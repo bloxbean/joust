@@ -1,0 +1,33 @@
+plugins {
+    id 'application'
+    alias(libs.plugins.julc)
+}
+
+description = 'JOUST example: counter (generated files are hand-written until the processor exists)'
+
+dependencies {
+    implementation project(':julc-state-api')
+
+    implementation libs.julc.stdlib
+    implementation libs.julc.cardano.client.lib
+    annotationProcessor libs.julc.annotation.processor
+    annotationProcessor project(path: ":julc-state-api", configuration: "onchainSources")   // JOUST on-chain sources for JuLC (ADR-0001 D17)
+    implementation libs.julc.annotation.processor   // JulcScriptLoader at runtime
+    runtimeOnly libs.julc.vm.java
+
+    implementation libs.cardano.client.lib
+    implementation libs.cardano.client.backend.blockfrost
+
+    testImplementation libs.bouncycastle.bcprov
+    testImplementation libs.julc.testkit
+    testImplementation libs.julc.compiler
+    testRuntimeOnly libs.julc.vm.java
+}
+
+application {
+    mainClass = 'org.julclang.state.examples.counter.CounterApp'
+}
+
+tasks.named('run', JavaExec) {
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}

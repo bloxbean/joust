@@ -1,0 +1,45 @@
+plugins {
+    alias(libs.plugins.julc) apply false
+}
+
+subprojects {
+    apply plugin: path.startsWith(':examples') ? 'java' : 'java-library'
+
+    group = rootProject.group
+    version = rootProject.version
+
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        maven {
+            url = uri("https://central.sonatype.com/repository/maven-snapshots")
+            content { snapshotsOnly() }
+        }
+    }
+
+    java {
+        toolchain { languageVersion = JavaLanguageVersion.of(25) }
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+        options.compilerArgs << '-parameters'
+    }
+
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
+        jvmArgs '--enable-native-access=ALL-UNNAMED'
+        maxHeapSize = '1g'
+        testLogging {
+            events 'passed', 'skipped', 'failed'
+            exceptionFormat = 'full'
+        }
+    }
+
+    dependencies {
+        testImplementation platform(rootProject.libs.junit.bom)
+        testImplementation rootProject.libs.junit.jupiter
+        testImplementation rootProject.libs.assertj.core
+        testRuntimeOnly rootProject.libs.junit.platform.launcher
+    }
+}

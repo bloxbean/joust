@@ -1,0 +1,28 @@
+pluginManagement {
+    repositories {
+        mavenLocal()
+        maven {
+            url = uri("https://central.sonatype.com/repository/maven-snapshots")
+            content { snapshotsOnly() }
+        }
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = 'joust'
+
+include 'julc-state-api'
+include 'julc-state-processor'
+include 'julc-state-runtime'
+include 'julc-state-testkit'
+include 'examples:counter'
+
+// Local development against a JuLC checkout (opt-in, untested so far):
+//   ./gradlew build -PuseLocalJulc            (expects ../julc)
+//   ./gradlew build -PuseLocalJulc=/path/to/julc
+if (providers.gradleProperty('useLocalJulc').isPresent()) {
+    def p = providers.gradleProperty('useLocalJulc').get()
+    def julcDir = file(p && p != 'true' ? p : '../julc')
+    if (!julcDir.exists()) throw new GradleException("useLocalJulc: ${julcDir} not found")
+    includeBuild(julcDir)
+}

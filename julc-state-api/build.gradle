@@ -1,0 +1,61 @@
+description = 'JOUST public API: @StateContract, Ctx, Payout, Require (on-chain compilable + JVM runnable)'
+
+dependencies {
+    api libs.julc.stdlib
+}
+
+// JuLC compiles validators against a fixed class path (its own on-chain API) plus *library sources*:
+// .java files shipped under META-INF/plutus-sources/ (listed in index.txt) by entries of the annotation
+// processor path. Every source of this module is shipped that way, so a @StateContract class and the
+// validator generated from it can use JOUST's annotations and helpers on-chain.
+//
+// src/onchain/java holds on-chain variants of a few classes whose JVM body must differ (Require: the JVM
+// throws with the message, on-chain traces and errors). A file there replaces the src/main/java file of the
+// same path in the bundle. Keep that set tiny; ADR-0001 D7.
+def onchainOverrides = file('src/onchain/java')
+def bundleDir = layout.buildDirectory.dir('generated/julc-state/onchain-sources')
+def bundleOnchainSources = tasks.register('bundleOnchainSources') {
+    def srcDir = file('src/main/java')
+    inputs.dir(srcDir)
+    if (onchainOverrides.exists()) inputs.dir(onchainOverrides)
+    outputs.dir(bundleDir)
+    doLast {
+        def root = bundleDir.get().asFile
+        project.delete(root)
+        def target = new File(root, 'META-INF/plutus-sources')
+        def sources = new TreeMap<String, File>()
+        fileTree(srcDir).matching { include '**/*.java'; exclude '**/package-info.java', '**/RequireException.java' }.visit { d ->   // RequireException: JVM-only
+            if (!d.directory) sources[d.relativePath.pathString] = d.file
+        }
+        if (onchainOverrides.exists()) {
+            fileTree(onchainOverrides).matching { include '**/*.java' }.visit { d ->
+                if (!d.directory) {
+                    if (!sources.containsKey(d.relativePath.pathString))
+                        throw new GradleException("on-chain override without a JVM counterpart: ${d.relativePath}")
+                    sources[d.relativePath.pathString] = d.file
+                }
+            }
+        }
+        sources.each { path, file ->
+            def out = new File(target, path)
+            out.parentFile.mkdirs()
+            out.text = file.getText('UTF-8')
+        }
+        new File(target, 'index.txt').text = sources.keySet().join('\n') + '\n'
+    }
+}
+sourceSets.main.resources.srcDir(bundleOnchainSources)
+
+// Consumers in this build put the bundle on their annotation processor path as a *directory*:
+//   annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+// A jar would work too, but a rebuilt jar on the processor path of a long-lived Gradle daemon can make
+// JuLC's source scan silently find nothing (ADR-0001 F8).
+configurations {
+    onchainSources {
+        canBeConsumed = true
+        canBeResolved = false
+    }
+}
+artifacts {
+    onchainSources(bundleDir) { builtBy bundleOnchainSources }
+}

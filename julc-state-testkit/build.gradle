@@ -1,0 +1,6 @@
+description = 'JOUST test helpers'
+
+dependencies {
+    api project(':julc-state-api')
+    api libs.julc.testkit
+}

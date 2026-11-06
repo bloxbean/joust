@@ -1,0 +1,11 @@
+description = 'JOUST off-chain runtime: locate, run, build, evaluate, submit for generated clients'
+
+dependencies {
+    api project(':julc-state-api')
+    api libs.julc.cardano.client.lib
+    api libs.cardano.client.lib
+    api libs.cardano.client.backend
+    // JulcScriptLoader (loads the compiled validator from META-INF/plutus) lives in the annotation processor artifact
+    implementation libs.julc.annotation.processor
+    runtimeOnly libs.julc.vm.java
+}

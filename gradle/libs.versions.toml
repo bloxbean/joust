@@ -1,0 +1,31 @@
+[versions]
+# JuLC main, built locally: `./gradlew publishToMavenLocal -Pversion=0.1.0-local-SNAPSHOT` in ../julc
+# (the julc build appends the commit hash). Switch back to a released version once one includes what we need.
+julc = "0.1.0-local-728cb83-SNAPSHOT"
+cardano-client-lib = "0.8.0-pre7"
+junit = "5.11.4"
+bouncycastle = "1.83"
+assertj = "3.25.1"
+
+[libraries]
+julc-stdlib = { module = "org.julclang:julc-stdlib", version.ref = "julc" }
+julc-ledger-api = { module = "org.julclang:julc-ledger-api", version.ref = "julc" }
+julc-core = { module = "org.julclang:julc-core", version.ref = "julc" }
+julc-compiler = { module = "org.julclang:julc-compiler", version.ref = "julc" }
+julc-annotation-processor = { module = "org.julclang:julc-annotation-processor", version.ref = "julc" }
+julc-cardano-client-lib = { module = "org.julclang:julc-cardano-client-lib", version.ref = "julc" }
+julc-testkit = { module = "org.julclang:julc-testkit", version.ref = "julc" }
+julc-vm-java = { module = "org.julclang:julc-vm-java", version.ref = "julc" }
+
+cardano-client-lib = { module = "com.bloxbean.cardano:cardano-client-lib", version.ref = "cardano-client-lib" }
+cardano-client-backend = { module = "com.bloxbean.cardano:cardano-client-backend", version.ref = "cardano-client-lib" }
+cardano-client-backend-blockfrost = { module = "com.bloxbean.cardano:cardano-client-backend-blockfrost", version.ref = "cardano-client-lib" }
+
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+bouncycastle-bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
+
+[plugins]
+julc = { id = "org.julclang.julc", version.ref = "julc" }
