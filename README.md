@@ -21,7 +21,6 @@ The JOUST annotation processor generates:
 
 ```java
 @StateContract(maxDatumBytes = 128)
-@OnchainLibrary                                   // needed until JuLC accepts meta-annotations (ADR-0001 §12)
 public class Vault {
     public record State(byte[] owner, BigInteger unlockAt, BigInteger total) {}
     public record Result(State state, JulcList<Payout> payouts) {}
@@ -69,8 +68,9 @@ vault.close(alice);                                                 // burns the
 ## Build
 
 - JDK 25. Versions live in `gradle/libs.versions.toml`.
-- CCL is `0.8.0-pre7`. JuLC is `main`, built locally: in `../julc`, run
-  `./gradlew publishToMavenLocal -Pversion=0.1.0-local-SNAPSHOT -x test -x check`. The JuLC build appends the
+- CCL is `0.8.0-pre7`. JuLC is built locally from the worktree `../julc-joust` (`main` plus
+  [julc#311](https://github.com/bloxbean/julc/pull/311)): run
+  `./gradlew publishToMavenLocal -Pversion=0.1.0-adr071-SNAPSHOT -x test -x check`. The JuLC build appends the
   commit hash; set `julc` in the catalog to match.
 - `./gradlew build` runs everything. Tests tagged `devnet` run only when Yaci DevKit answers on `localhost:8080`
   (Store) and `:10000` (admin); otherwise they are skipped.

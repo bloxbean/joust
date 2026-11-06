@@ -445,8 +445,10 @@ the `.jsc` DSL (E), events/indexer, `@Invariant`, upgrades, the Gradle plugin, C
 
 ## 12. Upstream follow-ups
 
-JuLC:
-1. Accept annotations meta-annotated with `@OnchainLibrary`, which drops the double annotation.
+JuLC (both done in [bloxbean/julc#311](https://github.com/bloxbean/julc/pull/311), JuLC ADR-071, label `joust`;
+JOUST builds against it locally):
+1. Accept annotations meta-annotated with `@OnchainLibrary`, which drops the double annotation. `@StateContract` is
+   now meta-annotated, and contracts carry only `@StateContract`.
 2. Library-source scan (F8, F16):
    - Don't swallow `IOException`s.
    - Keep scanning the other entries after one fails: today one stale jar hides julc-stdlib's sources.

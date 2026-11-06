@@ -15,7 +15,6 @@ import org.julclang.state.api.SignedBy;
 import org.julclang.state.api.SortedMaps;
 import org.julclang.state.api.StateContract;
 import org.julclang.state.api.View;
-import org.julclang.stdlib.annotation.OnchainLibrary;
 
 import java.math.BigInteger;
 
@@ -29,7 +28,6 @@ import java.math.BigInteger;
  * client writes (canonical CBOR) is exactly the one the validator recomputes.
  */
 @StateContract(maxDatumBytes = 1024)
-@OnchainLibrary
 public class Crowdfund {
 
     public record State(byte[] creator, BigInteger goal, BigInteger deadline, BigInteger minContribution,

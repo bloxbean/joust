@@ -29,9 +29,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 
 ## Build / test
 - JDK 25. `./gradlew build`.
-- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is **main built locally**: in `../julc` run
-  `./gradlew publishToMavenLocal -Pversion=0.1.0-local-SNAPSHOT -x test -x check`; the julc build appends the commit
-  hash (e.g. `0.1.0-local-728cb83-SNAPSHOT`), then update `julc` in the catalog.
+- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is **built locally** from the worktree
+  `../julc-joust` (julc main + PR #311): `./gradlew publishToMavenLocal -Pversion=0.1.0-adr071-SNAPSHOT -x test -x check`;
+  the julc build appends the commit hash, then update `julc` in the catalog. JuLC changes JOUST needs: worktree + PR
+  labelled `joust`.
 - A consumer of JOUST needs on its processor path: `julc-state-processor`, `julc-annotation-processor`, and
   `project(path: ':julc-state-api', configuration: 'onchainSources')` (a *directory*, not the jar; see gotchas).
 - `-PuseLocalJulc[=path]` adds `../julc` as a composite build. Not tested yet.
@@ -65,8 +66,8 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).
 - JuLC's subset: immutable locals (except loop accumulators), no `Function.apply`, records and sealed interfaces only.
-- Today the user's contract class must also carry `@OnchainLibrary`. Planned upstream JuLC change: accept
-  annotations meta-annotated with `@OnchainLibrary`.
+- `@StateContract` is meta-annotated with `@OnchainLibrary` (JuLC ADR-071, bloxbean/julc#311, label `joust`); JOUST
+  builds against a local JuLC from the worktree `../julc-joust` (branch `feat/joust-library-annotations`) until released.
 - JuLC's annotation processor reads validators via the `Trees` API and keeps `@OnchainLibrary` sources across rounds,
   so a validator generated in round 1 should compile in round 2. **Verify this first** when writing the processor.
 

@@ -54,7 +54,7 @@ class ProcessorDiagnosticsTest {
     }
 
     static final String GOOD = """
-            @StateContract @OnchainLibrary
+            @StateContract
             public class C {
                 public record S(BigInteger n, byte[] owner) {}
                 @Init public static S init(Ctx ctx) { return new S(BigInteger.ZERO, ctx.caller()); }
@@ -72,8 +72,9 @@ class ProcessorDiagnosticsTest {
     }
 
     @Test
-    void missingOnchainLibrary() {
-        assertTrue(compile(GOOD.replace("@StateContract @OnchainLibrary", "@StateContract")).hasError("@OnchainLibrary"));
+    void stateContractAloneIsEnough() {
+        // JuLC ADR-071: @StateContract is meta-annotated with @OnchainLibrary.
+        assertTrue(compile(GOOD).success());
     }
 
     @Test
@@ -151,7 +152,7 @@ class ProcessorDiagnosticsTest {
 
     @Test
     void minAdaBelowWhatTheDatumNeeds() {
-        var r = compile(GOOD.replace("@StateContract @OnchainLibrary", "@StateContract(minAda = 1_000_000) @OnchainLibrary"));
+        var r = compile(GOOD.replace("@StateContract", "@StateContract(minAda = 1_000_000)"));
         assertTrue(r.hasError("is below the"), r.errors().toString());
     }
 

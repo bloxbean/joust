@@ -14,7 +14,6 @@ import org.julclang.state.api.Require;
 import org.julclang.state.api.StateContract;
 import org.julclang.state.api.ValidAfter;
 import org.julclang.state.api.View;
-import org.julclang.stdlib.annotation.OnchainLibrary;
 
 import java.math.BigInteger;
 
@@ -24,7 +23,6 @@ import java.math.BigInteger;
  * vault actually holds.
  */
 @StateContract(maxDatumBytes = 128)
-@OnchainLibrary
 public class Vault {
 
     public record State(byte[] owner, BigInteger unlockAt, BigInteger total) {}

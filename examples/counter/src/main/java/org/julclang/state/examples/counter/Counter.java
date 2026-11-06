@@ -11,7 +11,6 @@ import org.julclang.state.api.Payouts;
 import org.julclang.state.api.Require;
 import org.julclang.state.api.StateContract;
 import org.julclang.state.api.View;
-import org.julclang.stdlib.annotation.OnchainLibrary;
 
 import java.math.BigInteger;
 
@@ -23,7 +22,6 @@ import java.math.BigInteger;
  * (to check it).
  */
 @StateContract(maxDatumBytes = 128)
-@OnchainLibrary
 public class Counter {
 
     /** The state, stored as the inline datum of the state UTxO. */

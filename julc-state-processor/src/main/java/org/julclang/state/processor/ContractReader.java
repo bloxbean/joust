@@ -73,11 +73,6 @@ final class ContractReader {
         if (!type.getModifiers().contains(Modifier.PUBLIC)) {
             error(type, "@StateContract class must be public");
         }
-        if (annotation(type, ONCHAIN_LIBRARY).isEmpty()) {
-            error(type, "@StateContract class must also be annotated @OnchainLibrary"
-                    + " (import org.julclang.stdlib.annotation.OnchainLibrary) so JuLC can compile it on-chain."
-                    + " This goes away once JuLC accepts meta-annotated library annotations (ADR-0001 §12)");
-        }
         String pkg = env.getElementUtils().getPackageOf(type).getQualifiedName().toString();
         var types = new TypeRenderer(pkg);
 

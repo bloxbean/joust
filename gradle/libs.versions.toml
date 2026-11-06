@@ -1,7 +1,8 @@
 [versions]
-# JuLC main, built locally: `./gradlew publishToMavenLocal -Pversion=0.1.0-local-SNAPSHOT` in ../julc
-# (the julc build appends the commit hash). Switch back to a released version once one includes what we need.
-julc = "0.1.0-local-728cb83-SNAPSHOT"
+# JuLC built locally from the worktree of bloxbean/julc#311 (ADR-071), on top of main 728cb835:
+#   ./gradlew publishToMavenLocal -Pversion=0.1.0-adr071-SNAPSHOT (the julc build appends the commit hash).
+# Switch to a released version once one includes ADR-071.
+julc = "0.1.0-adr071-566ea845-SNAPSHOT"
 cardano-client-lib = "0.8.0-pre7"
 junit = "5.11.4"
 bouncycastle = "1.83"

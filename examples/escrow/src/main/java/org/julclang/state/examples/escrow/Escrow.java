@@ -11,7 +11,6 @@ import org.julclang.state.api.Payouts;
 import org.julclang.state.api.Require;
 import org.julclang.state.api.StateContract;
 import org.julclang.state.api.View;
-import org.julclang.stdlib.annotation.OnchainLibrary;
 import org.julclang.stdlib.lib.ByteStringLib;
 
 import java.math.BigInteger;
@@ -22,7 +21,6 @@ import java.math.BigInteger;
  * passed. Either way the instance ends and everything it holds goes to the winner.
  */
 @StateContract(maxDatumBytes = 192)
-@OnchainLibrary
 public class Escrow {
 
     public record State(byte[] buyer, byte[] seller, byte[] arbiter, BigInteger amount, BigInteger deadline) {}

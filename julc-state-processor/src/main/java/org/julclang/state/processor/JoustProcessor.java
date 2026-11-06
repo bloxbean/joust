@@ -19,7 +19,7 @@ import java.util.Set;
  * Generates {@code <Name>Validator} and {@code <Name>Client} for every {@code @StateContract} class (ADR-0001).
  * <p>
  * Runs in round 1. JuLC's annotation processor then compiles the generated {@code @MultiValidator} in round 2,
- * together with the contract class it calls (which must be {@code @OnchainLibrary}).
+ * together with the contract class it calls (an on-chain library through @StateContract; JuLC ADR-071).
  */
 public class JoustProcessor extends AbstractProcessor {
 
