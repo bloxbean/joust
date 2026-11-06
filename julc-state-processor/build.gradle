@@ -5,6 +5,7 @@ dependencies {
 
     // Processor tests compile small contracts in-process (javax.tools) with this processor and JuLC's.
     testImplementation project(':julc-state-api')
+    testImplementation project(':julc-state-runtime')
     testImplementation libs.julc.annotation.processor
     testImplementation libs.julc.compiler
 }
@@ -13,3 +14,4 @@ tasks.withType(Test).configureEach {
     // The tests run javac in-process and need the JDK compiler module.
     jvmArgs '--add-modules', 'jdk.compiler'
 }
+

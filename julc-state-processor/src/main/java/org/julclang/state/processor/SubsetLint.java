@@ -59,19 +59,27 @@ final class SubsetLint {
             "intValue", "longValue", "shortValue", "byteValue", "intValueExact", "longValueExact", "shortValueExact",
             "byteValueExact", "doubleValue", "floatValue");
 
+    private final ProcessingEnvironment env;
     private final Trees trees;
     private final Set<String> pending = new HashSet<>();
+    /** Trees of the context javac compiles in after processing (taken in the final round); see {@link #finalRound}. */
+    private volatile Trees finalTrees;
 
     SubsetLint(ProcessingEnvironment env) {
+        this.env = env;
         Trees t;
         try {
             t = Trees.instance(env);
-            JavacTask.instance(env).addTaskListener(new TaskListener() {
+            JavacTask task = JavacTask.instance(env);
+            task.addTaskListener(new TaskListener() {
                 @Override
                 public void finished(TaskEvent e) {
                     if (e.getKind() == TaskEvent.Kind.ANALYZE && e.getTypeElement() != null
                             && pending.remove(e.getTypeElement().getQualifiedName().toString())) {
-                        typed(e.getTypeElement());
+                        // After annotation processing javac works in a fresh context: use the task's Trees and the
+                        // event's own compilation unit, not what was captured during processing.
+                        Trees typedTrees = finalTrees != null ? finalTrees : Trees.instance(task);
+                        typed(typedTrees, e.getCompilationUnit(), e.getTypeElement().getSimpleName().toString());
                     }
                 }
             });
@@ -79,6 +87,19 @@ final class SubsetLint {
             t = null;   // not javac (e.g. ECJ): skip the lint; JuLC still checks its own subset
         }
         this.trees = t;
+    }
+
+    /**
+     * Called in the last processing round. javac makes a new context per round, and the phases after processing run in
+     * the last one; diagnostics printed through an earlier round's Trees are lost.
+     */
+    void finalRound() {
+        if (trees == null) return;
+        try {
+            finalTrees = Trees.instance(env);
+        } catch (IllegalArgumentException ignored) {
+            // not javac
+        }
     }
 
     /** Syntactic pass now; schedules the typed pass for when javac has attributed {@code type}. */
@@ -115,9 +136,15 @@ final class SubsetLint {
     }
 
     /** Typed pass: fixed-width arithmetic and fixed-width locals, wherever their types come from. */
-    private void typed(TypeElement type) {
-        TreePath path = trees.getPath(type);
-        if (path == null) return;
+    private void typed(Trees trees, com.sun.source.tree.CompilationUnitTree unit, String className) {
+        for (Tree decl : unit.getTypeDecls()) {
+            if (decl instanceof com.sun.source.tree.ClassTree ct && ct.getSimpleName().contentEquals(className)) {
+                typedScan(trees, new TreePath(new TreePath(unit), decl));
+            }
+        }
+    }
+
+    private void typedScan(Trees trees, TreePath path) {
         new TreePathScanner<Void, Void>() {
             @Override
             public Void visitBinary(BinaryTree node, Void unused) {
@@ -135,7 +162,7 @@ final class SubsetLint {
             public Void visitCompoundAssignment(CompoundAssignmentTree node, Void unused) {
                 TypeMirror t = typeOf(node);
                 if (t != null && FIXED_WIDTH.contains(t.getKind())) {
-                    report(node, getCurrentPath(), "fixed-width arithmetic (" + t + ") in a @StateContract: the JVM"
+                    reportTyped(trees, node, getCurrentPath(), "fixed-width arithmetic (" + t + ") in a @StateContract: the JVM"
                             + " wraps, on-chain does not. Use BigInteger");
                 }
                 return super.visitCompoundAssignment(node, unused);
@@ -144,9 +171,12 @@ final class SubsetLint {
             @Override
             public Void visitVariable(VariableTree node, Void unused) {
                 TypeMirror t = typeOf(node);
-                if (t != null && FIXED_WIDTH.contains(t.getKind()) && !(node.getType() instanceof PrimitiveTypeTree)) {
-                    report(node, getCurrentPath(), "'" + node.getName() + "' is inferred as " + t + " in a"
-                            + " @StateContract; fixed-width numbers diverge between the JVM and on-chain. Use BigInteger");
+                if (t != null && FIXED_WIDTH.contains(t.getKind())) {
+                    // After attribution javac replaces `var` with the inferred type, so every fixed-width variable is
+                    // reported here, written or inferred (written ones are also caught by the syntactic pass).
+                    reportTyped(trees, node, getCurrentPath(), "'" + node.getName() + "' is " + t + " in a"
+                            + " @StateContract (inferred or declared); fixed-width numbers diverge between the JVM and"
+                            + " on-chain. Use BigInteger");
                 }
                 return super.visitVariable(node, unused);
             }
@@ -155,7 +185,7 @@ final class SubsetLint {
                 if (!ARITHMETIC.contains(node.getKind())) return;
                 TypeMirror t = typeOf(node);
                 if (t != null && FIXED_WIDTH.contains(t.getKind())) {
-                    report(node, getCurrentPath(), "fixed-width arithmetic (" + t + ") in a @StateContract: the JVM"
+                    reportTyped(trees, node, getCurrentPath(), "fixed-width arithmetic (" + t + ") in a @StateContract: the JVM"
                             + " wraps at " + (t.getKind() == TypeKind.LONG ? "64" : "32") + " bits, on-chain integers"
                             + " are unbounded, so the two runs could disagree. Compute in BigInteger");
                 }
@@ -169,6 +199,14 @@ final class SubsetLint {
     }
 
     private void report(Tree node, TreePath at, String message) {
+        report(trees, node, at, message);
+    }
+
+    private static void report(Trees trees, Tree node, TreePath at, String message) {
+        trees.printMessage(Diagnostic.Kind.ERROR, message, node, at.getCompilationUnit());
+    }
+
+    private static void reportTyped(Trees trees, Tree node, TreePath at, String message) {
         trees.printMessage(Diagnostic.Kind.ERROR, message, node, at.getCompilationUnit());
     }
 }

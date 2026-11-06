@@ -17,15 +17,15 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - Main annotation: `@StateContract`
 
 ## Layout
-- `julc-state-api`: annotations, `Ctx`, `Payout`/`Payouts`, `Require`, `Clock`. Must stay **JuLC-compilable and
+- `julc-state-api`: annotations, `Ctx`, `Payout`/`Payouts`, `Require`, `Clock`, `SortedMaps`. Must stay **JuLC-compilable and
   JVM-runnable**. Its sources ship as JuLC *library sources* (`bundleOnchainSources` → `onchainSources` configuration);
   `src/onchain/java` holds on-chain variants (only `Require`).
 - `julc-state-processor`: the annotation processor (ContractReader → State IR → ValidatorGenerator/ClientGenerator),
-  plus `SubsetLint` (rejects int/long/narrowing calls in contract code). In progress.
-- `julc-state-runtime`: shared off-chain client runtime (in progress).
-- `julc-state-testkit`: harness + attack suite (not started).
-- `examples/counter`: working prototype. `Counter.java` is what users write. `generated/CounterValidator` and
-  `generated/CounterClient` are **hand-written stand-ins for generator output** and serve as the spec for the processor.
+  plus `SubsetLint` (syntactic pass + typed pass on ANALYZE: rejects fixed-width numbers in contract code).
+- `julc-state-runtime`: off-chain runtime for generated clients (StateRuntime, StateContractHandle, StateInstance).
+- `julc-state-testkit`: `StateHarness` (evaluates the compiled validator) + `Attacks` (attack suite).
+- `examples/{counter,vault,escrow,crowdfund}`: contracts + JVM/harness/devnet tests; `examples/devkit`: DevKit helper.
+  Option A (ADR-0001) is implemented; all four run on Yaci DevKit.
 
 ## Build / test
 - JDK 25. `./gradlew build`.
@@ -57,10 +57,13 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   nothing (stale JarFile cache, swallowed IOException). Use the `onchainSources` directory artifact; if in doubt
   `./gradlew --stop`.
 - `IntervalLib.finite*Bound` return -1 for infinite bounds: never compare them without checking `Finite`.
+- CCL writes inline datums as canonical CBOR (map keys sorted): state maps must be in canonical order (`SortedMaps`).
+- QuickTx takes the fee from any output at the fee payer's address: never pay a payout there (caller -> enterprise addr).
+- DevKit's time horizon is minutes: keep TTL short (DevKit runtime uses 20 s); `Clock.before` needs the whole window.
 - `JulcMap.insert` prepends (duplicates stay); update with `delete(k).insert(k, v)`; `getOrDefault` isn't on-chain.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
-- No `require()` yet. Use `if (!cond) { Builtins.error(); return x; } else { ... }` (both branches must return).
+- Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).
 - JuLC's subset: immutable locals (except loop accumulators), no `Function.apply`, records and sealed interfaces only.
 - Today the user's contract class must also carry `@OnchainLibrary`. Planned upstream JuLC change: accept
   annotations meta-annotated with `@OnchainLibrary`.
@@ -68,11 +71,9 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   so a validator generated in round 1 should compile in round 2. **Verify this first** when writing the processor.
 
 ## Next steps
-1. Minimal `julc-state-processor`: `@StateContract`/`@Init`/`@Action`/`@View`, INLINE storage, direct mode.
-   Generate exactly what `examples/counter/generated/*` contains, then delete the hand-written copies.
-2. Extract the generic parts of `CounterClient` into `julc-state-runtime`.
-3. Add `require()` and `Ctx` (`caller()`, `pay()`, `received()`), plus escrow and vault examples.
-4. Upstream ADR/PR to julc for the `@OnchainLibrary` meta-annotation.
+1. Upstream follow-ups listed in ADR-0001 §12 (JuLC meta-annotation, source-scan robustness; CCL datum order).
+2. Script-size/budget optimisation; reference-script deployment helper.
+3. ADR-0002: Option B/C (StateMap storage strategies, owned/shared), extending the IR.
 
 ## Conventions
 - Don't commit or push unless asked. Commits end with the attribution line from the session's system reminder.

@@ -68,8 +68,9 @@ public final class DevKit {
                 .network(Networks.testnet())
                 .chainTime(time)
                 // The ledger converts validity bounds to POSIX time only within its stability window ("horizon").
-                // The DevKit's is short (safe zone ~300 slots), so keep the TTL well inside it.
-                .ttl(Duration.ofSeconds(120))
+                // The DevKit's is short (safe zone ~300 slots), so keep the TTL well inside it. Short also because a
+                // rule like Clock.before(ctx, deadline) needs the whole window to end before the deadline.
+                .ttl(Duration.ofSeconds(20))
                 .log(msg -> System.out.println("  [joust] " + msg));
         if (!"backend".equalsIgnoreCase(System.getProperty("julc.evaluator", "local"))) {
             b.evaluator(new JulcTransactionEvaluator(

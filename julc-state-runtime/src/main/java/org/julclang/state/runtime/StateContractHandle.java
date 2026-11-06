@@ -86,6 +86,7 @@ public final class StateContractHandle<S> {
         S initial = d.run().apply(ctx);                      // the developer's @Init, on the JVM
         PlutusData datum = PlutusDataAdapter.convert(initial);
         Datums.checkSize(spec, datum, "deploy");
+        Datums.checkCanonical(spec, datum, "deploy");
 
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())),
                 BigInteger.valueOf(seed.getOutputIndex()));

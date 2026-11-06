@@ -48,6 +48,11 @@ final class TxRunner {
             if (requiredSigners.length > 0) ctx = ctx.withRequiredSigners(requiredSigners);
             if (window != null) ctx = ctx.validFrom(window.fromSlot()).validTo(window.toSlot());
             if (rt.evaluator() != null) ctx = ctx.withTxEvaluator(rt.evaluator());
+            if (Boolean.getBoolean("joust.debug.nodeEvaluates")) {
+                // Diagnostic: skip local script-cost evaluation so the node evaluates and, on failure, reports the
+                // full script context it saw. Never for normal use.
+                ctx = ctx.ignoreScriptCostEvaluationError(true);
+            }
             signed = ctx.buildAndSign();
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);

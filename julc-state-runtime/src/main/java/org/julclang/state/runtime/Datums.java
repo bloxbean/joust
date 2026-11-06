@@ -21,6 +21,28 @@ final class Datums {
         }
     }
 
+    /**
+     * cardano-client-lib writes inline datums in canonical CBOR, which sorts map keys; the validator recomputes the
+     * state with JuLC's ordered maps. If the state's own order is not canonical, what is written differs from what is
+     * checked and the call would fail on-chain. Refuse it here with a useful message.
+     */
+    static void checkCanonical(ContractSpec<?> spec, PlutusData datum, String what) {
+        try {
+            var item = datum.serialize();
+            byte[] canonical = com.bloxbean.cardano.client.common.cbor.CborSerializationUtil.serialize(item, true);
+            byte[] asBuilt = com.bloxbean.cardano.client.common.cbor.CborSerializationUtil.serialize(item, false);
+            if (!java.util.Arrays.equals(canonical, asBuilt)) {
+                throw new JoustException(what + ": the new " + spec.name() + " state contains a map whose keys are not in"
+                        + " canonical order, so the datum written on chain would differ from the one the validator"
+                        + " recomputes. Keep state maps ordered with org.julclang.state.api.SortedMaps");
+            }
+        } catch (JoustException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new JoustException("cannot serialise the state", e);
+        }
+    }
+
     static String hex(PlutusData d) {
         try {
             return d.serializeToHex();

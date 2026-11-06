@@ -1,6 +1,12 @@
-description = 'JOUST test helpers'
+description = 'JOUST test kit: evaluate generated validators against runtime-shaped transactions, plus the attack suite'
 
 dependencies {
-    api project(':julc-state-api')
+    api project(':julc-state-runtime')
     api libs.julc.testkit
+    api libs.julc.core
+    api platform(libs.junit.bom)
+    api libs.junit.jupiter
+    implementation libs.julc.annotation.processor
+    runtimeOnly libs.julc.vm.java
+    runtimeOnly libs.bouncycastle.bcprov
 }

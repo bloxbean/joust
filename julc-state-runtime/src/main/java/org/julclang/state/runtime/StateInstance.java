@@ -129,6 +129,7 @@ public final class StateInstance<S> {
             }
             PlutusData datum = PlutusDataAdapter.convert(t.next());
             Datums.checkSize(spec, datum, what);
+            Datums.checkCanonical(spec, datum, what);
             tx.payToContract(contract.address, List.of(Amount.lovelace(next), new Amount(unit(), BigInteger.ONE)), datum);
             expected = new TxRunner.ExpectedState(unit(), next, datum);
         } else {
@@ -160,7 +161,20 @@ public final class StateInstance<S> {
             awaitState(txHash);
             return new CallResult<>(txHash, t.next(), payouts);
         }
+        awaitGone();
         return new CallResult<>(txHash, null, payouts);
+    }
+
+    /** After a destroy: waits until the indexer no longer shows the state UTxO. */
+    private void awaitGone() {
+        for (int i = 0; i < 60; i++) {
+            try {
+                utxo();
+            } catch (InstanceNotFoundException gone) {
+                return;
+            }
+            TxRunner.sleep(500);
+        }
     }
 
     /** Waits until the indexer shows the state UTxO created by {@code txHash}. */

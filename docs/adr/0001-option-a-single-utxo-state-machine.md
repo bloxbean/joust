@@ -1,6 +1,6 @@
 # ADR-0001: Option A — single-UTxO state machine (`@StateContract`, INLINE storage, direct mode)
 
-**Status:** Accepted with changes (r3). r1 was reviewed by three independent reviewers and revised; r2 was approved with changes by the security re-review, and those changes are applied (§14)
+**Status:** Accepted, and implemented (r4). r4 adds what the implementation taught us (§15). r1 was reviewed by three independent reviewers and revised; r2 was approved with changes by the security re-review, and those changes are applied (§14)
 **Date:** 2026-11-06
 **Builds on:** `docs/research/state-oriented-contracts-research.md` (Option A, §6 design rules, §9 adjustments),
 `docs/research/annotation-catalog.md` (milestone-1 rows)
@@ -57,9 +57,9 @@ Facts established for this ADR (spiked against JuLC `728cb835`):
    the corresponding fact of the transaction before calling the user's method.
 4. An action **returns** its payouts: either the state type `S`, or a contract-declared record `(S state,
    JulcList<Payout> payouts)`. `@Destroy` returns `JulcList<Payout>`.
-5. The processor builds a **State IR** and generates code from it through **strategy interfaces**:
-   `StorageStrategy` (INLINE only), `ExecutionMode` (DIRECT only) and `TxLevelValidation` (SPEND only). Later layers add
-   implementations instead of rewriting generators.
+5. The processor builds a **State IR** that records the strategy choice: storage INLINE, execution DIRECT, and
+   transaction-level validation SPEND. A ships only these. They are a seam for B, C and D, not a promise that those
+   layers need no generator changes (§10).
 6. Code is generated from **string templates** (no JavaPoet), so every construct emitted is one we know JuLC accepts.
 7. Annotations in milestone 1: `@StateContract`, `@Init`, `@Action`, `@View`, `@Destroy`, `@Payable`,
    `@SignedBy`/`@OnlyOwner`, `@ValidAfter`/`@ValidBefore`. Each compiles to a check you could write by hand.
@@ -316,7 +316,9 @@ All tx plumbing lives in the runtime. The generated client is a thin typed facad
   - create: seed, mint, output;
   - act: spend with redeemer, continuing output, tagged payouts, validity interval, required signer;
   - destroy: spend, burn, tagged payouts.
-- **Submit:** evaluate (local JuLC evaluator or backend), sign, submit, then wait until the state UTxO moves.
+- **Submit:** evaluate (local JuLC evaluator or backend), sign, verify the balanced transaction (state output and
+  payouts), submit, then wait for **the submitted transaction** to be included. After an action, also wait until the
+  indexer shows its state UTxO; after a destroy, until the instance is gone.
 - **Contention, without double execution:** the runtime retries only when the node **rejected** the submission
   (nothing was accepted) **and** the state UTxO it spent has moved. It then re-reads, re-runs on the JVM and resubmits,
   up to N times. Once a submission is accepted, the runtime never resubmits. It waits for the transaction itself to
@@ -441,11 +443,21 @@ unchanged**, not that the generators survive untouched.
 `@Anonymous`/`@MultiSig`/`@ScriptCaller`, `StateMap` and storage strategies (B), `@Owned`/`@Shared` (C), `@Batched` (D),
 the `.jsc` DSL (E), events/indexer, `@Invariant`, upgrades, the Gradle plugin, CIP-57 blueprint enrichment.
 
-## 12. Upstream follow-ups (JuLC)
+## 12. Upstream follow-ups
 
-1. Accept annotations meta-annotated with `@OnchainLibrary` (drops the double annotation).
-2. Library-source scan: don't swallow `IOException`s, and open jar resources without the URL cache (F8).
-3. Consider shipping `Require`-style helpers in the stdlib with a message-preserving JVM implementation (F5).
+JuLC:
+1. Accept annotations meta-annotated with `@OnchainLibrary`, which drops the double annotation.
+2. Library-source scan (F8, F16):
+   - Don't swallow `IOException`s.
+   - Keep scanning the other entries after one fails: today one stale jar hides julc-stdlib's sources.
+   - Open jar resources without the URL cache.
+3. `ValuesLib.uniqueTokenName` has no on-chain lowering ("Undefined variable: ValuesLib") (F17).
+4. Consider stdlib `Require`-style helpers with a message-preserving JVM implementation (F5).
+
+cardano-client-lib:
+1. Offer an option to keep an inline datum's map order instead of always writing canonical CBOR (F13).
+2. Document, or make configurable, that QuickTx takes the fee from any output at the fee payer's address, even an
+   output with a datum (F14).
 
 ## 13. Open questions
 
@@ -493,3 +505,37 @@ Codex (C). All three asked for changes. Resolution:
 | Trust radius of time; closure flags | §10; `startsAt`/`endsAt` also assert lower-inclusive and upper-exclusive |
 | No `@Destroy` means a locked deposit | Processor warning (D2) |
 | Split `Ctx` | Still §13 Q2, deferred |
+
+**Re-review of r2 by Codex** ("request changes"):
+
+| Finding | Resolution |
+|---|---|
+| The numeric lint misses fixed-width arithmetic that names no primitive type (`BigInteger.valueOf(2147483647 + 1)`, `var`) | Typed pass after attribution: every fixed-width arithmetic expression and variable is rejected; compile tests cover it |
+| D14 says "wait until the state UTxO moves"; client behaviour unproven | D14 reworded (wait for the submitted tx); implemented, and exercised on DevKit |
+| D16 lacks create scenarios, joint MINT+SPEND destroy, duplicate-recipient tests | Implemented: create scenarios with create-specific mutations; destroy evaluated through SPEND and MINT; aggregation in `Attacks`; shared-payout double-satisfaction test |
+| The strategy wording contradicts §10 | §2 point 5 reworded |
+
+## 15. What the implementation taught us (r4)
+
+| # | Finding | Consequence |
+|---|---|---|
+| F13 | cardano-client-lib writes inline datums in **canonical CBOR**, which sorts map keys. On-chain, `JulcMap` is an ordered list and `insert` prepends. A state map not already in canonical order is therefore written differently from what the validator recomputes. Crowdfund failed on DevKit whenever backers arrived out of key order | `SortedMaps` (API) keeps `byte[]`-keyed maps in canonical order on both sides. The runtime refuses a non-canonical state with a clear message. The harness now encodes datums through canonical CBOR, as the runtime does (it had passed the broken case) |
+| F14 | QuickTx takes the fee out of any output at the fee payer's address. A destroy paying the caller lost 0.58 ADA of its payout, so the node rejected it ("paid ≥ owed"), after local evaluation had passed on the pre-fee transaction | Payouts to the caller go to the caller's enterprise address. The runtime verifies every payout in the balanced transaction before submitting |
+| F15 | The ledger converts validity bounds to time only within the stability window. On a devnet that is minutes, and a 10-minute TTL gave `PastHorizon` | `ttl` documented. The DevKit runtime uses 20 s |
+| F16 | A `julc-state-api` jar carrying the bundled sources reached the processor path transitively. When rebuilt, JuLC's source scan stopped at it and also skipped julc-stdlib's sources ("Undefined variable: OutputLib") | The bundle ships only through the `onchainSources` directory artifact, not the jar |
+| F17 | `ValuesLib.uniqueTokenName` exists on the JVM but has no on-chain lowering | The instance-id helper is generated inline (same formula) |
+| F18 | `Clock.before(ctx, d)` needs the whole validity window to end before `d`, so a long TTL rejects near deadlines | Documented. Use a TTL shorter than the shortest deadline gap |
+| F19 | javac only attributes expressions after annotation processing | The typed lint pass runs in a `TaskListener` on `ANALYZE` |
+
+**Acceptance (§9).**
+1. Build green. The hand-written generated files are deleted.
+2. Four examples, each with JVM tests, harness tests with the attack suite (17 / 10 / 11 / 12 mutations on the
+   counter's create / increment / reset / close), and a DevKit integration test, run and passing on a live DevKit.
+3. 17 processor diagnostics tests.
+4. Sizes and budgets are in `examples/README.md`.
+
+**Still open.**
+- Script optimisation: each script execution costs about 115–250M CPU, mostly the generated checks.
+- A reference-script deployment helper.
+- The §13 questions.
+

@@ -45,6 +45,10 @@ public class JoustProcessor extends AbstractProcessor {
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+        if (roundEnv.processingOver()) {
+            lint.finalRound();
+            return false;
+        }
         for (TypeElement annotation : annotations) {
             for (Element element : roundEnv.getElementsAnnotatedWith(annotation)) {
                 if (element instanceof TypeElement type) {
