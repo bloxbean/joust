@@ -16,6 +16,7 @@ include 'julc-state-processor'
 include 'julc-state-runtime'
 include 'julc-state-testkit'
 include 'julc-state-verifier'
+include 'julc-state-dsl'
 include 'examples:devkit'
 include 'examples:counter'
 include 'examples:vault'
@@ -24,6 +25,7 @@ include 'examples:crowdfund'
 include 'examples:token'
 include 'examples:bank'
 include 'examples:pool'
+include 'examples:dsl'
 
 // Local development against a JuLC checkout (opt-in, untested so far):
 //   ./gradlew build -PuseLocalJulc            (expects ../julc)

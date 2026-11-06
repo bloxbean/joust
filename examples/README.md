@@ -19,6 +19,7 @@ Each example contains:
 | `token` | **Option B (ADR-0002).** An account-model token whose balances live in a `MerkleMap` (an unbounded map in a 32-byte root). MPF proofs are checked by the shared map verifier (withdraw-zero). The script is read by reference |
 | `bank` | **Option C (ADR-0003).** Shared bank config plus one owned account per customer. Customers act in parallel; withdrawals read the config by reference; closing works even if the bank is paused |
 | `pool` | **Option D (ADR-0004).** `@Batched` donations and order-dependent ticket sales as intents: users lock requests concurrently, a permissionless batcher applies them in one transaction (refunds, change payouts, a cancel, an expired intent) |
+| `dsl` | **Option E (ADR-0005).** Contracts written in `.jsc` and lowered to Java at build time: `Jar.jsc` (tips, also as intents; a withdraw rule in an `if`), `Points.jsc` (a `Map<Key, Int>` with `delete` and self-transfer) and `Guards.jsc` (laziness of untaken arms and `\|\|`) |
 | `crowdfund` | A `JulcMap` in the state, kept canonical with `SortedMaps`; refunds paying the caller; `@SignedBy("creator")`; capacity tested at `maxDatumBytes` |
 
 ## Script sizes and budgets
@@ -52,6 +53,9 @@ are per script execution, from the harness tests. For scale, a transaction may u
 | | | cancel intent | SPEND + MINT | 72.8M + 24.1M | 275k + 103k |
 | | | batch of 3 (donate, buy, buy) | SPEND instance + 3 × SPEND intent + MINT | 607.1M + 3 × 160.4M + 40.2M | 1,950k + 3 × 542k + 165k |
 | | | batch of 10 donations (all scripts) | | 4,990.6M | 15,537k |
+| Jar (.jsc) | 11 KB | tip | SPEND | 194.5M | 651k |
+| | | withdraw (with an `if` arm) | SPEND | 236.0M | 796k |
+| Points (.jsc) | 14 KB (+ MapVerifier) | give | SPEND + VERIFIER | 327.7M + 392.5M | 1,109k + 1,493k |
 | Token | 14.0 KB (+ MapVerifier 4.6 KB, shared) | create | MINT + VERIFIER | 202.4M + 31.0M | 663k + 135k |
 | | | mint (1 read, 1 write) | SPEND + VERIFIER | 248.5M + 335.4M | 823k + 1,274k |
 | | | transfer (2 reads, 2 writes) | SPEND + VERIFIER | 310.7M + 501.3M | 1,046k + 1,898k |

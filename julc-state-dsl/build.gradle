@@ -1,0 +1,1 @@
+description = 'JOUST .jsc: a state-contract surface syntax that lowers to a Java @StateContract (ADR-0005)'

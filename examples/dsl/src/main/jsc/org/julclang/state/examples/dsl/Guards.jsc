@@ -1,0 +1,25 @@
+package org.julclang.state.examples.dsl
+
+// A semantics fixture (ADR-0005 r2): an untaken if-arm and the right side of a false || must not run, on the JVM or
+// on-chain. Both divide by d, which is zero when they must not run.
+contract Guards {
+    state owner: Key
+    state n: Int
+
+    init() {
+        owner = caller
+    }
+
+    action set(d: Int) {
+        if d == 0 {
+            n = 0
+        } else {
+            n = 100 / d
+        }
+    }
+
+    action check(d: Int) {
+        require d == 0 || 100 / d > 1 "d too large"
+        n = d
+    }
+}

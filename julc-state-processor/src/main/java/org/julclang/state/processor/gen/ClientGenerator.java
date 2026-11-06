@@ -158,7 +158,8 @@ public final class ClientGenerator {
         }
         w.line(".redeemer(ctx -> new " + V + "." + t.variant() + "(" + redeemerArgs(t, null) + "))");
         w.line(".build());");
-        w.close("");
+        w.dedent();
+        w.dedent();
         w.close("}").blank();
     }
 
@@ -249,7 +250,8 @@ public final class ClientGenerator {
             }
             w.line(".redeemer(ctx -> new " + V + "." + t.variant() + "(" + redeemerArgs(t, null) + "))");
             w.line(".build());");
-            w.close("");
+            w.dedent();
+            w.dedent();
             w.close("}").blank();
         }
         w.close("}").blank();

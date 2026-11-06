@@ -2,12 +2,13 @@
 
 *JOUST = **J**ava **O**n **U**PLC **ST**ate, pronounced "jowst".*
 
-> **Status: Options A–D work end to end, but nothing is published yet.** The example contracts are generated,
+> **Status: Options A–E work end to end, but nothing is published yet.** The example contracts are generated,
 > attack-tested and run on Yaci DevKit:
 > - A: single-UTxO state machines;
 > - B: MerkleMap state with a shared proof verifier;
 > - C: owned objects beside shared state;
-> - D: batched intents for hot shared state.
+> - D: batched intents for hot shared state;
+> - E: `.jsc`, a Solidity-like surface syntax that lowers to a Java `@StateContract`.
 
 JOUST lets Java developers write Cardano smart contracts as **state plus actions**, the way they would write an
 account-based contract, instead of UTxOs, datums and redeemers. You write a state record and pure static methods.
@@ -101,5 +102,7 @@ dependencies {
   script.
 - [ADR-0003](docs/adr/0003-option-c-owned-objects.md): Option C, `@Owned` objects with `@Shared` reads.
 - [ADR-0004](docs/adr/0004-option-d-batched-intents.md): Option D, `@Batched` intents and a permissionless batcher.
+- [ADR-0005](docs/adr/0005-option-e-jsc-dsl.md): Option E, the `.jsc` syntax lowered to Java (SSA, one helper per
+  `if` arm, checker rules).
 - [Research](docs/research/state-oriented-contracts-research.md): options A–F and prior art.
 - [Annotation catalogue](docs/research/annotation-catalog.md): everything planned, and what ships when.

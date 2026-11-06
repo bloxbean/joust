@@ -1,0 +1,43 @@
+package org.julclang.state.examples.dsl
+
+// Loyalty points in a Map<Key, Int> (a MerkleMap: any number of holders, a 32-byte root on chain).
+contract Points(maxDatumBytes = 160) {
+    state admin: Key
+    state supply: Int
+    state points: Map<Key, Int>
+
+    init() {
+        admin = caller
+    }
+
+    action award(to: Key, n: Int) only admin {
+        require n > 0 "award a positive amount"
+        points[to] += n
+        supply += n
+    }
+
+    // Spending everything removes the holder.
+    action spend(n: Int) {
+        let have = points[caller]
+        require n > 0 && have >= n "not enough points"
+        if have == n {
+            delete points[caller]
+        } else {
+            points[caller] -= n
+        }
+        supply -= n
+    }
+
+    action give(to: Key, n: Int) {
+        require n > 0 && points[caller] >= n "not enough points"
+        points[caller] -= n
+        points[to] += n
+    }
+
+    destroy close() only admin {
+        require supply == 0 && isEmpty(points) "points are still out"
+        pay balance to admin
+    }
+
+    view pointsOf(who: Key): Int = points[who]
+}
