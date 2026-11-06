@@ -20,6 +20,7 @@ Each example contains:
 | `bank` | **Option C (ADR-0003).** Shared bank config plus one owned account per customer. Customers act in parallel; withdrawals read the config by reference; closing works even if the bank is paused |
 | `pool` | **Option D (ADR-0004).** `@Batched` donations and order-dependent ticket sales as intents: users lock requests concurrently, a permissionless batcher applies them in one transaction (refunds, change payouts, a cancel, an expired intent) |
 | `dsl` | **Option E (ADR-0005).** Contracts written in `.jsc` and lowered to Java at build time: `Jar.jsc` (tips, also as intents; a withdraw rule in an `if`), `Points.jsc` (a `Map<Key, Int>` with `delete` and self-transfer) and `Guards.jsc` (laziness of untaken arms and `\|\|`) |
+| `rollup` | **Option F spike (ADR-0006).** An off-chain payments ledger (`Ledger`, a total JuLC-subset program with ed25519-signed orders) checkpointed by an L1 `Rollup` contract: commit the steps, a challenge window, finalize, and one-step fraud proofs that re-run `Ledger.step` on-chain and slash the bond |
 | `crowdfund` | A `JulcMap` in the state, kept canonical with `SortedMaps`; refunds paying the caller; `@SignedBy("creator")`; capacity tested at `maxDatumBytes` |
 
 ## Script sizes and budgets
@@ -56,6 +57,8 @@ are per script execution, from the harness tests. For scale, a transaction may u
 | Jar (.jsc) | 11 KB | tip | SPEND | 194.5M | 651k |
 | | | withdraw (with an `if` arm) | SPEND | 236.0M | 796k |
 | Points (.jsc) | 14 KB (+ MapVerifier) | give | SPEND + VERIFIER | 327.7M + 392.5M | 1,109k + 1,493k |
+| Rollup | 12 KB | commit (16 steps) | SPEND | 744.5M | 2,232k |
+| | | challenge, worst case (32 accounts, 16 steps) | SPEND | 2,735.2M | 8,117k |
 | Token | 14.0 KB (+ MapVerifier 4.6 KB, shared) | create | MINT + VERIFIER | 202.4M + 31.0M | 663k + 135k |
 | | | mint (1 read, 1 write) | SPEND + VERIFIER | 248.5M + 335.4M | 823k + 1,274k |
 | | | transfer (2 reads, 2 writes) | SPEND + VERIFIER | 310.7M + 501.3M | 1,046k + 1,898k |
