@@ -15,6 +15,7 @@ include 'julc-state-api'
 include 'julc-state-processor'
 include 'julc-state-runtime'
 include 'julc-state-testkit'
+include 'examples:devkit'
 include 'examples:counter'
 
 // Local development against a JuLC checkout (opt-in, untested so far):

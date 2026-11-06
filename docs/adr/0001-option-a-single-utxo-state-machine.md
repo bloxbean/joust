@@ -1,6 +1,6 @@
 # ADR-0001: Option A — single-UTxO state machine (`@StateContract`, INLINE storage, direct mode)
 
-**Status:** Proposed (r2: revised after review r1 by three independent reviewers; see §14)
+**Status:** Accepted with changes (r3). r1 was reviewed by three independent reviewers and revised; r2 was approved with changes by the security re-review, and those changes are applied (§14)
 **Date:** 2026-11-06
 **Builds on:** `docs/research/state-oriented-contracts-research.md` (Option A, §6 design rules, §9 adjustments),
 `docs/research/annotation-catalog.md` (milestone-1 rows)
@@ -97,7 +97,7 @@ interfaces, `JulcList`, `JulcMap`, `Optional`). `[Ctx]` is an optional **last** 
 |---|---|---|
 | `@Init` | `public static S init(Args [, Ctx])` | `S` must be a record. The state type is defined as this method's return type |
 | `@Action` | `public static S name(S, Args [, Ctx])` or `public static R name(S, Args [, Ctx])` | `R` is a record with exactly two components `(S state, JulcList<Payout> payouts)` (D5) |
-| `@Destroy` | `public static JulcList<Payout> name(S, Args [, Ctx])` | May be repeated (escrow has `release` and `refund`) |
+| `@Destroy` | `public static JulcList<Payout> name(S, Args, Ctx)` | `Ctx` is **required**: it must pay out `ctx.balance()`, which only `Ctx` exposes. May be repeated (escrow has `release` and `refund`). A contract without `@Destroy` gets a warning, since its deposit is locked forever |
 | `@View` | `public static T name(S, Args)` | No `Ctx`; never on-chain |
 
 Further rules:
@@ -105,6 +105,9 @@ Further rules:
 - `@SignedBy`/`@OnlyOwner` must name an `S` component of type `byte[]`; `@ValidAfter`/`@ValidBefore` must name a
   component of type `BigInteger`.
 - `@Payable` without a `Ctx` parameter is an error, since the method could not see the amount.
+- **Reserved names.** Variants `Create`, `Burn`, `Mint` and `Spend` (so no action may be named `create` or `burn`),
+  the parameter name `ctx`, and the `@Init` parameter name `seed`. Generated per-transition methods are named
+  `on<Variant>` and never collide with the generated helpers. Each clash is a compile error.
 - The whole class, views included, must stay inside JuLC's subset, because JuLC compiles the class source as a library.
 - **Shared-execution subset** (F12). The processor rejects `int`, `long`, `short`, `char`, `float` and `double`, and
   calls to `intValue()`/`longValue()` (and the other narrowing conversions), anywhere in the contract class. These
@@ -424,6 +427,13 @@ unchanged**, not that the generators survive untouched.
   arguments (for example naming a victim as seller). Front ends must show who created an instance and with what
   arguments.
 - With several signers, the transaction builder chooses which one is `caller`.
+- **Capacity.** `maxDatumBytes` bounds the state, so an anyone-callable action that grows a collection can be used to
+  fill it: about 13 entries of `pkh → amount` at the default 512 bytes. Contracts size `maxDatumBytes` for their
+  use and add economic floors, such as crowdfund's minimum contribution. The attack suite checks that the shrinking
+  paths (refund, claim, destroy) still succeed, within budget, at capacity.
+- **Trust radius of time.** `validFrom` may be up to `maxValidityMs` in the past and `validTo` up to that far ahead.
+  Contracts that store "now" or accrue by time inherit that skew. The client fails fast if its TTL exceeds
+  `maxValidityMs`.
 
 ## 11. Out of scope (later ADRs)
 
@@ -471,3 +481,15 @@ Codex (C). All three asked for changes. Resolution:
 | Datum equality is structural | S12 | Reworded (D6) |
 | Spoofed instances, caller ambiguity, retry against changed state | S9, S10 | Documented (§10, D14) |
 | `JulcAnnotationProcessor` is not incremental | F12 | Noted; the JOUST processor claims only `org.julclang.state.api.StateContract` |
+
+**Re-review of r2.** The security reviewer approved with changes and confirmed that every r1 finding is closed.
+
+| Finding | Resolution (r3) |
+|---|---|
+| `maxDatumBytes` enables cheap capacity griefing | §10 "Capacity"; crowdfund minimum contribution and a sized limit; at-capacity scenario in D16 |
+| A `Ctx`-less `@Destroy` can't allocate the deposit | `Ctx` required on `@Destroy` (D2) |
+| Generated names can collide with user names | `on<Variant>` methods; reserved names diagnosed (D2) |
+| Ambiguous submit results | "Rejected" means a definite rejection from the node; anything else raises `PendingTransactionException` (D14) |
+| Trust radius of time; closure flags | §10; `startsAt`/`endsAt` also assert lower-inclusive and upper-exclusive |
+| No `@Destroy` means a locked deposit | Processor warning (D2) |
+| Split `Ctx` | Still §13 Q2, deferred |

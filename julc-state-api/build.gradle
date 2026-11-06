@@ -44,7 +44,10 @@ def bundleOnchainSources = tasks.register('bundleOnchainSources') {
         new File(target, 'index.txt').text = sources.keySet().join('\n') + '\n'
     }
 }
-sourceSets.main.resources.srcDir(bundleOnchainSources)
+// Not added to the main jar on purpose: julc-state-processor depends on this module, so the jar also lands on the
+// processor path, and a rebuilt jar there makes JuLC's source scan abort (it stops at the first unreadable index,
+// skipping julc-stdlib's sources too; ADR-0001 F8). The bundle ships only through `onchainSources` below.
+// Publishing will add it as a separate `onchain` classifier jar.
 
 // Consumers in this build put the bundle on their annotation processor path as a *directory*:
 //   annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')

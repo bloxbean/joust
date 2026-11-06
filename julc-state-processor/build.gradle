@@ -6,6 +6,7 @@ dependencies {
     // Processor tests compile small contracts in-process (javax.tools) with this processor and JuLC's.
     testImplementation project(':julc-state-api')
     testImplementation libs.julc.annotation.processor
+    testImplementation libs.julc.compiler
 }
 
 tasks.withType(Test).configureEach {

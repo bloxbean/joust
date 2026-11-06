@@ -110,6 +110,14 @@ final class ContractReader {
             if (!m.getTypeParameters().isEmpty()) {
                 error(m, "contract methods cannot be generic");
             }
+            if (org.julclang.state.processor.gen.ClientGenerator.RESERVED_MEMBERS.contains(m.getSimpleName().toString())) {
+                error(m, "\"" + m.getSimpleName() + "\" is a member of the generated client; rename the method");
+            }
+            for (var p : m.getParameters()) {
+                if (org.julclang.state.processor.gen.ClientGenerator.RESERVED_PARAMS.contains(p.getSimpleName().toString())) {
+                    error(p, "parameter name \"" + p.getSimpleName() + "\" is used by the generated client; rename it");
+                }
+            }
             if (!names.add(m.getSimpleName().toString())) {
                 error(m, "contract method names must be unique (no overloading): " + m.getSimpleName());
             }
@@ -176,6 +184,10 @@ final class ContractReader {
         }
         types.checkNoClash(GENERATED_NAMES).forEach(msg -> error(type, msg));
 
+        if (destroyIRs.isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.WARNING, "this @StateContract has no @Destroy method: an instance can"
+                    + " never end, so its min-ADA deposit (" + minAda + " lovelace) is locked forever", type);
+        }
         if (failed) return Optional.empty();
         return Optional.of(new ContractIR(pkg, type.getSimpleName().toString(), stateText, stateComponents, minAda,
                 maxDatumBytes, maxValidityMs,
@@ -200,7 +212,8 @@ final class ContractReader {
             "TxOut", "TxInInfo", "TxOutRef", "Value", "Address", "Credential", "ScriptInfo", "Builtins", "Entrypoint",
             "MultiValidator", "Purpose", "AddressLib", "ByteStringLib", "ContextsLib", "OutputLib", "ValuesLib",
             "IntervalLib", "CryptoLib", "Interval", "IntervalBoundType", "OutputDatum", "Ctx", "Clock", "Payout", "Payouts", "Create", "Burn", "Account", "StateRuntime",
-            "StateInstance", "TxResult", "Transition", "Mint", "Spend");
+            "StateInstance", "TxResult", "Transition", "Mint", "Spend", "Call", "Deploy", "ContractSpec",
+            "StateContractHandle", "Utxo", "Arrays");
 
     private record Reading(TypeRenderer types, TypeMirror stateType, Map<String, ParamIR> components) {}
 
@@ -256,6 +269,20 @@ final class ContractReader {
         boolean payable = annotation(m, PAYABLE).isPresent();
         if (payable && kind == TransitionIR.Kind.DESTROY) error(m, "@Payable does not apply to @Destroy");
         if (payable && !hasCtx) error(m, "@Payable needs a Ctx parameter, to read ctx.received()");
+        if (kind == TransitionIR.Kind.DESTROY && !hasCtx) {
+            error(m, "@Destroy needs a Ctx parameter: it must pay out ctx.balance(), everything the instance holds"
+                    + " (deposit included)");
+        }
+        if (kind == TransitionIR.Kind.INIT) {
+            for (ParamIR p : params) {
+                if (p.name().equals("seed") || p.name().equals("ctx")) {
+                    error(m, "@Init parameter name \"" + p.name() + "\" is reserved by the generated redeemer; rename it");
+                }
+            }
+        }
+        for (ParamIR p : params) {
+            if (p.name().equals("ctx")) error(m, "parameter name \"ctx\" is reserved for the Ctx parameter; rename it");
+        }
 
         List<String> signedBy = new ArrayList<>();
         annotation(m, SIGNED_BY).flatMap(a -> value(a, "value")).ifPresent(v -> signedBy.add((String) v.getValue()));

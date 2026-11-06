@@ -1,0 +1,6 @@
+description = 'JOUST examples: Yaci DevKit connection helper'
+
+dependencies {
+    api project(':julc-state-runtime')
+    api libs.cardano.client.backend.blockfrost
+}

@@ -44,7 +44,7 @@ public final class ValidatorGenerator {
                 "org.julclang.stdlib.Builtins", "org.julclang.stdlib.annotation.Entrypoint",
                 "org.julclang.stdlib.annotation.MultiValidator", "org.julclang.stdlib.annotation.Purpose",
                 "org.julclang.stdlib.lib.AddressLib", "org.julclang.stdlib.lib.ByteStringLib",
-                "org.julclang.stdlib.lib.ContextsLib",
+                "org.julclang.stdlib.lib.ContextsLib", "org.julclang.stdlib.lib.CryptoLib",
                 "org.julclang.stdlib.lib.OutputLib", "org.julclang.stdlib.lib.ValuesLib",
                 "org.julclang.state.api.Ctx", "org.julclang.state.api.Payout", "org.julclang.state.api.Payouts"));
         imports.addAll(c.imports());
@@ -94,7 +94,7 @@ public final class ValidatorGenerator {
 
         TransitionIR init = c.init();
         w.open("static boolean create(Create cr, TxInfo tx, byte[] policy) {");
-        w.line("byte[] id = ValuesLib.uniqueTokenName(cr.seed());");
+        w.line("byte[] id = instanceId(cr.seed());");
         w.line("boolean seedSpent = seedConsumed(tx.inputs(), cr.seed());");
         w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
         w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
@@ -126,7 +126,7 @@ public final class ValidatorGenerator {
             w.line("BigInteger inLovelace = ValuesLib.lovelaceOf(ownOut.value());");
             w.open("return switch (redeemer) {");
             for (var t : spend) {
-                w.line("case " + t.variant() + " r -> " + t.method() + "(r, current, tx, own, policy, id, inLovelace);");
+                w.line("case " + t.variant() + " r -> on" + t.variant() + "(r, current, tx, own, policy, id, inLovelace);");
             }
             w.close("};");
             w.close("}").blank();
@@ -141,7 +141,7 @@ public final class ValidatorGenerator {
     private void transition(TransitionIR t) {
         String X = c.name();
         String S = c.stateType();
-        w.open("static boolean " + t.method() + "(" + t.variant() + " r, " + S
+        w.open("static boolean on" + t.variant() + "(" + t.variant() + " r, " + S
                 + " current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id, BigInteger inLovelace) {");
         List<String> checks = new ArrayList<>();
         for (String f : t.signedBy()) {
@@ -199,6 +199,12 @@ public final class ValidatorGenerator {
     private void helpers() {
         w.line("// ---- generated helpers ---------------------------------------------------------------------");
         w.blank();
+        w.line("/** The instance id: blake2b_256(seedTxId ++ I2OSP(seedIndex, 2)), as ValuesLib.uniqueTokenName. */");
+        w.open("static byte[] instanceId(TxOutRef seed) {");
+        w.line("byte[] txId = (byte[]) (Object) seed.txId();");
+        w.line("return CryptoLib.blake2b_256(Builtins.appendByteString(txId, ByteStringLib.integerToByteString(true, 2, seed.index())));");
+        w.close("}").blank();
+
         w.open("static boolean seedConsumed(JulcList<TxInInfo> inputs, TxOutRef seed) {");
         w.line("boolean found = false;");
         w.open("for (var in : inputs) {");
@@ -317,17 +323,19 @@ public final class ValidatorGenerator {
         w.line("return signed && receivedOk && balanceOk && fromOk && toOk && narrow;");
         w.close("}").blank();
 
+        w.line("/** Finite, inclusive lower bound equal to t (Conway: lower bounds are closed). */");
         w.open("static boolean startsAt(Interval range, BigInteger t) {");
         w.open("return switch (range.from().boundType()) {");
-        w.line("case IntervalBoundType.Finite f -> f.time().compareTo(t) == 0;");
+        w.line("case IntervalBoundType.Finite f -> f.time().compareTo(t) == 0 && range.from().isInclusive();");
         w.line("case IntervalBoundType.NegInf n -> false;");
         w.line("case IntervalBoundType.PosInf p -> false;");
         w.close("};");
         w.close("}").blank();
 
+        w.line("/** Finite, exclusive upper bound equal to t (Conway: invalidHereafter is open). */");
         w.open("static boolean endsAt(Interval range, BigInteger t) {");
         w.open("return switch (range.to().boundType()) {");
-        w.line("case IntervalBoundType.Finite f -> f.time().compareTo(t) == 0;");
+        w.line("case IntervalBoundType.Finite f -> f.time().compareTo(t) == 0 && !range.to().isInclusive();");
         w.line("case IntervalBoundType.NegInf n -> false;");
         w.line("case IntervalBoundType.PosInf p -> false;");
         w.close("};");

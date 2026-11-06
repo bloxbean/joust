@@ -3,7 +3,7 @@ plugins {
 }
 
 subprojects {
-    apply plugin: path.startsWith(':examples') ? 'java' : 'java-library'
+    apply plugin: 'java-library'
 
     group = rootProject.group
     version = rootProject.version
