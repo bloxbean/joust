@@ -22,6 +22,7 @@ class ProcessorDiagnosticsTest {
             import java.math.BigInteger;
             import org.julclang.core.types.JulcList;
             import org.julclang.state.api.*;
+            import org.julclang.state.api.MerkleMap;
             import org.julclang.stdlib.annotation.OnchainLibrary;
             """;
 
@@ -128,7 +129,7 @@ class ProcessorDiagnosticsTest {
 
     @Test
     void reservedNames() {
-        assertTrue(compile(GOOD.replace("bump(", "create(").replace("@View public static BigInteger n(S s)",
+        assertTrue(compile(GOOD.replace("bump(", "createInstance(").replace("@View public static BigInteger n(S s)",
                 "@View public static BigInteger n(S s)")).hasError("clashes with a generated name"));
         assertTrue(compile(GOOD.replace("n(S s) { return s.n(); }", "state(S s) { return s.n(); }"))
                 .hasError("member of the generated client"));
@@ -154,6 +155,40 @@ class ProcessorDiagnosticsTest {
     void minAdaBelowWhatTheDatumNeeds() {
         var r = compile(GOOD.replace("@StateContract", "@StateContract(minAda = 1_000_000)"));
         assertTrue(r.hasError("is below the"), r.errors().toString());
+    }
+
+    // ------------------------------------------------------------------ MerkleMap rules (ADR-0002 r2)
+
+    static final String MAPPED = """
+            @StateContract
+            public class C {
+                public record S(byte[] owner, MerkleMap m) {}
+                @Init public static S init(Ctx ctx) { return new S(ctx.caller(), MerkleMaps.empty()); }
+                @Action public static S put(S s, byte[] k) { return new S(s.owner(), MerkleMaps.put(s.m(), k, k)); }
+            }
+            """;
+
+    @Test
+    void merkleMapStateCompiles() {
+        var r = compile(MAPPED);
+        assertTrue(r.success(), r.errors().toString());
+    }
+
+    @Test
+    void merkleMapArgumentsAreRejected() {
+        var r = compile(MAPPED.replace("put(S s, byte[] k) { return new S(s.owner(), MerkleMaps.put(s.m(), k, k)); }",
+                "put(S s, MerkleMap other) { return new S(s.owner(), other); }"));
+        assertTrue(r.hasError("can only be a component of the state record"), r.errors().toString());
+    }
+
+    @Test
+    void handMadeMapsAndInternalsAreRejected() {
+        var made = compile(MAPPED.replace("MerkleMaps.put(s.m(), k, k)",
+                "new MerkleMap(s.m().root(), org.julclang.core.types.JulcList.empty(), org.julclang.core.types.JulcList.empty())"));
+        assertTrue(made.hasError("constructing org.julclang.state.api.MerkleMap"), made.errors().toString());
+        var peek = compile(MAPPED.replace("return new S(s.owner(), MerkleMaps.put(s.m(), k, k));",
+                "Require.that(s.m().reads().isEmpty(), \"x\"); return s;"));
+        assertTrue(peek.hasError("MerkleMap.reads()"), peek.errors().toString());
     }
 
     // ------------------------------------------------------------------ numeric divergence lint

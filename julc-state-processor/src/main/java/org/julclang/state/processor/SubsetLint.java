@@ -55,6 +55,8 @@ final class SubsetLint {
             Tree.Kind.BITWISE_COMPLEMENT, Tree.Kind.PREFIX_INCREMENT, Tree.Kind.PREFIX_DECREMENT,
             Tree.Kind.POSTFIX_INCREMENT, Tree.Kind.POSTFIX_DECREMENT);
 
+    private static final Set<String> MAP_TYPES = Set.of("org.julclang.state.api.MerkleMap", "org.julclang.state.api.MapEntry");
+
     private static final Set<String> NARROWING_CALLS = Set.of(
             "intValue", "longValue", "shortValue", "byteValue", "intValueExact", "longValueExact", "shortValueExact",
             "byteValueExact", "doubleValue", "floatValue");
@@ -166,6 +168,29 @@ final class SubsetLint {
                             + " wraps, on-chain does not. Use BigInteger");
                 }
                 return super.visitCompoundAssignment(node, unused);
+            }
+
+            @Override
+            public Void visitNewClass(com.sun.source.tree.NewClassTree node, Void unused) {
+                TypeMirror t = typeOf(node);
+                if (t != null && MAP_TYPES.contains(t.toString())) {
+                    reportTyped(trees, node, getCurrentPath(), "constructing " + t + " in a @StateContract: a hand-made"
+                            + " map carries reads nobody proved. Use MerkleMaps.empty() and its helpers (ADR-0002 r2)");
+                }
+                return super.visitNewClass(node, unused);
+            }
+
+            @Override
+            public Void visitMemberSelect(com.sun.source.tree.MemberSelectTree node, Void unused) {
+                String name = node.getIdentifier().toString();
+                if (name.equals("reads") || name.equals("writes") || name.equals("root")) {
+                    TypeMirror owner = trees.getTypeMirror(new TreePath(getCurrentPath(), node.getExpression()));
+                    if (owner != null && owner.toString().equals("org.julclang.state.api.MerkleMap")) {
+                        reportTyped(trees, node, getCurrentPath(), "MerkleMap." + name + "() in a @StateContract: its"
+                                + " internals differ between the JVM run and the on-chain run. Use MerkleMaps helpers");
+                    }
+                }
+                return super.visitMemberSelect(node, unused);
             }
 
             @Override

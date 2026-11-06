@@ -2,6 +2,7 @@ description = 'JOUST annotation processor: @StateContract -> <Name>Validator (Ju
 
 dependencies {
     implementation project(':julc-state-api')
+    implementation project(':julc-state-verifier')   // MapVerifier's script hash, embedded in validators with MerkleMaps
 
     // Processor tests compile small contracts in-process (javax.tools) with this processor and JuLC's.
     testImplementation project(':julc-state-api')

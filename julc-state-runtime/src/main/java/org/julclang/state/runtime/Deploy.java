@@ -6,7 +6,6 @@ import org.julclang.state.api.Ctx;
 
 import java.math.BigInteger;
 import java.util.Objects;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -19,7 +18,14 @@ import java.util.function.Function;
  * @param redeemer  builds the {@code Create} redeemer from the seed and the Ctx
  */
 public record Deploy<S>(Account caller, BigInteger received, boolean usesCtx, Function<Ctx, S> run,
-                        BiFunction<TxOutRef, Ctx, Object> redeemer) {
+                        CreateRedeemer redeemer) {
+
+    /** Builds the {@code CreateInstance} redeemer from the seed and the Ctx. */
+    @FunctionalInterface
+    public interface CreateRedeemer {
+        Object make(TxOutRef seed, Ctx ctx);
+    }
+
     public Deploy {
         Objects.requireNonNull(caller, "caller");
         Objects.requireNonNull(received, "received");

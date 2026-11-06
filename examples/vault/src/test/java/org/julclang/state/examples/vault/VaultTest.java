@@ -22,7 +22,7 @@ class VaultTest {
     @Test
     void open_withFirstDeposit() {
         Ctx ctx = h.ctx(OWNER, ADA.multiply(BigInteger.TEN), BigInteger.ZERO);
-        var tx = h.create(new VaultValidator.Create(h.seed(), LATER, ctx), Vault.open(LATER, ctx), ctx);
+        var tx = h.create(new VaultValidator.CreateInstance(h.seed(), LATER, ctx), Vault.open(LATER, ctx), ctx);
         System.out.println("[open] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
     }
 
@@ -78,7 +78,7 @@ class VaultTest {
     void close_afterUnlock() {
         var live = h.live(new Vault.State(OWNER, UNLOCK, ADA.multiply(BigInteger.TEN)), ADA.multiply(BigInteger.TEN));
         Ctx ctx = h.ctx(OWNER, BigInteger.ZERO, live.lovelace());
-        var tx = h.destroy(live, new VaultValidator.Close(ctx), new VaultValidator.Burn(), Vault.close(live.state(), ctx), OWNER, ctx);
+        var tx = h.destroy(live, new VaultValidator.Close(ctx), new VaultValidator.BurnInstance(), Vault.close(live.state(), ctx), OWNER, ctx);
         System.out.println("[close] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
     }
 }

@@ -25,8 +25,8 @@ class CounterDevnetTest {
     @Test
     void lifecycle() {
         var runtime = DevKit.runtime();
-        var alice = DevKit.fundedAccount(50);
-        var bob = DevKit.fundedAccount(50);
+        var alice = DevKit.fundedAccount(500);
+        var bob = DevKit.fundedAccount(500);
 
         var counter = CounterClient.deploy(runtime, alice);
         assertEquals(BigInteger.ZERO, counter.count());

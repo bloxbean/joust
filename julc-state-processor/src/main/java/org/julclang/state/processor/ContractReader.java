@@ -129,6 +129,12 @@ final class ContractReader {
             error(initMethod, "@Init must return the state record");
             return Optional.empty();
         }
+        for (RecordComponentElement c : stateElement.getRecordComponents()) {
+            if (!isNamed(c.asType(), API + "MerkleMap") && mentionsMap(c.asType(), new java.util.HashSet<>())) {
+                error(initMethod, "state component '" + c.getSimpleName() + "' nests a MerkleMap or MapEntry; MerkleMaps"
+                        + " are supported only as direct components of the state record (ADR-0002 D6)");
+            }
+        }
         List<ParamIR> stateComponents = new ArrayList<>();
         Map<String, ParamIR> componentsByName = new LinkedHashMap<>();
         for (RecordComponentElement c : stateElement.getRecordComponents()) {
@@ -179,6 +185,11 @@ final class ContractReader {
         }
         types.checkNoClash(GENERATED_NAMES).forEach(msg -> error(type, msg));
 
+        boolean anyMap = stateComponents.stream().anyMatch(p -> p.kind() == ParamIR.TypeKind.MERKLE_MAP);
+        if (anyMap && !destroyIRs.isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.WARNING, "a @Destroy discards every MerkleMap's contents: check"
+                    + " MerkleMaps.isEmpty(...) in its rules unless losing them is intended (ADR-0002 r2)", type);
+        }
         if (destroyIRs.isEmpty()) {
             messager.printMessage(Diagnostic.Kind.WARNING, "this @StateContract has no @Destroy method: an instance can"
                     + " never end, so its min-ADA deposit (" + minAda + " lovelace) is locked forever", type);
@@ -206,8 +217,9 @@ final class ContractReader {
             "BigInteger", "Optional", "List", "PlutusData", "JulcList", "AssetEntry", "ScriptContext", "TxInfo",
             "TxOut", "TxInInfo", "TxOutRef", "Value", "Address", "Credential", "ScriptInfo", "Builtins", "Entrypoint",
             "MultiValidator", "Purpose", "AddressLib", "ByteStringLib", "ContextsLib", "OutputLib", "ValuesLib",
-            "IntervalLib", "CryptoLib", "Interval", "IntervalBoundType", "OutputDatum", "Ctx", "Clock", "Payout", "Payouts", "Create", "Burn", "Account", "StateRuntime",
-            "StateInstance", "TxResult", "Transition", "Mint", "Spend", "Call", "Deploy", "ContractSpec",
+            "IntervalLib", "CryptoLib", "Interval", "IntervalBoundType", "OutputDatum", "Ctx", "Clock", "Payout", "Payouts", "CreateInstance", "BurnInstance", "Account", "StateRuntime",
+            "StateInstance", "TxResult", "Transition", "Lifecycle", "Calls", "Call", "MerkleMap", "MapEntry", "MapWitness",
+            "MapWitnesses", "Mpf", "Deploy", "ContractSpec",
             "StateContractHandle", "Utxo", "Arrays");
 
     private record Reading(TypeRenderer types, TypeMirror stateType, Map<String, ParamIR> components) {}
@@ -231,6 +243,10 @@ final class ContractReader {
                 error(p, "Ctx must be the last parameter");
             } else if (same(p.asType(), r.stateType())) {
                 error(p, "only the first parameter may be the state");
+            }
+            if (mentionsMap(p.asType(), new java.util.HashSet<>())) {
+                error(p, "a MerkleMap or MapEntry can only be a component of the state record: one passed in an argument"
+                        + " carries reads nobody proved (ADR-0002 r2)");
             }
             params.add(new ParamIR(p.getSimpleName().toString(), r.types().render(p.asType()), kindOf(p.asType())));
         }
@@ -277,6 +293,7 @@ final class ContractReader {
         }
         for (ParamIR p : params) {
             if (p.name().equals("ctx")) error(m, "parameter name \"ctx\" is reserved for the Ctx parameter; rename it");
+            if (p.name().equals("maps")) error(m, "parameter name \"maps\" is reserved for the MerkleMap witnesses; rename it");
         }
 
         List<String> signedBy = new ArrayList<>();
@@ -295,7 +312,7 @@ final class ContractReader {
         for (String f : validBefore) checkField(m, r, f, ParamIR.TypeKind.INTEGER, "BigInteger", "@ValidBefore");
 
         String name = m.getSimpleName().toString();
-        String variant = kind == TransitionIR.Kind.INIT ? "Create"
+        String variant = kind == TransitionIR.Kind.INIT ? "CreateInstance"
                 : Character.toUpperCase(name.charAt(0)) + name.substring(1);
         return new TransitionIR(kind, name, variant, List.copyOf(params), hasCtx, payable, returns, resultType,
                 List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore));
@@ -327,6 +344,19 @@ final class ContractReader {
     }
 
     // ------------------------------------------------------------------ type helpers
+
+    /** True if {@code t} is, or contains (in record components or type arguments), a MerkleMap or MapEntry. */
+    private boolean mentionsMap(TypeMirror t, java.util.Set<String> seen) {
+        if (!(t instanceof DeclaredType d) || !(d.asElement() instanceof TypeElement e)) return false;
+        String name = e.getQualifiedName().toString();
+        if (name.equals(API + "MerkleMap") || name.equals(API + "MapEntry")) return true;
+        if (!seen.add(name)) return false;
+        for (TypeMirror a : d.getTypeArguments()) if (mentionsMap(a, seen)) return true;
+        if (e.getKind() == ElementKind.RECORD) {
+            for (RecordComponentElement c : e.getRecordComponents()) if (mentionsMap(c.asType(), seen)) return true;
+        }
+        return false;
+    }
 
     private boolean isResultRecord(TypeMirror t, TypeMirror stateType) {
         TypeElement e = asRecord(t);
@@ -362,6 +392,7 @@ final class ContractReader {
                 == TypeKind.BYTE) return ParamIR.TypeKind.BYTES;
         if (isNamed(t, BIG_INTEGER)) return ParamIR.TypeKind.INTEGER;
         if (isNamed(t, "java.lang.String")) return ParamIR.TypeKind.STRING;
+        if (isNamed(t, API + "MerkleMap")) return ParamIR.TypeKind.MERKLE_MAP;
         return ParamIR.TypeKind.OTHER;
     }
 

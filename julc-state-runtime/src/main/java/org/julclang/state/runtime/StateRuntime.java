@@ -27,6 +27,7 @@ public final class StateRuntime {
     private final Duration confirmTimeout;
     private final Map<String, String> addressBook;
     private final Consumer<String> log;
+    private final com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
 
     private StateRuntime(Builder b) {
         this.backend = Objects.requireNonNull(b.backend, "backend");
@@ -38,6 +39,8 @@ public final class StateRuntime {
         this.confirmTimeout = b.confirmTimeout;
         this.addressBook = Map.copyOf(b.addressBook);
         this.log = b.log;
+        this.mapStore = b.mapStore != null ? b.mapStore : new InMemoryNodeStore();
+        org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
     }
 
     public static Builder builder(BackendService backend) {
@@ -53,6 +56,16 @@ public final class StateRuntime {
     public int maxRetries() { return maxRetries; }
     public Duration confirmTimeout() { return confirmTimeout; }
     void log(String message) { log.accept(message); }
+    private volatile MapVerifierHandle mapVerifier;
+
+    /** The JOUST map verifier on this network (ADR-0002 D9). */
+    public MapVerifierHandle mapVerifier() {
+        if (mapVerifier == null) mapVerifier = new MapVerifierHandle(this);
+        return mapVerifier;
+    }
+
+    /** Node store of every MerkleMap mirror (content-addressed; ADR-0002 D5). */
+    public com.bloxbean.cardano.vds.core.api.NodeStore mapStore() { return mapStore; }
 
     /** A known address (bech32) for a payment key hash, used for payouts; null if unknown. */
     String addressOf(byte[] pkh) {
@@ -69,6 +82,7 @@ public final class StateRuntime {
         private Duration confirmTimeout = Duration.ofSeconds(90);
         private final Map<String, String> addressBook = new HashMap<>();
         private Consumer<String> log = msg -> { };
+        private com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
 
         private Builder(BackendService backend) {
             this.backend = backend;
@@ -92,6 +106,8 @@ public final class StateRuntime {
             return this;
         }
         public Builder log(Consumer<String> log) { this.log = log; return this; }
+        /** Where MerkleMap mirrors keep their trie nodes; default in memory. Use a persistent store to reconnect later. */
+        public Builder mapStore(com.bloxbean.cardano.vds.core.api.NodeStore store) { this.mapStore = store; return this; }
 
         public StateRuntime build() {
             return new StateRuntime(this);

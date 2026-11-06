@@ -49,11 +49,69 @@ public final class StateContractHandle<S> {
         this.address = AddressProvider.getEntAddress(script, runtime.network()).toBech32();
     }
 
+    /** The reference-script UTxO the contract's transactions read the script from (null until found or created). */
+    private volatile Utxo referenceScript;
+
     public String policyId() { return policyId; }
     public String address() { return address; }
     public PlutusV3Script script() { return script; }
     public ContractSpec<S> spec() { return spec; }
     public StateRuntime runtime() { return runtime; }
+
+    /**
+     * The UTxO holding this contract's script as a reference script (CIP-33), at the contract's own address without a
+     * thread token: the validator never lets it be spent (I10), so it stays available. Found on chain, or null.
+     */
+    public Utxo findReferenceScript() {
+        if (referenceScript != null) return referenceScript;
+        try {
+            for (int page = 1; page < 20; page++) {
+                var r = runtime.backend().getUtxoService().getUtxos(address, 100, page);
+                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                for (Utxo u : r.getValue()) {
+                    if (policyId.equalsIgnoreCase(u.getReferenceScriptHash())) {
+                        referenceScript = u;
+                        return u;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            throw new JoustException("cannot look up the " + spec.name() + " reference script", e);
+        }
+        return null;
+    }
+
+    /**
+     * Publishes the script as a reference script, paid by {@code payer}, unless it is already on chain. Its min-ADA
+     * deposit (about 4.3 lovelace per script byte) stays locked with it.
+     */
+    public Utxo ensureReferenceScript(Account payer) {
+        Utxo existing = findReferenceScript();
+        if (existing != null) return existing;
+        var tx = new com.bloxbean.cardano.client.quicktx.Tx()
+                .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
+                .from(payer.baseAddress());
+        String txHash = new TxRunner(runtime).submitPlain(tx, payer, "publish the " + spec.name() + " reference script");
+        for (int i = 0; i < 60 && findReferenceScript() == null; i++) TxRunner.sleep(500);
+        Utxo published = findReferenceScript();
+        if (published == null) throw new PendingTransactionException(txHash, "reference script not visible yet");
+        runtime.log("published the " + spec.name() + " reference script in " + txHash);
+        return published;
+    }
+
+    private BigInteger referenceScriptDeposit() {
+        try {
+            ProtocolParams pp = runtime.backend().getEpochService().getProtocolParameters().getValue();
+            var out = TransactionOutput.builder()
+                    .address(address)
+                    .value(Value.builder().coin(BigInteger.valueOf(2_000_000)).build())
+                    .scriptRef(script)
+                    .build();
+            return new MinAdaCalculator(pp).calculateMinAda(out).add(BigInteger.valueOf(1_000_000));
+        } catch (Exception e) {
+            throw new JoustException("cannot compute the reference script deposit", e);
+        }
+    }
 
     /** Reconnects to an existing instance by its id (hex thread-token name). */
     public StateInstance<S> at(String instanceId) {
@@ -75,6 +133,10 @@ public final class StateContractHandle<S> {
     public DeployResult<S> deploy(Deploy<S> d) {
         Account caller = d.caller();
         byte[] callerPkh = Keys.pkh(caller);
+        // Publish reference scripts first: doing so spends the caller's UTxOs, so the seed is picked afterwards.
+        Utxo ref = ensureReferenceScript(caller);
+        boolean maps = MerkleSupport.hasMaps(spec.stateClass());
+        if (maps) runtime.mapVerifier().ensure(caller);
         Utxo seed = pickSeed(caller);
         String instanceId = instanceIdOf(seed.getTxHash(), seed.getOutputIndex());
         var instance = new StateInstance<>(this, instanceId);
@@ -83,24 +145,38 @@ public final class StateContractHandle<S> {
         Ctx ctx = window == null
                 ? new Ctx(callerPkh, d.received(), BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO)
                 : new Ctx(callerPkh, d.received(), BigInteger.ZERO, window.fromMs(), window.toMs());
-        S initial = d.run().apply(ctx);                      // the developer's @Init, on the JVM
+        MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapStore()) : null;
+        S made = maps ? merkle.run(() -> d.run().apply(ctx)) : d.run().apply(ctx);   // the developer's @Init, on the JVM
+        var seedOwner = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())),
+                BigInteger.valueOf(seed.getOutputIndex()));
+        java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();
+        S initial = made;
+        if (maps) {
+            var prepared = merkle.prepare(spec.stateClass(), made, made, seedOwner);
+            claims = prepared.claims();
+            initial = prepared.stored();
+        }
         PlutusData datum = PlutusDataAdapter.convert(initial);
         Datums.checkSize(spec, datum, "deploy");
         Datums.checkCanonical(spec, datum, "deploy");
 
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())),
                 BigInteger.valueOf(seed.getOutputIndex()));
-        PlutusData redeemer = PlutusDataAdapter.convert(d.redeemer().apply(seedRef, ctx));
+        PlutusData redeemer = PlutusDataAdapter.convert(d.redeemer().make(seedRef, ctx));
         BigInteger lovelace = BigInteger.valueOf(spec.minAda()).add(d.received());
 
         var tx = new ScriptTx()
                 .collectFrom(seed)
-                .mintAsset(script, new Asset("0x" + instanceId, BigInteger.ONE), redeemer)
+                .readFrom(ref)
+                .mintAsset(policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE)), redeemer)
                 .payToContract(address, List.of(Amount.lovelace(lovelace), new Amount(instance.unit(), BigInteger.ONE)), datum);
+        if (maps) runtime.mapVerifier().attach(tx, claims, caller);
 
         var expected = new TxRunner.ExpectedState(instance.unit(), lovelace, datum);
         String txHash = new TxRunner(runtime).submit(tx, caller, window, d.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],
-                expected, List.of(), "deploy " + spec.name());
+                expected, List.of(), maps ? new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script,
+                        runtime.mapVerifier().script()} : new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script},
+                "deploy " + spec.name());
         instance.awaitState(txHash);
         return new DeployResult<>(instance, txHash, initial);
     }

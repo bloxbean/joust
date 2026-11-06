@@ -2,6 +2,12 @@ description = 'JOUST public API: @StateContract, Ctx, Payout, Require (on-chain 
 
 dependencies {
     api libs.julc.stdlib
+
+    // MPF differential tests: the JuLC-subset Mpf library against cardano-client-lib's MpfTrie.
+    testImplementation libs.cardano.client.mpf
+    testImplementation libs.cardano.client.lib
+    testImplementation libs.julc.testkit
+    testRuntimeOnly libs.bouncycastle.bcprov
 }
 
 // JuLC compiles validators against a fixed class path (its own on-chain API) plus *library sources*:

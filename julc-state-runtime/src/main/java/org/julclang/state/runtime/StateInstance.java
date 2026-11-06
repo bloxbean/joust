@@ -59,6 +59,15 @@ public final class StateInstance<S> {
         return decode(utxo());
     }
 
+    /**
+     * Runs a read-only function of the current state, with MerkleMap lookups served from the mirror (views).
+     */
+    public <T> T view(java.util.function.Function<S, T> f) {
+        S s = state();
+        if (!MerkleSupport.hasMaps(contract.spec.stateClass())) return f.apply(s);
+        return new MerkleSupport(contract.runtime.mapStore()).run(() -> f.apply(s));
+    }
+
     /** Lovelace the state UTxO holds (deposit included). */
     public BigInteger lovelace() {
         return lovelaceOf(utxo());
@@ -107,7 +116,20 @@ public final class StateInstance<S> {
         Ctx ctx = new Ctx(callerPkh, call.received, balance,
                 window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
 
-        Transition<S> t = call.run.apply(current, ctx);     // the developer's method, on the JVM
+        boolean maps = MerkleSupport.hasMaps(spec.stateClass());
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        Transition<S> t = maps ? merkle.run(() -> call.run.apply(current, ctx))   // the developer's method, on the JVM
+                : call.run.apply(current, ctx);
+        java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();
+        S stored = t.next();
+        TxOutRef owner = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
+                BigInteger.valueOf(stateUtxo.getOutputIndex()));
+        if (maps) {
+            var prepared = merkle.prepare(spec.stateClass(), current, t.next(), owner);
+            claims = prepared.claims();
+            stored = prepared.stored();
+            MerkleSupport.verifyReplay(spec.stateClass(), current, claims, s -> call.run.apply(s, ctx), t);
+        }
         Map<String, BigInteger> owed = new LinkedHashMap<>();
         List<Payout> payouts = new ArrayList<>();
         BigInteger total = BigInteger.ZERO;
@@ -119,15 +141,18 @@ public final class StateInstance<S> {
             total = total.add(p.lovelace());
         }
 
-        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemer.apply(ctx));
-        var tx = new ScriptTx().collectFrom(stateUtxo, redeemer);
+        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemer.make(ctx));
+        Utxo ref = contract.findReferenceScript();
+        if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
+        var tx = new ScriptTx().collectFrom(stateUtxo, redeemer).readFrom(ref);
+        if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         TxRunner.ExpectedState expected = null;
         if (call.kind == Call.Kind.ACTION) {
             BigInteger next = inLovelace.add(call.received).subtract(total);
             if (next.compareTo(BigInteger.valueOf(spec.minAda())) < 0) {
                 throw new RequireException(what + ": payouts exceed the contract's funds");
             }
-            PlutusData datum = PlutusDataAdapter.convert(t.next());
+            PlutusData datum = PlutusDataAdapter.convert(stored);
             Datums.checkSize(spec, datum, what);
             Datums.checkCanonical(spec, datum, what);
             tx.payToContract(contract.address, List.of(Amount.lovelace(next), new Amount(unit(), BigInteger.ONE)), datum);
@@ -137,7 +162,7 @@ public final class StateInstance<S> {
                 throw new RequireException(what + ": a destroy must pay out everything the instance holds ("
                         + inLovelace + " lovelace, ctx.balance()), but pays " + total);
             }
-            tx.mintAsset(contract.script, new Asset("0x" + instanceId, BigInteger.ONE.negate()),
+            tx.mintAsset(contract.policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE.negate())),
                     PlutusDataAdapter.convert(call.burnRedeemer));
         }
 
@@ -151,15 +176,15 @@ public final class StateInstance<S> {
             tx.payToContract(addr, List.of(Amount.lovelace(amount)), tag);
             expectedPayouts.add(new TxRunner.ExpectedPayout(addr, e.getValue(), tag));
         }
-        tx.attachSpendingValidator(contract.script);
 
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
         String txHash = new TxRunner(contract.runtime).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
-                expected, expectedPayouts, what);
+                expected, expectedPayouts, maps ? new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{contract.script,
+                        contract.runtime.mapVerifier().script()} : new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{contract.script}, what);
         if (call.kind == Call.Kind.ACTION) {
             awaitState(txHash);
-            return new CallResult<>(txHash, t.next(), payouts);
+            return new CallResult<>(txHash, stored, payouts);
         }
         awaitGone();
         return new CallResult<>(txHash, null, payouts);

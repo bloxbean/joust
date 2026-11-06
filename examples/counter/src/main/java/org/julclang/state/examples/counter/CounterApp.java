@@ -17,8 +17,8 @@ public class CounterApp {
             System.exit(1);
         }
         var runtime = DevKit.runtime();
-        var alice = DevKit.fundedAccount(100);
-        var bob = DevKit.fundedAccount(100);
+        var alice = DevKit.fundedAccount(500);
+        var bob = DevKit.fundedAccount(500);
 
         CounterClient counter = CounterClient.deploy(runtime, alice);
         System.out.println("deployed instance " + counter.instanceId() + " at "

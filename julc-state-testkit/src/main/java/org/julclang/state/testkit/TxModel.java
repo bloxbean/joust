@@ -33,6 +33,9 @@ public final class TxModel {
     public PlutusData mintRedeemer;
     /** Index in {@link #outputs} of the state output (create, action), or -1. */
     public int stateOutput = -1;
+    /** The map verifier's claims (ADR-0002 D9), if the transaction touches MerkleMaps; else null. */
+    public java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims;
+
     /** Indexes in {@link #outputs} of payout outputs. */
     public final List<Integer> payoutOutputs = new ArrayList<>();
 
@@ -51,6 +54,7 @@ public final class TxModel {
         c.mintRedeemer = mintRedeemer;
         c.stateOutput = stateOutput;
         c.payoutOutputs.addAll(payoutOutputs);
+        c.mapClaims = mapClaims == null ? null : new java.util.ArrayList<>(mapClaims);
         return c;
     }
 

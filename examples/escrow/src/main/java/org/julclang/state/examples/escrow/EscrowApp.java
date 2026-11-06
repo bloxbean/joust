@@ -15,9 +15,9 @@ public class EscrowApp {
             System.exit(1);
         }
         var runtime = DevKit.runtime();
-        var buyer = DevKit.fundedAccount(100);
-        var seller = DevKit.fundedAccount(20);
-        var arbiter = DevKit.fundedAccount(20);
+        var buyer = DevKit.fundedAccount(500);
+        var seller = DevKit.fundedAccount(500);
+        var arbiter = DevKit.fundedAccount(500);
         var price = BigInteger.valueOf(25_000_000);
         var deadline = BigInteger.valueOf(System.currentTimeMillis() + 3_600_000);
 

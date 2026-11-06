@@ -16,8 +16,8 @@ public class VaultApp {
             System.exit(1);
         }
         var runtime = DevKit.runtime();
-        var alice = DevKit.fundedAccount(100);
-        var bob = DevKit.fundedAccount(100);
+        var alice = DevKit.fundedAccount(500);
+        var bob = DevKit.fundedAccount(500);
 
         long unlockAt = System.currentTimeMillis() + 45_000;
         var vault = VaultClient.deploy(runtime, alice, BigInteger.valueOf(unlockAt), ADA.multiply(BigInteger.TEN));

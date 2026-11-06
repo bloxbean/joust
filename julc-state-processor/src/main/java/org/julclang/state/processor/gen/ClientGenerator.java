@@ -78,7 +78,7 @@ public final class ClientGenerator {
         w.line("var result = contract(runtime).deploy(new Deploy<" + S + ">(callerAccount, "
                 + (init.payable() ? "payLovelace" : "BigInteger.ZERO") + ", " + init.hasCtx() + ",");
         w.line("        ctx -> " + X + "." + init.method() + "(" + callArgs(init, List.of()) + "),");
-        w.line("        (seed, ctx) -> new " + V + ".Create(" + redeemerArgs(init, "seed") + ")));");
+        w.line("        (seed, ctx) -> new " + V + ".CreateInstance(" + redeemerArgs(init, "seed") + ")));");
         w.line("return new " + C + "(result.instance());");
         w.close("}").blank();
 
@@ -92,11 +92,11 @@ public final class ClientGenerator {
 
         // ---- views
         for (ViewIR v : c.views()) {
-            var args = new ArrayList<String>(List.of("state()"));
+            var args = new ArrayList<String>(List.of("s"));
             for (ParamIR p : v.params()) args.add(p.name());
             w.line("/** {@link " + X + "#" + v.method() + "} on the current state (off-chain, no transaction). */");
             w.open("public " + v.returnType() + " " + v.method() + "(" + String.join(", ", decls(v.params())) + ") {");
-            w.line("return " + X + "." + v.method() + "(" + String.join(", ", args) + ");");
+            w.line("return instance.view(s -> " + X + "." + v.method() + "(" + String.join(", ", args) + "));");
             w.close("}").blank();
         }
 
@@ -130,7 +130,7 @@ public final class ClientGenerator {
         w.line("/** Calls {@link " + X + "#" + t.method() + "}" + (destroy ? "; ends the instance." : ".") + " */");
         w.open("public CallResult<" + S + "> " + t.method() + "(" + String.join(", ", params) + ") {");
         String start = destroy
-                ? "Call.<" + S + ">destroy(\"" + t.method() + "\", callerAccount, new " + V + ".Burn())"
+                ? "Call.<" + S + ">destroy(\"" + t.method() + "\", callerAccount, new " + V + ".BurnInstance())"
                 : "Call.<" + S + ">action(\"" + t.method() + "\", callerAccount)";
         w.line("return instance.call(" + start);
         w.indent();
@@ -166,8 +166,8 @@ public final class ClientGenerator {
         return String.join(", ", out);
     }
 
-    /** Components of the redeemer record: [seed], parameters, then ctx if declared. */
-    private static String redeemerArgs(TransitionIR t, String seed) {
+    /** Components of the redeemer record: [seed], parameters, ctx if declared, map witnesses if any. */
+    private String redeemerArgs(TransitionIR t, String seed) {
         var out = new ArrayList<String>();
         if (seed != null) out.add(seed);
         for (ParamIR p : t.params()) out.add(p.name());

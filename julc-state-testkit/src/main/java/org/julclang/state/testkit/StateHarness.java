@@ -48,7 +48,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * <pre>{@code
  * var h = StateHarness.of(CounterClient.SPEC);
  * Ctx ctx = h.ctx(ALICE, BigInteger.ZERO, BigInteger.ZERO);
- * TxModel create = h.create(new CounterValidator.Create(h.seed(), ctx), Counter.init(ctx), ctx);
+ * TxModel create = h.create(new CounterValidator.CreateInstance(h.seed(), ctx), Counter.init(ctx), ctx);
  * h.assertAccepted(create);
  * Attacks.assertAllRejected(h, create);
  * }</pre>
@@ -63,6 +63,11 @@ public final class StateHarness<S> {
     private final Program program;
     private final byte[] policy;
     private final TxOutRef seed;
+    private final Program verifier;
+    private final byte[] verifierHash;
+
+    /** Where {@link #live} instances sit: the owner of their map claims. */
+    public static final TxOutRef LIVE_REF = new TxOutRef(new TxId(fill(32, 0x7A)), BigInteger.ONE);
 
     private StateHarness(ContractSpec<S> spec) {
         this.spec = spec;
@@ -74,6 +79,19 @@ public final class StateHarness<S> {
             throw new IllegalStateException(e);
         }
         this.seed = new TxOutRef(new TxId(fill(32, 0x5E)), BigInteger.ZERO);
+        var v = JulcScriptLoader.load(org.julclang.state.verifier.MapVerifier.class);
+        this.verifier = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(v.getCborHex())));
+        try {
+            this.verifierHash = v.getScriptHash();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Attaches the map verifier's claims to {@code tx} (its zero withdrawal and redeemer), as the runtime does. */
+    public TxModel withClaims(TxModel tx, java.util.List<org.julclang.state.api.mpf.MapClaim> claims) {
+        tx.mapClaims = claims;
+        return tx;
     }
 
     public static <S> StateHarness<S> of(ContractSpec<S> spec) {
@@ -115,8 +133,7 @@ public final class StateHarness<S> {
 
     /** An instance holding {@code funds} lovelace on top of the deposit. */
     public Live<S> live(S state, BigInteger funds) {
-        return new Live<>(new TxOutRef(new TxId(fill(32, 0x7A)), BigInteger.ONE), state,
-                BigInteger.valueOf(spec.minAda()).add(funds));
+        return new Live<>(LIVE_REF, state, BigInteger.valueOf(spec.minAda()).add(funds));
     }
 
     // ------------------------------------------------------------------ transactions shaped like the runtime's
@@ -223,6 +240,10 @@ public final class StateHarness<S> {
             var b = ScriptContextTestBuilder.minting(new PolicyId(policy)).redeemer(tx.mintRedeemer);
             results.put("MINT", ValidatorTest.evaluate(program, fill(b, tx).buildPlutusData()));
         }
+        if (tx.mapClaims != null) {
+            var b = ScriptContextTestBuilder.rewarding(verifierCredential()).redeemer(claimsData(tx));
+            results.put("MAP VERIFIER", ValidatorTest.evaluate(verifier, fill(b, tx).buildPlutusData()));
+        }
         return new Verdict(results);
     }
 
@@ -237,7 +258,22 @@ public final class StateHarness<S> {
         if (v.accepted()) fail("expected rejection (" + what + ") but every script accepted:\n" + v);
     }
 
-    private static ScriptContextTestBuilder fill(ScriptContextTestBuilder b, TxModel tx) {
+    private Credential verifierCredential() {
+        return new Credential.ScriptCredential(new org.julclang.ledger.ScriptHash(verifierHash));
+    }
+
+    private static PlutusData claimsData(TxModel tx) {
+        org.julclang.core.types.JulcList<org.julclang.state.api.mpf.MapClaim> list =
+                org.julclang.core.types.JulcList.empty();
+        for (int i = tx.mapClaims.size() - 1; i >= 0; i--) list = list.prepend(tx.mapClaims.get(i));
+        return data(new org.julclang.state.api.mpf.MapClaims(list));
+    }
+
+    private ScriptContextTestBuilder fill(ScriptContextTestBuilder b, TxModel tx) {
+        if (tx.mapClaims != null) {
+            b.withdrawal(verifierCredential(), BigInteger.ZERO);
+            b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(verifierCredential()), claimsData(tx));
+        }
         tx.inputs.forEach(b::input);
         tx.outputs.forEach(b::output);
         tx.signers.forEach(s -> b.signer(new PubKeyHash(s)));

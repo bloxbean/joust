@@ -24,10 +24,10 @@ class EscrowDevnetTest {
     @Test
     void releaseAndRefund() throws Exception {
         var runtime = DevKit.runtime();
-        var buyer = DevKit.fundedAccount(100);
-        var seller = DevKit.fundedAccount(20);
-        var arbiter = DevKit.fundedAccount(20);
-        var stranger = DevKit.fundedAccount(20);
+        var buyer = DevKit.fundedAccount(500);
+        var seller = DevKit.fundedAccount(500);
+        var arbiter = DevKit.fundedAccount(500);
+        var stranger = DevKit.fundedAccount(500);
         var deposit = BigInteger.valueOf(EscrowClient.SPEC.minAda());
 
         // Released by the buyer: the seller gets everything.

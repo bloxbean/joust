@@ -43,6 +43,19 @@ public record ContractIR(String packageName,
         return name + "Client";
     }
 
+    /** Indexes of the state's MerkleMap components (ADR-0002). */
+    public List<Integer> mapComponents() {
+        var out = new java.util.ArrayList<Integer>();
+        for (int i = 0; i < stateComponents.size(); i++) {
+            if (stateComponents.get(i).kind() == ParamIR.TypeKind.MERKLE_MAP) out.add(i);
+        }
+        return out;
+    }
+
+    public boolean hasMaps() {
+        return !mapComponents().isEmpty();
+    }
+
     /** Spend-side transitions: actions then destroys, in that order (the redeemer's constructor order). */
     public List<TransitionIR> spendTransitions() {
         var all = new java.util.ArrayList<TransitionIR>(actions);

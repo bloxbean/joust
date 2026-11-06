@@ -24,8 +24,8 @@ class VaultDevnetTest {
     @Test
     void lifecycle() throws Exception {
         var runtime = DevKit.runtime();
-        var owner = DevKit.fundedAccount(100);
-        var bob = DevKit.fundedAccount(50);
+        var owner = DevKit.fundedAccount(500);
+        var bob = DevKit.fundedAccount(500);
         long unlockAt = System.currentTimeMillis() + 40_000;
 
         var vault = VaultClient.deploy(runtime, owner, BigInteger.valueOf(unlockAt), ADA.multiply(BigInteger.TEN));

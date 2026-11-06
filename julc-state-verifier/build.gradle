@@ -1,0 +1,10 @@
+description = 'JOUST map verifier: the generic withdraw-zero script that checks every MerkleMap claim of a transaction (ADR-0002 D9)'
+
+dependencies {
+    api project(':julc-state-api')
+    implementation libs.julc.stdlib
+    implementation libs.julc.ledger.api
+
+    annotationProcessor libs.julc.annotation.processor
+    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+}

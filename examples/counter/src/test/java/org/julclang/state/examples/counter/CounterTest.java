@@ -55,7 +55,7 @@ class CounterTest {
         @Test
         void create() {
             Ctx ctx = aliceCtx(BigInteger.ZERO);
-            var tx = h.create(new CounterValidator.Create(h.seed(), ctx), Counter.init(ctx), ctx);
+            var tx = h.create(new CounterValidator.CreateInstance(h.seed(), ctx), Counter.init(ctx), ctx);
             System.out.println("[create] " + h.assertAccepted(tx));
             System.out.println("  attacks rejected: " + Attacks.assertAllRejected(h, tx));
         }
@@ -64,14 +64,14 @@ class CounterTest {
         void create_wrongInitialState_rejected() {
             Ctx ctx = aliceCtx(BigInteger.ZERO);
             var bogus = new Counter.State(BigInteger.valueOf(1000), ALICE);
-            h.assertRejected(h.create(new CounterValidator.Create(h.seed(), ctx), bogus, ctx), "initial state != init()");
+            h.assertRejected(h.create(new CounterValidator.CreateInstance(h.seed(), ctx), bogus, ctx), "initial state != init()");
         }
 
         @Test
         void create_ownerIsSomeoneElse_rejected() {
             Ctx ctx = aliceCtx(BigInteger.ZERO);
             var stolen = new Counter.State(BigInteger.ZERO, BOB);
-            h.assertRejected(h.create(new CounterValidator.Create(h.seed(), ctx), stolen, ctx), "owner != caller");
+            h.assertRejected(h.create(new CounterValidator.CreateInstance(h.seed(), ctx), stolen, ctx), "owner != caller");
         }
 
         @Test
@@ -125,7 +125,7 @@ class CounterTest {
             var live = h.live(new Counter.State(BigInteger.valueOf(42), ALICE), BigInteger.ZERO);
             Ctx ctx = aliceCtx(live.lovelace());          // in @Destroy, balance is everything, deposit included
             var payouts = Counter.close(live.state(), ctx);
-            var tx = h.destroy(live, new CounterValidator.Close(ctx), new CounterValidator.Burn(), payouts, ALICE, ctx);
+            var tx = h.destroy(live, new CounterValidator.Close(ctx), new CounterValidator.BurnInstance(), payouts, ALICE, ctx);
             System.out.println("[close] " + h.assertAccepted(tx));
             System.out.println("  attacks rejected: " + Attacks.assertAllRejected(h, tx));
         }
@@ -135,7 +135,7 @@ class CounterTest {
             var live = h.live(new Counter.State(BigInteger.valueOf(42), ALICE), BigInteger.ZERO);
             Ctx ctx = aliceCtx(live.lovelace());
             var short1 = Payouts.of(ALICE, live.lovelace().subtract(BigInteger.ONE));
-            h.assertRejected(h.destroy(live, new CounterValidator.Close(ctx), new CounterValidator.Burn(), short1, ALICE, ctx),
+            h.assertRejected(h.destroy(live, new CounterValidator.Close(ctx), new CounterValidator.BurnInstance(), short1, ALICE, ctx),
                     "destroy must allocate everything");
         }
 
@@ -147,9 +147,9 @@ class CounterTest {
                     new org.julclang.ledger.TxId(StateHarness.fill(32, 0x7B)), BigInteger.ZERO),
                     new Counter.State(BigInteger.TWO, ALICE), a.lovelace());
             Ctx ctx = aliceCtx(a.lovelace());
-            var txA = h.destroy(a, new CounterValidator.Close(ctx), new CounterValidator.Burn(),
+            var txA = h.destroy(a, new CounterValidator.Close(ctx), new CounterValidator.BurnInstance(),
                     Counter.close(a.state(), ctx), ALICE, ctx);
-            var txB = h.destroy(b, new CounterValidator.Close(ctx), new CounterValidator.Burn(),
+            var txB = h.destroy(b, new CounterValidator.Close(ctx), new CounterValidator.BurnInstance(),
                     Counter.close(b.state(), ctx), ALICE, ctx);
             h.assertRejected(Attacks.sharedPayouts(txA, txB), "one payout output satisfying two instances");
         }

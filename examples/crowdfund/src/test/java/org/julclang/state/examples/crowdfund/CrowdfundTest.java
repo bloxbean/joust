@@ -33,7 +33,7 @@ class CrowdfundTest {
     @Test
     void launch() {
         Ctx ctx = h.ctx(CREATOR, BigInteger.ZERO, BigInteger.ZERO);
-        var tx = h.create(new CrowdfundValidator.Create(h.seed(), GOAL, RUNNING, ADA.multiply(BigInteger.TWO), ctx),
+        var tx = h.create(new CrowdfundValidator.CreateInstance(h.seed(), GOAL, RUNNING, ADA.multiply(BigInteger.TWO), ctx),
                 Crowdfund.launch(GOAL, RUNNING, ADA.multiply(BigInteger.TWO), ctx), ctx);
         System.out.println("[launch] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
     }
@@ -74,7 +74,7 @@ class CrowdfundTest {
                 JulcMap.<byte[], BigInteger>empty().insert(ANN, GOAL));
         var live = h.live(s, GOAL);
         Ctx ctx = h.ctx(CREATOR, BigInteger.ZERO, live.lovelace());
-        var tx = h.destroy(live, new CrowdfundValidator.Claim(ctx), new CrowdfundValidator.Burn(),
+        var tx = h.destroy(live, new CrowdfundValidator.Claim(ctx), new CrowdfundValidator.BurnInstance(),
                 Crowdfund.claim(live.state(), ctx), CREATOR, ctx);
         System.out.println("[claim] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
     }

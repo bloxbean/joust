@@ -24,9 +24,9 @@ class CrowdfundDevnetTest {
     @Test
     void goalMet_creatorClaims() throws Exception {
         var runtime = DevKit.runtime();
-        var creator = DevKit.fundedAccount(20);
+        var creator = DevKit.fundedAccount(500);
         var backers = new com.bloxbean.cardano.client.account.Account[]{
-                DevKit.fundedAccount(100), DevKit.fundedAccount(100), DevKit.fundedAccount(100)};
+                DevKit.fundedAccount(500), DevKit.fundedAccount(500), DevKit.fundedAccount(500)};
         long deadline = System.currentTimeMillis() + 60_000;
         var c = CrowdfundClient.deploy(runtime, creator, ADA.multiply(BigInteger.valueOf(40)), BigInteger.valueOf(deadline),
                 ADA.multiply(BigInteger.TWO));

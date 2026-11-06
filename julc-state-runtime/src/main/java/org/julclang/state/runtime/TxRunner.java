@@ -37,7 +37,8 @@ final class TxRunner {
     }
 
     String submit(ScriptTx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
-                  java.util.List<ExpectedPayout> payouts, String what) {
+                  java.util.List<ExpectedPayout> payouts, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts,
+                  String what) {
         Transaction signed;
         try {
             var ctx = new QuickTxBuilder(rt.backend()).compose(tx)
@@ -45,6 +46,7 @@ final class TxRunner {
                     .feePayer(caller.baseAddress())
                     .collateralPayer(caller.baseAddress())
                     .mergeOutputs(false);
+            if (referenceScripts != null && referenceScripts.length > 0) ctx = ctx.withReferenceScripts(referenceScripts);
             if (requiredSigners.length > 0) ctx = ctx.withRequiredSigners(requiredSigners);
             if (window != null) ctx = ctx.validFrom(window.fromSlot()).validTo(window.toSlot());
             if (rt.evaluator() != null) ctx = ctx.withTxEvaluator(rt.evaluator());
@@ -74,6 +76,30 @@ final class TxRunner {
             throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
         }
         rt.log(what + ": submitted " + txHash);
+        awaitInclusion(txHash, what);
+        return txHash;
+    }
+
+    /** Builds, signs, submits and confirms a transaction without scripts (e.g. publishing a reference script). */
+    String submitPlain(com.bloxbean.cardano.client.quicktx.Tx tx, Account payer, String what) {
+        Transaction signed;
+        try {
+            signed = new QuickTxBuilder(rt.backend()).compose(tx)
+                    .withSigner(SignerProviders.signerFrom(payer))
+                    .feePayer(payer.baseAddress())
+                    .buildAndSign();
+        } catch (Exception e) {
+            throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
+        }
+        String txHash = TransactionUtil.getTxHash(signed);
+        try {
+            var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
+            if (!r.isSuccessful()) throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
+        } catch (SubmitException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
+        }
         awaitInclusion(txHash, what);
         return txHash;
     }

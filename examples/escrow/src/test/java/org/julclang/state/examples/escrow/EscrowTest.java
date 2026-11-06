@@ -28,7 +28,7 @@ class EscrowTest {
     @Test
     void open() {
         Ctx ctx = h.ctx(BUYER, PRICE, BigInteger.ZERO);
-        var tx = h.create(new EscrowValidator.Create(h.seed(), SELLER, ARBITER, FUTURE, ctx),
+        var tx = h.create(new EscrowValidator.CreateInstance(h.seed(), SELLER, ARBITER, FUTURE, ctx),
                 Escrow.open(SELLER, ARBITER, FUTURE, ctx), ctx);
         System.out.println("[open] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
     }
@@ -37,7 +37,7 @@ class EscrowTest {
     void release_byBuyer_paysTheSeller() {
         var live = funded(FUTURE);
         Ctx ctx = h.ctx(BUYER, BigInteger.ZERO, live.lovelace());
-        var tx = h.destroy(live, new EscrowValidator.Release(ctx), new EscrowValidator.Burn(),
+        var tx = h.destroy(live, new EscrowValidator.Release(ctx), new EscrowValidator.BurnInstance(),
                 Escrow.release(live.state(), ctx), BUYER, ctx);
         System.out.println("[release] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
     }
@@ -48,7 +48,7 @@ class EscrowTest {
         Ctx ctx = h.ctx(SELLER, BigInteger.ZERO, live.lovelace());
         assertThrows(RequireException.class, () -> Escrow.release(live.state(), ctx));
         // ...and on-chain, even with the payouts a cheating client would build:
-        var tx = h.destroy(live, new EscrowValidator.Release(ctx), new EscrowValidator.Burn(),
+        var tx = h.destroy(live, new EscrowValidator.Release(ctx), new EscrowValidator.BurnInstance(),
                 org.julclang.state.api.Payouts.of(SELLER, live.lovelace()), SELLER, ctx);
         h.assertRejected(tx, "only buyer or arbiter releases");
     }
@@ -57,7 +57,7 @@ class EscrowTest {
     void refund_bySeller_beforeDeadline() {
         var live = funded(FUTURE);
         Ctx ctx = h.ctx(SELLER, BigInteger.ZERO, live.lovelace());
-        var tx = h.destroy(live, new EscrowValidator.Refund(ctx), new EscrowValidator.Burn(),
+        var tx = h.destroy(live, new EscrowValidator.Refund(ctx), new EscrowValidator.BurnInstance(),
                 Escrow.refund(live.state(), ctx), SELLER, ctx);
         System.out.println("[refund] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
     }
@@ -66,10 +66,10 @@ class EscrowTest {
     void refund_byStranger_onlyAfterTheDeadline() {
         Ctx ctx = h.ctx(STRANGER, BigInteger.ZERO, funded(FUTURE).lovelace());
         var early = funded(FUTURE);
-        h.assertRejected(h.destroy(early, new EscrowValidator.Refund(ctx), new EscrowValidator.Burn(),
+        h.assertRejected(h.destroy(early, new EscrowValidator.Refund(ctx), new EscrowValidator.BurnInstance(),
                 org.julclang.state.api.Payouts.of(BUYER, early.lovelace()), STRANGER, ctx), "stranger before deadline");
         var late = funded(PAST);
-        h.assertAccepted(h.destroy(late, new EscrowValidator.Refund(ctx), new EscrowValidator.Burn(),
+        h.assertAccepted(h.destroy(late, new EscrowValidator.Refund(ctx), new EscrowValidator.BurnInstance(),
                 Escrow.refund(late.state(), ctx), STRANGER, ctx));
     }
 }

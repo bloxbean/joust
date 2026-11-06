@@ -16,9 +16,9 @@ public class CrowdfundApp {
             System.exit(1);
         }
         var runtime = DevKit.runtime();
-        var creator = DevKit.fundedAccount(50);
-        var ann = DevKit.fundedAccount(100);
-        var ben = DevKit.fundedAccount(100);
+        var creator = DevKit.fundedAccount(500);
+        var ann = DevKit.fundedAccount(500);
+        var ben = DevKit.fundedAccount(500);
 
         long deadline = System.currentTimeMillis() + 60_000;
         var campaign = CrowdfundClient.deploy(runtime, creator, ADA.multiply(BigInteger.valueOf(100)),

@@ -17,6 +17,12 @@ public final class Call<S> {
 
     public enum Kind { ACTION, DESTROY }
 
+    /** Builds the spend redeemer from the call's Ctx. */
+    @FunctionalInterface
+    public interface ActRedeemer {
+        Object make(Ctx ctx);
+    }
+
     /** {@code @SignedBy(field)}: the state field holding the key hash that must sign. */
     public record SignerRule<S>(String field, Function<S, byte[]> key) {}
 
@@ -32,7 +38,7 @@ public final class Call<S> {
     final List<TimeRule<S>> notBefore;
     final List<TimeRule<S>> notAfter;
     final BiFunction<S, Ctx, Transition<S>> run;
-    final Function<Ctx, Object> redeemer;
+    final ActRedeemer redeemer;
     final Object burnRedeemer;
 
     private Call(Builder<S> b) {
@@ -75,7 +81,7 @@ public final class Call<S> {
         private final List<TimeRule<S>> notBefore = new ArrayList<>();
         private final List<TimeRule<S>> notAfter = new ArrayList<>();
         private BiFunction<S, Ctx, Transition<S>> run;
-        private Function<Ctx, Object> redeemer;
+        private ActRedeemer redeemer;
         private Object burnRedeemer;
 
         private Builder(String name, Kind kind, Account caller) {
@@ -90,7 +96,7 @@ public final class Call<S> {
         public Builder<S> validAfter(String field, Function<S, BigInteger> t) { notBefore.add(new TimeRule<>(field, t)); return this; }
         public Builder<S> validBefore(String field, Function<S, BigInteger> t) { notAfter.add(new TimeRule<>(field, t)); return this; }
         public Builder<S> run(BiFunction<S, Ctx, Transition<S>> run) { this.run = run; return this; }
-        public Builder<S> redeemer(Function<Ctx, Object> redeemer) { this.redeemer = redeemer; return this; }
+        public Builder<S> redeemer(ActRedeemer redeemer) { this.redeemer = redeemer; return this; }
 
         public Call<S> build() {
             return new Call<>(this);
