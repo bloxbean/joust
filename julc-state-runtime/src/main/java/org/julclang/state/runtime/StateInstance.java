@@ -118,6 +118,7 @@ public final class StateInstance<S> {
 
         boolean maps = MerkleSupport.hasMaps(spec.stateClass());
         MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        if (call.run == null) throw new JoustException(what + ": an instance call needs run(...)");
         Transition<S> t = maps ? merkle.run(() -> call.run.apply(current, ctx))   // the developer's method, on the JVM
                 : call.run.apply(current, ctx);
         java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();

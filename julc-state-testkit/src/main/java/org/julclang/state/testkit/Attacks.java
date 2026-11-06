@@ -125,7 +125,7 @@ public final class Attacks {
                 var c = t.copy();
                 c.mint = Value.zero();
                 c.mintRedeemer = null;
-                c.outputs.add(new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBA)), h.token(BigInteger.ONE),
+                c.outputs.add(new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBA)), h.token(t, BigInteger.ONE),
                         new OutputDatum.NoOutputDatum(), Optional.empty()));
                 return c;
             }));
@@ -140,9 +140,9 @@ public final class Attacks {
             }));
             out.add(new Attack("two thread tokens minted", "I1", t -> {
                 var c = t.copy();
-                c.mint = h.token(BigInteger.TWO);
+                c.mint = h.token(t, BigInteger.TWO);
                 c.outputs.set(c.stateOutput, new TxOut(c.outputs.get(c.stateOutput).address(),
-                        c.outputs.get(c.stateOutput).value().merge(h.token(BigInteger.ONE)),
+                        c.outputs.get(c.stateOutput).value().merge(h.token(t, BigInteger.ONE)),
                         c.outputs.get(c.stateOutput).datum(), Optional.empty()));
                 return c;
             }));
@@ -156,7 +156,7 @@ public final class Attacks {
                 var c = t.copy();
                 c.inputs.replaceAll(i -> c.spendRedeemers.containsKey(i.outRef())
                         ? new TxInInfo(i.outRef(), new TxOut(i.resolved().address(),
-                        i.resolved().value().merge(h.token(BigInteger.ONE.negate())), i.resolved().datum(), Optional.empty()))
+                        i.resolved().value().merge(h.token(t, BigInteger.ONE.negate())), i.resolved().datum(), Optional.empty()))
                         : i);
                 return c;
             }));

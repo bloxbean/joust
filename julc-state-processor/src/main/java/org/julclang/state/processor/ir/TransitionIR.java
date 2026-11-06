@@ -16,6 +16,7 @@ import java.util.List;
  * @param signedBy    state fields whose key hash must sign ({@code @SignedBy}, {@code @OnlyOwner})
  * @param validAfter  state fields the validity interval must start at or after
  * @param validBefore state fields the validity interval must end at or before
+ * @param shared      the method takes the instance state read-only ({@code @Shared}, owned methods only)
  */
 public record TransitionIR(Kind kind,
                            String method,
@@ -27,9 +28,20 @@ public record TransitionIR(Kind kind,
                            String resultType,
                            List<String> signedBy,
                            List<String> validAfter,
-                           List<String> validBefore) {
+                           List<String> validBefore,
+                           boolean shared) {
 
-    public enum Kind { INIT, ACTION, DESTROY }
+    public enum Kind { INIT, ACTION, DESTROY, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY }
+
+    /** An owned-object method (ADR-0003). */
+    public boolean owned() {
+        return kind == Kind.OWNED_INIT || kind == Kind.OWNED_ACTION || kind == Kind.OWNED_DESTROY;
+    }
+
+    /** Ends what it acts on (instance or object): burns its token. */
+    public boolean destroys() {
+        return kind == Kind.DESTROY || kind == Kind.OWNED_DESTROY;
+    }
 
     public enum Returns {
         /** the state type */

@@ -184,6 +184,10 @@ public final class StateContractHandle<S> {
     /** Result of {@link #deploy}. */
     public record DeployResult<S>(StateInstance<S> instance, String txHash, S state) {}
 
+    Utxo pickSeedFor(Account caller) {
+        return pickSeed(caller);
+    }
+
     private Utxo pickSeed(Account caller) {
         try {
             var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, 1);

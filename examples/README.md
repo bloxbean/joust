@@ -17,6 +17,7 @@ Each example contains:
 | `vault` | `@Payable` init and deposit; `@OnlyOwner @ValidAfter` withdraw returning payouts (`Result`); close |
 | `escrow` | `@Payable @Init` (buyer funds it); two `@Destroy`s; `Clock.after` lets anyone refund after the deadline |
 | `token` | **Option B (ADR-0002).** An account-model token whose balances live in a `MerkleMap` (an unbounded map in a 32-byte root). MPF proofs are checked by the shared map verifier (withdraw-zero). The script is read by reference |
+| `bank` | **Option C (ADR-0003).** Shared bank config plus one owned account per customer. Customers act in parallel; withdrawals read the config by reference; closing works even if the bank is paused |
 | `crowdfund` | A `JulcMap` in the state, kept canonical with `SortedMaps`; refunds paying the caller; `@SignedBy("creator")`; capacity tested at `maxDatumBytes` |
 
 ## Script sizes and budgets
@@ -42,6 +43,10 @@ are per script execution, from the harness tests. For scale, a transaction may u
 | | | refund | SPEND | 248.3M | 796k |
 | | | refund, 27 backers (`maxDatumBytes` = 1024, at capacity) | SPEND | 378.0M | 895k |
 | | | claim | SPEND + MINT | 122.1M + 23.9M | 442k + 102k |
+| Bank | 10.3 KB | open account | MINT | 205.3M | 690k |
+| | | deposit (owned) | SPEND | 198.5M | 663k |
+| | | withdraw (owned, @Shared read) | SPEND | 263.1M | 885k |
+| | | close (owned) | SPEND | 119.8M | 435k |
 | Token | 14.0 KB (+ MapVerifier 4.6 KB, shared) | create | MINT + VERIFIER | 202.4M + 31.0M | 663k + 135k |
 | | | mint (1 read, 1 write) | SPEND + VERIFIER | 248.5M + 335.4M | 823k + 1,274k |
 | | | transfer (2 reads, 2 writes) | SPEND + VERIFIER | 310.7M + 501.3M | 1,046k + 1,898k |

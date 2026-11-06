@@ -20,6 +20,11 @@ import java.util.List;
  * @param views        {@code @View} methods, in source order
  * @param imports      fully qualified names the generated code must import for the types above
  * @param strategies   how state is stored, executed and validated
+ * @param ownedType    the {@code @Owned} record as source text, or null (ADR-0003)
+ * @param ownedComponents components of the owned record
+ * @param ownedInits   {@code @OwnedInit} methods
+ * @param ownedActions {@code @OwnedAction} methods
+ * @param ownedDestroys {@code @OwnedDestroy} methods
  */
 public record ContractIR(String packageName,
                          String name,
@@ -33,7 +38,24 @@ public record ContractIR(String packageName,
                          List<TransitionIR> destroys,
                          List<ViewIR> views,
                          List<String> imports,
-                         Strategies strategies) {
+                         Strategies strategies,
+                         String ownedType,
+                         List<ParamIR> ownedComponents,
+                         List<TransitionIR> ownedInits,
+                         List<TransitionIR> ownedActions,
+                         List<TransitionIR> ownedDestroys) {
+
+    /** The contract has an {@code @Owned} record (ADR-0003). */
+    public boolean hasOwned() {
+        return ownedType != null;
+    }
+
+    /** Owned spend-side transitions: owned actions then owned destroys. */
+    public List<TransitionIR> ownedSpendTransitions() {
+        var all = new java.util.ArrayList<TransitionIR>(ownedActions);
+        all.addAll(ownedDestroys);
+        return List.copyOf(all);
+    }
 
     public String validatorName() {
         return name + "Validator";

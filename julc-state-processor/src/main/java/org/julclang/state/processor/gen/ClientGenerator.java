@@ -44,6 +44,7 @@ public final class ClientGenerator {
                 "org.julclang.state.runtime.ContractSpec", "org.julclang.state.runtime.Deploy",
                 "org.julclang.state.runtime.StateContractHandle", "org.julclang.state.runtime.StateInstance",
                 "org.julclang.state.runtime.StateRuntime", "org.julclang.state.runtime.Transition"));
+        if (c.hasOwned()) imports.add("org.julclang.state.runtime.OwnedObject");
         imports.addAll(c.imports());
         for (String i : imports) w.line("import " + i + ";");
         w.blank();
@@ -100,6 +101,8 @@ public final class ClientGenerator {
             w.close("}").blank();
         }
 
+        if (c.hasOwned()) owned();
+
         w.line("/** The current state. */");
         w.open("public " + S + " state() {");
         w.line("return instance.state();");
@@ -149,6 +152,99 @@ public final class ClientGenerator {
         w.line(".redeemer(ctx -> new " + V + "." + t.variant() + "(" + redeemerArgs(t, null) + "))");
         w.line(".build());");
         w.close("");
+        w.close("}").blank();
+    }
+
+    /** Owned objects (ADR-0003): a codec, creation methods, a lookup, and a typed handle per object. */
+    private void owned() {
+        String X = c.name();
+        String S = c.stateType();
+        String R = c.ownedType();
+        String V = c.validatorName();
+        String simple = R.substring(R.lastIndexOf('.') + 1);
+        String handle = simple + "Object";
+        String codec = simple.replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase() + "_CODEC";
+        String lookup = Character.toLowerCase(simple.charAt(0)) + simple.substring(1);
+
+        w.line("/** How " + V + ".Holding wraps a " + simple + " (ADR-0003 D2). */");
+        w.line("public static final OwnedObject.Codec<" + R + "> " + codec + " = new OwnedObject.Codec<>(" + V
+                + ".Holding.class,");
+        w.line("        h -> ((" + V + ".Holding) h).value(), (inst, v) -> new " + V + ".Holding(inst, v));").blank();
+
+        for (TransitionIR t : c.ownedInits()) {
+            var params = new ArrayList<String>(List.of("Account callerAccount"));
+            params.addAll(decls(t.params()));
+            if (t.payable()) params.add("BigInteger payLovelace");
+            var runArgs = new ArrayList<String>();
+            if (t.shared()) runArgs.add("(" + S + ") sh");
+            t.params().forEach(p -> runArgs.add(p.name()));
+            if (t.hasCtx()) runArgs.add("ctx");
+            var redArgs = new ArrayList<String>(List.of("seed", "inst"));
+            t.params().forEach(p -> redArgs.add(p.name()));
+            if (t.hasCtx()) redArgs.add("ctx");
+            w.line("/** Creates a " + simple + " under this instance with {@link " + X + "#" + t.method() + "}. */");
+            w.open("public " + handle + " " + t.method() + "(" + String.join(", ", params) + ") {");
+            w.line("return new " + handle + "(OwnedObject.create(instance, new OwnedObject.Create<" + R + ">(\"" + t.method()
+                    + "\", callerAccount, " + (t.payable() ? "payLovelace" : "BigInteger.ZERO") + ", " + t.hasCtx() + ", "
+                    + t.shared() + ",");
+            w.line("        (sh, ctx) -> " + X + "." + t.method() + "(" + String.join(", ", runArgs) + "),");
+            w.line("        (seed, inst, ctx) -> new " + V + "." + t.variant() + "(" + String.join(", ", redArgs) + ")), "
+                    + codec + "));");
+            w.close("}").blank();
+        }
+        w.line("/** An existing " + simple + " of this instance. */");
+        w.open("public " + handle + " " + lookup + "(String objectId) {");
+        w.line("return new " + handle + "(OwnedObject.at(instance, objectId, " + codec + "));");
+        w.close("}").blank();
+
+        w.line("/** One " + simple + ": its own UTxO; calls on it never contend with other objects. */");
+        w.open("public final class " + handle + " {");
+        w.line("private final OwnedObject<" + S + ", " + R + "> object;").blank();
+        w.open(handle + "(OwnedObject<" + S + ", " + R + "> object) {");
+        w.line("this.object = object;");
+        w.close("}").blank();
+        w.line("public String objectId() { return object.objectId(); }");
+        w.line("public " + R + " value() { return object.value(); }");
+        w.line("public BigInteger lovelace() { return object.lovelace(); }").blank();
+        for (TransitionIR t : c.ownedSpendTransitions()) {
+            boolean destroy = t.destroys();
+            var params = new ArrayList<String>(List.of("Account callerAccount"));
+            params.addAll(decls(t.params()));
+            if (t.payable()) params.add("BigInteger payLovelace");
+            w.open("public CallResult<" + R + "> " + t.method() + "(" + String.join(", ", params) + ") {");
+            String start = destroy
+                    ? "Call.<" + R + ">destroy(\"" + t.method() + "\", callerAccount, new " + V + ".BurnInstance())"
+                    : "Call.<" + R + ">action(\"" + t.method() + "\", callerAccount)";
+            w.line("return object.call(" + start);
+            w.indent();
+            w.indent();
+            w.line(".usesCtx(" + t.hasCtx() + ")");
+            if (t.payable()) w.line(".received(payLovelace)");
+            for (String f : t.signedBy()) w.line(".signedBy(\"" + f + "\", o -> o." + f + "())");
+            for (String f : t.validAfter()) w.line(".validAfter(\"" + f + "\", o -> o." + f + "())");
+            for (String f : t.validBefore()) w.line(".validBefore(\"" + f + "\", o -> o." + f + "())");
+            var callArgs = new ArrayList<String>(List.of("o"));
+            if (t.shared()) callArgs.add("(" + S + ") sh");
+            t.params().forEach(p -> callArgs.add(p.name()));
+            if (t.hasCtx()) callArgs.add("ctx");
+            String invoke = X + "." + t.method() + "(" + String.join(", ", callArgs) + ")";
+            String body = switch (t.returns()) {
+                case STATE -> "Transition.of(" + invoke + ")";
+                case RESULT -> "Transition.of(" + invoke + ".state(), " + invoke + ".payouts())";
+                case PAYOUTS -> "Transition.end(" + invoke + ")";
+            };
+            if (t.returns() == TransitionIR.Returns.RESULT) {
+                body = null;
+                w.line(t.shared() ? ".runShared((o, sh, ctx) -> { var r = " + invoke + "; return Transition.of(r.state(), r.payouts()); })"
+                        : ".run((o, ctx) -> { var r = " + invoke + "; return Transition.of(r.state(), r.payouts()); })");
+            } else {
+                w.line(t.shared() ? ".runShared((o, sh, ctx) -> " + body + ")" : ".run((o, ctx) -> " + body + ")");
+            }
+            w.line(".redeemer(ctx -> new " + V + "." + t.variant() + "(" + redeemerArgs(t, null) + "))");
+            w.line(".build());");
+            w.close("");
+            w.close("}").blank();
+        }
         w.close("}").blank();
     }
 

@@ -22,6 +22,7 @@ include 'examples:vault'
 include 'examples:escrow'
 include 'examples:crowdfund'
 include 'examples:token'
+include 'examples:bank'
 
 // Local development against a JuLC checkout (opt-in, untested so far):
 //   ./gradlew build -PuseLocalJulc            (expects ../julc)

@@ -275,6 +275,7 @@ public final class StateHarness<S> {
             b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(verifierCredential()), claimsData(tx));
         }
         tx.inputs.forEach(b::input);
+        tx.referenceInputs.forEach(b::referenceInput);
         tx.outputs.forEach(b::output);
         tx.signers.forEach(s -> b.signer(new PubKeyHash(s)));
         b.mint(tx.mint);
@@ -291,6 +292,104 @@ public final class StateHarness<S> {
 
     public Value token(BigInteger qty) {
         return Value.singleton(new PolicyId(policy), new TokenName(instanceId()), qty);
+    }
+
+    /** {@code qty} of the token {@code tx} works on (its instance's, or its object's). */
+    public Value token(TxModel tx, BigInteger qty) {
+        byte[] name = tx.token != null ? tx.token : instanceId();
+        return Value.singleton(new PolicyId(policy), new TokenName(name), qty);
+    }
+
+    // ------------------------------------------------------------------ owned objects (ADR-0003)
+
+    /** The object id the harness seed produces: 0x4F ++ blake2b_224(seed ref). */
+    public byte[] objectId() {
+        return HexFormat.of().parseHex(org.julclang.state.runtime.OwnedObject.objectIdOf(
+                HexFormat.of().formatHex(seed.txId().hash()), seed.index().intValueExact()));
+    }
+
+    /** Where {@link #liveObject} objects sit. */
+    public static final TxOutRef OBJECT_REF = new TxOutRef(new TxId(fill(32, 0x0B)), BigInteger.TWO);
+
+    /** An object at {@link #OBJECT_REF} holding {@code holding} (the generated Holding) and {@code funds} on top of the deposit. */
+    public record LiveObject(TxOutRef ref, Object holding, BigInteger lovelace) {}
+
+    public LiveObject liveObject(Object holding, BigInteger funds) {
+        return new LiveObject(OBJECT_REF, holding, BigInteger.valueOf(spec.minAda()).add(funds));
+    }
+
+    /** The instance UTxO with {@code shared} as a reference input (how objects read @Shared state). */
+    public TxInInfo instanceReference(Object shared) {
+        return new TxInInfo(LIVE_REF, stateOut(shared, BigInteger.valueOf(spec.minAda())));
+    }
+
+    private TxOut objectOut(Object holding, BigInteger lovelace) {
+        return new TxOut(stateAddress(), Value.lovelace(lovelace).merge(Value.singleton(new PolicyId(policy),
+                new TokenName(objectId()), BigInteger.ONE)), new OutputDatum.OutputDatumInline(data(holding)), Optional.empty());
+    }
+
+    /** Creating an object: seed, the instance as a reference input, the object token minted, the object output. */
+    public TxModel createObject(Object redeemer, Object holding, Object shared, Ctx ctx) {
+        var tx = new TxModel(TxModel.Kind.CREATE);
+        tx.token = objectId();
+        byte[] caller = ctx == null ? fill(28, 0xCA) : ctx.caller();
+        tx.inputs.add(new TxInInfo(seed, walletOut(caller, BigInteger.valueOf(50_000_000))));
+        tx.referenceInputs.add(instanceReference(shared));
+        BigInteger received = ctx == null ? BigInteger.ZERO : ctx.received();
+        tx.outputs.add(objectOut(holding, BigInteger.valueOf(spec.minAda()).add(received)));
+        tx.stateOutput = 0;
+        tx.mint = Value.singleton(new PolicyId(policy), new TokenName(objectId()), BigInteger.ONE);
+        tx.mintRedeemer = data(redeemer);
+        if (ctx != null) {
+            tx.signers.add(caller);
+            tx.range = window(ctx.validFrom(), ctx.validTo());
+        }
+        return tx;
+    }
+
+    /** An owned action: spends the object only (plus the instance by reference when {@code shared} is given). */
+    public TxModel actObject(LiveObject obj, Object redeemer, Object nextHolding, JulcList<Payout> payouts, byte[] signer,
+                             Ctx ctx, Object shared) {
+        var tx = spendObject(TxModel.Kind.ACTION, obj, redeemer, signer, ctx, shared);
+        BigInteger received = ctx == null ? BigInteger.ZERO : ctx.received();
+        tx.outputs.add(objectOut(nextHolding, obj.lovelace().add(received).subtract(total(payouts))));
+        tx.stateOutput = tx.outputs.size() - 1;
+        addPayoutsFor(tx, obj.ref(), payouts);
+        return tx;
+    }
+
+    /** An owned destroy: spends the object, burns its token, pays out everything. */
+    public TxModel destroyObject(LiveObject obj, Object redeemer, Object burnRedeemer, JulcList<Payout> payouts,
+                                 byte[] signer, Ctx ctx) {
+        var tx = spendObject(TxModel.Kind.DESTROY, obj, redeemer, signer, ctx, null);
+        tx.mint = Value.singleton(new PolicyId(policy), new TokenName(objectId()), BigInteger.ONE.negate());
+        tx.mintRedeemer = data(burnRedeemer);
+        addPayoutsFor(tx, obj.ref(), payouts);
+        return tx;
+    }
+
+    private TxModel spendObject(TxModel.Kind kind, LiveObject obj, Object redeemer, byte[] signer, Ctx ctx, Object shared) {
+        var tx = new TxModel(kind);
+        tx.token = objectId();
+        tx.inputs.add(new TxInInfo(obj.ref(), objectOut(obj.holding(), obj.lovelace())));
+        tx.inputs.add(new TxInInfo(new TxOutRef(new TxId(fill(32, 0x33)), BigInteger.ZERO),
+                walletOut(signer == null ? fill(28, 0xFE) : signer, BigInteger.valueOf(50_000_000))));
+        if (shared != null) tx.referenceInputs.add(instanceReference(shared));
+        tx.spendRedeemers.put(obj.ref(), data(redeemer));
+        if (signer != null) tx.signers.add(signer);
+        if (ctx != null) tx.range = window(ctx.validFrom(), ctx.validTo());
+        return tx;
+    }
+
+    private void addPayoutsFor(TxModel tx, TxOutRef ref, JulcList<Payout> payouts) {
+        Map<String, BigInteger> owed = new LinkedHashMap<>();
+        for (Payout p : payouts) owed.merge(HexFormat.of().formatHex(p.to()), p.lovelace(), BigInteger::add);
+        PlutusData tag = data(ref);
+        for (var e : owed.entrySet()) {
+            tx.outputs.add(new TxOut(pkhAddress(HexFormat.of().parseHex(e.getKey())), Value.lovelace(e.getValue()),
+                    new OutputDatum.OutputDatumInline(tag), Optional.empty()));
+            tx.payoutOutputs.add(tx.outputs.size() - 1);
+        }
     }
 
     public static TxOut walletOut(byte[] pkh, BigInteger lovelace) {

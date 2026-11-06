@@ -23,6 +23,7 @@ public final class TxModel {
 
     public final Kind kind;
     public final List<TxInInfo> inputs = new ArrayList<>();
+    public final List<TxInInfo> referenceInputs = new ArrayList<>();
     public final List<TxOut> outputs = new ArrayList<>();
     public Value mint = Value.zero();
     public final List<byte[]> signers = new ArrayList<>();
@@ -36,6 +37,9 @@ public final class TxModel {
     /** The map verifier's claims (ADR-0002 D9), if the transaction touches MerkleMaps; else null. */
     public java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims;
 
+    /** The name of the token this transaction creates or spends: an instance id, or an object id (ADR-0003). */
+    public byte[] token;
+
     /** Indexes in {@link #outputs} of payout outputs. */
     public final List<Integer> payoutOutputs = new ArrayList<>();
 
@@ -46,6 +50,7 @@ public final class TxModel {
     public TxModel copy() {
         var c = new TxModel(kind);
         c.inputs.addAll(inputs);
+        c.referenceInputs.addAll(referenceInputs);
         c.outputs.addAll(outputs);
         c.mint = mint;
         c.signers.addAll(signers);
@@ -55,6 +60,7 @@ public final class TxModel {
         c.stateOutput = stateOutput;
         c.payoutOutputs.addAll(payoutOutputs);
         c.mapClaims = mapClaims == null ? null : new java.util.ArrayList<>(mapClaims);
+        c.token = token;
         return c;
     }
 

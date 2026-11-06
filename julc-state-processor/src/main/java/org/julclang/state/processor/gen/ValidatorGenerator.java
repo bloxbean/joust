@@ -47,6 +47,7 @@ public final class ValidatorGenerator {
                 "org.julclang.stdlib.lib.ContextsLib",
                 "org.julclang.stdlib.lib.OutputLib", "org.julclang.stdlib.lib.ValuesLib",
                 "org.julclang.state.api.Ctx", "org.julclang.state.api.Payout", "org.julclang.state.api.Payouts"));
+        if (c.hasOwned()) imports.add("org.julclang.stdlib.lib.CryptoLib");
         if (c.hasMaps()) {
             imports.addAll(List.of("org.julclang.state.api.MapEntry", "org.julclang.state.api.MerkleMap",
                     "org.julclang.state.api.mpf.MapClaim", "org.julclang.state.api.mpf.MapClaims",
@@ -77,16 +78,27 @@ public final class ValidatorGenerator {
 
         // ---- redeemers
         w.line("// ---- redeemers ---------------------------------------------------------------------------");
-        w.line("public sealed interface Lifecycle permits CreateInstance, BurnInstance {}");
+        var lifecycle = new ArrayList<String>(List.of("CreateInstance", "BurnInstance"));
+        c.ownedInits().forEach(t -> lifecycle.add(t.variant()));
+        w.line("public sealed interface Lifecycle permits " + String.join(", ", lifecycle) + " {}");
         w.line("public record CreateInstance(" + join(prepend(List.of("TxOutRef seed"),
                 fields(c.init()))) + ") implements Lifecycle {}");
         w.line("public record BurnInstance() implements Lifecycle {}");
-        var spend = c.spendTransitions();
+        for (var t : c.ownedInits()) {
+            w.line("public record " + t.variant() + "(" + join(prepend(List.of("TxOutRef seed", "byte[] instance"), fields(t)))
+                    + ") implements Lifecycle {}");
+        }
+        var spend = new ArrayList<TransitionIR>(c.spendTransitions());
+        spend.addAll(c.ownedSpendTransitions());
         if (!spend.isEmpty()) {
             w.line("public sealed interface Calls permits " + String.join(", ", spend.stream().map(TransitionIR::variant).toList()) + " {}");
             for (var t : spend) {
                 w.line("public record " + t.variant() + "(" + join(fields(t)) + ") implements Calls {}");
             }
+        }
+        if (c.hasOwned()) {
+            w.line("/** An owned object's datum: its instance and its value (ADR-0003 D2). */");
+            w.line("public record Holding(byte[] instance, " + c.ownedType() + " value) {}");
         }
         w.blank();
 
@@ -100,6 +112,9 @@ public final class ValidatorGenerator {
         w.open("return switch (redeemer) {");
         w.line("case CreateInstance cr -> create(cr, tx, policy);");
         w.line("case BurnInstance b -> onlyBurns(tx.mint(), policy);");
+        for (var t : c.ownedInits()) {
+            w.line("case " + t.variant() + " o -> create" + t.variant() + "(o, tx, policy);");
+        }
         w.close("};");
         w.close("}").blank();
 
@@ -130,6 +145,8 @@ public final class ValidatorGenerator {
         w.line("return seedSpent && mintOk && shapeOk && ctxOk && datumOk && valueOk;");
         w.close("}").blank();
 
+        for (var t : c.ownedInits()) createObject(t);
+
         // ---- SPEND
         if (!spend.isEmpty()) {
             w.line("// ---- SPEND: actions and destroys -------------------------------------------------------");
@@ -139,13 +156,19 @@ public final class ValidatorGenerator {
             w.line("TxInInfo own = ContextsLib.findOwnInput(ctx).get();");
             w.line("TxOut ownOut = own.resolved();");
             w.line("byte[] policy = AddressLib.credentialHash(ownOut.address());");
-            w.line("// Only the UTxO holding a thread token is an instance; anything else at the address is junk (I10).");
+            w.line("// Only a UTxO holding an instance or object token can be spent; anything else is junk (I10).");
             w.line("byte[] id = instanceIdOf(ownOut.value(), policy);");
-            w.line(S + " current = (" + S + ") (Object) OutputLib.getInlineDatum(ownOut);");
             w.line("BigInteger inLovelace = ValuesLib.lovelaceOf(ownOut.value());");
             w.open("return switch (redeemer) {");
             for (var t : spend) {
-                w.line("case " + t.variant() + " r -> on" + t.variant() + "(r, current, tx, own, policy, id, inLovelace);");
+                if (t.owned()) {
+                    w.line("// I21: owned redeemers only for object tokens.");
+                    w.line("case " + t.variant() + " r -> isObjectToken(id) && on" + t.variant() + "(r, (Holding) (Object)"
+                            + " OutputLib.getInlineDatum(ownOut), tx, own, policy, id, inLovelace);");
+                } else {
+                    w.line("case " + t.variant() + " r -> isInstanceToken(id) && on" + t.variant() + "(r, (" + S
+                            + ") (Object) OutputLib.getInlineDatum(ownOut), tx, own, policy, id, inLovelace);");
+                }
             }
             w.close("};");
             w.close("}").blank();
@@ -159,9 +182,16 @@ public final class ValidatorGenerator {
 
     private void transition(TransitionIR t) {
         String X = c.name();
-        String S = c.stateType();
-        w.open("static boolean on" + t.variant() + "(" + t.variant() + " r, " + S
-                + " current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id, BigInteger inLovelace) {");
+        boolean owned = t.owned();
+        String S = owned ? c.ownedType() : c.stateType();      // the record this method acts on
+        if (owned) {
+            w.open("static boolean on" + t.variant() + "(" + t.variant() + " r, Holding held, TxInfo tx, TxInInfo own,"
+                    + " byte[] policy, byte[] id, BigInteger inLovelace) {");
+            w.line(S + " current = held.value();");
+        } else {
+            w.open("static boolean on" + t.variant() + "(" + t.variant() + " r, " + S
+                    + " current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id, BigInteger inLovelace) {");
+        }
         List<String> checks = new ArrayList<>();
         for (String f : t.signedBy()) {
             String v = "signed_" + f;
@@ -179,30 +209,38 @@ public final class ValidatorGenerator {
             checks.add(v);
         }
         if (t.hasCtx()) {
-            String balance = t.kind() == TransitionIR.Kind.DESTROY ? "inLovelace" : "inLovelace.subtract(MIN_ADA)";
+            String balance = t.destroys() ? "inLovelace" : "inLovelace.subtract(MIN_ADA)";
             w.line("boolean ctxOk = ctxValid(tx, r.ctx(), " + balance + ", " + t.payable() + ");");
             checks.add("ctxOk");
         }
         String stateArg = "current";
-        if (c.hasMaps()) {
+        if (t.shared()) {
+            w.line("// I20: the instance state, read through a reference input of exactly this object's instance.");
+            w.line(c.stateType() + " shared = sharedState(tx, policy, held.instance());");
+        }
+        if (c.hasMaps() && !owned) {
             w.line("// Each MerkleMap opened with the read set the map verifier proved (I15).");
             w.line("MapClaims mc = claims(tx);");
             w.line(S + " opened = openAll(current, mc, own.outRef());");
             stateArg = "opened";
         }
-        String call = X + "." + t.method() + "(" + args("r", t, stateArg) + ")";
+        String call = t.shared() ? X + "." + t.method() + "(" + args("r", t, stateArg, "shared") + ")"
+                : X + "." + t.method() + "(" + args("r", t, stateArg) + ")";
+        java.util.function.UnaryOperator<String> datum = owned
+                ? v -> "(PlutusData) (Object) new Holding(held.instance(), " + v + ")"
+                : v -> "(PlutusData) (Object) " + v;
         switch (t.returns()) {
             case STATE -> {
-                w.line(S + " next = " + committed(call) + ";");
-                w.line("boolean continues = continues(tx, own, policy, id, (PlutusData) (Object) next, inLovelace.add("
+                w.line(S + " next = " + (owned ? call : committed(call)) + ";");
+                w.line("boolean continues = continues(tx, own, policy, id, " + datum.apply("next") + ", inLovelace.add("
                         + received("r", t) + "));");
                 checks.add("continues");
             }
             case RESULT -> {
                 w.line(t.resultType() + " result = " + call + ";");
                 w.line("JulcList<Payout> payouts = result.payouts();");
-                w.line(S + " next = " + committed("result.state()") + ";");
-                w.line("boolean continues = continues(tx, own, policy, id, (PlutusData) (Object) next,"
+                w.line(S + " next = " + (owned ? "result.state()" : committed("result.state()")) + ";");
+                w.line("boolean continues = continues(tx, own, policy, id, " + datum.apply("next") + ","
                         + " inLovelace.add(" + received("r", t) + ").subtract(Payouts.total(payouts)));");
                 w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
                 checks.add("continues");
@@ -223,6 +261,34 @@ public final class ValidatorGenerator {
         w.close("}").blank();
     }
 
+    /** MINT for an {@code @OwnedInit}: one object under an existing instance (I18). */
+    private void createObject(TransitionIR t) {
+        String X = c.name();
+        String R = c.ownedType();
+        w.open("static boolean create" + t.variant() + "(" + t.variant() + " o, TxInfo tx, byte[] policy) {");
+        w.line("byte[] id = objectId(o.seed());");
+        w.line("boolean seedSpent = seedConsumed(tx.inputs(), o.seed());");
+        w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
+        w.line("boolean underInstance = ByteStringLib.length(o.instance()) == 32;");
+        w.line("// The instance exists: a reference input holds its token (and gives the @Shared state).");
+        w.line(c.stateType() + " shared = sharedState(tx, policy, o.instance());");
+        w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
+        w.line("boolean shapeOk = isStateAddress(out.address(), policy) && out.referenceScript().isEmpty();");
+        if (t.hasCtx()) {
+            w.line("boolean ctxOk = ctxValid(tx, o.ctx(), BigInteger.ZERO, " + t.payable() + ");");
+        } else {
+            w.line("boolean ctxOk = true;");
+        }
+        String call = t.shared() ? X + "." + t.method() + "(" + args("o", t, "shared") + ")"
+                : X + "." + t.method() + "(" + args("o", t) + ")";
+        w.line(R + " value = " + call + ";");
+        w.line("PlutusData held = (PlutusData) (Object) new Holding(o.instance(), value);");
+        w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), held) && datumFits(held);");
+        w.line("boolean valueOk = exactValue(out.value(), policy, id, MIN_ADA.add(" + received("o", t) + "));");
+        w.line("return seedSpent && mintOk && underInstance && shapeOk && ctxOk && datumOk && valueOk;");
+        w.close("}").blank();
+    }
+
     /** {@code expr} (the method's next state) with each MerkleMap committed to its new root (I16, I17). */
     private String committed(String expr) {
         if (!c.hasMaps()) return expr;
@@ -233,7 +299,42 @@ public final class ValidatorGenerator {
         return c.stateType();
     }
 
+    private void ownedHelpers() {
+        w.line("/** An object's token name: 0x4F ++ blake2b_224(seed ref), 29 bytes, never an instance id (ADR-0003 D2). */");
+        w.open("static byte[] objectId(TxOutRef seed) {");
+        w.line("return ByteStringLib.cons(79L, CryptoLib.blake2b_224(ValuesLib.refBytes(seed)));");
+        w.close("}").blank();
+        w.open("static boolean isObjectToken(byte[] id) {");
+        w.line("return ByteStringLib.length(id) == 29 && ByteStringLib.at(id, 0L) == 79L;");
+        w.close("}").blank();
+        w.line("/**");
+        w.line(" * The state of instance {@code instance}: the reference input holding its token at this script's address (I20).");
+        w.line(" */");
+        w.open("static " + c.stateType() + " sharedState(TxInfo tx, byte[] policy, byte[] instance) {");
+        w.line("boolean found = !isInstanceToken(instance);   // only a 32-byte instance id names state (ADR-0003 r2)");
+        w.open("if (found) {");
+        w.line("Builtins.error();");
+        w.close("}");
+        w.line("TxOut hit = tx.outputs().head();");
+        w.open("for (var ref : tx.referenceInputs()) {");
+        w.line("TxOut o = ref.resolved();");
+        w.open("if (!found && ValuesLib.assetOf(o.value(), policy, instance).compareTo(BigInteger.ONE) == 0 && isStateAddress(o.address(), policy)) {");
+        w.line("found = true;");
+        w.line("hit = o;");
+        w.close("}");
+        w.close("}");
+        w.open("if (!found) {");
+        w.line("Builtins.error();");
+        w.close("}");
+        w.line("return (" + c.stateType() + ") (Object) OutputLib.getInlineDatum(hit);");
+        w.close("}").blank();
+    }
+
     private void helpers() {
+        w.open("static boolean isInstanceToken(byte[] id) {");
+        w.line("return ByteStringLib.length(id) == 32;");
+        w.close("}").blank();
+        if (c.hasOwned()) ownedHelpers();
         if (c.hasMaps()) {
             String S = c.stateType();
             w.line("/** The state a method sees: each MerkleMap opened with its proven read set (I15). */");

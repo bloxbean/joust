@@ -50,6 +50,11 @@ final class ContractReader {
     static final String VALID_AFTER = API + "ValidAfter";
     static final String VALID_BEFORE = API + "ValidBefore";
     static final String CTX = API + "Ctx";
+    static final String OWNED = API + "Owned";
+    static final String OWNED_INIT = API + "OwnedInit";
+    static final String OWNED_ACTION = API + "OwnedAction";
+    static final String OWNED_DESTROY = API + "OwnedDestroy";
+    static final String SHARED = API + "Shared";
     static final String PAYOUT = API + "Payout";
     static final String ONCHAIN_LIBRARY = "org.julclang.stdlib.annotation.OnchainLibrary";
     static final String JULC_LIST = "org.julclang.core.types.JulcList";
@@ -80,6 +85,9 @@ final class ContractReader {
         List<ExecutableElement> actions = new ArrayList<>();
         List<ExecutableElement> destroys = new ArrayList<>();
         List<ExecutableElement> views = new ArrayList<>();
+        List<ExecutableElement> ownedInits = new ArrayList<>();
+        List<ExecutableElement> ownedActions = new ArrayList<>();
+        List<ExecutableElement> ownedDestroys = new ArrayList<>();
         Set<String> names = new HashSet<>();
         for (ExecutableElement m : ElementFilter.methodsIn(type.getEnclosedElements())) {
             int kinds = 0;
@@ -87,6 +95,9 @@ final class ContractReader {
             if (annotation(m, ACTION).isPresent()) { actions.add(m); kinds++; }
             if (annotation(m, DESTROY).isPresent()) { destroys.add(m); kinds++; }
             if (annotation(m, VIEW).isPresent()) { views.add(m); kinds++; }
+            if (annotation(m, OWNED_INIT).isPresent()) { ownedInits.add(m); kinds++; }
+            if (annotation(m, OWNED_ACTION).isPresent()) { ownedActions.add(m); kinds++; }
+            if (annotation(m, OWNED_DESTROY).isPresent()) { ownedDestroys.add(m); kinds++; }
             if (kinds == 0) {
                 for (String policy : List.of(PAYABLE, SIGNED_BY, ONLY_OWNER, VALID_AFTER, VALID_BEFORE)) {
                     if (annotation(m, policy).isPresent()) {
@@ -96,7 +107,8 @@ final class ContractReader {
                 continue;
             }
             if (kinds > 1) {
-                error(m, "a method can be only one of @Init, @Action, @Destroy, @View");
+                error(m, "a method can be only one of @Init, @Action, @Destroy, @View, @OwnedInit, @OwnedAction,"
+                        + " @OwnedDestroy");
                 continue;
             }
             if (!m.getModifiers().contains(Modifier.PUBLIC) || !m.getModifiers().contains(Modifier.STATIC)) {
@@ -143,7 +155,39 @@ final class ContractReader {
             componentsByName.put(p.name(), p);
         }
 
-        var ctx = new Reading(types, stateType, componentsByName);
+        // ---- the @Owned record (ADR-0003)
+        TypeElement ownedElement = null;
+        for (TypeElement nested : ElementFilter.typesIn(type.getEnclosedElements())) {
+            if (annotation(nested, OWNED).isPresent()) {
+                if (nested.getKind() != ElementKind.RECORD) error(nested, "@Owned must be on a record");
+                else if (ownedElement != null) error(nested, "at most one @Owned record per contract (ADR-0003 D1)");
+                else ownedElement = nested;
+            }
+        }
+        boolean anyOwnedMethod = !ownedInits.isEmpty() || !ownedActions.isEmpty() || !ownedDestroys.isEmpty();
+        if (anyOwnedMethod && ownedElement == null) {
+            error(type, "@OwnedInit/@OwnedAction/@OwnedDestroy need an @Owned record in the contract");
+            return Optional.empty();
+        }
+        if (ownedElement != null && ownedInits.isEmpty()) {
+            error(ownedElement, "an @Owned record needs at least one @OwnedInit method to create objects");
+        }
+        List<ParamIR> ownedComponents = new ArrayList<>();
+        Map<String, ParamIR> ownedByName = new LinkedHashMap<>();
+        if (ownedElement != null) {
+            for (RecordComponentElement c : ownedElement.getRecordComponents()) {
+                if (mentionsMap(c.asType(), new java.util.HashSet<>())) {
+                    error(ownedElement, "owned records cannot hold MerkleMaps in Option C (ADR-0003 §4)");
+                }
+                var p = new ParamIR(c.getSimpleName().toString(), types.render(c.asType()), kindOf(c.asType()));
+                ownedComponents.add(p);
+                ownedByName.put(p.name(), p);
+            }
+        }
+        TypeMirror ownedType = ownedElement == null ? null : ownedElement.asType();
+
+        var ctx = new Reading(types, stateType, componentsByName, stateType);
+        var ownedCtx = ownedElement == null ? null : new Reading(types, ownedType, ownedByName, stateType);
         TransitionIR init = readTransition(initMethod, TransitionIR.Kind.INIT, ctx);
         List<TransitionIR> actionIRs = new ArrayList<>();
         for (var m : actions) actionIRs.add(readTransition(m, TransitionIR.Kind.ACTION, ctx));
@@ -151,6 +195,14 @@ final class ContractReader {
         for (var m : destroys) destroyIRs.add(readTransition(m, TransitionIR.Kind.DESTROY, ctx));
         List<ViewIR> viewIRs = new ArrayList<>();
         for (var m : views) viewIRs.add(readView(m, ctx));
+        List<TransitionIR> ownedInitIRs = new ArrayList<>();
+        List<TransitionIR> ownedActionIRs = new ArrayList<>();
+        List<TransitionIR> ownedDestroyIRs = new ArrayList<>();
+        if (ownedCtx != null) {
+            for (var m : ownedInits) ownedInitIRs.add(readTransition(m, TransitionIR.Kind.OWNED_INIT, ownedCtx));
+            for (var m : ownedActions) ownedActionIRs.add(readTransition(m, TransitionIR.Kind.OWNED_ACTION, ownedCtx));
+            for (var m : ownedDestroys) ownedDestroyIRs.add(readTransition(m, TransitionIR.Kind.OWNED_DESTROY, ownedCtx));
+        }
 
         var sc = annotation(type, STATE_CONTRACT);
         int maxDatumBytes = sc.flatMap(a -> value(a, "maxDatumBytes"))
@@ -177,7 +229,7 @@ final class ContractReader {
         var reserved = new HashSet<String>(GENERATED_NAMES);
         reserved.add(type.getSimpleName() + "Validator");
         reserved.add(type.getSimpleName() + "Client");
-        for (var t : concat(List.of(init), actionIRs, destroyIRs)) {
+        for (var t : concat(List.of(init), actionIRs, destroyIRs, ownedInitIRs, ownedActionIRs, ownedDestroyIRs)) {
             if (!reserved.add(t.variant()) && t.kind() != TransitionIR.Kind.INIT) {
                 error(type, "redeemer variant name " + t.variant() + " (from method " + t.method()
                         + ") clashes with a generated name; rename the method");
@@ -190,14 +242,36 @@ final class ContractReader {
             messager.printMessage(Diagnostic.Kind.WARNING, "a @Destroy discards every MerkleMap's contents: check"
                     + " MerkleMaps.isEmpty(...) in its rules unless losing them is intended (ADR-0002 r2)", type);
         }
-        if (destroyIRs.isEmpty()) {
+        if (ownedCtx != null) {
+            if (!destroyIRs.isEmpty()) {
+                error(type, "a contract with @Owned objects cannot @Destroy its instance: objects that read @Shared state"
+                        + " would be locked forever (ADR-0003 r2)");
+            }
+            if (ownedDestroyIRs.stream().noneMatch(t -> !t.shared())) {
+                error(ownedElement, "owned objects need an escape hatch: an @OwnedDestroy without @Shared, so an owner can"
+                        + " always close their object whatever the instance state (ADR-0003 r2)");
+            }
+            if (anyMap) {
+                error(type, "@Owned objects and MerkleMap state cannot be combined yet: a @Shared read has no proof path"
+                        + " for map reads (ADR-0003 r2)");
+            }
+            for (var t : concat(ownedActionIRs, ownedDestroyIRs)) {
+                if (t.signedBy().isEmpty()) {
+                    messager.printMessage(Diagnostic.Kind.WARNING, "owned method " + t.method() + " has no @SignedBy:"
+                            + " anyone can call it on anyone's object (and keep the owner's own calls failing)", type);
+                }
+            }
+        }
+        if (destroyIRs.isEmpty() && ownedCtx == null) {
             messager.printMessage(Diagnostic.Kind.WARNING, "this @StateContract has no @Destroy method: an instance can"
                     + " never end, so its min-ADA deposit (" + minAda + " lovelace) is locked forever", type);
         }
         if (failed) return Optional.empty();
         return Optional.of(new ContractIR(pkg, type.getSimpleName().toString(), stateText, stateComponents, minAda,
                 maxDatumBytes, maxValidityMs,
-                init, actionIRs, destroyIRs, viewIRs, types.imports(), Strategies.OPTION_A));
+                init, actionIRs, destroyIRs, viewIRs, types.imports(), Strategies.OPTION_A,
+                ownedType == null ? null : types.render(ownedType), List.copyOf(ownedComponents), ownedInitIRs,
+                ownedActionIRs, ownedDestroyIRs));
     }
 
     /** Coins per UTxO byte on mainnet and the public testnets (Conway). Governance can change it; ADR-0001 §10. */
@@ -220,20 +294,36 @@ final class ContractReader {
             "IntervalLib", "CryptoLib", "Interval", "IntervalBoundType", "OutputDatum", "Ctx", "Clock", "Payout", "Payouts", "CreateInstance", "BurnInstance", "Account", "StateRuntime",
             "StateInstance", "TxResult", "Transition", "Lifecycle", "Calls", "Call", "MerkleMap", "MapEntry", "MapWitness",
             "MapWitnesses", "Mpf", "Deploy", "ContractSpec",
-            "StateContractHandle", "Utxo", "Arrays");
+            "StateContractHandle", "Utxo", "Arrays", "Holding");
 
-    private record Reading(TypeRenderer types, TypeMirror stateType, Map<String, ParamIR> components) {}
+    /** What a transition acts on: {@code stateType} is its subject (the state, or the owned record), {@code sharedType}
+     * the instance state (for {@code @Shared}). */
+    private record Reading(TypeRenderer types, TypeMirror stateType, Map<String, ParamIR> components, TypeMirror sharedType) {}
 
     private TransitionIR readTransition(ExecutableElement m, TransitionIR.Kind kind, Reading r) {
         List<? extends VariableElement> ps = m.getParameters();
         int first = 0;
-        if (kind != TransitionIR.Kind.INIT) {
+        boolean creates = kind == TransitionIR.Kind.INIT || kind == TransitionIR.Kind.OWNED_INIT;
+        if (!creates) {
             if (ps.isEmpty() || !same(ps.get(0).asType(), r.stateType())) {
-                error(m, "the first parameter of @" + label(kind) + " must be the state ("
-                        + r.types().render(r.stateType()) + ")");
+                error(m, "the first parameter of @" + label(kind) + " must be the "
+                        + (kind == TransitionIR.Kind.ACTION || kind == TransitionIR.Kind.DESTROY ? "state" : "owned record")
+                        + " (" + r.types().render(r.stateType()) + ")");
             }
             first = 1;
         }
+        boolean shared = false;
+        boolean ownedKind = kind == TransitionIR.Kind.OWNED_INIT || kind == TransitionIR.Kind.OWNED_ACTION
+                || kind == TransitionIR.Kind.OWNED_DESTROY;
+        for (int i = 0; i < ps.size(); i++) {
+            if (annotation(ps.get(i), SHARED).isPresent()) {
+                if (!ownedKind) error(ps.get(i), "@Shared is for owned methods; shared methods get the state as their first parameter");
+                else if (i != first) error(ps.get(i), "the @Shared parameter must come right after the owned record");
+                else if (!same(ps.get(i).asType(), r.sharedType())) error(ps.get(i), "@Shared must have the state type");
+                else shared = true;
+            }
+        }
+        if (shared) first++;
         boolean hasCtx = ps.size() > first && isNamed(ps.get(ps.size() - 1).asType(), CTX);
         int last = hasCtx ? ps.size() - 1 : ps.size();
         List<ParamIR> params = new ArrayList<>();
@@ -241,8 +331,9 @@ final class ContractReader {
             var p = ps.get(i);
             if (isNamed(p.asType(), CTX)) {
                 error(p, "Ctx must be the last parameter");
-            } else if (same(p.asType(), r.stateType())) {
-                error(p, "only the first parameter may be the state");
+            } else if (same(p.asType(), r.stateType()) || same(p.asType(), r.sharedType())) {
+                error(p, ownedKind ? "the state reaches an owned method only through one @Shared parameter"
+                        : "only the first parameter may be the state");
             }
             if (mentionsMap(p.asType(), new java.util.HashSet<>())) {
                 error(p, "a MerkleMap or MapEntry can only be a component of the state record: one passed in an argument"
@@ -255,8 +346,13 @@ final class ContractReader {
         String resultType = null;
         TypeMirror ret = m.getReturnType();
         switch (kind) {
-            case INIT -> returns = TransitionIR.Returns.STATE;
-            case DESTROY -> {
+            case INIT, OWNED_INIT -> {
+                returns = TransitionIR.Returns.STATE;
+                if (!same(ret, r.stateType())) {
+                    error(m, "@OwnedInit must return the owned record (" + r.types().render(r.stateType()) + ")");
+                }
+            }
+            case DESTROY, OWNED_DESTROY -> {
                 returns = TransitionIR.Returns.PAYOUTS;
                 if (!isPayoutList(ret)) {
                     error(m, "@Destroy must return JulcList<Payout>: the payouts that allocate the contract's balance");
@@ -278,15 +374,16 @@ final class ContractReader {
         }
 
         boolean payable = annotation(m, PAYABLE).isPresent();
-        if (payable && kind == TransitionIR.Kind.DESTROY) error(m, "@Payable does not apply to @Destroy");
+        boolean destroys = kind == TransitionIR.Kind.DESTROY || kind == TransitionIR.Kind.OWNED_DESTROY;
+        if (payable && destroys) error(m, "@Payable does not apply to a destroy");
         if (payable && !hasCtx) error(m, "@Payable needs a Ctx parameter, to read ctx.received()");
-        if (kind == TransitionIR.Kind.DESTROY && !hasCtx) {
+        if (destroys && !hasCtx) {
             error(m, "@Destroy needs a Ctx parameter: it must pay out ctx.balance(), everything the instance holds"
                     + " (deposit included)");
         }
-        if (kind == TransitionIR.Kind.INIT) {
+        if (creates) {
             for (ParamIR p : params) {
-                if (p.name().equals("seed") || p.name().equals("ctx")) {
+                if (p.name().equals("seed") || p.name().equals("ctx") || p.name().equals("instance")) {
                     error(m, "@Init parameter name \"" + p.name() + "\" is reserved by the generated redeemer; rename it");
                 }
             }
@@ -303,7 +400,7 @@ final class ContractReader {
         annotation(m, VALID_AFTER).flatMap(a -> value(a, "value")).ifPresent(v -> validAfter.add((String) v.getValue()));
         List<String> validBefore = new ArrayList<>();
         annotation(m, VALID_BEFORE).flatMap(a -> value(a, "value")).ifPresent(v -> validBefore.add((String) v.getValue()));
-        if (kind == TransitionIR.Kind.INIT && !(signedBy.isEmpty() && validAfter.isEmpty() && validBefore.isEmpty())) {
+        if (creates && !(signedBy.isEmpty() && validAfter.isEmpty() && validBefore.isEmpty())) {
             error(m, "@SignedBy, @OnlyOwner, @ValidAfter and @ValidBefore check the current state, which @Init does not"
                     + " have; use Ctx and Require.that in the body instead");
         }
@@ -315,7 +412,7 @@ final class ContractReader {
         String variant = kind == TransitionIR.Kind.INIT ? "CreateInstance"
                 : Character.toUpperCase(name.charAt(0)) + name.substring(1);
         return new TransitionIR(kind, name, variant, List.copyOf(params), hasCtx, payable, returns, resultType,
-                List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore));
+                List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared);
     }
 
     private ViewIR readView(ExecutableElement m, Reading r) {
@@ -423,6 +520,9 @@ final class ContractReader {
             case INIT -> "Init";
             case ACTION -> "Action";
             case DESTROY -> "Destroy";
+            case OWNED_INIT -> "OwnedInit";
+            case OWNED_ACTION -> "OwnedAction";
+            case OWNED_DESTROY -> "OwnedDestroy";
         };
     }
 

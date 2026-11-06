@@ -17,6 +17,12 @@ public final class Call<S> {
 
     public enum Kind { ACTION, DESTROY }
 
+    /** An owned method run with the instance's state (read through a reference input). */
+    @FunctionalInterface
+    public interface SharedRun<S> {
+        Transition<S> apply(S current, Object shared, Ctx ctx);
+    }
+
     /** Builds the spend redeemer from the call's Ctx. */
     @FunctionalInterface
     public interface ActRedeemer {
@@ -38,6 +44,7 @@ public final class Call<S> {
     final List<TimeRule<S>> notBefore;
     final List<TimeRule<S>> notAfter;
     final BiFunction<S, Ctx, Transition<S>> run;
+    final SharedRun<S> sharedRun;
     final ActRedeemer redeemer;
     final Object burnRedeemer;
 
@@ -50,7 +57,9 @@ public final class Call<S> {
         this.signers = List.copyOf(b.signers);
         this.notBefore = List.copyOf(b.notBefore);
         this.notAfter = List.copyOf(b.notAfter);
-        this.run = Objects.requireNonNull(b.run);
+        this.run = b.run;
+        this.sharedRun = b.sharedRun;
+        if (run == null && sharedRun == null) throw new IllegalArgumentException(name + ": no run");
         this.redeemer = Objects.requireNonNull(b.redeemer);
         this.burnRedeemer = b.burnRedeemer;
         if (received.signum() < 0) throw new IllegalArgumentException(name + ": received must not be negative");
@@ -81,6 +90,7 @@ public final class Call<S> {
         private final List<TimeRule<S>> notBefore = new ArrayList<>();
         private final List<TimeRule<S>> notAfter = new ArrayList<>();
         private BiFunction<S, Ctx, Transition<S>> run;
+        private SharedRun<S> sharedRun;
         private ActRedeemer redeemer;
         private Object burnRedeemer;
 
@@ -96,6 +106,8 @@ public final class Call<S> {
         public Builder<S> validAfter(String field, Function<S, BigInteger> t) { notBefore.add(new TimeRule<>(field, t)); return this; }
         public Builder<S> validBefore(String field, Function<S, BigInteger> t) { notAfter.add(new TimeRule<>(field, t)); return this; }
         public Builder<S> run(BiFunction<S, Ctx, Transition<S>> run) { this.run = run; return this; }
+        /** An owned method that also reads the instance state ({@code @Shared}; ADR-0003). */
+        public Builder<S> runShared(SharedRun<S> run) { this.sharedRun = run; return this; }
         public Builder<S> redeemer(ActRedeemer redeemer) { this.redeemer = redeemer; return this; }
 
         public Call<S> build() {
