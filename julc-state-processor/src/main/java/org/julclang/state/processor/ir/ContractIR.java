@@ -78,9 +78,21 @@ public record ContractIR(String packageName,
         return !mapComponents().isEmpty();
     }
 
-    /** Spend-side transitions: actions then destroys, in that order (the redeemer's constructor order). */
+    /** {@code @Batched} actions (ADR-0004), in source order. */
+    public List<TransitionIR> batched() {
+        return actions.stream().filter(TransitionIR::batched).toList();
+    }
+
+    public boolean hasBatched() {
+        return actions.stream().anyMatch(TransitionIR::batched);
+    }
+
+    /**
+     * Spend-side transitions with a direct-call redeemer: actions (except {@code @Batched(only = true)}) then
+     * destroys, in that order (the redeemer's constructor order).
+     */
     public List<TransitionIR> spendTransitions() {
-        var all = new java.util.ArrayList<TransitionIR>(actions);
+        var all = new java.util.ArrayList<TransitionIR>(actions.stream().filter(t -> !t.batchOnly()).toList());
         all.addAll(destroys);
         return List.copyOf(all);
     }

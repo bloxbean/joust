@@ -223,4 +223,36 @@ class ProcessorDiagnosticsTest {
                 "Require.that(by.compareTo(BigInteger.ZERO) > 0, \"positive\"); return new S(s.n().add(by), s.owner());"));
         assertTrue(r.success(), r.errors().toString());
     }
+
+    // ------------------------------------------------------------------ @Batched rules (ADR-0004)
+
+    static final String BATCHED = GOOD.replace("@Action public static S bump(S s, BigInteger by) { return new S(s.n().add(by), s.owner()); }",
+            "@Action @Batched @Payable public static S bump(S s, BigInteger by, Ctx ctx) { return new S(s.n().add(by), s.owner()); }");
+
+    @Test
+    void batchedActionCompiles() {
+        var r = compile(BATCHED);
+        assertTrue(r.success(), r.errors().toString());
+    }
+
+    @Test
+    void batchedNeedsCtx_andNoSignedByOrTime() {
+        assertTrue(compile(BATCHED.replace("bump(S s, BigInteger by, Ctx ctx)", "bump(S s, BigInteger by)")
+                .replace("@Batched @Payable", "@Batched")).hasError("@Batched needs a Ctx parameter"));
+        assertTrue(compile(BATCHED.replace("@Batched @Payable", "@Batched @Payable @OnlyOwner"))
+                .hasError("@Batched cannot use @SignedBy"));
+    }
+
+    @Test
+    void batchedOnlyOnActions() {
+        var r = compile(GOOD.replace("@Destroy @OnlyOwner", "@Destroy @OnlyOwner @Batched"));
+        assertTrue(r.hasError("@Batched is for @Action methods"), r.errors().toString());
+    }
+
+    @Test
+    void batchedWithMerkleMapsIsRejected() {
+        var r = compile(MAPPED.replace("@Action public static S put(S s, byte[] k)",
+                "@Action @Batched public static S put(S s, byte[] k, Ctx ctx)"));
+        assertTrue(r.hasError("@Batched actions and MerkleMap state cannot be combined"), r.errors().toString());
+    }
 }

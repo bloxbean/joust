@@ -17,6 +17,8 @@ import java.util.List;
  * @param validAfter  state fields the validity interval must start at or after
  * @param validBefore state fields the validity interval must end at or before
  * @param shared      the method takes the instance state read-only ({@code @Shared}, owned methods only)
+ * @param batched     the action may also run as an intent ({@code @Batched}, ADR-0004)
+ * @param batchOnly   only as an intent: no direct-call redeemer ({@code @Batched(only = true)})
  */
 public record TransitionIR(Kind kind,
                            String method,
@@ -29,7 +31,9 @@ public record TransitionIR(Kind kind,
                            List<String> signedBy,
                            List<String> validAfter,
                            List<String> validBefore,
-                           boolean shared) {
+                           boolean shared,
+                           boolean batched,
+                           boolean batchOnly) {
 
     public enum Kind { INIT, ACTION, DESTROY, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY }
 
@@ -41,6 +45,11 @@ public record TransitionIR(Kind kind,
     /** Ends what it acts on (instance or object): burns its token. */
     public boolean destroys() {
         return kind == Kind.DESTROY || kind == Kind.OWNED_DESTROY;
+    }
+
+    /** The redeemer variant of this action's intent call ({@code donate} -> {@code DonateIntent}). */
+    public String intentVariant() {
+        return variant + "Intent";
     }
 
     public enum Returns {

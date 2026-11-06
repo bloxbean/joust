@@ -57,7 +57,7 @@ at least X to Y, tagged with this instance's input", plus the matching decrease 
 | `@Owned(by="holder")` | record | One UTxO per user, no contention (positions, balances) |
 | `@Shared` | record | Single global state. The compiler warns that writes are limited to about one per block |
 | `@ReadOnly` | action parameter | Another contract's state, read via a reference input (prices, config) |
-| `@Batched(max = 20)` | action | Intent mode: users submit requests, a generated batcher applies them |
+| `@Batched(only = false)` | action | **Shipped (ADR-0004).** Intent mode: users lock requests in their own UTxOs; a permissionless batcher applies many in one transaction. `only = true` removes the direct call. The batch size comes from the budget (about 8), not from an annotation attribute |
 
 ## Lifecycle, events, composition
 

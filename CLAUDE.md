@@ -25,9 +25,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - `julc-state-runtime`: off-chain runtime for generated clients (StateRuntime, StateContractHandle, StateInstance).
 - `julc-state-testkit`: `StateHarness` (evaluates the compiled validator) + `Attacks` (attack suite).
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
-- `examples/{counter,vault,escrow,crowdfund,token}`: contracts + JVM/harness/devnet tests; `examples/devkit`: DevKit
-  helper. Options A (ADR-0001) and B (ADR-0002, MerkleMap, token example) run on Yaci DevKit.
-- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, then C/D/E/F. JuLC changes: worktree `../julc-joust`, PR label
+- `examples/{counter,vault,escrow,crowdfund,token,bank,pool}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
+  DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D
+  (ADR-0004, batched intents, pool) run on Yaci DevKit.
+- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, then E/F. JuLC changes: worktree `../julc-joust`, PR label
   `joust` (julc#311).
 
 ## Build / test
@@ -66,6 +67,8 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - Library sources: JuLC follows imports and `Class.member` references only; same-package *type* references need an
   explicit import in bundled sources. Accessors on call results (`f(x).field()`) need a typed local first. Library
   static fields must be literals (use `byte[]` literals for constants).
+- Token kinds by name: instance 32 bytes; owned object 29 bytes `0x4F…`; intent 29 bytes `0x49…`. Every spend arm
+  checks the kind first. A batch is memory-bound at about 8 intents (ADR-0004 §6).
 - Max tx size is 16 KB: scripts must stay well below (reference scripts; heavy logic in shared withdraw-zero scripts).
 - `MerkleMap`/`MapEntry` only as top-level state components; never construct them or read `.reads()/.writes()/.root()`.
 - DevKit's time horizon is minutes: keep TTL short (DevKit runtime uses 20 s); `Clock.before` needs the whole window.

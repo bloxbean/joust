@@ -47,7 +47,8 @@ public final class ValidatorGenerator {
                 "org.julclang.stdlib.lib.ContextsLib",
                 "org.julclang.stdlib.lib.OutputLib", "org.julclang.stdlib.lib.ValuesLib",
                 "org.julclang.state.api.Ctx", "org.julclang.state.api.Payout", "org.julclang.state.api.Payouts"));
-        if (c.hasOwned()) imports.add("org.julclang.stdlib.lib.CryptoLib");
+        if (c.hasOwned() || c.hasBatched()) imports.add("org.julclang.stdlib.lib.CryptoLib");
+        if (c.hasBatched()) imports.add("org.julclang.ledger.ScriptPurpose");
         if (c.hasMaps()) {
             imports.addAll(List.of("org.julclang.state.api.MapEntry", "org.julclang.state.api.MerkleMap",
                     "org.julclang.state.api.mpf.MapClaim", "org.julclang.state.api.mpf.MapClaims",
@@ -70,6 +71,10 @@ public final class ValidatorGenerator {
         w.line("static final BigInteger MIN_ADA = BigInteger.valueOf(" + c.minAda() + "L);");
         w.line("static final BigInteger MAX_DATUM_BYTES = BigInteger.valueOf(" + c.maxDatumBytes() + "L);");
         w.line("static final BigInteger MAX_VALIDITY_MS = BigInteger.valueOf(" + c.maxValidityMs() + "L);");
+        if (c.hasBatched()) {
+            w.line("/** Lovelace an intent carries beyond what it pays in: its refund, at least a min-UTxO output (ADR-0004 D2). */");
+            w.line("static final BigInteger INTENT_DEPOSIT = BigInteger.valueOf(" + INTENT_DEPOSIT + "L);");
+        }
         if (c.hasMaps()) {
             w.line("/** Script hash of the JOUST map verifier (ADR-0002 D9), which checks every MerkleMap claim. */");
             w.line("static final byte[] MAP_VERIFIER = " + MapVerifierInfo.hashLiteral() + ";");
@@ -80,6 +85,7 @@ public final class ValidatorGenerator {
         w.line("// ---- redeemers ---------------------------------------------------------------------------");
         var lifecycle = new ArrayList<String>(List.of("CreateInstance", "BurnInstance"));
         c.ownedInits().forEach(t -> lifecycle.add(t.variant()));
+        if (c.hasBatched()) lifecycle.add("CreateIntent");
         w.line("public sealed interface Lifecycle permits " + String.join(", ", lifecycle) + " {}");
         w.line("public record CreateInstance(" + join(prepend(List.of("TxOutRef seed"),
                 fields(c.init()))) + ") implements Lifecycle {}");
@@ -90,11 +96,40 @@ public final class ValidatorGenerator {
         }
         var spend = new ArrayList<TransitionIR>(c.spendTransitions());
         spend.addAll(c.ownedSpendTransitions());
-        if (!spend.isEmpty()) {
-            w.line("public sealed interface Calls permits " + String.join(", ", spend.stream().map(TransitionIR::variant).toList()) + " {}");
+        var callNames = new ArrayList<String>(spend.stream().map(TransitionIR::variant).toList());
+        // Constructor tags of the batch redeemers: their index in the permits list (ADR-0004 D3).
+        long batchTag = callNames.size();
+        if (c.hasBatched()) callNames.addAll(List.of("Batch", "InBatch", "CancelIntent"));
+        if (!callNames.isEmpty()) {
+            w.line("public sealed interface Calls permits " + String.join(", ", callNames) + " {}");
             for (var t : spend) {
                 w.line("public record " + t.variant() + "(" + join(fields(t)) + ") implements Calls {}");
             }
+        }
+        if (c.hasBatched()) {
+            w.line("/** Applies every intent of this instance in the transaction, in ledger input order (ADR-0004 D3). */");
+            w.line("public record Batch(BigInteger validFrom, BigInteger validTo) implements Calls {}");
+            w.line("/** An intent consumed by its instance's Batch. */");
+            w.line("public record InBatch() implements Calls {}");
+            w.line("/** An intent withdrawn by its owner. */");
+            w.line("public record CancelIntent() implements Calls {}");
+            var batched = c.batched();
+            w.line("/** The batched action an intent asks for, with its arguments (Ctx comes from the intent and the batch). */");
+            w.line("public sealed interface IntentCall permits " + String.join(", ",
+                    batched.stream().map(TransitionIR::intentVariant).toList()) + " {}");
+            for (var t : batched) {
+                var fs = new ArrayList<String>();
+                for (ParamIR p : t.params()) fs.add(p.type() + " " + p.name());
+                w.line("public record " + t.intentVariant() + "(" + join(fs) + ") implements IntentCall {}");
+            }
+            w.line("/** An intent's datum (ADR-0004 D2). */");
+            w.line("public record Intent(byte[] instance, byte[] owner, Address refund, BigInteger deadline, BigInteger received,"
+                    + " IntentCall call) {}");
+            w.line("/** The datum of an intent's refund output: names the intent, distinct from payout tags. */");
+            w.line("public record IntentRefund(TxOutRef intent) {}");
+            w.line("/** One step of a batch: the next state and the action's payouts. */");
+            w.line("public record Step(" + c.stateType() + " state, JulcList<Payout> payouts) {}");
+            w.line("public record CreateIntent(TxOutRef seed, Intent intent) implements Lifecycle {}");
         }
         if (c.hasOwned()) {
             w.line("/** An owned object's datum: its instance and its value (ADR-0003 D2). */");
@@ -115,6 +150,7 @@ public final class ValidatorGenerator {
         for (var t : c.ownedInits()) {
             w.line("case " + t.variant() + " o -> create" + t.variant() + "(o, tx, policy);");
         }
+        if (c.hasBatched()) w.line("case CreateIntent ci -> createIntent(ci, tx, policy);");
         w.close("};");
         w.close("}").blank();
 
@@ -148,7 +184,7 @@ public final class ValidatorGenerator {
         for (var t : c.ownedInits()) createObject(t);
 
         // ---- SPEND
-        if (!spend.isEmpty()) {
+        if (!callNames.isEmpty()) {
             w.line("// ---- SPEND: actions and destroys -------------------------------------------------------");
             w.line("@Entrypoint(purpose = Purpose.SPEND)");
             w.open("public static boolean spend(Optional<PlutusData> datum, Calls redeemer, ScriptContext ctx) {");
@@ -170,9 +206,18 @@ public final class ValidatorGenerator {
                             + ") (Object) OutputLib.getInlineDatum(ownOut), tx, own, policy, id, inLovelace);");
                 }
             }
+            if (c.hasBatched()) {
+                w.line("// Batch only on an instance; InBatch and CancelIntent only on intents (0x49 tokens).");
+                w.line("case Batch r -> isInstanceToken(id) && onBatch(r, (" + S
+                        + ") (Object) OutputLib.getInlineDatum(ownOut), tx, own, policy, id, inLovelace);");
+                w.line("case InBatch r -> isIntentToken(id) && inBatch((Intent) (Object) OutputLib.getInlineDatum(ownOut), tx, policy);");
+                w.line("case CancelIntent r -> isIntentToken(id) && cancelIntent((Intent) (Object) OutputLib.getInlineDatum(ownOut),"
+                        + " tx, policy, id);");
+            }
             w.close("};");
             w.close("}").blank();
             for (var t : spend) transition(t);
+            if (c.hasBatched()) batch(batchTag);
         }
 
         helpers();
@@ -258,6 +303,162 @@ public final class ValidatorGenerator {
             }
         }
         w.line("return " + String.join(" && ", checks) + ";");
+        w.close("}").blank();
+    }
+
+    /** Lovelace an intent must carry beyond its payment (ADR-0004 r2: a tagged refund output needs about 1.2 ADA). */
+    static final long INTENT_DEPOSIT = 2_000_000L;
+
+    /** Intents (ADR-0004): creation, the batch fold, InBatch, cancel and the step functions. */
+    private void batch(long batchTag) {
+        String X = c.name();
+        String S = c.stateType();
+        var batched = c.batched();
+
+        w.line("// ---- intents and batches (ADR-0004) -----------------------------------------------------");
+        w.line("/** An intent's token name: 0x49 ++ blake2b_224(seed ref), 29 bytes (instances: 32; objects: 0x4F). */");
+        w.open("static byte[] intentId(TxOutRef seed) {");
+        w.line("return ByteStringLib.cons(73L, CryptoLib.blake2b_224(ValuesLib.refBytes(seed)));");
+        w.close("}").blank();
+        w.open("static boolean isIntentToken(byte[] id) {");
+        w.line("return ByteStringLib.length(id) == 29 && ByteStringLib.at(id, 0L) == 73L;");
+        w.close("}").blank();
+        w.line("/** The intent token under this policy in {@code v}, or the empty name. */");
+        w.open("static byte[] intentTokenOf(Value v, byte[] policy) {");
+        w.line("byte[] name = ByteStringLib.empty();");
+        w.open("for (var e : ValuesLib.flattenTyped(v)) {");
+        w.open("if (ByteStringLib.equals(e.policyId(), policy) && isIntentToken(e.tokenName())) {");
+        w.line("name = e.tokenName();");
+        w.close("}");
+        w.close("}");
+        w.line("return name;");
+        w.close("}").blank();
+
+        w.open("static boolean intentPayable(IntentCall call) {");
+        w.open("return switch (call) {");
+        for (var t : batched) w.line("case " + t.intentVariant() + " a -> " + t.payable() + ";");
+        w.close("};");
+        w.close("}").blank();
+
+        w.line("/** MINT CreateIntent: signed by its owner, under a 32-byte instance id, exact output (I22). */");
+        w.open("static boolean createIntent(CreateIntent ci, TxInfo tx, byte[] policy) {");
+        w.line("byte[] id = intentId(ci.seed());");
+        w.line("Intent it = ci.intent();");
+        w.line("boolean seedSpent = seedConsumed(tx.inputs(), ci.seed());");
+        w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
+        w.line("// No reference input: the instance moves with every batch, and an intent must not contend with it.");
+        w.line("boolean forInstance = isInstanceToken(it.instance());");
+        w.line("boolean ownerOk = ByteStringLib.length(it.owner()) == 28 && ContextsLib.signedBy(tx, it.owner());");
+        w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
+        w.line("boolean shapeOk = isStateAddress(out.address(), policy) && out.referenceScript().isEmpty();");
+        w.line("PlutusData data = (PlutusData) (Object) it;");
+        w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), data) && datumFits(data);");
+        w.line("BigInteger lovelace = ValuesLib.lovelaceOf(out.value());");
+        w.line("boolean valueOk = exactValue(out.value(), policy, id, lovelace)");
+        w.line("        && lovelace.compareTo(it.received().add(INTENT_DEPOSIT)) >= 0;");
+        w.line("// received is never negative, and zero unless the action is @Payable (ADR-0004 r2).");
+        w.line("boolean receivedOk = intentPayable(it.call()) ? it.received().compareTo(BigInteger.ZERO) >= 0");
+        w.line("        : it.received().compareTo(BigInteger.ZERO) == 0;");
+        w.line("return seedSpent && mintOk && forInstance && ownerOk && shapeOk && datumOk && valueOk && receivedOk;");
+        w.close("}").blank();
+
+        w.open("static Step step(" + S + " s, IntentCall call, Ctx cx) {");
+        w.open("return switch (call) {");
+        for (var t : batched) w.line("case " + t.intentVariant() + " a -> step" + t.variant() + "(s, a, cx);");
+        w.close("};");
+        w.close("}").blank();
+        for (var t : batched) {
+            w.open("static Step step" + t.variant() + "(" + S + " s, " + t.intentVariant() + " a, Ctx cx) {");
+            var args = new ArrayList<String>(List.of("s"));
+            for (ParamIR p : t.params()) args.add("a." + p.name() + "()");
+            args.add("cx");
+            String call = X + "." + t.method() + "(" + String.join(", ", args) + ")";
+            if (t.returns() == TransitionIR.Returns.RESULT) {
+                w.line(t.resultType() + " r = " + call + ";");
+                w.line("return new Step(r.state(), r.payouts());");
+            } else {
+                w.line(S + " next = " + call + ";");
+                w.line("JulcList<Payout> none = JulcList.empty();");
+                w.line("return new Step(next, none);");
+            }
+            w.close("}").blank();
+        }
+
+        w.line("/**");
+        w.line(" * SPEND Batch on an instance: folds the action over every intent of this instance among the inputs, in ledger");
+        w.line(" * order. Each step: Ctx from the intent and the batch bounds, before its deadline, spent with InBatch, token");
+        w.line(" * burned, refund to its refund address and payouts tagged with the intent's own input, balance never negative.");
+        w.line(" * The continuation holds the final state and exactly the final balance (I24, I25).");
+        w.line(" */");
+        w.open("static boolean onBatch(Batch r, " + S + " current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id,"
+                + " BigInteger inLovelace) {");
+        w.line("boolean fromOk = startsAt(tx.validRange(), r.validFrom());");
+        w.line("boolean toOk = endsAt(tx.validRange(), r.validTo());");
+        w.line("boolean narrow = r.validTo().subtract(r.validFrom()).compareTo(MAX_VALIDITY_MS) <= 0;");
+        w.line(S + " state = current;");
+        w.line("BigInteger balance = inLovelace.subtract(MIN_ADA);");
+        w.line("long applied = 0;");
+        w.line("boolean ok = true;");
+        w.open("for (var in : tx.inputs()) {");
+        w.line("TxOut o = in.resolved();");
+        w.line("byte[] tok = intentTokenOf(o.value(), policy);");
+        w.open("if (isIntentToken(tok) && isStateAddress(o.address(), policy)) {");
+        w.line("Intent it = (Intent) (Object) OutputLib.getInlineDatum(o);");
+        w.open("if (ByteStringLib.equals(it.instance(), id)) {");
+        w.line("Ctx cx = new Ctx(it.owner(), it.received(), balance, r.validFrom(), r.validTo());");
+        w.line("Step st = step(state, it.call(), cx);");
+        w.line("JulcList<Payout> payouts = st.payouts();");
+        w.line("BigInteger nextBalance = balance.add(it.received()).subtract(Payouts.total(payouts));");
+        w.line("PlutusData rd = tx.redeemers().get(new ScriptPurpose.Spending(in.outRef()));");
+        w.line("boolean viaInBatch = Builtins.constrTag(rd) == " + (batchTag + 1) + "L;");
+        w.line("boolean inTime = r.validTo().compareTo(it.deadline()) <= 0;");
+        w.line("boolean burned = ValuesLib.assetOf(tx.mint(), policy, tok).compareTo(BigInteger.valueOf(-1)) == 0;");
+        w.line("BigInteger refund = ValuesLib.lovelaceOf(o.value()).subtract(it.received());");
+        w.line("boolean refunded = paidTo(tx.outputs(), it.refund(), (PlutusData) (Object) new IntentRefund(in.outRef()))"
+                + ".compareTo(refund) >= 0;");
+        w.line("boolean paid = payoutsTagged(tx.outputs(), (PlutusData) (Object) in.outRef(), payouts);");
+        w.line("boolean solvent = nextBalance.compareTo(BigInteger.ZERO) >= 0;");
+        w.line("ok = ok && viaInBatch && inTime && burned && refunded && paid && solvent;");
+        w.line("state = st.state();");
+        w.line("balance = nextBalance;");
+        w.line("applied = applied + 1;");
+        w.close("}");
+        w.close("}");
+        w.close("}");
+        w.line("boolean continues = continues(tx, own, policy, id, (PlutusData) (Object) state, balance.add(MIN_ADA));");
+        w.line("return fromOk && toOk && narrow && ok && applied > 0 && continues;");
+        w.close("}").blank();
+
+        w.line("/** SPEND InBatch on an intent: its instance is spent in this transaction with Batch, which applies it (I23). */");
+        w.open("static boolean inBatch(Intent it, TxInfo tx, byte[] policy) {");
+        w.line("boolean found = false;");
+        w.open("for (var in : tx.inputs()) {");
+        w.line("TxOut o = in.resolved();");
+        w.open("if (!found && ValuesLib.assetOf(o.value(), policy, it.instance()).compareTo(BigInteger.ONE) == 0"
+                + " && isStateAddress(o.address(), policy)) {");
+        w.line("PlutusData rd = tx.redeemers().get(new ScriptPurpose.Spending(in.outRef()));");
+        w.line("found = Builtins.constrTag(rd) == " + batchTag + "L;");
+        w.close("}");
+        w.close("}");
+        w.line("return found;");
+        w.close("}").blank();
+
+        w.line("/** SPEND CancelIntent: the owner signs and the intent token is burned (I23). */");
+        w.open("static boolean cancelIntent(Intent it, TxInfo tx, byte[] policy, byte[] id) {");
+        w.line("boolean signed = ContextsLib.signedBy(tx, it.owner());");
+        w.line("boolean burned = ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.valueOf(-1)) == 0;");
+        w.line("return signed && burned;");
+        w.close("}").blank();
+
+        w.line("/** Lovelace paid to exactly {@code to} in outputs whose inline datum is {@code tag}. */");
+        w.open("static BigInteger paidTo(JulcList<TxOut> outputs, Address to, PlutusData tag) {");
+        w.line("BigInteger paid = BigInteger.ZERO;");
+        w.open("for (var o : outputs) {");
+        w.open("if (Builtins.equalsData(o.address(), to) && taggedWith(o, tag)) {");
+        w.line("paid = paid.add(ValuesLib.lovelaceOf(o.value()));");
+        w.close("}");
+        w.close("}");
+        w.line("return paid;");
         w.close("}").blank();
     }
 
@@ -520,7 +721,10 @@ public final class ValidatorGenerator {
         w.line(" * instance's input reference. The tag stops one output from satisfying two instances (I7).");
         w.line(" */");
         w.open("static boolean payoutsPaid(JulcList<TxOut> outputs, TxInInfo own, JulcList<Payout> payouts) {");
-        w.line("PlutusData tag = (PlutusData) (Object) own.outRef();");
+        w.line("return payoutsTagged(outputs, (PlutusData) (Object) own.outRef(), payouts);");
+        w.close("}").blank();
+        w.line("/** Each recipient receives what {@code payouts} owe it, in outputs to its key tagged with {@code tag}. */");
+        w.open("static boolean payoutsTagged(JulcList<TxOut> outputs, PlutusData tag, JulcList<Payout> payouts) {");
         w.line("boolean ok = true;");
         w.open("for (var p : payouts) {");
         w.line("BigInteger owed = BigInteger.ZERO;");

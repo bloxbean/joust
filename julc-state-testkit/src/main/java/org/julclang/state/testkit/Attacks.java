@@ -56,9 +56,13 @@ public final class Attacks {
             out.add(new Attack("one lovelace skimmed from the state output", "I3", t -> mapState(t, o ->
                     new TxOut(o.address(), o.value().merge(Value.lovelace(BigInteger.ONE.negate())), o.datum(),
                             o.referenceScript()))));
-            out.add(new Attack("one lovelace added to the state output", "I3", t -> mapState(t, o ->
-                    new TxOut(o.address(), o.value().merge(Value.lovelace(BigInteger.ONE)), o.datum(),
-                            o.referenceScript()))));
+            // An intent may carry more than its payment plus deposit: the surplus is refunded (ADR-0004 D2).
+            boolean intent = tx.token != null && tx.token.length == 29 && tx.token[0] == 0x49;
+            if (!intent) {
+                out.add(new Attack("one lovelace added to the state output", "I3", t -> mapState(t, o ->
+                        new TxOut(o.address(), o.value().merge(Value.lovelace(BigInteger.ONE)), o.datum(),
+                                o.referenceScript()))));
+            }
             out.add(new Attack("thread token sent to a key address", "I4/I12", t -> mapState(t, o ->
                     new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBA)), o.value(), o.datum(),
                             o.referenceScript()))));

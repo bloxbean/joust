@@ -19,6 +19,8 @@ public final class ClientGenerator {
     /** Client members and generated parameter names a contract may not reuse (checked by the reader). */
     public static final List<String> RESERVED_MEMBERS = List.of("deploy", "at", "contract", "state", "instance",
             "instanceId", "lovelace", "SPEC");
+    /** Client members added for {@code @Batched} contracts (ADR-0004). */
+    public static final List<String> INTENT_MEMBERS = List.of("INTENTS", "batch", "pendingIntents", "intent");
     public static final List<String> RESERVED_PARAMS = List.of("callerAccount", "payLovelace", "runtime");
 
     private final ContractIR c;
@@ -45,6 +47,10 @@ public final class ClientGenerator {
                 "org.julclang.state.runtime.StateContractHandle", "org.julclang.state.runtime.StateInstance",
                 "org.julclang.state.runtime.StateRuntime", "org.julclang.state.runtime.Transition"));
         if (c.hasOwned()) imports.add("org.julclang.state.runtime.OwnedObject");
+        if (c.hasBatched()) {
+            imports.addAll(List.of("org.julclang.state.runtime.Batcher", "org.julclang.state.runtime.IntentCodec",
+                    "org.julclang.state.runtime.IntentHandle"));
+        }
         imports.addAll(c.imports());
         for (String i : imports) w.line("import " + i + ";");
         w.blank();
@@ -102,6 +108,7 @@ public final class ClientGenerator {
         }
 
         if (c.hasOwned()) owned();
+        if (c.hasBatched()) intents();
 
         w.line("/** The current state. */");
         w.open("public " + S + " state() {");
@@ -245,6 +252,79 @@ public final class ClientGenerator {
             w.close("");
             w.close("}").blank();
         }
+        w.close("}").blank();
+    }
+
+    /** Intents (ADR-0004): the codec, one intent method per @Batched action, the batcher and lookups. */
+    private void intents() {
+        String X = c.name();
+        String S = c.stateType();
+        String V = c.validatorName();
+        w.line("/** How " + V + "'s intent types are built and read; the batch fold's steps (ADR-0004). */");
+        w.open("public static final IntentCodec<" + S + "> INTENTS = new IntentCodec<>() {");
+        w.line("@Override public Class<?> intentClass() { return " + V + ".Intent.class; }");
+        w.open("@Override public IntentData read(Object o) {");
+        w.line("var i = (" + V + ".Intent) o;");
+        w.line("return new IntentData(i.instance(), i.owner(), i.refund(), i.deadline(), i.received(), i.call());");
+        w.close("}");
+        w.line("@Override public Object intent(byte[] instance, byte[] owner, org.julclang.ledger.Address refund,"
+                + " BigInteger deadline, BigInteger received, Object call) {");
+        w.line("    return new " + V + ".Intent(instance, owner, refund, deadline, received, (" + V + ".IntentCall) call);");
+        w.line("}");
+        w.line("@Override public Object create(org.julclang.ledger.TxOutRef seed, Object intent) { return new " + V
+                + ".CreateIntent(seed, (" + V + ".Intent) intent); }");
+        w.line("@Override public Object batch(BigInteger from, BigInteger to) { return new " + V + ".Batch(from, to); }");
+        w.line("@Override public Object inBatch() { return new " + V + ".InBatch(); }");
+        w.line("@Override public Object cancel() { return new " + V + ".CancelIntent(); }");
+        w.line("@Override public Object burn() { return new " + V + ".BurnInstance(); }");
+        w.line("@Override public Object refundTag(org.julclang.ledger.TxOutRef ref) { return new " + V + ".IntentRefund(ref); }");
+        w.open("@Override public Transition<" + S + "> step(" + S + " s, Object call, org.julclang.state.api.Ctx ctx) {");
+        for (TransitionIR t : c.batched()) {
+            var args = new ArrayList<String>(List.of("s"));
+            for (ParamIR p : t.params()) args.add("a." + p.name() + "()");
+            args.add("ctx");
+            String invoke = X + "." + t.method() + "(" + String.join(", ", args) + ")";
+            w.open("if (call instanceof " + V + "." + t.intentVariant() + " a) {");
+            if (t.returns() == TransitionIR.Returns.RESULT) {
+                w.line("var r = " + invoke + ";");
+                w.line("return Transition.of(r.state(), r.payouts());");
+            } else {
+                w.line("return Transition.of(" + invoke + ");");
+            }
+            w.close("}");
+        }
+        w.line("throw new IllegalArgumentException(\"not an intent call of " + X + ": \" + call);");
+        w.close("}");
+        w.close("};").blank();
+
+        for (TransitionIR t : c.batched()) {
+            var params = new ArrayList<String>(List.of("Account callerAccount"));
+            params.addAll(decls(t.params()));
+            if (t.payable()) params.add("BigInteger payLovelace");
+            params.add("java.time.Instant deadline");
+            var recArgs = new ArrayList<String>();
+            t.params().forEach(p -> recArgs.add(p.name()));
+            w.line("/**");
+            w.line(" * Locks an intent to call {@link " + X + "#" + t.method() + "}: a batcher applies it, with the caller as");
+            w.line(" * {@code ctx.caller()}, before {@code deadline}. Until then the caller can cancel it.");
+            w.line(" */");
+            w.open("public IntentHandle<" + S + "> " + t.method() + "Intent(" + String.join(", ", params) + ") {");
+            w.line("return IntentHandle.create(instance, INTENTS, callerAccount, new " + V + "." + t.intentVariant() + "("
+                    + String.join(", ", recArgs) + "), " + (t.payable() ? "payLovelace" : "BigInteger.ZERO")
+                    + ", IntentHandle.DEFAULT_DEPOSIT, deadline);");
+            w.close("}").blank();
+        }
+        w.line("/** Applies up to {@code maxIntents} pending intents in one transaction, paid by {@code callerAccount}. */");
+        w.open("public Batcher.BatchResult<" + S + "> batch(Account callerAccount, int maxIntents) {");
+        w.line("return new Batcher<>(instance, INTENTS).run(callerAccount, maxIntents);");
+        w.close("}").blank();
+        w.line("/** Intents of this instance waiting to be batched. */");
+        w.open("public java.util.List<Batcher.Pending> pendingIntents() {");
+        w.line("return new Batcher<>(instance, INTENTS).pending();");
+        w.close("}").blank();
+        w.line("/** An intent of this instance, by id. */");
+        w.open("public IntentHandle<" + S + "> intent(String intentId) {");
+        w.line("return IntentHandle.at(instance, INTENTS, intentId);");
         w.close("}").blank();
     }
 

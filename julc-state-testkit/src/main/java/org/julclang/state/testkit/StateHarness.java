@@ -274,6 +274,11 @@ public final class StateHarness<S> {
             b.withdrawal(verifierCredential(), BigInteger.ZERO);
             b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(verifierCredential()), claimsData(tx));
         }
+        // The redeemer map, as the ledger builds it: scripts can look up each other's redeemers (ADR-0004 InBatch).
+        tx.spendRedeemers.forEach((ref, r) -> b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Spending(ref), r));
+        if (tx.mintRedeemer != null) {
+            b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Minting(new PolicyId(policy)), tx.mintRedeemer);
+        }
         tx.inputs.forEach(b::input);
         tx.referenceInputs.forEach(b::referenceInput);
         tx.outputs.forEach(b::output);
@@ -390,6 +395,107 @@ public final class StateHarness<S> {
                     new OutputDatum.OutputDatumInline(tag), Optional.empty()));
             tx.payoutOutputs.add(tx.outputs.size() - 1);
         }
+    }
+
+    // ------------------------------------------------------------------ intents and batches (ADR-0004)
+
+    /** An intent as it sits on chain: its UTxO reference, generated Intent record, lovelace and token name. */
+    public record LiveIntent(TxOutRef ref, Object intent, BigInteger lovelace, byte[] token) {}
+
+    /** The intent id a seed produces: 0x49 ++ blake2b_224(seed ref). */
+    public static byte[] intentId(TxOutRef seed) {
+        return HexFormat.of().parseHex(org.julclang.state.runtime.IntentHandle.intentIdOf(
+                HexFormat.of().formatHex(seed.txId().hash()), seed.index().intValueExact()));
+    }
+
+    /** The {@code n}-th test intent's UTxO reference; their transaction ids sort by {@code n} (ledger order). */
+    public static TxOutRef intentRef(int n) {
+        return new TxOutRef(new TxId(fill(32, 0x40 + n)), BigInteger.valueOf(n));
+    }
+
+    /** An intent at {@link #intentRef(int) intentRef(n)}, minted from seed {@code fill(32, 0x20 + n)#0}. */
+    public LiveIntent liveIntent(int n, Object intent, BigInteger lovelace) {
+        byte[] token = intentId(new TxOutRef(new TxId(fill(32, 0x20 + n)), BigInteger.ZERO));
+        return new LiveIntent(intentRef(n), intent, lovelace, token);
+    }
+
+    public TxOut intentOut(Object intent, BigInteger lovelace, byte[] token) {
+        return new TxOut(stateAddress(), Value.lovelace(lovelace).merge(Value.singleton(new PolicyId(policy),
+                new TokenName(token), BigInteger.ONE)), new OutputDatum.OutputDatumInline(data(intent)), Optional.empty());
+    }
+
+    /** Creating an intent (runtime: IntentHandle.create): seed, token minted, intent output, owner signs. */
+    public TxModel createIntent(org.julclang.state.runtime.IntentCodec<S> codec, Object intent, BigInteger lovelace) {
+        var tx = new TxModel(TxModel.Kind.CREATE);
+        tx.token = intentId(seed);
+        byte[] owner = codec.read(intent).owner();
+        tx.inputs.add(new TxInInfo(seed, walletOut(owner, BigInteger.valueOf(50_000_000))));
+        tx.outputs.add(intentOut(intent, lovelace, tx.token));
+        tx.stateOutput = 0;
+        tx.mint = Value.singleton(new PolicyId(policy), new TokenName(tx.token), BigInteger.ONE);
+        tx.mintRedeemer = data(codec.create(seed, intent));
+        tx.signers.add(owner);
+        return tx;
+    }
+
+    /** Cancelling an intent (runtime: IntentHandle.cancel): owner signs, token burned, funds back to the owner. */
+    public TxModel cancelIntent(org.julclang.state.runtime.IntentCodec<S> codec, LiveIntent it, byte[] signer) {
+        var tx = new TxModel(TxModel.Kind.DESTROY);
+        tx.token = it.token();
+        tx.inputs.add(new TxInInfo(it.ref(), intentOut(it.intent(), it.lovelace(), it.token())));
+        tx.spendRedeemers.put(it.ref(), data(codec.cancel()));
+        tx.mint = Value.singleton(new PolicyId(policy), new TokenName(it.token()), BigInteger.ONE.negate());
+        tx.mintRedeemer = data(codec.burn());
+        tx.outputs.add(walletOut(signer, it.lovelace()));
+        tx.signers.add(signer);
+        return tx;
+    }
+
+    /** A batch and the JVM fold that produced it. */
+    public record Batch<S>(TxModel tx, org.julclang.state.runtime.Batcher.Plan<S> plan) {}
+
+    /**
+     * A batch (runtime: Batcher.run) over the harness window: folds {@code intents} on the JVM in ledger order, then
+     * spends the instance with Batch and each applied intent with InBatch, burns their tokens, pays refunds
+     * (tagged IntentRefund(intentRef)) and payouts (tagged with the intent's input), and continues the state.
+     */
+    public Batch<S> batch(Live<S> live, org.julclang.state.runtime.IntentCodec<S> codec, List<LiveIntent> intents) {
+        var pending = new ArrayList<org.julclang.state.runtime.Batcher.Pending>();
+        for (LiveIntent it : intents) {
+            pending.add(new org.julclang.state.runtime.Batcher.Pending(it.ref(), codec.read(it.intent()), it.lovelace(),
+                    HexFormat.of().formatHex(it.token()), null));
+        }
+        BigInteger to = T0.add(WINDOW_MS);
+        var plan = org.julclang.state.runtime.Batcher.fold(codec, live.state(),
+                live.lovelace().subtract(BigInteger.valueOf(spec.minAda())), pending, T0, to, Integer.MAX_VALUE);
+        var tx = new TxModel(TxModel.Kind.ACTION);
+        var inputs = new ArrayList<TxInInfo>();
+        inputs.add(new TxInInfo(live.ref(), stateOut(live.state(), live.lovelace())));
+        inputs.add(new TxInInfo(new TxOutRef(new TxId(fill(32, 0x33)), BigInteger.ZERO),
+                walletOut(fill(28, 0xBA), BigInteger.valueOf(50_000_000))));
+        tx.spendRedeemers.put(live.ref(), data(codec.batch(T0, to)));
+        Value burns = Value.zero();
+        for (int i = 0; i < plan.applied().size(); i++) {
+            var p = plan.applied().get(i);
+            LiveIntent it = intents.stream().filter(x -> x.ref().equals(p.ref())).findFirst().orElseThrow();
+            inputs.add(new TxInInfo(it.ref(), intentOut(it.intent(), it.lovelace(), it.token())));
+            tx.spendRedeemers.put(it.ref(), data(codec.inBatch()));
+            burns = burns.merge(Value.singleton(new PolicyId(policy), new TokenName(it.token()), BigInteger.ONE.negate()));
+            tx.outputs.add(new TxOut(p.data().refund(), Value.lovelace(it.lovelace().subtract(p.data().received())),
+                    new OutputDatum.OutputDatumInline(data(codec.refundTag(it.ref()))), Optional.empty()));
+            tx.payoutOutputs.add(tx.outputs.size() - 1);
+            JulcList<Payout> owed = JulcList.empty();
+            for (Payout po : plan.payouts().get(i)) owed = owed.prepend(po);
+            addPayoutsFor(tx, it.ref(), owed);
+        }
+        inputs.sort(java.util.Comparator.comparing(TxInInfo::outRef, org.julclang.state.runtime.Batcher.LEDGER_ORDER));
+        tx.inputs.addAll(inputs);
+        tx.mint = burns;
+        tx.mintRedeemer = data(codec.burn());
+        tx.outputs.add(stateOut(plan.state(), plan.balance().add(BigInteger.valueOf(spec.minAda()))));
+        tx.stateOutput = tx.outputs.size() - 1;
+        tx.range = window(T0, to);
+        return new Batch<>(tx, plan);
     }
 
     public static TxOut walletOut(byte[] pkh, BigInteger lovelace) {

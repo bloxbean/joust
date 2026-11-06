@@ -55,6 +55,7 @@ final class ContractReader {
     static final String OWNED_ACTION = API + "OwnedAction";
     static final String OWNED_DESTROY = API + "OwnedDestroy";
     static final String SHARED = API + "Shared";
+    static final String BATCHED = API + "Batched";
     static final String PAYOUT = API + "Payout";
     static final String ONCHAIN_LIBRARY = "org.julclang.stdlib.annotation.OnchainLibrary";
     static final String JULC_LIST = "org.julclang.core.types.JulcList";
@@ -99,7 +100,7 @@ final class ContractReader {
             if (annotation(m, OWNED_ACTION).isPresent()) { ownedActions.add(m); kinds++; }
             if (annotation(m, OWNED_DESTROY).isPresent()) { ownedDestroys.add(m); kinds++; }
             if (kinds == 0) {
-                for (String policy : List.of(PAYABLE, SIGNED_BY, ONLY_OWNER, VALID_AFTER, VALID_BEFORE)) {
+                for (String policy : List.of(PAYABLE, SIGNED_BY, ONLY_OWNER, VALID_AFTER, VALID_BEFORE, BATCHED)) {
                     if (annotation(m, policy).isPresent()) {
                         error(m, "@" + simple(policy) + " needs @Init, @Action or @Destroy on the same method");
                     }
@@ -227,11 +228,29 @@ final class ContractReader {
 
         String stateText = types.render(stateType);
         var reserved = new HashSet<String>(GENERATED_NAMES);
+        boolean anyBatched = actionIRs.stream().anyMatch(TransitionIR::batched);
+        if (anyBatched) {
+            reserved.addAll(INTENT_NAMES);
+            types.checkNoClash(INTENT_NAMES).forEach(msg -> error(type, msg));
+            for (var t : concat(actionIRs, destroyIRs, ownedActionIRs, ownedDestroyIRs, ownedInitIRs)) {
+                if (org.julclang.state.processor.gen.ClientGenerator.INTENT_MEMBERS.contains(t.method())
+                        || names.contains(t.method() + "Intent") && !t.batched()) {
+                    error(type, "method " + t.method() + " clashes with a member of the generated client for @Batched"
+                            + " contracts; rename it");
+                }
+            }
+        }
         reserved.add(type.getSimpleName() + "Validator");
         reserved.add(type.getSimpleName() + "Client");
         for (var t : concat(List.of(init), actionIRs, destroyIRs, ownedInitIRs, ownedActionIRs, ownedDestroyIRs)) {
             if (!reserved.add(t.variant()) && t.kind() != TransitionIR.Kind.INIT) {
                 error(type, "redeemer variant name " + t.variant() + " (from method " + t.method()
+                        + ") clashes with a generated name; rename the method");
+            }
+        }
+        for (var t : actionIRs) {
+            if (t.batched() && !reserved.add(t.intentVariant())) {
+                error(type, "intent variant name " + t.intentVariant() + " (from method " + t.method()
                         + ") clashes with a generated name; rename the method");
             }
         }
@@ -261,6 +280,10 @@ final class ContractReader {
                             + " anyone can call it on anyone's object (and keep the owner's own calls failing)", type);
                 }
             }
+        }
+        if (anyMap && actionIRs.stream().anyMatch(TransitionIR::batched)) {
+            error(type, "@Batched actions and MerkleMap state cannot be combined yet: each step of a batch would need its"
+                    + " own map claim (ADR-0004 D1)");
         }
         if (destroyIRs.isEmpty() && ownedCtx == null) {
             messager.printMessage(Diagnostic.Kind.WARNING, "this @StateContract has no @Destroy method: an instance can"
@@ -294,7 +317,11 @@ final class ContractReader {
             "IntervalLib", "CryptoLib", "Interval", "IntervalBoundType", "OutputDatum", "Ctx", "Clock", "Payout", "Payouts", "CreateInstance", "BurnInstance", "Account", "StateRuntime",
             "StateInstance", "TxResult", "Transition", "Lifecycle", "Calls", "Call", "MerkleMap", "MapEntry", "MapWitness",
             "MapWitnesses", "Mpf", "Deploy", "ContractSpec",
-            "StateContractHandle", "Utxo", "Arrays", "Holding");
+            "StateContractHandle", "Utxo", "Arrays", "Holding", "ScriptPurpose");
+
+    /** Names generated only for contracts with {@code @Batched} actions (ADR-0004). */
+    static final Set<String> INTENT_NAMES = Set.of("Intent", "IntentCall", "Step", "IntentRefund", "Batch", "InBatch",
+            "CancelIntent", "CreateIntent", "IntentCodec", "IntentData", "IntentHandle", "Batcher");
 
     /** What a transition acts on: {@code stateType} is its subject (the state, or the owned record), {@code sharedType}
      * the instance state (for {@code @Shared}). */
@@ -408,11 +435,28 @@ final class ContractReader {
         for (String f : validAfter) checkField(m, r, f, ParamIR.TypeKind.INTEGER, "BigInteger", "@ValidAfter");
         for (String f : validBefore) checkField(m, r, f, ParamIR.TypeKind.INTEGER, "BigInteger", "@ValidBefore");
 
+        var batchedAnn = annotation(m, BATCHED);
+        boolean batched = batchedAnn.isPresent();
+        boolean batchOnly = batchedAnn.flatMap(a -> value(a, "only")).map(v -> (Boolean) v.getValue()).orElse(false);
+        if (batched) {
+            if (kind != TransitionIR.Kind.ACTION) {
+                error(m, "@Batched is for @Action methods (ADR-0004 D1)");
+            } else {
+                if (!hasCtx) {
+                    error(m, "@Batched needs a Ctx parameter: in a batch, ctx.caller() is the intent's owner");
+                }
+                if (!(signedBy.isEmpty() && validAfter.isEmpty() && validBefore.isEmpty())) {
+                    error(m, "@Batched cannot use @SignedBy, @OnlyOwner, @ValidAfter or @ValidBefore: the batcher, not the"
+                            + " caller, signs a batch; authorise with ctx.caller() and check time with Clock (ADR-0004 D1)");
+                }
+            }
+        }
+
         String name = m.getSimpleName().toString();
         String variant = kind == TransitionIR.Kind.INIT ? "CreateInstance"
                 : Character.toUpperCase(name.charAt(0)) + name.substring(1);
         return new TransitionIR(kind, name, variant, List.copyOf(params), hasCtx, payable, returns, resultType,
-                List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared);
+                List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared, batched, batchOnly);
     }
 
     private ViewIR readView(ExecutableElement m, Reading r) {
