@@ -44,7 +44,7 @@ public final class ValidatorGenerator {
                 "org.julclang.stdlib.Builtins", "org.julclang.stdlib.annotation.Entrypoint",
                 "org.julclang.stdlib.annotation.MultiValidator", "org.julclang.stdlib.annotation.Purpose",
                 "org.julclang.stdlib.lib.AddressLib", "org.julclang.stdlib.lib.ByteStringLib",
-                "org.julclang.stdlib.lib.ContextsLib", "org.julclang.stdlib.lib.CryptoLib",
+                "org.julclang.stdlib.lib.ContextsLib",
                 "org.julclang.stdlib.lib.OutputLib", "org.julclang.stdlib.lib.ValuesLib",
                 "org.julclang.state.api.Ctx", "org.julclang.state.api.Payout", "org.julclang.state.api.Payouts"));
         imports.addAll(c.imports());
@@ -94,7 +94,7 @@ public final class ValidatorGenerator {
 
         TransitionIR init = c.init();
         w.open("static boolean create(Create cr, TxInfo tx, byte[] policy) {");
-        w.line("byte[] id = instanceId(cr.seed());");
+        w.line("byte[] id = ValuesLib.uniqueTokenName(cr.seed());");
         w.line("boolean seedSpent = seedConsumed(tx.inputs(), cr.seed());");
         w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
         w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
@@ -199,12 +199,6 @@ public final class ValidatorGenerator {
     private void helpers() {
         w.line("// ---- generated helpers ---------------------------------------------------------------------");
         w.blank();
-        w.line("/** The instance id: blake2b_256(seedTxId ++ I2OSP(seedIndex, 2)), as ValuesLib.uniqueTokenName. */");
-        w.open("static byte[] instanceId(TxOutRef seed) {");
-        w.line("byte[] txId = (byte[]) (Object) seed.txId();");
-        w.line("return CryptoLib.blake2b_256(Builtins.appendByteString(txId, ByteStringLib.integerToByteString(true, 2, seed.index())));");
-        w.close("}").blank();
-
         w.open("static boolean seedConsumed(JulcList<TxInInfo> inputs, TxOutRef seed) {");
         w.line("boolean found = false;");
         w.open("for (var in : inputs) {");

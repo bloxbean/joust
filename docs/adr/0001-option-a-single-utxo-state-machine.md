@@ -451,8 +451,7 @@ JuLC:
    - Don't swallow `IOException`s.
    - Keep scanning the other entries after one fails: today one stale jar hides julc-stdlib's sources.
    - Open jar resources without the URL cache.
-3. `ValuesLib.uniqueTokenName` has no on-chain lowering ("Undefined variable: ValuesLib") (F17).
-4. Consider stdlib `Require`-style helpers with a message-preserving JVM implementation (F5).
+3. Consider stdlib `Require`-style helpers with a message-preserving JVM implementation (F5).
 
 cardano-client-lib:
 1. Offer an option to keep an inline datum's map order instead of always writing canonical CBOR (F13).
@@ -523,7 +522,7 @@ Codex (C). All three asked for changes. Resolution:
 | F14 | QuickTx takes the fee out of any output at the fee payer's address. A destroy paying the caller lost 0.58 ADA of its payout, so the node rejected it ("paid ≥ owed"), after local evaluation had passed on the pre-fee transaction | Payouts to the caller go to the caller's enterprise address. The runtime verifies every payout in the balanced transaction before submitting |
 | F15 | The ledger converts validity bounds to time only within the stability window. On a devnet that is minutes, and a 10-minute TTL gave `PastHorizon` | `ttl` documented. The DevKit runtime uses 20 s |
 | F16 | A `julc-state-api` jar carrying the bundled sources reached the processor path transitively. When rebuilt, JuLC's source scan stopped at it and also skipped julc-stdlib's sources ("Undefined variable: OutputLib") | The bundle ships only through the `onchainSources` directory artifact, not the jar |
-| F17 | `ValuesLib.uniqueTokenName` exists on the JVM but has no on-chain lowering | The instance-id helper is generated inline (same formula) |
+| F17 | (Retracted.) `ValuesLib.uniqueTokenName` looked like it had no on-chain lowering ("Undefined variable: ValuesLib"), but that was F16: the stale jar had hidden all of julc-stdlib's sources | The generated validator uses `ValuesLib.uniqueTokenName` (D8) |
 | F18 | `Clock.before(ctx, d)` needs the whole validity window to end before `d`, so a long TTL rejects near deadlines | Documented. Use a TTL shorter than the shortest deadline gap |
 | F19 | javac only attributes expressions after annotation processing | The typed lint pass runs in a `TaskListener` on `ANALYZE` |
 
