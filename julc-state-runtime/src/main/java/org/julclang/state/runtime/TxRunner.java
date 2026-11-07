@@ -60,6 +60,8 @@ final class TxRunner {
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
         /** A nested composition that allows shared signers: its calls count as one for the signer check. */
         String group;
+        /** Building for wallets ({@code Compose.prepare}): no key held here may take part (ADR-0013 D2). */
+        boolean walletOnly;
         /** Deposits into other instances made by the calls (ADR-0011 D3), resolved to claims when submitting. */
         final java.util.List<PendingDeposit> deposits = new java.util.ArrayList<>();
         /** The deposits the probe pass saw: a receiver's Funds.deposits in the real pass. */
@@ -72,6 +74,11 @@ final class TxRunner {
         void record(Account caller, byte[][] signers, ExpectedState exp, java.util.List<ExpectedPayout> pays,
                     java.util.List<ExpectedSend> snds, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] scs,
                     java.util.List<Account> cos, String what) {
+            if (walletOnly) {
+                // Refused here, before anything is recorded, and whatever address the account claims (review r3 L1).
+                if (!(caller instanceof WalletAccount)) throw keyHeld(caller, what);
+                for (Account a : cos) if (!(a instanceof WalletAccount)) throw keyHeld(a, what);
+            }
             accounts.putIfAbsent(caller.baseAddress(), caller);
             for (Account a : cos) accounts.putIfAbsent(a.baseAddress(), a);
             for (byte[] sg : signers) {
@@ -100,6 +107,14 @@ final class TxRunner {
     /** A deposit a call makes into instance {@code target} (a unit, policy ++ instance id, hex). */
     record PendingDeposit(String target, org.julclang.ledger.TxOutRef by, org.julclang.ledger.Value value,
                           org.julclang.core.PlutusData memo, String what) {}
+
+    static JoustException keyHeld(Account a, String what) {
+        return new JoustException(what + ": needs the key of " + a.baseAddress() + ", held here; a wallet transaction is"
+                + " signed by wallets only (ADR-0013 D2)");
+    }
+
+    /** Time-to-live of a prepared wallet transaction without its own window, in slots (ten minutes at 1 s slots). */
+    static final long WALLET_TTL_SLOTS = 600;
 
     static final ThreadLocal<Capture> CAPTURE = new ThreadLocal<>();
 
@@ -226,8 +241,164 @@ final class TxRunner {
         return all.toArray(new Account[0]);
     }
 
+    /**
+     * Builds the transaction for a wallet to sign (ADR-0013 D1): balanced from the payer's UTxOs, with collateral and
+     * its return to the payer, the fee covering every witness the wallets add; then the post-balancing checks.
+     */
+    PreparedTx prepare(ScriptTx tx, Account payer, Window window, byte[][] requiredSigners, ExpectedState expected,
+                       java.util.List<ExpectedPayout> payouts, java.util.List<ExpectedSend> sends,
+                       com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts, String what,
+                       java.util.Set<String> spent) {
+        var needed = new java.util.LinkedHashMap<String, byte[]>();
+        needed.put(HexUtil.encodeHexString(Keys.pkh(payer)), Keys.pkh(payer));   // the payer's inputs
+        for (byte[] sg : requiredSigners) needed.put(HexUtil.encodeHexString(sg), sg);
+        // A payout to the payer's own address can be the only output at it, and the balancer would then take the fee
+        // out of it. Spending one of the payer's UTxOs gives it a change output to pay the fee from (restorePayouts).
+        if (payouts.stream().anyMatch(p -> p.address().equals(payer.baseAddress()))) {
+            Utxo funding = largestAdaOnly(payer.baseAddress(), spent);
+            if (funding != null) tx.collectFrom(funding);
+        }
+        Transaction unsigned;
+        try {
+            var ctx = new QuickTxBuilder(rt.backend()).compose(tx)
+                    .feePayer(payer.baseAddress())
+                    .collateralPayer(payer.baseAddress())
+                    .mergeOutputs(false)
+                    .additionalSignersCount(needed.size())
+                    // The fee is taken from the largest output at the payer's address, which can be a payout to the
+                    // wallet itself (its change output did not exist yet): move it back from the change (ADR-0013 D1).
+                    .postBalanceTx((context, txn) -> restorePayouts(txn, payer.baseAddress(), payouts, context.getProtocolParams()));
+            if (referenceScripts != null && referenceScripts.length > 0) ctx = ctx.withReferenceScripts(referenceScripts);
+            if (requiredSigners.length > 0) ctx = ctx.withRequiredSigners(requiredSigners);
+            if (window != null) {
+                ctx = ctx.validFrom(window.fromSlot()).validTo(window.toSlot());
+            } else {
+                // A wallet transaction always expires soon, so a withheld signature cannot be used much later (ADR-0013).
+                long tip = rt.backend().getBlockService().getLatestBlock().getValue().getSlot();
+                ctx = ctx.validTo(tip + WALLET_TTL_SLOTS);
+            }
+            if (rt.evaluator() != null) ctx = ctx.withTxEvaluator(rt.evaluator());
+            unsigned = ctx.build();
+        } catch (Exception e) {
+            throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
+        }
+        verify(unsigned, expected, what);
+        for (ExpectedState e : extraExpected) verify(unsigned, e, what);
+        verifyPayouts(unsigned, payouts, what);
+        verifySends(unsigned, sends, what);
+        // Every key whose UTxO the transaction spends (or takes as collateral) must sign too (review r3).
+        for (byte[] owner : inputOwners(unsigned)) needed.putIfAbsent(HexUtil.encodeHexString(owner), owner);
+        return new PreparedTx(rt, unsigned, new java.util.ArrayList<>(needed.values()), window, what);
+    }
+
+    /**
+     * Each payout to {@code changeAddress} (tagged) that the balancer reduced gets its deficit back from the change
+     * output there (no datum, the largest): the total, and so the balance and the fee, are unchanged.
+     */
+    private static void restorePayouts(Transaction txn, String changeAddress, java.util.List<ExpectedPayout> payouts,
+                                       com.bloxbean.cardano.client.api.model.ProtocolParams pp) {
+        for (ExpectedPayout p : payouts) {
+            if (!p.address().equals(changeAddress)) continue;
+            String tagHex = Datums.hex(p.tag());
+            for (TransactionOutput o : txn.getBody().getOutputs()) {
+                if (!o.getAddress().equals(changeAddress) || o.getInlineDatum() == null
+                        || !Datums.hex(o.getInlineDatum()).equals(tagHex)) continue;
+                BigInteger deficit = p.lovelace().subtract(o.getValue().getCoin());
+                if (deficit.signum() <= 0) continue;
+                TransactionOutput change = null;
+                for (TransactionOutput c : txn.getBody().getOutputs()) {
+                    if (c.getAddress().equals(changeAddress) && c.getInlineDatum() == null && c.getDatumHash() == null
+                            && (change == null || c.getValue().getCoin().compareTo(change.getValue().getCoin()) > 0)) {
+                        change = c;
+                    }
+                }
+                if (change == null) return;   // nothing to take it from: verifyPayouts reports it
+                // The change keeps at least its ledger minimum (it may hold tokens; review r3).
+                BigInteger left = change.getValue().getCoin().subtract(deficit);
+                var after = TransactionOutput.builder().address(change.getAddress())
+                        .value(com.bloxbean.cardano.client.transaction.spec.Value.builder().coin(left)
+                                .multiAssets(change.getValue().getMultiAssets()).build()).build();
+                if (left.compareTo(new com.bloxbean.cardano.client.api.MinAdaCalculator(pp).calculateMinAda(after)) < 0) return;
+                change.getValue().setCoin(change.getValue().getCoin().subtract(deficit));
+                o.getValue().setCoin(p.lovelace());
+            }
+        }
+    }
+
+    /**
+     * The UTxO at {@code address} with the most lovelace (at least 3 ADA; tokens allowed, they return as change), over
+     * every page, not already spent by the composition and without a reference script; or null.
+     */
+    private Utxo largestAdaOnly(String address, java.util.Set<String> spent) {
+        Utxo best = null;
+        try {
+            for (int page = 1; page <= 20; page++) {
+                var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
+                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                for (Utxo u : r.getValue()) {
+                    if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null) continue;
+                    if (spent.contains(u.getTxHash() + "#" + u.getOutputIndex())) continue;
+                    BigInteger q = lovelace(u);
+                    if (q.compareTo(BigInteger.valueOf(3_000_000)) < 0) continue;
+                    if (best == null || q.compareTo(lovelace(best)) > 0) best = u;
+                }
+                if (r.getValue().size() < 100) break;
+            }
+        } catch (Exception e) {
+            return best;
+        }
+        return best;
+    }
+
+    private static BigInteger lovelace(Utxo u) {
+        return u.getAmount().stream().filter(a -> a.getUnit().equals("lovelace")).map(a -> a.getQuantity())
+                .findFirst().orElse(BigInteger.ZERO);
+    }
+
+    /** The payment key hashes owning the transaction's spent and collateral inputs (those at key addresses). */
+    private java.util.List<byte[]> inputOwners(Transaction t) {
+        var out = new java.util.ArrayList<byte[]>();
+        var refs = new java.util.ArrayList<com.bloxbean.cardano.client.transaction.spec.TransactionInput>(t.getBody().getInputs());
+        if (t.getBody().getCollateral() != null) refs.addAll(t.getBody().getCollateral());
+        for (var in : refs) {
+            try {
+                var r = rt.backend().getUtxoService().getTxOutput(in.getTransactionId(), in.getIndex());
+                if (!r.isSuccessful() || r.getValue() == null) continue;
+                var cred = com.bloxbean.cardano.client.address.AddressProvider.getPaymentCredential(
+                        new com.bloxbean.cardano.client.address.Address(r.getValue().getAddress()));
+                if (cred.isPresent() && cred.get().getType() == com.bloxbean.cardano.client.address.CredentialType.Key) {
+                    out.add(cred.get().getBytes());
+                }
+            } catch (Exception e) {
+                throw new JoustException("cannot resolve input " + in.getTransactionId() + "#" + in.getIndex(), e);
+            }
+        }
+        return out;
+    }
+
+    /** Submits a signed transaction and waits for it (a {@link PreparedTx} after the wallets signed). */
+    String submitSigned(Transaction signed, String what) {
+        String txHash = TransactionUtil.getTxHash(signed);
+        try {
+            var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
+            if (!r.isSuccessful()) throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
+        } catch (SubmitException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
+        }
+        rt.log(what + ": submitted " + txHash);
+        awaitInclusion(txHash, what);
+        return txHash;
+    }
+
     /** Builds, signs, submits and confirms a transaction without scripts (e.g. publishing a reference script). */
     String submitPlain(com.bloxbean.cardano.client.quicktx.Tx tx, Account payer, String what) {
+        Capture cap = CAPTURE.get();
+        if (payer instanceof WalletAccount || (cap != null && cap.walletOnly)) {
+            throw new JoustException(what + ": needs a key-holding account to pay and sign; publish reference scripts and"
+                    + " the verifiers before wallet users call the contract (ADR-0013)");
+        }
         Transaction signed;
         try {
             signed = new QuickTxBuilder(rt.backend()).compose(tx)

@@ -57,8 +57,23 @@ public final class Compose {
 
     /** Builds, checks, submits and confirms the one transaction; returns its hash. */
     public String submit() {
+        return (String) finish(false);
+    }
+
+    /**
+     * Builds the composed transaction for a wallet to sign, without signing it (ADR-0013 D1). The payer and every
+     * caller must be {@link WalletAccount}s: a call that needs a key held here (a co-signer, an authorization) is refused.
+     * The checks {@code submit()} makes after balancing run here; the result carries the CBOR for CIP-30 {@code signTx}.
+     */
+    public PreparedTx prepare() {
+        return (PreparedTx) finish(true);
+    }
+
+    private Object finish(boolean prepare) {
         if (calls.isEmpty()) throw new IllegalStateException("nothing to compose");
         TxRunner.Capture outer = TxRunner.capture();
+        if (prepare && outer != null) throw new JoustException("prepare() cannot be nested in another composition");
+        if (prepare && !(payer instanceof WalletAccount)) throw new JoustException("prepare(): the payer must be a WalletAccount");
         if (outer != null) {
             // Nested in another composition: the calls join the outer transaction, which submits them all (or none).
             String saved = outer.group;
@@ -83,9 +98,11 @@ public final class Compose {
         // Pass 1: every call's own window. A receiver placed before its depositors sees no deposits yet and may refuse:
         // the pass then runs again with the deposits the first try found (ADR-0011 D3).
         var probe = new TxRunner.Capture();
+        probe.walletOnly = prepare;
         RuntimeException failed = runTolerant(probe);
         if (failed != null && !probe.deposits.isEmpty()) {
             var again = new TxRunner.Capture();
+            again.walletOnly = prepare;
             again.known = List.copyOf(probe.deposits);
             failed = runTolerant(again);
             probe = again;
@@ -97,6 +114,7 @@ public final class Compose {
         }
         // Pass 2: every call in the common window, into one transaction.
         var cap = new TxRunner.Capture();
+        cap.walletOnly = prepare;
         cap.forced = window;
         cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
         run(cap);
@@ -144,8 +162,23 @@ public final class Compose {
         }
         var signers = new ArrayList<Account>(cap.accounts.values());
         signers.removeIf(a -> a.baseAddress().equals(payer.baseAddress()));
-        var runner = new TxRunner(runtime, signers);
+        if (prepare) {
+            for (Account a : cap.accounts.values()) {
+                if (!(a instanceof WalletAccount)) {
+                    throw new JoustException("prepare(): the composition needs the key of " + a.baseAddress() + ", held here;"
+                            + " a wallet transaction is signed by wallets only (ADR-0013 D2)");
+                }
+            }
+            if (!(payer instanceof WalletAccount)) throw new JoustException("prepare(): the payer must be a WalletAccount");
+        }
+        var runner = new TxRunner(runtime, prepare ? List.of() : signers);
         runner.extraExpected = cap.expected.size() > 1 ? cap.expected.subList(1, cap.expected.size()) : List.of();
+        if (prepare) {
+            return runner.prepare(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),
+                    cap.expected.isEmpty() ? null : cap.expected.get(0), cap.payouts, cap.sends,
+                    cap.scripts.values().toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusScript[0]), "composed transaction",
+                    cap.inputs);
+        }
         return runner.submit(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),
                 cap.expected.isEmpty() ? null : cap.expected.get(0), cap.payouts, cap.sends,
                 cap.scripts.values().toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusScript[0]), "composed transaction");

@@ -408,7 +408,11 @@ public final class StateContractHandle<S> {
      * caller's enterprise address (same payment key); others go to their address-book address, else enterprise.
      */
     String payoutAddress(byte[] pkh, Account caller) {
-        if (java.util.Arrays.equals(pkh, Keys.pkh(caller))) return caller.enterpriseAddress();
+        if (java.util.Arrays.equals(pkh, Keys.pkh(caller))) {
+            // A wallet caller is paid at the address its wallet shows (ADR-0013 D1); a key-holding caller at its
+            // enterprise address, so QuickTx never takes the fee out of a payout at the fee payer's address.
+            return caller instanceof WalletAccount w ? w.address() : caller.enterpriseAddress();
+        }
         String known = runtime.addressOf(pkh);
         if (known != null && !known.equals(caller.baseAddress())) return known;
         return AddressProvider.getEntAddress(Credential.fromKey(pkh), runtime.network()).toBech32();

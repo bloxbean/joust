@@ -1,6 +1,6 @@
 # ADR-0013: Option M — browser wallets (CIP-30) and JavaScript clients (CIP-57)
 
-**Status:** Proposed (r2): a design review returned "request changes"; resolved in §6
+**Status:** Accepted (r2): a design review returned "request changes"; resolved in §6. Phase 1 implemented (§7)
 **Date:** 2026-11-07
 **Builds on:** ADR-0001 (the runtime and generated clients), ADR-0011 (`Compose`), CIP-30, CIP-57.
 **Stack:** #1–#14, then this.
@@ -155,3 +155,96 @@ callers only and never replaces a transaction signature.
 | Medium. A document with only `x-joust` and `definitions` is not valid CIP-57 | A superset of JuLC's blueprint, with the datum typed, plus `x-joust`; deployments separate |
 | Low. The plan should exist in (a); name the JS library; CIP-103; `signData`'s role | D4 |
 | Medium. The PoC cannot show wallet behaviour | Malicious-service tests, witness tampering, a JS signer from hex; real wallets as a later step |
+
+## 7. Phase 1: implementation notes
+
+**Runtime:**
+- **`WalletAccount.of(address, network)`** overrides every public method of CCL's `Account`.
+  - While CCL's constructor runs, before the address is set, the overrides answer as `Account` does. Afterwards they
+    answer from the address or throw.
+  - A reflection test fails if a CCL upgrade adds a method that is not overridden.
+  - `Keys.pkh` takes the payment credential from the address.
+  - Script, Byron and other-network addresses are refused.
+- **`Compose.prepare()`** returns a `PreparedTx`. It refuses a composition in which any caller, co-signer or payer is
+  a key-holding `Account`.
+- **`TxRunner.prepare`** builds the transaction with QuickTx's `build()`, without signing:
+  - the payer pays the fee and the collateral, with the collateral returned to it;
+  - `additionalSignersCount` covers every key that must sign;
+  - then the post-balancing checks run.
+- **`PreparedTx.withWitnesses` / `submit`:**
+  - decode each witness set, and refuse any carrying more than vkey witnesses;
+  - verify each Ed25519 signature against the transaction hash, and require every signer;
+  - add the witnesses to the body object that was built, so the body bytes never change;
+  - check the hash again.
+- **Payouts to a wallet caller go to its own (base) address.** QuickTx takes the fee from the largest output at the
+  fee payer's address, which can be that payout when nothing else is there. So `prepare` spends one of the payer's
+  ADA-only UTxOs, which gives it a change output. A post-balance step then moves any deficit from that change back
+  into the payout, and `verifyPayouts` checks it.
+- A reference script or verifier is never published from a wallet account: deploy from a key-holding account first.
+
+**Tests:**
+- **`WalletAccountTest`:**
+  - every `Account` method is overridden;
+  - addresses come from the wallet's address; there are no keys;
+  - enterprise addresses are accepted; mainnet, script and invalid addresses are refused.
+- **`WalletDevnetTest` (DevKit), with a simulated CIP-30 `signTx(cbor, true)`:**
+  - a counter increment prepared, signed and submitted;
+  - refused before submission: no signature, the wrong key, a signature of another transaction, a witness set
+    carrying a redeemer;
+  - the signed CBOR keeps its hash;
+  - a stale input is refused by the node;
+  - a key-holding caller is refused by `prepare()`;
+  - a bank account opened and withdrawn from a wallet, with the payout at its base address.
+- **`WalletPageDevnetTest` (DevKit) with `examples/wallet/js/page.mjs` (Node, CSL 15):**
+  - the page has the test's service prepare an increment;
+  - it verifies the transaction against what it pins: the redeemer, the script, the instance token, no certificates,
+    votes, donation, withdrawals or mint, `is_valid`, the collateral return and limit, the network, and the wallet's
+    net outflow at most the fee;
+  - it refuses twelve malicious variants (listed in §8);
+  - it signs over the original body bytes (`FixedTransaction`), assembles the signed transaction itself, and submits
+    it, as `wallet.submitTx` would. The service never sees or returns the signed bytes.
+
+  So the CBOR CCL builds survives a JavaScript wallet library byte for byte.
+
+**Next:**
+- phase 2, the D3 descriptions and the generated TypeScript client, whose verifier is `page.mjs`'s generalised;
+- the co-signing policy (D2);
+- a real wallet (Eternl, Lace, Ledger).
+
+## 8. Implementation review (r3)
+
+S = security reviewer, C = Codex. The page verifier is the reference for phase 2's generated TypeScript verifier, so
+its findings were fixed in `page.mjs`.
+
+| Finding | Source | Resolution |
+|---|---|---|
+| **Critical/High.** The page counted only lovelace, only at one address, with input values from the index, so other wallet addresses or tokens could be drained | S C1, C 1 | Inputs must be the pinned instance or the wallet's own UTxOs (CIP-30 `getUtxos`). The net outflow is checked over every asset. Every output must be the wallet's own or the instance's continuation |
+| **High.** Collateral could be lost through `is_valid = false`: the collateral checks were conditional, and the page submitted the bytes the service returned | S H1 | `collateral_return` and `total_collateral` are required, the collateral must be the wallet's, and at most 5 ADA may be at risk. The continuing state is checked against the next state the page computes. The page assembles and submits the signed transaction itself |
+| **High.** The fee had no bound | S H2 | Capped at the protocol's size fee plus script fee, ×1.2, plus 0.5 ADA for reference scripts. Budgets within the protocol limits |
+| Medium. TTL, `required_signers`, reference inputs and metadata were unchecked | S M1 | TTL at most the tip plus 15 minutes. `prepare()` gives windowless calls a 10-minute TTL. Required signers must be the wallet's keys. Reference inputs must carry the pinned script. No auxiliary data |
+| Medium. The redeemer was not tied to an input | S M2 | The spend redeemer's index must be the instance input's, in ledger order |
+| Medium. `prepare()` could submit (publish a reference script) before refusing a key-holding account | C 2, S L1 | The capture of a `prepare()` is wallet-only: a key-holding caller or co-signer is refused when it is recorded, and `submitPlain` refuses to sign while preparing |
+| Medium. Owners of spent or collateral inputs were not required to sign | C 3 | Their payment key hashes are added to the required signers after the build |
+| Medium. Extra witnesses could exceed the fee | C 4, S L2 | Witnesses of keys that need not sign are dropped |
+| Medium. Funding looked at one page of ADA-only UTxOs | C 5 | Every page, the UTxO with the most lovelace, tokens allowed (they return as change), no datum or script |
+| Medium. Restoring a payout used a fixed 1 ADA floor for the change | C 6 | The change output's real minimum is computed, tokens included |
+| Medium. Indefinite-length witness pairs were refused | C 7 | BREAK markers are stripped before decoding. Indefinite pairs and tag-258 sets are tested |
+| Low. Malformed witness sets | C 8 | Exactly one CBOR map, whose only key is 0 |
+| Low. A nested `prepare()`; `transaction()` exposing the mutable transaction | S L2 | A nested `prepare()` is refused; `transaction()` returns a copy |
+| Low. The reflection test checked overrides, not behaviour | S | A test calls every `Account` method after construction: only the address methods answer |
+| Low. Restoring a payout runs after the fee is computed, so a coin crossing 2^32 lovelace would grow the encoding | S L3 | Documented. The node would reject it; nothing can be lost |
+
+The page refuses these twelve variants on DevKit:
+- an extra output to an attacker;
+- `is_valid = false`;
+- a certificate;
+- a mint;
+- another call;
+- an inflated fee;
+- the collateral return sent to an attacker;
+- a long validity interval;
+- an extra required signer;
+- metadata;
+- an unknown reference input;
+- another continuing state.
+

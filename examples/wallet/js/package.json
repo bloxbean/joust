@@ -1,0 +1,9 @@
+{
+  "name": "joust-wallet-page-poc",
+  "private": true,
+  "type": "module",
+  "description": "Plays a dApp page with a CIP-30 wallet against a JOUST prepare service (ADR-0013 proof of concept)",
+  "dependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "15.0.3"
+  }
+}

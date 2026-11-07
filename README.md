@@ -20,7 +20,9 @@
 >   (`@Reads`, an oracle), version migration (`@MigrateTo`/`@Migrate`), and deposits into another contract's instance
 >   (`@Receives`, a fee pot);
 > - L: owned objects v2: several owned types per contract, MerkleMaps inside objects, and objects moving between
->   instances with the destination's consent (`@Into`/`@Admits`; a game guild).
+>   instances with the destination's consent (`@Into`/`@Admits`; a game guild);
+> - M (phase 1): browser wallets: transactions prepared for a CIP-30 wallet address (`WalletAccount`,
+>   `Compose.prepare()`), verified by the page and signed by the wallet.
 
 JOUST lets Java developers write Cardano smart contracts as **state plus actions**, the way they would write an
 account-based contract, instead of UTxOs, datums and redeemers. You write a state record and pure static methods.
@@ -127,5 +129,7 @@ dependencies {
   `@Propose` and `stakeSelf`.
 - [ADR-0011](docs/adr/0011-option-k-composition.md): Option K, `Compose`, `@Reads`, migration.
 - [ADR-0012](docs/adr/0012-option-l-owned-objects-v2.md): Option L, several owned types, owned MerkleMaps, moves.
+- [ADR-0013](docs/adr/0013-option-m-wallets-and-js.md): Option M, CIP-30 wallets and JavaScript clients.
+- [ADR-0014](docs/adr/0014-maps-v2.md): namespaced map claims, MerkleMaps with native assets.
 - [Research](docs/research/state-oriented-contracts-research.md): options A–F and prior art.
 - [Annotation catalogue](docs/research/annotation-catalog.md): everything planned, and what ships when.
