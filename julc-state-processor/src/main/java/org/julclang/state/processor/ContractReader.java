@@ -412,14 +412,15 @@ final class ContractReader {
                     error(type, "moves of " + mt + " need an @Admits action for that type (ADR-0012 D3)");
                 }
             }
-            boolean withdraws = purposeMethods.containsKey("WITHDRAW");   // the generated code is asset-aware then too
             if (anyMap) {
                 error(type, "@Owned objects and MerkleMap state cannot be combined yet: a @Shared read has no proof path"
                         + " for map reads (ADR-0003 r2); MerkleMaps may go in the owned records instead (ADR-0012 D2)");
             }
-            boolean ownedMaps = ownedIRs.stream().anyMatch(ContractIR.OwnedIR::hasMaps);
-            if (ownedMaps && (assetAware || withdraws)) {
-                error(type, "owned MerkleMaps cannot be combined with native assets (Funds, sends, mint) yet (ADR-0007)");
+            for (var t : ownedDestroyIRs) {
+                if (ownedIRs.stream().anyMatch(o -> o.type().equals(t.ownedType()) && o.hasMaps())) {
+                    messager.printMessage(Diagnostic.Kind.WARNING, "@OwnedDestroy " + t.method() + " discards the object's"
+                            + " MerkleMaps: check MerkleMaps.isEmpty(...) in its rules unless losing them is intended", type);
+                }
             }
             for (var inv : invariantMethods) {
                 var ps0 = inv.getParameters();
@@ -439,9 +440,6 @@ final class ContractReader {
         }
         if (ownedCtx == null && actionIRs.stream().anyMatch(TransitionIR::admits)) {
             error(type, "@Admits admits owned objects: the contract needs an @Owned record and an @Into move (ADR-0012 D3)");
-        }
-        if (assetAware && anyMap) {
-            error(type, "MerkleMap state cannot be combined with native assets (Funds, sends, mint) yet (ADR-0007)");
         }
         if (assetAware && anyBatched) {
             error(type, "@Batched actions cannot be combined with native assets (Funds, sends, mint) yet: intents carry"

@@ -261,7 +261,7 @@ public final class ValidatorGenerator {
             w.line("// Maps start empty; the init's writes are committed through the verifier's claims (ADR-0002 D9).");
             w.line("MapClaims mc = claims(tx);");
             w.line(S + " initial = " + rebuild("made", (i, a) -> "stored(MapWitnesses.commit(Mpf.emptyRoot(), " + a
-                    + ", MapWitnesses.claimFor(mc, cr.seed(), " + i + "L)))") + ";");
+                    + ", MapWitnesses.claimFor(mc, policy, cr.seed(), " + (-1 - i) + "L)))") + ";");
         } else {
             w.line(S + " initial = " + X + "." + init.method() + "(" + args("cr", init) + ");");
         }
@@ -366,7 +366,7 @@ public final class ValidatorGenerator {
         if (opensMaps(t)) {
             w.line("// Each MerkleMap opened with the read set the map verifier proved (I15; ADR-0012 D2 for objects).");
             w.line("MapClaims mc = claims(tx);");
-            w.line(S + " opened = " + mapFn("openAll", t) + "(current, mc, own.outRef());");
+            w.line(S + " opened = " + mapFn("openAll", t) + "(current, mc, policy, own.outRef());");
             stateArg = "opened";
         }
         String call = X + "." + t.method() + "(" + args("r", t, leading(t, stateArg)) + ")";
@@ -623,7 +623,7 @@ public final class ValidatorGenerator {
             w.line("// Its maps start empty; the creation's writes are committed through the verifier's claims (ADR-0012 D2).");
             w.line("MapClaims mc = claims(tx);");
             w.line(R + " value = " + rebuild("made", R, ow.components(), (i, a) -> "stored(MapWitnesses.commit(Mpf.emptyRoot(), "
-                    + a + ", MapWitnesses.claimFor(mc, o.seed(), " + i + "L)))") + ";");
+                    + a + ", MapWitnesses.claimFor(mc, policy, o.seed(), " + (-1 - i) + "L)))") + ";");
         } else {
             w.line(R + " value = " + call + ";");
         }
@@ -1216,7 +1216,7 @@ public final class ValidatorGenerator {
             w.line(S + " made = " + made + ";");
             w.line("MapClaims mc = claims(tx);");
             w.line(S + " initial = " + rebuild("made", (i, a) -> "stored(MapWitnesses.commit(Mpf.emptyRoot(), " + a
-                    + ", MapWitnesses.claimFor(mc, cr.seed(), " + i + "L)))") + ";");
+                    + ", MapWitnesses.claimFor(mc, policy, cr.seed(), " + (-1 - i) + "L)))") + ";");
         } else {
             w.line(S + " initial = " + made + ";");
         }
@@ -1256,11 +1256,17 @@ public final class ValidatorGenerator {
         fundsLocal(t, "o", "id", "noAssets()");
         String call = t.shared() ? X + "." + t.method() + "(" + args("o", t, "shared") + ")"
                 : X + "." + t.method() + "(" + args("o", t) + ")";
-        if (t.returnsRecord()) {
-            w.line(t.resultType() + " result = " + call + ";");
-            w.line(R + " value = result.state();");
+        String madeExpr = t.returnsRecord() ? "result.state()" : call;
+        if (t.returnsRecord()) w.line(t.resultType() + " result = " + call + ";");
+        var ow = c.ownedOf(t);
+        if (ow.hasMaps()) {
+            w.line(R + " made = " + madeExpr + ";");
+            w.line("// Its maps start empty; the creation's writes are committed through the verifier's claims (ADR-0012 D2).");
+            w.line("MapClaims mc = claims(tx);");
+            w.line(R + " value = " + rebuild("made", R, ow.components(), (i, a) -> "stored(MapWitnesses.commit(Mpf.emptyRoot(), "
+                    + a + ", MapWitnesses.claimFor(mc, policy, o.seed(), " + (-1 - i) + "L)))") + ";");
         } else {
-            w.line(R + " value = " + call + ";");
+            w.line(R + " value = " + madeExpr + ";");
         }
         acceptedLocal(t, "o", checks);
         outputChecks(t.ownedType(), "value", checks);
@@ -1339,7 +1345,7 @@ public final class ValidatorGenerator {
         String stateArg = "current";
         if (opensMaps(t)) {
             w.line("MapClaims mc = claims(tx);");
-            w.line(S + " opened = " + mapFn("openAll", t) + "(current, mc, own.outRef());");
+            w.line(S + " opened = " + mapFn("openAll", t) + "(current, mc, policy, own.outRef());");
             stateArg = "opened";
         }
         w.line("JulcValue inValue = Builtins.unValueData((PlutusData) (Object) ownOutValue(own));");
@@ -1845,7 +1851,7 @@ public final class ValidatorGenerator {
     /** {@code expr} (the method's next state) with each MerkleMap committed to its new root (I16, I17). */
     private String committed(TransitionIR t, String expr) {
         if (!opensMaps(t)) return expr;
-        return mapFn("commitAll", t) + "(current, " + expr + ", mc, own.outRef())";
+        return mapFn("commitAll", t) + "(current, " + expr + ", mc, policy, own.outRef())";
     }
 
     /** The transition's subject (the state, or its owned record) has MerkleMaps. */
@@ -2180,14 +2186,14 @@ public final class ValidatorGenerator {
         var maps = new ArrayList<Integer>();
         for (int i = 0; i < cs.size(); i++) if (cs.get(i).kind() == ParamIR.TypeKind.MERKLE_MAP) maps.add(i);
         w.line("/** What a method sees: each MerkleMap of " + S + " opened with its proven read set (I15). */");
-        w.open("static " + S + " openAll" + suffix + "(" + S + " current, MapClaims mc, TxOutRef owner) {");
-        w.line("return " + rebuild("current", S, cs, (i, a) -> "MapWitnesses.open(" + a + ".root(), MapWitnesses.claimFor(mc, owner, "
+        w.open("static " + S + " openAll" + suffix + "(" + S + " current, MapClaims mc, byte[] policy, TxOutRef owner) {");
+        w.line("return " + rebuild("current", S, cs, (i, a) -> "MapWitnesses.open(" + a + ".root(), MapWitnesses.claimFor(mc, policy, owner, "
                 + i + "L))") + ";");
         w.close("}").blank();
         w.line("/** What to store: each MerkleMap of {@code raw} committed from {@code current}'s root (I16, I17). */");
-        w.open("static " + S + " commitAll" + suffix + "(" + S + " current, " + S + " raw, MapClaims mc, TxOutRef owner) {");
+        w.open("static " + S + " commitAll" + suffix + "(" + S + " current, " + S + " raw, MapClaims mc, byte[] policy, TxOutRef owner) {");
         w.line("return " + rebuild("raw", S, cs, (i, a) -> "stored(MapWitnesses.commit(current."
-                + cs.get(maps.get(i)).name() + "().root(), " + a + ", MapWitnesses.claimFor(mc, owner, " + i + "L)))") + ";");
+                + cs.get(maps.get(i)).name() + "().root(), " + a + ", MapWitnesses.claimFor(mc, policy, owner, " + i + "L)))") + ";");
         w.close("}").blank();
     }
 

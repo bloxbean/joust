@@ -129,7 +129,7 @@ public final class StateInstance<S> {
         TxOutRef owner = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
                 BigInteger.valueOf(stateUtxo.getOutputIndex()));
         if (maps) {
-            var prepared = merkle.prepare(spec.stateClass(), current, t.next(), owner);
+            var prepared = merkle.prepare(HexUtil.decodeHexString(contract.policyId), spec.stateClass(), current, t.next(), owner);
             claims = prepared.claims();
             stored = prepared.stored();
             MerkleSupport.verifyReplay(spec.stateClass(), current, claims, s -> call.run.apply(s, ctx), t);
@@ -221,16 +221,30 @@ public final class StateInstance<S> {
         byte[] id = HexUtil.decodeHexString(instanceId);
         var incoming = call.receives ? AssetTx.incoming(unit()) : org.julclang.core.types.JulcList.<org.julclang.state.api.DepositClaim>empty();
         var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id), incoming);
-        Transition<S> t = call.assetRun.apply(current, null, ctx, funds);   // the developer's method, on the JVM
+        boolean maps = MerkleSupport.hasMaps(spec.stateClass());
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        Transition<S> t = maps ? merkle.run(() -> call.assetRun.apply(current, null, ctx, funds))   // the developer's method
+                : call.assetRun.apply(current, null, ctx, funds);
+        TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
+                BigInteger.valueOf(stateUtxo.getOutputIndex()));
+        S stored = t.next();
+        java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();
+        if (maps) {
+            var prepared = merkle.prepare(policy, spec.stateClass(), current, destroy ? null : t.next(), ownRef);
+            claims = prepared.claims();
+            stored = prepared.stored();
+            MerkleSupport.verifyReplay(spec.stateClass(), current, claims, s -> call.assetRun.apply(s, null, ctx, funds), t);
+        }
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
         var tx = TxRunner.collect(TxRunner.scriptTx(), stateUtxo, redeemer).readFrom(ref);
         TxOutRef own = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
                 BigInteger.valueOf(stateUtxo.getOutputIndex()));
-        PlutusData datum = destroy ? null : PlutusDataAdapter.convert(t.next());
+        PlutusData datum = destroy ? null : PlutusDataAdapter.convert(stored);
         var applied = AssetTx.apply(tx, contract, call.caller, what, own, inValue, call.received, call.receivedAssets, t,
                 unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false, null, incoming);
+        if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
         for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
@@ -238,6 +252,7 @@ public final class StateInstance<S> {
         call.applyReads(tx);
         var scripts = new ArrayList<com.bloxbean.cardano.client.plutus.spec.PlutusScript>(List.of(contract.script));
         if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
+        if (maps) scripts.add(contract.runtime.mapVerifier().script());
         String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
                 applied.expected(), applied.payouts(), applied.sends(),
                 scripts.toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusScript[0]), what);
@@ -245,7 +260,7 @@ public final class StateInstance<S> {
         t.payouts().forEach(payouts::add);
         if (!destroy) {
             awaitState(txHash);
-            return new CallResult<>(txHash, t.next(), payouts, eventsOf(t));
+            return new CallResult<>(txHash, stored, payouts, eventsOf(t));
         }
         awaitGone();
         return new CallResult<>(txHash, null, payouts, eventsOf(t));

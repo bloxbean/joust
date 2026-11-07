@@ -12,5 +12,5 @@ import java.math.BigInteger;
  * map with {@code oldRoot}, and applying the writes in order to it gives {@code newRoot}. The contract's validator finds
  * its claim by {@code owner} (its state input, or the seed when creating) and {@code field} (the map's index).
  */
-public record MapClaim(TxOutRef owner, BigInteger field, byte[] oldRoot, JulcList<ReadProof> reads,
+public record MapClaim(byte[] policy, TxOutRef owner, BigInteger field, byte[] oldRoot, JulcList<ReadProof> reads,
                        JulcList<WriteProof> writes, byte[] newRoot) {}

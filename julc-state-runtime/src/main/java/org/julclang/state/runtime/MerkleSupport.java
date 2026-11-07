@@ -56,7 +56,20 @@ public final class MerkleSupport {
      * Witnesses for each MerkleMap component of {@code before}, in component order, and the state to store (each map
      * replaced by {@code (newRoot, [], [])}). {@code after} is the method's result; null for a destroy (reads only).
      */
-    public <S> Prepared<S> prepare(Class<S> stateClass, S before, S after, org.julclang.ledger.TxOutRef owner) {
+    public <S> Prepared<S> prepare(byte[] policy, Class<S> stateClass, S before, S after, org.julclang.ledger.TxOutRef owner) {
+        return prepare(policy, stateClass, before, after, owner, false);
+    }
+
+    /**
+     * Witnesses for a creation's maps, which start empty: claimed by the seed under fields -1, -2, ..., so they never
+     * share a key with a spend of the same contract whose input is that seed (ADR-0014 review).
+     */
+    public <S> Prepared<S> prepareCreation(byte[] policy, Class<S> stateClass, S made, org.julclang.ledger.TxOutRef seed) {
+        return prepare(policy, stateClass, made, made, seed, true);
+    }
+
+    private <S> Prepared<S> prepare(byte[] policy, Class<S> stateClass, S before, S after, org.julclang.ledger.TxOutRef owner,
+                                    boolean creation) {
         List<Integer> maps = mapComponents(stateClass);
         List<MapClaim> ordered = new ArrayList<>();
         byte[][] newRoots = new byte[maps.size()][];
@@ -72,7 +85,7 @@ public final class MerkleSupport {
                 writes = result.proofs();
                 newRoot = result.root();
             }
-            ordered.add(new MapClaim(owner, BigInteger.valueOf(i), root, reads, writes, newRoot));
+            ordered.add(new MapClaim(policy, owner, BigInteger.valueOf(creation ? -1 - i : i), root, reads, writes, newRoot));
             newRoots[i] = newRoot;
         }
         S stored = after == null ? null : withRoots(stateClass, after, maps, newRoots);
@@ -125,7 +138,14 @@ public final class MerkleSupport {
         Object r = result;
         if (r instanceof Transition<?> t) {
             String payouts = org.julclang.clientlib.PlutusDataAdapter.convert(t.payouts()).serializeToHex();
-            return (t.next() == null ? "end" : canonical(t.next())) + "|" + payouts;
+            // Every effect, not only the state and payouts: an asset-aware method must replay to the same sends, mint,
+            // accepted assets, events and deposits too (ADR-0014 review).
+            String effects = org.julclang.clientlib.PlutusDataAdapter.convert(t.sends()).serializeToHex() + "|"
+                    + org.julclang.clientlib.PlutusDataAdapter.convert(t.mint()).serializeToHex() + "|"
+                    + org.julclang.clientlib.PlutusDataAdapter.convert(t.accepted()).serializeToHex() + "|"
+                    + org.julclang.clientlib.PlutusDataAdapter.convert(t.events()).serializeToHex() + "|"
+                    + org.julclang.clientlib.PlutusDataAdapter.convert(t.deposits()).serializeToHex();
+            return (t.next() == null ? "end" : canonical(t.next())) + "|" + payouts + "|" + effects;
         }
         if (r != null && r.getClass().isRecord()) {
             var sb = new StringBuilder();

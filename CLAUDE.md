@@ -27,10 +27,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - `julc-state-dsl`: `.jsc` lexer/parser/checker and the lowering to a Java `@StateContract` (ADR-0005). Run by each
   consumer's `generateJsc` JavaExec task into `build/generated/sources/jsc`.
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
-- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
+- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees,locker}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
   DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D
   (ADR-0004, batched intents, pool) E (ADR-0005, `.jsc`, dsl) and the F spike (ADR-0006, optimistic L2, rollup) run on Yaci DevKit.
-- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007), #9 H (fees, ADR-0008), #10 I (params/quorum/auth/invariants/events, ADR-0009), #11 J (purposes/staking, ADR-0010), #12 K (composition, ADR-0011), #13 L (owned objects v2, ADR-0012), #14 deposits (ADR-0011 D3). JuLC changes: worktree `../julc-joust`, PR label
+- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007), #9 H (fees, ADR-0008), #10 I (params/quorum/auth/invariants/events, ADR-0009), #11 J (purposes/staking, ADR-0010), #12 K (composition, ADR-0011), #13 L (owned objects v2, ADR-0012), #14 deposits (ADR-0011 D3), #15 ADR-0013 (design), #16 maps v2 (ADR-0014). JuLC changes: worktree `../julc-joust`, PR label
   `joust` (julc#311).
 
 ## Build / test
@@ -89,6 +89,9 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - ADR-0011 D3 (deposits): only a `@Receives` action (with Funds) takes deposits; deposits need `Compose`. The output
   verifier reads its redeemer by cast (a Value field in an entrypoint redeemer mis-decodes). The harness evaluates only
   its own script's spends, so cross-contract transactions are checked with each contract's harness.
+- ADR-0014: map claims are keyed by (policy, owner, field); `MerkleSupport.prepare(policy, ...)`. Maps + assets work
+  (both sets of helpers: watch script size, ~14.3 KB). DevKit's faucet may run dry: `DevKit.topUp` falls back to the
+  default-mnemonic genesis accounts.
 - ADR-0012: several owned types: datum `Holding_<Type>` (sealed) with a tag check per arm; one type keeps `Holding`.
   A move's redeemer has `into` at field 0; an `@Admits` action's first argument (the object id) is field 0. Moves run
   only inside `Compose` (`<move>Admitted`). Watch script size: three owned types + moves + maps exceeded 16 KB.

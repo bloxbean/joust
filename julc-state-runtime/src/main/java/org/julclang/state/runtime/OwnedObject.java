@@ -153,7 +153,7 @@ public final class OwnedObject<S, R> {
         R value = made;
         if (maps) {
             // ADR-0012 D2: the object's maps start empty; its writes are claimed by the seed, as for an instance.
-            var prepared = merkle.prepare(codec.valueClass(), made, made, seedRef);
+            var prepared = merkle.prepareCreation(HexUtil.decodeHexString(contract.policyId), codec.valueClass(), made, seedRef);
             claims = prepared.claims();
             value = prepared.stored();
         }
@@ -183,20 +183,30 @@ public final class OwnedObject<S, R> {
         byte[] id = HexUtil.decodeHexString(object.objectId);
         var funds = new org.julclang.state.api.Funds(policy, id, spec.receivedAssets(), org.julclang.state.api.Assets.none(),
                 org.julclang.core.types.JulcList.empty());
-        Transition<R> t = spec.assetRun().apply(shared, ctx, funds);
+        boolean maps = codec.hasMaps();
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        Transition<R> t = maps ? merkle.run(() -> spec.assetRun().apply(shared, ctx, funds)) : spec.assetRun().apply(shared, ctx, funds);
         byte[] instance = HexUtil.decodeHexString(parent.instanceId());
-        PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(instance, t.next()));
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
+        R value = t.next();
+        List<org.julclang.state.api.mpf.MapClaim> claims = List.of();
+        if (maps) {
+            var prepared = merkle.prepareCreation(policy, codec.valueClass(), t.next(), seedRef);
+            claims = prepared.claims();
+            value = prepared.stored();
+        }
+        PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(instance, value));
         Object redeemer = spec.redeemer().make(seedRef, instance, ctx);
         var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null).readFrom(ref).readFrom(instanceUtxo);
         var inValue = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(contract.spec.minAda())),
                 org.julclang.state.api.Assets.of(policy, id, BigInteger.ONE));
         var applied = AssetTx.apply(tx, contract, spec.caller(), what, null, inValue, spec.received(), spec.receivedAssets(), t,
                 object.unit(), id, datum, redeemer, null, true, seed);
+        if (maps) contract.runtime.mapVerifier().attach(tx, claims, spec.caller());
         byte[] callerPkh = Keys.pkh(spec.caller());
         String txHash = new TxRunner(contract.runtime).submit(tx, spec.caller(), window,
                 spec.usesCtx() ? new byte[][]{callerPkh} : new byte[0][], applied.expected(), List.of(), List.of(),
-                new PlutusScript[]{contract.script}, what);
+                scripts(contract, maps), what);
         object.awaitUtxo(txHash);
         return object;
     }
@@ -276,7 +286,7 @@ public final class OwnedObject<S, R> {
         R stored = t.next();
         if (maps) {
             // ADR-0012 D2: the object's maps, claimed by its own input, as an instance's are.
-            var prepared = merkle.prepare(codec.valueClass(), current, call.kind == Call.Kind.ACTION ? t.next() : null, ownRef);
+            var prepared = merkle.prepare(HexUtil.decodeHexString(contract.policyId), codec.valueClass(), current, call.kind == Call.Kind.ACTION ? t.next() : null, ownRef);
             claims = prepared.claims();
             stored = prepared.stored();
             MerkleSupport.verifyReplay(codec.valueClass(), current, claims, o -> method.apply(o), t);
@@ -363,14 +373,26 @@ public final class OwnedObject<S, R> {
         byte[] id = HexUtil.decodeHexString(objectId);
         var incoming = call.receives ? AssetTx.incoming(unit()) : org.julclang.core.types.JulcList.<org.julclang.state.api.DepositClaim>empty();
         var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id), incoming);
-        Transition<R> t = call.assetRun.apply(current, shared, ctx, funds);
+        boolean maps = codec.hasMaps();
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        Transition<R> t = maps ? merkle.run(() -> call.assetRun.apply(current, shared, ctx, funds))
+                : call.assetRun.apply(current, shared, ctx, funds);
+        TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(own.getTxHash())), BigInteger.valueOf(own.getOutputIndex()));
+        R stored = t.next();
+        List<org.julclang.state.api.mpf.MapClaim> claims = List.of();
+        if (maps) {
+            var prepared = merkle.prepare(policy, codec.valueClass(), current, destroy ? null : t.next(), ownRef);
+            claims = prepared.claims();
+            stored = prepared.stored();
+            MerkleSupport.verifyReplay(codec.valueClass(), current, claims, o -> call.assetRun.apply(o, shared, ctx, funds), t);
+        }
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         var tx = TxRunner.collect(TxRunner.scriptTx(), own, redeemer).readFrom(ref);
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
-        TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(own.getTxHash())), BigInteger.valueOf(own.getOutputIndex()));
+        if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         PlutusData datum = destroy ? null
-                : PlutusDataAdapter.convert(codec.wrap().apply(HexUtil.decodeHexString(instanceAfter(call, own)), t.next()));
+                : PlutusDataAdapter.convert(codec.wrap().apply(HexUtil.decodeHexString(instanceAfter(call, own)), stored));
         var applied = AssetTx.apply(tx, contract, call.caller, what, ownRef, inValue, call.received, call.receivedAssets, t,
                 unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false, null, incoming);
         List<byte[]> signers = new ArrayList<>();
@@ -380,13 +402,14 @@ public final class OwnedObject<S, R> {
         call.applyReads(tx);
         var scripts = new ArrayList<PlutusScript>(List.of(contract.script));
         if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
+        if (maps) scripts.add(contract.runtime.mapVerifier().script());
         String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
                 applied.expected(), applied.payouts(), applied.sends(), scripts.toArray(new PlutusScript[0]), what);
         var payouts = new ArrayList<Payout>();
         t.payouts().forEach(payouts::add);
         if (!destroy) {
             awaitUtxo(txHash);
-            return new CallResult<>(txHash, t.next(), payouts, eventsOf(t));
+            return new CallResult<>(txHash, stored, payouts, eventsOf(t));
         }
         return new CallResult<>(txHash, null, payouts, eventsOf(t));
     }

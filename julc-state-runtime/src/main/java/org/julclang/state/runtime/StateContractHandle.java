@@ -279,7 +279,7 @@ public final class StateContractHandle<S> {
         java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();
         S initial = made;
         if (maps) {
-            var prepared = merkle.prepare(spec.stateClass(), made, made, seedOwner);
+            var prepared = merkle.prepareCreation(HexUtil.decodeHexString(policyId), spec.stateClass(), made, seedOwner);
             claims = prepared.claims();
             initial = prepared.stored();
         }
@@ -316,19 +316,31 @@ public final class StateContractHandle<S> {
         byte[] id = HexUtil.decodeHexString(instance.instanceId());
         var funds = new org.julclang.state.api.Funds(policy, id, d.receivedAssets(), org.julclang.state.api.Assets.none(),
                 org.julclang.core.types.JulcList.empty());
-        Transition<S> t = d.assetRun().apply(ctx, funds);
-        PlutusData datum = PlutusDataAdapter.convert(t.next());
+        boolean maps = MerkleSupport.hasMaps(spec.stateClass());
+        MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapStore()) : null;
+        Transition<S> t = maps ? merkle.run(() -> d.assetRun().apply(ctx, funds)) : d.assetRun().apply(ctx, funds);
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
+        S stored = t.next();
+        java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();
+        if (maps) {
+            var prepared = merkle.prepareCreation(policy, spec.stateClass(), t.next(), seedRef);
+            claims = prepared.claims();
+            stored = prepared.stored();
+        }
+        PlutusData datum = PlutusDataAdapter.convert(stored);
         Object redeemer = d.redeemer().make(seedRef, ctx);
         var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null).readFrom(ref);
         var inValue = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(spec.minAda())),
                 org.julclang.state.api.Assets.of(policy, id, BigInteger.ONE));
         var applied = AssetTx.apply(tx, this, d.caller(), what, null, inValue, d.received(), d.receivedAssets(), t,
                 instance.unit(), id, datum, redeemer, null, true, seed);
+        if (maps) runtime.mapVerifier().attach(tx, claims, d.caller());
         String txHash = new TxRunner(runtime).submit(tx, d.caller(), window, d.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],
-                applied.expected(), List.of(), List.of(), new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script}, what);
+                applied.expected(), List.of(), List.of(), maps
+                        ? new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script, runtime.mapVerifier().script()}
+                        : new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script}, what);
         instance.awaitState(txHash);
-        return new DeployResult<>(instance, txHash, t.next());
+        return new DeployResult<>(instance, txHash, stored);
     }
 
     /**

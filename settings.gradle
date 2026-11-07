@@ -35,6 +35,7 @@ include 'examples:oracle'
 include 'examples:upgrade'
 include 'examples:guild'
 include 'examples:fees'
+include 'examples:locker'
 
 // Local development against a JuLC checkout (opt-in, untested so far):
 //   ./gradlew build -PuseLocalJulc            (expects ../julc)

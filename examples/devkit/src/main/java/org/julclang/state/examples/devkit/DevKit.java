@@ -96,7 +96,10 @@ public final class DevKit {
                     .POST(HttpRequest.BodyPublishers.ofString("{\"address\":\"" + address + "\",\"adaAmount\":" + ada + "}"))
                     .build();
             var res = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
-            if (res.statusCode() != 200) throw new IllegalStateException("topup failed: " + res.statusCode() + " " + res.body());
+            if (res.statusCode() != 200) {
+                // The admin faucet can run dry on a long-lived devnet: pay from DevKit's pre-funded default accounts.
+                topUpFromDefaults(address, ada, res.statusCode() + " " + res.body());
+            }
             waitForFunds(address);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -104,6 +107,26 @@ public final class DevKit {
         } catch (Exception e) {
             throw new IllegalStateException("topup failed", e);
         }
+    }
+
+    /** DevKit's default mnemonic: its first 20 base addresses are funded in genesis (10 000 ADA each). */
+    static final String DEFAULT_MNEMONIC = "test test test test test test test test test test test test test test test test test"
+            + " test test test test test test sauce";
+
+    private static synchronized void topUpFromDefaults(String address, long ada, String faucetError) {
+        java.math.BigInteger need = java.math.BigInteger.valueOf(ada + 2).multiply(java.math.BigInteger.valueOf(1_000_000));
+        for (int i = 0; i < 20; i++) {
+            var src = new Account(Networks.testnet(), DEFAULT_MNEMONIC, i);
+            if (balance(src.baseAddress(), "lovelace").compareTo(need) < 0) continue;
+            var tx = new com.bloxbean.cardano.client.quicktx.Tx()
+                    .payToAddress(address, com.bloxbean.cardano.client.api.model.Amount.ada(ada))
+                    .from(src.baseAddress());
+            var result = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend()).compose(tx)
+                    .withSigner(com.bloxbean.cardano.client.function.helper.SignerProviders.signerFrom(src))
+                    .completeAndWait(java.time.Duration.ofSeconds(60));
+            if (result.isSuccessful()) return;
+        }
+        throw new IllegalStateException("topup failed: the faucet (" + faucetError + ") and every default account");
     }
 
     /**

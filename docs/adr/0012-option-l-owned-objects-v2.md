@@ -233,7 +233,5 @@ tags and the per-object map claims hold.
 | Low. Closing a map-holding object opens its maps, so it needs the off-chain mirror | S L5 | A call that touches no map entry builds its claim from the root alone, with no mirror needed (r4, `ArmoryTest`) |
 | Low. In the example, `arrivals` only grows, so bouncing a hero between guilds fills the cap | S L6 | The cap is gone. Guild admits by the arriving hero's level, which it reads through the new arriving-object parameter (r4) |
 
-**Not yet:**
-- Namespaced claim keys. This affects liveness only: a claim shared by two users must match both.
-- Owned maps with native assets, the general maps-and-assets limit of ADR-0007.
+**Closed later:** namespaced claim keys and owned maps with native assets (ADR-0014).
 

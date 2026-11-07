@@ -76,11 +76,12 @@ public class MapWitnesses {
     // ------------------------------------------------------------------ contract side (no MPF code)
 
     /** The claim for map {@code field} of the instance whose state input (or seed) is {@code owner}; fails if none. */
-    public static MapClaim claimFor(MapClaims claims, TxOutRef owner, long field) {
+    public static MapClaim claimFor(MapClaims claims, byte[] policy, TxOutRef owner, long field) {
         boolean found = false;
         MapClaim hit = claims.claims().head();
         for (var c : claims.claims()) {
-            if (!found && Builtins.equalsData(c.owner(), owner) && c.field().compareTo(BigInteger.valueOf(field)) == 0) {
+            if (!found && ByteStringLib.equals(c.policy(), policy) && Builtins.equalsData(c.owner(), owner)
+                    && c.field().compareTo(BigInteger.valueOf(field)) == 0) {
                 found = true;
                 hit = c;
             }

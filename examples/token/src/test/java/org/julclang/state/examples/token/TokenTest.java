@@ -46,7 +46,7 @@ class TokenTest {
     MerkleSupport.Prepared<Token.State> call(Token.State current, Function<Token.State, Token.State> method) {
         var ms = new MerkleSupport(store);
         Token.State next = ms.run(() -> method.apply(current));
-        return ms.prepare(Token.State.class, current, next, StateHarness.LIVE_REF);
+        return ms.prepare(h.policy(), Token.State.class, current, next, StateHarness.LIVE_REF);
     }
 
     /** An action transaction on the live instance, with the verifier's claims attached. */
@@ -59,18 +59,18 @@ class TokenTest {
     }
 
     static MapClaim withReads(MapClaim c, org.julclang.core.types.JulcList<ReadProof> reads) {
-        return new MapClaim(c.owner(), c.field(), c.oldRoot(), reads, c.writes(), c.newRoot());
+        return new MapClaim(c.policy(), c.owner(), c.field(), c.oldRoot(), reads, c.writes(), c.newRoot());
     }
 
     static MapClaim withWrites(MapClaim c, org.julclang.core.types.JulcList<WriteProof> writes) {
-        return new MapClaim(c.owner(), c.field(), c.oldRoot(), c.reads(), writes, c.newRoot());
+        return new MapClaim(c.policy(), c.owner(), c.field(), c.oldRoot(), c.reads(), writes, c.newRoot());
     }
 
     /** A token with ANN 100, BEN 50, CAT 25 minted (built through real calls, so the mirror holds them). */
     Token.State seeded() {
         var ms = new MerkleSupport(store);
         Ctx ctx = h.ctx(ADMIN, BigInteger.ZERO, BigInteger.ZERO);
-        Token.State s = ms.prepare(Token.State.class, Token.create(ctx), Token.create(ctx), h.seed()).stored();
+        Token.State s = ms.prepareCreation(h.policy(), Token.State.class, Token.create(ctx), h.seed()).stored();
         s = call(s, x -> Token.mint(x, ANN, BigInteger.valueOf(100))).stored();
         s = call(s, x -> Token.mint(x, BEN, BigInteger.valueOf(50))).stored();
         return call(s, x -> Token.mint(x, CAT, BigInteger.valueOf(25))).stored();
@@ -81,7 +81,7 @@ class TokenTest {
         Ctx ctx = h.ctx(ADMIN, BigInteger.ZERO, BigInteger.ZERO);
         var ms = new MerkleSupport(store);
         Token.State made = ms.run(() -> Token.create(ctx));
-        var p = ms.prepare(Token.State.class, made, made, h.seed());
+        var p = ms.prepareCreation(h.policy(), Token.State.class, made, h.seed());
         var tx = h.withClaims(h.create(new TokenValidator.CreateInstance(h.seed(), ctx), p.stored(), ctx), p.claims());
         System.out.println("[create] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
     }

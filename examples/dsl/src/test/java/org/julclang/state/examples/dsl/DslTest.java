@@ -118,7 +118,7 @@ class DslTest {
     MerkleSupport.Prepared<Points.State> call(Points.State current, Function<Points.State, Points.State> method) {
         var ms = new MerkleSupport(store);
         Points.State next = ms.run(() -> method.apply(current));
-        return ms.prepare(Points.State.class, current, next, StateHarness.LIVE_REF);
+        return ms.prepare(pts.policy(), Points.State.class, current, next, StateHarness.LIVE_REF);
     }
 
     TxModel act(Points.State s, Object redeemer, MerkleSupport.Prepared<Points.State> p, byte[] signer, Ctx ctx) {
@@ -128,7 +128,7 @@ class DslTest {
     Points.State seeded() {
         var ms = new MerkleSupport(store);
         Ctx ctx = pts.ctx(OWNER, BigInteger.ZERO, BigInteger.ZERO);
-        Points.State s = ms.prepare(Points.State.class, Points.init(ctx), Points.init(ctx), pts.seed()).stored();
+        Points.State s = ms.prepareCreation(pts.policy(), Points.State.class, Points.init(ctx), pts.seed()).stored();
         s = call(s, x -> Points.award(x, ANN, BigInteger.valueOf(30))).stored();
         return call(s, x -> Points.award(x, BEN, BigInteger.valueOf(10))).stored();
     }

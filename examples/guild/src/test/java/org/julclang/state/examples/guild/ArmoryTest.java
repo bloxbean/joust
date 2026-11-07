@@ -41,7 +41,7 @@ class ArmoryTest {
         Ctx ctx = h.ctx(ANN, BigInteger.ZERO, BigInteger.ZERO);
         var ms = new MerkleSupport(store);
         var made = ms.run(() -> Armory.openVault(armory, ctx));
-        Armory.Vault v = ms.prepare(Armory.Vault.class, made, made, h.seed()).stored();
+        Armory.Vault v = ms.prepareCreation(h.policy(), Armory.Vault.class, made, h.seed()).stored();
         v = step(v, x -> Armory.stash(x, SWORD, BigInteger.valueOf(3))).stored();
         return step(v, x -> Armory.stash(x, GEM, BigInteger.valueOf(5))).stored();
     }
@@ -49,7 +49,7 @@ class ArmoryTest {
     MerkleSupport.Prepared<Armory.Vault> step(Armory.Vault v, java.util.function.Function<Armory.Vault, Armory.Vault> f) {
         var ms = new MerkleSupport(store);
         var next = ms.run(() -> f.apply(v));
-        return ms.prepare(Armory.Vault.class, v, next, StateHarness.OBJECT_REF);
+        return ms.prepare(h.policy(), Armory.Vault.class, v, next, StateHarness.OBJECT_REF);
     }
 
     @Test
@@ -57,7 +57,7 @@ class ArmoryTest {
         Ctx ctx = h.ctx(ANN, BigInteger.ZERO, BigInteger.ZERO);
         var ms = new MerkleSupport(store);
         var made = ms.run(() -> Armory.openVault(armory, ctx));
-        var p = ms.prepare(Armory.Vault.class, made, made, h.seed());
+        var p = ms.prepareCreation(h.policy(), Armory.Vault.class, made, h.seed());
         var tx = h.withClaims(h.createObject(new ArmoryValidator.OpenVault(h.seed(), h.instanceId(), ctx), vault(p.stored()),
                 armory, ctx), p.claims());
         System.out.println("[openVault] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
@@ -90,7 +90,7 @@ class ArmoryTest {
         h.assertRejected(h.actObject(obj, new ArmoryValidator.Stash(GEM, BigInteger.ONE), vault(p.stored()), JulcList.empty(),
                 ANN, null, null), "no map verifier claims");
         // a claim owned by another input
-        var other = p.claims().stream().map(c -> new org.julclang.state.api.mpf.MapClaim(StateHarness.LIVE_REF, c.field(),
+        var other = p.claims().stream().map(c -> new org.julclang.state.api.mpf.MapClaim(c.policy(), StateHarness.LIVE_REF, c.field(),
                 c.oldRoot(), c.reads(), c.writes(), c.newRoot())).toList();
         h.assertRejected(h.withClaims(h.actObject(obj, new ArmoryValidator.Stash(GEM, BigInteger.ONE), vault(p.stored()),
                 JulcList.empty(), ANN, null, null), other), "a claim keyed to another input");
@@ -106,7 +106,7 @@ class ArmoryTest {
         var obj = h.liveObject(vault(empty), BigInteger.ZERO);
         var ms = new MerkleSupport(store);
         var pay = ms.run(() -> Armory.closeVault(empty, ctx));
-        var p = ms.prepare(Armory.Vault.class, empty, null, StateHarness.OBJECT_REF);
+        var p = ms.prepare(h.policy(), Armory.Vault.class, empty, null, StateHarness.OBJECT_REF);
         var tx = h.withClaims(h.destroyObject(obj, new ArmoryValidator.CloseVault(ctx), new ArmoryValidator.BurnInstance(), pay,
                 ANN, ctx), p.claims());
         System.out.println("[closeVault] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
@@ -119,7 +119,7 @@ class ArmoryTest {
         var fresh = new MerkleSupport(new InMemoryNodeStore());
         Ctx ctx = h.ctx(ANN, BigInteger.ZERO, BigInteger.valueOf(h.minAda()));
         assertThrows(RequireException.class, () -> fresh.run(() -> Armory.closeVault(v, ctx)), "not empty, read from kinds");
-        var p = fresh.prepare(Armory.Vault.class, v, null, StateHarness.OBJECT_REF);
+        var p = fresh.prepare(h.policy(), Armory.Vault.class, v, null, StateHarness.OBJECT_REF);
         assertTrue(p.claims().get(0).reads().isEmpty());
         assertArrayEquals(v.inventory().root(), p.claims().get(0).oldRoot());
     }
