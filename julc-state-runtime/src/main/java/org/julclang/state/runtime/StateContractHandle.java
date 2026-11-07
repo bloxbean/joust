@@ -38,6 +38,91 @@ public final class StateContractHandle<S> {
     final String address;
 
     final Object params;
+    final String rewardAddress;
+
+    private static byte[] hashOf(PlutusV3Script s) {
+        try {
+            return s.getScriptHash();
+        } catch (Exception e) {
+            throw new JoustException("cannot hash a script", e);
+        }
+    }
+
+    /** The reward address of this script's stake credential (ADR-0010). */
+    public String rewardAddress() { return rewardAddress; }
+
+    /** Registers this script's stake credential (legacy registration: no script witness; anyone may). */
+    public void registerStake(Account payer) {
+        var tx = new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(rewardAddress).from(payer.baseAddress());
+        new TxRunner(runtime).submitPlain(tx, payer, "register the " + spec.name() + " stake credential");
+    }
+
+    /**
+     * Delegates this script's stake to {@code poolId} (bech32 or hex): runs the contract's {@code @Certify} handler,
+     * signed by {@code caller} and {@code cosigners} ({@code @Quorum}; ADR-0010).
+     */
+    public String delegateTo(String poolId, Account caller, Account... cosigners) {
+        Utxo ref = ensureReferenceScript(caller);
+        var tx = new ScriptTx().readFrom(ref)
+                .delegateTo(new com.bloxbean.cardano.client.address.Address(rewardAddress), poolId,
+                        com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0));
+        return submitPurpose(tx, caller, cosigners, "delegate the " + spec.name() + " stake");
+    }
+
+    /** The rewards withdrawable from this script's stake credential. */
+    public BigInteger rewardBalance() {
+        try {
+            var r = runtime.backend().getAccountService().getAccountInformation(rewardAddress);
+            if (!r.isSuccessful() || r.getValue() == null || r.getValue().getWithdrawableAmount() == null) return BigInteger.ZERO;
+            return new BigInteger(r.getValue().getWithdrawableAmount());
+        } catch (Exception e) {
+            return BigInteger.ZERO;
+        }
+    }
+
+    /**
+     * Withdraws {@code amount} rewards with the {@code @Withdraw} redeemer, sending them as the handler returned:
+     * each send claimed in the output registry by RewardRef (ADR-0010 r2).
+     */
+    public String withdrawRewards(Object rewardsRedeemer, BigInteger amount, org.julclang.core.types.JulcList<org.julclang.state.api.Send> sends,
+                                  Account caller, Account... cosigners) {
+        Utxo ref = ensureReferenceScript(caller);
+        var tx = new ScriptTx().readFrom(ref).withdraw(rewardAddress, amount, PlutusDataAdapter.convert(rewardsRedeemer));
+        byte[] h = hashOf(script);
+        var by = new TxOutRef(new TxId(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(h)), BigInteger.valueOf(-1));
+        var claims = new java.util.ArrayList<org.julclang.state.api.OutputClaim>();
+        var expected = new java.util.ArrayList<TxRunner.ExpectedSend>();
+        int index = 0;
+        for (var snd : sends) {
+            String addr = LedgerAddresses.toBech32(snd.to(), runtime.network());
+            var amounts = AssetTx.amounts(snd.value());
+            tx.payToAddress(addr, amounts);
+            claims.add(new org.julclang.state.api.OutputClaim(BigInteger.valueOf(index), by));
+            expected.add(new TxRunner.ExpectedSend(index, addr, null, null, snd.value()));
+            index++;
+        }
+        if (!claims.isEmpty()) {
+            org.julclang.core.types.JulcList<org.julclang.state.api.OutputClaim> list = org.julclang.core.types.JulcList.empty();
+            for (int i = claims.size() - 1; i >= 0; i--) list = list.prepend(claims.get(i));
+            runtime.outputVerifier().attachRedeemer(tx, new org.julclang.state.api.OutputClaims(list), caller);
+        }
+        var signers = new java.util.ArrayList<byte[]>();
+        signers.add(Keys.pkh(caller));
+        for (Account a : cosigners) signers.add(Keys.pkh(a));
+        var scripts = new java.util.ArrayList<com.bloxbean.cardano.client.plutus.spec.PlutusScript>(List.of(script));
+        if (!claims.isEmpty()) scripts.add(runtime.outputVerifier().script());
+        return new TxRunner(runtime, List.of(cosigners)).submit(tx, caller, null, signers.toArray(new byte[0][]), null,
+                List.of(), expected, scripts.toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusScript[0]),
+                "withdraw " + spec.name() + " rewards");
+    }
+
+    private String submitPurpose(ScriptTx tx, Account caller, Account[] cosigners, String what) {
+        var signers = new java.util.ArrayList<byte[]>();
+        signers.add(Keys.pkh(caller));
+        for (Account a : cosigners) signers.add(Keys.pkh(a));
+        return new TxRunner(runtime, List.of(cosigners)).submit(tx, caller, null, signers.toArray(new byte[0][]), null,
+                List.of(), List.of(), new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script}, what);
+    }
 
     public StateContractHandle(StateRuntime runtime, ContractSpec<S> spec) {
         this(runtime, spec, null);
@@ -57,7 +142,11 @@ public final class StateContractHandle<S> {
         } catch (Exception e) {
             throw new JoustException("cannot hash the " + spec.name() + " script", e);
         }
-        this.address = AddressProvider.getEntAddress(script, runtime.network()).toBech32();
+        this.address = spec.stakeSelf()
+                ? AddressProvider.getBaseAddress(Credential.fromScript(hashOf(script)), Credential.fromScript(hashOf(script)),
+                        runtime.network()).toBech32()
+                : AddressProvider.getEntAddress(script, runtime.network()).toBech32();
+        this.rewardAddress = AddressProvider.getRewardAddress(script, runtime.network()).toBech32();
     }
 
     /** The applied script of {@code spec} for {@code params} (null: none); refuses one too large to publish by reference. */

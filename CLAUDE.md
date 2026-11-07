@@ -27,10 +27,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - `julc-state-dsl`: `.jsc` lexer/parser/checker and the lowering to a Java `@StateContract` (ADR-0005). Run by each
   consumer's `generateJsc` JavaExec task into `build/generated/sources/jsc`.
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
-- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
+- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
   DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D
   (ADR-0004, batched intents, pool) E (ADR-0005, `.jsc`, dsl) and the F spike (ADR-0006, optimistic L2, rollup) run on Yaci DevKit.
-- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007), #9 H (fees, ADR-0008), #10 I (params/quorum/auth/invariants/events, ADR-0009). JuLC changes: worktree `../julc-joust`, PR label
+- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007), #9 H (fees, ADR-0008), #10 I (params/quorum/auth/invariants/events, ADR-0009), #11 J (purposes/staking, ADR-0010). JuLC changes: worktree `../julc-joust`, PR label
   `joust` (julc#311).
 
 ## Build / test
@@ -82,6 +82,8 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - ADR-0009: generated code reads `@Params` through a typed local (`P params = (P) (Object) PARAMS`), since JuLC needs a
   typed receiver before an accessor. Quorum keys must be strictly ascending. A governor's Rewarding redeemer is
   `Approvals`.
+- ADR-0010: purpose handlers are params-governed; `@Votes` (not `@Vote`); no enums in bundled api sources; contracts
+  with VOTE/PROPOSE handlers need `-Ajulc.blueprint=false` (CIP-57 vocabulary gap in JuLC).
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

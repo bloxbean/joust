@@ -43,4 +43,10 @@ public @interface StateContract {
      * bytes (ADR-0007). {@code -1} (the default) means 4 for contracts that handle native assets and 0 otherwise.
      */
     int assetSlots() default -1;
+
+    /**
+     * Stake the state UTxOs to this script (ADR-0010 D2): base addresses whose rewards and certificates follow its
+     * {@link Withdraw} and {@link Certify} handlers (both required). Default: enterprise addresses, no rewards.
+     */
+    boolean stakeSelf() default false;
 }

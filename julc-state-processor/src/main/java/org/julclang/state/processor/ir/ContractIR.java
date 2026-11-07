@@ -27,6 +27,8 @@ import java.util.List;
  * @param ownedDestroys {@code @OwnedDestroy} methods
  * @param paramsType   the {@code @Params} record as source text, or null (ADR-0009 D1)
  * @param invariants   {@code @Invariant} methods (ADR-0009 D4)
+ * @param purposes     {@code @Withdraw}/{@code @Certify}/{@code @Vote}/{@code @Propose} handlers (ADR-0010 D1)
+ * @param stakeSelf    state UTxOs stake to the contract's own script (ADR-0010 D2)
  */
 public record ContractIR(String packageName,
                          String name,
@@ -47,7 +49,17 @@ public record ContractIR(String packageName,
                          List<TransitionIR> ownedActions,
                          List<TransitionIR> ownedDestroys,
                          String paramsType,
-                         List<InvariantIR> invariants) {
+                         List<InvariantIR> invariants,
+                         List<PurposeIR> purposes,
+                         boolean stakeSelf) {
+
+    /** A handler for a non-spend purpose (ADR-0010). */
+    public record PurposeIR(String kind, String method, List<ParamIR> args, boolean hasCtx, String quorumKeys,
+                            String quorumThreshold, List<String> authorizedBy) {}
+
+    public java.util.Optional<PurposeIR> purpose(String kind) {
+        return purposes.stream().filter(p -> p.kind().equals(kind)).findFirst();
+    }
 
     /** An {@code @Invariant} method: on the owned record ({@code owned}) or the state; optionally taking params. */
     public record InvariantIR(String method, boolean owned, boolean takesParams) {}
@@ -111,12 +123,12 @@ public record ContractIR(String packageName,
      * checks the full multi-asset value; otherwise the cheaper lovelace-only check of ADR-0001 I3 applies.
      */
     public boolean assetAware() {
-        return allTransitions().stream().anyMatch(TransitionIR::assetAware);
+        return allTransitions().stream().anyMatch(TransitionIR::assetAware) || purpose("WITHDRAW").isPresent();
     }
 
     /** Some method sends outputs (ADR-0007 D5): validators embed the output verifier's hash. */
     public boolean hasSends() {
-        return allTransitions().stream().anyMatch(TransitionIR::resultSends);
+        return allTransitions().stream().anyMatch(TransitionIR::resultSends) || purpose("WITHDRAW").isPresent();
     }
 
     /** Spend-side methods that may mint user tokens (ADR-0007 D4). */

@@ -132,7 +132,92 @@ public final class StateHarness<S> {
 
     /** The enterprise script address every instance lives at. */
     public Address stateAddress() {
-        return new Address(new Credential.ScriptCredential(new ScriptHash(policy)), Optional.empty());
+        Credential own = new Credential.ScriptCredential(new ScriptHash(policy));
+        return spec.stakeSelf()
+                ? new Address(own, Optional.of(new org.julclang.ledger.StakingCredential.StakingHash(own)))
+                : new Address(own, Optional.empty());
+    }
+
+    // ------------------------------------------------------------------ other purposes (ADR-0010)
+
+    /** This script's own credential (its stake credential, DRep or committee credential). */
+    public Credential ownCredential() {
+        return new Credential.ScriptCredential(new ScriptHash(policy));
+    }
+
+    /** The claimant of reward sends in the output registry: TxOutRef(blake2b_256(own), -1). */
+    public TxOutRef rewardRef() {
+        return new TxOutRef(new TxId(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(policy)), BigInteger.valueOf(-1));
+    }
+
+    /**
+     * A reward withdrawal of {@code amount} with the {@code Rewards} redeemer: {@code sends} become outputs claimed by
+     * {@link #rewardRef()}. Returns the transaction; evaluate it with {@link #evaluateWithdraw}.
+     */
+    public TxModel withdrawTx(java.util.List<org.julclang.state.api.Send> sends, byte[]... signers) {
+        var tx = new TxModel(TxModel.Kind.ACTION);
+        tx.inputs.add(new TxInInfo(new TxOutRef(new TxId(fill(32, 0x33)), BigInteger.ZERO),
+                walletOut(signers.length == 0 ? fill(28, 0xFE) : signers[0], BigInteger.valueOf(50_000_000))));
+        for (byte[] sgn : signers) tx.signers.add(sgn);
+        if (!sends.isEmpty()) {
+            tx.outputClaims = new ArrayList<>();
+            for (var snd : sends) {
+                tx.outputs.add(new TxOut(snd.to(), snd.value(), snd.datum(), Optional.empty()));
+                tx.sendOutputs.add(tx.outputs.size() - 1);
+                tx.outputClaims.add(new org.julclang.state.api.OutputClaim(BigInteger.valueOf(tx.outputs.size() - 1), rewardRef()));
+            }
+        }
+        return tx;
+    }
+
+    public Verdict evaluateWithdraw(TxModel tx, Object rewards, BigInteger amount) {
+        var results = new LinkedHashMap<String, EvalResult>();
+        PlutusData rd = data(rewards);
+        var b = ScriptContextTestBuilder.rewarding(ownCredential()).redeemer(rd);
+        b.withdrawal(ownCredential(), amount);
+        b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(ownCredential()), rd);
+        results.put("WITHDRAW", ValidatorTest.evaluate(program, fill(b, tx).buildPlutusData()));
+        if (tx.outputClaims != null) {
+            var v = ScriptContextTestBuilder.rewarding(outputVerifierCredential()).redeemer(outputClaimsData(tx));
+            v.withdrawal(ownCredential(), amount);
+            results.put("OUTPUT VERIFIER", ValidatorTest.evaluate(outputVerifier, fill(v, tx).buildPlutusData()));
+        }
+        return new Verdict(results);
+    }
+
+    public Verdict evaluateCertify(TxModel tx, org.julclang.ledger.TxCert cert) {
+        var b = ScriptContextTestBuilder.certifying(BigInteger.ZERO, cert).redeemer(PlutusData.integer(0));
+        b.certificate(cert);
+        var results = new LinkedHashMap<String, EvalResult>();
+        results.put("CERTIFY", ValidatorTest.evaluate(program, fill(b, tx).buildPlutusData()));
+        return new Verdict(results);
+    }
+
+    /** Evaluates the VOTE purpose for {@code voter} casting {@code votes} (action id -> vote) in the transaction. */
+    public Verdict evaluateVote(TxModel tx, org.julclang.ledger.Voter voter,
+                                java.util.Map<org.julclang.ledger.GovernanceActionId, org.julclang.ledger.Vote> votes) {
+        var b = ScriptContextTestBuilder.voting(voter).redeemer(PlutusData.integer(0));
+        PlutusData ctx = fill(b, tx).buildPlutusData();
+        // The builder has no votes: put them in TxInfo field 12 (votes: Map Voter (Map GovernanceActionId Vote)).
+        var inner = new ArrayList<PlutusData.Pair>();
+        votes.forEach((id, v) -> inner.add(new PlutusData.Pair(data(id), data(v))));
+        var votesMap = new PlutusData.MapData(List.of(new PlutusData.Pair(data(voter), new PlutusData.MapData(inner))));
+        var sc = (PlutusData.ConstrData) ctx;
+        var info = (PlutusData.ConstrData) sc.fields().get(0);
+        var fields = new ArrayList<>(info.fields());
+        fields.set(12, votesMap);
+        var newInfo = new PlutusData.ConstrData(info.tag(), fields);
+        var newCtx = new PlutusData.ConstrData(sc.tag(), List.of(newInfo, sc.fields().get(1), sc.fields().get(2)));
+        var results = new LinkedHashMap<String, EvalResult>();
+        results.put("VOTE", ValidatorTest.evaluate(program, newCtx));
+        return new Verdict(results);
+    }
+
+    public Verdict evaluatePropose(TxModel tx, org.julclang.ledger.ProposalProcedure procedure) {
+        var b = ScriptContextTestBuilder.proposing(BigInteger.ZERO, procedure).redeemer(PlutusData.integer(0));
+        var results = new LinkedHashMap<String, EvalResult>();
+        results.put("PROPOSE", ValidatorTest.evaluate(program, fill(b, tx).buildPlutusData()));
+        return new Verdict(results);
     }
 
     /** A Ctx over the harness window {@code [T0, T0 + WINDOW_MS)}. */

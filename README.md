@@ -14,7 +14,8 @@
 >   (a DEX and an NFT marketplace);
 > - H: lower fees: cheaper generated checks and smaller scripts;
 > - I: deploy parameters, M-of-N quorums, script callers (withdraw-zero governors), invariants and authenticated events
->   (a multisig treasury).
+>   (a multisig treasury);
+> - J: every script purpose: staked state, reward withdrawals, certificates, DRep votes, guardrails (a staked vault).
 
 JOUST lets Java developers write Cardano smart contracts as **state plus actions**, the way they would write an
 account-based contract, instead of UTxOs, datums and redeemers. You write a state record and pure static methods.
@@ -117,5 +118,7 @@ dependencies {
 - [ADR-0008](docs/adr/0008-option-h-fees-and-size.md): Option H, cheaper invariant checks and smaller scripts.
 - [ADR-0009](docs/adr/0009-option-i-params-auth-invariants-events.md): Option I, `@Params`, `@Quorum`,
   `@AuthorizedBy`, `@Invariant` and events.
+- [ADR-0010](docs/adr/0010-option-j-script-purposes-and-staking.md): Option J, `@Withdraw`, `@Certify`, `@Votes`,
+  `@Propose` and `stakeSelf`.
 - [Research](docs/research/state-oriented-contracts-research.md): options A–F and prior art.
 - [Annotation catalogue](docs/research/annotation-catalog.md): everything planned, and what ships when.

@@ -69,6 +69,12 @@ public final class ValidatorGenerator {
                     "org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId"));
         }
         if (c.hasParams()) imports.add("org.julclang.stdlib.annotation.Param");
+        if (c.stakeSelf()) imports.addAll(List.of("org.julclang.ledger.StakingCredential", "org.julclang.ledger.ScriptHash"));
+        if (!c.purposes().isEmpty()) {
+            imports.addAll(List.of("org.julclang.stdlib.lib.CryptoLib", "org.julclang.ledger.TxId", "org.julclang.ledger.TxCert",
+                    "org.julclang.ledger.Voter", "org.julclang.ledger.Vote", "org.julclang.ledger.GovernanceActionId",
+                    "org.julclang.core.types.JulcMap"));
+        }
         if (anyAuthorizedBy()) {
             imports.addAll(List.of("org.julclang.ledger.ScriptPurpose", "org.julclang.state.api.Approval",
                     "org.julclang.state.api.Approvals"));
@@ -176,6 +182,7 @@ public final class ValidatorGenerator {
             w.line("/** The shape of a JOUST refund tag (IntentRefund): a send may never carry one (ADR-0007 I30). */");
             w.line("public record RefTag(TxOutRef ref) {}");
         }
+        purposeRedeemers();
         if (c.hasOwned()) {
             w.line("/** An owned object's datum: its instance and its value (ADR-0003 D2). */");
             w.line("public record Holding(byte[] instance, " + c.ownedType() + " value) {}");
@@ -212,6 +219,7 @@ public final class ValidatorGenerator {
 
         // ---- SPEND
         spendSection(spend, callNames, batchTag);
+        purposeEntrypoints();
         helpers();
         w.close("}");
         return w.toString();
@@ -586,6 +594,152 @@ public final class ValidatorGenerator {
     }
 
 
+
+    // ------------------------------------------------------------------ ADR-0010: other script purposes
+
+    private void purposeRedeemers() {
+        c.purpose("WITHDRAW").ifPresent(pr -> {
+            var fs = new ArrayList<String>(List.of("BigInteger marker", "BigInteger amount"));
+            for (ParamIR a : pr.args()) fs.add(a.type() + " " + a.name());
+            if (pr.hasCtx()) fs.add("Ctx ctx");
+            w.line("/** The @Withdraw redeemer; its leading integer marker (74) means it never reads as Approvals (ADR-0010 r2). */");
+            w.line("public record Rewards(" + String.join(", ", fs) + ") {}");
+        });
+    }
+
+    /** Authorization of a purpose handler: quorum and governors over params.*, bound to this script info (I33). */
+    private void purposeAuth(ContractIR.PurposeIR pr, long purposeTag, List<String> checks) {
+        if (pr.quorumKeys() != null) {
+            w.line("boolean quorum = quorumOf(tx, " + field(pr.quorumKeys()) + ", " + field(pr.quorumThreshold()) + ");");
+            checks.add("quorum");
+        }
+        if (!pr.authorizedBy().isEmpty()) {
+            w.line("byte[] target = CryptoLib.blake2b_224(Builtins.serialiseData((PlutusData) (Object) ctx.scriptInfo()));");
+            int i = 0;
+            for (String f : pr.authorizedBy()) {
+                String v = "authorized_" + (i++);
+                w.line("boolean " + v + " = authorized(tx, " + field(f) + ", policy, target, " + (1000 + purposeTag) + "L);");
+                checks.add(v);
+            }
+        }
+    }
+
+    private void purposeEntrypoints() {
+        String X = c.name();
+        if (c.purposes().isEmpty()) return;
+        w.line("// ---- other purposes (ADR-0010) -------------------------------------------------------------");
+        c.purpose("WITHDRAW").ifPresent(pr -> {
+            w.line("@Entrypoint(purpose = Purpose.WITHDRAW)");
+            w.open("public static boolean withdraw(Rewards r, ScriptContext ctx) {");
+            w.line("TxInfo tx = ctx.txInfo();");
+            w.line("ScriptInfo.RewardingScript ri = (ScriptInfo.RewardingScript) ctx.scriptInfo();");
+            w.line("Credential own = ri.credential();");
+            w.line("byte[] policy = scriptHashOf(own);");
+            declareParams();
+            var checks = new ArrayList<String>();
+            w.line("boolean marked = r.marker().compareTo(BigInteger.valueOf(74)) == 0;");
+            w.line("// The ledger requires the whole balance; the redeemer states it exactly (I37).");
+            w.line("boolean amountOk = r.amount().compareTo(tx.withdrawals().get(own)) == 0;");
+            checks.add("marked");
+            checks.add("amountOk");
+            if (pr.hasCtx()) {
+                w.line("boolean ctxOk = ctxValid(tx, r.ctx(), r.amount(), false);");
+                checks.add("ctxOk");
+            }
+            purposeAuth(pr, 2, checks);
+            var args = new ArrayList<String>(List.of("params", "r.amount()"));
+            for (ParamIR a : pr.args()) args.add("r." + a.name() + "()");
+            if (pr.hasCtx()) args.add("r.ctx()");
+            w.line("JulcList<Send> sends = " + X + "." + pr.method() + "(" + String.join(", ", args) + ");");
+            w.line("// Fully allocated, lovelace only, each send claimed in the registry by RewardRef(own) (I37).");
+            w.line("boolean allocated = Builtins.equalsData(Builtins.valueData(sendsTotal(sends, policy)),"
+                    + " Builtins.valueData(lovelaceValue(r.amount())));");
+            w.line("boolean sent = sendsClaimed(tx, rewardRef(policy), sends, policy);");
+            checks.add("allocated");
+            checks.add("sent");
+            w.line("return " + conj(checks, "withdraw") + ";");
+            w.close("}").blank();
+            w.line("/** The claimant of reward sends: a reference no real input can have (index -1). */");
+            w.open("static TxOutRef rewardRef(byte[] h) {");
+            w.line("return new TxOutRef(new TxId(CryptoLib.blake2b_256(h)), BigInteger.valueOf(-1));");
+            w.close("}").blank();
+        });
+        c.purpose("CERTIFY").ifPresent(pr -> {
+            w.line("@Entrypoint(purpose = Purpose.CERTIFY)");
+            w.open("public static boolean certify(PlutusData redeemer, ScriptContext ctx) {");
+            w.line("TxInfo tx = ctx.txInfo();");
+            w.line("ScriptInfo.CertifyingScript ci = (ScriptInfo.CertifyingScript) ctx.scriptInfo();");
+            w.line("TxCert cert = ci.cert();");
+            w.line("// Only registration, delegation and DRep registration/update; unregistration, committee and pool certificates");
+            w.line("// are refused before the handler runs (ADR-0010 r2).");
+            w.line("byte[] policy = certOwner(cert);");
+            declareParams();
+            var checks = new ArrayList<String>();
+            purposeAuth(pr, 3, checks);
+            w.line("boolean allowed = " + X + "." + pr.method() + "(params, cert);");
+            checks.add("allowed");
+            w.line("return " + conj(checks, "certify") + ";");
+            w.close("}").blank();
+            w.open("static byte[] certOwner(TxCert c) {");
+            w.open("return switch (c) {");
+            w.line("case TxCert.RegStaking x -> scriptHashOf(x.credential());");
+            w.line("case TxCert.DelegStaking x -> scriptHashOf(x.credential());");
+            w.line("case TxCert.RegDeleg x -> scriptHashOf(x.credential());");
+            w.line("case TxCert.RegDRep x -> scriptHashOf(x.credential());");
+            w.line("case TxCert.UpdateDRep x -> scriptHashOf(x.credential());");
+            w.line("default -> refused();");
+            w.close("};");
+            w.close("}").blank();
+        });
+        c.purpose("VOTE").ifPresent(pr -> {
+            w.line("@Entrypoint(purpose = Purpose.VOTE)");
+            w.open("public static boolean vote(PlutusData redeemer, ScriptContext ctx) {");
+            w.line("TxInfo tx = ctx.txInfo();");
+            w.line("ScriptInfo.VotingScript vi = (ScriptInfo.VotingScript) ctx.scriptInfo();");
+            w.line("Voter voter = vi.voter();");
+            w.line("byte[] policy = voterOwner(voter);");
+            declareParams();
+            var checks = new ArrayList<String>();
+            purposeAuth(pr, 4, checks);
+            w.line("// Exactly this voter's votes; every one must be allowed (fails if there are none).");
+            w.line("JulcMap<GovernanceActionId, Vote> mine = tx.votes().get(voter);");
+            w.line("boolean any = !mine.isEmpty();");
+            w.line("boolean all = true;");
+            w.open("for (var id : mine.keys()) {");
+            w.line("all = all && " + X + "." + pr.method() + "(params, voter, id, mine.get(id));");
+            w.close("}");
+            checks.add("any");
+            checks.add("all");
+            w.line("return " + conj(checks, "vote") + ";");
+            w.close("}").blank();
+            w.open("static byte[] voterOwner(Voter v) {");
+            w.open("return switch (v) {");
+            w.line("case Voter.DRepVoter d -> scriptHashOf(d.credential());");
+            w.line("case Voter.CommitteeVoter m -> scriptHashOf(m.credential());");
+            w.line("default -> refused();");
+            w.close("};");
+            w.close("}").blank();
+        });
+        c.purpose("PROPOSE").ifPresent(pr -> {
+            w.line("@Entrypoint(purpose = Purpose.PROPOSE)");
+            w.open("public static boolean propose(PlutusData redeemer, ScriptContext ctx) {");
+            w.line("ScriptInfo.ProposingScript pi = (ScriptInfo.ProposingScript) ctx.scriptInfo();");
+            declareParams();
+            w.line("return " + X + "." + pr.method() + "(params, pi.procedure());");
+            w.close("}").blank();
+        });
+        w.open("static byte[] scriptHashOf(Credential c) {");
+        w.open("return switch (c) {");
+        w.line("case Credential.ScriptCredential sc -> (byte[]) (Object) sc.hash();");
+        w.line("case Credential.PubKeyCredential pk -> refused();");
+        w.close("};");
+        w.close("}").blank();
+        w.open("static byte[] refused() {");
+        w.line("Builtins.error();");
+        w.line("return ByteStringLib.empty();");
+        w.close("}").blank();
+    }
+
     // ------------------------------------------------------------------ ADR-0009: params, quorum, authorization, invariants, events
 
     /** The @Params record, as an expression. */
@@ -649,13 +803,18 @@ public final class ValidatorGenerator {
 
     /** Params-level quorum shapes, checked when an instance is created. */
     private void paramsQuorumChecks(List<String> checks) {
-        var seen = new java.util.LinkedHashSet<String>();
-        int i = 0;
+        var pairs = new java.util.LinkedHashSet<String>();
         for (var t : c.allTransitions()) {
-            if (t.quorumKeys() == null || !t.quorumKeys().startsWith("params.")) continue;
-            if (!seen.add(t.quorumKeys() + "," + t.quorumThreshold())) continue;
+            if (t.quorumKeys() != null && t.quorumKeys().startsWith("params.")) pairs.add(t.quorumKeys() + "," + t.quorumThreshold());
+        }
+        for (var pr : c.purposes()) {
+            if (pr.quorumKeys() != null) pairs.add(pr.quorumKeys() + "," + pr.quorumThreshold());
+        }
+        int i = 0;
+        for (String pair : pairs) {
+            String[] kt = pair.split(",");
             String v = "paramsQuorum_" + (i++);
-            w.line("boolean " + v + " = quorumWellFormed(" + field(t.quorumKeys()) + ", " + field(t.quorumThreshold()) + ");");
+            w.line("boolean " + v + " = quorumWellFormed(" + field(kt[0]) + ", " + field(kt[1]) + ");");
             checks.add(v);
         }
     }
@@ -668,11 +827,13 @@ public final class ValidatorGenerator {
     }
 
     private boolean anyQuorum() {
-        return c.allTransitions().stream().anyMatch(t -> t.quorumKeys() != null);
+        return c.allTransitions().stream().anyMatch(t -> t.quorumKeys() != null)
+                || c.purposes().stream().anyMatch(p -> p.quorumKeys() != null);
     }
 
     private boolean anyAuthorizedBy() {
-        return c.allTransitions().stream().anyMatch(t -> !t.authorizedBy().isEmpty());
+        return c.allTransitions().stream().anyMatch(t -> !t.authorizedBy().isEmpty())
+                || c.purposes().stream().anyMatch(p -> !p.authorizedBy().isEmpty());
     }
 
     private void authHelpers() {
@@ -1419,11 +1580,21 @@ public final class ValidatorGenerator {
         w.close("}");
         w.close("}").blank();
 
-        w.line("/** This script's payment credential and no stake credential: one address for all instances (I12). */");
-        w.open("static boolean isStateAddress(Address address, byte[] policy) {");
-        w.line("return AddressLib.isScriptAddress(address) && ByteStringLib.equals(AddressLib.credentialHash(address), policy)");
-        w.line("        && address.stakingCredential().isEmpty();");
-        w.close("}").blank();
+        if (c.stakeSelf()) {
+            w.line("/** This script's payment credential, staked to this script: one address for all instances (I36). */");
+            w.open("static boolean isStateAddress(Address address, byte[] policy) {");
+            w.line("Optional<StakingCredential> self = Optional.of(new StakingCredential.StakingHash(");
+            w.line("        new Credential.ScriptCredential(new ScriptHash(policy))));");
+            w.line("return AddressLib.isScriptAddress(address) && ByteStringLib.equals(AddressLib.credentialHash(address), policy)");
+            w.line("        && Builtins.equalsData((PlutusData) (Object) address.stakingCredential(), (PlutusData) (Object) self);");
+            w.close("}").blank();
+        } else {
+            w.line("/** This script's payment credential and no stake credential: one address for all instances (I12). */");
+            w.open("static boolean isStateAddress(Address address, byte[] policy) {");
+            w.line("return AddressLib.isScriptAddress(address) && ByteStringLib.equals(AddressLib.credentialHash(address), policy)");
+            w.line("        && address.stakingCredential().isEmpty();");
+            w.close("}").blank();
+        }
 
         w.line("/** The serialised state is at most MAX_DATUM_BYTES (I13). */");
         w.open("static boolean datumFits(PlutusData d) {");

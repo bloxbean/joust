@@ -65,7 +65,8 @@ public final class ClientGenerator {
         w.line(" */");
         w.open("public final class " + C + " {").blank();
         w.line("public static final ContractSpec<" + S + "> SPEC = new ContractSpec<>(\"" + X + "\", " + V + ".class, "
-                + S + ".class, " + c.minAda() + "L, " + c.maxDatumBytes() + ", " + c.maxValidityMs() + "L);").blank();
+                + S + ".class, " + c.minAda() + "L, " + c.maxDatumBytes() + ", " + c.maxValidityMs() + "L"
+                + (c.stakeSelf() ? ", true" : "") + ");").blank();
         String P = c.paramsType();
         w.line("private final StateInstance<" + S + "> instance;");
         if (P != null) w.line("private final " + P + " params;");
@@ -112,6 +113,25 @@ public final class ClientGenerator {
         }
         w.line("return new " + C + "(result.instance()" + (P != null ? ", params" : "") + ");");
         w.close("}").blank();
+
+        c.purpose("WITHDRAW").filter(pr -> !pr.hasCtx()).ifPresent(pr -> {
+            var ps = new ArrayList<String>(List.of("StateRuntime runtime", P + " params", "Account callerAccount"));
+            for (ParamIR a : pr.args()) ps.add(a.type() + " " + a.name());
+            ps.add("Account... cosigners");
+            var args = new ArrayList<String>(List.of("params", "amount"));
+            for (ParamIR a : pr.args()) args.add(a.name());
+            var red = new ArrayList<String>(List.of("BigInteger.valueOf(74)", "amount"));
+            for (ParamIR a : pr.args()) red.add(a.name());
+            w.line("/** Withdraws all the rewards of this contract's stake credential through {@link " + X + "#" + pr.method()
+                    + "} (ADR-0010). */");
+            w.open("public static String " + pr.method() + "(" + String.join(", ", ps) + ") {");
+            w.line("var handle = contract(runtime, params);");
+            w.line("BigInteger amount = handle.rewardBalance();");
+            w.line("var sends = " + X + "." + pr.method() + "(" + String.join(", ", args) + ");");
+            w.line("return handle.withdrawRewards(new " + V + ".Rewards(" + String.join(", ", red) + "), amount, sends,"
+                    + " callerAccount, cosigners);");
+            w.close("}").blank();
+        });
 
         w.line("/** Reconnects to an existing instance. */");
         w.open("public static " + C + " at(StateRuntime runtime" + (P != null ? ", " + P + " params" : "") + ", String instanceId) {");

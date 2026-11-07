@@ -65,6 +65,8 @@ final class ContractReader {
     static final String AUTHORIZED_BY = API + "AuthorizedBy";
     static final String INVARIANT = API + "Invariant";
     static final String CREDENTIAL = "org.julclang.ledger.Credential";
+    static final java.util.Map<String, String> PURPOSES = java.util.Map.of(API + "Withdraw", "WITHDRAW",
+            API + "Certify", "CERTIFY", API + "Votes", "VOTE", API + "Propose", "PROPOSE");
     static final String ONCHAIN_LIBRARY = "org.julclang.stdlib.annotation.OnchainLibrary";
     static final String JULC_LIST = "org.julclang.core.types.JulcList";
     static final String BIG_INTEGER = "java.math.BigInteger";
@@ -98,6 +100,7 @@ final class ContractReader {
         List<ExecutableElement> ownedActions = new ArrayList<>();
         List<ExecutableElement> ownedDestroys = new ArrayList<>();
         List<ExecutableElement> invariantMethods = new ArrayList<>();
+        Map<String, ExecutableElement> purposeMethods = new LinkedHashMap<>();
         Set<String> names = new HashSet<>();
         for (ExecutableElement m : ElementFilter.methodsIn(type.getEnclosedElements())) {
             int kinds = 0;
@@ -108,6 +111,15 @@ final class ContractReader {
             if (annotation(m, OWNED_INIT).isPresent()) { ownedInits.add(m); kinds++; }
             if (annotation(m, OWNED_ACTION).isPresent()) { ownedActions.add(m); kinds++; }
             if (annotation(m, OWNED_DESTROY).isPresent()) { ownedDestroys.add(m); kinds++; }
+            String purposeKind = null;
+            for (var e : PURPOSES.entrySet()) if (annotation(m, e.getKey()).isPresent()) purposeKind = e.getValue();
+            if (purposeKind != null) {
+                if (kinds > 0) error(m, "a purpose handler cannot also be @Init/@Action/@Destroy/@View/owned");
+                if (purposeMethods.put(purposeKind, m) != null) {
+                    error(m, "at most one handler per purpose (" + purposeKind + ") (ADR-0010)");
+                }
+                continue;
+            }
             if (annotation(m, INVARIANT).isPresent()) {
                 if (kinds > 0) error(m, "@Invariant cannot be combined with @Init/@Action/@Destroy/@View/owned annotations");
                 invariantMethods.add(m);
@@ -250,7 +262,8 @@ final class ContractReader {
         int assetSlots = sc.flatMap(a -> value(a, "assetSlots"))
                 .map(v -> ((Number) v.getValue()).intValue()).filter(n -> n >= 0).orElse(assetAware ? 4 : 0);
         if (assetSlots < 0 || assetSlots > 64) error(type, "@StateContract(assetSlots) must be between 0 and 64");
-        long requiredMinAda = requiredMinAda(maxDatumBytes, assetSlots);
+        boolean stakeSelf = sc.flatMap(a -> value(a, "stakeSelf")).map(v -> (Boolean) v.getValue()).orElse(false);
+        long requiredMinAda = requiredMinAda(maxDatumBytes, assetSlots + (stakeSelf ? 1 : 0));   // a base address: ~28 B more
         long minAda = sc.flatMap(a -> value(a, "minAda"))
                 .map(v -> ((Number) v.getValue()).longValue()).orElse(0L);
         if (maxDatumBytes < 16 || maxDatumBytes > 8192) {
@@ -354,6 +367,15 @@ final class ContractReader {
             }
             invariants.add(new ContractIR.InvariantIR(m.getSimpleName().toString(), onOwned, withParams));
         }
+        // ---- purpose handlers (ADR-0010)
+        List<ContractIR.PurposeIR> purposes = new ArrayList<>();
+        for (var e : purposeMethods.entrySet()) {
+            purposes.add(readPurpose(e.getKey(), e.getValue(), types, paramsType, paramsByName));
+        }
+        if (stakeSelf && !(purposeMethods.containsKey("WITHDRAW") && purposeMethods.containsKey("CERTIFY"))) {
+            error(type, "@StateContract(stakeSelf = true) needs a @Withdraw and a @Certify handler, or the rewards and the"
+                    + " credential of its funds are unreachable (ADR-0010 D2)");
+        }
         if (!invariants.isEmpty() && anyBatched) {
             error(type, "@Invariant cannot be combined with @Batched yet: a batch passes through intermediate states that"
                     + " the validator does not check (ADR-0009 r2)");
@@ -363,7 +385,8 @@ final class ContractReader {
                 maxDatumBytes, maxValidityMs,
                 init, actionIRs, destroyIRs, viewIRs, types.imports(), Strategies.OPTION_A,
                 ownedType == null ? null : types.render(ownedType), List.copyOf(ownedComponents), ownedInitIRs,
-                ownedActionIRs, ownedDestroyIRs, paramsType == null ? null : types.render(paramsType), List.copyOf(invariants)));
+                ownedActionIRs, ownedDestroyIRs, paramsType == null ? null : types.render(paramsType), List.copyOf(invariants),
+                List.copyOf(purposes), stakeSelf));
     }
 
     /** Coins per UTxO byte on mainnet and the public testnets (Conway). Governance can change it; ADR-0001 §10. */
@@ -685,6 +708,68 @@ final class ContractReader {
             params.add(new ParamIR(p.getSimpleName().toString(), r.types().render(p.asType()), kindOf(p.asType())));
         }
         return new ViewIR(m.getSimpleName().toString(), List.copyOf(params), r.types().render(m.getReturnType()));
+    }
+
+    /** A purpose handler's shape and authorization (ADR-0010 D1). */
+    private ContractIR.PurposeIR readPurpose(String kind, ExecutableElement m, TypeRenderer types, TypeMirror paramsType,
+                                             Map<String, ParamIR> paramsByName) {
+        if (!m.getModifiers().contains(Modifier.PUBLIC) || !m.getModifiers().contains(Modifier.STATIC)) {
+            error(m, "purpose handlers must be public static");
+        }
+        var ps = m.getParameters();
+        if (paramsType == null || ps.isEmpty() || !same(ps.get(0).asType(), paramsType)) {
+            error(m, "a purpose handler's first parameter must be the @Params record: it is governed by the deploy-time"
+                    + " parameters, since no instance is spent (ADR-0010 D1)");
+        }
+        List<ParamIR> args = new ArrayList<>();
+        boolean hasCtx = false;
+        switch (kind) {
+            case "WITHDRAW" -> {
+                if (ps.size() < 2 || !isNamed(ps.get(1).asType(), BIG_INTEGER)) {
+                    error(m, "@Withdraw takes (Params, BigInteger amount, args..., [Ctx])");
+                }
+                hasCtx = ps.size() > 2 && isNamed(ps.get(ps.size() - 1).asType(), CTX);
+                int last = hasCtx ? ps.size() - 1 : ps.size();
+                for (int i = 2; i < last; i++) {
+                    args.add(new ParamIR(ps.get(i).getSimpleName().toString(), types.render(ps.get(i).asType()),
+                            kindOf(ps.get(i).asType())));
+                }
+                if (!isListOf(m.getReturnType(), SEND)) {
+                    error(m, "@Withdraw must return JulcList<Send>: where the rewards go, claimed in the output registry");
+                }
+            }
+            case "CERTIFY" -> requireShape(m, ps, List.of("org.julclang.ledger.TxCert"), "@Certify takes (Params, TxCert)");
+            case "VOTE" -> requireShape(m, ps, List.of("org.julclang.ledger.Voter", "org.julclang.ledger.GovernanceActionId",
+                    "org.julclang.ledger.Vote"), "@Vote takes (Params, Voter, GovernanceActionId, Vote)");
+            case "PROPOSE" -> requireShape(m, ps, List.of("org.julclang.ledger.ProposalProcedure"),
+                    "@Propose takes (Params, ProposalProcedure)");
+            default -> throw new IllegalStateException(kind);
+        }
+        if (!kind.equals("WITHDRAW") && m.getReturnType().getKind() != TypeKind.BOOLEAN) {
+            error(m, "@" + kind.charAt(0) + kind.substring(1).toLowerCase() + " must return boolean");
+        }
+        String qk = annotation(m, QUORUM).flatMap(a -> value(a, "keys")).map(v -> (String) v.getValue()).orElse(null);
+        String qt = annotation(m, QUORUM).flatMap(a -> value(a, "threshold")).map(v -> (String) v.getValue()).orElse(null);
+        List<String> auth = new ArrayList<>();
+        annotation(m, AUTHORIZED_BY).flatMap(a -> value(a, "value")).ifPresent(v -> auth.add((String) v.getValue()));
+        for (String path : concat(qk == null ? List.<String>of() : List.of(qk, qt), auth)) {
+            if (path == null || !path.startsWith("params.")) {
+                error(m, "a purpose handler's @Quorum/@AuthorizedBy must name params.* fields (ADR-0010 D1)");
+            } else if (!paramsByName.containsKey(path.substring(7))) {
+                error(m, "\"" + path + "\" is not a component of the @Params record");
+            }
+        }
+        if (!kind.equals("PROPOSE") && qk == null && auth.isEmpty()) {
+            error(m, "@" + kind.charAt(0) + kind.substring(1).toLowerCase() + " needs @Quorum or @AuthorizedBy over"
+                    + " params.*: an open handler lets anyone drain rewards, redelegate or vote (ADR-0010 r2)");
+        }
+        return new ContractIR.PurposeIR(kind, m.getSimpleName().toString(), List.copyOf(args), hasCtx, qk, qt, List.copyOf(auth));
+    }
+
+    private void requireShape(ExecutableElement m, List<? extends VariableElement> ps, List<String> rest, String message) {
+        boolean ok = ps.size() == rest.size() + 1;
+        for (int i = 0; ok && i < rest.size(); i++) ok = isNamed(ps.get(i + 1).asType(), rest.get(i));
+        if (!ok) error(m, message);
     }
 
     /** A field of the state/owned record, or {@code params.x} of the @Params record; reports an error if absent. */

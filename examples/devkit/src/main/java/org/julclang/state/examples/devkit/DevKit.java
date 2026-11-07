@@ -187,6 +187,16 @@ public final class DevKit {
         }
     }
 
+    /** The DevKit's stake pool id (hex), from Yaci Store's pool registrations. */
+    public static String poolId() {
+        try {
+            var r = get(STORE_URL + "pools/registrations?page=0&count=1");
+            return find(r.body(), "pool_id", "\"[0-9a-f]{56}\"").replace("\"", "");
+        } catch (Exception e) {
+            throw new IllegalStateException("cannot find the DevKit pool", e);
+        }
+    }
+
     /** How much of {@code unit} ({@code lovelace} or policy+name hex) sits at {@code address}. */
     public static java.math.BigInteger balance(String address, String unit) {
         try {

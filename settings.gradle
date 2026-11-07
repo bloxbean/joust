@@ -30,6 +30,7 @@ include 'examples:rollup'
 include 'examples:dex'
 include 'examples:market'
 include 'examples:treasury'
+include 'examples:staking'
 
 // Local development against a JuLC checkout (opt-in, untested so far):
 //   ./gradlew build -PuseLocalJulc            (expects ../julc)
