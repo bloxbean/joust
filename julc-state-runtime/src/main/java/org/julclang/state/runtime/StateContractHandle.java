@@ -292,11 +292,10 @@ public final class StateContractHandle<S> {
         PlutusData redeemer = PlutusDataAdapter.convert(d.redeemer().make(seedRef, ctx));
         BigInteger lovelace = BigInteger.valueOf(spec.minAda()).add(d.received());
 
-        var tx = new ScriptTx()
-                .collectFrom(seed)
-                .readFrom(ref)
-                .mintAsset(policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE)), redeemer)
-                .payToContract(address, List.of(Amount.lovelace(lovelace), new Amount(instance.unit(), BigInteger.ONE)), datum);
+        var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null)
+                .readFrom(ref);
+        TxRunner.mint(tx, policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE)), redeemer);
+        tx.payToContract(address, List.of(Amount.lovelace(lovelace), new Amount(instance.unit(), BigInteger.ONE)), datum);
         if (maps) runtime.mapVerifier().attach(tx, claims, caller);
 
         var expected = new TxRunner.ExpectedState(instance.unit(), lovelace, datum);
@@ -320,7 +319,7 @@ public final class StateContractHandle<S> {
         PlutusData datum = PlutusDataAdapter.convert(t.next());
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
         Object redeemer = d.redeemer().make(seedRef, ctx);
-        var tx = new ScriptTx().collectFrom(seed).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null).readFrom(ref);
         var inValue = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(spec.minAda())),
                 org.julclang.state.api.Assets.of(policy, id, BigInteger.ONE));
         var applied = AssetTx.apply(tx, this, d.caller(), what, null, inValue, d.received(), d.receivedAssets(), t,
@@ -329,6 +328,40 @@ public final class StateContractHandle<S> {
                 applied.expected(), List.of(), List.of(), new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script}, what);
         instance.awaitState(txHash);
         return new DeployResult<>(instance, txHash, t.next());
+    }
+
+    /**
+     * Adopts {@code prior}, an instance of the previous version, as an instance of this contract (ADR-0011 D4). Runs
+     * only inside a {@link Compose} that also runs the old instance's {@code @MigrateTo} destroy: the old state UTxO is
+     * the seed (already spent there), its token burns, and the new instance holds exactly its lovelace.
+     */
+    public DeployResult<S> adopt(Deploy<S> d, Utxo prior) {
+        if (TxRunner.capture() == null) {
+            throw new JoustException("adopt runs inside a Compose, together with the old instance's migrating destroy");
+        }
+        Account caller = d.caller();
+        byte[] callerPkh = Keys.pkh(caller);
+        Utxo ref = ensureReferenceScript(caller);
+        String instanceId = instanceIdOf(prior.getTxHash(), prior.getOutputIndex());
+        var instance = new StateInstance<>(this, instanceId);
+        Window window = d.usesCtx() ? Window.open(runtime, spec, List.of(), List.of(), null, "adopt") : null;
+        Ctx ctx = window == null
+                ? new Ctx(callerPkh, BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO)
+                : new Ctx(callerPkh, BigInteger.ZERO, BigInteger.ZERO, window.fromMs(), window.toMs());
+        S initial = d.run().apply(ctx);
+        PlutusData datum = PlutusDataAdapter.convert(initial);
+        Datums.checkSize(spec, datum, "adopt");
+        var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(prior.getTxHash())), BigInteger.valueOf(prior.getOutputIndex()));
+        PlutusData redeemer = PlutusDataAdapter.convert(d.redeemer().make(seedRef, ctx));
+        BigInteger lovelace = prior.getAmount().stream().filter(a -> a.getUnit().equals("lovelace"))
+                .map(Amount::getQuantity).findFirst().orElse(BigInteger.ZERO);
+        var tx = TxRunner.scriptTx().readFrom(ref);
+        TxRunner.mint(tx, policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE)), redeemer);
+        tx.payToContract(address, List.of(Amount.lovelace(lovelace), new Amount(instance.unit(), BigInteger.ONE)), datum);
+        String txHash = new TxRunner(runtime).submit(tx, caller, window, d.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],
+                new TxRunner.ExpectedState(instance.unit(), lovelace, datum), List.of(),
+                new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script}, "adopt " + spec.name());
+        return new DeployResult<>(instance, txHash, initial);
     }
 
     /** Result of {@link #deploy}. */

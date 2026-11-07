@@ -30,6 +30,8 @@ import java.util.List;
  * @param authorizedBy {@code @AuthorizedBy} credential field paths (ADR-0009 D3)
  * @param resultEvents the result record has an {@code events} component (ADR-0009 D5)
  * @param eventsType  the events list type, e.g. {@code JulcList<Treasury.Event>}, or null
+ * @param reads       {@code @Reads} parameters, right after the params (ADR-0011 D2); for MIGRATE, the old state
+ * @param migrateTo   {@code @MigrateTo} field path of a destroy, or null (ADR-0011 D4)
  */
 public record TransitionIR(Kind kind,
                            String method,
@@ -55,9 +57,14 @@ public record TransitionIR(Kind kind,
                            String quorumThreshold,
                            List<String> authorizedBy,
                            boolean resultEvents,
-                           String eventsType) {
+                           String eventsType,
+                           List<ReadIR> reads,
+                           String migrateTo) {
 
-    public enum Kind { INIT, ACTION, DESTROY, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY }
+    /** A {@code @Reads(path)} parameter: its foreign record type and field count, for the shape check. */
+    public record ReadIR(String name, String path, String type, int fields) {}
+
+    public enum Kind { INIT, ACTION, DESTROY, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY, MIGRATE }
 
     /** An owned-object method (ADR-0003). */
     public boolean owned() {

@@ -152,11 +152,11 @@ final class AssetTx {
             if (redeemer == null) throw new JoustException(what + ": no mint redeemer");
             var assets = new ArrayList<Asset>();
             Assets.read(mint).forEach((p, ts) -> ts.forEach((n, q) -> assets.add(new Asset("0x" + n, q))));
-            tx.mintAsset(contract.policyId(), assets, PlutusDataAdapter.convert(redeemer));
+            TxRunner.mint(tx, contract.policyId(), assets, PlutusDataAdapter.convert(redeemer));
         }
 
         // ---- payouts (tagged, I7)
-        int index = continuing != null ? 1 : 0;
+        int index = TxRunner.outputOffset() + (continuing != null ? 1 : 0);
         Map<String, BigInteger> owed = new LinkedHashMap<>();
         for (Payout p : t.payouts()) {
             if (p.lovelace().signum() <= 0) throw new RequireException(what + ": payouts must be positive");
@@ -212,7 +212,9 @@ final class AssetTx {
         if (!claims.isEmpty()) {
             org.julclang.core.types.JulcList<OutputClaim> list = org.julclang.core.types.JulcList.empty();
             for (int i = claims.size() - 1; i >= 0; i--) list = list.prepend(claims.get(i));
-            contract.runtime.outputVerifier().attachRedeemer(tx, new OutputClaims(list), caller);
+            TxRunner.Capture cap = TxRunner.capture();
+            if (cap != null) cap.claims.addAll(claims);
+            else contract.runtime.outputVerifier().attachRedeemer(tx, new OutputClaims(list), caller);
         }
         return new Applied(expected, expectedPayouts, expectedSends);
     }

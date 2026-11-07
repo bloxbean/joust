@@ -1,0 +1,24 @@
+plugins {
+    id 'application'
+}
+
+description = 'JOUST example: oracle (a price oracle read by a shop with @Reads; ADR-0011)'
+
+dependencies {
+    implementation project(':julc-state-runtime')
+    implementation project(':examples:devkit')
+
+    annotationProcessor project(':julc-state-processor')
+    annotationProcessor libs.julc.annotation.processor
+    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+
+    testImplementation project(':julc-state-testkit')
+}
+
+application {
+    mainClass = 'org.julclang.state.examples.oracle.OracleApp'
+}
+
+tasks.named('run', JavaExec) {
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}

@@ -140,12 +140,11 @@ public final class OwnedObject<S, R> {
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
         PlutusData redeemer = PlutusDataAdapter.convert(spec.redeemer().make(seedRef, instance, ctx));
         BigInteger lovelace = BigInteger.valueOf(contract.spec.minAda()).add(spec.received());
-        var tx = new ScriptTx()
-                .collectFrom(seed)
+        var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null)
                 .readFrom(ref)
-                .readFrom(instanceUtxo)
-                .mintAsset(contract.policyId, List.of(new Asset("0x" + objectId, BigInteger.ONE)), redeemer)
-                .payToContract(contract.address, List.of(Amount.lovelace(lovelace), new Amount(object.unit(), BigInteger.ONE)), datum);
+                .readFrom(instanceUtxo);
+        TxRunner.mint(tx, contract.policyId, List.of(new Asset("0x" + objectId, BigInteger.ONE)), redeemer);
+        tx.payToContract(contract.address, List.of(Amount.lovelace(lovelace), new Amount(object.unit(), BigInteger.ONE)), datum);
         String txHash = new TxRunner(rt).submit(tx, spec.caller(), window, spec.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],
                 new TxRunner.ExpectedState(object.unit(), lovelace, datum), List.of(), new PlutusScript[]{contract.script}, what);
         object.awaitUtxo(txHash);
@@ -165,7 +164,7 @@ public final class OwnedObject<S, R> {
         PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(instance, t.next()));
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
         Object redeemer = spec.redeemer().make(seedRef, instance, ctx);
-        var tx = new ScriptTx().collectFrom(seed).readFrom(ref).readFrom(instanceUtxo);
+        var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null).readFrom(ref).readFrom(instanceUtxo);
         var inValue = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(contract.spec.minAda())),
                 org.julclang.state.api.Assets.of(policy, id, BigInteger.ONE));
         var applied = AssetTx.apply(tx, contract, spec.caller(), what, null, inValue, spec.received(), spec.receivedAssets(), t,
@@ -237,7 +236,7 @@ public final class OwnedObject<S, R> {
         }
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
-        var tx = new ScriptTx().collectFrom(own, redeemer).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.scriptTx(), own, redeemer).readFrom(ref);
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
         TxRunner.ExpectedState expected = null;
         if (call.kind == Call.Kind.ACTION) {
@@ -252,7 +251,7 @@ public final class OwnedObject<S, R> {
                 throw new RequireException(what + ": closing an object must pay out everything it holds (" + inLovelace
                         + " lovelace), but pays " + total);
             }
-            tx.mintAsset(contract.policyId, List.of(new Asset("0x" + objectId, BigInteger.ONE.negate())),
+            TxRunner.mint(tx, contract.policyId, List.of(new Asset("0x" + objectId, BigInteger.ONE.negate())),
                     PlutusDataAdapter.convert(call.burnRedeemer));
         }
         PlutusData tag = PlutusDataAdapter.convert(new TxOutRef(new TxId(HexUtil.decodeHexString(own.getTxHash())),
@@ -268,6 +267,7 @@ public final class OwnedObject<S, R> {
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
         for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
         call.applyAuthorization(tx);
+        call.applyReads(tx);
         String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
                 expected, expectedPayouts, new PlutusScript[]{contract.script}, what);
         if (call.kind == Call.Kind.ACTION) {
@@ -305,7 +305,7 @@ public final class OwnedObject<S, R> {
         Transition<R> t = call.assetRun.apply(current, shared, ctx, funds);
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
-        var tx = new ScriptTx().collectFrom(own, redeemer).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.scriptTx(), own, redeemer).readFrom(ref);
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
         TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(own.getTxHash())), BigInteger.valueOf(own.getOutputIndex()));
         PlutusData datum = destroy ? null
@@ -316,6 +316,7 @@ public final class OwnedObject<S, R> {
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
         for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
         call.applyAuthorization(tx);
+        call.applyReads(tx);
         var scripts = new ArrayList<PlutusScript>(List.of(contract.script));
         if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
         String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
@@ -335,6 +336,7 @@ public final class OwnedObject<S, R> {
     }
 
     private void awaitUtxo(String txHash) {
+        if (TxRunner.capture() != null) return;
         for (int i = 0; i < 60; i++) {
             try {
                 if (utxo().getTxHash().equals(txHash)) return;

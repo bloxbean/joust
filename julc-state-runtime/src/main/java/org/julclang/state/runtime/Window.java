@@ -18,7 +18,23 @@ record Window(long fromSlot, long toSlot, BigInteger fromMs, BigInteger toMs) {
     static <S> Window open(StateRuntime rt, ContractSpec<?> spec, List<Call.TimeRule<S>> notBefore,
                            List<Call.TimeRule<S>> notAfter, S state, String what) {
         ChainTime time = rt.chainTime();
-        long from = time.tipSlot();
+        TxRunner.Capture cap = TxRunner.capture();
+        if (cap != null && cap.forced != null) {
+            // A composition's one window (ADR-0011 D1): every call's time rules must hold in it.
+            Window w = cap.forced;
+            for (var rule : notAfter) {
+                if (BigInteger.valueOf(time.slotToPosixMs(w.toSlot())).compareTo(rule.time().apply(state)) > 0) {
+                    throw new RequireException(what + ": the composed window ends after the deadline in '" + rule.field() + "'");
+                }
+            }
+            for (var rule : notBefore) {
+                if (w.fromMs().compareTo(rule.time().apply(state)) < 0) {
+                    throw new RequireException(what + ": the composed window starts before '" + rule.field() + "'");
+                }
+            }
+            return w;
+        }
+        long from = cap != null && !cap.windows.isEmpty() ? cap.windows.get(0).fromSlot() : time.tipSlot();
         long ttl = Math.min(rt.ttlMs(), spec.maxValidityMs());
         long to = from + Math.max(1, ttl / time.slotLengthMs());
         for (var rule : notAfter) {
@@ -36,6 +52,20 @@ record Window(long fromSlot, long toSlot, BigInteger fromMs, BigInteger toMs) {
                 throw new RequireException(what + ": too early, the time in '" + rule.field() + "' has not been reached");
             }
         }
-        return new Window(from, to, BigInteger.valueOf(fromMs), BigInteger.valueOf(time.slotToPosixMs(to)));
+        Window w = new Window(from, to, BigInteger.valueOf(fromMs), BigInteger.valueOf(time.slotToPosixMs(to)));
+        if (cap != null) cap.windows.add(w);
+        return w;
+    }
+
+    /** The intersection of windows that share their start; null if empty. */
+    static Window intersect(StateRuntime rt, java.util.List<Window> ws) {
+        long from = Long.MIN_VALUE, to = Long.MAX_VALUE;
+        for (Window w : ws) {
+            from = Math.max(from, w.fromSlot());
+            to = Math.min(to, w.toSlot());
+        }
+        if (ws.isEmpty() || from >= to) return null;
+        ChainTime time = rt.chainTime();
+        return new Window(from, to, BigInteger.valueOf(time.slotToPosixMs(from)), BigInteger.valueOf(time.slotToPosixMs(to)));
     }
 }

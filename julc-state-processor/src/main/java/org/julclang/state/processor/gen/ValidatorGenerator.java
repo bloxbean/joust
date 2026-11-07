@@ -69,6 +69,7 @@ public final class ValidatorGenerator {
                     "org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId"));
         }
         if (c.hasParams()) imports.add("org.julclang.stdlib.annotation.Param");
+        if (anyReads()) imports.add("org.julclang.state.api.ForeignInstance");
         if (c.stakeSelf()) imports.addAll(List.of("org.julclang.ledger.StakingCredential", "org.julclang.ledger.ScriptHash"));
         if (!c.purposes().isEmpty()) {
             imports.addAll(List.of("org.julclang.stdlib.lib.CryptoLib", "org.julclang.ledger.TxId", "org.julclang.ledger.TxCert",
@@ -129,6 +130,7 @@ public final class ValidatorGenerator {
         c.ownedInits().forEach(t -> lifecycle.add(t.variant()));
         if (c.hasBatched()) lifecycle.add("CreateIntent");
         if (c.hasMints()) lifecycle.add("ByAction");
+        if (c.migrate() != null) lifecycle.add("Adopt");
         w.line("public sealed interface Lifecycle permits " + String.join(", ", lifecycle) + " {}");
         w.line("public record CreateInstance(" + join(prepend(List.of("TxOutRef seed"),
                 fields(c.init()))) + ") implements Lifecycle {}");
@@ -174,6 +176,10 @@ public final class ValidatorGenerator {
             w.line("public record Step(" + c.stateType() + " state, JulcList<Payout> payouts) {}");
             w.line("public record CreateIntent(TxOutRef seed, Intent intent) implements Lifecycle {}");
         }
+        if (c.migrate() != null) {
+            w.line("/** Adopts an instance of the previous version: the seed is its state UTxO, whose token burns (ADR-0011 D4). */");
+            w.line("public record Adopt(" + join(prepend(List.of("TxOutRef seed"), fields(c.migrate()))) + ") implements Lifecycle {}");
+        }
         if (c.hasMints()) {
             w.line("/** Mints or burns user tokens for the transition spending {@code by}, which checks them (ADR-0007 D4). */");
             w.line("public record ByAction(TxOutRef by) implements Lifecycle {}");
@@ -204,6 +210,7 @@ public final class ValidatorGenerator {
         }
         if (c.hasBatched()) w.line("case CreateIntent ci -> createIntent(ci, tx, policy);");
         if (c.hasMints()) w.line("case ByAction b -> byAction(b, tx, policy);");
+        if (c.migrate() != null) w.line("case Adopt a -> adopt(a, tx, policy);");
         w.close("};");
         w.close("}").blank();
 
@@ -214,6 +221,7 @@ public final class ValidatorGenerator {
             createPlain(init);
         }
         if (c.hasMints()) byAction();
+        if (c.migrate() != null) adoptMethod();
 
         for (var t : c.ownedInits()) createObject(t);
 
@@ -316,7 +324,7 @@ public final class ValidatorGenerator {
                     + " current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id, BigInteger inLovelace) {");
         }
         List<String> checks = new ArrayList<>();
-        declareParams();
+        declareParams(t);
         for (String f : t.signedBy()) {
             String v = "signed_" + f;
             w.line("boolean " + v + " = ContextsLib.signedBy(tx, current." + f + "());");
@@ -387,8 +395,20 @@ public final class ValidatorGenerator {
             }
             case PAYOUTS -> {
                 w.line("JulcList<Payout> payouts = " + call + ";");
-                w.line("// The instance ends: everything it holds, deposit included, is allocated (I8).");
-                w.line("boolean allocated = Payouts.total(payouts).compareTo(inLovelace.add(" + received("r", t) + ")) == 0;");
+                if (t.migrateTo() != null) {
+                    w.line("// I41: the instance migrates: its successor mints blake2b_256(own input) and holds the rest.");
+                    w.line("byte[] successor = " + field(t.migrateTo()) + ";");
+                    w.line("byte[] successorId = ValuesLib.uniqueTokenName(own.outRef());");
+                    w.line("boolean successorMinted = ValuesLib.assetOf(tx.mint(), successor, successorId).compareTo(BigInteger.ONE) == 0;");
+                    w.line("TxOut next = uniqueOutputWith(tx.outputs(), successor, successorId);");
+                    w.line("boolean successorAt = AddressLib.isScriptAddress(next.address())");
+                    w.line("        && ByteStringLib.equals(AddressLib.credentialHash(next.address()), successor);");
+                    w.line("boolean allocated = successorMinted && successorAt && ValuesLib.lovelaceOf(next.value())");
+                    w.line("        .compareTo(inLovelace.add(" + received("r", t) + ").subtract(Payouts.total(payouts))) >= 0;");
+                } else {
+                    w.line("// The instance ends: everything it holds, deposit included, is allocated (I8).");
+                    w.line("boolean allocated = Payouts.total(payouts).compareTo(inLovelace.add(" + received("r", t) + ")) == 0;");
+                }
                 w.line("boolean burned = ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.valueOf(-1)) == 0;");
                 w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
                 checks.add("allocated");
@@ -595,6 +615,74 @@ public final class ValidatorGenerator {
 
 
 
+
+    /** MINT Adopt: the new version takes over an instance of the previous one, in the same transaction (I41). */
+    private void adoptMethod() {
+        TransitionIR t = c.migrate();
+        var old = t.reads().get(0);
+        String S = c.stateType();
+        w.open("static boolean adopt(Adopt a, TxInfo tx, byte[] policy) {");
+        declareParams();
+        w.line("byte[] previous = " + field(old.path()) + ";");
+        w.line("byte[] id = ValuesLib.uniqueTokenName(a.seed());");
+        w.line("TxOut prior = spentOutput(tx.inputs(), a.seed());");
+        w.line("// The seed is a state UTxO of the previous policy: one 32-byte token at its script address, inline datum.");
+        w.line("byte[] priorId = instanceIdOf(prior.value(), previous);");
+        w.line("boolean priorOk = ByteStringLib.length(priorId) == 32 && AddressLib.isScriptAddress(prior.address())");
+        w.line("        && ByteStringLib.equals(AddressLib.credentialHash(prior.address()), previous);");
+        w.line("PlutusData priorDatum = OutputLib.getInlineDatum(prior);");
+        w.line("boolean shapeOk = Builtins.constrTag(priorDatum) == 0 && fieldCount(priorDatum) == " + old.fields() + "L;");
+        w.line("// The previous instance ends here: its token burns.");
+        w.line("boolean priorBurned = ValuesLib.assetOf(tx.mint(), previous, priorId).compareTo(BigInteger.valueOf(-1)) == 0;");
+        w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
+        w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
+        w.line("boolean addressOk = isStateAddress(out.address(), policy) && out.referenceScript().isEmpty();");
+        var checks = new ArrayList<String>(List.of("priorOk", "shapeOk", "priorBurned", "mintOk", "addressOk"));
+        if (t.hasCtx()) {
+            w.line("boolean ctxOk = ctxValid(tx, a.ctx(), BigInteger.ZERO, false);");
+            checks.add("ctxOk");
+        }
+        w.line(old.type() + " " + old.name() + " = (" + old.type() + ") (Object) priorDatum;");
+        w.line(S + " initial = " + c.name() + "." + t.method() + "(" + args("a", t) + ");");
+        w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), (PlutusData) (Object) initial)");
+        w.line("        && datumFits((PlutusData) (Object) initial);");
+        w.line("// Value conservation: exactly the previous instance's lovelace, now with the new token.");
+        w.line("BigInteger lovelace = ValuesLib.lovelaceOf(prior.value());");
+        w.line("boolean valueOk = lovelace.compareTo(MIN_ADA) >= 0 && exactValue(out.value(), policy, id, lovelace);");
+        checks.add("datumOk");
+        checks.add("valueOk");
+        outputChecks(false, "initial", checks);
+        paramsQuorumChecks(checks);
+        w.line("return " + conj(checks, "adopt") + ";");
+        w.close("}").blank();
+        w.open("static TxOut spentOutput(JulcList<TxInInfo> inputs, TxOutRef ref) {");
+        w.line("TxOut hit = inputs.head().resolved();");
+        w.line("boolean found = false;");
+        w.open("for (var in : inputs) {");
+        w.open("if (Builtins.equalsData(in.outRef(), ref)) {");
+        w.line("hit = in.resolved();");
+        w.line("found = true;");
+        w.close("}");
+        w.close("}");
+        w.open("if (!found) {");
+        w.line("Builtins.error();");
+        w.line("return hit;");
+        w.close("} else {");
+        w.indent();
+        w.line("return hit;");
+        w.close("}");
+        w.close("}").blank();
+        w.open("static long fieldCount(PlutusData d) {");
+        w.line("long n = 0;");
+        w.line("PlutusData fs = Builtins.constrFields(d);");
+        w.open("while (!Builtins.nullList(fs)) {");
+        w.line("n = n + 1;");
+        w.line("fs = Builtins.tailList(fs);");
+        w.close("}");
+        w.line("return n;");
+        w.close("}").blank();
+    }
+
     // ------------------------------------------------------------------ ADR-0010: other script purposes
 
     private void purposeRedeemers() {
@@ -750,6 +838,55 @@ public final class ValidatorGenerator {
     /** Declares the typed {@code params} local (JuLC needs a typed local before an accessor). */
     private void declareParams() {
         if (c.hasParams()) w.line(c.paramsType() + " params = (" + c.paramsType() + ") (Object) PARAMS;");
+    }
+
+    /** {@link #declareParams()}, then each {@code @Reads} value, authenticated and shape-checked (I39). */
+    private void declareParams(TransitionIR t) {
+        declareParams();
+        for (var rd : t.reads()) {
+            w.line(rd.type() + " " + rd.name() + " = (" + rd.type() + ") (Object) foreignState(tx, " + field(rd.path()) + ", "
+                    + rd.fields() + "L);");
+        }
+    }
+
+    private boolean anyReads() {
+        return c.allTransitions().stream().anyMatch(t -> !t.reads().isEmpty());
+    }
+
+    private void readsHelpers() {
+        if (!anyReads()) return;
+        w.line("/**");
+        w.line(" * The state of another JOUST contract's instance (I39): the reference input holding exactly one token of");
+        w.line(" * {@code fi.policy}, named {@code fi.instance} (32 bytes), at that script's address, with an inline datum of");
+        w.line(" * constructor 0 and {@code fields} fields.");
+        w.line(" */");
+        w.open("static PlutusData foreignState(TxInfo tx, ForeignInstance fi, long fields) {");
+        w.line("PlutusData one = Builtins.mapData(Builtins.mkCons(Builtins.mkPairData(Builtins.bData(fi.instance()), Builtins.iData(1L)),"
+                + " Builtins.mkNilPairData()));");
+        w.line("boolean found = false;");
+        w.line("PlutusData datum = Builtins.iData(0L);");
+        w.open("for (var ref : tx.referenceInputs()) {");
+        w.line("TxOut o = ref.resolved();");
+        w.open("if (!found && AddressLib.isScriptAddress(o.address()) && ByteStringLib.equals(AddressLib.credentialHash(o.address()),"
+                + " fi.policy()) && Builtins.equalsData(ledgerTokensOf(o.value(), fi.policy()), one)) {");
+        w.line("found = true;");
+        w.line("datum = OutputLib.getInlineDatum(o);");
+        w.close("}");
+        w.close("}");
+        w.line("long n = 0;");
+        w.line("PlutusData fs = Builtins.constrFields(datum);");
+        w.open("while (!Builtins.nullList(fs)) {");
+        w.line("n = n + 1;");
+        w.line("fs = Builtins.tailList(fs);");
+        w.close("}");
+        w.open("if (!found || ByteStringLib.length(fi.instance()) != 32 || Builtins.constrTag(datum) != 0 || n != fields) {");
+        w.line("Builtins.error();");
+        w.line("return datum;");
+        w.close("} else {");
+        w.indent();
+        w.line("return datum;");
+        w.close("}");
+        w.close("}").blank();
     }
 
     /** A field path of the current subject ({@code current.x()}) or of the params ({@code params.x}). */
@@ -1053,7 +1190,7 @@ public final class ValidatorGenerator {
                     + " current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id, BigInteger inLovelace) {");
         }
         List<String> checks = new ArrayList<>();
-        declareParams();
+        declareParams(t);
         for (String f : t.signedBy()) {
             w.line("boolean signed_" + f + " = ContextsLib.signedBy(tx, current." + f + "());");
             checks.add("signed_" + f);
@@ -1472,6 +1609,7 @@ public final class ValidatorGenerator {
         if (c.hasOwned()) ownedHelpers();
         if (c.assetAware()) assetHelpers();
         authHelpers();
+        readsHelpers();
         if (c.hasMaps()) {
             String S = c.stateType();
             w.line("/** The state a method sees: each MerkleMap opened with its proven read set (I15). */");
@@ -1760,6 +1898,7 @@ public final class ValidatorGenerator {
     private String args(String redeemerVar, TransitionIR t, String... leading) {
         var out = new ArrayList<>(List.of(leading));
         if (t.takesParams()) out.add(paramsExpr());
+        for (var rd : t.reads()) out.add(rd.name());
         for (ParamIR p : t.params()) out.add(redeemerVar + "." + p.name() + "()");
         if (t.hasCtx()) out.add(redeemerVar + ".ctx()");
         if (t.hasFunds()) out.add("funds");

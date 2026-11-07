@@ -148,7 +148,7 @@ public final class StateInstance<S> {
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
-        var tx = new ScriptTx().collectFrom(stateUtxo, redeemer).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.scriptTx(), stateUtxo, redeemer).readFrom(ref);
         if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         TxRunner.ExpectedState expected = null;
         if (call.kind == Call.Kind.ACTION) {
@@ -162,11 +162,11 @@ public final class StateInstance<S> {
             tx.payToContract(contract.address, List.of(Amount.lovelace(next), new Amount(unit(), BigInteger.ONE)), datum);
             expected = new TxRunner.ExpectedState(unit(), next, datum);
         } else {
-            if (total.compareTo(inLovelace) != 0) {
+            if (!call.migrates && total.compareTo(inLovelace) != 0) {
                 throw new RequireException(what + ": a destroy must pay out everything the instance holds ("
                         + inLovelace + " lovelace, ctx.balance()), but pays " + total);
             }
-            tx.mintAsset(contract.policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE.negate())),
+            TxRunner.mint(tx, contract.policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE.negate())),
                     PlutusDataAdapter.convert(call.burnRedeemer));
         }
 
@@ -185,6 +185,7 @@ public final class StateInstance<S> {
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
         for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
         call.applyAuthorization(tx);
+        call.applyReads(tx);
         String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
                 expected, expectedPayouts, maps ? new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{contract.script,
                         contract.runtime.mapVerifier().script()} : new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{contract.script}, what);
@@ -223,7 +224,7 @@ public final class StateInstance<S> {
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
-        var tx = new ScriptTx().collectFrom(stateUtxo, redeemer).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.scriptTx(), stateUtxo, redeemer).readFrom(ref);
         TxOutRef own = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
                 BigInteger.valueOf(stateUtxo.getOutputIndex()));
         PlutusData datum = destroy ? null : PlutusDataAdapter.convert(t.next());
@@ -233,6 +234,7 @@ public final class StateInstance<S> {
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
         for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
         call.applyAuthorization(tx);
+        call.applyReads(tx);
         var scripts = new ArrayList<com.bloxbean.cardano.client.plutus.spec.PlutusScript>(List.of(contract.script));
         if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
         String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
@@ -255,6 +257,7 @@ public final class StateInstance<S> {
 
     /** After a destroy: waits until the indexer no longer shows the state UTxO. */
     private void awaitGone() {
+        if (TxRunner.capture() != null) return;
         for (int i = 0; i < 60; i++) {
             try {
                 utxo();
@@ -267,6 +270,7 @@ public final class StateInstance<S> {
 
     /** Waits until the indexer shows the state UTxO created by {@code txHash}. */
     void awaitState(String txHash) {
+        if (TxRunner.capture() != null) return;   // composed: Compose submits and confirms
         for (int i = 0; i < 60; i++) {
             try {
                 if (utxo().getTxHash().equals(txHash)) return;

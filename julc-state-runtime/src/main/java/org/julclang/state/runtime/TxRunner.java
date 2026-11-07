@@ -5,6 +5,7 @@ import com.bloxbean.cardano.client.function.helper.SignerProviders;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import com.bloxbean.cardano.client.quicktx.QuickTxBuilder;
 import com.bloxbean.cardano.client.quicktx.ScriptTx;
+import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.transaction.spec.Transaction;
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil;
@@ -37,6 +38,88 @@ final class TxRunner {
     /** A payout output the built transaction must contain: at {@code address}, at least {@code lovelace}, tagged. */
     record ExpectedPayout(String address, BigInteger lovelace, PlutusData tag) {}
 
+    // ------------------------------------------------------------------ composition (ADR-0011 D1)
+
+    /** What {@link Compose} collects while it runs several calls into one transaction. */
+    static final class Capture {
+        final ScriptTx tx = new ScriptTx();
+        Window forced;
+        final java.util.List<Window> windows = new java.util.ArrayList<>();
+        int outputs;
+        final java.util.List<org.julclang.state.api.OutputClaim> claims = new java.util.ArrayList<>();
+        final java.util.List<ExpectedState> expected = new java.util.ArrayList<>();
+        final java.util.List<ExpectedPayout> payouts = new java.util.ArrayList<>();
+        final java.util.List<ExpectedSend> sends = new java.util.ArrayList<>();
+        final java.util.LinkedHashMap<String, byte[]> requiredSigners = new java.util.LinkedHashMap<>();
+        final java.util.Map<String, java.util.List<String>> signerCalls = new java.util.LinkedHashMap<>();
+        final java.util.LinkedHashMap<String, Account> accounts = new java.util.LinkedHashMap<>();
+        final java.util.LinkedHashMap<String, com.bloxbean.cardano.client.plutus.spec.PlutusScript> scripts = new java.util.LinkedHashMap<>();
+        final java.util.Set<String> inputs = new java.util.HashSet<>();
+        final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
+
+        void record(Account caller, byte[][] signers, ExpectedState exp, java.util.List<ExpectedPayout> pays,
+                    java.util.List<ExpectedSend> snds, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] scs,
+                    java.util.List<Account> cos, String what) {
+            accounts.putIfAbsent(caller.baseAddress(), caller);
+            for (Account a : cos) accounts.putIfAbsent(a.baseAddress(), a);
+            for (byte[] sg : signers) {
+                String hex = HexUtil.encodeHexString(sg);
+                requiredSigners.putIfAbsent(hex, sg);
+                signerCalls.computeIfAbsent(hex, k -> new java.util.ArrayList<>()).add(what);
+            }
+            if (exp != null) expected.add(exp);
+            payouts.addAll(pays);
+            sends.addAll(snds);
+            if (scs != null) {
+                for (var sc : scs) {
+                    try {
+                        scripts.putIfAbsent(HexUtil.encodeHexString(sc.getScriptHash()), sc);
+                    } catch (Exception e) {
+                        throw new JoustException("cannot hash a script", e);
+                    }
+                }
+            }
+            outputs += (exp != null ? 1 : 0) + pays.size() + snds.size();
+        }
+    }
+
+    static final ThreadLocal<Capture> CAPTURE = new ThreadLocal<>();
+
+    static Capture capture() {
+        return CAPTURE.get();
+    }
+
+    /** The transaction a call builds into: a fresh one, or the composition's shared one. */
+    static ScriptTx scriptTx() {
+        Capture c = CAPTURE.get();
+        return c != null ? c.tx : new ScriptTx();
+    }
+
+    /** Index of the next output a call adds (0 outside a composition). */
+    static int outputOffset() {
+        Capture c = CAPTURE.get();
+        return c == null ? 0 : c.outputs;
+    }
+
+    /** Spends {@code u} (with {@code redeemer} if a script input); a composition refuses the same UTxO twice. */
+    static ScriptTx collect(ScriptTx tx, Utxo u, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
+        Capture c = CAPTURE.get();
+        if (c != null && !c.inputs.add(u.getTxHash() + "#" + u.getOutputIndex())) {
+            throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
+        }
+        return redeemer == null ? tx.collectFrom(u) : tx.collectFrom(u, redeemer);
+    }
+
+    /** Mints under {@code policy}; a composition refuses two calls minting under one policy (one redeemer each). */
+    static void mint(ScriptTx tx, String policy, java.util.List<com.bloxbean.cardano.client.transaction.spec.Asset> assets,
+                     com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
+        Capture c = CAPTURE.get();
+        if (c != null && !c.mintPolicies.add(policy)) {
+            throw new JoustException("composition: two calls mint under policy " + policy + " (one mint redeemer per policy)");
+        }
+        tx.mintAsset(policy, assets, redeemer);
+    }
+
     private final StateRuntime rt;
     private final java.util.List<Account> cosigners;
 
@@ -50,6 +133,9 @@ final class TxRunner {
         this.cosigners = cosigners;
     }
 
+    /** Further state outputs to verify (a composition's other instances). */
+    java.util.List<ExpectedState> extraExpected = java.util.List.of();
+
     String submit(ScriptTx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
                   java.util.List<ExpectedPayout> payouts, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts,
                   String what) {
@@ -59,6 +145,11 @@ final class TxRunner {
     String submit(ScriptTx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
                   java.util.List<ExpectedPayout> payouts, java.util.List<ExpectedSend> sends,
                   com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts, String what) {
+        Capture cap = CAPTURE.get();
+        if (cap != null) {
+            cap.record(caller, requiredSigners, expected, payouts, sends, referenceScripts, cosigners, what);
+            return "composed";
+        }
         Transaction signed;
         try {
             var ctx = new QuickTxBuilder(rt.backend()).compose(tx)
@@ -81,6 +172,7 @@ final class TxRunner {
         }
 
         verify(signed, expected, what);
+        for (ExpectedState e : extraExpected) verify(signed, e, what);
         verifyPayouts(signed, payouts, what);
         verifySends(signed, sends, what);
 

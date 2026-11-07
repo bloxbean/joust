@@ -29,6 +29,7 @@ import java.util.List;
  * @param invariants   {@code @Invariant} methods (ADR-0009 D4)
  * @param purposes     {@code @Withdraw}/{@code @Certify}/{@code @Vote}/{@code @Propose} handlers (ADR-0010 D1)
  * @param stakeSelf    state UTxOs stake to the contract's own script (ADR-0010 D2)
+ * @param migrate      the {@code @Migrate} creation, or null (ADR-0011 D4)
  */
 public record ContractIR(String packageName,
                          String name,
@@ -51,7 +52,8 @@ public record ContractIR(String packageName,
                          String paramsType,
                          List<InvariantIR> invariants,
                          List<PurposeIR> purposes,
-                         boolean stakeSelf) {
+                         boolean stakeSelf,
+                         TransitionIR migrate) {
 
     /** A handler for a non-spend purpose (ADR-0010). */
     public record PurposeIR(String kind, String method, List<ParamIR> args, boolean hasCtx, String quorumKeys,

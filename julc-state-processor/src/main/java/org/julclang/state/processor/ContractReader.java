@@ -65,6 +65,10 @@ final class ContractReader {
     static final String AUTHORIZED_BY = API + "AuthorizedBy";
     static final String INVARIANT = API + "Invariant";
     static final String CREDENTIAL = "org.julclang.ledger.Credential";
+    static final String READS = API + "Reads";
+    static final String MIGRATE = API + "Migrate";
+    static final String MIGRATE_TO = API + "MigrateTo";
+    static final String FOREIGN = API + "ForeignInstance";
     static final java.util.Map<String, String> PURPOSES = java.util.Map.of(API + "Withdraw", "WITHDRAW",
             API + "Certify", "CERTIFY", API + "Votes", "VOTE", API + "Propose", "PROPOSE");
     static final String ONCHAIN_LIBRARY = "org.julclang.stdlib.annotation.OnchainLibrary";
@@ -100,6 +104,7 @@ final class ContractReader {
         List<ExecutableElement> ownedActions = new ArrayList<>();
         List<ExecutableElement> ownedDestroys = new ArrayList<>();
         List<ExecutableElement> invariantMethods = new ArrayList<>();
+        List<ExecutableElement> migrateMethods = new ArrayList<>();
         Map<String, ExecutableElement> purposeMethods = new LinkedHashMap<>();
         Set<String> names = new HashSet<>();
         for (ExecutableElement m : ElementFilter.methodsIn(type.getEnclosedElements())) {
@@ -118,6 +123,11 @@ final class ContractReader {
                 if (purposeMethods.put(purposeKind, m) != null) {
                     error(m, "at most one handler per purpose (" + purposeKind + ") (ADR-0010)");
                 }
+                continue;
+            }
+            if (annotation(m, MIGRATE).isPresent()) {
+                if (kinds > 0) error(m, "@Migrate is its own kind of creation; drop the other annotation");
+                migrateMethods.add(m);
                 continue;
             }
             if (annotation(m, INVARIANT).isPresent()) {
@@ -376,6 +386,19 @@ final class ContractReader {
             error(type, "@StateContract(stakeSelf = true) needs a @Withdraw and a @Certify handler, or the rewards and the"
                     + " credential of its funds are unreachable (ADR-0010 D2)");
         }
+        TransitionIR migrateIR = null;
+        if (migrateMethods.size() > 1) error(type, "at most one @Migrate per contract");
+        if (!migrateMethods.isEmpty()) {
+            migrateIR = readTransition(migrateMethods.get(0), TransitionIR.Kind.MIGRATE, ctx);
+            if (anyMap || ownedCtx != null || assetAware) {
+                error(type, "@Migrate is not supported yet with MerkleMaps, owned objects or native assets (ADR-0011 r2)");
+            }
+        }
+        for (var t : destroyIRs) {
+            if (t.migrateTo() != null && (anyMap || ownedCtx != null || assetAware)) {
+                error(type, "@MigrateTo is not supported yet with MerkleMaps, owned objects or native assets (ADR-0011 r2)");
+            }
+        }
         if (!invariants.isEmpty() && anyBatched) {
             error(type, "@Invariant cannot be combined with @Batched yet: a batch passes through intermediate states that"
                     + " the validator does not check (ADR-0009 r2)");
@@ -386,7 +409,7 @@ final class ContractReader {
                 init, actionIRs, destroyIRs, viewIRs, types.imports(), Strategies.OPTION_A,
                 ownedType == null ? null : types.render(ownedType), List.copyOf(ownedComponents), ownedInitIRs,
                 ownedActionIRs, ownedDestroyIRs, paramsType == null ? null : types.render(paramsType), List.copyOf(invariants),
-                List.copyOf(purposes), stakeSelf));
+                List.copyOf(purposes), stakeSelf, migrateIR));
     }
 
     /** Coins per UTxO byte on mainnet and the public testnets (Conway). Governance can change it; ADR-0001 §10. */
@@ -425,7 +448,8 @@ final class ContractReader {
     private TransitionIR readTransition(ExecutableElement m, TransitionIR.Kind kind, Reading r) {
         List<? extends VariableElement> ps = m.getParameters();
         int first = 0;
-        boolean creates = kind == TransitionIR.Kind.INIT || kind == TransitionIR.Kind.OWNED_INIT;
+        boolean creates = kind == TransitionIR.Kind.INIT || kind == TransitionIR.Kind.OWNED_INIT
+                || kind == TransitionIR.Kind.MIGRATE;
         if (!creates) {
             if (ps.isEmpty() || !same(ps.get(0).asType(), r.stateType())) {
                 error(m, "the first parameter of @" + label(kind) + " must be the "
@@ -448,6 +472,51 @@ final class ContractReader {
         if (shared) first++;
         boolean takesParams = r.paramsType() != null && ps.size() > first && same(ps.get(first).asType(), r.paramsType());
         if (takesParams) first++;
+        List<TransitionIR.ReadIR> reads = new ArrayList<>();
+        if (kind == TransitionIR.Kind.MIGRATE) {
+            String from = annotation(m, MIGRATE).flatMap(a -> value(a, "from")).map(v -> (String) v.getValue()).orElse("");
+            if (!takesParams || !from.startsWith("params.") || !r.paramsComponents().containsKey(from.substring(7))
+                    || r.paramsComponents().get(from.substring(7)).kind() != ParamIR.TypeKind.BYTES) {
+                error(m, "@Migrate takes (Params, Old.State old, ...) and from = \"params.x\" naming a byte[] (the previous"
+                        + " policy) of the @Params record (ADR-0011 D4)");
+            }
+            TypeElement rec = ps.size() > first ? asRecord(ps.get(first).asType()) : null;
+            if (rec == null) {
+                error(m, "@Migrate's parameter after the params must be the previous contract's state record");
+            } else {
+                reads.add(new TransitionIR.ReadIR(ps.get(first).getSimpleName().toString(), from,
+                        r.types().render(ps.get(first).asType()), rec.getRecordComponents().size()));
+                first++;
+            }
+        }
+        while (ps.size() > first && annotation(ps.get(first), READS).isPresent()) {
+            var p = ps.get(first);
+            String path = annotation(p, READS).flatMap(a -> value(a, "value")).map(v -> (String) v.getValue()).orElse("");
+            TypeElement rec = asRecord(p.asType());
+            if (!path.startsWith("params.")) {
+                error(p, "@Reads must name a ForeignInstance of the @Params record (\"params.x\"): the trusted script is"
+                        + " fixed at deploy (ADR-0011 r2)");
+            } else {
+                ParamIR f = r.paramsComponents().get(path.substring(7));
+                if (f == null || !f.type().equals("ForeignInstance")) {
+                    error(p, "@Reads(\"" + path + "\") must name a ForeignInstance component of the @Params record");
+                }
+            }
+            if (rec == null) error(p, "a @Reads parameter must be the other contract's state record");
+            else if (mentionsMap(p.asType(), new java.util.HashSet<>())) {
+                error(p, "@Reads cannot read state with MerkleMaps: there is no proof path for them (ADR-0011 r2)");
+            }
+            if (creates) error(p, "@Reads is not supported in a creation yet");
+            reads.add(new TransitionIR.ReadIR(p.getSimpleName().toString(), path, r.types().render(p.asType()),
+                    rec == null ? 0 : rec.getRecordComponents().size()));
+            first++;
+        }
+        for (int i = first; i < ps.size(); i++) {
+            if (annotation(ps.get(i), READS).isPresent()) {
+                error(ps.get(i), "@Reads parameters must come right after the @Params record");
+            }
+        }
+        if (!reads.isEmpty() && !takesParams) error(m, "@Reads needs the @Params record parameter before it");
         for (int i = first; i < ps.size(); i++) {
             if (r.paramsType() != null && same(ps.get(i).asType(), r.paramsType())) {
                 error(ps.get(i), "the @Params record must come right after the state (or @Shared; first in @Init)");
@@ -480,7 +549,7 @@ final class ContractReader {
         ResultShape shape = null;
         TypeMirror ret = m.getReturnType();
         switch (kind) {
-            case INIT, OWNED_INIT -> {
+            case INIT, OWNED_INIT, MIGRATE -> {
                 if (same(ret, r.stateType())) {
                     returns = TransitionIR.Returns.STATE;
                 } else {
@@ -584,7 +653,7 @@ final class ContractReader {
                 if (!hasCtx) {
                     error(m, "@Batched needs a Ctx parameter: in a batch, ctx.caller() is the intent's owner");
                 }
-                if (takesParams) error(m, "@Batched actions cannot take the @Params record yet (ADR-0009)");
+                if (takesParams) error(m, "@Batched actions cannot take the @Params record or @Reads yet (ADR-0009)");
                 if (quorumKeys != null || !authorizedBy.isEmpty() || (shape != null && shape.events())) {
                     error(m, "@Batched actions cannot use @Quorum, @AuthorizedBy or events: an intent's owner is the caller"
                             + " (ADR-0009)");
@@ -599,8 +668,14 @@ final class ContractReader {
             }
         }
 
+        String migrateTo = annotation(m, MIGRATE_TO).flatMap(a -> value(a, "value")).map(v -> (String) v.getValue()).orElse(null);
+        if (migrateTo != null) {
+            if (kind != TransitionIR.Kind.DESTROY) error(m, "@MigrateTo goes on an instance @Destroy");
+            ParamIR f = fieldOf(m, r, migrateTo, "@MigrateTo");
+            if (f != null && f.kind() != ParamIR.TypeKind.BYTES) error(m, "@MigrateTo must name a byte[] (the successor's policy)");
+        }
         String name = m.getSimpleName().toString();
-        String variant = kind == TransitionIR.Kind.INIT ? "CreateInstance"
+        String variant = kind == TransitionIR.Kind.MIGRATE ? "Adopt" : kind == TransitionIR.Kind.INIT ? "CreateInstance"
                 : Character.toUpperCase(name.charAt(0)) + name.substring(1);
         for (ParamIR p : params) {
             if (p.name().equals("funds") || p.name().equals("assetsIn")) {
@@ -618,7 +693,8 @@ final class ContractReader {
         return new TransitionIR(kind, name, variant, List.copyOf(params), hasCtx, payable, returns, resultType,
                 List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared, batched, batchOnly,
                 hasFunds, shape != null && shape.payouts(), shape != null && shape.sends(), shape != null && shape.mint(),
-                accepts, takesParams, quorumKeys, quorumThreshold, List.copyOf(authorizedBy), events, eventsType);
+                accepts, takesParams, quorumKeys, quorumThreshold, List.copyOf(authorizedBy), events, eventsType,
+                List.copyOf(reads), migrateTo);
     }
 
     /** Which effect components a result record has (ADR-0007 D1). */
@@ -874,6 +950,7 @@ final class ContractReader {
             case OWNED_INIT -> "OwnedInit";
             case OWNED_ACTION -> "OwnedAction";
             case OWNED_DESTROY -> "OwnedDestroy";
+            case MIGRATE -> "Migrate";
         };
     }
 
@@ -926,7 +1003,8 @@ final class ContractReader {
             String topPkg = cur instanceof PackageElement p ? p.getQualifiedName().toString() : "";
             String top = chain.get(0);
             String topFqcn = topPkg.isEmpty() ? top : topPkg + "." + top;
-            if (!topPkg.equals(pkg) && !topPkg.equals("java.lang")) {
+            // Same-package types are imported too: JuLC follows imports only (ADR-0011: a contract reading another).
+            if (!topPkg.equals("java.lang") && !topPkg.isEmpty()) {
                 String prev = imports.putIfAbsent(top, topFqcn);
                 if (prev != null && !prev.equals(topFqcn)) {
                     clashes.add("types " + prev + " and " + topFqcn + " share the simple name " + top

@@ -63,6 +63,8 @@ public final class Call<S> {
     final List<Account> cosigners;
     final Authorization authorization;
     final BiFunction<Ctx, Transition<S>, Object> redeemerWith;
+    final List<com.bloxbean.cardano.client.api.model.Utxo> referenceInputs;
+    final boolean migrates;
 
     private Call(Builder<S> b) {
         this.name = Objects.requireNonNull(b.name);
@@ -82,6 +84,8 @@ public final class Call<S> {
         this.cosigners = List.copyOf(b.cosigners);
         this.authorization = b.authorization;
         this.redeemerWith = b.redeemerWith;
+        this.referenceInputs = List.copyOf(b.referenceInputs);
+        this.migrates = b.migrates;
         if (run == null && sharedRun == null && assetRun == null) throw new IllegalArgumentException(name + ": no run");
         this.redeemer = b.redeemer != null ? b.redeemer : (ctx -> { throw new IllegalStateException("redeemerWith only"); });
         if (b.redeemer == null && b.redeemerWith == null) throw new NullPointerException(name + ": no redeemer");
@@ -103,6 +107,10 @@ public final class Call<S> {
     }
 
     /** Adds the authorization's zero withdrawal, if it is a script (ADR-0009 D3). */
+    void applyReads(com.bloxbean.cardano.client.quicktx.ScriptTx tx) {
+        for (var u : referenceInputs) tx.readFrom(u);
+    }
+
     void applyAuthorization(com.bloxbean.cardano.client.quicktx.ScriptTx tx) {
         if (authorization == null || authorization.rewardAddress() == null) return;
         tx.withdraw(authorization.rewardAddress(), java.math.BigInteger.ZERO,
@@ -144,6 +152,8 @@ public final class Call<S> {
         private final List<Account> cosigners = new ArrayList<>();
         private Authorization authorization;
         private BiFunction<Ctx, Transition<S>, Object> redeemerWith;
+        private final List<com.bloxbean.cardano.client.api.model.Utxo> referenceInputs = new ArrayList<>();
+        private boolean migrates;
 
         private Builder(String name, Kind kind, Account caller) {
             this.name = name;
@@ -172,6 +182,13 @@ public final class Call<S> {
         public Builder<S> authorization(Authorization auth) { this.authorization = auth; return this; }
         /** A redeemer built from the Ctx and the method's result (it carries the events; ADR-0009 D5). */
         public Builder<S> redeemerWith(BiFunction<Ctx, Transition<S>, Object> make) { this.redeemerWith = make; return this; }
+        /** A {@code @MigrateTo} destroy: its funds move to the successor instead of being paid out (ADR-0011 D4). */
+        public Builder<S> migrates() { this.migrates = true; return this; }
+        /** Reference inputs the call reads ({@code @Reads}; ADR-0011 D2). */
+        public Builder<S> referenceInputs(com.bloxbean.cardano.client.api.model.Utxo... utxos) {
+            referenceInputs.addAll(List.of(utxos));
+            return this;
+        }
 
         public Call<S> build() {
             return new Call<>(this);

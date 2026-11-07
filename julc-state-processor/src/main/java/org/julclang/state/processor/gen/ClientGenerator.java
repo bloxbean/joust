@@ -133,6 +133,29 @@ public final class ClientGenerator {
             w.close("}").blank();
         });
 
+        if (c.migrate() != null) {
+            var t = c.migrate();
+            var old = t.reads().get(0);
+            var ps = new ArrayList<String>(List.of("StateRuntime runtime", P + " params", "Account callerAccount",
+                    "StateInstance<" + old.type() + "> prior"));
+            ps.addAll(decls(t.params()));
+            var run = new ArrayList<String>(List.of("params", "priorState"));
+            t.params().forEach(p -> run.add(p.name()));
+            if (t.hasCtx()) run.add("ctx");
+            w.line("/**");
+            w.line(" * Adopts {@code prior}, an instance of the previous version (ADR-0011 D4). Call inside a Compose together with");
+            w.line(" * the old instance's @MigrateTo destroy.");
+            w.line(" */");
+            w.open("public static " + C + " " + t.method() + "(" + String.join(", ", ps) + ") {");
+            w.line(old.type() + " priorState = prior.state();");
+            w.line("var result = contract(runtime, params).adopt(new Deploy<" + S + ">(callerAccount, BigInteger.ZERO, " + t.hasCtx()
+                    + ",");
+            w.line("        ctx -> " + X + "." + t.method() + "(" + String.join(", ", run) + "),");
+            w.line("        (seed, ctx) -> new " + V + ".Adopt(" + redeemerArgs(t, "seed") + ")), prior.utxo());");
+            w.line("return new " + C + "(result.instance(), params);");
+            w.close("}").blank();
+        }
+
         w.line("/** Reconnects to an existing instance. */");
         w.open("public static " + C + " at(StateRuntime runtime" + (P != null ? ", " + P + " params" : "") + ", String instanceId) {");
         w.line("return new " + C + "(contract(runtime" + (P != null ? ", params" : "") + ").at(instanceId)" + (P != null ? ", params" : "")
@@ -190,6 +213,7 @@ public final class ClientGenerator {
 
         w.line("/** Calls {@link " + X + "#" + t.method() + "}" + (destroy ? "; ends the instance." : ".") + " */");
         w.open("public CallResult<" + S + "> " + t.method() + "(" + String.join(", ", params) + ") {");
+        fetchReads(t, "instance.contract().runtime()");
         String start = destroy
                 ? "Call.<" + S + ">destroy(\"" + t.method() + "\", callerAccount, new " + V + ".BurnInstance())"
                 : "Call.<" + S + ">action(\"" + t.method() + "\", callerAccount)";
@@ -197,6 +221,7 @@ public final class ClientGenerator {
         w.indent();
         w.indent();
         w.line(".usesCtx(" + t.hasCtx() + ")");
+        if (t.migrateTo() != null) w.line(".migrates()");
         if (t.payable()) w.line(".received(payLovelace)");
         for (String f : t.signedBy()) w.line(".signedBy(\"" + f + "\", s -> s." + f + "())");
         for (String f : t.validAfter()) w.line(".validAfter(\"" + f + "\", s -> s." + f + "())");
@@ -294,6 +319,7 @@ public final class ClientGenerator {
             if (ValidatorGenerator.takesAssets(t)) params.add("org.julclang.ledger.Value payAssets");
             extraParams(t, params);
             w.open("public CallResult<" + R + "> " + t.method() + "(" + String.join(", ", params) + ") {");
+            fetchReads(t, "object.instance().contract().runtime()");
             String start = destroy
                     ? "Call.<" + R + ">destroy(\"" + t.method() + "\", callerAccount, new " + V + ".BurnInstance())"
                     : "Call.<" + R + ">action(\"" + t.method() + "\", callerAccount)";
@@ -308,6 +334,7 @@ public final class ClientGenerator {
             var callArgs = new ArrayList<String>(List.of("o"));
             if (t.shared()) callArgs.add("(" + S + ") sh");
             if (t.takesParams()) callArgs.add("params");
+            for (var rd : t.reads()) callArgs.add("read_" + rd.name() + ".state()");
             t.params().forEach(p -> callArgs.add(p.name()));
             if (t.hasCtx()) callArgs.add("ctx");
             if (t.hasFunds()) callArgs.add("funds");
@@ -460,8 +487,21 @@ public final class ClientGenerator {
     private static void extraCalls(TransitionIR t) {
     }
 
+    /** Reads each {@code @Reads} instance before the call; its UTxO becomes a reference input (ADR-0011 D2). */
+    private void fetchReads(TransitionIR t, String runtime) {
+        for (var rd : t.reads()) {
+            w.line("var read_" + rd.name() + " = org.julclang.state.runtime.ForeignReads.read(" + runtime + ", params."
+                    + rd.path().substring(7) + "(), " + rd.type() + ".class);");
+        }
+    }
+
     private void redeemerLine(TransitionIR t) {
         String V = c.validatorName();
+        if (!t.reads().isEmpty()) {
+            var refs = new ArrayList<String>();
+            for (var rd : t.reads()) refs.add("read_" + rd.name() + ".utxo()");
+            w.line(".referenceInputs(" + String.join(", ", refs) + ")");
+        }
         if (!t.authorizedBy().isEmpty()) w.line(".authorization(authorization)");
         if (t.quorumKeys() != null) w.line(".cosigners(cosigners)");
         if (t.resultEvents()) {
@@ -501,6 +541,7 @@ public final class ClientGenerator {
     private static String callArgs(TransitionIR t, List<String> leading) {
         var out = new ArrayList<>(leading);
         if (t.takesParams()) out.add("params");
+        for (var rd : t.reads()) out.add("read_" + rd.name() + ".state()");
         for (ParamIR p : t.params()) out.add(p.name());
         if (t.hasCtx()) out.add("ctx");
         if (t.hasFunds()) out.add("funds");
