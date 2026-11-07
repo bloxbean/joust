@@ -229,7 +229,9 @@ public final class OwnedObject<S, R> {
                     throw e;
                 }
                 boolean moved = !(now.getTxHash().equals(own.getTxHash()) && now.getOutputIndex() == own.getOutputIndex());
-                if (!moved && call.sharedRun == null) throw e;
+                boolean stale = StateInstance.staleInput(e);
+                if (!moved && call.sharedRun == null && !stale) throw e;
+                if (stale) TxRunner.sleep(2000);
                 contract().runtime.log(call.name + ": the object or instance moved (attempt " + (attempt + 1) + "), re-running");
             }
         }

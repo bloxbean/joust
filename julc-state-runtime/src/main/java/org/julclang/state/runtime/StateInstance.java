@@ -75,7 +75,19 @@ public final class StateInstance<S> {
         return lovelaceOf(utxo());
     }
 
-    /** Runs an action or destroy: on the JVM first, then on chain. Retries only if the node rejected it because the state moved. */
+    /**
+     * The node rejected the transaction because one of its inputs was already spent, though the state was not: the
+     * chain index had not caught up with a transaction of ours (e.g. a token UTxO the caller just spent). Rebuilding
+     * after a moment queries the UTxOs again. Nothing was submitted, so retrying is safe.
+     */
+    static boolean staleInput(SubmitException e) {
+        return e.getMessage() != null && e.getMessage().contains("BadInputsUTxO");
+    }
+
+    /**
+     * Runs an action or destroy: on the JVM first, then on chain. Retries only if the node rejected it because the state
+     * moved, or because an input was stale.
+     */
     public CallResult<S> call(Call<S> call) {
         SubmitException last = null;
         for (int attempt = 0; attempt <= contract.runtime.maxRetries(); attempt++) {
@@ -92,8 +104,11 @@ public final class StateInstance<S> {
                 }
                 boolean moved = !(now.getTxHash().equals(stateUtxo.getTxHash())
                         && now.getOutputIndex() == stateUtxo.getOutputIndex());
-                if (!moved) throw e;            // a real failure, not contention
-                contract.runtime.log(call.name + ": state moved (attempt " + (attempt + 1) + "), re-running");
+                boolean stale = staleInput(e);
+                if (!moved && !stale) throw e;            // a real failure, not contention
+                contract.runtime.log(call.name + (stale ? ": an input was already spent (the index lagged)" : ": state moved")
+                        + " (attempt " + (attempt + 1) + "), re-running");
+                if (stale) TxRunner.sleep(2000);
             }
         }
         throw new ContentionException(call.name + ": the state kept moving", last);
