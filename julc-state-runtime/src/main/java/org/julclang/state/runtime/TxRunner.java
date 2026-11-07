@@ -25,7 +25,14 @@ import java.math.BigInteger;
 final class TxRunner {
 
     /** The state output the built transaction must contain (null for a destroy). */
-    record ExpectedState(String unit, BigInteger lovelace, PlutusData datum) {}
+    record ExpectedState(String unit, BigInteger lovelace, PlutusData datum, org.julclang.ledger.Value value) {
+        ExpectedState(String unit, BigInteger lovelace, PlutusData datum) {
+            this(unit, lovelace, datum, null);
+        }
+    }
+
+    /** A send output (ADR-0007): at output {@code index}, exactly this address and datum, at least {@code value}. */
+    record ExpectedSend(int index, String address, String inlineDatumHex, String datumHash, org.julclang.ledger.Value value) {}
 
     /** A payout output the built transaction must contain: at {@code address}, at least {@code lovelace}, tagged. */
     record ExpectedPayout(String address, BigInteger lovelace, PlutusData tag) {}
@@ -39,6 +46,12 @@ final class TxRunner {
     String submit(ScriptTx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
                   java.util.List<ExpectedPayout> payouts, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts,
                   String what) {
+        return submit(tx, caller, window, requiredSigners, expected, payouts, java.util.List.of(), referenceScripts, what);
+    }
+
+    String submit(ScriptTx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
+                  java.util.List<ExpectedPayout> payouts, java.util.List<ExpectedSend> sends,
+                  com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts, String what) {
         Transaction signed;
         try {
             var ctx = new QuickTxBuilder(rt.backend()).compose(tx)
@@ -62,8 +75,17 @@ final class TxRunner {
 
         verify(signed, expected, what);
         verifyPayouts(signed, payouts, what);
+        verifySends(signed, sends, what);
 
         String txHash = TransactionUtil.getTxHash(signed);
+        if (System.getProperty("joust.dumpTx") != null) {
+            try {
+                java.nio.file.Files.writeString(java.nio.file.Path.of(System.getProperty("joust.dumpTx"), txHash + ".cbor"),
+                        HexUtil.encodeHexString(signed.serialize()));
+            } catch (Exception ignored) {
+                // diagnostics only
+            }
+        }
         try {
             var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
             if (!r.isSuccessful()) {
@@ -92,6 +114,14 @@ final class TxRunner {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
         String txHash = TransactionUtil.getTxHash(signed);
+        if (System.getProperty("joust.dumpTx") != null) {
+            try {
+                java.nio.file.Files.writeString(java.nio.file.Path.of(System.getProperty("joust.dumpTx"), txHash + ".cbor"),
+                        HexUtil.encodeHexString(signed.serialize()));
+            } catch (Exception ignored) {
+                // diagnostics only
+            }
+        }
         try {
             var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
             if (!r.isSuccessful()) throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
@@ -124,6 +154,44 @@ final class TxRunner {
         if (found.getInlineDatum() == null || !Datums.hex(found.getInlineDatum()).equals(Datums.hex(expected.datum()))) {
             throw new SubmitException(what + ": built transaction's state datum differs from the JVM result");
         }
+        if (expected.value() != null && !org.julclang.state.api.Assets.isEmpty(
+                org.julclang.state.api.Assets.subtract(valueOf(found), expected.value()))) {
+            throw new SubmitException(what + ": built transaction's state output value differs from the JVM result");
+        }
+    }
+
+    /** Each send is at its claimed index after balancing: address, datum, and at least its value (ADR-0007 D6). */
+    private static void verifySends(Transaction t, java.util.List<ExpectedSend> sends, String what) {
+        var outs = t.getBody().getOutputs();
+        for (ExpectedSend s : sends) {
+            if (s.index() >= outs.size()) throw new SubmitException(what + ": send output " + s.index() + " is missing");
+            TransactionOutput o = outs.get(s.index());
+            boolean datumOk = s.inlineDatumHex() != null
+                    ? o.getInlineDatum() != null && Datums.hex(o.getInlineDatum()).equals(s.inlineDatumHex())
+                    : s.datumHash() != null
+                    ? o.getDatumHash() != null && HexUtil.encodeHexString(o.getDatumHash()).equals(s.datumHash())
+                    : o.getInlineDatum() == null && o.getDatumHash() == null;
+            boolean covers = org.julclang.state.api.Assets.covers(valueOf(o), s.value());
+            if (!o.getAddress().equals(s.address()) || !datumOk || !covers) {
+                throw new SubmitException(what + ": the balanced transaction's output " + s.index()
+                        + " no longer delivers the send to " + s.address() + " (the builder moved or changed it)");
+            }
+        }
+    }
+
+    /** A built output's value as a canonical ledger value. */
+    static org.julclang.ledger.Value valueOf(TransactionOutput o) {
+        org.julclang.ledger.Value v = org.julclang.state.api.Assets.lovelace(o.getValue().getCoin());
+        if (o.getValue().getMultiAssets() != null) {
+            for (var ma : o.getValue().getMultiAssets()) {
+                for (var a : ma.getAssets()) {
+                    String n = a.getNameAsHex().startsWith("0x") ? a.getNameAsHex().substring(2) : a.getNameAsHex();
+                    v = org.julclang.state.api.Assets.add(v, org.julclang.state.api.Assets.of(
+                            HexUtil.decodeHexString(ma.getPolicyId()), HexUtil.decodeHexString(n), a.getValue()));
+                }
+            }
+        }
+        return v;
     }
 
     /** Each payout is still there after balancing: right address, tag, and at least what is owed (I7). */

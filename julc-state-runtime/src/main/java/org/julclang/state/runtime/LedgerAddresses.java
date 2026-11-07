@@ -12,10 +12,10 @@ import org.julclang.ledger.StakingCredential;
 import java.util.Optional;
 
 /** Converts between bech32 addresses and the ledger {@link Address} a script sees (key or script credentials). */
-final class LedgerAddresses {
+public final class LedgerAddresses {
     private LedgerAddresses() {}
 
-    static Address toLedger(String bech32) {
+    public static Address toLedger(String bech32) {
         var a = new com.bloxbean.cardano.client.address.Address(bech32);
         var pay = a.getPaymentCredential().orElseThrow(() -> new JoustException("address has no payment credential"));
         Optional<StakingCredential> stake = a.getDelegationCredential().map(d ->
@@ -23,7 +23,7 @@ final class LedgerAddresses {
         return new Address(ledger(pay), stake);
     }
 
-    static String toBech32(Address a, Network network) {
+    public static String toBech32(Address a, Network network) {
         Credential pay = ccl(a.credential());
         if (a.stakingCredential().isEmpty()) return AddressProvider.getEntAddress(pay, network).toBech32();
         if (!(a.stakingCredential().get() instanceof StakingCredential.StakingHash sh)) {

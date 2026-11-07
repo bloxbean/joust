@@ -43,7 +43,7 @@ Two rules:
 
 | Annotation | Purpose |
 |---|---|
-| `@Payable` | The action may add ADA (later tokens) to the contract. Generates an exact "output value = input value + received − payouts" check |
+| `@Payable` | The action may add ADA and, with `Funds` (ADR-0007), native assets it names in `accepted` to the contract. Generates an exact "output value = input value + received − payouts" check |
 | `@Deposit(ada = 2)` | Min-ADA buffer held by the state UTxO, topped up automatically as the state grows |
 
 Payouts need no annotation: the action returns them (see ADR-0001), and the generator turns each one into "an output pays

@@ -27,6 +27,8 @@ include 'examples:bank'
 include 'examples:pool'
 include 'examples:dsl'
 include 'examples:rollup'
+include 'examples:dex'
+include 'examples:market'
 
 // Local development against a JuLC checkout (opt-in, untested so far):
 //   ./gradlew build -PuseLocalJulc            (expects ../julc)

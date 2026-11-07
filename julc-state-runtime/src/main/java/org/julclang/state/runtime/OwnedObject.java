@@ -40,7 +40,19 @@ public final class OwnedObject<S, R> {
 
     /** How to create an object: filled in by a generated client. */
     public record Create<R>(String name, Account caller, BigInteger received, boolean usesCtx, boolean needsShared,
-                            BiFunction<Object, Ctx, R> run, Redeemer redeemer) {
+                            BiFunction<Object, Ctx, R> run, Redeemer redeemer, org.julclang.ledger.Value receivedAssets,
+                            AssetCreate<R> assetRun) {
+
+        public Create(String name, Account caller, BigInteger received, boolean usesCtx, boolean needsShared,
+                      BiFunction<Object, Ctx, R> run, Redeemer redeemer) {
+            this(name, caller, received, usesCtx, needsShared, run, redeemer, org.julclang.state.api.Assets.none(), null);
+        }
+
+        /** An {@code @OwnedInit} of an asset-aware contract (ADR-0007). */
+        @FunctionalInterface
+        public interface AssetCreate<R> {
+            Transition<R> apply(Object shared, Ctx ctx, org.julclang.state.api.Funds funds);
+        }
         @FunctionalInterface
         public interface Redeemer {
             Object make(TxOutRef seed, byte[] instance, Ctx ctx);
@@ -120,6 +132,7 @@ public final class OwnedObject<S, R> {
         Window window = spec.usesCtx() ? Window.open(rt, contract.spec, List.of(), List.of(), null, what) : null;
         Ctx ctx = new Ctx(callerPkh, spec.received(), BigInteger.ZERO,
                 window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
+        if (spec.assetRun() != null) return createAssets(parent, spec, codec, ref, instanceUtxo, shared, seed, object, ctx, window, what);
         R value = spec.run().apply(shared, ctx);
         byte[] instance = HexUtil.decodeHexString(parent.instanceId());
         PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(instance, value));
@@ -135,6 +148,32 @@ public final class OwnedObject<S, R> {
                 .payToContract(contract.address, List.of(Amount.lovelace(lovelace), new Amount(object.unit(), BigInteger.ONE)), datum);
         String txHash = new TxRunner(rt).submit(tx, spec.caller(), window, spec.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],
                 new TxRunner.ExpectedState(object.unit(), lovelace, datum), List.of(), new PlutusScript[]{contract.script}, what);
+        object.awaitUtxo(txHash);
+        return object;
+    }
+
+    private static <S, R> OwnedObject<S, R> createAssets(StateInstance<S> parent, Create<R> spec, Codec<R> codec, Utxo ref,
+                                                       Utxo instanceUtxo, Object shared, Utxo seed, OwnedObject<S, R> object,
+                                                       Ctx ctx, Window window, String what) {
+        var contract = parent.contract();
+        org.julclang.state.api.Assets.check(spec.receivedAssets(), what + ": received assets");
+        byte[] policy = HexUtil.decodeHexString(contract.policyId);
+        byte[] id = HexUtil.decodeHexString(object.objectId);
+        var funds = new org.julclang.state.api.Funds(policy, id, spec.receivedAssets(), org.julclang.state.api.Assets.none());
+        Transition<R> t = spec.assetRun().apply(shared, ctx, funds);
+        byte[] instance = HexUtil.decodeHexString(parent.instanceId());
+        PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(instance, t.next()));
+        var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
+        Object redeemer = spec.redeemer().make(seedRef, instance, ctx);
+        var tx = new ScriptTx().collectFrom(seed).readFrom(ref).readFrom(instanceUtxo);
+        var inValue = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(contract.spec.minAda())),
+                org.julclang.state.api.Assets.of(policy, id, BigInteger.ONE));
+        var applied = AssetTx.apply(tx, contract, spec.caller(), what, null, inValue, spec.received(), spec.receivedAssets(), t,
+                object.unit(), id, datum, redeemer, null, true, seed);
+        byte[] callerPkh = Keys.pkh(spec.caller());
+        String txHash = new TxRunner(contract.runtime).submit(tx, spec.caller(), window,
+                spec.usesCtx() ? new byte[][]{callerPkh} : new byte[0][], applied.expected(), List.of(), List.of(),
+                new PlutusScript[]{contract.script}, what);
         object.awaitUtxo(txHash);
         return object;
     }
@@ -165,6 +204,7 @@ public final class OwnedObject<S, R> {
     }
 
     private CallResult<R> attempt(Call<R> call, Utxo own) {
+        if (call.assetRun != null) return attemptAssets(call, own);
         var contract = contract();
         var spec = contract.spec;
         String what = spec.name() + "." + call.name;
@@ -233,6 +273,61 @@ public final class OwnedObject<S, R> {
             return new CallResult<>(txHash, t.next(), payouts);
         }
         return new CallResult<>(txHash, null, payouts);
+    }
+
+    /** An owned call of an asset-aware contract (ADR-0007). */
+    private CallResult<R> attemptAssets(Call<R> call, Utxo own) {
+        var contract = contract();
+        var spec = contract.spec;
+        String what = spec.name() + "." + call.name;
+        R current = decode(own);
+        byte[] callerPkh = Keys.pkh(call.caller);
+        org.julclang.ledger.Value inValue = AssetTx.valueOf(own);
+        BigInteger inLovelace = lovelaceOf(own);
+        boolean destroy = call.kind == Call.Kind.DESTROY;
+        BigInteger balance = destroy ? inLovelace : inLovelace.subtract(BigInteger.valueOf(spec.minAda()));
+        for (var rule : call.signers) {
+            if (!Arrays.equals(rule.key().apply(current), callerPkh)) {
+                throw new RequireException(what + ": must be called by the key in '" + rule.field() + "'");
+            }
+        }
+        org.julclang.state.api.Assets.check(call.receivedAssets, what + ": received assets");
+        Window window = call.usesTime() ? Window.open(contract.runtime, spec, call.notBefore, call.notAfter, current, what) : null;
+        Ctx ctx = new Ctx(callerPkh, call.received, balance,
+                window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
+        Utxo sharedUtxo = call.needsShared ? parent.utxo() : null;
+        Object shared = call.needsShared ? parent.state() : null;
+        byte[] policy = HexUtil.decodeHexString(contract.policyId);
+        byte[] id = HexUtil.decodeHexString(objectId);
+        var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id));
+        Transition<R> t = call.assetRun.apply(current, shared, ctx, funds);
+        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemer.make(ctx));
+        Utxo ref = contract.findReferenceScript();
+        var tx = new ScriptTx().collectFrom(own, redeemer).readFrom(ref);
+        if (sharedUtxo != null) tx.readFrom(sharedUtxo);
+        TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(own.getTxHash())), BigInteger.valueOf(own.getOutputIndex()));
+        PlutusData datum = destroy ? null
+                : PlutusDataAdapter.convert(codec.wrap().apply(HexUtil.decodeHexString(parent.instanceId()), t.next()));
+        var applied = AssetTx.apply(tx, contract, call.caller, what, ownRef, inValue, call.received, call.receivedAssets, t,
+                unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false);
+        List<byte[]> signers = new ArrayList<>();
+        if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
+        var scripts = new ArrayList<PlutusScript>(List.of(contract.script));
+        if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
+        String txHash = new TxRunner(contract.runtime).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
+                applied.expected(), applied.payouts(), applied.sends(), scripts.toArray(new PlutusScript[0]), what);
+        var payouts = new ArrayList<Payout>();
+        t.payouts().forEach(payouts::add);
+        if (!destroy) {
+            awaitUtxo(txHash);
+            return new CallResult<>(txHash, t.next(), payouts);
+        }
+        return new CallResult<>(txHash, null, payouts);
+    }
+
+    /** The object UTxO's full value (ADR-0007). */
+    public org.julclang.ledger.Value fullValue() {
+        return AssetTx.valueOf(utxo());
     }
 
     private void awaitUtxo(String txHash) {

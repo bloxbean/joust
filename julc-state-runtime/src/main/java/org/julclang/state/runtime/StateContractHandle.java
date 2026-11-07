@@ -145,6 +145,7 @@ public final class StateContractHandle<S> {
         Ctx ctx = window == null
                 ? new Ctx(callerPkh, d.received(), BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO)
                 : new Ctx(callerPkh, d.received(), BigInteger.ZERO, window.fromMs(), window.toMs());
+        if (d.assetRun() != null) return deployAssets(d, ref, seed, instance, ctx, window, callerPkh);
         MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapStore()) : null;
         S made = maps ? merkle.run(() -> d.run().apply(ctx)) : d.run().apply(ctx);   // the developer's @Init, on the JVM
         var seedOwner = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())),
@@ -179,6 +180,29 @@ public final class StateContractHandle<S> {
                 "deploy " + spec.name());
         instance.awaitState(txHash);
         return new DeployResult<>(instance, txHash, initial);
+    }
+
+    /** Deploys an asset-aware contract (ADR-0007): the init may take native assets in. */
+    private DeployResult<S> deployAssets(Deploy<S> d, Utxo ref, Utxo seed, StateInstance<S> instance, Ctx ctx, Window window,
+                                         byte[] callerPkh) {
+        String what = "deploy " + spec.name();
+        org.julclang.state.api.Assets.check(d.receivedAssets(), what + ": received assets");
+        byte[] policy = HexUtil.decodeHexString(policyId);
+        byte[] id = HexUtil.decodeHexString(instance.instanceId());
+        var funds = new org.julclang.state.api.Funds(policy, id, d.receivedAssets(), org.julclang.state.api.Assets.none());
+        Transition<S> t = d.assetRun().apply(ctx, funds);
+        PlutusData datum = PlutusDataAdapter.convert(t.next());
+        var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
+        Object redeemer = d.redeemer().make(seedRef, ctx);
+        var tx = new ScriptTx().collectFrom(seed).readFrom(ref);
+        var inValue = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(spec.minAda())),
+                org.julclang.state.api.Assets.of(policy, id, BigInteger.ONE));
+        var applied = AssetTx.apply(tx, this, d.caller(), what, null, inValue, d.received(), d.receivedAssets(), t,
+                instance.unit(), id, datum, redeemer, null, true, seed);
+        String txHash = new TxRunner(runtime).submit(tx, d.caller(), window, d.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],
+                applied.expected(), List.of(), List.of(), new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script}, what);
+        instance.awaitState(txHash);
+        return new DeployResult<>(instance, txHash, t.next());
     }
 
     /** Result of {@link #deploy}. */
@@ -230,6 +254,31 @@ public final class StateContractHandle<S> {
             return new MinAdaCalculator(pp).calculateMinAda(out);
         } catch (Exception e) {
             throw new JoustException("cannot compute the minimum UTxO for a payout", e);
+        }
+    }
+
+    /** Ledger minimum for an output of {@code amounts} at {@code addr}, with an inline datum if not null. */
+    BigInteger minUtxoFor(String addr, PlutusData datum, List<Amount> amounts) {
+        try {
+            ProtocolParams pp = runtime.backend().getEpochService().getProtocolParameters().getValue();
+            var multi = new java.util.ArrayList<com.bloxbean.cardano.client.transaction.spec.MultiAsset>();
+            BigInteger coin = BigInteger.ZERO;
+            for (Amount a : amounts) {
+                if (a.getUnit().equals("lovelace")) {
+                    coin = a.getQuantity();
+                } else {
+                    String unit = a.getUnit();
+                    var ma = new com.bloxbean.cardano.client.transaction.spec.MultiAsset(unit.substring(0, 56),
+                            new java.util.ArrayList<>(List.of(new Asset("0x" + unit.substring(56), a.getQuantity()))));
+                    multi.add(ma);
+                }
+            }
+            var b = TransactionOutput.builder().address(addr)
+                    .value(Value.builder().coin(coin.max(BigInteger.ONE)).multiAssets(multi).build());
+            if (datum != null) b.inlineDatum(datum);
+            return new MinAdaCalculator(pp).calculateMinAda(b.build());
+        } catch (Exception e) {
+            throw new JoustException("cannot compute the minimum UTxO for an output", e);
         }
     }
 

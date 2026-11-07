@@ -83,6 +83,36 @@ public record ContractIR(String packageName,
         return actions.stream().filter(TransitionIR::batched).toList();
     }
 
+    /** Every transition: init, actions, destroys, owned inits, owned actions, owned destroys. */
+    public List<TransitionIR> allTransitions() {
+        var all = new java.util.ArrayList<TransitionIR>();
+        all.add(init);
+        all.addAll(actions);
+        all.addAll(destroys);
+        all.addAll(ownedInits);
+        all.addAll(ownedActions);
+        all.addAll(ownedDestroys);
+        return List.copyOf(all);
+    }
+
+    /**
+     * The contract handles native assets (ADR-0007 D2): some method takes Funds, sends or mints. Then every transition
+     * checks the full multi-asset value; otherwise the cheaper lovelace-only check of ADR-0001 I3 applies.
+     */
+    public boolean assetAware() {
+        return allTransitions().stream().anyMatch(TransitionIR::assetAware);
+    }
+
+    /** Some method sends outputs (ADR-0007 D5): validators embed the output verifier's hash. */
+    public boolean hasSends() {
+        return allTransitions().stream().anyMatch(TransitionIR::resultSends);
+    }
+
+    /** Spend-side methods that may mint user tokens (ADR-0007 D4). */
+    public boolean hasMints() {
+        return allTransitions().stream().anyMatch(TransitionIR::resultMint);
+    }
+
     public boolean hasBatched() {
         return actions.stream().anyMatch(TransitionIR::batched);
     }

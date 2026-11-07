@@ -98,6 +98,7 @@ public final class StateInstance<S> {
     }
 
     private CallResult<S> attempt(Call<S> call, Utxo stateUtxo) {
+        if (call.assetRun != null) return attemptAssets(call, stateUtxo);
         var spec = contract.spec;
         String what = spec.name() + "." + call.name;
         S current = decode(stateUtxo);
@@ -189,6 +190,61 @@ public final class StateInstance<S> {
         }
         awaitGone();
         return new CallResult<>(txHash, null, payouts);
+    }
+
+    /** A call of an asset-aware contract (ADR-0007): full values, sends, user mints. */
+    private CallResult<S> attemptAssets(Call<S> call, Utxo stateUtxo) {
+        var spec = contract.spec;
+        String what = spec.name() + "." + call.name;
+        S current = decode(stateUtxo);
+        byte[] callerPkh = Keys.pkh(call.caller);
+        org.julclang.ledger.Value inValue = AssetTx.valueOf(stateUtxo);
+        BigInteger inLovelace = lovelaceOf(stateUtxo);
+        boolean destroy = call.kind == Call.Kind.DESTROY;
+        BigInteger balance = destroy ? inLovelace : inLovelace.subtract(BigInteger.valueOf(spec.minAda()));
+        for (var rule : call.signers) {
+            if (!Arrays.equals(rule.key().apply(current), callerPkh)) {
+                throw new RequireException(what + ": must be called by the key in '" + rule.field() + "'");
+            }
+        }
+        org.julclang.state.api.Assets.check(call.receivedAssets, what + ": received assets");
+        Window window = call.usesTime()
+                ? Window.open(contract.runtime, spec, call.notBefore, call.notAfter, current, what) : null;
+        Ctx ctx = new Ctx(callerPkh, call.received, balance,
+                window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
+        byte[] policy = HexUtil.decodeHexString(contract.policyId);
+        byte[] id = HexUtil.decodeHexString(instanceId);
+        var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id));
+        Transition<S> t = call.assetRun.apply(current, null, ctx, funds);   // the developer's method, on the JVM
+        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemer.make(ctx));
+        Utxo ref = contract.findReferenceScript();
+        if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
+        var tx = new ScriptTx().collectFrom(stateUtxo, redeemer).readFrom(ref);
+        TxOutRef own = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
+                BigInteger.valueOf(stateUtxo.getOutputIndex()));
+        PlutusData datum = destroy ? null : PlutusDataAdapter.convert(t.next());
+        var applied = AssetTx.apply(tx, contract, call.caller, what, own, inValue, call.received, call.receivedAssets, t,
+                unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false);
+        List<byte[]> signers = new ArrayList<>();
+        if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
+        var scripts = new ArrayList<com.bloxbean.cardano.client.plutus.spec.PlutusScript>(List.of(contract.script));
+        if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
+        String txHash = new TxRunner(contract.runtime).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
+                applied.expected(), applied.payouts(), applied.sends(),
+                scripts.toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusScript[0]), what);
+        var payouts = new ArrayList<Payout>();
+        t.payouts().forEach(payouts::add);
+        if (!destroy) {
+            awaitState(txHash);
+            return new CallResult<>(txHash, t.next(), payouts);
+        }
+        awaitGone();
+        return new CallResult<>(txHash, null, payouts);
+    }
+
+    /** The current state UTxO's full value (ADR-0007). */
+    public org.julclang.ledger.Value value() {
+        return AssetTx.valueOf(utxo());
     }
 
     /** After a destroy: waits until the indexer no longer shows the state UTxO. */

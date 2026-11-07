@@ -18,7 +18,17 @@ import java.util.function.Function;
  * @param redeemer  builds the {@code Create} redeemer from the seed and the Ctx
  */
 public record Deploy<S>(Account caller, BigInteger received, boolean usesCtx, Function<Ctx, S> run,
-                        CreateRedeemer redeemer) {
+                        CreateRedeemer redeemer, org.julclang.ledger.Value receivedAssets, AssetInit<S> assetRun) {
+
+    public Deploy(Account caller, BigInteger received, boolean usesCtx, Function<Ctx, S> run, CreateRedeemer redeemer) {
+        this(caller, received, usesCtx, run, redeemer, org.julclang.state.api.Assets.none(), null);
+    }
+
+    /** The {@code @Init} of an asset-aware contract (ADR-0007): Ctx and Funds in, the state and what it accepts out. */
+    @FunctionalInterface
+    public interface AssetInit<S> {
+        Transition<S> apply(Ctx ctx, org.julclang.state.api.Funds funds);
+    }
 
     /** Builds the {@code CreateInstance} redeemer from the seed and the Ctx. */
     @FunctionalInterface

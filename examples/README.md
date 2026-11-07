@@ -16,6 +16,8 @@ Each example contains:
 | `counter` | Actions without value; an anyone-can-call action without `Ctx`; `@OnlyOwner`; `@Destroy` returning the deposit |
 | `vault` | `@Payable` init and deposit; `@OnlyOwner @ValidAfter` withdraw returning payouts (`Result`); close |
 | `escrow` | `@Payable @Init` (buyer funds it); two `@Destroy`s; `Clock.after` lets anyone refund after the deadline |
+| `dex` | **Option G (ADR-0007).** A constant-product AMM for one ADA/token pair: reserves are what the UTxO holds (`Funds.held`); LP tokens are minted and burned by the contract's own policy (`mint`, `ByAction`); swaps send tokens with `Send`. Every call names exactly what it `accepted` |
+| `market` | **Option G (ADR-0007).** An NFT marketplace: each listing is an owned object holding its NFT; `buy` (a `@Payable` owned destroy) pays the seller and sends the NFT to the buyer and a royalty to a script address with an inline datum; `cancel` is the escape hatch |
 | `token` | **Option B (ADR-0002).** An account-model token whose balances live in a `MerkleMap` (an unbounded map in a 32-byte root). MPF proofs are checked by the shared map verifier (withdraw-zero). The script is read by reference |
 | `bank` | **Option C (ADR-0003).** Shared bank config plus one owned account per customer. Customers act in parallel; withdrawals read the config by reference; closing works even if the bank is paused |
 | `pool` | **Option D (ADR-0004).** `@Batched` donations and order-dependent ticket sales as intents: users lock requests concurrently, a permissionless batcher applies them in one transaction (refunds, change payouts, a cancel, an expired intent) |
@@ -63,6 +65,15 @@ are per script execution, from the harness tests. For scale, a transaction may u
 | | | mint (1 read, 1 write) | SPEND + VERIFIER | 248.5M + 335.4M | 823k + 1,274k |
 | | | transfer (2 reads, 2 writes) | SPEND + VERIFIER | 310.7M + 501.3M | 1,046k + 1,898k |
 | | | transfer, 203 holders in the map | SPEND + VERIFIER | 310.7M + 741.3M | 1,046k + 2,920k |
+
+| Dex | 13 KB (+ OutputVerifier 0.7 KB, shared) | open | MINT | 112.9M | 365k |
+| | | addLiquidity (LP minted, sent) | SPEND + MINT + VERIFIER | 303.9M + 57.8M + 21.2M | 1,007k + 214k + 86k |
+| | | swapAdaForToken | SPEND + VERIFIER | 260.5M + 21.2M | 876k + 86k |
+| | | swapTokenForAda | SPEND | 222.6M | 739k |
+| | | removeLiquidity (LP burned) | SPEND + MINT + VERIFIER | 350.3M + 69.5M + 22.1M | 1,158k + 260k + 90k |
+| Market | 12 KB | offer (NFT in) | MINT | 181.7M | 601k |
+| | | buy (payout, NFT send, royalty send) | SPEND + MINT + VERIFIER | 405.0M + 24.0M + 35.3M | 1,389k + 100k + 145k |
+| | | cancel | SPEND + MINT + VERIFIER | 227.8M + 24.0M + 21.2M | 801k + 100k + 86k |
 
 All contracts read their script by reference (ADR-0002 D9); the first deploy of a contract type publishes it.
 

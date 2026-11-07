@@ -43,6 +43,12 @@ public final class TxModel {
     /** Indexes in {@link #outputs} of payout outputs. */
     public final List<Integer> payoutOutputs = new ArrayList<>();
 
+    /** The output registry's claims (ADR-0007 D5), if the transaction sends outputs; else null. */
+    public List<org.julclang.state.api.OutputClaim> outputClaims;
+
+    /** Indexes in {@link #outputs} of send outputs (ADR-0007). */
+    public final List<Integer> sendOutputs = new ArrayList<>();
+
     public TxModel(Kind kind) {
         this.kind = kind;
     }
@@ -61,6 +67,8 @@ public final class TxModel {
         c.payoutOutputs.addAll(payoutOutputs);
         c.mapClaims = mapClaims == null ? null : new java.util.ArrayList<>(mapClaims);
         c.token = token;
+        c.outputClaims = outputClaims == null ? null : new ArrayList<>(outputClaims);
+        c.sendOutputs.addAll(sendOutputs);
         return c;
     }
 

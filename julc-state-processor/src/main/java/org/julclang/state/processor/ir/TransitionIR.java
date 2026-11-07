@@ -19,6 +19,11 @@ import java.util.List;
  * @param shared      the method takes the instance state read-only ({@code @Shared}, owned methods only)
  * @param batched     the action may also run as an intent ({@code @Batched}, ADR-0004)
  * @param batchOnly   only as an intent: no direct-call redeemer ({@code @Batched(only = true)})
+ * @param hasFunds    the method declares a trailing {@code Funds} (ADR-0007)
+ * @param resultPayouts the result record has a {@code payouts} component (RESULT, SETTLE)
+ * @param resultSends the result record has a {@code sends} component (ADR-0007)
+ * @param resultMint  the result record has a {@code mint} component (ADR-0007)
+ * @param resultAccepted the result record has an {@code accepted} component (ADR-0007 r2)
  */
 public record TransitionIR(Kind kind,
                            String method,
@@ -33,7 +38,12 @@ public record TransitionIR(Kind kind,
                            List<String> validBefore,
                            boolean shared,
                            boolean batched,
-                           boolean batchOnly) {
+                           boolean batchOnly,
+                           boolean hasFunds,
+                           boolean resultPayouts,
+                           boolean resultSends,
+                           boolean resultMint,
+                           boolean resultAccepted) {
 
     public enum Kind { INIT, ACTION, DESTROY, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY }
 
@@ -58,7 +68,24 @@ public record TransitionIR(Kind kind,
         /** a record {@code (S state, JulcList<Payout> payouts)} */
         RESULT,
         /** {@code JulcList<Payout>} ({@code @Destroy}) */
-        PAYOUTS
+        PAYOUTS,
+        /** a destroy's record of {@code payouts}, {@code sends} and/or {@code mint}, without state (ADR-0007) */
+        SETTLE
+    }
+
+    /** Returns a record (RESULT or SETTLE). */
+    public boolean returnsRecord() {
+        return returns == Returns.RESULT || returns == Returns.SETTLE;
+    }
+
+    /** The method pays out with {@code Payout}s (a payout list, or a record with a payouts component). */
+    public boolean hasPayouts() {
+        return returns == Returns.PAYOUTS || (returnsRecord() && resultPayouts);
+    }
+
+    /** Touches native assets: takes Funds, sends or mints (ADR-0007). */
+    public boolean assetAware() {
+        return hasFunds || resultSends || resultMint;
     }
 
     public boolean paysOut() {

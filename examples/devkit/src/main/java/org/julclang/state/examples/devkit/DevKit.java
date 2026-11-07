@@ -106,6 +106,92 @@ public final class DevKit {
         }
     }
 
+    /**
+     * Mints {@code quantity} of a test token named {@code name} under a single-signature native policy of {@code owner}
+     * (ADR-0007 examples); returns the policy id (hex). The tokens land at {@code owner}'s base address.
+     */
+    public static String mintToken(Account owner, String name, long quantity) {
+        try {
+            var key = com.bloxbean.cardano.client.crypto.VerificationKey.create(owner.publicKeyBytes());
+            var script = com.bloxbean.cardano.client.transaction.spec.script.ScriptPubkey.create(key);
+            String policy = script.getPolicyId();
+            var tx = new com.bloxbean.cardano.client.quicktx.Tx()
+                    .mintAssets(script, new com.bloxbean.cardano.client.transaction.spec.Asset(name, java.math.BigInteger.valueOf(quantity)),
+                            owner.baseAddress())
+                    .from(owner.baseAddress());
+            var r = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend()).compose(tx)
+                    .withSigner(com.bloxbean.cardano.client.function.helper.SignerProviders.signerFrom(owner))
+                    .completeAndWait(java.time.Duration.ofSeconds(60));
+            if (!r.isSuccessful()) throw new IllegalStateException("mint failed: " + r.getResponse());
+            waitForUnit(owner.baseAddress(), policy + com.bloxbean.cardano.client.util.HexUtil.encodeHexString(
+                    name.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            return policy;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("mint failed", e);
+        }
+    }
+
+    /**
+     * Moves everything at {@code a}'s enterprise address to its base address. Contracts send to a caller's enterprise
+     * address (never the fee payer's base address; ADR-0007 D6); this makes those funds spendable by later calls.
+     */
+    public static void sweepEnterprise(Account a) {
+        try {
+            var utxos = backend().getUtxoService().getUtxos(a.enterpriseAddress(), 100, 1);
+            if (!utxos.isSuccessful() || utxos.getValue() == null || utxos.getValue().isEmpty()) return;
+            var totals = new java.util.LinkedHashMap<String, java.math.BigInteger>();
+            for (var u : utxos.getValue()) {
+                for (var amt : u.getAmount()) totals.merge(amt.getUnit(), amt.getQuantity(), java.math.BigInteger::add);
+            }
+            var amounts = new java.util.ArrayList<com.bloxbean.cardano.client.api.model.Amount>();
+            totals.forEach((unit, q) -> {
+                if (!unit.equals("lovelace")) amounts.add(new com.bloxbean.cardano.client.api.model.Amount(unit, q));
+            });
+            // Spend the enterprise UTxOs explicitly; the base address tops up the min-ADA and pays the fee.
+            var tx = new com.bloxbean.cardano.client.quicktx.Tx()
+                    .collectFrom(utxos.getValue())
+                    .payToAddress(a.baseAddress(), amounts.isEmpty()
+                            ? java.util.List.of(com.bloxbean.cardano.client.api.model.Amount.ada(1)) : amounts)
+                    .from(a.baseAddress());
+            var r = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend()).compose(tx)
+                    .withSigner(com.bloxbean.cardano.client.function.helper.SignerProviders.signerFrom(a))
+                    .feePayer(a.baseAddress())
+                    .completeAndWait(java.time.Duration.ofSeconds(60));
+            if (!r.isSuccessful()) throw new IllegalStateException("sweep failed: " + r.getResponse());
+            Thread.sleep(1500);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("sweep failed", e);
+        }
+    }
+
+    /** How much of {@code unit} ({@code lovelace} or policy+name hex) sits at {@code address}. */
+    public static java.math.BigInteger balance(String address, String unit) {
+        try {
+            var r = backend().getUtxoService().getUtxos(address, 100, 1);
+            java.math.BigInteger sum = java.math.BigInteger.ZERO;
+            if (r.isSuccessful() && r.getValue() != null) {
+                for (var u : r.getValue()) {
+                    for (var amt : u.getAmount()) if (amt.getUnit().equalsIgnoreCase(unit)) sum = sum.add(amt.getQuantity());
+                }
+            }
+            return sum;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void waitForUnit(String address, String unit) throws Exception {
+        for (int i = 0; i < 60; i++) {
+            if (balance(address, unit).signum() > 0) return;
+            Thread.sleep(500);
+        }
+        throw new IllegalStateException(unit + " did not arrive at " + address);
+    }
+
     private static void waitForFunds(String address) throws Exception {
         var backend = backend();
         for (int i = 0; i < 30; i++) {

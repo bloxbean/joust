@@ -39,6 +39,11 @@ public class JoustProcessor extends AbstractProcessor {
     }
 
     @Override
+    public Set<String> getSupportedOptions() {
+        return Set.of("joust.traces");
+    }
+
+    @Override
     public SourceVersion getSupportedSourceVersion() {
         return SourceVersion.latestSupported();
     }
@@ -61,7 +66,8 @@ public class JoustProcessor extends AbstractProcessor {
     }
 
     private void generate(ContractIR ir, TypeElement origin) {
-        write(ir.packageName() + "." + ir.validatorName(), ValidatorGenerator.generate(ir), origin);
+        boolean traces = Boolean.parseBoolean(processingEnv.getOptions().getOrDefault("joust.traces", "false"));
+        write(ir.packageName() + "." + ir.validatorName(), ValidatorGenerator.generate(ir, traces), origin);
         write(ir.packageName() + "." + ir.clientName(), ClientGenerator.generate(ir), origin);
     }
 

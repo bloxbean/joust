@@ -1,0 +1,29 @@
+plugins {
+    id 'application'
+}
+
+description = 'JOUST example: market (NFT marketplace: listings hold the NFT, ADR-0007)'
+
+dependencies {
+    implementation project(':julc-state-runtime')
+    implementation project(':examples:devkit')
+
+    annotationProcessor project(':julc-state-processor')
+    annotationProcessor libs.julc.annotation.processor
+    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+
+    testImplementation project(':julc-state-testkit')
+}
+
+application {
+    mainClass = 'org.julclang.state.examples.market.MarketApp'
+}
+
+tasks.named('run', JavaExec) {
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+// -Pjoust.traces: each failing validator check traces its name (debugging only; larger scripts).
+if (project.hasProperty('joust.traces')) {
+    tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.traces=true'] }
+}

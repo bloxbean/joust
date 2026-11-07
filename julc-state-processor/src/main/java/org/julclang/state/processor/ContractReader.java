@@ -57,6 +57,9 @@ final class ContractReader {
     static final String SHARED = API + "Shared";
     static final String BATCHED = API + "Batched";
     static final String PAYOUT = API + "Payout";
+    static final String FUNDS = API + "Funds";
+    static final String SEND = API + "Send";
+    static final String VALUE = "org.julclang.ledger.Value";
     static final String ONCHAIN_LIBRARY = "org.julclang.stdlib.annotation.OnchainLibrary";
     static final String JULC_LIST = "org.julclang.core.types.JulcList";
     static final String BIG_INTEGER = "java.math.BigInteger";
@@ -210,7 +213,12 @@ final class ContractReader {
                 .map(v -> ((Number) v.getValue()).intValue()).orElse(512);
         long maxValidityMs = sc.flatMap(a -> value(a, "maxValidityMs"))
                 .map(v -> ((Number) v.getValue()).longValue()).orElse(3_600_000L);
-        long requiredMinAda = requiredMinAda(maxDatumBytes);
+        boolean assetAware = concat(List.of(init), actionIRs, destroyIRs, ownedInitIRs, ownedActionIRs, ownedDestroyIRs)
+                .stream().anyMatch(TransitionIR::assetAware);
+        int assetSlots = sc.flatMap(a -> value(a, "assetSlots"))
+                .map(v -> ((Number) v.getValue()).intValue()).filter(n -> n >= 0).orElse(assetAware ? 4 : 0);
+        if (assetSlots < 0 || assetSlots > 64) error(type, "@StateContract(assetSlots) must be between 0 and 64");
+        long requiredMinAda = requiredMinAda(maxDatumBytes, assetSlots);
         long minAda = sc.flatMap(a -> value(a, "minAda"))
                 .map(v -> ((Number) v.getValue()).longValue()).orElse(0L);
         if (maxDatumBytes < 16 || maxDatumBytes > 8192) {
@@ -281,6 +289,13 @@ final class ContractReader {
                 }
             }
         }
+        if (assetAware && anyMap) {
+            error(type, "MerkleMap state cannot be combined with native assets (Funds, sends, mint) yet (ADR-0007)");
+        }
+        if (assetAware && anyBatched) {
+            error(type, "@Batched actions cannot be combined with native assets (Funds, sends, mint) yet: intents carry"
+                    + " only lovelace (ADR-0007 r2)");
+        }
         if (anyMap && actionIRs.stream().anyMatch(TransitionIR::batched)) {
             error(type, "@Batched actions and MerkleMap state cannot be combined yet: each step of a batch would need its"
                     + " own map claim (ADR-0004 D1)");
@@ -304,8 +319,9 @@ final class ContractReader {
      * Deposit covering the ledger minimum for a state output: 160 bytes of ledger overhead, about 200 bytes of address,
      * value (lovelace plus the thread token) and CBOR framing, and the datum. Rounded up to 0.1 ADA.
      */
-    static long requiredMinAda(int maxDatumBytes) {
-        long raw = COINS_PER_UTXO_BYTE * (160L + 200L + maxDatumBytes);
+    static long requiredMinAda(int maxDatumBytes, int assetSlots) {
+        // Each native asset the UTxO may hold adds about 80 bytes: policy (28), name (up to 32), quantity, framing.
+        long raw = COINS_PER_UTXO_BYTE * (160L + 200L + maxDatumBytes + 80L * assetSlots);
         return (raw + 99_999L) / 100_000L * 100_000L;
     }
 
@@ -314,7 +330,8 @@ final class ContractReader {
             "BigInteger", "Optional", "List", "PlutusData", "JulcList", "AssetEntry", "ScriptContext", "TxInfo",
             "TxOut", "TxInInfo", "TxOutRef", "Value", "Address", "Credential", "ScriptInfo", "Builtins", "Entrypoint",
             "MultiValidator", "Purpose", "AddressLib", "ByteStringLib", "ContextsLib", "OutputLib", "ValuesLib",
-            "IntervalLib", "CryptoLib", "Interval", "IntervalBoundType", "OutputDatum", "Ctx", "Clock", "Payout", "Payouts", "CreateInstance", "BurnInstance", "Account", "StateRuntime",
+            "IntervalLib", "CryptoLib", "Interval", "IntervalBoundType", "OutputDatum", "Ctx", "Clock", "Payout", "Payouts",
+            "Funds", "Send", "Sends", "Assets", "OutputClaim", "OutputClaims", "ByAction", "JulcValue", "CreateInstance", "BurnInstance", "Account", "StateRuntime",
             "StateInstance", "TxResult", "Transition", "Lifecycle", "Calls", "Call", "MerkleMap", "MapEntry", "MapWitness",
             "MapWitnesses", "Mpf", "Deploy", "ContractSpec",
             "StateContractHandle", "Utxo", "Arrays", "Holding", "ScriptPurpose");
@@ -351,13 +368,17 @@ final class ContractReader {
             }
         }
         if (shared) first++;
-        boolean hasCtx = ps.size() > first && isNamed(ps.get(ps.size() - 1).asType(), CTX);
-        int last = hasCtx ? ps.size() - 1 : ps.size();
+        boolean hasFunds = ps.size() > first && isNamed(ps.get(ps.size() - 1).asType(), FUNDS);
+        int end = hasFunds ? ps.size() - 1 : ps.size();
+        boolean hasCtx = end > first && isNamed(ps.get(end - 1).asType(), CTX);
+        int last = hasCtx ? end - 1 : end;
         List<ParamIR> params = new ArrayList<>();
         for (int i = first; i < last; i++) {
             var p = ps.get(i);
-            if (isNamed(p.asType(), CTX)) {
-                error(p, "Ctx must be the last parameter");
+            if (isNamed(p.asType(), FUNDS)) {
+                error(p, "Funds must be the last parameter (after Ctx, if any)");
+            } else if (isNamed(p.asType(), CTX)) {
+                error(p, "Ctx must be the last parameter, or the last before Funds");
             } else if (same(p.asType(), r.stateType()) || same(p.asType(), r.sharedType())) {
                 error(p, ownedKind ? "the state reaches an owned method only through one @Shared parameter"
                         : "only the first parameter may be the state");
@@ -371,38 +392,44 @@ final class ContractReader {
 
         TransitionIR.Returns returns;
         String resultType = null;
+        ResultShape shape = null;
         TypeMirror ret = m.getReturnType();
         switch (kind) {
             case INIT, OWNED_INIT -> {
-                returns = TransitionIR.Returns.STATE;
-                if (!same(ret, r.stateType())) {
-                    error(m, "@OwnedInit must return the owned record (" + r.types().render(r.stateType()) + ")");
+                if (same(ret, r.stateType())) {
+                    returns = TransitionIR.Returns.STATE;
+                } else {
+                    returns = TransitionIR.Returns.RESULT;
+                    shape = resultShape(m, ret, r, true);
+                    resultType = r.types().render(ret);
+                    if (shape.payouts() || shape.sends() || shape.mint()) {
+                        error(m, "@" + label(kind) + " cannot pay out, send or mint; its record may only add 'accepted'"
+                                + " (ADR-0007 D1)");
+                    }
                 }
             }
             case DESTROY, OWNED_DESTROY -> {
-                returns = TransitionIR.Returns.PAYOUTS;
-                if (!isPayoutList(ret)) {
-                    error(m, "@Destroy must return JulcList<Payout>: the payouts that allocate the contract's balance");
+                if (isPayoutList(ret)) {
+                    returns = TransitionIR.Returns.PAYOUTS;
+                } else {
+                    returns = TransitionIR.Returns.SETTLE;
+                    shape = resultShape(m, ret, r, false);
+                    resultType = r.types().render(ret);
                 }
             }
             default -> {
                 if (same(ret, r.stateType())) {
                     returns = TransitionIR.Returns.STATE;
-                } else if (isResultRecord(ret, r.stateType())) {
-                    returns = TransitionIR.Returns.RESULT;
-                    resultType = r.types().render(ret);
                 } else {
-                    returns = TransitionIR.Returns.STATE;
-                    error(m, "@Action must return the state (" + r.types().render(r.stateType())
-                            + ") or a record (" + r.types().render(r.stateType())
-                            + " state, JulcList<Payout> payouts) to pay funds out");
+                    returns = TransitionIR.Returns.RESULT;
+                    shape = resultShape(m, ret, r, true);
+                    resultType = r.types().render(ret);
                 }
             }
         }
 
         boolean payable = annotation(m, PAYABLE).isPresent();
         boolean destroys = kind == TransitionIR.Kind.DESTROY || kind == TransitionIR.Kind.OWNED_DESTROY;
-        if (payable && destroys) error(m, "@Payable does not apply to a destroy");
         if (payable && !hasCtx) error(m, "@Payable needs a Ctx parameter, to read ctx.received()");
         if (destroys && !hasCtx) {
             error(m, "@Destroy needs a Ctx parameter: it must pay out ctx.balance(), everything the instance holds"
@@ -445,6 +472,9 @@ final class ContractReader {
                 if (!hasCtx) {
                     error(m, "@Batched needs a Ctx parameter: in a batch, ctx.caller() is the intent's owner");
                 }
+                if (hasFunds || (shape != null && (shape.sends() || shape.mint()))) {
+                    error(m, "@Batched actions cannot take Funds, send or mint yet (ADR-0007 D1)");
+                }
                 if (!(signedBy.isEmpty() && validAfter.isEmpty() && validBefore.isEmpty())) {
                     error(m, "@Batched cannot use @SignedBy, @OnlyOwner, @ValidAfter or @ValidBefore: the batcher, not the"
                             + " caller, signs a batch; authorise with ctx.caller() and check time with Clock (ADR-0004 D1)");
@@ -455,8 +485,90 @@ final class ContractReader {
         String name = m.getSimpleName().toString();
         String variant = kind == TransitionIR.Kind.INIT ? "CreateInstance"
                 : Character.toUpperCase(name.charAt(0)) + name.substring(1);
+        for (ParamIR p : params) {
+            if (p.name().equals("funds") || p.name().equals("assetsIn")) {
+                error(m, "parameter name \"" + p.name() + "\" is reserved for Funds and its redeemer field; rename it");
+            }
+        }
+        boolean accepts = shape != null && shape.accepted();
+        if (payable && hasFunds && !accepts) {
+            error(m, "a @Payable method with Funds must return a record with 'accepted' (Value): exactly the native assets"
+                    + " it takes in, so nobody can push unwanted tokens into the contract (ADR-0007 r2)");
+        }
+        if (accepts && !(payable && hasFunds)) {
+            error(m, "'accepted' needs @Payable and a Funds parameter: only then can the caller add native assets");
+        }
         return new TransitionIR(kind, name, variant, List.copyOf(params), hasCtx, payable, returns, resultType,
-                List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared, batched, batchOnly);
+                List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared, batched, batchOnly,
+                hasFunds, shape != null && shape.payouts(), shape != null && shape.sends(), shape != null && shape.mint(),
+                accepts);
+    }
+
+    /** Which effect components a result record has (ADR-0007 D1). */
+    private record ResultShape(boolean payouts, boolean sends, boolean mint, boolean accepted) {}
+
+    /**
+     * Reads a result record: components named {@code state} (actions: required; destroys: forbidden), {@code payouts}
+     * ({@code JulcList<Payout>}), {@code sends} ({@code JulcList<Send>}) and {@code mint} ({@code Value}), nothing else.
+     */
+    private ResultShape resultShape(ExecutableElement m, TypeMirror ret, Reading r, boolean action) {
+        String what = action ? "@" + "Action" : "@Destroy";
+        String expected = action
+                ? "the state (" + r.types().render(r.stateType()) + ") or a record with a 'state' component and any of"
+                + " 'payouts' (JulcList<Payout>), 'sends' (JulcList<Send>), 'mint' (Value) and 'accepted' (Value)"
+                : "JulcList<Payout>, or a record with any of 'payouts' (JulcList<Payout>), 'sends' (JulcList<Send>),"
+                + " 'mint' (Value) and 'accepted' (Value)";
+        TypeElement e = asRecord(ret);
+        if (e == null) {
+            error(m, what + " must return " + expected);
+            return new ResultShape(false, false, false, false);
+        }
+        boolean state = false, payouts = false, sends = false, mint = false, accepted = false;
+        var known = java.util.Set.of("state", "payouts", "sends", "mint", "accepted");
+        for (RecordComponentElement c : e.getRecordComponents()) {
+            if (!known.contains(c.getSimpleName().toString())) {
+                error(m, what + " must return " + expected + "; component '" + c.getSimpleName() + "' is none of these");
+                return new ResultShape(false, false, false, false);
+            }
+        }
+        for (RecordComponentElement c : e.getRecordComponents()) {
+            String n = c.getSimpleName().toString();
+            TypeMirror t = c.asType();
+            switch (n) {
+                case "state" -> {
+                    if (!action) error(m, "a destroy's result has no 'state': the instance or object ends");
+                    else if (!same(t, r.stateType())) error(m, "the result's 'state' must be " + r.types().render(r.stateType()));
+                    state = true;
+                }
+                case "payouts" -> {
+                    if (!isPayoutList(t)) error(m, "the result's 'payouts' must be JulcList<Payout>");
+                    payouts = true;
+                }
+                case "sends" -> {
+                    if (!isListOf(t, SEND)) error(m, "the result's 'sends' must be JulcList<Send>");
+                    sends = true;
+                }
+                case "mint" -> {
+                    if (!isNamed(t, VALUE)) error(m, "the result's 'mint' must be a Value");
+                    mint = true;
+                }
+                case "accepted" -> {
+                    if (!isNamed(t, VALUE)) error(m, "the result's 'accepted' must be a Value");
+                    accepted = true;
+                }
+                default -> error(m, "result record component '" + n + "' is not one of state, payouts, sends, mint,"
+                        + " accepted;"
+                        + " " + what + " must return " + expected);
+            }
+        }
+        if (action && !state) error(m, what + " must return " + expected);
+        if (!action && !(payouts || sends || mint)) error(m, what + " must return " + expected);
+        return new ResultShape(payouts, sends, mint, accepted);
+    }
+
+    private boolean isListOf(TypeMirror t, String element) {
+        if (!(t instanceof DeclaredType d) || !isNamed(t, JULC_LIST) || d.getTypeArguments().size() != 1) return false;
+        return isNamed(d.getTypeArguments().get(0), element);
     }
 
     private ViewIR readView(ExecutableElement m, Reading r) {
@@ -497,13 +609,6 @@ final class ContractReader {
             for (RecordComponentElement c : e.getRecordComponents()) if (mentionsMap(c.asType(), seen)) return true;
         }
         return false;
-    }
-
-    private boolean isResultRecord(TypeMirror t, TypeMirror stateType) {
-        TypeElement e = asRecord(t);
-        if (e == null) return false;
-        var cs = e.getRecordComponents();
-        return cs.size() == 2 && same(cs.get(0).asType(), stateType) && isPayoutList(cs.get(1).asType());
     }
 
     private boolean isPayoutList(TypeMirror t) {

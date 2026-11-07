@@ -30,6 +30,8 @@ subprojects {
         useJUnitPlatform()
         jvmArgs '--enable-native-access=ALL-UNNAMED'
         maxHeapSize = '1g'
+        if (project.hasProperty('joust.failedTerm')) systemProperty 'joust.failedTerm', 'true'
+        if (project.hasProperty('joust.dumpTx')) systemProperty 'joust.dumpTx', project.property('joust.dumpTx')
         testLogging {
             events 'passed', 'skipped', 'failed'
             exceptionFormat = 'full'

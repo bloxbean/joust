@@ -65,12 +65,15 @@ public final class StateHarness<S> {
     private final TxOutRef seed;
     private final Program verifier;
     private final byte[] verifierHash;
+    private final Program outputVerifier;
+    private final byte[] outputVerifierHash;
 
     /** Where {@link #live} instances sit: the owner of their map claims. */
     public static final TxOutRef LIVE_REF = new TxOutRef(new TxId(fill(32, 0x7A)), BigInteger.ONE);
 
     private StateHarness(ContractSpec<S> spec) {
         this.spec = spec;
+        org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());   // contracts may hash
         var script = JulcScriptLoader.load(spec.validatorClass());
         this.program = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(script.getCborHex())));
         try {
@@ -79,6 +82,13 @@ public final class StateHarness<S> {
             throw new IllegalStateException(e);
         }
         this.seed = new TxOutRef(new TxId(fill(32, 0x5E)), BigInteger.ZERO);
+        var ov = JulcScriptLoader.load(org.julclang.state.verifier.OutputVerifier.class);
+        this.outputVerifier = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(ov.getCborHex())));
+        try {
+            this.outputVerifierHash = ov.getScriptHash();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
         var v = JulcScriptLoader.load(org.julclang.state.verifier.MapVerifier.class);
         this.verifier = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(v.getCborHex())));
         try {
@@ -221,7 +231,8 @@ public final class StateHarness<S> {
             results.forEach((k, r) -> sb.append(k).append(": ").append(r.isSuccess() ? "ok" : "REJECTED")
                     .append(" cpu=").append(r.budgetConsumed().cpuSteps())
                     .append(" mem=").append(r.budgetConsumed().memoryUnits())
-                    .append(r.isSuccess() ? "" : " traces=" + r.traces()).append('\n'));
+                    .append(r.isSuccess() ? "" : " traces=" + r.traces())
+                    .append(r instanceof org.julclang.vm.EvalResult.Failure f ? " error=" + f.error() + (Boolean.getBoolean("joust.failedTerm") && f.failedTerm() != null ? " term=" + String.valueOf(f.failedTerm()).substring(0, Math.min(1500, String.valueOf(f.failedTerm()).length())) : "") : "").append('\n'));
             return sb.toString();
         }
     }
@@ -243,6 +254,10 @@ public final class StateHarness<S> {
         if (tx.mapClaims != null) {
             var b = ScriptContextTestBuilder.rewarding(verifierCredential()).redeemer(claimsData(tx));
             results.put("MAP VERIFIER", ValidatorTest.evaluate(verifier, fill(b, tx).buildPlutusData()));
+        }
+        if (tx.outputClaims != null) {
+            var b = ScriptContextTestBuilder.rewarding(outputVerifierCredential()).redeemer(outputClaimsData(tx));
+            results.put("OUTPUT VERIFIER", ValidatorTest.evaluate(outputVerifier, fill(b, tx).buildPlutusData()));
         }
         return new Verdict(results);
     }
@@ -269,7 +284,21 @@ public final class StateHarness<S> {
         return data(new org.julclang.state.api.mpf.MapClaims(list));
     }
 
+    private Credential outputVerifierCredential() {
+        return new Credential.ScriptCredential(new org.julclang.ledger.ScriptHash(outputVerifierHash));
+    }
+
+    private static PlutusData outputClaimsData(TxModel tx) {
+        JulcList<org.julclang.state.api.OutputClaim> list = JulcList.empty();
+        for (int i = tx.outputClaims.size() - 1; i >= 0; i--) list = list.prepend(tx.outputClaims.get(i));
+        return data(new org.julclang.state.api.OutputClaims(list));
+    }
+
     private ScriptContextTestBuilder fill(ScriptContextTestBuilder b, TxModel tx) {
+        if (tx.outputClaims != null) {
+            b.withdrawal(outputVerifierCredential(), BigInteger.ZERO);
+            b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(outputVerifierCredential()), outputClaimsData(tx));
+        }
         if (tx.mapClaims != null) {
             b.withdrawal(verifierCredential(), BigInteger.ZERO);
             b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(verifierCredential()), claimsData(tx));
@@ -395,6 +424,123 @@ public final class StateHarness<S> {
                     new OutputDatum.OutputDatumInline(tag), Optional.empty()));
             tx.payoutOutputs.add(tx.outputs.size() - 1);
         }
+    }
+
+    // ------------------------------------------------------------------ native assets (ADR-0007)
+
+    /**
+     * A UTxO of an asset-aware contract as it sits on chain: its reference, its datum (the state, or the Holding of an
+     * object), its full value (lovelace, its own token, native assets) and its token name.
+     */
+    public record Held(TxOutRef ref, Object datum, Value value, byte[] token) {
+        public BigInteger lovelace() {
+            return org.julclang.state.api.Assets.lovelaceOf(value);
+        }
+    }
+
+    /** An instance at {@link #LIVE_REF} holding {@code funds} lovelace on top of the deposit and {@code assets}. */
+    public Held held(S state, BigInteger funds, Value assets) {
+        return new Held(LIVE_REF, state, ownedValue(instanceId(), funds, assets), instanceId());
+    }
+
+    /** An object at {@link #OBJECT_REF} with datum {@code holding}, {@code funds} lovelace and {@code assets}. */
+    public Held heldObject(Object holding, BigInteger funds, Value assets) {
+        return new Held(OBJECT_REF, holding, ownedValue(objectId(), funds, assets), objectId());
+    }
+
+    private Value ownedValue(byte[] token, BigInteger funds, Value assets) {
+        return org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.add(
+                org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(spec.minAda()).add(funds)),
+                org.julclang.state.api.Assets.of(policy, token, BigInteger.ONE)), assets);
+    }
+
+    /** The Funds a method sees for {@code h}, with {@code received} offered by the caller. */
+    public org.julclang.state.api.Funds funds(Held h, Value received) {
+        Value v = org.julclang.state.api.Assets.withoutLovelace(h.value());
+        Value held = org.julclang.state.api.Assets.subtract(v, org.julclang.state.api.Assets.of(policy, h.token(), BigInteger.ONE));
+        return new org.julclang.state.api.Funds(policy, h.token(), received, held);
+    }
+
+    /** The Funds of a creation (instance or object): nothing held yet. */
+    public org.julclang.state.api.Funds createFunds(boolean object, Value received) {
+        return new org.julclang.state.api.Funds(policy, object ? objectId() : instanceId(), received,
+                org.julclang.state.api.Assets.none());
+    }
+
+    /**
+     * A creation in an asset-aware contract (runtime: StateContractHandle.deploy / OwnedObject.create): the output holds
+     * the deposit, {@code ctx.received()}, the token and {@code accepted}.
+     *
+     * @param object create an owned object (the instance {@code shared} is then a reference input)
+     */
+    public TxModel createWith(Object createRedeemer, Object datum, Ctx ctx, Value accepted, boolean object, Object shared) {
+        var tx = new TxModel(TxModel.Kind.CREATE);
+        byte[] token = object ? objectId() : instanceId();
+        tx.token = token;
+        byte[] caller = ctx == null ? fill(28, 0xCA) : ctx.caller();
+        tx.inputs.add(new TxInInfo(seed, walletOut(caller, BigInteger.valueOf(50_000_000))));
+        if (object) tx.referenceInputs.add(instanceReference(shared));
+        BigInteger received = ctx == null ? BigInteger.ZERO : ctx.received();
+        tx.outputs.add(new TxOut(stateAddress(), ownedValue(token, received, accepted),
+                new OutputDatum.OutputDatumInline(data(datum)), Optional.empty()));
+        tx.stateOutput = 0;
+        tx.mint = org.julclang.state.api.Assets.of(policy, token, BigInteger.ONE);
+        tx.mintRedeemer = data(createRedeemer);
+        if (ctx != null) {
+            tx.signers.add(caller);
+            tx.range = window(ctx.validFrom(), ctx.validTo());
+        }
+        return tx;
+    }
+
+    /**
+     * A call in an asset-aware contract (runtime: StateInstance / OwnedObject asset paths): spends {@code h}, continues
+     * with {@code nextDatum} (null for a destroy) holding {@code in + received + accepted + mint - payouts - sends}, pays
+     * the payouts (tagged), adds each send as an output claimed for {@code h} in the output registry, and mints
+     * {@code t.mint()} (plus the burn of the token for a destroy) under {@code mintRedeemer}.
+     */
+    public TxModel stepWith(Held h, Object spendRedeemer, Object mintRedeemer, org.julclang.state.runtime.Transition<?> t,
+                            Object nextDatum, byte[] signer, Ctx ctx, Object shared) {
+        boolean destroy = nextDatum == null;
+        var tx = new TxModel(destroy ? TxModel.Kind.DESTROY : TxModel.Kind.ACTION);
+        tx.token = h.token();
+        tx.inputs.add(new TxInInfo(h.ref(), new TxOut(stateAddress(), h.value(),
+                new OutputDatum.OutputDatumInline(data(h.datum())), Optional.empty())));
+        tx.inputs.add(new TxInInfo(new TxOutRef(new TxId(fill(32, 0x33)), BigInteger.ZERO),
+                walletOut(signer == null ? fill(28, 0xFE) : signer, BigInteger.valueOf(50_000_000))));
+        if (shared != null) tx.referenceInputs.add(instanceReference(shared));
+        tx.spendRedeemers.put(h.ref(), data(spendRedeemer));
+        if (signer != null) tx.signers.add(signer);
+        if (ctx != null) tx.range = window(ctx.validFrom(), ctx.validTo());
+
+        BigInteger received = ctx == null ? BigInteger.ZERO : ctx.received();
+        Value sent = org.julclang.state.api.Assets.none();
+        for (var snd : t.sends()) sent = org.julclang.state.api.Assets.add(sent, snd.value());
+        Value next = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.add(h.value(),
+                org.julclang.state.api.Assets.lovelace(received.subtract(total(t.payouts())))),
+                org.julclang.state.api.Assets.add(t.accepted(), t.mint()));
+        next = org.julclang.state.api.Assets.subtract(next, sent);
+        if (!destroy) {
+            tx.outputs.add(new TxOut(stateAddress(), next, new OutputDatum.OutputDatumInline(data(nextDatum)), Optional.empty()));
+            tx.stateOutput = tx.outputs.size() - 1;
+        }
+        addPayoutsFor(tx, h.ref(), t.payouts());
+        if (!t.sends().isEmpty()) {
+            tx.outputClaims = new ArrayList<>();
+            for (var snd : t.sends()) {
+                tx.outputs.add(new TxOut(snd.to(), snd.value(), snd.datum(), Optional.empty()));
+                tx.sendOutputs.add(tx.outputs.size() - 1);
+                tx.outputClaims.add(new org.julclang.state.api.OutputClaim(BigInteger.valueOf(tx.outputs.size() - 1), h.ref()));
+            }
+        }
+        Value mint = t.mint();
+        if (destroy) mint = org.julclang.state.api.Assets.add(mint, org.julclang.state.api.Assets.of(policy, h.token(),
+                BigInteger.ONE.negate()));
+        if (!org.julclang.state.api.Assets.isEmpty(mint)) {
+            tx.mint = mint;
+            tx.mintRedeemer = data(mintRedeemer);
+        }
+        return tx;
     }
 
     // ------------------------------------------------------------------ intents and batches (ADR-0004)

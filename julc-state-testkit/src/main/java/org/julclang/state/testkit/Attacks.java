@@ -124,6 +124,90 @@ public final class Attacks {
                             o.value(), o.datum(), o.referenceScript()))));
         }
 
+        // ---- native assets, sends and user mints (ADR-0007)
+        if (tx.stateOutput >= 0 && hasNativeAssets(tx.outputs.get(tx.stateOutput).value(), h.policy(), tx)) {
+            out.add(new Attack("one native token skimmed from the state output", "I26", t -> mapState(t, o ->
+                    new TxOut(o.address(), lessOneToken(o.value(), h.policy(), t), o.datum(), o.referenceScript()))));
+        }
+        if (tx.outputClaims != null) {
+            for (int k = 0; k < tx.sendOutputs.size(); k++) {
+                final int idx = tx.sendOutputs.get(k);
+                final int claim = k;
+                out.add(new Attack("send #" + k + " under-filled by one unit", "I29", t -> mapOutput(t, idx, o ->
+                        new TxOut(o.address(), lessOne(o.value()), o.datum(), o.referenceScript()))));
+                out.add(new Attack("send #" + k + " delivered to another address", "I29", t -> mapOutput(t, idx, o ->
+                        new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBC)), o.value(), o.datum(), o.referenceScript()))));
+                out.add(new Attack("send #" + k + " datum changed", "I29", t -> mapOutput(t, idx, o ->
+                        new TxOut(o.address(), o.value(), new OutputDatum.OutputDatumInline(PlutusData.integer(7)),
+                                o.referenceScript()))));
+                out.add(new Attack("send #" + k + " claimed by another input", "I29", t -> {
+                    var c = t.copy();
+                    var cl = c.outputClaims.get(claim);
+                    c.outputClaims.set(claim, new org.julclang.state.api.OutputClaim(cl.output(),
+                            new TxOutRef(new TxId(StateHarness.fill(32, 0x98)), BigInteger.ZERO)));
+                    return c;
+                }));
+                out.add(new Attack("send #" + k + " claim dropped", "I29", t -> {
+                    var c = t.copy();
+                    c.outputClaims.remove(claim);
+                    return c;
+                }));
+                out.add(new Attack("send #" + k + " claim pointed at the state output or another output", "I29/I30", t -> {
+                    var c = t.copy();
+                    var cl = c.outputClaims.get(claim);
+                    c.outputClaims.set(claim, new org.julclang.state.api.OutputClaim(BigInteger.ZERO, cl.by()));
+                    c.outputClaims.sort(java.util.Comparator.comparing(org.julclang.state.api.OutputClaim::output));
+                    return c;
+                }));
+                out.add(new Attack("send #" + k + " claimed twice (duplicate index)", "I29", t -> {
+                    var c = t.copy();
+                    c.outputClaims.add(claim, c.outputClaims.get(claim));
+                    return c;
+                }));
+                out.add(new Attack("send #" + k + " claim with a negative index", "I29", t -> {
+                    var c = t.copy();
+                    var cl = c.outputClaims.get(claim);
+                    c.outputClaims.add(0, new org.julclang.state.api.OutputClaim(BigInteger.valueOf(-1), cl.by()));
+                    return c;
+                }));
+                out.add(new Attack("send #" + k + " carries this input's payout tag", "I30", t -> mapOutput(t, idx, o ->
+                        new TxOut(o.address(), o.value(), new OutputDatum.OutputDatumInline(t.inputs.get(0).outRef().toPlutusData()),
+                                o.referenceScript()))));
+            }
+            out.add(new Attack("output registry absent", "I29", t -> {
+                var c = t.copy();
+                c.outputClaims = null;
+                return c;
+            }));
+        }
+        if (userMint(tx, h.policy()) != null) {
+            out.add(new Attack("one user token too many minted (to the attacker)", "I28", t -> {
+                var c = t.copy();
+                var e = userMint(c, h.policy());
+                Value extra = org.julclang.state.api.Assets.of(h.policy(), e, BigInteger.ONE);
+                c.mint = org.julclang.state.api.Assets.add(c.mint, extra);
+                c.outputs.add(new TxOut(StateHarness.pkhAddress(StateHarness.fill(28, 0xBA)),
+                        org.julclang.state.api.Assets.add(Value.lovelace(BigInteger.valueOf(2_000_000)), extra),
+                        new OutputDatum.NoOutputDatum(), Optional.empty()));
+                return c;
+            }));
+            out.add(new Attack("one user token too few minted", "I28", t -> {
+                var c = t.copy();
+                var e = userMint(c, h.policy());
+                c.mint = org.julclang.state.api.Assets.subtract(c.mint, org.julclang.state.api.Assets.of(h.policy(), e,
+                        BigInteger.ONE.multiply(BigInteger.valueOf(org.julclang.state.api.Assets.quantity(c.mint, h.policy(), e).signum()))));
+                return c;
+            }));
+            out.add(new Attack("ByAction names another input", "I28", t -> {
+                var c = t.copy();
+                if (c.mintRedeemer instanceof PlutusData.ConstrData cd) {
+                    c.mintRedeemer = new PlutusData.ConstrData(cd.tag(), List.of(
+                            new TxOutRef(new TxId(StateHarness.fill(32, 0x33)), BigInteger.ZERO).toPlutusData()));
+                }
+                return c;
+            }));
+        }
+
         if (destroy) {
             out.add(new Attack("destroy without burning the token", "I8", t -> {
                 var c = t.copy();
@@ -194,6 +278,51 @@ public final class Attacks {
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /** The first user-token name the transaction mints or burns under the policy, or null (ADR-0007). */
+    private static byte[] userMint(TxModel t, byte[] policy) {
+        var ts = org.julclang.state.api.Assets.read(t.mint).get(java.util.HexFormat.of().formatHex(policy));
+        if (ts == null) return null;
+        for (String n : ts.keySet()) {
+            byte[] name = java.util.HexFormat.of().parseHex(n);
+            if (!java.util.Arrays.equals(name, t.token)) return name;
+        }
+        return null;
+    }
+
+    private static boolean hasNativeAssets(Value v, byte[] policy, TxModel t) {
+        return firstToken(v, policy, t) != null;
+    }
+
+    /** The first native entry of {@code v} other than the transaction's own lifecycle token: {policy, name}. */
+    private static String[] firstToken(Value v, byte[] policy, TxModel t) {
+        String own = java.util.HexFormat.of().formatHex(policy);
+        String tok = t.token == null ? "" : java.util.HexFormat.of().formatHex(t.token);
+        for (var p : org.julclang.state.api.Assets.read(v).entrySet()) {
+            if (p.getKey().isEmpty()) continue;
+            for (String n : p.getValue().keySet()) {
+                if (!(p.getKey().equals(own) && n.equals(tok))) return new String[]{p.getKey(), n};
+            }
+        }
+        return null;
+    }
+
+    private static Value lessOneToken(Value v, byte[] policy, TxModel t) {
+        String[] e = firstToken(v, policy, t);
+        return org.julclang.state.api.Assets.subtract(v, org.julclang.state.api.Assets.of(
+                java.util.HexFormat.of().parseHex(e[0]), java.util.HexFormat.of().parseHex(e[1]), BigInteger.ONE));
+    }
+
+    /** One unit less of the first native token, or one lovelace less if there is none. */
+    private static Value lessOne(Value v) {
+        for (var p : org.julclang.state.api.Assets.read(v).entrySet()) {
+            if (p.getKey().isEmpty()) continue;
+            String n = p.getValue().firstKey();
+            return org.julclang.state.api.Assets.subtract(v, org.julclang.state.api.Assets.of(
+                    java.util.HexFormat.of().parseHex(p.getKey()), java.util.HexFormat.of().parseHex(n), BigInteger.ONE));
+        }
+        return org.julclang.state.api.Assets.subtract(v, org.julclang.state.api.Assets.lovelace(BigInteger.ONE));
+    }
 
     private static TxModel mapState(TxModel t, UnaryOperator<TxOut> f) {
         return mapOutput(t, t.stateOutput, f);

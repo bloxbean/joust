@@ -1,6 +1,7 @@
 package org.julclang.state.verifier;
 
 import org.julclang.ledger.ScriptContext;
+import org.julclang.ledger.ScriptInfo;
 import org.julclang.state.api.mpf.MapClaims;
 import org.julclang.state.api.mpf.MapWitnesses;
 import org.julclang.stdlib.annotation.Entrypoint;
@@ -17,7 +18,8 @@ public class MapVerifier {
 
     @Entrypoint
     public static boolean validate(MapClaims redeemer, ScriptContext ctx) {
-        boolean ok = true;
+        // Only as a withdrawal: never for a certificate, so nobody can deregister the shared credential (ADR-0007 r2).
+        boolean ok = ctx.scriptInfo() instanceof ScriptInfo.RewardingScript;
         for (var claim : redeemer.claims()) {
             if (!MapWitnesses.verify(claim)) {
                 ok = false;

@@ -56,12 +56,23 @@ public final class StateRuntime {
     public int maxRetries() { return maxRetries; }
     public Duration confirmTimeout() { return confirmTimeout; }
     void log(String message) { log.accept(message); }
-    private volatile MapVerifierHandle mapVerifier;
+    private volatile VerifierHandle mapVerifier;
+    private volatile VerifierHandle outputVerifier;
 
     /** The JOUST map verifier on this network (ADR-0002 D9). */
-    public MapVerifierHandle mapVerifier() {
-        if (mapVerifier == null) mapVerifier = new MapVerifierHandle(this);
+    public VerifierHandle mapVerifier() {
+        if (mapVerifier == null) {
+            mapVerifier = new VerifierHandle(this, org.julclang.state.verifier.MapVerifier.class, "map verifier");
+        }
         return mapVerifier;
+    }
+
+    /** The shared output verifier carrying the output-claim registry (ADR-0007 D5). */
+    public VerifierHandle outputVerifier() {
+        if (outputVerifier == null) {
+            outputVerifier = new VerifierHandle(this, org.julclang.state.verifier.OutputVerifier.class, "output verifier");
+        }
+        return outputVerifier;
     }
 
     /** Node store of every MerkleMap mirror (content-addressed; ADR-0002 D5). */

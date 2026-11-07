@@ -18,10 +18,10 @@ public final class ClientGenerator {
 
     /** Client members and generated parameter names a contract may not reuse (checked by the reader). */
     public static final List<String> RESERVED_MEMBERS = List.of("deploy", "at", "contract", "state", "instance",
-            "instanceId", "lovelace", "SPEC");
+            "instanceId", "lovelace", "fullValue", "SPEC");
     /** Client members added for {@code @Batched} contracts (ADR-0004). */
     public static final List<String> INTENT_MEMBERS = List.of("INTENTS", "batch", "pendingIntents", "intent");
-    public static final List<String> RESERVED_PARAMS = List.of("callerAccount", "payLovelace", "runtime");
+    public static final List<String> RESERVED_PARAMS = List.of("callerAccount", "payLovelace", "payAssets", "runtime");
 
     private final ContractIR c;
     private final SourceWriter w = new SourceWriter();
@@ -80,12 +80,21 @@ public final class ClientGenerator {
         var deployParams = new ArrayList<String>(List.of("StateRuntime runtime", "Account callerAccount"));
         deployParams.addAll(decls(init.params()));
         if (init.payable()) deployParams.add("BigInteger payLovelace");
+        if (ValidatorGenerator.takesAssets(init)) deployParams.add("org.julclang.ledger.Value payAssets");
         w.line("/** Creates a new instance by running {@link " + X + "#" + init.method() + "}. */");
         w.open("public static " + C + " deploy(" + String.join(", ", deployParams) + ") {");
         w.line("var result = contract(runtime).deploy(new Deploy<" + S + ">(callerAccount, "
                 + (init.payable() ? "payLovelace" : "BigInteger.ZERO") + ", " + init.hasCtx() + ",");
-        w.line("        ctx -> " + X + "." + init.method() + "(" + callArgs(init, List.of()) + "),");
-        w.line("        (seed, ctx) -> new " + V + ".CreateInstance(" + redeemerArgs(init, "seed") + ")));");
+        if (c.assetAware()) {
+            w.line("        null,");
+            w.line("        (seed, ctx) -> new " + V + ".CreateInstance(" + redeemerArgs(init, "seed") + "),");
+            w.line("        " + assetsArg(init) + ",");
+            w.line("        (ctx, funds) -> { var r = " + X + "." + init.method() + "(" + callArgs(init, List.of()) + "); return "
+                    + transitionExpr(init, "r") + "; }));");
+        } else {
+            w.line("        ctx -> " + X + "." + init.method() + "(" + callArgs(init, List.of()) + "),");
+            w.line("        (seed, ctx) -> new " + V + ".CreateInstance(" + redeemerArgs(init, "seed") + ")));");
+        }
         w.line("return new " + C + "(result.instance());");
         w.close("}").blank();
 
@@ -118,6 +127,10 @@ public final class ClientGenerator {
         w.open("public BigInteger lovelace() {");
         w.line("return instance.lovelace();");
         w.close("}").blank();
+        w.line("/** Everything the state UTxO holds: lovelace, the thread token, native assets (ADR-0007). */");
+        w.open("public org.julclang.ledger.Value fullValue() {");
+        w.line("return instance.value();");
+        w.close("}").blank();
         w.open("public String instanceId() {");
         w.line("return instance.instanceId();");
         w.close("}").blank();
@@ -136,6 +149,7 @@ public final class ClientGenerator {
         var params = new ArrayList<String>(List.of("Account callerAccount"));
         params.addAll(decls(t.params()));
         if (t.payable()) params.add("BigInteger payLovelace");
+        if (ValidatorGenerator.takesAssets(t)) params.add("org.julclang.ledger.Value payAssets");
 
         w.line("/** Calls {@link " + X + "#" + t.method() + "}" + (destroy ? "; ends the instance." : ".") + " */");
         w.open("public CallResult<" + S + "> " + t.method() + "(" + String.join(", ", params) + ") {");
@@ -151,10 +165,12 @@ public final class ClientGenerator {
         for (String f : t.validAfter()) w.line(".validAfter(\"" + f + "\", s -> s." + f + "())");
         for (String f : t.validBefore()) w.line(".validBefore(\"" + f + "\", s -> s." + f + "())");
         String invoke = X + "." + t.method() + "(" + callArgs(t, List.of("s")) + ")";
-        switch (t.returns()) {
+        if (c.assetAware()) {
+            assetCall(t, invoke, "s");
+        } else switch (t.returns()) {
             case STATE -> w.line(".run((s, ctx) -> Transition.of(" + invoke + "))");
             case RESULT -> w.line(".run((s, ctx) -> { var r = " + invoke + "; return Transition.of(r.state(), r.payouts()); })");
-            case PAYOUTS -> w.line(".run((s, ctx) -> Transition.end(" + invoke + "))");
+            case PAYOUTS, SETTLE -> w.line(".run((s, ctx) -> Transition.end(" + invoke + "))");
         }
         w.line(".redeemer(ctx -> new " + V + "." + t.variant() + "(" + redeemerArgs(t, null) + "))");
         w.line(".build());");
@@ -183,21 +199,32 @@ public final class ClientGenerator {
             var params = new ArrayList<String>(List.of("Account callerAccount"));
             params.addAll(decls(t.params()));
             if (t.payable()) params.add("BigInteger payLovelace");
+            if (ValidatorGenerator.takesAssets(t)) params.add("org.julclang.ledger.Value payAssets");
             var runArgs = new ArrayList<String>();
             if (t.shared()) runArgs.add("(" + S + ") sh");
             t.params().forEach(p -> runArgs.add(p.name()));
             if (t.hasCtx()) runArgs.add("ctx");
+            if (t.hasFunds()) runArgs.add("funds");
             var redArgs = new ArrayList<String>(List.of("seed", "inst"));
             t.params().forEach(p -> redArgs.add(p.name()));
             if (t.hasCtx()) redArgs.add("ctx");
+            if (ValidatorGenerator.takesAssets(t)) redArgs.add("payAssets.toPlutusData()");
             w.line("/** Creates a " + simple + " under this instance with {@link " + X + "#" + t.method() + "}. */");
             w.open("public " + handle + " " + t.method() + "(" + String.join(", ", params) + ") {");
             w.line("return new " + handle + "(OwnedObject.create(instance, new OwnedObject.Create<" + R + ">(\"" + t.method()
                     + "\", callerAccount, " + (t.payable() ? "payLovelace" : "BigInteger.ZERO") + ", " + t.hasCtx() + ", "
                     + t.shared() + ",");
-            w.line("        (sh, ctx) -> " + X + "." + t.method() + "(" + String.join(", ", runArgs) + "),");
-            w.line("        (seed, inst, ctx) -> new " + V + "." + t.variant() + "(" + String.join(", ", redArgs) + ")), "
-                    + codec + "));");
+            if (c.assetAware()) {
+                w.line("        null,");
+                w.line("        (seed, inst, ctx) -> new " + V + "." + t.variant() + "(" + String.join(", ", redArgs) + "),");
+                w.line("        " + assetsArg(t) + ",");
+                w.line("        (sh, ctx, funds) -> { var r = " + X + "." + t.method() + "(" + String.join(", ", runArgs)
+                        + "); return " + transitionExpr(t, "r") + "; }), " + codec + "));");
+            } else {
+                w.line("        (sh, ctx) -> " + X + "." + t.method() + "(" + String.join(", ", runArgs) + "),");
+                w.line("        (seed, inst, ctx) -> new " + V + "." + t.variant() + "(" + String.join(", ", redArgs) + ")), "
+                        + codec + "));");
+            }
             w.close("}").blank();
         }
         w.line("/** An existing " + simple + " of this instance. */");
@@ -213,12 +240,15 @@ public final class ClientGenerator {
         w.close("}").blank();
         w.line("public String objectId() { return object.objectId(); }");
         w.line("public " + R + " value() { return object.value(); }");
-        w.line("public BigInteger lovelace() { return object.lovelace(); }").blank();
+        w.line("public BigInteger lovelace() { return object.lovelace(); }");
+        w.line("/** Everything the object's UTxO holds: lovelace, its token, native assets (ADR-0007). */");
+        w.line("public org.julclang.ledger.Value fullValue() { return object.fullValue(); }").blank();
         for (TransitionIR t : c.ownedSpendTransitions()) {
             boolean destroy = t.destroys();
             var params = new ArrayList<String>(List.of("Account callerAccount"));
             params.addAll(decls(t.params()));
             if (t.payable()) params.add("BigInteger payLovelace");
+            if (ValidatorGenerator.takesAssets(t)) params.add("org.julclang.ledger.Value payAssets");
             w.open("public CallResult<" + R + "> " + t.method() + "(" + String.join(", ", params) + ") {");
             String start = destroy
                     ? "Call.<" + R + ">destroy(\"" + t.method() + "\", callerAccount, new " + V + ".BurnInstance())"
@@ -235,13 +265,16 @@ public final class ClientGenerator {
             if (t.shared()) callArgs.add("(" + S + ") sh");
             t.params().forEach(p -> callArgs.add(p.name()));
             if (t.hasCtx()) callArgs.add("ctx");
+            if (t.hasFunds()) callArgs.add("funds");
             String invoke = X + "." + t.method() + "(" + String.join(", ", callArgs) + ")";
             String body = switch (t.returns()) {
                 case STATE -> "Transition.of(" + invoke + ")";
                 case RESULT -> "Transition.of(" + invoke + ".state(), " + invoke + ".payouts())";
-                case PAYOUTS -> "Transition.end(" + invoke + ")";
+                case PAYOUTS, SETTLE -> "Transition.end(" + invoke + ")";
             };
-            if (t.returns() == TransitionIR.Returns.RESULT) {
+            if (c.assetAware()) {
+                assetCall(t, invoke, "o");
+            } else if (t.returns() == TransitionIR.Returns.RESULT) {
                 body = null;
                 w.line(t.shared() ? ".runShared((o, sh, ctx) -> { var r = " + invoke + "; return Transition.of(r.state(), r.payouts()); })"
                         : ".run((o, ctx) -> { var r = " + invoke + "; return Transition.of(r.state(), r.payouts()); })");
@@ -330,6 +363,32 @@ public final class ClientGenerator {
         w.close("}").blank();
     }
 
+    /** The {@code runAssets}/{@code receivedAssets}/{@code byAction} lines of an asset-aware call (ADR-0007). */
+    private void assetCall(TransitionIR t, String invoke, String subject) {
+        String V = c.validatorName();
+        if (ValidatorGenerator.takesAssets(t)) w.line(".receivedAssets(payAssets)");
+        w.line(".runAssets(" + t.shared() + ", (" + subject + ", sh, ctx, funds) -> { var r = " + invoke + "; return "
+                + transitionExpr(t, "r") + "; })");
+        if (t.resultMint()) w.line(".byAction(ref -> new " + V + ".ByAction(ref))");
+    }
+
+    /** {@code Transition.full(...)} from a method's result {@code r}. */
+    private static String transitionExpr(TransitionIR t, String r) {
+        return switch (t.returns()) {
+            case STATE -> "Transition.full(" + r + ", null, null, null, null)";
+            case PAYOUTS -> "Transition.full(null, " + r + ", null, null, null)";
+            case RESULT, SETTLE -> "Transition.full(" + (t.returns() == TransitionIR.Returns.RESULT ? r + ".state()" : "null")
+                    + ", " + (t.resultPayouts() ? r + ".payouts()" : "null")
+                    + ", " + (t.resultSends() ? r + ".sends()" : "null")
+                    + ", " + (t.resultMint() ? r + ".mint()" : "null")
+                    + ", " + (t.resultAccepted() ? r + ".accepted()" : "null") + ")";
+        };
+    }
+
+    private static String assetsArg(TransitionIR t) {
+        return ValidatorGenerator.takesAssets(t) ? "payAssets" : "org.julclang.state.api.Assets.none()";
+    }
+
     private static List<String> decls(List<ParamIR> ps) {
         var out = new ArrayList<String>();
         for (ParamIR p : ps) out.add(p.type() + " " + p.name());
@@ -341,6 +400,7 @@ public final class ClientGenerator {
         var out = new ArrayList<>(leading);
         for (ParamIR p : t.params()) out.add(p.name());
         if (t.hasCtx()) out.add("ctx");
+        if (t.hasFunds()) out.add("funds");
         return String.join(", ", out);
     }
 
@@ -350,6 +410,7 @@ public final class ClientGenerator {
         if (seed != null) out.add(seed);
         for (ParamIR p : t.params()) out.add(p.name());
         if (t.hasCtx()) out.add("ctx");
+        if (ValidatorGenerator.takesAssets(t)) out.add("payAssets.toPlutusData()");
         return String.join(", ", out);
     }
 }

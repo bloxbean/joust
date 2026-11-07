@@ -29,6 +29,15 @@ public final class Call<S> {
         Object make(Ctx ctx);
     }
 
+    /**
+     * A method of an asset-aware contract (ADR-0007): the current state or object, the instance state for
+     * {@code @Shared} (else null), the Ctx and the Funds.
+     */
+    @FunctionalInterface
+    public interface AssetRun<S> {
+        Transition<S> apply(S current, Object shared, Ctx ctx, org.julclang.state.api.Funds funds);
+    }
+
     /** {@code @SignedBy(field)}: the state field holding the key hash that must sign. */
     public record SignerRule<S>(String field, Function<S, byte[]> key) {}
 
@@ -47,6 +56,10 @@ public final class Call<S> {
     final SharedRun<S> sharedRun;
     final ActRedeemer redeemer;
     final Object burnRedeemer;
+    final org.julclang.ledger.Value receivedAssets;
+    final AssetRun<S> assetRun;
+    final boolean needsShared;
+    final Function<org.julclang.ledger.TxOutRef, Object> byAction;
 
     private Call(Builder<S> b) {
         this.name = Objects.requireNonNull(b.name);
@@ -59,7 +72,11 @@ public final class Call<S> {
         this.notAfter = List.copyOf(b.notAfter);
         this.run = b.run;
         this.sharedRun = b.sharedRun;
-        if (run == null && sharedRun == null) throw new IllegalArgumentException(name + ": no run");
+        this.assetRun = b.assetRun;
+        this.needsShared = b.needsShared || b.sharedRun != null;
+        this.receivedAssets = b.receivedAssets;
+        this.byAction = b.byAction;
+        if (run == null && sharedRun == null && assetRun == null) throw new IllegalArgumentException(name + ": no run");
         this.redeemer = Objects.requireNonNull(b.redeemer);
         this.burnRedeemer = b.burnRedeemer;
         if (received.signum() < 0) throw new IllegalArgumentException(name + ": received must not be negative");
@@ -93,6 +110,10 @@ public final class Call<S> {
         private SharedRun<S> sharedRun;
         private ActRedeemer redeemer;
         private Object burnRedeemer;
+        private org.julclang.ledger.Value receivedAssets = org.julclang.state.api.Assets.none();
+        private AssetRun<S> assetRun;
+        private boolean needsShared;
+        private Function<org.julclang.ledger.TxOutRef, Object> byAction;
 
         private Builder(String name, Kind kind, Account caller) {
             this.name = name;
@@ -109,6 +130,12 @@ public final class Call<S> {
         /** An owned method that also reads the instance state ({@code @Shared}; ADR-0003). */
         public Builder<S> runShared(SharedRun<S> run) { this.sharedRun = run; return this; }
         public Builder<S> redeemer(ActRedeemer redeemer) { this.redeemer = redeemer; return this; }
+        /** Native assets the caller offers ({@code Funds.received}; ADR-0007). */
+        public Builder<S> receivedAssets(org.julclang.ledger.Value assets) { this.receivedAssets = assets; return this; }
+        /** A method of an asset-aware contract; {@code shared}: it reads the instance state (@Shared). */
+        public Builder<S> runAssets(boolean shared, AssetRun<S> run) { this.assetRun = run; this.needsShared = shared; return this; }
+        /** The {@code ByAction} mint redeemer for methods that mint user tokens (ADR-0007 D4). */
+        public Builder<S> byAction(Function<org.julclang.ledger.TxOutRef, Object> make) { this.byAction = make; return this; }
 
         public Call<S> build() {
             return new Call<>(this);
