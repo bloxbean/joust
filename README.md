@@ -24,6 +24,34 @@
 > - M (phase 1): browser wallets: transactions prepared for a CIP-30 wallet address (`WalletAccount`,
 >   `Compose.prepare()`), verified by the page and signed by the wallet.
 
+## Development snapshots
+
+[![snapshot](https://img.shields.io/maven-metadata/v?metadataUrl=https%3A%2F%2Frepo.bloxbean.org%2Fmaven%2Fsnapshots%2Forg%2Fjulclang%2Fjulc-state-runtime%2Fmaven-metadata.xml&strategy=latestProperty&label=snapshot)](https://github.com/bloxbean/joust/releases/tag/snapshot)
+
+Development snapshots are in the BloxBean Maven repository, one version per commit (`0.1.0-<sha7>-SNAPSHOT`). The
+newest version is on the [Development snapshot](https://github.com/bloxbean/joust/releases/tag/snapshot) page.
+
+```gradle
+repositories {
+    mavenCentral()
+    mavenLocal()     // JuLC with ADR-071, until it is published (below)
+    maven {
+        url = uri('https://repo.bloxbean.org/maven/snapshots')
+        mavenContent { snapshotsOnly() }
+    }
+}
+dependencies {
+    implementation "org.julclang:julc-state-runtime:$joustVersion"
+    annotationProcessor "org.julclang:julc-state-processor:$joustVersion"
+    annotationProcessor "org.julclang:julc-state-api:$joustVersion:onchain"   // on-chain sources for JuLC
+    annotationProcessor "org.julclang:julc-annotation-processor:$julcVersion"
+    testImplementation "org.julclang:julc-state-testkit:$joustVersion"
+}
+```
+
+JOUST needs JuLC's ADR-071 (bloxbean/julc#311), which is not published yet: build it into mavenLocal first with
+`.github/ci/build-julc.sh` (from a JOUST checkout). Publishing is described in [docs/release-ops.md](docs/release-ops.md).
+
 JOUST lets Java developers write Cardano smart contracts as **state plus actions**, the way they would write an
 account-based contract, instead of UTxOs, datums and redeemers. You write a state record and pure static methods.
 The JOUST annotation processor generates:

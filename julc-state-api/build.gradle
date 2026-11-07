@@ -68,3 +68,17 @@ configurations {
 artifacts {
     onchainSources(bundleDir) { builtBy bundleOnchainSources }
 }
+
+// External consumers put this jar on their annotation processor path:
+//   annotationProcessor "org.julclang:julc-state-api:<version>:onchain"
+def onchainJar = tasks.register('onchainJar', Jar) {
+    archiveClassifier = 'onchain'
+    from(bundleDir)
+    dependsOn bundleOnchainSources
+}
+pluginManager.withPlugin('maven-publish') {
+    afterEvaluate {
+        publishing.publications.withType(MavenPublication).configureEach { artifact onchainJar }
+    }
+}
+
