@@ -113,9 +113,6 @@ final class TxRunner {
                 + " signed by wallets only (ADR-0013 D2)");
     }
 
-    /** Time-to-live of a prepared wallet transaction without its own window, in slots (ten minutes at 1 s slots). */
-    static final long WALLET_TTL_SLOTS = 600;
-
     static final ThreadLocal<Capture> CAPTURE = new ThreadLocal<>();
 
     static Capture capture() {
@@ -273,9 +270,10 @@ final class TxRunner {
             if (window != null) {
                 ctx = ctx.validFrom(window.fromSlot()).validTo(window.toSlot());
             } else {
-                // A wallet transaction always expires soon, so a withheld signature cannot be used much later (ADR-0013).
+                // A wallet transaction always expires soon, so a withheld signature cannot be used much later (ADR-0013):
+                // the runtime's TTL, as for Ctx-reading calls (DevKit's time horizon is only minutes).
                 long tip = rt.backend().getBlockService().getLatestBlock().getValue().getSlot();
-                ctx = ctx.validTo(tip + WALLET_TTL_SLOTS);
+                ctx = ctx.validTo(tip + Math.max(1, rt.ttlMs() / rt.chainTime().slotLengthMs()));
             }
             if (rt.evaluator() != null) ctx = ctx.withTxEvaluator(rt.evaluator());
             unsigned = ctx.build();
