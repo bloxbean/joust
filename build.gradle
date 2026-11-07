@@ -51,6 +51,10 @@ subprojects {
         maxHeapSize = '1g'
         if (project.hasProperty('joust.failedTerm')) systemProperty 'joust.failedTerm', 'true'
         if (project.hasProperty('joust.dumpTx')) systemProperty 'joust.dumpTx', project.property('joust.dumpTx')
+        // A hung test (a DevKit call that never returns) fails after 10 minutes with its stack trace, rather than
+        // holding the build until the CI job times out.
+        systemProperty 'junit.jupiter.execution.timeout.default', '10m'
+        systemProperty 'junit.jupiter.execution.timeout.thread.mode.default', 'SEPARATE_THREAD'
         testLogging {
             events 'passed', 'skipped', 'failed'
             exceptionFormat = 'full'

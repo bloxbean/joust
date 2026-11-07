@@ -92,10 +92,19 @@ public final class DevKit {
     public static void topUp(String address, long ada) {
         try {
             var req = HttpRequest.newBuilder(URI.create(ADMIN_URL + "/local-cluster/api/addresses/topup"))
+                    // The faucet waits for its transaction's inclusion and has been seen waiting forever in CI.
+                    .timeout(Duration.ofSeconds(60))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString("{\"address\":\"" + address + "\",\"adaAmount\":" + ada + "}"))
                     .build();
-            var res = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> res;
+            try {
+                res = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+            } catch (java.net.http.HttpTimeoutException slow) {
+                topUpFromDefaults(address, ada, "no answer within 60 s");
+                waitForFunds(address);
+                return;
+            }
             if (res.statusCode() != 200) {
                 // The admin faucet can run dry on a long-lived devnet: pay from DevKit's pre-funded default accounts.
                 topUpFromDefaults(address, ada, res.statusCode() + " " + res.body());
