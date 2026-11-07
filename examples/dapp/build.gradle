@@ -1,0 +1,37 @@
+plugins {
+    id 'application'
+}
+
+description = 'JOUST example: a browser dApp on Yaci DevKit (CIP-30 wallet, generated JS clients, prepare service; ADR-0013)'
+
+dependencies {
+    implementation project(':julc-state-runtime')
+    implementation project(':julc-state-server')
+    implementation project(':examples:devkit')
+    implementation project(':examples:counter')
+    implementation project(':examples:bank')
+    testImplementation project(':julc-state-testkit')
+}
+
+application {
+    mainClass = 'org.julclang.state.examples.dapp.DappServer'
+}
+
+tasks.named('run', JavaExec) {
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    workingDir = projectDir
+}
+
+// The page's typed clients, generated from the contracts' descriptions (ADR-0013 D3).
+def descriptions = files(
+        project(':examples:counter').layout.buildDirectory.file('classes/java/main/META-INF/joust/org.julclang.state.examples.counter.Counter.json'),
+        project(':examples:bank').layout.buildDirectory.file('classes/java/main/META-INF/joust/org.julclang.state.examples.bank.Bank.json'))
+tasks.register('jsClients', Exec) {
+    description = 'Generates frontend/src/generated/{Counter,Bank}.js and .d.ts with joust-gen'
+    dependsOn ':examples:counter:classes', ':examples:bank:classes'
+    inputs.files descriptions
+    outputs.dir 'frontend/src/generated'
+    workingDir projectDir
+    commandLine(['node', '../../js/state-client/bin/joust-gen.js'] + descriptions.files.collect { it.path } + ['--out', 'frontend/src/generated'])
+}
+

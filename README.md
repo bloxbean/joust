@@ -23,6 +23,9 @@
 >   instances with the destination's consent (`@Into`/`@Admits`; a game guild);
 > - M (phase 1): browser wallets: transactions prepared for a CIP-30 wallet address (`WalletAccount`,
 >   `Compose.prepare()`), verified by the page and signed by the wallet.
+> - M (phases 2 and 3): JavaScript pages. The processor describes each contract (CIP-57 plus `x-joust`).
+>   `@julclang/state-client` (`js/state-client`) encodes calls, verifies prepared transactions and generates typed
+>   clients. `julc-state-server` prepares transactions over HTTP. `examples/dapp` is a browser dApp on DevKit.
 
 ## Development snapshots
 
@@ -108,6 +111,8 @@ vault.close(alice);                                                 // burns the
 | `julc-state-api` | Annotations, `Ctx`, `Payout`/`Payouts`, `Require`, `Clock`, `SortedMaps`. JuLC-compilable and JVM-runnable; its sources ship to JuLC as library sources (the `onchainSources` configuration) |
 | `julc-state-processor` | The annotation processor: contract reader (shape rules), State IR, validator and client generators, numeric-divergence lint |
 | `julc-state-runtime` | The off-chain runtime for generated clients: locate, run, build (QuickTx), verify, submit, confirm, retry on contention |
+| `julc-state-server` | The prepare service for JavaScript pages: serves generated clients over HTTP (`/api/prepare`, `/api/view`), with rate limits and a CORS allow-list (ADR-0013 D2) |
+| `js/state-client` | `@julclang/state-client`: the JavaScript client. It encodes calls from a contract's description, verifies prepared transactions before a CIP-30 wallet signs them, and generates typed clients (`joust-gen`) |
 | `julc-state-testkit` | `StateHarness` evaluates the compiled validator against runtime-shaped transactions; `Attacks` runs the attack suite (ADR-0001 D16) |
 | `examples/{counter,vault,escrow,crowdfund}` | Example contracts with JVM tests, harness and attack-suite tests, and Yaci DevKit integration tests ([budgets](examples/README.md)) |
 | `examples/devkit` | Yaci DevKit connection helper for the examples |

@@ -1,6 +1,7 @@
 # ADR-0013: Option M — browser wallets (CIP-30) and JavaScript clients (CIP-57)
 
-**Status:** Accepted (r2): a design review returned "request changes"; resolved in §6. Phase 1 implemented (§7)
+**Status:** Accepted (r2): a design review returned "request changes"; resolved in §6. Phase 1 implemented (§7);
+phases 2 and 3, with a DevKit dApp, implemented (§9). Phase 4 targets GraalVM Web Image instead of TeaVM (§9.5)
 **Date:** 2026-11-07
 **Builds on:** ADR-0001 (the runtime and generated clients), ADR-0011 (`Compose`), CIP-30, CIP-57.
 **Stack:** #1–#14, then this.
@@ -103,8 +104,8 @@ and has the wallet sign it. Typing the datum in JuLC's own blueprint is a JuLC c
 
 The runtime splits "run the method into a **plan**" (inputs, outputs with datums and values, redeemers, mint, required
 signers, window) from "turn the plan into a CCL transaction". `prepare()` returns the plan, and the page's verifier
-compares the transaction with it. The plan is also the seam for (b): a TeaVM build of the contract class and the JVM
-bodies of `julc-state-api` computes it in the page, and a TypeScript SDK (Evolution SDK, with CML underneath) builds
+compares the transaction with it. The plan is also the seam for (b): a Wasm build of the contract class and the JVM
+bodies of `julc-state-api` (GraalVM Web Image, §9.5; TeaVM was the first choice) computes it in the page, and a TypeScript SDK (Evolution SDK, with CML underneath) builds
 the transaction. That proof of concept must show byte-identical datums, map order and `BigInteger` arithmetic against
 the JVM. CIP-103 `signTxs` is optional, for chained transactions (deploy, then call). `signData` authenticates
 callers only and never replaces a transaction signature.
@@ -139,7 +140,7 @@ callers only and never replaces a transaction signature.
 1. D1 and the page verifier's checks, with the PoC's runtime part.
 2. D3 descriptions and the generated TypeScript client.
 3. D2 service.
-4. D4 plan extraction, then the TeaVM spike.
+4. D4 plan extraction, then the Wasm spike (GraalVM Web Image, experimental; §9.5).
 
 ## 6. Review r1 and its resolution
 
@@ -248,3 +249,149 @@ The page refuses these twelve variants on DevKit:
 - an unknown reference input;
 - another continuing state.
 
+
+## 9. Phases 2 and 3: implementation notes
+
+### 9.1 Descriptions (D3)
+
+The processor writes `META-INF/joust/<package>.<Contract>.json` for every contract (`DescriptionWriter`):
+- CIP-57 `preamble`, `validators` (`<V>.mint` with the `Lifecycle` redeemer; `<V>.spend` with the state datum and the
+  `Calls` redeemer) and `definitions`.
+- The encodings follow JuLC's:
+  - records are constructor 0, sealed variants their `permits` position;
+  - Bool is False/True 0/1, Optional is Some/None 0/1;
+  - ledger hashes and `@NewType`s are their underlying type;
+  - `Value` is a map of maps.
+
+  Redeemer constructors follow the validator's own `permits` order, and their fields follow `fields(t)`.
+- `x-joust` (version 1) holds:
+  - the contract, validator and client names, the state, params, `minAda` and `maxDatumBytes`;
+  - the owned types (with their `Holding` definitions, tags and lookup names);
+  - every creation and action: kind, redeemer constructor and index, arguments with schemas, `ctx`, payable,
+    policies, what it returns, and `needsService` (MerkleMaps, foreign reads, batches, moves, deposits);
+  - the views, the token-name rules, and the JSON conventions.
+- **Bool and Optional are recognised by shape** (constructor titles, indices and arity), not by title: a field's
+  title replaces the schema's.
+- `Descriptions.assertMatches(Contract.class, ContractValidator.class)` (testkit) checks a description against the
+  generated validator by reflection: constructor order, indices and fields, the state, the owned values and the
+  `Holding` tags. A `DescriptionTest` runs it for each example module (25 contracts).
+- Deployments are not in the description: the page gets `{policy, address, networkId, referenceScripts}` separately.
+
+### 9.2 The JavaScript client (`js/state-client`, `@julclang/state-client`)
+
+- **`data.js`** turns JSON into CSL `PlutusData` and back, by schema. Maps are encoded in canonical key order.
+  `dataEqual` compares Data structurally, whatever the CBOR encoding.
+- **`verify.js` generalises `page.mjs`.** The page does not recompute the next state: the pinned validator already
+  enforces `datum == method(state, args)`. It checks that the transaction makes exactly the call it asked for and
+  that the wallet risks nothing else:
+  - **Inputs:** the wallet's own UTxOs (CIP-30 `getUtxos`) and, for a spending call, the target (the instance or
+    object token at the pinned address); nothing else.
+  - **Redeemers:**
+    - exactly one spend redeemer, on the target's input in ledger order (inputs sort by transaction id, then by
+      numeric index), for actions and destroys;
+    - a `BurnInstance` mint redeemer for destroys, and exactly one mint redeemer for creations;
+    - nothing under another policy.
+  - **The call:**
+    - the constructor is the method's;
+    - every argument is Data-equal to the page's own encoding;
+    - `ctx.caller` is a wallet key and `ctx.received` the payment;
+    - `assetsIn` is the assets paid;
+    - a creation's `seed` is a wallet input it spends, and the minted token is derived from it;
+    - an owned creation's `instance` is the pinned instance;
+    - any other field is refused (moves need the service).
+  - **Mint:** none for actions; exactly the target's token burned for destroys; exactly the new token for
+    creations.
+  - **Outputs:**
+    - wallet outputs carry no datum, except a payout tag naming the target;
+    - exactly one continuation (none for a destroy), decoded for display;
+    - outputs to other parties are allowed and listed in the review, but only up to what the script releases
+      (the target's value, less the continuation, plus the mint) beyond its tagged payouts to the wallet. A payout to
+      the wallet can thus never hide the wallet's own funds going elsewhere (r4);
+    - no output pays the wallet's payment key at an address the wallet does not use (another stake key).
+  - **The transaction balances:** inputs plus mint equal outputs plus fee. An unbalanced transaction is not worth a
+    signature: the e2e test found a tampering that added an unfunded output.
+  - **The wallet's net outflow** is at most the fee plus the payment (for a creation, plus the new UTxO, itself at
+    most the payment plus `minAda`), for every asset.
+  - **Validity:** at most 15 minutes from now, where now is the chain's tip and, when the deployment gives the slot
+    clock (`slotConfig`), also the page's own clock. A call that reads `Ctx` must start within 2 minutes before now:
+    `ctx.validFrom` is the contract's "now" and may not be backdated (r4).
+  - **Unchanged from §8:** the fee cap, collateral, validity, required signers, reference inputs (the pinned
+    reference script, or the instance read), no certificates, withdrawals, votes, donations or metadata,
+    `is_valid`, and the network.
+- **`client.js`** runs a call:
+  1. canonicalise the arguments;
+  2. take the CIP-30 wallet view;
+  3. `POST /prepare`;
+  4. verify;
+  5. `onReview` (the page shows what was checked; throwing cancels);
+  6. `signTx(cbor, true)`;
+  7. add the witnesses to the original bytes (`FixedTransaction`);
+  8. `submitTx`;
+  9. wait for the transaction.
+
+  The hash is the page's own, of the body bytes the wallet signs, never the service's claim.
+- **`codegen.js` / `joust-gen`** writes `<Contract>.js`, with the description inlined so the page pins it, and
+  `<Contract>.d.ts`, with types from the schemas. Calls with `needsService` are not generated: the page cannot
+  verify them. That covers MerkleMaps, foreign reads, params, batches, moves, deposits, and (r4) sends and mints,
+  which go through the output verifier or `ByAction`.
+- **`devwallet.js`** is a CIP-30 wallet for DevKit: CIP-1852 keys from a mnemonic, derived as CCL's `Account`
+  derives them, with UTxOs and submission through the chain API. Browser wallets cannot join a private devnet.
+- **`chain.js`** reads a Blockfrost-style API (Blockfrost, or Yaci Store's `/api/v1`).
+
+### 9.3 The service (`julc-state-server`)
+
+`JoustServer` serves generated clients by reflection, by the names their description gives:
+- `deploy` / `at` / `<method>` / `<lookup>(objectId).<method>`, with arguments decoded by the description's JSON
+  conventions (`JsonValues`);
+- each call runs in `Compose.of(runtime, WalletAccount).add(...).prepare()`, so it runs exactly what a Java caller
+  runs;
+- endpoints: `GET /api/contracts` (deployments), `GET /api/description`, `POST /api/prepare`, `POST /api/view`;
+- **operations:** a per-client rate limit on `/prepare` (30 a minute), a bound on concurrent prepares (4), a 64 KB
+  body limit, a strict CORS allow-list (exact origins), no cookies, `no-store`;
+- **errors:** 400 for the caller's mistakes and the contract's `Require` messages; 422 for the runtime's refusals; 500
+  without details otherwise;
+- **not served yet:** `@Params` contracts, and co-signed calls. `prepare()` refuses runtime-held keys; the `signData`
+  policy of D2 is still to do.
+
+### 9.4 Review r4
+
+S = security reviewer, C = Codex.
+
+| Finding | Source | Resolution |
+|---|---|---|
+| **Critical.** A tagged payout to the wallet counted as an inflow, so it could hide the wallet's own funds going to an attacker. Bank `withdraw` or `close`, and any destroy paying its caller, lost up to the payout | S 1 | Outputs to others may take only what the script releases beyond its payouts to the wallet. The e2e test tampers a withdrawal this way, and the transaction is refused unsigned |
+| Medium. A payout at the wallet's payment key with a stranger's stake key | S 2 | Refused: an output to a wallet key must be at one of the wallet's addresses. The e2e test covers it |
+| Medium. The validity start had no lower bound, so `ctx.validFrom` ("now") could be backdated by about an hour | S 3 | A Ctx call must start within 2 minutes before now |
+| Low/Medium. The chain API (the service's proxy in the demo) could lie about the tip | S 4 | Validity is also bounded by the page's own clock (`slotConfig` in the deployment). The demo's proxy is documented as development-only |
+| Medium. `/api/view` had no limit; one client could hold every prepare slot | S 5 | Views have their own rate limit, and each client has one prepare in flight |
+| Low. Deeply nested CBOR overflowed the decoder's stack | S 6 | Caught: 400 |
+| Low (dev). `/dev/topup` took cross-site simple POSTs; `%2e` passed the proxy; `Host` was trusted for the same-origin check | S 7 | JSON from local origins only; encoded dots and slashes refused; same-origin dropped (the page's own origin is allow-listed) |
+| High. `dataEqual` let maps with duplicate keys compare equal | C 1 | A map with a duplicate key is never equal |
+| High. Preparing used only the change address | C 2 | The client sends the address holding the most funds when the change address is empty. A single funding address remains (`WalletAccount`) |
+| Medium. Sends and mints were generated but always refused | C 3, C 4 | `needsService` |
+| Medium. `java.util.List` and `Map` were described but not served | C 5 | Not described: contracts use `JulcList` and `JulcMap` |
+| Medium. Views with arguments could not be called | C 6 | Views are described with their arguments and result, and served with them |
+| Medium. The spend datum omitted the owned holdings | C 7 | `anyOf` the state and each `Holding` |
+| Low. `node --test test/` fails on Node 22.12 | C 8 | Explicit glob |
+
+### 9.5 The dApp (`examples/dapp`) and phase 4
+
+- **`DappServer`** (DevKit):
+  - publishes the reference scripts and deploys a shared bank;
+  - writes the page's `deployment.json`;
+  - serves the service, the built page, a chain proxy (Yaci Store has no CORS policy) and a development top-up.
+- **The page** (Vite, CSL browser build, the generated `Counter` and `Bank` clients):
+  - development wallets and any injected CIP-30 wallet;
+  - Counter deploy/increment/reset/close, and bank accounts (open/deposit/withdraw/close) as owned objects;
+  - a review dialog listing what was verified before the wallet signs;
+  - a "malicious service" switch, whose tampered transactions are refused unsigned.
+- **`DappDevnetTest`** runs `frontend/e2e/run.mjs` (the generated clients in Node) against the dApp server on DevKit:
+  - Counter and Bank calls from a wallet;
+  - contract refusals (`Require`, the withdrawal limit, a paused bank);
+  - twelve tampered transactions refused without a signature request (ten on an increment, two on a withdrawal),
+    and one on a deposit;
+  - the dev wallet's address equal to CCL's.
+
+  The page was also driven in headless Chrome.
+- **Phase 4:** per the user's decision, the serverless path uses **GraalVM Web Image** (`native-image --tool:svm-wasm`,
+  GraalVM 25.3) instead of TeaVM. It stays **experimental**, as Web Image is.

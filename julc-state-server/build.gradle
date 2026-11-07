@@ -1,0 +1,13 @@
+description = 'JOUST prepare service: prepares wallet transactions for JavaScript pages over HTTP (ADR-0013 D2)'
+
+dependencies {
+    api project(':julc-state-runtime')
+    testImplementation project(':julc-state-testkit')
+}
+
+dependencies {
+    // Generated clients to serve in the tests (no DevKit needed for these).
+    testImplementation project(':examples:counter')
+    testImplementation project(':examples:bank')
+    testImplementation libs.cardano.client.backend.blockfrost
+}

@@ -51,8 +51,25 @@ jobs:
         working-directory: examples/wallet/js
         run: npm ci
 
+      # The JavaScript client (ADR-0013 D3): its unit tests, then the dApp page that uses it.
+      - name: Test the JavaScript client
+        working-directory: js/state-client
+        run: |
+          npm ci
+          npm test
+
+      - name: Install the dApp page's Node dependencies
+        working-directory: examples/dapp/frontend
+        run: npm ci
+
       - name: Compile
         run: ./gradlew assemble testClasses --stacktrace
+
+      # The dApp's typed clients come from the contracts' descriptions; then the page must build.
+      - name: Generate the dApp's clients and build its page
+        run: |
+          ./gradlew :examples:dapp:jsClients --stacktrace
+          (cd examples/dapp/frontend && npm run build)
 
       - name: Wait for Yaci DevKit
         run: |

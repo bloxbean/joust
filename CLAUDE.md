@@ -26,11 +26,13 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - `julc-state-testkit`: `StateHarness` (evaluates the compiled validator) + `Attacks` (attack suite).
 - `julc-state-dsl`: `.jsc` lexer/parser/checker and the lowering to a Java `@StateContract` (ADR-0005). Run by each
   consumer's `generateJsc` JavaExec task into `build/generated/sources/jsc`.
+- `julc-state-server`: the prepare service (ADR-0013 D2) over generated clients by reflection; `js/state-client`: the
+  JS client (codec, verifier, CIP-30 flow, dev wallet, `joust-gen`); `examples/dapp`: the browser dApp on DevKit.
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
-- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees,locker,wallet}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
+- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees,locker,wallet,dapp}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
   DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D
   (ADR-0004, batched intents, pool) E (ADR-0005, `.jsc`, dsl) and the F spike (ADR-0006, optimistic L2, rollup) run on Yaci DevKit.
-- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007), #9 H (fees, ADR-0008), #10 I (params/quorum/auth/invariants/events, ADR-0009), #11 J (purposes/staking, ADR-0010), #12 K (composition, ADR-0011), #13 L (owned objects v2, ADR-0012), #14 deposits (ADR-0011 D3), #15 ADR-0013 (design), #16 maps v2 (ADR-0014), #17 M phase 1 (wallets). JuLC changes: worktree `../julc-joust`, PR label
+- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007), #9 H (fees, ADR-0008), #10 I (params/quorum/auth/invariants/events, ADR-0009), #11 J (purposes/staking, ADR-0010), #12 K (composition, ADR-0011), #13 L (owned objects v2, ADR-0012), #14 deposits (ADR-0011 D3), #15 ADR-0013 (design), #16 maps v2 (ADR-0014), #17 M phase 1 (wallets), #18 snapshot publishing, #19 M phases 2+3 (descriptions, JS client, service, dApp). JuLC changes: worktree `../julc-joust`, PR label
   `joust` (julc#311).
 
 ## Build / test
@@ -99,6 +101,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - ADR-0012: several owned types: datum `Holding_<Type>` (sealed) with a tag check per arm; one type keeps `Holding`.
   A move's redeemer has `into` at field 0; an `@Admits` action's first argument (the object id) is field 0. Moves run
   only inside `Compose` (`<move>Admitted`). Watch script size: three owned types + moves + maps exceeded 16 KB.
+- ADR-0013 phases 2/3: descriptions at `META-INF/joust/<pkg>.<Contract>.json`; a field's title replaces a schema's, so
+  JS recognises Bool/Optional by shape. Calls with `needsService` are not generated for pages. The page verifier
+  allows outputs to other parties but requires the tx to balance and bounds the wallet's net outflow. Vite: no
+  `vite-plugin-top-level-await` (swc breaks); target es2022. DevKit's default-mnemonic accounts may be empty: top up.
+  Phase 4 (serverless Wasm) uses GraalVM Web Image (`/Users/satya/work/java/graalvm-25.3.4.1+1.1`), experimental; no TeaVM.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).
