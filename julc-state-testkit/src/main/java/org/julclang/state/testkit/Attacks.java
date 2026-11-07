@@ -75,6 +75,22 @@ public final class Attacks {
             out.add(new Attack("datum hash instead of inline datum", "I4", t -> mapState(t, o ->
                     new TxOut(o.address(), o.value(), new OutputDatum.OutputDatumHash(new DatumHash(StateHarness.fill(32, 0xDA))),
                             o.referenceScript()))));
+            // An object's continuing Holding keeps its instance (I19); only a move names another, admitted one (I43).
+            boolean object = tx.token != null && tx.token.length == 29 && tx.token[0] == 0x4F;
+            if (object && !create && tx.outputs.get(tx.stateOutput).datum() instanceof OutputDatum.OutputDatumInline held
+                    && held.datum() instanceof PlutusData.ConstrData cd && !cd.fields().isEmpty()
+                    && cd.fields().get(0) instanceof PlutusData.BytesData) {
+                out.add(new Attack("object's instance changed", "I19/I43", t -> mapState(t, o -> {
+                    var d = (PlutusData.ConstrData) ((OutputDatum.OutputDatumInline) o.datum()).datum();
+                    var fs = new ArrayList<>(d.fields());
+                    // another instance id: never the one already there (a move's own destination, say)
+                    byte[] now = ((PlutusData.BytesData) fs.get(0)).value();
+                    byte[] other = StateHarness.fill(32, now.length > 0 && (now[0] & 0xFF) == 0x77 ? 0x78 : 0x77);
+                    fs.set(0, PlutusData.bytes(other));
+                    return new TxOut(o.address(), o.value(), new OutputDatum.OutputDatumInline(new PlutusData.ConstrData(d.tag(), fs)),
+                            o.referenceScript());
+                })));
+            }
             out.add(new Attack("state output dropped", "I4", t -> {
                 var c = t.copy();
                 c.outputs.remove(c.stateOutput);

@@ -36,7 +36,17 @@ import java.util.function.Function;
 public final class OwnedObject<S, R> {
 
     /** How the generated validator's {@code Holding} wraps the owned record. */
-    public record Codec<R>(Class<?> holdingClass, Function<Object, R> value, BiFunction<byte[], R, Object> wrap) {}
+    public record Codec<R>(Class<?> holdingClass, Function<Object, R> value, BiFunction<byte[], R, Object> wrap,
+                           Class<R> valueClass) {
+        public Codec(Class<?> holdingClass, Function<Object, R> value, BiFunction<byte[], R, Object> wrap) {
+            this(holdingClass, value, wrap, null);
+        }
+
+        /** The owned record has MerkleMap components (ADR-0012 D2). */
+        boolean hasMaps() {
+            return valueClass != null && MerkleSupport.hasMaps(valueClass);
+        }
+    }
 
     /** How to create an object: filled in by a generated client. */
     public record Create<R>(String name, Account caller, BigInteger received, boolean usesCtx, boolean needsShared,
@@ -125,6 +135,8 @@ public final class OwnedObject<S, R> {
         Utxo ref = contract.ensureReferenceScript(spec.caller());
         Utxo instanceUtxo = parent.utxo();
         Object shared = parent.state();
+        // Publishing the map verifier spends the caller's UTxOs: do it before picking the seed.
+        if (codec.hasMaps()) rt.mapVerifier().ensure(spec.caller());
         Utxo seed = contract.pickSeedFor(spec.caller());
         String objectId = objectIdOf(seed.getTxHash(), seed.getOutputIndex());
         var object = new OwnedObject<>(parent, objectId, codec);
@@ -133,11 +145,21 @@ public final class OwnedObject<S, R> {
         Ctx ctx = new Ctx(callerPkh, spec.received(), BigInteger.ZERO,
                 window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
         if (spec.assetRun() != null) return createAssets(parent, spec, codec, ref, instanceUtxo, shared, seed, object, ctx, window, what);
-        R value = spec.run().apply(shared, ctx);
+        boolean maps = codec.hasMaps();
+        MerkleSupport merkle = maps ? new MerkleSupport(rt.mapStore()) : null;
+        R made = maps ? merkle.run(() -> spec.run().apply(shared, ctx)) : spec.run().apply(shared, ctx);
+        var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
+        List<org.julclang.state.api.mpf.MapClaim> claims = List.of();
+        R value = made;
+        if (maps) {
+            // ADR-0012 D2: the object's maps start empty; its writes are claimed by the seed, as for an instance.
+            var prepared = merkle.prepare(codec.valueClass(), made, made, seedRef);
+            claims = prepared.claims();
+            value = prepared.stored();
+        }
         byte[] instance = HexUtil.decodeHexString(parent.instanceId());
         PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(instance, value));
         Datums.checkSize(contract.spec, datum, what);
-        var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
         PlutusData redeemer = PlutusDataAdapter.convert(spec.redeemer().make(seedRef, instance, ctx));
         BigInteger lovelace = BigInteger.valueOf(contract.spec.minAda()).add(spec.received());
         var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null)
@@ -145,8 +167,9 @@ public final class OwnedObject<S, R> {
                 .readFrom(instanceUtxo);
         TxRunner.mint(tx, contract.policyId, List.of(new Asset("0x" + objectId, BigInteger.ONE)), redeemer);
         tx.payToContract(contract.address, List.of(Amount.lovelace(lovelace), new Amount(object.unit(), BigInteger.ONE)), datum);
+        if (maps) rt.mapVerifier().attach(tx, claims, spec.caller());
         String txHash = new TxRunner(rt).submit(tx, spec.caller(), window, spec.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],
-                new TxRunner.ExpectedState(object.unit(), lovelace, datum), List.of(), new PlutusScript[]{contract.script}, what);
+                new TxRunner.ExpectedState(object.unit(), lovelace, datum), List.of(), scripts(contract, maps), what);
         object.awaitUtxo(txHash);
         return object;
     }
@@ -202,7 +225,28 @@ public final class OwnedObject<S, R> {
         throw new ContentionException(call.name + ": the state kept moving", last);
     }
 
+    /**
+     * The instance the object belongs to now, from its Holding datum: after a move (ADR-0012 D3) it is no longer the
+     * one this handle was looked up under.
+     */
+    private StateInstance<S> home(Utxo own) {
+        try {
+            var data = PlutusData.deserialize(HexUtil.decodeHexString(own.getInlineDatum()));
+            Object holding = PlutusDataAdapter.convert(data, codec.holdingClass());
+            byte[] inst = (byte[]) holding.getClass().getMethod("instance").invoke(holding);
+            String hex = HexUtil.encodeHexString(inst);
+            return hex.equalsIgnoreCase(parent.instanceId()) ? parent : new StateInstance<>(contract(), hex);
+        } catch (Exception e) {
+            throw new JoustException("cannot read the object's instance", e);
+        }
+    }
+
     private CallResult<R> attempt(Call<R> call, Utxo own) {
+        StateInstance<S> home = home(own);
+        if (call.into != null && TxRunner.capture() == null) {
+            throw new JoustException(call.name + ": a move needs the destination's consent in the same transaction; compose it"
+                    + " with the destination's @Admits call (Compose.of(...).add(move).add(admit), ADR-0012 D3)");
+        }
         if (call.assetRun != null) return attemptAssets(call, own);
         var contract = contract();
         var spec = contract.spec;
@@ -219,10 +263,23 @@ public final class OwnedObject<S, R> {
         Window window = call.usesTime() ? Window.open(contract.runtime, spec, call.notBefore, call.notAfter, current, what) : null;
         Ctx ctx = new Ctx(callerPkh, call.received, balance,
                 window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
-        Utxo sharedUtxo = call.sharedRun != null ? parent.utxo() : null;
-        Transition<R> t = call.sharedRun != null
-                ? call.sharedRun.apply(current, parent.state(), ctx)
-                : call.run.apply(current, ctx);
+        Utxo sharedUtxo = call.sharedRun != null ? home.utxo() : null;
+        Object sharedState = call.sharedRun != null ? home.state() : null;
+        java.util.function.Function<R, Transition<R>> method = o -> call.sharedRun != null
+                ? call.sharedRun.apply(o, sharedState, ctx) : call.run.apply(o, ctx);
+        boolean maps = codec.hasMaps();
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        Transition<R> t = maps ? merkle.run(() -> method.apply(current)) : method.apply(current);
+        TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(own.getTxHash())), BigInteger.valueOf(own.getOutputIndex()));
+        List<org.julclang.state.api.mpf.MapClaim> claims = List.of();
+        R stored = t.next();
+        if (maps) {
+            // ADR-0012 D2: the object's maps, claimed by its own input, as an instance's are.
+            var prepared = merkle.prepare(codec.valueClass(), current, call.kind == Call.Kind.ACTION ? t.next() : null, ownRef);
+            claims = prepared.claims();
+            stored = prepared.stored();
+            MerkleSupport.verifyReplay(codec.valueClass(), current, claims, o -> method.apply(o), t);
+        }
 
         Map<String, BigInteger> owed = new LinkedHashMap<>();
         List<Payout> payouts = new ArrayList<>();
@@ -238,11 +295,12 @@ public final class OwnedObject<S, R> {
         Utxo ref = contract.findReferenceScript();
         var tx = TxRunner.collect(TxRunner.scriptTx(), own, redeemer).readFrom(ref);
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
+        if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         TxRunner.ExpectedState expected = null;
         if (call.kind == Call.Kind.ACTION) {
             BigInteger next = inLovelace.add(call.received).subtract(total);
             if (next.compareTo(BigInteger.valueOf(spec.minAda())) < 0) throw new RequireException(what + ": payouts exceed the object's funds");
-            PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(HexUtil.decodeHexString(parent.instanceId()), t.next()));
+            PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(HexUtil.decodeHexString(instanceAfter(call, own)), stored));
             Datums.checkSize(spec, datum, what);
             tx.payToContract(contract.address, List.of(Amount.lovelace(next), new Amount(unit(), BigInteger.ONE)), datum);
             expected = new TxRunner.ExpectedState(unit(), next, datum);
@@ -269,10 +327,10 @@ public final class OwnedObject<S, R> {
         call.applyAuthorization(tx);
         call.applyReads(tx);
         String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
-                expected, expectedPayouts, new PlutusScript[]{contract.script}, what);
+                expected, expectedPayouts, scripts(contract, maps), what);
         if (call.kind == Call.Kind.ACTION) {
             awaitUtxo(txHash);
-            return new CallResult<>(txHash, t.next(), payouts, eventsOf(t));
+            return new CallResult<>(txHash, stored, payouts, eventsOf(t));
         }
         return new CallResult<>(txHash, null, payouts, eventsOf(t));
     }
@@ -297,8 +355,9 @@ public final class OwnedObject<S, R> {
         Window window = call.usesTime() ? Window.open(contract.runtime, spec, call.notBefore, call.notAfter, current, what) : null;
         Ctx ctx = new Ctx(callerPkh, call.received, balance,
                 window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
-        Utxo sharedUtxo = call.needsShared ? parent.utxo() : null;
-        Object shared = call.needsShared ? parent.state() : null;
+        StateInstance<S> home = home(own);
+        Utxo sharedUtxo = call.needsShared ? home.utxo() : null;
+        Object shared = call.needsShared ? home.state() : null;
         byte[] policy = HexUtil.decodeHexString(contract.policyId);
         byte[] id = HexUtil.decodeHexString(objectId);
         var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id));
@@ -309,7 +368,7 @@ public final class OwnedObject<S, R> {
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
         TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(own.getTxHash())), BigInteger.valueOf(own.getOutputIndex()));
         PlutusData datum = destroy ? null
-                : PlutusDataAdapter.convert(codec.wrap().apply(HexUtil.decodeHexString(parent.instanceId()), t.next()));
+                : PlutusDataAdapter.convert(codec.wrap().apply(HexUtil.decodeHexString(instanceAfter(call, own)), t.next()));
         var applied = AssetTx.apply(tx, contract, call.caller, what, ownRef, inValue, call.received, call.receivedAssets, t,
                 unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false);
         List<byte[]> signers = new ArrayList<>();
@@ -328,6 +387,16 @@ public final class OwnedObject<S, R> {
             return new CallResult<>(txHash, t.next(), payouts, eventsOf(t));
         }
         return new CallResult<>(txHash, null, payouts, eventsOf(t));
+    }
+
+    private static PlutusScript[] scripts(StateContractHandle<?> contract, boolean maps) {
+        return maps ? new PlutusScript[]{contract.script, contract.runtime.mapVerifier().script()}
+                : new PlutusScript[]{contract.script};
+    }
+
+    /** The instance the object belongs to after {@code call}: the destination of a move, else its current one. */
+    private String instanceAfter(Call<R> call, Utxo own) {
+        return call.into != null ? call.into : home(own).instanceId();
     }
 
     /** The object UTxO's full value (ADR-0007). */

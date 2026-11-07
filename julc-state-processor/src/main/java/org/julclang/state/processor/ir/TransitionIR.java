@@ -32,6 +32,10 @@ import java.util.List;
  * @param eventsType  the events list type, e.g. {@code JulcList<Treasury.Event>}, or null
  * @param reads       {@code @Reads} parameters, right after the params (ADR-0011 D2); for MIGRATE, the old state
  * @param migrateTo   {@code @MigrateTo} field path of a destroy, or null (ADR-0011 D4)
+ * @param ownedType   for an owned method: the owned record it acts on, as source text; otherwise null (ADR-0012 D1)
+ * @param into        for a move: the name of the {@code @Into} parameter (the destination's state); otherwise null
+ * @param admitsType  for an {@code @Admits} action: the owned record it admits, as source text (or, before the reader
+ *                    resolves it, the annotation's simple name, possibly empty); otherwise null (ADR-0012 D3)
  */
 public record TransitionIR(Kind kind,
                            String method,
@@ -59,7 +63,10 @@ public record TransitionIR(Kind kind,
                            boolean resultEvents,
                            String eventsType,
                            List<ReadIR> reads,
-                           String migrateTo) {
+                           String migrateTo,
+                           String ownedType,
+                           String into,
+                           String admitsType) {
 
     /** A {@code @Reads(path)} parameter: its foreign record type and field count, for the shape check. */
     public record ReadIR(String name, String path, String type, int fields) {}
@@ -69,6 +76,24 @@ public record TransitionIR(Kind kind,
     /** An owned-object method (ADR-0003). */
     public boolean owned() {
         return kind == Kind.OWNED_INIT || kind == Kind.OWNED_ACTION || kind == Kind.OWNED_DESTROY;
+    }
+
+    /** An {@code @Admits} action: its first argument is the arriving object's id (ADR-0012 D3). */
+    public boolean admits() {
+        return admitsType != null;
+    }
+
+    /** This transition with its {@code @Admits} type resolved to the owned record's source text. */
+    public TransitionIR withAdmitsType(String type) {
+        return new TransitionIR(kind, method, variant, params, hasCtx, payable, returns, resultType, signedBy, validAfter,
+                validBefore, shared, batched, batchOnly, hasFunds, resultPayouts, resultSends, resultMint, resultAccepted,
+                takesParams, quorumKeys, quorumThreshold, authorizedBy, resultEvents, eventsType, reads, migrateTo, ownedType,
+                into, type);
+    }
+
+    /** Moves its object to another instance ({@code @Into}, ADR-0012 D3). */
+    public boolean moves() {
+        return into != null;
     }
 
     /** Ends what it acts on (instance or object): burns its token. */

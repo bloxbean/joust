@@ -422,6 +422,25 @@ public final class StateHarness<S> {
                 new OutputDatum.OutputDatumInline(data(state)), Optional.empty());
     }
 
+    /** A state output of another instance of this contract, {@code id} (ADR-0012 moves between instances). */
+    public TxOut instanceOut(byte[] id, Object state, BigInteger lovelace) {
+        return new TxOut(stateAddress(), Value.lovelace(lovelace).merge(Value.singleton(new PolicyId(policy), new TokenName(id),
+                BigInteger.ONE)), new OutputDatum.OutputDatumInline(data(state)), Optional.empty());
+    }
+
+    /**
+     * Adds another instance {@code id} of this contract to {@code tx}: spent at {@code ref} with {@code redeemer}, holding
+     * {@code state}, continuing with {@code next} (same lovelace). How a move's destination admits the object (ADR-0012 D3).
+     */
+    public TxModel withInstance(TxModel tx, byte[] id, TxOutRef ref, Object state, Object redeemer, Object next,
+                                BigInteger lovelace) {
+        var c = tx.copy();
+        c.inputs.add(new TxInInfo(ref, instanceOut(id, state, lovelace)));
+        c.spendRedeemers.put(ref, data(redeemer));
+        c.outputs.add(instanceOut(id, next, lovelace));
+        return c;
+    }
+
     public Value token(BigInteger qty) {
         return Value.singleton(new PolicyId(policy), new TokenName(instanceId()), qty);
     }

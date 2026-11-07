@@ -71,6 +71,13 @@ public final class VerifierHandle {
 
     /** Adds the zero withdrawal carrying the map {@code claims} and the verifier's reference input to {@code tx}. */
     void attach(ScriptTx tx, List<MapClaim> claims, Account payer) {
+        var cap = TxRunner.capture();
+        if (cap != null) {
+            // In a composition every call's claims go into one withdrawal, attached when it is submitted.
+            ensure(payer);
+            cap.mapClaims.addAll(claims);
+            return;
+        }
         JulcList<MapClaim> list = JulcList.empty();
         for (int i = claims.size() - 1; i >= 0; i--) list = list.prepend(claims.get(i));
         attachRedeemer(tx, new MapClaims(list), payer);

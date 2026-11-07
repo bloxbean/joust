@@ -65,6 +65,8 @@ public final class Call<S> {
     final BiFunction<Ctx, Transition<S>, Object> redeemerWith;
     final List<com.bloxbean.cardano.client.api.model.Utxo> referenceInputs;
     final boolean migrates;
+    /** A move's destination instance id, hex (ADR-0012 D3), or null. */
+    final String into;
 
     private Call(Builder<S> b) {
         this.name = Objects.requireNonNull(b.name);
@@ -86,6 +88,7 @@ public final class Call<S> {
         this.redeemerWith = b.redeemerWith;
         this.referenceInputs = List.copyOf(b.referenceInputs);
         this.migrates = b.migrates;
+        this.into = b.into;
         if (run == null && sharedRun == null && assetRun == null) throw new IllegalArgumentException(name + ": no run");
         this.redeemer = b.redeemer != null ? b.redeemer : (ctx -> { throw new IllegalStateException("redeemerWith only"); });
         if (b.redeemer == null && b.redeemerWith == null) throw new NullPointerException(name + ": no redeemer");
@@ -154,6 +157,7 @@ public final class Call<S> {
         private BiFunction<Ctx, Transition<S>, Object> redeemerWith;
         private final List<com.bloxbean.cardano.client.api.model.Utxo> referenceInputs = new ArrayList<>();
         private boolean migrates;
+        private String into;
 
         private Builder(String name, Kind kind, Account caller) {
             this.name = name;
@@ -184,6 +188,8 @@ public final class Call<S> {
         public Builder<S> redeemerWith(BiFunction<Ctx, Transition<S>, Object> make) { this.redeemerWith = make; return this; }
         /** A {@code @MigrateTo} destroy: its funds move to the successor instead of being paid out (ADR-0011 D4). */
         public Builder<S> migrates() { this.migrates = true; return this; }
+        /** The object moves to instance {@code instanceId} (ADR-0012 D3); compose it with that instance's @Admits call. */
+        public Builder<S> movesTo(String instanceId) { this.into = instanceId.toLowerCase(); return this; }
         /** Reference inputs the call reads ({@code @Reads}; ADR-0011 D2). */
         public Builder<S> referenceInputs(com.bloxbean.cardano.client.api.model.Utxo... utxos) {
             referenceInputs.addAll(List.of(utxos));

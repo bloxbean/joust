@@ -63,7 +63,7 @@ public final class ValidatorGenerator {
                 "org.julclang.stdlib.lib.OutputLib", "org.julclang.stdlib.lib.ValuesLib",
                 "org.julclang.state.api.Ctx", "org.julclang.state.api.Payout", "org.julclang.state.api.Payouts"));
         if (c.hasOwned() || c.hasBatched()) imports.add("org.julclang.stdlib.lib.CryptoLib");
-        if (c.hasBatched()) imports.add("org.julclang.ledger.ScriptPurpose");
+        if (c.hasBatched() || !c.moves().isEmpty()) imports.add("org.julclang.ledger.ScriptPurpose");
         if (c.assetAware()) {
             imports.addAll(List.of("org.julclang.core.types.JulcValue", "org.julclang.state.api.Funds",
                     "org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId"));
@@ -84,7 +84,7 @@ public final class ValidatorGenerator {
             imports.addAll(List.of("org.julclang.state.api.Send", "org.julclang.state.api.OutputClaim",
                     "org.julclang.state.api.OutputClaims", "org.julclang.ledger.ScriptHash"));
         }
-        if (c.hasMaps()) {
+        if (c.anyMaps()) {
             imports.addAll(List.of("org.julclang.state.api.MapEntry", "org.julclang.state.api.MerkleMap",
                     "org.julclang.state.api.mpf.MapClaim", "org.julclang.state.api.mpf.MapClaims",
                     "org.julclang.state.api.mpf.MapWitnesses", "org.julclang.state.api.mpf.Mpf",
@@ -114,7 +114,7 @@ public final class ValidatorGenerator {
             w.line("/** Lovelace an intent carries beyond what it pays in: its refund, at least a min-UTxO output (ADR-0004 D2). */");
             w.line("static final BigInteger INTENT_DEPOSIT = BigInteger.valueOf(" + INTENT_DEPOSIT + "L);");
         }
-        if (c.hasMaps()) {
+        if (c.anyMaps()) {
             w.line("/** Script hash of the JOUST map verifier (ADR-0002 D9), which checks every MerkleMap claim. */");
             w.line("static final byte[] MAP_VERIFIER = " + MapVerifierInfo.hashLiteral() + ";");
         }
@@ -189,9 +189,16 @@ public final class ValidatorGenerator {
             w.line("public record RefTag(TxOutRef ref) {}");
         }
         purposeRedeemers();
-        if (c.hasOwned()) {
+        if (c.hasOwned() && !c.multiOwned()) {
             w.line("/** An owned object's datum: its instance and its value (ADR-0003 D2). */");
-            w.line("public record Holding(byte[] instance, " + c.ownedType() + " value) {}");
+            w.line("public record Holding(byte[] instance, " + c.owned().get(0).type() + " value) {}");
+        } else if (c.hasOwned()) {
+            w.line("/** An owned object's datum: one variant per owned type, told apart by constructor tag (ADR-0012 D1). */");
+            w.line("public sealed interface Holding permits " + String.join(", ",
+                    c.owned().stream().map(ContractIR.OwnedIR::holding).toList()) + " {}");
+            for (var o : c.owned()) {
+                w.line("public record " + o.holding() + "(byte[] instance, " + o.type() + " value) implements Holding {}");
+            }
         }
         w.blank();
 
@@ -261,7 +268,7 @@ public final class ValidatorGenerator {
         w.line("        && datumFits((PlutusData) (Object) initial);");
         w.line("boolean valueOk = exactValue(out.value(), policy, id, MIN_ADA.add(" + received("cr", init) + "));");
         var extra = new ArrayList<String>();
-        outputChecks(false, "initial", extra);
+        outputChecks(null, "initial", extra);
         paramsQuorumChecks(extra);
         var all = new ArrayList<String>(List.of("seedSpent", "mintOk", "shapeOk", "ctxOk", "datumOk", "valueOk"));
         all.addAll(extra);
@@ -285,9 +292,11 @@ public final class ValidatorGenerator {
             w.open("return switch (redeemer) {");
             for (var t : spend) {
                 if (t.owned()) {
-                    w.line("// I21: owned redeemers only for object tokens.");
-                    w.line("case " + t.variant() + " r -> isObjectToken(id) && on" + t.variant() + "(r, (Holding) (Object)"
-                            + " OutputLib.getInlineDatum(ownOut), tx, own, policy, id, inLovelace);");
+                    var o = c.ownedOf(t);
+                    w.line("// I21: owned redeemers only for object tokens" + (c.multiOwned() ? "; I42: only on a " + o.simple() : "") + ".");
+                    String tagOk = c.multiOwned() ? " && Builtins.constrTag(OutputLib.getInlineDatum(ownOut)) == " + o.tag() + "L" : "";
+                    w.line("case " + t.variant() + " r -> isObjectToken(id)" + tagOk + " && on" + t.variant() + "(r, ("
+                            + o.holding() + ") (Object) OutputLib.getInlineDatum(ownOut), tx, own, policy, id, inLovelace);");
                 } else {
                     w.line("case " + t.variant() + " r -> isInstanceToken(id) && on" + t.variant() + "(r, (" + S
                             + ") (Object) OutputLib.getInlineDatum(ownOut), tx, own, policy, id, inLovelace);");
@@ -314,9 +323,10 @@ public final class ValidatorGenerator {
     private void transition(TransitionIR t) {
         String X = c.name();
         boolean owned = t.owned();
-        String S = owned ? c.ownedType() : c.stateType();      // the record this method acts on
+        String S = owned ? c.ownedOf(t).type() : c.stateType();      // the record this method acts on
+        String H = owned ? c.ownedOf(t).holding() : null;
         if (owned) {
-            w.open("static boolean on" + t.variant() + "(" + t.variant() + " r, Holding held, TxInfo tx, TxInInfo own,"
+            w.open("static boolean on" + t.variant() + "(" + t.variant() + " r, " + H + " held, TxInfo tx, TxInInfo own,"
                     + " byte[] policy, byte[] id, BigInteger inLovelace) {");
             w.line(S + " current = held.value();");
         } else {
@@ -351,24 +361,26 @@ public final class ValidatorGenerator {
             w.line("// I20: the instance state, read through a reference input of exactly this object's instance.");
             w.line(c.stateType() + " shared = sharedState(tx, policy, held.instance());");
         }
-        if (c.hasMaps() && !owned) {
-            w.line("// Each MerkleMap opened with the read set the map verifier proved (I15).");
+        moveChecks(t, checks);
+        if (opensMaps(t)) {
+            w.line("// Each MerkleMap opened with the read set the map verifier proved (I15; ADR-0012 D2 for objects).");
             w.line("MapClaims mc = claims(tx);");
-            w.line(S + " opened = openAll(current, mc, own.outRef());");
+            w.line(S + " opened = " + mapFn("openAll", t) + "(current, mc, own.outRef());");
             stateArg = "opened";
         }
-        String call = t.shared() ? X + "." + t.method() + "(" + args("r", t, stateArg, "shared") + ")"
-                : X + "." + t.method() + "(" + args("r", t, stateArg) + ")";
+        String call = X + "." + t.method() + "(" + args("r", t, leading(t, stateArg)) + ")";
+        // I19: the object keeps its instance, except in a move, where it names the destination (I43).
+        String instanceExpr = t.moves() ? "r.into()" : "held.instance()";
         java.util.function.UnaryOperator<String> datum = owned
-                ? v -> "(PlutusData) (Object) new Holding(held.instance(), " + v + ")"
+                ? v -> "(PlutusData) (Object) new " + H + "(" + instanceExpr + ", " + v + ")"
                 : v -> "(PlutusData) (Object) " + v;
         switch (t.returns()) {
             case STATE -> {
-                w.line(S + " next = " + (owned ? call : committed(call)) + ";");
+                w.line(S + " next = " + committed(t, call) + ";");
                 w.line("boolean continues = continues(tx, own, policy, id, " + datum.apply("next") + ", inLovelace.add("
                         + received("r", t) + "));");
                 checks.add("continues");
-                outputChecks(owned, "next", checks);
+                outputChecks(t.ownedType(), "next", checks);
             }
             case SETTLE -> {
                 w.line(t.resultType() + " result = " + call + ";");
@@ -384,13 +396,13 @@ public final class ValidatorGenerator {
             case RESULT -> {
                 w.line(t.resultType() + " result = " + call + ";");
                 w.line("JulcList<Payout> payouts = " + (t.resultPayouts() ? "result.payouts()" : "JulcList.empty()") + ";");
-                w.line(S + " next = " + (owned ? "result.state()" : committed("result.state()")) + ";");
+                w.line(S + " next = " + committed(t, "result.state()") + ";");
                 w.line("boolean continues = continues(tx, own, policy, id, " + datum.apply("next") + ","
                         + " inLovelace.add(" + received("r", t) + ").subtract(Payouts.total(payouts)));");
                 w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
                 checks.add("continues");
                 checks.add("paid");
-                outputChecks(owned, "next", checks);
+                outputChecks(t.ownedType(), "next", checks);
                 eventsCheck(t, checks);
             }
             case PAYOUTS -> {
@@ -585,7 +597,8 @@ public final class ValidatorGenerator {
             return;
         }
         String X = c.name();
-        String R = c.ownedType();
+        String R = c.ownedOf(t).type();
+        String H = c.ownedOf(t).holding();
         w.open("static boolean create" + t.variant() + "(" + t.variant() + " o, TxInfo tx, byte[] policy) {");
         declareParams();
         w.line("byte[] id = objectId(o.seed());");
@@ -603,12 +616,21 @@ public final class ValidatorGenerator {
         }
         String call = t.shared() ? X + "." + t.method() + "(" + args("o", t, "shared") + ")"
                 : X + "." + t.method() + "(" + args("o", t) + ")";
-        w.line(R + " value = " + call + ";");
-        w.line("PlutusData held = (PlutusData) (Object) new Holding(o.instance(), value);");
+        var ow = c.ownedOf(t);
+        if (ow.hasMaps()) {
+            w.line(R + " made = " + call + ";");
+            w.line("// Its maps start empty; the creation's writes are committed through the verifier's claims (ADR-0012 D2).");
+            w.line("MapClaims mc = claims(tx);");
+            w.line(R + " value = " + rebuild("made", R, ow.components(), (i, a) -> "stored(MapWitnesses.commit(Mpf.emptyRoot(), "
+                    + a + ", MapWitnesses.claimFor(mc, o.seed(), " + i + "L)))") + ";");
+        } else {
+            w.line(R + " value = " + call + ";");
+        }
+        w.line("PlutusData held = (PlutusData) (Object) new " + H + "(o.instance(), value);");
         w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), held) && datumFits(held);");
         w.line("boolean valueOk = exactValue(out.value(), policy, id, MIN_ADA.add(" + received("o", t) + "));");
         var extra = new ArrayList<String>(List.of("seedSpent", "mintOk", "underInstance", "shapeOk", "ctxOk", "datumOk", "valueOk"));
-        outputChecks(true, "value", extra);
+        outputChecks(t.ownedType(), "value", extra);
         w.line("return " + conj(extra, "create" + t.variant()) + ";");
         w.close("}").blank();
     }
@@ -651,7 +673,7 @@ public final class ValidatorGenerator {
         w.line("boolean valueOk = lovelace.compareTo(MIN_ADA) >= 0 && exactValue(out.value(), policy, id, lovelace);");
         checks.add("datumOk");
         checks.add("valueOk");
-        outputChecks(false, "initial", checks);
+        outputChecks(null, "initial", checks);
         paramsQuorumChecks(checks);
         w.line("return " + conj(checks, "adopt") + ";");
         w.close("}").blank();
@@ -902,6 +924,73 @@ public final class ValidatorGenerator {
         throw new IllegalStateException("not a spend transition: " + t.method());
     }
 
+    /** I43: a move's destination admits it; an {@code @Admits} action's object arrives by a move naming this instance. */
+    private void moveChecks(TransitionIR t, List<String> checks) {
+        if (t.moves()) {
+            w.line("// I43: the object moves to r.into(), another instance, spent here with an @Admits action naming it.");
+            w.line("boolean intoOk = isInstanceToken(r.into()) && !ByteStringLib.equals(r.into(), held.instance());");
+            w.line(c.stateType() + " destination = admittedBy_" + c.ownedOf(t).simple() + "(tx, policy, r.into(), id);");
+            checks.add("intoOk");
+        }
+        if (t.admits()) {
+            w.line("// I43: the object arrives here: it is spent in this transaction with a move naming this instance.");
+            w.line("boolean arrives = arrivesHere_" + c.ownedOf(t.admitsType()).simple() + "(tx, policy, r."
+                    + t.params().get(0).name() + "(), id);");
+            checks.add("arrives");
+        }
+    }
+
+    /** The redeemer of the state input holding {@code token}: its constructor tag is one of {@code tags} and field 0 is {@code want}. */
+    private void moveHelpers() {
+        if (c.moves().isEmpty()) return;
+        w.line("/** Field 0 of a redeemer, as bytes: an @Admits action's object, or a move's destination (ADR-0012 D3). */");
+        w.open("static byte[] firstBytes(PlutusData rd) {");
+        w.line("return Builtins.unBData(Builtins.headList(Builtins.constrFields(rd)));");
+        w.close("}").blank();
+        for (var o : c.owned()) {
+            var moves = c.moves().stream().filter(m -> m.ownedType().equals(o.type())).toList();
+            if (moves.isEmpty()) continue;
+            // Each @Admits is bound to one owned type: a move of this type pairs only with an admit for it (ADR-0012 r3).
+            String admitTags = String.join(" || ", c.admits().stream().filter(a -> o.type().equals(a.admitsType()))
+                    .map(a -> "tag == " + spendTag(a) + "L").toList());
+            String moveTags = String.join(" || ", moves.stream().map(m -> "tag == " + spendTag(m) + "L").toList());
+            w.line("/**");
+            w.line(" * I43: the state of instance {@code into}, spent in this transaction with an @Admits action for " + o.simple());
+            w.line(" * naming {@code object}; the method sees that state as it was before the move. Fails if there is none.");
+            w.line(" */");
+            w.open("static " + c.stateType() + " admittedBy_" + o.simple() + "(TxInfo tx, byte[] policy, byte[] into, byte[] object) {");
+            w.line("boolean found = false;");
+            w.line("TxOut hit = tx.outputs().head();");
+            w.open("for (var in : tx.inputs()) {");
+            w.line("TxOut o = in.resolved();");
+            w.open("if (!found && ValuesLib.assetOf(o.value(), policy, into).compareTo(BigInteger.ONE) == 0 && isStateAddress(o.address(), policy)) {");
+            w.line("PlutusData rd = tx.redeemers().get(new ScriptPurpose.Spending(in.outRef()));");
+            w.line("long tag = Builtins.constrTag(rd);");
+            w.line("found = (" + admitTags + ") && ByteStringLib.equals(firstBytes(rd), object);");
+            w.line("hit = o;");
+            w.close("}");
+            w.close("}");
+            w.open("if (!found) {");
+            w.line("Builtins.error();");
+            w.close("}");
+            w.line("return (" + c.stateType() + ") (Object) OutputLib.getInlineDatum(hit);");
+            w.close("}").blank();
+            w.line("/** I43: " + o.simple() + " {@code object} is spent in this transaction with a move whose destination is {@code instance}. */");
+            w.open("static boolean arrivesHere_" + o.simple() + "(TxInfo tx, byte[] policy, byte[] object, byte[] instance) {");
+            w.line("boolean found = false;");
+            w.open("for (var in : tx.inputs()) {");
+            w.line("TxOut o = in.resolved();");
+            w.open("if (!found && ValuesLib.assetOf(o.value(), policy, object).compareTo(BigInteger.ONE) == 0 && isStateAddress(o.address(), policy)) {");
+            w.line("PlutusData rd = tx.redeemers().get(new ScriptPurpose.Spending(in.outRef()));");
+            w.line("long tag = Builtins.constrTag(rd);");
+            w.line("found = (" + moveTags + ") && ByteStringLib.equals(firstBytes(rd), instance);");
+            w.close("}");
+            w.close("}");
+            w.line("return isObjectToken(object) && found;");
+            w.close("}").blank();
+        }
+    }
+
     /** @Quorum and @AuthorizedBy checks on the current (input) state (I32, I33). */
     private void authChecks(TransitionIR t, List<String> checks) {
         if (t.quorumKeys() != null) {
@@ -917,10 +1006,10 @@ public final class ValidatorGenerator {
     }
 
     /** Invariants and quorum shapes of a state the validator accepts as an output (I32, I34). */
-    private void outputChecks(boolean owned, String subject, List<String> checks) {
+    private void outputChecks(String ownedType, String subject, List<String> checks) {
         int i = 0;
         for (var inv : c.invariants()) {
-            if (inv.owned() != owned) continue;
+            if (!java.util.Objects.equals(inv.ownedType(), ownedType)) continue;
             String v = "invariant_" + (i++);
             w.line("boolean " + v + " = " + c.name() + "." + inv.method() + "(" + subject
                     + (inv.takesParams() ? ", " + paramsExpr() : "") + ");");
@@ -928,7 +1017,8 @@ public final class ValidatorGenerator {
         }
         var seen = new java.util.LinkedHashSet<String>();
         for (var t : c.allTransitions()) {
-            if (t.quorumKeys() == null || t.owned() != owned || t.quorumKeys().startsWith("params.")) continue;
+            if (t.quorumKeys() == null || !java.util.Objects.equals(t.ownedType(), ownedType)
+                    || t.quorumKeys().startsWith("params.")) continue;
             String pair = t.quorumKeys() + "," + t.quorumThreshold();
             if (!seen.add(pair)) continue;
             String v = "quorumShape_" + (i++);
@@ -1102,7 +1192,7 @@ public final class ValidatorGenerator {
         acceptedLocal(init, "cr", checks);
         w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), (PlutusData) (Object) initial)");
         w.line("        && datumFits((PlutusData) (Object) initial);");
-        outputChecks(false, "initial", checks);
+        outputChecks(null, "initial", checks);
         paramsQuorumChecks(checks);
         w.line("JulcValue expected = Builtins.insertCoin(policy, id, BigInteger.ONE,");
         w.line("        Builtins.unionValue(lovelaceValue(MIN_ADA.add(" + received("cr", init) + ")), acceptedV));");
@@ -1116,7 +1206,8 @@ public final class ValidatorGenerator {
     /** MINT for an {@code @OwnedInit} in an asset-aware contract (I18, I26). */
     private void createObjectAssets(TransitionIR t) {
         String X = c.name();
-        String R = c.ownedType();
+        String R = c.ownedOf(t).type();
+        String H = c.ownedOf(t).holding();
         w.open("static boolean create" + t.variant() + "(" + t.variant() + " o, TxInfo tx, byte[] policy) {");
         declareParams();
         w.line("byte[] id = objectId(o.seed());");
@@ -1141,8 +1232,8 @@ public final class ValidatorGenerator {
             w.line(R + " value = " + call + ";");
         }
         acceptedLocal(t, "o", checks);
-        outputChecks(true, "value", checks);
-        w.line("PlutusData held = (PlutusData) (Object) new Holding(o.instance(), value);");
+        outputChecks(t.ownedType(), "value", checks);
+        w.line("PlutusData held = (PlutusData) (Object) new " + H + "(o.instance(), value);");
         w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), held) && datumFits(held);");
         w.line("JulcValue expected = Builtins.insertCoin(policy, id, BigInteger.ONE,");
         w.line("        Builtins.unionValue(lovelaceValue(MIN_ADA.add(" + received("o", t) + ")), acceptedV));");
@@ -1180,9 +1271,10 @@ public final class ValidatorGenerator {
     private void transitionAssets(TransitionIR t) {
         String X = c.name();
         boolean owned = t.owned();
-        String S = owned ? c.ownedType() : c.stateType();
+        String S = owned ? c.ownedOf(t).type() : c.stateType();      // the record this method acts on
+        String H = owned ? c.ownedOf(t).holding() : null;
         if (owned) {
-            w.open("static boolean on" + t.variant() + "(" + t.variant() + " r, Holding held, TxInfo tx, TxInInfo own,"
+            w.open("static boolean on" + t.variant() + "(" + t.variant() + " r, " + H + " held, TxInfo tx, TxInInfo own,"
                     + " byte[] policy, byte[] id, BigInteger inLovelace) {");
             w.line(S + " current = held.value();");
         } else {
@@ -1212,18 +1304,20 @@ public final class ValidatorGenerator {
         if (t.shared()) {
             w.line(c.stateType() + " shared = sharedState(tx, policy, held.instance());");
         }
+        moveChecks(t, checks);
         String stateArg = "current";
-        if (c.hasMaps() && !owned) {
+        if (opensMaps(t)) {
             w.line("MapClaims mc = claims(tx);");
-            w.line(S + " opened = openAll(current, mc, own.outRef());");
+            w.line(S + " opened = " + mapFn("openAll", t) + "(current, mc, own.outRef());");
             stateArg = "opened";
         }
         w.line("JulcValue inValue = Builtins.unValueData((PlutusData) (Object) ownOutValue(own));");
         fundsLocal(t, "r", "id", "heldOf(inValue, policy, id)");
-        String call = t.shared() ? X + "." + t.method() + "(" + args("r", t, stateArg, "shared") + ")"
-                : X + "." + t.method() + "(" + args("r", t, stateArg) + ")";
+        String call = X + "." + t.method() + "(" + args("r", t, leading(t, stateArg)) + ")";
+        // I19: the object keeps its instance, except in a move, where it names the destination (I43).
+        String instanceExpr = t.moves() ? "r.into()" : "held.instance()";
         java.util.function.UnaryOperator<String> datum = owned
-                ? v -> "(PlutusData) (Object) new Holding(held.instance(), " + v + ")"
+                ? v -> "(PlutusData) (Object) new " + H + "(" + instanceExpr + ", " + v + ")"
                 : v -> "(PlutusData) (Object) " + v;
         String next = "Builtins.iData(0L)";
         String payouts = "JulcList.empty()";
@@ -1232,7 +1326,7 @@ public final class ValidatorGenerator {
         String accepted = "noAssets()";
         switch (t.returns()) {
             case STATE -> {
-                w.line(S + " next = " + (owned ? call : committed(call)) + ";");
+                w.line(S + " next = " + committed(t, call) + ";");
                 next = datum.apply("next");
             }
             case PAYOUTS -> {
@@ -1242,7 +1336,7 @@ public final class ValidatorGenerator {
             case RESULT, SETTLE -> {
                 w.line(t.resultType() + " result = " + call + ";");
                 if (t.returns() == TransitionIR.Returns.RESULT) {
-                    w.line(S + " next = " + (owned ? "result.state()" : committed("result.state()")) + ";");
+                    w.line(S + " next = " + committed(t, "result.state()") + ";");
                     next = datum.apply("next");
                 }
                 if (t.resultPayouts()) payouts = "result.payouts()";
@@ -1251,7 +1345,7 @@ public final class ValidatorGenerator {
                 if (t.resultAccepted()) accepted = "result.accepted()";
             }
         }
-        if (!t.destroys()) outputChecks(owned, "next", checks);
+        if (!t.destroys()) outputChecks(t.ownedType(), "next", checks);
         if (t.returnsRecord()) eventsCheck(t, checks);
         if (!t.destroys() && next.equals("Builtins.iData(0L)")) {
             throw new IllegalStateException(t.method() + ": a continuing transition without a next state");
@@ -1551,9 +1645,19 @@ public final class ValidatorGenerator {
     }
 
     /** {@code expr} (the method's next state) with each MerkleMap committed to its new root (I16, I17). */
-    private String committed(String expr) {
-        if (!c.hasMaps()) return expr;
-        return "commitAll(current, " + expr + ", mc, own.outRef())";
+    private String committed(TransitionIR t, String expr) {
+        if (!opensMaps(t)) return expr;
+        return mapFn("commitAll", t) + "(current, " + expr + ", mc, own.outRef())";
+    }
+
+    /** The transition's subject (the state, or its owned record) has MerkleMaps. */
+    private boolean opensMaps(TransitionIR t) {
+        return t.owned() ? c.ownedOf(t).hasMaps() : c.hasMaps();
+    }
+
+    /** {@code openAll}/{@code commitAll} for the state; {@code openAll_Vault} for an owned type. */
+    private String mapFn(String base, TransitionIR t) {
+        return t.owned() ? base + "_" + c.ownedOf(t).simple() : base;
     }
 
     private String S() {
@@ -1607,22 +1711,15 @@ public final class ValidatorGenerator {
         w.line("return ByteStringLib.length(id) == 32;");
         w.close("}").blank();
         if (c.hasOwned()) ownedHelpers();
+        moveHelpers();
         if (c.assetAware()) assetHelpers();
         authHelpers();
         readsHelpers();
-        if (c.hasMaps()) {
-            String S = c.stateType();
-            w.line("/** The state a method sees: each MerkleMap opened with its proven read set (I15). */");
-            w.open("static " + S + " openAll(" + S + " current, MapClaims mc, TxOutRef owner) {");
-            w.line("return " + rebuild("current", (i, a) -> "MapWitnesses.open(" + a + ".root(), MapWitnesses.claimFor(mc, owner, "
-                    + i + "L))") + ";");
-            w.close("}").blank();
-            w.line("/** The state to store: each MerkleMap of {@code raw} committed from {@code current}'s root (I16, I17). */");
-            w.open("static " + S + " commitAll(" + S + " current, " + S + " raw, MapClaims mc, TxOutRef owner) {");
-            w.line("return " + rebuild("raw", (i, a) -> "stored(MapWitnesses.commit(current."
-                    + c.stateComponents().get(c.mapComponents().get(i)).name() + "().root(), " + a
-                    + ", MapWitnesses.claimFor(mc, owner, " + i + "L)))") + ";");
-            w.close("}").blank();
+        if (c.hasMaps()) mapOpeners("", c.stateType(), c.stateComponents());
+        for (var o : c.owned()) {
+            if (o.hasMaps()) mapOpeners("_" + o.simple(), o.type(), o.components());
+        }
+        if (c.anyMaps()) {
             w.line("/** Every MerkleMap claim of this transaction: the map verifier's redeemer (its presence means it ran). */");
             w.open("static MapClaims claims(TxInfo tx) {");
             w.line("ScriptPurpose purpose = new ScriptPurpose.Rewarding(new Credential.ScriptCredential(new ScriptHash(MAP_VERIFIER)));");
@@ -1865,6 +1962,7 @@ public final class ValidatorGenerator {
     /** Redeemer record components: the method's arguments, then {@code Ctx ctx}, then the map witnesses. */
     List<String> fields(TransitionIR t) {
         var out = new ArrayList<String>();
+        if (t.moves()) out.add("byte[] into");     // first, so an @Admits validator finds it at field 0 (I43)
         for (ParamIR p : t.params()) out.add(p.type() + " " + p.name());
         if (t.hasCtx()) out.add("Ctx ctx");
         // PlutusData, not Value: JuLC decodes a redeemer field typed Value as a constructor (julc issue); cast on use.
@@ -1878,10 +1976,29 @@ public final class ValidatorGenerator {
         return t.payable() && t.hasFunds();
     }
 
+    /** {@code openAll}/{@code commitAll} (with {@code suffix}) for a record with MerkleMaps: the state or an owned type. */
+    private void mapOpeners(String suffix, String S, List<ParamIR> cs) {
+        var maps = new ArrayList<Integer>();
+        for (int i = 0; i < cs.size(); i++) if (cs.get(i).kind() == ParamIR.TypeKind.MERKLE_MAP) maps.add(i);
+        w.line("/** What a method sees: each MerkleMap of " + S + " opened with its proven read set (I15). */");
+        w.open("static " + S + " openAll" + suffix + "(" + S + " current, MapClaims mc, TxOutRef owner) {");
+        w.line("return " + rebuild("current", S, cs, (i, a) -> "MapWitnesses.open(" + a + ".root(), MapWitnesses.claimFor(mc, owner, "
+                + i + "L))") + ";");
+        w.close("}").blank();
+        w.line("/** What to store: each MerkleMap of {@code raw} committed from {@code current}'s root (I16, I17). */");
+        w.open("static " + S + " commitAll" + suffix + "(" + S + " current, " + S + " raw, MapClaims mc, TxOutRef owner) {");
+        w.line("return " + rebuild("raw", S, cs, (i, a) -> "stored(MapWitnesses.commit(current."
+                + cs.get(maps.get(i)).name() + "().root(), " + a + ", MapWitnesses.claimFor(mc, owner, " + i + "L)))") + ";");
+        w.close("}").blank();
+    }
+
     /** {@code new S(...)} from {@code var}, with each MerkleMap component replaced by {@code mapExpr(i, access)}. */
     private String rebuild(String var, java.util.function.BiFunction<Integer, String, String> mapExpr) {
+        return rebuild(var, c.stateType(), c.stateComponents(), mapExpr);
+    }
+
+    private String rebuild(String var, String type, List<ParamIR> cs, java.util.function.BiFunction<Integer, String, String> mapExpr) {
         var parts = new ArrayList<String>();
-        var cs = c.stateComponents();
         int mapIndex = 0;
         for (int i = 0; i < cs.size(); i++) {
             String access = var + "." + cs.get(i).name() + "()";
@@ -1891,7 +2008,15 @@ public final class ValidatorGenerator {
                 parts.add(access);
             }
         }
-        return "new " + c.stateType() + "(" + String.join(", ", parts) + ")";
+        return "new " + type + "(" + String.join(", ", parts) + ")";
+    }
+
+    /** The method's leading arguments: the subject, then {@code @Shared} and {@code @Into} states (ADR-0012 D3). */
+    private static String[] leading(TransitionIR t, String subject) {
+        var out = new ArrayList<String>(List.of(subject));
+        if (t.shared()) out.add("shared");
+        if (t.moves()) out.add("destination");
+        return out.toArray(new String[0]);
     }
 
     /** Call arguments from a redeemer variable, optionally after the current state. */

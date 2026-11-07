@@ -108,7 +108,7 @@ public final class ClientGenerator {
             w.line("        (ctx, funds) -> { var r = " + X + "." + init.method() + "(" + callArgs(init, List.of()) + "); return "
                     + transitionExpr(init, "r") + "; }));");
         } else {
-            w.line("        ctx -> " + st(X + "." + init.method() + "(" + callArgs(init, List.of()) + ")", false) + ",");
+            w.line("        ctx -> " + st(X + "." + init.method() + "(" + callArgs(init, List.of()) + ")", null) + ",");
             w.line("        (seed, ctx) -> new " + V + ".CreateInstance(" + redeemerArgs(init, "seed") + ")));");
         }
         w.line("return new " + C + "(result.instance()" + (P != null ? ", params" : "") + ");");
@@ -230,8 +230,8 @@ public final class ClientGenerator {
         if (c.assetAware()) {
             assetCall(t, invoke, "s");
         } else switch (t.returns()) {
-            case STATE -> w.line(".run((s, ctx) -> Transition.of(" + st(invoke, false) + "))");
-            case RESULT -> w.line(".run((s, ctx) -> { var r = " + invoke + "; return Transition.of(" + st("r.state()", false)
+            case STATE -> w.line(".run((s, ctx) -> Transition.of(" + st(invoke, null) + "))");
+            case RESULT -> w.line(".run((s, ctx) -> { var r = " + invoke + "; return Transition.of(" + st("r.state()", null)
                     + ", " + (t.resultPayouts() ? "r.payouts()" : "org.julclang.core.types.JulcList.empty()") + ")"
                     + events(t) + "; })");
             case PAYOUTS -> w.line(".run((s, ctx) -> Transition.end(" + invoke + "))");
@@ -246,23 +246,28 @@ public final class ClientGenerator {
         w.close("}").blank();
     }
 
-    /** Owned objects (ADR-0003): a codec, creation methods, a lookup, and a typed handle per object. */
+    /** Owned objects (ADR-0003, ADR-0012 D1): per owned type a codec, creation methods, a lookup and a typed handle. */
     private void owned() {
+        for (var o : c.owned()) owned(o);
+    }
+
+    private void owned(org.julclang.state.processor.ir.ContractIR.OwnedIR o) {
         String X = c.name();
         String S = c.stateType();
-        String R = c.ownedType();
+        String R = o.type();
         String V = c.validatorName();
-        String simple = R.substring(R.lastIndexOf('.') + 1);
+        String HD = V + "." + o.holding();
+        String simple = o.simple();
         String handle = simple + "Object";
         String codec = simple.replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase() + "_CODEC";
         String lookup = Character.toLowerCase(simple.charAt(0)) + simple.substring(1);
 
-        w.line("/** How " + V + ".Holding wraps a " + simple + " (ADR-0003 D2). */");
-        w.line("public static final OwnedObject.Codec<" + R + "> " + codec + " = new OwnedObject.Codec<>(" + V
-                + ".Holding.class,");
-        w.line("        h -> ((" + V + ".Holding) h).value(), (inst, v) -> new " + V + ".Holding(inst, v));").blank();
+        w.line("/** How " + HD + " wraps a " + simple + " (ADR-0003 D2). */");
+        w.line("public static final OwnedObject.Codec<" + R + "> " + codec + " = new OwnedObject.Codec<>(" + HD + ".class,");
+        w.line("        h -> ((" + HD + ") h).value(), (inst, v) -> new " + HD + "(inst, v), " + R + ".class);").blank();
 
         for (TransitionIR t : c.ownedInits()) {
+            if (!t.ownedType().equals(R)) continue;
             var params = new ArrayList<String>(List.of("Account callerAccount"));
             params.addAll(decls(t.params()));
             if (t.payable()) params.add("BigInteger payLovelace");
@@ -289,7 +294,7 @@ public final class ClientGenerator {
                 w.line("        (sh, ctx, funds) -> { var r = " + X + "." + t.method() + "(" + String.join(", ", runArgs)
                         + "); return " + transitionExpr(t, "r") + "; }), " + codec + "));");
             } else {
-                w.line("        (sh, ctx) -> " + st(X + "." + t.method() + "(" + String.join(", ", runArgs) + ")", true) + ",");
+                w.line("        (sh, ctx) -> " + st(X + "." + t.method() + "(" + String.join(", ", runArgs) + ")", R) + ",");
                 w.line("        (seed, inst, ctx) -> new " + V + "." + t.variant() + "(" + String.join(", ", redArgs) + ")), "
                         + codec + "));");
             }
@@ -312,14 +317,23 @@ public final class ClientGenerator {
         w.line("/** Everything the object's UTxO holds: lovelace, its token, native assets (ADR-0007). */");
         w.line("public org.julclang.ledger.Value fullValue() { return object.fullValue(); }").blank();
         for (TransitionIR t : c.ownedSpendTransitions()) {
+            if (!t.ownedType().equals(R)) continue;
             boolean destroy = t.destroys();
             var params = new ArrayList<String>(List.of("Account callerAccount"));
+            if (t.moves()) params.add(c.clientName() + " destination");
             params.addAll(decls(t.params()));
             if (t.payable()) params.add("BigInteger payLovelace");
             if (ValidatorGenerator.takesAssets(t)) params.add("org.julclang.ledger.Value payAssets");
             extraParams(t, params);
+            if (t.moves()) {
+                w.line("/**");
+                w.line(" * Moves this " + simple + " to {@code destination} with {@link " + X + "#" + t.method() + "} (ADR-0012 D3). The");
+                w.line(" * destination must admit it in the same transaction: compose this call with its @Admits call.");
+                w.line(" */");
+            }
             w.open("public CallResult<" + R + "> " + t.method() + "(" + String.join(", ", params) + ") {");
             fetchReads(t, "object.instance().contract().runtime()");
+            if (t.moves()) w.line(S + " destination_state = destination.state();");
             String start = destroy
                     ? "Call.<" + R + ">destroy(\"" + t.method() + "\", callerAccount, new " + V + ".BurnInstance())"
                     : "Call.<" + R + ">action(\"" + t.method() + "\", callerAccount)";
@@ -331,8 +345,10 @@ public final class ClientGenerator {
             for (String f : t.signedBy()) w.line(".signedBy(\"" + f + "\", o -> o." + f + "())");
             for (String f : t.validAfter()) w.line(".validAfter(\"" + f + "\", o -> o." + f + "())");
             for (String f : t.validBefore()) w.line(".validBefore(\"" + f + "\", o -> o." + f + "())");
+            if (t.moves()) w.line(".movesTo(destination.instanceId())");
             var callArgs = new ArrayList<String>(List.of("o"));
             if (t.shared()) callArgs.add("(" + S + ") sh");
+            if (t.moves()) callArgs.add("destination_state");
             if (t.takesParams()) callArgs.add("params");
             for (var rd : t.reads()) callArgs.add("read_" + rd.name() + ".state()");
             t.params().forEach(p -> callArgs.add(p.name()));
@@ -340,8 +356,8 @@ public final class ClientGenerator {
             if (t.hasFunds()) callArgs.add("funds");
             String invoke = X + "." + t.method() + "(" + String.join(", ", callArgs) + ")";
             String body = switch (t.returns()) {
-                case STATE -> "Transition.of(" + st(invoke, true) + ")";
-                case RESULT -> "Transition.of(" + st(invoke + ".state()", true) + ", " + invoke + ".payouts())";
+                case STATE -> "Transition.of(" + st(invoke, R) + ")";
+                case RESULT -> "Transition.of(" + st(invoke + ".state()", R) + ", " + invoke + ".payouts())";
                 case PAYOUTS -> "Transition.end(" + invoke + ")";
                 case SETTLE -> "Transition.end(" + (t.resultPayouts() ? invoke + ".payouts()" : "org.julclang.core.types.JulcList.empty()")
                         + ")" + (t.resultEvents() ? ".withEvents(" + invoke + ".events())" : "");
@@ -350,7 +366,7 @@ public final class ClientGenerator {
                 assetCall(t, invoke, "o");
             } else if (t.returns() == TransitionIR.Returns.RESULT) {
                 body = null;
-                String lam = "{ var r = " + invoke + "; return Transition.of(" + st("r.state()", true) + ", "
+                String lam = "{ var r = " + invoke + "; return Transition.of(" + st("r.state()", R) + ", "
                         + (t.resultPayouts() ? "r.payouts()" : "org.julclang.core.types.JulcList.empty()") + ")" + events(t) + "; }";
                 w.line(t.shared() ? ".runShared((o, sh, ctx) -> " + lam + ")" : ".run((o, ctx) -> " + lam + ")");
             } else {
@@ -362,7 +378,38 @@ public final class ClientGenerator {
             w.dedent();
             w.dedent();
             w.close("}").blank();
+            if (t.moves()) admittedMove(t, params, handle, lookup);
         }
+        w.close("}").blank();
+    }
+
+    /**
+     * {@code <move>Admitted}: the move and the destination's {@code @Admits} call in one composed transaction, when the
+     * contract has exactly one {@code @Admits} action for the move's type, taking only the object id (ADR-0012 D3).
+     */
+    private void admittedMove(TransitionIR t, List<String> params, String handle, String lookup) {
+        var admits = c.admits().stream().filter(x -> t.ownedType().equals(x.admitsType())).toList();
+        if (admits.size() != 1) return;
+        var a = admits.get(0);
+        if (a.params().size() != 1 || a.takesParams() || a.payable() || a.quorumKeys() != null || !a.authorizedBy().isEmpty()
+                || !a.signedBy().isEmpty()) return;
+        var args = new ArrayList<String>(List.of("callerAccount", "destination"));
+        t.params().forEach(p -> args.add(p.name()));
+        if (t.payable()) args.add("payLovelace");
+        if (ValidatorGenerator.takesAssets(t)) args.add("payAssets");
+        if (!t.authorizedBy().isEmpty()) args.add("authorization");
+        if (t.quorumKeys() != null) args.add("cosigners");
+        w.line("/**");
+        w.line(" * Moves this object to {@code destination}, which admits it with {@link " + c.name() + "#" + a.method()
+                + "}, in one transaction. The caller signs both calls. Returns the object's handle under the destination.");
+        w.line(" */");
+        w.open("public " + handle + " " + t.method() + "Admitted(" + String.join(", ", params) + ") {");
+        w.line("byte[] object_id = com.bloxbean.cardano.client.util.HexUtil.decodeHexString(objectId());");
+        w.line("org.julclang.state.runtime.Compose.of(object.instance().contract().runtime(), callerAccount).allowSharedSigners()");
+        w.line("        .add(() -> " + t.method() + "(" + String.join(", ", args) + "))");
+        w.line("        .add(() -> destination." + a.method() + "(callerAccount, object_id))");
+        w.line("        .submit();");
+        w.line("return destination." + lookup + "(objectId());");
         w.close("}").blank();
     }
 
@@ -451,10 +498,15 @@ public final class ClientGenerator {
     // ------------------------------------------------------------------ ADR-0009
 
     /** The state expression, checked against the invariants on the JVM if there are any for this subject. */
-    private String st(String expr, boolean owned) {
-        boolean any = c.invariants().stream().anyMatch(i -> i.owned() == owned);
+    /** {@code expr} checked against the invariants of its subject: an owned record's type, or null for the state. */
+    private String st(String expr, String ownedType) {
+        boolean any = c.invariants().stream().anyMatch(i -> java.util.Objects.equals(i.ownedType(), ownedType));
         if (!any) return expr;
-        return (owned ? "checkedObject(" : "checkedState(") + expr + (c.hasParams() ? ", params" : "") + ")";
+        return checkedName(ownedType) + "(" + expr + (c.hasParams() ? ", params" : "") + ")";
+    }
+
+    private String checkedName(String ownedType) {
+        return ownedType == null ? "checkedState" : "checked" + c.ownedOf(ownedType).simple();
     }
 
     private static String events(TransitionIR t) {
@@ -462,11 +514,14 @@ public final class ClientGenerator {
     }
 
     private void invariantHelpers() {
-        for (boolean owned : new boolean[]{false, true}) {
-            var invs = c.invariants().stream().filter(i -> i.owned() == owned).toList();
+        var subjects = new ArrayList<String>();
+        subjects.add(null);
+        c.owned().forEach(o -> subjects.add(o.type()));
+        for (String subject : subjects) {
+            var invs = c.invariants().stream().filter(i -> java.util.Objects.equals(i.ownedType(), subject)).toList();
             if (invs.isEmpty()) continue;
-            String T = owned ? c.ownedType() : c.stateType();
-            String name = owned ? "checkedObject" : "checkedState";
+            String T = subject != null ? subject : c.stateType();
+            String name = checkedName(subject);
             w.line("/** {@code s}, after checking every @Invariant on the JVM (the validator checks them again; ADR-0009 D4). */");
             w.open("static " + T + " " + name + "(" + T + " s" + (c.hasParams() ? ", " + c.paramsType() + " params" : "") + ") {");
             for (var inv : invs) {
@@ -516,9 +571,9 @@ public final class ClientGenerator {
     /** {@code Transition.full(...)} from a method's result {@code r}. */
     private String transitionExpr(TransitionIR t, String r) {
         return switch (t.returns()) {
-            case STATE -> "Transition.full(" + st(r, t.owned()) + ", null, null, null, null)";
+            case STATE -> "Transition.full(" + st(r, t.ownedType()) + ", null, null, null, null)";
             case PAYOUTS -> "Transition.full(null, " + r + ", null, null, null)";
-            case RESULT, SETTLE -> "Transition.full(" + (t.returns() == TransitionIR.Returns.RESULT ? st(r + ".state()", t.owned()) : "null")
+            case RESULT, SETTLE -> "Transition.full(" + (t.returns() == TransitionIR.Returns.RESULT ? st(r + ".state()", t.ownedType()) : "null")
                     + ", " + (t.resultPayouts() ? r + ".payouts()" : "null")
                     + ", " + (t.resultSends() ? r + ".sends()" : "null")
                     + ", " + (t.resultMint() ? r + ".mint()" : "null")
@@ -552,6 +607,7 @@ public final class ClientGenerator {
     private String redeemerArgs(TransitionIR t, String seed) {
         var out = new ArrayList<String>();
         if (seed != null) out.add(seed);
+        if (t.moves()) out.add("com.bloxbean.cardano.client.util.HexUtil.decodeHexString(destination.instanceId())");
         for (ParamIR p : t.params()) out.add(p.name());
         if (t.hasCtx()) out.add("ctx");
         if (ValidatorGenerator.takesAssets(t)) out.add("payAssets.toPlutusData()");

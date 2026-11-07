@@ -17,7 +17,9 @@
 >   (a multisig treasury);
 > - J: every script purpose: staked state, reward withdrawals, certificates, DRep votes, guardrails (a staked vault);
 > - K: composition: several contracts' calls in one transaction (`Compose`), typed reads of another contract
->   (`@Reads`, an oracle), and version migration (`@MigrateTo`/`@Migrate`).
+>   (`@Reads`, an oracle), and version migration (`@MigrateTo`/`@Migrate`);
+> - L: owned objects v2: several owned types per contract, MerkleMaps inside objects, and objects moving between
+>   instances with the destination's consent (`@Into`/`@Admits`; a game guild).
 
 JOUST lets Java developers write Cardano smart contracts as **state plus actions**, the way they would write an
 account-based contract, instead of UTxOs, datums and redeemers. You write a state record and pure static methods.
@@ -123,5 +125,6 @@ dependencies {
 - [ADR-0010](docs/adr/0010-option-j-script-purposes-and-staking.md): Option J, `@Withdraw`, `@Certify`, `@Votes`,
   `@Propose` and `stakeSelf`.
 - [ADR-0011](docs/adr/0011-option-k-composition.md): Option K, `Compose`, `@Reads`, migration.
+- [ADR-0012](docs/adr/0012-option-l-owned-objects-v2.md): Option L, several owned types, owned MerkleMaps, moves.
 - [Research](docs/research/state-oriented-contracts-research.md): options A–F and prior art.
 - [Annotation catalogue](docs/research/annotation-catalog.md): everything planned, and what ships when.

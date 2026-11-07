@@ -20,8 +20,7 @@ import java.util.List;
  * @param views        {@code @View} methods, in source order
  * @param imports      fully qualified names the generated code must import for the types above
  * @param strategies   how state is stored, executed and validated
- * @param ownedType    the {@code @Owned} record as source text, or null (ADR-0003)
- * @param ownedComponents components of the owned record
+ * @param owned        the {@code @Owned} records, in source order (ADR-0003; several since ADR-0012 D1)
  * @param ownedInits   {@code @OwnedInit} methods
  * @param ownedActions {@code @OwnedAction} methods
  * @param ownedDestroys {@code @OwnedDestroy} methods
@@ -44,8 +43,7 @@ public record ContractIR(String packageName,
                          List<ViewIR> views,
                          List<String> imports,
                          Strategies strategies,
-                         String ownedType,
-                         List<ParamIR> ownedComponents,
+                         List<OwnedIR> owned,
                          List<TransitionIR> ownedInits,
                          List<TransitionIR> ownedActions,
                          List<TransitionIR> ownedDestroys,
@@ -63,8 +61,44 @@ public record ContractIR(String packageName,
         return purposes.stream().filter(p -> p.kind().equals(kind)).findFirst();
     }
 
-    /** An {@code @Invariant} method: on the owned record ({@code owned}) or the state; optionally taking params. */
-    public record InvariantIR(String method, boolean owned, boolean takesParams) {}
+    /**
+     * An {@code @Invariant} method: on an owned record ({@code ownedType}, its source text) or on the state (null);
+     * optionally taking params.
+     */
+    public record InvariantIR(String method, String ownedType, boolean takesParams) {
+        public boolean owned() {
+            return ownedType != null;
+        }
+    }
+
+    /**
+     * One {@code @Owned} record (ADR-0012 D1).
+     *
+     * @param type       the record as source text ({@code Guild.Hero})
+     * @param simple     its simple name ({@code Hero})
+     * @param components its components, in order
+     * @param holding    the datum record wrapping it: {@code Holding} with one owned type, {@code Holding_Hero} with several
+     * @param tag        the datum's constructor tag: its index among the owned records
+     */
+    public record OwnedIR(String type, String simple, List<ParamIR> components, String holding, int tag) {
+        /** Indexes of its MerkleMap components (ADR-0012 D2). */
+        public List<Integer> mapComponents() {
+            var out = new java.util.ArrayList<Integer>();
+            for (int i = 0; i < components.size(); i++) {
+                if (components.get(i).kind() == ParamIR.TypeKind.MERKLE_MAP) out.add(i);
+            }
+            return out;
+        }
+
+        public boolean hasMaps() {
+            return !mapComponents().isEmpty();
+        }
+    }
+
+    /** The state or some owned record has MerkleMaps: the validator reads the map verifier's claims. */
+    public boolean anyMaps() {
+        return hasMaps() || owned.stream().anyMatch(OwnedIR::hasMaps);
+    }
 
     public boolean hasParams() {
         return paramsType != null;
@@ -72,7 +106,33 @@ public record ContractIR(String packageName,
 
     /** The contract has an {@code @Owned} record (ADR-0003). */
     public boolean hasOwned() {
-        return ownedType != null;
+        return !owned.isEmpty();
+    }
+
+    /** Several owned types: the datum is a sealed {@code Holding} with one variant per type (ADR-0012 D1). */
+    public boolean multiOwned() {
+        return owned.size() > 1;
+    }
+
+    /** The owned record named by source text {@code type}. */
+    public OwnedIR ownedOf(String type) {
+        for (var o : owned) if (o.type().equals(type)) return o;
+        throw new IllegalArgumentException("not an owned type: " + type);
+    }
+
+    /** The owned record an owned method acts on. */
+    public OwnedIR ownedOf(TransitionIR t) {
+        return ownedOf(t.ownedType());
+    }
+
+    /** Owned moves ({@code @Into}, ADR-0012 D3). */
+    public List<TransitionIR> moves() {
+        return ownedActions.stream().filter(TransitionIR::moves).toList();
+    }
+
+    /** {@code @Admits} actions (ADR-0012 D3). */
+    public List<TransitionIR> admits() {
+        return actions.stream().filter(TransitionIR::admits).toList();
     }
 
     /** Owned spend-side transitions: owned actions then owned destroys. */

@@ -57,6 +57,18 @@ public final class Compose {
     /** Builds, checks, submits and confirms the one transaction; returns its hash. */
     public String submit() {
         if (calls.isEmpty()) throw new IllegalStateException("nothing to compose");
+        TxRunner.Capture outer = TxRunner.capture();
+        if (outer != null) {
+            // Nested in another composition: the calls join the outer transaction, which submits them all (or none).
+            String saved = outer.group;
+            if (sharedSigners && saved == null) outer.group = "composed calls #" + System.identityHashCode(this);
+            try {
+                for (Runnable call : calls) call.run();
+            } finally {
+                outer.group = saved;
+            }
+            return null;
+        }
         // Pass 1: every call's own window.
         var probe = new TxRunner.Capture();
         run(probe);
@@ -83,6 +95,10 @@ public final class Compose {
             for (int i = sorted.size() - 1; i >= 0; i--) list = list.prepend(sorted.get(i));
             runtime.outputVerifier().attachRedeemer(cap.tx, new org.julclang.state.api.OutputClaims(list), payer);
             cap.scripts.putIfAbsent("output-verifier", runtime.outputVerifier().script());
+        }
+        if (!cap.mapClaims.isEmpty()) {
+            // Outside the capture now: one zero withdrawal carrying every call's map claims.
+            runtime.mapVerifier().attach(cap.tx, cap.mapClaims, payer);
         }
         var signers = new ArrayList<Account>(cap.accounts.values());
         signers.removeIf(a -> a.baseAddress().equals(payer.baseAddress()));

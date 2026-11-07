@@ -54,6 +54,8 @@ final class ContractReader {
     static final String OWNED_INIT = API + "OwnedInit";
     static final String OWNED_ACTION = API + "OwnedAction";
     static final String OWNED_DESTROY = API + "OwnedDestroy";
+    static final String INTO = API + "Into";
+    static final String ADMITS = API + "Admits";
     static final String SHARED = API + "Shared";
     static final String BATCHED = API + "Batched";
     static final String PAYOUT = API + "Payout";
@@ -137,7 +139,7 @@ final class ContractReader {
             }
             if (kinds == 0) {
                 for (String policy : List.of(PAYABLE, SIGNED_BY, ONLY_OWNER, VALID_AFTER, VALID_BEFORE, BATCHED, QUORUM,
-                        AUTHORIZED_BY)) {
+                        AUTHORIZED_BY, ADMITS)) {
                     if (annotation(m, policy).isPresent()) {
                         error(m, "@" + simple(policy) + " needs @Init, @Action or @Destroy on the same method");
                     }
@@ -193,37 +195,39 @@ final class ContractReader {
             componentsByName.put(p.name(), p);
         }
 
-        // ---- the @Owned record (ADR-0003)
-        TypeElement ownedElement = null;
+        // ---- the @Owned records (ADR-0003; several since ADR-0012 D1)
+        List<TypeElement> ownedElements = new ArrayList<>();
         for (TypeElement nested : ElementFilter.typesIn(type.getEnclosedElements())) {
             if (annotation(nested, OWNED).isPresent()) {
                 if (nested.getKind() != ElementKind.RECORD) error(nested, "@Owned must be on a record");
-                else if (ownedElement != null) error(nested, "at most one @Owned record per contract (ADR-0003 D1)");
-                else ownedElement = nested;
+                else ownedElements.add(nested);
             }
         }
         boolean anyOwnedMethod = !ownedInits.isEmpty() || !ownedActions.isEmpty() || !ownedDestroys.isEmpty();
-        if (anyOwnedMethod && ownedElement == null) {
+        if (anyOwnedMethod && ownedElements.isEmpty()) {
             error(type, "@OwnedInit/@OwnedAction/@OwnedDestroy need an @Owned record in the contract");
             return Optional.empty();
         }
-        if (ownedElement != null && ownedInits.isEmpty()) {
-            error(ownedElement, "an @Owned record needs at least one @OwnedInit method to create objects");
-        }
-        List<ParamIR> ownedComponents = new ArrayList<>();
-        Map<String, ParamIR> ownedByName = new LinkedHashMap<>();
-        if (ownedElement != null) {
-            for (RecordComponentElement c : ownedElement.getRecordComponents()) {
-                if (mentionsMap(c.asType(), new java.util.HashSet<>())) {
-                    error(ownedElement, "owned records cannot hold MerkleMaps in Option C (ADR-0003 §4)");
+        List<ContractIR.OwnedIR> ownedIRs = new ArrayList<>();
+        Map<String, Map<String, ParamIR>> ownedFields = new LinkedHashMap<>();
+        for (TypeElement oe : ownedElements) {
+            List<ParamIR> comps = new ArrayList<>();
+            Map<String, ParamIR> byName = new LinkedHashMap<>();
+            for (RecordComponentElement c : oe.getRecordComponents()) {
+                if (!isNamed(c.asType(), API + "MerkleMap") && mentionsMap(c.asType(), new java.util.HashSet<>())) {
+                    error(oe, "owned component '" + c.getSimpleName() + "' nests a MerkleMap or MapEntry; MerkleMaps are"
+                            + " supported only as direct components of an owned record (ADR-0012 D2)");
                 }
                 var p = new ParamIR(c.getSimpleName().toString(), types.render(c.asType()), kindOf(c.asType()));
-                ownedComponents.add(p);
-                ownedByName.put(p.name(), p);
+                comps.add(p);
+                byName.put(p.name(), p);
             }
+            String text = types.render(oe.asType());
+            String simpleName = oe.getSimpleName().toString();
+            String holding = ownedElements.size() == 1 ? "Holding" : "Holding_" + simpleName;
+            ownedIRs.add(new ContractIR.OwnedIR(text, simpleName, List.copyOf(comps), holding, ownedIRs.size()));
+            ownedFields.put(text, byName);
         }
-        TypeMirror ownedType = ownedElement == null ? null : ownedElement.asType();
-
         // ---- the @Params record (ADR-0009 D1)
         TypeElement paramsElement = null;
         for (TypeElement nested : ElementFilter.typesIn(type.getEnclosedElements())) {
@@ -244,8 +248,12 @@ final class ContractReader {
         TypeMirror paramsType = paramsElement == null ? null : paramsElement.asType();
 
         var ctx = new Reading(types, stateType, componentsByName, stateType, paramsType, paramsByName);
-        var ownedCtx = ownedElement == null ? null
-                : new Reading(types, ownedType, ownedByName, stateType, paramsType, paramsByName);
+        Map<String, Reading> ownedCtxs = new LinkedHashMap<>();
+        for (TypeElement oe : ownedElements) {
+            String text = types.render(oe.asType());
+            ownedCtxs.put(text, new Reading(types, oe.asType(), ownedFields.get(text), stateType, paramsType, paramsByName));
+        }
+        var ownedCtx = ownedElements.isEmpty() ? null : ownedCtxs.values().iterator().next();
         TransitionIR init = readTransition(initMethod, TransitionIR.Kind.INIT, ctx);
         List<TransitionIR> actionIRs = new ArrayList<>();
         for (var m : actions) actionIRs.add(readTransition(m, TransitionIR.Kind.ACTION, ctx));
@@ -257,9 +265,15 @@ final class ContractReader {
         List<TransitionIR> ownedActionIRs = new ArrayList<>();
         List<TransitionIR> ownedDestroyIRs = new ArrayList<>();
         if (ownedCtx != null) {
-            for (var m : ownedInits) ownedInitIRs.add(readTransition(m, TransitionIR.Kind.OWNED_INIT, ownedCtx));
-            for (var m : ownedActions) ownedActionIRs.add(readTransition(m, TransitionIR.Kind.OWNED_ACTION, ownedCtx));
-            for (var m : ownedDestroys) ownedDestroyIRs.add(readTransition(m, TransitionIR.Kind.OWNED_DESTROY, ownedCtx));
+            for (var m : ownedInits) {
+                ownedInitIRs.add(readTransition(m, TransitionIR.Kind.OWNED_INIT, ownedReading(m, true, ownedCtxs)));
+            }
+            for (var m : ownedActions) {
+                ownedActionIRs.add(readTransition(m, TransitionIR.Kind.OWNED_ACTION, ownedReading(m, false, ownedCtxs)));
+            }
+            for (var m : ownedDestroys) {
+                ownedDestroyIRs.add(readTransition(m, TransitionIR.Kind.OWNED_DESTROY, ownedReading(m, false, ownedCtxs)));
+            }
         }
 
         var sc = annotation(type, STATE_CONTRACT);
@@ -318,6 +332,14 @@ final class ContractReader {
             }
         }
         types.checkNoClash(GENERATED_NAMES).forEach(msg -> error(type, msg));
+        if (ownedIRs.size() > 1) {
+            var holdings = new HashSet<String>();
+            for (var o : ownedIRs) {
+                holdings.add(o.holding());
+                if (!reserved.add(o.holding())) error(type, "generated datum name " + o.holding() + " clashes; rename a method");
+            }
+            types.checkNoClash(holdings).forEach(msg -> error(type, msg));
+        }
 
         boolean anyMap = stateComponents.stream().anyMatch(p -> p.kind() == ParamIR.TypeKind.MERKLE_MAP);
         if (anyMap && !destroyIRs.isEmpty()) {
@@ -329,13 +351,72 @@ final class ContractReader {
                 error(type, "a contract with @Owned objects cannot @Destroy its instance: objects that read @Shared state"
                         + " would be locked forever (ADR-0003 r2)");
             }
-            if (ownedDestroyIRs.stream().noneMatch(t -> !t.shared())) {
-                error(ownedElement, "owned objects need an escape hatch: an @OwnedDestroy without @Shared, so an owner can"
-                        + " always close their object whatever the instance state (ADR-0003 r2)");
+            for (var o : ownedIRs) {
+                if (ownedInitIRs.stream().noneMatch(t -> t.ownedType().equals(o.type()))) {
+                    error(type, "@Owned record " + o.simple() + " needs at least one @OwnedInit method to create objects");
+                }
+                if (ownedDestroyIRs.stream().noneMatch(t -> !t.shared() && t.ownedType().equals(o.type()))) {
+                    error(type, "owned objects of type " + o.simple() + " need an escape hatch: an @OwnedDestroy on "
+                            + o.simple() + " without @Shared, so an owner can always close their object whatever the"
+                            + " instance state (ADR-0003 r2, ADR-0012 D1)");
+                }
+            }
+            var movesIR = ownedActionIRs.stream().filter(TransitionIR::moves).toList();
+            var admitsIR = actionIRs.stream().filter(TransitionIR::admits).toList();
+            if (!movesIR.isEmpty() && admitsIR.isEmpty()) {
+                error(type, "an @Into move needs an @Admits action: the destination must consent (ADR-0012 D3)");
+            }
+            if (movesIR.isEmpty() && !admitsIR.isEmpty()) {
+                error(type, "an @Admits action needs an @Into move: no object could ever arrive (ADR-0012 D3)");
+            }
+            // Bind each @Admits to one owned type: only that type's moves arrive through it (ADR-0012 r3).
+            var movingTypes = new java.util.LinkedHashSet<String>();
+            for (var mv : movesIR) movingTypes.add(mv.ownedType());
+            for (int i = 0; i < actionIRs.size(); i++) {
+                var a = actionIRs.get(i);
+                if (!a.admits()) continue;
+                String resolved = null;
+                if (a.admitsType().isEmpty()) {
+                    if (movingTypes.size() == 1) resolved = movingTypes.iterator().next();
+                    else if (movingTypes.size() > 1) {
+                        error(type, "@Admits on " + a.method() + " must name the owned type it admits (@Admits(\"Hero\")):"
+                                + " several owned types have moves (ADR-0012)");
+                    }
+                } else {
+                    for (var o : ownedIRs) if (o.simple().equals(a.admitsType())) resolved = o.type();
+                    if (resolved == null) error(type, "@Admits(\"" + a.admitsType() + "\") on " + a.method()
+                            + " does not name an @Owned record of this contract");
+                    else if (!movingTypes.contains(resolved)) error(type, "@Admits(\"" + a.admitsType() + "\") on "
+                            + a.method() + ": that type has no @Into move");
+                }
+                if (resolved != null) actionIRs.set(i, a.withAdmitsType(resolved));
+            }
+            for (String mt : movingTypes) {
+                boolean admitted = actionIRs.stream().anyMatch(a -> a.admits() && mt.equals(a.admitsType()));
+                if (!admitted && !actionIRs.stream().filter(TransitionIR::admits).toList().isEmpty()) {
+                    error(type, "moves of " + mt + " need an @Admits action for that type (ADR-0012 D3)");
+                }
+            }
+            boolean withdraws = purposeMethods.containsKey("WITHDRAW");   // the generated code is asset-aware then too
+            if (!movesIR.isEmpty() && (assetAware || withdraws)) {
+                error(type, "@Into moves cannot be combined with native assets yet (ADR-0012)");
             }
             if (anyMap) {
                 error(type, "@Owned objects and MerkleMap state cannot be combined yet: a @Shared read has no proof path"
-                        + " for map reads (ADR-0003 r2)");
+                        + " for map reads (ADR-0003 r2); MerkleMaps may go in the owned records instead (ADR-0012 D2)");
+            }
+            boolean ownedMaps = ownedIRs.stream().anyMatch(ContractIR.OwnedIR::hasMaps);
+            if (ownedMaps && (assetAware || withdraws)) {
+                error(type, "owned MerkleMaps cannot be combined with native assets (Funds, sends, mint) yet (ADR-0007)");
+            }
+            for (var inv : invariantMethods) {
+                var ps0 = inv.getParameters();
+                for (var o : ownedIRs) {
+                    if (o.hasMaps() && !ps0.isEmpty() && types.render(ps0.get(0).asType()).equals(o.type())) {
+                        error(inv, "@Invariant cannot read an owned record with MerkleMaps: on-chain sees only the opened"
+                                + " read set (ADR-0009 r2)");
+                    }
+                }
             }
             for (var t : concat(ownedActionIRs, ownedDestroyIRs)) {
                 if (t.signedBy().isEmpty()) {
@@ -343,6 +424,9 @@ final class ContractReader {
                             + " anyone can call it on anyone's object (and keep the owner's own calls failing)", type);
                 }
             }
+        }
+        if (ownedCtx == null && actionIRs.stream().anyMatch(TransitionIR::admits)) {
+            error(type, "@Admits admits owned objects: the contract needs an @Owned record and an @Into move (ADR-0012 D3)");
         }
         if (assetAware && anyMap) {
             error(type, "MerkleMap state cannot be combined with native assets (Funds, sends, mint) yet (ADR-0007)");
@@ -365,7 +449,11 @@ final class ContractReader {
             if (!m.getModifiers().contains(Modifier.STATIC)) error(m, "@Invariant methods must be static");
             if (m.getReturnType().getKind() != TypeKind.BOOLEAN) error(m, "@Invariant must return boolean");
             var ps = m.getParameters();
-            boolean onOwned = !ps.isEmpty() && ownedType != null && same(ps.get(0).asType(), ownedType);
+            String onOwnedType = null;
+            for (TypeElement oe : ownedElements) {
+                if (!ps.isEmpty() && same(ps.get(0).asType(), oe.asType())) onOwnedType = types.render(oe.asType());
+            }
+            boolean onOwned = onOwnedType != null;
             boolean onState = !ps.isEmpty() && same(ps.get(0).asType(), stateType);
             if (!onOwned && !onState) error(m, "@Invariant's first parameter must be the state or the owned record");
             boolean withParams = ps.size() == 2 && paramsType != null && same(ps.get(1).asType(), paramsType);
@@ -375,7 +463,7 @@ final class ContractReader {
             if (onState && anyMap) {
                 error(m, "@Invariant cannot read state with MerkleMaps: on-chain sees only the opened read set (ADR-0009 r2)");
             }
-            invariants.add(new ContractIR.InvariantIR(m.getSimpleName().toString(), onOwned, withParams));
+            invariants.add(new ContractIR.InvariantIR(m.getSimpleName().toString(), onOwnedType, withParams));
         }
         // ---- purpose handlers (ADR-0010)
         List<ContractIR.PurposeIR> purposes = new ArrayList<>();
@@ -407,7 +495,7 @@ final class ContractReader {
         return Optional.of(new ContractIR(pkg, type.getSimpleName().toString(), stateText, stateComponents, minAda,
                 maxDatumBytes, maxValidityMs,
                 init, actionIRs, destroyIRs, viewIRs, types.imports(), Strategies.OPTION_A,
-                ownedType == null ? null : types.render(ownedType), List.copyOf(ownedComponents), ownedInitIRs,
+                List.copyOf(ownedIRs), ownedInitIRs,
                 ownedActionIRs, ownedDestroyIRs, paramsType == null ? null : types.render(paramsType), List.copyOf(invariants),
                 List.copyOf(purposes), stakeSelf, migrateIR));
     }
@@ -445,6 +533,34 @@ final class ContractReader {
     private record Reading(TypeRenderer types, TypeMirror stateType, Map<String, ParamIR> components, TypeMirror sharedType,
                            TypeMirror paramsType, Map<String, ParamIR> paramsComponents) {}
 
+    /**
+     * The owned record an owned method acts on (ADR-0012 D1): an action's or destroy's first parameter; an init's return
+     * type, or its result record's {@code state} component.
+     */
+    private Reading ownedReading(ExecutableElement m, boolean init, Map<String, Reading> byType) {
+        TypeMirror subject = null;
+        if (init) {
+            subject = m.getReturnType();
+            TypeElement rec = asRecord(subject);
+            boolean direct = byType.values().stream().anyMatch(r -> same(r.stateType(), m.getReturnType()));
+            if (!direct && rec != null) {
+                for (RecordComponentElement c : rec.getRecordComponents()) {
+                    if (c.getSimpleName().contentEquals("state")) subject = c.asType();
+                }
+            }
+        } else if (!m.getParameters().isEmpty()) {
+            subject = m.getParameters().get(0).asType();
+        }
+        for (Reading r : byType.values()) {
+            if (subject != null && same(r.stateType(), subject)) return r;
+        }
+        if (byType.size() > 1) {
+            error(m, "an owned method acts on one @Owned record: " + (init ? "return it (or a record with a 'state' of it)"
+                    : "take it as the first parameter") + " (ADR-0012 D1)");
+        }
+        return byType.values().iterator().next();
+    }
+
     private TransitionIR readTransition(ExecutableElement m, TransitionIR.Kind kind, Reading r) {
         List<? extends VariableElement> ps = m.getParameters();
         int first = 0;
@@ -470,6 +586,16 @@ final class ContractReader {
             }
         }
         if (shared) first++;
+        String into = null;
+        for (int i = 0; i < ps.size(); i++) {
+            if (annotation(ps.get(i), INTO).isPresent()) {
+                if (kind != TransitionIR.Kind.OWNED_ACTION) error(ps.get(i), "@Into is for @OwnedAction methods (ADR-0012 D3)");
+                else if (i != first) error(ps.get(i), "the @Into parameter must come right after the owned record (and @Shared)");
+                else if (!same(ps.get(i).asType(), r.sharedType())) error(ps.get(i), "@Into must have the state type");
+                else into = ps.get(i).getSimpleName().toString();
+            }
+        }
+        if (into != null) first++;
         boolean takesParams = r.paramsType() != null && ps.size() > first && same(ps.get(first).asType(), r.paramsType());
         if (takesParams) first++;
         List<TransitionIR.ReadIR> reads = new ArrayList<>();
@@ -690,11 +816,34 @@ final class ContractReader {
         if (accepts && !(payable && hasFunds)) {
             error(m, "'accepted' needs @Payable and a Funds parameter: only then can the caller add native assets");
         }
+        String admitsType = annotation(m, ADMITS).map(a -> value(a, "value").map(v -> (String) v.getValue()).orElse(""))
+                .orElse(null);
+        boolean admits = admitsType != null;
+        if (admits) {
+            if (kind != TransitionIR.Kind.ACTION) error(m, "@Admits goes on an instance @Action (ADR-0012 D3)");
+            else if (params.isEmpty() || params.get(0).kind() != ParamIR.TypeKind.BYTES) {
+                error(m, "@Admits: the first argument after the state (and the params) must be the object's id (byte[])");
+            }
+            if (batched) error(m, "@Admits cannot be @Batched: the object's move must be in the same transaction");
+            if (!reads.isEmpty()) error(m, "@Admits cannot take @Reads yet");
+        }
+        if (into != null) {
+            for (ParamIR p : params) {
+                if (p.name().equals("into") || p.name().equals("destination") || p.name().equals("destination_state")) {
+                    error(m, "parameter name \"" + p.name() + "\" is used by a move's generated redeemer and client; rename it");
+                }
+            }
+            if (returns != TransitionIR.Returns.STATE && returns != TransitionIR.Returns.RESULT) {
+                error(m, "a move continues its object: return the owned record (or a record with its state)");
+            }
+            if (!reads.isEmpty()) error(m, "a move cannot take @Reads yet");
+        }
+        String ownedTypeText = ownedKind ? r.types().render(r.stateType()) : null;
         return new TransitionIR(kind, name, variant, List.copyOf(params), hasCtx, payable, returns, resultType,
                 List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared, batched, batchOnly,
                 hasFunds, shape != null && shape.payouts(), shape != null && shape.sends(), shape != null && shape.mint(),
                 accepts, takesParams, quorumKeys, quorumThreshold, List.copyOf(authorizedBy), events, eventsType,
-                List.copyOf(reads), migrateTo);
+                List.copyOf(reads), migrateTo, ownedTypeText, into, admitsType);
     }
 
     /** Which effect components a result record has (ADR-0007 D1). */

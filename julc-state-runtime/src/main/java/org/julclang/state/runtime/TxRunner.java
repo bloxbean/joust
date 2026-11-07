@@ -56,6 +56,10 @@ final class TxRunner {
         final java.util.LinkedHashMap<String, com.bloxbean.cardano.client.plutus.spec.PlutusScript> scripts = new java.util.LinkedHashMap<>();
         final java.util.Set<String> inputs = new java.util.HashSet<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
+        /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
+        final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
+        /** A nested composition that allows shared signers: its calls count as one for the signer check. */
+        String group;
 
         void record(Account caller, byte[][] signers, ExpectedState exp, java.util.List<ExpectedPayout> pays,
                     java.util.List<ExpectedSend> snds, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] scs,
@@ -65,7 +69,9 @@ final class TxRunner {
             for (byte[] sg : signers) {
                 String hex = HexUtil.encodeHexString(sg);
                 requiredSigners.putIfAbsent(hex, sg);
-                signerCalls.computeIfAbsent(hex, k -> new java.util.ArrayList<>()).add(what);
+                var calls = signerCalls.computeIfAbsent(hex, k -> new java.util.ArrayList<>());
+                String label = group != null ? group : what;
+                if (!calls.contains(label)) calls.add(label);
             }
             if (exp != null) expected.add(exp);
             payouts.addAll(pays);
