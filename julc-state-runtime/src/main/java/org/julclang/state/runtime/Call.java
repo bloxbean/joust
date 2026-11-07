@@ -67,6 +67,8 @@ public final class Call<S> {
     final boolean migrates;
     /** A move's destination instance id, hex (ADR-0012 D3), or null. */
     final String into;
+    /** {@code @Receives}: the call takes the deposits other calls of the composition make into it (ADR-0011 D3). */
+    final boolean receives;
 
     private Call(Builder<S> b) {
         this.name = Objects.requireNonNull(b.name);
@@ -89,6 +91,7 @@ public final class Call<S> {
         this.referenceInputs = List.copyOf(b.referenceInputs);
         this.migrates = b.migrates;
         this.into = b.into;
+        this.receives = b.receives;
         if (run == null && sharedRun == null && assetRun == null) throw new IllegalArgumentException(name + ": no run");
         this.redeemer = b.redeemer != null ? b.redeemer : (ctx -> { throw new IllegalStateException("redeemerWith only"); });
         if (b.redeemer == null && b.redeemerWith == null) throw new NullPointerException(name + ": no redeemer");
@@ -158,6 +161,7 @@ public final class Call<S> {
         private final List<com.bloxbean.cardano.client.api.model.Utxo> referenceInputs = new ArrayList<>();
         private boolean migrates;
         private String into;
+        private boolean receives;
 
         private Builder(String name, Kind kind, Account caller) {
             this.name = name;
@@ -190,6 +194,8 @@ public final class Call<S> {
         public Builder<S> migrates() { this.migrates = true; return this; }
         /** The object moves to instance {@code instanceId} (ADR-0012 D3); compose it with that instance's @Admits call. */
         public Builder<S> movesTo(String instanceId) { this.into = instanceId.toLowerCase(); return this; }
+        /** The action takes deposits ({@code @Receives}, ADR-0011 D3). */
+        public Builder<S> receives() { this.receives = true; return this; }
         /** Reference inputs the call reads ({@code @Reads}; ADR-0011 D2). */
         public Builder<S> referenceInputs(com.bloxbean.cardano.client.api.model.Utxo... utxos) {
             referenceInputs.addAll(List.of(utxos));

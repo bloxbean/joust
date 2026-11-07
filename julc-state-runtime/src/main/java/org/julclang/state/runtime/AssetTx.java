@@ -93,6 +93,36 @@ final class AssetTx {
                          Value inValue, BigInteger receivedLovelace, Value receivedAssets, Transition<?> t, String unit,
                          byte[] id, com.bloxbean.cardano.client.plutus.spec.PlutusData continuing, Object lifecycle,
                          Function<TxOutRef, Object> byAction, boolean creating, Utxo seed) {
+        return apply(tx, contract, caller, what, ownRef, inValue, receivedLovelace, receivedAssets, t, unit, id, continuing,
+                lifecycle, byAction, creating, seed, org.julclang.core.types.JulcList.empty());
+    }
+
+    /**
+     * The deposits other calls of the composition make into {@code unit} (from the probe pass), as the claims the
+     * registry will hold: their output is this call's continuing output, the next output it adds (ADR-0011 D3).
+     */
+    static org.julclang.core.types.JulcList<org.julclang.state.api.DepositClaim> incoming(String unit) {
+        TxRunner.Capture cap = TxRunner.capture();
+        org.julclang.core.types.JulcList<org.julclang.state.api.DepositClaim> out = org.julclang.core.types.JulcList.empty();
+        if (cap == null) return out;
+        cap.receivers.add(unit.toLowerCase());
+        // The real pass knows every deposit (from the first); the first pass knows those made so far.
+        var source = cap.known.isEmpty() ? cap.deposits : cap.known;
+        var mine = source.stream().filter(d -> d.target().equalsIgnoreCase(unit)).toList();
+        BigInteger at = BigInteger.valueOf(TxRunner.outputOffset());
+        for (int i = mine.size() - 1; i >= 0; i--) {
+            var d = mine.get(i);
+            out = out.prepend(new org.julclang.state.api.DepositClaim(at, d.by(), d.value(), d.memo()));
+        }
+        return out;
+    }
+
+    /** As above, for a call that takes {@code incoming} deposits ({@code @Receives}; ADR-0011 D3). */
+    static Applied apply(ScriptTx tx, StateContractHandle<?> contract, Account caller, String what, TxOutRef ownRef,
+                         Value inValue, BigInteger receivedLovelace, Value receivedAssets, Transition<?> t, String unit,
+                         byte[] id, com.bloxbean.cardano.client.plutus.spec.PlutusData continuing, Object lifecycle,
+                         Function<TxOutRef, Object> byAction, boolean creating, Utxo seed,
+                         org.julclang.core.types.JulcList<org.julclang.state.api.DepositClaim> incoming) {
         byte[] policy = HEX.parseHex(contract.policyId());
         Assets.check(t.accepted(), what + ": accepted");
         Assets.check(t.mint(), what + ": mint");
@@ -118,6 +148,21 @@ final class AssetTx {
             Assets.check(s.value(), what + ": send value");
             sent = Assets.add(sent, s.value());
         }
+        // Deposits (ADR-0011 D3): made ones leave like sends, incoming ones arrive like received value.
+        TxRunner.Capture cap = TxRunner.capture();
+        for (var d : t.deposits()) {
+            Assets.check(d.value(), what + ": deposit value");
+            if (cap == null) {
+                throw new JoustException(what + ": a deposit needs its receiver's @Receives call in the same transaction;"
+                        + " compose them with Compose (ADR-0011 D3)");
+            }
+            if (ownRef == null) throw new RequireException(what + ": a creation cannot deposit");
+            Datums.checkCanonicalMemo(PlutusDataAdapter.convert(d.memo()), what);
+            sent = Assets.add(sent, d.value());
+            cap.deposits.add(new TxRunner.PendingDeposit(HEX.formatHex(d.policy()) + HEX.formatHex(d.instance()), ownRef,
+                    d.value(), d.memo(), what));
+        }
+        for (var d : incoming) sent = Assets.subtract(sent, d.value());
         Value next = Assets.add(Assets.add(inValue, Assets.lovelace(receivedLovelace)), Assets.add(t.accepted(), t.mint()));
         next = Assets.subtract(Assets.subtract(next, payoutTotal), sent);
         Value token = Assets.of(policy, id, BigInteger.ONE);
@@ -128,6 +173,7 @@ final class AssetTx {
                 throw new RequireException(what + ": payouts and sends exceed the contract's funds");
             }
             List<Amount> out = amounts(next);
+            if (cap != null) cap.stateOutputs.put(unit.toLowerCase(), TxRunner.outputOffset());
             Datums.checkSize(contract.spec, continuing, what);
             Datums.checkCanonical(contract.spec, continuing, what);
             tx.payToContract(contract.address(), out, continuing);
@@ -212,9 +258,8 @@ final class AssetTx {
         if (!claims.isEmpty()) {
             org.julclang.core.types.JulcList<OutputClaim> list = org.julclang.core.types.JulcList.empty();
             for (int i = claims.size() - 1; i >= 0; i--) list = list.prepend(claims.get(i));
-            TxRunner.Capture cap = TxRunner.capture();
             if (cap != null) cap.claims.addAll(claims);
-            else contract.runtime.outputVerifier().attachRedeemer(tx, new OutputClaims(list), caller);
+            else contract.runtime.outputVerifier().attachRedeemer(tx, new OutputClaims(list, org.julclang.core.types.JulcList.empty()), caller);
         }
         return new Applied(expected, expectedPayouts, expectedSends);
     }

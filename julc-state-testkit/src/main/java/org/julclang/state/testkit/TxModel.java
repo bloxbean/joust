@@ -49,6 +49,9 @@ public final class TxModel {
     /** Further zero withdrawals (e.g. a governor script for @AuthorizedBy; ADR-0009), with their redeemer or null. */
     public final Map<org.julclang.ledger.Credential, PlutusData> withdrawals = new LinkedHashMap<>();
 
+    /** The output registry's deposit claims (ADR-0011 D3), or null. */
+    public List<org.julclang.state.api.DepositClaim> depositClaims;
+
     /** Indexes in {@link #outputs} of send outputs (ADR-0007). */
     public final List<Integer> sendOutputs = new ArrayList<>();
 
@@ -72,6 +75,7 @@ public final class TxModel {
         c.token = token;
         c.outputClaims = outputClaims == null ? null : new ArrayList<>(outputClaims);
         c.sendOutputs.addAll(sendOutputs);
+        c.depositClaims = depositClaims == null ? null : new ArrayList<>(depositClaims);
         c.withdrawals.putAll(withdrawals);
         return c;
     }

@@ -177,7 +177,7 @@ public final class StateHarness<S> {
         b.withdrawal(ownCredential(), amount);
         b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(ownCredential()), rd);
         results.put("WITHDRAW", ValidatorTest.evaluate(program, fill(b, tx).buildPlutusData()));
-        if (tx.outputClaims != null) {
+        if (tx.outputClaims != null || tx.depositClaims != null) {
             var v = ScriptContextTestBuilder.rewarding(outputVerifierCredential()).redeemer(outputClaimsData(tx));
             v.withdrawal(ownCredential(), amount);
             results.put("OUTPUT VERIFIER", ValidatorTest.evaluate(outputVerifier, fill(v, tx).buildPlutusData()));
@@ -336,6 +336,9 @@ public final class StateHarness<S> {
         for (var e : tx.spendRedeemers.entrySet()) {
             TxInInfo in = tx.inputs.stream().filter(i -> i.outRef().equals(e.getKey())).findFirst()
                     .orElseThrow(() -> new IllegalStateException("spend redeemer for a missing input"));
+            // Another contract's input in the same transaction (ADR-0011 composition) is that contract's harness's job.
+            if (in.resolved().address().credential() instanceof Credential.ScriptCredential sc
+                    && !java.util.Arrays.equals(sc.hash().hash(), policy)) continue;
             PlutusData datum = in.resolved().datum() instanceof OutputDatum.OutputDatumInline d ? d.datum() : null;
             var b = ScriptContextTestBuilder.spending(e.getKey(), datum).redeemer(e.getValue());
             results.put("SPEND " + e.getKey().index() + "@" + shortHex(e.getKey().txId().hash()),
@@ -349,7 +352,7 @@ public final class StateHarness<S> {
             var b = ScriptContextTestBuilder.rewarding(verifierCredential()).redeemer(claimsData(tx));
             results.put("MAP VERIFIER", ValidatorTest.evaluate(verifier, fill(b, tx).buildPlutusData()));
         }
-        if (tx.outputClaims != null) {
+        if (tx.outputClaims != null || tx.depositClaims != null) {
             var b = ScriptContextTestBuilder.rewarding(outputVerifierCredential()).redeemer(outputClaimsData(tx));
             results.put("OUTPUT VERIFIER", ValidatorTest.evaluate(outputVerifier, fill(b, tx).buildPlutusData()));
         }
@@ -384,8 +387,14 @@ public final class StateHarness<S> {
 
     private static PlutusData outputClaimsData(TxModel tx) {
         JulcList<org.julclang.state.api.OutputClaim> list = JulcList.empty();
-        for (int i = tx.outputClaims.size() - 1; i >= 0; i--) list = list.prepend(tx.outputClaims.get(i));
-        return data(new org.julclang.state.api.OutputClaims(list));
+        if (tx.outputClaims != null) {
+            for (int i = tx.outputClaims.size() - 1; i >= 0; i--) list = list.prepend(tx.outputClaims.get(i));
+        }
+        JulcList<org.julclang.state.api.DepositClaim> deps = JulcList.empty();
+        if (tx.depositClaims != null) {
+            for (int i = tx.depositClaims.size() - 1; i >= 0; i--) deps = deps.prepend(tx.depositClaims.get(i));
+        }
+        return data(new org.julclang.state.api.OutputClaims(list, deps));
     }
 
     private ScriptContextTestBuilder fill(ScriptContextTestBuilder b, TxModel tx) {
@@ -393,7 +402,7 @@ public final class StateHarness<S> {
             b.withdrawal(cred, BigInteger.ZERO);
             if (rd != null) b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(cred), rd);
         });
-        if (tx.outputClaims != null) {
+        if (tx.outputClaims != null || tx.depositClaims != null) {
             b.withdrawal(outputVerifierCredential(), BigInteger.ZERO);
             b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(outputVerifierCredential()), outputClaimsData(tx));
         }
@@ -575,13 +584,19 @@ public final class StateHarness<S> {
     public org.julclang.state.api.Funds funds(Held h, Value received) {
         Value v = org.julclang.state.api.Assets.withoutLovelace(h.value());
         Value held = org.julclang.state.api.Assets.subtract(v, org.julclang.state.api.Assets.of(policy, h.token(), BigInteger.ONE));
-        return new org.julclang.state.api.Funds(policy, h.token(), received, held);
+        return new org.julclang.state.api.Funds(policy, h.token(), received, held, JulcList.empty());
+    }
+
+    /** The Funds of a {@code @Receives} call: as {@link #funds}, plus the deposits claimed on its output (ADR-0011 D3). */
+    public org.julclang.state.api.Funds funds(Held h, Value received, JulcList<org.julclang.state.api.DepositClaim> deposits) {
+        var f = funds(h, received);
+        return new org.julclang.state.api.Funds(f.policy(), f.self(), f.received(), f.held(), deposits);
     }
 
     /** The Funds of a creation (instance or object): nothing held yet. */
     public org.julclang.state.api.Funds createFunds(boolean object, Value received) {
         return new org.julclang.state.api.Funds(policy, object ? objectId() : instanceId(), received,
-                org.julclang.state.api.Assets.none());
+                org.julclang.state.api.Assets.none(), JulcList.empty());
     }
 
     /**
@@ -633,6 +648,7 @@ public final class StateHarness<S> {
         BigInteger received = ctx == null ? BigInteger.ZERO : ctx.received();
         Value sent = org.julclang.state.api.Assets.none();
         for (var snd : t.sends()) sent = org.julclang.state.api.Assets.add(sent, snd.value());
+        for (var dep : t.deposits()) sent = org.julclang.state.api.Assets.add(sent, dep.value());   // ADR-0011 D3
         Value next = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.add(h.value(),
                 org.julclang.state.api.Assets.lovelace(received.subtract(total(t.payouts())))),
                 org.julclang.state.api.Assets.add(t.accepted(), t.mint()));

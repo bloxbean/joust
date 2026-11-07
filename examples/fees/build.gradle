@@ -1,0 +1,12 @@
+description = 'JOUST example: fees (deposits into another contract instance, ADR-0011 D3)'
+
+dependencies {
+    implementation project(':julc-state-runtime')
+    implementation project(':examples:devkit')
+
+    annotationProcessor project(':julc-state-processor')
+    annotationProcessor libs.julc.annotation.processor
+    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+
+    testImplementation project(':julc-state-testkit')
+}

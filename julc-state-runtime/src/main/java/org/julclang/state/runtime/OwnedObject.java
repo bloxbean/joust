@@ -181,7 +181,8 @@ public final class OwnedObject<S, R> {
         org.julclang.state.api.Assets.check(spec.receivedAssets(), what + ": received assets");
         byte[] policy = HexUtil.decodeHexString(contract.policyId);
         byte[] id = HexUtil.decodeHexString(object.objectId);
-        var funds = new org.julclang.state.api.Funds(policy, id, spec.receivedAssets(), org.julclang.state.api.Assets.none());
+        var funds = new org.julclang.state.api.Funds(policy, id, spec.receivedAssets(), org.julclang.state.api.Assets.none(),
+                org.julclang.core.types.JulcList.empty());
         Transition<R> t = spec.assetRun().apply(shared, ctx, funds);
         byte[] instance = HexUtil.decodeHexString(parent.instanceId());
         PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(instance, t.next()));
@@ -360,7 +361,8 @@ public final class OwnedObject<S, R> {
         Object shared = call.needsShared ? home.state() : null;
         byte[] policy = HexUtil.decodeHexString(contract.policyId);
         byte[] id = HexUtil.decodeHexString(objectId);
-        var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id));
+        var incoming = call.receives ? AssetTx.incoming(unit()) : org.julclang.core.types.JulcList.<org.julclang.state.api.DepositClaim>empty();
+        var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id), incoming);
         Transition<R> t = call.assetRun.apply(current, shared, ctx, funds);
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
@@ -370,7 +372,7 @@ public final class OwnedObject<S, R> {
         PlutusData datum = destroy ? null
                 : PlutusDataAdapter.convert(codec.wrap().apply(HexUtil.decodeHexString(instanceAfter(call, own)), t.next()));
         var applied = AssetTx.apply(tx, contract, call.caller, what, ownRef, inValue, call.received, call.receivedAssets, t,
-                unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false);
+                unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false, null, incoming);
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
         for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));

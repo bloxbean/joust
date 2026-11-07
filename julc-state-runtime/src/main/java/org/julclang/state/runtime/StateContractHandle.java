@@ -104,7 +104,7 @@ public final class StateContractHandle<S> {
         if (!claims.isEmpty()) {
             org.julclang.core.types.JulcList<org.julclang.state.api.OutputClaim> list = org.julclang.core.types.JulcList.empty();
             for (int i = claims.size() - 1; i >= 0; i--) list = list.prepend(claims.get(i));
-            runtime.outputVerifier().attachRedeemer(tx, new org.julclang.state.api.OutputClaims(list), caller);
+            runtime.outputVerifier().attachRedeemer(tx, new org.julclang.state.api.OutputClaims(list, org.julclang.core.types.JulcList.empty()), caller);
         }
         var signers = new java.util.ArrayList<byte[]>();
         signers.add(Keys.pkh(caller));
@@ -314,7 +314,8 @@ public final class StateContractHandle<S> {
         org.julclang.state.api.Assets.check(d.receivedAssets(), what + ": received assets");
         byte[] policy = HexUtil.decodeHexString(policyId);
         byte[] id = HexUtil.decodeHexString(instance.instanceId());
-        var funds = new org.julclang.state.api.Funds(policy, id, d.receivedAssets(), org.julclang.state.api.Assets.none());
+        var funds = new org.julclang.state.api.Funds(policy, id, d.receivedAssets(), org.julclang.state.api.Assets.none(),
+                org.julclang.core.types.JulcList.empty());
         Transition<S> t = d.assetRun().apply(ctx, funds);
         PlutusData datum = PlutusDataAdapter.convert(t.next());
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));

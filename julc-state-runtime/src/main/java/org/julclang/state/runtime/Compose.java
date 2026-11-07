@@ -2,6 +2,7 @@ package org.julclang.state.runtime;
 
 import com.bloxbean.cardano.client.account.Account;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -62,16 +63,34 @@ public final class Compose {
             // Nested in another composition: the calls join the outer transaction, which submits them all (or none).
             String saved = outer.group;
             if (sharedSigners && saved == null) outer.group = "composed calls #" + System.identityHashCode(this);
+            // Every call runs even if one fails (a receiver before its depositor, in the outer first pass); the outer
+            // composition retries with the deposits found, and the first failure is rethrown here.
+            RuntimeException first = null;
             try {
-                for (Runnable call : calls) call.run();
+                for (Runnable call : calls) {
+                    try {
+                        call.run();
+                    } catch (RuntimeException e) {
+                        if (first == null) first = e;
+                    }
+                }
             } finally {
                 outer.group = saved;
             }
+            if (first != null) throw first;
             return null;
         }
-        // Pass 1: every call's own window.
+        // Pass 1: every call's own window. A receiver placed before its depositors sees no deposits yet and may refuse:
+        // the pass then runs again with the deposits the first try found (ADR-0011 D3).
         var probe = new TxRunner.Capture();
-        run(probe);
+        RuntimeException failed = runTolerant(probe);
+        if (failed != null && !probe.deposits.isEmpty()) {
+            var again = new TxRunner.Capture();
+            again.known = List.copyOf(probe.deposits);
+            failed = runTolerant(again);
+            probe = again;
+        }
+        if (failed != null) throw failed;
         Window window = probe.windows.isEmpty() ? null : Window.intersect(runtime, probe.windows);
         if (!probe.windows.isEmpty() && window == null) {
             throw new JoustException("composition: the calls' validity windows do not overlap");
@@ -79,6 +98,7 @@ public final class Compose {
         // Pass 2: every call in the common window, into one transaction.
         var cap = new TxRunner.Capture();
         cap.forced = window;
+        cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
         run(cap);
         if (!sharedSigners) {
             for (var e : cap.signerCalls.entrySet()) {
@@ -88,12 +108,34 @@ public final class Compose {
                 }
             }
         }
-        if (!cap.claims.isEmpty()) {
+        // Deposits (ADR-0011 D3): each one becomes a claim on its receiver's continuing output, which must be in this
+        // transaction; the receivers' JVM runs saw exactly these (from the first pass), in this order.
+        var depositClaims = new ArrayList<org.julclang.state.api.DepositClaim>();
+        for (var d : cap.deposits) {
+            Integer at = cap.stateOutputs.get(d.target().toLowerCase());
+            if (at != null && !cap.receivers.contains(d.target().toLowerCase())) {
+                throw new JoustException("composition: " + d.what() + " deposits into instance " + d.target()
+                        + ", whose call in this transaction is not @Receives: it would not count the deposit");
+            }
+            if (at == null) {
+                throw new JoustException("composition: " + d.what() + " deposits into instance " + d.target()
+                        + ", which no call of this transaction continues (add its @Receives call)");
+            }
+            depositClaims.add(new org.julclang.state.api.DepositClaim(BigInteger.valueOf(at), d.by(), d.value(), d.memo()));
+        }
+        if (!cap.deposits.equals(probe.deposits)) {
+            throw new JoustException("composition: the calls made different deposits in the two passes; a deposit must not"
+                    + " depend on the validity window or on other deposits");
+        }
+        depositClaims.sort(java.util.Comparator.comparing(org.julclang.state.api.DepositClaim::output));
+        if (!cap.claims.isEmpty() || !depositClaims.isEmpty()) {
             var sorted = new ArrayList<>(cap.claims);
             sorted.sort(java.util.Comparator.comparing(org.julclang.state.api.OutputClaim::output));
             org.julclang.core.types.JulcList<org.julclang.state.api.OutputClaim> list = org.julclang.core.types.JulcList.empty();
             for (int i = sorted.size() - 1; i >= 0; i--) list = list.prepend(sorted.get(i));
-            runtime.outputVerifier().attachRedeemer(cap.tx, new org.julclang.state.api.OutputClaims(list), payer);
+            org.julclang.core.types.JulcList<org.julclang.state.api.DepositClaim> deps = org.julclang.core.types.JulcList.empty();
+            for (int i = depositClaims.size() - 1; i >= 0; i--) deps = deps.prepend(depositClaims.get(i));
+            runtime.outputVerifier().attachRedeemer(cap.tx, new org.julclang.state.api.OutputClaims(list, deps), payer);
             cap.scripts.putIfAbsent("output-verifier", runtime.outputVerifier().script());
         }
         if (!cap.mapClaims.isEmpty()) {
@@ -107,6 +149,24 @@ public final class Compose {
         return runner.submit(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),
                 cap.expected.isEmpty() ? null : cap.expected.get(0), cap.payouts, cap.sends,
                 cap.scripts.values().toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusScript[0]), "composed transaction");
+    }
+
+    /** Runs every call, even after one fails; returns the first failure. */
+    private RuntimeException runTolerant(TxRunner.Capture cap) {
+        RuntimeException first = null;
+        TxRunner.CAPTURE.set(cap);
+        try {
+            for (Runnable call : calls) {
+                try {
+                    call.run();
+                } catch (RuntimeException e) {
+                    if (first == null) first = e;
+                }
+            }
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        return first;
     }
 
     private void run(TxRunner.Capture cap) {

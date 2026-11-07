@@ -56,6 +56,7 @@ final class ContractReader {
     static final String OWNED_DESTROY = API + "OwnedDestroy";
     static final String INTO = API + "Into";
     static final String ADMITS = API + "Admits";
+    static final String RECEIVES = API + "Receives";
     static final String SHARED = API + "Shared";
     static final String BATCHED = API + "Batched";
     static final String PAYOUT = API + "Payout";
@@ -139,7 +140,7 @@ final class ContractReader {
             }
             if (kinds == 0) {
                 for (String policy : List.of(PAYABLE, SIGNED_BY, ONLY_OWNER, VALID_AFTER, VALID_BEFORE, BATCHED, QUORUM,
-                        AUTHORIZED_BY, ADMITS)) {
+                        AUTHORIZED_BY, ADMITS, RECEIVES)) {
                     if (annotation(m, policy).isPresent()) {
                         error(m, "@" + simple(policy) + " needs @Init, @Action or @Destroy on the same method");
                     }
@@ -316,6 +317,9 @@ final class ContractReader {
                             + " contracts; rename it");
                 }
             }
+        }
+        if (concat(actionIRs, destroyIRs, ownedActionIRs, ownedDestroyIRs).stream().anyMatch(TransitionIR::resultDeposits)) {
+            reserved.add("Deposit");   // the validator imports org.julclang.state.api.Deposit (ADR-0011 D3)
         }
         reserved.add(type.getSimpleName() + "Validator");
         reserved.add(type.getSimpleName() + "Client");
@@ -527,7 +531,7 @@ final class ContractReader {
             "TxOut", "TxInInfo", "TxOutRef", "Value", "Address", "Credential", "ScriptInfo", "Builtins", "Entrypoint",
             "MultiValidator", "Purpose", "AddressLib", "ByteStringLib", "ContextsLib", "OutputLib", "ValuesLib",
             "IntervalLib", "CryptoLib", "Interval", "IntervalBoundType", "OutputDatum", "Ctx", "Clock", "Payout", "Payouts",
-            "Funds", "Send", "Sends", "Assets", "OutputClaim", "OutputClaims", "ByAction", "JulcValue", "Param", "Approval", "CreateInstance", "BurnInstance", "Account", "StateRuntime",
+            "Funds", "Send", "Sends", "Assets", "OutputClaim", "OutputClaims", "DepositClaim", "ByAction", "JulcValue", "Param", "Approval", "CreateInstance", "BurnInstance", "Account", "StateRuntime",
             "StateInstance", "TxResult", "Transition", "Lifecycle", "Calls", "Call", "MerkleMap", "MapEntry", "MapWitness",
             "MapWitnesses", "Mpf", "Deploy", "ContractSpec",
             "StateContractHandle", "Utxo", "Arrays", "Holding", "ScriptPurpose");
@@ -695,7 +699,7 @@ final class ContractReader {
                     returns = TransitionIR.Returns.RESULT;
                     shape = resultShape(m, ret, r, true);
                     resultType = r.types().render(ret);
-                    if (shape.payouts() || shape.sends() || shape.mint()) {
+                    if (shape.payouts() || shape.sends() || shape.mint() || shape.deposits()) {
                         error(m, "@" + label(kind) + " cannot pay out, send or mint; its record may only add 'accepted'"
                                 + " (ADR-0007 D1)");
                     }
@@ -797,7 +801,7 @@ final class ContractReader {
                     error(m, "@Batched actions cannot use @Quorum, @AuthorizedBy or events: an intent's owner is the caller"
                             + " (ADR-0009)");
                 }
-                if (hasFunds || (shape != null && (shape.sends() || shape.mint()))) {
+                if (hasFunds || (shape != null && (shape.sends() || shape.mint() || shape.deposits()))) {
                     error(m, "@Batched actions cannot take Funds, send or mint yet (ADR-0007 D1)");
                 }
                 if (!(signedBy.isEmpty() && validAfter.isEmpty() && validBefore.isEmpty())) {
@@ -851,17 +855,26 @@ final class ContractReader {
             }
             if (!reads.isEmpty()) error(m, "a move cannot take @Reads yet");
         }
+        boolean receives = annotation(m, RECEIVES).isPresent();
+        if (receives) {
+            if (kind != TransitionIR.Kind.ACTION && kind != TransitionIR.Kind.OWNED_ACTION) {
+                error(m, "@Receives goes on an @Action or @OwnedAction: it continues, and its output takes the deposits");
+            }
+            if (!hasFunds) error(m, "@Receives needs a Funds parameter: the method sees the deposits in funds.deposits()");
+            if (batched) error(m, "@Receives cannot be @Batched");
+        }
+        boolean resultDeposits = shape != null && shape.deposits();
         String ownedTypeText = ownedKind ? r.types().render(r.stateType()) : null;
         return new TransitionIR(kind, name, variant, List.copyOf(params), hasCtx, payable, returns, resultType,
                 List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared, batched, batchOnly,
                 hasFunds, shape != null && shape.payouts(), shape != null && shape.sends(), shape != null && shape.mint(),
                 accepts, takesParams, quorumKeys, quorumThreshold, List.copyOf(authorizedBy), events, eventsType,
-                List.copyOf(reads), migrateTo, ownedTypeText, into, admitsType, null);
+                List.copyOf(reads), migrateTo, ownedTypeText, into, admitsType, null, resultDeposits, receives);
     }
 
     /** Which effect components a result record has (ADR-0007 D1). */
     private record ResultShape(boolean payouts, boolean sends, boolean mint, boolean accepted, boolean events,
-                               String eventsType) {}
+                               String eventsType, boolean deposits) {}
 
     /**
      * Reads a result record: components named {@code state} (actions: required; destroys: forbidden), {@code payouts}
@@ -871,21 +884,22 @@ final class ContractReader {
         String what = action ? "@" + "Action" : "@Destroy";
         String expected = action
                 ? "the state (" + r.types().render(r.stateType()) + ") or a record with a 'state' component and any of"
-                + " 'payouts' (JulcList<Payout>), 'sends' (JulcList<Send>), 'mint' (Value) and 'accepted' (Value)"
+                + " 'payouts' (JulcList<Payout>), 'sends' (JulcList<Send>), 'deposits' (JulcList<Deposit>), 'mint' (Value)"
+                + " and 'accepted' (Value)"
                 : "JulcList<Payout>, or a record with any of 'payouts' (JulcList<Payout>), 'sends' (JulcList<Send>),"
-                + " 'mint' (Value) and 'accepted' (Value)";
+                + " 'deposits' (JulcList<Deposit>), 'mint' (Value) and 'accepted' (Value)";
         TypeElement e = asRecord(ret);
         if (e == null) {
             error(m, what + " must return " + expected);
-            return new ResultShape(false, false, false, false, false, null);
+            return new ResultShape(false, false, false, false, false, null, false);
         }
-        boolean state = false, payouts = false, sends = false, mint = false, accepted = false, events = false;
+        boolean state = false, payouts = false, sends = false, mint = false, accepted = false, events = false, deposits = false;
         String eventsType = null;
-        var known = java.util.Set.of("state", "payouts", "sends", "mint", "accepted", "events");
+        var known = java.util.Set.of("state", "payouts", "sends", "mint", "accepted", "events", "deposits");
         for (RecordComponentElement c : e.getRecordComponents()) {
             if (!known.contains(c.getSimpleName().toString())) {
                 error(m, what + " must return " + expected + "; component '" + c.getSimpleName() + "' is none of these");
-                return new ResultShape(false, false, false, false, false, null);
+                return new ResultShape(false, false, false, false, false, null, false);
             }
         }
         for (RecordComponentElement c : e.getRecordComponents()) {
@@ -904,6 +918,10 @@ final class ContractReader {
                 case "sends" -> {
                     if (!isListOf(t, SEND)) error(m, "the result's 'sends' must be JulcList<Send>");
                     sends = true;
+                }
+                case "deposits" -> {
+                    if (!isListOf(t, API + "Deposit")) error(m, "the result's 'deposits' must be JulcList<Deposit>");
+                    deposits = true;
                 }
                 case "mint" -> {
                     if (!isNamed(t, VALUE)) error(m, "the result's 'mint' must be a Value");
@@ -924,8 +942,8 @@ final class ContractReader {
             }
         }
         if (action && !state) error(m, what + " must return " + expected);
-        if (!action && !(payouts || sends || mint)) error(m, what + " must return " + expected);
-        return new ResultShape(payouts, sends, mint, accepted, events, eventsType);
+        if (!action && !(payouts || sends || mint || deposits)) error(m, what + " must return " + expected);
+        return new ResultShape(payouts, sends, mint, accepted, events, eventsType, deposits);
     }
 
     private boolean isListOf(TypeMirror t, String element) {

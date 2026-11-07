@@ -17,7 +17,8 @@
 >   (a multisig treasury);
 > - J: every script purpose: staked state, reward withdrawals, certificates, DRep votes, guardrails (a staked vault);
 > - K: composition: several contracts' calls in one transaction (`Compose`), typed reads of another contract
->   (`@Reads`, an oracle), and version migration (`@MigrateTo`/`@Migrate`);
+>   (`@Reads`, an oracle), version migration (`@MigrateTo`/`@Migrate`), and deposits into another contract's instance
+>   (`@Receives`, a fee pot);
 > - L: owned objects v2: several owned types per contract, MerkleMaps inside objects, and objects moving between
 >   instances with the destination's consent (`@Into`/`@Admits`; a game guild).
 

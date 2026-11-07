@@ -188,9 +188,20 @@ public record ContractIR(String packageName,
         return allTransitions().stream().anyMatch(TransitionIR::assetAware) || purpose("WITHDRAW").isPresent();
     }
 
-    /** Some method sends outputs (ADR-0007 D5): validators embed the output verifier's hash. */
+    /** Some method sends outputs or uses deposits (ADR-0007 D5, ADR-0011 D3): validators read the output registry. */
     public boolean hasSends() {
-        return allTransitions().stream().anyMatch(TransitionIR::resultSends) || purpose("WITHDRAW").isPresent();
+        return allTransitions().stream().anyMatch(TransitionIR::resultSends) || purpose("WITHDRAW").isPresent()
+                || hasDeposits() || hasReceives();
+    }
+
+    /** Some method deposits into another instance (ADR-0011 D3). */
+    public boolean hasDeposits() {
+        return allTransitions().stream().anyMatch(TransitionIR::resultDeposits);
+    }
+
+    /** Some method takes deposits ({@code @Receives}, ADR-0011 D3). */
+    public boolean hasReceives() {
+        return allTransitions().stream().anyMatch(TransitionIR::receives);
     }
 
     /** Spend-side methods that may mint user tokens (ADR-0007 D4). */

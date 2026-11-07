@@ -60,6 +60,14 @@ final class TxRunner {
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
         /** A nested composition that allows shared signers: its calls count as one for the signer check. */
         String group;
+        /** Deposits into other instances made by the calls (ADR-0011 D3), resolved to claims when submitting. */
+        final java.util.List<PendingDeposit> deposits = new java.util.ArrayList<>();
+        /** The deposits the probe pass saw: a receiver's Funds.deposits in the real pass. */
+        java.util.List<PendingDeposit> known = java.util.List.of();
+        /** Output index of each call's continuing state output, by unit (policy ++ token name). */
+        final java.util.Map<String, Integer> stateOutputs = new java.util.HashMap<>();
+        /** Units whose call is {@code @Receives}: the only valid deposit targets (ADR-0011 D3). */
+        final java.util.Set<String> receivers = new java.util.HashSet<>();
 
         void record(Account caller, byte[][] signers, ExpectedState exp, java.util.List<ExpectedPayout> pays,
                     java.util.List<ExpectedSend> snds, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] scs,
@@ -88,6 +96,10 @@ final class TxRunner {
             outputs += (exp != null ? 1 : 0) + pays.size() + snds.size();
         }
     }
+
+    /** A deposit a call makes into instance {@code target} (a unit, policy ++ instance id, hex). */
+    record PendingDeposit(String target, org.julclang.ledger.TxOutRef by, org.julclang.ledger.Value value,
+                          org.julclang.core.PlutusData memo, String what) {}
 
     static final ThreadLocal<Capture> CAPTURE = new ThreadLocal<>();
 

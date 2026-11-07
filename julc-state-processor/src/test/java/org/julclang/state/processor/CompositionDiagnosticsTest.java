@@ -51,4 +51,17 @@ class CompositionDiagnosticsTest {
         var r2 = compile(contract("@Destroy @MigrateTo(\"n\") public static JulcList<Payout> up(S s, Ctx ctx) { return Payouts.none(); }"));
         assertTrue(r2.hasError("@MigrateTo must name a byte[]"), r2.errors().toString());
     }
+
+    @Test
+    void depositsAndReceives() {
+        var ok = compile(contract("""
+                public record Paid(S state, JulcList<Deposit> deposits) {}
+                @Action public static Paid pay(S s, P p, Ctx ctx) { return new Paid(s, Deposits.of(p.feed(), Assets.lovelace(BigInteger.TEN), org.julclang.stdlib.Builtins.iData(0))); }
+                @Action @Receives public static S take(S s, Ctx ctx, Funds funds) { return s; }"""));
+        assertTrue(ok.success(), ok.errors().toString());
+        var r = compile(contract("@Action @Receives public static S take(S s, Ctx ctx) { return s; }"));
+        assertTrue(r.hasError("@Receives needs a Funds parameter"), r.errors().toString());
+        var r2 = compile(contract("@Receives public static S take(S s, Ctx ctx, Funds funds) { return s; }"));
+        assertTrue(r2.hasError("@Receives needs @Init, @Action or @Destroy"), r2.errors().toString());
+    }
 }

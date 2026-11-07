@@ -229,6 +229,7 @@ public final class ClientGenerator {
         w.indent();
         w.line(".usesCtx(" + t.hasCtx() + ")");
         if (t.migrateTo() != null) w.line(".migrates()");
+        if (t.receives()) w.line(".receives()");
         if (t.payable()) w.line(".received(payLovelace)");
         for (String f : t.signedBy()) w.line(".signedBy(\"" + f + "\", s -> s." + f + "())");
         for (String f : t.validAfter()) w.line(".validAfter(\"" + f + "\", s -> s." + f + "())");
@@ -348,6 +349,7 @@ public final class ClientGenerator {
             w.indent();
             w.indent();
             w.line(".usesCtx(" + t.hasCtx() + ")");
+            if (t.receives()) w.line(".receives()");
             if (t.payable()) w.line(".received(payLovelace)");
             for (String f : t.signedBy()) w.line(".signedBy(\"" + f + "\", o -> o." + f + "())");
             for (String f : t.validAfter()) w.line(".validAfter(\"" + f + "\", o -> o." + f + "())");
@@ -585,7 +587,8 @@ public final class ClientGenerator {
                     + ", " + (t.resultSends() ? r + ".sends()" : "null")
                     + ", " + (t.resultMint() ? r + ".mint()" : "null")
                     + ", " + (t.resultAccepted() ? r + ".accepted()" : "null") + ")"
-                    + (t.resultEvents() ? ".withEvents(" + r + ".events())" : "");
+                    + (t.resultEvents() ? ".withEvents(" + r + ".events())" : "")
+                    + (t.resultDeposits() ? ".withDeposits(" + r + ".deposits())" : "");
         };
     }
 

@@ -38,6 +38,8 @@ import java.util.List;
  *                    resolves it, the annotation's simple name, possibly empty); otherwise null (ADR-0012 D3)
  * @param arriving    for an {@code @Admits} action that takes the arriving object: that parameter's name; it is not a
  *                    redeemer field but read from the object's input (ADR-0012 r4)
+ * @param resultDeposits the result record has a {@code deposits} component (ADR-0011 D3)
+ * @param receives    {@code @Receives}: the continuing output takes deposits (ADR-0011 D3)
  */
 public record TransitionIR(Kind kind,
                            String method,
@@ -69,7 +71,9 @@ public record TransitionIR(Kind kind,
                            String ownedType,
                            String into,
                            String admitsType,
-                           String arriving) {
+                           String arriving,
+                           boolean resultDeposits,
+                           boolean receives) {
 
     /** A {@code @Reads(path)} parameter: its foreign record type and field count, for the shape check. */
     public record ReadIR(String name, String path, String type, int fields) {}
@@ -91,7 +95,7 @@ public record TransitionIR(Kind kind,
         return new TransitionIR(kind, method, variant, newParams, hasCtx, payable, returns, resultType, signedBy, validAfter,
                 validBefore, shared, batched, batchOnly, hasFunds, resultPayouts, resultSends, resultMint, resultAccepted,
                 takesParams, quorumKeys, quorumThreshold, authorizedBy, resultEvents, eventsType, reads, migrateTo, ownedType,
-                into, type, arrivingName);
+                into, type, arrivingName, resultDeposits, receives);
     }
 
     /** Moves its object to another instance ({@code @Into}, ADR-0012 D3). */
@@ -130,9 +134,9 @@ public record TransitionIR(Kind kind,
         return returns == Returns.PAYOUTS || (returnsRecord() && resultPayouts);
     }
 
-    /** Touches native assets: takes Funds, sends or mints (ADR-0007). */
+    /** Touches native assets: takes Funds, sends, mints or deposits (ADR-0007, ADR-0011 D3). */
     public boolean assetAware() {
-        return hasFunds || resultSends || resultMint;
+        return hasFunds || resultSends || resultMint || resultDeposits || receives;
     }
 
     public boolean paysOut() {

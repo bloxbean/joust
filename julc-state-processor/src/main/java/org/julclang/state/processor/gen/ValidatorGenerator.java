@@ -66,7 +66,8 @@ public final class ValidatorGenerator {
         if (c.hasBatched() || !c.moves().isEmpty()) imports.add("org.julclang.ledger.ScriptPurpose");
         if (c.assetAware()) {
             imports.addAll(List.of("org.julclang.core.types.JulcValue", "org.julclang.state.api.Funds",
-                    "org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId"));
+                    "org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId", "org.julclang.state.api.DepositClaim"));
+            if (c.hasDeposits()) imports.add("org.julclang.state.api.Deposit");
         }
         if (c.hasParams()) imports.add("org.julclang.stdlib.annotation.Param");
         if (anyReads()) imports.add("org.julclang.state.api.ForeignInstance");
@@ -1163,7 +1164,13 @@ public final class ValidatorGenerator {
     private void fundsLocal(TransitionIR t, String redeemerVar, String selfExpr, String heldExpr) {
         if (!t.hasFunds()) return;
         String offered = takesAssets(t) ? "(Value) (Object) " + redeemerVar + ".assetsIn()" : "noAssets()";
-        w.line("Funds funds = new Funds(policy, " + selfExpr + ", " + offered + ", " + heldExpr + ");");
+        if (t.receives()) {
+            w.line("// The deposits claimed on this call's continuing output, in registry order (ADR-0011 D3).");
+            w.line("JulcList<DepositClaim> depositsIn = depositsInto(tx, policy, id);");
+        } else {
+            w.line("JulcList<DepositClaim> depositsIn = JulcList.empty();");
+        }
+        w.line("Funds funds = new Funds(policy, " + selfExpr + ", " + offered + ", " + heldExpr + ", depositsIn);");
     }
 
     /**
@@ -1387,6 +1394,19 @@ public final class ValidatorGenerator {
             settleArgs.add(String.valueOf(t.resultAccepted()));
             settleArgs.add(t.resultAccepted() ? "r.assetsIn()" : "Builtins.iData(0L)");
         }
+        if (c.hasDeposits()) {
+            if (t.resultDeposits()) {
+                settleArgs.add("result.deposits()");
+            } else {
+                w.line("JulcList<Deposit> noDeposits = JulcList.empty();");
+                settleArgs.add("noDeposits");
+            }
+        }
+        if (c.hasReceives()) {
+            if (!t.hasFunds()) w.line("JulcList<DepositClaim> depositsIn = JulcList.empty();");
+            settleArgs.add("depositsIn");
+            settleArgs.add(String.valueOf(t.receives()));
+        }
         checks.add("settle(" + String.join(", ", settleArgs) + ")");
         w.line("return " + conj(checks, t.variant()) + ";");
         w.close("}").blank();
@@ -1411,6 +1431,11 @@ public final class ValidatorGenerator {
             params.add("boolean accepts");
             params.add("PlutusData assetsIn");
         }
+        if (c.hasDeposits()) params.add("JulcList<Deposit> deposits");
+        if (c.hasReceives()) {
+            params.add("JulcList<DepositClaim> depositsIn");
+            params.add("boolean receiving");
+        }
         w.line("/**");
         w.line(" * Settles a transition: out = in + received + accepted + mint - payouts - sends (I26), or for a destroy exactly");
         w.line(" * the burned token; payouts tagged (I7); sends claimed (I29); the user mint exact (I28); accepted == offered (I31).");
@@ -1425,8 +1450,11 @@ public final class ValidatorGenerator {
         }
         w.line("JulcValue mintV = " + (c.hasMints() ? "mints ? methodValue(mint, policy, 2L) : noValue()" : "noValue()") + ";");
         w.line("JulcValue sentV = " + (c.hasSends() ? "sendsTotal(sends, policy)" : "noValue()") + ";");
+        // Deposits made leave this output like sends; deposits received arrive like received value (ADR-0011 D3).
+        w.line("JulcValue outV = " + (c.hasDeposits() ? "Builtins.unionValue(sentV, depositsTotal(deposits, policy))" : "sentV") + ";");
+        w.line("JulcValue inV = " + (c.hasReceives() ? "Builtins.unionValue(acceptedV, depositedTotal(depositsIn, policy))" : "acceptedV") + ";");
         w.line("JulcValue expected = Builtins.unionValue(inValue, Builtins.unionValue(lovelaceValue(received.subtract(Payouts.total(payouts))),");
-        w.line("        Builtins.unionValue(acceptedV, Builtins.unionValue(mintV, Builtins.scaleValue(BigInteger.valueOf(-1), sentV)))));");
+        w.line("        Builtins.unionValue(inV, Builtins.unionValue(mintV, Builtins.scaleValue(BigInteger.valueOf(-1), outV)))));");
         w.line("boolean valueOk = destroy");
         w.line("        ? Builtins.equalsData(Builtins.valueData(expected), Builtins.valueData(Builtins.insertCoin(policy, id, BigInteger.ONE, noValue())))");
         w.line("          && ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.valueOf(-1)) == 0");
@@ -1434,7 +1462,15 @@ public final class ValidatorGenerator {
         w.line("boolean paid = payouts.isEmpty() || payoutsPaid(tx.outputs(), own, payouts);");
         w.line("boolean sent = " + (c.hasSends() ? "sendsClaimed(tx, own.outRef(), sends, policy)" : "true") + ";");
         w.line("boolean minted = " + (c.hasMints() ? "!mints || mintMatches(tx, policy, own.outRef(), mintV, destroy, id)" : "true") + ";");
-        w.line("return " + conj(List.of("acceptedOk", "valueOk", "paid", "sent", "minted"), "settle") + ";");
+        w.line("boolean deposited = " + (c.hasDeposits() ? "depositsMade(tx, own.outRef(), deposits, policy, id)" : "true") + ";");
+        if (c.hasReceives()) {
+            // I40: only a @Receives transition takes deposits; any other continuing one refuses a claim on its output, or
+            // a depositor's value would leave without being counted anywhere (implementation review r3, C1).
+            w.line("boolean refuses = destroy || receiving || noDepositsAt(tx, policy, id);");
+        } else {
+            w.line("boolean refuses = true;");
+        }
+        w.line("return " + conj(List.of("acceptedOk", "valueOk", "paid", "sent", "minted", "deposited", "refuses"), "settle") + ";");
         w.close("}").blank();
     }
 
@@ -1668,6 +1704,144 @@ public final class ValidatorGenerator {
         }
     }
 
+    /** The output registry helpers of deposits (ADR-0011 D3). */
+    private void depositHelpers() {
+        if (!c.hasDeposits() && !c.hasReceives()) return;
+        w.line("// ---- deposits into other instances (ADR-0011 D3) -------------------------------------------");
+        w.open("static OutputClaims outputClaims(TxInfo tx) {");
+        w.line("ScriptPurpose purpose = new ScriptPurpose.Rewarding(new Credential.ScriptCredential(new ScriptHash(OUTPUT_VERIFIER)));");
+        w.line("return (OutputClaims) (Object) tx.redeemers().get(purpose);");
+        w.close("}").blank();
+        w.line("/** The index of the unique output holding {@code token} of {@code policy} at that script's address; fails otherwise. */");
+        w.open("static BigInteger indexWith(TxInfo tx, byte[] policy, byte[] token) {");
+        w.line("BigInteger k = BigInteger.ZERO;");
+        w.line("BigInteger at = BigInteger.valueOf(-1);");
+        w.line("long count = 0;");
+        w.open("for (var o : tx.outputs()) {");
+        w.open("if (ValuesLib.assetOf(o.value(), policy, token).compareTo(BigInteger.ZERO) > 0) {");
+        w.line("boolean home = AddressLib.isScriptAddress(o.address()) && ByteStringLib.equals(AddressLib.credentialHash(o.address()), policy);");
+        w.line("count = count + (home ? 1 : 2);");
+        w.line("at = k;");
+        w.close("}");
+        w.line("k = k.add(BigInteger.ONE);");
+        w.close("}");
+        w.open("if (count != 1) {");
+        w.line("Builtins.error();");
+        w.close("}");
+        w.line("return at;");
+        w.close("}").blank();
+        if (c.hasReceives()) {
+            w.line("/** The deposits claimed on this call's continuing output, in registry order (I40). */");
+            w.open("static JulcList<DepositClaim> depositsInto(TxInfo tx, byte[] policy, byte[] id) {");
+            w.line("BigInteger at = indexWith(tx, policy, id);");
+            w.line("ScriptPurpose purpose = new ScriptPurpose.Rewarding(new Credential.ScriptCredential(new ScriptHash(OUTPUT_VERIFIER)));");
+            w.open("if (tx.redeemers().containsKey(purpose)) {");
+            w.line("OutputClaims oc = outputClaims(tx);");
+            w.line("return keepAt(oc.deposits(), at);");
+            w.close("} else {");
+            w.indent();
+            w.line("JulcList<DepositClaim> none = JulcList.empty();");
+            w.line("return none;");
+            w.close("}");
+            w.close("}").blank();
+            w.open("static JulcList<DepositClaim> keepAt(JulcList<DepositClaim> ds, BigInteger at) {");
+            w.open("if (ds.isEmpty()) {");
+            w.line("return ds;");
+            w.close("} else {");
+            w.indent();
+            w.line("DepositClaim d = ds.head();");
+            w.line("JulcList<DepositClaim> rest = keepAt(ds.tail(), at);");
+            w.line("return d.output().compareTo(at) == 0 ? rest.prepend(d) : rest;");
+            w.close("}");
+            w.close("}").blank();
+            w.line("/** The total value of received deposits: never a reserved token of this policy (the verifier checks the rest). */");
+            w.line("/** No deposit claim names this transition's continuing output (it is not @Receives). */");
+            w.open("static boolean noDepositsAt(TxInfo tx, byte[] policy, byte[] id) {");
+            w.line("ScriptPurpose purpose = new ScriptPurpose.Rewarding(new Credential.ScriptCredential(new ScriptHash(OUTPUT_VERIFIER)));");
+            w.open("if (tx.redeemers().containsKey(purpose)) {");
+            w.line("OutputClaims oc = outputClaims(tx);");
+            w.line("return keepAt(oc.deposits(), indexWith(tx, policy, id)).isEmpty();");
+            w.close("} else {");
+            w.indent();
+            w.line("return true;");
+            w.close("}");
+            w.close("}").blank();
+            w.open("static JulcValue depositedTotal(JulcList<DepositClaim> ds, byte[] policy) {");
+            w.open("if (ds.isEmpty()) {");
+            w.line("return noValue();");
+            w.close("} else {");
+            w.indent();
+            w.line("DepositClaim d = ds.head();");
+            w.line("return Builtins.unionValue(methodValue(d.value(), policy, 0L), depositedTotal(ds.tail(), policy));");
+            w.close("}");
+            w.close("}").blank();
+        }
+        if (c.hasDeposits()) {
+            w.open("static JulcValue depositsTotal(JulcList<Deposit> ds, byte[] policy) {");
+            w.open("if (ds.isEmpty()) {");
+            w.line("return noValue();");
+            w.close("} else {");
+            w.indent();
+            w.line("Deposit d = ds.head();");
+            w.line("return Builtins.unionValue(methodValue(d.value(), policy, 0L), depositsTotal(ds.tail(), policy));");
+            w.close("}");
+            w.close("}").blank();
+            w.line("/**");
+            w.line(" * I40: each deposit goes to a distinct instance (32-byte id) spent in this transaction, and one registry claim by");
+            w.line(" * {@code by} names that instance's continuing output with the same value and memo; no other claim names {@code by}.");
+            w.line(" */");
+            w.open("static boolean depositsMade(TxInfo tx, TxOutRef by, JulcList<Deposit> deposits, byte[] policy, byte[] id) {");
+            w.line("ScriptPurpose purpose = new ScriptPurpose.Rewarding(new Credential.ScriptCredential(new ScriptHash(OUTPUT_VERIFIER)));");
+            w.line("boolean any = tx.redeemers().containsKey(purpose);");
+            w.open("if (!any) {");
+            w.line("return deposits.isEmpty();");
+            w.close("} else {");
+            w.indent();
+            w.line("OutputClaims oc = outputClaims(tx);");
+            w.line("JulcList<DepositClaim> claims = oc.deposits();");
+            w.line("long mine = 0;");
+            w.open("for (var cl : claims) {");
+            w.open("if (Builtins.equalsData(cl.by(), by)) {");
+            w.line("mine = mine + 1;");
+            w.close("}");
+            w.close("}");
+            w.line("long made = 0;");
+            w.line("boolean ok = true;");
+            w.line("JulcList<Deposit> rest = deposits;");
+            w.open("while (!rest.isEmpty()) {");
+            w.line("Deposit d = rest.head();");
+            w.line("rest = rest.tail();");
+            w.line("made = made + 1;");
+            w.line("boolean distinct = true;");
+            w.open("for (var e : rest) {");
+            w.open("if (ByteStringLib.equals(e.policy(), d.policy()) && ByteStringLib.equals(e.instance(), d.instance())) {");
+            w.line("distinct = false;");
+            w.close("}");
+            w.close("}");
+            w.line("boolean spent = false;");
+            w.open("for (var in : tx.inputs()) {");
+            w.open("if (ValuesLib.assetOf(in.resolved().value(), d.policy(), d.instance()).compareTo(BigInteger.ONE) == 0) {");
+            w.line("spent = true;");
+            w.close("}");
+            w.close("}");
+            w.line("BigInteger at = indexWith(tx, d.policy(), d.instance());");
+            w.line("PlutusData v = Builtins.valueData(methodValue(d.value(), policy, 0L));");
+            w.line("boolean claimed = false;");
+            w.open("for (var cl : claims) {");
+            w.open("if (Builtins.equalsData(cl.by(), by) && cl.output().compareTo(at) == 0 && Builtins.equalsData((PlutusData) (Object) cl.value(), v)"
+                    + " && Builtins.equalsData(cl.memo(), d.memo())) {");
+            w.line("claimed = true;");
+            w.close("}");
+            w.close("}");
+            w.line("boolean notSelf = !(ByteStringLib.equals(d.policy(), policy) && ByteStringLib.equals(d.instance(), id));");
+            w.line("ok = ok && distinct && spent && claimed && notSelf && ByteStringLib.length(d.instance()) == 32;");
+            w.close("}");
+            w.line("return ok && mine == made;");
+            w.close("}");
+            w.close("}").blank();
+        }
+    }
+
     /** {@code expr} (the method's next state) with each MerkleMap committed to its new root (I16, I17). */
     private String committed(TransitionIR t, String expr) {
         if (!opensMaps(t)) return expr;
@@ -1737,6 +1911,7 @@ public final class ValidatorGenerator {
         if (c.hasOwned()) ownedHelpers();
         moveHelpers();
         if (c.assetAware()) assetHelpers();
+        if (c.assetAware()) depositHelpers();
         authHelpers();
         readsHelpers();
         if (c.hasMaps()) mapOpeners("", c.stateType(), c.stateComponents());

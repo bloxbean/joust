@@ -1,6 +1,6 @@
 # ADR-0011: Option K — composition: several contracts in one transaction, reads, deposits, migration
 
-**Status:** Accepted with changes (r2): a security reviewer and Codex both returned "request changes"; resolved in §5. D1, D2 and D4 are implemented; D3 (deposits) is designed but not yet implemented (§6)
+**Status:** Accepted with changes (r2): a security reviewer and Codex both returned "request changes"; resolved in §5. D1, D2, D4 and (in a follow-up, §7) D3 are implemented
 **Date:** 2026-11-07
 **Builds on:** ADR-0003 (`@Shared` reads), ADR-0007 (sends, the output registry, I29/I30), ADR-0009 (`@Params`).
 **Stack:** #1–#11, then this.
@@ -124,7 +124,6 @@ Both sides must agree: the old one names the new policy, and the new one names t
 - contracts with owned objects, whose objects would be stranded.
 
 ## 3. Invariants added
-## 3. Invariants added
 
 | ID | Invariant |
 |---|---|
@@ -176,12 +175,7 @@ S = security reviewer, C = Codex.
   new side pins its predecessor in params. Migration is implemented for plain contracts. It is refused with
   MerkleMaps, owned objects or native assets.
 
-**Not implemented:**
-- **D3 (deposits into another instance).** It needs the output registry to carry deposit claims and the receiving
-  contract's value equation to count them, which means a new `OutputVerifier` and a `Funds.deposits` view. That is a
-  follow-up.
-- **Value flows between contracts today** go through keys within one composed transaction: a contract pays a key
-  (`Payout`/`Send`), and that key's payable call funds the other contract.
+**D3 was a follow-up:** see §7.
 
 **Sizes:**
 - Shop (with `@Reads`): 6.2 KB.
@@ -200,3 +194,77 @@ S = security reviewer, C = Codex.
   twice;
 - a v1 counter migrates into v2 in one composed transaction, with its count and funds, after which v1 is gone and
   v2 continues.
+
+## 7. D3 implemented: deposits into another instance
+
+**API:**
+- A transition deposits by returning `deposits: JulcList<Deposit>`, with `Deposit(policy, instance, value, memo)`.
+  `Deposits.of(ForeignInstance, value, memo)` builds one.
+- An action takes deposits with `@Receives` and a `Funds` parameter. It sees them in `funds.deposits()`, a list of
+  `DepositClaim(output, by, value, memo)`. `Deposits.lovelace(...)` totals them.
+- An action without `@Receives` takes none: anything added to its output fails its exact value check.
+
+**The output registry:**
+- `OutputClaims` gains `deposits`. The output verifier requires:
+  - non-decreasing output indices, all in range;
+  - each `by` an input of the transaction;
+  - each value canonical, strictly positive, and free of reserved-kind token names under any policy.
+- The verifier now reads its redeemer by cast (a `Value` inside an entrypoint redeemer mis-decodes in JuLC), so its
+  hash changes, and every contract embedding it changes with it.
+
+**The depositor's validator** (`depositsMade`, I40):
+- Its value equation subtracts the deposits, like sends.
+- Each deposit targets a distinct instance with a 32-byte id, whose token an input holds, so the receiver's validator
+  runs.
+- One registry claim by its own input names the target's unique continuing output (`indexWith`: the output holding the
+  token at the script address of `policy`), with the same value and memo.
+- The number of claims naming its input equals its number of deposits, so no claim can be attributed to it falsely.
+
+**The receiver's validator** (`@Receives`):
+- Its value equation adds every claim on its own continuing output, in registry order, each normalised by `methodValue`
+  (no negatives, no reserved name of its own policy).
+- The method's `funds.deposits()` is exactly that list.
+
+**Runtime:**
+- A deposit needs its receiver in the same transaction, through `Compose`. A deposit outside it is refused with an
+  explanation.
+- In the first pass, a receiver sees the deposits made so far. If a receiver placed before its depositors refuses, the
+  pass is rerun with the deposits the first try found. In the second pass every receiver sees every deposit.
+- At submit, each deposit becomes a claim on its receiver's state output, sorted by output index, alongside the send
+  claims.
+
+**Example `fees`:** a `Stall` deposits a 5% fee from each sale into a `Pot` fixed in its params. `Pot.collect` is
+`@Receives`.
+- **Sizes:** Pot 8.6 KB, Stall 9.4 KB, OutputVerifier 1.4 KB.
+- **Budgets for one sale:** the stall 280.7M CPU / 895k mem, the pot 209.6M / 669k, the verifier 41.7M / 135k.
+- **Harness tests (5):**
+  - the sale with the attack suite;
+  - no receiver spent; no claim;
+  - a claim below the deposit; a negative claim; a claim carrying a reserved-kind token;
+  - an extra claim naming the depositor;
+  - the pot's output without the deposit;
+  - a pot collecting nothing.
+- **DevKit:**
+  - a deposit outside `Compose` refused;
+  - two composed sales;
+  - a composition with the receiver first.
+- **Diagnostics:** `@Receives` without `Funds`; `@Receives` without an action.
+
+**Harness change:** `StateHarness.evaluate` now evaluates only the spends at its own script address, so a
+transaction with two contracts is checked by each contract's harness.
+
+### 7.1 Implementation review (r3)
+
+S = security reviewer, C = Codex.
+
+| Finding | Source | Resolution |
+|---|---|---|
+| **Critical.** A depositor checks only that its claim exists. The target spent through any action that is not `@Receives` (an admin action, a payable deposit) adds nothing, so the deposited value goes to the builder's change, or is credited to whoever declared it `received` | S C1, C 1 | In every contract with `@Receives`, each other continuing transition refuses a deposit claim on its output (`noDepositsAt`). A depositor may not deposit into itself. **Rule:** a deposit target must be a contract that declares `@Receives`. A depositor cannot check this for contracts generated before this change, for plain contracts or for foreign scripts, so a target is the depositor's author's choice and must be fixed (params), never chosen by a caller |
+| `Deposit` added to the reserved names broke every contract with a `deposit` method (Bank, Vault, StakedVault) | C 2 | Reserved only in contracts that make deposits |
+| Medium. `by` is not authenticated | S M1 | Documented: `by` names an input of the transaction, nothing more. Every JOUST arm that runs `settle` refuses claims naming its input that it did not make (`mine == made`). A receiver that credits by depositor must check the input at `by` itself |
+| Medium. The runtime attached a claim to a call that is not `@Receives` | S M2 | `Compose` refuses such a deposit before building |
+| Medium. A receiver first in a nested composition stopped the inner calls in the first pass | C 3 | A nested composition runs every call and rethrows the first failure, so the outer first pass retries with the deposits found |
+| Medium. A memo with a map built out of key order is reordered by serialisation, and the depositor's check then fails | C 4 | The runtime refuses a non-canonical memo, as it does for state (`SortedMaps`) |
+| Low. Empty-value claims passed the verifier | S L1 | A claim's value must be non-empty |
+| Low. The reserved-name filter applies under every policy, so an NFT named by a 32-byte hash cannot be deposited | S L2 | Documented: send such a token instead |
+

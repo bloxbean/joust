@@ -219,7 +219,8 @@ public final class StateInstance<S> {
                 window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
         byte[] policy = HexUtil.decodeHexString(contract.policyId);
         byte[] id = HexUtil.decodeHexString(instanceId);
-        var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id));
+        var incoming = call.receives ? AssetTx.incoming(unit()) : org.julclang.core.types.JulcList.<org.julclang.state.api.DepositClaim>empty();
+        var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id), incoming);
         Transition<S> t = call.assetRun.apply(current, null, ctx, funds);   // the developer's method, on the JVM
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
@@ -229,7 +230,7 @@ public final class StateInstance<S> {
                 BigInteger.valueOf(stateUtxo.getOutputIndex()));
         PlutusData datum = destroy ? null : PlutusDataAdapter.convert(t.next());
         var applied = AssetTx.apply(tx, contract, call.caller, what, own, inValue, call.received, call.receivedAssets, t,
-                unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false);
+                unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false, null, incoming);
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
         for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));

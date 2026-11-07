@@ -43,6 +43,23 @@ final class Datums {
         }
     }
 
+    /** A deposit's memo must be canonical too: the registry carries its serialised form (ADR-0011 D3, review r3). */
+    static void checkCanonicalMemo(PlutusData memo, String what) {
+        try {
+            var item = memo.serialize();
+            byte[] canonical = com.bloxbean.cardano.client.common.cbor.CborSerializationUtil.serialize(item, true);
+            byte[] asBuilt = com.bloxbean.cardano.client.common.cbor.CborSerializationUtil.serialize(item, false);
+            if (!java.util.Arrays.equals(canonical, asBuilt)) {
+                throw new JoustException(what + ": a deposit memo contains a map whose keys are not in canonical order;"
+                        + " the validator would compare it with the reordered copy in the registry. Build it with SortedMaps");
+            }
+        } catch (JoustException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new JoustException("cannot serialise a deposit memo", e);
+        }
+    }
+
     static String hex(PlutusData d) {
         try {
             return d.serializeToHex();
