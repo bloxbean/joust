@@ -1032,7 +1032,7 @@ public final class ValidatorGenerator {
             w.line(" */");
             w.open("static boolean mintMatches(TxInfo tx, byte[] policy, TxOutRef own, JulcValue declared, boolean destroy,"
                     + " byte[] id) {");
-            w.line("PlutusData.MapData minted = ValuesLib._ledgerTokensOf(Builtins.unMapData((PlutusData) (Object) tx.mint()),"
+            w.line("PlutusData.MapData minted = ValuesLib._tokensOf(Builtins.unMapData((PlutusData) (Object) tx.mint()),"
                     + " Builtins.bData(policy));");
             w.line("boolean any = !Builtins.nullList(Builtins.unMapData(minted));");
             w.line("boolean byOwn = any && Builtins.equalsData(tx.redeemers().get(new ScriptPurpose.Minting(new PolicyId(policy))),");
@@ -1147,7 +1147,7 @@ public final class ValidatorGenerator {
         w.line(" * repeated policy; never for a value a method or redeemer supplies.");
         w.line(" */");
         w.open("static PlutusData.MapData ledgerTokensOf(Value v, byte[] policy) {");
-        w.line("return ValuesLib._ledgerTokensOf(Builtins.unMapData((PlutusData) (Object) v), Builtins.bData(policy));");
+        w.line("return ValuesLib._tokensOf(Builtins.unMapData((PlutusData) (Object) v), Builtins.bData(policy));");
         w.close("}").blank();
 
         w.line("/** Under this policy the transaction mints exactly (id, 1) and nothing else (I1). */");
