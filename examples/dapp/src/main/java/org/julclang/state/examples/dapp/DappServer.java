@@ -65,6 +65,11 @@ public final class DappServer {
 
     /** Sets up the chain side and starts serving. */
     public static DappServer start(StateRuntime runtime, Path frontend, String host, int port) throws IOException {
+        return start(runtime, frontend, host, port, 30);
+    }
+
+    /** As {@link #start(StateRuntime, Path, String, int)}, with this many prepares a minute per client (tests: more). */
+    public static DappServer start(StateRuntime runtime, Path frontend, String host, int port, int preparesPerMinute) throws IOException {
         Account operator = DevKit.fundedAccount(200);
         // Reference scripts first: a wallet caller cannot publish them (it never signs for the service).
         var counter = CounterClient.contract(runtime);
@@ -79,7 +84,8 @@ public final class DappServer {
                 .allowOrigin("http://localhost:5174")
                 .allowOrigin("http://127.0.0.1:5174")
                 .handler("/chain/", new ChainProxy(DevKit.STORE_URL))
-                .handler("/dev/topup", DappServer::topUp);
+                .handler("/dev/topup", DappServer::topUp)
+                .preparesPerMinute(preparesPerMinute);
         if (port != 0) {
             // The page served here calls the API from this origin (allow-listed: the Host header proves nothing).
             builder.allowOrigin("http://localhost:" + port).allowOrigin("http://127.0.0.1:" + port);
@@ -102,7 +108,9 @@ public final class DappServer {
             sc.put("zeroSlot", t.zeroSlot());
             sc.put("zeroTimeMs", t.zeroTimeMs());
             sc.put("slotLengthMs", t.slotLengthMs());
+            long ttlSlots = Math.max(1, runtime.ttlMs() / t.slotLengthMs());
             contracts.fields().forEachRemaining(e -> ((ObjectNode) e.getValue()).set("slotConfig", sc.deepCopy()));
+            contracts.fields().forEachRemaining(e -> ((ObjectNode) e.getValue()).put("ttlSlots", ttlSlots));
         }
         d.put("operator", operator.baseAddress());
         for (Path dir : new Path[]{frontend.resolve("public"), frontend.resolve("dist")}) {
@@ -167,13 +175,14 @@ public final class DappServer {
     }
 
     /**
-     * The page's chain API, forwarded to Yaci Store (its browser CORS policy is not configured): reads, and
-     * {@code POST /tx/submit}. A public-network page talks to Blockfrost (or its own indexer) directly instead.
+     * The page's chain API, forwarded to Yaci Store (its browser CORS policy is not configured): reads,
+     * {@code POST /tx/submit} and {@code POST /utils/txs/evaluate}. A public-network page talks to Blockfrost (or its own indexer) directly instead.
      */
     static final class ChainProxy implements HttpHandler {
         private static final Set<String> HEADERS = Set.of("content-type");
         private final String base;
         private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        private final org.julclang.state.server.JoustServer.RateLimit posts = new org.julclang.state.server.JoustServer.RateLimit(120);
 
         ChainProxy(String storeUrl) {
             this.base = storeUrl.endsWith("/") ? storeUrl.substring(0, storeUrl.length() - 1) : storeUrl;
@@ -184,16 +193,33 @@ public final class DappServer {
             try (ex) {
                 String path = ex.getRequestURI().getRawPath().substring("/chain".length());
                 String query = ex.getRequestURI().getRawQuery();
-                boolean submit = ex.getRequestMethod().equals("POST") && path.equals("/tx/submit");
+                boolean post = ex.getRequestMethod().equals("POST");
+                boolean submit = post && path.equals("/tx/submit");
+                boolean evaluate = post && path.equals("/utils/txs/evaluate");   // budgets for a page-built tx (phase 4)
                 String lower = path.toLowerCase();
-                if (!(ex.getRequestMethod().equals("GET") || submit) || path.contains("..") || lower.contains("%2e")
+                // POSTs only from this machine's pages (a cross-site form could otherwise spend Yaci Store's CPU), and few.
+                String origin = ex.getRequestHeaders().getFirst("Origin");
+                if (post && origin != null && !origin.matches("http://(localhost|127\\.0\\.0\\.1):[0-9]+")) {
+                    ex.sendResponseHeaders(403, -1);
+                    return;
+                }
+                if (post && !posts.allow(ex.getRemoteAddress().getAddress().getHostAddress())) {
+                    ex.sendResponseHeaders(429, -1);
+                    return;
+                }
+                if (!(ex.getRequestMethod().equals("GET") || submit || evaluate) || path.contains("..") || lower.contains("%2e")
                         || lower.contains("%2f") || lower.contains("%5c")) {
                     ex.sendResponseHeaders(405, -1);
                     return;
                 }
                 var req = HttpRequest.newBuilder(URI.create(base + path + (query == null ? "" : "?" + query))).timeout(Duration.ofSeconds(20));
-                if (submit) {
-                    req.header("Content-Type", "application/cbor").POST(HttpRequest.BodyPublishers.ofByteArray(ex.getRequestBody().readNBytes(32 * 1024)));
+                if (submit || evaluate) {
+                    byte[] body = ex.getRequestBody().readNBytes(64 * 1024 + 1);   // hex of at most a 16 KB transaction, and some
+                    if (body.length > 64 * 1024) {
+                        ex.sendResponseHeaders(413, -1);
+                        return;
+                    }
+                    req.header("Content-Type", "application/cbor").POST(HttpRequest.BodyPublishers.ofByteArray(body));
                 }
                 HttpResponse<byte[]> r = http.send(req.build(), HttpResponse.BodyHandlers.ofByteArray());
                 r.headers().map().forEach((k, v) -> {

@@ -8,10 +8,11 @@ import { devWallet } from '@julclang/state-client/devwallet';
 import { Counter } from './generated/Counter.js';
 import { Bank } from './generated/Bank.js';
 import { maliciousService } from './tamper.js';
+import { loadWasm, serverlessCall } from './serverless.js';
 
 const $ = (id) => document.getElementById(id);
 const deployment = await (await fetch('/deployment.json', { cache: 'no-store' })).json();
-const chain = blockfrostChain(location.origin + deployment.chain);
+const chain = blockfrostChain(location.origin + deployment.chain, { CSL });
 const honest = httpService(location.origin + deployment.service);
 
 const app = { api: null, view: null, dev: false, malicious: false, tampered: null };
@@ -20,7 +21,10 @@ const service = {
   prepare: (r) => (app.malicious ? bad : honest).prepare(r),
   view: (r) => honest.view(r),
 };
-const options = (name) => ({ CSL, deployment: deployment.contracts[name], service, chain, onReview: review });
+// EXPERIMENTAL (phase 4): the contracts' Java in Wasm (GraalVM Web Image), when it is built (./gradlew
+// :examples:dapp:wasm). The page then recomputes every call's next state itself, and can call without a service.
+const wasm = await loadWasm();
+const options = (name) => ({ CSL, deployment: deployment.contracts[name], service, chain, onReview: review, portable: wasm ?? undefined });
 const counter = new Counter(options('Counter'));
 const bank = new Bank(options('Bank'));
 
@@ -84,7 +88,7 @@ async function act(label, fn) {
 }
 
 /** onReview: what the page checked, shown before the wallet signs. Resolves to sign; throws to cancel. */
-function review({ contract, call, report }) {
+function review({ contract, call, report, serverless }) {
   const args = Object.keys(call.args ?? {}).length ? JSON.stringify(toJson(call.args)) : '';
   const target = call.object ? `account ${short(call.object)}` : call.instance ? `instance ${short(call.instance)}` : 'a new instance';
   const pays = call.pay?.lovelace ? BigInt(call.pay.lovelace) : 0n;
@@ -99,6 +103,8 @@ function review({ contract, call, report }) {
         : `Your wallet receives ${ada(-report.walletNet)} net of the ${ada(report.fee)} fee`),
       el('li', {}, 'No certificates, withdrawals, votes, foreign mints, metadata or other signers'),
       el('li', {}, 'Collateral is yours and comes back to you; the transaction expires within minutes'),
+      report.recomputed ? el('li', {}, `The next state and payouts were recomputed in this page by the contract's own Java code (Wasm) from ${report.recomputedFrom}: identical`) : null,
+      serverless ? el('li', {}, 'Built in this page: no prepare service (the contract ran in Wasm; state, parameters and budgets came from the chain API)') : null,
     ),
     el('div', { class: 'kv' },
       report.created ? [el('div', { class: 'k' }, 'creates'), el('div', { class: 'mono' }, report.created)] : null,
@@ -204,6 +210,10 @@ async function renderCounters() {
         el('button', { class: 'small', onclick: () => act('Counter.increment(1)', () => inst.increment(app.api, { by: 1n })) }, '+1'),
         el('button', { class: 'small', onclick: () => act('Counter.increment(10)', () => inst.increment(app.api, { by: 10n })) }, '+10'),
         el('button', { class: 'small secondary', onclick: () => act('Counter.increment(0)', () => inst.increment(app.api, { by: 0n })), title: 'refused by the contract: increments must be positive' }, '+0'),
+        wasm ? el('button', { class: 'small secondary', title: 'experimental: built in the page, the contract runs in Wasm, no service',
+          onclick: () => act('Counter.increment(1) without a service', () => serverlessCall({ CSL, chain, chainUrl: location.origin + deployment.chain,
+            deployment: deployment.contracts.Counter, description: counter.contract.description, wasm, api: app.api, instance: id,
+            method: 'increment', args: { by: 1n }, onReview: review })) }, '+1 (no service)') : null,
         el('button', { class: 'small secondary', disabled: !mine, onclick: () => act('Counter.reset', () => inst.reset(app.api)) }, 'Reset'),
         el('button', { class: 'small danger', disabled: !mine, onclick: () => act('Counter.close', () => inst.close(app.api)) }, 'Close')),
     ));
@@ -290,6 +300,7 @@ $('bank-deploy').addEventListener('click', () => act('Bank.init', async () => {
 }));
 $('bank-open').addEventListener('click', () => act('Bank.open', () => bank.at($('bank-choice').value).open(app.api, {}, { lovelace: lovelaceOf('open-amount') })));
 
+if (wasm) log('The contracts\' Java code is loaded in this page (Wasm, experimental): calls on existing instances and objects are recomputed before signing', 'ok');
 walletChoices();
 bankChoices();
 setTimeout(walletChoices, 500);   // CIP-30 wallets inject themselves after load

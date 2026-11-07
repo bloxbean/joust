@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit;
  * GET  /api/contracts                 the served contracts' deployments (policy, address, network, reference script)
  * GET  /api/description?contract=     a contract's description (for tooling; pages bundle their own)
  * POST /api/prepare                   { contract, kind, method, instance, object, args, pay, address }
- *                                     -> { cbor, txHash, validTo, signers, instance?, object? }
+ *                                     -> { cbor, txHash, validTo, signers, plan, instance?, object? }
  * POST /api/view                      { contract, instance, view, args } -> { value } (view null: the state)
  * </pre>
  * Operations: a per-client rate limit and a bound on concurrent prepares (each runs the call twice and evaluates
@@ -252,6 +252,7 @@ public final class JoustServer {
             out.put("validTo", p.validTo());
             var signers = out.putArray("signers");
             p.requiredSigners().forEach(signers::add);
+            out.set("plan", JsonValues.JSON.valueToTree(p.plan()));   // ADR-0013 D4: the page checks it describes cbor
             if (kind.equals("init") && made[0] != null) out.put("instance", (String) made[0]);
             if (kind.equals("ownedInit") && made[0] != null) out.put("object", (String) made[0]);
             LOG.log(System.Logger.Level.INFO, "prepared {0} {1}.{2} for {3}", p.txHash(), c.x.get("contract").asText(), meta.get("name").asText(), address);
@@ -380,15 +381,15 @@ public final class JoustServer {
     }
 
     /** A fixed window per client address. */
-    static final class RateLimit {
+    public static final class RateLimit {
         private final int perMinute;
         private final Map<String, long[]> windows = new ConcurrentHashMap<>();
 
-        RateLimit(int perMinute) {
+        public RateLimit(int perMinute) {
             this.perMinute = perMinute;
         }
 
-        boolean allow(String client) {
+        public boolean allow(String client) {
             long now = System.nanoTime();
             long minute = TimeUnit.MINUTES.toNanos(1);
             if (windows.size() > 10_000) windows.entrySet().removeIf(e -> now - e.getValue()[0] > minute);

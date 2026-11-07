@@ -396,11 +396,17 @@ public final class DescriptionWriter {
 
     // ------------------------------------------------------------------ the contract's elements
 
+    /** The contract's method {@code name}: the one carrying a JOUST annotation (an unannotated overload is a helper). */
     private ExecutableElement method(String name) {
+        ExecutableElement any = null;
         for (ExecutableElement m : ElementFilter.methodsIn(contract.getEnclosedElements())) {
-            if (m.getSimpleName().contentEquals(name)) return m;
+            if (!m.getSimpleName().contentEquals(name)) continue;
+            boolean joust = m.getAnnotationMirrors().stream().anyMatch(a -> ((TypeElement) a.getAnnotationType().asElement())
+                    .getQualifiedName().toString().startsWith("org.julclang.state.api."));
+            if (joust) return m;
+            if (any == null) any = m;
         }
-        return null;
+        return any;
     }
 
     private static TypeMirror paramType(ExecutableElement m, String name) {

@@ -65,6 +65,11 @@ public final class PreparedTx {
         return window == null ? -1 : window.toSlot();
     }
 
+    /** The portable plan of this transaction (ADR-0013 D4): see {@link TxPlan}. */
+    public java.util.Map<String, Object> plan() {
+        return TxPlan.of(tx);
+    }
+
     /** A copy of the transaction this prepared, for inspection. */
     public Transaction transaction() {
         return TransactionUtil.createCopy(tx);

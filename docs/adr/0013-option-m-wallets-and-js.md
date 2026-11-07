@@ -1,7 +1,8 @@
 # ADR-0013: Option M — browser wallets (CIP-30) and JavaScript clients (CIP-57)
 
 **Status:** Accepted (r2): a design review returned "request changes"; resolved in §6. Phase 1 implemented (§7);
-phases 2 and 3, with a DevKit dApp, implemented (§9). Phase 4 targets GraalVM Web Image instead of TeaVM (§9.5)
+phases 2 and 3, with a DevKit dApp, implemented (§9); phase 4, experimental, with GraalVM Web Image instead of
+TeaVM (§10)
 **Date:** 2026-11-07
 **Builds on:** ADR-0001 (the runtime and generated clients), ADR-0011 (`Compose`), CIP-30, CIP-57.
 **Stack:** #1–#14, then this.
@@ -105,7 +106,7 @@ and has the wallet sign it. Typing the datum in JuLC's own blueprint is a JuLC c
 The runtime splits "run the method into a **plan**" (inputs, outputs with datums and values, redeemers, mint, required
 signers, window) from "turn the plan into a CCL transaction". `prepare()` returns the plan, and the page's verifier
 compares the transaction with it. The plan is also the seam for (b): a Wasm build of the contract class and the JVM
-bodies of `julc-state-api` (GraalVM Web Image, §9.5; TeaVM was the first choice) computes it in the page, and a TypeScript SDK (Evolution SDK, with CML underneath) builds
+bodies of `julc-state-api` (GraalVM Web Image, §10; TeaVM was the first choice) computes it in the page, and a TypeScript SDK (Evolution SDK, with CML underneath) builds
 the transaction. That proof of concept must show byte-identical datums, map order and `BigInteger` arithmetic against
 the JVM. CIP-103 `signTxs` is optional, for chained transactions (deploy, then call). `signData` authenticates
 callers only and never replaces a transaction signature.
@@ -140,7 +141,7 @@ callers only and never replaces a transaction signature.
 1. D1 and the page verifier's checks, with the PoC's runtime part.
 2. D3 descriptions and the generated TypeScript client.
 3. D2 service.
-4. D4 plan extraction, then the Wasm spike (GraalVM Web Image, experimental; §9.5).
+4. D4 plan extraction, then the Wasm spike (GraalVM Web Image, experimental; §10).
 
 ## 6. Review r1 and its resolution
 
@@ -395,3 +396,105 @@ S = security reviewer, C = Codex.
   The page was also driven in headless Chrome.
 - **Phase 4:** per the user's decision, the serverless path uses **GraalVM Web Image** (`native-image --tool:svm-wasm`,
   GraalVM 25.3) instead of TeaVM. It stays **experimental**, as Web Image is.
+
+## 10. Phase 4 (experimental): the plan, and the contract in the page with GraalVM Web Image
+
+Per the user's decision, phase 4 uses **GraalVM Web Image** (`native-image --tool:svm-wasm`, GraalVM 25.3) instead of
+TeaVM. Web Image is experimental, and so is everything here.
+
+### 10.1 The plan (D4)
+
+- **`TxPlan.of(tx)` and `PreparedTx.plan()`** give a prepared transaction's portable plan in plain values:
+  - inputs, reference inputs and collateral (`tx#i`);
+  - outputs (address, value by unit, inline datum hex);
+  - the collateral return and total, the mint, and the redeemers (tag, index, data hex, budget);
+  - the required signers, the validity and the fee.
+- `/api/prepare` returns the plan. The client derives the same plan from the CBOR itself (`planOf`) and refuses a
+  plan that does not describe the transaction. Every honest call in the e2e test compares equal.
+
+### 10.2 Portable transitions (`-Ajoust.portable=true`)
+
+`PortableGenerator` writes `<Name>Portable`:
+- **The contract's pure transitions**, with generated non-reflective codecs over julc-core's `PlutusData`: records,
+  sealed variants, Bool, Optional, `JulcList`, `JulcMap`, ledger types and `@NewType`s.
+- **`step(method, target, shared, args, ctx)`**: CBOR in, CBOR of `Constr 0 [next | none, payouts]` out. A `Require`
+  throws as on the JVM.
+- **Not portable:** transitions with MerkleMaps, foreign reads, params, native assets, batches, moves, deposits,
+  sends, mints or events (they are listed in the class's Javadoc).
+- **Reach:** all 25 example contracts compile with it (`-PjoustPortableAll`). It runs no reflection and needs no
+  cardano-client-lib.
+
+### 10.3 The Wasm image (`./gradlew :examples:dapp:wasm -PgraalvmHome=...`)
+
+- **`JoustWasm`** exposes `globalThis.joustWasm.step(contract, method, target, shared, args, ctx)`:
+  - hex in, `ok:`/`require:`/`error:` out, since Java exceptions reach JavaScript only as opaque proxies;
+  - it follows JuLC's `julc-wasm` pattern: a Java `Function` passed to a `@JS` snippet.
+- **The image classpath** holds only the contracts, JOUST's API, julc-stdlib (without its dependencies),
+  julc-ledger-api, julc-core and cbor.
+- **Size: 1.41 MB of Wasm.**
+  - With julc-stdlib's transitive dependencies, julc-compiler's native-image metadata kept much of the JDK alive:
+    8.7 MB.
+  - Streams in generated code and `String.join` or `toString` of arbitrary objects are avoided for the same reason.
+- **The output is a classic script,** not an ES module. Node 22 needs `--experimental-wasm-exnref`; Chrome 137+ and
+  Node 24 enable it by default.
+
+### 10.4 What it does
+
+- **Byte-identical to the JVM.** `WasmParityTest` runs 136 vectors through the Wasm image and compares them with the
+  same methods on the JVM, encoded as the runtime encodes datums (cardano-client-lib):
+  - Counter and Bank;
+  - integers up to 2^200, negative integers, byte strings over 64 bytes (chunked CBOR);
+  - Bool, `@Shared` reads, Ctx, payouts and `Require` refusals.
+
+  All 136 match, in about 25 ms.
+- **The page recomputes calls on existing instances and objects.** The client's `portable` option recomputes each
+  prepared call's next state and payouts in the page before signing, and refuses a transaction that differs. The
+  validator would refuse it on chain anyway; this catches it before the wallet signs.
+  - The datums it starts from are the spent target and, for owned calls, the instance the transaction reads (its
+    own reference input).
+  - They are hash-checked against their producing transaction when the chain API serves transaction CBOR
+    (Blockfrost; Yaci Store with `store.transaction.save-cbor=true`). Otherwise they are taken from the chain API,
+    and the review says so.
+
+  On DevKit:
+  - an increment's next datum, recomputed in Wasm, is byte-identical to the one the JVM built and the chain holds;
+  - Bank deposit, withdraw (a `@Shared` read, payouts) and close are recomputed identically;
+  - a service that changes the next state, with a consistent plan, is refused unsigned.
+- **A call with no service** (`frontend/src/serverless.js`, Counter.increment):
+  1. the page computes the next datum in Wasm;
+  2. it builds the transaction with CSL: the reference script, collateral, the runtime's TTL from the deployment,
+     and cost models from the protocol parameters;
+  3. it gets the budgets from the chain API's `/utils/txs/evaluate`;
+  4. it verifies the transaction with the same verifier as a service's;
+  5. the wallet signs, and it is submitted.
+
+  This works on DevKit (e2e) and in the dApp page (headless Chrome, "+1 (no service)").
+- **Scope of the spike:** actions without Ctx, payment, payouts, co-signers or time bounds. `@SignedBy` is supported:
+  the wallet is the required signer (a serverless `Counter.reset` passes on DevKit). A general page builder needs, per call kind, what
+  the runtime's `TxRunner` does: payouts and tags, windows and Ctx, owned objects, creations, and the min-ADA rules.
+  That is the next step if (b) is pursued. The plan (§10.1) is its contract.
+
+### 10.5 Review r5
+
+S = security reviewer, C = Codex. No path to a loss of funds was found: the pinned validator still decides every
+transition.
+
+| Finding | Source | Resolution |
+|---|---|---|
+| Medium. The fee cap trusts the chain API's protocol parameters and budgets, the only dependency left in the serverless path | S 1 | An absolute `limits.maxFee` (3 ADA by default). Pinned or bounded parameters are a follow-up |
+| Low/Medium. The recompute's starting datum came from the chain API, so a lying API could make "identical" a false badge (the chain still refuses) | S 2 | Outputs are hash-checked against their producing transaction when the API serves CBOR. Otherwise the review names the chain API as the source |
+| Low. The `@Shared` state was read at the tip, not from the transaction's reference input | S 3 | Taken from the single reference input carrying the instance token |
+| Low. Payouts were not compared | S 4 | Compared: each payee is paid at least what the method owes, and no tagged output goes to anyone else |
+| Low. The owned `Holding` was unwrapped without checks | S 5 | Decoded with its own definition, and its instance checked |
+| Low. Ctx was re-encoded from its decoding | S 6 | The redeemer's own bytes |
+| Low. Deep CBOR overflowed the image's stack | S 7 | Caught: `error:`, so the check fails closed |
+| Low. `globalThis.joustWasm` could be swapped | S 8 | Installed non-writable and frozen; the loader accepts only the installed object and removes its callback. SRI for the image is a follow-up |
+| Low. The plan was optional and incomplete; a validity start of 0 read differently | S 9 | Required by default (`requirePlan: false` for other backends). Network id, script data hash, auxiliary data, certificates, withdrawals, votes, proposals, donation, treasury value and `is_valid` added. 0 and absent read alike |
+| Low (dev). The proxy forwarded evaluation from any site, unlimited, truncating large bodies | S 10 | POSTs only from local origins, rate-limited, 413 when too large |
+| Info. The UI overclaimed | S 11 | Reworded: creations are not recomputed, and the serverless path names the chain API |
+| Medium. A same-name unannotated overload was chosen | C 1 | The annotated method is chosen, in `PortableGenerator` and `DescriptionWriter` |
+| Medium. Codec names could collide (`C.A_B`, `C.A.B`) | C 2 | One unique name per type |
+| Medium. Redeemer order: the Java plan kept the builder's order, the page the CBOR's | C 3 | Both sides sort by tag, then index |
+| Medium. Serverless owner-only actions had no required signer | C 4 | The wallet is added for `@SignedBy`; quorum, authorization and time bounds are refused |
+| Medium. Fixed 5 ADA collateral failed small wallets | C 5 | `collateral_percent` of the fee, with a clear error when no UTxO is large enough |
+| Medium. The page's copy of the image was not a declared Gradle output | C 6 | Declared |

@@ -18,6 +18,7 @@ export const DEFAULT_LIMITS = {
   maxStartSlots: 60,
   maxBackdateSlots: 120,         // a Ctx call's validity starts at most 2 minutes before now
   feeMargin: 500_000n,           // over 1.2 x the protocol's fee for this size and budget (reference scripts)
+  maxFee: 3_000_000n,            // an absolute bound: the fee cap above trusts the chain API's protocol parameters (r5)
 };
 
 const SPEND_KINDS = new Set(['action', 'destroy', 'ownedAction', 'ownedDestroy']);
@@ -146,6 +147,7 @@ export async function verifyPrepared(o) {
     }
   }
   if (targetUnit && targetIndex < 0) problems.push('the pinned instance or object is not spent');
+  report.targetRef = targetRef;
 
   // Redeemers: exactly the call (and a destroy's burn), on the pinned script.
   const rds = tx.witness_set().redeemers();
@@ -187,7 +189,7 @@ export async function verifyPrepared(o) {
       return null;
     }
     const alt = c.resolve(def).anyOf.find((a) => a.index === Number(r.data().as_constr_plutus_data()?.alternative().to_str()));
-    return { decoded, alt, fields: r.data().as_constr_plutus_data().data() };
+    return { decoded, alt, fields: r.data().as_constr_plutus_data().data(), data: r.data().to_hex() };
   };
 
   /** The call's own fields: arguments byte-equal to the page's encoding; ctx for this wallet and payment. */
@@ -195,6 +197,7 @@ export async function verifyPrepared(o) {
     if (!got) return;
     const { alt, fields, decoded } = got;
     report.redeemer = decoded;
+    report.callData = got.data;
     if (alt.title !== call.meta.redeemer.constructor || alt.index !== call.meta.redeemer.index) {
       problems.push(`the redeemer is ${alt.title}, not the call the page asked for (${call.meta.redeemer.constructor})`);
       return;
@@ -301,6 +304,7 @@ export async function verifyPrepared(o) {
       const datum = out.plutus_data();
       if (!datum) problems.push('the continuation has no inline datum');
       else {
+        report.nextData = datum.to_hex();
         try {
           report.next = decodeNext(c, xj, call, datum);
         } catch (e) {
@@ -366,6 +370,7 @@ export async function verifyPrepared(o) {
   const scriptFee = BigInt(Math.ceil(Number(mem) * Number(pp.price_mem) + Number(steps) * Number(pp.price_step)));
   const cap = (BigInt(pp.min_fee_a) * size + BigInt(pp.min_fee_b) + scriptFee) * 12n / 10n + limits.feeMargin;
   if (fee > cap) problems.push(`a fee of ${fee}, above the ${cap} this transaction needs`);
+  if (fee > limits.maxFee) problems.push(`a fee of ${fee}, above the page's limit of ${limits.maxFee}`);
 
   // Collateral: the wallet's, returned to the wallet, at most maxCollateral at risk.
   const coll = body.collateral();

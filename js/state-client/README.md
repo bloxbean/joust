@@ -43,6 +43,14 @@ console.log(await instance.state());            // { count: 3n, owner: '…' }
 Calls that need data only the service computes are not generated, because a page cannot verify them: MerkleMap
 claims, foreign reads, batches, moves and deposits.
 
+## Plans and Wasm (ADR-0013 D4, experimental)
+
+- **Plans.** `/prepare` returns the transaction's plan (`TxPlan`). The client derives its own with `planOf` and
+  refuses a plan that does not describe the transaction.
+- **`portable`.** Pass a Wasm image of the contract's transitions (`globalThis.joustWasm` from a GraalVM Web Image
+  build; see `examples/dapp`). The client then recomputes each call's next state in the page and refuses a
+  transaction whose next state differs.
+
 ## JSON conventions
 
 | Schema | JSON |

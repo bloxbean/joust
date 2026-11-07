@@ -1,7 +1,7 @@
 // Chain access over a Blockfrost-style API (Blockfrost itself, or Yaci Store's /api/v1): what the page reads to verify
 // a prepared transaction and to show state, independently of the service that prepared it.
 
-export function blockfrostChain(baseUrl, { projectId, fetchImpl } = {}) {
+export function blockfrostChain(baseUrl, { projectId, fetchImpl, CSL } = {}) {
   const base = baseUrl.replace(/\/$/, '');
   const f = fetchImpl ?? globalThis.fetch.bind(globalThis);
   const headers = projectId ? { project_id: projectId } : {};
@@ -33,6 +33,23 @@ export function blockfrostChain(baseUrl, { projectId, fetchImpl } = {}) {
       const o = j?.outputs?.find((x) => x.output_index === Number(index));
       if (!o) return null;
       return { address: o.address, value: amountMap(o.amount), referenceScriptHash: o.reference_script_hash ?? null, inlineDatum: o.inline_datum ?? null };
+    },
+
+    /**
+     * One output read from its producing transaction's CBOR, whose body hashes to the reference's transaction id: the
+     * API cannot invent it. Null when the API does not serve transaction CBOR (Yaci Store needs
+     * store.transaction.save-cbor=true). Needs {@code CSL} in the options.
+     */
+    async verifiedOutput(ref) {
+      if (!CSL) return null;
+      const [hash, index] = ref.split('#');
+      const j = await get(`/txs/${hash}/cbor`, { allow404: true }).catch(() => null);
+      if (!j?.cbor) return null;
+      const fixed = CSL.FixedTransaction.from_hex(j.cbor);
+      if (fixed.transaction_hash().to_hex() !== hash) throw new Error(`the chain API served another transaction for ${hash}`);
+      const o = CSL.Transaction.from_hex(j.cbor).body().outputs().get(Number(index));
+      if (!o) return null;
+      return { address: o.address().to_bech32(), inlineDatum: o.has_plutus_data() ? o.plutus_data().to_hex() : null };
     },
 
     /** Unspent outputs at an address: [{ ref, address, value, inlineDatum }]. */

@@ -35,3 +35,53 @@ tasks.register('jsClients', Exec) {
     commandLine(['node', '../../js/state-client/bin/joust-gen.js'] + descriptions.files.collect { it.path } + ['--out', 'frontend/src/generated'])
 }
 
+// ---- Experimental (ADR-0013 D4): the contracts' portable transitions as a GraalVM Web Image (Wasm) for the page.
+//   ./gradlew :examples:dapp:wasm -PgraalvmHome=/path/to/graalvm-25.3     (or GRAALVM_HOME); needs Binaryen on PATH
+sourceSets {
+    wasm
+}
+dependencies {
+    wasmCompileOnly 'org.graalvm.sdk:webimage-preview:25.3.4.1'
+    // Only the contracts' classes and JOUST's API: no runtime, no cardano-client-lib in the image.
+    wasmImplementation(project(':examples:counter')) { transitive = false }
+    wasmImplementation(project(':examples:bank')) { transitive = false }
+    // julc-stdlib pulls in JuLC's compiler and VM, whose native-image metadata would register (and so keep) much of
+    // them: the image takes only the libraries the contracts' JVM bodies use.
+    wasmImplementation(project(':julc-state-api')) { transitive = false }
+    wasmImplementation(libs.julc.stdlib) { transitive = false }
+    wasmImplementation libs.julc.ledger.api
+    wasmImplementation libs.julc.core
+}
+def graalvmHome = providers.gradleProperty('graalvmHome').orElse(providers.environmentVariable('GRAALVM_HOME'))
+def wasmDir = layout.buildDirectory.dir('wasm')
+tasks.register('wasm', Exec) {
+    group = 'build'
+    description = 'Builds frontend/public/wasm/joust.js(.wasm) with GraalVM Web Image (experimental)'
+    dependsOn 'wasmClasses', ':examples:counter:jar', ':examples:bank:jar'
+    def cp = sourceSets.wasm.runtimeClasspath
+    inputs.files(cp)
+    inputs.property('graalvmHome', graalvmHome.orElse(''))
+    outputs.dir(wasmDir)
+    outputs.dir('frontend/public/wasm')   // the page's copy: deleting it reruns the task
+    doFirst {
+        if (!graalvmHome.isPresent()) throw new GradleException('set -PgraalvmHome=/path/to/graalvm-25.3 (or GRAALVM_HOME)')
+        def ni = new File(graalvmHome.get(), 'bin/native-image')
+        if (!ni.canExecute()) throw new GradleException("native-image not found at ${ni}")
+        def dir = wasmDir.get().asFile
+        dir.mkdirs()
+        executable ni.absolutePath
+        args '--tool:svm-wasm', '-cp', cp.files.collect { it.absolutePath }.join(File.pathSeparator),
+                '-o', new File(dir, 'joust').absolutePath, '-H:+ReportExceptionStackTraces',
+                '-H:+UnlockExperimentalVMOptions', '-H:AbortOnTypeReachable=com.bloxbean.cardano.*', '-H:AbortOnTypeReachable=org.julclang.compiler.*', '-Os',
+                'org.julclang.state.examples.dapp.wasm.JoustWasm'
+    }
+    doLast {
+        def out = file('frontend/public/wasm')
+        out.mkdirs()
+        ['joust.js', 'joust.js.wasm'].each { n -> java.nio.file.Files.copy(new File(wasmDir.get().asFile, n).toPath(),
+                new File(out, n).toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING) }
+        // A classic script, not an ES module: Node must not read it as one under the page's "type": "module".
+        new File(out, 'package.json').text = '{ "type": "commonjs" }\n'
+        new File(wasmDir.get().asFile, 'joust.js.wat').delete()
+    }
+}

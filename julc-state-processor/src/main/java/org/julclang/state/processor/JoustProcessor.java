@@ -2,6 +2,7 @@ package org.julclang.state.processor;
 
 import org.julclang.state.processor.gen.ClientGenerator;
 import org.julclang.state.processor.gen.DescriptionWriter;
+import org.julclang.state.processor.gen.PortableGenerator;
 import org.julclang.state.processor.gen.ValidatorGenerator;
 import org.julclang.state.processor.ir.ContractIR;
 
@@ -42,7 +43,7 @@ public class JoustProcessor extends AbstractProcessor {
 
     @Override
     public Set<String> getSupportedOptions() {
-        return Set.of("joust.traces");
+        return Set.of("joust.traces", "joust.portable");
     }
 
     @Override
@@ -72,6 +73,9 @@ public class JoustProcessor extends AbstractProcessor {
         write(ir.packageName() + "." + ir.validatorName(), ValidatorGenerator.generate(ir, traces), origin);
         write(ir.packageName() + "." + ir.clientName(), ClientGenerator.generate(ir), origin);
         describe(ir, origin);
+        if (Boolean.parseBoolean(processingEnv.getOptions().getOrDefault("joust.portable", "false"))) {
+            write(ir.packageName() + "." + ir.name() + "Portable", PortableGenerator.generate(ir, origin, processingEnv), origin);
+        }
     }
 
     /** {@code META-INF/joust/<package>.<Contract>.json}: the description JavaScript clients use (ADR-0013 D3). */

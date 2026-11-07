@@ -33,16 +33,19 @@ class DappDevnetTest {
     @Test
     void pageFlowsOnDevKit() throws Exception {
         var runtime = DevKit.runtime();
-        var dapp = DappServer.start(runtime, Path.of("build/e2e-frontend"), "127.0.0.1", 0);
+        var dapp = DappServer.start(runtime, Path.of("build/e2e-frontend"), "127.0.0.1", 0, 600);
         try {
             var user = DevKit.fundedAccount(300);
-            var pb = new ProcessBuilder("node", "e2e/run.mjs").directory(FRONTEND).redirectErrorStream(true);
+            // Node 22 needs exnref for GraalVM Web Image's Wasm (on by default from Node 24).
+            var pb = new ProcessBuilder("node", "--experimental-wasm-exnref", "e2e/run.mjs").directory(FRONTEND).redirectErrorStream(true);
             var env = pb.environment();
             env.put("SERVICE", "http://127.0.0.1:" + dapp.port());
             env.put("STORE", DevKit.STORE_URL.endsWith("/") ? DevKit.STORE_URL.substring(0, DevKit.STORE_URL.length() - 1) : DevKit.STORE_URL);
             env.put("DEPLOYMENT", dapp.deployment().toString());
             env.put("MNEMONIC", user.mnemonic());
             env.put("ADDRESS", user.baseAddress());
+            File wasm = new File(FRONTEND, "public/wasm/joust.js");
+            if (wasm.isFile()) env.put("WASM", wasm.getParentFile().getAbsolutePath());   // experimental (phase 4)
             Process node = pb.start();
             String out = new String(node.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             int code = node.waitFor();

@@ -32,6 +32,26 @@ Open http://localhost:8090, pick a **DevKit wallet**, **Connect** and **Top up 1
 To develop the page, run `npm run dev` in `frontend` (http://localhost:5174). It proxies `/api`, `/chain` and `/dev` to
 the server on :8090, which must be running.
 
+## Experimental: the contracts' Java in the page (Wasm)
+
+With GraalVM 25.3 (Web Image) and Binaryen:
+
+```sh
+./gradlew :examples:dapp:wasm -PgraalvmHome=/path/to/graalvm-25.3     # frontend/public/wasm/joust.js(.wasm), ~1.4 MB
+(cd examples/dapp/frontend && npm run build) && ./gradlew :examples:dapp:run
+```
+
+The page then loads the contracts' own Java methods, compiled to Wasm (`CounterPortable`, `BankPortable`, generated
+with `-Ajoust.portable=true`):
+
+- **Every call is recomputed in the page before signing.** The review says so, and a different next state is refused.
+- **"+1 (no service)"** builds a counter increment entirely in the page. The next state comes from Wasm, the budgets
+  from the chain API, and the transaction is verified, signed and submitted with no prepare service.
+
+`WasmParityTest` checks the Wasm results byte for byte against the JVM (136 vectors). `DappDevnetTest` runs the Wasm
+steps on DevKit when the image is built. Both skip themselves otherwise. Chrome 137+ is needed (WebAssembly exnref);
+Node 22 needs `--experimental-wasm-exnref`.
+
 ## Pieces
 
 | Path | What |
@@ -40,6 +60,9 @@ the server on :8090, which must be running.
 | `frontend/src/main.js` | The page |
 | `frontend/src/tamper.js` | What a malicious service could do (ten variants) |
 | `frontend/e2e/run.mjs` | The page's flows in Node (CSL nodejs), run by `DappDevnetTest` |
+| `frontend/src/serverless.js` | Experimental: the Wasm loader, and a call built in the page with no service |
+| `src/wasm/java/.../JoustWasm.java` | Experimental: the Web Image entry point (`globalThis.joustWasm.step`) |
+| `frontend/e2e/parity.mjs` | Experimental: runs `WasmParityTest`'s vectors through the image |
 | `../../js/state-client` | The client library: codec, verifier, CIP-30 flow, dev wallet, `joust-gen` |
 
 ## Production notes
