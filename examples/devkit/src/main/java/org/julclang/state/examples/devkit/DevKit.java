@@ -168,6 +168,25 @@ public final class DevKit {
         }
     }
 
+    /** Registers the stake credential of {@code script} (for withdraw-zero governors); returns its reward address. */
+    public static String registerScriptStake(com.bloxbean.cardano.client.plutus.spec.PlutusScript script, Account payer) {
+        try {
+            String reward = com.bloxbean.cardano.client.address.AddressProvider.getRewardAddress(script, Networks.testnet())
+                    .toBech32();
+            var tx = new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(reward).from(payer.baseAddress());
+            var r = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend()).compose(tx)
+                    .withSigner(com.bloxbean.cardano.client.function.helper.SignerProviders.signerFrom(payer))
+                    .completeAndWait(java.time.Duration.ofSeconds(60));
+            if (!r.isSuccessful()) throw new IllegalStateException("stake registration failed: " + r.getResponse());
+            Thread.sleep(1500);
+            return reward;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("stake registration failed", e);
+        }
+    }
+
     /** How much of {@code unit} ({@code lovelace} or policy+name hex) sits at {@code address}. */
     public static java.math.BigInteger balance(String address, String unit) {
         try {

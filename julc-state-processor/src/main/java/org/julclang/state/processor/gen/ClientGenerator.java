@@ -18,10 +18,11 @@ public final class ClientGenerator {
 
     /** Client members and generated parameter names a contract may not reuse (checked by the reader). */
     public static final List<String> RESERVED_MEMBERS = List.of("deploy", "at", "contract", "state", "instance",
-            "instanceId", "lovelace", "fullValue", "SPEC");
+            "instanceId", "lovelace", "fullValue", "SPEC", "params", "policyIdFor", "checkedState", "checkedObject");
     /** Client members added for {@code @Batched} contracts (ADR-0004). */
     public static final List<String> INTENT_MEMBERS = List.of("INTENTS", "batch", "pendingIntents", "intent");
-    public static final List<String> RESERVED_PARAMS = List.of("callerAccount", "payLovelace", "payAssets", "runtime");
+    public static final List<String> RESERVED_PARAMS = List.of("callerAccount", "payLovelace", "payAssets", "runtime", "params", "authorization",
+            "cosigners");
 
     private final ContractIR c;
     private final SourceWriter w = new SourceWriter();
@@ -65,25 +66,39 @@ public final class ClientGenerator {
         w.open("public final class " + C + " {").blank();
         w.line("public static final ContractSpec<" + S + "> SPEC = new ContractSpec<>(\"" + X + "\", " + V + ".class, "
                 + S + ".class, " + c.minAda() + "L, " + c.maxDatumBytes() + ", " + c.maxValidityMs() + "L);").blank();
-        w.line("private final StateInstance<" + S + "> instance;").blank();
-        w.open("private " + C + "(StateInstance<" + S + "> instance) {");
+        String P = c.paramsType();
+        w.line("private final StateInstance<" + S + "> instance;");
+        if (P != null) w.line("private final " + P + " params;");
+        w.blank();
+        w.open("private " + C + "(StateInstance<" + S + "> instance" + (P != null ? ", " + P + " params" : "") + ") {");
         w.line("this.instance = instance;");
+        if (P != null) w.line("this.params = params;");
         w.close("}").blank();
 
         w.line("/** The contract on a network: script, policy id, address. */");
-        w.open("public static StateContractHandle<" + S + "> contract(StateRuntime runtime) {");
-        w.line("return new StateContractHandle<>(runtime, SPEC);");
+        w.open("public static StateContractHandle<" + S + "> contract(StateRuntime runtime" + (P != null ? ", " + P + " params" : "")
+                + ") {");
+        w.line("return new StateContractHandle<>(runtime, SPEC" + (P != null ? ", params" : "") + ");");
         w.close("}").blank();
+        if (P != null) {
+            w.line("/** The policy id of the contract with {@code params} applied: pin it to tell deployments apart (ADR-0009). */");
+            w.open("public static String policyIdFor(" + P + " params) {");
+            w.line("return StateContractHandle.policyIdFor(SPEC, params);");
+            w.close("}").blank();
+        }
+        invariantHelpers();
 
         // ---- deploy
         TransitionIR init = c.init();
-        var deployParams = new ArrayList<String>(List.of("StateRuntime runtime", "Account callerAccount"));
+        var deployParams = new ArrayList<String>(List.of("StateRuntime runtime"));
+        if (P != null) deployParams.add(P + " params");
+        deployParams.add("Account callerAccount");
         deployParams.addAll(decls(init.params()));
         if (init.payable()) deployParams.add("BigInteger payLovelace");
         if (ValidatorGenerator.takesAssets(init)) deployParams.add("org.julclang.ledger.Value payAssets");
         w.line("/** Creates a new instance by running {@link " + X + "#" + init.method() + "}. */");
         w.open("public static " + C + " deploy(" + String.join(", ", deployParams) + ") {");
-        w.line("var result = contract(runtime).deploy(new Deploy<" + S + ">(callerAccount, "
+        w.line("var result = contract(runtime" + (P != null ? ", params" : "") + ").deploy(new Deploy<" + S + ">(callerAccount, "
                 + (init.payable() ? "payLovelace" : "BigInteger.ZERO") + ", " + init.hasCtx() + ",");
         if (c.assetAware()) {
             w.line("        null,");
@@ -92,15 +107,16 @@ public final class ClientGenerator {
             w.line("        (ctx, funds) -> { var r = " + X + "." + init.method() + "(" + callArgs(init, List.of()) + "); return "
                     + transitionExpr(init, "r") + "; }));");
         } else {
-            w.line("        ctx -> " + X + "." + init.method() + "(" + callArgs(init, List.of()) + "),");
+            w.line("        ctx -> " + st(X + "." + init.method() + "(" + callArgs(init, List.of()) + ")", false) + ",");
             w.line("        (seed, ctx) -> new " + V + ".CreateInstance(" + redeemerArgs(init, "seed") + ")));");
         }
-        w.line("return new " + C + "(result.instance());");
+        w.line("return new " + C + "(result.instance()" + (P != null ? ", params" : "") + ");");
         w.close("}").blank();
 
         w.line("/** Reconnects to an existing instance. */");
-        w.open("public static " + C + " at(StateRuntime runtime, String instanceId) {");
-        w.line("return new " + C + "(contract(runtime).at(instanceId));");
+        w.open("public static " + C + " at(StateRuntime runtime" + (P != null ? ", " + P + " params" : "") + ", String instanceId) {");
+        w.line("return new " + C + "(contract(runtime" + (P != null ? ", params" : "") + ").at(instanceId)" + (P != null ? ", params" : "")
+                + ");");
         w.close("}").blank();
 
         // ---- actions and destroys
@@ -150,6 +166,7 @@ public final class ClientGenerator {
         params.addAll(decls(t.params()));
         if (t.payable()) params.add("BigInteger payLovelace");
         if (ValidatorGenerator.takesAssets(t)) params.add("org.julclang.ledger.Value payAssets");
+        extraParams(t, params);
 
         w.line("/** Calls {@link " + X + "#" + t.method() + "}" + (destroy ? "; ends the instance." : ".") + " */");
         w.open("public CallResult<" + S + "> " + t.method() + "(" + String.join(", ", params) + ") {");
@@ -168,11 +185,16 @@ public final class ClientGenerator {
         if (c.assetAware()) {
             assetCall(t, invoke, "s");
         } else switch (t.returns()) {
-            case STATE -> w.line(".run((s, ctx) -> Transition.of(" + invoke + "))");
-            case RESULT -> w.line(".run((s, ctx) -> { var r = " + invoke + "; return Transition.of(r.state(), r.payouts()); })");
-            case PAYOUTS, SETTLE -> w.line(".run((s, ctx) -> Transition.end(" + invoke + "))");
+            case STATE -> w.line(".run((s, ctx) -> Transition.of(" + st(invoke, false) + "))");
+            case RESULT -> w.line(".run((s, ctx) -> { var r = " + invoke + "; return Transition.of(" + st("r.state()", false)
+                    + ", " + (t.resultPayouts() ? "r.payouts()" : "org.julclang.core.types.JulcList.empty()") + ")"
+                    + events(t) + "; })");
+            case PAYOUTS -> w.line(".run((s, ctx) -> Transition.end(" + invoke + "))");
+            case SETTLE -> w.line(".run((s, ctx) -> { var r = " + invoke + "; return Transition.end("
+                    + (t.resultPayouts() ? "r.payouts()" : "org.julclang.core.types.JulcList.empty()") + ")" + events(t) + "; })");
         }
-        w.line(".redeemer(ctx -> new " + V + "." + t.variant() + "(" + redeemerArgs(t, null) + "))");
+        extraCalls(t);
+        redeemerLine(t);
         w.line(".build());");
         w.dedent();
         w.dedent();
@@ -202,6 +224,7 @@ public final class ClientGenerator {
             if (ValidatorGenerator.takesAssets(t)) params.add("org.julclang.ledger.Value payAssets");
             var runArgs = new ArrayList<String>();
             if (t.shared()) runArgs.add("(" + S + ") sh");
+            if (t.takesParams()) runArgs.add("params");
             t.params().forEach(p -> runArgs.add(p.name()));
             if (t.hasCtx()) runArgs.add("ctx");
             if (t.hasFunds()) runArgs.add("funds");
@@ -221,7 +244,7 @@ public final class ClientGenerator {
                 w.line("        (sh, ctx, funds) -> { var r = " + X + "." + t.method() + "(" + String.join(", ", runArgs)
                         + "); return " + transitionExpr(t, "r") + "; }), " + codec + "));");
             } else {
-                w.line("        (sh, ctx) -> " + X + "." + t.method() + "(" + String.join(", ", runArgs) + "),");
+                w.line("        (sh, ctx) -> " + st(X + "." + t.method() + "(" + String.join(", ", runArgs) + ")", true) + ",");
                 w.line("        (seed, inst, ctx) -> new " + V + "." + t.variant() + "(" + String.join(", ", redArgs) + ")), "
                         + codec + "));");
             }
@@ -249,6 +272,7 @@ public final class ClientGenerator {
             params.addAll(decls(t.params()));
             if (t.payable()) params.add("BigInteger payLovelace");
             if (ValidatorGenerator.takesAssets(t)) params.add("org.julclang.ledger.Value payAssets");
+            extraParams(t, params);
             w.open("public CallResult<" + R + "> " + t.method() + "(" + String.join(", ", params) + ") {");
             String start = destroy
                     ? "Call.<" + R + ">destroy(\"" + t.method() + "\", callerAccount, new " + V + ".BurnInstance())"
@@ -263,25 +287,30 @@ public final class ClientGenerator {
             for (String f : t.validBefore()) w.line(".validBefore(\"" + f + "\", o -> o." + f + "())");
             var callArgs = new ArrayList<String>(List.of("o"));
             if (t.shared()) callArgs.add("(" + S + ") sh");
+            if (t.takesParams()) callArgs.add("params");
             t.params().forEach(p -> callArgs.add(p.name()));
             if (t.hasCtx()) callArgs.add("ctx");
             if (t.hasFunds()) callArgs.add("funds");
             String invoke = X + "." + t.method() + "(" + String.join(", ", callArgs) + ")";
             String body = switch (t.returns()) {
-                case STATE -> "Transition.of(" + invoke + ")";
-                case RESULT -> "Transition.of(" + invoke + ".state(), " + invoke + ".payouts())";
-                case PAYOUTS, SETTLE -> "Transition.end(" + invoke + ")";
+                case STATE -> "Transition.of(" + st(invoke, true) + ")";
+                case RESULT -> "Transition.of(" + st(invoke + ".state()", true) + ", " + invoke + ".payouts())";
+                case PAYOUTS -> "Transition.end(" + invoke + ")";
+                case SETTLE -> "Transition.end(" + (t.resultPayouts() ? invoke + ".payouts()" : "org.julclang.core.types.JulcList.empty()")
+                        + ")" + (t.resultEvents() ? ".withEvents(" + invoke + ".events())" : "");
             };
             if (c.assetAware()) {
                 assetCall(t, invoke, "o");
             } else if (t.returns() == TransitionIR.Returns.RESULT) {
                 body = null;
-                w.line(t.shared() ? ".runShared((o, sh, ctx) -> { var r = " + invoke + "; return Transition.of(r.state(), r.payouts()); })"
-                        : ".run((o, ctx) -> { var r = " + invoke + "; return Transition.of(r.state(), r.payouts()); })");
+                String lam = "{ var r = " + invoke + "; return Transition.of(" + st("r.state()", true) + ", "
+                        + (t.resultPayouts() ? "r.payouts()" : "org.julclang.core.types.JulcList.empty()") + ")" + events(t) + "; }";
+                w.line(t.shared() ? ".runShared((o, sh, ctx) -> " + lam + ")" : ".run((o, ctx) -> " + lam + ")");
             } else {
                 w.line(t.shared() ? ".runShared((o, sh, ctx) -> " + body + ")" : ".run((o, ctx) -> " + body + ")");
             }
-            w.line(".redeemer(ctx -> new " + V + "." + t.variant() + "(" + redeemerArgs(t, null) + "))");
+            extraCalls(t);
+            redeemerLine(t);
             w.line(".build());");
             w.dedent();
             w.dedent();
@@ -372,16 +401,69 @@ public final class ClientGenerator {
         if (t.resultMint()) w.line(".byAction(ref -> new " + V + ".ByAction(ref))");
     }
 
+    // ------------------------------------------------------------------ ADR-0009
+
+    /** The state expression, checked against the invariants on the JVM if there are any for this subject. */
+    private String st(String expr, boolean owned) {
+        boolean any = c.invariants().stream().anyMatch(i -> i.owned() == owned);
+        if (!any) return expr;
+        return (owned ? "checkedObject(" : "checkedState(") + expr + (c.hasParams() ? ", params" : "") + ")";
+    }
+
+    private static String events(TransitionIR t) {
+        return t.resultEvents() ? ".withEvents(r.events())" : "";
+    }
+
+    private void invariantHelpers() {
+        for (boolean owned : new boolean[]{false, true}) {
+            var invs = c.invariants().stream().filter(i -> i.owned() == owned).toList();
+            if (invs.isEmpty()) continue;
+            String T = owned ? c.ownedType() : c.stateType();
+            String name = owned ? "checkedObject" : "checkedState";
+            w.line("/** {@code s}, after checking every @Invariant on the JVM (the validator checks them again; ADR-0009 D4). */");
+            w.open("static " + T + " " + name + "(" + T + " s" + (c.hasParams() ? ", " + c.paramsType() + " params" : "") + ") {");
+            for (var inv : invs) {
+                w.line("if (!" + c.name() + "." + inv.method() + "(s" + (inv.takesParams() ? ", params" : "")
+                        + ")) throw new org.julclang.state.api.RequireException(\"invariant " + inv.method() + "\");");
+            }
+            w.line("return s;");
+            w.close("}").blank();
+        }
+    }
+
+    /** Extra client parameters: the authorization and the co-signers. */
+    private static void extraParams(TransitionIR t, List<String> params) {
+        if (!t.authorizedBy().isEmpty()) params.add("org.julclang.state.runtime.Authorization authorization");
+        if (t.quorumKeys() != null) params.add("Account... cosigners");
+    }
+
+    private static void extraCalls(TransitionIR t) {
+    }
+
+    private void redeemerLine(TransitionIR t) {
+        String V = c.validatorName();
+        if (!t.authorizedBy().isEmpty()) w.line(".authorization(authorization)");
+        if (t.quorumKeys() != null) w.line(".cosigners(cosigners)");
+        if (t.resultEvents()) {
+            String args = redeemerArgs(t, null);
+            args = args.isEmpty() ? "" : args + ", ";
+            w.line(".redeemerWith((ctx, tr) -> new " + V + "." + t.variant() + "(" + args + "(" + t.eventsType() + ") tr.events()))");
+        } else {
+            w.line(".redeemer(ctx -> new " + V + "." + t.variant() + "(" + redeemerArgs(t, null) + "))");
+        }
+    }
+
     /** {@code Transition.full(...)} from a method's result {@code r}. */
-    private static String transitionExpr(TransitionIR t, String r) {
+    private String transitionExpr(TransitionIR t, String r) {
         return switch (t.returns()) {
-            case STATE -> "Transition.full(" + r + ", null, null, null, null)";
+            case STATE -> "Transition.full(" + st(r, t.owned()) + ", null, null, null, null)";
             case PAYOUTS -> "Transition.full(null, " + r + ", null, null, null)";
-            case RESULT, SETTLE -> "Transition.full(" + (t.returns() == TransitionIR.Returns.RESULT ? r + ".state()" : "null")
+            case RESULT, SETTLE -> "Transition.full(" + (t.returns() == TransitionIR.Returns.RESULT ? st(r + ".state()", t.owned()) : "null")
                     + ", " + (t.resultPayouts() ? r + ".payouts()" : "null")
                     + ", " + (t.resultSends() ? r + ".sends()" : "null")
                     + ", " + (t.resultMint() ? r + ".mint()" : "null")
-                    + ", " + (t.resultAccepted() ? r + ".accepted()" : "null") + ")";
+                    + ", " + (t.resultAccepted() ? r + ".accepted()" : "null") + ")"
+                    + (t.resultEvents() ? ".withEvents(" + r + ".events())" : "");
         };
     }
 
@@ -398,6 +480,7 @@ public final class ClientGenerator {
     /** Arguments of the contract method: leading (state), parameters, then ctx if declared. */
     private static String callArgs(TransitionIR t, List<String> leading) {
         var out = new ArrayList<>(leading);
+        if (t.takesParams()) out.add("params");
         for (ParamIR p : t.params()) out.add(p.name());
         if (t.hasCtx()) out.add("ctx");
         if (t.hasFunds()) out.add("funds");

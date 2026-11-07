@@ -1,5 +1,7 @@
 package org.julclang.state.runtime;
 
+import com.bloxbean.cardano.client.account.Account;
+
 import com.bloxbean.cardano.client.api.model.Amount;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
@@ -143,7 +145,7 @@ public final class StateInstance<S> {
             total = total.add(p.lovelace());
         }
 
-        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemer.make(ctx));
+        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
         var tx = new ScriptTx().collectFrom(stateUtxo, redeemer).readFrom(ref);
@@ -181,15 +183,17 @@ public final class StateInstance<S> {
 
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
-        String txHash = new TxRunner(contract.runtime).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
+        for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
+        call.applyAuthorization(tx);
+        String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
                 expected, expectedPayouts, maps ? new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{contract.script,
                         contract.runtime.mapVerifier().script()} : new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{contract.script}, what);
         if (call.kind == Call.Kind.ACTION) {
             awaitState(txHash);
-            return new CallResult<>(txHash, stored, payouts);
+            return new CallResult<>(txHash, stored, payouts, eventsOf(t));
         }
         awaitGone();
-        return new CallResult<>(txHash, null, payouts);
+        return new CallResult<>(txHash, null, payouts, eventsOf(t));
     }
 
     /** A call of an asset-aware contract (ADR-0007): full values, sends, user mints. */
@@ -216,7 +220,7 @@ public final class StateInstance<S> {
         byte[] id = HexUtil.decodeHexString(instanceId);
         var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id));
         Transition<S> t = call.assetRun.apply(current, null, ctx, funds);   // the developer's method, on the JVM
-        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemer.make(ctx));
+        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
         var tx = new ScriptTx().collectFrom(stateUtxo, redeemer).readFrom(ref);
@@ -227,19 +231,21 @@ public final class StateInstance<S> {
                 unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false);
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
+        for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
+        call.applyAuthorization(tx);
         var scripts = new ArrayList<com.bloxbean.cardano.client.plutus.spec.PlutusScript>(List.of(contract.script));
         if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
-        String txHash = new TxRunner(contract.runtime).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
+        String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
                 applied.expected(), applied.payouts(), applied.sends(),
                 scripts.toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusScript[0]), what);
         var payouts = new ArrayList<Payout>();
         t.payouts().forEach(payouts::add);
         if (!destroy) {
             awaitState(txHash);
-            return new CallResult<>(txHash, t.next(), payouts);
+            return new CallResult<>(txHash, t.next(), payouts, eventsOf(t));
         }
         awaitGone();
-        return new CallResult<>(txHash, null, payouts);
+        return new CallResult<>(txHash, null, payouts, eventsOf(t));
     }
 
     /** The current state UTxO's full value (ADR-0007). */
@@ -287,5 +293,11 @@ public final class StateInstance<S> {
     private static BigInteger lovelaceOf(Utxo u) {
         return u.getAmount().stream().filter(a -> a.getUnit().equals("lovelace"))
                 .map(Amount::getQuantity).findFirst().orElse(BigInteger.ZERO);
+    }
+
+    static java.util.List<Object> eventsOf(Transition<?> t) {
+        var out = new java.util.ArrayList<Object>();
+        if (t.events() != null) t.events().forEach(out::add);
+        return out;
     }
 }

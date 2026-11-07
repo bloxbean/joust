@@ -24,6 +24,12 @@ import java.util.List;
  * @param resultSends the result record has a {@code sends} component (ADR-0007)
  * @param resultMint  the result record has a {@code mint} component (ADR-0007)
  * @param resultAccepted the result record has an {@code accepted} component (ADR-0007 r2)
+ * @param takesParams the method takes the {@code @Params} record (ADR-0009 D1)
+ * @param quorumKeys  {@code @Quorum(keys)}: a field path, or null (ADR-0009 D2)
+ * @param quorumThreshold {@code @Quorum(threshold)}: a field path, or null
+ * @param authorizedBy {@code @AuthorizedBy} credential field paths (ADR-0009 D3)
+ * @param resultEvents the result record has an {@code events} component (ADR-0009 D5)
+ * @param eventsType  the events list type, e.g. {@code JulcList<Treasury.Event>}, or null
  */
 public record TransitionIR(Kind kind,
                            String method,
@@ -43,7 +49,13 @@ public record TransitionIR(Kind kind,
                            boolean resultPayouts,
                            boolean resultSends,
                            boolean resultMint,
-                           boolean resultAccepted) {
+                           boolean resultAccepted,
+                           boolean takesParams,
+                           String quorumKeys,
+                           String quorumThreshold,
+                           List<String> authorizedBy,
+                           boolean resultEvents,
+                           String eventsType) {
 
     public enum Kind { INIT, ACTION, DESTROY, OWNED_INIT, OWNED_ACTION, OWNED_DESTROY }
 

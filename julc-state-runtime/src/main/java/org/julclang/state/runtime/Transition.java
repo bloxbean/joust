@@ -10,10 +10,20 @@ import org.julclang.state.api.Send;
  * The JVM result of running a method: the next state ({@code null} when the instance or object ends), payouts, and for
  * asset-aware contracts (ADR-0007) sends, the user-token mint and the native assets accepted from the caller.
  */
-public record Transition<S>(S next, JulcList<Payout> payouts, JulcList<Send> sends, Value mint, Value accepted) {
+public record Transition<S>(S next, JulcList<Payout> payouts, JulcList<Send> sends, Value mint, Value accepted,
+                            JulcList<?> events) {
 
     public Transition(S next, JulcList<Payout> payouts) {
-        this(next, payouts, JulcList.empty(), Assets.none(), Assets.none());
+        this(next, payouts, JulcList.empty(), Assets.none(), Assets.none(), JulcList.empty());
+    }
+
+    public Transition(S next, JulcList<Payout> payouts, JulcList<Send> sends, Value mint, Value accepted) {
+        this(next, payouts, sends, mint, accepted, JulcList.empty());
+    }
+
+    /** The same transition with {@code events} (ADR-0009 D5). */
+    public Transition<S> withEvents(JulcList<?> events) {
+        return new Transition<>(next, payouts, sends, mint, accepted, events == null ? JulcList.empty() : events);
     }
 
     public static <S> Transition<S> of(S next) {

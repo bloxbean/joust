@@ -37,10 +37,21 @@ public final class StateContractHandle<S> {
     final String policyId;
     final String address;
 
+    final Object params;
+
     public StateContractHandle(StateRuntime runtime, ContractSpec<S> spec) {
+        this(runtime, spec, null);
+    }
+
+    /**
+     * A contract with deploy-time parameters (ADR-0009 D1): the script is the validator with {@code params} applied, so
+     * its policy id and address belong to this parameter set.
+     */
+    public StateContractHandle(StateRuntime runtime, ContractSpec<S> spec, Object params) {
         this.runtime = runtime;
         this.spec = spec;
-        this.script = JulcScriptLoader.load(spec.validatorClass());
+        this.params = params;
+        this.script = scriptFor(spec, params);
         try {
             this.policyId = HexUtil.encodeHexString(script.getScriptHash());
         } catch (Exception e) {
@@ -48,6 +59,32 @@ public final class StateContractHandle<S> {
         }
         this.address = AddressProvider.getEntAddress(script, runtime.network()).toBech32();
     }
+
+    /** The applied script of {@code spec} for {@code params} (null: none); refuses one too large to publish by reference. */
+    public static PlutusV3Script scriptFor(ContractSpec<?> spec, Object params) {
+        PlutusV3Script s = params == null ? JulcScriptLoader.load(spec.validatorClass())
+                : JulcScriptLoader.load(spec.validatorClass(), PlutusDataAdapter.convert(params));
+        int size = HexUtil.decodeHexString(s.getCborHex()).length;
+        if (size > 15_000) {
+            throw new JoustException(spec.name() + ": the applied script is " + size + " bytes; a reference script must fit a"
+                    + " 16 KB transaction (ADR-0009 r2)");
+        }
+        return s;
+    }
+
+    /** The policy id (script hash) of {@code spec} with {@code params} applied: pin it to tell deployments apart. */
+    public static String policyIdFor(ContractSpec<?> spec, Object params) {
+        try {
+            return HexUtil.encodeHexString(scriptFor(spec, params).getScriptHash());
+        } catch (JoustException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new JoustException("cannot hash the " + spec.name() + " script", e);
+        }
+    }
+
+    /** The deploy-time parameters, or null. */
+    public Object params() { return params; }
 
     /** The reference-script UTxO the contract's transactions read the script from (null until found or created). */
     private volatile Utxo referenceScript;

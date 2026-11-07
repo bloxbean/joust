@@ -235,7 +235,7 @@ public final class OwnedObject<S, R> {
             payouts.add(p);
             total = total.add(p.lovelace());
         }
-        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemer.make(ctx));
+        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         var tx = new ScriptTx().collectFrom(own, redeemer).readFrom(ref);
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
@@ -266,13 +266,15 @@ public final class OwnedObject<S, R> {
         }
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
-        String txHash = new TxRunner(contract.runtime).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
+        for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
+        call.applyAuthorization(tx);
+        String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
                 expected, expectedPayouts, new PlutusScript[]{contract.script}, what);
         if (call.kind == Call.Kind.ACTION) {
             awaitUtxo(txHash);
-            return new CallResult<>(txHash, t.next(), payouts);
+            return new CallResult<>(txHash, t.next(), payouts, eventsOf(t));
         }
-        return new CallResult<>(txHash, null, payouts);
+        return new CallResult<>(txHash, null, payouts, eventsOf(t));
     }
 
     /** An owned call of an asset-aware contract (ADR-0007). */
@@ -301,7 +303,7 @@ public final class OwnedObject<S, R> {
         byte[] id = HexUtil.decodeHexString(objectId);
         var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id));
         Transition<R> t = call.assetRun.apply(current, shared, ctx, funds);
-        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemer.make(ctx));
+        PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         var tx = new ScriptTx().collectFrom(own, redeemer).readFrom(ref);
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
@@ -312,17 +314,19 @@ public final class OwnedObject<S, R> {
                 unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false);
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
+        for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
+        call.applyAuthorization(tx);
         var scripts = new ArrayList<PlutusScript>(List.of(contract.script));
         if (!applied.sends().isEmpty()) scripts.add(contract.runtime.outputVerifier().script());
-        String txHash = new TxRunner(contract.runtime).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
+        String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
                 applied.expected(), applied.payouts(), applied.sends(), scripts.toArray(new PlutusScript[0]), what);
         var payouts = new ArrayList<Payout>();
         t.payouts().forEach(payouts::add);
         if (!destroy) {
             awaitUtxo(txHash);
-            return new CallResult<>(txHash, t.next(), payouts);
+            return new CallResult<>(txHash, t.next(), payouts, eventsOf(t));
         }
-        return new CallResult<>(txHash, null, payouts);
+        return new CallResult<>(txHash, null, payouts, eventsOf(t));
     }
 
     /** The object UTxO's full value (ADR-0007). */
@@ -354,5 +358,11 @@ public final class OwnedObject<S, R> {
     private static BigInteger lovelaceOf(Utxo u) {
         return u.getAmount().stream().filter(a -> a.getUnit().equals("lovelace"))
                 .map(Amount::getQuantity).findFirst().orElse(BigInteger.ZERO);
+    }
+
+    static java.util.List<Object> eventsOf(Transition<?> t) {
+        var out = new java.util.ArrayList<Object>();
+        if (t.events() != null) t.events().forEach(out::add);
+        return out;
     }
 }

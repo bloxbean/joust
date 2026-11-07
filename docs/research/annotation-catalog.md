@@ -106,5 +106,7 @@ public class Vault {
 - **Milestone 1 (Option A, ADR-0001):** `@StateContract`, `@Init`, `@Action`, `@View`, `@Destroy`, `@OnlyOwner`/`@SignedBy`,
   `@Payable`, `@ValidAfter`/`@ValidBefore`, plus `Ctx` (`caller`, `received`, `balance`, `validFrom`, `validTo`),
   `Payout`/`Payouts` and `Require`.
-- **Later:** `@Param`, `@Deposit`, `@Anonymous`/`@MultiSig`/`@ScriptCaller`, storage and concurrency (`@Storage`, `@Owned`,
+- **Shipped in ADR-0009:** `@Params` (deploy-time parameters), `@Quorum` (M-of-N), `@AuthorizedBy` (key or script
+  caller), `@Invariant`, events (a result component, carried and checked in the redeemer).
+- **Later:** `@Deposit`, `@Anonymous`/`@MultiSig`/`@ScriptCaller`, storage and concurrency (`@Storage`, `@Owned`,
   `@Shared`, `@Batched`), then `@Event`, `@Invariant`, `@Upgradeable` and `@Calls`.

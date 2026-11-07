@@ -25,6 +25,8 @@ import java.util.List;
  * @param ownedInits   {@code @OwnedInit} methods
  * @param ownedActions {@code @OwnedAction} methods
  * @param ownedDestroys {@code @OwnedDestroy} methods
+ * @param paramsType   the {@code @Params} record as source text, or null (ADR-0009 D1)
+ * @param invariants   {@code @Invariant} methods (ADR-0009 D4)
  */
 public record ContractIR(String packageName,
                          String name,
@@ -43,7 +45,16 @@ public record ContractIR(String packageName,
                          List<ParamIR> ownedComponents,
                          List<TransitionIR> ownedInits,
                          List<TransitionIR> ownedActions,
-                         List<TransitionIR> ownedDestroys) {
+                         List<TransitionIR> ownedDestroys,
+                         String paramsType,
+                         List<InvariantIR> invariants) {
+
+    /** An {@code @Invariant} method: on the owned record ({@code owned}) or the state; optionally taking params. */
+    public record InvariantIR(String method, boolean owned, boolean takesParams) {}
+
+    public boolean hasParams() {
+        return paramsType != null;
+    }
 
     /** The contract has an {@code @Owned} record (ADR-0003). */
     public boolean hasOwned() {

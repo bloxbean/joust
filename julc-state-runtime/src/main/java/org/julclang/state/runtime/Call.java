@@ -60,6 +60,9 @@ public final class Call<S> {
     final AssetRun<S> assetRun;
     final boolean needsShared;
     final Function<org.julclang.ledger.TxOutRef, Object> byAction;
+    final List<Account> cosigners;
+    final Authorization authorization;
+    final BiFunction<Ctx, Transition<S>, Object> redeemerWith;
 
     private Call(Builder<S> b) {
         this.name = Objects.requireNonNull(b.name);
@@ -76,11 +79,35 @@ public final class Call<S> {
         this.needsShared = b.needsShared || b.sharedRun != null;
         this.receivedAssets = b.receivedAssets;
         this.byAction = b.byAction;
+        this.cosigners = List.copyOf(b.cosigners);
+        this.authorization = b.authorization;
+        this.redeemerWith = b.redeemerWith;
         if (run == null && sharedRun == null && assetRun == null) throw new IllegalArgumentException(name + ": no run");
-        this.redeemer = Objects.requireNonNull(b.redeemer);
+        this.redeemer = b.redeemer != null ? b.redeemer : (ctx -> { throw new IllegalStateException("redeemerWith only"); });
+        if (b.redeemer == null && b.redeemerWith == null) throw new NullPointerException(name + ": no redeemer");
         this.burnRedeemer = b.burnRedeemer;
         if (received.signum() < 0) throw new IllegalArgumentException(name + ": received must not be negative");
         if (kind == Kind.DESTROY && burnRedeemer == null) throw new IllegalArgumentException("destroy needs a burn redeemer");
+    }
+
+    /** The spend redeemer of this call, given the method's result. */
+    Object redeemerFor(Ctx ctx, Transition<S> t) {
+        return redeemerWith != null ? redeemerWith.apply(ctx, t) : redeemer.make(ctx);
+    }
+
+    /** The extra signing accounts: co-signers and an authorization key. */
+    List<Account> extraSigners() {
+        var all = new ArrayList<Account>(cosigners);
+        if (authorization != null) all.addAll(authorization.signers());
+        return all;
+    }
+
+    /** Adds the authorization's zero withdrawal, if it is a script (ADR-0009 D3). */
+    void applyAuthorization(com.bloxbean.cardano.client.quicktx.ScriptTx tx) {
+        if (authorization == null || authorization.rewardAddress() == null) return;
+        tx.withdraw(authorization.rewardAddress(), java.math.BigInteger.ZERO,
+                org.julclang.clientlib.PlutusDataAdapter.convert(authorization.redeemer()));
+        tx.attachRewardValidator(authorization.script());
     }
 
     boolean usesTime() {
@@ -114,6 +141,9 @@ public final class Call<S> {
         private AssetRun<S> assetRun;
         private boolean needsShared;
         private Function<org.julclang.ledger.TxOutRef, Object> byAction;
+        private final List<Account> cosigners = new ArrayList<>();
+        private Authorization authorization;
+        private BiFunction<Ctx, Transition<S>, Object> redeemerWith;
 
         private Builder(String name, Kind kind, Account caller) {
             this.name = name;
@@ -136,6 +166,12 @@ public final class Call<S> {
         public Builder<S> runAssets(boolean shared, AssetRun<S> run) { this.assetRun = run; this.needsShared = shared; return this; }
         /** The {@code ByAction} mint redeemer for methods that mint user tokens (ADR-0007 D4). */
         public Builder<S> byAction(Function<org.julclang.ledger.TxOutRef, Object> make) { this.byAction = make; return this; }
+        /** Further keys that sign the transaction ({@code @Quorum}; ADR-0009 D2). */
+        public Builder<S> cosigners(Account... accounts) { if (accounts != null) cosigners.addAll(List.of(accounts)); return this; }
+        /** How {@code @AuthorizedBy} is proven (ADR-0009 D3). */
+        public Builder<S> authorization(Authorization auth) { this.authorization = auth; return this; }
+        /** A redeemer built from the Ctx and the method's result (it carries the events; ADR-0009 D5). */
+        public Builder<S> redeemerWith(BiFunction<Ctx, Transition<S>, Object> make) { this.redeemerWith = make; return this; }
 
         public Call<S> build() {
             return new Call<>(this);

@@ -60,6 +60,11 @@ final class ContractReader {
     static final String FUNDS = API + "Funds";
     static final String SEND = API + "Send";
     static final String VALUE = "org.julclang.ledger.Value";
+    static final String PARAMS = API + "Params";
+    static final String QUORUM = API + "Quorum";
+    static final String AUTHORIZED_BY = API + "AuthorizedBy";
+    static final String INVARIANT = API + "Invariant";
+    static final String CREDENTIAL = "org.julclang.ledger.Credential";
     static final String ONCHAIN_LIBRARY = "org.julclang.stdlib.annotation.OnchainLibrary";
     static final String JULC_LIST = "org.julclang.core.types.JulcList";
     static final String BIG_INTEGER = "java.math.BigInteger";
@@ -92,6 +97,7 @@ final class ContractReader {
         List<ExecutableElement> ownedInits = new ArrayList<>();
         List<ExecutableElement> ownedActions = new ArrayList<>();
         List<ExecutableElement> ownedDestroys = new ArrayList<>();
+        List<ExecutableElement> invariantMethods = new ArrayList<>();
         Set<String> names = new HashSet<>();
         for (ExecutableElement m : ElementFilter.methodsIn(type.getEnclosedElements())) {
             int kinds = 0;
@@ -102,8 +108,14 @@ final class ContractReader {
             if (annotation(m, OWNED_INIT).isPresent()) { ownedInits.add(m); kinds++; }
             if (annotation(m, OWNED_ACTION).isPresent()) { ownedActions.add(m); kinds++; }
             if (annotation(m, OWNED_DESTROY).isPresent()) { ownedDestroys.add(m); kinds++; }
+            if (annotation(m, INVARIANT).isPresent()) {
+                if (kinds > 0) error(m, "@Invariant cannot be combined with @Init/@Action/@Destroy/@View/owned annotations");
+                invariantMethods.add(m);
+                continue;
+            }
             if (kinds == 0) {
-                for (String policy : List.of(PAYABLE, SIGNED_BY, ONLY_OWNER, VALID_AFTER, VALID_BEFORE, BATCHED)) {
+                for (String policy : List.of(PAYABLE, SIGNED_BY, ONLY_OWNER, VALID_AFTER, VALID_BEFORE, BATCHED, QUORUM,
+                        AUTHORIZED_BY)) {
                     if (annotation(m, policy).isPresent()) {
                         error(m, "@" + simple(policy) + " needs @Init, @Action or @Destroy on the same method");
                     }
@@ -190,8 +202,28 @@ final class ContractReader {
         }
         TypeMirror ownedType = ownedElement == null ? null : ownedElement.asType();
 
-        var ctx = new Reading(types, stateType, componentsByName, stateType);
-        var ownedCtx = ownedElement == null ? null : new Reading(types, ownedType, ownedByName, stateType);
+        // ---- the @Params record (ADR-0009 D1)
+        TypeElement paramsElement = null;
+        for (TypeElement nested : ElementFilter.typesIn(type.getEnclosedElements())) {
+            if (annotation(nested, PARAMS).isPresent()) {
+                if (nested.getKind() != ElementKind.RECORD) error(nested, "@Params must be on a record");
+                else if (paramsElement != null) error(nested, "at most one @Params record per contract (ADR-0009 D1)");
+                else paramsElement = nested;
+            }
+        }
+        Map<String, ParamIR> paramsByName = new LinkedHashMap<>();
+        if (paramsElement != null) {
+            for (RecordComponentElement c : paramsElement.getRecordComponents()) {
+                if (mentionsMap(c.asType(), new java.util.HashSet<>())) error(paramsElement, "@Params cannot hold MerkleMaps");
+                paramsByName.put(c.getSimpleName().toString(),
+                        new ParamIR(c.getSimpleName().toString(), types.render(c.asType()), kindOf(c.asType())));
+            }
+        }
+        TypeMirror paramsType = paramsElement == null ? null : paramsElement.asType();
+
+        var ctx = new Reading(types, stateType, componentsByName, stateType, paramsType, paramsByName);
+        var ownedCtx = ownedElement == null ? null
+                : new Reading(types, ownedType, ownedByName, stateType, paramsType, paramsByName);
         TransitionIR init = readTransition(initMethod, TransitionIR.Kind.INIT, ctx);
         List<TransitionIR> actionIRs = new ArrayList<>();
         for (var m : actions) actionIRs.add(readTransition(m, TransitionIR.Kind.ACTION, ctx));
@@ -304,12 +336,34 @@ final class ContractReader {
             messager.printMessage(Diagnostic.Kind.WARNING, "this @StateContract has no @Destroy method: an instance can"
                     + " never end, so its min-ADA deposit (" + minAda + " lovelace) is locked forever", type);
         }
+        // ---- @Invariant methods (ADR-0009 D4)
+        List<ContractIR.InvariantIR> invariants = new ArrayList<>();
+        for (ExecutableElement m : invariantMethods) {
+            if (!m.getModifiers().contains(Modifier.STATIC)) error(m, "@Invariant methods must be static");
+            if (m.getReturnType().getKind() != TypeKind.BOOLEAN) error(m, "@Invariant must return boolean");
+            var ps = m.getParameters();
+            boolean onOwned = !ps.isEmpty() && ownedType != null && same(ps.get(0).asType(), ownedType);
+            boolean onState = !ps.isEmpty() && same(ps.get(0).asType(), stateType);
+            if (!onOwned && !onState) error(m, "@Invariant's first parameter must be the state or the owned record");
+            boolean withParams = ps.size() == 2 && paramsType != null && same(ps.get(1).asType(), paramsType);
+            if (ps.size() > 2 || (ps.size() == 2 && !withParams)) {
+                error(m, "@Invariant takes the state (or owned record) and optionally the @Params record, nothing else");
+            }
+            if (onState && anyMap) {
+                error(m, "@Invariant cannot read state with MerkleMaps: on-chain sees only the opened read set (ADR-0009 r2)");
+            }
+            invariants.add(new ContractIR.InvariantIR(m.getSimpleName().toString(), onOwned, withParams));
+        }
+        if (!invariants.isEmpty() && anyBatched) {
+            error(type, "@Invariant cannot be combined with @Batched yet: a batch passes through intermediate states that"
+                    + " the validator does not check (ADR-0009 r2)");
+        }
         if (failed) return Optional.empty();
         return Optional.of(new ContractIR(pkg, type.getSimpleName().toString(), stateText, stateComponents, minAda,
                 maxDatumBytes, maxValidityMs,
                 init, actionIRs, destroyIRs, viewIRs, types.imports(), Strategies.OPTION_A,
                 ownedType == null ? null : types.render(ownedType), List.copyOf(ownedComponents), ownedInitIRs,
-                ownedActionIRs, ownedDestroyIRs));
+                ownedActionIRs, ownedDestroyIRs, paramsType == null ? null : types.render(paramsType), List.copyOf(invariants)));
     }
 
     /** Coins per UTxO byte on mainnet and the public testnets (Conway). Governance can change it; ADR-0001 §10. */
@@ -331,7 +385,7 @@ final class ContractReader {
             "TxOut", "TxInInfo", "TxOutRef", "Value", "Address", "Credential", "ScriptInfo", "Builtins", "Entrypoint",
             "MultiValidator", "Purpose", "AddressLib", "ByteStringLib", "ContextsLib", "OutputLib", "ValuesLib",
             "IntervalLib", "CryptoLib", "Interval", "IntervalBoundType", "OutputDatum", "Ctx", "Clock", "Payout", "Payouts",
-            "Funds", "Send", "Sends", "Assets", "OutputClaim", "OutputClaims", "ByAction", "JulcValue", "CreateInstance", "BurnInstance", "Account", "StateRuntime",
+            "Funds", "Send", "Sends", "Assets", "OutputClaim", "OutputClaims", "ByAction", "JulcValue", "Param", "Approval", "CreateInstance", "BurnInstance", "Account", "StateRuntime",
             "StateInstance", "TxResult", "Transition", "Lifecycle", "Calls", "Call", "MerkleMap", "MapEntry", "MapWitness",
             "MapWitnesses", "Mpf", "Deploy", "ContractSpec",
             "StateContractHandle", "Utxo", "Arrays", "Holding", "ScriptPurpose");
@@ -342,7 +396,8 @@ final class ContractReader {
 
     /** What a transition acts on: {@code stateType} is its subject (the state, or the owned record), {@code sharedType}
      * the instance state (for {@code @Shared}). */
-    private record Reading(TypeRenderer types, TypeMirror stateType, Map<String, ParamIR> components, TypeMirror sharedType) {}
+    private record Reading(TypeRenderer types, TypeMirror stateType, Map<String, ParamIR> components, TypeMirror sharedType,
+                           TypeMirror paramsType, Map<String, ParamIR> paramsComponents) {}
 
     private TransitionIR readTransition(ExecutableElement m, TransitionIR.Kind kind, Reading r) {
         List<? extends VariableElement> ps = m.getParameters();
@@ -368,6 +423,13 @@ final class ContractReader {
             }
         }
         if (shared) first++;
+        boolean takesParams = r.paramsType() != null && ps.size() > first && same(ps.get(first).asType(), r.paramsType());
+        if (takesParams) first++;
+        for (int i = first; i < ps.size(); i++) {
+            if (r.paramsType() != null && same(ps.get(i).asType(), r.paramsType())) {
+                error(ps.get(i), "the @Params record must come right after the state (or @Shared; first in @Init)");
+            }
+        }
         boolean hasFunds = ps.size() > first && isNamed(ps.get(ps.size() - 1).asType(), FUNDS);
         int end = hasFunds ? ps.size() - 1 : ps.size();
         boolean hasCtx = end > first && isNamed(ps.get(end - 1).asType(), CTX);
@@ -458,6 +520,33 @@ final class ContractReader {
             error(m, "@SignedBy, @OnlyOwner, @ValidAfter and @ValidBefore check the current state, which @Init does not"
                     + " have; use Ctx and Require.that in the body instead");
         }
+        String quorumKeys = annotation(m, QUORUM).flatMap(a -> value(a, "keys")).map(v -> (String) v.getValue()).orElse(null);
+        String quorumThreshold = annotation(m, QUORUM).flatMap(a -> value(a, "threshold")).map(v -> (String) v.getValue())
+                .orElse(null);
+        if (quorumKeys != null) {
+            ParamIR k = fieldOf(m, r, quorumKeys, "@Quorum(keys)");
+            if (k != null && !k.type().equals("JulcList<byte[]>")) {
+                error(m, "@Quorum(keys) names \"" + quorumKeys + "\", which must be JulcList<byte[]> but is " + k.type());
+            }
+            ParamIR t = fieldOf(m, r, quorumThreshold, "@Quorum(threshold)");
+            if (t != null && t.kind() != ParamIR.TypeKind.INTEGER) {
+                error(m, "@Quorum(threshold) names \"" + quorumThreshold + "\", which must be BigInteger but is " + t.type());
+            }
+        }
+        List<String> authorizedBy = new ArrayList<>();
+        annotation(m, AUTHORIZED_BY).flatMap(a -> value(a, "value")).ifPresent(v -> authorizedBy.add((String) v.getValue()));
+        for (String f : authorizedBy) {
+            ParamIR c = fieldOf(m, r, f, "@AuthorizedBy");
+            if (c != null && !c.type().equals("Credential")) {
+                error(m, "@AuthorizedBy names \"" + f + "\", which must be a Credential but is " + c.type());
+            }
+        }
+        if (creates && (quorumKeys != null || !authorizedBy.isEmpty())) {
+            error(m, "@Quorum and @AuthorizedBy check the current state, which a creation does not have");
+        }
+        boolean events = shape != null && shape.events();
+        String eventsType = events ? shape.eventsType() : null;
+        if (events && creates) error(m, "an init cannot emit events yet (ADR-0009 r2)");
         for (String f : signedBy) checkField(m, r, f, ParamIR.TypeKind.BYTES, "byte[]", "@SignedBy/@OnlyOwner");
         for (String f : validAfter) checkField(m, r, f, ParamIR.TypeKind.INTEGER, "BigInteger", "@ValidAfter");
         for (String f : validBefore) checkField(m, r, f, ParamIR.TypeKind.INTEGER, "BigInteger", "@ValidBefore");
@@ -471,6 +560,11 @@ final class ContractReader {
             } else {
                 if (!hasCtx) {
                     error(m, "@Batched needs a Ctx parameter: in a batch, ctx.caller() is the intent's owner");
+                }
+                if (takesParams) error(m, "@Batched actions cannot take the @Params record yet (ADR-0009)");
+                if (quorumKeys != null || !authorizedBy.isEmpty() || (shape != null && shape.events())) {
+                    error(m, "@Batched actions cannot use @Quorum, @AuthorizedBy or events: an intent's owner is the caller"
+                            + " (ADR-0009)");
                 }
                 if (hasFunds || (shape != null && (shape.sends() || shape.mint()))) {
                     error(m, "@Batched actions cannot take Funds, send or mint yet (ADR-0007 D1)");
@@ -501,11 +595,12 @@ final class ContractReader {
         return new TransitionIR(kind, name, variant, List.copyOf(params), hasCtx, payable, returns, resultType,
                 List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared, batched, batchOnly,
                 hasFunds, shape != null && shape.payouts(), shape != null && shape.sends(), shape != null && shape.mint(),
-                accepts);
+                accepts, takesParams, quorumKeys, quorumThreshold, List.copyOf(authorizedBy), events, eventsType);
     }
 
     /** Which effect components a result record has (ADR-0007 D1). */
-    private record ResultShape(boolean payouts, boolean sends, boolean mint, boolean accepted) {}
+    private record ResultShape(boolean payouts, boolean sends, boolean mint, boolean accepted, boolean events,
+                               String eventsType) {}
 
     /**
      * Reads a result record: components named {@code state} (actions: required; destroys: forbidden), {@code payouts}
@@ -521,14 +616,15 @@ final class ContractReader {
         TypeElement e = asRecord(ret);
         if (e == null) {
             error(m, what + " must return " + expected);
-            return new ResultShape(false, false, false, false);
+            return new ResultShape(false, false, false, false, false, null);
         }
-        boolean state = false, payouts = false, sends = false, mint = false, accepted = false;
-        var known = java.util.Set.of("state", "payouts", "sends", "mint", "accepted");
+        boolean state = false, payouts = false, sends = false, mint = false, accepted = false, events = false;
+        String eventsType = null;
+        var known = java.util.Set.of("state", "payouts", "sends", "mint", "accepted", "events");
         for (RecordComponentElement c : e.getRecordComponents()) {
             if (!known.contains(c.getSimpleName().toString())) {
                 error(m, what + " must return " + expected + "; component '" + c.getSimpleName() + "' is none of these");
-                return new ResultShape(false, false, false, false);
+                return new ResultShape(false, false, false, false, false, null);
             }
         }
         for (RecordComponentElement c : e.getRecordComponents()) {
@@ -556,6 +652,11 @@ final class ContractReader {
                     if (!isNamed(t, VALUE)) error(m, "the result's 'accepted' must be a Value");
                     accepted = true;
                 }
+                case "events" -> {
+                    if (!isNamed(t, JULC_LIST)) error(m, "the result's 'events' must be a JulcList of event records");
+                    events = true;
+                    eventsType = r.types().render(t);
+                }
                 default -> error(m, "result record component '" + n + "' is not one of state, payouts, sends, mint,"
                         + " accepted;"
                         + " " + what + " must return " + expected);
@@ -563,7 +664,7 @@ final class ContractReader {
         }
         if (action && !state) error(m, what + " must return " + expected);
         if (!action && !(payouts || sends || mint)) error(m, what + " must return " + expected);
-        return new ResultShape(payouts, sends, mint, accepted);
+        return new ResultShape(payouts, sends, mint, accepted, events, eventsType);
     }
 
     private boolean isListOf(TypeMirror t, String element) {
@@ -584,6 +685,22 @@ final class ContractReader {
             params.add(new ParamIR(p.getSimpleName().toString(), r.types().render(p.asType()), kindOf(p.asType())));
         }
         return new ViewIR(m.getSimpleName().toString(), List.copyOf(params), r.types().render(m.getReturnType()));
+    }
+
+    /** A field of the state/owned record, or {@code params.x} of the @Params record; reports an error if absent. */
+    private ParamIR fieldOf(ExecutableElement m, Reading r, String path, String what) {
+        if (path == null || path.isEmpty()) {
+            error(m, what + " needs a field name");
+            return null;
+        }
+        if (path.startsWith("params.")) {
+            ParamIR p = r.paramsComponents().get(path.substring(7));
+            if (p == null) error(m, what + " names \"" + path + "\", which is not a component of the @Params record");
+            return p;
+        }
+        ParamIR c = r.components().get(path);
+        if (c == null) error(m, what + " names \"" + path + "\", which is not a component of the state record");
+        return c;
     }
 
     private void checkField(ExecutableElement m, Reading r, String field, ParamIR.TypeKind kind, String typeName,

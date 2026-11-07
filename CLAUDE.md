@@ -27,10 +27,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - `julc-state-dsl`: `.jsc` lexer/parser/checker and the lowering to a Java `@StateContract` (ADR-0005). Run by each
   consumer's `generateJsc` JavaExec task into `build/generated/sources/jsc`.
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
-- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
+- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
   DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D
   (ADR-0004, batched intents, pool) E (ADR-0005, `.jsc`, dsl) and the F spike (ADR-0006, optimistic L2, rollup) run on Yaci DevKit.
-- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007). JuLC changes: worktree `../julc-joust`, PR label
+- Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007), #9 H (fees, ADR-0008), #10 I (params/quorum/auth/invariants/events, ADR-0009). JuLC changes: worktree `../julc-joust`, PR label
   `joust` (julc#311).
 
 ## Build / test
@@ -79,6 +79,9 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `(PlutusData) (Object) record` throws on the JVM: build datums with `Builtins.constrData`/`bData`/`iData`. A native
   Value cannot be a JuLC loop accumulator (use recursion). Redeemer fields typed `Value` mis-decode in JuLC: use
   `PlutusData`. QuickTx `ScriptTx` balances only lovelace: collect asset UTxOs explicitly. Debug with `-Pjoust.traces`.
+- ADR-0009: generated code reads `@Params` through a typed local (`P params = (P) (Object) PARAMS`), since JuLC needs a
+  typed receiver before an accessor. Quorum keys must be strictly ascending. A governor's Rewarding redeemer is
+  `Approvals`.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

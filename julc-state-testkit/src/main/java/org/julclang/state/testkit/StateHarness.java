@@ -72,9 +72,13 @@ public final class StateHarness<S> {
     public static final TxOutRef LIVE_REF = new TxOutRef(new TxId(fill(32, 0x7A)), BigInteger.ONE);
 
     private StateHarness(ContractSpec<S> spec) {
+        this(spec, null);
+    }
+
+    private StateHarness(ContractSpec<S> spec, Object params) {
         this.spec = spec;
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());   // contracts may hash
-        var script = JulcScriptLoader.load(spec.validatorClass());
+        var script = org.julclang.state.runtime.StateContractHandle.scriptFor(spec, params);
         this.program = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(script.getCborHex())));
         try {
             this.policy = script.getScriptHash();
@@ -106,6 +110,11 @@ public final class StateHarness<S> {
 
     public static <S> StateHarness<S> of(ContractSpec<S> spec) {
         return new StateHarness<>(spec);
+    }
+
+    /** A harness for a contract with deploy-time parameters (ADR-0009 D1): the validator with {@code params} applied. */
+    public static <S> StateHarness<S> of(ContractSpec<S> spec, Object params) {
+        return new StateHarness<>(spec, params);
     }
 
     public ContractSpec<S> spec() { return spec; }
@@ -295,6 +304,10 @@ public final class StateHarness<S> {
     }
 
     private ScriptContextTestBuilder fill(ScriptContextTestBuilder b, TxModel tx) {
+        tx.withdrawals.forEach((cred, rd) -> {
+            b.withdrawal(cred, BigInteger.ZERO);
+            if (rd != null) b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(cred), rd);
+        });
         if (tx.outputClaims != null) {
             b.withdrawal(outputVerifierCredential(), BigInteger.ZERO);
             b.redeemerEntry(new org.julclang.ledger.ScriptPurpose.Rewarding(outputVerifierCredential()), outputClaimsData(tx));

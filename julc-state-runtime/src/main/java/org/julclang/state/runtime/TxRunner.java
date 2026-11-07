@@ -38,9 +38,16 @@ final class TxRunner {
     record ExpectedPayout(String address, BigInteger lovelace, PlutusData tag) {}
 
     private final StateRuntime rt;
+    private final java.util.List<Account> cosigners;
 
     TxRunner(StateRuntime rt) {
+        this(rt, java.util.List.of());
+    }
+
+    /** {@code cosigners} also sign every transaction this runner submits ({@code @Quorum}, {@code @AuthorizedBy}). */
+    TxRunner(StateRuntime rt, java.util.List<Account> cosigners) {
         this.rt = rt;
+        this.cosigners = cosigners;
     }
 
     String submit(ScriptTx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
@@ -55,7 +62,7 @@ final class TxRunner {
         Transaction signed;
         try {
             var ctx = new QuickTxBuilder(rt.backend()).compose(tx)
-                    .withSigner(SignerProviders.signerFrom(caller))
+                    .withSigner(SignerProviders.signerFrom(allSigners(caller)))
                     .feePayer(caller.baseAddress())
                     .collateralPayer(caller.baseAddress())
                     .mergeOutputs(false);
@@ -100,6 +107,13 @@ final class TxRunner {
         rt.log(what + ": submitted " + txHash);
         awaitInclusion(txHash, what);
         return txHash;
+    }
+
+    private Account[] allSigners(Account caller) {
+        var all = new java.util.ArrayList<Account>();
+        all.add(caller);
+        for (Account a : cosigners) if (!a.baseAddress().equals(caller.baseAddress())) all.add(a);
+        return all.toArray(new Account[0]);
     }
 
     /** Builds, signs, submits and confirms a transaction without scripts (e.g. publishing a reference script). */

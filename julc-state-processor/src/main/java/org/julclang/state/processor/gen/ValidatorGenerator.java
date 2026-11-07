@@ -68,6 +68,11 @@ public final class ValidatorGenerator {
             imports.addAll(List.of("org.julclang.core.types.JulcValue", "org.julclang.state.api.Funds",
                     "org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId"));
         }
+        if (c.hasParams()) imports.add("org.julclang.stdlib.annotation.Param");
+        if (anyAuthorizedBy()) {
+            imports.addAll(List.of("org.julclang.ledger.ScriptPurpose", "org.julclang.state.api.Approval",
+                    "org.julclang.state.api.Approvals"));
+        }
         if (c.hasSends()) {
             imports.addAll(List.of("org.julclang.state.api.Send", "org.julclang.state.api.OutputClaim",
                     "org.julclang.state.api.OutputClaims", "org.julclang.ledger.ScriptHash"));
@@ -94,6 +99,10 @@ public final class ValidatorGenerator {
         w.line("static final BigInteger MIN_ADA = BigInteger.valueOf(" + c.minAda() + "L);");
         w.line("static final BigInteger MAX_DATUM_BYTES = BigInteger.valueOf(" + c.maxDatumBytes() + "L);");
         w.line("static final BigInteger MAX_VALIDITY_MS = BigInteger.valueOf(" + c.maxValidityMs() + "L);");
+        if (c.hasParams()) {
+            w.line("/** The deploy-time parameters (" + c.paramsType() + "), applied to the script (ADR-0009 D1). */");
+            w.line("@Param static PlutusData PARAMS;");
+        }
         if (c.hasBatched()) {
             w.line("/** Lovelace an intent carries beyond what it pays in: its refund, at least a min-UTxO output (ADR-0004 D2). */");
             w.line("static final BigInteger INTENT_DEPOSIT = BigInteger.valueOf(" + INTENT_DEPOSIT + "L);");
@@ -212,6 +221,7 @@ public final class ValidatorGenerator {
         String X = c.name();
         String S = c.stateType();
         w.open("static boolean create(CreateInstance cr, TxInfo tx, byte[] policy) {");
+        declareParams();
         w.line("byte[] id = ValuesLib.uniqueTokenName(cr.seed());");
         w.line("boolean seedSpent = seedConsumed(tx.inputs(), cr.seed());");
         w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
@@ -234,7 +244,12 @@ public final class ValidatorGenerator {
         w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), (PlutusData) (Object) initial)");
         w.line("        && datumFits((PlutusData) (Object) initial);");
         w.line("boolean valueOk = exactValue(out.value(), policy, id, MIN_ADA.add(" + received("cr", init) + "));");
-        w.line("return seedSpent && mintOk && shapeOk && ctxOk && datumOk && valueOk;");
+        var extra = new ArrayList<String>();
+        outputChecks(false, "initial", extra);
+        paramsQuorumChecks(extra);
+        var all = new ArrayList<String>(List.of("seedSpent", "mintOk", "shapeOk", "ctxOk", "datumOk", "valueOk"));
+        all.addAll(extra);
+        w.line("return " + conj(all, "create") + ";");
         w.close("}").blank();
     }
 
@@ -293,6 +308,7 @@ public final class ValidatorGenerator {
                     + " current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id, BigInteger inLovelace) {");
         }
         List<String> checks = new ArrayList<>();
+        declareParams();
         for (String f : t.signedBy()) {
             String v = "signed_" + f;
             w.line("boolean " + v + " = ContextsLib.signedBy(tx, current." + f + "());");
@@ -313,6 +329,7 @@ public final class ValidatorGenerator {
             w.line("boolean ctxOk = ctxValid(tx, r.ctx(), " + balance + ", " + t.payable() + ");");
             checks.add("ctxOk");
         }
+        authChecks(t, checks);
         String stateArg = "current";
         if (t.shared()) {
             w.line("// I20: the instance state, read through a reference input of exactly this object's instance.");
@@ -335,16 +352,30 @@ public final class ValidatorGenerator {
                 w.line("boolean continues = continues(tx, own, policy, id, " + datum.apply("next") + ", inLovelace.add("
                         + received("r", t) + "));");
                 checks.add("continues");
+                outputChecks(owned, "next", checks);
+            }
+            case SETTLE -> {
+                w.line(t.resultType() + " result = " + call + ";");
+                w.line("JulcList<Payout> payouts = " + (t.resultPayouts() ? "result.payouts()" : "JulcList.empty()") + ";");
+                w.line("boolean allocated = Payouts.total(payouts).compareTo(inLovelace.add(" + received("r", t) + ")) == 0;");
+                w.line("boolean burned = ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.valueOf(-1)) == 0;");
+                w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
+                checks.add("allocated");
+                checks.add("burned");
+                checks.add("paid");
+                eventsCheck(t, checks);
             }
             case RESULT -> {
                 w.line(t.resultType() + " result = " + call + ";");
-                w.line("JulcList<Payout> payouts = result.payouts();");
+                w.line("JulcList<Payout> payouts = " + (t.resultPayouts() ? "result.payouts()" : "JulcList.empty()") + ";");
                 w.line(S + " next = " + (owned ? "result.state()" : committed("result.state()")) + ";");
                 w.line("boolean continues = continues(tx, own, policy, id, " + datum.apply("next") + ","
                         + " inLovelace.add(" + received("r", t) + ").subtract(Payouts.total(payouts)));");
                 w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
                 checks.add("continues");
                 checks.add("paid");
+                outputChecks(owned, "next", checks);
+                eventsCheck(t, checks);
             }
             case PAYOUTS -> {
                 w.line("JulcList<Payout> payouts = " + call + ";");
@@ -424,7 +455,9 @@ public final class ValidatorGenerator {
         w.close("}").blank();
         for (var t : batched) {
             w.open("static Step step" + t.variant() + "(" + S + " s, " + t.intentVariant() + " a, Ctx cx) {");
+            declareParams();
             var args = new ArrayList<String>(List.of("s"));
+            if (t.takesParams()) args.add(paramsExpr());
             for (ParamIR p : t.params()) args.add("a." + p.name() + "()");
             args.add("cx");
             String call = X + "." + t.method() + "(" + String.join(", ", args) + ")";
@@ -526,6 +559,7 @@ public final class ValidatorGenerator {
         String X = c.name();
         String R = c.ownedType();
         w.open("static boolean create" + t.variant() + "(" + t.variant() + " o, TxInfo tx, byte[] policy) {");
+        declareParams();
         w.line("byte[] id = objectId(o.seed());");
         w.line("boolean seedSpent = seedConsumed(tx.inputs(), o.seed());");
         w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
@@ -545,8 +579,170 @@ public final class ValidatorGenerator {
         w.line("PlutusData held = (PlutusData) (Object) new Holding(o.instance(), value);");
         w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), held) && datumFits(held);");
         w.line("boolean valueOk = exactValue(out.value(), policy, id, MIN_ADA.add(" + received("o", t) + "));");
-        w.line("return seedSpent && mintOk && underInstance && shapeOk && ctxOk && datumOk && valueOk;");
+        var extra = new ArrayList<String>(List.of("seedSpent", "mintOk", "underInstance", "shapeOk", "ctxOk", "datumOk", "valueOk"));
+        outputChecks(true, "value", extra);
+        w.line("return " + conj(extra, "create" + t.variant()) + ";");
         w.close("}").blank();
+    }
+
+
+    // ------------------------------------------------------------------ ADR-0009: params, quorum, authorization, invariants, events
+
+    /** The @Params record, as an expression. */
+    private String paramsExpr() {
+        return "params";
+    }
+
+    /** Declares the typed {@code params} local (JuLC needs a typed local before an accessor). */
+    private void declareParams() {
+        if (c.hasParams()) w.line(c.paramsType() + " params = (" + c.paramsType() + ") (Object) PARAMS;");
+    }
+
+    /** A field path of the current subject ({@code current.x()}) or of the params ({@code params.x}). */
+    private String field(String path) {
+        return path.startsWith("params.") ? paramsExpr() + "." + path.substring(7) + "()" : "current." + path + "()";
+    }
+
+    /** The redeemer constructor tag of a spend transition (its position in Calls). */
+    private long spendTag(TransitionIR t) {
+        var spend = new ArrayList<TransitionIR>(c.spendTransitions());
+        spend.addAll(c.ownedSpendTransitions());
+        for (int i = 0; i < spend.size(); i++) if (spend.get(i).method().equals(t.method())) return i;
+        throw new IllegalStateException("not a spend transition: " + t.method());
+    }
+
+    /** @Quorum and @AuthorizedBy checks on the current (input) state (I32, I33). */
+    private void authChecks(TransitionIR t, List<String> checks) {
+        if (t.quorumKeys() != null) {
+            w.line("boolean quorum = quorumOf(tx, " + field(t.quorumKeys()) + ", " + field(t.quorumThreshold()) + ");");
+            checks.add("quorum");
+        }
+        int i = 0;
+        for (String f : t.authorizedBy()) {
+            String v = "authorized_" + (i++);
+            w.line("boolean " + v + " = authorized(tx, " + field(f) + ", policy, id, " + spendTag(t) + "L);");
+            checks.add(v);
+        }
+    }
+
+    /** Invariants and quorum shapes of a state the validator accepts as an output (I32, I34). */
+    private void outputChecks(boolean owned, String subject, List<String> checks) {
+        int i = 0;
+        for (var inv : c.invariants()) {
+            if (inv.owned() != owned) continue;
+            String v = "invariant_" + (i++);
+            w.line("boolean " + v + " = " + c.name() + "." + inv.method() + "(" + subject
+                    + (inv.takesParams() ? ", " + paramsExpr() : "") + ");");
+            checks.add(v);
+        }
+        var seen = new java.util.LinkedHashSet<String>();
+        for (var t : c.allTransitions()) {
+            if (t.quorumKeys() == null || t.owned() != owned || t.quorumKeys().startsWith("params.")) continue;
+            String pair = t.quorumKeys() + "," + t.quorumThreshold();
+            if (!seen.add(pair)) continue;
+            String v = "quorumShape_" + (i++);
+            w.line("boolean " + v + " = quorumWellFormed(" + subject + "." + t.quorumKeys() + "(), " + subject + "."
+                    + t.quorumThreshold() + "());");
+            checks.add(v);
+        }
+    }
+
+    /** Params-level quorum shapes, checked when an instance is created. */
+    private void paramsQuorumChecks(List<String> checks) {
+        var seen = new java.util.LinkedHashSet<String>();
+        int i = 0;
+        for (var t : c.allTransitions()) {
+            if (t.quorumKeys() == null || !t.quorumKeys().startsWith("params.")) continue;
+            if (!seen.add(t.quorumKeys() + "," + t.quorumThreshold())) continue;
+            String v = "paramsQuorum_" + (i++);
+            w.line("boolean " + v + " = quorumWellFormed(" + field(t.quorumKeys()) + ", " + field(t.quorumThreshold()) + ");");
+            checks.add(v);
+        }
+    }
+
+    /** The redeemer carries exactly the method's events (I35). */
+    private void eventsCheck(TransitionIR t, List<String> checks) {
+        if (!t.resultEvents()) return;
+        w.line("boolean eventsOk = Builtins.equalsData(Builtins.listData(r.events()), Builtins.listData(result.events()));");
+        checks.add("eventsOk");
+    }
+
+    private boolean anyQuorum() {
+        return c.allTransitions().stream().anyMatch(t -> t.quorumKeys() != null);
+    }
+
+    private boolean anyAuthorizedBy() {
+        return c.allTransitions().stream().anyMatch(t -> !t.authorizedBy().isEmpty());
+    }
+
+    private void authHelpers() {
+        if (anyQuorum()) {
+            w.line("/** At least {@code threshold >= 1} of the transaction's signatories are in {@code keys} (I32). */");
+            w.open("static boolean quorumOf(TxInfo tx, JulcList<byte[]> keys, BigInteger threshold) {");
+            w.line("long count = 0;");
+            w.open("for (var sig : tx.signatories()) {");
+            w.line("byte[] s = (byte[]) (Object) sig;");
+            w.line("boolean member = false;");
+            w.open("for (var k : keys) {");
+            w.open("if (ByteStringLib.equals(k, s)) {");
+            w.line("member = true;");
+            w.close("}");
+            w.close("}");
+            w.open("if (member) {");
+            w.line("count = count + 1;");
+            w.close("}");
+            w.close("}");
+            w.line("return threshold.compareTo(BigInteger.ONE) >= 0 && BigInteger.valueOf(count).compareTo(threshold) >= 0;");
+            w.close("}").blank();
+
+            w.line("/** Keys strictly ascending (so distinct), each 28 bytes, and 1 <= threshold <= their number (I32). */");
+            w.open("static boolean quorumWellFormed(JulcList<byte[]> keys, BigInteger threshold) {");
+            w.line("boolean ok = true;");
+            w.line("long n = 0;");
+            w.line("byte[] prev = ByteStringLib.empty();");
+            w.open("for (var k : keys) {");
+            w.open("if (ByteStringLib.length(k) != 28 || (n > 0 && !Builtins.lessThanByteString(prev, k))) {");
+            w.line("ok = false;");
+            w.close("}");
+            w.line("prev = k;");
+            w.line("n = n + 1;");
+            w.close("}");
+            w.line("return ok && threshold.compareTo(BigInteger.ONE) >= 0 && threshold.compareTo(BigInteger.valueOf(n)) <= 0;");
+            w.close("}").blank();
+        }
+        if (anyAuthorizedBy()) {
+            w.line("/**");
+            w.line(" * The credential approves this action on {@code target} (I33): a key signed; a script was withdrawn from in the");
+            w.line(" * transaction and, if it is a Plutus script, its Rewarding redeemer lists Approval(policy, target, action).");
+            w.line(" * Never this contract's own script or a JOUST verifier, which approve anything.");
+            w.line(" */");
+            w.open("static boolean authorized(TxInfo tx, Credential c, byte[] policy, byte[] target, long action) {");
+            w.open("return switch (c) {");
+            w.line("case Credential.PubKeyCredential pk -> ContextsLib.signedBy(tx, (byte[]) (Object) pk.hash());");
+            w.line("case Credential.ScriptCredential sc -> scriptApproves(tx, c, (byte[]) (Object) sc.hash(), policy, target, action);");
+            w.close("};");
+            w.close("}").blank();
+            w.open("static boolean scriptApproves(TxInfo tx, Credential c, byte[] h, byte[] policy, byte[] target, long action) {");
+            w.line("boolean forbidden = ByteStringLib.equals(h, policy) || ByteStringLib.equals(h, " + MapVerifierInfo.hashLiteral()
+                    + ") || ByteStringLib.equals(h, " + MapVerifierInfo.hashLiteral("OutputVerifier") + ");");
+            w.line("boolean withdrawn = tx.withdrawals().containsKey(c);");
+            w.line("ScriptPurpose purpose = new ScriptPurpose.Rewarding(c);");
+            w.line("// A Plutus script has a redeemer and must name this approval; a native script (no redeemer) signs for all.");
+            w.line("boolean bound = !tx.redeemers().containsKey(purpose) || approves(tx.redeemers().get(purpose), policy, target, action);");
+            w.line("return !forbidden && withdrawn && bound;");
+            w.close("}").blank();
+            w.open("static boolean approves(PlutusData rd, byte[] policy, byte[] target, long action) {");
+            w.line("Approvals list = (Approvals) (Object) rd;");
+            w.line("boolean found = false;");
+            w.open("for (var a : list.approvals()) {");
+            w.open("if (ByteStringLib.equals(a.policy(), policy) && ByteStringLib.equals(a.target(), target)"
+                    + " && a.action().compareTo(BigInteger.valueOf(action)) == 0) {");
+            w.line("found = true;");
+            w.close("}");
+            w.close("}");
+            w.line("return found;");
+            w.close("}").blank();
+        }
     }
 
     // ------------------------------------------------------------------ native assets (ADR-0007)
@@ -577,6 +773,7 @@ public final class ValidatorGenerator {
         String X = c.name();
         String S = c.stateType();
         w.open("static boolean create(CreateInstance cr, TxInfo tx, byte[] policy) {");
+        declareParams();
         w.line("byte[] id = ValuesLib.uniqueTokenName(cr.seed());");
         w.line("boolean seedSpent = seedConsumed(tx.inputs(), cr.seed());");
         w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
@@ -607,6 +804,8 @@ public final class ValidatorGenerator {
         acceptedLocal(init, "cr", checks);
         w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), (PlutusData) (Object) initial)");
         w.line("        && datumFits((PlutusData) (Object) initial);");
+        outputChecks(false, "initial", checks);
+        paramsQuorumChecks(checks);
         w.line("JulcValue expected = Builtins.insertCoin(policy, id, BigInteger.ONE,");
         w.line("        Builtins.unionValue(lovelaceValue(MIN_ADA.add(" + received("cr", init) + ")), acceptedV));");
         w.line("boolean valueOk = Builtins.equalsData(Builtins.valueData(expected), (PlutusData) (Object) out.value());");
@@ -621,6 +820,7 @@ public final class ValidatorGenerator {
         String X = c.name();
         String R = c.ownedType();
         w.open("static boolean create" + t.variant() + "(" + t.variant() + " o, TxInfo tx, byte[] policy) {");
+        declareParams();
         w.line("byte[] id = objectId(o.seed());");
         w.line("boolean seedSpent = seedConsumed(tx.inputs(), o.seed());");
         w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
@@ -643,6 +843,7 @@ public final class ValidatorGenerator {
             w.line(R + " value = " + call + ";");
         }
         acceptedLocal(t, "o", checks);
+        outputChecks(true, "value", checks);
         w.line("PlutusData held = (PlutusData) (Object) new Holding(o.instance(), value);");
         w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), held) && datumFits(held);");
         w.line("JulcValue expected = Builtins.insertCoin(policy, id, BigInteger.ONE,");
@@ -691,6 +892,7 @@ public final class ValidatorGenerator {
                     + " current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id, BigInteger inLovelace) {");
         }
         List<String> checks = new ArrayList<>();
+        declareParams();
         for (String f : t.signedBy()) {
             w.line("boolean signed_" + f + " = ContextsLib.signedBy(tx, current." + f + "());");
             checks.add("signed_" + f);
@@ -708,6 +910,7 @@ public final class ValidatorGenerator {
             w.line("boolean ctxOk = ctxValid(tx, r.ctx(), " + balance + ", " + t.payable() + ");");
             checks.add("ctxOk");
         }
+        authChecks(t, checks);
         if (t.shared()) {
             w.line(c.stateType() + " shared = sharedState(tx, policy, held.instance());");
         }
@@ -750,6 +953,8 @@ public final class ValidatorGenerator {
                 if (t.resultAccepted()) accepted = "result.accepted()";
             }
         }
+        if (!t.destroys()) outputChecks(owned, "next", checks);
+        if (t.returnsRecord()) eventsCheck(t, checks);
         if (!t.destroys() && next.equals("Builtins.iData(0L)")) {
             throw new IllegalStateException(t.method() + ": a continuing transition without a next state");
         }
@@ -1105,6 +1310,7 @@ public final class ValidatorGenerator {
         w.close("}").blank();
         if (c.hasOwned()) ownedHelpers();
         if (c.assetAware()) assetHelpers();
+        authHelpers();
         if (c.hasMaps()) {
             String S = c.stateType();
             w.line("/** The state a method sees: each MerkleMap opened with its proven read set (I15). */");
@@ -1354,6 +1560,7 @@ public final class ValidatorGenerator {
         if (t.hasCtx()) out.add("Ctx ctx");
         // PlutusData, not Value: JuLC decodes a redeemer field typed Value as a constructor (julc issue); cast on use.
         if (takesAssets(t)) out.add("PlutusData assetsIn");
+        if (t.resultEvents()) out.add(t.eventsType() + " events");
         return out;
     }
 
@@ -1379,8 +1586,9 @@ public final class ValidatorGenerator {
     }
 
     /** Call arguments from a redeemer variable, optionally after the current state. */
-    private static String args(String redeemerVar, TransitionIR t, String... leading) {
+    private String args(String redeemerVar, TransitionIR t, String... leading) {
         var out = new ArrayList<>(List.of(leading));
+        if (t.takesParams()) out.add(paramsExpr());
         for (ParamIR p : t.params()) out.add(redeemerVar + "." + p.name() + "()");
         if (t.hasCtx()) out.add(redeemerVar + ".ctx()");
         if (t.hasFunds()) out.add("funds");
