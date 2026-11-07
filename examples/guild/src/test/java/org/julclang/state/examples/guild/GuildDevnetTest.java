@@ -31,8 +31,8 @@ class GuildDevnetTest {
         var other = DevKit.fundedAccount(300);
         var ann = DevKit.fundedAccount(300);
 
-        var a = GuildClient.deploy(runtime, master, BigInteger.TEN);
-        var b = GuildClient.deploy(runtime, other, BigInteger.ONE);
+        var a = GuildClient.deploy(runtime, master, BigInteger.ONE);      // minimum levels to join: 1, 2 and 3
+        var b = GuildClient.deploy(runtime, other, BigInteger.TWO);
 
         var hero = a.recruit(ann);
         assertArrayEquals(Keys.pkh(ann), hero.value().owner());
@@ -54,7 +54,7 @@ class GuildDevnetTest {
         assertEquals(BigInteger.valueOf(3), moved.value().level());
 
         // Nested: the move-and-admit joins an outer composition with another call, in one transaction.
-        var c = GuildClient.deploy(runtime, other, BigInteger.TEN);
+        var c = GuildClient.deploy(runtime, other, BigInteger.valueOf(3));
         Compose.of(runtime, ann).allowSharedSigners()
                 .add(() -> moved.transferAdmitted(ann, c))
                 .add(() -> sword.enchant(ann, BigInteger.ONE))
@@ -62,10 +62,10 @@ class GuildDevnetTest {
         assertEquals(BigInteger.ONE, c.state().arrivals());
         assertEquals(BigInteger.valueOf(28), sword.value().power());
 
-        // Guild B is full now: its admit refuses the next hero.
+        // Guild C admits from level 3: its admit sees the arriving level-2 hero and refuses it.
         var second = a.recruit(ann);
         second.levelUp(ann);
-        assertThrows(RequireException.class, () -> second.transferAdmitted(ann, b), "the destination is full");
+        assertThrows(RequireException.class, () -> second.transferAdmitted(ann, c), "the hero's level is too low");
 
         // Closing the source keeps heroes in, but the escape hatch still works.
         a.setOpen(master, false);

@@ -36,6 +36,8 @@ import java.util.List;
  * @param into        for a move: the name of the {@code @Into} parameter (the destination's state); otherwise null
  * @param admitsType  for an {@code @Admits} action: the owned record it admits, as source text (or, before the reader
  *                    resolves it, the annotation's simple name, possibly empty); otherwise null (ADR-0012 D3)
+ * @param arriving    for an {@code @Admits} action that takes the arriving object: that parameter's name; it is not a
+ *                    redeemer field but read from the object's input (ADR-0012 r4)
  */
 public record TransitionIR(Kind kind,
                            String method,
@@ -66,7 +68,8 @@ public record TransitionIR(Kind kind,
                            String migrateTo,
                            String ownedType,
                            String into,
-                           String admitsType) {
+                           String admitsType,
+                           String arriving) {
 
     /** A {@code @Reads(path)} parameter: its foreign record type and field count, for the shape check. */
     public record ReadIR(String name, String path, String type, int fields) {}
@@ -83,12 +86,12 @@ public record TransitionIR(Kind kind,
         return admitsType != null;
     }
 
-    /** This transition with its {@code @Admits} type resolved to the owned record's source text. */
-    public TransitionIR withAdmitsType(String type) {
-        return new TransitionIR(kind, method, variant, params, hasCtx, payable, returns, resultType, signedBy, validAfter,
+    /** This transition with its {@code @Admits} type resolved, and the arriving-object parameter taken out of the params. */
+    public TransitionIR withAdmits(String type, String arrivingName, List<ParamIR> newParams) {
+        return new TransitionIR(kind, method, variant, newParams, hasCtx, payable, returns, resultType, signedBy, validAfter,
                 validBefore, shared, batched, batchOnly, hasFunds, resultPayouts, resultSends, resultMint, resultAccepted,
                 takesParams, quorumKeys, quorumThreshold, authorizedBy, resultEvents, eventsType, reads, migrateTo, ownedType,
-                into, type);
+                into, type, arrivingName);
     }
 
     /** Moves its object to another instance ({@code @Into}, ADR-0012 D3). */

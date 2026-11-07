@@ -111,4 +111,16 @@ class ArmoryTest {
                 ANN, ctx), p.claims());
         System.out.println("[closeVault] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
     }
+
+    @Test
+    void callsThatTouchNoMapEntry_needNoMirror() {
+        // A filled vault, then a fresh process with an empty node store: a call reading no entry still builds its claim.
+        var v = filled();
+        var fresh = new MerkleSupport(new InMemoryNodeStore());
+        Ctx ctx = h.ctx(ANN, BigInteger.ZERO, BigInteger.valueOf(h.minAda()));
+        assertThrows(RequireException.class, () -> fresh.run(() -> Armory.closeVault(v, ctx)), "not empty, read from kinds");
+        var p = fresh.prepare(Armory.Vault.class, v, null, StateHarness.OBJECT_REF);
+        assertTrue(p.claims().get(0).reads().isEmpty());
+        assertArrayEquals(v.inventory().root(), p.claims().get(0).oldRoot());
+    }
 }

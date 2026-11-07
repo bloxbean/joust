@@ -934,8 +934,12 @@ public final class ValidatorGenerator {
         }
         if (t.admits()) {
             w.line("// I43: the object arrives here: it is spent in this transaction with a move naming this instance.");
-            w.line("boolean arrives = arrivesHere_" + c.ownedOf(t.admitsType()).simple() + "(tx, policy, r."
-                    + t.params().get(0).name() + "(), id);");
+            var at = c.ownedOf(t.admitsType());
+            w.line("boolean arrives = arrivesHere_" + at.simple() + "(tx, policy, r." + t.params().get(0).name() + "(), id);");
+            if (t.arriving() != null) {
+                w.line(at.type() + " " + t.arriving() + " = arrivingValue_" + at.simple() + "(tx, policy, r."
+                        + t.params().get(0).name() + "());");
+            }
             checks.add("arrives");
         }
     }
@@ -988,6 +992,26 @@ public final class ValidatorGenerator {
             w.close("}");
             w.line("return isObjectToken(object) && found;");
             w.close("}").blank();
+            boolean wanted = c.admits().stream().anyMatch(a -> o.type().equals(a.admitsType()) && a.arriving() != null);
+            if (wanted) {
+                w.line("/** The arriving " + o.simple() + " as it was before the move: its input's Holding (ADR-0012 r4). */");
+                w.open("static " + o.type() + " arrivingValue_" + o.simple() + "(TxInfo tx, byte[] policy, byte[] object) {");
+                w.line("boolean found = false;");
+                w.line("TxOut hit = tx.outputs().head();");
+                w.open("for (var in : tx.inputs()) {");
+                w.line("TxOut o = in.resolved();");
+                w.open("if (!found && ValuesLib.assetOf(o.value(), policy, object).compareTo(BigInteger.ONE) == 0 && isStateAddress(o.address(), policy)) {");
+                w.line("found = true;");
+                w.line("hit = o;");
+                w.close("}");
+                w.close("}");
+                w.open("if (!found) {");
+                w.line("Builtins.error();");
+                w.close("}");
+                w.line(o.holding() + " held = (" + o.holding() + ") (Object) OutputLib.getInlineDatum(hit);");
+                w.line("return held.value();");
+                w.close("}").blank();
+            }
         }
     }
 
@@ -2024,7 +2048,10 @@ public final class ValidatorGenerator {
         var out = new ArrayList<>(List.of(leading));
         if (t.takesParams()) out.add(paramsExpr());
         for (var rd : t.reads()) out.add(rd.name());
-        for (ParamIR p : t.params()) out.add(redeemerVar + "." + p.name() + "()");
+        for (int i = 0; i < t.params().size(); i++) {
+            out.add(redeemerVar + "." + t.params().get(i).name() + "()");
+            if (i == 0 && t.arriving() != null) out.add(t.arriving());
+        }
         if (t.hasCtx()) out.add(redeemerVar + ".ctx()");
         if (t.hasFunds()) out.add("funds");
         return String.join(", ", out);

@@ -131,4 +131,35 @@ class MarketTest {
         h.assertRejected(h.stepWith(live, new MarketValidator.Cancel(ctx), new MarketValidator.BurnInstance(),
                 Transition.full(null, w.payouts(), w.sends(), null, null), null, BUYER, ctx, null), "@SignedBy(seller)");
     }
+
+    // ------------------------------------------------------------------ moves with native assets (ADR-0012 D3)
+
+    static final byte[] OTHER = StateHarness.fill(32, 0xB2);
+    static final org.julclang.ledger.TxOutRef OTHER_REF = new org.julclang.ledger.TxOutRef(
+            new org.julclang.ledger.TxId(StateHarness.fill(32, 0x0C)), BigInteger.ZERO);
+
+    org.julclang.state.testkit.TxModel relist(Market.Config destination, Object admit, byte[] into, byte[] continuesUnder) {
+        var live = listing();
+        Ctx ctx = h.ctx(SELLER, BigInteger.ZERO, BigInteger.ZERO);
+        var moved = Market.relist(new Market.Listing(SELLER, NFT_POLICY, NFT, PRICE), destination, PRICE.add(PRICE), ctx);
+        var tx = h.stepWith(live, new MarketValidator.Relist(into, PRICE.add(PRICE), ctx), null,
+                Transition.full(moved, null, null, null, null), new MarketValidator.Holding(continuesUnder, moved), SELLER, ctx, null);
+        return h.withInstance(tx, OTHER, OTHER_REF, destination, admit, destination, BigInteger.valueOf(h.minAda()));
+    }
+
+    @Test
+    void relist_movesTheListingAndItsNftToAnotherMarket() {
+        Ctx ctx = h.ctx(SELLER, BigInteger.ZERO, BigInteger.ZERO);
+        var tx = relist(config, new MarketValidator.Enlist(h.objectId(), ctx), OTHER, OTHER);
+        System.out.println("[relist] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
+    }
+
+    @Test
+    void relist_intoAPausedMarket_orUnadmitted_rejected() {
+        Ctx ctx = h.ctx(SELLER, BigInteger.ZERO, BigInteger.ZERO);
+        h.assertRejected(relist(paused, new MarketValidator.Enlist(h.objectId(), ctx), OTHER, OTHER), "a paused destination");
+        h.assertRejected(relist(config, new MarketValidator.SetPaused(false), OTHER, OTHER), "no @Admits");
+        h.assertRejected(relist(config, new MarketValidator.Enlist(h.objectId(), ctx), OTHER, h.instanceId()),
+                "the listing stays under its source");
+    }
 }

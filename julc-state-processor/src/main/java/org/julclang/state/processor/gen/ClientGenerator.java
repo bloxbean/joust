@@ -214,6 +214,13 @@ public final class ClientGenerator {
         w.line("/** Calls {@link " + X + "#" + t.method() + "}" + (destroy ? "; ends the instance." : ".") + " */");
         w.open("public CallResult<" + S + "> " + t.method() + "(" + String.join(", ", params) + ") {");
         fetchReads(t, "instance.contract().runtime()");
+        if (t.arriving() != null) {
+            var at = c.ownedOf(t.admitsType());
+            String lookup = Character.toLowerCase(at.simple().charAt(0)) + at.simple().substring(1);
+            w.line("// The arriving object as it is before the move (the validator reads the same, from its input).");
+            w.line(at.type() + " " + t.arriving() + " = " + lookup + "(com.bloxbean.cardano.client.util.HexUtil.encodeHexString("
+                    + t.params().get(0).name() + ")).value();");
+        }
         String start = destroy
                 ? "Call.<" + S + ">destroy(\"" + t.method() + "\", callerAccount, new " + V + ".BurnInstance())"
                 : "Call.<" + S + ">action(\"" + t.method() + "\", callerAccount)";
@@ -597,7 +604,10 @@ public final class ClientGenerator {
         var out = new ArrayList<>(leading);
         if (t.takesParams()) out.add("params");
         for (var rd : t.reads()) out.add("read_" + rd.name() + ".state()");
-        for (ParamIR p : t.params()) out.add(p.name());
+        for (int i = 0; i < t.params().size(); i++) {
+            out.add(t.params().get(i).name());
+            if (i == 0 && t.arriving() != null) out.add(t.arriving());
+        }
         if (t.hasCtx()) out.add("ctx");
         if (t.hasFunds()) out.add("funds");
         return String.join(", ", out);

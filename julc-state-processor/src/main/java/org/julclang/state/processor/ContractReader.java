@@ -389,7 +389,18 @@ final class ContractReader {
                     else if (!movingTypes.contains(resolved)) error(type, "@Admits(\"" + a.admitsType() + "\") on "
                             + a.method() + ": that type has no @Into move");
                 }
-                if (resolved != null) actionIRs.set(i, a.withAdmitsType(resolved));
+                if (resolved != null) {
+                    // An optional parameter right after the object id, of the admitted type: the arriving object as it
+                    // was before the move, read from its input on-chain (ADR-0012 r4). Not a redeemer field.
+                    var ps = new ArrayList<ParamIR>(a.params());
+                    String arriving = null;
+                    if (ps.size() >= 2 && ps.get(1).type().equals(resolved)) arriving = ps.remove(1).name();
+                    if (arriving != null && GENERATED_LOCALS.contains(arriving)) {
+                        error(type, "parameter name \"" + arriving + "\" of " + a.method() + " is used by the generated"
+                                + " validator; rename it");
+                    }
+                    actionIRs.set(i, a.withAdmits(resolved, arriving, List.copyOf(ps)));
+                }
             }
             for (String mt : movingTypes) {
                 boolean admitted = actionIRs.stream().anyMatch(a -> a.admits() && mt.equals(a.admitsType()));
@@ -398,9 +409,6 @@ final class ContractReader {
                 }
             }
             boolean withdraws = purposeMethods.containsKey("WITHDRAW");   // the generated code is asset-aware then too
-            if (!movesIR.isEmpty() && (assetAware || withdraws)) {
-                error(type, "@Into moves cannot be combined with native assets yet (ADR-0012)");
-            }
             if (anyMap) {
                 error(type, "@Owned objects and MerkleMap state cannot be combined yet: a @Shared read has no proof path"
                         + " for map reads (ADR-0003 r2); MerkleMaps may go in the owned records instead (ADR-0012 D2)");
@@ -523,6 +531,11 @@ final class ContractReader {
             "StateInstance", "TxResult", "Transition", "Lifecycle", "Calls", "Call", "MerkleMap", "MapEntry", "MapWitness",
             "MapWitnesses", "Mpf", "Deploy", "ContractSpec",
             "StateContractHandle", "Utxo", "Arrays", "Holding", "ScriptPurpose");
+
+    /** Locals of generated validator methods that a derived argument must not shadow (ADR-0012 r4). */
+    static final Set<String> GENERATED_LOCALS = Set.of("r", "tx", "own", "policy", "id", "inLovelace", "current", "next",
+            "result", "payouts", "continues", "paid", "shared", "destination", "mc", "opened", "arrives", "held",
+            "params", "ctxOk", "allocated", "burned", "inValue", "funds");
 
     /** Names generated only for contracts with {@code @Batched} actions (ADR-0004). */
     static final Set<String> INTENT_NAMES = Set.of("Intent", "IntentCall", "Step", "IntentRefund", "Batch", "InBatch",
@@ -843,7 +856,7 @@ final class ContractReader {
                 List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared, batched, batchOnly,
                 hasFunds, shape != null && shape.payouts(), shape != null && shape.sends(), shape != null && shape.mint(),
                 accepts, takesParams, quorumKeys, quorumThreshold, List.copyOf(authorizedBy), events, eventsType,
-                List.copyOf(reads), migrateTo, ownedTypeText, into, admitsType);
+                List.copyOf(reads), migrateTo, ownedTypeText, into, admitsType, null);
     }
 
     /** Which effect components a result record has (ADR-0007 D1). */

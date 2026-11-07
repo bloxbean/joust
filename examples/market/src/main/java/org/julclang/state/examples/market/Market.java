@@ -9,12 +9,15 @@ import org.julclang.ledger.OutputDatum;
 import org.julclang.ledger.PubKeyHash;
 import org.julclang.ledger.Value;
 import org.julclang.state.api.Action;
+import org.julclang.state.api.Admits;
 import org.julclang.state.api.Assets;
 import org.julclang.state.api.Ctx;
 import org.julclang.state.api.Datum;
 import org.julclang.state.api.Funds;
 import org.julclang.state.api.Init;
+import org.julclang.state.api.Into;
 import org.julclang.state.api.Owned;
+import org.julclang.state.api.OwnedAction;
 import org.julclang.state.api.OwnedDestroy;
 import org.julclang.state.api.OwnedInit;
 import org.julclang.state.api.Payable;
@@ -91,6 +94,23 @@ public class Market {
                         Datum.inline(royalty(l)))
                 : nft;
         return new Sold(withFee, sends, Assets.none());
+    }
+
+    /**
+     * Moves a listing, NFT included, to another market at a new price (ADR-0012 D3): the destination admits it with
+     * {@link #enlist}. The listing's value moves with it, exactly.
+     */
+    @OwnedAction @SignedBy("seller")
+    public static Listing relist(Listing l, @Into Config to, BigInteger price, Ctx ctx) {
+        Require.that(price.compareTo(BigInteger.valueOf(2_000_000)) >= 0, "price below 2 ADA");
+        return new Listing(l.seller(), l.nftPolicy(), l.nftName(), price);
+    }
+
+    /** Admits a listing relisted from another market, unless this market is paused. */
+    @Action @Admits
+    public static Config enlist(Config c, byte[] listingId, Listing listing, Ctx ctx) {
+        Require.that(!c.paused(), "the market is paused");
+        return c;
     }
 
     /** The seller takes the NFT back. Reads no market state, so it works even if the market is paused. */

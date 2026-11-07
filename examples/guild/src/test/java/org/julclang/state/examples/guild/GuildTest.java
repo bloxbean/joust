@@ -25,8 +25,8 @@ class GuildTest {
     static final BigInteger TWO = BigInteger.TWO;
 
     final StateHarness<Guild.State> h = StateHarness.of(GuildClient.SPEC);
-    final Guild.State open = new Guild.State(MASTER, true, BigInteger.ZERO, BigInteger.TEN);
-    final Guild.State closed = new Guild.State(MASTER, false, BigInteger.ZERO, BigInteger.TEN);
+    final Guild.State open = new Guild.State(MASTER, true, BigInteger.ZERO, BigInteger.ONE);
+    final Guild.State closed = new Guild.State(MASTER, false, BigInteger.ZERO, BigInteger.ONE);
 
     /** The destination guild of a move: another instance at its own UTxO. */
     static final byte[] B = StateHarness.fill(32, 0xB2);
@@ -109,7 +109,7 @@ class GuildTest {
         var tx = h.actObject(obj, new GuildValidator.Transfer(into, ctx), hero(continuesUnder, hv), JulcList.empty(), ANN, ctx,
                 source);
         var admittedState = new Guild.State(destination.master(), destination.open(), destination.arrivals().add(BigInteger.ONE),
-                destination.cap());
+                destination.minLevel());
         return h.withInstance(tx, B, B_REF, destination, new GuildValidator.Admit(admitted, ctx), admittedState,
                 BigInteger.valueOf(h.minAda()));
     }
@@ -147,10 +147,13 @@ class GuildTest {
         Ctx ctx = h.ctx(ANN, BigInteger.ZERO, BigInteger.ZERO);
         assertThrows(RequireException.class, () -> Guild.transfer(new Guild.Hero(ANN, TWO), closed, open, ctx));
         h.assertRejected(move(closed, open, B, h.objectId(), B), "the source is closed");
-        assertThrows(RequireException.class, () -> Guild.admit(closed, h.objectId(), ctx));
+        var level2 = new Guild.Hero(ANN, TWO);
+        assertThrows(RequireException.class, () -> Guild.admit(closed, h.objectId(), level2, ctx));
         h.assertRejected(move(open, closed, B, h.objectId(), B), "the destination is closed");
-        var full = new Guild.State(MASTER, true, BigInteger.TEN, BigInteger.TEN);
-        h.assertRejected(move(open, full, B, h.objectId(), B), "the destination is full");
+        // The destination sees the arriving hero (from its input) and requires level 5: a level-2 hero is refused.
+        var elite = new Guild.State(MASTER, true, BigInteger.ZERO, BigInteger.valueOf(5));
+        assertThrows(RequireException.class, () -> Guild.admit(elite, h.objectId(), level2, ctx));
+        h.assertRejected(move(open, elite, B, h.objectId(), B), "the hero's level is below the destination's minimum");
     }
 
     @Test
@@ -161,7 +164,7 @@ class GuildTest {
         Ctx ctx = h.ctx(ANN, BigInteger.ZERO, BigInteger.ZERO);
         var tx = h.actObject(obj, new GuildValidator.LevelUp(), hero(h.instanceId(), Guild.levelUp(hv)), JulcList.empty(), ANN,
                 ctx, null);
-        var admitted = new Guild.State(MASTER, true, BigInteger.ONE, BigInteger.TEN);
+        var admitted = new Guild.State(MASTER, true, BigInteger.ONE, BigInteger.ONE);
         h.assertRejected(h.withInstance(tx, B, B_REF, open, new GuildValidator.Admit(h.objectId(), ctx), admitted,
                 BigInteger.valueOf(h.minAda())), "an admit with no move");
     }
@@ -173,13 +176,14 @@ class GuildTest {
         var obj = h.liveObject(hero(h.instanceId(), hv), BigInteger.ZERO);
         Ctx ctx = h.ctx(ANN, BigInteger.ZERO, BigInteger.ZERO);
         var tx = h.actObject(obj, new GuildValidator.Transfer(B, ctx), hero(B, hv), JulcList.empty(), ANN, ctx, open);
-        var full = new Guild.State(MASTER, true, BigInteger.TEN, BigInteger.TEN);
-        h.assertRejected(h.withInstance(tx, B, B_REF, full, new GuildValidator.AdmitItem(h.objectId(), ctx), full,
+        // admitItem checks no level: a level-2 hero must not enter a level-5 guild through it
+        var elite = new Guild.State(MASTER, true, BigInteger.ZERO, BigInteger.valueOf(5));
+        h.assertRejected(h.withInstance(tx, B, B_REF, elite, new GuildValidator.AdmitItem(h.objectId(), ctx), elite,
                 BigInteger.valueOf(h.minAda())), "a hero through admitItem");
         var iv = new Guild.Item(ANN, BigInteger.valueOf(7));
         var it = h.liveObject(item(h.instanceId(), iv), BigInteger.ZERO);
         var carry = h.actObject(it, new GuildValidator.Carry(B, ctx), item(B, iv), JulcList.empty(), ANN, ctx, null);
-        var admitted = new Guild.State(MASTER, true, BigInteger.ONE, BigInteger.TEN);
+        var admitted = new Guild.State(MASTER, true, BigInteger.ONE, BigInteger.ONE);
         h.assertRejected(h.withInstance(carry, B, B_REF, open, new GuildValidator.Admit(h.objectId(), ctx), admitted,
                 BigInteger.valueOf(h.minAda())), "an item through the hero admit");
         var ok = h.withInstance(carry, B, B_REF, open, new GuildValidator.AdmitItem(h.objectId(), ctx), open,

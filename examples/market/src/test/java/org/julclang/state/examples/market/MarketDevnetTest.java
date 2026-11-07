@@ -66,9 +66,17 @@ class MarketDevnetTest {
         // A second listing, withdrawn by its seller even while the market is paused (the escape hatch).
         var second = market.offer(seller, policy2, ape2, ADA.multiply(BigInteger.valueOf(50)), BigInteger.ZERO,
                 Assets.of(policy2, ape2, BigInteger.ONE));
+        // The seller moves it, NFT included, to a second market at a new price; that market admits it (ADR-0012 D3).
+        var market2 = MarketClient.deploy(runtime, admin, BigInteger.valueOf(100), vault, BigInteger.valueOf(500));
+        var moved = second.relistAdmitted(seller, market2, ADA.multiply(BigInteger.valueOf(60)));
+        assertEquals(ADA.multiply(BigInteger.valueOf(60)), moved.value().price());
+        assertEquals(BigInteger.ONE, Assets.quantity(moved.fullValue(), policy2, ape2), "the NFT moved with the listing");
         market.setPaused(admin, true);
-        assertThrows(RequireException.class, () -> second.buy(buyer, ADA.multiply(BigInteger.valueOf(50)), Assets.none()));
-        second.cancel(seller);
+        assertThrows(RequireException.class, () -> moved.relistAdmitted(seller, market, ADA.multiply(BigInteger.valueOf(70))),
+                "a paused market admits nothing");
+        market2.setPaused(admin, true);
+        assertThrows(RequireException.class, () -> moved.buy(buyer, ADA.multiply(BigInteger.valueOf(60)), Assets.none()));
+        moved.cancel(seller);
         assertEquals(BigInteger.ONE, DevKit.balance(seller.enterpriseAddress(),
                 HexUtil.encodeHexString(policy2) + HexUtil.encodeHexString(ape2)));
     }

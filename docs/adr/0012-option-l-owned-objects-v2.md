@@ -1,6 +1,6 @@
 # ADR-0012: Option L — owned objects v2: several types, MerkleMaps inside objects, moving between instances
 
-**Status:** Accepted with changes (r2): a security reviewer and Codex both returned "request changes"; resolved in §4. Implemented (§5); implementation reviewed by both again (r3, §6)
+**Status:** Accepted with changes (r2): a security reviewer and Codex both returned "request changes"; resolved in §4. Implemented (§5); implementation reviewed by both again (r3, §6); open items closed (r4)
 **Date:** 2026-11-07
 **Builds on:** ADR-0002 (MerkleMaps, the map verifier), ADR-0003 (owned objects: I18–I21).
 **Stack:** #1–#12, then this.
@@ -132,8 +132,11 @@ S = security reviewer, C = Codex.
     keyed by the object's input. A creation commits from empty roots with claims keyed by its seed, a wallet UTxO.
   - **Runtime:** `OwnedObject` runs the method against the mirror, prepares the claims, replays the method on the
     witnessed read set, and attaches the verifier, the same path as an instance's maps.
-  - **Still refused:** maps in a contract's shared state when it has owned objects; owned maps with native assets; an
-    `@Invariant` on an owned record with maps.
+  - **Still refused:** maps in a contract's shared state when it has owned objects; an `@Invariant` on an owned record
+    with maps; owned maps with native assets, which is the same limit as for instance maps (ADR-0007).
+  - **The mirror (r4).** A call that reads and writes no map entry no longer needs the off-chain mirror:
+    `MerkleSupport` builds its claim from the root alone. This holds for instances too. So an escape hatch that does not
+    touch its maps works even if the node store is lost.
 - **D3 (moves).**
   - **Each `@Admits` names the owned type it admits** (`@Admits("Hero")`); it may be left out when only one type has
     moves. The generated `admittedBy_<Type>`/`arrivesHere_<Type>` accept only the paired tags. So a hero cannot arrive
@@ -148,9 +151,15 @@ S = security reviewer, C = Codex.
   - **The continuing `Holding`** names `into`, which must be a 32-byte id different from the current instance.
   - **Every other owned arm** writes `held.instance()` back, so I19 holds. The attack suite gains "object's instance
     changed".
+  - **The arriving object (r4).** An `@Admits` method may take the arriving object as the parameter right after its
+    id (`admit(State s, byte[] heroId, Hero hero, Ctx ctx)`). It is not a redeemer field. On-chain,
+    `arrivingValue_<Type>` reads it from the object's input, and the client looks it up, so both sides see the object
+    as it was before the move. Guild admits only heroes of at least its `minLevel`.
   - **Example:** Guild's items move too, through their own `admitItem`.
-  - **Limits:** one move per destination per transaction, because the destination has one redeemer. Moves cannot be
-    combined with native assets yet.
+  - **With native assets (r4).** A move continues the object's full value under the destination. The Market example
+    relists a listing, NFT included, into another market (`relist`/`enlist`). This is tested in the harness and on
+    DevKit.
+  - **Limits:** one move per destination per transaction, because the destination has one redeemer.
 - **Runtime.**
   - `Call.movesTo(instanceId)` makes the continuing datum name the destination. A move outside `Compose` is refused
     with an explanation.
@@ -221,10 +230,10 @@ tags and the per-object map claims hold.
 | Owned maps and moves with a `@Withdraw` handler, which makes the code asset-aware | C | Refused like native assets |
 | Low. `admittedBy` enforces I43 by failing, not through the returned conjunction | S L1 | Kept: the same pattern as `sharedState` (I20). JuLC keeps a call whose result is unused but which may fail, and the "destination not spent" test checks it |
 | Low. Claim keys of objects are not namespaced | S L3 | Liveness only, since a shared claim must match both its users. Namespacing stays a follow-up |
-| Low. Closing a map-holding object opens its maps, so it needs the off-chain mirror | S L5 | As for instance maps, the runtime's node store must be kept. Documented; not opening maps a destroy never reads is a follow-up |
-| Low. In the example, `arrivals` only grows, so bouncing a hero between guilds fills the cap | S L6 | A simplification of the example. A real guild would count residents with a source-side hook |
+| Low. Closing a map-holding object opens its maps, so it needs the off-chain mirror | S L5 | A call that touches no map entry builds its claim from the root alone, with no mirror needed (r4, `ArmoryTest`) |
+| Low. In the example, `arrivals` only grows, so bouncing a hero between guilds fills the cap | S L6 | The cap is gone. Guild admits by the arriving hero's level, which it reads through the new arriving-object parameter (r4) |
 
 **Not yet:**
-- An `@Admits` method sees only the object's id, not its value.
-- Namespaced claim keys.
+- Namespaced claim keys. This affects liveness only: a claim shared by two users must match both.
+- Owned maps with native assets, the general maps-and-assets limit of ADR-0007.
 

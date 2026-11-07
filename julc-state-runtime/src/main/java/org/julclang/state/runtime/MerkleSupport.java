@@ -158,6 +158,8 @@ public final class MerkleSupport {
 
     private JulcList<ReadProof> readProofs(byte[] root) {
         Set<String> keys = readsByRoot.getOrDefault(hex(root), Set.of());
+        // No reads: no proofs, and no need for the mirror (an escape hatch must work even without it; ADR-0012 r4).
+        if (keys.isEmpty()) return JulcList.empty();
         var trie = trie(root);
         var list = new ArrayList<ReadProof>();
         for (String k : keys) {
@@ -174,6 +176,7 @@ public final class MerkleSupport {
     private record WriteResult(JulcList<WriteProof> proofs, byte[] root) {}
 
     private WriteResult writeProofs(byte[] root, JulcList<MapEntry> net) {
+        if (net.isEmpty()) return new WriteResult(JulcList.empty(), root);
         var trie = trie(root);
         var list = new ArrayList<WriteProof>();
         for (MapEntry n : net) {

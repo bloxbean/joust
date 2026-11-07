@@ -30,8 +30,8 @@ import java.math.BigInteger;
 @StateContract(maxDatumBytes = 160)
 public class Guild {
 
-    /** The guild: its master, whether it is open, and how many heroes it admitted (up to {@code cap}). */
-    public record State(byte[] master, boolean open, BigInteger arrivals, BigInteger cap) {}
+    /** The guild: its master, whether it is open, how many heroes it admitted, and the level a hero needs to join. */
+    public record State(byte[] master, boolean open, BigInteger arrivals, BigInteger minLevel) {}
 
     @Owned
     public record Hero(byte[] owner, BigInteger level) {}
@@ -40,24 +40,27 @@ public class Guild {
     public record Item(byte[] owner, BigInteger power) {}
 
     @Init
-    public static State init(BigInteger cap, Ctx ctx) {
-        Require.that(cap.signum() > 0, "the cap must be positive");
-        return new State(ctx.caller(), true, BigInteger.ZERO, cap);
+    public static State init(BigInteger minLevel, Ctx ctx) {
+        Require.that(minLevel.signum() > 0, "the minimum level must be positive");
+        return new State(ctx.caller(), true, BigInteger.ZERO, minLevel);
     }
 
     @Action
     @SignedBy("master")
     public static State setOpen(State s, boolean open) {
-        return new State(s.master(), open, s.arrivals(), s.cap());
+        return new State(s.master(), open, s.arrivals(), s.minLevel());
     }
 
-    /** Admits a hero moving in from another guild (the other half of {@link #transfer}); counts toward the cap. */
+    /**
+     * Admits a hero moving in from another guild (the other half of {@link #transfer}). It sees the arriving hero, read
+     * on-chain from the hero's own input, and admits only heroes of at least the guild's level.
+     */
     @Action
     @Admits("Hero")
-    public static State admit(State s, byte[] hero, Ctx ctx) {
+    public static State admit(State s, byte[] heroId, Hero hero, Ctx ctx) {
         Require.that(s.open(), "the guild is closed");
-        Require.that(s.arrivals().compareTo(s.cap()) < 0, "the guild is full");
-        return new State(s.master(), s.open(), s.arrivals().add(BigInteger.ONE), s.cap());
+        Require.that(hero.level().compareTo(s.minLevel()) >= 0, "the hero's level is too low for this guild");
+        return new State(s.master(), s.open(), s.arrivals().add(BigInteger.ONE), s.minLevel());
     }
 
     /** Admits an item carried in from another guild (the other half of {@link #carry}); items do not count. */
