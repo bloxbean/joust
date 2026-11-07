@@ -27,55 +27,55 @@ Each example contains:
 
 ## Script sizes and budgets
 
-The validator compiled by JuLC `main` (`728cb835`, target `plutus-v3-pv11`, `pv11-safe` optimisation). The budgets
-are per script execution, from the harness tests. For scale, a transaction may use 10,000M CPU and 14M memory units
-(mainnet).
+The validators are compiled by JuLC (target `plutus-v3-pv11`, `pv11-safe` optimisation), after the ADR-0008
+optimisations. The budgets are per script execution, from the harness tests. For scale, a transaction may use
+10,000M CPU and 14M memory units (mainnet; 16.5M on DevKit). The ADR-0008 tables give the numbers from before the
+optimisations.
 
 | Contract | Script size | Call | Purpose | CPU | Mem |
 |---|---|---|---|---|---|
-| Counter | 7.9 KB | create | MINT | 167.4M | 568k |
-| | | increment | SPEND | 165.7M | 553k |
-| | | reset | SPEND | 166.5M | 556k |
-| | | close | SPEND + MINT (burn) | 117.3M + 23.8M | 423k + 101k |
-| Vault | 8.6 KB | open | MINT | 173.9M | 587k |
-| | | deposit | SPEND | 191.7M | 642k |
-| | | withdraw | SPEND | 232.0M | 782k |
-| | | close | SPEND + MINT | 121.1M + 23.9M | 436k + 102k |
-| Escrow | 7.3 KB | open | MINT | 183.7M | 611k |
-| | | release / refund | SPEND + MINT | 113.3M + 23.9M | 404k + 102k |
-| Crowdfund | 10.3 KB | launch | MINT | 184.0M | 614k |
-| | | contribute | SPEND | 225.1M | 724k |
-| | | refund | SPEND | 248.3M | 796k |
-| | | refund, 27 backers (`maxDatumBytes` = 1024, at capacity) | SPEND | 378.0M | 895k |
-| | | claim | SPEND + MINT | 122.1M + 23.9M | 442k + 102k |
-| Bank | 10.3 KB | open account | MINT | 205.3M | 690k |
-| | | deposit (owned) | SPEND | 198.5M | 663k |
-| | | withdraw (owned, @Shared read) | SPEND | 263.1M | 885k |
-| | | close (owned) | SPEND | 119.8M | 435k |
-| Pool | 12.0 KB | create intent | MINT | 191.6M | 618k |
-| | | cancel intent | SPEND + MINT | 72.8M + 24.1M | 275k + 103k |
-| | | batch of 3 (donate, buy, buy) | SPEND instance + 3 × SPEND intent + MINT | 607.1M + 3 × 160.4M + 40.2M | 1,950k + 3 × 542k + 165k |
-| | | batch of 10 donations (all scripts) | | 4,990.6M | 15,537k |
-| Jar (.jsc) | 11 KB | tip | SPEND | 194.5M | 651k |
-| | | withdraw (with an `if` arm) | SPEND | 236.0M | 796k |
-| Points (.jsc) | 14 KB (+ MapVerifier) | give | SPEND + VERIFIER | 327.7M + 392.5M | 1,109k + 1,493k |
-| Rollup | 12 KB | commit (16 steps) | SPEND | 744.5M | 2,232k |
-| | | challenge, worst case (32 accounts, 16 steps) | SPEND | 2,735.2M | 8,117k |
-| Token | 14.0 KB (+ MapVerifier 4.6 KB, shared) | create | MINT + VERIFIER | 202.4M + 31.0M | 663k + 135k |
-| | | mint (1 read, 1 write) | SPEND + VERIFIER | 248.5M + 335.4M | 823k + 1,274k |
-| | | transfer (2 reads, 2 writes) | SPEND + VERIFIER | 310.7M + 501.3M | 1,046k + 1,898k |
-| | | transfer, 203 holders in the map | SPEND + VERIFIER | 310.7M + 741.3M | 1,046k + 2,920k |
-
-| Dex | 13 KB (+ OutputVerifier 0.7 KB, shared) | open | MINT | 112.9M | 365k |
-| | | addLiquidity (LP minted, sent) | SPEND + MINT + VERIFIER | 303.9M + 57.8M + 21.2M | 1,007k + 214k + 86k |
-| | | swapAdaForToken | SPEND + VERIFIER | 260.5M + 21.2M | 876k + 86k |
-| | | swapTokenForAda | SPEND | 222.6M | 739k |
-| | | removeLiquidity (LP burned) | SPEND + MINT + VERIFIER | 350.3M + 69.5M + 22.1M | 1,158k + 260k + 90k |
-| Market | 12 KB | offer (NFT in) | MINT | 181.7M | 601k |
-| | | buy (payout, NFT send, royalty send) | SPEND + MINT + VERIFIER | 405.0M + 24.0M + 35.3M | 1,389k + 100k + 145k |
-| | | cancel | SPEND + MINT + VERIFIER | 227.8M + 24.0M + 21.2M | 801k + 100k + 86k |
+| Counter | 5,631 B | create | MINT | 86.2M | 271k |
+| | | increment | SPEND | 73.4M | 213k |
+| | | reset | SPEND | 74.2M | 216k |
+| | | close | SPEND + MINT (burn) | 94.1M + 17.6M | 317k + 64k |
+| Vault | 6,273 B | open | MINT | 92.7M | 290k |
+| | | deposit | SPEND | 99.4M | 303k |
+| | | withdraw | SPEND | 140.6M | 445k |
+| | | close | SPEND + MINT | 97.9M + 17.6M | 330k + 64k |
+| Escrow | 5,688 B | open | MINT | 102.5M | 314k |
+| | | release / refund | SPEND + MINT | 92.1M + 17.6M | 309k + 64k |
+| Crowdfund | 7,976 B | launch | MINT | 102.8M | 317k |
+| | | contribute | SPEND | 132.8M | 385k |
+| | | refund | SPEND | 156.9M | 460k |
+| | | refund, 27 backers (`maxDatumBytes` = 1024, at capacity) | SPEND | 286.6M | 559k |
+| | | claim | SPEND + MINT | 99.0M + 17.6M | 336k + 64k |
+| Bank | 7,920 B | open account | MINT | 124.1M | 392k |
+| | | deposit (owned) | SPEND | 105.9M | 323k |
+| | | withdraw (owned, @Shared read) | SPEND | 171.4M | 547k |
+| | | close (owned) | SPEND | 96.4M | 327k |
+| Pool | 9,586 B | create intent | MINT | 110.3M | 321k |
+| | | cancel intent | SPEND | 48.3M | 165k |
+| | | batch of 3 (donate, buy, buy) | SPEND instance | 517.6M | 1,619k |
+| | | batch of 10 donations (all scripts) | | 4,629.8M | 13,976k |
+| Jar (.jsc) | 9,507 B | tip | SPEND | 102.3M | 312k |
+| | | withdraw (with an `if` arm) | SPEND | 144.5M | 460k |
+| Points (.jsc) | 12,276 B (+ MapVerifier) | give | SPEND + VERIFIER | 235.1M + 393.6M | 768k + 1,496k |
+| Rollup | 10,447 B | commit (16 steps) | SPEND | 651.9M | 1,892k |
+| | | challenge, worst case (32 accounts, 16 steps) | SPEND | 2,644.1M | 7,781k |
+| Token | 11,718 B (+ MapVerifier 4,700 B, shared) | create | MINT + VERIFIER | 121.2M + 32.0M | 366k + 138k |
+| | | mint (1 read, 1 write) | SPEND + VERIFIER | 156.2M + 336.5M | 483k + 1,277k |
+| | | transfer (2 reads, 2 writes) | SPEND + VERIFIER | 218.4M + 502.3M | 707k + 1,901k |
+| | | transfer, 203 holders in the map | SPEND + VERIFIER | 218.4M + 742.4M | 707k + 2,923k |
+| Dex | 12,008 B (+ OutputVerifier 703 B, shared) | open | MINT | 100.4M | 302k |
+| | | addLiquidity (LP minted, sent) | SPEND + MINT + VERIFIER | 256.5M + 57.8M + 21.2M | 793k + 214k + 86k |
+| | | swapAdaForToken | SPEND + VERIFIER | 221.6M + 21.2M | 688k + 86k |
+| | | swapTokenForAda | SPEND | 197.8M | 611k |
+| | | removeLiquidity (LP burned) | SPEND + MINT + VERIFIER | 296.3M + 69.5M + 22.1M | 913k + 260k + 90k |
+| Market | 11,325 B | offer (NFT in) | MINT | 159.1M | 497k |
+| | | buy (payout, NFT send, royalty send) | SPEND + MINT + VERIFIER | 345.7M + 24.0M + 35.3M | 1,127k + 100k + 145k |
+| | | cancel | SPEND + MINT + VERIFIER | 191.0M + 24.0M + 21.2M | 634k + 100k + 86k |
 
 All contracts read their script by reference (ADR-0002 D9); the first deploy of a contract type publishes it.
 
-The scripts are not optimised yet. Most of the cost is the generated invariant checks, not the contracts' own
-logic: an increment and a reset cost almost the same. That leaves room to optimise (ADR-0001 §13).
+ADR-0008 cut the generated checks' cost by 30–60 % (plain contracts) and the scripts by about 2.4 KB. The
+size-based fee is now the largest part of a simple call's fee.

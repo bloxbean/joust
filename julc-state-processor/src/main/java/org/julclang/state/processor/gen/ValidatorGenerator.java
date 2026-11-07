@@ -724,12 +724,15 @@ public final class ValidatorGenerator {
         java.util.function.UnaryOperator<String> datum = owned
                 ? v -> "(PlutusData) (Object) new Holding(held.instance(), " + v + ")"
                 : v -> "(PlutusData) (Object) " + v;
-        String next = null;
-        String payouts = null;
+        String next = "Builtins.iData(0L)";
+        String payouts = "JulcList.empty()";
+        String sends = "JulcList.empty()";
+        String mint = "noAssets()";
+        String accepted = "noAssets()";
         switch (t.returns()) {
             case STATE -> {
                 w.line(S + " next = " + (owned ? call : committed(call)) + ";");
-                next = "next";
+                next = datum.apply("next");
             }
             case PAYOUTS -> {
                 w.line("JulcList<Payout> payouts = " + call + ";");
@@ -739,55 +742,84 @@ public final class ValidatorGenerator {
                 w.line(t.resultType() + " result = " + call + ";");
                 if (t.returns() == TransitionIR.Returns.RESULT) {
                     w.line(S + " next = " + (owned ? "result.state()" : committed("result.state()")) + ";");
-                    next = "next";
+                    next = datum.apply("next");
                 }
-                if (t.resultPayouts()) {
-                    w.line("JulcList<Payout> payouts = result.payouts();");
-                    payouts = "payouts";
-                }
+                if (t.resultPayouts()) payouts = "result.payouts()";
+                if (t.resultSends()) sends = "result.sends()";
+                if (t.resultMint()) mint = "result.mint()";
+                if (t.resultAccepted()) accepted = "result.accepted()";
             }
         }
-        if (t.returnsRecord()) {
-            acceptedLocal(t, "r", checks);
+        if (!t.destroys() && next.equals("Builtins.iData(0L)")) {
+            throw new IllegalStateException(t.method() + ": a continuing transition without a next state");
+        }
+        // One shared settlement helper for every transition: the value equation, payouts, sends, mint (ADR-0008).
+        var settleArgs = new ArrayList<String>(List.of("tx", "own", "policy", "id", "inValue", next, String.valueOf(t.destroys()),
+                received("r", t), payouts));
+        if (c.hasSends()) settleArgs.add(sends);
+        if (c.hasMints()) {
+            settleArgs.add(mint);
+            settleArgs.add(String.valueOf(t.resultMint()));
+        }
+        if (anyAccepts()) {
+            settleArgs.add(accepted);
+            settleArgs.add(String.valueOf(t.resultAccepted()));
+            settleArgs.add(t.resultAccepted() ? "r.assetsIn()" : "Builtins.iData(0L)");
+        }
+        checks.add("settle(" + String.join(", ", settleArgs) + ")");
+        w.line("return " + conj(checks, t.variant()) + ";");
+        w.close("}").blank();
+    }
+
+    /** Some transition returns {@code accepted} (ADR-0007 r2). */
+    private boolean anyAccepts() {
+        return c.allTransitions().stream().anyMatch(TransitionIR::resultAccepted);
+    }
+
+    /** The shared settlement of an asset-aware transition (I26, I28, I29, I31). */
+    private void settleHelper() {
+        var params = new ArrayList<String>(List.of("TxInfo tx", "TxInInfo own", "byte[] policy", "byte[] id", "JulcValue inValue",
+                "PlutusData next", "boolean destroy", "BigInteger received", "JulcList<Payout> payouts"));
+        if (c.hasSends()) params.add("JulcList<Send> sends");
+        if (c.hasMints()) {
+            params.add("Value mint");
+            params.add("boolean mints");
+        }
+        if (anyAccepts()) {
+            params.add("Value accepted");
+            params.add("boolean accepts");
+            params.add("PlutusData assetsIn");
+        }
+        w.line("/**");
+        w.line(" * Settles a transition: out = in + received + accepted + mint - payouts - sends (I26), or for a destroy exactly");
+        w.line(" * the burned token; payouts tagged (I7); sends claimed (I29); the user mint exact (I28); accepted == offered (I31).");
+        w.line(" */");
+        w.open("static boolean settle(" + String.join(", ", params) + ") {");
+        if (anyAccepts()) {
+            w.line("JulcValue acceptedV = accepts ? methodValue(accepted, policy, 1L) : noValue();");
+            w.line("boolean acceptedOk = !accepts || Builtins.equalsData(Builtins.valueData(acceptedV), assetsIn);");
         } else {
             w.line("JulcValue acceptedV = noValue();");
+            w.line("boolean acceptedOk = true;");
         }
-        String out = payouts == null ? "BigInteger.ZERO" : "Payouts.total(payouts)";
-        w.line("JulcValue mintV = " + (t.resultMint() ? "methodValue(result.mint(), policy, 2L)" : "noValue()") + ";");
-        w.line("JulcValue sentV = " + (t.resultSends() ? "sendsTotal(result.sends(), policy)" : "noValue()") + ";");
-        w.line("// I26: out = in + received + accepted + mint - payouts - sends.");
-        w.line("JulcValue expected = Builtins.unionValue(inValue, Builtins.unionValue(lovelaceValue(" + received("r", t)
-                + ".subtract(" + out + ")),");
+        w.line("JulcValue mintV = " + (c.hasMints() ? "mints ? methodValue(mint, policy, 2L) : noValue()" : "noValue()") + ";");
+        w.line("JulcValue sentV = " + (c.hasSends() ? "sendsTotal(sends, policy)" : "noValue()") + ";");
+        w.line("JulcValue expected = Builtins.unionValue(inValue, Builtins.unionValue(lovelaceValue(received.subtract(Payouts.total(payouts))),");
         w.line("        Builtins.unionValue(acceptedV, Builtins.unionValue(mintV, Builtins.scaleValue(BigInteger.valueOf(-1), sentV)))));");
-        if (t.destroys()) {
-            w.line("// The instance ends: what is left is exactly its own token, which the lifecycle burn removes (I8).");
-            w.line("boolean allocated = Builtins.equalsData(Builtins.valueData(expected),");
-            w.line("        Builtins.valueData(Builtins.insertCoin(policy, id, BigInteger.ONE, noValue())));");
-            w.line("boolean burned = ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.valueOf(-1)) == 0;");
-            checks.add("allocated");
-            checks.add("burned");
-        } else {
-            w.line("boolean continues = continuesValue(tx, own, policy, id, " + datum.apply(next) + ", expected);");
-            checks.add("continues");
-        }
-        if (payouts != null) {
-            w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
-            checks.add("paid");
-        }
-        if (t.resultSends()) {
-            w.line("boolean sent = sendsClaimed(tx, own.outRef(), result.sends(), policy);");
-            checks.add("sent");
-        }
-        if (t.resultMint()) {
-            w.line("boolean minted = mintMatches(tx, policy, own.outRef(), mintV, " + t.destroys() + ", id);");
-            checks.add("minted");
-        }
-        w.line("return " + conj(checks, t.variant()) + ";");
+        w.line("boolean valueOk = destroy");
+        w.line("        ? Builtins.equalsData(Builtins.valueData(expected), Builtins.valueData(Builtins.insertCoin(policy, id, BigInteger.ONE, noValue())))");
+        w.line("          && ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.valueOf(-1)) == 0");
+        w.line("        : continuesValue(tx, own, policy, id, next, expected);");
+        w.line("boolean paid = payouts.isEmpty() || payoutsPaid(tx.outputs(), own, payouts);");
+        w.line("boolean sent = " + (c.hasSends() ? "sendsClaimed(tx, own.outRef(), sends, policy)" : "true") + ";");
+        w.line("boolean minted = " + (c.hasMints() ? "!mints || mintMatches(tx, policy, own.outRef(), mintV, destroy, id)" : "true") + ";");
+        w.line("return " + conj(List.of("acceptedOk", "valueOk", "paid", "sent", "minted"), "settle") + ";");
         w.close("}").blank();
     }
 
     private void assetHelpers() {
         w.line("// ---- native assets (ADR-0007) ---------------------------------------------------------------");
+        settleHelper();
         w.line("/** Reserved token kinds: 32 bytes (instance), 29 bytes with 0x4F (object) or 0x49 (intent) (I27). */");
         w.open("static boolean isReserved(byte[] n) {");
         w.line("long len = ByteStringLib.length(n);");
@@ -796,17 +828,19 @@ public final class ValidatorGenerator {
 
         w.line("/** The single reserved token (quantity 1) under this policy in a state UTxO; user tokens are ignored (I27). */");
         w.open("static byte[] lifecycleTokenOf(Value v, byte[] policy) {");
+        w.line("PlutusData rest = Builtins.unMapData(ledgerTokensOf(v, policy));");
         w.line("long entries = 0;");
         w.line("byte[] name = ByteStringLib.empty();");
         w.line("boolean ok = true;");
-        w.open("for (var e : ValuesLib.flattenTyped(v)) {");
-        w.open("if (ByteStringLib.equals(e.policyId(), policy) && isReserved(e.tokenName())) {");
+        w.open("while (!Builtins.nullList(rest)) {");
+        w.line("PlutusData pair = Builtins.headList(rest);");
+        w.line("byte[] n = Builtins.unBData(Builtins.fstPair(pair));");
+        w.open("if (isReserved(n)) {");
         w.line("entries = entries + 1;");
-        w.line("name = e.tokenName();");
-        w.open("if (e.amount().compareTo(BigInteger.ONE) != 0) {");
-        w.line("ok = false;");
+        w.line("name = n;");
+        w.line("ok = ok && Builtins.unIData(Builtins.sndPair(pair)).compareTo(BigInteger.ONE) == 0;");
         w.close("}");
-        w.close("}");
+        w.line("rest = Builtins.tailList(rest);");
         w.close("}");
         w.open("if (!ok || entries != 1) {");
         w.line("Builtins.error();");
@@ -847,35 +881,48 @@ public final class ValidatorGenerator {
         w.line(" * only this policy, user names. Never a reserved name of this policy (I31).");
         w.line(" */");
         w.open("static JulcValue methodValue(Value v, byte[] policy, long mode) {");
-        w.line("JulcList<AssetEntry> entries = ValuesLib.flattenTyped(v);");
-        w.line("boolean ok = true;");
-        w.open("for (var e : entries) {");
-        w.line("boolean own = ByteStringLib.equals(e.policyId(), policy);");
-        w.line("boolean negative = e.amount().compareTo(BigInteger.ZERO) < 0;");
-        w.line("boolean ada = ByteStringLib.length(e.policyId()) == 0;");
-        w.open("if ((own && isReserved(e.tokenName())) || (mode != 2L && negative) || (mode == 1L && ada)"
-                + " || (mode == 2L && !own)) {");
-        w.line("ok = false;");
-        w.close("}");
-        w.close("}");
-        w.open("if (!ok) {");
-        w.line("Builtins.error();");
-        w.line("return noValue();");
-        w.close("} else {");
-        w.indent();
-        w.line("return foldEntries(entries, noValue());");
-        w.close("}");
+        w.line("return foldPolicies(Builtins.unMapData((PlutusData) (Object) v), noValue(), policy, mode);");
         w.close("}").blank();
 
-        w.line("/** The entries added into {@code acc} (recursive: a native value cannot be a loop accumulator). */");
-        w.open("static JulcValue foldEntries(JulcList<AssetEntry> es, JulcValue acc) {");
-        w.open("if (es.isEmpty()) {");
+        w.line("/** Folds each policy's tokens into {@code acc} (recursive: a native value cannot be a loop accumulator). */");
+        w.open("static JulcValue foldPolicies(PlutusData ps, JulcValue acc, byte[] policy, long mode) {");
+        w.open("if (Builtins.nullList(ps)) {");
         w.line("return acc;");
         w.close("} else {");
         w.indent();
-        w.line("AssetEntry e = es.head();");
-        w.line("return foldEntries(es.tail(), Builtins.insertCoin(e.policyId(), e.tokenName(),");
-        w.line("        e.amount().add(Builtins.lookupCoin(e.policyId(), e.tokenName(), acc)), acc));");
+        w.line("PlutusData pair = Builtins.headList(ps);");
+        w.line("byte[] p = Builtins.unBData(Builtins.fstPair(pair));");
+        w.line("boolean own = ByteStringLib.equals(p, policy);");
+        w.line("boolean ada = ByteStringLib.length(p) == 0;");
+        w.line("// An empty token map adds nothing, and is accepted as before (ADR-0008 review).");
+        w.line("boolean empty = Builtins.nullList(Builtins.unMapData(Builtins.sndPair(pair)));");
+        w.open("if (!empty && ((mode == 1L && ada) || (mode == 2L && !own))) {");
+        w.line("Builtins.error();");
+        w.line("return acc;");
+        w.close("} else {");
+        w.indent();
+        w.line("return foldPolicies(Builtins.tailList(ps), foldTokens(Builtins.unMapData(Builtins.sndPair(pair)), p, own, acc, mode),"
+                + " policy, mode);");
+        w.close("}");
+        w.close("}");
+        w.close("}").blank();
+
+        w.open("static JulcValue foldTokens(PlutusData ts, byte[] p, boolean own, JulcValue acc, long mode) {");
+        w.open("if (Builtins.nullList(ts)) {");
+        w.line("return acc;");
+        w.close("} else {");
+        w.indent();
+        w.line("PlutusData pair = Builtins.headList(ts);");
+        w.line("byte[] n = Builtins.unBData(Builtins.fstPair(pair));");
+        w.line("BigInteger q = Builtins.unIData(Builtins.sndPair(pair));");
+        w.open("if ((own && isReserved(n)) || (mode != 2L && q.compareTo(BigInteger.ZERO) < 0)) {");
+        w.line("Builtins.error();");
+        w.line("return acc;");
+        w.close("} else {");
+        w.indent();
+        w.line("return foldTokens(Builtins.tailList(ts), p, own, Builtins.insertCoin(p, n, q.add(Builtins.lookupCoin(p, n, acc)), acc),"
+                + " mode);");
+        w.close("}");
         w.close("}");
         w.close("}").blank();
 
@@ -985,7 +1032,7 @@ public final class ValidatorGenerator {
             w.line(" */");
             w.open("static boolean mintMatches(TxInfo tx, byte[] policy, TxOutRef own, JulcValue declared, boolean destroy,"
                     + " byte[] id) {");
-            w.line("PlutusData.MapData minted = ValuesLib._tokensOf(Builtins.unMapData((PlutusData) (Object) tx.mint()),"
+            w.line("PlutusData.MapData minted = ValuesLib._ledgerTokensOf(Builtins.unMapData((PlutusData) (Object) tx.mint()),"
                     + " Builtins.bData(policy));");
             w.line("boolean any = !Builtins.nullList(Builtins.unMapData(minted));");
             w.line("boolean byOwn = any && Builtins.equalsData(tx.redeemers().get(new ScriptPurpose.Minting(new PolicyId(policy))),");
@@ -1094,68 +1141,75 @@ public final class ValidatorGenerator {
         w.line("return found;");
         w.close("}").blank();
 
+        w.line("/**");
+        w.line(" * The token map of {@code policy} in a value (empty if absent): one pass over the policies (ADR-0008). Takes the");
+        w.line(" * first entry of the policy, so only for ledger values (tx.mint(), an input's or output's value), which have no");
+        w.line(" * repeated policy; never for a value a method or redeemer supplies.");
+        w.line(" */");
+        w.open("static PlutusData.MapData ledgerTokensOf(Value v, byte[] policy) {");
+        w.line("return ValuesLib._ledgerTokensOf(Builtins.unMapData((PlutusData) (Object) v), Builtins.bData(policy));");
+        w.close("}").blank();
+
         w.line("/** Under this policy the transaction mints exactly (id, 1) and nothing else (I1). */");
         w.open("static boolean mintsExactlyOne(Value mint, byte[] policy, byte[] id) {");
-        w.line("long entries = 0;");
-        w.line("boolean ok = true;");
-        w.open("for (var e : ValuesLib.flattenTyped(mint)) {");
-        w.open("if (ByteStringLib.equals(e.policyId(), policy)) {");
-        w.line("entries = entries + 1;");
-        w.open("if (!ByteStringLib.equals(e.tokenName(), id) || e.amount().compareTo(BigInteger.ONE) != 0) {");
-        w.line("ok = false;");
-        w.close("}");
-        w.close("}");
-        w.close("}");
-        w.line("return ok && entries == 1;");
+        w.line("PlutusData expected = Builtins.mapData(Builtins.mkCons(Builtins.mkPairData(Builtins.bData(id), Builtins.iData(1L)),"
+                + " Builtins.mkNilPairData()));");
+        w.line("return Builtins.equalsData(ledgerTokensOf(mint, policy), expected);");
         w.close("}").blank();
 
         w.line("/** Under this policy the transaction only burns, one token per name (I9). */");
         w.open("static boolean onlyBurns(Value mint, byte[] policy) {");
-        w.line("long entries = 0;");
-        w.line("boolean ok = true;");
-        w.open("for (var e : ValuesLib.flattenTyped(mint)) {");
-        w.open("if (ByteStringLib.equals(e.policyId(), policy)) {");
-        w.line("entries = entries + 1;");
-        w.open("if (e.amount().compareTo(BigInteger.valueOf(-1)) != 0" + (c.assetAware() ? " || !isReserved(e.tokenName())" : "") + ") {");
+        w.line("PlutusData tokens = Builtins.unMapData(ledgerTokensOf(mint, policy));");
+        w.line("boolean ok = !Builtins.nullList(tokens);");
+        w.line("PlutusData rest = tokens;");
+        w.open("while (!Builtins.nullList(rest)) {");
+        w.line("PlutusData pair = Builtins.headList(rest);");
+        w.open("if (Builtins.unIData(Builtins.sndPair(pair)).compareTo(BigInteger.valueOf(-1)) != 0"
+                + (c.assetAware() ? " || !isReserved(Builtins.unBData(Builtins.fstPair(pair)))" : "") + ") {");
         w.line("ok = false;");
         w.close("}");
+        w.line("rest = Builtins.tailList(rest);");
         w.close("}");
-        w.close("}");
-        w.line("return ok && entries > 0;");
+        w.line("return ok;");
         w.close("}").blank();
 
         w.line("/** The name of the single thread token (quantity 1) under this policy in a state UTxO; fails otherwise. */");
         w.open("static byte[] instanceIdOf(Value v, byte[] policy) {");
-        w.line("long entries = 0;");
-        w.line("byte[] name = ByteStringLib.empty();");
-        w.line("boolean ok = true;");
-        w.open("for (var e : ValuesLib.flattenTyped(v)) {");
-        w.open("if (ByteStringLib.equals(e.policyId(), policy)) {");
-        w.line("entries = entries + 1;");
-        w.line("name = e.tokenName();");
-        w.open("if (e.amount().compareTo(BigInteger.ONE) != 0) {");
-        w.line("ok = false;");
-        w.close("}");
-        w.close("}");
-        w.close("}");
-        w.open("if (!ok || entries != 1) {");
+        w.line("PlutusData tokens = Builtins.unMapData(ledgerTokensOf(v, policy));");
+        w.open("if (Builtins.nullList(tokens)) {");
         w.line("Builtins.error();");
-        w.line("return name;");
+        w.line("return ByteStringLib.empty();");
         w.close("} else {");
         w.indent();
-        w.line("return name;");
+        w.line("PlutusData pair = Builtins.headList(tokens);");
+        w.open("if (!Builtins.nullList(Builtins.tailList(tokens)) || Builtins.unIData(Builtins.sndPair(pair)).compareTo(BigInteger.ONE) != 0) {");
+        w.line("Builtins.error();");
+        w.line("return ByteStringLib.empty();");
+        w.close("} else {");
+        w.indent();
+        w.line("return Builtins.unBData(Builtins.fstPair(pair));");
+        w.close("}");
         w.close("}");
         w.close("}").blank();
 
-        w.line("/** Exactly one output carries the thread token; returns it (fails otherwise). */");
+        w.line("/** Exactly one output carries the thread token; returns it (fails otherwise). One pass, no list built. */");
         w.open("static TxOut uniqueOutputWith(JulcList<TxOut> outputs, byte[] policy, byte[] id) {");
-        w.line("JulcList<TxOut> withToken = OutputLib.outputsWithToken(outputs, policy, id);");
-        w.open("if (withToken.size() != 1) {");
+        w.line("PlutusData.BytesData p = Builtins.bData(policy);");
+        w.line("PlutusData.BytesData n = Builtins.bData(id);");
+        w.line("long count = 0;");
+        w.line("TxOut hit = outputs.head();");
+        w.open("for (var o : outputs) {");
+        w.open("if (ValuesLib._assetOf(o.value(), p, n).compareTo(BigInteger.ZERO) > 0) {");
+        w.line("count = count + 1;");
+        w.line("hit = o;");
+        w.close("}");
+        w.close("}");
+        w.open("if (count != 1) {");
         w.line("Builtins.error();");
-        w.line("return withToken.head();");
+        w.line("return hit;");
         w.close("} else {");
         w.indent();
-        w.line("return withToken.head();");
+        w.line("return hit;");
         w.close("}");
         w.close("}").blank();
 
@@ -1170,11 +1224,17 @@ public final class ValidatorGenerator {
         w.line("return BigInteger.valueOf(Builtins.lengthOfByteString(Builtins.serialiseData(d))).compareTo(MAX_DATUM_BYTES) <= 0;");
         w.close("}").blank();
 
-        w.line("/** The value is exactly {lovelace, policy.id: 1}: no token dust, no skim (I3). */");
+        w.line("/**");
+        w.line(" * The value is exactly {lovelace, policy.id: 1}: no token dust, no skim (I3). Ledger values are canonical (lovelace");
+        w.line(" * first, under the empty policy), so this is one Data comparison (ADR-0008).");
+        w.line(" */");
         w.open("static boolean exactValue(Value v, byte[] policy, byte[] id, BigInteger lovelace) {");
-        w.line("Value expected = ValuesLib.add(ValuesLib.singleton(ByteStringLib.empty(), ByteStringLib.empty(), lovelace),");
-        w.line("        ValuesLib.singleton(policy, id, BigInteger.ONE));");
-        w.line("return ValuesLib.eq(v, expected);");
+        w.line("PlutusData none = Builtins.mkNilPairData();");
+        w.line("PlutusData ada = Builtins.mkPairData(Builtins.bData(ByteStringLib.empty()), Builtins.mapData(Builtins.mkCons("
+                + "Builtins.mkPairData(Builtins.bData(ByteStringLib.empty()), Builtins.iData(lovelace)), none)));");
+        w.line("PlutusData thread = Builtins.mkPairData(Builtins.bData(policy), Builtins.mapData(Builtins.mkCons("
+                + "Builtins.mkPairData(Builtins.bData(id), Builtins.iData(1L)), none)));");
+        w.line("return Builtins.equalsData((PlutusData) (Object) v, Builtins.mapData(Builtins.mkCons(ada, Builtins.mkCons(thread, none))));");
         w.close("}").blank();
 
         w.line("/** The unique continuing output: same address, inline datum == next, exact value (I3, I4). */");
