@@ -1,6 +1,6 @@
 # ADR-0015: Option N — JOUST for JavaScript developers: an npm toolchain and off-chain runtime on a Wasm engine
 
-**Status:** Proposed (r3)
+**Status:** Proposed (r4)
 **Date:** 2026-11-08
 **Builds on:** ADR-0013 (wallets, descriptions, the JS client, the page verifier, phase 4's Wasm spike), ADR-0005
 (`.jsc`), ADR-0011 (`Compose`), JuLC ADR-057/064/068 (the `julc-wasm` engine, embedders, javac in Web Image).
@@ -45,7 +45,7 @@ Each fact was verified at the cited source:
 | F5 | Sizes measured by JuLC with GraalVM 25.3.4.1: VM probe 11.58 MB `.wasm` (4.32 MB gzip); playground engine (compiler, CCL, …) 21.29 MB (7.47 MB gzip). Both predate javac in the image; with javac, Elci's engine is 30.0 MB (F4), and JOUST's will be measured (S0, S1) | JuLC ADR-057 table, ADR-064 |
 | F6 | JOUST code in Web Image is byte-identical to the JVM: 136/136 vectors (`WasmParityTest`); the Counter and Bank image is 1.41 MB once julc-compiler's native-image metadata is kept off its class path | JOUST ADR-0013 §10.3–10.4 |
 | F7 | Web Image exports work through a Java `Function` passed into a `@JS` snippet. Java exceptions reach JS as opaque proxies. Java code cannot await a JS promise | JuLC `JsApi.java`; JOUST `JoustWasm.java` |
-| F8 | CCL's TxPlan is a YAML description of QuickTx `Tx` transactions, in the 0.8.0-pre7 JOUST already uses (itself a preview). Facts:<br>- It rejects the deprecated `ScriptTx` (`TxPlan.java:466-471`), which JOUST still builds on (`TxRunner.java:47,123`).<br>- Its **extension SPI** carries what plain intents cannot: namespaced intents (`<id>:<operation>`, `ExtensionIntent`), and build hooks `prepare`, `beforeScriptEvaluation`, `afterBalance` (returning `BalanceFinalization`), `verify` and `referenceScripts` (`quicktx/.../extension/TxBuildExtension.java`, `QuickTxExtension.java`). CIP-113 programmable tokens use it.<br>- Its structured PlutusData form is not byte-exact (`ListDataJsonDeserializer.java:41` drops list chunking). Its **hex forms** (`datum_hex`, `redeemer_hex`) go through CBOR decoding, which keeps an indefinite list chunked (`PlutusDataCodec.java:107,218`), so data CCL encoded round-trips byte for byte | CCL `quicktx/.../serialization/TxPlan.java`, `quicktx/.../extension/*`, `plutus/.../PlutusDataCodec.java`; review r0 (§12) |
+| F8 | CCL's TxPlan is a YAML description of QuickTx `Tx` transactions, in the 0.8.0-pre7 JOUST already uses (itself a preview). Facts:<br>- It rejects the deprecated `ScriptTx` (`TxPlan.java:466-471`), which JOUST still builds on (`TxRunner.java:47,123`).<br>- Its **extension SPI** carries what plain intents cannot: namespaced intents (`<id>:<operation>`, `ExtensionIntent`), and build hooks `prepare`, `beforeScriptEvaluation`, `afterBalance` (returning `BalanceFinalization`), `verify` and `referenceScripts` (`quicktx/.../extension/TxBuildExtension.java`, `QuickTxExtension.java`). CIP-113 programmable tokens use it.<br>- Its structured PlutusData form is not byte-exact (`ListDataJsonDeserializer.java:41` drops list chunking). Its hex forms (`datum_hex`, `redeemer_hex`) go through CBOR decoding into CCL's PlutusData model, which keeps an indefinite list chunked (`PlutusDataCodec.java:107,218`) but collapses duplicate map keys (review r3, F11) | CCL `quicktx/.../serialization/TxPlan.java`, `quicktx/.../extension/*`, `plutus/.../PlutusDataCodec.java`; review r0 (§12) |
 | F9 | `.jsc` lowers to a Java `@StateContract` in pure Java (`julc-state-dsl`: `Lexer`, `Parser`, `Lowering`) | JOUST `julc-state-dsl` |
 | F10 | The Web Image runs in Chrome 156 (headless, the dApp page) and in Node 22.12 only with `--experimental-wasm-exnref` | JOUST phase 4 (tested here) |
 | F11 | Today's runtime is typed and partly reflective:<br>- `ContractSpec` holds `Class` objects;<br>- `Call.Builder` takes Java lambdas (`signedBy`, `validAfter`, `run`, `redeemerWith`, `byAction`, `Call.java:174-196`);<br>- `MerkleSupport` and `OwnedObject` reflect over records (`MerkleSupport.java:120,155,251,277`; `OwnedObject.java:249`);<br>- off-chain map reads are discovered by a JVM callback (`MerkleSupport.java:46`), which the on-chain `MerkleMaps` answers with `error()` (`julc-state-api/src/onchain/.../MerkleMaps.java:106`) | JOUST runtime; review r0 (§12) |
@@ -119,11 +119,13 @@ QuickTx extensions are a later option (D6, Q2), not on the path the developer ex
 
    **What JuLC's host does today (r3):** JuLC's javac frontend runs with `-proc:none` (`JavacFrontend.OPTIONS`,
    `EmbeddedFileManager.java:103`), discards javac's outputs, and its embedded environment has no `julc-state-api`
-   signatures. Either JOUST's embedder runs its own `JavacTask` over JuLC's `EmbeddedFileManager` (route a, if the
-   classes are usable from outside), or JuLC gains:
-   - a host option that allows processors;
-   - access to the generated sources;
-   - library signatures or sources supplied by the embedder.
+   signatures. `EmbeddedFileManager` is package-private (`final class`, line 33), so JOUST's embedder cannot reuse it
+   as it is. Either route therefore needs a JuLC change:
+   - for route (a), either an exported way to build an embedded `JavacTask` with JOUST's processors, or JuLC gains:
+     - a host option that allows processors;
+     - access to the generated sources;
+     - library signatures or sources supplied by the embedder;
+   - for route (b), the library signatures or sources for `julc-state-api` at least.
 
    Those changes go through JuLC's ADR process (label `joust`). S1's entry gate is whichever applies.
 
@@ -164,7 +166,9 @@ QuickTx extensions are a later option (D6, Q2), not on the path the developer ex
   - The engine fetches proofs for all of them and runs again. A key is either **proven present**, **proven absent**
     (a non-membership proof), or **not yet fetched**; only the first two are answers.
   - **Further rounds** happen only when a read depends on the value of an earlier one. The number of rounds is
-    bounded by that dependency depth, and a call that exceeds a limit (default 4) is refused with a clear error.
+    bounded by that dependency depth. A call that exceeds a limit (default 4, configurable) is refused with a clear
+    error. The JVM has no such limit, since its reads are answered inline, so `joust test` reports each call's round
+    count and lets a contract author see when one approaches the limit.
   - The final run's result is used only if every read it made was proven.
   - The read set equals the one the JVM collects (I2). Foreign reads (`@Reads`) and batches discover the UTxOs they
     need the same way.
@@ -191,7 +195,7 @@ both paths:
 - **Execution budgets** are computed by the VM in the engine (CCL's evaluator SPI over `julc-vm-java`), so no
   network evaluate endpoint is needed.
 - **`Tx`, not `ScriptTx`:** every transaction the runtime builds uses QuickTx's `Tx`; `ScriptTx` is deprecated in
-  0.8.0-pre7 (F8). This is the first step of M1 and is needed by D6.
+  0.8.0-pre7 (F8). This is milestone M0, before anything else.
 
 ### D5. Deterministic replay: the engine is a pure function of request and snapshot
 
@@ -208,7 +212,14 @@ Web Image cannot await JS promises (F7), and the runtime today does I/O inline (
   - **failed:** the fetch failed, and the JS layer surfaces the error.
 - **"UTxOs at address X" in a snapshot means the complete set at a stated tip.** Paging is the JS layer's job.
 - **No sleeping or polling** in the engine; any such path fails loudly.
-- **Each pass collects all the needs it can** before returning, so replays stay few.
+- **Needs come in two kinds (review r3, F14):**
+  - **Up front:** the call recipe (D4) and the request determine most needs before anything runs: the target UTxO,
+    any shared or foreign instances, the reference scripts, the parameters, and the wallet's UTxOs. `prepare`
+    returns all of them in its first pass.
+  - **Discovered:** `Need` (thrown on any other lookup) stops a pass at the first one. It covers only what cannot be
+    known up front, such as map reads (D3's discovery runs) and data-dependent lookups.
+- **`joust.prepare` catches `Need` itself** and returns `{needs}`. julc-wasm's `ApiRegistry.invoke` catches
+  `Throwable` and would otherwise report a server error.
 - **The protocol:** `joust.prepare(request, snapshot)` returns either `{ tx, summary }`, `{ needs: [...] }` or a
   refusal (the contract's `Require`, a runtime check). The JS layer fetches the needs (Blockfrost, Yaci Store,
   Ogmios, or the developer's own provider) and calls again.
@@ -217,9 +228,18 @@ Web Image cannot await JS promises (F7), and the runtime today does I/O inline (
 - **Where MerkleMap proofs come from, npm-only (r3):** no general chain API serves them. Two sources, both
   untrusted, since every proof is checked against the root on chain:
   - **(a) A local mirror,** rebuilt by replaying the contract's map writes from chain history. The writes are
-    public: they are in the map verifier's claims in each transaction. The engine applies them
-    (`joust.mirror.apply`), and the JS layer persists the mirror (IndexedDB, files) and fetches history from the
-    chain API.
+    public: each `MapClaim` carries `WriteProof(before, after, proof)` for every written key and value. Rebuilding:
+    1. The JS layer lists the instance's or object's transactions in chain order. These are the transactions
+       spending its UTxO, found from the address history at the chain API.
+    2. It reads each map claim from the map verifier's withdrawal redeemer.
+    3. The engine (`joust.mirror.apply`) applies the claims in order. Each claim's `oldRoot` must equal the
+       mirror's root; each `newRoot` must equal the root after applying its writes.
+    4. The rebuilt root must equal the root in the current on-chain datum; a mismatch discards the mirror.
+    5. Rollbacks: the mirror records the slot of each applied claim and rewinds to the deepest common point.
+       Persisting it (IndexedDB, files) is the JS layer's job.
+
+    The cost is linear in the map's write history. A mirror is incremental after the first build, and option (b)
+    serves large maps.
   - **(b) An optional map indexer** (a service, or a Yaci Store plugin) that serves proofs.
 
   The CLI and runtime default to (a). M3's gate covers `examples/token` through (a) with no service.
@@ -256,15 +276,27 @@ None of these improves what a JS developer sees, so they wait for the prerequisi
 **Data fidelity (I9)** applies whatever builds the transaction:
 - **The reference encoding** of a datum or redeemer is julc-core's `PlutusDataCborEncoder`: the encoder of the VM
   and the transition programs, whose output is what the validator sees.
-- **The runtime refuses Data cardano-client-lib cannot carry faithfully,** with a clear error. CCL's PlutusData
-  model collapses duplicate map keys (`a201020103` → `a10103`), makes indefinite maps definite, and re-encodes
-  bignums, non-minimal integers and byte-string chunking (review r2, F2). JOUST's canonical datums (`SortedMaps`)
-  avoid all of these; a refusal means a contract produced Data that could not reach the chain intact.
+- **What differs (review r3, F11):** a probe at JuLC `566ea84` against CCL 0.8.0-pre7 found julc-core's encoder
+  and CCL's output byte-identical for every Data julc's model can produce, except one case: **maps with duplicate
+  keys**, which CCL's model collapses (`a201020103` → `a10103`). Identical cases included:
+  - empty constructors and lists;
+  - byte strings over 64 bytes (chunked alike);
+  - integers of 2^64 and 2^600 (bignums);
+  - constructor tag 200.
+
+  Indefinite maps and non-minimal integers cannot occur in julc's Data model.
+- **So the runtime refuses only Data containing a map with a duplicate key,** with a clear error. JOUST's canonical
+  datums (`SortedMaps`) never have one; a `JulcMap` built with `insert` on an existing key can (CLAUDE.md gotcha).
 - **After the build,** every datum and redeemer in the transaction is compared, byte for byte, with the reference
-  encoding.
-- **Negative fixtures** (duplicate keys, indefinite maps, bignum boundaries, chunked bytes over 64, non-minimal
-  integers) are part of I9's tests.
-- **Upstream:** a CCL issue for a lossless PlutusData (or raw-bytes) path, after which the refusals can be relaxed.
+  encoding. Any difference is refused: it would mean a new divergence, caught rather than signed.
+- **Fixtures:**
+  - positive (must match byte for byte): bignums at and beyond 2^64, byte strings over 64 bytes, empty
+    constructors and lists, large constructor tags;
+  - negative (refused): duplicate-key maps, nested and at the top.
+- **Reading datums from the chain** (review r3, F12): the runtime decodes them with julc-core's lossless
+  `PlutusDataCborDecoder`, not CCL's `PlutusData.deserialize` (`StateInstance:319`, `OwnedObject:247,449`), so an
+  on-chain duplicate key is seen as the validator sees it. This is part of M1b.
+- **Upstream:** a CCL issue for duplicate keys in `MapPlutusData`, after which the refusal can be dropped.
 
 ### D7. npm packages and the CLI
 
@@ -322,7 +354,7 @@ Before anything goes to npmjs.org, the packages are built and tested as real npm
 
 | ID | Invariant | Constrains |
 |---|---|---|
-| I1 | The same contract source gives byte-identical UPLC, script hashes, `plutus.json` and description from Gradle (JVM) and from `joust build` (Wasm), through one pipeline (D2) | D1, D2 |
+| I1 | The same contract source gives byte-identical UPLC, script hashes, `plutus.json` and description from Gradle (JVM) and from `joust build` (Wasm): the same generators and JuLC compile entry point on two hosts (D2) | D1, D2 |
 | I2 | A transition program evaluated by the VM gives the same Data as the JVM method, for every example contract, on the parity corpus and on generated inputs, including `Require` refusals and map read sets | D3 |
 | I3 | For the same recorded `(request, snapshot)` fixture, the JVM and the Wasm runtime produce the same **unsigned transaction bytes**: the full body and witness set, not only a summary. The fixtures cover withdrawals, reference-script publication, encoding variants, owned objects, composition and maps | D4, D5, D6 |
 | I4 | The whole developer flow (D9) passes on linux-x64 and macOS arm64 machines with no JDK, JRE or GraalVM, from packages installed through a registry (local in this ADR) | D1, D7, D9 |
@@ -330,7 +362,7 @@ Before anything goes to npmjs.org, the packages are built and tested as real npm
 | I6 | The engines perform no network or file I/O; everything they read arrives through D5's snapshot or the build inputs | D1, D5 |
 | I7 | Build outputs record the toolchain, JuLC and description versions (`joust.lock.json`); the runtime refuses programs and descriptions built for another major version | D1, D2 |
 | I8 | `prepare` is deterministic: the same request and snapshot give the same result (a transaction, the same needs, or the same refusal); no `Need` is ever swallowed into a partial result | D5 |
-| I9 | Every datum and redeemer in a transaction the runtime builds has exactly the bytes of the reference encoding (julc-core's encoder, D6); Data that cardano-client-lib cannot carry faithfully is refused before building, with negative fixtures for each case | D6 |
+| I9 | Every datum and redeemer in a transaction the runtime builds has exactly the bytes of the reference encoding (julc-core's encoder, D6). Data with a duplicate map key is refused before building; the positive and negative fixtures of D6 hold | D6 |
 
 ## 5. Threat model and trust
 
@@ -389,13 +421,13 @@ Each gate must pass before the milestones after it start, or the ADR is revised.
 
 | ID | What | Entry gate | Exit criteria |
 |---|---|---|---|
-| **M0** | Baseline: the runtime moves from `ScriptTx` to `Tx` (D4), with no behaviour change. Then `(request, snapshot, unsigned tx)` fixtures are recorded from the JVM runtime on DevKit, for every example contract's DevKit flows, as the oracle for everything after | This ADR accepted | Every existing JVM, harness and DevKit test passes on `Tx`; fixtures stored with their DevKit run |
+| **M0** | Baseline: the runtime moves from `ScriptTx` to `Tx` (D4), with no behaviour change. Then fixtures are recorded from the JVM runtime on DevKit, as the oracle for everything after:<br>- `(request, snapshot, unsigned tx)` for every example contract's DevKit flows;<br>- each transition's inputs and results from the JVM tests | This ADR accepted | Every existing JVM, harness and DevKit test passes on `Tx`; fixtures stored with their DevKit run |
 | **S0** | Runtime feasibility: CCL's `QuickTxBuilder` in a Web Image builds a Counter increment (`Tx`) from a snapshot (balancing, min-ADA, budgets from the in-image VM, hashing); runtime image size and start-up measured | M0 | Byte-identical to M0's fixture; size and cold start recorded; Q3 decided |
 | **S1** | A toolchain engine in Node: `joust-wasm` as a `julc-wasm` embedder compiles `Counter.java`, `Counter.jsc` and Bank with JOUST's generators (route a or b; D2) | This ADR accepted, plus the JuLC host change or the embedder route D2 names | I1 on these contracts; route decided; size and cold start measured |
 | **S2** | Transition programs (D3) for Counter and Bank, evaluated by the VM in the engine | S1 | I2 on the 136 phase-4 vectors and on each contract's JVM test inputs |
 | **S2b** | Read discovery (D3) on `examples/token` (MerkleMaps) | S2 | The JVM's read sets and results; rounds within the bound |
 | **M1a** | Description v2 with call recipes; the generated Java client as a typed wrapper over the core's call path | M0 | All existing tests pass; I3 against M0's fixtures (JVM) |
-| **M1b** | `TransitionFn` (JVM implementation); descriptor-backed maps and owned objects; `ContractSpec` without `Class` | M1a | As M1a, plus I2 for the JVM transition against M0 |
+| **M1b** | `TransitionFn` (JVM implementation); descriptor-backed maps and owned objects; `ContractSpec` without `Class`; datums decoded with julc-core (D6) | M1a | As M1a; the JVM `TransitionFn` gives the generated client's results on every example's JVM tests (the oracle is the pre-refactor client, recorded in M0) |
 | **M1c** | The snapshot backend, `Need` and replay (D5); the catch-site audit test | M1b | I8; I3 for JVM replay against M0's fixtures |
 | **M1d** | The shared dispatcher for call requests (`JoustServer` and the engine); I9's checks and negative fixtures | M1c | I3, I8 and I9 on the JVM |
 | **M2** | The runtime engine and packages: `joust-runtime-wasm`, `@julclang/joust-runtime`, `@julclang/joust`, `create-joust`; Verdaccio publishing; the no-Java acceptance test; the page verifier extended (D7) | M1d, S0, S1, S2 | I3 (Wasm against M0's fixtures), I4, I5 with tamper tests, I6, I7, I9 on Counter and Bank |
@@ -461,6 +493,15 @@ Three independent reviews of the first draft:
 | A summary is too weak an oracle | C | I3: full unsigned bytes on recorded fixtures |
 | The UPLC program as the reference meaning | A | Q6 |
 
+**r4, review of r3** (verdict CHANGES REQUESTED, `8174a46`). F1 and F3–F10 were confirmed resolved, and F2 was
+narrowed to F11. Open findings, all resolved in r4:
+- **F11 [P2]:** the refusal list would have refused valid Data. Now only duplicate keys are refused, and bignums and
+  long byte strings are positive fixtures.
+- **F12:** datums are decoded with julc-core.
+- **F13:** the mirror's replay is specified.
+- **F14:** needs up front and discovered; `joust.prepare` catches `Need`; the round limit is reported in tests.
+- **F15:** stale text fixed (D4/M0, F8, I1, D2's route (a) needs a JuLC change, M1b's oracle).
+
 **r3, review of r2** (verdict CHANGES REQUESTED, `08d31a5`): F1–F10 are resolved as listed in the revision history.
 
 The maintainer's guidance for this round:
@@ -482,6 +523,12 @@ direct `Tx` building, gated by S3.
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.
+- r4 (2026-11-08, responds to review of `8174a46`):
+  - **F11 →** D6 and I9: refuse only duplicate keys; positive and negative fixtures.
+  - **F12 →** D6 and M1b: datums decoded with julc-core.
+  - **F13 →** D5: the mirror replay specified.
+  - **F14 →** D3 and D5: needs up front, `Need` caught in `joust.prepare`, round counts in `joust test`.
+  - **F15 →** D4, F8, I1, D2 and M0/M1b text.
 - r3 (2026-11-08, responds to review of `08d31a5`):
   - **F1, F3, F4 →** D6 rewritten: the call request and snapshot with direct `Tx` building; the extension deferred
     with its prerequisites (Q2); threat model updated.
