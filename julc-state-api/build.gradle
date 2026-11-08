@@ -19,11 +19,13 @@ dependencies {
 // throws with the message, on-chain traces and errors). A file there replaces the src/main/java file of the
 // same path in the bundle. Keep that set tiny; ADR-0001 D7.
 def onchainOverrides = file('src/onchain/java')
+def discoveryOverrides = file('src/discovery/java')
 def bundleDir = layout.buildDirectory.dir('generated/julc-state/onchain-sources')
 def bundleOnchainSources = tasks.register('bundleOnchainSources') {
     def srcDir = file('src/main/java')
     inputs.dir(srcDir)
     if (onchainOverrides.exists()) inputs.dir(onchainOverrides)
+    if (discoveryOverrides.exists()) inputs.dir(discoveryOverrides)
     outputs.dir(bundleDir)
     doLast {
         def root = bundleDir.get().asFile
@@ -48,6 +50,17 @@ def bundleOnchainSources = tasks.register('bundleOnchainSources') {
             out.text = file.getText('UTF-8')
         }
         new File(target, 'index.txt').text = sources.keySet().join('\n') + '\n'
+        // ADR-0015 D3: variants compiled only into transition programs (MerkleMaps' read discovery), never into
+        // validators; the toolchain swaps them in. Not under plutus-sources, so JuLC's source scan never sees them.
+        if (discoveryOverrides.exists()) {
+            fileTree(discoveryOverrides).matching { include '**/*.java' }.visit { d ->
+                if (!d.directory) {
+                    def out = new File(root, 'META-INF/joust/discovery/' + d.relativePath.pathString)
+                    out.parentFile.mkdirs()
+                    out.text = d.file.getText('UTF-8')
+                }
+            }
+        }
     }
 }
 // Not added to the main jar on purpose: julc-state-processor depends on this module, so the jar also lands on the

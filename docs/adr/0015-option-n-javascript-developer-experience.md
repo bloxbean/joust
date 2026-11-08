@@ -624,6 +624,26 @@ direct `Tx` building, gated by S3.
   Jackson's snake-case naming strategy. The contracts' and API's records are registered by `CodecFeature`.
 - **Run:** `./gradlew :julc-state-runtime-wasm:runtimeWasmTest -PgraalvmHome=…` (Binaryen on `PATH`).
 
+### 13.5 S2b (gate passed)
+- **The discovery variant:** `julc-state-api/src/discovery/java/…/MerkleMaps.java`. It is the on-chain source except
+  `missing`, which traces `joust:read <root hex> <key hex>` and answers absent.
+  - It is bundled at `META-INF/joust/discovery/`, outside `plutus-sources`, so no validator can pick it up.
+  - The toolchain swaps it in only when compiling transition programs.
+  - In JuLC, `(String) (Object) Builtins.decodeUtf8(ByteStringLib.toHex(bytes))` gives a string that `+` can
+    concatenate; the stdlib has no typed bytes-to-string helper.
+- **The driver** (`ReadDiscoveryTest`) gives the map its proven entries through `MerkleMap.reads`, as the runtime does
+  on chain.
+  - Each round adds the keys a run reports, proven present or proven absent.
+  - It stops when a run reports nothing new, and gives up beyond the limit (4).
+- **Result on `examples/token`:** 43 calls (mint, transfer, burn; present, absent and self-transfer keys; 24 refusals).
+  - The read set equals the JVM's, which reads by callback, in order.
+  - The final result equals the JVM's given the same proven reads, byte for byte, and its run reads nothing unproven.
+  - At most 3 rounds: transfer's second read waits for the first, since an absent sender refuses before the
+    recipient is read.
+- **In Wasm** (`run-discovery.mjs`, part of `toolchainWasmTest`):
+  - The engine compiles Token's transition programs identical to the JVM toolchain's.
+  - All 43 calls give the same first-round reads and the same final result.
+
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.

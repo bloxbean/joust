@@ -169,7 +169,7 @@ public final class Toolchain {
             String transitionsSource = null;
             if (g.transitions() != null) {
                 transitionsSource = g.transitions().source();
-                var libs = withMarker(LibrarySourceResolver.resolveLibrarySources(transitionsSource, libraryPool), project, libraryPool);
+                var libs = discovery(withMarker(LibrarySourceResolver.resolveLibrarySources(transitionsSource, libraryPool), project, libraryPool));
                 for (String m : g.transitions().methods()) {
                     try {
                         var tr = compiler.compileMethod(transitionsSource, m, libs.stream().map(LibrarySource::source).toList());
@@ -191,6 +191,23 @@ public final class Toolchain {
                     result.scriptSizeBytes(), g.descriptionJson(), transitionsSource, transitions));
         }
         return new Result(!hasErrors(diagnostics), contracts, diagnostics);
+    }
+
+    /**
+     * The transition programs' library variants (ADR-0015 D3): a library with a source under
+     * {@code META-INF/joust/discovery/} on the class path replaces the on-chain one (MerkleMaps' read discovery).
+     */
+    private static List<LibrarySource> discovery(List<LibrarySource> libs) {
+        var out = new ArrayList<LibrarySource>(libs.size());
+        for (LibrarySource l : libs) {
+            String path = "META-INF/joust/discovery/" + l.fqcn().replace('.', '/') + ".java";
+            try (var in = Toolchain.class.getClassLoader().getResourceAsStream(path)) {
+                out.add(in == null ? l : LibrarySourceResolver.librarySource(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)));
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException("cannot read " + path, e);
+            }
+        }
+        return out;
     }
 
     /** The resolved libraries, plus JOUST's {@code @StateContract} marker for a project contract (JuLC ADR-071). */

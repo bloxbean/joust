@@ -13,6 +13,7 @@ dependencies {
     // S2: transition programs evaluated by JuLC's VM against the contracts' JVM methods.
     testImplementation project(':examples:counter')
     testImplementation project(':examples:bank')
+    testImplementation project(':examples:token')     // S2b: read discovery
     testImplementation libs.julc.vm.java
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes
@@ -70,6 +71,8 @@ tasks.register('toolchainWasm', Exec) {
                 'META-INF/native-image/',
                 // JOUST's on-chain API sources: the toolchain reads them as JuLC library sources.
                 '-H:IncludeResources=META-INF/plutus-sources/.*',
+                // Transition programs' library variants (MerkleMaps' read discovery; ADR-0015 D3).
+                '-H:IncludeResources=META-INF/joust/discovery/.*',
                 // The verifiers' compiled scripts, which the generators embed (MapVerifierInfo).
                 '-H:IncludeResources=META-INF/plutus/.*\\.plutus\\.json',
                 '-H:+UnlockExperimentalVMOptions', '-H:AbortOnTypeReachable=com.github.javaparser.*',
@@ -93,6 +96,9 @@ tasks.register('toolchainWasmTest', Exec) {
         // S2 in Wasm: every transition vector through the engine's VM, against the JVM's answers.
         project.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2-vectors.json'; workingDir rootDir }
+        // S2b in Wasm: read discovery (build/s2b-vectors.json, from ReadDiscoveryTest).
+        project.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-discovery.mjs',
+                'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2b-vectors.json', 'examples/token/src/main/java'; workingDir rootDir }
     }
     workingDir rootDir
     commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/build-in-node.mjs',
