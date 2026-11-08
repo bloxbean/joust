@@ -121,7 +121,7 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   examples); `FixturesTest` checks the oracle. `StateRuntime.Builder.onBuilt` observes every built transaction.
 - ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). JuLC
-  pinned at `3a8e149a` (branch `feat/joust-embedder-attribution` on top of #311: `JavacFrontend.attribute` public).
+  pinned at `deb72bb7` (branch `feat/joust-embedder-attribution`, bloxbean/julc#313, stacked on #311: `JavacFrontend.attribute` public).
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).
