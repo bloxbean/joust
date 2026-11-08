@@ -455,8 +455,8 @@ acceptance run (I4). Expected values come from the JVM path or the chain, never 
    A plain export of a built call as TxPlan YAML (`joust export --txplan`) needs none of these and can come any
    time. Lean: export after M2; the extension after M3, if the prerequisites are met.
 3. **Q3: the page profile.** If S0 shows the runtime is too large for pages, trim that one image (VM and core
-   without the CCL parts pages do not use) rather than adding a third engine or a second VM. Lean: decide on S0's
-   numbers.
+   without the CCL parts pages do not use) rather than adding a third engine or a second VM. **Decided on S0's
+   numbers (§13.4):** one untrimmed image, loaded lazily in a worker.
 4. **Q4: publishing.** The npm scope (`@julclang`), npmjs.org publishing, provenance and the release-ops steps.
    Maintainer decision before M5; D9 needs none of it.
 5. **Q5: the minimum Node.** Node 22 needs `--experimental-wasm-exnref` (F10); whether Node 24 runs the engines
@@ -528,8 +528,20 @@ direct `Tx` building, gated by S3.
   279 tests pass unchanged.
 - **Observing builds:** `StateRuntime.Builder.onBuilt` observes every built transaction.
 - **The oracle:** `examples/devkit`'s `FixtureRecorder` (`-PjoustFixtures`) recorded `fixtures/m0`, 199
-  transactions and 3712 chain reads from all 20 example modules. Each transaction is stored unsigned, with the reads
-  behind it; results are content-addressed in `blobs/` (7.8 MB). `FixturesTest` checks it.
+  transactions and 3882 chain reads from all 20 example modules. Each transaction is stored unsigned, with the reads
+  behind it; results are content-addressed in `blobs/` (8.4 MB). `FixturesTest` checks it.
+  - The recorder wraps the backend before the slot clock is built, so the clock's tip reads are in the snapshot.
+  - The dApp's fixtures also hold each prepare's call request (`JoustServer.Builder.onPrepared`), and
+    `fixtures/m0/devkit.json` holds the DevKit's slot clock.
+- **Replay (I3 on the JVM):** `Snapshot`, `SnapshotBackend` and `Need` (D5) are in `julc-state-runtime`. `examples/devkit`'s
+  `Fixtures` reads a fixture as a snapshot; later reads replace earlier ones, since a fixture's first reads can be the
+  previous transaction's confirmation polling. `examples/dapp`'s `ReplayTest` prepares the 34 recorded requests
+  (Counter and Bank: init, actions, owned objects, close) again from their snapshots through
+  `JoustServer.prepare(request)`. All 34 are byte-identical, in under a second, with no DevKit.
+  - An output never changes once created, so the snapshot answers a lookup by reference from any set that lists it.
+    The recording runtime resolved some outputs without a backend read.
+  - A recorded address listing can be a first page only (Bank's script address has more than 100 UTxOs), so a query by
+    unit prefers the recorded listing by unit.
 
 ### 13.2 S1 (gate passed)
 - **JuLC change** (embedder API, on top of #311): `JavacFrontend.attribute()` and `Attribution` are public. Route
@@ -578,6 +590,39 @@ direct `Tx` building, gated by S3.
   - byte strings over 64 bytes;
   - Bool, `@Shared` reads, Ctx and payouts.
 - **In Wasm** (`run-transitions.mjs`): the same 114 vectors through the engine, all identical, in 111 ms.
+
+### 13.4 S0 (gate passed)
+- **`julc-state-runtime-wasm`** is a GraalVM Web Image (25.3.4.1) of the runtime path: `Compose.prepare()`, TxRunner,
+  CCL's QuickTx `Tx` building and balancing, and JuLC's evaluator with the VM in the image. It runs over a
+  `SnapshotBackend` with no I/O.
+  - The spike's operation is `joust.prepareS0`, which takes Counter's calls with the snapshot as JSON. M2 replaces the
+    Counter dispatch with descriptor-driven calls (M1a, M1b).
+  - A read outside the snapshot comes back as a need: with an empty snapshot, the instance lookup.
+- **Result:** all 21 Counter calls the dApp's DevKit run prepared (init, increment, reset, close) are byte-identical
+  to the recorded unsigned transactions, both on the JVM (`CounterPrepareTest`) and in Node 22 (`s0.mjs`).
+- **Measured** (Apple M-series, Node 22.12):
+
+  | | |
+  |---|---|
+  | Image | 18.82 MiB `.wasm`, 6.83 MiB gzip; JS loader 109 KiB |
+  | Cold start (load to ready) | about 250 ms |
+  | Prepare, with script evaluation | first about 365 ms, then a median of about 240 ms (JVM, warm-up included: first 117 ms, median 13 ms) |
+- **Q3 decided:** one runtime image for Node and pages, untrimmed. At 6.8 MiB gzip it is below JuLC's playground engine
+  (7.47 MB, F5). Pages load it lazily in a worker (D5) after the wallet connects. Trimming stays possible later; there
+  is no third engine.
+- **Finding: sealed-type tags in images.** JuLC's reflective codec (`ReflectivePlutusDataConverter`) takes a record's
+  constructor tag from its position in `getPermittedSubclasses()`. The JDK gives the `permits` order, but GraalVM
+  25.3's metadata encoder collects permitted subclasses in a `HashSet` (`RuntimeMetadataEncoderImpl
+  .registerClassValues`), so in an image the order differs and changes from build to build. Redeemers then encode with
+  the wrong tag, and the scripts refuse them.
+  - Workaround: `CodecFeature` fills the codec's metadata cache at image build time, on the build JVM, and keeps it in
+    the image heap.
+  - Encoding is then right. Decoding a sealed type still reads the run-time order, which Counter never needs.
+  - Fix: JuLC's codec should not depend on that order (upstream, label `joust`). M1b's descriptor-backed codec removes
+    the dependence in JOUST.
+- **Reflection metadata** the image needs: the snapshot's CCL models (`Utxo`, `Amount`, `ProtocolParams`, `Block`), and
+  Jackson's snake-case naming strategy. The contracts' and API's records are registered by `CodecFeature`.
+- **Run:** `./gradlew :julc-state-runtime-wasm:runtimeWasmTest -PgraalvmHome=…` (Binaryen on `PATH`).
 
 ## Revision history
 

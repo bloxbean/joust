@@ -1,0 +1,74 @@
+description = 'JOUST runtime engine (ADR-0015 D4/D5, gate S0): prepares calls from a snapshot in a GraalVM Web Image'
+
+// S0 spike: the runtime path (Compose.prepare, TxRunner, CCL QuickTx, JuLC's evaluator) over a SnapshotBackend,
+// for Counter's calls. M2 replaces the Counter dispatch with descriptor-driven calls (M1a/M1b).
+dependencies {
+    implementation project(':julc-state-runtime')
+    implementation project(':examples:counter')
+    implementation libs.julc.vm.java
+
+    testImplementation project(':examples:devkit')       // Fixtures: the M0 fixtures as snapshots
+}
+
+// S0 on the JVM, and the vectors for S0 in Wasm (build/s0-vectors.json).
+tasks.named('test') {
+    dependsOn ':examples:counter:classes'
+}
+
+// ---- The runtime engine: a GraalVM Web Image embedding julc-wasm (JuLC ADR-064).
+//   ./gradlew :julc-state-runtime-wasm:runtimeWasm -PgraalvmHome=/path/to/graalvm-25.3   (Binaryen on PATH)
+sourceSets {
+    wasm {
+        compileClasspath += sourceSets.main.output + configurations.runtimeClasspath
+        runtimeClasspath += sourceSets.main.output + configurations.runtimeClasspath
+    }
+}
+dependencies {
+    wasmImplementation "org.julclang:julc-wasm:${libs.versions.julc.get()}"
+    wasmCompileOnly 'org.graalvm.sdk:webimage-preview:25.3.4.1'
+    wasmCompileOnly 'org.graalvm.sdk:nativeimage:25.3.4.1'
+    wasmRuntimeOnly 'org.slf4j:slf4j-nop:2.0.17'
+}
+def runtimeGraalvm = providers.gradleProperty('graalvmHome').orElse(providers.environmentVariable('GRAALVM_HOME'))
+def runtimeWasmDir = layout.buildDirectory.dir('wasm')
+tasks.register('runtimeWasm', Exec) {
+    group = 'build'
+    description = 'Builds build/wasm/joust-runtime.js(.wasm) with GraalVM Web Image'
+    dependsOn 'wasmClasses'
+    def cp = sourceSets.wasm.runtimeClasspath
+    inputs.files(cp)
+    inputs.property('graalvmHome', runtimeGraalvm.orElse(''))
+    outputs.dir(runtimeWasmDir)
+    doFirst {
+        if (!runtimeGraalvm.isPresent()) throw new GradleException('set -PgraalvmHome=/path/to/graalvm-25.3 (or GRAALVM_HOME)')
+        def ni = new File(runtimeGraalvm.get(), 'bin/native-image')
+        def dir = runtimeWasmDir.get().asFile
+        dir.mkdirs()
+        executable ni.absolutePath
+        args '--tool:svm-wasm', '-cp', cp.files.findAll { it.exists() }.collect { it.absolutePath }.join(File.pathSeparator),
+                '--exclude-config', '.*[/\\\\](julc-tools|julc-blueprint|cardano-client-[a-z0-9-]+|json-schema-validator)-[0-9][^/\\\\]*\\.jar',
+                'META-INF/native-image/',
+                // The contracts' compiled validators (JulcScriptLoader) and the verifiers' scripts.
+                '-H:IncludeResources=META-INF/plutus/.*',
+                // JuLC's codec metadata built on the build JVM (permits order; CodecFeature), kept in the image heap.
+                '--features=org.julclang.state.runtime.wasm.CodecFeature',
+                '--initialize-at-build-time=org.julclang.clientlib.ReflectivePlutusDataConverter,org.julclang.clientlib.ReflectivePlutusDataConverter$TypeMetadata',
+                '-H:+UnlockExperimentalVMOptions', '-H:+ReportExceptionStackTraces',
+                "-Djoust.version=${project.version}",
+                '-o', new File(dir, 'joust-runtime').absolutePath,
+                'org.julclang.state.runtime.wasm.JoustRuntimeWasm'
+    }
+    doLast {
+        new File(runtimeWasmDir.get().asFile, 'joust-runtime.js.wat').delete()
+        new File(runtimeWasmDir.get().asFile, 'package.json').text = '{ "type": "commonjs" }\n'
+    }
+}
+
+// S0 in Wasm: each Counter call the dApp's DevKit run prepared, prepared again in Node from its snapshot.
+tasks.register('runtimeWasmTest', Exec) {
+    group = 'verification'
+    dependsOn 'runtimeWasm', 'test'
+    workingDir rootDir
+    commandLine 'node', '--experimental-wasm-exnref', 'julc-state-runtime-wasm/src/test/js/s0.mjs',
+            'julc-state-runtime-wasm/build/wasm', 'julc-state-runtime-wasm/build/s0-vectors.json'
+}
