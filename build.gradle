@@ -171,3 +171,19 @@ tasks.register('verifyMavenReleasePublicationScope') {
     }
 }
 
+
+// ---- ADR-0015 M2: JOUST for JavaScript developers, from a local npm registry (js/verdaccio, http://127.0.0.1:4873).
+//   ./gradlew npmPublishLocal -PgraalvmHome=/path/to/graalvm-25.3   builds both engines, publishes the four packages
+//   ./gradlew npmAcceptance -PgraalvmHome=...                        I4: create, install, build, deploy, test with no Java
+tasks.register('npmPublishLocal', Exec) {
+    group = 'publishing'
+    description = 'Publishes @julclang/state-client, @julclang/joust-runtime, @julclang/joust and create-joust to the local registry'
+    dependsOn ':julc-state-runtime-wasm:runtimeWasm', ':julc-state-toolchain:toolchainWasm'
+    commandLine 'bash', 'js/publish-local.sh'
+}
+tasks.register('npmAcceptance', Exec) {
+    group = 'verification'
+    description = 'ADR-0015 I4 on a Yaci DevKit: the npm-only developer flow in a shell where no Java can be found'
+    dependsOn 'npmPublishLocal'
+    commandLine 'bash', 'js/acceptance/no-java.sh'
+}

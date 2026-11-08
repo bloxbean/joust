@@ -1,0 +1,31 @@
+{
+  "name": "@julclang/joust",
+  "version": "0.1.0",
+  "description": "JOUST for JavaScript developers: build Cardano state contracts written in Java (.java) or JOUST's DSL (.jsc) with npm only, no JDK or GraalVM (ADR-0015)",
+  "type": "module",
+  "bin": {
+    "joust": "bin/joust.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "engine"
+  ],
+  "dependencies": {
+    "@julclang/state-client": "0.1.0",
+    "@julclang/joust-runtime": "0.1.0"
+  },
+  "peerDependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "15.0.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "UNLICENSED",
+  "publishConfig": {
+    "registry": "http://127.0.0.1:4873/"
+  }
+}

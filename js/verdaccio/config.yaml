@@ -1,0 +1,29 @@
+# A local npm registry for JOUST's packages (ADR-0015 D9): `./gradlew npmPublishLocal` starts it and publishes
+# @julclang/state-client, @julclang/joust-runtime, @julclang/joust and create-joust; everything else is proxied from
+# npmjs. Nothing is published to npmjs.org (Q4 is a maintainer decision).
+storage: ../../build/verdaccio/storage
+auth:
+  htpasswd:
+    file: ../../build/verdaccio/htpasswd
+    max_users: -1
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+packages:
+  '@julclang/*':
+    access: $all
+    publish: $anonymous
+    unpublish: $anonymous
+  'create-joust':
+    access: $all
+    publish: $anonymous
+    unpublish: $anonymous
+  '**':
+    access: $all
+    proxy: npmjs
+server:
+  keepAliveTimeout: 60
+listen: 127.0.0.1:4873
+# The toolchain package carries a ~30 MB engine.
+max_body_size: 200mb
+log: { type: stdout, format: pretty, level: warn }

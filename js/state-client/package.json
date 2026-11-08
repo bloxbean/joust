@@ -12,7 +12,7 @@
     "./codegen": "./src/codegen.js"
   },
   "bin": {
-    "joust-gen": "./bin/joust-gen.js"
+    "joust-gen": "bin/joust-gen.js"
   },
   "files": [
     "src",
@@ -41,6 +41,8 @@
     "@emurgo/cardano-serialization-lib-nodejs": "15.0.3"
   },
   "license": "UNLICENSED",
-  "private": true,
-  "types": "./src/index.d.ts"
+  "types": "./src/index.d.ts",
+  "publishConfig": {
+    "registry": "http://127.0.0.1:4873/"
+  }
 }

@@ -691,6 +691,47 @@ direct `Tx` building, gated by S3.
   - The JVM `TransitionFn`, descriptor-backed MerkleMaps, and M1b's JVM oracle (the typed client's results through
     the described path on every example) remain.
 
+### 13.7 M2 (in progress): the npm packages, the local registry, I4
+- **`@julclang/joust-runtime`** (`js/joust-runtime`): the runtime engine and its JS layer.
+  - `engineService` is a prepare service with the same interface as the HTTP one. `@julclang/state-client`'s
+    `JoustContract`, and every generated client, therefore verify (D7), have the wallet sign, and submit exactly as
+    before.
+  - The replay loop (D5) fetches each need from a Blockfrost-style API (Blockfrost, Yaci Store) in the JSON that
+    cardano-client-lib reads: complete address sets paged by the JS layer, outputs by reference, scripts as served
+    CBOR (the version found from the hash, as CCL does).
+  - `ensureDeployment` publishes a missing reference script. The transaction is checked to pay only the contract's
+    address (with the script) and the payer before the wallet signs it.
+  - DevKit helpers: the slot clock and the faucet.
+  - On Node 22 the package enables Wasm exception references itself (`v8.setFlagsFromString`), so developers pass no
+    flag (Q5).
+- **`@julclang/joust`** (`js/joust`): the CLI, with the toolchain engine.
+  - `joust build` writes, for `contracts/` (`.java`, `.jsc`), into `build/joust/`: the description, the script, the
+    typed client (`joust-gen`), `contracts.json` for the runtime, and `joust.lock.json`.
+  - `joust deploy` publishes the reference scripts and writes `deployments.<network>.json`. On DevKit it uses a
+    deployer key kept in `.joust/`, topped up from the faucet; elsewhere it uses `JOUST_MNEMONIC`.
+- **`create-joust`** (`js/create-joust`): `npm create joust` gives a Counter contract, `joust.config.json`, and a DevKit
+  test using the generated client.
+- **The local registry:** `js/verdaccio` and `js/publish-local.sh`, or `./gradlew npmPublishLocal`.
+  - Anonymous publishing is allowed for JOUST's packages only; everything else is proxied from npmjs.
+  - Each package's `publishConfig` names the local registry, so nothing reaches npmjs.org before Q4.
+- **Measured on DevKit:**
+  - `js/joust-runtime/test/devkit.test.js` runs Counter and Bank end to end in about 41 s, with the engine preparing
+    every call: reference scripts, create, increment, the contract's refusal, close, and Bank's payable owned
+    account with a `@Shared` withdraw.
+  - A prepare takes 2 to 8 engine runs, one per need.
+- **I4** (`js/acceptance/no-java.sh`, `./gradlew npmAcceptance`) passed on macOS arm64.
+  - The setup: a `PATH` holding only `node`, `npm` and `npx` (macOS's `/usr/bin/java` is a launcher that finds any
+    JDK), with `JAVA_HOME` unset.
+  - From the local registry, `npm create joust`, `npm install` (no jar installed), `npm run build` (2 s),
+    `npm run deploy` (3 s) and `npm test` (22 s on DevKit) all pass.
+  - Also run: a changed contract, so `joust deploy` published its reference script itself.
+- **Still open in M2:**
+  - I4 on linux-x64.
+  - Needs returned up front, all at once (D5), rather than one per run.
+  - I7: the runtime does not yet refuse programs and descriptions of another major version.
+  - The verifier's tamper suite over engine-built transactions (I5).
+  - The engine in a page, in a worker (M4).
+
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.
