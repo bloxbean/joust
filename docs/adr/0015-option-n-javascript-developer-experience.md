@@ -1,6 +1,6 @@
 # ADR-0015: Option N — JOUST for JavaScript developers: an npm toolchain and off-chain runtime on a Wasm engine
 
-**Status:** Proposed
+**Status:** Proposed (r2)
 **Date:** 2026-11-08
 **Builds on:** ADR-0013 (wallets, descriptions, the JS client, the page verifier, phase 4's Wasm spike), ADR-0005
 (`.jsc`), ADR-0011 (`Compose`), JuLC ADR-057/064/068 (the `julc-wasm` engine, embedders, javac in Web Image).
@@ -45,7 +45,7 @@ Each fact was verified at the cited source:
 | F5 | Sizes measured by JuLC with GraalVM 25.3.4.1: VM probe 11.58 MB `.wasm` (4.32 MB gzip); playground engine (compiler, CCL, …) 21.29 MB (7.47 MB gzip), before javac | JuLC ADR-057 table |
 | F6 | JOUST code in Web Image is byte-identical to the JVM: 136/136 vectors (`WasmParityTest`); the Counter and Bank image is 1.41 MB once julc-compiler's native-image metadata is kept off its class path | JOUST ADR-0013 §10.3–10.4 |
 | F7 | Web Image exports work through a Java `Function` passed into a `@JS` snippet. Java exceptions reach JS as opaque proxies. Java code cannot await a JS promise | JuLC `JsApi.java`; JOUST `JoustWasm.java` |
-| F8 | CCL's TxPlan is a preview (0.8.0-preview1) YAML description of QuickTx `Tx` transactions, with an extension SPI. It rejects `ScriptTx` (`TxPlan.java:466-471`), on which JOUST builds (`TxRunner.java:47,123`). It cannot carry `postBalanceTx`, `mergeOutputs`, the evaluator or JOUST's post-build checks. Its PlutusData round-trips are not byte-exact (list chunking) | CCL `quicktx/.../serialization/TxPlan.java`, `TransactionDocument.java:133`, `plutus/.../ListDataJsonDeserializer.java:41`; review r0 (§12) |
+| F8 | CCL's TxPlan is a YAML description of QuickTx `Tx` transactions, in the 0.8.0-pre7 JOUST already uses (itself a preview). Facts:<br>- It rejects the deprecated `ScriptTx` (`TxPlan.java:466-471`), which JOUST still builds on (`TxRunner.java:47,123`).<br>- Its **extension SPI** carries what plain intents cannot: namespaced intents (`<id>:<operation>`, `ExtensionIntent`), and build hooks `prepare`, `beforeScriptEvaluation`, `afterBalance` (returning `BalanceFinalization`), `verify` and `referenceScripts` (`quicktx/.../extension/TxBuildExtension.java`, `QuickTxExtension.java`). CIP-113 programmable tokens use it.<br>- Its structured PlutusData form is not byte-exact (`ListDataJsonDeserializer.java:41` drops list chunking). Its **hex forms** (`datum_hex`, `redeemer_hex`) go through CBOR decoding, which keeps an indefinite list chunked (`PlutusDataCodec.java:107,218`), so data CCL encoded round-trips byte for byte | CCL `quicktx/.../serialization/TxPlan.java`, `quicktx/.../extension/*`, `plutus/.../PlutusDataCodec.java`; review r0 (§12) |
 | F9 | `.jsc` lowers to a Java `@StateContract` in pure Java (`julc-state-dsl`: `Lexer`, `Parser`, `Lowering`) | JOUST `julc-state-dsl` |
 | F10 | The Web Image runs in Chrome 156 (headless, the dApp page) and in Node 22.12 only with `--experimental-wasm-exnref` | JOUST phase 4 (tested here) |
 | F11 | Today's runtime is typed and partly reflective:<br>- `ContractSpec` holds `Class` objects;<br>- `Call.Builder` takes Java lambdas (`signedBy`, `validAfter`, `run`, `redeemerWith`, `byAction`, `Call.java:174-196`);<br>- `MerkleSupport` and `OwnedObject` reflect over records (`MerkleSupport.java:120,155,251,277`; `OwnedObject.java:249`);<br>- off-chain map reads are discovered by a JVM callback (`MerkleSupport.java:46`), which the on-chain `MerkleMaps` answers with `error()` (`julc-state-api/src/onchain/.../MerkleMaps.java:106`) | JOUST runtime; review r0 (§12) |
@@ -81,7 +81,8 @@ Non-goals:
 
 There is **one runtime implementation**, description-driven, used by the JVM and by Wasm. Contract methods run
 off-chain behind one transition interface: the JVM method, or its compiled UPLC. The engine is a pure function of
-a call request and a chain snapshot; all I/O is in JavaScript.
+a call request and a chain snapshot; all I/O is in JavaScript. JOUST is a QuickTx extension, so a JOUST call is a
+CCL TxPlan and composes with any other TxPlan intent (D6).
 
 ### D1. Two engines, built once, shipped in npm
 
@@ -167,7 +168,8 @@ both paths:
   holding.
 - **Execution budgets** are computed by the VM in the engine (CCL's evaluator SPI over `julc-vm-java`), so no
   network evaluate endpoint is needed.
-- **Internal hygiene:** QuickTx's deprecated `ScriptTx` is replaced by `Tx` (F8).
+- **`Tx`, not `ScriptTx`:** every transaction the runtime builds uses QuickTx's `Tx`; `ScriptTx` is deprecated in
+  0.8.0-pre7 (F8). This is the first step of M1 and is needed by D6.
 
 ### D5. Deterministic replay: the engine is a pure function of request and snapshot
 
@@ -192,30 +194,53 @@ Web Image cannot await JS promises (F7), and the runtime today does I/O inline (
 
 Alternative: JS Promise Integration (JSPI). Web Image support is unknown and D5 needs none (Q5).
 
-### D6. Portable formats: the call request and the snapshot (TxPlan is not the build format)
+### D6. JOUST as a QuickTx extension: a JOUST call is a TxPlan (revised in r2)
 
-The engine's contract with the outside world is two versioned JSON documents and their results:
-- **The call request:** contract, kind, method, instance or object, arguments, payment, caller and wallet
-  addresses, and composition: a list of such calls. It is today's `/api/prepare` body (`JoustServer.java:224-247`)
-  extended and versioned, with a JSON Schema derived from the description.
+A call is described by two versioned documents:
+- **The call request:** contract, kind, method, instance or object, arguments, payment, and caller and wallet
+  addresses. It is today's `/api/prepare` body (`JoustServer.java:224-247`) extended and versioned, with a JSON
+  Schema derived from the description.
 - **The snapshot:** UTxOs by reference and by address (with the tip they are complete at), protocol parameters,
   reference scripts and map proofs.
-- **The results:** the unsigned transaction CBOR, its `TxSummary` (ADR-0013 §10.1, renamed from `TxPlan`), needs,
-  or a refusal.
 
-Everything below the request is one implementation (D4). A second model of what `TxRunner` decides (about 20
-fields in `Capture`, extended by most ADRs from 0007 to 0014) would drift with each new feature.
+The transaction is described in CCL's **TxPlan**, with JOUST as a **QuickTx extension** (F8):
+- **An extension intent per call kind** (`joust:action`, `joust:create`, `joust:destroy`, `joust:owned-action`,
+  `joust:compose`, …). Its fields are the call request, so there is one request format for the npm runtime, the
+  prepare service and TxPlan.
+- **A TxPlan** holds the JOUST intents beside any standard intents (payments, metadata, other extensions such as
+  CIP-113 tokens) and the plan context (fee payer, collateral payer, validity).
+- **`QuickTxBuilder.compose(plan)`, with the JOUST extension registered,** builds the transaction on the JVM and
+  in the engine alike. The extension's hooks carry what `TxRunner` does today:
+  - `prepare`: runs the transitions (`TransitionFn`, D3), decides windows, Ctx, payouts and tags, deposits, verifier
+    claims and owned-object effects, and materialises them as `Tx` operations: script inputs with redeemers,
+    outputs with inline datums, mint and burn, zero withdrawals for the verifiers, reference inputs and scripts;
+  - `afterBalance`: restores payouts after the fee is taken (ADR-0013 §7), returning `BalanceFinalization` so
+    QuickTx rebalances;
+  - `verify`: the state, payout and send checks, and the byte-exactness check below.
+- **Outside the plan:** the input owners that must sign, which `PreparedTx` reports after the build (ADR-0013 §8),
+  and the engine's needs (D5).
 
-**CCL's TxPlan is not used to build:**
-- it rejects `ScriptTx`;
-- it cannot carry JOUST's balancing hooks or checks;
-- its PlutusData round-trips are not byte-exact;
-- it is a preview in another repository, whose schema work is still a proposal (F8).
+**Datums and redeemers are byte-exact (a workaround for now):**
+- JOUST always writes the hex forms (`datum_hex`, `redeemer_hex`), never the structured form, whose list encoding
+  is lossy (F8).
+- The extension's `verify` checks that every datum and redeemer in the built transaction has exactly the bytes
+  JOUST produced, and refuses otherwise (I9).
+- Upstream follow-up: an issue for CCL's structured PlutusData form to keep list chunking (or carry opaque bytes),
+  so the hex-only rule can be dropped later.
 
-Putting it in the middle would add a format and a conversion without removing any orchestration. **It may become
-an export later** (`joust export --txplan`), for reviewing or replaying a call with plain QuickTx, once the runtime
-builds `Tx` (D4) and with script references materialised as bytes. CCL's QuickTx extension SPI (namespaced intents,
-`afterBalance` and `verify` hooks) could one day host JOUST's steps; that is Q2, for when it is stable.
+**What this gives:**
+- JOUST calls compose with other TxPlan intents and extensions, and can join CCL's multi-step TxFlow documents.
+- A call can be written, reviewed and replayed as YAML (`joust plan …`), and executed by any `QuickTxBuilder` with
+  the JOUST extension registered.
+- The runtime's orchestration lives in one place: the extension.
+
+**In the engine,** the JS layer sends either the call request (which the engine wraps in a one-intent plan) or a
+whole TxPlan. If Jackson's YAML proves costly in Web Image (S3), the engine takes the plan in its JSON form; the
+model is the same.
+
+**Fallback:** if the hooks cannot express something JOUST does (S3), that part is built with `Tx` directly behind
+the same call request, and the plan form is limited to what the hooks cover. The call request and snapshot stay the
+engine's contract either way.
 
 ### D7. npm packages and the CLI
 
@@ -281,6 +306,7 @@ Before anything goes to npmjs.org, the packages are built and tested as real npm
 | I6 | The engines perform no network or file I/O; everything they read arrives through D5's snapshot or the build inputs | D1, D5 |
 | I7 | Build outputs record the toolchain, JuLC and description versions (`joust.lock.json`); the runtime refuses programs and descriptions built for another major version | D1, D2 |
 | I8 | `prepare` is deterministic: the same request and snapshot give the same result (a transaction, the same needs, or the same refusal); no `Need` is ever swallowed into a partial result | D5 |
+| I9 | Every datum and redeemer in a transaction built from a TxPlan has exactly the bytes JOUST produced (checked in the extension's `verify`) | D6 |
 
 ## 5. Threat model and trust
 
@@ -301,8 +327,8 @@ Before anything goes to npmjs.org, the packages are built and tested as real npm
 |---|---|
 | A TypeScript reimplementation of the runtime | It duplicates `TxRunner`, `Compose`, MerkleMaps and batching, and they would drift. The maintainer ruled it out (G4) |
 | A "dynamic mode" beside the typed runtime (r1 draft) | Two runtimes in practice: the typed lambdas and reflection (F11) would need a data-driven twin. Replaced by one core with the Java client as a wrapper (D4) |
-| CCL's TxPlan as the build format | See D6 and F8. Kept as a possible export |
-| A JOUST "intents" format below the call request | A second model of `TxRunner`'s decisions that drifts with each ADR (D6) |
+| The runtime building `Tx` directly with no portable transaction form (r1) | Works, but JOUST calls could not compose with other TxPlan intents or TxFlow, and every export would be a separate converter. Kept as D6's fallback |
+| A JOUST-specific intents format | A second model of `TxRunner`'s decisions that drifts with each ADR; the extension intent carries only the call request (D6) |
 | Per-contract Web Images (phase 4) | Needs GraalVM where contracts are built (against G1) |
 | Requiring a JDK for `joust build`, or a hosted compile service | Against G1, or a network and trust dependency for the compiled script |
 | TeaVM | Ruled out by the maintainer (ADR-0013 §10); Web Image is what JuLC ships |
@@ -316,8 +342,9 @@ Before anything goes to npmjs.org, the packages are built and tested as real npm
   Version 1 readers ignore the new fields.
 - **ADR-0013's packages** keep working. The prepare service uses the shared dispatcher; `/api/prepare` accepts the
   versioned request, and the old body for one release.
-- **Renaming:** `TxPlan` (JOUST, ADR-0013 §10.1) becomes `TxSummary`, and the response field `plan` becomes
-  `summary`; the old name is accepted for one release.
+- **Renaming:** JOUST's `TxPlan` (ADR-0013 §10.1, a summary of a built transaction) becomes `TxSummary`, and the
+  response field `plan` becomes `summary`; the old name is accepted for one release. "TxPlan" then means only CCL's.
+- **`ScriptTx` → `Tx`** in the runtime (D4). Behaviour is unchanged; every example's tests must pass.
 
 ## 8. Consequences
 
@@ -338,7 +365,8 @@ Each gate must pass before the milestones after it start, or the ADR is revised.
 | **S1** | A toolchain engine in Node: `joust-wasm` as a `julc-wasm` embedder compiles `Counter.java`, `Counter.jsc` and Bank with JOUST's processor (route a or b) | This ADR accepted (may run with S0) | I1 on these contracts; route decided; size and cold start measured |
 | **S2** | Transition programs (D3) for Counter and Bank, evaluated by the VM in the engine | S1 | I2 on the 136 phase-4 vectors and on each contract's JVM test inputs |
 | **S2b** | Read discovery (D3) on `examples/token` (MerkleMaps) | S2 | The same read sets and results as the JVM; the replay finishes in at most two rounds for one call |
-| **M1** | One runtime core (D4): description v2, `TransitionFn`, descriptor-backed maps and owned objects, `ScriptTx` → `Tx`, the shared dispatcher, the snapshot backend and the `Need` audit (D5) | S0, S2 | Every existing JVM, harness and DevKit test passes on the core; I3 on recorded fixtures (JVM against JVM-replay); I8 |
+| **S3** | Extension fit (D6): Counter and Bank calls (deploy, action, owned create, withdraw with a payout, close) as TxPlans with `joust:` intents, composed by `QuickTxBuilder` and the JOUST extension on the JVM, and the plan's YAML and JSON in a Web Image | S0 | Byte-identical to today's runtime on the same snapshots (I3); I9; the fallback's scope decided |
+| **M1** | One runtime core (D4): `ScriptTx` → `Tx` first; then description v2, `TransitionFn`, descriptor-backed maps and owned objects, the JOUST QuickTx extension (D6), the shared dispatcher, the snapshot backend and the `Need` audit (D5) | S0, S2, S3 | Every existing JVM, harness and DevKit test passes on the core; I3 on recorded fixtures (JVM against JVM-replay); I8; I9 |
 | **M2** | The runtime engine and packages: `joust-runtime-wasm`, `@julclang/joust-runtime`, `@julclang/joust`, `create-joust`; Verdaccio publishing; the no-Java acceptance test; the page verifier extended (D7) | M1, S1 | I3 (JVM against Wasm), I4, I5 with tamper tests, I6, I7 on Counter and Bank |
 | **M3** | Feature parity through npm: MerkleMaps (S2b), composition and deposits, batching, native assets, `@Params`, owned moves | M2 | Each example's DevKit test also passes through the npm path; I3 on its fixtures |
 | **M4** | `joust deploy` for preview and mainnet (Blockfrost), `joust dev`, the Vite plugin, page worker and SRI | M3 | A dApp on preview with Eternl or Lace, built from npm only |
@@ -352,9 +380,9 @@ acceptance run (I4). Expected values come from the JVM path or the chain, never 
 
 1. **Q1: processor route (D2).** Does javac's annotation processing with an in-memory `Filer` work in Web Image
    (a), or must both builds drive the generators directly (b)? Lean: try (a); S1 decides.
-2. **Q2: CCL's QuickTx extension SPI.** Should JOUST's steps (balancing hooks, checks) become a CCL extension once
-   that SPI and TxPlan are stable, which would make JOUST calls portable TxPlans? Lean: revisit after M3; D6 keeps
-   the door open.
+2. **Q2 (decided in r2):** JOUST becomes a QuickTx extension, and calls are TxPlans (D6). Remaining: whether JOUST
+   publishes a JSON Schema fragment for its extension intents. CCL's proposed intent-schema work leaves extension
+   schemas as future work. Lean: yes, generated from the description.
 3. **Q3: the page profile.** If S0 shows the runtime is too large for pages, trim that one image (VM and core
    without the CCL parts pages do not use) rather than adding a third engine or a second VM. Lean: decide on S0's
    numbers.
@@ -383,7 +411,7 @@ Three independent reviews of the first draft:
 
 | Finding | Source | Resolution |
 |---|---|---|
-| TxPlan as the build format: it rejects `ScriptTx`, cannot carry `postBalanceTx` or the checks, is not byte-exact for PlutusData, is a preview with a proposed stricter schema, and its YAML in Web Image is unproven | A, C, T | D6: the call request and snapshot are the portable formats; TxPlan is a possible export (D6) and Q2 |
+| TxPlan as the build format: it rejects `ScriptTx`, cannot carry `postBalanceTx` or the checks, is not byte-exact for PlutusData, is a preview with a proposed stricter schema, and its YAML in Web Image is unproven | A, C, T | r1: the call request and snapshot as the portable formats, TxPlan as an export. **Superseded in r2** by D6's extension design (below) |
 | The "dynamic mode" would be a second runtime: the typed client's knowledge sits in lambdas and reflection (F11) | A, C | D4: one description-driven core; the Java client becomes a wrapper; description v2 call recipes |
 | Transition programs cannot discover MerkleMap reads (the JVM uses a callback; on chain it is `error()`) | A, C | D3: read discovery by structured traces and replay; gate S2b |
 | QuickTx in Web Image is unproven (F3 overstated) | A | F3 corrected; gate S0 first |
@@ -394,6 +422,20 @@ Three independent reviews of the first draft:
 | A summary is too weak an oracle | C | I3: full unsigned bytes on recorded fixtures |
 | The UPLC program as the reference meaning | A | Q6 |
 
+**r2, maintainer input** (on the published r1):
+- **TxPlan's preview status is not an objection.** JOUST is on CCL 0.8.0-pre7, itself a preview.
+- **All transactions use `Tx`, not the deprecated `ScriptTx`.**
+- **Datums must be byte-exact,** with a workaround for now.
+
+With those, the remaining objection to TxPlan (no room for JOUST's hooks and checks) is answered by CCL's extension
+SPI. D6 now makes JOUST a QuickTx extension, with byte-exact hex datums and a `verify` check (I9) and a fallback to
+direct `Tx` building, gated by S3.
+
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.
+- r2 (2026-11-08, responds to maintainer input on `01e34bb`):
+  - F8 revised (extension SPI; hex forms byte-exact).
+  - D4: `Tx` instead of `ScriptTx`, made a decision.
+  - D6 rewritten: JOUST as a QuickTx extension, a call is a TxPlan, byte-exact datums.
+  - New I9 and gate S3; M1, alternatives, compatibility and Q2 updated.
