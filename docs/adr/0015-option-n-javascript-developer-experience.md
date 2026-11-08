@@ -429,7 +429,7 @@ Each gate must pass before the milestones after it start, or the ADR is revised.
 | **M1a** | Description v2 with call recipes; the generated Java client as a typed wrapper over the core's call path | M0 | All existing tests pass; I3 against M0's fixtures (JVM) |
 | **M1b** | `TransitionFn` (JVM implementation); descriptor-backed maps and owned objects; `ContractSpec` without `Class`; datums decoded with julc-core (D6) | M1a | As M1a; the JVM `TransitionFn` gives the generated client's results on every example's JVM tests (the oracle is the pre-refactor client, recorded in M0) |
 | **M1c** | The snapshot backend, `Need` and replay (D5); the catch-site audit test | M1b | I8; I3 for JVM replay against M0's fixtures |
-| **M1d** | The shared dispatcher for call requests (`JoustServer` and the engine); I9's checks and negative fixtures | M1c | I3, I8 and I9 on the JVM |
+| **M1d** | The shared dispatcher for call requests (`JoustServer` and the engine); I9's checks with its positive and negative fixtures | M1c | I3, I8 and I9 on the JVM |
 | **M2** | The runtime engine and packages: `joust-runtime-wasm`, `@julclang/joust-runtime`, `@julclang/joust`, `create-joust`; Verdaccio publishing; the no-Java acceptance test; the page verifier extended (D7) | M1d, S0, S1, S2 | I3 (Wasm against M0's fixtures), I4, I5 with tamper tests, I6, I7, I9 on Counter and Bank |
 | **M3** | Feature parity through npm: MerkleMaps (S2b, local mirror), composition and deposits, batching, native assets, `@Params`, owned moves | M2, S2b | Each example's DevKit flow passes through the npm path; I3 on every example's fixtures |
 | **M4** | `joust deploy` for preview and mainnet (Blockfrost), `joust dev`, the Vite plugin, page worker and SRI | M3 | A dApp on preview with Eternl or Lace, built from npm only |
@@ -523,12 +523,11 @@ direct `Tx` building, gated by S3.
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.
-- r4 (2026-11-08, responds to review of `8174a46`):
-  - **F11 →** D6 and I9: refuse only duplicate keys; positive and negative fixtures.
-  - **F12 →** D6 and M1b: datums decoded with julc-core.
-  - **F13 →** D5: the mirror replay specified.
-  - **F14 →** D3 and D5: needs up front, `Need` caught in `joust.prepare`, round counts in `joust test`.
-  - **F15 →** D4, F8, I1, D2 and M0/M1b text.
+- r2 (2026-11-08, responds to maintainer input on `01e34bb`):
+  - F8 revised (extension SPI; hex forms byte-exact).
+  - D4: `Tx` instead of `ScriptTx`, made a decision.
+  - D6 rewritten: JOUST as a QuickTx extension, a call is a TxPlan, byte-exact datums.
+  - New I9 and gate S3; M1, alternatives, compatibility and Q2 updated.
 - r3 (2026-11-08, responds to review of `08d31a5`):
   - **F1, F3, F4 →** D6 rewritten: the call request and snapshot with direct `Tx` building; the extension deferred
     with its prerequisites (Q2); threat model updated.
@@ -539,8 +538,11 @@ direct `Tx` building, gated by S3.
   - **F8 →** D2's JuLC host changes, and "same pipeline, two hosts".
   - **F9 →** G1 and I4 platform scope.
   - **F10 →** F5 sizes, §8, and the PR description.
-- r2 (2026-11-08, responds to maintainer input on `01e34bb`):
-  - F8 revised (extension SPI; hex forms byte-exact).
-  - D4: `Tx` instead of `ScriptTx`, made a decision.
-  - D6 rewritten: JOUST as a QuickTx extension, a call is a TxPlan, byte-exact datums.
-  - New I9 and gate S3; M1, alternatives, compatibility and Q2 updated.
+- r4 (2026-11-08, responds to review of `8174a46`):
+  - **F11 →** D6 and I9: refuse only duplicate keys; positive and negative fixtures.
+  - **F12 →** D6 and M1b: datums decoded with julc-core.
+  - **F13 →** D5: the mirror replay specified.
+  - **F14 →** D3 and D5: needs up front, `Need` caught in `joust.prepare`, round counts in `joust test`.
+  - **F15 →** D4, F8, I1, D2 and M0/M1b text.
+- r5 (2026-11-08): F16 (P3) after approval of `6510aee`: M1d names I9's positive and negative fixtures; the
+  revision history is in order. No design change.
