@@ -47,10 +47,22 @@ export async function verifyComposed(o) {
     // In a composition, deposits and @Receives are verifiable: their claims go through the pinned output verifier
     // (checked on chain), and the receiving call is part of the same transaction.
     const meta = k.call.meta;
-    const asComposed = (meta.returns?.deposits || meta.policies?.receives) && k.deployment.outputVerifier
-      ? { ...meta, returns: { ...meta.returns, deposits: false }, policies: { ...meta.policies, receives: false } } : meta;
+    // So are moves and @Admits calls: the move's destination and its consent are checked below (ADR-0012 D3).
+    const composedOnly = (meta.returns?.deposits || meta.policies?.receives) && k.deployment.outputVerifier;
+    const asComposed = composedOnly || meta.policies?.into || meta.policies?.admits
+      ? { ...meta, returns: { ...meta.returns, deposits: composedOnly ? false : meta.returns?.deposits },
+          policies: { ...meta.policies, receives: composedOnly ? false : meta.policies?.receives, into: false, admits: null } }
+      : meta;
     if (meta.needsService && !verifiableWithoutService(asComposed, k.description, k.deployment)) {
       problems.push(`${k.call.meta.name} needs data only the service computes; the page cannot verify it`);
+    }
+  }
+  // A move needs its destination's consent: an @Admits call on that instance in the same transaction (ADR-0012 D3).
+  for (const k of calls) {
+    if (!k.call.meta.policies?.into) continue;
+    if (!k.call.into) problems.push(`${k.call.meta.name}: a move without its destination`);
+    else if (!calls.some((x) => x !== k && x.call.instance === k.call.into && x.call.meta.policies?.admits && x.policy === k.policy)) {
+      problems.push(`${k.call.meta.name}: no @Admits call of the destination in the transaction`);
     }
   }
   const targets = new Set(calls.map((k) => k.targetUnit));
@@ -181,6 +193,9 @@ export async function verifyComposed(o) {
               if (got.decoded.ctx.received !== k.pay.lovelace) problems.push(`${call.meta.name}: it receives ${got.decoded.ctx.received} lovelace, not the ${k.pay.lovelace} the page pays`);
             } else if (f.title === 'assetsIn') {
               if (!dataEqual(c.encode(f, k.pay.assets, 'assetsIn'), actual)) problems.push(`${call.meta.name}: it offers other assets than the page pays`);
+            } else if (f.title === 'into') {
+              // A move (ADR-0012 D3): its redeemer names the destination the page asked for.
+              if (got.decoded.into !== call.into) problems.push(`${call.meta.name}: the object moves to another instance than the page asked`);
             } else if (f.title !== 'events') {
               problems.push(`${call.meta.name}: the redeemer has a field the page cannot check: ${f.title}`);
             }
@@ -231,7 +246,9 @@ export async function verifyComposed(o) {
       if (!datum) problems.push(`${k.call.meta.name}: the continuation has no inline datum`);
       else {
         try {
-          report.calls[calls.indexOf(k)].next = decodeNext(k.c, k.xj, k.call, datum);
+          // A moved object continues under its destination (ADR-0012 D3).
+          const asHeld = k.call.meta.policies?.into ? { ...k.call, instance: k.call.into } : k.call;
+          report.calls[calls.indexOf(k)].next = decodeNext(k.c, k.xj, asHeld, datum);
         } catch (e) {
           problems.push(`${k.call.meta.name}: the continuing datum does not decode: ${e.message}`);
         }
@@ -357,6 +374,7 @@ export async function verifyComposed(o) {
       const u = await chain.utxo(r);
       ok = !!u && calls.some((k) => u.referenceScriptHash === k.policy
         || (u.address === k.deployment.address && u.value.get(k.targetUnit) === 1n)
+        || (u.address === k.deployment.address && k.call.instance && u.value.get(k.policy + k.call.instance) === 1n)
         || (k.call.meta.recipe?.reads ?? []).some((rd) => {
           const fi = k.deployment.params?.[rd.params];
           return fi && u.value.get(fi.policy + fi.instance) === 1n;
@@ -385,7 +403,7 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
       if (!(a.name in (s.args ?? {}))) throw new Error(`${s.method}: missing argument ${a.name}`);
       args[a.name] = k.codec.decode(a.schema, k.codec.encode(a.schema, s.args[a.name], a.name));
     }
-    return { k, call: { kind: meta.kind, meta, args, pay: s.pay ?? {}, instance: s.instance, object: s.object } };
+    return { k, call: { kind: meta.kind, meta, args, pay: s.pay ?? {}, instance: s.instance, object: s.object, into: s.into } };
   });
   const wallet = await walletView(CSL, api);
   const request = {
@@ -393,6 +411,7 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
     calls: prepared.map(({ k, call }) => ({
       contract: k.description.preamble.title, kind: call.kind, method: call.meta.name, instance: call.instance ?? null,
       object: call.object ?? null, args: toJson(call.args), pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: call.pay?.assets ?? [] }),
+      ...(call.into ? { into: call.into } : {}),
     })),
   };
   const p = await service.prepare(request);

@@ -282,8 +282,11 @@ public final class DescriptionWriter {
         if (t.takesParams()) layout.add("$params");
         for (var rd : t.reads()) layout.add("$read:" + rd.name());
         if (t.hasFunds()) layout.add("$funds");
+        if (t.moves()) layout.add("$into");
+        if (t.arriving() != null) layout.add("$admitted");
         for (var p : t.params()) layout.add(p.name());
         r.put("transitionArgs", layout);
+        if (t.admits()) r.put("admits", t.admitsType());
         return r;
     }
 

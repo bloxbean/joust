@@ -865,8 +865,19 @@ direct `Tx` building, gated by S3.
   - Spending calls only for now (no creations in a composition).
   - **I5:** all 10 of the dApp's tamperings of a composed transaction are refused before signing.
   - **I3:** `fixtures/m3`, re-recorded, holds 69 calls (Fees' compositions included), all byte-identical on the JVM.
-- **Next in M3:** owned moves (a composition of a move and an `@Admits` call), co-signers (`@Quorum`,
-  `@AuthorizedBy`), batches, and creations inside compositions.
+- **Owned moves (ADR-0012 D3) through npm.** Guild passes on DevKit: a hero moves to another guild, which admits it
+  in the same transaction, then keeps levelling under its new guild.
+  - A move's transition reads its destination's state (`@Into`, the args field `joustInto`; `$into` in the recipe).
+  - An `@Admits` action may read the arriving object as it was before the move (`joustAdmitted`, `$admitted`; the
+    object id is its first argument).
+  - The dispatcher reads both and sets `movesTo`; the request names the destination (`into`).
+  - **`verifyComposed`** checks that a move's redeemer names the destination the page asked for, that the object
+    continues under that destination, and that the destination's `@Admits` call is in the transaction. A move alone
+    is refused, by the engine or by the page.
+  - **I5:** all 10 tamperings of a move are refused before signing.
+  - **I3:** `fixtures/m3` holds 86 calls, Guild's 17 included, all byte-identical on the JVM.
+  - On the JVM, `DescribedGuildDevnetTest` runs the same flow.
+- **Next in M3:** co-signers (`@Quorum`, `@AuthorizedBy`), batches, and creations inside compositions.
 
 ## Revision history
 

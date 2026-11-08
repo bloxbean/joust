@@ -331,3 +331,43 @@ test('Fees: a sale deposits its fee into the Pot in the same transaction (compos
   }
   console.log(`I5: ${refused} tamperings of an engine-built composed transaction refused before signing`);
 });
+
+test('Guild: a hero moves to another guild, which admits it in the same transaction (owned moves)', { skip, timeout: 900_000 }, async () => {
+  const { rt, wallets, contract } = await setup(['guild']);
+  const [master, ann] = await wallets(2);
+  const guild = await contract('Guild', master);
+  const a = (await guild.deploy(master, { minLevel: 1n })).instance;
+  const b = (await guild.deploy(master, { minLevel: 2n })).instance;
+  const hero = (await guild.at(a).create(ann, 'recruit', {})).object;
+  await guild.at(a).object(hero).call(ann, 'levelUp', {});
+  const move = [
+    { contract: guild, method: 'transfer', instance: a, object: hero, into: b, args: {} },
+    { contract: guild, method: 'admit', instance: b, args: { heroId: hero } },
+  ];
+  // A move needs the destination's consent: alone, it is refused.
+  await assert.rejects(rt.compose(ann, [move[0]]), /no @Admits call|Script evaluation failed/);   // the engine or the page refuses it
+  // I5 over a move: every tampering is refused before the wallet is asked to sign.
+  let refused = 0;
+  for (let i = 0; ; i++) {
+    let total = 0;
+    const evil = { ...rt.service, async prepare(req) {
+      const p = await rt.service.prepare(req);
+      const all = Object.entries(tamperings(CSL, p.cbor, [ann.address]));
+      total = all.length;
+      return { ...p, cbor: all[i][1] };
+    } };
+    let asked = false;
+    const watched = { ...ann, signTx: (...x) => { asked = true; return ann.signTx(...x); } };
+    await assert.rejects(runComposed({ CSL, service: evil, chain: rt.chain, api: watched, steps: move }), /refused/, `tampering ${i}`);
+    assert.equal(asked, false, `tampering ${i} reached the wallet`);
+    refused++;
+    if (i + 1 >= total) break;
+  }
+  console.log(`I5: ${refused} tamperings of an engine-built move refused before signing`);
+  await rt.compose(ann, move);
+  assert.equal((await guild.at(b).state()).arrivals, 1n);
+  const moved = await guild.at(b).object(hero).read();
+  assert.equal(moved.value.level, 2n);
+  await guild.at(b).object(hero).call(ann, 'levelUp', {});
+  await guild.at(b).object(hero).call(ann, 'retire', {});
+});

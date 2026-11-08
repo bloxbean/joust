@@ -117,6 +117,12 @@ public final class DescribedContract {
      */
     public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
                        JsonNode args, BigInteger lovelace, JsonNode params, JsonNode payAssets) {
+        return call(runtime, caller, kind, method, instance, object, args, lovelace, params, payAssets, null);
+    }
+
+    /** As above; {@code into}: a move's destination instance (ADR-0012 D3), composed with its {@code @Admits} call. */
+    public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
+                       JsonNode args, BigInteger lovelace, JsonNode params, JsonNode payAssets, String into) {
         JsonNode meta = meta(kind, method);
         JsonNode recipe = meta.get("recipe");
         if (recipe == null) throw new IllegalArgumentException(method + ": no call recipe (rebuild with JOUST's processor)");
@@ -159,7 +165,6 @@ public final class DescribedContract {
             lead.add(read.state());
         }
         lead.addAll(argList);
-        PlutusData argsData = new PlutusData.ConstrData(0, lead);
         // The recipe's layout of the transition's arguments; Funds (an asset-aware method's) are filled in per run.
         var layoutArgs = new ArrayList<PlutusData>();
         int fundsAt = -1;
@@ -173,6 +178,19 @@ public final class DescribedContract {
                 else if (a.equals("$funds")) {
                     fundsAt = layoutArgs.size();
                     layoutArgs.add(NONE);
+                } else if (a.equals("$into")) {
+                    // A move reads its destination's state (@Into).
+                    if (into == null || !into.matches("[0-9a-f]{64}")) throw new IllegalArgumentException(method + " moves the object: give its destination (into)");
+                    layoutArgs.add(handle.at(into).state());
+                } else if (a.equals("$admitted")) {
+                    // An @Admits action reads the arriving object as it is before the move (its id is the first argument).
+                    String id = HexFormat.of().formatHex(((PlutusData.BytesData) argList.get(0)).value());
+                    String admitted = recipe.path("admits").asText();
+                    String simple = admitted.substring(admitted.lastIndexOf('.') + 1);
+                    String typeKey = null;
+                    for (JsonNode o : x.path("owned")) if (o.path("simple").asText().equals(simple)) typeKey = o.path("type").asText();
+                    if (typeKey == null) throw new IllegalArgumentException(name + " has no owned type " + admitted);
+                    layoutArgs.add(OwnedObject.at(handle.at(requireInstance(instance)), id, ownedCodec(typeKey)).value());
                 } else layoutArgs.add(byName.get(a));
             }
         } else {
@@ -185,6 +203,7 @@ public final class DescribedContract {
             return new PlutusData.ConstrData(0, l);
         };
         PlutusData offeredData = offered.toPlutusData();
+        if (into != null) byName.put("into", PlutusData.bytes(HexFormat.of().parseHex(into)));
         boolean usesCtx = meta.path("ctx").asBoolean();
         String transition = recipe.get("transition").asText();
         int alternative = meta.get("redeemer").get("index").asInt();
@@ -199,7 +218,7 @@ public final class DescribedContract {
                     return handle.deploy(d).instance().instanceId();
                 }
                 var d = new Deploy<PlutusData>(caller, lovelace, usesCtx,
-                        ctx -> next(fn.apply(transition, NONE, NONE, argsData, ctxData(ctx, usesCtx)), method),
+                        ctx -> next(fn.apply(transition, NONE, NONE, argsWith.apply(null), ctxData(ctx, usesCtx)), method),
                         (seed, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), seed, null));
                 return handle.deploy(d).instance().instanceId();
             }
@@ -222,7 +241,7 @@ public final class DescribedContract {
                         b.byAction(ref -> new PlutusData.ConstrData(byAction, List.of(ref.toPlutusData())));
                     }
                 } else {
-                    b.run((s, ctx) -> transition(discover(transition, spec.layout(), s, NONE, argsData, ctxData(ctx, usesCtx))));
+                    b.run((s, ctx) -> transition(discover(transition, spec.layout(), s, NONE, argsWith.apply(null), ctxData(ctx, usesCtx))));
                 }
                 at.call(b.build());
                 return null;
@@ -238,7 +257,7 @@ public final class DescribedContract {
                     return OwnedObject.create(at, create, ownedCodec(meta.get("owned").asText())).objectId();
                 }
                 var create = new OwnedObject.Create<PlutusData>(method, caller, lovelace, usesCtx, shared,
-                        (sh, ctx) -> next(fn.apply(transition, NONE, shared ? (PlutusData) sh : NONE, argsData, ctxData(ctx, usesCtx)), method),
+                        (sh, ctx) -> next(fn.apply(transition, NONE, shared ? (PlutusData) sh : NONE, argsWith.apply(null), ctxData(ctx, usesCtx)), method),
                         (seed, inst, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), seed, inst));
                 return OwnedObject.create(at, create, ownedCodec(meta.get("owned").asText())).objectId();
             }
@@ -252,6 +271,7 @@ public final class DescribedContract {
                         ? Call.<PlutusData>destroy(method, caller, burn(recipe))
                         : Call.<PlutusData>action(method, caller);
                 rules(b, recipe);
+                if (meta.path("policies").path("into").asBoolean()) b.movesTo(into);   // ADR-0012 D3
                 b.usesCtx(usesCtx).received(lovelace)
                         .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
                 if (assetAware) {
@@ -259,9 +279,9 @@ public final class DescribedContract {
                     b.receivedAssets(offered).runAssets(sharedObj, (o, sh, ctx, funds) -> full(discover(transition, ownedLayout, o,
                             sharedObj ? (PlutusData) sh : NONE, argsWith.apply(funds), ctxData(ctx, usesCtx))));
                 } else if (recipe.path("shared").asBoolean()) {
-                    b.runShared((o, sh, ctx) -> transition(discover(transition, ownedLayout, o, (PlutusData) sh, argsData, ctxData(ctx, usesCtx))));
+                    b.runShared((o, sh, ctx) -> transition(discover(transition, ownedLayout, o, (PlutusData) sh, argsWith.apply(null), ctxData(ctx, usesCtx))));
                 } else {
-                    b.run((o, ctx) -> transition(discover(transition, ownedLayout, o, NONE, argsData, ctxData(ctx, usesCtx))));
+                    b.run((o, ctx) -> transition(discover(transition, ownedLayout, o, NONE, argsWith.apply(null), ctxData(ctx, usesCtx))));
                 }
                 obj.call(b.build());
                 return null;
@@ -408,8 +428,7 @@ public final class DescribedContract {
         JsonNode p = meta.path("policies");
         boolean cosigned = !p.path("quorum").isNull() && !p.path("quorum").isMissingNode() || !p.path("authorizedBy").isEmpty();
         JsonNode r = meta.path("returns");
-        return p.path("batched").asBoolean() || p.path("into").asBoolean()
-                || !p.path("admits").isNull() && !p.path("admits").isMissingNode()
+        return p.path("batched").asBoolean()
                 || r.path("events").asBoolean() || cosigned;
     }
 

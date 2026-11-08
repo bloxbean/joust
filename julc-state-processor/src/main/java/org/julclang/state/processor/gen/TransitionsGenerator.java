@@ -125,7 +125,7 @@ public final class TransitionsGenerator {
 
     private static boolean unsupported(TransitionIR t) {
         return t.batched()
-                || t.moves() || t.admits() || t.resultEvents();
+                || t.resultEvents();
     }
 
     /** One transition method; null when its parameters or result are not supported. */
@@ -151,6 +151,10 @@ public final class TransitionsGenerator {
                 call.add("args." + name + "()");
             } else if (named(p.asType(), API + "Funds")) {
                 call.add("args.joustFunds()");
+            } else if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Into"))) {
+                call.add("args.joustInto()");
+            } else if (name.equals(t.arriving())) {
+                call.add("args.joustAdmitted()");
             } else if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Shared"))) {
                 sharedType = render(p.asType());
                 call.add("shared");
@@ -249,6 +253,13 @@ public final class TransitionsGenerator {
         if (t.takesParams()) out.add(c.paramsType() + " joustParams");
         for (var rd : t.reads()) out.add(paramType(m, rd.name()) + " " + rd.name());
         if (t.hasFunds()) out.add("org.julclang.state.api.Funds joustFunds");
+        // A move reads its destination's state (@Into); an @Admits action may read the arriving object (ADR-0012 D3).
+        for (VariableElement p : m.getParameters()) {
+            if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Into"))) {
+                out.add(render(p.asType()) + " joustInto");
+            }
+        }
+        if (t.arriving() != null) out.add(paramType(m, t.arriving()) + " joustAdmitted");
         return out;
     }
 

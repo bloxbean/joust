@@ -191,7 +191,7 @@ public final class Prepare {
                 made.add(null);
                 compose.add(() -> made.set(slot, dc.call(rt, wallet, c.path("kind").asText(), c.path("method").asText(),
                         c.path("instance").asText(null), c.path("object").asText(null), c.path("args"), pay, c.get("params"),
-                        c.path("pay").get("assets"))));
+                        c.path("pay").get("assets"), c.path("into").asText(null))));
             }
             PreparedTx p = compose.prepare();
             return new Result(true, p.cbor(), p.txHash(), JSON.writeValueAsString(made), p.validTo(), p.requiredSigners(),
