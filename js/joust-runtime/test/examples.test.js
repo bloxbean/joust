@@ -11,6 +11,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { joustRuntime, devkitClock, devkitTopUp, devWallet, JoustContract } from '../src/index.js';
 import { build } from '../../joust/src/build.js';
+import { tamperings } from '../../../examples/dapp/frontend/src/tamper.js';
 
 const STORE = process.env.STORE ?? 'http://localhost:8080/api/v1';
 const ADMIN = process.env.ADMIN ?? 'http://localhost:10000';
@@ -143,7 +144,7 @@ test('Oracle and Shop: @SignedBy; @Params naming the oracle; @Reads of its price
 });
 
 test('Token: MerkleMap balances, read discovery, the map verifier', { skip, timeout: 600_000 }, async () => {
-  const { wallets, contract } = await setup(['token']);
+  const { rt, wallets, contract } = await setup(['token']);
   const [admin, ann, ben] = await wallets(3);
   const token = await contract('Token', admin);
   assert.ok(token.deployment.mapVerifier?.referenceScripts?.length, 'the map verifier is pinned');
@@ -151,6 +152,49 @@ test('Token: MerkleMap balances, read discovery, the map verifier', { skip, time
   await t.call(admin, 'mint', { to: ann.keyHash, amount: 1000n });
   await t.call(admin, 'mint', { to: ben.keyHash, amount: 500n });
   await t.call(ann, 'transfer', { to: ben.keyHash, amount: 250n });   // the recipient's read depends on the sender's
+  // I5 over map transactions: the dApp's tamperings, and the verifier's withdrawal changed, doubled or removed.
+  const mapTamperings = (txHex) => {
+    const out = tamperings(CSL, txHex, [ann.address]);
+    const tx = CSL.Transaction.from_hex(txHex);
+    const edit = (f) => {
+      const b = CSL.TransactionBody.from_bytes(tx.body().to_bytes());
+      f(b);
+      return CSL.Transaction.new(b, tx.witness_set(), tx.auxiliary_data()).to_hex();
+    };
+    const ws = tx.body().withdrawals();
+    const key = ws.keys().get(0);
+    out['a non-zero withdrawal from the map verifier'] = edit((b) => {
+      const w = CSL.Withdrawals.new();
+      w.insert(key, CSL.BigNum.from_str('1000000'));
+      b.set_withdrawals(w);
+    });
+    out['a second withdrawal to an attacker'] = edit((b) => {
+      const w = CSL.Withdrawals.new();
+      w.insert(key, CSL.BigNum.zero());
+      w.insert(CSL.RewardAddress.new(0, CSL.Credential.from_keyhash(CSL.Ed25519KeyHash.from_hex('ee'.repeat(28)))), CSL.BigNum.zero());
+      b.set_withdrawals(w);
+    });
+    out['the verifier\'s withdrawal removed'] = edit((b) => b.set_withdrawals(CSL.Withdrawals.new()));
+    return out;
+  };
+  let refused = 0;
+  for (let i = 0; ; i++) {
+    let total = 0;
+    const evil = { ...rt.service, async prepare(req) {
+      const p = await rt.service.prepare(req);
+      const all = Object.entries(mapTamperings(p.cbor));
+      total = all.length;
+      return { ...p, cbor: all[i][1] };
+    } };
+    const k = new JoustContract({ CSL, description: token.description, deployment: token.deployment, service: evil, chain: rt.chain });
+    let asked = false;
+    const watched = { ...ann, signTx: (...a) => { asked = true; return ann.signTx(...a); } };
+    await assert.rejects(k.at(t.id).call(watched, 'transfer', { to: ben.keyHash, amount: 1n }), undefined, `tampering ${i}`);
+    assert.equal(asked, false, `tampering ${i} reached the wallet`);
+    refused++;
+    if (i + 1 >= total) break;
+  }
+  console.log(`I5: ${refused} tamperings of an engine-built map transfer refused before signing`);
   await t.call(ben, 'transfer', { to: ben.keyHash, amount: 100n });   // to itself
   await assert.rejects(t.call(ann, 'transfer', { to: ben.keyHash, amount: 751n }), /insufficient balance/);
   await t.call(ann, 'burn', { amount: 750n });                          // emptied: removed from the map
