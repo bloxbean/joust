@@ -926,7 +926,23 @@ direct `Tx` building, gated by S3.
   - On the JVM, `DescribedPoolDevnetTest` runs the same flow.
   - **Not yet:** batches of asset-aware contracts or over MerkleMaps, and `@Params`-reading batched steps that also
     `@Reads`.
-- **Next in M3:** script governors for `@AuthorizedBy`, and creations inside compositions.
+- **Creations inside compositions: upgrades (ADR-0011 D4) through npm.** Upgrade passes on DevKit. CounterV1's
+  migrating destroy (`@MigrateTo`) and CounterV2's adoption (`@Migrate`) go in one transaction: the count and funds
+  move, v1 ends, and v2 goes on counting.
+  - Descriptions name a destroy's `migrateTo`. `@Migrate` creations get transition programs: the prior state is a
+    read argument, keyed by the policy that `params.previous` names, not by a `ForeignInstance`.
+  - The dispatcher's `migrate` kind finds the prior instance (the call's instance, under that policy) and adopts it.
+    The destroy side sets `migrates()`.
+  - **`verifyComposed`** accepts an adoption only beside its old instance's migrating destroy, under the policy the
+    adopting deployment's params name:
+    - its token is the one the spent prior UTxO names, minted with `Adopt` whose seed is that UTxO;
+    - it continues at its contract holding exactly the prior instance's lovelace;
+    - its next state is decoded and reported.
+  - **I5:** all 10 tamperings of an upgrade are refused before signing. An adoption alone is refused.
+  - On the JVM, `DescribedUpgradeDevnetTest` runs the same flow.
+  - Other creations in a composition (`@Init`, `@OwnedInit` beside other calls) are not composed yet: no example
+    needs them.
+- **Next in M3:** script governors for `@AuthorizedBy`, and StakedVault (staking purposes).
 
 ### 13.9 Planned for M4: a pluggable chain provider
 

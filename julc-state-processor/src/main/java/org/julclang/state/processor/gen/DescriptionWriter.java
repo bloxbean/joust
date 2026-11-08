@@ -287,7 +287,8 @@ public final class DescriptionWriter {
                 "into", t.moves(),
                 "admits", t.admits() ? t.admitsType() : null,
                 "receives", t.receives(),
-                "batched", t.batched()));
+                "batched", t.batched(),
+                "migrateTo", t.migrateTo()));
         m.put("returns", map(
                 "state", t.returns() == TransitionIR.Returns.STATE || t.returns() == TransitionIR.Returns.RESULT,
                 "payouts", t.hasPayouts(),

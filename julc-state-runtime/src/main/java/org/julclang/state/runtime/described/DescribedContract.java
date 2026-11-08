@@ -93,7 +93,7 @@ public final class DescribedContract {
 
     /** The x-joust entry of a creation or action called {@code method} of {@code kind}. */
     public JsonNode meta(String kind, String method) {
-        String list = kind.equals("init") || kind.equals("ownedInit") ? "creations" : "actions";
+        String list = kind.equals("init") || kind.equals("ownedInit") || kind.equals("migrate") ? "creations" : "actions";
         for (JsonNode m : x.get(list)) {
             if (m.get("name").asText().equals(method) && m.get("kind").asText().equals(kind)) return m;
         }
@@ -174,7 +174,16 @@ public final class DescribedContract {
         var reads = new ArrayList<org.julclang.state.runtime.ForeignReads.Read<PlutusData>>();
         var lead = new ArrayList<PlutusData>();
         if (recipe.path("params").asBoolean()) lead.add(codec.encode(x.get("params"), params, "params"));
-        for (JsonNode rd : recipe.path("reads")) {
+        org.julclang.state.runtime.ForeignReads.Read<PlutusData> prior = null;
+        if (kind.equals("migrate")) {
+            // @Migrate(from = "params.<previous>"): the prior instance (its id is the call's instance), of the policy
+            // the params name; it is spent by its own migrating destroy in the same transaction (ADR-0011 D4).
+            JsonNode rd = recipe.path("reads").path(0);
+            var policy = (PlutusData.BytesData) field(codec.encode(x.get("params"), params, "params"), rd.path("index").asInt());
+            prior = org.julclang.state.runtime.ForeignReads.read(runtime, new org.julclang.state.api.ForeignInstance(policy.value(),
+                    HexFormat.of().parseHex(requireInstance(instance))), PlutusData.class);
+        }
+        for (JsonNode rd : kind.equals("migrate") ? com.fasterxml.jackson.databind.node.MissingNode.getInstance() : recipe.path("reads")) {
             var fi = (PlutusData.ConstrData) field(lead.isEmpty() ? codec.encode(x.get("params"), params, "params") : lead.get(0),
                     rd.get("index").asInt());
             var read = org.julclang.state.runtime.ForeignReads.read(runtime, new org.julclang.state.api.ForeignInstance(
@@ -193,6 +202,7 @@ public final class DescribedContract {
             for (JsonNode n : recipe.get("transitionArgs")) {
                 String a = n.asText();
                 if (a.equals("$params")) layoutArgs.add(lead.get(0));
+                else if (a.startsWith("$read:") && prior != null) layoutArgs.add(prior.state());
                 else if (a.startsWith("$read:")) layoutArgs.add(lead.get(leadParams + readAt++));
                 else if (a.equals("$funds")) {
                     fundsAt = layoutArgs.size();
@@ -241,12 +251,20 @@ public final class DescribedContract {
                         (seed, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), seed, null));
                 return handle.deploy(d).instance().instanceId();
             }
+            case "migrate" -> {
+                // Adopts the prior instance: runs inside a Compose with its @MigrateTo destroy (ADR-0011 D4).
+                var d = new Deploy<PlutusData>(caller, BigInteger.ZERO, usesCtx,
+                        ctx -> next(fn.apply(transition, NONE, NONE, argsWith.apply(null), ctxData(ctx, usesCtx)), method),
+                        (seed, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), seed, null));
+                return handle.adopt(d, prior.utxo()).instance().instanceId();
+            }
             case "action", "destroy" -> {
                 StateInstance<PlutusData> at = handle.at(requireInstance(instance));
                 var b = kind.equals("destroy")
                         ? Call.<PlutusData>destroy(method, caller, burn(recipe))
                         : Call.<PlutusData>action(method, caller);
                 rules(b, recipe);
+                if (meta.path("policies").path("migrateTo").isTextual()) b.migrates();   // @MigrateTo (ADR-0011 D4)
                 for (var rd : reads) b.referenceInputs(rd.utxo());
                 if (!cosigners.isEmpty()) b.cosigners(cosigners.toArray(new Account[0]));
                 authorize(method, meta, params, caller, cosigners, b);

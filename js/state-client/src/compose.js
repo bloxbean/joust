@@ -4,6 +4,7 @@
 // loses and others receive, over every call). Spending calls only (actions, destroys, owned calls).
 
 import { codec as makeCodec, dataEqual } from './data.js';
+import { instanceIdOf } from './tokens.js';
 import {
   DEFAULT_LIMITS, refOf, ledgerOrder, valueMap, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
   paymentKeyHashOf, decodeNext,
@@ -38,12 +39,13 @@ export async function verifyComposed(o) {
     const targetName = s.call.kind.startsWith('owned') ? s.call.object : s.call.instance;
     return {
       ...s, c, xj, policy, rdefs: redeemerDefs(c, s.description), targetUnit: policy + targetName,
+      creation: s.call.kind === 'migrate',
       pay: { lovelace: BigInt(s.call.pay?.lovelace ?? 0), assets: s.call.pay?.assets ?? [] },
       targetIndex: -1, targetRef: null, targetValue: new Map(), continuation: new Map(), continuations: 0,
     };
   });
   for (const k of calls) {
-    if (!SPEND_KINDS.has(k.call.kind)) problems.push(`${k.call.meta.name}: only spending calls can be composed here`);
+    if (!SPEND_KINDS.has(k.call.kind) && !k.creation) problems.push(`${k.call.meta.name}: only spending calls and adoptions can be composed here`);
     // In a composition, deposits and @Receives are verifiable: their claims go through the pinned output verifier
     // (checked on chain), and the receiving call is part of the same transaction.
     const meta = k.call.meta;
@@ -107,7 +109,7 @@ export async function verifyComposed(o) {
       continue;
     }
     const u = await chain.utxo(r);
-    const k = u && calls.find((x) => x.targetIndex < 0 && u.address === x.deployment.address && u.value.get(x.targetUnit) === 1n);
+    const k = u && calls.find((x) => !x.creation && x.targetIndex < 0 && u.address === x.deployment.address && u.value.get(x.targetUnit) === 1n);
     if (k) {
       k.targetIndex = i;
       k.targetRef = r;
@@ -117,7 +119,24 @@ export async function verifyComposed(o) {
       problems.push(`an input that is neither the wallet's nor a call's target: ${r}`);
     }
   }
-  for (const k of calls) if (k.targetIndex < 0) problems.push(`${k.call.meta.name}: its instance or object is not spent`);
+  for (const k of calls) if (!k.creation && k.targetIndex < 0) problems.push(`${k.call.meta.name}: its instance or object is not spent`);
+  // An adoption (@Migrate, ADR-0011 D4): of the prior instance the page names, which its own @MigrateTo destroy spends
+  // here, under the policy the adopting deployment's params name. Its token is named by that prior UTxO.
+  for (const k of calls.filter((x) => x.creation)) {
+    const from = k.call.meta.recipe?.reads?.[0]?.params;
+    const previous = from ? k.deployment.params?.[from] : null;
+    const source = calls.find((x) => DESTROYS.has(x.call.kind) && x.call.meta.policies?.migrateTo && x.policy === previous
+      && x.call.instance === k.call.instance);
+    if (!source || !source.targetRef) {
+      problems.push(`${k.call.meta.name}: an adoption without its old instance's migrating destroy`);
+      continue;
+    }
+    const [txId, index] = source.targetRef.split('#');
+    k.priorRef = source.targetRef;
+    k.priorValue = source.targetValue;
+    k.created = instanceIdOf(txId, Number(index));
+    k.targetUnit = k.policy + k.created;
+  }
 
   // Redeemers: one spend per call on its target; mints per call (a destroy's burn, a minting method's ByAction);
   // reward redeemers only for the pinned verifiers' withdrawals.
@@ -132,7 +151,8 @@ export async function verifyComposed(o) {
     else if (kind === CSL.RedeemerTagKind.Reward && Number(r.index().to_str()) < withdrawalCount) { /* a pinned verifier's */ }
     else problems.push('a redeemer that is neither a spend, a mint nor a pinned verifier\'s');
   }
-  if (spends.length !== calls.length) problems.push(`${spends.length} spend redeemers for ${calls.length} calls`);
+  const spending = calls.filter((x) => !x.creation).length;
+  if (spends.length !== spending) problems.push(`${spends.length} spend redeemers for ${spending} spending calls`);
 
   // Mint: by policy, in the ledger's policy order (mint redeemers are indexed by it).
   const minted = new Map();
@@ -171,6 +191,24 @@ export async function verifyComposed(o) {
       const alt = c.resolve(def).anyOf.find((a) => a.index === Number(r.data().as_constr_plutus_data()?.alternative().to_str()));
       return { decoded, alt, fields: r.data().as_constr_plutus_data().data() };
     };
+    if (k.creation) {
+      // An adoption: exactly its token minted under its policy, with Adopt naming the prior UTxO as its seed.
+      const entry = { method: call.meta.name, created: k.created ?? null, redeemer: null, next: null };
+      report.calls.push(entry);
+      if (!k.created) continue;
+      const ownMinted = [...minted].filter(([unit]) => unit.startsWith(k.policy));
+      if (ownMinted.length !== 1 || minted.get(k.targetUnit) !== 1n) problems.push(`${call.meta.name}: the mint is not exactly the adopted instance's token`);
+      const ownMints = mints.filter((r) => sortedPolicies[Number(r.index().to_str())] === k.policy);
+      const got = ownMints.length === 1 ? fields(rdefs.mint, ownMints[0], 'the adoption') : null;
+      if (!got) problems.push(`${call.meta.name}: not exactly one mint redeemer`);
+      else {
+        entry.redeemer = got.decoded;
+        if (got.alt.title !== call.meta.redeemer.constructor || got.alt.index !== call.meta.redeemer.index) problems.push(`${call.meta.name}: the mint redeemer is ${got.alt.title}, not ${call.meta.redeemer.constructor}`);
+        else if (`${got.decoded.seed?.txId}#${got.decoded.seed?.index}` !== k.priorRef) problems.push(`${call.meta.name}: the adoption's seed is not the prior instance`);
+        got.alt.fields.forEach((f) => { if (f.title !== 'seed') problems.push(`${call.meta.name}: the redeemer has a field the page cannot check: ${f.title}`); });
+      }
+      continue;
+    }
     const own = spends.filter((r) => Number(r.index().to_str()) === k.targetIndex);
     const entry = { method: call.meta.name, targetRef: k.targetRef, redeemer: null, next: null };
     report.calls.push(entry);
@@ -272,6 +310,11 @@ export async function verifyComposed(o) {
   }
   for (const k of calls) {
     if (!DESTROYS.has(k.call.kind) && k.continuations !== 1) problems.push(`${k.call.meta.name}: not exactly one continuation`);
+    // An adoption holds exactly what the prior instance held, its token aside (the funds move; ADR-0011 D4).
+    if (k.creation && k.continuation && k.priorValue) {
+      const lovelace = k.continuation.get('lovelace') ?? 0n;
+      if (lovelace !== (k.priorValue.get('lovelace') ?? 0n)) problems.push(`${k.call.meta.name}: the adopted instance holds ${lovelace} lovelace, not the prior instance's ${k.priorValue.get('lovelace')}`);
+    }
   }
 
   // Balance: inputs and mint equal outputs and fee.
@@ -402,7 +445,7 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
   const { fundingAddress, cosignersOf, signedByOthers } = await import('./client.js');
   const prepared = steps.map((s) => {
     const k = s.contract;
-    const meta = k.meta(s.method, ['action', 'destroy', 'ownedAction', 'ownedDestroy']);
+    const meta = k.meta(s.method, ['action', 'destroy', 'ownedAction', 'ownedDestroy', 'migrate']);
     const args = {};
     for (const a of meta.args) {
       if (!(a.name in (s.args ?? {}))) throw new Error(`${s.method}: missing argument ${a.name}`);

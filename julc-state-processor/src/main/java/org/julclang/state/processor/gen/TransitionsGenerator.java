@@ -93,6 +93,7 @@ public final class TransitionsGenerator {
         var creations = new ArrayList<TransitionIR>();
         if (c.init() != null) creations.add(c.init());
         creations.addAll(c.ownedInits());
+        if (c.migrate() != null) creations.add(c.migrate());   // @Migrate: reads the prior state (ADR-0011 D4)
         for (TransitionIR t : creations) {
             if (unsupported(t)) continue;
             ExecutableElement m = method(t.method());
@@ -245,6 +246,8 @@ public final class TransitionsGenerator {
                 call.add("shared");
             } else if (named(p.asType(), API + "Ctx")) {
                 call.add("ctx");
+            } else if (t.reads().stream().anyMatch(rd -> rd.name().equals(name))) {
+                call.add("args." + name + "()");   // a read state: @Reads, or @Migrate's prior state
             } else if (argNames.contains(name)) {
                 call.add("args." + name + "()");
             } else {

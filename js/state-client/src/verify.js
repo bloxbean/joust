@@ -516,7 +516,7 @@ export function paymentKeyHashOf(CSL, address) {
 }
 
 export function decodeNext(c, xj, call, datum) {
-  if (call.kind === 'action' || call.kind === 'init') return c.decode(xj.state, datum);
+  if (call.kind === 'action' || call.kind === 'init' || call.kind === 'migrate') return c.decode(xj.state, datum);
   const owned = xj.owned.find((o) => o.type === call.meta.owned);
   if (!owned) throw new Error('unknown owned type ' + call.meta.owned);
   const holding = c.decode(owned.holding, datum);

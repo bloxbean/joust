@@ -476,3 +476,46 @@ test('Pool: @Batched intents locked by users, one cancelled, the rest applied by
   assert.equal(s.price, 12n * ADA);
   assert.equal((await p.pendingIntents()).length, 0);
 });
+
+test('Upgrade: v1 migrates into v2 in one transaction (a creation inside a composition)', { skip, timeout: 900_000 }, async () => {
+  const { rt, wallets, contract } = await setup(['upgrade']);
+  const [admin] = await wallets(1, 100);
+  const v1 = await contract('CounterV1', admin);
+  const v2 = await contract('CounterV2', admin, { previous: v1.deployment.policy });
+  const old = v1.at((await v1.deploy(admin, {}, { lovelace: 10n * ADA })).instance);
+  await old.call(admin, 'increment', {});
+  await old.call(admin, 'increment', {});
+  await old.call(admin, 'setSuccessor', { successor: v2.deployment.policy });
+  const funds = (await old.read()).lovelace;
+  const steps = [
+    { contract: v1, method: 'upgrade', instance: old.id },
+    { contract: v2, method: 'adopt', instance: old.id },
+  ];
+  // An adoption alone is refused (the engine runs v2's validator, which needs v1's migrating destroy).
+  await assert.rejects(rt.compose(admin, [steps[1]]));
+  // I5: every tampering of the engine-built upgrade is refused before the wallet is asked.
+  let refused = 0;
+  for (let i = 0, total = 1; i < total; i++) {
+    const evil = { ...rt.service, async prepare(req) {
+      const p = await rt.service.prepare(req);
+      const all = Object.entries(tamperings(CSL, p.cbor, [admin.address]));
+      total = all.length;
+      return { ...p, cbor: all[i][1] };
+    } };
+    let asked = false;
+    const watched = { ...admin, signTx: (...x) => { asked = true; return admin.signTx(...x); } };
+    await assert.rejects(runComposed({ CSL, service: evil, chain: rt.chain, api: watched, steps }), /refused/, `tampering ${i}`);
+    assert.equal(asked, false, `tampering ${i} reached the wallet`);
+    refused++;
+  }
+  console.log(`I5: ${refused} tamperings of an engine-built upgrade refused before signing`);
+  const r = await rt.compose(admin, steps);
+  const adopted = r.report.calls[1].created;
+  assert.ok(adopted, 'the adopted instance id');
+  assert.equal(r.report.calls[1].next.count, 2n);
+  assert.equal(await old.state(), null, 'v1 ended');
+  const nv = v2.at(adopted);
+  assert.equal((await nv.read()).lovelace, funds, 'the funds moved');
+  await nv.call(admin, 'increment', {});
+  assert.equal((await nv.state()).count, 3n);
+});
