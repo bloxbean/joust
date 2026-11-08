@@ -18,7 +18,7 @@ test('a counter: create, increment, refuse, close', { timeout: 300_000 }, async 
     deployments: deployed.contracts, ttlMs: 20_000 });
   // A fresh DevKit wallet with 100 ADA from the faucet.
   const wallet = devWallet({ CSL, chain: rt.chain, mnemonic: generateMnemonic(wordlist, 256) });
-  await devkitTopUp(wallet.address, 100, config.networks.devkit.admin);
+  await devkitTopUp(wallet.address, 100, config.networks.devkit.admin, { CSL, chain: rt.chain });
   for (let i = 0; i < 30 && !(await rt.chain.utxosAt(wallet.address)).length; i++) await new Promise((r) => setTimeout(r, 1000));
 
   const counter = new Counter(rt.options('app.Counter'));

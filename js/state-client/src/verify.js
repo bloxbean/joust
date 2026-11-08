@@ -99,7 +99,7 @@ export async function verifyPrepared(o) {
   }
   const body = tx.body();
 
-  if (call.meta.needsService && !verifiableWithoutService(call.meta, description)) {
+  if (call.meta.needsService && !verifiableWithoutService(call.meta, description, deployment)) {
     problems.push(`${call.meta.name} needs data only the service computes; the page cannot verify it`);
   }
   if (!SPEND_KINDS.has(call.kind) && !CREATIONS.has(call.kind)) problems.push('unknown call kind ' + call.kind);
@@ -109,7 +109,16 @@ export async function verifyPrepared(o) {
   if (body.certs() && body.certs().len() > 0) problems.push('certificates');
   if (body.voting_procedures() || body.voting_proposals()) problems.push('votes or proposals');
   if (body.donation() || body.current_treasury_value()) problems.push('a treasury donation');
-  if (body.withdrawals() && body.withdrawals().len() > 0) problems.push('withdrawals');
+  // Withdrawals: none, except one zero withdrawal from JOUST's map verifier (the call's MerkleMap claims, checked on
+  // chain by the verifier and the contract; ADR-0002 D9), pinned by the deployment.
+  const mv = deployment.mapVerifier;
+  const ws = body.withdrawals();
+  if (ws && ws.len() > 0) {
+    const keys = ws.keys();
+    const only = ws.len() === 1 && mv && keys.get(0).to_address().to_bech32() === mv.rewardAddress
+      && ws.get(keys.get(0)).to_str() === '0';
+    if (!only) problems.push('withdrawals');
+  }
   if (tx.auxiliary_data()) problems.push('auxiliary data');
   if (body.network_id() && body.network_id().kind() !== (deployment.networkId === 1 ? CSL.NetworkIdKind.Mainnet : CSL.NetworkIdKind.Testnet)) {
     problems.push('another network');
@@ -160,6 +169,7 @@ export async function verifyPrepared(o) {
     const kind = r.tag().kind();
     if (kind === CSL.RedeemerTagKind.Spend) spends.push(r);
     else if (kind === CSL.RedeemerTagKind.Mint) mints.push(r);
+    else if (kind === CSL.RedeemerTagKind.Reward && mv && ws && ws.len() === 1 && r.index().to_str() === '0') { /* the map verifier's */ }
     else problems.push('a redeemer that is neither a spend nor a mint');
   }
 
@@ -428,6 +438,7 @@ export async function verifyPrepared(o) {
   for (let i = 0; refIns && i < refIns.len(); i++) {
     const r = refOf(refIns.get(i));
     if ((deployment.referenceScripts ?? []).includes(r)) continue;
+    if ((mv?.referenceScripts ?? []).includes(r)) continue;
     const u = await chain.utxo(r);
     const ok = u && (u.referenceScriptHash === policy || (atScript(u.address) && u.value.get(policy + call.instance) === 1n)
       || foreign.some((unit) => u.value.get(unit) === 1n));
@@ -439,9 +450,10 @@ export async function verifyPrepared(o) {
 
 /**
  * A method marked as needing the service that the page can still verify (ADR-0015 D7): one that needs it only for
- * @Params (the deployment pins the applied script's policy) and @Reads (checked as reference inputs above).
+ * @Params (the deployment pins the applied script's policy), @Reads (checked as reference inputs) and MerkleMaps (the
+ * map verifier's zero withdrawal, pinned by the deployment).
  */
-function verifiableWithoutService(meta, description) {
+function verifiableWithoutService(meta, description, deployment) {
   const r = meta.recipe;
   if (!r) return false;
   const p = meta.policies ?? {};
@@ -449,8 +461,9 @@ function verifiableWithoutService(meta, description) {
   if (meta.takesAssets || p.batched || p.into || p.admits || p.receives || p.quorum || p.authorizedBy?.length) return false;
   if (out.sends || out.mint || out.deposits || out.events) return false;
   const target = description.definitions?.[r.target];
+  // MerkleMaps: verifiable when the deployment pins JOUST's map verifier (its claims are checked on chain).
   for (const alt of target?.anyOf ?? []) {
-    for (const f of alt.fields ?? []) if (f.$ref?.endsWith('/org.julclang.state.api.MerkleMap')) return false;
+    for (const f of alt.fields ?? []) if (f.$ref?.endsWith('/org.julclang.state.api.MerkleMap') && !deployment?.mapVerifier) return false;
   }
   return true;
 }

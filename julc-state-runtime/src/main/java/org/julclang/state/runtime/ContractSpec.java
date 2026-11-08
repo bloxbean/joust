@@ -15,7 +15,19 @@ package org.julclang.state.runtime;
  * @param <S>            the state type
  */
 public record ContractSpec<S>(String name, Class<?> validatorClass, Class<S> stateClass, long minAda,
-                              int maxDatumBytes, long maxValidityMs, boolean stakeSelf, String scriptCborHex) {
+                              int maxDatumBytes, long maxValidityMs, boolean stakeSelf, String scriptCborHex,
+                              java.util.List<Integer> mapFields) {
+
+    public ContractSpec(String name, Class<?> validatorClass, Class<S> stateClass, long minAda, int maxDatumBytes,
+                        long maxValidityMs, boolean stakeSelf, String scriptCborHex) {
+        this(name, validatorClass, stateClass, minAda, maxDatumBytes, maxValidityMs, stakeSelf, scriptCborHex, null);
+    }
+
+    /** Where the state's MerkleMaps are: record components, or (a described contract) {@code mapFields} of its Data. */
+    @SuppressWarnings("unchecked")
+    public MerkleSupport.Layout<S> layout() {
+        return mapFields != null ? (MerkleSupport.Layout<S>) MerkleSupport.dataLayout(mapFields) : MerkleSupport.layout(stateClass);
+    }
 
     public ContractSpec(String name, Class<?> validatorClass, Class<S> stateClass, long minAda, int maxDatumBytes,
                         long maxValidityMs) {
@@ -30,7 +42,14 @@ public record ContractSpec<S>(String name, Class<?> validatorClass, Class<S> sta
     /** A contract known by its description and compiled script, with its state as Plutus data (ADR-0015 D4). */
     public static ContractSpec<org.julclang.core.PlutusData> described(String name, String scriptCborHex, long minAda,
                                                                        int maxDatumBytes, long maxValidityMs, boolean stakeSelf) {
+        return described(name, scriptCborHex, minAda, maxDatumBytes, maxValidityMs, stakeSelf, java.util.List.of());
+    }
+
+    /** As {@link #described(String, String, long, int, long, boolean)}, the state's MerkleMaps being {@code mapFields}. */
+    public static ContractSpec<org.julclang.core.PlutusData> described(String name, String scriptCborHex, long minAda,
+                                                                       int maxDatumBytes, long maxValidityMs, boolean stakeSelf,
+                                                                       java.util.List<Integer> mapFields) {
         return new ContractSpec<>(name, null, org.julclang.core.PlutusData.class, minAda, maxDatumBytes, maxValidityMs,
-                stakeSelf, scriptCborHex);
+                stakeSelf, scriptCborHex, java.util.List.copyOf(mapFields));
     }
 }

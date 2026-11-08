@@ -18,7 +18,7 @@ const { contracts, clock, vectors } = JSON.parse(readFileSync(vectorsFile, 'utf8
 const request = (call, snapshot) => ({
   call, snapshot, contracts,
   zeroSlot: BigInt(clock.zeroSlot), zeroTimeMs: BigInt(clock.startTimeMs), slotLengthMs: BigInt(clock.slotLengthMs),
-  ttlMs: 20000n, networkId: 0,
+  ttlMs: 20000n, networkId: 0, mapNodes: {},
 });
 let same = 0;
 const times = [];

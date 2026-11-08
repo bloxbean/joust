@@ -4,6 +4,7 @@
 
 import { loadEngine } from './engine.js';
 import { emptySnapshot, fetchNeed } from './snapshot.js';
+import { memoryMapStore } from './maps.js';
 import { readFileSync } from 'node:fs';
 
 /** This runtime's version: contracts built by an incompatible toolchain are refused (ADR-0015 I7). */
@@ -36,6 +37,7 @@ const big = (x) => BigInt(x);
  * @param o.networkId  0 (test networks) or 1 (mainnet)
  * @param o.ttlMs      how long a prepared transaction stays valid (default 120 s; a DevKit's horizon is minutes)
  * @param o.maxRounds  needs fetched before giving up (default 64)
+ * @param o.mapStore   the MerkleMap mirror's nodes (memoryMapStore() by default; fileMapStore(path) to keep them)
  * @param o.prefetch   async (call, snapshot) => void: fills what the call will surely read before the first run (the
  *                     up-front needs of ADR-0015 D5); the engine still asks for anything missing
  */
@@ -46,6 +48,7 @@ export function engineService(o) {
     script: c.script, transitions: c.transitions,
   }));
   const rounds = [];
+  const maps = o.mapStore ?? memoryMapStore();
 
   async function run(call) {
     const engine = await loadEngine(o.engine);
@@ -55,13 +58,18 @@ export function engineService(o) {
       const r = engine.joust.prepare({
         call: JSON.stringify(call), snapshot: JSON.stringify(snapshot), contracts,
         zeroSlot: big(o.clock.zeroSlot), zeroTimeMs: big(o.clock.zeroTimeMs), slotLengthMs: big(o.clock.slotLengthMs),
-        ttlMs: big(o.ttlMs ?? 120_000), networkId: o.networkId ?? 0,
+        ttlMs: big(o.ttlMs ?? 120_000), networkId: o.networkId ?? 0, mapNodes: maps.all(),
       });
       if (r.ok) {
         rounds.push(round);
+        maps.putAll(r.mapNodes);   // the mirror's new nodes (the next call's map roots)
         return r;
       }
       if (!r.needKind) throw new Error(r.error);
+      if (r.needKind === 'mapNode') {
+        throw new Error(`the MerkleMap mirror has no node ${r.needKey}: this app did not build that map's history`
+          + ' (keep the map store; rebuilding a mirror from the chain comes later, ADR-0015 D5)');
+      }
       if (process.env.JOUST_DEBUG_NEEDS) console.error(`[joust] round ${round}: needs ${r.needKind} ${r.needKey}`);
       await fetchNeed(o.api, snapshot, r.needKind, r.needKey);
     }

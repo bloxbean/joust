@@ -772,8 +772,27 @@ direct `Tx` building, gated by S3.
   - Maps, assets, batches, moves, sends, mints, events, deposits and co-signers stay refused until supported.
 - **Engines in one process:** the engines install distinct globals (`joustRuntime`, `joustToolchain`) and load one at a
   time through julc-wasm's `onJulcReady`. The engine loads only the called contract from a bundle.
-- **Next in M3:** MerkleMaps (S2b's discovery, proofs from a local mirror), native assets, co-signers (`@Quorum`,
-  `@AuthorizedBy`), batches, composition and deposits, moves; and call requests in every example's fixtures (I3).
+- **MerkleMaps (ADR-0002) through npm.** Token passes on DevKit: mint, transfer (the recipient's read waits for the
+  sender's), self-transfer, burn to zero, and the contract's refusals.
+  - **`MerkleSupport.Layout`** says where a state's maps are: record components (the typed clients), or Data fields
+    by index (a described contract; `ContractSpec.mapFields`, `OwnedObject.Codec.mapFields`). Proofs, claims, the
+    stored state and the replay check are shared by both.
+  - **The described dispatcher runs a map method's transition in rounds (D3).** Each key a run reports is read
+    through the call's bound `ReadSource` (`MerkleMaps.read`), so the runtime records and proves it as on the JVM
+    path. The limit is 4 rounds. The replay check opens the maps with exactly the witnessed reads.
+  - **The mirror:** the engine's node store (`SnapshotNodeStore`) holds the nodes the caller passes; a missing node
+    is a need, and the nodes a prepare writes go back. `@julclang/joust-runtime` keeps them in memory or in a file
+    (`fileMapStore`).
+  - Rebuilding a mirror from chain history (D5's option a) remains, for maps this app did not build.
+  - **The map verifier:** the engine answers `joust:mapVerifier` deployment and publish requests (published and
+    registered once per network, unsigned for the deployer's wallet). Deployments of map contracts pin it.
+  - **The page verifier** allows exactly one zero withdrawal to the pinned verifier, its reward redeemer and its
+    reference input. The claims are checked on chain by the verifier and the contract.
+  - On the JVM, `DescribedTokenDevnetTest` runs the same Token flow through the dispatcher with key accounts.
+- **DevKit's faucet can run dry:** `devkitTopUp` then pays from the default mnemonic's genesis accounts, as
+  `DevKit.topUp` does.
+- **Next in M3:** native assets, co-signers (`@Quorum`, `@AuthorizedBy`), batches, composition and deposits, moves;
+  the tamper suite over map transactions; and call requests in every example's fixtures (I3).
 
 ## Revision history
 

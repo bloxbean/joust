@@ -52,6 +52,34 @@ public final class VerifierHandle {
 
     public PlutusV3Script script() { return script; }
     public String rewardAddress() { return rewardAddress; }
+    public String hash() { return hash; }
+    /** Where its reference script is kept (the verifier's own enterprise address). */
+    public String holder() { return holder; }
+
+    /** Its reference script on chain, or null. */
+    public Utxo reference() { return find(); }
+
+    /**
+     * The transaction publishing its reference script and registering its stake credential, unsigned, paid from
+     * {@code payerAddress} (a wallet signs it; ADR-0015 D5), or null when it is already on chain.
+     */
+    public com.bloxbean.cardano.client.transaction.spec.Transaction prepare(String payerAddress) {
+        if (find() != null) return null;
+        var tx = new Tx()
+                .payToAddress(holder, List.of(Amount.lovelace(deposit())), script)
+                .registerStakeAddress(rewardAddress)
+                .from(payerAddress);
+        try {
+            var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(runtime.backend()).compose(tx)
+                    .feePayer(payerAddress)
+                    .additionalSignersCount(1)
+                    .build();
+            runtime.built("publish and register the JOUST " + label, built, true);
+            return built;
+        } catch (Exception e) {
+            throw new SubmitException("publish the " + label + ": could not build the transaction: " + e.getMessage(), e);
+        }
+    }
 
     /** The verifier's reference script, publishing it (and registering its stake credential) first if needed. */
     public Utxo ensure(Account payer) {
@@ -90,6 +118,11 @@ public final class VerifierHandle {
 
     private Utxo find() {
         if (reference != null) return reference;
+        var pinned = runtime.referenceScript(hash);
+        if (pinned != null && holder.equals(pinned.getAddress())) {
+            reference = pinned;
+            return pinned;
+        }
         try {
             var r = runtime.backend().getUtxoService().getUtxos(holder, 20, 1);
             if (r.isSuccessful() && r.getValue() != null) {

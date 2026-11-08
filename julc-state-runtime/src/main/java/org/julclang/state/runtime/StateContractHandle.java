@@ -294,7 +294,7 @@ public final class StateContractHandle<S> {
         byte[] callerPkh = Keys.pkh(caller);
         // Publish reference scripts first: doing so spends the caller's UTxOs, so the seed is picked afterwards.
         Utxo ref = ensureReferenceScript(caller);
-        boolean maps = MerkleSupport.hasMaps(spec.stateClass());
+        boolean maps = spec.layout().hasMaps();
         if (maps) runtime.mapVerifier().ensure(caller);
         Utxo seed = pickSeed(caller);
         String instanceId = instanceIdOf(seed.getTxHash(), seed.getOutputIndex());
@@ -312,7 +312,7 @@ public final class StateContractHandle<S> {
         java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();
         S initial = made;
         if (maps) {
-            var prepared = merkle.prepareCreation(HexUtil.decodeHexString(policyId), spec.stateClass(), made, seedOwner);
+            var prepared = merkle.prepareCreation(HexUtil.decodeHexString(policyId), spec.layout(), made, seedOwner);
             claims = prepared.claims();
             initial = prepared.stored();
         }
@@ -349,14 +349,14 @@ public final class StateContractHandle<S> {
         byte[] id = HexUtil.decodeHexString(instance.instanceId());
         var funds = new org.julclang.state.api.Funds(policy, id, d.receivedAssets(), org.julclang.state.api.Assets.none(),
                 org.julclang.core.types.JulcList.empty());
-        boolean maps = MerkleSupport.hasMaps(spec.stateClass());
+        boolean maps = spec.layout().hasMaps();
         MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapStore()) : null;
         Transition<S> t = maps ? merkle.run(() -> d.assetRun().apply(ctx, funds)) : d.assetRun().apply(ctx, funds);
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
         S stored = t.next();
         java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();
         if (maps) {
-            var prepared = merkle.prepareCreation(policy, spec.stateClass(), t.next(), seedRef);
+            var prepared = merkle.prepareCreation(policy, spec.layout(), t.next(), seedRef);
             claims = prepared.claims();
             stored = prepared.stored();
         }

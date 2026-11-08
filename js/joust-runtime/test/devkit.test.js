@@ -30,7 +30,7 @@ test('Counter and Bank on DevKit through the runtime engine', { skip: !devkit ||
   const rt = joustRuntime({ CSL, chainUrl: STORE, contracts, clock: await devkitClock(ADMIN), networkId: 0, ttlMs: 20_000 });
   const mnemonic = generateMnemonic(wordlist, 256);
   const wallet = devWallet({ CSL, chain: rt.chain, mnemonic });
-  await devkitTopUp(wallet.address, 500, ADMIN);
+  await devkitTopUp(wallet.address, 500, ADMIN, { CSL, chain: rt.chain });
   for (let i = 0; i < 30 && !(await rt.chain.utxosAt(wallet.address)).length; i++) await new Promise((r) => setTimeout(r, 1000));
 
   const description = (title) => JSON.parse(contracts.map((c) => (typeof c.description === 'string' ? c.description : JSON.stringify(c.description)))

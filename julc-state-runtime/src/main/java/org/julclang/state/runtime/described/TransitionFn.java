@@ -15,4 +15,16 @@ import org.julclang.core.PlutusData;
 public interface TransitionFn {
 
     PlutusData apply(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx);
+
+    /** One run: the step, or the refusal's message (step null); and the run's traces (MerkleMap read discovery). */
+    record Run(PlutusData step, String refusal, java.util.List<String> traces) {}
+
+    /** As {@link #apply}, keeping the traces and returning a refusal instead of throwing it. */
+    default Run run(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
+        try {
+            return new Run(apply(method, target, shared, args, ctx), null, java.util.List.of());
+        } catch (org.julclang.state.api.RequireException e) {
+            return new Run(null, e.getMessage(), java.util.List.of());
+        }
+    }
 }

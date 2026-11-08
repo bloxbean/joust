@@ -34,6 +34,13 @@ public final class UplcTransitions implements TransitionFn {
 
     @Override
     public PlutusData apply(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
+        Run r = run(method, target, shared, args, ctx);
+        if (r.step() == null) throw new RequireException(r.refusal());
+        return r.step();
+    }
+
+    @Override
+    public Run run(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
         var program = decoded.computeIfAbsent(method, m -> {
             String hex = programs.get(m);
             if (hex == null) throw new IllegalArgumentException("no transition program for " + m);
@@ -41,11 +48,11 @@ public final class UplcTransitions implements TransitionFn {
         });
         EvalResult r = VM.evaluateWithArgs(program, LedgerEvaluationTarget.pv11(PlutusLanguage.PLUTUS_V3),
                 List.of(target, shared, args, ctx), new ExBudget(10_000_000_000L, 14_000_000L), EvalOptions.DEFAULT);
-        if (r instanceof EvalResult.Success s) return TermExtractor.extractData(s.resultTerm());
+        if (r instanceof EvalResult.Success s) return new Run(TermExtractor.extractData(s.resultTerm()), null, s.traces());
         List<String> traces = r instanceof EvalResult.Failure f ? f.traces() : ((EvalResult.BudgetExhausted) r).traces();
         String message = method + " refused";
         for (String t : traces) if (!t.startsWith("joust:")) message = t;
         if (r instanceof EvalResult.BudgetExhausted) message = method + ": over the execution budget";
-        throw new RequireException(message);
+        return new Run(null, message, traces);
     }
 }

@@ -19,7 +19,9 @@ import org.julclang.state.runtime.Transition;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
+import org.julclang.state.runtime.MerkleSupport;
 
 /**
  * A contract known by its description (version 2, with call recipes), its compiled script and its transitions
@@ -50,7 +52,8 @@ public final class DescribedContract {
         this.name = description.path("preamble").path("title").asText();
         this.codec = new SchemaCodec(description);
         this.spec = ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
-                x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean());
+                x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
+                mapFields(refKey(x.get("state"))));
         this.fn = fn;
     }
 
@@ -164,7 +167,7 @@ public final class DescribedContract {
                 rules(b, recipe);
                 for (var rd : reads) b.referenceInputs(rd.utxo());
                 b.usesCtx(usesCtx).received(lovelace)
-                        .run((s, ctx) -> transition(fn.apply(transition, s, NONE, argsData, ctxData(ctx, usesCtx))))
+                        .run((s, ctx) -> transition(discover(transition, spec.layout(), s, NONE, argsData, ctxData(ctx, usesCtx))))
                         .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null));
                 at.call(b.build());
                 return null;
@@ -180,7 +183,9 @@ public final class DescribedContract {
             case "ownedAction", "ownedDestroy" -> {
                 if (object == null || !object.matches("4f[0-9a-f]{56}")) throw new IllegalArgumentException("an owned call needs an object id");
                 StateInstance<PlutusData> at = handle.at(requireInstance(instance));
-                var obj = OwnedObject.at(at, object, ownedCodec(meta.get("owned").asText()));
+                var codec = ownedCodec(meta.get("owned").asText());
+                var ownedLayout = MerkleSupport.dataLayout(codec.mapFields());
+                var obj = OwnedObject.at(at, object, codec);
                 var b = kind.equals("ownedDestroy")
                         ? Call.<PlutusData>destroy(method, caller, burn(recipe))
                         : Call.<PlutusData>action(method, caller);
@@ -188,9 +193,9 @@ public final class DescribedContract {
                 b.usesCtx(usesCtx).received(lovelace)
                         .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null));
                 if (recipe.path("shared").asBoolean()) {
-                    b.runShared((o, sh, ctx) -> transition(fn.apply(transition, o, (PlutusData) sh, argsData, ctxData(ctx, usesCtx))));
+                    b.runShared((o, sh, ctx) -> transition(discover(transition, ownedLayout, o, (PlutusData) sh, argsData, ctxData(ctx, usesCtx))));
                 } else {
-                    b.run((o, ctx) -> transition(fn.apply(transition, o, NONE, argsData, ctxData(ctx, usesCtx))));
+                    b.run((o, ctx) -> transition(discover(transition, ownedLayout, o, NONE, argsData, ctxData(ctx, usesCtx))));
                 }
                 obj.call(b.build());
                 return null;
@@ -282,7 +287,7 @@ public final class DescribedContract {
             if (o.get("type").asText().equals(type)) {
                 int tag = o.get("tag").asInt();
                 return new OwnedObject.Codec<>(PlutusData.class, h -> field((PlutusData) h, 1),
-                        (inst, v) -> PlutusData.constr(tag, PlutusData.bytes(inst), v), null);
+                        (inst, v) -> PlutusData.constr(tag, PlutusData.bytes(inst), v), null, mapFields(type));
             }
         }
         throw new IllegalArgumentException(name + " has no owned type " + type);
@@ -296,20 +301,77 @@ public final class DescribedContract {
         return meta.path("takesAssets").asBoolean() || p.path("batched").asBoolean() || p.path("into").asBoolean()
                 || !p.path("admits").isNull() && !p.path("admits").isMissingNode() || p.path("receives").asBoolean()
                 || r.path("sends").asBoolean() || r.path("mint").asBoolean() || r.path("deposits").asBoolean()
-                || r.path("events").asBoolean() || cosigned || hasMaps(meta.path("recipe").path("target").asText());
+                || r.path("events").asBoolean() || cosigned;
     }
 
-    /** The record {@code key} has a MerkleMap component (ADR-0002): its calls need proofs (M3). */
-    private boolean hasMaps(String key) {
-        if (key.isEmpty()) return false;
-        JsonNode d = description.path("definitions").path(key);
-        for (JsonNode alt : d.path("anyOf")) {
-            for (JsonNode f : alt.path("fields")) {
-                if (f.path("$ref").asText().endsWith("/org.julclang.state.api.MerkleMap")) return true;
+    private static String refKey(JsonNode schema) {
+        String ref = schema == null ? "" : schema.path("$ref").asText("");
+        return ref.startsWith("#/definitions/") ? ref.substring("#/definitions/".length()) : ref;
+    }
+
+    /** The indexes of the record {@code key}'s MerkleMap components (ADR-0002), from the description's schema. */
+    private List<Integer> mapFields(String key) {
+        var out = new ArrayList<Integer>();
+        if (key == null || key.isEmpty()) return out;
+        JsonNode alts = description.path("definitions").path(key).path("anyOf");
+        if (alts.size() != 1) return out;
+        JsonNode fs = alts.get(0).path("fields");
+        for (int i = 0; i < fs.size(); i++) {
+            if (fs.get(i).path("$ref").asText().endsWith("/org.julclang.state.api.MerkleMap")) out.add(i);
+        }
+        return out;
+    }
+
+    /**
+     * Runs a transition with MerkleMap read discovery (ADR-0015 D3): each key a run reports ({@code joust:read}) is read
+     * through the call's bound ReadSource (so the runtime records it and proves it) and given to the next run in the
+     * map's reads, until a run reports nothing new. Starts from the reads the target already carries (the replay check
+     * opens the maps with exactly the witnessed reads).
+     */
+    private PlutusData discover(String transition, MerkleSupport.Layout<PlutusData> layout, PlutusData target,
+                                PlutusData shared, PlutusData args, PlutusData ctx) {
+        if (!layout.hasMaps() || target == NONE) {
+            var r = fn.run(transition, target, shared, args, ctx);
+            if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
+            return r.step();
+        }
+        var known = new java.util.LinkedHashMap<String, List<org.julclang.state.api.MapEntry>>();
+        for (int idx : layout.maps()) {
+            var m = layout.map(target, idx);
+            var list = known.computeIfAbsent(HexFormat.of().formatHex(m.root()), k -> new ArrayList<>());
+            for (var e : m.reads()) list.add(e);
+        }
+        for (int round = 1; round <= MAX_READ_ROUNDS; round++) {
+            var reads = new ArrayList<JulcList<org.julclang.state.api.MapEntry>>();
+            for (int idx : layout.maps()) {
+                var list = known.get(HexFormat.of().formatHex(layout.map(target, idx).root()));
+                JulcList<org.julclang.state.api.MapEntry> l = JulcList.empty();
+                for (int i = list.size() - 1; i >= 0; i--) l = l.prepend(list.get(i));
+                reads.add(l);
+            }
+            var r = fn.run(transition, layout.opened(target, reads), shared, args, ctx);
+            boolean fresh = false;
+            for (String t : r.traces()) {
+                if (!t.startsWith("joust:read ")) continue;
+                String[] p = t.split(" ");
+                String root = p[1];
+                String key = p.length > 2 ? p[2] : "";
+                var list = known.computeIfAbsent(root, k -> new ArrayList<>());
+                if (list.stream().anyMatch(e -> HexFormat.of().formatHex(e.key()).equals(key))) continue;
+                list.add(org.julclang.state.api.MerkleMaps.read(HexFormat.of().parseHex(root), HexFormat.of().parseHex(key)));
+                fresh = true;
+            }
+            if (!fresh) {
+                if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
+                return r.step();
             }
         }
-        return false;
+        throw new org.julclang.state.api.RequireException(transition + ": more than " + MAX_READ_ROUNDS
+                + " rounds of MerkleMap reads (ADR-0015 D3)");
     }
+
+    /** The round limit of read discovery (ADR-0015 D3). */
+    static final int MAX_READ_ROUNDS = 4;
 
     /** The current state of {@code instance}, as JSON by the description's state schema. */
     public JsonNode state(StateRuntime runtime, String instance) {

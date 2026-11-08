@@ -24,7 +24,7 @@ async function deployer(root, net, rt, CSL) {
   if (net.admin) {
     const have = (await rt.chain.utxosAt(wallet.address)).reduce((s, u) => s + (u.value.get('lovelace') ?? 0n), 0n);
     if (have < 200_000_000n) {
-      await devkitTopUp(wallet.address, 1000, net.admin);
+      await devkitTopUp(wallet.address, 1000, net.admin, { CSL, chain: rt.chain });
       for (let i = 0; i < 30 && !(await rt.chain.utxosAt(wallet.address)).length; i++) await new Promise((r) => setTimeout(r, 1000));
     }
   }

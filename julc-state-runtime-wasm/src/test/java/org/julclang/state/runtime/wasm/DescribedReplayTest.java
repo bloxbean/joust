@@ -55,7 +55,7 @@ class DescribedReplayTest {
                 if (call == null) continue;
                 var req = new Prepare.Request(call.toString(), Fixtures.snapshot(fixture).toJson(), contracts,
                         clock.get("zeroSlot").asLong(), clock.get("startTimeMs").asLong(), clock.get("slotLengthMs").asLong(),
-                        20_000, 0);
+                        20_000, 0, java.util.Map.of());
                 String name = f.getFileName() + " " + call.get("contract").asText().replaceAll(".*\\.", "") + "." + call.get("method").asText();
                 long t = System.nanoTime();
                 var r = Prepare.prepare(req);
@@ -99,16 +99,16 @@ class DescribedReplayTest {
         String snapshot = Fixtures.snapshot(fixture).toJson();
         // The contract's Require, from the transition program's trace.
         ((com.fasterxml.jackson.databind.node.ObjectNode) call.get("args")).put("by", "0");
-        var refused = Prepare.prepare(new Prepare.Request(call.toString(), snapshot, contracts, 0, 1793975371000L, 1000, 20_000, 0));
+        var refused = Prepare.prepare(new Prepare.Request(call.toString(), snapshot, contracts, 0, 1793975371000L, 1000, 20_000, 0, java.util.Map.of()));
         assertFalse(refused.ok());
         assertEquals("increment must be positive", refused.error());
         // A read the snapshot lacks: a need, not an error.
-        var need = Prepare.prepare(new Prepare.Request(fixture.get("call").toString(), "{}", contracts, 0, 1793975371000L, 1000, 20_000, 0));
+        var need = Prepare.prepare(new Prepare.Request(fixture.get("call").toString(), "{}", contracts, 0, 1793975371000L, 1000, 20_000, 0, java.util.Map.of()));
         assertFalse(need.ok());
         assertNotNull(need.needKind(), String.valueOf(need.error()));
         // An argument that does not fit its schema.
         ((com.fasterxml.jackson.databind.node.ObjectNode) call.get("args")).put("by", "five");
-        var bad = Prepare.prepare(new Prepare.Request(call.toString(), snapshot, contracts, 0, 1793975371000L, 1000, 20_000, 0));
+        var bad = Prepare.prepare(new Prepare.Request(call.toString(), snapshot, contracts, 0, 1793975371000L, 1000, 20_000, 0, java.util.Map.of()));
         assertFalse(bad.ok());
         assertTrue(bad.error().contains("not an integer"), bad.error());
     }

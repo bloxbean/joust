@@ -57,7 +57,91 @@ public final class MerkleSupport {
      * replaced by {@code (newRoot, [], [])}). {@code after} is the method's result; null for a destroy (reads only).
      */
     public <S> Prepared<S> prepare(byte[] policy, Class<S> stateClass, S before, S after, org.julclang.ledger.TxOutRef owner) {
-        return prepare(policy, stateClass, before, after, owner, false);
+        return prepare(policy, layout(stateClass), before, after, owner, false);
+    }
+
+    /** As {@link #prepare(byte[], Class, Object, Object, org.julclang.ledger.TxOutRef)}, for any {@link Layout}. */
+    public <S> Prepared<S> prepare(byte[] policy, Layout<S> layout, S before, S after, org.julclang.ledger.TxOutRef owner) {
+        return prepare(policy, layout, before, after, owner, false);
+    }
+
+    /**
+     * Where a state's MerkleMaps are (ADR-0002): its record components (a typed client's state), or fields of Plutus data
+     * by index (a described contract's state; ADR-0015 D4).
+     */
+    public interface Layout<S> {
+        /** Indexes of the MerkleMap components. */
+        List<Integer> maps();
+
+        MerkleMap map(S state, int index);
+
+        /** {@code state} with each map replaced by its datum form {@code (roots[j], [], [])}. */
+        S withRoots(S state, byte[][] roots);
+
+        /** {@code state} with each map opened with {@code reads[j]} (as the validator opens it). */
+        S opened(S state, List<JulcList<MapEntry>> reads);
+
+        /** A comparable form of a state: maps reduced to (root, net writes). */
+        String canonical(S state);
+
+        default boolean hasMaps() {
+            return !maps().isEmpty();
+        }
+    }
+
+    /** The layout of a typed state (record components). */
+    @SuppressWarnings("unchecked")
+    public static <S> Layout<S> layout(Class<S> stateClass) {
+        if (stateClass != null && !stateClass.isRecord() && org.julclang.core.PlutusData.class.isAssignableFrom(stateClass)) {
+            return (Layout<S>) dataLayout(List.of());
+        }
+        List<Integer> maps = stateClass == null ? List.of() : mapComponents(stateClass);
+        return new Layout<>() {
+            public List<Integer> maps() { return maps; }
+            public MerkleMap map(S state, int index) { return (MerkleMap) component(state, index); }
+            public S withRoots(S state, byte[][] roots) { return MerkleSupport.withRoots(stateClass, state, maps, roots); }
+            public S opened(S state, List<JulcList<MapEntry>> reads) { return MerkleSupport.opened(stateClass, state, maps, reads); }
+            public String canonical(S state) { return MerkleSupport.canonical(state); }
+        };
+    }
+
+    /** The layout of Plutus-data state whose MerkleMaps are the fields {@code maps} (a described contract). */
+    public static Layout<org.julclang.core.PlutusData> dataLayout(List<Integer> maps) {
+        return new Layout<>() {
+            public List<Integer> maps() { return maps; }
+
+            public MerkleMap map(org.julclang.core.PlutusData state, int index) {
+                var f = ((org.julclang.core.PlutusData.ConstrData) state).fields().get(index);
+                return org.julclang.clientlib.PlutusDataAdapter.convert(org.julclang.clientlib.PlutusDataAdapter.toClientLib(f), MerkleMap.class);
+            }
+
+            private org.julclang.core.PlutusData with(org.julclang.core.PlutusData state, java.util.function.IntFunction<MerkleMap> at) {
+                var c = (org.julclang.core.PlutusData.ConstrData) state;
+                var fields = new ArrayList<>(c.fields());
+                for (int j = 0; j < maps.size(); j++) {
+                    fields.set(maps.get(j), org.julclang.clientlib.PlutusDataAdapter.fromClientLib(
+                            org.julclang.clientlib.PlutusDataAdapter.convert(at.apply(j))));
+                }
+                return new org.julclang.core.PlutusData.ConstrData(c.tag(), fields);
+            }
+
+            public org.julclang.core.PlutusData withRoots(org.julclang.core.PlutusData state, byte[][] roots) {
+                JulcList<MapEntry> none = JulcList.empty();
+                return with(state, j -> new MerkleMap(roots[j], none, none));
+            }
+
+            public org.julclang.core.PlutusData opened(org.julclang.core.PlutusData state, List<JulcList<MapEntry>> reads) {
+                return with(state, j -> new MerkleMap(map(state, maps.get(j)).root(), reads.get(j), JulcList.empty()));
+            }
+
+            public String canonical(org.julclang.core.PlutusData state) {
+                if (state == null) return "end";
+                return HexFormat.of().formatHex(org.julclang.core.cbor.PlutusDataCborEncoder.encode(with(state, j -> {
+                    MerkleMap m = map(state, maps.get(j));
+                    return new MerkleMap(m.root(), JulcList.empty(), MerkleMaps.netWrites(m));
+                })));
+            }
+        };
     }
 
     /**
@@ -65,22 +149,26 @@ public final class MerkleSupport {
      * share a key with a spend of the same contract whose input is that seed (ADR-0014 review).
      */
     public <S> Prepared<S> prepareCreation(byte[] policy, Class<S> stateClass, S made, org.julclang.ledger.TxOutRef seed) {
-        return prepare(policy, stateClass, made, made, seed, true);
+        return prepare(policy, layout(stateClass), made, made, seed, true);
     }
 
-    private <S> Prepared<S> prepare(byte[] policy, Class<S> stateClass, S before, S after, org.julclang.ledger.TxOutRef owner,
+    public <S> Prepared<S> prepareCreation(byte[] policy, Layout<S> layout, S made, org.julclang.ledger.TxOutRef seed) {
+        return prepare(policy, layout, made, made, seed, true);
+    }
+
+    private <S> Prepared<S> prepare(byte[] policy, Layout<S> layout, S before, S after, org.julclang.ledger.TxOutRef owner,
                                     boolean creation) {
-        List<Integer> maps = mapComponents(stateClass);
+        List<Integer> maps = layout.maps();
         List<MapClaim> ordered = new ArrayList<>();
         byte[][] newRoots = new byte[maps.size()][];
         for (int i = 0; i < maps.size(); i++) {
-            MerkleMap pre = (MerkleMap) component(before, maps.get(i));
+            MerkleMap pre = layout.map(before, maps.get(i));
             byte[] root = pre.root();
             JulcList<ReadProof> reads = readProofs(root);
             JulcList<WriteProof> writes = JulcList.empty();
             byte[] newRoot = root;
             if (after != null) {
-                MerkleMap post = (MerkleMap) component(after, maps.get(i));
+                MerkleMap post = layout.map(after, maps.get(i));
                 var result = writeProofs(root, MerkleMaps.netWrites(post));
                 writes = result.proofs();
                 newRoot = result.root();
@@ -88,7 +176,7 @@ public final class MerkleSupport {
             ordered.add(new MapClaim(policy, owner, BigInteger.valueOf(creation ? -1 - i : i), root, reads, writes, newRoot));
             newRoots[i] = newRoot;
         }
-        S stored = after == null ? null : withRoots(stateClass, after, maps, newRoots);
+        S stored = after == null ? null : layout.withRoots(after, newRoots);
         return new Prepared<>(List.copyOf(ordered), stored);
     }
 
@@ -99,38 +187,41 @@ public final class MerkleSupport {
      */
     public static <S> void verifyReplay(Class<S> stateClass, S before, List<MapClaim> claims,
                                         java.util.function.Function<S, Object> method, Object recorded) {
-        List<Integer> maps = mapComponents(stateClass);
-        RecordComponent[] cs = stateClass.getRecordComponents();
-        Object[] values = new Object[cs.length];
-        Class<?>[] types = new Class<?>[cs.length];
-        for (int i = 0; i < cs.length; i++) {
-            types[i] = cs[i].getType();
-            values[i] = component(before, i);
-        }
-        int w = 0;
+        verifyReplay(layout(stateClass), before, claims, method, recorded);
+    }
+
+    /** As {@link #verifyReplay(Class, Object, List, java.util.function.Function, Object)}, for any {@link Layout}. */
+    public static <S> void verifyReplay(Layout<S> layout, S before, List<MapClaim> claims,
+                                        java.util.function.Function<S, Object> method, Object recorded) {
+        var readsPerMap = new ArrayList<JulcList<MapEntry>>();
         for (MapClaim claim : claims) {
             JulcList<MapEntry> reads = JulcList.empty();
             for (ReadProof r : claim.reads()) reads = reads.prepend(r.entry());
-            MerkleMap pre = (MerkleMap) values[maps.get(w)];
-            values[maps.get(w)] = new MerkleMap(pre.root(), reads, JulcList.empty());
-            w++;
+            readsPerMap.add(reads);
         }
-        S opened;
-        try {
-            var ctor = stateClass.getDeclaredConstructor(types);
-            ctor.setAccessible(true);
-            opened = ctor.newInstance(values);
-        } catch (ReflectiveOperationException e) {
-            throw new JoustException("cannot rebuild " + stateClass.getSimpleName(), e);
-        }
+        S opened = layout.opened(before, readsPerMap);
         Object replayed = MerkleMaps.withReads((root, key) -> {
             throw new JoustException("replay check: the method read key " + hex(key) + " outside the witnessed read set;"
                     + " its reads must not depend on the map's internals (ADR-0002 r2)");
         }, () -> method.apply(opened));
-        if (!canonical(replayed).equals(canonical(recorded))) {
+        if (!canonical(layout, replayed).equals(canonical(layout, recorded))) {
             throw new JoustException("replay check: the method computed a different result against the witnessed read"
                     + " set than when recording it; refusing to submit (ADR-0002 r2)");
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <S> String canonical(Layout<S> layout, Object result) {
+        if (result instanceof Transition<?> t) {
+            String effects = org.julclang.clientlib.PlutusDataAdapter.convert(t.payouts()).serializeToHex() + "|"
+                    + org.julclang.clientlib.PlutusDataAdapter.convert(t.sends()).serializeToHex() + "|"
+                    + org.julclang.clientlib.PlutusDataAdapter.convert(t.mint()).serializeToHex() + "|"
+                    + org.julclang.clientlib.PlutusDataAdapter.convert(t.accepted()).serializeToHex() + "|"
+                    + org.julclang.clientlib.PlutusDataAdapter.convert(t.events()).serializeToHex() + "|"
+                    + org.julclang.clientlib.PlutusDataAdapter.convert(t.deposits()).serializeToHex();
+            return (t.next() == null ? "end" : layout.canonical((S) t.next())) + "|" + effects;
+        }
+        return result == null ? "end" : layout.canonical((S) result);
     }
 
     /** A comparable form of a method result: maps reduced to (root, net writes); everything else as Plutus data. */
@@ -261,6 +352,27 @@ public final class MerkleSupport {
             return record.getClass().getRecordComponents()[index].getAccessor().invoke(record);
         } catch (ReflectiveOperationException e) {
             throw new JoustException("cannot read state component " + index, e);
+        }
+    }
+
+    static <S> S opened(Class<S> stateClass, S state, List<Integer> maps, List<JulcList<MapEntry>> reads) {
+        RecordComponent[] cs = stateClass.getRecordComponents();
+        Object[] values = new Object[cs.length];
+        Class<?>[] types = new Class<?>[cs.length];
+        for (int i = 0; i < cs.length; i++) {
+            types[i] = cs[i].getType();
+            values[i] = component(state, i);
+        }
+        for (int j = 0; j < maps.size(); j++) {
+            MerkleMap pre = (MerkleMap) values[maps.get(j)];
+            values[maps.get(j)] = new MerkleMap(pre.root(), reads.get(j), JulcList.empty());
+        }
+        try {
+            var ctor = stateClass.getDeclaredConstructor(types);
+            ctor.setAccessible(true);
+            return ctor.newInstance(values);
+        } catch (ReflectiveOperationException e) {
+            throw new JoustException("cannot rebuild " + stateClass.getSimpleName(), e);
         }
     }
 

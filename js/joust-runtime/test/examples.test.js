@@ -41,7 +41,7 @@ async function setup(names) {
   const rt = joustRuntime({ CSL, chainUrl: STORE, contracts, clock: await devkitClock(ADMIN), networkId: 0, ttlMs: 20_000 });
   const wallets = async (n, ada = 300) => {
     const ws = Array.from({ length: n }, () => devWallet({ CSL, chain: rt.chain, mnemonic: generateMnemonic(wordlist, 256) }));
-    for (const w of ws) await devkitTopUp(w.address, ada, ADMIN);
+    for (const w of ws) await devkitTopUp(w.address, ada, ADMIN, { CSL, chain: rt.chain });
     for (const w of ws) for (let i = 0; i < 30 && !(await rt.chain.utxosAt(w.address)).length; i++) await sleep(1000);
     return ws;
   };
@@ -140,4 +140,23 @@ test('Oracle and Shop: @SignedBy; @Params naming the oracle; @Reads of its price
   await sh.call(shopOwner, 'close', {});
   await o.call(publisher, 'close', {});
   assert.equal(await o.state(), null);
+});
+
+test('Token: MerkleMap balances, read discovery, the map verifier', { skip, timeout: 600_000 }, async () => {
+  const { wallets, contract } = await setup(['token']);
+  const [admin, ann, ben] = await wallets(3);
+  const token = await contract('Token', admin);
+  assert.ok(token.deployment.mapVerifier?.referenceScripts?.length, 'the map verifier is pinned');
+  const t = token.at((await token.deploy(admin, {})).instance);
+  await t.call(admin, 'mint', { to: ann.keyHash, amount: 1000n });
+  await t.call(admin, 'mint', { to: ben.keyHash, amount: 500n });
+  await t.call(ann, 'transfer', { to: ben.keyHash, amount: 250n });   // the recipient's read depends on the sender's
+  await t.call(ben, 'transfer', { to: ben.keyHash, amount: 100n });   // to itself
+  await assert.rejects(t.call(ann, 'transfer', { to: ben.keyHash, amount: 751n }), /insufficient balance/);
+  await t.call(ann, 'burn', { amount: 750n });                          // emptied: removed from the map
+  assert.equal((await t.state()).supply, 750n);
+  await assert.rejects(t.call(admin, 'close', {}), /still in circulation/);
+  await t.call(ben, 'burn', { amount: 750n });
+  await t.call(admin, 'close', {});
+  assert.equal(await t.state(), null);
 });

@@ -124,6 +124,16 @@ public class MerkleMaps {
         }
     }
 
+    /**
+     * A key of the map with {@code root}, from the {@link ReadSource} bound for this call (recorded, so it joins the read
+     * set): how the runtime answers the reads a transition program reports (ADR-0015 D3).
+     */
+    public static MapEntry read(byte[] root, byte[] key) {
+        ReadSource source = SOURCE.get();
+        if (source == null) throw new IllegalStateException("MerkleMap read outside a JOUST call: no ReadSource is bound");
+        return source.read(root, key);
+    }
+
     static MapEntry missing(MerkleMap m, byte[] key) {
         ReadSource source = SOURCE.get();
         if (source == null) {

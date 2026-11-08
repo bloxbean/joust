@@ -66,7 +66,7 @@ public final class StateInstance<S> {
      */
     public <T> T view(java.util.function.Function<S, T> f) {
         S s = state();
-        if (!MerkleSupport.hasMaps(contract.spec.stateClass())) return f.apply(s);
+        if (!contract.spec.layout().hasMaps()) return f.apply(s);
         return new MerkleSupport(contract.runtime.mapStore()).run(() -> f.apply(s));
     }
 
@@ -134,7 +134,7 @@ public final class StateInstance<S> {
         Ctx ctx = new Ctx(callerPkh, call.received, balance,
                 window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
 
-        boolean maps = MerkleSupport.hasMaps(spec.stateClass());
+        boolean maps = spec.layout().hasMaps();
         MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
         if (call.run == null) throw new JoustException(what + ": an instance call needs run(...)");
         Transition<S> t = maps ? merkle.run(() -> call.run.apply(current, ctx))   // the developer's method, on the JVM
@@ -144,10 +144,10 @@ public final class StateInstance<S> {
         TxOutRef owner = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
                 BigInteger.valueOf(stateUtxo.getOutputIndex()));
         if (maps) {
-            var prepared = merkle.prepare(HexUtil.decodeHexString(contract.policyId), spec.stateClass(), current, t.next(), owner);
+            var prepared = merkle.prepare(HexUtil.decodeHexString(contract.policyId), spec.layout(), current, t.next(), owner);
             claims = prepared.claims();
             stored = prepared.stored();
-            MerkleSupport.verifyReplay(spec.stateClass(), current, claims, s -> call.run.apply(s, ctx), t);
+            MerkleSupport.verifyReplay(spec.layout(), current, claims, s -> call.run.apply(s, ctx), t);
         }
         Map<String, BigInteger> owed = new LinkedHashMap<>();
         List<Payout> payouts = new ArrayList<>();
@@ -236,7 +236,7 @@ public final class StateInstance<S> {
         byte[] id = HexUtil.decodeHexString(instanceId);
         var incoming = call.receives ? AssetTx.incoming(unit()) : org.julclang.core.types.JulcList.<org.julclang.state.api.DepositClaim>empty();
         var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id), incoming);
-        boolean maps = MerkleSupport.hasMaps(spec.stateClass());
+        boolean maps = spec.layout().hasMaps();
         MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
         Transition<S> t = maps ? merkle.run(() -> call.assetRun.apply(current, null, ctx, funds))   // the developer's method
                 : call.assetRun.apply(current, null, ctx, funds);
@@ -245,10 +245,10 @@ public final class StateInstance<S> {
         S stored = t.next();
         java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();
         if (maps) {
-            var prepared = merkle.prepare(policy, spec.stateClass(), current, destroy ? null : t.next(), ownRef);
+            var prepared = merkle.prepare(policy, spec.layout(), current, destroy ? null : t.next(), ownRef);
             claims = prepared.claims();
             stored = prepared.stored();
-            MerkleSupport.verifyReplay(spec.stateClass(), current, claims, s -> call.assetRun.apply(s, null, ctx, funds), t);
+            MerkleSupport.verifyReplay(spec.layout(), current, claims, s -> call.assetRun.apply(s, null, ctx, funds), t);
         }
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();

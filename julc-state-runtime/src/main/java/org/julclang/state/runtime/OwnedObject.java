@@ -37,14 +37,25 @@ public final class OwnedObject<S, R> {
 
     /** How the generated validator's {@code Holding} wraps the owned record. */
     public record Codec<R>(Class<?> holdingClass, Function<Object, R> value, BiFunction<byte[], R, Object> wrap,
-                           Class<R> valueClass) {
+                           Class<R> valueClass, java.util.List<Integer> mapFields) {
         public Codec(Class<?> holdingClass, Function<Object, R> value, BiFunction<byte[], R, Object> wrap) {
-            this(holdingClass, value, wrap, null);
+            this(holdingClass, value, wrap, null, null);
+        }
+
+        public Codec(Class<?> holdingClass, Function<Object, R> value, BiFunction<byte[], R, Object> wrap, Class<R> valueClass) {
+            this(holdingClass, value, wrap, valueClass, null);
+        }
+
+        /** Where the owned value's MerkleMaps are (ADR-0012 D2): record components, or {@code mapFields} of its Data. */
+        @SuppressWarnings("unchecked")
+        MerkleSupport.Layout<R> layout() {
+            if (mapFields != null) return (MerkleSupport.Layout<R>) MerkleSupport.dataLayout(mapFields);
+            return valueClass != null ? MerkleSupport.layout(valueClass) : (MerkleSupport.Layout<R>) MerkleSupport.dataLayout(java.util.List.of());
         }
 
         /** The owned record has MerkleMap components (ADR-0012 D2). */
         boolean hasMaps() {
-            return valueClass != null && MerkleSupport.hasMaps(valueClass);
+            return layout().hasMaps();
         }
     }
 
@@ -153,7 +164,7 @@ public final class OwnedObject<S, R> {
         R value = made;
         if (maps) {
             // ADR-0012 D2: the object's maps start empty; its writes are claimed by the seed, as for an instance.
-            var prepared = merkle.prepareCreation(HexUtil.decodeHexString(contract.policyId), codec.valueClass(), made, seedRef);
+            var prepared = merkle.prepareCreation(HexUtil.decodeHexString(contract.policyId), codec.layout(), made, seedRef);
             claims = prepared.claims();
             value = prepared.stored();
         }
@@ -191,7 +202,7 @@ public final class OwnedObject<S, R> {
         R value = t.next();
         List<org.julclang.state.api.mpf.MapClaim> claims = List.of();
         if (maps) {
-            var prepared = merkle.prepareCreation(policy, codec.valueClass(), t.next(), seedRef);
+            var prepared = merkle.prepareCreation(policy, codec.layout(), t.next(), seedRef);
             claims = prepared.claims();
             value = prepared.stored();
         }
@@ -291,10 +302,10 @@ public final class OwnedObject<S, R> {
         R stored = t.next();
         if (maps) {
             // ADR-0012 D2: the object's maps, claimed by its own input, as an instance's are.
-            var prepared = merkle.prepare(HexUtil.decodeHexString(contract.policyId), codec.valueClass(), current, call.kind == Call.Kind.ACTION ? t.next() : null, ownRef);
+            var prepared = merkle.prepare(HexUtil.decodeHexString(contract.policyId), codec.layout(), current, call.kind == Call.Kind.ACTION ? t.next() : null, ownRef);
             claims = prepared.claims();
             stored = prepared.stored();
-            MerkleSupport.verifyReplay(codec.valueClass(), current, claims, o -> method.apply(o), t);
+            MerkleSupport.verifyReplay(codec.layout(), current, claims, o -> method.apply(o), t);
         }
 
         Map<String, BigInteger> owed = new LinkedHashMap<>();
@@ -386,10 +397,10 @@ public final class OwnedObject<S, R> {
         R stored = t.next();
         List<org.julclang.state.api.mpf.MapClaim> claims = List.of();
         if (maps) {
-            var prepared = merkle.prepare(policy, codec.valueClass(), current, destroy ? null : t.next(), ownRef);
+            var prepared = merkle.prepare(policy, codec.layout(), current, destroy ? null : t.next(), ownRef);
             claims = prepared.claims();
             stored = prepared.stored();
-            MerkleSupport.verifyReplay(codec.valueClass(), current, claims, o -> call.assetRun.apply(o, shared, ctx, funds), t);
+            MerkleSupport.verifyReplay(codec.layout(), current, claims, o -> call.assetRun.apply(o, shared, ctx, funds), t);
         }
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
