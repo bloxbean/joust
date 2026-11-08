@@ -1,18 +1,18 @@
 description = 'JOUST runtime engine (ADR-0015 D4/D5, gate S0): prepares calls from a snapshot in a GraalVM Web Image'
 
-// S0 spike: the runtime path (Compose.prepare, TxRunner, CCL QuickTx, JuLC's evaluator) over a SnapshotBackend,
-// for Counter's calls. M2 replaces the Counter dispatch with descriptor-driven calls (M1a/M1b).
+// The runtime path (Compose.prepare, TxRunner, CCL QuickTx, JuLC's evaluator) over a SnapshotBackend, for contracts
+// known by their descriptions and transition programs (DescribedContract): no contract classes in the image.
 dependencies {
     implementation project(':julc-state-runtime')
-    implementation project(':examples:counter')
     implementation libs.julc.vm.java
 
     testImplementation project(':examples:devkit')       // Fixtures: the M0 fixtures as snapshots
+    testImplementation project(':julc-state-toolchain')  // descriptions, scripts and transition programs, as npm builds them
 }
 
-// S0 on the JVM, and the vectors for S0 in Wasm (build/s0-vectors.json).
+// I3 on the JVM, and the vectors for I3 in Wasm (build/prepare-vectors.json).
 tasks.named('test') {
-    dependsOn ':examples:counter:classes'
+    dependsOn ':examples:counter:classes', ':examples:bank:classes'
 }
 
 // ---- The runtime engine: a GraalVM Web Image embedding julc-wasm (JuLC ADR-064).
@@ -64,11 +64,11 @@ tasks.register('runtimeWasm', Exec) {
     }
 }
 
-// S0 in Wasm: each Counter call the dApp's DevKit run prepared, prepared again in Node from its snapshot.
+// I3 in Wasm: each prepare the dApp's DevKit run recorded, prepared again in Node from its call request and snapshot.
 tasks.register('runtimeWasmTest', Exec) {
     group = 'verification'
     dependsOn 'runtimeWasm', 'test'
     workingDir rootDir
-    commandLine 'node', '--experimental-wasm-exnref', 'julc-state-runtime-wasm/src/test/js/s0.mjs',
-            'julc-state-runtime-wasm/build/wasm', 'julc-state-runtime-wasm/build/s0-vectors.json'
+    commandLine 'node', '--experimental-wasm-exnref', 'julc-state-runtime-wasm/src/test/js/prepare.mjs',
+            'julc-state-runtime-wasm/build/wasm', 'julc-state-runtime-wasm/build/prepare-vectors.json'
 }

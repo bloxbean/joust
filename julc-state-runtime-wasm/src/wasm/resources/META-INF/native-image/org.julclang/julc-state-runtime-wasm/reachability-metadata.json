@@ -1,13 +1,19 @@
 {
   "reflection": [
     {
-      "type": "org.julclang.state.runtime.wasm.CounterPrepare$Request",
+      "type": "org.julclang.state.runtime.wasm.Prepare$Contract",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true
     },
     {
-      "type": "org.julclang.state.runtime.wasm.CounterPrepare$Result",
+      "type": "org.julclang.state.runtime.wasm.Prepare$Result",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.julclang.state.runtime.wasm.Prepare$Request",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true

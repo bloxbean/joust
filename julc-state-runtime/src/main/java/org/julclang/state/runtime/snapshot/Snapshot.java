@@ -29,8 +29,15 @@ public final class Snapshot {
 
     static final ObjectMapper JSON = new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
-    /** A script by hash: its CCL type name ({@code PlutusScriptV1..V3}) and its CBOR. */
-    public record Script(String type, String cborHex) {}
+    /**
+     * A script by hash: its CCL type name ({@code PlutusScriptV1..V3}) and its CBOR; or only {@code cbor}, as a
+     * Blockfrost-style API serves it ({@code /scripts/{hash}/cbor}), the version found from the hash as CCL does.
+     */
+    public record Script(String type, String cborHex, String cbor) {
+        public Script(String type, String cborHex) {
+            this(type, cborHex, null);
+        }
+    }
 
     public Block tip;
     public ProtocolParams protocolParams;
@@ -68,8 +75,8 @@ public final class Snapshot {
             n.path("assetUtxos").fields().forEachRemaining(e -> s.assetUtxos.put(e.getKey(), utxoList(e.getValue())));
             for (Utxo u : utxoList(n.path("outputs"))) s.outputs.put(ref(u.getTxHash(), u.getOutputIndex()), u);
             for (JsonNode a : n.path("absent")) s.absent.add(a.asText());
-            n.path("scripts").fields().forEachRemaining(e ->
-                    s.scripts.put(e.getKey(), new Script(e.getValue().path("type").asText(), e.getValue().path("cborHex").asText())));
+            n.path("scripts").fields().forEachRemaining(e -> s.scripts.put(e.getKey(), new Script(
+                    e.getValue().path("type").asText(null), e.getValue().path("cborHex").asText(null), e.getValue().path("cbor").asText(null))));
             return s;
         } catch (Exception e) {
             throw new IllegalArgumentException("not a snapshot: " + e.getMessage(), e);
@@ -88,7 +95,12 @@ public final class Snapshot {
         var abs = n.putArray("absent");
         absent.forEach(abs::add);
         ObjectNode sc = n.putObject("scripts");
-        scripts.forEach((k, v) -> sc.putObject(k).put("type", v.type()).put("cborHex", v.cborHex()));
+        scripts.forEach((k, v) -> {
+            var o = sc.putObject(k);
+            if (v.type() != null) o.put("type", v.type());
+            if (v.cborHex() != null) o.put("cborHex", v.cborHex());
+            if (v.cbor() != null) o.put("cbor", v.cbor());
+        });
         return n.toString();
     }
 

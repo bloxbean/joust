@@ -151,7 +151,11 @@ public final class StateContractHandle<S> {
 
     /** The applied script of {@code spec} for {@code params} (null: none); refuses one too large to publish by reference. */
     public static PlutusV3Script scriptFor(ContractSpec<?> spec, Object params) {
-        PlutusV3Script s = params == null ? JulcScriptLoader.load(spec.validatorClass())
+        if (spec.scriptCborHex() != null && params != null) {
+            throw new JoustException(spec.name() + ": a described contract with @Params is not supported yet (ADR-0015 M3)");
+        }
+        PlutusV3Script s = spec.scriptCborHex() != null ? PlutusV3Script.builder().cborHex(spec.scriptCborHex()).build()
+                : params == null ? JulcScriptLoader.load(spec.validatorClass())
                 : JulcScriptLoader.load(spec.validatorClass(), PlutusDataAdapter.convert(params));
         int size = HexUtil.decodeHexString(s.getCborHex()).length;
         if (size > 15_000) {
@@ -223,6 +227,28 @@ public final class StateContractHandle<S> {
         if (published == null) throw new PendingTransactionException(txHash, "reference script not visible yet");
         runtime.log("published the " + spec.name() + " reference script in " + txHash);
         return published;
+    }
+
+    /**
+     * The transaction publishing this contract's reference script, unsigned, paid from {@code payerAddress} (a wallet
+     * signs it; ADR-0015 D5: the engine submits nothing), or null when the script is already on chain.
+     */
+    public com.bloxbean.cardano.client.transaction.spec.Transaction prepareReferenceScript(String payerAddress) {
+        if (findReferenceScript() != null) return null;
+        var tx = new com.bloxbean.cardano.client.quicktx.Tx()
+                .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
+                .from(payerAddress);
+        try {
+            var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(runtime.backend()).compose(tx)
+                    .feePayer(payerAddress)
+                    .additionalSignersCount(1)
+                    .build();
+            runtime.built("publish the " + spec.name() + " reference script", built, true);
+            return built;
+        } catch (Exception e) {
+            throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
+                    + e.getMessage(), e);
+        }
     }
 
     private BigInteger referenceScriptDeposit() {

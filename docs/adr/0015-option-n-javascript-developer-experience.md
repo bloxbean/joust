@@ -595,11 +595,11 @@ direct `Tx` building, gated by S3.
 - **`julc-state-runtime-wasm`** is a GraalVM Web Image (25.3.4.1) of the runtime path: `Compose.prepare()`, TxRunner,
   CCL's QuickTx `Tx` building and balancing, and JuLC's evaluator with the VM in the image. It runs over a
   `SnapshotBackend` with no I/O.
-  - The spike's operation is `joust.prepareS0`, which takes Counter's calls with the snapshot as JSON. M2 replaces the
-    Counter dispatch with descriptor-driven calls (M1a, M1b).
+  - The spike's operation was `joust.prepareS0`, which took Counter's calls with the snapshot as JSON. M1a replaces
+    it with `joust.prepare` over described contracts (§13.6).
   - A read outside the snapshot comes back as a need: with an empty snapshot, the instance lookup.
 - **Result:** all 21 Counter calls the dApp's DevKit run prepared (init, increment, reset, close) are byte-identical
-  to the recorded unsigned transactions, both on the JVM (`CounterPrepareTest`) and in Node 22 (`s0.mjs`).
+  to the recorded unsigned transactions, both on the JVM and in Node 22. M1a's tests supersede the spike's (§13.6).
 - **Measured** (Apple M-series, Node 22.12):
 
   | | |
@@ -643,6 +643,53 @@ direct `Tx` building, gated by S3.
 - **In Wasm** (`run-discovery.mjs`, part of `toolchainWasmTest`):
   - The engine compiles Token's transition programs identical to the JVM toolchain's.
   - All 43 calls give the same first-round reads and the same final result.
+
+### 13.6 M1a (in progress): description v2, the described dispatcher, the engine's prepare
+- **Description version 2.** Each creation and action carries a `recipe`:
+  - the transition it runs;
+  - the redeemer's fields in order (`seed`, `instance`, argument names, `ctx`);
+  - a destroy's burn redeemer;
+  - the target record (the state or the owned value), and whether it takes `@Shared`;
+  - `@SignedBy`, `@ValidAfter` and `@ValidBefore` as fields of the target, with their indexes.
+
+  Version 1's fields are kept, so existing JS clients read version 2 unchanged.
+- **Creations as transitions.** `TransitionsGenerator` also writes `@Init` and `@OwnedInit` methods: no target, the
+  `@Shared` state if taken, and the step's next is what they make.
+- **The described dispatcher** (`julc-state-runtime`, package `described`) is the core D4 asks for, with no contract
+  classes:
+  - `SchemaCodec`: JSON and Plutus data by the description's schemas, a port of the JS client's codec.
+  - `TransitionFn`: a transition's Data signature. `UplcTransitions` runs the transition programs in JuLC's VM, and
+    a refusal carries the contract's `Require` message, read from the traces.
+  - `DescribedContract`: builds the runtime's own `Deploy`, `Call` and `OwnedObject` requests over `PlutusData` from
+    the recipe.
+    - `TxRunner`, `Compose`, the checks and payout restoration are unchanged and shared with the typed clients.
+    - `ContractSpec.described(…)` carries the compiled script instead of a validator class.
+    - The Holding datum is read as Data: `MerkleSupport` and `OwnedObject` accept a non-record state.
+  - Supported now: creations, actions, destroys, owned objects with `@Shared`, payable calls. Maps, assets,
+    `@Params`, batches, composition, moves, sends, mints and events come in M3.
+- **The engine's `joust.prepare`** (`julc-state-runtime-wasm`) takes a call request, a snapshot and the contracts as
+  the toolchain builds them (description, script, transition programs). It replaces S0's Counter-only
+  `joust.prepareS0`.
+- **I3:** all 34 recorded dApp prepares (Counter and Bank: init, actions, owned objects with `@Shared`, payable,
+  close) are byte-identical.
+  - On the JVM (`DescribedReplayTest`): median 11 ms.
+  - In Node 22 (`prepare.mjs`): median about 225 ms, with a 6.85 MiB gzip image and a cold start of about 250 ms.
+  - Also tested: a refusal carries the contract's message, an empty snapshot gives a need, and an argument that
+    does not fit its schema is refused.
+- **I9 (`DataFidelity`, with positive and negative fixtures):** every redeemer the dispatcher builds, and every result
+  of a transition, is checked before anything is built.
+  - **A finding beyond D6's probe:** CCL also writes map keys in canonical order (length-first), while julc-core
+    keeps them as given, so an unsorted map differs too, not only one with a duplicate key.
+  - So the check refuses any map whose keys are not strictly ascending in canonical order, which covers duplicates.
+  - JOUST's contracts already keep their maps canonical (`SortedMaps`), and the schema codec sorts what it encodes.
+- **The engine also answers** `deployment` (policy, address and reference script, read through needs) and `publish`
+  (the reference-script transaction, unsigned, for the deployer's wallet). The engine submits nothing, so
+  `ensureReferenceScript` (which submits and sleeps) never runs in it.
+- **Not yet, against M1a and M1b as written:**
+  - The generated Java client still builds `Call`s with typed lambdas. It shares the core with the described path
+    but does not delegate to it.
+  - The JVM `TransitionFn`, descriptor-backed MerkleMaps, and M1b's JVM oracle (the typed client's results through
+    the described path on every example) remain.
 
 ## Revision history
 

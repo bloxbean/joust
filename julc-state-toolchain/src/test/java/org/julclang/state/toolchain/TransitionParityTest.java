@@ -118,7 +118,7 @@ class TransitionParityTest {
     void counterAndBankTransitionsMatchTheJvm() throws Exception {
         var counter = transitions("counter");
         var bank = transitions("bank");
-        assertEquals(List.of("increment", "reset", "close"), List.copyOf(counter.keySet()));
+        assertEquals(List.of("increment", "reset", "close", "init"), List.copyOf(counter.keySet()));   // init: a creation (M1a)
         assertTrue(bank.keySet().containsAll(List.of("setPaused", "setLimit", "deposit", "withdraw", "close")), bank.keySet().toString());
 
         int checked = 0, refusals = 0;

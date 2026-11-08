@@ -9,5 +9,5 @@ dependencies {
     api project(':julc-state-verifier')  // the map verifier script (ADR-0002 D9)
     // JulcScriptLoader (loads the compiled validator from META-INF/plutus) lives in the annotation processor artifact
     implementation libs.julc.annotation.processor
-    runtimeOnly libs.julc.vm.java
+    implementation libs.julc.vm.java       // transition programs (ADR-0015 D3) and the evaluator
 }

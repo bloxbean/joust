@@ -250,6 +250,7 @@ public final class MerkleSupport {
 
     static List<Integer> mapComponents(Class<?> stateClass) {
         var out = new ArrayList<Integer>();
+        if (!stateClass.isRecord()) return out;   // a described contract's state is Plutus data (ADR-0015 D4)
         RecordComponent[] cs = stateClass.getRecordComponents();
         for (int i = 0; i < cs.length; i++) if (cs[i].getType() == MerkleMap.class) out.add(i);
         return out;

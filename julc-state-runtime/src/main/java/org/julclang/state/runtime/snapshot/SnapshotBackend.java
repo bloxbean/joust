@@ -239,6 +239,16 @@ public final class SnapshotBackend implements BackendService {
         public Result<PlutusScript> getPlutusScript(String scriptHash) {
             Snapshot.Script sc = s.scripts.get(scriptHash);
             if (sc == null) throw new Need("script", scriptHash);
+            if (sc.cborHex() == null) {
+                // As CCL's default getPlutusScript over a Blockfrost-style API: the version whose hash matches.
+                try {
+                    var found = com.bloxbean.cardano.client.plutus.util.PlutusUtil.getPlutusScript(scriptHash, sc.cbor());
+                    if (found.isEmpty()) throw new IllegalArgumentException("no Plutus script of hash " + scriptHash + " in the snapshot's CBOR");
+                    return ok(found.get());
+                } catch (Exception e) {
+                    throw new IllegalArgumentException("script " + scriptHash + ": " + e.getMessage(), e);
+                }
+            }
             PlutusScript p = switch (sc.type()) {
                 case "PlutusScriptV1" -> PlutusV1Script.builder().cborHex(sc.cborHex()).build();
                 case "PlutusScriptV2" -> PlutusV2Script.builder().cborHex(sc.cborHex()).build();
@@ -251,7 +261,7 @@ public final class SnapshotBackend implements BackendService {
         public Result<String> getPlutusScriptCbor(String scriptHash) {
             Snapshot.Script sc = s.scripts.get(scriptHash);
             if (sc == null) throw new Need("script", scriptHash);
-            return ok(sc.cborHex());
+            return ok(sc.cbor() != null ? sc.cbor() : sc.cborHex());
         }
 
         @Override

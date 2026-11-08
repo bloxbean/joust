@@ -140,7 +140,8 @@ public final class DescriptionWriter {
         var views = new ArrayList<Object>();
         for (var v : c.views()) views.add(view(v));
         var xj = new LinkedHashMap<String, Object>();
-        xj.put("version", 1);
+        // Version 2 (ADR-0015 D4): each creation and action also carries a call recipe.
+        xj.put("version", 2);
         xj.put("contract", c.name());
         xj.put("package", c.packageName());
         xj.put("validator", V);
@@ -194,6 +195,10 @@ public final class DescriptionWriter {
         if (t.owned()) m.put("owned", keyOf(ownedMirror(c.ownedOf(t).simple())));
         m.put("needsService", (t.owned() ? c.ownedOf(t).hasMaps() : c.hasMaps()) || !t.reads().isEmpty() || t.resultSends()
                 || t.resultMint() || t.takesParams());
+        var fields = new ArrayList<String>(List.of("seed"));
+        if (kind.equals("ownedInit")) fields.add("instance");
+        fields.addAll(redeemerFieldNames(t));
+        m.put("recipe", recipe(t, fields, null));
         return m;
     }
 
@@ -238,7 +243,42 @@ public final class DescriptionWriter {
         // Sends and mints go through the output verifier or ByAction (ADR-0007), which the page does not verify yet.
         m.put("needsService", maps || t.batched() || !t.reads().isEmpty() || t.moves() || t.resultDeposits() || t.receives()
                 || t.resultSends() || t.resultMint() || t.takesParams());
+        boolean destroys = t.kind() == TransitionIR.Kind.DESTROY || t.kind() == TransitionIR.Kind.OWNED_DESTROY;
+        m.put("recipe", recipe(t, redeemerFieldNames(t), destroys ? map("constructor", "BurnInstance", "index", 1) : null));
         return m;
+    }
+
+    /**
+     * The call recipe (ADR-0015 D4): what the generated client's {@code Call.Builder} lambdas encode, as data. The
+     * transition the call runs (by method name: a transition program, or the JVM method), the redeemer's fields in
+     * order ({@code seed}, {@code instance}, an argument's name, {@code ctx}, …), the burn redeemer of a destroy, and the
+     * signer and time rules as fields of the target record (the state, or the owned value) with their indexes.
+     */
+    private Map<String, Object> recipe(TransitionIR t, List<String> redeemerFields, Map<String, Object> burn) {
+        TypeMirror target = t.owned() ? ownedMirror(c.ownedOf(t).simple()) : stateMirror();
+        var r = new LinkedHashMap<String, Object>();
+        r.put("transition", t.method());
+        r.put("redeemerFields", redeemerFields);
+        if (burn != null) r.put("burn", burn);
+        r.put("target", keyOf(target));
+        r.put("shared", t.shared());
+        r.put("signers", fieldPaths(target, t.signedBy()));
+        r.put("validAfter", fieldPaths(target, t.validAfter()));
+        r.put("validBefore", fieldPaths(target, t.validBefore()));
+        return r;
+    }
+
+    /** Each field name with its index in {@code record}'s components (a path into the target's Data). */
+    private List<Object> fieldPaths(TypeMirror record, List<String> names) {
+        var out = new ArrayList<Object>();
+        if (names == null) return out;
+        var comps = Records.components((TypeElement) ((DeclaredType) record).asElement());
+        for (String n : names) {
+            int index = -1;
+            for (int i = 0; i < comps.size(); i++) if (comps.get(i).getSimpleName().contentEquals(n)) index = i;
+            out.add(map("field", n, "index", index));
+        }
+        return out;
     }
 
     /** A view: its name, its arguments (every parameter after the state) and its result's schema. */

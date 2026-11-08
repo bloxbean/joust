@@ -79,6 +79,21 @@ public final class TransitionsGenerator {
             body.line(code);
             methods.add(t.method());
         }
+        // Creations (@Init, @OwnedInit): no target; the step's next is what they make.
+        var creations = new ArrayList<TransitionIR>();
+        if (c.init() != null) creations.add(c.init());
+        creations.addAll(c.ownedInits());
+        for (TransitionIR t : creations) {
+            if (unsupported(t)) continue;
+            ExecutableElement m = method(t.method());
+            if (m == null || methods.contains(t.method())) continue;
+            String made = render(m.getReturnType());
+            String step = stepTypes.computeIfAbsent(made, k -> "Step" + (stepTypes.size() + 1));
+            String code = creation(t, m, step);
+            if (code == null) continue;
+            body.line(code);
+            methods.add(t.method());
+        }
         w.line("package " + c.packageName() + ";").blank();
         w.line("import java.math.BigInteger;");
         w.line("import java.util.Optional;");
@@ -159,6 +174,37 @@ public final class TransitionsGenerator {
         sb.append("    public static ").append(step).append(" ").append(t.method()).append("(").append(targetType)
                 .append(" target, ").append(sharedType).append(" shared, ").append(argsRecord).append(" args, Ctx ctx) {\n");
         sb.append("        ").append(result).append("\n    }\n");
+        return sb.toString();
+    }
+
+    /** One creation method: its arguments, the instance state ({@code @Shared}) and the Ctx in; what it makes out. */
+    private String creation(TransitionIR t, ExecutableElement m, String step) {
+        var argNames = t.params().stream().map(ParamIR::name).toList();
+        String argsRecord = cap(t.method()) + "Args";
+        var argFields = new ArrayList<String>();
+        for (ParamIR p : t.params()) argFields.add(paramType(m, p.name()) + " " + p.name());
+        String sharedType = "PlutusData";
+        var call = new ArrayList<String>();
+        for (VariableElement p : m.getParameters()) {
+            String name = p.getSimpleName().toString();
+            if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Shared"))) {
+                sharedType = render(p.asType());
+                call.add("shared");
+            } else if (named(p.asType(), API + "Ctx")) {
+                call.add("ctx");
+            } else if (argNames.contains(name)) {
+                call.add("args." + name + "()");
+            } else {
+                return null;
+            }
+        }
+        var sb = new StringBuilder();
+        sb.append("    public record ").append(argsRecord).append("(").append(String.join(", ", argFields)).append(") {}\n\n");
+        sb.append("    /** Runs {@link ").append(c.name()).append("#").append(t.method()).append("} (a creation: no target). */\n");
+        sb.append("    public static ").append(step).append(" ").append(t.method()).append("(PlutusData target, ").append(sharedType)
+                .append(" shared, ").append(argsRecord).append(" args, Ctx ctx) {\n");
+        sb.append("        return new ").append(step).append("(Optional.of(").append(c.name()).append(".").append(t.method())
+                .append("(").append(String.join(", ", call)).append(")), Payouts.none());\n    }\n");
         return sb.toString();
     }
 

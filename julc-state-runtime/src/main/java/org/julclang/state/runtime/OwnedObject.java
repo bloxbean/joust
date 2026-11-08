@@ -246,7 +246,10 @@ public final class OwnedObject<S, R> {
         try {
             var data = PlutusData.deserialize(HexUtil.decodeHexString(own.getInlineDatum()));
             Object holding = PlutusDataAdapter.convert(data, codec.holdingClass());
-            byte[] inst = (byte[]) holding.getClass().getMethod("instance").invoke(holding);
+            // A described contract's Holding is Plutus data, Constr tag [instance, value] (ADR-0015 D4).
+            byte[] inst = holding instanceof org.julclang.core.PlutusData.ConstrData c
+                    ? ((org.julclang.core.PlutusData.BytesData) c.fields().get(0)).value()
+                    : (byte[]) holding.getClass().getMethod("instance").invoke(holding);
             String hex = HexUtil.encodeHexString(inst);
             return hex.equalsIgnoreCase(parent.instanceId()) ? parent : new StateInstance<>(contract(), hex);
         } catch (Exception e) {
