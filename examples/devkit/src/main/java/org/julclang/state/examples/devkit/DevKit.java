@@ -63,9 +63,10 @@ public final class DevKit {
     /** A runtime for the DevKit; the evaluator is JuLC's local one unless {@code -Djulc.evaluator=backend}. */
     public static StateRuntime runtime() {
         BackendService backend = backend();
-        SlotChainTime time = chainTime(backend);
         FixtureRecorder recorder = recorder();
+        // Wrap first: the clock reads the tip through the backend, and a replayed snapshot must include those reads.
         if (recorder != null) backend = recorder.wrap(backend);
+        SlotChainTime time = chainTime(backend);
         var b = StateRuntime.builder(backend)
                 .network(Networks.testnet())
                 .chainTime(time)
@@ -83,6 +84,38 @@ public final class DevKit {
         }
         if (recorder != null) b.onBuilt(recorder::built);
         return b.build();
+    }
+
+    /** Records {@code request} as the call behind the transaction just built on this thread, when recording fixtures. */
+    public static void recordCall(com.fasterxml.jackson.databind.JsonNode request) {
+        FixtureRecorder r = recorder();
+        if (r != null) r.call(request);
+    }
+
+    /**
+     * A runtime over a snapshot (ADR-0015 D5): configured as {@link #runtime()}, with the slot clock of
+     * {@code fixtures/m0/devkit.json} (recorded from the DevKit's genesis). No I/O: a read outside the snapshot throws
+     * {@link org.julclang.state.runtime.snapshot.Need}.
+     */
+    public static StateRuntime snapshotRuntime(org.julclang.state.runtime.snapshot.Snapshot snapshot, java.nio.file.Path devkitJson) {
+        BackendService backend = new org.julclang.state.runtime.snapshot.SnapshotBackend(snapshot);
+        com.fasterxml.jackson.databind.JsonNode d;
+        try {
+            d = new com.fasterxml.jackson.databind.ObjectMapper().readTree(devkitJson.toFile());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("cannot read " + devkitJson, e);
+        }
+        SlotChainTime time = new SlotChainTime(d.get("zeroSlot").asLong(), d.get("startTimeMs").asLong(), d.get("slotLengthMs").asLong(), backend);
+        return StateRuntime.builder(backend)
+                .network(Networks.testnet())
+                .chainTime(time)
+                .ttl(Duration.ofSeconds(20))
+                .evaluator(new JulcTransactionEvaluator(
+                        new DefaultUtxoSupplier(backend.getUtxoService()),
+                        new DefaultProtocolParamsSupplier(backend.getEpochService()),
+                        new DefaultScriptSupplier(backend.getScriptService()),
+                        new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())))
+                .build();
     }
 
     private static FixtureRecorder recorder;

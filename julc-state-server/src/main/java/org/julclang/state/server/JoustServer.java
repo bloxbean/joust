@@ -58,6 +58,7 @@ public final class JoustServer {
     private final RateLimit viewLimit;
     private final Semaphore preparing;
     private final Map<String, Boolean> active = new ConcurrentHashMap<>();
+    private final java.util.function.BiConsumer<JsonNode, JsonNode> onPrepared;
     private HttpServer http;
 
     private JoustServer(Builder b) {
@@ -69,6 +70,7 @@ public final class JoustServer {
         this.limit = new RateLimit(b.preparesPerMinute);
         this.viewLimit = new RateLimit(b.viewsPerMinute);
         this.preparing = new Semaphore(b.concurrentPrepares);
+        this.onPrepared = b.onPrepared;
     }
 
     public static Builder builder(StateRuntime runtime) {
@@ -84,6 +86,7 @@ public final class JoustServer {
         private int preparesPerMinute = 30;
         private int viewsPerMinute = 120;
         private int concurrentPrepares = 4;
+        private java.util.function.BiConsumer<JsonNode, JsonNode> onPrepared = (req, out) -> {};
 
         private Builder(StateRuntime runtime) {
             this.runtime = runtime;
@@ -127,6 +130,15 @@ public final class JoustServer {
 
         public Builder concurrentPrepares(int n) {
             this.concurrentPrepares = n;
+            return this;
+        }
+
+        /**
+         * Observes every prepared call: the request and the answer, on the thread that prepared it, after the
+         * runtime's {@code onBuilt} (fixtures record the call request beside the transaction; ADR-0015 M0).
+         */
+        public Builder onPrepared(java.util.function.BiConsumer<JsonNode, JsonNode> observer) {
+            this.onPrepared = observer;
             return this;
         }
 
@@ -221,6 +233,26 @@ public final class JoustServer {
     private JsonNode prepare(HttpExchange ex, JsonNode req) {
         String client = ex.getRemoteAddress().getAddress().getHostAddress();
         if (!limit.allow(client)) throw new Busy(429, "too many prepares; retry in a minute");
+        // One prepare at a time per client, and a few in all: each runs the call twice and evaluates scripts.
+        if (active.putIfAbsent(client, Boolean.TRUE) != null) throw new Busy(429, "a prepare of yours is still running");
+        if (!preparing.tryAcquire()) {
+            active.remove(client);
+            throw new Busy(503, "busy; retry shortly");
+        }
+        try {
+            return prepare(req);
+        } finally {
+            preparing.release();
+            active.remove(client);
+        }
+    }
+
+    /**
+     * Prepares one call request ({@code { contract, kind, method, instance, object, args, pay, address }}) without the
+     * HTTP layer's limits: the answer's {@code cbor} is the unsigned transaction. A replay of a recorded request over
+     * its recorded chain reads gives the same bytes (ADR-0015 S0).
+     */
+    public ObjectNode prepare(JsonNode req) {
         ServedContract c = served(text(req, "contract"));
         String kind = text(req, "kind");
         JsonNode meta = c.meta(kind, text(req, "method"));
@@ -235,32 +267,22 @@ public final class JoustServer {
         BigInteger lovelace = pay.has("lovelace") ? (BigInteger) JsonValues.fromJson(pay.get("lovelace"), BigInteger.class, "pay.lovelace") : BigInteger.ZERO;
         String instance = req.path("instance").isTextual() ? req.get("instance").asText() : null;
         String object = req.path("object").isTextual() ? req.get("object").asText() : null;
-        // One prepare at a time per client, and a few in all: each runs the call twice and evaluates scripts.
-        if (active.putIfAbsent(client, Boolean.TRUE) != null) throw new Busy(429, "a prepare of yours is still running");
-        if (!preparing.tryAcquire()) {
-            active.remove(client);
-            throw new Busy(503, "busy; retry shortly");
-        }
-        try {
-            Object[] made = new Object[1];
-            PreparedTx p = Compose.of(runtime, wallet)
-                    .add(() -> made[0] = c.call(runtime, wallet, kind, meta, instance, object, req.path("args"), lovelace, pay.get("assets")))
-                    .prepare();
-            ObjectNode out = JsonValues.JSON.createObjectNode();
-            out.put("cbor", p.cbor());
-            out.put("txHash", p.txHash());
-            out.put("validTo", p.validTo());
-            var signers = out.putArray("signers");
-            p.requiredSigners().forEach(signers::add);
-            out.set("plan", JsonValues.JSON.valueToTree(p.plan()));   // ADR-0013 D4: the page checks it describes cbor
-            if (kind.equals("init") && made[0] != null) out.put("instance", (String) made[0]);
-            if (kind.equals("ownedInit") && made[0] != null) out.put("object", (String) made[0]);
-            LOG.log(System.Logger.Level.INFO, "prepared {0} {1}.{2} for {3}", p.txHash(), c.x.get("contract").asText(), meta.get("name").asText(), address);
-            return out;
-        } finally {
-            preparing.release();
-            active.remove(client);
-        }
+        Object[] made = new Object[1];
+        PreparedTx p = Compose.of(runtime, wallet)
+                .add(() -> made[0] = c.call(runtime, wallet, kind, meta, instance, object, req.path("args"), lovelace, pay.get("assets")))
+                .prepare();
+        ObjectNode out = JsonValues.JSON.createObjectNode();
+        out.put("cbor", p.cbor());
+        out.put("txHash", p.txHash());
+        out.put("validTo", p.validTo());
+        var signers = out.putArray("signers");
+        p.requiredSigners().forEach(signers::add);
+        out.set("plan", JsonValues.JSON.valueToTree(p.plan()));   // ADR-0013 D4: the page checks it describes cbor
+        if (kind.equals("init") && made[0] != null) out.put("instance", (String) made[0]);
+        if (kind.equals("ownedInit") && made[0] != null) out.put("object", (String) made[0]);
+        LOG.log(System.Logger.Level.INFO, "prepared {0} {1}.{2} for {3}", p.txHash(), c.x.get("contract").asText(), meta.get("name").asText(), address);
+        onPrepared.accept(req, out);
+        return out;
     }
 
     private JsonNode view(HttpExchange ex, JsonNode req) {
