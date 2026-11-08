@@ -197,6 +197,12 @@ public final class DescriptionWriter {
                     "create", map("constructor", "CreateIntent", "index", indexOf(lifecycle, "CreateIntent")),
                     "burn", map("constructor", "BurnInstance", "index", 1)));
         }
+        if (!c.purposes().isEmpty()) {
+            // Other script purposes (ADR-0010): the stake credential's handlers (ADR-0015 M3).
+            var purposes = new ArrayList<Object>();
+            for (var pr : c.purposes()) purposes.add(purpose(pr));
+            xj.put("purposes", purposes);
+        }
         xj.put("tokens", map(
                 "instance", "blake2b_256(seed txId ++ I2OSP(seed index, 2)), 32 bytes",
                 "object", "0x4f ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes",
@@ -236,6 +242,50 @@ public final class DescriptionWriter {
         if (kind.equals("ownedInit")) fields.add("instance");
         fields.addAll(redeemerFieldNames(t));
         m.put("recipe", recipe(t, fields, null));
+        return m;
+    }
+
+    /**
+     * A purpose handler (ADR-0010): {@code @Withdraw} runs as a transition program giving the reward sends (its redeemer
+     * is {@code Rewards(74, amount, args..., ctx?)}); {@code @Certify}, {@code @Votes} and {@code @Propose} only decide
+     * on chain (their redeemers carry nothing).
+     */
+    private Map<String, Object> purpose(org.julclang.state.processor.ir.ContractIR.PurposeIR pr) {
+        var m = new LinkedHashMap<String, Object>();
+        m.put("name", pr.method());
+        String purpose = switch (pr.kind()) {
+            case "WITHDRAW" -> "withdraw";
+            case "CERTIFY" -> "certify";
+            case "VOTE" -> "vote";
+            default -> "propose";
+        };
+        m.put("purpose", purpose);
+        ExecutableElement e = method(pr.method());
+        var args = new ArrayList<Object>();
+        for (ParamIR p : pr.args()) {
+            TypeMirror type = e == null ? null : paramType(e, p.name());
+            args.add(map("name", p.name(), "type", p.type(), "schema", type == null ? data() : schemaOf(type)));
+        }
+        m.put("args", args);
+        m.put("ctx", pr.hasCtx());
+        m.put("policies", map(
+                "quorum", pr.quorumKeys() == null ? null : map("keys", pr.quorumKeys(), "threshold", pr.quorumThreshold()),
+                "authorizedBy", pr.authorizedBy()));
+        if (purpose.equals("withdraw")) {
+            var fields = new ArrayList<Object>(List.of(field("marker", integer()), field("amount", integer())));
+            for (ParamIR p : pr.args()) {
+                TypeMirror type = e == null ? null : paramType(e, p.name());
+                fields.add(field(p.name(), type == null ? data() : schemaOf(type)));
+            }
+            if (pr.hasCtx()) fields.add(field("ctx", schemaOf(env.getElementUtils().getTypeElement(API + "Ctx").asType())));
+            m.put("redeemer", map("purpose", "withdraw", "constructor", "Rewards", "index", 0, "marker", 74, "fields", fields));
+            var layout = new ArrayList<String>(List.of("$params", "$amount"));
+            for (ParamIR p : pr.args()) layout.add(p.name());
+            m.put("recipe", map("transition", pr.method(), "transitionArgs", layout));
+            m.put("returns", map("sends", true));
+        } else {
+            m.put("redeemer", map("purpose", purpose.equals("certify") ? "publish" : purpose, "constructor", "Unit", "index", 0));
+        }
         return m;
     }
 

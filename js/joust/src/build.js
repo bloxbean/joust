@@ -3,6 +3,8 @@
 //   <Contract>.json       the description (CIP-57 + x-joust v2)
 //   <Contract>.plutus     the compiled validator (CBOR hex)
 //   <Contract>.js/.d.ts   the typed client (joust-gen), importing @julclang/state-client
+//   validators.json       the plain JuLC validators (governors, ...): [{ name, purpose, script, params }]
+//   <Validator>.plutus    each one's compiled script (CBOR hex; parameters not applied)
 //   joust.lock.json       the versions that built it (I7)
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
@@ -55,10 +57,20 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
       + `${Object.keys(c.transitions).length} transitions`);
   }
   writeFileSync(join(dir, 'contracts.json'), JSON.stringify(bundle) + '\n');
+  // Plain JuLC validators (a governor for @AuthorizedBy, ADR-0009 D3): their scripts, parameters applied at deployment.
+  const validators = (r.validators ?? []).map((v) => ({ name: v.name, package: v.packageName, purpose: v.purpose,
+    script: v.scriptCborHex, scriptHash: v.scriptHash, params: v.params, built: { joust: VERSION } }));
+  for (const v of r.validators ?? []) {
+    writeFileSync(join(dir, v.name + '.plutus'), v.scriptCborHex + '\n');
+    log(`${v.packageName}.${v.name}: ${v.purpose} validator, ${v.scriptSizeBytes} bytes`
+      + (v.params.length ? `, params ${v.params.map((p) => p.name + ': ' + p.type).join(', ')}` : `, hash ${v.scriptHash}`));
+  }
+  if (validators.length) writeFileSync(join(dir, 'validators.json'), JSON.stringify(validators) + '\n');
   writeFileSync(join(dir, 'joust.lock.json'), JSON.stringify({
     joust: VERSION, descriptionVersion: 2,
     contracts: Object.fromEntries(r.contracts.map((c) => [`${c.packageName}.${c.name}`, { scriptHash: c.scriptHash }])),
+    ...(validators.length ? { validators: Object.fromEntries(validators.map((v) => [`${v.package}.${v.name}`, { purpose: v.purpose, scriptHash: v.scriptHash }])) } : {}),
   }, null, 2) + '\n');
   log(`built ${r.contracts.length} contract(s) into ${relative(root, dir)} in ${Date.now() - t} ms`);
-  return { ok: true, contracts: r.contracts, diagnostics: r.diagnostics };
+  return { ok: true, contracts: r.contracts, validators, diagnostics: r.diagnostics };
 }

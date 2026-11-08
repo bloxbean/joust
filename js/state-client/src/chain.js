@@ -71,6 +71,22 @@ export function blockfrostChain(baseUrl, { projectId, fetchImpl, CSL } = {}) {
     },
 
     /** Submits signed CBOR (hex); returns the transaction hash. */
+    /**
+     * Whether a stake credential is registered: true or false where the API says (Blockfrost's {@code active}, or 404),
+     * undefined where it cannot tell (Yaci Store reports registered and unknown credentials alike).
+     */
+    async registered(stakeAddress) {
+      const j = await get(`/accounts/${stakeAddress}`, { allow404: true });
+      if (j === null) return false;   // Blockfrost: a credential the chain has never seen
+      return typeof j.active === 'boolean' ? j.active : undefined;
+    },
+
+    /** The rewards withdrawable from a stake credential (0 for one the API does not know). */
+    async rewards(stakeAddress) {
+      const j = await get(`/accounts/${stakeAddress}`, { allow404: true });
+      return BigInt(j?.withdrawable_amount ?? 0);
+    },
+
     async submit(cborHex) {
       const bytes = new Uint8Array(cborHex.length / 2);
       for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(cborHex.substr(i * 2, 2), 16);

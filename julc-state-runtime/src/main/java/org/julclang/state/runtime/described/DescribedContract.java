@@ -137,6 +137,20 @@ public final class DescribedContract {
     public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
                        JsonNode args, BigInteger lovelace, JsonNode params, JsonNode payAssets, String into,
                        List<Account> cosigners) {
+        return call(runtime, caller, kind, method, instance, object, args, lovelace, params, payAssets, into, cosigners, null);
+    }
+
+    /**
+     * A script credential's approval for {@code @AuthorizedBy} (ADR-0009 D3): the governor script (its parameters
+     * applied) and the keys it requires itself. The call withdraws zero from the governor's stake credential (registered
+     * once) with the {@code Approvals} redeemer naming exactly this call.
+     */
+    public record Governor(com.bloxbean.cardano.client.plutus.spec.PlutusScript script, List<Account> signers) {}
+
+    /** As above; {@code governor}: the script approving an {@code @AuthorizedBy} call whose credential is a script. */
+    public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
+                       JsonNode args, BigInteger lovelace, JsonNode params, JsonNode payAssets, String into,
+                       List<Account> cosigners, Governor governor) {
         JsonNode meta = meta(kind, method);
         JsonNode recipe = meta.get("recipe");
         if (recipe == null) throw new IllegalArgumentException(method + ": no call recipe (rebuild with JOUST's processor)");
@@ -150,6 +164,7 @@ public final class DescribedContract {
             throw new IllegalArgumentException(method + ": @Quorum and @AuthorizedBy on " + kind + " calls: not supported yet (ADR-0015 M3)");
         }
         if (!signedByOthers && !cosigners.isEmpty()) throw new IllegalArgumentException(method + " takes no co-signers");
+        if (governor != null && meta.path("policies").path("authorizedBy").isEmpty()) throw new IllegalArgumentException(method + " takes no governor");
         if (unsupported(meta)) throw new IllegalArgumentException(method + " is batched (@Batched intents): not supported yet (ADR-0015 M3)");
         if (!meta.path("payable").asBoolean() && lovelace.signum() != 0) throw new IllegalArgumentException(method + " is not payable");
         if (lovelace.signum() < 0) throw new IllegalArgumentException("a negative payment");
@@ -267,7 +282,7 @@ public final class DescribedContract {
                 if (meta.path("policies").path("migrateTo").isTextual()) b.migrates();   // @MigrateTo (ADR-0011 D4)
                 for (var rd : reads) b.referenceInputs(rd.utxo());
                 if (!cosigners.isEmpty()) b.cosigners(cosigners.toArray(new Account[0]));
-                authorize(method, meta, params, caller, cosigners, b);
+                authorize(runtime, method, meta, params, caller, cosigners, governor, handle.policyId(), requireInstance(instance), b);
                 // @Quorum counts the transaction's required signers: the caller (who signs anyway) is one of them.
                 if (meta.path("policies").path("quorum").isObject()) b.cosigners(caller);
                 b.usesCtx(usesCtx).received(lovelace);
@@ -499,26 +514,52 @@ public final class DescribedContract {
     }
 
     /**
-     * {@code @AuthorizedBy} (ADR-0009 D3) with a key credential: the key must sign, as the caller or a co-signer (it is
-     * made a required signer). A script credential (a governor's zero withdrawal) is not supported here yet.
+     * {@code @AuthorizedBy} (ADR-0009 D3). A key credential: the key must sign, as the caller or a co-signer (it is made
+     * a required signer). A script credential: the {@code governor} must be that script; the call withdraws zero from
+     * it with {@code Approvals[Approval(policy, target, action)]}, this call alone, and its own signers sign.
      */
-    private static void authorize(String method, JsonNode meta, JsonNode params, Account caller, List<Account> cosigners,
+    private static void authorize(StateRuntime runtime, String method, JsonNode meta, JsonNode params, Account caller,
+                                  List<Account> cosigners, Governor governor, String policy, String target,
                                   Call.Builder<PlutusData> b) {
+        boolean usedGovernor = false;
         for (JsonNode path : meta.path("policies").path("authorizedBy")) {
             String at = path.asText();
             if (!at.startsWith("params.")) throw new IllegalArgumentException(method + ": @AuthorizedBy(\"" + at + "\"): only @Params credentials are supported here yet (ADR-0015 M3)");
             JsonNode cred = params == null ? null : params.get(at.substring("params.".length()));
             if (cred == null) throw new IllegalArgumentException(method + ": no " + at + " in the call's params");
-            if (!"PubKeyCredential".equals(cred.path("$variant").asText())) {
-                throw new IllegalArgumentException(method + ": " + at + " is a script credential: a governor's approval is not supported here yet (ADR-0015 M3)");
+            String hash = cred.path("hash").asText();
+            if ("ScriptCredential".equals(cred.path("$variant").asText())) {
+                if (governor == null) throw new IllegalArgumentException(method + ": " + at + " is a script: give its governor (the script, applied, and its signers)");
+                String h;
+                try {
+                    h = HexFormat.of().formatHex(governor.script().getScriptHash());
+                } catch (Exception e) {
+                    throw new IllegalArgumentException(method + ": cannot hash the governor script", e);
+                }
+                if (!h.equals(hash)) throw new IllegalArgumentException(method + ": the governor is script " + h + ", not " + at + " (" + hash + ")");
+                if (usedGovernor) throw new IllegalArgumentException(method + ": one governor approves one credential");
+                usedGovernor = true;
+                // Approvals [Approval(policy, target, action)]: the action is the spend redeemer's tag (I33).
+                var approval = com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
+                        com.bloxbean.cardano.client.plutus.spec.BytesPlutusData.of(HexFormat.of().parseHex(policy)),
+                        com.bloxbean.cardano.client.plutus.spec.BytesPlutusData.of(HexFormat.of().parseHex(target)),
+                        com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData.of(meta.path("redeemer").path("index").asInt()));
+                var approvals = com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
+                        com.bloxbean.cardano.client.plutus.spec.ListPlutusData.of(approval));
+                String reward = com.bloxbean.cardano.client.address.AddressProvider.getRewardAddress(governor.script(),
+                        runtime.network()).toBech32();
+                b.authorization(org.julclang.state.runtime.Authorization.script(reward, governor.script(), approvals,
+                        governor.signers().toArray(new Account[0])));
+                continue;
             }
-            String key = cred.path("hash").asText();
+            if (!"PubKeyCredential".equals(cred.path("$variant").asText())) throw new IllegalArgumentException(method + ": " + at + " is not a credential");
             Account signer = null;
-            if (HexFormat.of().formatHex(Keys.pkh(caller)).equals(key)) signer = caller;
-            for (Account a : cosigners) if (HexFormat.of().formatHex(Keys.pkh(a)).equals(key)) signer = a;
-            if (signer == null) throw new IllegalArgumentException(method + " needs the signature of " + at + " (" + key + "): the caller or a co-signer");
+            if (HexFormat.of().formatHex(Keys.pkh(caller)).equals(hash)) signer = caller;
+            for (Account a : cosigners) if (HexFormat.of().formatHex(Keys.pkh(a)).equals(hash)) signer = a;
+            if (signer == null) throw new IllegalArgumentException(method + " needs the signature of " + at + " (" + hash + "): the caller or a co-signer");
             if (signer == caller) b.cosigners(caller);   // a co-signer is a required signer already
         }
+        if (governor != null && !usedGovernor) throw new IllegalArgumentException(method + ": no script credential for the governor to approve");
     }
 
     /** The index of the generated validator's Lifecycle constructor {@code title} (CreateInstance, BurnInstance, ByAction…). */
@@ -601,6 +642,72 @@ public final class DescribedContract {
     }
 
     /** The round limit of read discovery (ADR-0015 D3). */
+    // ------------------------------------------------------------------ other purposes (ADR-0010; ADR-0015 M3)
+
+    /** The purpose handler of {@code purpose} (withdraw, certify, vote, propose). */
+    JsonNode purposeMeta(String purpose) {
+        for (JsonNode p : x.path("purposes")) if (p.path("purpose").asText().equals(purpose)) return p;
+        throw new IllegalArgumentException(name + " has no @" + Character.toUpperCase(purpose.charAt(0)) + purpose.substring(1) + " handler");
+    }
+
+    /** The stake credential's reward address (a {@code stakeSelf} contract's funds are staked to it). */
+    public String rewardAddress(StateRuntime runtime, JsonNode params) {
+        return handle(runtime, params).rewardAddress();
+    }
+
+    /**
+     * Delegates the contract's stake to {@code pool} (hex or bech32): the {@code @Certify} handler decides on chain;
+     * {@code caller} and {@code cosigners} sign (its {@code @Quorum}).
+     */
+    public String delegate(StateRuntime runtime, Account caller, JsonNode params, String pool, List<Account> cosigners) {
+        purposeMeta("certify");
+        if (pool == null || !(pool.matches("[0-9a-f]{56}") || pool.startsWith("pool1"))) throw new IllegalArgumentException("a pool id (hex or bech32)");
+        return handle(runtime, params).delegateTo(pool, caller, cosigners.toArray(new Account[0]));
+    }
+
+    /**
+     * Withdraws {@code amount} rewards (the whole balance, as the ledger requires) through the {@code @Withdraw} handler:
+     * its transition program gives the sends, paid in the same transaction and claimed in the output registry.
+     */
+    public String collect(StateRuntime runtime, Account caller, JsonNode params, BigInteger amount, JsonNode args,
+                          List<Account> cosigners) {
+        JsonNode meta = purposeMeta("withdraw");
+        if (meta.path("ctx").asBoolean()) throw new IllegalArgumentException(meta.path("name").asText() + ": a @Withdraw taking Ctx: not supported yet (ADR-0015 M3)");
+        if (amount == null || amount.signum() < 0) throw new IllegalArgumentException("a reward amount (the whole balance)");
+        if (args == null) args = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+        var names = new ArrayList<String>();
+        meta.path("args").forEach(a -> names.add(a.get("name").asText()));
+        args.fieldNames().forEachRemaining(n -> {
+            if (!names.contains(n)) throw new IllegalArgumentException("unknown argument " + n);
+        });
+        var byName = new java.util.HashMap<String, PlutusData>();
+        for (JsonNode a : meta.path("args")) {
+            String n = a.get("name").asText();
+            byName.put(n, codec.encode(a.get("schema"), args.get(n), n));
+        }
+        PlutusData paramsData = codec.encode(x.get("params"), params, "params");
+        var layout = new ArrayList<PlutusData>();
+        for (JsonNode n : meta.path("recipe").path("transitionArgs")) {
+            String a = n.asText();
+            layout.add(a.equals("$params") ? paramsData : a.equals("$amount") ? PlutusData.integer(amount) : byName.get(a));
+        }
+        var r = fn.run(meta.path("recipe").path("transition").asText(), NONE, NONE, new PlutusData.ConstrData(0, layout), NONE);
+        if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
+        var items = ((PlutusData.ListData) ((PlutusData.ConstrData) DataFidelity.check(r.step(), "the handler's sends")).fields().get(0)).items();
+        JulcList<org.julclang.state.api.Send> sends = JulcList.empty();
+        for (int i = items.size() - 1; i >= 0; i--) {
+            sends = sends.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(items.get(i)), org.julclang.state.api.Send.class));
+        }
+        // Rewards(74, amount, args...): the marker means it never reads as Approvals (ADR-0010 r2).
+        var fields = new ArrayList<com.bloxbean.cardano.client.plutus.spec.PlutusData>();
+        fields.add(com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData.of(meta.path("redeemer").path("marker").asLong(74)));
+        fields.add(com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData.of(amount));
+        for (JsonNode a : meta.path("args")) fields.add(PlutusDataAdapter.toClientLib(byName.get(a.get("name").asText())));
+        var redeemer = com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
+                fields.toArray(new com.bloxbean.cardano.client.plutus.spec.PlutusData[0]));
+        return handle(runtime, params).withdrawRewards(redeemer, amount, sends, caller, cosigners.toArray(new Account[0]));
+    }
+
     // ------------------------------------------------------------------ intents (ADR-0004; ADR-0015 M3)
 
     /** The intent entry of the batched action {@code method}: its IntentCall constructor, arguments and recipe. */

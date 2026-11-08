@@ -59,6 +59,7 @@ export function tamperings(CSL, txHex, walletAddresses) {
     const tx = base();
     const ws = tx.witness_set();
     const rds = ws.redeemers();
+    if (!rds || rds.len() === 0) return null;   // no script runs (a registration)
     const r = rds.get(0);
     const c = r.data().as_constr_plutus_data();
     const other = CSL.PlutusData.new_constr_plutus_data(CSL.ConstrPlutusData.new(

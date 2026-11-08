@@ -32,7 +32,13 @@ public final class JoustToolchainWasm {
                            String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson,
                            String transitionsSource, Map<String, String> transitions) {}
 
-    public record BuildResult(boolean ok, List<Contract> contracts, List<Diagnostic> diagnostics) {}
+    public record Param(String name, String type) {}
+
+    /** A plain JuLC validator of the project (a governor, ...): see {@link Toolchain.Validator}. */
+    public record Validator(String name, String packageName, String purpose, String scriptCborHex, String scriptHash,
+                            int scriptSizeBytes, List<Param> params) {}
+
+    public record BuildResult(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics) {}
 
     /** A transition program (script CBOR hex) and its Data arguments (CBOR hex). */
     public record RunRequest(String program, List<String> args) {}
@@ -77,6 +83,8 @@ public final class JoustToolchainWasm {
                 r.contracts().stream().map(c -> new Contract(c.name(), c.packageName(), c.validatorName(), c.validatorSource(),
                         c.scriptCborHex(), c.scriptHash(), c.scriptSizeBytes(), c.descriptionJson(), c.transitionsSource(),
                         c.transitions())).toList(),
+                r.validators().stream().map(v -> new Validator(v.name(), v.packageName(), v.purpose(), v.scriptCborHex(),
+                        v.scriptHash(), v.scriptSizeBytes(), v.params().stream().map(p -> new Param(p.name(), p.type())).toList())).toList(),
                 r.diagnostics().stream().map(d -> new Diagnostic(d.severity().name().toLowerCase(), d.message(), d.file(), d.line(),
                         d.source())).toList()));
     }

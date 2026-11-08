@@ -11,6 +11,7 @@
 import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf, objectIdOf } from './tokens.js';
 import { bytesToHex } from './hex.js';
+import { approvalsData, rewardAddressOf } from './governors.js';
 
 export const DEFAULT_LIMITS = {
   maxCollateral: 5_000_000n,     // lovelace a failing script may cost
@@ -116,15 +117,26 @@ export async function verifyPrepared(o) {
   // call's MerkleMap claims; ADR-0002 D9) and the output verifier (its sends; ADR-0007 D5), checked on chain.
   const pinnedVerifiers = [deployment.mapVerifier, deployment.outputVerifier].filter(Boolean);
   const verifierRewards = new Set(pinnedVerifiers.map((v) => v.rewardAddress));
+  // A script governor's zero withdrawal (@AuthorizedBy with a script credential; ADR-0009 D3): the credential the
+  // deployment's @Params name, at the reward address the page derives itself.
+  const governor = governorOf(CSL, call, deployment, problems);
+  const allowedRewards = new Set(verifierRewards);
+  if (governor) allowedRewards.add(governor.rewardAddress);
   const ws = body.withdrawals();
+  const rewardOrder = [];   // the withdrawals in ledger order (a Reward redeemer's index)
   if (ws && ws.len() > 0) {
     const keys = ws.keys();
-    let ok = ws.len() <= verifierRewards.size;
+    let ok = ws.len() <= allowedRewards.size;
     for (let i = 0; i < keys.len(); i++) {
-      if (!verifierRewards.has(keys.get(i).to_address().to_bech32()) || ws.get(keys.get(i)).to_str() !== '0') ok = false;
+      const a = keys.get(i).to_address();
+      rewardOrder.push({ bech32: a.to_bech32(), bytes: a.to_hex() });
+      if (!allowedRewards.has(a.to_bech32()) || ws.get(keys.get(i)).to_str() !== '0') ok = false;
     }
     if (!ok) problems.push('withdrawals');
   }
+  rewardOrder.sort((x, y) => (x.bytes < y.bytes ? -1 : x.bytes > y.bytes ? 1 : 0));
+  const governorIndex = governor ? rewardOrder.findIndex((r) => r.bech32 === governor.rewardAddress) : -1;
+  if (governor && governorIndex < 0) problems.push('the governor does not approve the call (no zero withdrawal from it)');
   const withdrawalCount = ws ? ws.len() : 0;
   if (tx.auxiliary_data()) problems.push('auxiliary data');
   if (body.network_id() && body.network_id().kind() !== (deployment.networkId === 1 ? CSL.NetworkIdKind.Mainnet : CSL.NetworkIdKind.Testnet)) {
@@ -171,14 +183,22 @@ export async function verifyPrepared(o) {
   const rds = tx.witness_set().redeemers();
   const spends = [];
   const mints = [];
+  let governorRedeemers = 0;
   for (let i = 0; rds && i < rds.len(); i++) {
     const r = rds.get(i);
     const kind = r.tag().kind();
     if (kind === CSL.RedeemerTagKind.Spend) spends.push(r);
     else if (kind === CSL.RedeemerTagKind.Mint) mints.push(r);
-    else if (kind === CSL.RedeemerTagKind.Reward && Number(r.index().to_str()) < withdrawalCount) { /* a pinned verifier's */ }
+    else if (kind === CSL.RedeemerTagKind.Reward && governor && Number(r.index().to_str()) === governorIndex) {
+      // The governor grants exactly this call: Approvals [Approval(policy, instance, the action's tag)] (I33).
+      governorRedeemers++;
+      if (!dataEqual(r.data(), approvalsData(CSL, policy, call.instance, call.meta.redeemer.index))) {
+        problems.push('the governor\'s redeemer approves something else than this call');
+      }
+    } else if (kind === CSL.RedeemerTagKind.Reward && Number(r.index().to_str()) < withdrawalCount) { /* a pinned verifier's */ }
     else problems.push('a redeemer that is neither a spend nor a mint');
   }
+  if (governor && governorRedeemers !== 1) problems.push('the governor\'s withdrawal has no Approvals redeemer');
 
   // Mint: none for an action; the target's token burned for a destroy; the new token for a creation.
   const mint = body.mint();
@@ -491,11 +511,11 @@ export function verifiableWithoutService(meta, description, deployment) {
   // @Quorum is verifiable (the page checks the required signers; the validator counts them), and so are events (the
   // validator compares the redeemer's with the method's).
   if (p.batched || p.into || p.admits || p.receives) return false;
-  // @AuthorizedBy: verifiable for key credentials the deployment's @Params name (the key is a required signer, which
-  // the page checks against the co-signers it named); a script governor's approval is not checked here yet.
+  // @AuthorizedBy: verifiable for credentials the deployment's @Params name: a key is a required signer (checked
+  // against the co-signers the page named); a script is the governor whose zero withdrawal and Approvals the page checks.
   for (const at of p.authorizedBy ?? []) {
     const cred = at.startsWith('params.') ? deployment?.params?.[at.slice('params.'.length)] : null;
-    if (cred?.$variant !== 'PubKeyCredential') return false;
+    if (cred?.$variant !== 'PubKeyCredential' && cred?.$variant !== 'ScriptCredential') return false;
   }
   if (out.deposits) return false;
   // Sends: verifiable when the deployment pins JOUST's output verifier (the outputs are checked on chain; the page
@@ -507,6 +527,33 @@ export function verifiableWithoutService(meta, description, deployment) {
     for (const f of alt.fields ?? []) if (f.$ref?.endsWith('/org.julclang.state.api.MerkleMap') && !deployment?.mapVerifier) return false;
   }
   return true;
+}
+
+/**
+ * The governor a call names ({@code call.governor: { hash }}), checked against the method's @AuthorizedBy script
+ * credential in the deployment's @Params; its reward address derived by the page. Null when the call needs none.
+ */
+function governorOf(CSL, call, deployment, problems) {
+  const scripts = (call.meta.policies?.authorizedBy ?? [])
+    .map((at) => (at.startsWith('params.') ? deployment.params?.[at.slice('params.'.length)] : null))
+    .filter((cred) => cred?.$variant === 'ScriptCredential');
+  if (!call.governor) {
+    if (scripts.length) problems.push(`${call.meta.name} needs its governor's approval (a script credential)`);
+    return null;
+  }
+  if (scripts.length !== 1) {
+    problems.push(`${call.meta.name} has ${scripts.length ? 'several script credentials' : 'no script credential'} for a governor`);
+    return null;
+  }
+  if (!SPEND_KINDS.has(call.kind) || call.kind.startsWith('owned')) {
+    problems.push('a governor approves instance actions only');
+    return null;
+  }
+  if (call.governor.hash !== scripts[0].hash) {
+    problems.push('the governor is not the script the deployment names');
+    return null;
+  }
+  return { hash: scripts[0].hash, rewardAddress: rewardAddressOf(CSL, scripts[0].hash, deployment.networkId) };
 }
 
 export function paymentKeyHashOf(CSL, address) {

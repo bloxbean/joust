@@ -942,7 +942,74 @@ direct `Tx` building, gated by S3.
   - On the JVM, `DescribedUpgradeDevnetTest` runs the same flow.
   - Other creations in a composition (`@Init`, `@OwnedInit` beside other calls) are not composed yet: no example
     needs them.
-- **Next in M3:** script governors for `@AuthorizedBy`, and StakedVault (staking purposes).
+- **Script governors for `@AuthorizedBy` (ADR-0009 D3) through npm.** The Treasury guardian as a script passes on
+  DevKit. `Guardian` is a plain JuLC `@WithdrawValidator` with its owner key as a `@Param`; it approves a freeze through
+  a zero withdrawal.
+  - **The toolchain compiles plain JuLC validators** (`@WithdrawValidator`, `@SpendingValidator`, ... : JuLC's
+    validator annotations) beside the state contracts, as JuLC's annotation processor does. `joust build` writes
+    `validators.json` (`{ name, package, purpose, script, scriptHash, params }`) and each one's `.plutus`. I1:
+    `ToolchainParityTest` compares them byte for byte with Gradle's `META-INF/plutus/<Name>.plutus.json`.
+  - **The engine's `joust:governor`** applies the parameters (`deployment`: the applied script, its hash and reward
+    address) and builds the registration of its stake credential (`register`). `runtime.ensureGovernor(name, params,
+    wallet)` encodes the parameters by their Java types (`byte[]`, `BigInteger`, `boolean`, `PlutusData`) and registers
+    the credential once.
+    - **Registration status:** Blockfrost reports it (`active`, or 404); Yaci Store does not, answering alike for
+      registered and unknown credentials.
+    - Where the API cannot tell, the registration is attempted, and the ledger's "already registered" refusal counts
+      as success.
+  - **`verifyRegistration`**, before the wallet signs, requires:
+    - one stake registration certificate for exactly the governor's script credential, with the protocol's
+      `key_deposit`;
+    - the wallet's inputs and outputs only, and the wallet paying exactly the fee and the deposit;
+    - nothing else: no withdrawals, mints, redeemers, scripts, collateral, reference inputs, votes, metadata or other
+      signers, and a short validity window.
+  - **A call names its governor:** `opts.governor = { governor, signers }`. The signers are the keys the governor
+    requires itself, and the caller may be one of them. The dispatcher (`DescribedContract.Governor`) checks the
+    script's hash against the `params.*` credential and adds the zero withdrawal. Its redeemer is
+    `Approvals [Approval(policy, instance, the action's redeemer index)]`: this call alone.
+  - **The page verifier (`verifyPrepared`):**
+    - allows that one extra zero withdrawal, at the reward address the page derives from the deployment's credential;
+    - requires the governor's Reward redeemer to be exactly those `Approvals`;
+    - counts the governor's signers as named co-signers;
+    - refuses a governed method called without its governor, a governor on a method without a script credential, and
+      another script.
+  - **I5:** all 9 tamperings of a governor registration and all 10 of a governed call are refused before signing. One
+    of the call's tamperings is an `Approvals` naming another action.
+  - On the JVM, `DescribedTreasuryDevnetTest.scriptGovernor` runs the same flow: the toolchain-built governor, a missing
+    governor, another script, and a missing owner signature.
+  - **Not yet:** native-script governors (no redeemer), and governors on owned objects or purpose handlers.
+- **Staking purposes (ADR-0010) through npm.** StakedVault passes on DevKit. Its funds sit at base addresses staked to
+  its own script, and a council quorum (in the params) registers, delegates, collects the rewards and closes.
+  - **Descriptions carry the purposes:** `x-joust.purposes`, one entry per handler, each with its arguments and
+    `policies` (quorum, authorizedBy).
+    - `@Withdraw` gets its redeemer layout: `Rewards(74, amount, args...)`, with `marker`.
+    - `@Withdraw` gets a recipe: `transitionArgs: [$params, $amount, ...]`. It also gets a transition program
+      returning `Constr 0 [sends]`, which the engine runs for the reward sends.
+    - `@Certify`, `@Votes` and `@Propose` decide on chain only; their redeemers carry nothing.
+  - **The dispatcher:** `delegate` (the JVM handle's `delegateTo`) and `collect` (the handler's program, then
+    `withdrawRewards`). Both now build into a composition's transaction (`TxRunner.newTx()`), and the reward sends'
+    output claims join the composition's. The engine's kinds are `registerStake`, `delegate` and `collect`.
+  - **`JoustContract`:** `registerStake(api)` (checked by `verifyRegistration` for the contract's own credential),
+    `delegate(api, pool, { cosigners })` and `collect(api, { amount?, args?, cosigners })`. Collection reads the
+    balance from the chain (`chain.rewards`).
+  - **`verifyPurpose` (`purposes.js`):**
+    - **A delegation** is one stake delegation of the script's own credential to the page's pool, with the handler's
+      Cert redeemer.
+    - **A collection** withdraws exactly the balance from the script's credential with the page's `Rewards` redeemer
+      (and the output verifier's zero withdrawal, when there are sends). Others receive at most what was withdrawn.
+    - **Both:** the wallet's inputs only; the pinned reference scripts only; the wallet loses at most the fee;
+      bounded collateral and validity; signers are the wallet's and the named co-signers.
+  - **I5:** all 11 tamperings of a delegation (a delegation to another pool among them) and all 10 of a reward
+    collection are refused before signing.
+  - On the JVM, `DescribedStakingDevnetTest` runs the same flow.
+  - **DevKit pays no rewards within a test:** they take epochs. So the flows collect a zero balance, which still runs
+    `@Withdraw` and its program, with no sends. Sends of real rewards are covered by the validator's checks and the
+    verifier's bound, but not exercised on DevKit.
+  - **Not yet: votes and proposals** (`@Votes`, `@Propose`). They need a script DRep's registration and deposit, and
+    a governance action to vote on. The JVM client has no calls for them either.
+- **M3's examples all pass through npm.** I3: `fixtures/m3` holds 191 calls, the governor's 17 and StakedVault's 29
+  included, all byte-identical on the JVM. Remaining options, none of which an example needs: `@Init`/`@OwnedInit`
+  inside compositions; quorum and governors on owned objects; batches over maps or assets; votes and proposals.
 
 ### 13.9 Planned for M4: a pluggable chain provider
 

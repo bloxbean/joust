@@ -11,6 +11,7 @@ import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devkitSweep, devWallet, JoustContract, runComposed } from '../src/index.js';
+import { walletView, verifyRegistration, approvalsData } from '@julclang/state-client';
 import { build } from '../../joust/src/build.js';
 import { tamperings } from '../../../examples/dapp/frontend/src/tamper.js';
 
@@ -29,12 +30,17 @@ async function reachable() {
 const devkit = await reachable();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** The plain validators the builds wrote (validators.json): governors. */
+const validatorsBuilt = [];
+
 /** The contracts of {@code examples/<name>}, built by the toolchain engine. */
 async function built(name) {
   const out = mkdtempSync(join(tmpdir(), 'joust-ex-'));
   const r = await build({ root: join(EXAMPLES, name), src: 'src/main/java', out, log: () => {},
-    keep: (f, text) => f.endsWith('.jsc') || /@StateContract|@OnchainLibrary/.test(text) });   // not the JVM apps
+    // Contracts, their libraries and plain JuLC validators (governors); not the JVM apps.
+    keep: (f, text) => f.endsWith('.jsc') || /@StateContract|@OnchainLibrary|^@(Withdraw|Spending|Minting|Multi)Validator\b/m.test(text) });
   assert.ok(r.ok, `${name} builds`);
+  if (existsSync(join(out, 'validators.json'))) validatorsBuilt.push(...JSON.parse(readFileSync(join(out, 'validators.json'), 'utf8')));
   return JSON.parse(readFileSync(join(out, 'contracts.json'), 'utf8'));
 }
 
@@ -61,11 +67,11 @@ function recorder(group) {
 }
 const contractsByDescription = new Map();
 
-async function setup(names) {
+async function setup(names, group = names.join('+')) {
   const contracts = (await Promise.all(names.map(built))).flat();
   for (const c of contracts) contractsByDescription.set(c.description, c);
-  const rt = joustRuntime({ CSL, chainUrl: STORE, contracts, clock: await devkitClock(ADMIN), networkId: 0, ttlMs: 20_000,
-    record: recorder(names.join('+')) });
+  const rt = joustRuntime({ CSL, chainUrl: STORE, contracts, validators: validatorsBuilt, clock: await devkitClock(ADMIN), networkId: 0,
+    ttlMs: 20_000, record: recorder(group) });
   const wallets = async (n, ada = 300) => {
     const ws = Array.from({ length: n }, () => devWallet({ CSL, chain: rt.chain, mnemonic: generateMnemonic(wordlist, 256) }));
     for (const w of ws) await devkitTopUp(w.address, ada, ADMIN, { CSL, chain: rt.chain });
@@ -417,6 +423,137 @@ test('Treasury: @Quorum co-signers sign the same transaction; the guardian (@Aut
   assert.deepEqual((await t.state()).council, council.slice(0, 2));
   await t.call(b, 'close', { to: a.keyHash }, {}, { cosigners: [a] });
   assert.equal(await t.state(), null);
+});
+
+test('Treasury: a script governor (Guardian, built by joust build) approves @AuthorizedBy through a zero withdrawal', { skip, timeout: 900_000 }, async () => {
+  const { rt, wallets, contract } = await setup(['treasury'], 'treasury-governor');
+  const [a, owner, stranger] = await wallets(3, 100);
+  // I5 for the registration: every tampering of the engine-built registration is refused before the wallet signs.
+  const g0 = await rt.service.governor('deployment', validatorsBuilt.find((v) => v.name === 'Guardian').script,
+    [CSL.PlutusData.new_bytes(Buffer.from(stranger.keyHash, 'hex')).to_hex()], stranger.address);
+  const reg = await rt.service.governor('register', validatorsBuilt.find((v) => v.name === 'Guardian').script,
+    [CSL.PlutusData.new_bytes(Buffer.from(stranger.keyHash, 'hex')).to_hex()], stranger.address);
+  const view = await walletView(CSL, stranger);
+  const chainNow = { params: await rt.chain.params(), tip: await rt.chain.tip() };
+  assert.deepEqual(verifyRegistration({ CSL, txHex: reg.cbor, governor: g0, wallet: view, chain: chainNow, networkId: 0 }).problems, []);
+  const regTamperings = Object.entries(tamperings(CSL, reg.cbor, [stranger.address]));
+  for (const [what, hex] of regTamperings) {
+    assert.notDeepEqual(verifyRegistration({ CSL, txHex: hex, governor: g0, wallet: view, chain: chainNow, networkId: 0 }).problems, [], what);
+  }
+  assert.notDeepEqual(verifyRegistration({ CSL, txHex: reg.cbor, governor: { hash: '00'.repeat(28) }, wallet: view, chain: chainNow, networkId: 0 }).problems, []);
+  console.log(`I5: ${regTamperings.length} tamperings of an engine-built governor registration refused before signing`);
+
+  // The governor: Guardian with its owner applied, its stake credential registered once (checked, then signed).
+  const guardian = await rt.ensureGovernor('Guardian', { owner: owner.keyHash }, owner);
+  assert.equal(await rt.ensureGovernor('Guardian', { owner: owner.keyHash }, owner), guardian);
+  const other = await rt.ensureGovernor('Guardian', [stranger.keyHash], stranger);
+  assert.notEqual(other.hash, guardian.hash, 'the parameters pin the script');
+  const treasury = await contract('Treasury', a, { guardian: { $variant: 'ScriptCredential', hash: guardian.hash }, maxPayout: 50n * ADA });
+  const t = treasury.at((await treasury.deploy(a, { council: [a.keyHash], quorum: 1n }, { lovelace: 20n * ADA })).instance);
+  await assert.rejects(t.call(a, 'freeze', { frozen: true }), /governor/);
+  await assert.rejects(t.call(a, 'freeze', { frozen: true }, {}, { governor: { governor: other, signers: [stranger] } }), /governor/);
+  await assert.rejects(t.call(a, 'fund', {}, { lovelace: ADA }, { governor: { governor: guardian, signers: [owner] } }), /no governor/);
+  // Without its owner's signature the governor refuses (the engine evaluates it before any wallet is asked).
+  await assert.rejects(t.call(a, 'freeze', { frozen: true }, {}, { governor: { governor: guardian } }));
+  // I5: every tampering of an engine-built governed call is refused before either wallet is asked; and a governor
+  // redeemer approving another action, or a service that drops the withdrawal.
+  let refused = 0;
+  const variants = (p) => {
+    const all = Object.entries(tamperings(CSL, p.cbor, [a.address]));
+    const tx = CSL.Transaction.from_hex(p.cbor);
+    const ws = tx.witness_set();
+    const rs = ws.redeemers();
+    const out = CSL.Redeemers.new();
+    for (let i = 0; i < rs.len(); i++) {
+      const r = rs.get(i);
+      out.add(r.tag().kind() === CSL.RedeemerTagKind.Reward
+        ? CSL.Redeemer.new(r.tag(), r.index(), approvalsData(CSL, treasury.deployment.policy, t.id, 0), r.ex_units()) : r);
+    }
+    ws.set_redeemers(out);
+    all.push(['a governor approval of another action', CSL.Transaction.new(tx.body(), ws, tx.auxiliary_data()).to_hex()]);
+    return all;
+  };
+  for (let i = 0, total = 1; i < total; i++) {
+    const evil = { ...treasury.service, async prepare(req) {
+      const p = await treasury.service.prepare(req);
+      const all = variants(p);
+      total = all.length;
+      return { ...p, cbor: all[i][1] };
+    } };
+    const k = new JoustContract({ CSL, description: treasury.description, deployment: treasury.deployment, service: evil, chain: treasury.chain });
+    let touched = false;
+    const spy = (w) => ({ ...w, signTx: (...x) => { touched = true; return w.signTx(...x); } });
+    await assert.rejects(k.at(t.id).call(spy(a), 'freeze', { frozen: true }, {}, { governor: { governor: guardian, signers: [spy(owner)] } }),
+      undefined, `tampering ${i}`);
+    assert.equal(touched, false, `tampering ${i} reached a wallet`);
+    refused++;
+  }
+  console.log(`I5: ${refused} tamperings of an engine-built governed call refused before signing`);
+  // The governor's owner co-signs the caller's transaction; or calls itself.
+  let asked = 0;
+  const watched = { ...owner, signTx: (...x) => { asked++; return owner.signTx(...x); } };
+  await t.call(a, 'freeze', { frozen: true }, {}, { governor: { governor: guardian, signers: [watched] } });
+  assert.equal(asked, 1);
+  assert.equal((await t.state()).frozen, true);
+  await t.call(owner, 'freeze', { frozen: false }, {}, { governor: { governor: guardian, signers: [owner] } });
+  assert.equal((await t.state()).frozen, false);
+});
+
+test('StakedVault: staked funds; the council delegates (@Certify) and collects rewards (@Withdraw) by quorum', { skip, timeout: 900_000 }, async () => {
+  const { rt, wallets, contract } = await setup(['staking']);
+  const council = (await wallets(3)).sort((x, y) => (x.keyHash < y.keyHash ? -1 : 1));
+  const [a, b, c] = council;
+  const [payee] = await wallets(1, 5);
+  const pool = (await (await fetch(STORE + '/pools/registrations?page=0&count=1')).json())[0].pool_id;
+  const params = { council: council.map((m) => m.keyHash), quorum: 2n, pool, payee: payee.keyHash, cap: 1000n * ADA };
+  const vault = await contract('StakedVault', a, params);
+  assert.ok(vault.deployment.address.startsWith('addr_test1x'), 'a base address staked to the script');
+  const v = vault.at((await vault.deploy(a, {}, { lovelace: 100n * ADA })).instance);
+  await v.call(b, 'deposit', {}, { lovelace: 20n * ADA });
+  assert.equal((await v.state()).deposits, 120n * ADA);
+
+  // The stake credential: registered once (checked to be only that), then delegated by a quorum.
+  await vault.registerStake(a);
+  await assert.rejects(vault.delegate(a, pool));                                  // one signature is not a quorum
+  await assert.rejects(vault.delegate(a, 'ab'.repeat(28), { cosigners: [b] }));    // another pool: @Certify refuses
+  // I5: every tampering of an engine-built delegation (and one to another pool) is refused before either wallet signs.
+  const spy = (w, hit) => ({ ...w, signTx: (...x) => { hit.touched = true; return w.signTx(...x); } });
+  const loop = async (what, run, extra = () => []) => {
+    let refused = 0;
+    for (let i = 0, total = 1; i < total; i++) {
+      const evil = { ...vault.service, async prepare(req) {
+        const p = await vault.service.prepare(req);
+        const all = [...Object.entries(tamperings(CSL, p.cbor, [a.address])), ...extra(p)];
+        total = all.length;
+        return { ...p, cbor: all[i][1] };
+      } };
+      const k = new JoustContract({ CSL, description: vault.description, deployment: vault.deployment, service: evil, chain: vault.chain });
+      const hit = { touched: false };
+      await assert.rejects(run(k, hit), undefined, `${what} tampering ${i}`);
+      assert.equal(hit.touched, false, `${what} tampering ${i} reached a wallet`);
+      refused++;
+    }
+    console.log(`I5: ${refused} tamperings of an engine-built ${what} refused before signing`);
+  };
+  const otherPool = (p) => {
+    const tx = CSL.Transaction.from_hex(p.cbor);
+    const body = tx.body();
+    const d = body.certs().get(0).as_stake_delegation();
+    const certs = CSL.Certificates.new();
+    certs.add(CSL.Certificate.new_stake_delegation(CSL.StakeDelegation.new(d.stake_credential(), CSL.Ed25519KeyHash.from_hex('ab'.repeat(28)))));
+    body.set_certs(certs);
+    return [['a delegation to another pool', CSL.Transaction.new(body, tx.witness_set(), tx.auxiliary_data()).to_hex()]];
+  };
+  await loop('delegation', (k, hit) => k.delegate(spy(a, hit), pool, { cosigners: [spy(b, hit)] }), otherPool);
+  await vault.delegate(a, pool, { cosigners: [b] });
+  // Rewards take epochs on DevKit: collecting the balance (zero now) still runs @Withdraw and its program.
+  const amount = await rt.chain.rewards(vault.rewardAddress);
+  await loop('reward collection', (k, hit) => k.collect(spy(a, hit), { amount, cosigners: [spy(c, hit)] }));
+  await assert.rejects(vault.collect(a, { amount: amount + 1n, cosigners: [c] }));   // not the balance: the ledger and the validator refuse
+  const collected = await vault.collect(a, { amount, cosigners: [c] });
+  assert.equal(collected.report.withdrawn, amount);
+  await v.call(b, 'close', {}, {}, { cosigners: [c] });
+  assert.equal(await v.state(), null);
 });
 
 test('Pool: @Batched intents locked by users, one cancelled, the rest applied by a batcher', { skip, timeout: 900_000 }, async () => {

@@ -120,7 +120,8 @@ public final class Call<S> {
     void applyAuthorization(com.bloxbean.cardano.client.quicktx.Tx tx) {
         if (authorization == null || authorization.rewardAddress() == null) return;
         tx.withdraw(authorization.rewardAddress(), java.math.BigInteger.ZERO,
-                org.julclang.clientlib.PlutusDataAdapter.convert(authorization.redeemer()));
+                authorization.redeemer() instanceof com.bloxbean.cardano.client.plutus.spec.PlutusData d ? d
+                        : org.julclang.clientlib.PlutusDataAdapter.convert(authorization.redeemer()));
         tx.attachRewardValidator(authorization.script());
     }
 

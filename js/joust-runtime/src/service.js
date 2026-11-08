@@ -107,6 +107,16 @@ export function engineService(o) {
       return r.cbor ? { cbor: r.cbor, txHash: r.txHash, signers: r.signers, plan: JSON.parse(r.plan) } : null;
     },
 
+    /**
+     * A governor script (ADR-0009 D3): {@code deployment} gives { script (parameters applied), hash, rewardAddress };
+     * {@code register} the unsigned transaction registering its stake credential, paid from {@code address}.
+     */
+    async governor(kind, script, params, address) {
+      const r = await run({ contract: 'joust:governor', kind, script, params, address });
+      if (kind === 'deployment') return JSON.parse(r.plan);
+      return { cbor: r.cbor, txHash: r.txHash, signers: r.signers, plan: JSON.parse(r.plan) };
+    },
+
     /** How many engine runs each prepare took (needs fetched one at a time; ADR-0015 D5). */
     rounds,
   };

@@ -7,6 +7,8 @@ import { verifyPrepared, redeemerDefs } from './verify.js';
 import { walletView, assemble } from './wallet.js';
 import { planOf, planDifference } from './plan.js';
 import { verifyIntent, verifyCancel, verifyBatch } from './intents.js';
+import { verifyPurpose, purposeOf } from './purposes.js';
+import { verifyRegistration, rewardAddressOf } from './governors.js';
 
 export class VerificationError extends Error {
   constructor(problems, report) {
@@ -68,6 +70,31 @@ export async function cosignersOf(CSL, apis = [], wallet, networkId) {
   return { apis: apis ?? [], keys };
 }
 
+/**
+ * A call's governor: {@code call.governor = { governor: { script, hash } (runtime.ensureGovernor), signers: [CIP-30 api] }}.
+ * The signers are keys the governor requires; the caller's wallet may be one (it signs anyway).
+ */
+async function governorOf(CSL, call, wallet, named, networkId) {
+  if (!call.meta.policies?.authorizedBy?.length) throw new Error(`${call.meta.name} takes no governor`);
+  const g = call.governor.governor ?? call.governor;
+  if (!g?.script || !/^[0-9a-f]{56}$/.test(g?.hash ?? '')) throw new Error('a governor is { script, hash } (runtime.ensureGovernor)');
+  const apis = [];
+  const keys = [];
+  const signerKeys = [];
+  for (const a of call.governor.signers ?? []) {
+    const v = await walletView(CSL, a);
+    if (v.networkId !== networkId) throw new Error('a governor signer is on another network');
+    const k = v.keyHashes[0];
+    if (!k) throw new Error('a governor signer without a payment key');
+    if (signerKeys.includes(k)) throw new Error('a governor signer named twice');
+    signerKeys.push(k);
+    if (wallet.keyHashes.includes(k) || named.includes(k)) continue;   // signs already
+    apis.push(a);
+    keys.push(k);
+  }
+  return { script: g.script, hash: g.hash, apis, keys, signerKeys };
+}
+
 /** A method that others sign for: @Quorum, or @AuthorizedBy (a key credential: the key's wallet co-signs). */
 export const signedByOthers = (meta) => !!meta.policies?.quorum || !!meta.policies?.authorizedBy?.length;
 
@@ -85,6 +112,88 @@ export class JoustContract {
     Object.assign(this, { limits: {}, ...o });
     this.codec = codec(o.CSL, o.description);
     this.x = o.description['x-joust'];
+  }
+
+  /** The reward address of the contract's stake credential (a stakeSelf contract's funds are staked to it). */
+  get rewardAddress() {
+    return rewardAddressOf(this.CSL, this.deployment.policy, this.deployment.networkId);
+  }
+
+  /**
+   * Registers the contract's stake credential (ADR-0010; once per deployment; anyone may), paid by {@code api}: the
+   * transaction is checked to be exactly that registration before the wallet signs. Resolves to its hash, or null when
+   * the chain refuses it as registered already.
+   */
+  async registerStake(api) {
+    const { CSL } = this;
+    const wallet = await walletView(CSL, api);
+    if (wallet.networkId !== this.deployment.networkId) throw new Error('the wallet is on another network');
+    if (this.chain.registered && await this.chain.registered(this.rewardAddress) === true) return null;
+    const p = await this.service.prepare({ contract: this.description.preamble.title, kind: 'registerStake', address: fundingAddress(wallet) });
+    const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
+    const { problems } = verifyRegistration({ CSL, txHex: p.cbor, governor: { hash: this.deployment.policy }, wallet,
+      chain: { tip, params }, networkId: this.deployment.networkId, limits: this.limits });
+    if (problems.length) throw new VerificationError(problems, {});
+    const signed = assemble(CSL, p.cbor, await api.signTx(p.cbor, true));
+    try {
+      await api.submitTx(signed.cbor);
+    } catch (e) {
+      if (/StakeKeyRegistered|already registered|StakeKeyAlreadyRegistered/i.test(e.message ?? String(e))) return null;
+      throw e;
+    }
+    await this.chain.awaitTx(signed.txHash);
+    return signed.txHash;
+  }
+
+  /** Delegates the contract's stake to {@code pool} (key hash hex or pool1 bech32): its @Certify handler decides. */
+  delegate(api, pool, opts = {}) {
+    const hex = /^pool1/.test(pool) ? this.CSL.Ed25519KeyHash.from_bech32(pool).to_hex() : pool;
+    if (!/^[0-9a-f]{56}$/.test(hex)) throw new Error('a pool id: 28 bytes hex, or pool1 bech32');
+    return this.runPurpose(api, 'delegate', { pool: hex }, opts);
+  }
+
+  /**
+   * Withdraws the contract's rewards (the whole balance, read from the chain unless {@code opts.amount} gives it)
+   * through its @Withdraw handler, which decides where they go; {@code opts.args} are the handler's arguments.
+   */
+  async collect(api, opts = {}) {
+    const amount = BigInt(opts.amount ?? await this.chain.rewards(this.rewardAddress));
+    return this.runPurpose(api, 'collect', { amount, args: opts.args ?? {} }, opts);
+  }
+
+  /** Prepares, verifies (verifyPurpose), signs (the wallet and its co-signers), submits and confirms a purpose call. */
+  async runPurpose(api, op, what, opts) {
+    const { CSL } = this;
+    const meta = purposeOf(this.description, op === 'delegate' ? 'certify' : 'withdraw');
+    if (!meta) throw new Error(`${this.name} has no ${op === 'delegate' ? '@Certify' : '@Withdraw'} handler`);
+    const wallet = await walletView(CSL, api);
+    if (wallet.networkId !== this.deployment.networkId) throw new Error('the wallet is on another network');
+    const co = await cosignersOf(CSL, opts.cosigners, wallet, this.deployment.networkId);
+    const prepared = await this.service.prepare({
+      contract: this.description.preamble.title, kind: op, address: fundingAddress(wallet),
+      ...(op === 'delegate' ? { pool: what.pool } : { amount: String(what.amount), args: toJson(what.args) }),
+      ...(co.keys.length ? { cosigners: co.keys } : {}),
+    });
+    const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
+    const { problems, report } = await verifyPurpose({ CSL, description: this.description, deployment: this.deployment,
+      txHex: prepared.cbor, wallet, chain: { tip, params, utxo: (r) => this.chain.utxo(r) }, op, ...what,
+      cosignerKeys: co.keys, limits: this.limits });
+    report.plan = planOf(CSL, prepared.cbor);
+    if (prepared.plan) {
+      const d = planDifference(prepared.plan, report.plan);
+      if (d) problems.push('the service\'s plan does not describe its transaction: ' + d);
+    }
+    if (problems.length) throw new VerificationError(problems, report);
+    const txHash = CSL.FixedTransaction.from_hex(prepared.cbor).transaction_hash().to_hex();
+    if (this.onReview) await this.onReview({ contract: this.name, call: { kind: op, meta, ...what }, report, txHash });
+    const witnesses = [await api.signTx(prepared.cbor, true)];
+    for (const c of co.apis) witnesses.push(await c.signTx(prepared.cbor, true));
+    const signed = assemble(CSL, prepared.cbor, ...witnesses);
+    if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
+    const submitted = await api.submitTx(signed.cbor);
+    if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
+    await this.chain.awaitTx(signed.txHash);
+    return { txHash: signed.txHash, report };
   }
 
   get name() {
@@ -124,7 +233,10 @@ export class JoustContract {
     // Co-signers (@Quorum, ADR-0009 D2; @AuthorizedBy keys, D3): other CIP-30 wallets that sign the same transaction.
     const co = await cosignersOf(CSL, call.cosigners, wallet, this.deployment.networkId);
     if (co.apis.length && !signedByOthers(call.meta)) throw new Error(`${call.meta.name} takes no co-signers`);
-    call = { ...call, cosignerKeys: co.keys };
+    // A script governor (@AuthorizedBy with a script credential, ADR-0009 D3): its applied script, and the wallets of
+    // the keys it requires itself (the caller's own counts; others sign the same transaction).
+    const gov = call.governor ? await governorOf(CSL, call, wallet, co.keys, this.deployment.networkId) : null;
+    call = { ...call, cosignerKeys: [...co.keys, ...(gov?.keys ?? [])], ...(gov ? { governor: { hash: gov.hash } } : {}) };
     const prepared = await this.service.prepare({
       contract: this.description.preamble.title,
       kind: call.kind,
@@ -135,6 +247,7 @@ export class JoustContract {
       pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: call.pay?.assets ?? [] }),
       address: fundingAddress(wallet),
       ...(co.keys.length ? { cosigners: co.keys } : {}),
+      ...(gov ? { governor: { script: gov.script, signers: gov.signerKeys } } : {}),
     });
     const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
     const { problems, report } = await verifyPrepared({
@@ -155,7 +268,7 @@ export class JoustContract {
     const txHash = CSL.FixedTransaction.from_hex(prepared.cbor).transaction_hash().to_hex();
     if (this.onReview) await this.onReview({ contract: this.name, call, report, txHash });
     const witnesses = [await api.signTx(prepared.cbor, true)];
-    for (const c of co.apis) witnesses.push(await c.signTx(prepared.cbor, true));
+    for (const c of [...co.apis, ...(gov?.apis ?? [])]) witnesses.push(await c.signTx(prepared.cbor, true));
     const signed = assemble(CSL, prepared.cbor, ...witnesses);
     if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
     const submitted = await api.submitTx(signed.cbor);
@@ -331,7 +444,7 @@ export class JoustInstance {
 
   /** An action or destroy on this instance. */
   call(api, name, args = {}, pay = {}, opts = {}) {
-    return this.contract.run(api, { kind: this.kindOf(name, ['action', 'destroy']), meta: this.contract.meta(name, ['action', 'destroy']), args, pay, instance: this.id, cosigners: opts.cosigners });
+    return this.contract.run(api, { kind: this.kindOf(name, ['action', 'destroy']), meta: this.contract.meta(name, ['action', 'destroy']), args, pay, instance: this.id, cosigners: opts.cosigners, governor: opts.governor });
   }
 
   /**

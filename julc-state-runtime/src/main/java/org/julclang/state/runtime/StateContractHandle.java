@@ -63,7 +63,7 @@ public final class StateContractHandle<S> {
      */
     public String delegateTo(String poolId, Account caller, Account... cosigners) {
         Utxo ref = ensureReferenceScript(caller);
-        var tx = new Tx().readFrom(ref)
+        var tx = TxRunner.newTx().readFrom(ref)   // a composition's shared transaction, if inside one (ADR-0013 D1)
                 .delegateTo(new com.bloxbean.cardano.client.address.Address(rewardAddress), poolId,
                         com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0));
         return submitPurpose(tx, caller, cosigners, "delegate the " + spec.name() + " stake");
@@ -87,12 +87,14 @@ public final class StateContractHandle<S> {
     public String withdrawRewards(Object rewardsRedeemer, BigInteger amount, org.julclang.core.types.JulcList<org.julclang.state.api.Send> sends,
                                   Account caller, Account... cosigners) {
         Utxo ref = ensureReferenceScript(caller);
-        var tx = new Tx().readFrom(ref).withdraw(rewardAddress, amount, PlutusDataAdapter.convert(rewardsRedeemer));
+        var tx = TxRunner.newTx().readFrom(ref).withdraw(rewardAddress, amount,
+                rewardsRedeemer instanceof com.bloxbean.cardano.client.plutus.spec.PlutusData d ? d : PlutusDataAdapter.convert(rewardsRedeemer));
         byte[] h = hashOf(script);
         var by = new TxOutRef(new TxId(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(h)), BigInteger.valueOf(-1));
         var claims = new java.util.ArrayList<org.julclang.state.api.OutputClaim>();
         var expected = new java.util.ArrayList<TxRunner.ExpectedSend>();
-        int index = 0;
+        var cap = TxRunner.capture();
+        int index = TxRunner.outputOffset();   // inside a composition, after the outputs before this call
         for (var snd : sends) {
             String addr = LedgerAddresses.toBech32(snd.to(), runtime.network());
             var amounts = AssetTx.amounts(snd.value());
@@ -104,7 +106,9 @@ public final class StateContractHandle<S> {
         if (!claims.isEmpty()) {
             org.julclang.core.types.JulcList<org.julclang.state.api.OutputClaim> list = org.julclang.core.types.JulcList.empty();
             for (int i = claims.size() - 1; i >= 0; i--) list = list.prepend(claims.get(i));
-            runtime.outputVerifier().attachRedeemer(tx, new org.julclang.state.api.OutputClaims(list, org.julclang.core.types.JulcList.empty()), caller);
+            // In a composition (a wallet's prepare), the composition attaches every call's claims in one redeemer.
+            if (cap != null) cap.claims.addAll(claims);
+            else runtime.outputVerifier().attachRedeemer(tx, new org.julclang.state.api.OutputClaims(list, org.julclang.core.types.JulcList.empty()), caller);
         }
         var signers = new java.util.ArrayList<byte[]>();
         signers.add(Keys.pkh(caller));

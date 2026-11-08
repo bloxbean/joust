@@ -14,7 +14,12 @@ import org.junit.jupiter.api.Test;
 import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.julclang.state.toolchain.Toolchain;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -74,5 +79,57 @@ class DescribedTreasuryDevnetTest {
         treasury.call(rt, a, "destroy", "close", id, null, JSON.readTree("{\"to\":\"" + council.get(0).asText() + "\"}"),
                 BigInteger.ZERO, params, null, null, List.of(b));
         System.out.println("[M3] Treasury (@Quorum co-signers, @AuthorizedBy key, events in redeemers) through the described dispatcher on DevKit");
+    }
+
+    /**
+     * @AuthorizedBy with a script credential (ADR-0009 D3): the Guardian governor, built by the toolchain as a plain JuLC
+     * validator with its owner applied, approves a freeze through a zero withdrawal whose Approvals redeemer names it.
+     */
+    @Test
+    void scriptGovernor() throws Exception {
+        Map<String, String> files = new LinkedHashMap<>();
+        Path root = Path.of("../examples/treasury/src/main/java");
+        try (var s = Files.walk(root)) {
+            for (Path p : s.filter(f -> f.toString().endsWith(".java")).toList()) files.put(root.relativize(p).toString(), Files.readString(p));
+        }
+        var r = Toolchain.build(files, Map.of());
+        assertTrue(r.ok(), String.valueOf(r.diagnostics()));
+        var c = r.contracts().get(0);
+        var treasury = new DescribedContract(JSON.readTree(c.descriptionJson()), c.scriptCborHex(), new UplcTransitions(c.transitions()));
+        var g = r.validators().stream().filter(v -> v.name().equals("Guardian")).findFirst().orElseThrow();
+        assertEquals("withdraw", g.purpose());
+        var rt = DevKit.runtime();
+        var a = DevKit.fundedAccount(300);
+        var owner = DevKit.fundedAccount(50);
+        var stranger = DevKit.fundedAccount(50);
+        var guardian = applied(g.scriptCborHex(), Keys.pkh(owner));
+        DevKit.registerScriptStake(guardian, owner);
+        String hash = HexUtil.encodeHexString(guardian.getScriptHash());
+        var params = JSON.readTree("{\"guardian\":{\"$variant\":\"ScriptCredential\",\"hash\":\"" + hash + "\"},\"maxPayout\":\"50000000\"}");
+        var openArgs = JSON.createObjectNode();
+        openArgs.set("council", JSON.createArrayNode().add(HexUtil.encodeHexString(Keys.pkh(a))));
+        openArgs.put("quorum", "1");
+        String id = treasury.call(rt, a, "init", "open", null, null, openArgs, ADA.multiply(BigInteger.valueOf(20)), params);
+        var freeze = JSON.readTree("{\"frozen\":true}");
+        assertThrows(IllegalArgumentException.class, () -> treasury.call(rt, a, "action", "freeze", id, null, freeze, BigInteger.ZERO, params),
+                "a script credential needs its governor");
+        var other = new DescribedContract.Governor(applied(g.scriptCborHex(), Keys.pkh(stranger)), List.of(stranger));
+        assertThrows(IllegalArgumentException.class, () -> treasury.call(rt, a, "action", "freeze", id, null, freeze, BigInteger.ZERO,
+                params, null, null, List.of(), other), "another script is not the guardian");
+        var unsigned = new DescribedContract.Governor(guardian, List.of());
+        assertThrows(RuntimeException.class, () -> treasury.call(rt, a, "action", "freeze", id, null, freeze, BigInteger.ZERO,
+                params, null, null, List.of(), unsigned), "the guardian's owner must sign (its own rule)");
+        treasury.call(rt, a, "action", "freeze", id, null, freeze, BigInteger.ZERO, params, null, null, List.of(),
+                new DescribedContract.Governor(guardian, List.of(owner)));
+        assertTrue(treasury.state(rt, id, params).get("frozen").asBoolean());
+        assertThrows(IllegalArgumentException.class, () -> treasury.call(rt, a, "action", "fund", id, null, JSON.createObjectNode(),
+                ADA, params, null, null, List.of(), new DescribedContract.Governor(guardian, List.of(owner))), "fund takes no governor");
+        System.out.println("[M3] Treasury: a script governor (Guardian, built by the toolchain) approves @AuthorizedBy on DevKit");
+    }
+
+    /** The plain validator's script with one byte-string parameter applied. */
+    static com.bloxbean.cardano.client.plutus.spec.PlutusScript applied(String cbor, byte[] param) {
+        return org.julclang.clientlib.JulcScriptAdapter.fromProgram(org.julclang.clientlib.JulcScriptAdapter.toProgram(cbor)
+                .applyParams(org.julclang.core.PlutusData.bytes(param)));
     }
 }

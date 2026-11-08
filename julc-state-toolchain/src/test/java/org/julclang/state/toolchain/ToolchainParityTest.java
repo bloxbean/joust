@@ -21,6 +21,9 @@ class ToolchainParityTest {
 
     static final Path EXAMPLES = Path.of("../examples");
     static final ObjectMapper JSON = new ObjectMapper();
+    /** A plain JuLC validator's source: one of JuLC's validator annotations. */
+    static final java.util.regex.Pattern PLAIN_VALIDATOR = java.util.regex.Pattern.compile(
+            "^@(Spending|Minting|Withdraw|Certifying|Voting|Proposing|Multi)Validator\\b", java.util.regex.Pattern.MULTILINE);
 
     @ParameterizedTest
     @ValueSource(strings = {"counter", "bank", "vault", "escrow", "crowdfund", "dsl", "guild", "token", "treasury", "market", "fees",
@@ -35,7 +38,8 @@ class ToolchainParityTest {
                 for (Path p : s.filter(f -> f.toString().endsWith(".java") || f.toString().endsWith(".jsc")).toList()) {
                     String text = Files.readString(p);
                     // Only contract sources (and their own libraries); apps and helpers need the JVM runtime.
-                    if (p.toString().endsWith(".jsc") || text.contains("@StateContract") || text.contains("@OnchainLibrary")) {
+                    if (p.toString().endsWith(".jsc") || text.contains("@StateContract") || text.contains("@OnchainLibrary")
+                            || PLAIN_VALIDATOR.matcher(text).find()) {
                         files.put(root.relativize(p).toString(), text);
                     }
                 }
@@ -60,6 +64,13 @@ class ToolchainParityTest {
             // The description.
             assertEquals(Files.readString(classes.resolve("META-INF/joust/" + fq + ".json")), c.descriptionJson(), fq + ": description");
             System.out.printf("[I1] %-45s %6d bytes  %s%n", fq, c.scriptSizeBytes(), c.scriptHash());
+        }
+        // The plain validators (governors, ...), byte for byte as JuLC's annotation processor compiles them.
+        for (var v : r.validators()) {
+            var plutus = JSON.readTree(classes.resolve("META-INF/plutus/" + v.name() + ".plutus.json").toFile());
+            assertEquals(plutus.get("cborHex").asText(), v.scriptCborHex(), v.name() + ": script bytes");
+            System.out.printf("[I1] %-45s %6d bytes  %s (%s, params %s)%n", v.packageName() + "." + v.name(), v.scriptSizeBytes(),
+                    v.scriptHash(), v.purpose(), v.params());
         }
     }
 }

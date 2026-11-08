@@ -111,7 +111,7 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
     if (a.policies?.quorum || a.policies?.authorizedBy?.length) {
       // @Quorum: the other council members' wallets co-sign (the caller counts); @AuthorizedBy: the key's wallet.
       js(`  ${id(a.name)}(wallet, args = {}${a.payable ? ', pay = {}' : ''}, opts = {}) { return this.i.call(wallet, ${JSON.stringify(a.name)}, args, ${a.payable ? 'pay' : '{}'}, opts); }`);
-      ts.push(`  ${id(a.name)}(wallet: Cip30Api, args: ${argsType(a)}${payParam(a)}, opts?: { cosigners?: Cip30Api[] }): Promise<CallResult>;`);
+      ts.push(`  ${id(a.name)}(wallet: Cip30Api, args: ${argsType(a)}${payParam(a)}, opts?: { cosigners?: Cip30Api[]; governor?: { governor: { script: string; hash: string }; signers?: Cip30Api[] } }): Promise<CallResult>;`);
     } else {
       js(`  ${id(a.name)}(wallet, args = {}${a.payable ? ', pay = {}' : ''}) { return this.i.call(wallet, ${JSON.stringify(a.name)}, args${a.payable ? ', pay' : ''}); }`);
       ts.push(`  ${id(a.name)}(wallet: Cip30Api, args${a.args.length || a.payable ? '' : '?'}: ${argsType(a)}${payParam(a)}): Promise<CallResult>;`);

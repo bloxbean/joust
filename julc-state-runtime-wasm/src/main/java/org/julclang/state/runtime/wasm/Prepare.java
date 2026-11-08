@@ -74,6 +74,7 @@ public final class Prepare {
             if (call.has("calls")) return composed(r, call);
             String contract = call.path("contract").asText();
             if (contract.equals("joust:mapVerifier") || contract.equals("joust:outputVerifier")) return verifier(r, call, contract);
+            if (contract.equals("joust:governor")) return governor(r, call);
             // Only the called contract is loaded: the bundle may hold others this engine cannot serve yet.
             DescribedContract dc = null;
             for (Contract c : r.contracts()) {
@@ -129,6 +130,21 @@ public final class Prepare {
                         JSON.writeValueAsString(org.julclang.state.runtime.TxPlan.of(tx)), null, null, null, Map.of());
             }
             String kind = call.path("kind").asText();
+            if (kind.equals("registerStake")) {
+                // The contract's stake credential (ADR-0010): a plain registration, once per deployment.
+                return registration(backend, dc.rewardAddress(rt, call.get("params")), call.path("address").asText());
+            }
+            if (kind.equals("delegate") || kind.equals("collect")) {
+                // Purpose handlers (ADR-0010; ADR-0015 M3): @Certify (a delegation), @Withdraw (the rewards, sent).
+                final DescribedContract d = dc;
+                var cos = cosigners(call, network);
+                PreparedTx p = Compose.of(rt, wallet).add(() -> {
+                    if (kind.equals("delegate")) d.delegate(rt, wallet, call.get("params"), call.path("pool").asText(null), cos);
+                    else d.collect(rt, wallet, call.get("params"), new BigInteger(call.path("amount").asText("0")), call.get("args"), cos);
+                }).prepare();
+                return new Result(true, p.cbor(), p.txHash(), null, p.validTo(), p.requiredSigners(),
+                        JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
+            }
             if (kind.equals("pendingIntents")) {
                 // An instance's pending intents (ADR-0004), read through the snapshot: no transaction.
                 var list = dc.pendingIntents(rt, call.path("instance").asText(null), call.get("params"));
@@ -169,7 +185,7 @@ public final class Prepare {
             PreparedTx p = Compose.of(rt, wallet).add(() -> made[0] = target.call(rt, wallet, call.path("kind").asText(),
                     call.path("method").asText(), call.path("instance").asText(null), call.path("object").asText(null),
                     call.path("args"), pay, call.get("params"), call.path("pay").get("assets"), call.path("into").asText(null),
-                    cosigners)).prepare();
+                    cosigners, governorOf(call, network))).prepare();
             return new Result(true, p.cbor(), p.txHash(), made[0], p.validTo(), p.requiredSigners(),
                     JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
         } catch (Throwable t) {
@@ -191,6 +207,64 @@ public final class Prepare {
             out.add(WalletAccount.of(com.bloxbean.cardano.client.address.AddressProvider.getEntAddress(cred, network).toBech32(), network));
         }
         return out;
+    }
+
+    /**
+     * An {@code @AuthorizedBy} call's governor (ADR-0009 D3): {@code governor: { script, signers }}, the applied script
+     * (CBOR hex) and the key hashes it requires (their wallets sign), or null.
+     */
+    private static DescribedContract.Governor governorOf(JsonNode call, Network network) {
+        JsonNode g = call.get("governor");
+        if (g == null || g.isNull()) return null;
+        var script = com.bloxbean.cardano.client.plutus.spec.PlutusV3Script.builder().cborHex(g.path("script").asText()).build();
+        var signers = new java.util.ArrayList<com.bloxbean.cardano.client.account.Account>();
+        for (JsonNode k : g.path("signers")) {
+            var cred = com.bloxbean.cardano.client.address.Credential.fromKey(com.bloxbean.cardano.client.util.HexUtil.decodeHexString(k.asText()));
+            signers.add(WalletAccount.of(com.bloxbean.cardano.client.address.AddressProvider.getEntAddress(cred, network).toBech32(), network));
+        }
+        return new DescribedContract.Governor(script, signers);
+    }
+
+    /**
+     * A governor script (ADR-0009 D3): {@code { contract: "joust:governor", kind, script, params: [Data hex] }}.
+     * {@code deployment}: the script with its parameters applied, its hash and reward address; {@code register}: the
+     * transaction registering its stake credential (once per network, so it can withdraw zero), paid by {@code address}.
+     */
+    private static Result governor(Request r, JsonNode call) throws Exception {
+        Network network = r.networkId() == 1 ? Networks.mainnet() : Networks.testnet();
+        var program = org.julclang.clientlib.JulcScriptAdapter.toProgram(call.path("script").asText());
+        var params = new java.util.ArrayList<org.julclang.core.PlutusData>();
+        for (JsonNode p : call.path("params")) {
+            params.add(org.julclang.core.cbor.PlutusDataCborDecoder.decode(java.util.HexFormat.of().parseHex(p.asText())));
+        }
+        if (!params.isEmpty()) program = program.applyParams(params.toArray(new org.julclang.core.PlutusData[0]));
+        var script = org.julclang.clientlib.JulcScriptAdapter.fromProgram(program);
+        String hash = com.bloxbean.cardano.client.util.HexUtil.encodeHexString(script.getScriptHash());
+        String reward = com.bloxbean.cardano.client.address.AddressProvider.getRewardAddress(script, network).toBech32();
+        if (call.path("kind").asText().equals("deployment")) {
+            var d = JSON.createObjectNode();
+            d.put("contract", "joust:governor");
+            d.put("script", script.getCborHex());
+            d.put("hash", hash);
+            d.put("rewardAddress", reward);
+            return new Result(true, null, null, null, -1, List.of(), d.toString(), null, null, null, Map.of());
+        }
+        if (!call.path("kind").asText().equals("register")) return refused("a governor has no " + call.path("kind").asText());
+        return registration(new SnapshotBackend(Snapshot.fromJson(r.snapshot())), reward, call.path("address").asText());
+    }
+
+    /** The unsigned transaction registering the stake credential of {@code reward}, paid from {@code payer}. */
+    private static Result registration(SnapshotBackend backend, String reward, String payer) throws Exception {
+        var tx = new com.bloxbean.cardano.client.quicktx.Tx().registerStakeAddress(reward).from(payer);
+        var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend).compose(tx)
+                .feePayer(payer)
+                .additionalSignersCount(1)
+                .build();
+        byte[] pkh = new com.bloxbean.cardano.client.address.Address(payer).getPaymentCredentialHash().orElseThrow();
+        return new Result(true, com.bloxbean.cardano.client.util.HexUtil.encodeHexString(built.serialize()),
+                com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash(built), null, -1,
+                List.of(com.bloxbean.cardano.client.util.HexUtil.encodeHexString(pkh)),
+                JSON.writeValueAsString(org.julclang.state.runtime.TxPlan.of(built)), null, null, null, Map.of());
     }
 
     /** The described contract called {@code title}, from the request's contracts (only it is loaded). */
@@ -241,7 +315,7 @@ public final class Prepare {
                 made.add(null);
                 compose.add(() -> made.set(slot, dc.call(rt, wallet, c.path("kind").asText(), c.path("method").asText(),
                         c.path("instance").asText(null), c.path("object").asText(null), c.path("args"), pay, c.get("params"),
-                        c.path("pay").get("assets"), c.path("into").asText(null), cosigners(c, network))));
+                        c.path("pay").get("assets"), c.path("into").asText(null), cosigners(c, network), governorOf(c, network))));
             }
             PreparedTx p = compose.prepare();
             return new Result(true, p.cbor(), p.txHash(), JSON.writeValueAsString(made), p.validTo(), p.requiredSigners(),

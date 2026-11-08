@@ -2,7 +2,7 @@
 // engine (Wasm) from the chain as a Blockfrost-style API serves it; @julclang/state-client verifies each transaction
 // against the contract's description before the wallet signs it (D7), and submits it.
 
-import { blockfrostChain, assemble, planOf, toJson, runComposed } from '@julclang/state-client';
+import { blockfrostChain, assemble, planOf, toJson, runComposed, walletView, governorParams, verifyRegistration } from '@julclang/state-client';
 import { blockfrostApi, fetchNeed } from './snapshot.js';
 import { engineService } from './service.js';
 
@@ -24,6 +24,7 @@ export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-clien
  * @param o.clock      { zeroSlot, zeroTimeMs, slotLengthMs } (devkitClock(), or the network's)
  * @param o.networkId  0 (test networks) or 1 (mainnet)
  * @param o.deployments  { [contract]: deployment } (joust deploy writes them)
+ * @param o.validators   build/joust/validators.json (joust build): plain JuLC validators, such as governors
  */
 export function joustRuntime(o) {
   const api = blockfrostApi(o.chainUrl, { projectId: o.projectId, fetchImpl: o.fetchImpl });
@@ -105,8 +106,46 @@ export function joustRuntime(o) {
     return v;
   }
 
+  const governors = {};
+
   return {
     api, chain, service, deployments,
+
+    /**
+     * A script governor for @AuthorizedBy (ADR-0009 D3): the plain validator {@code name} (validators.json) with its
+     * parameters applied (JSON by their Java types), its stake credential registered on this network first if it is
+     * not yet (paid and signed by {@code wallet}; the registration is checked to be exactly that before it signs).
+     * Returns { name, script, hash, rewardAddress }: give it to a call as opts.governor = { governor, signers }.
+     */
+    async ensureGovernor(name, params, wallet) {
+      const CSL = o.CSL;
+      const v = (o.validators ?? []).find((x) => x.name === name || `${x.package}.${x.name}` === name);
+      if (!v) throw new Error(`no validator ${name} (pass validators: build/joust/validators.json)`);
+      if (v.purpose !== 'withdraw' && v.purpose !== 'multi') throw new Error(`${name} is a ${v.purpose} validator, not a governor (withdraw)`);
+      const ps = governorParams(CSL, v, params);
+      const key = name + '|' + ps.join(',');
+      if (governors[key]) return governors[key];
+      const payer = CSL.Address.from_hex(await wallet.getChangeAddress()).to_bech32();
+      const d = await engine.governor('deployment', v.script, ps, payer);
+      const g = { name: v.name, script: d.script, hash: d.hash, rewardAddress: d.rewardAddress };
+      if (await chain.registered(g.rewardAddress) !== true) {
+        const p = await engine.governor('register', v.script, ps, payer);
+        const view = await walletView(CSL, wallet);
+        const { problems } = verifyRegistration({ CSL, txHex: p.cbor, governor: g, wallet: view, chain: { params: await chain.params(), tip: await chain.tip() },
+          networkId: o.networkId ?? 0 });
+        if (problems.length) throw new Error(`the ${name} registration is refused: ${problems.join('; ')}`);
+        const signed = assemble(CSL, p.cbor, await wallet.signTx(p.cbor, true));
+        try {
+          await chain.submit(signed.cbor);
+          await chain.awaitTx(signed.txHash);
+        } catch (e) {
+          // An API that cannot tell (Yaci Store): the ledger refuses a second registration, which is what we wanted.
+          if (!/StakeKeyRegistered|already registered|StakeKeyAlreadyRegistered/i.test(e.message)) throw e;
+        }
+      }
+      governors[key] = g;
+      return g;
+    },
     /**
      * The deployment of {@code contract}, publishing its reference script first if it is not on chain yet (paid and
      * signed by {@code wallet}, a CIP-30 API). The publication is a plain payment to the contract's own address carrying
@@ -141,7 +180,8 @@ export function joustRuntime(o) {
       if (usesMaps(desc)) d.mapVerifier = await ensureVerifier('joust:mapVerifier', wallet, payer);
       // Sends go through JOUST's output verifier (ADR-0007 D5), published and registered once per network.
       // Deposits and @Receives are claimed through it too (ADR-0011 D3).
-      if ([...(desc?.['x-joust']?.actions ?? [])].some((a) => a.returns?.sends || a.returns?.deposits || a.policies?.receives)) {
+      if ([...(desc?.['x-joust']?.actions ?? []), ...(desc?.['x-joust']?.purposes ?? [])]
+        .some((a) => a.returns?.sends || a.returns?.deposits || a.policies?.receives)) {
         d.outputVerifier = await ensureVerifier('joust:outputVerifier', wallet, payer);
       }
       deployments[d.contract] = d;

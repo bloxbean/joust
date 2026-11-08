@@ -105,6 +105,17 @@ public final class TransitionsGenerator {
             body.line(code);
             methods.add(t.method());
         }
+        // @Withdraw (ADR-0010): its program gives the reward sends for an amount (ADR-0015 M3).
+        boolean sendsImport = c.assetAware();
+        var withdraw = c.purpose("WITHDRAW");
+        if (withdraw.isPresent() && !withdraw.get().hasCtx() && !methods.contains(withdraw.get().method())) {
+            String code = withdrawProgram(withdraw.get());
+            if (code != null) {
+                body.line(code);
+                methods.add(withdraw.get().method());
+                sendsImport = true;
+            }
+        }
         w.line("package " + c.packageName() + ";").blank();
         w.line("import java.math.BigInteger;");
         w.line("import java.util.Optional;");
@@ -114,6 +125,7 @@ public final class TransitionsGenerator {
         w.line("import org.julclang.state.api.Ctx;");
         w.line("import org.julclang.state.api.Payout;");
         w.line("import org.julclang.state.api.Payouts;");
+        if (sendsImport && !c.assetAware()) w.line("import org.julclang.state.api.Send;");
         if (c.assetAware()) {
             w.line("import org.julclang.ledger.Value;");
             w.line("import org.julclang.state.api.Assets;");
@@ -222,6 +234,34 @@ public final class TransitionsGenerator {
         sb.append("    public static ").append(step).append(" ").append(t.method()).append("(").append(targetType)
                 .append(" target, ").append(sharedType).append(" shared, ").append(argsRecord).append(" args, Ctx ctx) {\n");
         sb.append("        ").append(result).append("\n    }\n");
+        return sb.toString();
+    }
+
+    /**
+     * The {@code @Withdraw} handler as a program: {@code args = Constr 0 [params, amount, args...]}; it returns the
+     * handler's {@code JulcList<Send>} (the validator checks the transaction pays exactly those).
+     */
+    private String withdrawProgram(org.julclang.state.processor.ir.ContractIR.PurposeIR pr) {
+        ExecutableElement m = method(pr.method());
+        if (m == null || m.getParameters().size() < 2) return null;
+        String argsRecord = cap(pr.method()) + "Args";
+        var fields = new ArrayList<String>();
+        fields.add(render(m.getParameters().get(0).asType()) + " joustParams");
+        fields.add("BigInteger joustAmount");
+        var call = new ArrayList<String>(List.of("args.joustParams()", "args.joustAmount()"));
+        for (ParamIR p : pr.args()) {
+            fields.add(paramType(m, p.name()) + " " + p.name());
+            call.add("args." + p.name() + "()");
+        }
+        var sb = new StringBuilder();
+        String result = cap(pr.method()) + "Sends";
+        sb.append("    public record ").append(argsRecord).append("(").append(String.join(", ", fields)).append(") {}\n\n");
+        sb.append("    public record ").append(result).append("(JulcList<Send> sends) {}\n\n");
+        sb.append("    /** Runs {@link ").append(c.name()).append("#").append(pr.method()).append("} (@Withdraw): Constr 0 [the reward sends]. */\n");
+        sb.append("    public static ").append(result).append(" ").append(pr.method()).append("(PlutusData target, PlutusData shared, ")
+                .append(argsRecord).append(" args, Ctx ctx) {\n");
+        sb.append("        return new ").append(result).append("(").append(c.name()).append(".").append(pr.method()).append("(")
+                .append(String.join(", ", call)).append("));\n    }\n");
         return sb.toString();
     }
 

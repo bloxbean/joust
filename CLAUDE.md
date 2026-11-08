@@ -121,6 +121,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `fixtures/m0` holds the oracle (each DevKit transaction, unsigned, with the chain reads behind it, results
   content-addressed in `blobs/`). Re-record with DevKit up: `./gradlew :examples:<m>:test -PjoustFixtures` (or all
   examples); `FixturesTest` checks the oracle. `StateRuntime.Builder.onBuilt` observes every built transaction.
+- ADR-0015 M3: the toolchain also compiles plain JuLC validators (governors) into `validators.json`; Web Image needs
+  reachability metadata for every new record it serialises. Yaci Store cannot tell whether a stake credential is
+  registered (`/accounts` answers alike): register and treat "already registered" as success. Runtime code that builds
+  a transaction must start from `TxRunner.newTx()` (else a wallet's prepare captures nothing). DevKit pays no rewards
+  within a test (epochs): staking flows collect a zero balance.
 - ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). JuLC
   pinned at `deb72bb` (branch `feat/joust-embedder-attribution`, bloxbean/julc#313, stacked on #311: `JavacFrontend.attribute` public).

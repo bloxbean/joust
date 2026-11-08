@@ -56,8 +56,30 @@ public final class Toolchain {
                            String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson,
                            String transitionsSource, Map<String, String> transitions) {}
 
-    /** The build's result: the contracts, and every diagnostic; {@code ok} when there is no error. */
-    public record Result(boolean ok, List<Contract> contracts, List<Diagnostic> diagnostics) {}
+    /** A {@code @Param} of a plain validator: its name and Java type, as JuLC reports them. */
+    public record Param(String name, String type) {}
+
+    /**
+     * A plain JuLC validator of the project ({@code @WithdrawValidator}, {@code @SpendingValidator}, ...), compiled as
+     * JuLC's annotation processor does: a governor for {@code @AuthorizedBy} (ADR-0009 D3), for instance. {@code purpose}:
+     * spend, mint, withdraw, publish, vote, propose or multi; {@code scriptHash} is empty while it takes parameters.
+     */
+    public record Validator(String name, String packageName, String purpose, String scriptCborHex, String scriptHash,
+                            int scriptSizeBytes, List<Param> params) {}
+
+    /** The build's result: the contracts, the plain validators, and every diagnostic; {@code ok} when there is no error. */
+    public record Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics) {
+        public Result(boolean ok, List<Contract> contracts, List<Diagnostic> diagnostics) {
+            this(ok, contracts, List.of(), diagnostics);
+        }
+    }
+
+    /** JuLC's validator annotations, by simple name, and the purpose each compiles for. */
+    static final Map<String, String> VALIDATORS = Map.of(
+            "SpendingValidator", "spend", "MintingValidator", "mint", "WithdrawValidator", "withdraw",
+            "CertifyingValidator", "publish", "VotingValidator", "vote", "ProposingValidator", "propose",
+            "MultiValidator", "multi");
+    static final String VALIDATOR_PACKAGE = "org.julclang.stdlib.annotation.";
 
     private Toolchain() {
     }
@@ -105,10 +127,21 @@ public final class Toolchain {
         // 4. Lint, read and generate each @StateContract, as the annotation processor does.
         var env = new AttributedEnvironment(attribution.elements(), attribution.types(), attribution.trees(), options, diagnostics);
         var generated = new ArrayList<JoustGenerators.Generated>();
+        var plain = new ArrayList<Map.Entry<TypeElement, String>>();   // plain validators: the type, its purpose
+        var plainSources = new LinkedHashMap<TypeElement, String>();
         for (CompilationUnitTree unit : attribution.roots()) {
             for (Tree decl : unit.getTypeDecls()) {
                 if (!(decl instanceof ClassTree)) continue;
                 var element = attribution.trees().getElement(new TreePath(new TreePath(unit), decl));
+                if (element instanceof TypeElement type && validatorPurpose(type) != null) {
+                    plain.add(Map.entry(type, validatorPurpose(type)));
+                    try {
+                        plainSources.put(type, unit.getSourceFile().getCharContent(true).toString());
+                    } catch (java.io.IOException e) {
+                        throw new java.io.UncheckedIOException(e);
+                    }
+                    continue;
+                }
                 if (!(element instanceof TypeElement type) || !isStateContract(type)) continue;
                 boolean clean = SubsetLint.lint(attribution.trees(), type, (trees, node, cu, message) -> {
                     long pos = trees.getSourcePositions().getStartPosition(cu, node);
@@ -190,7 +223,39 @@ public final class Toolchain {
                     result.isParameterized() ? "" : JulcScriptAdapter.scriptHash(program),
                     result.scriptSizeBytes(), g.descriptionJson(), transitionsSource, transitions));
         }
-        return new Result(!hasErrors(diagnostics), contracts, diagnostics);
+        // 6. The project's plain validators (governors, ...), compiled as JuLC's annotation processor does.
+        var validators = new ArrayList<Validator>();
+        for (var e : plain) {
+            TypeElement type = e.getKey();
+            String source = plainSources.get(type);
+            var libs = LibrarySourceResolver.resolveLibrarySources(source, libraryPool);
+            var result = compiler.compileContract(source, libs.stream().map(LibrarySource::source).toList()).compileResult();
+            String simple = type.getSimpleName().toString();
+            if (result.hasErrors()) {
+                result.diagnostics().forEach(d -> diagnostics.add(new Diagnostic(Severity.ERROR, String.valueOf(d), simple, -1, "julc")));
+                continue;
+            }
+            var program = result.program();
+            var params = new ArrayList<Param>();
+            result.params().forEach(p -> params.add(new Param(p.name(), p.type())));
+            String pkg = type.getQualifiedName().toString();
+            pkg = pkg.contains(".") ? pkg.substring(0, pkg.lastIndexOf('.')) : "";
+            validators.add(new Validator(simple, pkg, e.getValue(), JulcScriptAdapter.fromProgram(program).getCborHex(),
+                    result.isParameterized() ? "" : JulcScriptAdapter.scriptHash(program), result.scriptSizeBytes(),
+                    List.copyOf(params)));
+        }
+        return new Result(!hasErrors(diagnostics), contracts, validators, diagnostics);
+    }
+
+    /** The purpose of a plain JuLC validator (its annotation), or null for any other type. */
+    private static String validatorPurpose(TypeElement type) {
+        for (var a : type.getAnnotationMirrors()) {
+            String n = ((TypeElement) a.getAnnotationType().asElement()).getQualifiedName().toString();
+            if (n.startsWith(VALIDATOR_PACKAGE) && VALIDATORS.containsKey(n.substring(VALIDATOR_PACKAGE.length()))) {
+                return VALIDATORS.get(n.substring(VALIDATOR_PACKAGE.length()));
+            }
+        }
+        return null;
     }
 
     /**
