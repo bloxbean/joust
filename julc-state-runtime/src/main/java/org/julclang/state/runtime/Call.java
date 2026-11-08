@@ -113,11 +113,11 @@ public final class Call<S> {
     }
 
     /** Adds the authorization's zero withdrawal, if it is a script (ADR-0009 D3). */
-    void applyReads(com.bloxbean.cardano.client.quicktx.ScriptTx tx) {
+    void applyReads(com.bloxbean.cardano.client.quicktx.Tx tx) {
         for (var u : referenceInputs) tx.readFrom(u);
     }
 
-    void applyAuthorization(com.bloxbean.cardano.client.quicktx.ScriptTx tx) {
+    void applyAuthorization(com.bloxbean.cardano.client.quicktx.Tx tx) {
         if (authorization == null || authorization.rewardAddress() == null) return;
         tx.withdraw(authorization.rewardAddress(), java.math.BigInteger.ZERO,
                 org.julclang.clientlib.PlutusDataAdapter.convert(authorization.redeemer()));

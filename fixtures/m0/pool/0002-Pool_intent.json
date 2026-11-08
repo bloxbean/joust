@@ -1,0 +1,82 @@
+{
+  "seq": 2,
+  "what": "Pool intent",
+  "prepared": false,
+  "txHash": "cf3ad92438ca9006fbe88694866e1bd0e424370ff4735ebaadec683a5ffa29df",
+  "unsignedTx": "84aa00d90102818258207201a4c5be2b808d7e018368a50c358f55702c55c4b9fbdbd85fba20eae960e9000182a300581d70d923b2cddc06166ea19ad7b8097ac52aaaed8adc8ae28b015c9b961401821a014fb180a1581cd923b2cddc06166ea19ad7b8097ac52aaaed8adc8ae28b015c9b9614a1581d490c6547d870ed791393ec04890d07346f6c58d74b1404e3e85e2554a201028201d81858abd8799f5820e3d083ff9467a80286327b30d17dc8ed7f43b6f4da534656d24efdc8b26d8639581cf491030db0e1c940fd8881c4e915c4d70aa8edb62a81c7a4f0970bbed8799fd8799f581cf491030db0e1c940fd8881c4e915c4d70aa8edb62a81c7a4f0970bbeffd8799fd8799fd8799f581c7c7886b4bb7156ee9e0c1c0f272fa315a25c2ae4774f2b3012772bdaffffffff1b000001a1b9715b821a01312d00d87a9f1a01312d00ffff82583900f491030db0e1c940fd8881c4e915c4d70aa8edb62a81c7a4f0970bbe7c7886b4bb7156ee9e0c1c0f272fa315a25c2ae4774f2b3012772bda1a04a069f1021a0005c58f09a1581cd923b2cddc06166ea19ad7b8097ac52aaaed8adc8ae28b015c9b9614a1581d490c6547d870ed791393ec04890d07346f6c58d74b1404e3e85e2554a2010b5820a8c2189a99a7d60d8802ce6b82b0c43d5045e8422a443d82651af528622291430dd90102818258207201a4c5be2b808d7e018368a50c358f55702c55c4b9fbdbd85fba20eae960e9000ed9010281581cf491030db0e1c940fd8881c4e915c4d70aa8edb62a81c7a4f0970bbe1082583900f491030db0e1c940fd8881c4e915c4d70aa8edb62a81c7a4f0970bbe7c7886b4bb7156ee9e0c1c0f272fa315a25c2ae4774f2b3012772bda1a05ed38a9111a0008a85712d9010281825820cfdf82cb7feaa12b26819d139419d0da8a0c5a5279f8915131fb589b0cd4d21500a105a182010082d87b9fd8799f58207201a4c5be2b808d7e018368a50c358f55702c55c4b9fbdbd85fba20eae960e900ffd8799f5820e3d083ff9467a80286327b30d17dc8ed7f43b6f4da534656d24efdc8b26d8639581cf491030db0e1c940fd8881c4e915c4d70aa8edb62a81c7a4f0970bbed8799fd8799f581cf491030db0e1c940fd8881c4e915c4d70aa8edb62a81c7a4f0970bbeffd8799fd8799fd8799f581c7c7886b4bb7156ee9e0c1c0f272fa315a25c2ae4774f2b3012772bdaffffffff1b000001a1b9715b821a01312d00d87a9f1a01312d00ffffff821a000575471a07429f2df5f6",
+  "reads": [
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1qr6fzqcdkrsujs8a3zquf6g4cnts428dkc4gr3ay7ztsh0nu0zrtfwm32mhfurqupunjlgc45fwz4erhfu4nqynh90dqme8wtn",
+        50,
+        1
+      ],
+      "result": {
+        "$ref": "77544fd3a563c6c382c9d3b6d369e2c74ca5f4fef80ee06afa664178cbe379f9"
+      }
+    },
+    {
+      "service": "EpochService",
+      "method": "getProtocolParameters",
+      "args": [],
+      "result": {
+        "$ref": "d87d379541a337cdbe7d167264b6bf0065d07b2d807c2246786d6d7c93b1ebb1"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1qr6fzqcdkrsujs8a3zquf6g4cnts428dkc4gr3ay7ztsh0nu0zrtfwm32mhfurqupunjlgc45fwz4erhfu4nqynh90dqme8wtn",
+        100,
+        1,
+        "asc"
+      ],
+      "result": {
+        "$ref": "0928dd799fa103c880b3dd753c6f47ec9dcf2fb18895a55dd4053adcec956de1"
+      }
+    },
+    {
+      "service": "EpochService",
+      "method": "getProtocolParameters",
+      "args": [],
+      "result": {
+        "$ref": "d87d379541a337cdbe7d167264b6bf0065d07b2d807c2246786d6d7c93b1ebb1"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "7201a4c5be2b808d7e018368a50c358f55702c55c4b9fbdbd85fba20eae960e9",
+        0
+      ],
+      "result": {
+        "$ref": "8449f77fe8dae002edc16d4f70cff01d6723a90976995cefaec7fe68e3d13d96"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "cfdf82cb7feaa12b26819d139419d0da8a0c5a5279f8915131fb589b0cd4d215",
+        0
+      ],
+      "result": {
+        "$ref": "3ddba1f6b7949b36ac901a98b24caae12352ea31eb1ec622ccf6e51d3ee68f72"
+      }
+    },
+    {
+      "service": "ScriptService",
+      "method": "getPlutusScript",
+      "args": [
+        "d923b2cddc06166ea19ad7b8097ac52aaaed8adc8ae28b015c9b9614"
+      ],
+      "result": {
+        "$ref": "f4ca42c9d6e1dc612868d3c08b9cf45e8363eb9d1ac0d3d5f36f317221e44724"
+      }
+    }
+  ]
+}

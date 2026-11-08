@@ -19,6 +19,15 @@ def publishedModules = ['julc-state-api', 'julc-state-processor', 'julc-state-ru
 subprojects {
     apply plugin: 'java-library'
 
+    // -PjoustFixtures: the examples' tests record ADR-0015 M0 fixtures (every built transaction with the chain reads
+    // behind it) into fixtures/m0/<module>; DevKit must be running. See examples/devkit FixtureRecorder.
+    if (rootProject.hasProperty('joustFixtures') && path.startsWith(':examples:')) {
+        tasks.withType(Test).configureEach {
+            systemProperty 'joust.fixtures', "${rootDir}/fixtures/m0/${project.name}"
+            outputs.upToDateWhen { false }
+        }
+    }
+
     // -PjoustPortableAll: generate <Name>Portable for every example contract (checks PortableGenerator; ADR-0013 D4).
     if (rootProject.hasProperty('joustPortableAll') && path.startsWith(':examples:')) {
         tasks.withType(JavaCompile).configureEach { options.compilerArgs += ['-Ajoust.portable=true'] }

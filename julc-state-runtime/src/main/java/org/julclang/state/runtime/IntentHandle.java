@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.crypto.Blake2bUtil;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import com.bloxbean.cardano.client.plutus.spec.PlutusScript;
-import com.bloxbean.cardano.client.quicktx.ScriptTx;
+import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.transaction.spec.Asset;
 import com.bloxbean.cardano.client.util.HexUtil;
 import org.julclang.clientlib.PlutusDataAdapter;
@@ -109,8 +109,8 @@ public final class IntentHandle<S> {
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
         PlutusData redeemer = PlutusDataAdapter.convert(codec.create(seedRef, intent));
         BigInteger lovelace = received.add(deposit);
-        var tx = new ScriptTx()
-                .collectFrom(seed)
+        var tx = new Tx()
+                .collectFrom(java.util.List.of(seed))
                 .readFrom(ref)
                 .mintAsset(contract.policyId, List.of(new Asset("0x" + intentId, BigInteger.ONE)), redeemer)
                 .payToContract(contract.address, List.of(Amount.lovelace(lovelace), new Amount(handle.unit(), BigInteger.ONE)), datum);
@@ -134,7 +134,7 @@ public final class IntentHandle<S> {
         if (!Arrays.equals(Batcher.decode(codec, u).owner(), ownerPkh)) throw new RequireException(what + ": only the owner can cancel");
         BigInteger lovelace = u.getAmount().stream().filter(a -> a.getUnit().equals("lovelace"))
                 .map(Amount::getQuantity).findFirst().orElse(BigInteger.ZERO);
-        var tx = new ScriptTx()
+        var tx = new Tx()
                 .collectFrom(u, PlutusDataAdapter.convert(codec.cancel()))
                 .readFrom(contract.findReferenceScript())
                 .mintAsset(contract.policyId, List.of(new Asset("0x" + intentId, BigInteger.ONE.negate())),

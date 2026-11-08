@@ -1,0 +1,82 @@
+{
+  "seq": 11,
+  "what": "Jar intent",
+  "prepared": false,
+  "txHash": "ceac3c95c8ea12b30d3ccca369a94806f4a7f06624aa5a41bbc0d33ffa03e3a3",
+  "unsignedTx": "84aa00d901028182582081dfbb2f4330b65843c14f9a91adcdae99f23ed912a7ed7d8ec5bab92833754c000182a300581d703cbd4bbd7b203fa2d0daf7dc6c5df3501ded49bec5171e5c4aed9a4301821a007a1200a1581c3cbd4bbd7b203fa2d0daf7dc6c5df3501ded49bec5171e5c4aed9a43a1581d4984198a7449bb70abf89eec637c837dfd41d8f88558965f56b1ec155f01028201d81858a5d8799f58200781e35b0d7ea4cd86ff715d7273b495d517f5289d070bed9b7d20d4ab47eddb581c3504ad71e28dcad6030bcbeff7cd1af59bd1852b44965ad724b3e7b3d8799fd8799f581c3504ad71e28dcad6030bcbeff7cd1af59bd1852b44965ad724b3e7b3ffd8799fd8799fd8799f581c6917e08950b22126a859c4b331a48a6872fc5bb5a754d0e893655de0ffffffff1b000001a1b96e44641a005b8d80d87980ff825839003504ad71e28dcad6030bcbeff7cd1af59bd1852b44965ad724b3e7b36917e08950b22126a859c4b331a48a6872fc5bb5a754d0e893655de01a057612d8021a0005bc2809a1581c3cbd4bbd7b203fa2d0daf7dc6c5df3501ded49bec5171e5c4aed9a43a1581d4984198a7449bb70abf89eec637c837dfd41d8f88558965f56b1ec155f010b58200785773747098c0d7113f750d992af7207581b86dea261be6e6b142cc2dca0b80dd901028182582081dfbb2f4330b65843c14f9a91adcdae99f23ed912a7ed7d8ec5bab92833754c000ed9010281581c3504ad71e28dcad6030bcbeff7cd1af59bd1852b44965ad724b3e7b310825839003504ad71e28dcad6030bcbeff7cd1af59bd1852b44965ad724b3e7b36917e08950b22126a859c4b331a48a6872fc5bb5a754d0e893655de01a05ed46c4111a00089a3c12d90102818258201f463a16a63754c19bb821afecaf3f59dc32b2d3a9be9e80f6f3d4ca022a6e9b00a105a182010082d87b9fd8799f582081dfbb2f4330b65843c14f9a91adcdae99f23ed912a7ed7d8ec5bab92833754c00ffd8799f58200781e35b0d7ea4cd86ff715d7273b495d517f5289d070bed9b7d20d4ab47eddb581c3504ad71e28dcad6030bcbeff7cd1af59bd1852b44965ad724b3e7b3d8799fd8799f581c3504ad71e28dcad6030bcbeff7cd1af59bd1852b44965ad724b3e7b3ffd8799fd8799fd8799f581c6917e08950b22126a859c4b331a48a6872fc5bb5a754d0e893655de0ffffffff1b000001a1b96e44641a005b8d80d87980ffff821a000555571a071386e9f5f6",
+  "reads": [
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1qq6sftt3u2xu44srp097la7drt6eh5v99dzfvkkhyje70vmfzlsgj59jyyn2skwykvc6fzngwt79hdd82ngw3ym9thsq6hz086",
+        50,
+        1
+      ],
+      "result": {
+        "$ref": "55660f68c2da96de32bf18f5815c154218e6f358eeaa6da5e43c26ac58a19d16"
+      }
+    },
+    {
+      "service": "EpochService",
+      "method": "getProtocolParameters",
+      "args": [],
+      "result": {
+        "$ref": "d87d379541a337cdbe7d167264b6bf0065d07b2d807c2246786d6d7c93b1ebb1"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1qq6sftt3u2xu44srp097la7drt6eh5v99dzfvkkhyje70vmfzlsgj59jyyn2skwykvc6fzngwt79hdd82ngw3ym9thsq6hz086",
+        100,
+        1,
+        "asc"
+      ],
+      "result": {
+        "$ref": "96adb5f253b7a40e6c32a2dd357ebc3d4109e19a60b189bb178885a38cf3972e"
+      }
+    },
+    {
+      "service": "EpochService",
+      "method": "getProtocolParameters",
+      "args": [],
+      "result": {
+        "$ref": "d87d379541a337cdbe7d167264b6bf0065d07b2d807c2246786d6d7c93b1ebb1"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "81dfbb2f4330b65843c14f9a91adcdae99f23ed912a7ed7d8ec5bab92833754c",
+        0
+      ],
+      "result": {
+        "$ref": "0075498d699bb546cc88c6b84bceaef98e62eb765828c9c513a95075ff0461ca"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "1f463a16a63754c19bb821afecaf3f59dc32b2d3a9be9e80f6f3d4ca022a6e9b",
+        0
+      ],
+      "result": {
+        "$ref": "6a4139ce8b7ccd3b1ba5efd9d62475361700bb320bd9adda3adce79e174ad1d7"
+      }
+    },
+    {
+      "service": "ScriptService",
+      "method": "getPlutusScript",
+      "args": [
+        "3cbd4bbd7b203fa2d0daf7dc6c5df3501ded49bec5171e5c4aed9a43"
+      ],
+      "result": {
+        "$ref": "38a01ccb1000a8e8aa1258c6c3ee35756d2e44f9e94f26cadaca0ce537490cb1"
+      }
+    }
+  ]
+}

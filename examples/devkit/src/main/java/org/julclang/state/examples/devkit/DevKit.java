@@ -64,6 +64,8 @@ public final class DevKit {
     public static StateRuntime runtime() {
         BackendService backend = backend();
         SlotChainTime time = chainTime(backend);
+        FixtureRecorder recorder = recorder();
+        if (recorder != null) backend = recorder.wrap(backend);
         var b = StateRuntime.builder(backend)
                 .network(Networks.testnet())
                 .chainTime(time)
@@ -79,7 +81,24 @@ public final class DevKit {
                     new DefaultScriptSupplier(backend.getScriptService()),
                     new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())));
         }
+        if (recorder != null) b.onBuilt(recorder::built);
         return b.build();
+    }
+
+    private static FixtureRecorder recorder;
+
+    /** The fixture recorder when {@code -Djoust.fixtures=<dir>} is set (ADR-0015 M0); one per JVM. */
+    private static synchronized FixtureRecorder recorder() {
+        String dir = System.getProperty("joust.fixtures");
+        if (dir == null || dir.isBlank()) return null;
+        if (recorder == null) {
+            try {
+                recorder = new FixtureRecorder(java.nio.file.Path.of(dir));
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException("cannot record fixtures in " + dir, e);
+            }
+        }
+        return recorder;
     }
 
     /** A fresh account funded with {@code ada} ADA through the admin API. */

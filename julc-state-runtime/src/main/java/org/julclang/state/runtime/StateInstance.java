@@ -5,7 +5,7 @@ import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.api.model.Amount;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
-import com.bloxbean.cardano.client.quicktx.ScriptTx;
+import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.transaction.spec.Asset;
 import com.bloxbean.cardano.client.util.HexUtil;
 import org.julclang.clientlib.PlutusDataAdapter;
@@ -163,7 +163,7 @@ public final class StateInstance<S> {
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
-        var tx = TxRunner.collect(TxRunner.scriptTx(), stateUtxo, redeemer).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.newTx(), stateUtxo, redeemer).readFrom(ref);
         if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         TxRunner.ExpectedState expected = null;
         if (call.kind == Call.Kind.ACTION) {
@@ -253,7 +253,7 @@ public final class StateInstance<S> {
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
         if (ref == null) throw new JoustException(what + ": the " + spec.name() + " reference script is not on chain");
-        var tx = TxRunner.collect(TxRunner.scriptTx(), stateUtxo, redeemer).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.newTx(), stateUtxo, redeemer).readFrom(ref);
         TxOutRef own = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
                 BigInteger.valueOf(stateUtxo.getOutputIndex()));
         PlutusData datum = destroy ? null : PlutusDataAdapter.convert(stored);

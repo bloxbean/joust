@@ -112,6 +112,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `Function` passed into a `@JS` snippet (julc-wasm's pattern); `@JS.Export` methods need reflection metadata and
   `JSString` params. Output is a classic script (a `{"type":"commonjs"}` package.json beside it for Node).
   DevKit's time horizon: page-built txs use the runtime TTL (`ttlSlots` in the deployment), else PastHorizon.
+- ADR-0015 (accepted): the npm toolchain and runtime on Wasm. M0: the runtime builds QuickTx `Tx` (never `ScriptTx`);
+  `fixtures/m0` holds the oracle (each DevKit transaction, unsigned, with the chain reads behind it, results
+  content-addressed in `blobs/`). Re-record with DevKit up: `./gradlew :examples:<m>:test -PjoustFixtures` (or all
+  examples); `FixturesTest` checks the oracle. `StateRuntime.Builder.onBuilt` observes every built transaction.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

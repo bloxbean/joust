@@ -1,0 +1,301 @@
+{
+  "seq": 8,
+  "what": "Bank.setPaused",
+  "prepared": false,
+  "txHash": "78ff8b6fa8031c933af7f9e56e7d6e60a06af1ae84c8fb6b851ad7c73622fe5e",
+  "unsignedTx": "84a900d9010282825820c7ce44961840ed05f0457efdce4e098b8fc852d83788e4bf52068db96e00f90200825820c7ce44961840ed05f0457efdce4e098b8fc852d83788e4bf52068db96e00f902010182a300581d705d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7f01821a00231860a1581c5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7fa15820ae45ea8932d38fcbef9e46738f112a6cddb53ddcfc49e0ef590a8e0e8dcd8f5e01028201d818582ad8799f581cdbc482174e89e306738e7023c604ab113ccb5564458b36d59160e452d87a801a01312d00ff82583900dbc482174e89e306738e7023c604ab113ccb5564458b36d59160e452189bad0d659c82226373c80fb59db6b541f1f5c067af33b9750d0b8d1a1da01898021a000506530b58202d88e8e87ee7b3fe95409b5d01f434a1ac700ffe5f2038ff0b3a05a8416fbaf30dd9010281825820c7ce44961840ed05f0457efdce4e098b8fc852d83788e4bf52068db96e00f902010ed9010281581cdbc482174e89e306738e7023c604ab113ccb5564458b36d59160e4521082583900dbc482174e89e306738e7023c604ab113ccb5564458b36d59160e452189bad0d659c82226373c80fb59db6b541f1f5c067af33b9750d0b8d1a1d9d956e111a0007897d12d901028182582004e3e6c2d968700fa477ee915f5c16745645ae73bb91178d1e42b1cd5ee76b0a00a105a182000082d8799fd87a80ff821a0003fcbd1a0539a41cf5f6",
+  "reads": [
+    {
+      "service": "TransactionService",
+      "method": "submitTransaction",
+      "args": [
+        "hKwA2QECgYJYIKTyOo3JpThowqrdIUfpBqXyEpgA8fOlOMWkvbGVnzP/AAGCowBYHXBdDpNl8QOIsTlhitDeOc1ODWToGSzc0RaP7m5/AYIaAoVyYKFYHF0Ok2XxA4ixOWGK0N45zU4NZOgZLNzRFo/ubn+hWB1PKmJaJFs6bf0saYnY7o6K5QvMoVEVKDdMKIwo9wECggHYGFhN2HmfWCCuReqJMtOPy++eRnOPESps3bU93PxJ4O9ZCo4Ojc2PXth5n1gcAnxQZK65YSbZItN77jKN/dkVmXDweh8yskuIOBoCYloA//+CWDkAAnxQZK65YSbZItN77jKN/dkVmXDweh8yskuIOJ4PlTSGJ8kWMAtm4HYJ0mHJeYrKDnUexvbeJQQaCWDlagIaAAVqNgMaAAIPXggaAAIPSgmhWBxdDpNl8QOIsTlhitDeOc1ODWToGSzc0RaP7m5/oVgdTypiWiRbOm39LGmJ2O6OiuULzKFRFSg3TCiMKPcBC1ggElCwCYSHW4+VMn65YYDIExvFzi0Dpsnj2+FuakzcbsgN2QECgYJYIKTyOo3JpThowqrdIUfpBqXyEpgA8fOlOMWkvbGVnzP/AA7ZAQKBWBwCfFBkrrlhJtki03vuMo392RWZcPB6HzKyS4g4EIJYOQACfFBkrrlhJtki03vuMo392RWZcPB6HzKyS4g4ng+VNIYnyRYwC2bgdgnSYcl5isoOdR7G9t4lBBoL46KvERoACB9REtkBAoKCWCAE4+bC2WhwD6R37pFfXBZ0VkWuc7uRF40eQrHNXudrCgCCWCDHzkSWGEDtBfBFfv3OTgmLj8hS2DeI5L9SBo25bgD5AgCiANkBAoGCWCCyjUdA4wsAvJ3+5udSs8kGw8X8ujl7uCUMVtETkkNIMFhAcB2h3S2ofyB5EU7ps7oxYE9DaTuj7Nz5tyDfRgRGpsm1jg3X4A8hTkJR9oR8PG9AxKb6lUaN/dvVGY/GJCZwBgWhggEAgth7n9h5n1ggpPI6jcmlOGjCqt0hR+kGpfISmADx86U4xaS9sZWfM/8A/1ggrkXqiTLTj8vvnkZzjxEqbN21Pdz8SeDvWQqODo3Nj17YeZ9YHAJ8UGSuuWEm2SLTe+4yjf3ZFZlw8HofMrJLiDgaAmJaAAAbAAABoblPfggbAAABoblPzCj//4IaAAbzThoIexiF9fY="
+      ],
+      "result": "(submission)"
+    },
+    {
+      "service": "TransactionService",
+      "method": "getTransaction",
+      "args": [
+        "0c4b44244b2fca98db5db95a39d5fce71495aed53743bd150e40ddabf1487ab6"
+      ],
+      "result": {
+        "$ref": "84381865f547a9d5757922969a571da8b57895f6c06cbb287d108e4b31abe6cb"
+      }
+    },
+    {
+      "service": "TransactionService",
+      "method": "getTransaction",
+      "args": [
+        "0c4b44244b2fca98db5db95a39d5fce71495aed53743bd150e40ddabf1487ab6"
+      ],
+      "result": {
+        "$ref": "a80dee10ca3d8244843664d63f3f2dd0421224852432d61faaaf12c928cb0439"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wpwsaym97ypc3vfevx9dph3ee48q6e8grykde5gk3lhxulcc5k0ea",
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7f4f2a625a245b3a6dfd2c6989d8ee8e8ae50bcca1511528374c288c28f7",
+        10,
+        1
+      ],
+      "result": {
+        "$ref": "9aad01f32c045dcae81ef6bc954b29823706b99525e529665ab1918480a7179d"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wpwsaym97ypc3vfevx9dph3ee48q6e8grykde5gk3lhxulcc5k0ea",
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7f4f0b9c8ae89c4888900af24a78fcf14fd12c712160466ed44ffc12414e",
+        10,
+        1
+      ],
+      "result": {
+        "$ref": "6af70f2691d6fd1913c2885cc16312fadcacbf3f7a40ea4650646de04626fbaf"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wpwsaym97ypc3vfevx9dph3ee48q6e8grykde5gk3lhxulcc5k0ea",
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7f4f0b9c8ae89c4888900af24a78fcf14fd12c712160466ed44ffc12414e",
+        10,
+        1
+      ],
+      "result": {
+        "$ref": "76cfe96930e2b013696512dc6ec066329b507a8aa37232c0118d6e56be222ed2"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wpwsaym97ypc3vfevx9dph3ee48q6e8grykde5gk3lhxulcc5k0ea",
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7f4f2a625a245b3a6dfd2c6989d8ee8e8ae50bcca1511528374c288c28f7",
+        10,
+        1
+      ],
+      "result": {
+        "$ref": "4aaea23f74683f019c0cb1336043c295ec881018243ddf0a88c1968ff35878b9"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wpwsaym97ypc3vfevx9dph3ee48q6e8grykde5gk3lhxulcc5k0ea",
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7f4f0b9c8ae89c4888900af24a78fcf14fd12c712160466ed44ffc12414e",
+        10,
+        1
+      ],
+      "result": {
+        "$ref": "76cfe96930e2b013696512dc6ec066329b507a8aa37232c0118d6e56be222ed2"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wpwsaym97ypc3vfevx9dph3ee48q6e8grykde5gk3lhxulcc5k0ea",
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7f4f0b9c8ae89c4888900af24a78fcf14fd12c712160466ed44ffc12414e",
+        10,
+        1
+      ],
+      "result": {
+        "$ref": "76cfe96930e2b013696512dc6ec066329b507a8aa37232c0118d6e56be222ed2"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wpwsaym97ypc3vfevx9dph3ee48q6e8grykde5gk3lhxulcc5k0ea",
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7fae45ea8932d38fcbef9e46738f112a6cddb53ddcfc49e0ef590a8e0e8dcd8f5e",
+        10,
+        1
+      ],
+      "result": {
+        "$ref": "e5db429a8bbbe2ee791515a94c0f91262b698eea71c90a5fbbe59b81ca25feab"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wpwsaym97ypc3vfevx9dph3ee48q6e8grykde5gk3lhxulcc5k0ea",
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7fae45ea8932d38fcbef9e46738f112a6cddb53ddcfc49e0ef590a8e0e8dcd8f5e",
+        10,
+        1
+      ],
+      "result": {
+        "$ref": "e5db429a8bbbe2ee791515a94c0f91262b698eea71c90a5fbbe59b81ca25feab"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wpwsaym97ypc3vfevx9dph3ee48q6e8grykde5gk3lhxulcc5k0ea",
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7fae45ea8932d38fcbef9e46738f112a6cddb53ddcfc49e0ef590a8e0e8dcd8f5e",
+        10,
+        1
+      ],
+      "result": {
+        "$ref": "e5db429a8bbbe2ee791515a94c0f91262b698eea71c90a5fbbe59b81ca25feab"
+      }
+    },
+    {
+      "service": "EpochService",
+      "method": "getProtocolParameters",
+      "args": [],
+      "result": {
+        "$ref": "e28a0659aad57a719001bc76a9cb71e1a3eee10f444a503abbb07ba25ca59c09"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1qrdufqshf6y7xpnn3ecz83sy4vgnej64v3zckdk4j9swg5scnwks6evusg3xxu7gp76emd44g8cltsr84uemjagdpwxs0403h5",
+        100,
+        1,
+        "asc"
+      ],
+      "result": {
+        "$ref": "82e8d5840743e858c6829ab941604a0e16f526e0a46483aea1e451d0b1c043a6"
+      }
+    },
+    {
+      "service": "EpochService",
+      "method": "getProtocolParameters",
+      "args": [],
+      "result": {
+        "$ref": "e28a0659aad57a719001bc76a9cb71e1a3eee10f444a503abbb07ba25ca59c09"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "c7ce44961840ed05f0457efdce4e098b8fc852d83788e4bf52068db96e00f902",
+        0
+      ],
+      "result": {
+        "$ref": "cdf98556cfc4e302ab1d4f55df70d347879d60a7b8405fb80dd30e976ba2593c"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "04e3e6c2d968700fa477ee915f5c16745645ae73bb91178d1e42b1cd5ee76b0a",
+        0
+      ],
+      "result": {
+        "$ref": "3670394d5f95e9943fbe78be7b13e6aa8d09e0b14bbc3bb887ae0e4d6818bf76"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "c7ce44961840ed05f0457efdce4e098b8fc852d83788e4bf52068db96e00f902",
+        0
+      ],
+      "result": {
+        "$ref": "cdf98556cfc4e302ab1d4f55df70d347879d60a7b8405fb80dd30e976ba2593c"
+      }
+    },
+    {
+      "service": "ScriptService",
+      "method": "getPlutusScript",
+      "args": [
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7f"
+      ],
+      "result": {
+        "$ref": "9e16d1d5af8af3d8fb77c80591c3a012339d041e5854572e3699de1808e5e0bd"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1qrdufqshf6y7xpnn3ecz83sy4vgnej64v3zckdk4j9swg5scnwks6evusg3xxu7gp76emd44g8cltsr84uemjagdpwxs0403h5",
+        100,
+        1,
+        "asc"
+      ],
+      "result": {
+        "$ref": "82e8d5840743e858c6829ab941604a0e16f526e0a46483aea1e451d0b1c043a6"
+      }
+    },
+    {
+      "service": "EpochService",
+      "method": "getProtocolParameters",
+      "args": [],
+      "result": {
+        "$ref": "e28a0659aad57a719001bc76a9cb71e1a3eee10f444a503abbb07ba25ca59c09"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "c7ce44961840ed05f0457efdce4e098b8fc852d83788e4bf52068db96e00f902",
+        0
+      ],
+      "result": {
+        "$ref": "cdf98556cfc4e302ab1d4f55df70d347879d60a7b8405fb80dd30e976ba2593c"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "c7ce44961840ed05f0457efdce4e098b8fc852d83788e4bf52068db96e00f902",
+        1
+      ],
+      "result": {
+        "$ref": "2c2a16e0b836c6661c6912aee063fda95208ecffe29b4f557992b97785d8ba69"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "04e3e6c2d968700fa477ee915f5c16745645ae73bb91178d1e42b1cd5ee76b0a",
+        0
+      ],
+      "result": {
+        "$ref": "3670394d5f95e9943fbe78be7b13e6aa8d09e0b14bbc3bb887ae0e4d6818bf76"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "c7ce44961840ed05f0457efdce4e098b8fc852d83788e4bf52068db96e00f902",
+        0
+      ],
+      "result": {
+        "$ref": "cdf98556cfc4e302ab1d4f55df70d347879d60a7b8405fb80dd30e976ba2593c"
+      }
+    },
+    {
+      "service": "ScriptService",
+      "method": "getPlutusScript",
+      "args": [
+        "5d0e9365f10388b139618ad0de39cd4e0d64e8192cdcd1168fee6e7f"
+      ],
+      "result": {
+        "$ref": "9e16d1d5af8af3d8fb77c80591c3a012339d041e5854572e3699de1808e5e0bd"
+      }
+    }
+  ]
+}

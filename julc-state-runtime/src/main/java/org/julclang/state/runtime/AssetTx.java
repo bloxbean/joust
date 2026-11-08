@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.api.model.Amount;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.transaction.spec.Asset;
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
-import com.bloxbean.cardano.client.quicktx.ScriptTx;
+import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.util.HexUtil;
 import org.julclang.clientlib.PlutusDataAdapter;
 import org.julclang.ledger.OutputDatum;
@@ -80,7 +80,7 @@ final class AssetTx {
      * @param continuing  the datum of the continuing output, or null for a destroy
      * @param lifecycle   the MINT redeemer for the lifecycle token (create or burn), or null for an action
      */
-    static Applied apply(ScriptTx tx, StateContractHandle<?> contract, Account caller, String what, TxOutRef ownRef,
+    static Applied apply(Tx tx, StateContractHandle<?> contract, Account caller, String what, TxOutRef ownRef,
                          Value inValue, BigInteger receivedLovelace, Value receivedAssets, Transition<?> t, String unit,
                          byte[] id, com.bloxbean.cardano.client.plutus.spec.PlutusData continuing, Object lifecycle, Function<TxOutRef, Object> byAction,
                          boolean creating) {
@@ -89,7 +89,7 @@ final class AssetTx {
     }
 
     /** As above; {@code seed} is the creation's seed input, which may already hold some of the assets paid in. */
-    static Applied apply(ScriptTx tx, StateContractHandle<?> contract, Account caller, String what, TxOutRef ownRef,
+    static Applied apply(Tx tx, StateContractHandle<?> contract, Account caller, String what, TxOutRef ownRef,
                          Value inValue, BigInteger receivedLovelace, Value receivedAssets, Transition<?> t, String unit,
                          byte[] id, com.bloxbean.cardano.client.plutus.spec.PlutusData continuing, Object lifecycle,
                          Function<TxOutRef, Object> byAction, boolean creating, Utxo seed) {
@@ -118,7 +118,7 @@ final class AssetTx {
     }
 
     /** As above, for a call that takes {@code incoming} deposits ({@code @Receives}; ADR-0011 D3). */
-    static Applied apply(ScriptTx tx, StateContractHandle<?> contract, Account caller, String what, TxOutRef ownRef,
+    static Applied apply(Tx tx, StateContractHandle<?> contract, Account caller, String what, TxOutRef ownRef,
                          Value inValue, BigInteger receivedLovelace, Value receivedAssets, Transition<?> t, String unit,
                          byte[] id, com.bloxbean.cardano.client.plutus.spec.PlutusData continuing, Object lifecycle,
                          Function<TxOutRef, Object> byAction, boolean creating, Utxo seed,
@@ -275,7 +275,7 @@ final class AssetTx {
      * lovelace from the fee payer, so the assets a caller pays in must be collected explicitly; the leftovers return as
      * change. Throws if the caller does not hold them.
      */
-    static void collectAssets(ScriptTx tx, StateContractHandle<?> contract, Account caller, Value needed, String what,
+    static void collectAssets(Tx tx, StateContractHandle<?> contract, Account caller, Value needed, String what,
                               Utxo alreadyIn) {
         var want = Assets.read(Assets.withoutLovelace(needed));
         if (want.isEmpty()) return;

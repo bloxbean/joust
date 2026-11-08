@@ -10,7 +10,7 @@ import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.crypto.Blake2bUtil;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script;
-import com.bloxbean.cardano.client.quicktx.ScriptTx;
+import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.transaction.spec.Asset;
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
 import com.bloxbean.cardano.client.transaction.spec.Value;
@@ -63,7 +63,7 @@ public final class StateContractHandle<S> {
      */
     public String delegateTo(String poolId, Account caller, Account... cosigners) {
         Utxo ref = ensureReferenceScript(caller);
-        var tx = new ScriptTx().readFrom(ref)
+        var tx = new Tx().readFrom(ref)
                 .delegateTo(new com.bloxbean.cardano.client.address.Address(rewardAddress), poolId,
                         com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0));
         return submitPurpose(tx, caller, cosigners, "delegate the " + spec.name() + " stake");
@@ -87,7 +87,7 @@ public final class StateContractHandle<S> {
     public String withdrawRewards(Object rewardsRedeemer, BigInteger amount, org.julclang.core.types.JulcList<org.julclang.state.api.Send> sends,
                                   Account caller, Account... cosigners) {
         Utxo ref = ensureReferenceScript(caller);
-        var tx = new ScriptTx().readFrom(ref).withdraw(rewardAddress, amount, PlutusDataAdapter.convert(rewardsRedeemer));
+        var tx = new Tx().readFrom(ref).withdraw(rewardAddress, amount, PlutusDataAdapter.convert(rewardsRedeemer));
         byte[] h = hashOf(script);
         var by = new TxOutRef(new TxId(com.bloxbean.cardano.client.crypto.Blake2bUtil.blake2bHash256(h)), BigInteger.valueOf(-1));
         var claims = new java.util.ArrayList<org.julclang.state.api.OutputClaim>();
@@ -116,7 +116,7 @@ public final class StateContractHandle<S> {
                 "withdraw " + spec.name() + " rewards");
     }
 
-    private String submitPurpose(ScriptTx tx, Account caller, Account[] cosigners, String what) {
+    private String submitPurpose(Tx tx, Account caller, Account[] cosigners, String what) {
         var signers = new java.util.ArrayList<byte[]>();
         signers.add(Keys.pkh(caller));
         for (Account a : cosigners) signers.add(Keys.pkh(a));
@@ -292,7 +292,7 @@ public final class StateContractHandle<S> {
         PlutusData redeemer = PlutusDataAdapter.convert(d.redeemer().make(seedRef, ctx));
         BigInteger lovelace = BigInteger.valueOf(spec.minAda()).add(d.received());
 
-        var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null)
+        var tx = TxRunner.collect(TxRunner.newTx(), seed, null)
                 .readFrom(ref);
         TxRunner.mint(tx, policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE)), redeemer);
         tx.payToContract(address, List.of(Amount.lovelace(lovelace), new Amount(instance.unit(), BigInteger.ONE)), datum);
@@ -329,7 +329,7 @@ public final class StateContractHandle<S> {
         }
         PlutusData datum = PlutusDataAdapter.convert(stored);
         Object redeemer = d.redeemer().make(seedRef, ctx);
-        var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.newTx(), seed, null).readFrom(ref);
         var inValue = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(spec.minAda())),
                 org.julclang.state.api.Assets.of(policy, id, BigInteger.ONE));
         var applied = AssetTx.apply(tx, this, d.caller(), what, null, inValue, d.received(), d.receivedAssets(), t,
@@ -368,7 +368,7 @@ public final class StateContractHandle<S> {
         PlutusData redeemer = PlutusDataAdapter.convert(d.redeemer().make(seedRef, ctx));
         BigInteger lovelace = prior.getAmount().stream().filter(a -> a.getUnit().equals("lovelace"))
                 .map(Amount::getQuantity).findFirst().orElse(BigInteger.ZERO);
-        var tx = TxRunner.scriptTx().readFrom(ref);
+        var tx = TxRunner.newTx().readFrom(ref);
         TxRunner.mint(tx, policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE)), redeemer);
         tx.payToContract(address, List.of(Amount.lovelace(lovelace), new Amount(instance.unit(), BigInteger.ONE)), datum);
         String txHash = new TxRunner(runtime).submit(tx, caller, window, d.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],

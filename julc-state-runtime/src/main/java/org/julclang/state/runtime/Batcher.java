@@ -5,7 +5,7 @@ import com.bloxbean.cardano.client.api.model.Amount;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import com.bloxbean.cardano.client.plutus.spec.PlutusScript;
-import com.bloxbean.cardano.client.quicktx.ScriptTx;
+import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.transaction.spec.Asset;
 import com.bloxbean.cardano.client.util.HexUtil;
 import org.julclang.clientlib.PlutusDataAdapter;
@@ -179,7 +179,7 @@ public final class Batcher<S> {
         Datums.checkCanonical(spec, datum, what);
         BigInteger next = plan.balance().add(BigInteger.valueOf(spec.minAda()));
 
-        var tx = new ScriptTx()
+        var tx = new Tx()
                 .collectFrom(own, PlutusDataAdapter.convert(codec.batch(window.fromMs(), window.toMs())))
                 .readFrom(contract.findReferenceScript());
         PlutusData inBatch = PlutusDataAdapter.convert(codec.inBatch());

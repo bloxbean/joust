@@ -6,7 +6,6 @@ import com.bloxbean.cardano.client.api.MinAdaCalculator;
 import com.bloxbean.cardano.client.api.model.Amount;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script;
-import com.bloxbean.cardano.client.quicktx.ScriptTx;
 import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
 import com.bloxbean.cardano.client.transaction.spec.Value;
@@ -70,7 +69,7 @@ public final class VerifierHandle {
     }
 
     /** Adds the zero withdrawal carrying the map {@code claims} and the verifier's reference input to {@code tx}. */
-    void attach(ScriptTx tx, List<MapClaim> claims, Account payer) {
+    void attach(Tx tx, List<MapClaim> claims, Account payer) {
         var cap = TxRunner.capture();
         if (cap != null) {
             // In a composition every call's claims go into one withdrawal, attached when it is submitted.
@@ -84,7 +83,7 @@ public final class VerifierHandle {
     }
 
     /** Adds the zero withdrawal carrying {@code redeemer} and the verifier's reference input to {@code tx}. */
-    void attachRedeemer(ScriptTx tx, Object redeemer, Account payer) {
+    void attachRedeemer(Tx tx, Object redeemer, Account payer) {
         Utxo ref = ensure(payer);
         tx.readFrom(ref).withdraw(rewardAddress, BigInteger.ZERO, PlutusDataAdapter.convert(redeemer));
     }

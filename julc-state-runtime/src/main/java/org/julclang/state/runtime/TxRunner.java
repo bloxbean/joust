@@ -4,7 +4,7 @@ import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.function.helper.SignerProviders;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import com.bloxbean.cardano.client.quicktx.QuickTxBuilder;
-import com.bloxbean.cardano.client.quicktx.ScriptTx;
+import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.transaction.spec.Transaction;
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
@@ -42,7 +42,7 @@ final class TxRunner {
 
     /** What {@link Compose} collects while it runs several calls into one transaction. */
     static final class Capture {
-        final ScriptTx tx = new ScriptTx();
+        final Tx tx = new Tx();
         Window forced;
         final java.util.List<Window> windows = new java.util.ArrayList<>();
         int outputs;
@@ -120,9 +120,9 @@ final class TxRunner {
     }
 
     /** The transaction a call builds into: a fresh one, or the composition's shared one. */
-    static ScriptTx scriptTx() {
+    static Tx newTx() {
         Capture c = CAPTURE.get();
-        return c != null ? c.tx : new ScriptTx();
+        return c != null ? c.tx : new Tx();
     }
 
     /** Index of the next output a call adds (0 outside a composition). */
@@ -132,16 +132,16 @@ final class TxRunner {
     }
 
     /** Spends {@code u} (with {@code redeemer} if a script input); a composition refuses the same UTxO twice. */
-    static ScriptTx collect(ScriptTx tx, Utxo u, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
+    static Tx collect(Tx tx, Utxo u, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
         Capture c = CAPTURE.get();
         if (c != null && !c.inputs.add(u.getTxHash() + "#" + u.getOutputIndex())) {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
-        return redeemer == null ? tx.collectFrom(u) : tx.collectFrom(u, redeemer);
+        return redeemer == null ? tx.collectFrom(java.util.List.of(u)) : tx.collectFrom(u, redeemer);
     }
 
     /** Mints under {@code policy}; a composition refuses two calls minting under one policy (one redeemer each). */
-    static void mint(ScriptTx tx, String policy, java.util.List<com.bloxbean.cardano.client.transaction.spec.Asset> assets,
+    static void mint(Tx tx, String policy, java.util.List<com.bloxbean.cardano.client.transaction.spec.Asset> assets,
                      com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
         Capture c = CAPTURE.get();
         if (c != null && !c.mintPolicies.add(policy)) {
@@ -166,13 +166,13 @@ final class TxRunner {
     /** Further state outputs to verify (a composition's other instances). */
     java.util.List<ExpectedState> extraExpected = java.util.List.of();
 
-    String submit(ScriptTx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
+    String submit(Tx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
                   java.util.List<ExpectedPayout> payouts, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts,
                   String what) {
         return submit(tx, caller, window, requiredSigners, expected, payouts, java.util.List.of(), referenceScripts, what);
     }
 
-    String submit(ScriptTx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
+    String submit(Tx tx, Account caller, Window window, byte[][] requiredSigners, ExpectedState expected,
                   java.util.List<ExpectedPayout> payouts, java.util.List<ExpectedSend> sends,
                   com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts, String what) {
         Capture cap = CAPTURE.get();
@@ -200,6 +200,7 @@ final class TxRunner {
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
+        rt.built(what, signed, false);
 
         verify(signed, expected, what);
         for (ExpectedState e : extraExpected) verify(signed, e, what);
@@ -242,7 +243,7 @@ final class TxRunner {
      * Builds the transaction for a wallet to sign (ADR-0013 D1): balanced from the payer's UTxOs, with collateral and
      * its return to the payer, the fee covering every witness the wallets add; then the post-balancing checks.
      */
-    PreparedTx prepare(ScriptTx tx, Account payer, Window window, byte[][] requiredSigners, ExpectedState expected,
+    PreparedTx prepare(Tx tx, Account payer, Window window, byte[][] requiredSigners, ExpectedState expected,
                        java.util.List<ExpectedPayout> payouts, java.util.List<ExpectedSend> sends,
                        com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts, String what,
                        java.util.Set<String> spent) {
@@ -253,7 +254,7 @@ final class TxRunner {
         // out of it. Spending one of the payer's UTxOs gives it a change output to pay the fee from (restorePayouts).
         if (payouts.stream().anyMatch(p -> p.address().equals(payer.baseAddress()))) {
             Utxo funding = largestAdaOnly(payer.baseAddress(), spent);
-            if (funding != null) tx.collectFrom(funding);
+            if (funding != null) tx.collectFrom(java.util.List.of(funding));
         }
         Transaction unsigned;
         try {
@@ -280,6 +281,7 @@ final class TxRunner {
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
+        rt.built(what, unsigned, true);
         verify(unsigned, expected, what);
         for (ExpectedState e : extraExpected) verify(unsigned, e, what);
         verifyPayouts(unsigned, payouts, what);
@@ -406,6 +408,7 @@ final class TxRunner {
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
+        rt.built(what, signed, false);
         String txHash = TransactionUtil.getTxHash(signed);
         if (System.getProperty("joust.dumpTx") != null) {
             try {

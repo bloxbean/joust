@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.crypto.Blake2bUtil;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import com.bloxbean.cardano.client.plutus.spec.PlutusScript;
-import com.bloxbean.cardano.client.quicktx.ScriptTx;
+import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.transaction.spec.Asset;
 import com.bloxbean.cardano.client.util.HexUtil;
 import org.julclang.clientlib.PlutusDataAdapter;
@@ -162,7 +162,7 @@ public final class OwnedObject<S, R> {
         Datums.checkSize(contract.spec, datum, what);
         PlutusData redeemer = PlutusDataAdapter.convert(spec.redeemer().make(seedRef, instance, ctx));
         BigInteger lovelace = BigInteger.valueOf(contract.spec.minAda()).add(spec.received());
-        var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null)
+        var tx = TxRunner.collect(TxRunner.newTx(), seed, null)
                 .readFrom(ref)
                 .readFrom(instanceUtxo);
         TxRunner.mint(tx, contract.policyId, List.of(new Asset("0x" + objectId, BigInteger.ONE)), redeemer);
@@ -197,7 +197,7 @@ public final class OwnedObject<S, R> {
         }
         PlutusData datum = PlutusDataAdapter.convert(codec.wrap().apply(instance, value));
         Object redeemer = spec.redeemer().make(seedRef, instance, ctx);
-        var tx = TxRunner.collect(TxRunner.scriptTx(), seed, null).readFrom(ref).readFrom(instanceUtxo);
+        var tx = TxRunner.collect(TxRunner.newTx(), seed, null).readFrom(ref).readFrom(instanceUtxo);
         var inValue = org.julclang.state.api.Assets.add(org.julclang.state.api.Assets.lovelace(BigInteger.valueOf(contract.spec.minAda())),
                 org.julclang.state.api.Assets.of(policy, id, BigInteger.ONE));
         var applied = AssetTx.apply(tx, contract, spec.caller(), what, null, inValue, spec.received(), spec.receivedAssets(), t,
@@ -306,7 +306,7 @@ public final class OwnedObject<S, R> {
         }
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
-        var tx = TxRunner.collect(TxRunner.scriptTx(), own, redeemer).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.newTx(), own, redeemer).readFrom(ref);
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
         if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         TxRunner.ExpectedState expected = null;
@@ -390,7 +390,7 @@ public final class OwnedObject<S, R> {
         }
         PlutusData redeemer = PlutusDataAdapter.convert(call.redeemerFor(ctx, t));
         Utxo ref = contract.findReferenceScript();
-        var tx = TxRunner.collect(TxRunner.scriptTx(), own, redeemer).readFrom(ref);
+        var tx = TxRunner.collect(TxRunner.newTx(), own, redeemer).readFrom(ref);
         if (sharedUtxo != null) tx.readFrom(sharedUtxo);
         if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         PlutusData datum = destroy ? null

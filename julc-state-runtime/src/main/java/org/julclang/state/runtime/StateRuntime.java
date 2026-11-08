@@ -28,6 +28,10 @@ public final class StateRuntime {
     private final Map<String, String> addressBook;
     private final Consumer<String> log;
     private final com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
+    private final Consumer<BuiltTx> onBuilt;
+
+    /** A transaction the runtime built: what it is for, and the transaction (signed when submitted, unsigned when prepared). */
+    public record BuiltTx(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {}
 
     private StateRuntime(Builder b) {
         this.backend = Objects.requireNonNull(b.backend, "backend");
@@ -40,6 +44,7 @@ public final class StateRuntime {
         this.addressBook = Map.copyOf(b.addressBook);
         this.log = b.log;
         this.mapStore = b.mapStore != null ? b.mapStore : new InMemoryNodeStore();
+        this.onBuilt = b.onBuilt;
         org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
     }
 
@@ -56,6 +61,10 @@ public final class StateRuntime {
     public int maxRetries() { return maxRetries; }
     public Duration confirmTimeout() { return confirmTimeout; }
     void log(String message) { log.accept(message); }
+    /** Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). */
+    void built(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {
+        if (onBuilt != null) onBuilt.accept(new BuiltTx(what, tx, prepared));
+    }
     private volatile VerifierHandle mapVerifier;
     private volatile VerifierHandle outputVerifier;
 
@@ -94,6 +103,7 @@ public final class StateRuntime {
         private final Map<String, String> addressBook = new HashMap<>();
         private Consumer<String> log = msg -> { };
         private com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
+        private Consumer<BuiltTx> onBuilt;
 
         private Builder(BackendService backend) {
             this.backend = backend;
@@ -117,6 +127,8 @@ public final class StateRuntime {
             return this;
         }
         public Builder log(Consumer<String> log) { this.log = log; return this; }
+        /** Called with every transaction the runtime builds, before it is submitted or returned (ADR-0015 M0 fixtures). */
+        public Builder onBuilt(Consumer<BuiltTx> observer) { this.onBuilt = observer; return this; }
         /** Where MerkleMap mirrors keep their trie nodes; default in memory. Use a persistent store to reconnect later. */
         public Builder mapStore(com.bloxbean.cardano.vds.core.api.NodeStore store) { this.mapStore = store; return this; }
 

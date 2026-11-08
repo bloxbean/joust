@@ -1,0 +1,94 @@
+{
+  "seq": 1,
+  "what": "deploy Rollup",
+  "prepared": false,
+  "txHash": "e0bd5872ea160cf2cc4bb2c0121b6f1aa1fe3ccc56ce3a1003a859bb53358146",
+  "unsignedTx": "84ac00d90102818258205d4cf9ea846f1c3f0a6c26e4a3abe985e6f13c7015433f0deb415b75e8b1acd2000182a300581d7068fa51de4fa99987407cc1f6fee50572e21baa1b43d50ec31ae238c301821a029020c0a1581c68fa51de4fa99987407cc1f6fee50572e21baa1b43d50ec31ae238c3a158202ca6e2959beb0dc8e77d6df497187e17a2153f748b507fa80ac53262bc740a8b01028201d8185851d8799f581c4519b9168618b703434d298f1e95ebe84e932c88be5bbb5e71a4298619ea601a02625a005820d9bc7292a05f199f0c270c7eafbd5069d10397c7d688dafc2182a25c271d2f260040004000ff825839004519b9168618b703434d298f1e95ebe84e932c88be5bbb5e71a42986aca063e1887b04bf90effe7da4fb463ceaa396c36b57f5e53309a4561a0f4bab67021a0005d6d9031a0002110d081a000210f909a1581c68fa51de4fa99987407cc1f6fee50572e21baa1b43d50ec31ae238c3a158202ca6e2959beb0dc8e77d6df497187e17a2153f748b507fa80ac53262bc740a8b010b58200ee3ecaf78cec8a07fed6bfa94a6cdc33a38760d99882f47d181f42d73fa8d420dd90102818258205d4cf9ea846f1c3f0a6c26e4a3abe985e6f13c7015433f0deb415b75e8b1acd2000ed9010281581c4519b9168618b703434d298f1e95ebe84e932c88be5bbb5e71a4298610825839004519b9168618b703434d298f1e95ebe84e932c88be5bbb5e71a42986aca063e1887b04bf90effe7da4fb463ceaa396c36b57f5e53309a4561a11d8e0ba111a0008c24612d901028182582055dd4aedb2d7a05d0bba5670355861722d6beac60ff437f210ac2bfd39662ec900a105a182010082d8799fd8799f58205d4cf9ea846f1c3f0a6c26e4a3abe985e6f13c7015433f0deb415b75e8b1acd200ff5820d9bc7292a05f199f0c270c7eafbd5069d10397c7d688dafc2182a25c271d2f2619ea60d8799f581c4519b9168618b703434d298f1e95ebe84e932c88be5bbb5e71a429861a02625a00001b000001a1b95611a01b000001a1b9565fc0ffff821a00051c3d1a06b69c0ef5f6",
+  "reads": [
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1wp5055w7f75enp6q0nqldlh9q4ewyxa2rdpa2rkrrt3r3scslkmlz",
+        100,
+        1
+      ],
+      "result": {
+        "$ref": "4f52950f25ff7f9709dddb994a7238177e0297c541cd50ad568ba6ed05d2ed42"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1qpz3nwgkscvtwq6rf55c7854a05yayev3zl9hw67wxjznp4v5p37rzrmqjlepml70kj0k33ua23edsmt2l672vcf53tqaxs866",
+        50,
+        1
+      ],
+      "result": {
+        "$ref": "fab6c8feea84afc1bfb35fc3d5d3089814809d6976112639f959b404aeea803b"
+      }
+    },
+    {
+      "service": "EpochService",
+      "method": "getProtocolParameters",
+      "args": [],
+      "result": {
+        "$ref": "d87d379541a337cdbe7d167264b6bf0065d07b2d807c2246786d6d7c93b1ebb1"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getUtxos",
+      "args": [
+        "addr_test1qpz3nwgkscvtwq6rf55c7854a05yayev3zl9hw67wxjznp4v5p37rzrmqjlepml70kj0k33ua23edsmt2l672vcf53tqaxs866",
+        100,
+        1,
+        "asc"
+      ],
+      "result": {
+        "$ref": "0d6f9fb177dbacf719f6e29f362d7599dbaa1f342e2e49a9a32a7f61900b2396"
+      }
+    },
+    {
+      "service": "EpochService",
+      "method": "getProtocolParameters",
+      "args": [],
+      "result": {
+        "$ref": "d87d379541a337cdbe7d167264b6bf0065d07b2d807c2246786d6d7c93b1ebb1"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "5d4cf9ea846f1c3f0a6c26e4a3abe985e6f13c7015433f0deb415b75e8b1acd2",
+        0
+      ],
+      "result": {
+        "$ref": "b2dea8ca6625eaf79b7b5b924f9c7d26ffb1dcc42f308acaffc99958f1443121"
+      }
+    },
+    {
+      "service": "UtxoService",
+      "method": "getTxOutput",
+      "args": [
+        "55dd4aedb2d7a05d0bba5670355861722d6beac60ff437f210ac2bfd39662ec9",
+        0
+      ],
+      "result": {
+        "$ref": "aeb818eb9d0c619977fd5c3caa0532ab5f29585852e6b0bfabff3cb98743d73f"
+      }
+    },
+    {
+      "service": "ScriptService",
+      "method": "getPlutusScript",
+      "args": [
+        "68fa51de4fa99987407cc1f6fee50572e21baa1b43d50ec31ae238c3"
+      ],
+      "result": {
+        "$ref": "e2aa0049bb8301b3f2575e228d5dec3bd02bce428bdd0cfda31aef0099bf7ffe"
+      }
+    }
+  ]
+}
