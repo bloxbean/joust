@@ -47,6 +47,23 @@ export function httpService(baseUrl, { fetchImpl } = {}) {
  * The address the service builds from (one address: JOUST's WalletAccount): the change address when it holds funds,
  * else the wallet address holding the most lovelace. Payouts to the caller go there too.
  */
+/**
+ * What a request says about the wallet: its funding address, and the UTxOs the wallet itself reports there (CIP-30
+ * getUtxos). A runtime engine builds from exactly those, so it never picks an input the wallet does not know (chain
+ * APIs behind a load balancer can lag one another; a real wallet keeps its own index).
+ */
+export function fromWallet(wallet) {
+  const address = fundingAddress(wallet);
+  const walletUtxos = [];
+  for (const [ref, u] of wallet.utxos) {
+    if (u.address !== address) continue;
+    const [txHash, index] = ref.split('#');
+    walletUtxos.push({ txHash, index: Number(index), address, value: [...u.value].map(([unit, q]) => ({ unit, quantity: String(q) })),
+      datumHash: u.datumHash ?? null, inlineDatum: u.inlineDatum ?? null, referenceScriptHash: null });
+  }
+  return { address, walletUtxos };
+}
+
 export function fundingAddress(wallet) {
   const lovelace = new Map();
   for (const u of wallet.utxos.values()) lovelace.set(u.address, (lovelace.get(u.address) ?? 0n) + (u.value.get('lovelace') ?? 0n));
@@ -132,7 +149,7 @@ export class JoustContract {
     const wallet = await walletView(CSL, api);
     if (wallet.networkId !== this.deployment.networkId) throw new Error('the wallet is on another network');
     if (this.chain.registered && await this.chain.registered(this.rewardAddress) === true) return null;
-    const p = await this.service.prepare({ contract: this.description.preamble.title, kind: 'registerStake', address: fundingAddress(wallet) });
+    const p = await this.service.prepare({ contract: this.description.preamble.title, kind: 'registerStake', ...fromWallet(wallet) });
     const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
     const { problems } = verifyRegistration({ CSL, txHex: p.cbor, governor: { hash: this.deployment.policy }, wallet,
       chain: { tip, params }, networkId: this.deployment.networkId, limits: this.limits });
@@ -173,7 +190,7 @@ export class JoustContract {
     if (wallet.networkId !== this.deployment.networkId) throw new Error('the wallet is on another network');
     const co = await cosignersOf(CSL, opts.cosigners, wallet, this.deployment.networkId);
     const prepared = await this.service.prepare({
-      contract: this.description.preamble.title, kind: op, address: fundingAddress(wallet),
+      contract: this.description.preamble.title, kind: op, ...fromWallet(wallet),
       ...(op === 'delegate' ? { pool: what.pool } : { amount: String(what.amount), args: toJson(what.args) }),
       ...(co.keys.length ? { cosigners: co.keys } : {}),
     });
@@ -248,7 +265,7 @@ export class JoustContract {
       object: call.object ?? null,
       args: toJson(call.args ?? {}),
       pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: call.pay?.assets ?? [] }),
-      address: fundingAddress(wallet),
+      ...fromWallet(wallet),
       ...(co.keys.length ? { cosigners: co.keys } : {}),
       ...(gov ? { governor: { script: gov.script, signers: gov.signerKeys } } : {}),
     });
@@ -397,8 +414,8 @@ JoustContract.prototype.runIntentOp = async function runIntentOp(api, request, v
   const { CSL } = this;
   const wallet = await walletView(CSL, api);
   if (wallet.networkId !== this.deployment.networkId) throw new Error('the wallet is on another network');
-  const address = fundingAddress(wallet);
-  const prepared = await this.service.prepare({ contract: this.description.preamble.title, ...request, address });
+  const { address, walletUtxos } = fromWallet(wallet);
+  const prepared = await this.service.prepare({ contract: this.description.preamble.title, ...request, address, walletUtxos });
   const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
   const { problems, report } = await verify({
     CSL, description: this.description, deployment: this.deployment, txHex: prepared.cbor, call: { ...call, address },

@@ -2,9 +2,12 @@
 // joust: JOUST contracts with npm only (ADR-0015 D9).
 //   joust build                 compile contracts/ (.java, .jsc) into build/joust/
 //   joust deploy [--network n]  publish the reference scripts; write build/joust/deployments.<n>.json
+//   joust dev [--network n] [--port p]  attach to the chain (DevKit/Yaci Store, or Blockfrost), build, deploy, rebuild
+//                               on save, serve the page with the chain API proxied at /chain
 //   joust version
 import { build, VERSION } from '../src/build.js';
 import { deploy } from '../src/deploy.js';
+import { dev } from '../src/dev.js';
 import { loadConfig } from '../src/config.js';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -25,12 +28,19 @@ try {
       await deploy({ config, networkName: flag('network') });
       process.exit(0);
       break;
+    case 'dev': {
+      const d = await dev({ config, networkName: flag('network'), port: flag('port') ? Number(flag('port')) : undefined });
+      const stop = async () => { await d.close(); process.exit(0); };
+      process.on('SIGINT', stop);
+      process.on('SIGTERM', stop);
+      break;
+    }
     case 'version':
     case '--version':
       console.log(VERSION);
       break;
     default:
-      console.log('usage: joust build | deploy [--network <name>] | version');
+      console.log('usage: joust build | deploy [--network <name>] | dev [--network <name>] [--port <port>] | version');
       process.exit(cmd ? 1 : 0);
   }
 } catch (e) {

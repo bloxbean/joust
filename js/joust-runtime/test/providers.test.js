@@ -93,14 +93,21 @@ test('the engine gets the same snapshot from either provider', { skip, timeout: 
   const og = ogmiosProvider(OGMIOS);
   const w = devWallet({ CSL, chain: chainOf(bf, { CSL }) });
   await devkitTopUp(w.address, 5, ADMIN, { CSL, chain: chainOf(bf, { CSL }) });
-  const a = emptySnapshot();
-  const b = emptySnapshot();
-  for (const [kind, key] of [['protocolParams', ''], ['utxos', w.address]]) {
-    await fetchNeed(og, a, kind, key);
-    await fetchNeed(bf, b, kind, key);
-  }
-  // The same set (the order of an address's UTxOs is the provider's; the engine's coin selection sorts them).
+  // The same set (the order of an address's UTxOs is the provider's; the engine's coin selection sorts them). Yaci
+  // Store indexes a moment after the node: compare once both have seen the top-up.
   const byRef = (l) => [...l].sort((x, y) => (`${x.tx_hash}#${x.output_index}` < `${y.tx_hash}#${y.output_index}` ? -1 : 1));
+  let a;
+  let b;
+  for (let i = 0; i < 20; i++) {
+    a = emptySnapshot();
+    b = emptySnapshot();
+    for (const [kind, key] of [['protocolParams', ''], ['utxos', w.address]]) {
+      await fetchNeed(og, a, kind, key);
+      await fetchNeed(bf, b, kind, key);
+    }
+    if (JSON.stringify(byRef(a.utxos[w.address])) === JSON.stringify(byRef(b.utxos[w.address]))) break;
+    await new Promise((ok) => setTimeout(ok, 1000));
+  }
   assert.deepEqual(byRef(a.utxos[w.address]), byRef(b.utxos[w.address]));
   for (const k of KEYS) assert.equal(norm(a.protocolParams[k]), norm(b.protocolParams[k]), k);
 });

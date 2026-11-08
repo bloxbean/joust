@@ -63,9 +63,19 @@ export function blockfrostProvider(baseUrl, { projectId, fetchImpl } = {}) {
   const base = baseUrl.replace(/\/$/, '');
   const f = fetchImpl ?? globalThis.fetch.bind(globalThis);
   const headers = projectId ? { project_id: projectId } : {};
+  // Blockfrost sits behind a load balancer whose backends can be at different tips. Its affinity cookie (__cflb) keeps
+  // every request of this provider on one backend, so what it reads only moves forward (a browser keeps it itself).
+  let affinity = null;
+  const remember = (r) => {
+    const c = r.headers.get?.('set-cookie');
+    const m = c && /__cflb=([^;]+)/.exec(c);
+    if (m) affinity = '__cflb=' + m[1];
+  };
+  const withAffinity = (h) => (affinity ? { ...h, cookie: affinity } : h);
 
   async function get(path, { allow404 = false } = {}) {
-    const r = await f(base + path, { headers });
+    const r = await f(base + path, { headers: withAffinity(headers) });
+    remember(r);
     if (allow404 && r.status === 404) return null;
     if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`);
     return r.json();
@@ -107,7 +117,8 @@ export function blockfrostProvider(baseUrl, { projectId, fetchImpl } = {}) {
     async output(ref) {
       const [hash, index] = ref.split('#');
       const j = await get(`/txs/${hash}/utxos`, { allow404: true });
-      const o = j?.outputs?.find((x) => x.output_index === Number(index));
+      // Blockfrost lists a collateral return among the outputs (flagged): it exists only if a script fails.
+      const o = j?.outputs?.find((x) => x.output_index === Number(index) && !x.collateral);
       return o ? utxo(o, hash) : null;
     },
     async scriptCbor(hash) {
@@ -139,16 +150,62 @@ export function blockfrostProvider(baseUrl, { projectId, fetchImpl } = {}) {
       // Yaci Store answers registered and unknown credentials alike: registration unknown.
       return { registered: typeof j.active === 'boolean' ? j.active : undefined, rewards: BigInt(j.withdrawable_amount ?? 0) };
     },
-    async submit(cborHex) {
-      const r = await f(base + '/tx/submit', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/cbor' }, body: hexToBytes(cborHex) });
-      const text = await r.text();
-      if (!r.ok) throw new Error('submit failed: ' + r.status + ' ' + text);
-      return text.replace(/"/g, '').trim();
+    async submit(cborHex, { retries = 10, intervalMs = 3000 } = {}) {
+      for (let attempt = 0; ; attempt++) {
+        const r = await f(base + '/tx/submit', { method: 'POST', headers: withAffinity({ ...headers, 'Content-Type': 'application/cbor' }), body: hexToBytes(cborHex) });
+        remember(r);
+        const text = await r.text();
+        if (r.ok) return text.replace(/"/g, '').trim();
+        // The node behind the submit endpoint can be a block behind the index the inputs were read from: the same
+        // signed transaction is resubmitted (valid until its TTL; nothing is signed again).
+        if (r.status === 400 && /BadInputsUTxO/.test(text) && attempt < retries) {
+          await sleep(intervalMs);
+          continue;
+        }
+        throw new Error('submit failed: ' + r.status + ' ' + text);
+      }
     },
-    async awaitTx(hash, { timeoutMs = 60_000, intervalMs = 1000 } = {}) {
+    async awaitTx(hash, { timeoutMs = 120_000, intervalMs = 1000 } = {}) {
       const until = Date.now() + timeoutMs;
       while (Date.now() < until) {
-        if (await get(`/txs/${hash}`, { allow404: true })) return true;
+        if (await get(`/txs/${hash}`, { allow404: true })) {
+          // Blockfrost indexes addresses a moment after transactions: wait until an output shows in its address's
+          // UTxOs (or is spent already), so the next call's wallet view and the engine's snapshot both see it.
+          // Every address an output went to (the wallet's change as well as the contract's), collateral aside; and
+          // every address it spent from, until the spent outputs have left the index (a closed instance is gone).
+          const tx = (await get(`/txs/${hash}/utxos`, { allow404: true })) ?? {};
+          const spent = (tx.inputs ?? []).filter((x) => !x.collateral && !x.reference);
+          for (const address of new Set(spent.map((x) => x.address))) {
+            const refs = new Set(spent.filter((x) => x.address === address).map((x) => `${x.tx_hash}#${x.output_index}`));
+            for (let i = 0; i < 30 && Date.now() < until; i++) {
+              const list = await pages(`/addresses/${address}/utxos`).catch(() => []);
+              if (!list.some((u) => refs.has(`${u.tx_hash}#${u.output_index}`))) break;
+              await sleep(intervalMs);
+            }
+          }
+          const outs = (tx.outputs ?? []).filter((x) => !x.collateral);
+          for (const address of new Set(outs.filter((x) => !x.consumed_by_tx).map((x) => x.address))) {
+            for (let i = 0; i < 30 && Date.now() < until; i++) {
+              const list = (await get(`/addresses/${address}/utxos?order=desc&count=100`, { allow404: true })) ?? [];
+              if (list.some((u) => u.tx_hash === hash)) break;
+              const now = ((await get(`/txs/${hash}/utxos`, { allow404: true }))?.outputs ?? [])
+                .filter((x) => !x.collateral && x.address === address);
+              if (now.every((x) => x.consumed_by_tx)) break;   // spent already: nothing left to show
+              await sleep(intervalMs);
+            }
+          }
+          // The by-asset index too (how an instance is found by its token): each new output's tokens listed there.
+          for (const o of outs.filter((x) => !x.consumed_by_tx)) {
+            for (const unit of o.amount.map((a) => a.unit).filter((u) => u !== 'lovelace').slice(0, 3)) {
+              for (let i = 0; i < 30 && Date.now() < until; i++) {
+                const list = (await get(`/addresses/${o.address}/utxos/${unit}`, { allow404: true })) ?? [];
+                if (list.some((u) => u.tx_hash === hash)) break;
+                await sleep(intervalMs);
+              }
+            }
+          }
+          return true;
+        }
         await sleep(intervalMs);
       }
       throw new Error(`transaction ${hash} not on chain after ${timeoutMs} ms`);

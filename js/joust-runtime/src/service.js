@@ -3,7 +3,7 @@
 // submits exactly as before; only the builder moved into the page or the Node process.
 
 import { loadEngine } from './engine.js';
-import { emptySnapshot, fetchNeed } from './snapshot.js';
+import { emptySnapshot, fetchNeed, utxoJson } from './snapshot.js';
 import { memoryMapStore } from './maps.js';
 import { mapMirror } from './mirror.js';
 import { readFileSync } from 'node:fs';
@@ -62,6 +62,8 @@ export function engineService(o) {
     const engine = await loadEngine(o.engine);
     const snapshot = emptySnapshot();
     const mapProofs = {};
+    // The wallet's own UTxOs at its funding address (CIP-30): the engine builds from exactly those (D5).
+    if (call.walletUtxos && call.address) snapshot.utxos[call.address] = call.walletUtxos.map(utxoJson);
     if (o.prefetch) await o.prefetch(call, snapshot);
     for (let round = 1; round <= (o.maxRounds ?? 64); round++) {
       const mapNodes = maps ? { ...maps.all() } : {};

@@ -407,7 +407,7 @@ export async function verifyComposed(o) {
 export async function runComposed({ CSL, service, chain, api, steps, limits, onReview }) {
   const { walletView, assemble } = await import('./wallet.js');
   const { toJson } = await import('./data.js');
-  const { fundingAddress, cosignersOf, signedByOthers } = await import('./client.js');
+  const { fromWallet, cosignersOf, signedByOthers } = await import('./client.js');
   const prepared = steps.map((s) => {
     const k = s.contract;
     const meta = k.meta(s.method, ['action', 'destroy', 'ownedAction', 'ownedDestroy', 'migrate']);
@@ -428,7 +428,7 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
     co.apis.forEach((a, i) => { if (!signing.some((x) => x.key === co.keys[i])) signing.push({ key: co.keys[i], api: a }); });
   }
   const request = {
-    address: fundingAddress(wallet),
+    ...fromWallet(wallet),
     calls: prepared.map(({ k, call }) => ({
       contract: k.description.preamble.title, kind: call.kind, method: call.meta.name, instance: call.instance ?? null,
       object: call.object ?? null, args: toJson(call.args), pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: call.pay?.assets ?? [] }),

@@ -46,7 +46,7 @@ export function joustRuntime(o) {
    */
   async function prefetch(call, snapshot) {
     const want = [['tip', ''], ['protocolParams', '']];
-    if (call.address) want.push(['utxos', call.address]);
+    if (call.address && !call.walletUtxos) want.push(['utxos', call.address]);
     for (const c of call.calls ?? [call]) {
       const d = deploymentOf(c.contract);
       if (!d) continue;

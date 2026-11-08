@@ -76,14 +76,19 @@ public final class Prepare {
     public record Result(boolean ok, String cbor, String txHash, String created, long validTo, List<String> signers,
                          String plan, String needKind, String needKey, String error, Map<String, String> mapNodes) {}
 
-    /** Described contracts by the description's text: parsed once. */
+    /**
+     * Described contracts, parsed once: by description, script and transition programs together (a rebuild can change
+     * the code and keep the description, as joust dev does on save).
+     */
     private static final Map<String, DescribedContract> LOADED = new HashMap<>();
 
     static DescribedContract load(Contract c) throws Exception {
-        DescribedContract d = LOADED.get(c.description());
+        String key = c.description() + '\u0000' + c.script() + '\u0000'
+                + (c.transitions() == null ? "" : new java.util.TreeMap<>(c.transitions()).toString());
+        DescribedContract d = LOADED.get(key);
         if (d == null) {
             d = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
-            LOADED.put(c.description(), d);
+            LOADED.put(key, d);
         }
         return d;
     }

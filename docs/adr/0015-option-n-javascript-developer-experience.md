@@ -1120,6 +1120,41 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
   - The DevKit's in-page wallets stay beside the extensions, since browser wallets cannot join a private devnet.
   - The page verifier and the signing flow are unchanged.
 
+- **`joust dev` and preview through Blockfrost (2026-11-09).**
+  - **`joust dev [--network n]`:**
+    - It attaches to the network's chain: Yaci DevKit through Yaci Store's Blockfrost-compatible API, or Blockfrost
+      itself. On a DevKit it can first run the network's `start` command.
+    - It builds, deploys, and rebuilds and redeploys on save. It serves the page (with Vite when the project has it).
+    - It also serves `/chain` (the chain API, proxied: a Blockfrost project id stays in the dev server),
+      `/joust/network.json` (network, clock, deployments), `/joust/*` (the build) and `/dev/topup` (DevKit faucet).
+    - `preview` is a built-in network. Its clock comes from preview's genesis (system start 1666656000, 1 s slots,
+      checked against the tip). The project id is read from `BLOCKFROST_PREVIEW_PROJECT_ID` and the deployer from
+      `JOUST_MNEMONIC`, never from the config file.
+  - **On DevKit:** `js/joust/test/dev.test.js` passes on a fresh template project. It deploys and calls through
+    `/chain` only, funds a wallet at `/dev/topup`, and checks a save that redeploys a new policy.
+  - **On preview:**
+    - The template's Counter, built and deployed with the CLI only (`joust build`, then `joust deploy --network
+      preview`).
+    - `preview.test.js` (run when the project id and a funded key are set) passes. The Counter flow runs with I5 on
+      preview (10 of 10 tamperings refused before signing). The Token flow's second runtime, with an empty mirror,
+      rebuilds the map from Blockfrost's history and transfers, and the first runtime catches up.
+    - `joust dev --network preview` attaches and proxies without exposing the project id.
+  - **What preview showed that DevKit could not** (Yaci Store indexes and submits on one node). Blockfrost sits behind
+    a load balancer whose backends, indexes and submit node can each be a moment apart:
+    - **The engine builds from the wallet's own UTxOs.** Requests carry `walletUtxos`, the CIP-30 `getUtxos` set at the
+      funding address. The runtime seeds the snapshot with them, so it never picks an input the wallet does not report.
+      This also suits real wallets, which keep their own index.
+    - **The provider is sticky.** It keeps the `__cflb` affinity cookie, so every request reaches one backend.
+    - **`awaitTx` waits for every index a next call reads:** each output's address, each spent input's removal, and
+      the by-asset index of each new token.
+    - **Submit retries.** On `BadInputsUTxO` the same signed transaction is resubmitted, for a submit node a block
+      behind. It stays valid until its TTL, and nothing is signed again.
+    - **Collateral outputs are skipped.** Blockfrost lists a transaction's collateral return among its outputs,
+      flagged, and the provider ignores it.
+  - **An engine bug that `joust dev` found:** the engine cached contracts by description alone, so a rebuild that
+    changes the code but not the description served the old script. The cache key now includes the script and the
+    transition programs.
+
 ### 13.12 MerkleMap mirrors (M4): proofs for the engine, Aiken's MPF in JS, RocksDB on the JVM, rebuilt from the chain
 
 **Problem.**

@@ -15,8 +15,8 @@
     "engine"
   ],
   "dependencies": {
-    "@julclang/state-client": "0.1.0",
-    "@julclang/joust-runtime": "0.1.0"
+    "@julclang/joust-runtime": "0.1.0",
+    "@julclang/state-client": "0.1.0"
   },
   "engines": {
     "node": ">=22"
@@ -24,5 +24,11 @@
   "license": "UNLICENSED",
   "publishConfig": {
     "registry": "http://127.0.0.1:4873/"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@scure/bip39": "1.6.0"
   }
 }

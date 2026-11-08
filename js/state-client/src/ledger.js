@@ -176,8 +176,12 @@ export function poolKeyHash(pool) {
 
 /** A CIP-30 UTxO (hex CBOR of TransactionUnspentOutput) as { ref, address, value }. */
 export function unspentOutput(hex) {
-  const [input, output] = Serialization.TransactionUnspentOutput.fromCbor(hex).toCore();
-  return { ref: refOfCore(input), address: output.address, value: valueOf(output.value) };
+  const u = Serialization.TransactionUnspentOutput.fromCbor(hex);
+  const [input, output] = u.toCore();
+  const datum = u.output().datum();
+  const inline = datum?.asInlineData?.();
+  return { ref: refOfCore(input), address: output.address, value: valueOf(output.value),
+    inlineDatum: inline ? inline.toCbor() : null, datumHash: datum?.asDataHash?.() ?? null };
 }
 
 /** The base address of a payment and a stake credential (bech32). */

@@ -9,7 +9,14 @@ export const DEFAULTS = {
   out: 'build/joust',
   network: 'devkit',
   networks: {
+    // Yaci DevKit: Yaci Store's Blockfrost-compatible API, and the admin API (slot clock, faucet).
     devkit: { chain: 'http://localhost:8080/api/v1', admin: 'http://localhost:10000', networkId: 0 },
+    // Cardano preview through Blockfrost (its project id from the environment, never the config). Clock from preview's
+    // genesis: system start 1666656000, one-second slots from slot 0 (checked against the tip, 2026-11-08).
+    preview: {
+      chain: 'https://cardano-preview.blockfrost.io/api/v0', projectIdEnv: 'BLOCKFROST_PREVIEW_PROJECT_ID', networkId: 0,
+      clock: { zeroSlot: 0, zeroTimeMs: 1666656000000, slotLengthMs: 1000 },
+    },
   },
 };
 
