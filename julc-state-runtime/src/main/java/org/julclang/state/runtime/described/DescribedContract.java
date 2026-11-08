@@ -212,6 +212,7 @@ public final class DescribedContract {
                 for (var rd : reads) b.referenceInputs(rd.utxo());
                 b.usesCtx(usesCtx).received(lovelace)
                         .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                if (meta.path("policies").path("receives").asBoolean()) b.receives();   // takes deposits (ADR-0011 D3)
                 if (assetAware) {
                     b.receivedAssets(offered).runAssets(false, (s, sh, ctx, funds) -> full(discover(transition, spec.layout(), s, NONE,
                             argsWith.apply(funds), ctxData(ctx, usesCtx))));
@@ -359,7 +360,14 @@ public final class DescribedContract {
         }
         var mint = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(c.fields().get(3)), org.julclang.ledger.Value.class);
         var accepted = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(c.fields().get(4)), org.julclang.ledger.Value.class);
-        return Transition.full(base.next(), base.payouts(), sends, mint, accepted);
+        JulcList<org.julclang.state.api.Deposit> deposits = JulcList.empty();
+        if (c.fields().size() > 5) {
+            var ds = ((PlutusData.ListData) c.fields().get(5)).items();
+            for (int i = ds.size() - 1; i >= 0; i--) {
+                deposits = deposits.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(ds.get(i)), org.julclang.state.api.Deposit.class));
+            }
+        }
+        return Transition.full(base.next(), base.payouts(), sends, mint, accepted).withDeposits(deposits);
     }
 
     /** Offered native assets: {@code [[policy, [[name, quantity]]]]} (hex), as the JS client sends them. */
@@ -401,8 +409,7 @@ public final class DescribedContract {
         boolean cosigned = !p.path("quorum").isNull() && !p.path("quorum").isMissingNode() || !p.path("authorizedBy").isEmpty();
         JsonNode r = meta.path("returns");
         return p.path("batched").asBoolean() || p.path("into").asBoolean()
-                || !p.path("admits").isNull() && !p.path("admits").isMissingNode() || p.path("receives").asBoolean()
-                || r.path("deposits").asBoolean()
+                || !p.path("admits").isNull() && !p.path("admits").isMissingNode()
                 || r.path("events").asBoolean() || cosigned;
     }
 

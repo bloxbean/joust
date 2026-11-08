@@ -843,8 +843,14 @@ direct `Tx` building, gated by S3.
     minting.
   - The examples' M0 fixtures came from key accounts (the signing path), so they are not prepares; these come from
     the path a JS developer uses.
-- **Next in M3:** composition and deposits, moves, co-signers (`@Quorum`, `@AuthorizedBy`) and batches; each recorded
-  into `fixtures/m3` the same way.
+- **Deposits and `@Receives` (ADR-0011 D3) in the dispatcher.**
+  - The asset-aware step gains its sixth component, the deposits.
+  - `@Receives` actions take the composition's incoming claims through `Funds`.
+  - On DevKit (JVM, `DescribedFeesDevnetTest`), a Stall's sale deposits its fee into a Pot whose `collect` takes it
+    in one composed transaction, also with the receiver first.
+- **Composition through npm** needs the page verifier to check a composed transaction call by call: each call's
+  target, redeemer and continuation, with the wallet's outflow and what others receive bounded over the whole
+  transaction. That is the next piece. Moves, co-signers (`@Quorum`, `@AuthorizedBy`) and batches build on it.
 
 ## Revision history
 
