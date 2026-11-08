@@ -812,8 +812,29 @@ direct `Tx` building, gated by S3.
     types (`CodecFeature`).
   - **`devkitMint`:** a single-signature native-script mint, for tests and demos.
   - On the JVM, `DescribedLockerDevnetTest` runs the same flow through the dispatcher.
-- **Next in M3:** minting (`ByAction`), co-signers (`@Quorum`, `@AuthorizedBy`), batches, composition and deposits,
-  moves; and call requests in every example's fixtures (I3).
+- **Minting (ADR-0007 D4) through npm.** Dex passes on DevKit: LP tokens minted with `ByAction`, swaps both ways with
+  slippage protection, and every LP token burned.
+  - The step's `mint` component is the method's.
+  - The dispatcher adds the `ByAction` mint redeemer, its constructor index taken from the description's `Lifecycle`
+    definition.
+  - **The page verifier** lets a minting method mint or burn only tokens of the pinned policy, never a thread token,
+    with exactly one `ByAction` redeemer naming the target input. An output may carry a contract token only if this
+    call mints it.
+- **Finding: cardano-client-lib 0.8.0-pre7's `Tx` treats a collected regular input differently on its two build
+  paths.** `AssetTx.collectAssets` explicitly collects the caller's UTxOs holding the native assets it pays in.
+  - **The signing build** (`buildAndSign`, a key account) needs this: without it, the node cannot decode the
+    transaction ("expected word"; Dex, Locker, Market on DevKit).
+  - **The unsigned build** (`build`, a wallet's `prepare`) balances native assets itself. A collected UTxO that the
+    balancing also selects, such as a wallet's only UTxO, counts twice, and the transaction does not balance. A
+    prepared Dex swap reproduced it on the JVM.
+  - So the runtime collects only for key accounts (`caller instanceof WalletAccount` skips it). This is worth
+    reporting to cardano-client-lib.
+- **The snapshot backend** returns one object per output reference, whichever query found it: cardano-client-lib tells
+  UTxOs apart by equality.
+- **`devkitSweep`** moves what contracts sent to the wallet key's enterprise address to its base address, as
+  `DevKit.sweepEnterprise` does.
+- **Next in M3:** co-signers (`@Quorum`, `@AuthorizedBy`), batches, composition and deposits, moves; and call requests
+  in every example's fixtures (I3).
 
 ## Revision history
 

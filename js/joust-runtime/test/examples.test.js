@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devWallet, JoustContract } from '../src/index.js';
+import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devkitSweep, devWallet, JoustContract } from '../src/index.js';
 import { build } from '../../joust/src/build.js';
 import { tamperings } from '../../../examples/dapp/frontend/src/tamper.js';
 
@@ -224,4 +224,34 @@ test('Locker: native assets accepted and sent back (the output verifier), balanc
   const ent = CSL.EnterpriseAddress.new(0, CSL.Credential.from_keyhash(CSL.Ed25519KeyHash.from_hex(ann.keyHash))).to_address().to_bech32();
   for (const u of await rt.chain.utxosAt(ent)) back += u.value.get(unit) ?? 0n;
   assert.equal(back, 1000n, 'every token came back');
+});
+
+test('Dex: liquidity minted as LP tokens (ByAction), swaps both ways, LP burned', { skip, timeout: 900_000 }, async () => {
+  const { rt, wallets, contract } = await setup(['dex']);
+  const [admin, lp, trader] = await wallets(3, 500);
+  const { policy } = await devkitMint(CSL, rt.chain, lp, 'HOSKY', 1_000_000n);
+  const name = Buffer.from('HOSKY').toString('hex');
+  const dex = await contract('Dex', admin);
+  const d = dex.at((await dex.deploy(admin, { tokenPolicy: policy, tokenName: name })).instance);
+  await d.call(lp, 'addLiquidity', { tokenIn: 100_000n }, { lovelace: 100n * ADA, assets: [[policy, [[name, 100_000n]]]] });
+  const pool = await d.state();
+  assert.equal(pool.lpSupply, 100n * ADA);
+  const lpUnit = dex.deployment.policy + pool.lpName;
+  // ADA -> token, with slippage protection: amountOut(in, reserveIn, reserveOut) with the 0.3% fee.
+  const amountOut = (i, rIn, rOut) => (i * 997n * rOut) / (rIn * 1000n + i * 997n);
+  const expect = amountOut(10n * ADA, 100n * ADA, 100_000n);
+  await assert.rejects(d.call(trader, 'swapAdaForToken', { minOut: expect + 1n }, { lovelace: 10n * ADA }));
+  await d.call(trader, 'swapAdaForToken', { minOut: expect }, { lovelace: 10n * ADA });
+  await devkitSweep(CSL, rt.chain, trader);
+  const sell = expect / 2n;
+  await d.call(trader, 'swapTokenForAda', { tokenIn: sell, minOut: 1n }, { lovelace: 0n, assets: [[policy, [[name, sell]]]] });
+  // The provider takes its liquidity out: LP burned.
+  await devkitSweep(CSL, rt.chain, lp);
+  const all = (await d.state()).lpSupply;
+  await d.call(lp, 'removeLiquidity', { lp: all }, { lovelace: 0n, assets: [[dex.deployment.policy, [[pool.lpName, all]]]] });
+  assert.equal((await d.state()).lpSupply, 0n);
+  let left = 0n;
+  for (const u of await rt.chain.utxosAt(lp.address)) left += u.value.get(lpUnit) ?? 0n;
+  assert.equal(left, 0n, 'every LP token burned');
+  await d.call(admin, 'close', {});
 });

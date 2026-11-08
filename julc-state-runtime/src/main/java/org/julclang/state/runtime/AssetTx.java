@@ -279,6 +279,10 @@ final class AssetTx {
                               Utxo alreadyIn) {
         var want = Assets.read(Assets.withoutLovelace(needed));
         if (want.isEmpty()) return;
+        // A wallet's unsigned build (Compose.prepare; ADR-0013, ADR-0015) balances native assets itself: there a
+        // collected regular input counts twice when the balancing also selects it (cardano-client-lib 0.8.0-pre7, Tx),
+        // while the signing build needs them collected. Both observed on DevKit (ADR-0015 §13.8).
+        if (caller instanceof WalletAccount) return;
         // The seed of a creation is already an input: count what it holds, never collect it twice.
         if (alreadyIn != null) {
             for (Amount a : alreadyIn.getAmount()) {

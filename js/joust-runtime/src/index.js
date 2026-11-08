@@ -9,7 +9,7 @@ import { engineService } from './service.js';
 export { loadEngine } from './engine.js';
 export { engineService } from './service.js';
 export { blockfrostApi, emptySnapshot, fetchNeed } from './snapshot.js';
-export { devkitClock, devkitTopUp, devkitMint } from './devkit.js';
+export { devkitClock, devkitTopUp, devkitMint, devkitSweep } from './devkit.js';
 export { memoryMapStore, fileMapStore } from './maps.js';
 export { JoustContract, VerificationError, blockfrostChain, toJson } from '@julclang/state-client';
 export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-client/devwallet';

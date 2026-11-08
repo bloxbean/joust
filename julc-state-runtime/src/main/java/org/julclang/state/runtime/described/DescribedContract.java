@@ -215,6 +215,11 @@ public final class DescribedContract {
                 if (assetAware) {
                     b.receivedAssets(offered).runAssets(false, (s, sh, ctx, funds) -> full(discover(transition, spec.layout(), s, NONE,
                             argsWith.apply(funds), ctxData(ctx, usesCtx))));
+                    // A method that mints the contract's own tokens: the ByAction mint redeemer (ADR-0007 D4).
+                    if (meta.path("returns").path("mint").asBoolean()) {
+                        int byAction = lifecycleIndex("ByAction");
+                        b.byAction(ref -> new PlutusData.ConstrData(byAction, List.of(ref.toPlutusData())));
+                    }
                 } else {
                     b.run((s, ctx) -> transition(discover(transition, spec.layout(), s, NONE, argsData, ctxData(ctx, usesCtx))));
                 }
@@ -397,8 +402,21 @@ public final class DescribedContract {
         JsonNode r = meta.path("returns");
         return p.path("batched").asBoolean() || p.path("into").asBoolean()
                 || !p.path("admits").isNull() && !p.path("admits").isMissingNode() || p.path("receives").asBoolean()
-                || r.path("mint").asBoolean() || r.path("deposits").asBoolean()
+                || r.path("deposits").asBoolean()
                 || r.path("events").asBoolean() || cosigned;
+    }
+
+    /** The index of the generated validator's Lifecycle constructor {@code title} (CreateInstance, BurnInstance, ByAction…). */
+    private int lifecycleIndex(String title) {
+        var it = description.path("definitions").fields();
+        while (it.hasNext()) {
+            var e = it.next();
+            if (!e.getKey().endsWith(".Lifecycle")) continue;
+            for (JsonNode alt : e.getValue().path("anyOf")) {
+                if (alt.path("title").asText().equals(title)) return alt.path("index").asInt();
+            }
+        }
+        throw new IllegalArgumentException(name + " has no " + title + " redeemer");
     }
 
     private static String refKey(JsonNode schema) {

@@ -93,3 +93,50 @@ export async function devkitMint(CSL, chain, wallet, name, quantity) {
   await chain.awaitTx(hash);
   return { policy, unit: policy + Buffer.from(name).toString('hex') };
 }
+
+/**
+ * Moves everything at the enterprise address of {@code wallet}'s key (where contracts send to {@code ctx.caller()}) to
+ * its base address, so the wallet can spend it. A DevKit convenience, as examples/devkit's DevKit.sweepEnterprise.
+ */
+export async function devkitSweep(CSL, chain, wallet) {
+  const ent = CSL.EnterpriseAddress.new(0, CSL.Credential.from_keyhash(CSL.Ed25519KeyHash.from_hex(wallet.keyHash))).to_address();
+  const utxos = await chain.utxosAt(ent.to_bech32());
+  if (!utxos.length) return null;
+  const p = await chain.params();
+  const num = (x) => CSL.BigNum.from_str(String(x));
+  const cfg = CSL.TransactionBuilderConfigBuilder.new()
+    .fee_algo(CSL.LinearFee.new(num(p.min_fee_a), num(p.min_fee_b)))
+    .pool_deposit(num(p.pool_deposit)).key_deposit(num(p.key_deposit))
+    .max_value_size(Number(p.max_val_size)).max_tx_size(Number(p.max_tx_size))
+    .coins_per_utxo_byte(num(p.coins_per_utxo_size ?? p.coins_per_utxo_byte ?? 4310))
+    .build();
+  const tb = CSL.TransactionBuilder.new(cfg);
+  const ib = CSL.TxInputsBuilder.new();
+  // The fee (and the change's minimum ADA) from the wallet's largest base-address UTxO.
+  const base = (await chain.utxosAt(wallet.address)).sort((a, b) => Number((b.value.get('lovelace') ?? 0n) - (a.value.get('lovelace') ?? 0n)))[0];
+  const inputs = base ? [...utxos, { ...base, from: CSL.Address.from_bech32(wallet.address) }] : utxos;
+  for (const u of inputs) {
+    const [hash, i] = u.ref.split('#');
+    const v = CSL.Value.new(num(u.value.get('lovelace') ?? 0n));
+    const ma = CSL.MultiAsset.new();
+    let any = false;
+    for (const [unit, q] of u.value) {
+      if (unit === 'lovelace') continue;
+      const assets = ma.get(CSL.ScriptHash.from_hex(unit.slice(0, 56))) ?? CSL.Assets.new();
+      assets.insert(CSL.AssetName.new(Buffer.from(unit.slice(56), 'hex')), num(q));
+      ma.insert(CSL.ScriptHash.from_hex(unit.slice(0, 56)), assets);
+      any = true;
+    }
+    if (any) v.set_multiasset(ma);
+    ib.add_regular_input(u.from ?? ent, CSL.TransactionInput.new(CSL.TransactionHash.from_hex(hash), Number(i)), v);
+  }
+  tb.set_inputs(ib);
+  tb.add_change_if_needed(CSL.Address.from_bech32(wallet.address));
+  const fixed = CSL.FixedTransaction.from_hex(tb.build_tx().to_hex());
+  const ws = CSL.TransactionWitnessSet.from_hex(await wallet.signTx(fixed.to_hex(), true));
+  const vkeys = ws.vkeys();
+  for (let i = 0; vkeys && i < vkeys.len(); i++) fixed.add_vkey_witness(vkeys.get(i));
+  const txHash = await chain.submit(fixed.to_hex());
+  await chain.awaitTx(txHash);
+  return txHash;
+}

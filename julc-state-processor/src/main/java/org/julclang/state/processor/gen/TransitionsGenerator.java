@@ -124,7 +124,7 @@ public final class TransitionsGenerator {
 
     private static boolean unsupported(TransitionIR t) {
         return t.batched()
-                || t.moves() || t.admits() || t.receives() || t.resultDeposits() || t.resultMint() || t.resultEvents();
+                || t.moves() || t.admits() || t.receives() || t.resultDeposits() || t.resultEvents();
     }
 
     /** One transition method; null when its parameters or result are not supported. */
@@ -170,23 +170,25 @@ public final class TransitionsGenerator {
         } else if (isPayouts(r)) {
             result = "return new " + step + "(Optional.empty(), " + invoke + tail + ");";
         } else if (r instanceof DeclaredType d && d.asElement().getKind() == ElementKind.RECORD) {
-            boolean hasState = false, hasPayouts = false, hasSends = false, hasAccepted = false;
+            boolean hasState = false, hasPayouts = false, hasSends = false, hasAccepted = false, hasMint = false;
             for (RecordComponentElement rc : Records.components((TypeElement) d.asElement())) {
                 switch (rc.getSimpleName().toString()) {
                     case "state" -> hasState = true;
                     case "payouts" -> hasPayouts = true;
                     case "sends" -> hasSends = true;
                     case "accepted" -> hasAccepted = true;
+                    case "mint" -> hasMint = true;
                     default -> {
                         return null;
                     }
                 }
             }
-            if ((hasSends || hasAccepted) && !c.assetAware()) return null;
+            if ((hasSends || hasAccepted || hasMint) && !c.assetAware()) return null;
             result = render(r) + " r = " + invoke + ";\n        return new " + step + "("
                     + (hasState ? "Optional.of(r.state())" : "Optional.empty()") + ", "
                     + (hasPayouts ? "r.payouts()" : "Payouts.none()")
-                    + (c.assetAware() ? ", " + (hasSends ? "r.sends()" : "Sends.none()") + ", Assets.none(), "
+                    + (c.assetAware() ? ", " + (hasSends ? "r.sends()" : "Sends.none()") + ", "
+                            + (hasMint ? "r.mint()" : "Assets.none()") + ", "
                             + (hasAccepted ? "r.accepted()" : "Assets.none()") : "") + ");";
         } else {
             return null;

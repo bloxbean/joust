@@ -273,6 +273,21 @@ export async function verifyPrepared(o) {
         const got = callFields(rdefs.mint, mints[0], 'the burn');
         if (got && (got.alt.title !== 'BurnInstance' || got.alt.fields.length !== 0)) problems.push('the burn redeemer is not BurnInstance');
       }
+    } else if (call.meta.returns?.mint) {
+      // A method that mints the contract's own tokens (ADR-0007 D4): only under the pinned policy, never its thread
+      // tokens, with one ByAction redeemer naming the target it spends; the amounts are the method's, checked on chain.
+      for (const unit of minted.keys()) {
+        if (!unit.startsWith(policy) || unit === targetUnit) problems.push(`a mint of ${unit}, not one of the contract's own tokens`);
+      }
+      if (minted.size && mints.length !== 1) problems.push('a mint needs exactly one ByAction redeemer');
+      if (!minted.size && mints.length) problems.push('a mint redeemer without a mint');
+      if (mints.length === 1) {
+        const got = callFields(rdefs.mint, mints[0], 'the mint');
+        if (got && got.alt.title !== 'ByAction') problems.push('the mint redeemer is not ByAction');
+        else if (got && report.targetRef && `${got.decoded.by.txId}#${got.decoded.by.index}` !== report.targetRef) {
+          problems.push('the ByAction redeemer names another input than the target');
+        }
+      }
     } else {
       if (minted.size) problems.push('a mint');
       if (mints.length) problems.push('a mint redeemer');
@@ -302,7 +317,10 @@ export async function verifyPrepared(o) {
     const out = outs.get(i);
     const value = valueMap(out.amount());
     for (const unit of value.keys()) {
-      if (unit.startsWith(policy) && unit !== continuingUnit && unit.length > 56) problems.push('an output carries another token of the contract');
+      // Another token of the contract (another instance's or object's) may not move, except the tokens this call
+      // mints itself (a minting method's own tokens, ADR-0007 D4).
+      const mintedHere = call.meta.returns?.mint && (minted.get(unit) ?? 0n) > 0n;
+      if (unit.startsWith(policy) && unit !== continuingUnit && unit.length > 56 && !mintedHere) problems.push('an output carries another token of the contract');
     }
     if (isWallet(out.address())) {
       if (out.has_script_ref() || out.has_data_hash()) problems.push('a wallet output with a script or datum hash');
@@ -466,7 +484,7 @@ function verifiableWithoutService(meta, description, deployment) {
   const p = meta.policies ?? {};
   const out = meta.returns ?? {};
   if (p.batched || p.into || p.admits || p.receives || p.quorum || p.authorizedBy?.length) return false;
-  if (out.mint || out.deposits || out.events) return false;
+  if (out.deposits || out.events) return false;
   // Sends: verifiable when the deployment pins JOUST's output verifier (the outputs are checked on chain; the page
   // still bounds what others receive by what the script releases).
   if (out.sends && !deployment?.outputVerifier) return false;

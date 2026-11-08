@@ -38,6 +38,24 @@ public final class SnapshotBackend implements BackendService {
         this.s = snapshot;
     }
 
+    /**
+     * One object per output reference, whichever query found it first. The same output may arrive in the address's
+     * set, a set by unit and a lookup, each in a slightly different JSON shape; cardano-client-lib tells UTxOs apart by
+     * equality, so two objects for one output would be selected twice (an unbalanced transaction).
+     */
+    private final java.util.Map<String, Utxo> canonical = new java.util.HashMap<>();
+
+    private Utxo canonical(Utxo u) {
+        if (u == null) return null;
+        return canonical.computeIfAbsent(Snapshot.ref(u.getTxHash(), u.getOutputIndex()), k -> u);
+    }
+
+    private List<Utxo> canonical(List<Utxo> list) {
+        var out = new ArrayList<Utxo>(list.size());
+        for (Utxo u : list) out.add(canonical(u));
+        return out;
+    }
+
     public Snapshot snapshot() {
         return s;
     }
@@ -124,7 +142,7 @@ public final class SnapshotBackend implements BackendService {
         public Result<List<Utxo>> getUtxos(String address, int count, int page, OrderEnum order) {
             List<Utxo> all = s.utxos.get(address);
             if (all == null) throw new Need("utxos", address);
-            return ok(page(all, count, page, order));
+            return ok(canonical(page(all, count, page, order)));
         }
 
         @Override
@@ -136,14 +154,14 @@ public final class SnapshotBackend implements BackendService {
         public Result<List<Utxo>> getUtxos(String address, String unit, int count, int page, OrderEnum order) {
             // The set by unit first: a recorded address listing can be a partial one (its first page).
             List<Utxo> some = s.assetUtxos.get(address + "|" + unit);
-            if (some != null) return ok(page(some, count, page, order));
+            if (some != null) return ok(canonical(page(some, count, page, order)));
             List<Utxo> all = s.utxos.get(address);
             if (all != null) {
                 List<Utxo> holding = new ArrayList<>();
                 for (Utxo u : all) {
                     if (u.getAmount().stream().anyMatch(a -> a.getUnit().equals(unit))) holding.add(u);
                 }
-                return ok(page(holding, count, page, order));
+                return ok(canonical(page(holding, count, page, order)));
             }
             throw new Need("assetUtxos", address + "|" + unit);
         }
@@ -151,7 +169,7 @@ public final class SnapshotBackend implements BackendService {
         @Override
         public Result<Utxo> getTxOutput(String txHash, int outputIndex) {
             Utxo u = s.output(txHash, outputIndex);
-            if (u != null) return ok(u);
+            if (u != null) return ok(canonical(u));
             if (s.absent.contains(Snapshot.ref(txHash, outputIndex))) {
                 Result<Utxo> r = Result.error("not found");
                 r.code(404);
