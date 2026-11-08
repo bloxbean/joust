@@ -188,7 +188,7 @@ final class TxRunner {
                     .collateralPayer(caller.baseAddress())
                     .mergeOutputs(false);
             if (referenceScripts != null && referenceScripts.length > 0) ctx = ctx.withReferenceScripts(referenceScripts);
-            if (requiredSigners.length > 0) ctx = ctx.withRequiredSigners(requiredSigners);
+            if (requiredSigners.length > 0) ctx = ctx.withRequiredSigners(requiredSigners).preBalanceTx(TxRunner::sortRequiredSigners);
             if (window != null) ctx = ctx.validFrom(window.fromSlot()).validTo(window.toSlot());
             if (rt.evaluator() != null) ctx = ctx.withTxEvaluator(rt.evaluator());
             if (Boolean.getBoolean("joust.debug.nodeEvaluates")) {
@@ -232,6 +232,20 @@ final class TxRunner {
         return txHash;
     }
 
+    /**
+     * Required signers in byte order. QuickTx keeps them in a {@code HashSet<byte[]>} (identity hashes), so with two or
+     * more the order on the wire varies from run to run; it reaches scripts as {@code txInfo.signatories} and breaks
+     * byte-identical builds (ADR-0015 I3). Runs before balancing, so fees and script costs see the final order.
+     */
+    static void sortRequiredSigners(com.bloxbean.cardano.client.function.TxBuilderContext context,
+                                    com.bloxbean.cardano.client.transaction.spec.Transaction txn) {
+        var rs = txn.getBody().getRequiredSigners();
+        if (rs == null || rs.size() < 2) return;
+        var sorted = new java.util.ArrayList<>(rs);
+        sorted.sort(java.util.Arrays::compareUnsigned);
+        txn.getBody().setRequiredSigners(sorted);
+    }
+
     private Account[] allSigners(Account caller) {
         var all = new java.util.ArrayList<Account>();
         all.add(caller);
@@ -267,7 +281,7 @@ final class TxRunner {
                     // wallet itself (its change output did not exist yet): move it back from the change (ADR-0013 D1).
                     .postBalanceTx((context, txn) -> restorePayouts(txn, payer.baseAddress(), payouts, context.getProtocolParams()));
             if (referenceScripts != null && referenceScripts.length > 0) ctx = ctx.withReferenceScripts(referenceScripts);
-            if (requiredSigners.length > 0) ctx = ctx.withRequiredSigners(requiredSigners);
+            if (requiredSigners.length > 0) ctx = ctx.withRequiredSigners(requiredSigners).preBalanceTx(TxRunner::sortRequiredSigners);
             if (window != null) {
                 ctx = ctx.validFrom(window.fromSlot()).validTo(window.toSlot());
             } else {

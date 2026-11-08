@@ -9,6 +9,7 @@ import org.julclang.ledger.TxOutRef;
 import org.julclang.state.api.Ctx;
 import org.julclang.state.api.Payout;
 import org.julclang.state.runtime.Call;
+import org.julclang.state.runtime.Keys;
 import org.julclang.state.runtime.ContractSpec;
 import org.julclang.state.runtime.Deploy;
 import org.julclang.state.runtime.OwnedObject;
@@ -123,6 +124,16 @@ public final class DescribedContract {
     /** As above; {@code into}: a move's destination instance (ADR-0012 D3), composed with its {@code @Admits} call. */
     public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
                        JsonNode args, BigInteger lovelace, JsonNode params, JsonNode payAssets, String into) {
+        return call(runtime, caller, kind, method, instance, object, args, lovelace, params, payAssets, into, List.of());
+    }
+
+    /**
+     * As above; {@code cosigners}: the further keys a {@code @Quorum} call needs (ADR-0009 D2). For a wallet's prepare
+     * they are address-only accounts: each co-signer's wallet signs the prepared transaction.
+     */
+    public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
+                       JsonNode args, BigInteger lovelace, JsonNode params, JsonNode payAssets, String into,
+                       List<Account> cosigners) {
         JsonNode meta = meta(kind, method);
         JsonNode recipe = meta.get("recipe");
         if (recipe == null) throw new IllegalArgumentException(method + ": no call recipe (rebuild with JOUST's processor)");
@@ -131,7 +142,12 @@ public final class DescribedContract {
             throw new IllegalArgumentException(method + " takes no native assets");
         }
         boolean assetAware = x.path("assetAware").asBoolean();
-        if (unsupported(meta)) throw new IllegalArgumentException(method + " needs maps, intents, moves, sends, mints or composition: not supported yet (ADR-0015 M3)");
+        boolean signedByOthers = meta.path("policies").path("quorum").isObject() || !meta.path("policies").path("authorizedBy").isEmpty();
+        if (signedByOthers && !kind.equals("action") && !kind.equals("destroy")) {
+            throw new IllegalArgumentException(method + ": @Quorum and @AuthorizedBy on " + kind + " calls: not supported yet (ADR-0015 M3)");
+        }
+        if (!signedByOthers && !cosigners.isEmpty()) throw new IllegalArgumentException(method + " takes no co-signers");
+        if (unsupported(meta)) throw new IllegalArgumentException(method + " is batched (@Batched intents): not supported yet (ADR-0015 M3)");
         if (!meta.path("payable").asBoolean() && lovelace.signum() != 0) throw new IllegalArgumentException(method + " is not payable");
         if (lovelace.signum() < 0) throw new IllegalArgumentException("a negative payment");
 
@@ -229,8 +245,17 @@ public final class DescribedContract {
                         : Call.<PlutusData>action(method, caller);
                 rules(b, recipe);
                 for (var rd : reads) b.referenceInputs(rd.utxo());
-                b.usesCtx(usesCtx).received(lovelace)
-                        .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                if (!cosigners.isEmpty()) b.cosigners(cosigners.toArray(new Account[0]));
+                authorize(method, meta, params, caller, cosigners, b);
+                // @Quorum counts the transaction's required signers: the caller (who signs anyway) is one of them.
+                if (meta.path("policies").path("quorum").isObject()) b.cosigners(caller);
+                b.usesCtx(usesCtx).received(lovelace);
+                if (hasField(fields, "events")) {
+                    // The method's events go into the redeemer (ADR-0009 D5): built from its result.
+                    b.redeemerWith((ctx, t) -> redeemer(alternative, fields, withEvents(byName, t), ctxData(ctx, usesCtx), null, null, offeredData));
+                } else {
+                    b.redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                }
                 if (meta.path("policies").path("receives").asBoolean()) b.receives();   // takes deposits (ADR-0011 D3)
                 if (assetAware) {
                     b.receivedAssets(offered).runAssets(false, (s, sh, ctx, funds) -> full(discover(transition, spec.layout(), s, NONE,
@@ -356,7 +381,30 @@ public final class DescribedContract {
         return PlutusDataAdapter.fromClientLib(PlutusDataAdapter.convert(ctx));
     }
 
-    /** A step ({@code Constr 0 [Some next | None, payouts]}) as the runtime's transition. */
+    private static boolean hasField(JsonNode fields, String name) {
+        for (JsonNode f : fields) if (f.asText().equals(name)) return true;
+        return false;
+    }
+
+    /** The arguments by name, with the transition's events (as Data) for the redeemer's {@code events} field. */
+    private static java.util.Map<String, PlutusData> withEvents(java.util.Map<String, PlutusData> args, Transition<?> t) {
+        var out = new java.util.LinkedHashMap<>(args);
+        var items = new ArrayList<PlutusData>();
+        for (Object e : t.events()) items.add((PlutusData) e);
+        out.put("events", new PlutusData.ListData(items));
+        return out;
+    }
+
+    /** The events a step carries after its other components (index {@code at}), as Data. */
+    private static JulcList<PlutusData> eventsOf(PlutusData.ConstrData c, int at) {
+        JulcList<PlutusData> out = JulcList.empty();
+        if (c.fields().size() <= at) return out;
+        var items = ((PlutusData.ListData) c.fields().get(at)).items();
+        for (int i = items.size() - 1; i >= 0; i--) out = out.prepend(items.get(i));
+        return out;
+    }
+
+    /** A step ({@code Constr 0 [Some next | None, payouts, events?]}) as the runtime's transition. */
     static Transition<PlutusData> transition(PlutusData step) {
         var c = (PlutusData.ConstrData) DataFidelity.check(step, "the method's result");
         var opt = (PlutusData.ConstrData) c.fields().get(0);
@@ -366,7 +414,8 @@ public final class DescribedContract {
         for (int i = items.size() - 1; i >= 0; i--) {
             payouts = payouts.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(items.get(i)), Payout.class));
         }
-        return next != null ? Transition.of(next, payouts) : Transition.end(payouts);
+        Transition<PlutusData> t = next != null ? Transition.of(next, payouts) : Transition.end(payouts);
+        return c.fields().size() > 2 ? t.withEvents(eventsOf(c, 2)) : t;
     }
 
     /** An asset-aware step ({@code Constr 0 [next?, payouts, sends, mint, accepted]}) as the runtime's full transition. */
@@ -387,7 +436,7 @@ public final class DescribedContract {
                 deposits = deposits.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(ds.get(i)), org.julclang.state.api.Deposit.class));
             }
         }
-        return Transition.full(base.next(), base.payouts(), sends, mint, accepted).withDeposits(deposits);
+        return Transition.full(base.next(), base.payouts(), sends, mint, accepted).withDeposits(deposits).withEvents(eventsOf(c, 6));
     }
 
     /** Offered native assets: {@code [[policy, [[name, quantity]]]]} (hex), as the JS client sends them. */
@@ -425,11 +474,30 @@ public final class DescribedContract {
 
     /** What this dispatcher cannot run yet (ADR-0015 M3): batches, composition and deposits, moves, mints, events, co-signers. */
     boolean unsupported(JsonNode meta) {
-        JsonNode p = meta.path("policies");
-        boolean cosigned = !p.path("quorum").isNull() && !p.path("quorum").isMissingNode() || !p.path("authorizedBy").isEmpty();
-        JsonNode r = meta.path("returns");
-        return p.path("batched").asBoolean()
-                || r.path("events").asBoolean() || cosigned;
+        return meta.path("policies").path("batched").asBoolean();
+    }
+
+    /**
+     * {@code @AuthorizedBy} (ADR-0009 D3) with a key credential: the key must sign, as the caller or a co-signer (it is
+     * made a required signer). A script credential (a governor's zero withdrawal) is not supported here yet.
+     */
+    private static void authorize(String method, JsonNode meta, JsonNode params, Account caller, List<Account> cosigners,
+                                  Call.Builder<PlutusData> b) {
+        for (JsonNode path : meta.path("policies").path("authorizedBy")) {
+            String at = path.asText();
+            if (!at.startsWith("params.")) throw new IllegalArgumentException(method + ": @AuthorizedBy(\"" + at + "\"): only @Params credentials are supported here yet (ADR-0015 M3)");
+            JsonNode cred = params == null ? null : params.get(at.substring("params.".length()));
+            if (cred == null) throw new IllegalArgumentException(method + ": no " + at + " in the call's params");
+            if (!"PubKeyCredential".equals(cred.path("$variant").asText())) {
+                throw new IllegalArgumentException(method + ": " + at + " is a script credential: a governor's approval is not supported here yet (ADR-0015 M3)");
+            }
+            String key = cred.path("hash").asText();
+            Account signer = null;
+            if (HexFormat.of().formatHex(Keys.pkh(caller)).equals(key)) signer = caller;
+            for (Account a : cosigners) if (HexFormat.of().formatHex(Keys.pkh(a)).equals(key)) signer = a;
+            if (signer == null) throw new IllegalArgumentException(method + " needs the signature of " + at + " (" + key + "): the caller or a co-signer");
+            if (signer == caller) b.cosigners(caller);   // a co-signer is a required signer already
+        }
     }
 
     /** The index of the generated validator's Lifecycle constructor {@code title} (CreateInstance, BurnInstance, ByAction…). */
@@ -516,7 +584,12 @@ public final class DescribedContract {
 
     /** The current state of {@code instance}, as JSON by the description's state schema. */
     public JsonNode state(StateRuntime runtime, String instance) {
-        return codec.decode(x.get("state"), handle(runtime, null).at(requireInstance(instance)).state());
+        return state(runtime, instance, null);
+    }
+
+    /** The current state of {@code instance} of a contract with {@code @Params} (they fix its script and address). */
+    public JsonNode state(StateRuntime runtime, String instance, JsonNode params) {
+        return codec.decode(x.get("state"), handle(runtime, params).at(requireInstance(instance)).state());
     }
 
     /** Names of the creations and actions this dispatcher can run (no maps, assets, params, batches, …). */

@@ -432,7 +432,7 @@ Each gate must pass before the milestones after it start, or the ADR is revised.
 | **M1d** | The shared dispatcher for call requests (`JoustServer` and the engine); I9's checks with its positive and negative fixtures | M1c | I3, I8 and I9 on the JVM |
 | **M2** | The runtime engine and packages: `joust-runtime-wasm`, `@julclang/joust-runtime`, `@julclang/joust`, `create-joust`; Verdaccio publishing; the no-Java acceptance test; the page verifier extended (D7) | M1d, S0, S1, S2 | I3 (Wasm against M0's fixtures), I4, I5 with tamper tests, I6, I7, I9 on Counter and Bank |
 | **M3** | Feature parity through npm: MerkleMaps (S2b, local mirror), composition and deposits, batching, native assets, `@Params`, owned moves | M2, S2b | Each example's DevKit flow passes through the npm path; I3 on every example's fixtures |
-| **M4** | `joust deploy` for preview and mainnet (Blockfrost), `joust dev`, the Vite plugin, page worker and SRI | M3 | A dApp on preview with Eternl or Lace, built from npm only |
+| **M4** | `joust deploy` for preview and mainnet (Blockfrost), `joust dev`, the Vite plugin, page worker and SRI; a pluggable chain provider (§13.9), cardano-js-sdk instead of CSL and a maintained wallet connector (§13.10) | M3 | A dApp on preview with Eternl or Lace, built from npm only; the flows pass on Blockfrost and one other provider |
 | **M5** | The release pipeline: GraalVM images in CI, tarballs, provenance, and (by maintainer decision) npmjs.org | M4 and Q4 | The release-ops checklist |
 
 Verification is differential throughout: JVM against Wasm on recorded `(request, snapshot)` fixtures from DevKit
@@ -877,7 +877,67 @@ direct `Tx` building, gated by S3.
   - **I5:** all 10 tamperings of a move are refused before signing.
   - **I3:** `fixtures/m3` holds 86 calls, Guild's 17 included, all byte-identical on the JVM.
   - On the JVM, `DescribedGuildDevnetTest` runs the same flow.
-- **Next in M3:** co-signers (`@Quorum`, `@AuthorizedBy`), batches, and creations inside compositions.
+- **`@Quorum` co-signers and events through npm.** Treasury passes on DevKit. A quorum of a council pays out,
+  rotates the council and closes the treasury, and each call's events go into its redeemer.
+  - A step carries the method's events (`stepEvents` in the recipe; the args record is unchanged). The dispatcher
+    puts them into the redeemer from the method's result (`redeemerWith`). The validator compares them with its own
+    run.
+  - Co-signers are other CIP-30 wallets that sign the same transaction (`call(wallet, name, args, pay,
+    { cosigners })`; generated clients take the same option on `@Quorum` methods). The request names their payment
+    keys (`cosigners`). The engine makes them required signers through address-only accounts, so no key enters it.
+  - The caller counts towards the quorum: the dispatcher makes it a required signer too, since it signs anyway.
+    Required signers are de-duplicated, because the ledger treats them as a set.
+  - **Page verifier:** a required signer must be one of the wallet's keys or a co-signer the page named. Every named
+    co-signer must be required. `@Quorum` and events no longer make a method need the service.
+  - **I5:** all 9 tamperings of a co-signed payment are refused before either wallet is asked, including an extra
+    required signer.
+  - On the JVM, `DescribedTreasuryDevnetTest` runs the same flow.
+  - **`@AuthorizedBy` with a key credential** (Treasury's guardian): the key must be the caller or a co-signer the
+    page names, and it becomes a required signer. The page verifies it when the deployment's `@Params` name a key. A
+    script governor (a zero withdrawal with an `Approvals` redeemer) is still refused.
+  - **Byte determinism (I3):** QuickTx keeps required signers in a `HashSet<byte[]>`, so with two or more their
+    order on the wire varied from run to run. They also reach scripts as `txInfo.signatories`. `TxRunner` now sorts
+    them before balancing. Upstream: a CCL issue to keep them ordered.
+  - **I3:** `fixtures/m3` holds 102 calls, Treasury's 16 included, all byte-identical on the JVM, run after run.
+- **Next in M3:** batches (`@Batched` intents: lock, cancel, batch), script governors for `@AuthorizedBy`, and
+  creations inside compositions.
+
+### 13.9 Planned for M4: a pluggable chain provider
+
+The engine does no I/O (D5). It names each chain read its snapshot lacks: `tip`, `protocolParams`, `utxos`
+(an address's complete set), `assetUtxos`, `output` and `script`. Today the npm runtime fetches them from a
+Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1`), and the page's `chain` comes from
+`blockfrostChain`. The only hook is `fetchImpl`. M4 adds the JavaScript counterpart of CCL's `BackendService`:
+
+- **A provider interface:** `tip()`, `protocolParams()`, `utxos(address)`, `assetUtxos(address, unit)`,
+  `output(ref)`, `scriptCbor(hash)`, `submit(cbor)` and `awaitTx(hash)`. It returns plain, normalised objects.
+- **The runtime owns the conversion** into the snapshot's JSON (the shape the engine's `SnapshotBackend` reads), so a
+  provider never learns CCL's formats.
+- **`joustRuntime({ provider })`.** The same provider backs the engine's needs and the page's `chain`: the verifier
+  reads from the same source the engine built from.
+- **Shipped providers:** Blockfrost (and Yaci Store), Koios, and maybe Ogmios with Kupo later. An app can bring its
+  own: an indexer, a cache, or a test double.
+- **Exit:** the example flows pass on Blockfrost and on one other provider, and a conformance test checks any
+  provider against recorded reads.
+
+### 13.10 Planned for M4: cardano-js-sdk instead of CSL, and a maintained wallet connector
+
+- **cardano-js-sdk (`@cardano-sdk/core`, IOG) replaces CSL in the JS layer.** The engine never used CSL. The page
+  verifier, codec and CIP-30 code use it only to parse and read a transaction, decode addresses, encode and decode
+  PlutusData, add vkey witnesses while keeping the body bytes, and hash; the dev wallet also derives keys and signs.
+  - These operations go behind an internal adapter in `state-client`, implemented with `@cardano-sdk/core`. The
+    `CSL` option leaves the public API, a breaking change best made before any npmjs.org release (Q4).
+  - Checked 2026-11-08 (`npm view`): `@cardano-sdk/core` 0.47.1, Apache-2.0, TypeScript. Its crypto package pulls in
+    `libsodium-wrappers-sumo` (Wasm with an asm.js fallback) for Ed25519 and `blake2b` (JS) for hashing. It is still
+    0.x.
+  - **Gates:**
+    - adding witnesses does not re-encode the body (the signed hash is the prepared one);
+    - PlutusData is byte-faithful on the recorded fixtures (definite and indefinite lists, canonical maps; I9);
+    - I5 is unchanged across every tamper loop;
+    - the bundle size is measured against CSL's.
+  - The verifier still parses with a different implementation from the engine's (CCL), so its independence holds.
+- **The dApp's connect button uses `cardano-connect-with-wallet` (Cardano Foundation)** instead of its own CIP-30
+  picker. The button only selects and enables a wallet; the page verifier and the signing flow are unchanged.
 
 ## Revision history
 

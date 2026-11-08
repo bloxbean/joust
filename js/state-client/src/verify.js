@@ -447,11 +447,16 @@ export async function verifyPrepared(o) {
   }
   if (ttl && start && Number(ttl.to_str()) - Number(start.to_str()) > limits.maxValiditySlots) problems.push('a validity interval that is too long');
 
-  // Signers: only the wallet's keys.
+  // Signers: only the wallet's keys, and the co-signers the page named (a @Quorum call's; ADR-0009 D2).
   const rs = body.required_signers();
+  const named = call.cosignerKeys ?? [];
+  const required = new Set();
   for (let i = 0; rs && i < rs.len(); i++) {
-    if (!wallet.keyHashes.includes(rs.get(i).to_hex())) problems.push('a required signer that is not the wallet');
+    const k = rs.get(i).to_hex();
+    required.add(k);
+    if (!wallet.keyHashes.includes(k) && !named.includes(k)) problems.push('a required signer that is not the wallet');
   }
+  for (const k of named) if (!required.has(k)) problems.push('a co-signer the transaction does not require');
 
   // Reference inputs: the pinned script's reference UTxOs, UTxOs of the pinned script (the instance, read), and the
   // foreign instances the call reads (@Reads), as the deployment's @Params name them (ADR-0011 D2).
@@ -483,8 +488,16 @@ export function verifiableWithoutService(meta, description, deployment) {
   if (!r) return false;
   const p = meta.policies ?? {};
   const out = meta.returns ?? {};
-  if (p.batched || p.into || p.admits || p.receives || p.quorum || p.authorizedBy?.length) return false;
-  if (out.deposits || out.events) return false;
+  // @Quorum is verifiable (the page checks the required signers; the validator counts them), and so are events (the
+  // validator compares the redeemer's with the method's).
+  if (p.batched || p.into || p.admits || p.receives) return false;
+  // @AuthorizedBy: verifiable for key credentials the deployment's @Params name (the key is a required signer, which
+  // the page checks against the co-signers it named); a script governor's approval is not checked here yet.
+  for (const at of p.authorizedBy ?? []) {
+    const cred = at.startsWith('params.') ? deployment?.params?.[at.slice('params.'.length)] : null;
+    if (cred?.$variant !== 'PubKeyCredential') return false;
+  }
+  if (out.deposits) return false;
   // Sends: verifiable when the deployment pins JOUST's output verifier (the outputs are checked on chain; the page
   // still bounds what others receive by what the script releases).
   if (out.sends && !deployment?.outputVerifier) return false;

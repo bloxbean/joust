@@ -50,6 +50,26 @@ export function fundingAddress(wallet) {
   return best;
 }
 
+/**
+ * The co-signers of a call: CIP-30 APIs on the wallet's network, each named by the payment key of its change address
+ * (the key it signs with). The calling wallet is not one of them (it counts anyway).
+ */
+export async function cosignersOf(CSL, apis = [], wallet, networkId) {
+  const keys = [];
+  for (const a of apis ?? []) {
+    const v = await walletView(CSL, a);
+    if (v.networkId !== networkId) throw new Error('a co-signer is on another network');
+    const k = v.keyHashes[0];
+    if (!k) throw new Error('a co-signer without a payment key');
+    if (wallet.keyHashes.includes(k) || keys.includes(k)) throw new Error('a co-signer named twice (the caller counts already)');
+    keys.push(k);
+  }
+  return { apis: apis ?? [], keys };
+}
+
+/** A method that others sign for: @Quorum, or @AuthorizedBy (a key credential: the key's wallet co-signs). */
+export const signedByOthers = (meta) => !!meta.policies?.quorum || !!meta.policies?.authorizedBy?.length;
+
 export class JoustContract {
   /**
    * @param o.CSL          cardano-serialization-lib 15.x (nodejs or browser)
@@ -100,6 +120,10 @@ export class JoustContract {
     call = { ...call, args };
     const wallet = await walletView(CSL, api);
     if (wallet.networkId !== this.deployment.networkId) throw new Error('the wallet is on another network');
+    // Co-signers (@Quorum, ADR-0009 D2; @AuthorizedBy keys, D3): other CIP-30 wallets that sign the same transaction.
+    const co = await cosignersOf(CSL, call.cosigners, wallet, this.deployment.networkId);
+    if (co.apis.length && !signedByOthers(call.meta)) throw new Error(`${call.meta.name} takes no co-signers`);
+    call = { ...call, cosignerKeys: co.keys };
     const prepared = await this.service.prepare({
       contract: this.description.preamble.title,
       kind: call.kind,
@@ -109,6 +133,7 @@ export class JoustContract {
       args: toJson(call.args ?? {}),
       pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: call.pay?.assets ?? [] }),
       address: fundingAddress(wallet),
+      ...(co.keys.length ? { cosigners: co.keys } : {}),
     });
     const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
     const { problems, report } = await verifyPrepared({
@@ -128,8 +153,9 @@ export class JoustContract {
     // The hash is the page's own (of the body bytes the wallet signs), never the service's claim.
     const txHash = CSL.FixedTransaction.from_hex(prepared.cbor).transaction_hash().to_hex();
     if (this.onReview) await this.onReview({ contract: this.name, call, report, txHash });
-    const witnesses = await api.signTx(prepared.cbor, true);
-    const signed = assemble(CSL, prepared.cbor, witnesses);
+    const witnesses = [await api.signTx(prepared.cbor, true)];
+    for (const c of co.apis) witnesses.push(await c.signTx(prepared.cbor, true));
+    const signed = assemble(CSL, prepared.cbor, ...witnesses);
     if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
     const submitted = await api.submitTx(signed.cbor);
     if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
@@ -272,8 +298,8 @@ export class JoustInstance {
   }
 
   /** An action or destroy on this instance. */
-  call(api, name, args = {}, pay = {}) {
-    return this.contract.run(api, { kind: this.kindOf(name, ['action', 'destroy']), meta: this.contract.meta(name, ['action', 'destroy']), args, pay, instance: this.id });
+  call(api, name, args = {}, pay = {}, opts = {}) {
+    return this.contract.run(api, { kind: this.kindOf(name, ['action', 'destroy']), meta: this.contract.meta(name, ['action', 'destroy']), args, pay, instance: this.id, cosigners: opts.cosigners });
   }
 
   /** Creates an owned object with the creation {@code name}; returns { txHash, object, report }. */

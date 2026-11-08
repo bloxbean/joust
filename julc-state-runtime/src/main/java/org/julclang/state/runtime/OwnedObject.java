@@ -350,7 +350,10 @@ public final class OwnedObject<S, R> {
         }
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
-        for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
+        for (Account a : call.extraSigners()) {
+            byte[] k = Keys.pkh(a);
+            if (signers.stream().noneMatch(s -> java.util.Arrays.equals(s, k))) signers.add(k);   // a set on the ledger
+        }
         call.applyAuthorization(tx);
         call.applyReads(tx);
         String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
@@ -413,7 +416,10 @@ public final class OwnedObject<S, R> {
                 unit(), id, datum, destroy ? call.burnRedeemer : null, call.byAction, false, null, incoming);
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
-        for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
+        for (Account a : call.extraSigners()) {
+            byte[] k = Keys.pkh(a);
+            if (signers.stream().noneMatch(s -> java.util.Arrays.equals(s, k))) signers.add(k);   // a set on the ledger
+        }
         call.applyAuthorization(tx);
         call.applyReads(tx);
         var scripts = new ArrayList<PlutusScript>(List.of(contract.script));

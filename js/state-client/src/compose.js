@@ -311,11 +311,16 @@ export async function verifyComposed(o) {
   report.fee = fee;
   report.walletNet = net.get('lovelace') ?? 0n;
 
-  // Signers: only the wallet's keys.
+  // Signers: only the wallet's keys, and the co-signers the page named for @Quorum calls (ADR-0009 D2).
   const rs = body.required_signers();
+  const named = new Set(calls.flatMap((k) => k.call.cosignerKeys ?? []));
+  const required = new Set();
   for (let i = 0; rs && i < rs.len(); i++) {
-    if (!wallet.keyHashes.includes(rs.get(i).to_hex())) problems.push('a required signer that is not the wallet');
+    const k = rs.get(i).to_hex();
+    required.add(k);
+    if (!wallet.keyHashes.includes(k) && !named.has(k)) problems.push('a required signer that is not the wallet');
   }
+  for (const k of named) if (!required.has(k)) problems.push('a co-signer the transaction does not require');
 
   // Validity: short, and starting now (as for one call; any call reading Ctx forbids backdating).
   const nows = [chain.tip];
@@ -394,7 +399,7 @@ export async function verifyComposed(o) {
 export async function runComposed({ CSL, service, chain, api, steps, limits, onReview }) {
   const { walletView, assemble } = await import('./wallet.js');
   const { toJson } = await import('./data.js');
-  const { fundingAddress } = await import('./client.js');
+  const { fundingAddress, cosignersOf, signedByOthers } = await import('./client.js');
   const prepared = steps.map((s) => {
     const k = s.contract;
     const meta = k.meta(s.method, ['action', 'destroy', 'ownedAction', 'ownedDestroy']);
@@ -403,15 +408,24 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
       if (!(a.name in (s.args ?? {}))) throw new Error(`${s.method}: missing argument ${a.name}`);
       args[a.name] = k.codec.decode(a.schema, k.codec.encode(a.schema, s.args[a.name], a.name));
     }
-    return { k, call: { kind: meta.kind, meta, args, pay: s.pay ?? {}, instance: s.instance, object: s.object, into: s.into } };
+    return { k, call: { kind: meta.kind, meta, args, pay: s.pay ?? {}, instance: s.instance, object: s.object, into: s.into }, apis: s.cosigners ?? [] };
   });
   const wallet = await walletView(CSL, api);
+  // @Quorum co-signers, per call (CIP-30 APIs); each distinct wallet signs the transaction once.
+  const signing = [];
+  for (const p of prepared) {
+    if (p.apis.length && !signedByOthers(p.call.meta)) throw new Error(`${p.call.meta.name} takes no co-signers`);
+    const co = await cosignersOf(CSL, p.apis, wallet, p.k.deployment.networkId);
+    p.call.cosignerKeys = co.keys;
+    co.apis.forEach((a, i) => { if (!signing.some((x) => x.key === co.keys[i])) signing.push({ key: co.keys[i], api: a }); });
+  }
   const request = {
     address: fundingAddress(wallet),
     calls: prepared.map(({ k, call }) => ({
       contract: k.description.preamble.title, kind: call.kind, method: call.meta.name, instance: call.instance ?? null,
       object: call.object ?? null, args: toJson(call.args), pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: call.pay?.assets ?? [] }),
       ...(call.into ? { into: call.into } : {}),
+      ...(call.cosignerKeys.length ? { cosigners: call.cosignerKeys } : {}),
     })),
   };
   const p = await service.prepare(request);
@@ -428,7 +442,9 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
   }
   const txHash = CSL.FixedTransaction.from_hex(p.cbor).transaction_hash().to_hex();
   if (onReview) await onReview({ calls: request.calls, report, txHash });
-  const signed = assemble(CSL, p.cbor, await api.signTx(p.cbor, true));
+  const witnesses = [await api.signTx(p.cbor, true)];
+  for (const c of signing) witnesses.push(await c.api.signTx(p.cbor, true));
+  const signed = assemble(CSL, p.cbor, ...witnesses);
   if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
   await api.submitTx(signed.cbor);
   await chain.awaitTx(signed.txHash);

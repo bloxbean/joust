@@ -371,3 +371,50 @@ test('Guild: a hero moves to another guild, which admits it in the same transact
   await guild.at(b).object(hero).call(ann, 'levelUp', {});
   await guild.at(b).object(hero).call(ann, 'retire', {});
 });
+
+test('Treasury: @Quorum co-signers sign the same transaction; the guardian (@AuthorizedBy); events', { skip, timeout: 900_000 }, async () => {
+  const { wallets, contract } = await setup(['treasury']);
+  const members = (await wallets(3)).sort((x, y) => (x.keyHash < y.keyHash ? -1 : 1));
+  const [a, b] = members;
+  const [guardian, bob] = await wallets(2, 20);
+  const council = members.map((m) => m.keyHash);
+  const treasury = await contract('Treasury', a, { guardian: { $variant: 'PubKeyCredential', hash: guardian.keyHash }, maxPayout: 50n * ADA });
+  const t = treasury.at((await treasury.deploy(a, { council, quorum: 2n }, { lovelace: 200n * ADA })).instance);
+  // One signature is not a quorum: the engine's run of the validator refuses it before any wallet is asked.
+  await assert.rejects(t.call(a, 'pay', { to: bob.keyHash, amount: 10n * ADA }));
+  // The co-signer's wallet signs the same transaction; the page checks that only the named keys are required.
+  let asked = 0;
+  const watched = { ...b, signTx: (...x) => { asked++; return b.signTx(...x); } };
+  const paid = await t.call(a, 'pay', { to: bob.keyHash, amount: 10n * ADA }, {}, { cosigners: [watched] });
+  assert.equal(asked, 1);
+  assert.deepEqual(paid.report.events, [{ $variant: 'Paid', to: bob.keyHash, amount: 10n * ADA }]);
+  await assert.rejects(t.call(a, 'pay', { to: bob.keyHash, amount: ADA }, {}, { cosigners: [a] }), /named twice/);
+  // I5: every tampering of an engine-built co-signed payment (an extra required signer among them) is refused before
+  // either wallet is asked.
+  let refused = 0;
+  for (let i = 0, total = 1; i < total; i++) {
+    const evil = { ...treasury.service, async prepare(req) {
+      const p = await treasury.service.prepare(req);
+      const all = Object.entries(tamperings(CSL, p.cbor, [a.address]));
+      total = all.length;
+      return { ...p, cbor: all[i][1] };
+    } };
+    const k = new JoustContract({ CSL, description: treasury.description, deployment: treasury.deployment, service: evil, chain: treasury.chain });
+    let touched = false;
+    const spy = (w) => ({ ...w, signTx: (...x) => { touched = true; return w.signTx(...x); } });
+    await assert.rejects(k.at(t.id).call(spy(a), 'pay', { to: bob.keyHash, amount: ADA }, {}, { cosigners: [spy(b)] }), undefined, `tampering ${i}`);
+    assert.equal(touched, false, `tampering ${i} reached a wallet`);
+    refused++;
+  }
+  console.log(`I5: ${refused} tamperings of an engine-built co-signed payment refused before signing`);
+  // @AuthorizedBy("params.guardian"), a key credential: the guardian's wallet co-signs, or calls itself.
+  await assert.rejects(t.call(a, 'freeze', { frozen: true }), /guardian/);
+  await t.call(a, 'freeze', { frozen: true }, {}, { cosigners: [guardian] });
+  await assert.rejects(t.call(a, 'pay', { to: bob.keyHash, amount: ADA }, {}, { cosigners: [b] }));
+  await t.call(guardian, 'freeze', { frozen: false });
+  assert.equal((await t.state()).frozen, false);
+  await t.call(a, 'rotate', { council: council.slice(0, 2), quorum: 2n }, {}, { cosigners: [b] });
+  assert.deepEqual((await t.state()).council, council.slice(0, 2));
+  await t.call(b, 'close', { to: a.keyHash }, {}, { cosigners: [a] });
+  assert.equal(await t.state(), null);
+});

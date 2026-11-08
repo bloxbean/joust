@@ -198,7 +198,10 @@ public final class StateInstance<S> {
 
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
-        for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
+        for (Account a : call.extraSigners()) {
+            byte[] k = Keys.pkh(a);
+            if (signers.stream().noneMatch(s -> java.util.Arrays.equals(s, k))) signers.add(k);   // a set on the ledger
+        }
         call.applyAuthorization(tx);
         call.applyReads(tx);
         String txHash = new TxRunner(contract.runtime, call.extraSigners()).submit(tx, call.caller, window, signers.toArray(new byte[0][]),
@@ -262,7 +265,10 @@ public final class StateInstance<S> {
         if (maps) contract.runtime.mapVerifier().attach(tx, claims, call.caller);
         List<byte[]> signers = new ArrayList<>();
         if (call.usesCtx || !call.signers.isEmpty()) signers.add(callerPkh);
-        for (Account a : call.extraSigners()) signers.add(Keys.pkh(a));
+        for (Account a : call.extraSigners()) {
+            byte[] k = Keys.pkh(a);
+            if (signers.stream().noneMatch(s -> java.util.Arrays.equals(s, k))) signers.add(k);   // a set on the ledger
+        }
         call.applyAuthorization(tx);
         call.applyReads(tx);
         var scripts = new ArrayList<com.bloxbean.cardano.client.plutus.spec.PlutusScript>(List.of(contract.script));

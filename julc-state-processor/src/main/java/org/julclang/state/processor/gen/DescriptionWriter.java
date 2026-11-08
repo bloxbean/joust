@@ -88,9 +88,31 @@ public final class DescriptionWriter {
             lifecycle.add(constructor(t.variant(), li, fs));
             creations.add(creation(t, "ownedInit", li++));
         }
+        String intentKey = c.packageName() + "." + V + ".Intent";
         if (c.hasBatched()) {
+            // Intents (ADR-0004 D2): the datum, the batched call it names, and the refund output's tag.
+            var intentCalls = new ArrayList<Object>();
+            var batched = c.batched();
+            for (int i = 0; i < batched.size(); i++) {
+                var t = batched.get(i);
+                ExecutableElement m = method(t.method());
+                var fs = new ArrayList<Object>();
+                for (ParamIR p : t.params()) {
+                    TypeMirror type = m == null ? null : paramType(m, p.name());
+                    fs.add(field(p.name(), type == null ? data() : schemaOf(type)));
+                }
+                intentCalls.add(constructor(t.intentVariant(), i, fs));
+            }
+            String intentCallKey = c.packageName() + "." + V + ".IntentCall";
+            definitions.put(intentCallKey, map("title", "IntentCall", "anyOf", intentCalls));
+            TypeMirror address = env.getElementUtils().getTypeElement("org.julclang.ledger.Address").asType();
+            definitions.put(intentKey, map("title", "Intent", "anyOf", List.of(constructor("Intent", 0, List.of(
+                    field("instance", bytes()), field("owner", bytes()), field("refund", schemaOf(address)),
+                    field("deadline", integer()), field("received", integer()), field("call", ref(intentCallKey)))))));
+            definitions.put(c.packageName() + "." + V + ".IntentRefund", map("title", "IntentRefund", "anyOf",
+                    List.of(constructor("IntentRefund", 0, List.of(field("intent", txOutRef()))))));
             lifecycle.add(constructor("CreateIntent", li++, List.of(field("seed", txOutRef()),
-                    field("intent", data()))));
+                    field("intent", ref(intentKey)))));
         }
         if (c.hasMints()) lifecycle.add(constructor("ByAction", li++, List.of(field("by", txOutRef()))));
         if (c.migrate() != null) {
@@ -160,6 +182,20 @@ public final class DescriptionWriter {
         xj.put("creations", creations);
         xj.put("actions", actions);
         xj.put("views", views);
+        if (c.hasBatched()) {
+            // Batched actions (ADR-0004): locked as intents, applied by a batcher (ADR-0015 M3).
+            var intents = new ArrayList<Object>();
+            var batched = c.batched();
+            for (int i = 0; i < batched.size(); i++) intents.add(intent(batched.get(i), i));
+            xj.put("intents", map("datum", ref(intentKey), "calls", intents,
+                    "refund", ref(c.packageName() + "." + V + ".IntentRefund"),
+                    "deposit", "IntentHandle.DEFAULT_DEPOSIT lovelace, refunded with the intent",
+                    "batch", map("constructor", "Batch", "index", spend.size()),
+                    "inBatch", map("constructor", "InBatch", "index", spend.size() + 1),
+                    "cancel", map("constructor", "CancelIntent", "index", spend.size() + 2),
+                    "create", map("constructor", "CreateIntent", "index", indexOf(lifecycle, "CreateIntent")),
+                    "burn", map("constructor", "BurnInstance", "index", 1)));
+        }
         xj.put("tokens", map(
                 "instance", "blake2b_256(seed txId ++ I2OSP(seed index, 2)), 32 bytes",
                 "object", "0x4f ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes",
@@ -200,6 +236,27 @@ public final class DescriptionWriter {
         fields.addAll(redeemerFieldNames(t));
         m.put("recipe", recipe(t, fields, null));
         return m;
+    }
+
+    /** A batched action as an intent (ADR-0004): its IntentCall constructor, arguments and transition. */
+    private Map<String, Object> intent(TransitionIR t, int index) {
+        var m = new LinkedHashMap<String, Object>();
+        m.put("name", t.method());
+        m.put("call", map("constructor", t.intentVariant(), "index", index));
+        m.put("only", t.batchOnly());
+        m.put("args", args(t));
+        m.put("payable", t.payable());
+        m.put("recipe", recipe(t, List.of(), null));
+        return m;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static int indexOf(List<Object> constructors, String title) {
+        for (Object o : constructors) {
+            var m = (Map<String, Object>) o;
+            if (title.equals(m.get("title"))) return (Integer) m.get("index");
+        }
+        return -1;
     }
 
     private Map<String, Object> action(TransitionIR t, int index) {
@@ -287,7 +344,15 @@ public final class DescriptionWriter {
         for (var p : t.params()) layout.add(p.name());
         r.put("transitionArgs", layout);
         if (t.admits()) r.put("admits", t.admitsType());
+        // The step's layout: [next?, payouts, (sends, mint, accepted, deposits)?, events?] (ADR-0015 D3).
+        r.put("stepEvents", contractHasEvents());
         return r;
+    }
+
+    private boolean contractHasEvents() {
+        var all = new ArrayList<TransitionIR>(c.spendTransitions());
+        all.addAll(c.ownedSpendTransitions());
+        return all.stream().anyMatch(x -> x.resultEvents() && x.eventsType() != null);
     }
 
     /** Each field name with its index in {@code record}'s components (a path into the target's Data). */

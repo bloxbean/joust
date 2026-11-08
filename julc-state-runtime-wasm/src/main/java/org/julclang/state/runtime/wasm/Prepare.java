@@ -130,9 +130,11 @@ public final class Prepare {
             }
             String[] made = new String[1];
             DescribedContract target = dc;
+            var cosigners = cosigners(call, network);
             PreparedTx p = Compose.of(rt, wallet).add(() -> made[0] = target.call(rt, wallet, call.path("kind").asText(),
                     call.path("method").asText(), call.path("instance").asText(null), call.path("object").asText(null),
-                    call.path("args"), pay, call.get("params"), call.path("pay").get("assets"))).prepare();
+                    call.path("args"), pay, call.get("params"), call.path("pay").get("assets"), call.path("into").asText(null),
+                    cosigners)).prepare();
             return new Result(true, p.cbor(), p.txHash(), made[0], p.validTo(), p.requiredSigners(),
                     JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
         } catch (Throwable t) {
@@ -141,6 +143,19 @@ public final class Prepare {
             }
             return refused(t.getMessage() != null ? t.getMessage() : t.toString());
         }
+    }
+
+    /**
+     * A {@code @Quorum} call's co-signers (ADR-0009 D2): key hashes, as address-only accounts (their wallets sign the
+     * prepared transaction; keys never enter the engine).
+     */
+    private static List<com.bloxbean.cardano.client.account.Account> cosigners(JsonNode call, Network network) {
+        var out = new java.util.ArrayList<com.bloxbean.cardano.client.account.Account>();
+        for (JsonNode k : call.path("cosigners")) {
+            var cred = com.bloxbean.cardano.client.address.Credential.fromKey(com.bloxbean.cardano.client.util.HexUtil.decodeHexString(k.asText()));
+            out.add(WalletAccount.of(com.bloxbean.cardano.client.address.AddressProvider.getEntAddress(cred, network).toBech32(), network));
+        }
+        return out;
     }
 
     /** The described contract called {@code title}, from the request's contracts (only it is loaded). */
@@ -191,7 +206,7 @@ public final class Prepare {
                 made.add(null);
                 compose.add(() -> made.set(slot, dc.call(rt, wallet, c.path("kind").asText(), c.path("method").asText(),
                         c.path("instance").asText(null), c.path("object").asText(null), c.path("args"), pay, c.get("params"),
-                        c.path("pay").get("assets"), c.path("into").asText(null))));
+                        c.path("pay").get("assets"), c.path("into").asText(null), cosigners(c, network))));
             }
             PreparedTx p = compose.prepare();
             return new Result(true, p.cbor(), p.txHash(), JSON.writeValueAsString(made), p.validTo(), p.requiredSigners(),

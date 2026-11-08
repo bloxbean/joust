@@ -52,7 +52,10 @@ class EngineFixturesTest {
                         x.get("ttlMs").asLong(), x.get("networkId").asInt(), nodes));
                 String name = FIXTURES.relativize(f).toString();
                 if (!r.ok()) diffs.add(name + ": " + (r.needKind() != null ? "needs " + r.needKind() + " " + r.needKey() : r.error()));
-                else if (!r.cbor().equals(x.get("cbor").asText())) diffs.add(name + ": different bytes");
+                else if (!r.cbor().equals(x.get("cbor").asText())) {
+                    diffs.add(name + ": different bytes");
+                    if (System.getenv("JOUST_DUMP") != null) Files.writeString(Path.of(System.getenv("JOUST_DUMP"), name.replace("/", "_") + ".jvm"), r.cbor());
+                }
                 groups.merge(f.getParent().getFileName().toString(), 1, Integer::sum);
             }
         }

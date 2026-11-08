@@ -108,8 +108,14 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
   ts.push(`  state(): Promise<${stateT} | null>;`);
   for (const a of x.actions.filter((a) => (a.kind === 'action' || a.kind === 'destroy') && usable(a))) {
     js(doc(a));
-    js(`  ${id(a.name)}(wallet, args = {}${a.payable ? ', pay = {}' : ''}) { return this.i.call(wallet, ${JSON.stringify(a.name)}, args${a.payable ? ', pay' : ''}); }`);
-    ts.push(`  ${id(a.name)}(wallet: Cip30Api, args${a.args.length || a.payable ? '' : '?'}: ${argsType(a)}${payParam(a)}): Promise<CallResult>;`);
+    if (a.policies?.quorum || a.policies?.authorizedBy?.length) {
+      // @Quorum: the other council members' wallets co-sign (the caller counts); @AuthorizedBy: the key's wallet.
+      js(`  ${id(a.name)}(wallet, args = {}${a.payable ? ', pay = {}' : ''}, opts = {}) { return this.i.call(wallet, ${JSON.stringify(a.name)}, args, ${a.payable ? 'pay' : '{}'}, opts); }`);
+      ts.push(`  ${id(a.name)}(wallet: Cip30Api, args: ${argsType(a)}${payParam(a)}, opts?: { cosigners?: Cip30Api[] }): Promise<CallResult>;`);
+    } else {
+      js(`  ${id(a.name)}(wallet, args = {}${a.payable ? ', pay = {}' : ''}) { return this.i.call(wallet, ${JSON.stringify(a.name)}, args${a.payable ? ', pay' : ''}); }`);
+      ts.push(`  ${id(a.name)}(wallet: Cip30Api, args${a.args.length || a.payable ? '' : '?'}: ${argsType(a)}${payParam(a)}): Promise<CallResult>;`);
+    }
   }
   for (const o of x.owned) {
     const O = `${C}${id(o.simple)}Object`;
