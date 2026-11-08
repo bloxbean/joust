@@ -45,7 +45,7 @@ public final class JoustToolchainWasm {
         new VmApi().register(api);
         api.add("joust.build", BuildRequest.class, JoustToolchainWasm::build);
         api.add("joust.run", RunRequest.class, JoustToolchainWasm::run);
-        JsApi.install(api, new EngineInfo("joust", "joust-toolchain", VERSION, List.of("vm", "debug", "joust")));
+        JsApi.install(api, new EngineInfo("joustToolchain", "joust-toolchain", VERSION, List.of("vm", "debug", "joust")));
     }
 
     private static final org.julclang.vm.JulcVm VM = org.julclang.vm.JulcVm.create();

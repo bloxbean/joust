@@ -25,6 +25,6 @@ public final class JoustRuntimeWasm {
         var api = new ApiRegistry();
         new VmApi().register(api);
         api.add("joust.prepare", Prepare.Request.class, r -> ServiceResult.ok(Prepare.prepare(r)));
-        JsApi.install(api, new EngineInfo("joust", "joust-runtime", VERSION, List.of("vm", "debug", "joust")));
+        JsApi.install(api, new EngineInfo("joustRuntime", "joust-runtime", VERSION, List.of("vm", "debug", "joust")));
     }
 }

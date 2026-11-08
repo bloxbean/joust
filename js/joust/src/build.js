@@ -6,19 +6,22 @@
 //   joust.lock.json       the versions that built it (I7)
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { loadToolchain } from './toolchain.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-function sources(dir) {
+function sources(dir, keep = () => true) {
   const out = {};
   const walk = (d) => {
     for (const n of readdirSync(d)) {
       const p = join(d, n);
       if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith('.java') || p.endsWith('.jsc')) out[relative(dir, p)] = readFileSync(p, 'utf8');
+      else if (p.endsWith('.java') || p.endsWith('.jsc')) {
+        const text = readFileSync(p, 'utf8');
+        if (keep(relative(dir, p), text)) out[relative(dir, p)] = text;
+      }
     }
   };
   if (existsSync(dir)) walk(dir);
@@ -26,9 +29,9 @@ function sources(dir) {
 }
 
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
-export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log } = {}) {
-  const files = sources(join(root, src));
-  if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${join(root, src)}`);
+export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep } = {}) {
+  const files = sources(resolve(root, src), keep);
+  if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
   const t = Date.now();
   const engine = await loadToolchain();
   const r = engine.joust.build({ files, options });
@@ -37,7 +40,7 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     (d.severity === 'error' ? console.error : log)(`${d.severity}: ${where}${d.message}`);
   }
   if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics };
-  const dir = join(root, out);
+  const dir = resolve(root, out);
   mkdirSync(dir, { recursive: true });
   const bundle = [];
   for (const c of r.contracts) {

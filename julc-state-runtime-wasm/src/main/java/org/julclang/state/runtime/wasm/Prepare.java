@@ -72,10 +72,10 @@ public final class Prepare {
         try {
             JsonNode call = JSON.readTree(r.call());
             String contract = call.path("contract").asText();
+            // Only the called contract is loaded: the bundle may hold others this engine cannot serve yet.
             DescribedContract dc = null;
             for (Contract c : r.contracts()) {
-                DescribedContract d = load(c);
-                if (d.name().equals(contract)) dc = d;
+                if (JSON.readTree(c.description()).path("preamble").path("title").asText().equals(contract)) dc = load(c);
             }
             if (dc == null) return refused("unknown contract " + contract);
             Network network = r.networkId() == 1 ? Networks.mainnet() : Networks.testnet();
