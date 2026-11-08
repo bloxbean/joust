@@ -23,12 +23,10 @@ npx joust-gen build/classes/java/main/META-INF/joust/com.example.Counter.json --
 This writes `Counter.js`, with the description inlined, and `Counter.d.ts`.
 
 ```js
-import * as CSL from '@emurgo/cardano-serialization-lib-browser';
 import { blockfrostChain, httpService } from '@julclang/state-client';
 import { Counter } from './generated/Counter.js';
 
 const counter = new Counter({
-  CSL,
   deployment,                                   // { policy, address, networkId, referenceScripts }, bundled
   service: httpService('https://dapp.example/api'),
   chain: blockfrostChain('https://cardano-preview.blockfrost.io/api/v0', { projectId }),
@@ -39,6 +37,11 @@ const { instance } = await counter.deploy(wallet, {});
 await instance.increment(wallet, { by: 3n });
 console.log(await instance.state());            // { count: 3n, owner: '…' }
 ```
+
+Transactions, addresses and witnesses are read with cardano-js-sdk (`@cardano-sdk/core`, through one adapter,
+`ledger.js`); Plutus data with the client's own model and CBOR (`pdata.js`). No other ledger library is needed. The
+chain view is built over a provider (`chainOf(blockfrostProvider(url))`, `chainOf(ogmiosProvider(url))`, or your own:
+see `providers.js`).
 
 Calls that need data only the service computes are not generated, because a page cannot verify them: MerkleMap
 claims, foreign reads, batches, moves and deposits.

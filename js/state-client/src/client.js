@@ -4,11 +4,14 @@
 
 import { codec, toJson, dataEqual } from './data.js';
 import { verifyPrepared, redeemerDefs } from './verify.js';
-import { walletView, assemble } from './wallet.js';
+import { walletView, assemble, paymentKeyHash } from './wallet.js';
 import { planOf, planDifference } from './plan.js';
 import { verifyIntent, verifyCancel, verifyBatch } from './intents.js';
 import { verifyPurpose, purposeOf } from './purposes.js';
 import { verifyRegistration, rewardAddressOf } from './governors.js';
+import { txHash as hashOf, poolKeyHash } from './ledger.js';
+import { Data, decodeData, dataHex } from './pdata.js';
+import { bytesToHex } from './hex.js';
 
 export class VerificationError extends Error {
   constructor(problems, report) {
@@ -100,7 +103,7 @@ export const signedByOthers = (meta) => !!meta.policies?.quorum || !!meta.polici
 
 export class JoustContract {
   /**
-   * @param o.CSL          cardano-serialization-lib 15.x (nodejs or browser)
+   * @param o.CSL          (optional, ignored: earlier versions read transactions with it)
    * @param o.description  the contract's description, bundled with the page (never fetched from the service)
    * @param o.deployment   { policy, address, networkId, referenceScripts }, bundled with the page
    * @param o.service      a prepare service (httpService(url))
@@ -110,13 +113,13 @@ export class JoustContract {
    */
   constructor(o) {
     Object.assign(this, { limits: {}, ...o });
-    this.codec = codec(o.CSL, o.description);
+    this.codec = codec(o.description);
     this.x = o.description['x-joust'];
   }
 
   /** The reward address of the contract's stake credential (a stakeSelf contract's funds are staked to it). */
   get rewardAddress() {
-    return rewardAddressOf(this.CSL, this.deployment.policy, this.deployment.networkId);
+    return rewardAddressOf(this.deployment.policy, this.deployment.networkId);
   }
 
   /**
@@ -147,7 +150,7 @@ export class JoustContract {
 
   /** Delegates the contract's stake to {@code pool} (key hash hex or pool1 bech32): its @Certify handler decides. */
   delegate(api, pool, opts = {}) {
-    const hex = /^pool1/.test(pool) ? this.CSL.Ed25519KeyHash.from_bech32(pool).to_hex() : pool;
+    const hex = poolKeyHash(pool);
     if (!/^[0-9a-f]{56}$/.test(hex)) throw new Error('a pool id: 28 bytes hex, or pool1 bech32');
     return this.runPurpose(api, 'delegate', { pool: hex }, opts);
   }
@@ -184,7 +187,7 @@ export class JoustContract {
       if (d) problems.push('the service\'s plan does not describe its transaction: ' + d);
     }
     if (problems.length) throw new VerificationError(problems, report);
-    const txHash = CSL.FixedTransaction.from_hex(prepared.cbor).transaction_hash().to_hex();
+    const txHash = hashOf(prepared.cbor);
     if (this.onReview) await this.onReview({ contract: this.name, call: { kind: op, meta, ...what }, report, txHash });
     const witnesses = [await api.signTx(prepared.cbor, true)];
     for (const c of co.apis) witnesses.push(await c.signTx(prepared.cbor, true));
@@ -265,7 +268,7 @@ export class JoustContract {
     if (!problems.length && this.portable) await this.recompute(call, report, problems);
     if (problems.length) throw new VerificationError(problems, report);
     // The hash is the page's own (of the body bytes the wallet signs), never the service's claim.
-    const txHash = CSL.FixedTransaction.from_hex(prepared.cbor).transaction_hash().to_hex();
+    const txHash = hashOf(prepared.cbor);
     if (this.onReview) await this.onReview({ contract: this.name, call, report, txHash });
     const witnesses = [await api.signTx(prepared.cbor, true)];
     for (const c of [...co.apis, ...(gov?.apis ?? [])]) witnesses.push(await c.signTx(prepared.cbor, true));
@@ -286,7 +289,6 @@ export class JoustContract {
 JoustContract.prototype.recompute = async function recompute(call, report, problems) {
   const methods = this.portable.contracts?.[this.name] ?? [];
   if (!methods.includes(call.meta.name) || !report.targetRef) return;   // creations, or not portable
-  const { CSL } = this;
   const c = this.codec;
   const owned = call.kind.startsWith('owned');
   // The datums the validator sees: the spent target, and (owned calls) the instance the transaction reads. Each is
@@ -323,24 +325,21 @@ JoustContract.prototype.recompute = async function recompute(call, report, probl
   const valueOf = (hex) => {
     if (!owned) return hex;
     c.decode(ownedType.holding, hex);   // throws on another type's Holding
-    const f = CSL.PlutusData.from_hex(hex).as_constr_plutus_data().data();
-    if (f.get(0).as_bytes() && Array.from(f.get(0).as_bytes(), (b) => b.toString(16).padStart(2, '0')).join('') !== call.instance) {
-      throw new Error('the object belongs to another instance');
-    }
-    return f.get(1).to_hex();
+    const f = decodeData(hex).fields;
+    if (f[0].bytes && bytesToHex(f[0].bytes) !== call.instance) throw new Error('the object belongs to another instance');
+    return dataHex(f[1]);
   };
-  const args = CSL.PlutusList.new();
-  for (const a of call.meta.args) args.add(c.encode(a.schema, call.args[a.name], a.name));
+  const args = Data.list(call.meta.args.map((a) => c.encode(a.schema, call.args[a.name], a.name)));
   // Ctx: the redeemer's own bytes, as the validator sees them.
   let ctx = '';
   if (call.meta.ctx) {
     const callDef = redeemerDefs(c, this.description).spend.anyOf.find((x) => x.index === call.meta.redeemer.index);
     const i = callDef.fields.findIndex((f) => f.title === 'ctx');
-    ctx = CSL.PlutusData.from_hex(report.callData).as_constr_plutus_data().data().get(i).to_hex();
+    ctx = dataHex(decodeData(report.callData).fields[i]);
   }
   let out;
   try {
-    out = this.portable.step(this.name, call.meta.name, valueOf(targetDatum), shared, CSL.PlutusData.new_list(args).to_hex(), ctx);
+    out = this.portable.step(this.name, call.meta.name, valueOf(targetDatum), shared, dataHex(args), ctx);
   } catch (e) {
     problems.push('the page could not recompute the call: ' + (e.message ?? e));
     return;
@@ -353,10 +352,10 @@ JoustContract.prototype.recompute = async function recompute(call, report, probl
     problems.push('the page could not recompute the call: ' + out);
     return;
   }
-  const r = CSL.PlutusData.from_hex(out.slice(3)).as_constr_plutus_data().data();
-  const next = r.get(0).as_constr_plutus_data();
-  const expected = next.alternative().to_str() === '0' ? next.data().get(0) : null;
-  const actual = report.nextData ? CSL.PlutusData.from_hex(valueOf(report.nextData)) : null;
+  const r = decodeData(out.slice(3)).fields;
+  const next = r[0];
+  const expected = next.constr === 0 ? next.fields[0] : null;
+  const actual = report.nextData ? decodeData(valueOf(report.nextData)) : null;
   if ((expected === null) !== (actual === null) || (expected && !dataEqual(expected, actual))) {
     problems.push('the next state is not what the contract computes (recomputed in the page)');
     return;
@@ -364,19 +363,16 @@ JoustContract.prototype.recompute = async function recompute(call, report, probl
   // Payouts: each payee is paid at least what the method owes it, in outputs tagged with the target; no tagged output
   // goes to anyone else.
   const owed = new Map();
-  const payouts = r.get(1).as_list();
-  for (let i = 0; i < payouts.len(); i++) {
-    const p = payouts.get(i).as_constr_plutus_data().data();
-    const to = Array.from(p.get(0).as_bytes(), (b) => b.toString(16).padStart(2, '0')).join('');
-    owed.set(to, (owed.get(to) ?? 0n) + BigInt(p.get(1).as_integer().to_str()));
+  for (const p of r[1].list) {
+    const to = bytesToHex(p.fields[0].bytes);
+    owed.set(to, (owed.get(to) ?? 0n) + p.fields[1].int);
   }
   const paid = new Map();
   const tag = c.encode({ $ref: '#/definitions/org.julclang.ledger.TxOutRef' },
     { txId: report.targetRef.split('#')[0], index: report.targetRef.split('#')[1] });
   for (const o of report.plan.outputs) {
-    if (!o.datum || !dataEqual(CSL.PlutusData.from_hex(o.datum), tag)) continue;
-    const a = CSL.Address.from_bech32(o.address);
-    const key = (CSL.BaseAddress.from_address(a)?.payment_cred() ?? CSL.EnterpriseAddress.from_address(a)?.payment_cred())?.to_keyhash()?.to_hex();
+    if (!o.datum || !dataEqual(decodeData(o.datum), tag)) continue;
+    const key = paymentKeyHash(o.address);
     if (!key || !owed.has(key)) {
       problems.push('a payout goes to someone the contract does not pay (recomputed in the page)');
       return;
@@ -414,7 +410,7 @@ JoustContract.prototype.runIntentOp = async function runIntentOp(api, request, v
     if (d) problems.push('the service\'s plan does not describe its transaction: ' + d);
   }
   if (problems.length) throw new VerificationError(problems, report);
-  const txHash = CSL.FixedTransaction.from_hex(prepared.cbor).transaction_hash().to_hex();
+  const txHash = hashOf(prepared.cbor);
   if (this.onReview) await this.onReview({ contract: this.name, call: { ...call, kind: request.kind }, report, txHash });
   const signed = assemble(CSL, prepared.cbor, await api.signTx(prepared.cbor, true));
   if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');

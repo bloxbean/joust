@@ -9,6 +9,7 @@
     "e2e": "node e2e/run.mjs"
   },
   "dependencies": {
+    "@cardano-foundation/cardano-connect-with-wallet-core": "0.2.12",
     "@emurgo/cardano-serialization-lib-browser": "15.0.3",
     "@julclang/state-client": "file:../../../js/state-client",
     "@noble/hashes": "1.8.0",

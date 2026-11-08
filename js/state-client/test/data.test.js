@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { codec, dataEqual, DataError } from '../src/data.js';
+import { decodeData, dataHex } from '../src/pdata.js';
 import { instanceIdOf, objectIdOf } from '../src/tokens.js';
 import { ledgerOrder } from '../src/verify.js';
 import { deriveAccount, DEVKIT_MNEMONIC } from '../src/devwallet.js';
@@ -35,35 +36,39 @@ const value = {
   count: 42n, owner: 'ab'.repeat(28), paused: true, limit: null, tags: ['01', '0203'],
   balances: [['bb', 2n], ['aa', 1n], ['0000', 3n]],
   shape: { $variant: 'Square', side: '7', filled: false },
-  extra: CSL.PlutusData.new_integer(CSL.BigInt.from_str('-5')).to_hex(),
+  extra: CSL.PlutusData.new_integer(CSL.BigInt.from_str('-5')).to_hex(),   // Data: hex CBOR, written by another library
 };
 
 test('encode then decode gives the value back, maps in canonical order', () => {
-  const c = codec(CSL, description);
+  const c = codec(description);
   const pd = c.encode(ref, value);
   const back = c.decode(ref, pd);
+  assert.equal(back.extra, value.extra, 'a Data field keeps its bytes');
   assert.equal(back.count, 42n);
   assert.equal(back.paused, true);
   assert.equal(back.limit, null);
   assert.deepEqual(back.tags, ['01', '0203']);
   assert.deepEqual(back.balances, [['aa', 1n], ['bb', 2n], ['0000', 3n]]);   // shorter keys first
   assert.deepEqual(back.shape, { $variant: 'Square', side: 7n, filled: false });
-  const st = pd.as_constr_plutus_data();
-  assert.equal(st.alternative().to_str(), '0');
-  assert.equal(st.data().get(2).as_constr_plutus_data().alternative().to_str(), '1');   // True = 1
-  assert.equal(st.data().get(3).as_constr_plutus_data().alternative().to_str(), '1');   // None = 1
-  assert.equal(st.data().get(6).as_constr_plutus_data().alternative().to_str(), '1');   // Square = 1
+  assert.equal(pd.constr, 0);
+  assert.equal(pd.fields[2].constr, 1);   // True = 1
+  assert.equal(pd.fields[3].constr, 1);   // None = 1
+  assert.equal(pd.fields[6].constr, 1);   // Square = 1
+  // The same bytes cardano-serialization-lib reads back (an independent CBOR implementation).
+  const csl = CSL.PlutusData.from_hex(dataHex(pd));
+  assert.equal(csl.to_hex(), dataHex(pd));
+  assert.equal(c.decode(ref, csl.to_hex()).count, 42n);
 });
 
 test('Some is constructor 0 with the value', () => {
-  const c = codec(CSL, description);
+  const c = codec(description);
   const pd = c.encode(optInt, 5);
-  assert.equal(pd.as_constr_plutus_data().alternative().to_str(), '0');
+  assert.equal(pd.constr, 0);
   assert.equal(c.decode(optInt, pd), 5n);
 });
 
 test('wrong values are refused with their path', () => {
-  const c = codec(CSL, description);
+  const c = codec(description);
   assert.throws(() => c.encode(ref, { ...value, count: 1.5 }), DataError);
   assert.throws(() => c.encode(ref, { ...value, owner: 'XY' }), /owner/);
   assert.throws(() => c.encode(ref, { ...value, unknown: 1 }), /unknown field/);
@@ -75,15 +80,18 @@ test('wrong values are refused with their path', () => {
 });
 
 test('decoding refuses data of another shape', () => {
-  const c = codec(CSL, description);
-  assert.throws(() => c.decode(ref, CSL.PlutusData.new_integer(CSL.BigInt.from_str('1'))), /not a constructor/);
+  const c = codec(description);
+  assert.throws(() => c.decode(ref, CSL.PlutusData.new_integer(CSL.BigInt.from_str('1')).to_hex()), /not a constructor/);
+  assert.throws(() => c.decode(ref, 'ff'), /not Plutus data/);
 });
 
 test('dataEqual ignores the CBOR encoding', () => {
-  const c = codec(CSL, description);
+  const c = codec(description);
   const a = c.encode(ref, value);
-  const b = CSL.PlutusData.from_bytes(a.to_bytes());
+  const b = decodeData(dataHex(a));
   assert.ok(dataEqual(a, b));
+  // Definite and indefinite lists are the same Data.
+  assert.ok(dataEqual(decodeData('d8799f0102ff'), decodeData('d879820102')));
   assert.ok(!dataEqual(a, c.encode(ref, { ...value, count: 43 })));
 });
 
@@ -102,6 +110,7 @@ test('inputs sort by transaction id, then numeric index', () => {
 
 test('the dev wallet derives the address cardano-client-lib does', () => {
   // CCL: new Account(Networks.testnet(), DEFAULT_MNEMONIC, 0).baseAddress()
-  const a = deriveAccount(CSL, DEVKIT_MNEMONIC, 0, 0);
-  assert.match(a.address.to_bech32(), /^addr_test1/);
+  const a = deriveAccount(DEVKIT_MNEMONIC, 0, 0);
+  assert.equal(a.address, 'addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex');
+  assert.equal(a.keyHash, 'c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8');
 });

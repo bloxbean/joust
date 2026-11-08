@@ -5,6 +5,9 @@
 import * as CSL from '@emurgo/cardano-serialization-lib-browser';
 import { blockfrostChain, httpService, VerificationError, walletView, toJson } from '@julclang/state-client';
 import { devWallet } from '@julclang/state-client/devwallet';
+// The connect button: the Cardano Foundation's framework-independent CIP-30 connector (cardano-connect-with-wallet).
+// It finds, enables and remembers the browser's wallet; the page verifier and the signing flow are unchanged.
+import { Wallet, NetworkType } from '@cardano-foundation/cardano-connect-with-wallet-core';
 import { Counter } from './generated/Counter.js';
 import { Bank } from './generated/Bank.js';
 import { maliciousService } from './tamper.js';
@@ -125,11 +128,14 @@ function review({ contract, call, report, serverless }) {
 
 // ------------------------------------------------------------------ wallets
 
-/** CIP-30 wallets the browser injected (window.cardano.<key>), first, then the in-page DevKit wallets. */
+/** CIP-30 wallets the browser injected (as the connector finds them), first, then the in-page DevKit wallets. */
 function walletChoices() {
   const sel = $('wallet-choice');
   const current = sel.value;
-  const injected = Object.entries(window.cardano ?? {}).filter(([, w]) => w && typeof w.enable === 'function');
+  const installed = new Set(Wallet.getInstalledWalletExtensions());
+  // The connector's list of known wallets, and any other CIP-30 object the browser injected (Yano, a new wallet).
+  const injected = Object.entries(window.cardano ?? {}).filter(([k, w]) => w && typeof w.enable === 'function'
+    && (installed.has(k.toLowerCase()) || !installed.size || typeof w.apiVersion === 'string'));
   const signature = injected.map(([k]) => k).join(',');
   if (sel.dataset.signature === signature && sel.options.length) return;   // nothing new
   sel.dataset.signature = signature;
@@ -186,6 +192,11 @@ async function connect() {
       const key = choice.slice(6);
       const name = window.cardano[key].name ?? key;
       log(`Asking ${name} to connect (answer in the extension)…`);
+      // The connector enables the wallet (CIP-30 enable), checks its network and remembers it for the next visit.
+      await new Promise((resolve, reject) => {
+        Wallet.connect(key, deployment.networkId === 1 ? NetworkType.MAINNET : NetworkType.TESTNET, resolve, reject).catch(reject);
+      });
+      // The enabled CIP-30 API (enable() again does not ask once the site is authorised).
       app.api = watched(await window.cardano[key].enable(), name);
       app.dev = false;
     }
@@ -352,6 +363,9 @@ walletChoices();
 bankChoices();
 // CIP-30 wallets inject themselves after load, some late: look again for a while, and whenever the list is opened.
 for (const ms of [300, 1000, 2500, 5000]) setTimeout(walletChoices, ms);
+// Wallet extensions inject themselves after the page loads: the connector watches for them.
+Wallet.addEventListener('installedWalletExtensions', () => walletChoices());
+Wallet.startInjectWalletListener();
 $('wallet-choice').addEventListener('focus', walletChoices);
 $('wallet-choice').addEventListener('mousedown', walletChoices);
 refresh();

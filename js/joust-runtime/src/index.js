@@ -2,7 +2,7 @@
 // engine (Wasm) from the chain as a Blockfrost-style API serves it; @julclang/state-client verifies each transaction
 // against the contract's description before the wallet signs it (D7), and submits it.
 
-import { chainOf, blockfrostProvider, assemble, planOf, toJson, runComposed, walletView, governorParams, verifyRegistration } from '@julclang/state-client';
+import { chainOf, blockfrostProvider, bech32Of, assemble, planOf, toJson, runComposed, walletView, governorParams, verifyRegistration } from '@julclang/state-client';
 import { fetchNeed } from './snapshot.js';
 import { engineService } from './service.js';
 
@@ -15,9 +15,9 @@ export { JoustContract, VerificationError, blockfrostChain, chainOf, blockfrostP
 export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-client/devwallet';
 
 /**
- * A runtime over one chain: the options a generated client takes ({ CSL, service, chain, deployment }), per contract.
+ * A runtime over one chain: the options a generated client takes ({ service, chain, deployment }), per contract.
  *
- * @param o.CSL        cardano-serialization-lib 15.x (nodejs or browser)
+ * @param o.CSL        (optional, ignored: earlier versions read transactions with it)
  * @param o.provider   a chain provider (ADR-0015 §13.9): blockfrostProvider(url), ogmiosProvider(url), or the app's
  *                     own. It backs both the engine's reads and the page's chain view, so the verifier reads from the
  *                     source the engine built from.
@@ -33,7 +33,7 @@ export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-clien
 export function joustRuntime(o) {
   const provider = o.provider ?? blockfrostProvider(o.chainUrl, { projectId: o.projectId, fetchImpl: o.fetchImpl });
   const api = provider;
-  const chain = chainOf(provider, { CSL: o.CSL });
+  const chain = chainOf(provider);
   const deployments = { ...(o.deployments ?? {}) };
   const deploymentOf = (contract) => deployments[contract]
     ?? Object.values(deployments).find((x) => x.contract === contract || x.contract.endsWith('.' + contract));
@@ -91,14 +91,13 @@ export function joustRuntime(o) {
   const verifiers = {};
   async function ensureVerifier(name, wallet, payer) {
     if (verifiers[name]?.referenceScripts?.length) return verifiers[name];
-    const CSL = o.CSL;
     let v = await engine.deployment(name, payer);
     if (!v.referenceScripts.length) {
       const p = await engine.publish(name, payer);
       if (p) {
-        const plan = planOf(CSL, p.cbor);
+        const plan = planOf(p.cbor);
         if (plan.outputs.some((x) => x.address !== v.address && x.address !== payer)) throw new Error(`the ${name} transaction pays elsewhere: refused`);
-        const signed = assemble(CSL, p.cbor, await wallet.signTx(p.cbor, true));
+        const signed = assemble(p.cbor, await wallet.signTx(p.cbor, true));
         await chain.submit(signed.cbor);
         await chain.awaitTx(signed.txHash);
       }
@@ -123,23 +122,22 @@ export function joustRuntime(o) {
      * Returns { name, script, hash, rewardAddress }: give it to a call as opts.governor = { governor, signers }.
      */
     async ensureGovernor(name, params, wallet) {
-      const CSL = o.CSL;
-      const v = (o.validators ?? []).find((x) => x.name === name || `${x.package}.${x.name}` === name);
+        const v = (o.validators ?? []).find((x) => x.name === name || `${x.package}.${x.name}` === name);
       if (!v) throw new Error(`no validator ${name} (pass validators: build/joust/validators.json)`);
       if (v.purpose !== 'withdraw' && v.purpose !== 'multi') throw new Error(`${name} is a ${v.purpose} validator, not a governor (withdraw)`);
-      const ps = governorParams(CSL, v, params);
+      const ps = governorParams(v, params);
       const key = name + '|' + ps.join(',');
       if (governors[key]) return governors[key];
-      const payer = CSL.Address.from_hex(await wallet.getChangeAddress()).to_bech32();
+      const payer = bech32Of(await wallet.getChangeAddress());
       const d = await engine.governor('deployment', v.script, ps, payer);
       const g = { name: v.name, script: d.script, hash: d.hash, rewardAddress: d.rewardAddress };
       if (await chain.registered(g.rewardAddress) !== true) {
         const p = await engine.governor('register', v.script, ps, payer);
-        const view = await walletView(CSL, wallet);
-        const { problems } = verifyRegistration({ CSL, txHex: p.cbor, governor: g, wallet: view, chain: { params: await chain.params(), tip: await chain.tip() },
+        const view = await walletView(wallet);
+        const { problems } = verifyRegistration({ txHex: p.cbor, governor: g, wallet: view, chain: { params: await chain.params(), tip: await chain.tip() },
           networkId: o.networkId ?? 0 });
         if (problems.length) throw new Error(`the ${name} registration is refused: ${problems.join('; ')}`);
-        const signed = assemble(CSL, p.cbor, await wallet.signTx(p.cbor, true));
+        const signed = assemble(p.cbor, await wallet.signTx(p.cbor, true));
         try {
           await chain.submit(signed.cbor);
           await chain.awaitTx(signed.txHash);
@@ -158,19 +156,18 @@ export function joustRuntime(o) {
      * deployment per params value (JSON by the description's schema; bigints allowed).
      */
     async ensureDeployment(contract, wallet, params) {
-      const CSL = o.CSL;
-      const payer = CSL.Address.from_hex(await wallet.getChangeAddress()).to_bech32();
+        const payer = bech32Of(await wallet.getChangeAddress());
       const pj = params === undefined ? undefined : toJson(params);
       let d = await service.deployment(contract, payer, pj);
       if (!d.referenceScripts.length) {
         const p = await service.publish(contract, payer, pj);
         if (p) {
-          const plan = planOf(CSL, p.cbor);
+          const plan = planOf(p.cbor);
           const bad = plan.outputs.filter((x) => x.address !== d.address && x.address !== payer);
           if (bad.length || !plan.outputs.some((x) => x.address === d.address && x.hasScript)) {
             throw new Error('the reference script transaction pays elsewhere: refused');
           }
-          const signed = assemble(CSL, p.cbor, await wallet.signTx(p.cbor, true));
+          const signed = assemble(p.cbor, await wallet.signTx(p.cbor, true));
           await chain.submit(signed.cbor);
           await chain.awaitTx(signed.txHash);
         }
@@ -198,14 +195,14 @@ export function joustRuntime(o) {
      * prepared by the engine, verified call by call and as a whole (verifyComposed), signed by {@code api}.
      */
     compose(api, steps, extra = {}) {
-      return runComposed({ CSL: o.CSL, service, chain, api, steps, ...extra });
+      return runComposed({ service, chain, api, steps, ...extra });
     },
 
     /** Options for a generated client of {@code contract} (its description's title, or its simple name). */
     options(contract, extra = {}) {
       const d = deploymentOf(contract);
       if (!d) throw new Error(`no deployment of ${contract}: run joust deploy (or pass deployments)`);
-      return { CSL: o.CSL, service, chain, deployment: d, ...extra };
+      return { service, chain, deployment: d, ...extra };
     },
   };
 }

@@ -55,7 +55,7 @@ export interface ChainProvider {
 
 export declare function blockfrostProvider(baseUrl: string, o?: { projectId?: string; fetchImpl?: typeof fetch }): ChainProvider & { base: string; get(path: string, o?: { allow404?: boolean }): Promise<any> };
 export declare function ogmiosProvider(url: string, o?: { fetchImpl?: typeof fetch }): ChainProvider & { rpc(method: string, params?: object): Promise<any> };
-export declare function chainOf(provider: ChainProvider, o?: { CSL?: any }): Chain;
+export declare function chainOf(provider: ChainProvider): Chain;
 
 export interface Chain {
   readonly provider?: ChainProvider;
@@ -93,7 +93,8 @@ export interface Review {
 }
 
 export interface JoustOptions {
-  CSL: unknown;
+  /** @deprecated ignored: transactions are read with cardano-js-sdk */
+  CSL?: unknown;
   deployment: Deployment;
   service: Service;
   chain: Chain;
@@ -133,10 +134,18 @@ export declare class JoustObject {
 export declare function httpService(baseUrl: string, o?: { fetchImpl?: typeof fetch }): Service;
 export declare function blockfrostChain(baseUrl: string, o?: { projectId?: string; fetchImpl?: typeof fetch }): Chain;
 export declare function verifyPrepared(o: unknown): Promise<{ problems: string[]; report: Report }>;
-export declare function codec(CSL: unknown, description: unknown): {
-  encode(schema: unknown, value: unknown, path?: string): unknown;
-  decode(schema: unknown, data: unknown, path?: string): unknown;
+/** Plutus data without a ledger library (pdata.js). */
+export type PlutusData = { constr: number; fields: PlutusData[] } | { int: bigint } | { bytes: Uint8Array } | { list: PlutusData[] }
+  | { map: Array<[PlutusData, PlutusData]> };
+export declare function codec(description: unknown): {
+  encode(schema: unknown, value: unknown, path?: string): PlutusData;
+  decode(schema: unknown, data: PlutusData | Hex, path?: string): unknown;
 };
+export declare function decodeData(cbor: Hex | Uint8Array): PlutusData;
+export declare function encodeData(d: PlutusData): Uint8Array;
+export declare function dataHex(d: PlutusData): Hex;
+export declare function parseTx(cbor: Hex): any;
+export declare function txHash(cbor: Hex): Hex;
 export declare function toJson(v: unknown): unknown;
 export declare function instanceIdOf(txHash: Hex, index: number): Hex;
 export declare function objectIdOf(txHash: Hex, index: number): Hex;

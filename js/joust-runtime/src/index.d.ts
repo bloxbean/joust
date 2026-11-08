@@ -32,7 +32,7 @@ export interface JoustRuntime {
 }
 
 export function joustRuntime(o: {
-  CSL: any; provider?: ChainProvider; chainUrl?: string; projectId?: string; contracts: BuiltContract[]; clock: Clock; networkId?: number;
+  CSL?: any; provider?: ChainProvider; chainUrl?: string; projectId?: string; contracts: BuiltContract[]; clock: Clock; networkId?: number;
   deployments?: Record<string, Deployment>; validators?: BuiltValidator[]; ttlMs?: number; fetchImpl?: typeof fetch;
 }): JoustRuntime;
 export function engineService(o: { api: ChainProvider | ChainApi; contracts: BuiltContract[]; clock: Clock; networkId?: number; ttlMs?: number; maxRounds?: number }): EngineService;
@@ -42,6 +42,6 @@ export function emptySnapshot(): object;
 export function fetchNeed(provider: ChainProvider | ChainApi, snapshot: object, kind: string, key: string): Promise<void>;
 export function devkitClock(adminUrl?: string): Promise<Clock>;
 export function devkitTopUp(address: string, ada: number, adminUrl?: string): Promise<void>;
-export function devWallet(o: { CSL: any; chain: any; mnemonic?: string; index?: number; networkId?: number; confirm?: (txHex: string) => Promise<boolean> }): Cip30Api & { address: string; keyHash: string };
-export function deriveAccount(CSL: any, mnemonic: string, index?: number, networkId?: number): any;
+export function devWallet(o: { chain: any; mnemonic?: string; index?: number; networkId?: number; confirm?: (txHex: string) => Promise<boolean> }): Cip30Api & { address: string; keyHash: string };
+export function deriveAccount(mnemonic: string, index?: number, networkId?: number): { address: string; reward: string; keyHash: string; publicKey: string };
 export const DEVKIT_MNEMONIC: string;

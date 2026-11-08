@@ -13,3 +13,5 @@ export { verifyComposed, runComposed } from './compose.js';
 export { verifyIntent, verifyCancel, verifyBatch, intentIdOf, ledgerAddressJson } from './intents.js';
 export { governorParams, rewardAddressOf, approvalsData, verifyRegistration } from './governors.js';
 export { verifyPurpose, purposeOf, rewardsData } from './purposes.js';
+export { parseTx, txHash, bech32Of, addressParts, rewardAddress, enterpriseAddress, baseAddress, poolKeyHash } from './ledger.js';
+export { Data, decodeData, encodeData, dataHex } from './pdata.js';

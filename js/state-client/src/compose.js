@@ -6,34 +6,33 @@
 import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import {
-  DEFAULT_LIMITS, refOf, ledgerOrder, valueMap, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
-  paymentKeyHashOf, decodeNext,
+  DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, SPEND_KINDS, DESTROYS, verifiableWithoutService,
+  paymentKeyHashOf, isWalletEnterprise, decodeNext,
 } from './verify.js';
+import { parseTx, txHash as hashOf } from './ledger.js';
 
 /**
  * @param o.steps  [{ description, deployment, call: { kind, meta, args, pay, instance, object } }] in composition order
- * @param o.wallet, o.chain, o.txHex, o.CSL, o.limits  as for verifyPrepared
+ * @param o.wallet, o.chain, o.txHex, o.limits  as for verifyPrepared
  * @returns { problems, report: { calls: [{ redeemer, next, targetRef }], fee, walletNet, outputs } }
  */
 export async function verifyComposed(o) {
-  const { CSL, txHex, steps, wallet, chain } = o;
+  const { txHex, steps, wallet, chain } = o;
   const limits = { ...DEFAULT_LIMITS, ...(o.limits ?? {}) };
   const problems = [];
   const report = { calls: [], outputs: [] };
-  const isWallet = (addr) => wallet.addresses.includes(addr.to_bech32())
-    || (CSL.EnterpriseAddress.from_address(addr) && wallet.keyHashes.includes(paymentKeyHashOf(CSL, addr)));
+  const isWallet = (addr) => wallet.addresses.includes(addr) || isWalletEnterprise(addr, wallet);
 
   let tx;
   try {
-    tx = CSL.Transaction.from_hex(txHex);
+    tx = parseTx(txHex);
   } catch (e) {
     return { problems: ['not a transaction'], report };
   }
-  const body = tx.body();
 
   // Each call: its contract, a spending kind, verifiable by the page.
   const calls = steps.map((s) => {
-    const c = makeCodec(CSL, s.description);
+    const c = makeCodec(s.description);
     const xj = s.description['x-joust'];
     const policy = s.deployment.policy;
     const targetName = s.call.kind.startsWith('owned') ? s.call.object : s.call.instance;
@@ -71,34 +70,25 @@ export async function verifyComposed(o) {
   if (targets.size !== calls.length) problems.push('two calls spend the same instance or object');
 
   // Nothing beyond the calls.
-  if (!tx.is_valid()) problems.push('is_valid is false (the collateral would be taken)');
-  if (body.certs() && body.certs().len() > 0) problems.push('certificates');
-  if (body.voting_procedures() || body.voting_proposals()) problems.push('votes or proposals');
-  if (body.donation() || body.current_treasury_value()) problems.push('a treasury donation');
-  if (tx.auxiliary_data()) problems.push('auxiliary data');
+  if (!tx.isValid) problems.push('is_valid is false (the collateral would be taken)');
+  if (tx.certificates.length > 0) problems.push('certificates');
+  if (tx.hasVotes || tx.hasProposals) problems.push('votes or proposals');
+  if (tx.hasDonation || tx.hasTreasuryValue) problems.push('a treasury donation');
+  if (tx.hasAuxiliaryData) problems.push('auxiliary data');
   const verifiers = calls.flatMap((k) => [k.deployment.mapVerifier, k.deployment.outputVerifier]).filter(Boolean);
   const verifierRewards = new Set(verifiers.map((v) => v.rewardAddress));
-  const ws = body.withdrawals();
-  if (ws && ws.len() > 0) {
-    const keys = ws.keys();
-    let ok = ws.len() <= verifierRewards.size;
-    for (let i = 0; i < keys.len(); i++) {
-      if (!verifierRewards.has(keys.get(i).to_address().to_bech32()) || ws.get(keys.get(i)).to_str() !== '0') ok = false;
-    }
+  if (tx.withdrawals.length > 0) {
+    let ok = tx.withdrawals.length <= verifierRewards.size;
+    for (const w of tx.withdrawals) if (!verifierRewards.has(w.address) || w.amount !== 0n) ok = false;
     if (!ok) problems.push('withdrawals');
   }
-  const withdrawalCount = ws ? ws.len() : 0;
+  const withdrawalCount = tx.withdrawals.length;
   const networkId = calls[0]?.deployment.networkId;
   if (calls.some((k) => k.deployment.networkId !== networkId)) problems.push('calls on different networks');
-  if (body.network_id() && body.network_id().kind() !== (networkId === 1 ? CSL.NetworkIdKind.Mainnet : CSL.NetworkIdKind.Testnet)) {
-    problems.push('another network');
-  }
+  if (tx.networkId !== null && tx.networkId !== (networkId === 1 ? 1 : 0)) problems.push('another network');
 
   // Inputs: the wallet's and each call's target; nothing else.
-  const inputs = body.inputs();
-  const refs = [];
-  for (let i = 0; i < inputs.len(); i++) refs.push(refOf(inputs.get(i)));
-  const sorted = ledgerOrder(refs);
+  const sorted = ledgerOrder(tx.inputs);
   const spent = new Map();
   const consumed = new Map();
   for (let i = 0; i < sorted.length; i++) {
@@ -140,39 +130,21 @@ export async function verifyComposed(o) {
 
   // Redeemers: one spend per call on its target; mints per call (a destroy's burn, a minting method's ByAction);
   // reward redeemers only for the pinned verifiers' withdrawals.
-  const rds = tx.witness_set().redeemers();
+  const rds = tx.redeemers;
   const spends = [];
   const mints = [];
-  for (let i = 0; rds && i < rds.len(); i++) {
-    const r = rds.get(i);
-    const kind = r.tag().kind();
-    if (kind === CSL.RedeemerTagKind.Spend) spends.push(r);
-    else if (kind === CSL.RedeemerTagKind.Mint) mints.push(r);
-    else if (kind === CSL.RedeemerTagKind.Reward && Number(r.index().to_str()) < withdrawalCount) { /* a pinned verifier's */ }
+  for (const r of rds) {
+    if (r.tag === 'spend') spends.push(r);
+    else if (r.tag === 'mint') mints.push(r);
+    else if (r.tag === 'reward' && r.index < withdrawalCount) { /* a pinned verifier's */ }
     else problems.push('a redeemer that is neither a spend, a mint nor a pinned verifier\'s');
   }
   const spending = calls.filter((x) => !x.creation).length;
   if (spends.length !== spending) problems.push(`${spends.length} spend redeemers for ${spending} spending calls`);
 
   // Mint: by policy, in the ledger's policy order (mint redeemers are indexed by it).
-  const minted = new Map();
-  const mint = body.mint();
-  const mintPolicies = [];
-  if (mint) {
-    const ps = mint.keys();
-    for (let i = 0; i < ps.len(); i++) {
-      mintPolicies.push(ps.get(i).to_hex());
-      const all = mint.get(ps.get(i));
-      for (let k = 0; k < all.len(); k++) {
-        const assets = all.get(k);
-        const names = assets.keys();
-        for (let j = 0; j < names.len(); j++) {
-          const unit = ps.get(i).to_hex() + Buffer.from(names.get(j).name()).toString('hex');
-          minted.set(unit, (minted.get(unit) ?? 0n) + BigInt(assets.get(names.get(j)).to_str()));
-        }
-      }
-    }
-  }
+  const minted = new Map(tx.mint);
+  const mintPolicies = [...new Set([...minted.keys()].map((u) => u.slice(0, 56)))];
   const sortedPolicies = [...mintPolicies].sort();
   for (const p of sortedPolicies) {
     if (!calls.some((k) => k.policy === p)) problems.push(`a mint under a policy no call pins: ${p}`);
@@ -183,13 +155,13 @@ export async function verifyComposed(o) {
     const fields = (def, r, what) => {
       let decoded;
       try {
-        decoded = c.decode(def, r.data());
+        decoded = c.decode(def, r.data);
       } catch (e) {
         problems.push(`${call.meta.name}: ${what}: ${e.message}`);
         return null;
       }
-      const alt = c.resolve(def).anyOf.find((a) => a.index === Number(r.data().as_constr_plutus_data()?.alternative().to_str()));
-      return { decoded, alt, fields: r.data().as_constr_plutus_data().data() };
+      const alt = c.resolve(def).anyOf.find((a) => a.index === r.data.constr);
+      return { decoded, alt, fields: r.data.fields };
     };
     if (k.creation) {
       // An adoption: exactly its token minted under its policy, with Adopt naming the prior UTxO as its seed.
@@ -198,7 +170,7 @@ export async function verifyComposed(o) {
       if (!k.created) continue;
       const ownMinted = [...minted].filter(([unit]) => unit.startsWith(k.policy));
       if (ownMinted.length !== 1 || minted.get(k.targetUnit) !== 1n) problems.push(`${call.meta.name}: the mint is not exactly the adopted instance's token`);
-      const ownMints = mints.filter((r) => sortedPolicies[Number(r.index().to_str())] === k.policy);
+      const ownMints = mints.filter((r) => sortedPolicies[r.index] === k.policy);
       const got = ownMints.length === 1 ? fields(rdefs.mint, ownMints[0], 'the adoption') : null;
       if (!got) problems.push(`${call.meta.name}: not exactly one mint redeemer`);
       else {
@@ -209,7 +181,7 @@ export async function verifyComposed(o) {
       }
       continue;
     }
-    const own = spends.filter((r) => Number(r.index().to_str()) === k.targetIndex);
+    const own = spends.filter((r) => r.index === k.targetIndex);
     const entry = { method: call.meta.name, targetRef: k.targetRef, redeemer: null, next: null };
     report.calls.push(entry);
     if (own.length !== 1) {
@@ -223,7 +195,7 @@ export async function verifyComposed(o) {
         } else {
           const argNames = new Set(call.meta.args.map((a) => a.name));
           got.alt.fields.forEach((f, i) => {
-            const actual = got.fields.get(i);
+            const actual = got.fields[i];
             if (argNames.has(f.title)) {
               if (!dataEqual(c.encode(f, call.args[f.title], f.title), actual)) problems.push(`${call.meta.name}: the redeemer's ${f.title} is not the argument the page gave`);
             } else if (f.title === 'ctx') {
@@ -243,7 +215,7 @@ export async function verifyComposed(o) {
     }
     // This call's mint: a destroy burns exactly its token; a minting method mints its policy's own tokens.
     const ownMinted = [...minted].filter(([unit]) => unit.startsWith(k.policy));
-    const ownMints = mints.filter((r) => sortedPolicies[Number(r.index().to_str())] === k.policy);
+    const ownMints = mints.filter((r) => sortedPolicies[r.index] === k.policy);
     if (DESTROYS.has(call.kind)) {
       if (minted.get(k.targetUnit) !== -1n) problems.push(`${call.meta.name}: a destroy must burn exactly its token`);
       const burns = ownMints.map((r) => fields(rdefs.mint, r, 'the burn')).filter(Boolean);
@@ -263,11 +235,9 @@ export async function verifyComposed(o) {
   const back = new Map();
   const tagged = new Map();
   const third = new Map();
-  const outs = body.outputs();
-  for (let i = 0; i < outs.len(); i++) {
-    const out = outs.get(i);
-    const value = valueMap(out.amount());
-    const bech = out.address().to_bech32();
+  for (const out of tx.outputs) {
+    const value = out.value;
+    const bech = out.address;
     const k = calls.find((x) => !DESTROYS.has(x.call.kind) && bech === x.deployment.address && value.get(x.targetUnit) === 1n);
     for (const unit of value.keys()) {
       for (const x of calls) {
@@ -280,7 +250,7 @@ export async function verifyComposed(o) {
     if (k) {
       k.continuations++;
       k.continuation = value;
-      const datum = out.plutus_data();
+      const datum = out.datum;
       if (!datum) problems.push(`${k.call.meta.name}: the continuation has no inline datum`);
       else {
         try {
@@ -293,17 +263,17 @@ export async function verifyComposed(o) {
       }
       continue;
     }
-    if (isWallet(out.address())) {
-      if (out.has_script_ref() || out.has_data_hash()) problems.push('a wallet output with a script or datum hash');
-      const isTagged = out.has_plutus_data() && tags.some((t) => dataEqual(out.plutus_data(), t));
-      if (out.has_plutus_data() && !isTagged) problems.push('a wallet output with a datum');
-      const pkh = paymentKeyHashOf(CSL, out.address());
+    if (isWallet(out.address)) {
+      if (out.hasScriptRef || out.datumHash) problems.push('a wallet output with a script or datum hash');
+      const isTagged = out.datum && tags.some((t) => dataEqual(out.datum, t));
+      if (out.datum && !isTagged) problems.push('a wallet output with a datum');
+      const pkh = paymentKeyHashOf(out.address);
       add(back, value);
       if (isTagged) add(tagged, value);
       if (pkh === null) problems.push('a wallet output without a payment key');
       continue;
     }
-    const pkh = paymentKeyHashOf(CSL, out.address());
+    const pkh = paymentKeyHashOf(out.address);
     if (pkh && wallet.keyHashes.includes(pkh)) problems.push('an output to the wallet\'s key at an address the wallet does not use');
     report.outputs.push({ address: bech, value });
     add(third, value);
@@ -318,9 +288,9 @@ export async function verifyComposed(o) {
   }
 
   // Balance: inputs and mint equal outputs and fee.
-  const fee = BigInt(body.fee().to_str());
+  const fee = tx.fee;
   const produced = new Map([['lovelace', fee]]);
-  for (let i = 0; i < outs.len(); i++) add(produced, valueMap(outs.get(i).amount()));
+  for (const out of tx.outputs) add(produced, out.value);
   const supplied = new Map(consumed);
   add(supplied, minted);
   for (const unit of new Set([...supplied.keys(), ...produced.keys()])) {
@@ -355,11 +325,9 @@ export async function verifyComposed(o) {
   report.walletNet = net.get('lovelace') ?? 0n;
 
   // Signers: only the wallet's keys, and the co-signers the page named for @Quorum calls (ADR-0009 D2).
-  const rs = body.required_signers();
   const named = new Set(calls.flatMap((k) => k.call.cosignerKeys ?? []));
   const required = new Set();
-  for (let i = 0; rs && i < rs.len(); i++) {
-    const k = rs.get(i).to_hex();
+  for (const k of tx.requiredSigners) {
     required.add(k);
     if (!wallet.keyHashes.includes(k) && !named.has(k)) problems.push('a required signer that is not the wallet');
   }
@@ -369,21 +337,21 @@ export async function verifyComposed(o) {
   const nows = [chain.tip];
   const sc = calls.find((k) => k.deployment.slotConfig)?.deployment.slotConfig;
   if (sc) nows.push(Number(sc.zeroSlot) + Math.floor((Date.now() - Number(sc.zeroTimeMs)) / Number(sc.slotLengthMs)));
-  const ttl = body.ttl_bignum();
-  const start = body.validity_start_interval_bignum();
+  const ttl = tx.ttl === null ? null : Number(tx.ttl);
+  const start = tx.validFrom === null ? null : Number(tx.validFrom);
   const readsCtx = calls.some((k) => k.call.meta.ctx);
   for (const now of nows) {
-    if (!ttl || Number(ttl.to_str()) > now + limits.maxValiditySlots) problems.push('a validity interval that is too long');
-    if (start && Number(start.to_str()) > now + limits.maxStartSlots) problems.push('a validity interval that starts later');
-    if (readsCtx && (!start || Number(start.to_str()) < now - limits.maxBackdateSlots)) problems.push('a validity interval that starts in the past (Ctx time)');
+    if (!ttl || ttl > now + limits.maxValiditySlots) problems.push('a validity interval that is too long');
+    if (start && start > now + limits.maxStartSlots) problems.push('a validity interval that starts later');
+    if (readsCtx && (!start || start < now - limits.maxBackdateSlots)) problems.push('a validity interval that starts in the past (Ctx time)');
   }
 
   // The fee: at most what the protocol asks for this size and these budgets, with a margin.
   const pp = chain.params;
   let mem = 0n, stepsUsed = 0n;
-  for (let i = 0; rds && i < rds.len(); i++) {
-    mem += BigInt(rds.get(i).ex_units().mem().to_str());
-    stepsUsed += BigInt(rds.get(i).ex_units().steps().to_str());
+  for (const rd of rds) {
+    mem += rd.mem;
+    stepsUsed += rd.steps;
   }
   if (mem > BigInt(pp.max_tx_ex_mem) || stepsUsed > BigInt(pp.max_tx_ex_steps)) problems.push('execution budgets above the protocol limits');
   const size = BigInt(txHex.length / 2 + 200);
@@ -393,29 +361,26 @@ export async function verifyComposed(o) {
   if (fee > limits.maxFee) problems.push(`a fee of ${fee}, above the page's limit of ${limits.maxFee}`);
 
   // Collateral: the wallet's, returned to the wallet, at most maxCollateral at risk.
-  const coll = body.collateral();
-  const ret = body.collateral_return();
-  const total = body.total_collateral();
-  if (rds && rds.len() > 0) {
-    if (!coll || coll.len() === 0 || !ret || !total) problems.push('collateral without a return and a total');
+  const coll = tx.collateral;
+  const ret = tx.collateralReturn;
+  const total = tx.totalCollateral;
+  if (rds.length > 0) {
+    if (coll.length === 0 || !ret || total === null) problems.push('collateral without a return and a total');
     else {
       let inColl = 0n;
-      for (let i = 0; i < coll.len(); i++) {
-        const r = refOf(coll.get(i));
+      for (const r of coll) {
         if (!wallet.utxos.has(r)) problems.push('collateral that is not the wallet\'s');
         else inColl += wallet.utxos.get(r).value.get('lovelace') ?? 0n;
       }
-      if (!isWallet(ret.address())) problems.push('the collateral return goes elsewhere');
-      if (BigInt(total.to_str()) > limits.maxCollateral || inColl - BigInt(ret.amount().coin().to_str()) > limits.maxCollateral) {
+      if (!isWallet(ret.address)) problems.push('the collateral return goes elsewhere');
+      if (total > limits.maxCollateral || inColl - ret.value.get('lovelace') > limits.maxCollateral) {
         problems.push(`more than ${limits.maxCollateral} lovelace of collateral at risk`);
       }
     }
   }
 
   // Reference inputs: each call's reference scripts, its pinned verifiers', its contract's UTxOs, its foreign reads.
-  const refIns = body.reference_inputs();
-  for (let i = 0; refIns && i < refIns.len(); i++) {
-    const r = refOf(refIns.get(i));
+  for (const r of tx.referenceInputs) {
     let ok = calls.some((k) => (k.deployment.referenceScripts ?? []).includes(r))
       || verifiers.some((v) => (v.referenceScripts ?? []).includes(r));
     if (!ok) {
@@ -483,7 +448,7 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
     e.report = report;
     throw e;
   }
-  const txHash = CSL.FixedTransaction.from_hex(p.cbor).transaction_hash().to_hex();
+  const txHash = hashOf(p.cbor);
   if (onReview) await onReview({ calls: request.calls, report, txHash });
   const witnesses = [await api.signTx(p.cbor, true)];
   for (const c of signing) witnesses.push(await c.api.signTx(p.cbor, true));

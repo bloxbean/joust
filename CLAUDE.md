@@ -126,6 +126,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   registered (`/accounts` answers alike): register and treat "already registered" as success. Runtime code that builds
   a transaction must start from `TxRunner.newTx()` (else a wallet's prepare captures nothing). DevKit pays no rewards
   within a test (epochs): staking flows collect a zero balance.
+- ADR-0015 M4: the JS layer reads ledger formats only through `js/state-client/src/ledger.js` (cardano-js-sdk,
+  pinned exactly); Plutus data is `pdata.js` (own CBOR; decoded nodes keep `raw` bytes). CSL is gone from the packages
+  (tests and the dApp's tamper/serverless demos keep it, as an independent implementation). `devwallet.js` awaits
+  libsodium at import (top-level await). Chain reads go through a provider (`providers.js`: Blockfrost/Yaci Store,
+  Ogmios; `PROVIDER=ogmios` runs the example flows over Ogmios on DevKit :1337).
 - ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). JuLC
   pinned at `deb72bb` (branch `feat/joust-embedder-attribution`, bloxbean/julc#313, stacked on #311: `JavacFrontend.attribute` public).

@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { network } from './config.js';
 
 /** The deployer's wallet: JOUST_MNEMONIC, else (DevKit only) a key kept in .joust/<network>-wallet.json, topped up. */
-async function deployer(root, net, rt, CSL) {
+async function deployer(root, net, rt) {
   const { devWallet, devkitTopUp } = await import('@julclang/joust-runtime');
   let mnemonic = process.env.JOUST_MNEMONIC;
   if (!mnemonic) {
@@ -20,11 +20,11 @@ async function deployer(root, net, rt, CSL) {
       writeFileSync(f, JSON.stringify({ note: 'a DevKit key made by joust deploy; never use it on a public network', mnemonic }, null, 2) + '\n', { mode: 0o600 });
     }
   }
-  const wallet = devWallet({ CSL, chain: rt.chain, mnemonic, networkId: net.networkId });
+  const wallet = devWallet({ chain: rt.chain, mnemonic, networkId: net.networkId });
   if (net.admin) {
     const have = (await rt.chain.utxosAt(wallet.address)).reduce((s, u) => s + (u.value.get('lovelace') ?? 0n), 0n);
     if (have < 200_000_000n) {
-      await devkitTopUp(wallet.address, 1000, net.admin, { CSL, chain: rt.chain });
+      await devkitTopUp(wallet.address, 1000, net.admin, { chain: rt.chain });
       for (let i = 0; i < 30 && !(await rt.chain.utxosAt(wallet.address)).length; i++) await new Promise((r) => setTimeout(r, 1000));
     }
   }
@@ -36,13 +36,12 @@ export async function deploy({ root = process.cwd(), config, networkName, log = 
   const bundleFile = join(root, config.out, 'contracts.json');
   if (!existsSync(bundleFile)) throw new Error('no build: run joust build first');
   const contracts = JSON.parse(readFileSync(bundleFile, 'utf8'));
-  const { default: CSL } = await import('@emurgo/cardano-serialization-lib-nodejs');
   const { joustRuntime, ogmiosProvider } = await import('@julclang/joust-runtime');
   // The network's chain provider (ADR-0015 §13.9): "provider": "ogmios" with "ogmios": url; else the Blockfrost-style
   // API at "chain" (Blockfrost, Yaci Store).
   const provider = net.provider === 'ogmios' ? ogmiosProvider(net.ogmios ?? 'http://localhost:1337') : undefined;
-  const rt = joustRuntime({ CSL, chainUrl: net.chain, provider, projectId: net.projectId, contracts, clock: net.clock, networkId: net.networkId });
-  const wallet = await deployer(root, net, rt, CSL);
+  const rt = joustRuntime({ chainUrl: net.chain, provider, projectId: net.projectId, contracts, clock: net.clock, networkId: net.networkId });
+  const wallet = await deployer(root, net, rt);
   const out = {};
   for (const c of contracts) {
     const title = JSON.parse(c.description).preamble.title;

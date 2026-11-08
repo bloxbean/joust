@@ -20,23 +20,14 @@
   "dependencies": {
     "@julclang/state-client": "0.1.0"
   },
-  "peerDependencies": {
-    "@emurgo/cardano-serialization-lib-nodejs": "15.0.3",
-    "@emurgo/cardano-serialization-lib-browser": "15.0.3"
-  },
-  "peerDependenciesMeta": {
-    "@emurgo/cardano-serialization-lib-nodejs": {
-      "optional": true
-    },
-    "@emurgo/cardano-serialization-lib-browser": {
-      "optional": true
-    }
-  },
   "engines": {
     "node": ">=22"
   },
   "license": "UNLICENSED",
   "publishConfig": {
     "registry": "http://127.0.0.1:4873/"
+  },
+  "devDependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "15.0.3"
   }
 }

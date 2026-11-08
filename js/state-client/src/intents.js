@@ -2,7 +2,8 @@
 // batcher. Each prepared transaction is verified against the description before the wallet signs, as for calls:
 // nothing beyond the operation, the wallet's funds bounded, every datum and redeemer the page's own.
 
-import { DEFAULT_LIMITS, refOf, ledgerOrder, valueMap, add, paymentKeyHashOf } from './verify.js';
+import { DEFAULT_LIMITS, ledgerOrder, add, isWalletEnterprise } from './verify.js';
+import { parseTx, addressParts } from './ledger.js';
 import { codec as makeCodec, dataEqual } from './data.js';
 import { bytesToHex } from './hex.js';
 import { blake2b } from '@noble/hashes/blake2.js';
@@ -19,15 +20,12 @@ export function intentIdOf(txHash, index) {
 }
 
 /** The ledger Address of a bech32 address, as the description's JSON (an intent's refund). */
-export function ledgerAddressJson(CSL, bech32) {
-  const a = CSL.Address.from_bech32(bech32);
-  const base = CSL.BaseAddress.from_address(a);
-  const ent = CSL.EnterpriseAddress.from_address(a);
-  const cred = (c) => (c.kind() === CSL.CredKind.Key
-    ? { $variant: 'PubKeyCredential', hash: c.to_keyhash().to_hex() }
-    : { $variant: 'ScriptCredential', hash: c.to_scripthash().to_hex() });
-  if (base) return { credential: cred(base.payment_cred()), stakingCredential: { $variant: 'StakingHash', credential: cred(base.stake_cred()) } };
-  if (ent) return { credential: cred(ent.payment_cred()), stakingCredential: null };
+export function ledgerAddressJson(...args) {
+  const bech32 = args.at(-1);
+  const a = addressParts(bech32);
+  const cred = (c) => (c.type === 'key' ? { $variant: 'PubKeyCredential', hash: c.hash } : { $variant: 'ScriptCredential', hash: c.hash });
+  if (a.kind === 'base') return { credential: cred(a.payment), stakingCredential: { $variant: 'StakingHash', credential: cred(a.stake) } };
+  if (a.kind === 'enterprise') return { credential: cred(a.payment), stakingCredential: null };
   throw new Error('a refund address must be a base or enterprise address');
 }
 
@@ -36,32 +34,25 @@ export function ledgerAddressJson(CSL, bech32) {
  * metadata, another network), inputs only the wallet's and those {@code scriptInput} accepts, required signers only
  * the wallet's keys, reference inputs only the pinned script's, balance, fee, collateral and validity.
  */
-async function frame({ CSL, deployment, txHex, wallet, chain, limits, scriptInput, walletDatums = false }) {
+async function frame({ deployment, txHex, wallet, chain, limits, scriptInput, walletDatums = false }) {
   const problems = [];
   let tx;
   try {
-    tx = CSL.Transaction.from_hex(txHex);
+    tx = parseTx(txHex);
   } catch (e) {
     return { problems: ['not a transaction'] };
   }
-  const body = tx.body();
-  const isWallet = (addr) => wallet.addresses.includes(addr.to_bech32())
-    || (CSL.EnterpriseAddress.from_address(addr) && wallet.keyHashes.includes(paymentKeyHashOf(CSL, addr)));
-  if (!tx.is_valid()) problems.push('is_valid is false (the collateral would be taken)');
-  if (body.certs() && body.certs().len() > 0) problems.push('certificates');
-  if (body.voting_procedures() || body.voting_proposals()) problems.push('votes or proposals');
-  if (body.donation() || body.current_treasury_value()) problems.push('a treasury donation');
-  if (body.withdrawals() && body.withdrawals().len() > 0) problems.push('withdrawals');
-  if (tx.auxiliary_data()) problems.push('auxiliary data');
-  if (body.network_id() && body.network_id().kind() !== (deployment.networkId === 1 ? CSL.NetworkIdKind.Mainnet : CSL.NetworkIdKind.Testnet)) {
-    problems.push('another network');
-  }
+  const isWallet = (addr) => wallet.addresses.includes(addr) || isWalletEnterprise(addr, wallet);
+  if (!tx.isValid) problems.push('is_valid is false (the collateral would be taken)');
+  if (tx.certificates.length > 0) problems.push('certificates');
+  if (tx.hasVotes || tx.hasProposals) problems.push('votes or proposals');
+  if (tx.hasDonation || tx.hasTreasuryValue) problems.push('a treasury donation');
+  if (tx.withdrawals.length > 0) problems.push('withdrawals');
+  if (tx.hasAuxiliaryData) problems.push('auxiliary data');
+  if (tx.networkId !== null && tx.networkId !== (deployment.networkId === 1 ? 1 : 0)) problems.push('another network');
 
   // Inputs, in ledger order (the redeemers' indexes).
-  const inputs = body.inputs();
-  const refs = [];
-  for (let i = 0; i < inputs.len(); i++) refs.push(refOf(inputs.get(i)));
-  const sorted = ledgerOrder(refs);
+  const sorted = ledgerOrder(tx.inputs);
   const spent = new Map();
   const consumed = new Map();
   const walletInputs = new Set();
@@ -84,54 +75,33 @@ async function frame({ CSL, deployment, txHex, wallet, chain, limits, scriptInpu
   }
 
   // Redeemers: spends and mints only.
-  const rds = tx.witness_set().redeemers();
+  const rds = tx.redeemers;
   const spends = new Map();
   const mints = [];
-  for (let i = 0; rds && i < rds.len(); i++) {
-    const r = rds.get(i);
-    const kind = r.tag().kind();
-    if (kind === CSL.RedeemerTagKind.Spend) spends.set(Number(r.index().to_str()), r);
-    else if (kind === CSL.RedeemerTagKind.Mint) mints.push(r);
+  for (const r of rds) {
+    if (r.tag === 'spend') spends.set(r.index, r);
+    else if (r.tag === 'mint') mints.push(r);
     else problems.push('a redeemer that is neither a spend nor a mint');
   }
 
   // Mint: by policy and unit.
-  const minted = new Map();
-  const mint = body.mint();
-  if (mint) {
-    const ps = mint.keys();
-    for (let i = 0; i < ps.len(); i++) {
-      const lists = mint.get(ps.get(i));
-      for (let k = 0; k < lists.len(); k++) {
-        const assets = lists.get(k);
-        const names = assets.keys();
-        for (let j = 0; j < names.len(); j++) {
-          const unit = ps.get(i).to_hex() + bytesToHex(names.get(j).name());
-          minted.set(unit, (minted.get(unit) ?? 0n) + BigInt(assets.get(names.get(j)).to_str()));
-        }
-      }
-    }
-  }
+  const minted = new Map(tx.mint);
 
   // Outputs: the wallet's, the script's, and others'.
-  const outs = body.outputs();
   const back = new Map();
   const outputs = [];
-  for (let i = 0; i < outs.len(); i++) {
-    const o = outs.get(i);
-    const value = valueMap(o.amount());
-    const address = o.address().to_bech32();
-    const datum = o.plutus_data() ?? null;
-    if (o.script_ref()) problems.push('an output carrying a script');
-    if (isWallet(o.address())) {
-      add(back, value);
-      if (datum && !walletDatums) problems.push('an output to the wallet with a datum');
+  tx.outputs.forEach((o, i) => {
+    if (o.hasScriptRef) problems.push('an output carrying a script');
+    const mine = isWallet(o.address);
+    if (mine) {
+      add(back, o.value);
+      if (o.datum && !walletDatums) problems.push('an output to the wallet with a datum');
     }
-    outputs.push({ index: i, address, value, datum, wallet: isWallet(o.address()) });
-  }
+    outputs.push({ index: i, address: o.address, value: o.value, datum: o.datum, wallet: mine });
+  });
 
   // Balance, fee, collateral.
-  const fee = BigInt(body.fee().to_str());
+  const fee = tx.fee;
   const produced = new Map([['lovelace', fee]]);
   for (const o of outputs) add(produced, o.value);
   const supplied = new Map(consumed);
@@ -144,9 +114,9 @@ async function frame({ CSL, deployment, txHex, wallet, chain, limits, scriptInpu
   }
   const pp = chain.params;
   let mem = 0n, steps = 0n;
-  for (let i = 0; rds && i < rds.len(); i++) {
-    mem += BigInt(rds.get(i).ex_units().mem().to_str());
-    steps += BigInt(rds.get(i).ex_units().steps().to_str());
+  for (const rd of rds) {
+    mem += rd.mem;
+    steps += rd.steps;
   }
   if (mem > BigInt(pp.max_tx_ex_mem) || steps > BigInt(pp.max_tx_ex_steps)) problems.push('execution budgets above the protocol limits');
   const size = BigInt(txHex.length / 2 + 200);
@@ -154,45 +124,35 @@ async function frame({ CSL, deployment, txHex, wallet, chain, limits, scriptInpu
   const cap = (BigInt(pp.min_fee_a) * size + BigInt(pp.min_fee_b) + scriptFee) * 12n / 10n + limits.feeMargin;
   if (fee > cap) problems.push(`a fee of ${fee}, above the ${cap} this transaction needs`);
   if (fee > limits.maxFee) problems.push(`a fee of ${fee}, above the page's limit of ${limits.maxFee}`);
-  const coll = body.collateral();
-  const ret = body.collateral_return();
-  const total = body.total_collateral();
-  if (rds && rds.len() > 0) {
-    if (!coll || coll.len() === 0 || !ret || !total) problems.push('collateral without a return and a total');
+  if (rds.length > 0) {
+    const ret = tx.collateralReturn;
+    if (tx.collateral.length === 0 || !ret || tx.totalCollateral === null) problems.push('collateral without a return and a total');
     else {
       let inColl = 0n;
-      for (let i = 0; i < coll.len(); i++) {
-        const r = refOf(coll.get(i));
+      for (const r of tx.collateral) {
         if (!wallet.utxos.has(r)) problems.push('collateral that is not the wallet\'s');
         else inColl += wallet.utxos.get(r).value.get('lovelace') ?? 0n;
       }
-      if (!isWallet(ret.address())) problems.push('the collateral return goes elsewhere');
-      if (BigInt(total.to_str()) > limits.maxCollateral || inColl - BigInt(ret.amount().coin().to_str()) > limits.maxCollateral) {
+      if (!isWallet(ret.address)) problems.push('the collateral return goes elsewhere');
+      if (tx.totalCollateral > limits.maxCollateral || inColl - ret.value.get('lovelace') > limits.maxCollateral) {
         problems.push(`more than ${limits.maxCollateral} lovelace of collateral at risk`);
       }
     }
   }
 
   // Validity: short, and starting no later than soon.
-  const ttl = body.ttl_bignum();
-  const start = body.validity_start_interval_bignum();
-  if (!ttl || Number(ttl.to_str()) > chain.tip + limits.maxValiditySlots) problems.push('a validity interval that is too long');
-  if (start && Number(start.to_str()) > chain.tip + limits.maxStartSlots) problems.push('a validity interval that starts later');
+  if (tx.ttl === null || Number(tx.ttl) > chain.tip + limits.maxValiditySlots) problems.push('a validity interval that is too long');
+  if (tx.validFrom !== null && Number(tx.validFrom) > chain.tip + limits.maxStartSlots) problems.push('a validity interval that starts later');
 
   // Signers: the wallet's keys only. Reference inputs: the pinned script's only.
-  const rs = body.required_signers();
-  for (let i = 0; rs && i < rs.len(); i++) {
-    if (!wallet.keyHashes.includes(rs.get(i).to_hex())) problems.push('a required signer that is not the wallet');
-  }
-  const refIns = body.reference_inputs();
-  for (let i = 0; refIns && i < refIns.len(); i++) {
-    const r = refOf(refIns.get(i));
+  for (const k of tx.requiredSigners) if (!wallet.keyHashes.includes(k)) problems.push('a required signer that is not the wallet');
+  for (const r of tx.referenceInputs) {
     if (!(deployment.referenceScripts ?? []).includes(r)) problems.push(`a reference input the page does not know: ${r}`);
   }
 
   const net = new Map(spent);
   add(net, back, -1n);
-  return { problems, tx, body, walletInputs, scriptInputs, spends, mints, minted, outputs, fee, net };
+  return { problems, tx, body: tx, walletInputs, scriptInputs, spends, mints, minted, outputs, fee, net };
 }
 
 function onlyUnits(minted, want) {
@@ -203,8 +163,8 @@ function onlyUnits(minted, want) {
 /** Decodes a redeemer by the schema {@code def}; null (and a problem) if it does not decode. */
 function decodeAs(c, def, r, problems, what) {
   try {
-    const d = r.data();
-    return { value: c.decode(def, d), index: Number(d.as_constr_plutus_data()?.alternative().to_str()), data: d };
+    const d = r.data;
+    return { value: c.decode(def, d), index: d.constr, data: d };
   } catch (e) {
     problems.push(`${what}: ${e.message}`);
     return null;
@@ -216,12 +176,12 @@ function decodeAs(c, def, r, problems, what) {
  * to the wallet's address, naming the call the page asked for with the page's deadline and payment.
  */
 export async function verifyIntent(o) {
-  const { CSL, description, deployment, txHex, call, wallet, chain } = o;
+  const { description, deployment, txHex, call, wallet, chain } = o;
   const limits = { ...DEFAULT_LIMITS, ...(o.limits ?? {}) };
-  const c = makeCodec(CSL, description);
+  const c = makeCodec(description);
   const xi = description['x-joust'].intents;
   const policy = deployment.policy;
-  const f = await frame({ CSL, deployment, txHex, wallet, chain, limits, scriptInput: () => false });
+  const f = await frame({ deployment, txHex, wallet, chain, limits, scriptInput: () => false });
   const problems = [...f.problems];
   const report = { intent: null, fee: f.fee };
   if (!f.body) return { problems, report };
@@ -238,7 +198,7 @@ export async function verifyIntent(o) {
       const seed = m.value.seed;
       if (!f.walletInputs.has(`${seed.txId}#${seed.index}`)) problems.push('the intent\'s seed is not a wallet input it spends');
       intentId = intentIdOf(seed.txId, Number(seed.index));
-      intentData = m.data.as_constr_plutus_data().data().get(1);
+      intentData = m.data.fields[1];
     }
   }
   if (intentId && !onlyUnits(f.minted, new Map([[policy + intentId, 1n]]))) problems.push('the mint is not exactly the new intent token');
@@ -268,13 +228,13 @@ export async function verifyIntent(o) {
         report.intent = intentId;
         if (it.instance !== call.instance) problems.push('the intent is for another instance');
         if (!wallet.keyHashes.includes(it.owner)) problems.push('the intent\'s owner is not the wallet');
-        const refund = c.encode(c.resolve(xi.datum).anyOf[0].fields[2], ledgerAddressJson(CSL, call.address), 'refund');
-        if (!dataEqual(refund, out.datum.as_constr_plutus_data().data().get(2))) problems.push('the intent refunds another address');
+        const refund = c.encode(c.resolve(xi.datum).anyOf[0].fields[2], ledgerAddressJson(call.address), 'refund');
+        if (!dataEqual(refund, out.datum.fields[2])) problems.push('the intent refunds another address');
         if (BigInt(it.deadline) !== BigInt(call.deadline)) problems.push('the intent has another deadline');
         if (BigInt(it.received) !== received) problems.push('the intent pays another amount');
         const callDef = c.resolve(xi.datum).anyOf[0].fields[5];
         const want = c.encode(callDef, { $variant: call.meta.call.constructor, ...call.args }, 'call');
-        if (!dataEqual(want, out.datum.as_constr_plutus_data().data().get(5))) problems.push('the intent names another call or arguments');
+        if (!dataEqual(want, out.datum.fields[5])) problems.push('the intent names another call or arguments');
       }
     }
   }
@@ -290,13 +250,13 @@ export async function verifyIntent(o) {
 
 /** Verifies a prepared cancel: the wallet's own intent spent with CancelIntent, its token burned, all of it back. */
 export async function verifyCancel(o) {
-  const { CSL, description, deployment, txHex, call, wallet, chain } = o;
+  const { description, deployment, txHex, call, wallet, chain } = o;
   const limits = { ...DEFAULT_LIMITS, ...(o.limits ?? {}) };
-  const c = makeCodec(CSL, description);
+  const c = makeCodec(description);
   const xi = description['x-joust'].intents;
   const policy = deployment.policy;
   const unit = policy + call.intent;
-  const f = await frame({ CSL, deployment, txHex, wallet, chain, limits, scriptInput: (u) => u.value.get(unit) === 1n });
+  const f = await frame({ deployment, txHex, wallet, chain, limits, scriptInput: (u) => u.value.get(unit) === 1n });
   const problems = [...f.problems];
   const report = { fee: f.fee };
   if (!f.body) return { problems, report };
@@ -339,15 +299,15 @@ export async function verifyCancel(o) {
  * The fold itself (each step, refunds, payouts, the final state) is the validator's to check (I24, I25).
  */
 export async function verifyBatch(o) {
-  const { CSL, description, deployment, txHex, call, wallet, chain } = o;
+  const { description, deployment, txHex, call, wallet, chain } = o;
   const limits = { ...DEFAULT_LIMITS, ...(o.limits ?? {}) };
-  const c = makeCodec(CSL, description);
+  const c = makeCodec(description);
   const xi = description['x-joust'].intents;
   const policy = deployment.policy;
   const instanceUnit = policy + call.instance;
   const isIntent = (u) => [...u.value.keys()].some((k) => k.startsWith(policy + '49') && k.length === 56 + 58 && u.value.get(k) === 1n);
   // A batcher may own a batched intent: its refund (tagged IntentRefund) comes back with a datum.
-  const f = await frame({ CSL, deployment, txHex, wallet, chain, limits, walletDatums: true,
+  const f = await frame({ deployment, txHex, wallet, chain, limits, walletDatums: true,
     scriptInput: (u) => u.value.get(instanceUnit) === 1n || isIntent(u) });
   const problems = [...f.problems];
   const report = { applied: [], fee: f.fee };

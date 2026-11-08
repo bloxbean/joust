@@ -78,7 +78,7 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
 
   // ---- the contract
   js(`export class ${C} {`);
-  js(`  /** @param o { CSL, deployment, service, chain, limits?, onReview? } */`);
+  js(`  /** @param o { deployment, service, chain, limits?, onReview? } */`);
   js(`  constructor(o) { this.contract = new JoustContract({ ...o, description }); }`);
   js(doc(init));
   js(`  async deploy(wallet, args = {}${init.payable ? ', pay = {}' : ''}) {`);

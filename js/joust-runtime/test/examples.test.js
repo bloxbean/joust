@@ -11,7 +11,7 @@ import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devkitSweep, devWallet, JoustContract, runComposed, ogmiosProvider } from '../src/index.js';
-import { walletView, verifyRegistration, approvalsData } from '@julclang/state-client';
+import { walletView, verifyRegistration, approvalsData, dataHex } from '@julclang/state-client';
 import { build } from '../../joust/src/build.js';
 import { tamperings } from '../../../examples/dapp/frontend/src/tamper.js';
 
@@ -470,7 +470,7 @@ test('Treasury: a script governor (Guardian, built by joust build) approves @Aut
     for (let i = 0; i < rs.len(); i++) {
       const r = rs.get(i);
       out.add(r.tag().kind() === CSL.RedeemerTagKind.Reward
-        ? CSL.Redeemer.new(r.tag(), r.index(), approvalsData(CSL, treasury.deployment.policy, t.id, 0), r.ex_units()) : r);
+        ? CSL.Redeemer.new(r.tag(), r.index(), CSL.PlutusData.from_hex(dataHex(approvalsData(treasury.deployment.policy, t.id, 0))), r.ex_units()) : r);
     }
     ws.set_redeemers(out);
     all.push(['a governor approval of another action', CSL.Transaction.new(tx.body(), ws, tx.auxiliary_data()).to_hex()]);

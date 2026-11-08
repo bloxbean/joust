@@ -18,9 +18,6 @@
     "@julclang/state-client": "0.1.0",
     "@julclang/joust-runtime": "0.1.0"
   },
-  "peerDependencies": {
-    "@emurgo/cardano-serialization-lib-nodejs": "15.0.3"
-  },
   "engines": {
     "node": ">=22"
   },

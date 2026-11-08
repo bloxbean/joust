@@ -2,11 +2,13 @@
 // the service that prepared it. Built over any chain provider (providers.js; ADR-0015 §13.9).
 
 import { blockfrostProvider } from './providers.js';
+import { parseTx, txHash } from './ledger.js';
+import { dataHex } from './pdata.js';
 
 const amountMap = (value) => new Map(value.map((a) => [a.unit, BigInt(a.quantity)]));
 
-/** The page's chain view over {@code provider}. {@code CSL} lets it check outputs against transaction CBOR. */
-export function chainOf(provider, { CSL } = {}) {
+/** The page's chain view over {@code provider}. ({@code { CSL }} options are accepted and ignored.) */
+export function chainOf(provider) {
   return {
     provider,
 
@@ -29,18 +31,17 @@ export function chainOf(provider, { CSL } = {}) {
     /**
      * One output read from its producing transaction's CBOR, whose body hashes to the reference's transaction id: the
      * provider cannot invent it. Null when the provider serves no transaction CBOR (Ogmios; Yaci Store unless
-     * store.transaction.save-cbor=true). Needs {@code CSL}.
+     * store.transaction.save-cbor=true).
      */
     async verifiedOutput(ref) {
-      if (!CSL || !provider.txCbor) return null;
+      if (!provider.txCbor) return null;
       const [hash, index] = ref.split('#');
       const cbor = await provider.txCbor(hash);
       if (!cbor) return null;
-      const fixed = CSL.FixedTransaction.from_hex(cbor);
-      if (fixed.transaction_hash().to_hex() !== hash) throw new Error(`the chain provider served another transaction for ${hash}`);
-      const o = CSL.Transaction.from_hex(cbor).body().outputs().get(Number(index));
+      if (txHash(cbor) !== hash) throw new Error(`the chain provider served another transaction for ${hash}`);
+      const o = parseTx(cbor).outputs[Number(index)];
       if (!o) return null;
-      return { address: o.address().to_bech32(), inlineDatum: o.has_plutus_data() ? o.plutus_data().to_hex() : null };
+      return { address: o.address, inlineDatum: o.datum ? dataHex(o.datum) : null };
     },
 
     /** Unspent outputs at an address: [{ ref, address, value, inlineDatum }]. */
@@ -80,6 +81,6 @@ export function chainOf(provider, { CSL } = {}) {
 }
 
 /** The chain view over a Blockfrost-style API (Blockfrost itself, or Yaci Store's /api/v1). */
-export function blockfrostChain(baseUrl, { projectId, fetchImpl, CSL } = {}) {
-  return chainOf(blockfrostProvider(baseUrl, { projectId, fetchImpl }), { CSL });
+export function blockfrostChain(baseUrl, { projectId, fetchImpl } = {}) {
+  return chainOf(blockfrostProvider(baseUrl, { projectId, fetchImpl }));
 }

@@ -12,7 +12,6 @@
     "@julclang/joust": "^0.1.0",
     "@julclang/joust-runtime": "^0.1.0",
     "@julclang/state-client": "^0.1.0",
-    "@emurgo/cardano-serialization-lib-nodejs": "15.0.3",
     "@scure/bip39": "1.6.0"
   }
 }

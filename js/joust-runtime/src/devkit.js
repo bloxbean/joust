@@ -1,4 +1,8 @@
-// Yaci DevKit (a local devnet): its slot clock and its faucet, from the admin API (default :10000).
+// Yaci DevKit (a local devnet): its slot clock and its faucet, from the admin API (default :10000). Development
+// conveniences: plain payments, test tokens and sweeps, built with the client's ledger adapter (no contract calls:
+// the engine builds those).
+
+import { buildPlainTx, singleKeyPolicy, enterpriseAddress, assemble } from '@julclang/state-client/ledger';
 
 /** The DevKit's slot clock: { zeroSlot, zeroTimeMs, slotLengthMs }. */
 export async function devkitClock(adminUrl = 'http://localhost:10000', { fetchImpl } = {}) {
@@ -13,9 +17,9 @@ export async function devkitClock(adminUrl = 'http://localhost:10000', { fetchIm
 }
 
 /**
- * Funds {@code address} with {@code ada} ADA from the DevKit's faucet; when the faucet is dry and {@code o.CSL} and
- * {@code o.chain} are given, from the genesis accounts of the DevKit's default mnemonic (its first 20 base addresses
- * hold 10 000 ADA each), as examples/devkit's DevKit.topUp does.
+ * Funds {@code address} with {@code ada} ADA from the DevKit's faucet; when the faucet is dry and {@code o.chain} is
+ * given, from the genesis accounts of the DevKit's default mnemonic (its first 20 base addresses hold 10 000 ADA
+ * each), as examples/devkit's DevKit.topUp does.
  */
 export async function devkitTopUp(address, ada, adminUrl = 'http://localhost:10000', o = {}) {
   const f = o.fetchImpl ?? globalThis.fetch.bind(globalThis);
@@ -24,37 +28,43 @@ export async function devkitTopUp(address, ada, adminUrl = 'http://localhost:100
   });
   if (r.ok && (await r.clone().json().catch(() => ({ status: true }))).status !== false) return;
   const why = `DevKit top-up: ${r.status} ${await r.text()}`;
-  if (!o.CSL || !o.chain) throw new Error(why);
-  await payFromGenesis(o.CSL, o.chain, address, BigInt(ada) * 1_000_000n);
+  if (!o.chain) throw new Error(why);
+  await payFromGenesis(o.chain, address, BigInt(ada) * 1_000_000n);
 }
 
+/** Signs {@code txHex} with {@code wallet} (CIP-30), submits and waits; returns the hash. */
+async function signAndSubmit(chain, wallet, txHex) {
+  const signed = assemble(txHex, await wallet.signTx(txHex, true));
+  const hash = await chain.submit(signed.cbor);
+  await chain.awaitTx(hash);
+  return hash;
+}
+
+/** The wallet's UTxOs, largest first, enough for {@code lovelace} (and at most 40). */
+const largestFirst = (utxos, lovelace) => {
+  const sorted = [...utxos].sort((a, b) => Number((b.value.get('lovelace') ?? 0n) - (a.value.get('lovelace') ?? 0n)));
+  const out = [];
+  let have = 0n;
+  for (const u of sorted) {
+    if (have >= lovelace || out.length >= 40) break;
+    out.push(u);
+    have += u.value.get('lovelace') ?? 0n;
+  }
+  return out;
+};
+
 /** A plain payment from the first genesis account (default mnemonic) that can afford it. */
-async function payFromGenesis(CSL, chain, to, lovelace) {
+async function payFromGenesis(chain, to, lovelace) {
   const { devWallet } = await import('@julclang/state-client/devwallet');
-  const p = await chain.params();
-  const num = (x) => CSL.BigNum.from_str(String(x));
-  const cfg = CSL.TransactionBuilderConfigBuilder.new()
-    .fee_algo(CSL.LinearFee.new(num(p.min_fee_a), num(p.min_fee_b)))
-    .pool_deposit(num(p.pool_deposit)).key_deposit(num(p.key_deposit))
-    .max_value_size(Number(p.max_val_size)).max_tx_size(Number(p.max_tx_size))
-    .coins_per_utxo_byte(num(p.coins_per_utxo_size ?? p.coins_per_utxo_byte ?? 4310))
-    .build();
+  const params = await chain.params();
   for (let i = 0; i < 20; i++) {
-    const w = devWallet({ CSL, chain, index: i });
-    const have = (await chain.utxosAt(w.address)).reduce((s, u) => s + (u.value.get('lovelace') ?? 0n), 0n);
+    const w = devWallet({ chain, index: i });
+    const utxos = await chain.utxosAt(w.address);
+    const have = utxos.reduce((s, u) => s + (u.value.get('lovelace') ?? 0n), 0n);
     if (have < lovelace + 5_000_000n) continue;
-    const tb = CSL.TransactionBuilder.new(cfg);
-    const utxos = CSL.TransactionUnspentOutputs.new();
-    for (const h of await w.getUtxos()) utxos.add(CSL.TransactionUnspentOutput.from_hex(h));
-    tb.add_inputs_from(utxos, CSL.CoinSelectionStrategyCIP2.LargestFirst);
-    tb.add_output(CSL.TransactionOutput.new(CSL.Address.from_bech32(to), CSL.Value.new(num(lovelace))));
-    tb.add_change_if_needed(CSL.Address.from_bech32(w.address));
-    const txHex = tb.build_tx().to_hex();
-    const ws = CSL.TransactionWitnessSet.from_hex(await w.signTx(txHex));
-    const fixed = CSL.FixedTransaction.from_hex(txHex);
-    fixed.set_witness_set(ws.to_bytes());
-    const hash = await chain.submit(fixed.to_hex());
-    await chain.awaitTx(hash);
+    const tx = buildPlainTx({ inputs: largestFirst(utxos, lovelace + 3_000_000n), outputs: [{ address: to, value: new Map([['lovelace', lovelace]]) }],
+      change: w.address, params });
+    await signAndSubmit(chain, w, tx);
     return;
   }
   throw new Error('DevKit: the faucet is dry and no genesis account can pay ' + lovelace + ' lovelace');
@@ -63,80 +73,31 @@ async function payFromGenesis(CSL, chain, to, lovelace) {
 /**
  * Mints {@code quantity} of a token named {@code name} (UTF-8) to {@code wallet} under a single-signature native
  * script of the wallet's key; returns { policy, unit }. A DevKit convenience for tests and demos.
+ * ({@code devkitMint(CSL, chain, wallet, ...)} is still accepted.)
  */
-export async function devkitMint(CSL, chain, wallet, name, quantity) {
-  const p = await chain.params();
-  const num = (x) => CSL.BigNum.from_str(String(x));
-  const cfg = CSL.TransactionBuilderConfigBuilder.new()
-    .fee_algo(CSL.LinearFee.new(num(p.min_fee_a), num(p.min_fee_b)))
-    .pool_deposit(num(p.pool_deposit)).key_deposit(num(p.key_deposit))
-    .max_value_size(Number(p.max_val_size)).max_tx_size(Number(p.max_tx_size))
-    .coins_per_utxo_byte(num(p.coins_per_utxo_size ?? p.coins_per_utxo_byte ?? 4310))
-    .build();
-  const script = CSL.NativeScript.new_script_pubkey(CSL.ScriptPubkey.new(CSL.Ed25519KeyHash.from_hex(wallet.keyHash)));
-  const policy = script.hash().to_hex();
-  const assetName = CSL.AssetName.new(new TextEncoder().encode(name));
-  const tb = CSL.TransactionBuilder.new(cfg);
-  const utxos = CSL.TransactionUnspentOutputs.new();
-  for (const h of await wallet.getUtxos()) utxos.add(CSL.TransactionUnspentOutput.from_hex(h));
-  const mb = CSL.MintBuilder.new();
-  mb.add_asset(CSL.MintWitness.new_native_script(CSL.NativeScriptSource.new(script)), assetName, CSL.Int.new(num(quantity)));
-  tb.set_mint_builder(mb);
-  // The minted tokens go to the wallet with the change (a mint counts as input when balancing).
-  tb.add_inputs_from(utxos, CSL.CoinSelectionStrategyCIP2.LargestFirst);
-  tb.add_change_if_needed(CSL.Address.from_bech32(wallet.address));
-  const fixed = CSL.FixedTransaction.from_hex(tb.build_tx().to_hex());
-  const ws = CSL.TransactionWitnessSet.from_hex(await wallet.signTx(fixed.to_hex(), true));
-  const vkeys = ws.vkeys();
-  for (let i = 0; vkeys && i < vkeys.len(); i++) fixed.add_vkey_witness(vkeys.get(i));
-  const hash = await chain.submit(fixed.to_hex());
-  await chain.awaitTx(hash);
-  return { policy, unit: policy + Buffer.from(name).toString('hex') };
+export async function devkitMint(...args) {
+  const [chain, wallet, name, quantity] = typeof args[0]?.utxosAt === 'function' ? args : args.slice(1);
+  const policy = singleKeyPolicy(wallet.keyHash);
+  const unit = policy + Array.from(new TextEncoder().encode(name), (b) => b.toString(16).padStart(2, '0')).join('');
+  const utxos = await chain.utxosAt(wallet.address);
+  const tx = buildPlainTx({ inputs: largestFirst(utxos, 5_000_000n), change: wallet.address, params: await chain.params(),
+    mint: { keyHash: wallet.keyHash, assets: new Map([[unit, BigInt(quantity)]]) } });
+  await signAndSubmit(chain, wallet, tx);
+  return { policy, unit };
 }
 
 /**
  * Moves everything at the enterprise address of {@code wallet}'s key (where contracts send to {@code ctx.caller()}) to
  * its base address, so the wallet can spend it. A DevKit convenience, as examples/devkit's DevKit.sweepEnterprise.
+ * ({@code devkitSweep(CSL, chain, wallet)} is still accepted.)
  */
-export async function devkitSweep(CSL, chain, wallet) {
-  const ent = CSL.EnterpriseAddress.new(0, CSL.Credential.from_keyhash(CSL.Ed25519KeyHash.from_hex(wallet.keyHash))).to_address();
-  const utxos = await chain.utxosAt(ent.to_bech32());
+export async function devkitSweep(...args) {
+  const [chain, wallet] = typeof args[0]?.utxosAt === 'function' ? args : args.slice(1);
+  const ent = enterpriseAddress({ type: 'key', hash: wallet.keyHash }, 0);
+  const utxos = await chain.utxosAt(ent);
   if (!utxos.length) return null;
-  const p = await chain.params();
-  const num = (x) => CSL.BigNum.from_str(String(x));
-  const cfg = CSL.TransactionBuilderConfigBuilder.new()
-    .fee_algo(CSL.LinearFee.new(num(p.min_fee_a), num(p.min_fee_b)))
-    .pool_deposit(num(p.pool_deposit)).key_deposit(num(p.key_deposit))
-    .max_value_size(Number(p.max_val_size)).max_tx_size(Number(p.max_tx_size))
-    .coins_per_utxo_byte(num(p.coins_per_utxo_size ?? p.coins_per_utxo_byte ?? 4310))
-    .build();
-  const tb = CSL.TransactionBuilder.new(cfg);
-  const ib = CSL.TxInputsBuilder.new();
   // The fee (and the change's minimum ADA) from the wallet's largest base-address UTxO.
-  const base = (await chain.utxosAt(wallet.address)).sort((a, b) => Number((b.value.get('lovelace') ?? 0n) - (a.value.get('lovelace') ?? 0n)))[0];
-  const inputs = base ? [...utxos, { ...base, from: CSL.Address.from_bech32(wallet.address) }] : utxos;
-  for (const u of inputs) {
-    const [hash, i] = u.ref.split('#');
-    const v = CSL.Value.new(num(u.value.get('lovelace') ?? 0n));
-    const ma = CSL.MultiAsset.new();
-    let any = false;
-    for (const [unit, q] of u.value) {
-      if (unit === 'lovelace') continue;
-      const assets = ma.get(CSL.ScriptHash.from_hex(unit.slice(0, 56))) ?? CSL.Assets.new();
-      assets.insert(CSL.AssetName.new(Buffer.from(unit.slice(56), 'hex')), num(q));
-      ma.insert(CSL.ScriptHash.from_hex(unit.slice(0, 56)), assets);
-      any = true;
-    }
-    if (any) v.set_multiasset(ma);
-    ib.add_regular_input(u.from ?? ent, CSL.TransactionInput.new(CSL.TransactionHash.from_hex(hash), Number(i)), v);
-  }
-  tb.set_inputs(ib);
-  tb.add_change_if_needed(CSL.Address.from_bech32(wallet.address));
-  const fixed = CSL.FixedTransaction.from_hex(tb.build_tx().to_hex());
-  const ws = CSL.TransactionWitnessSet.from_hex(await wallet.signTx(fixed.to_hex(), true));
-  const vkeys = ws.vkeys();
-  for (let i = 0; vkeys && i < vkeys.len(); i++) fixed.add_vkey_witness(vkeys.get(i));
-  const txHash = await chain.submit(fixed.to_hex());
-  await chain.awaitTx(txHash);
-  return txHash;
+  const base = largestFirst(await chain.utxosAt(wallet.address), 1n);
+  const tx = buildPlainTx({ inputs: [...utxos, ...base], change: wallet.address, params: await chain.params() });
+  return signAndSubmit(chain, wallet, tx);
 }

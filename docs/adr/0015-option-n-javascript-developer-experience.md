@@ -1080,6 +1080,45 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
     reference-script outputs and their scripts, and stake accounts.
   - It also checks that the engine gets the same snapshot from either provider.
   - The same check applies to any provider an app brings.
+- **cardano-js-sdk replaces CSL in the JS layer (§13.10).** `@julclang/state-client` reads every ledger format through
+  one adapter, `ledger.js`, over `@cardano-sdk/core` 0.47.1 (with `@cardano-sdk/crypto` 0.4.7 and `@cardano-sdk/util`
+  0.17.2, pinned exactly).
+  - **The adapter's contents:**
+    - `parseTx`: the transaction as plain values, withdrawals in ledger order;
+    - `txHash`: hashed from the body's own bytes;
+    - `assemble`: adds vkey witnesses and refuses any change to the body;
+    - address helpers and the CIP-30 encodings;
+    - `buildPlainTx`: the DevKit helpers' plain payments, test tokens and sweeps. Contract calls are always the engine's.
+  - **Plutus data no longer goes through any ledger library.** `pdata.js` is a plain model with its own CBOR decoder
+    and encoder.
+    - A decoded node keeps its original bytes, so a `Data` field's hex is the chain's.
+    - New data is encoded as the ledger and CCL write it: indefinite non-empty lists, definite maps, 64-byte chunks,
+      bignums.
+    - The description codec (`codec(description)`) works on this model.
+  - **Signing:** the dev wallet derives and signs with the SDK's BIP32-Ed25519 (libsodium, loaded once at import). It
+    derives the same DevKit key as CCL and CSL, and CSL verifies its signatures.
+  - **Public API:** `CSL` left it.
+    - Every function that took it first still accepts it, and ignores it.
+    - The packages no longer depend on CSL, peer or otherwise.
+    - It remains a dev dependency of the runtime's tests and the example dApp: there it builds the tampered
+      transactions, an independent implementation, and runs the experimental serverless spike.
+  - **The gates:**
+    - *Body bytes:* all 191 recorded transactions round-trip byte for byte, and keep their hash with a witness added.
+    - *PlutusData fidelity:* all 593 of their redeemers and inline datums re-decode to the same bytes, and re-encode
+      from scratch to CCL's exact bytes.
+    - *Cross-check:* the adapter's view agrees with CSL on every recorded transaction (inputs, outputs, values,
+      datums, redeemers, withdrawal order, certificates, signers, validity, reference inputs).
+    - *Bundle:* the same page (client, verifier, dev wallet) is 1,130 KB of JS (331 KB gzipped) with the SDK, against
+      785 KB of JS and a 2,723 KB Wasm module (924 KB gzipped) with CSL.
+    - *I5:* unchanged. All 20 JS tests pass on the SDK, and every tamper loop refuses the same counts as with CSL: 10,
+      11, 13, 10, 10, 9, 9, 10, 11, 10, 10, 10 and 10 tamperings.
+  - The verifier still parses with a different implementation from the engine's (cardano-js-sdk against CCL).
+- **The dApp's connect button uses the Cardano Foundation's connector**, `cardano-connect-with-wallet-core` 0.2.12
+  (framework-independent, Apache-2.0).
+  - It finds the browser's wallet extensions, including those injected after load (its inject listener).
+  - It enables the chosen one (`Wallet.connect`, with the network checked) and remembers it.
+  - The DevKit's in-page wallets stay beside the extensions, since browser wallets cannot join a private devnet.
+  - The page verifier and the signing flow are unchanged.
 
 ## Revision history
 

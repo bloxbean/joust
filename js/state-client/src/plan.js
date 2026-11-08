@@ -2,8 +2,8 @@
 // reads, creates, mints, runs and requires, in plain values. The page derives it from the CBOR itself and compares it
 // with the service's.
 
-import { bytesToHex } from './hex.js';
-import { refOf } from './verify.js';
+import { parseTx } from './ledger.js';
+import { dataHex } from './pdata.js';
 
 function units(entries) {
   const sums = new Map();
@@ -13,87 +13,51 @@ function units(entries) {
   return out;
 }
 
-function valueUnits(v) {
-  const entries = [['lovelace', BigInt(v.coin().to_str())]];
-  const ma = v.multiasset();
-  if (ma) {
-    const ps = ma.keys();
-    for (let i = 0; i < ps.len(); i++) {
-      const assets = ma.get(ps.get(i));
-      const names = assets.keys();
-      for (let j = 0; j < names.len(); j++) entries.push([ps.get(i).to_hex() + bytesToHex(names.get(j).name()), BigInt(assets.get(names.get(j)).to_str())]);
-    }
-  }
-  return units(entries);
-}
-
 function output(o) {
   return {
-    address: o.address().to_bech32(),
-    value: valueUnits(o.amount()),
-    datum: o.has_plutus_data() ? o.plutus_data().to_hex() : null,
-    datumHash: o.has_data_hash() ? o.data_hash().to_hex() : null,
-    hasScript: o.has_script_ref(),
+    address: o.address,
+    value: units([...o.value]),
+    datum: o.datum ? dataHex(o.datum) : null,
+    datumHash: o.datumHash,
+    hasScript: o.hasScriptRef,
   };
 }
 
-const list = (xs, f = (x) => x) => {
-  const out = [];
-  for (let i = 0; xs && i < xs.len(); i++) out.push(f(xs.get(i)));
-  return out;
-};
-
 const TAGS = ['spend', 'mint', 'cert', 'reward', 'voting', 'proposing'];
+const TAG_NAME = { spend: 'spend', mint: 'mint', cert: 'cert', reward: 'reward', vote: 'voting', propose: 'proposing' };
 
-/** The plan of a transaction (hex CBOR). */
-export function planOf(CSL, txHex) {
-  const tx = CSL.Transaction.from_hex(txHex);
-  const b = tx.body();
-  const mint = [];
-  if (b.mint()) {
-    const ps = b.mint().keys();
-    for (let i = 0; i < ps.len(); i++) {
-      const all = b.mint().get(ps.get(i));
-      for (let k = 0; k < all.len(); k++) {
-        const assets = all.get(k);
-        const names = assets.keys();
-        for (let j = 0; j < names.len(); j++) mint.push([ps.get(i).to_hex() + bytesToHex(names.get(j).name()), BigInt(assets.get(names.get(j)).to_str())]);
-      }
-    }
-  }
+/** The plan of a transaction (hex CBOR). ({@code planOf(CSL, hex)} still accepted.) */
+export function planOf(...args) {
+  const t = parseTx(args.at(-1));
   return {
-    inputs: list(b.inputs(), refOf),
-    referenceInputs: list(b.reference_inputs(), refOf),
-    collateral: list(b.collateral(), refOf),
-    outputs: list(b.outputs(), output),
-    collateralReturn: b.collateral_return() ? output(b.collateral_return()) : null,
-    totalCollateral: b.total_collateral() ? b.total_collateral().to_str() : null,
-    mint: units(mint),
+    inputs: t.inputs,
+    referenceInputs: t.referenceInputs,
+    collateral: t.collateral,
+    outputs: t.outputs.map(output),
+    collateralReturn: t.collateralReturn ? output(t.collateralReturn) : null,
+    totalCollateral: t.totalCollateral !== null ? t.totalCollateral.toString() : null,
+    mint: units([...t.mint]),
     // The ledger's order (tag, then index), whatever order the witness set lists them in.
-    redeemers: list(tx.witness_set().redeemers(), (r) => ({
-      tag: TAGS[r.tag().kind()],
-      index: Number(r.index().to_str()),
-      data: r.data().to_hex(),
-      mem: r.ex_units().mem().to_str(),
-      steps: r.ex_units().steps().to_str(),
+    redeemers: t.redeemers.map((r) => ({
+      tag: TAG_NAME[r.tag], index: r.index, data: dataHex(r.data), mem: r.mem.toString(), steps: r.steps.toString(),
     })).sort((x, y) => TAGS.indexOf(x.tag) - TAGS.indexOf(y.tag) || x.index - y.index),
-    requiredSigners: list(b.required_signers(), (k) => k.to_hex()),
+    requiredSigners: t.requiredSigners,
     // 0 and absent read alike (cardano-client-lib cannot tell them apart).
-    validFrom: b.validity_start_interval_bignum() && b.validity_start_interval_bignum().to_str() !== '0' ? Number(b.validity_start_interval_bignum().to_str()) : null,
-    validTo: b.ttl_bignum() && b.ttl_bignum().to_str() !== '0' ? Number(b.ttl_bignum().to_str()) : null,
-    fee: b.fee().to_str(),
+    validFrom: t.validFrom ? Number(t.validFrom) : null,
+    validTo: t.ttl ? Number(t.ttl) : null,
+    fee: t.fee.toString(),
     // Everything else, so that equal plans mean equal transactions (r5).
-    networkId: b.network_id() ? (b.network_id().kind() === CSL.NetworkIdKind.Mainnet ? 1 : 0) : null,
-    scriptDataHash: b.script_data_hash() ? b.script_data_hash().to_hex() : null,
-    auxiliaryDataHash: b.auxiliary_data_hash() ? b.auxiliary_data_hash().to_hex() : null,
-    certificates: b.certs() ? b.certs().len() : 0,
-    withdrawals: b.withdrawals() ? b.withdrawals().len() : 0,
-    votes: !!(b.voting_procedures() && b.voting_procedures().get_voters().len() > 0),
-    proposals: b.voting_proposals() ? b.voting_proposals().len() : 0,
-    donation: b.donation() ? b.donation().to_str() : null,
-    currentTreasuryValue: b.current_treasury_value() ? b.current_treasury_value().to_str() : null,
-    auxiliaryData: !!tx.auxiliary_data(),
-    isValid: tx.is_valid(),
+    networkId: t.networkId,
+    scriptDataHash: t.scriptDataHash,
+    auxiliaryDataHash: t.auxiliaryDataHash,
+    certificates: t.certificates.length,
+    withdrawals: t.withdrawals.length,
+    votes: t.hasVotes,
+    proposals: t.proposals,
+    donation: t.donation !== null ? t.donation.toString() : null,
+    currentTreasuryValue: t.treasuryValue !== null ? t.treasuryValue.toString() : null,
+    auxiliaryData: t.hasAuxiliaryData,
+    isValid: t.isValid,
   };
 }
 

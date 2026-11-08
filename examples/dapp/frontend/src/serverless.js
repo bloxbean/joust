@@ -5,7 +5,7 @@
 //
 // Scope of the spike: an action on an instance whose method needs no Ctx and pays nothing (Counter.increment).
 
-import { codec, verifyPrepared, walletView, assemble, redeemerDefs } from '@julclang/state-client';
+import { codec, verifyPrepared, walletView, assemble, redeemerDefs, dataHex } from '@julclang/state-client';
 
 /** Loads the Wasm image (a classic script) once: { contracts, step } or null when it is not built. */
 export function loadWasm(url = '/wasm/joust.js', timeoutMs = 20_000) {
@@ -84,14 +84,15 @@ export async function serverlessCall(o) {
 
   // 1. The contract's method, in Wasm, on the state the chain holds.
   const argList = CSL.PlutusList.new();
-  for (const a of meta.args) argList.add(c.encode(a.schema, args[a.name], a.name));
+  // The client's data model (pdata) to this spike's own builder (CSL), through the CBOR.
+  for (const a of meta.args) argList.add(CSL.PlutusData.from_hex(dataHex(c.encode(a.schema, args[a.name], a.name))));
   const { next } = runInWasm(CSL, wasm, x.contract, method, { target: target.inlineDatum, args: CSL.PlutusData.new_list(argList).to_hex() });
 
   // 2. The redeemer: the call's constructor with its arguments, as the description lays it out.
   const callDef = redeemerDefs(c, description).spend.anyOf.find((a) => a.index === meta.redeemer.index);
   const fields = {};
   for (const a of meta.args) fields[a.name] = args[a.name];
-  const redeemerData = c.encode(callDef, fields);
+  const redeemerData = CSL.PlutusData.from_hex(dataHex(c.encode(callDef, fields)));
 
   // 3. The transaction (CSL), twice: with generous budgets to evaluate, then with the evaluated ones.
   const refScript = deployment.referenceScripts?.[0];

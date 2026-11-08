@@ -12,6 +12,8 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf, objectIdOf } from './tokens.js';
 import { bytesToHex } from './hex.js';
 import { approvalsData, rewardAddressOf } from './governors.js';
+import { parseTx, addressParts } from './ledger.js';
+import { dataHex } from './pdata.js';
 
 export const DEFAULT_LIMITS = {
   maxCollateral: 5_000_000n,     // lovelace a failing script may cost
@@ -26,8 +28,8 @@ export const SPEND_KINDS = new Set(['action', 'destroy', 'ownedAction', 'ownedDe
 export const DESTROYS = new Set(['destroy', 'ownedDestroy']);
 export const CREATIONS = new Set(['init', 'ownedInit']);
 
-/** "txhash#index" of a CSL TransactionInput. */
-export const refOf = (input) => `${input.transaction_id().to_hex()}#${input.index()}`;
+/** "txhash#index" of an input: a ref string already, or a ledger library's input object (earlier callers). */
+export const refOf = (input) => (typeof input === 'string' ? input : `${input.transaction_id().to_hex()}#${input.index()}`);
 
 /** Ledger order of inputs: by transaction id, then index. */
 export function ledgerOrder(refs) {
@@ -38,8 +40,9 @@ export function ledgerOrder(refs) {
   });
 }
 
-/** A CSL Value as Map unit -> bigint ('lovelace', or policy hex + asset name hex). */
+/** A value as Map unit -> bigint ('lovelace', or policy hex + asset name hex): a Map already, or a ledger library's Value. */
 export function valueMap(v) {
+  if (v instanceof Map) return v;
   const m = new Map([['lovelace', BigInt(v.coin().to_str())]]);
   const ma = v.multiasset();
   if (ma) {
@@ -71,7 +74,7 @@ export function redeemerDefs(c, description) {
 /**
  * Everything wrong with {@code txHex} for {@code call}; an empty {@code problems} means the wallet may sign it.
  *
- * @param o.CSL          cardano-serialization-lib (nodejs or browser), 15.x
+ * @param o.CSL          (ignored; earlier versions read transactions with it)
  * @param o.description  the contract's description (bundled with the page)
  * @param o.deployment   { policy, address (bech32), networkId, referenceScripts?: ["tx#i"] } (bundled with the page)
  * @param o.call         { kind, meta (the x-joust action or creation), args, pay: { lovelace, assets? }, instance, object }
@@ -80,9 +83,9 @@ export function redeemerDefs(c, description) {
  * @returns { problems: string[], report }
  */
 export async function verifyPrepared(o) {
-  const { CSL, description, deployment, txHex, call, wallet, chain } = o;
+  const { description, deployment, txHex, call, wallet, chain } = o;
   const limits = { ...DEFAULT_LIMITS, ...(o.limits ?? {}) };
-  const c = makeCodec(CSL, description);
+  const c = makeCodec(description);
   const rdefs = redeemerDefs(c, description);
   const xj = description['x-joust'];
   const problems = [];
@@ -90,18 +93,16 @@ export async function verifyPrepared(o) {
   const policy = deployment.policy;
   // The wallet's addresses, and the enterprise address of one of its payment keys: no stake credential, so wholly the
   // wallet's (a contract may send there, e.g. to ctx.caller()). A wallet key under a stranger's stake key stays refused.
-  const isWallet = (addr) => wallet.addresses.includes(addr.to_bech32())
-    || (CSL.EnterpriseAddress.from_address(addr) && wallet.keyHashes.includes(paymentKeyHashOf(CSL, addr)));
+  const isWallet = (addr) => wallet.addresses.includes(addr) || isWalletEnterprise(addr, wallet);
   const atScript = (bech32) => bech32 === deployment.address;
   const pay = { lovelace: BigInt(call.pay?.lovelace ?? 0), assets: call.pay?.assets ?? [] };
 
   let tx;
   try {
-    tx = CSL.Transaction.from_hex(txHex);
+    tx = parseTx(txHex);
   } catch (e) {
     return { problems: ['not a transaction'], report };
   }
-  const body = tx.body();
 
   if (call.meta.needsService && !verifiableWithoutService(call.meta, description, deployment)) {
     problems.push(`${call.meta.name} needs data only the service computes; the page cannot verify it`);
@@ -109,49 +110,38 @@ export async function verifyPrepared(o) {
   if (!SPEND_KINDS.has(call.kind) && !CREATIONS.has(call.kind)) problems.push('unknown call kind ' + call.kind);
 
   // Nothing beyond the call.
-  if (!tx.is_valid()) problems.push('is_valid is false (the collateral would be taken)');
-  if (body.certs() && body.certs().len() > 0) problems.push('certificates');
-  if (body.voting_procedures() || body.voting_proposals()) problems.push('votes or proposals');
-  if (body.donation() || body.current_treasury_value()) problems.push('a treasury donation');
+  if (!tx.isValid) problems.push('is_valid is false (the collateral would be taken)');
+  if (tx.certificates.length > 0) problems.push('certificates');
+  if (tx.hasVotes || tx.hasProposals) problems.push('votes or proposals');
+  if (tx.hasDonation || tx.hasTreasuryValue) problems.push('a treasury donation');
   // Withdrawals: none, except zero withdrawals from JOUST's verifiers the deployment pins: the map verifier (the
   // call's MerkleMap claims; ADR-0002 D9) and the output verifier (its sends; ADR-0007 D5), checked on chain.
   const pinnedVerifiers = [deployment.mapVerifier, deployment.outputVerifier].filter(Boolean);
   const verifierRewards = new Set(pinnedVerifiers.map((v) => v.rewardAddress));
   // A script governor's zero withdrawal (@AuthorizedBy with a script credential; ADR-0009 D3): the credential the
   // deployment's @Params name, at the reward address the page derives itself.
-  const governor = governorOf(CSL, call, deployment, problems);
+  const governor = governorOf(call, deployment, problems);
   const allowedRewards = new Set(verifierRewards);
   if (governor) allowedRewards.add(governor.rewardAddress);
-  const ws = body.withdrawals();
-  const rewardOrder = [];   // the withdrawals in ledger order (a Reward redeemer's index)
-  if (ws && ws.len() > 0) {
-    const keys = ws.keys();
-    let ok = ws.len() <= allowedRewards.size;
-    for (let i = 0; i < keys.len(); i++) {
-      const a = keys.get(i).to_address();
-      rewardOrder.push({ bech32: a.to_bech32(), bytes: a.to_hex() });
-      if (!allowedRewards.has(a.to_bech32()) || ws.get(keys.get(i)).to_str() !== '0') ok = false;
-    }
+  // The withdrawals in ledger order (a Reward redeemer's index).
+  const rewardOrder = tx.withdrawals.map((w) => ({ bech32: w.address, bytes: w.bytes }));
+  if (tx.withdrawals.length > 0) {
+    let ok = tx.withdrawals.length <= allowedRewards.size;
+    for (const w of tx.withdrawals) if (!allowedRewards.has(w.address) || w.amount !== 0n) ok = false;
     if (!ok) problems.push('withdrawals');
   }
-  rewardOrder.sort((x, y) => (x.bytes < y.bytes ? -1 : x.bytes > y.bytes ? 1 : 0));
   const governorIndex = governor ? rewardOrder.findIndex((r) => r.bech32 === governor.rewardAddress) : -1;
   if (governor && governorIndex < 0) problems.push('the governor does not approve the call (no zero withdrawal from it)');
-  const withdrawalCount = ws ? ws.len() : 0;
-  if (tx.auxiliary_data()) problems.push('auxiliary data');
-  if (body.network_id() && body.network_id().kind() !== (deployment.networkId === 1 ? CSL.NetworkIdKind.Mainnet : CSL.NetworkIdKind.Testnet)) {
-    problems.push('another network');
-  }
+  const withdrawalCount = tx.withdrawals.length;
+  if (tx.hasAuxiliaryData) problems.push('auxiliary data');
+  if (tx.networkId !== null && tx.networkId !== (deployment.networkId === 1 ? 1 : 0)) problems.push('another network');
 
   // The target: the instance or object the call spends (spending calls).
   const targetName = call.kind.startsWith('owned') && call.kind !== 'ownedInit' ? call.object : call.instance;
   const targetUnit = SPEND_KINDS.has(call.kind) ? policy + targetName : null;
 
   // Inputs: the wallet's own UTxOs and, for a spending call, the target; nothing else.
-  const inputs = body.inputs();
-  const refs = [];
-  for (let i = 0; i < inputs.len(); i++) refs.push(refOf(inputs.get(i)));
-  const sorted = ledgerOrder(refs);
+  const sorted = ledgerOrder(tx.inputs);
   const spent = new Map();
   const consumed = new Map();     // every input's value: the wallet's and the target's
   let targetIndex = -1;
@@ -180,55 +170,39 @@ export async function verifyPrepared(o) {
   report.targetRef = targetRef;
 
   // Redeemers: exactly the call (and a destroy's burn), on the pinned script.
-  const rds = tx.witness_set().redeemers();
+  const rds = tx.redeemers;
   const spends = [];
   const mints = [];
   let governorRedeemers = 0;
-  for (let i = 0; rds && i < rds.len(); i++) {
-    const r = rds.get(i);
-    const kind = r.tag().kind();
-    if (kind === CSL.RedeemerTagKind.Spend) spends.push(r);
-    else if (kind === CSL.RedeemerTagKind.Mint) mints.push(r);
-    else if (kind === CSL.RedeemerTagKind.Reward && governor && Number(r.index().to_str()) === governorIndex) {
+  for (const r of rds) {
+    if (r.tag === 'spend') spends.push(r);
+    else if (r.tag === 'mint') mints.push(r);
+    else if (r.tag === 'reward' && governor && r.index === governorIndex) {
       // The governor grants exactly this call: Approvals [Approval(policy, instance, the action's tag)] (I33).
       governorRedeemers++;
-      if (!dataEqual(r.data(), approvalsData(CSL, policy, call.instance, call.meta.redeemer.index))) {
+      if (!dataEqual(r.data, approvalsData(policy, call.instance, call.meta.redeemer.index))) {
         problems.push('the governor\'s redeemer approves something else than this call');
       }
-    } else if (kind === CSL.RedeemerTagKind.Reward && Number(r.index().to_str()) < withdrawalCount) { /* a pinned verifier's */ }
+    } else if (r.tag === 'reward' && r.index < withdrawalCount) { /* a pinned verifier's */ }
     else problems.push('a redeemer that is neither a spend nor a mint');
   }
   if (governor && governorRedeemers !== 1) problems.push('the governor\'s withdrawal has no Approvals redeemer');
 
   // Mint: none for an action; the target's token burned for a destroy; the new token for a creation.
-  const mint = body.mint();
-  const minted = new Map();
-  if (mint) {
-    const ps = mint.keys();
-    for (let i = 0; i < ps.len(); i++) {
-      const assetsList = mint.get(ps.get(i));
-      for (let k = 0; k < assetsList.len(); k++) {
-        const assets = assetsList.get(k);
-        const names = assets.keys();
-        for (let j = 0; j < names.len(); j++) {
-          const unit = ps.get(i).to_hex() + bytesToHex(names.get(j).name());
-          minted.set(unit, (minted.get(unit) ?? 0n) + BigInt(assets.get(names.get(j)).to_str()));
-        }
-      }
-    }
-  }
+  const minted = new Map(tx.mint);
+  const mintPolicies = [...new Set([...minted.keys()].map((u) => u.slice(0, 56)))];
 
   let createdUnit = null;
   const callFields = (def, r, what) => {
     let decoded;
     try {
-      decoded = c.decode(def, r.data());
+      decoded = c.decode(def, r.data);
     } catch (e) {
       problems.push(`${what}: ${e.message}`);
       return null;
     }
-    const alt = c.resolve(def).anyOf.find((a) => a.index === Number(r.data().as_constr_plutus_data()?.alternative().to_str()));
-    return { decoded, alt, fields: r.data().as_constr_plutus_data().data(), data: r.data().to_hex() };
+    const alt = c.resolve(def).anyOf.find((a) => a.index === r.data.constr);
+    return { decoded, alt, fields: r.data.fields, data: dataHex(r.data) };
   };
 
   /** The call's own fields: arguments byte-equal to the page's encoding; ctx for this wallet and payment. */
@@ -243,7 +217,7 @@ export async function verifyPrepared(o) {
     }
     const argNames = new Set(call.meta.args.map((a) => a.name));
     alt.fields.forEach((f, i) => {
-      const actual = fields.get(i);
+      const actual = fields[i];
       if (argNames.has(f.title)) {
         let want;
         try {
@@ -283,7 +257,7 @@ export async function verifyPrepared(o) {
     if (spends.length !== 1) problems.push(`${spends.length} spend redeemers, expected 1`);
     else {
       const r = spends[0];
-      if (Number(r.index().to_str()) !== targetIndex) problems.push('the redeemer is not on the target input');
+      if (r.index !== targetIndex) problems.push('the redeemer is not on the target input');
       checkCall(callFields(rdefs.spend, r, 'the call'));
     }
     if (DESTROYS.has(call.kind)) {
@@ -318,8 +292,8 @@ export async function verifyPrepared(o) {
     else checkCall(callFields(rdefs.mint, mints[0], 'the creation'));
     if (createdUnit && (minted.size !== 1 || minted.get(createdUnit) !== 1n)) problems.push('the creation must mint exactly its new token');
   }
-  if (mints.length && mint && mint.keys().len() !== 1) problems.push('a mint under another policy');
-  if (mint && mint.keys().len() === 1 && mint.keys().get(0).to_hex() !== policy) problems.push('a mint under another policy');
+  if (mints.length && mintPolicies.length > 1) problems.push('a mint under another policy');
+  if (mintPolicies.length === 1 && mintPolicies[0] !== policy) problems.push('a mint under another policy');
 
   // Outputs: the wallet's (no datum except a payout tag naming the target), exactly one continuation (none for a
   // destroy), and other parties' (paid by the script, which checks them; listed in the report).
@@ -332,36 +306,34 @@ export async function verifyPrepared(o) {
   const continuingUnit = createdUnit ?? (DESTROYS.has(call.kind) ? null : targetUnit);
   let continuations = 0;
   let createdLovelace = 0n;
-  const outs = body.outputs();
-  for (let i = 0; i < outs.len(); i++) {
-    const out = outs.get(i);
-    const value = valueMap(out.amount());
+  for (const out of tx.outputs) {
+    const value = out.value;
     for (const unit of value.keys()) {
       // Another token of the contract (another instance's or object's) may not move, except the tokens this call
       // mints itself (a minting method's own tokens, ADR-0007 D4).
       const mintedHere = call.meta.returns?.mint && (minted.get(unit) ?? 0n) > 0n;
       if (unit.startsWith(policy) && unit !== continuingUnit && unit.length > 56 && !mintedHere) problems.push('an output carries another token of the contract');
     }
-    if (isWallet(out.address())) {
-      if (out.has_script_ref() || out.has_data_hash()) problems.push('a wallet output with a script or datum hash');
-      const isTagged = out.has_plutus_data() && payoutTag && dataEqual(out.plutus_data(), payoutTag);
-      if (out.has_plutus_data() && !isTagged) problems.push('a wallet output with a datum');
+    if (isWallet(out.address)) {
+      if (out.hasScriptRef || out.datumHash) problems.push('a wallet output with a script or datum hash');
+      const isTagged = out.datum && payoutTag && dataEqual(out.datum, payoutTag);
+      if (out.datum && !isTagged) problems.push('a wallet output with a datum');
       add(back, value);
       if (isTagged) add(tagged, value);
       continue;
     }
     // The wallet's payment key at an address the wallet does not use (e.g. with a stranger's stake key): refused.
-    const pkh = paymentKeyHashOf(CSL, out.address());
+    const pkh = paymentKeyHashOf(out.address);
     if (pkh && wallet.keyHashes.includes(pkh)) problems.push('an output to the wallet\'s key at an address the wallet does not use');
-    const bech = out.address().to_bech32();
+    const bech = out.address;
     if (continuingUnit && atScript(bech) && value.get(continuingUnit) === 1n) {
       continuations++;
       continuation = value;
       createdLovelace = value.get('lovelace');
-      const datum = out.plutus_data();
+      const datum = out.datum;
       if (!datum) problems.push('the continuation has no inline datum');
       else {
-        report.nextData = datum.to_hex();
+        report.nextData = dataHex(datum);
         try {
           report.next = decodeNext(c, xj, call, datum);
         } catch (e) {
@@ -376,9 +348,8 @@ export async function verifyPrepared(o) {
   if (continuingUnit && continuations !== 1) problems.push('not exactly one continuation of the instance or object');
 
   // The transaction balances: inputs and mint equal outputs and fee (an unbalanced one is not worth a signature).
-  const fee0 = BigInt(body.fee().to_str());
-  const produced = new Map([['lovelace', fee0]]);
-  for (let i = 0; i < outs.len(); i++) add(produced, valueMap(outs.get(i).amount()));
+  const produced = new Map([['lovelace', tx.fee]]);
+  for (const out of tx.outputs) add(produced, out.value);
   const supplied = new Map(consumed);
   add(supplied, minted);
   for (const unit of new Set([...supplied.keys(), ...produced.keys()])) {
@@ -389,7 +360,7 @@ export async function verifyPrepared(o) {
   }
 
   // The wallet loses at most the payment, the fee and (a creation) the new UTxO; and no token it does not pay.
-  const fee = BigInt(body.fee().to_str());
+  const fee = tx.fee;
   const net = new Map(spent);
   add(net, back, -1n);
   const created = CREATIONS.has(call.kind) ? createdLovelace : 0n;
@@ -418,9 +389,9 @@ export async function verifyPrepared(o) {
   // The fee: at most what the protocol asks for this size and these budgets, with a margin.
   const pp = chain.params;
   let mem = 0n, steps = 0n;
-  for (let i = 0; rds && i < rds.len(); i++) {
-    mem += BigInt(rds.get(i).ex_units().mem().to_str());
-    steps += BigInt(rds.get(i).ex_units().steps().to_str());
+  for (const rd of rds) {
+    mem += rd.mem;
+    steps += rd.steps;
   }
   if (mem > BigInt(pp.max_tx_ex_mem) || steps > BigInt(pp.max_tx_ex_steps)) problems.push('execution budgets above the protocol limits');
   const size = BigInt(txHex.length / 2 + 200);
@@ -430,20 +401,19 @@ export async function verifyPrepared(o) {
   if (fee > limits.maxFee) problems.push(`a fee of ${fee}, above the page's limit of ${limits.maxFee}`);
 
   // Collateral: the wallet's, returned to the wallet, at most maxCollateral at risk.
-  const coll = body.collateral();
-  const ret = body.collateral_return();
-  const total = body.total_collateral();
-  if (rds && rds.len() > 0) {
-    if (!coll || coll.len() === 0 || !ret || !total) problems.push('collateral without a return and a total');
+  const coll = tx.collateral;
+  const ret = tx.collateralReturn;
+  const total = tx.totalCollateral;
+  if (rds.length > 0) {
+    if (coll.length === 0 || !ret || total === null) problems.push('collateral without a return and a total');
     else {
       let inColl = 0n;
-      for (let i = 0; i < coll.len(); i++) {
-        const r = refOf(coll.get(i));
+      for (const r of coll) {
         if (!wallet.utxos.has(r)) problems.push('collateral that is not the wallet\'s');
         else inColl += wallet.utxos.get(r).value.get('lovelace') ?? 0n;
       }
-      if (!isWallet(ret.address())) problems.push('the collateral return goes elsewhere');
-      if (BigInt(total.to_str()) > limits.maxCollateral || inColl - BigInt(ret.amount().coin().to_str()) > limits.maxCollateral) {
+      if (!isWallet(ret.address)) problems.push('the collateral return goes elsewhere');
+      if (total > limits.maxCollateral || inColl - ret.value.get('lovelace') > limits.maxCollateral) {
         problems.push(`more than ${limits.maxCollateral} lovelace of collateral at risk`);
       }
     }
@@ -457,22 +427,20 @@ export async function verifyPrepared(o) {
     const { zeroSlot, zeroTimeMs, slotLengthMs } = deployment.slotConfig;
     nows.push(Number(zeroSlot) + Math.floor((Date.now() - Number(zeroTimeMs)) / Number(slotLengthMs)));
   }
-  const ttl = body.ttl_bignum();
-  const start = body.validity_start_interval_bignum();
+  const ttl = tx.ttl === null ? null : Number(tx.ttl);
+  const start = tx.validFrom === null ? null : Number(tx.validFrom);
   for (const now of nows) {
-    if (!ttl || Number(ttl.to_str()) > now + limits.maxValiditySlots) problems.push('a validity interval that is too long');
-    if (start && Number(start.to_str()) > now + limits.maxStartSlots) problems.push('a validity interval that starts later');
+    if (!ttl || ttl > now + limits.maxValiditySlots) problems.push('a validity interval that is too long');
+    if (start && start > now + limits.maxStartSlots) problems.push('a validity interval that starts later');
     // A call that reads Ctx sees validFrom as "now": it may not be backdated.
-    if (call.meta.ctx && (!start || Number(start.to_str()) < now - limits.maxBackdateSlots)) problems.push('a validity interval that starts in the past (Ctx time)');
+    if (call.meta.ctx && (!start || start < now - limits.maxBackdateSlots)) problems.push('a validity interval that starts in the past (Ctx time)');
   }
-  if (ttl && start && Number(ttl.to_str()) - Number(start.to_str()) > limits.maxValiditySlots) problems.push('a validity interval that is too long');
+  if (ttl && start && ttl - start > limits.maxValiditySlots) problems.push('a validity interval that is too long');
 
   // Signers: only the wallet's keys, and the co-signers the page named (a @Quorum call's; ADR-0009 D2).
-  const rs = body.required_signers();
   const named = call.cosignerKeys ?? [];
   const required = new Set();
-  for (let i = 0; rs && i < rs.len(); i++) {
-    const k = rs.get(i).to_hex();
+  for (const k of tx.requiredSigners) {
     required.add(k);
     if (!wallet.keyHashes.includes(k) && !named.includes(k)) problems.push('a required signer that is not the wallet');
   }
@@ -484,9 +452,7 @@ export async function verifyPrepared(o) {
     const fi = deployment.params?.[rd.params];
     return fi ? fi.policy + fi.instance : null;
   }).filter(Boolean);
-  const refIns = body.reference_inputs();
-  for (let i = 0; refIns && i < refIns.len(); i++) {
-    const r = refOf(refIns.get(i));
+  for (const r of tx.referenceInputs) {
     if ((deployment.referenceScripts ?? []).includes(r)) continue;
     if (pinnedVerifiers.some((v) => (v.referenceScripts ?? []).includes(r))) continue;
     const u = await chain.utxo(r);
@@ -533,7 +499,7 @@ export function verifiableWithoutService(meta, description, deployment) {
  * The governor a call names ({@code call.governor: { hash }}), checked against the method's @AuthorizedBy script
  * credential in the deployment's @Params; its reward address derived by the page. Null when the call needs none.
  */
-function governorOf(CSL, call, deployment, problems) {
+function governorOf(call, deployment, problems) {
   const scripts = (call.meta.policies?.authorizedBy ?? [])
     .map((at) => (at.startsWith('params.') ? deployment.params?.[at.slice('params.'.length)] : null))
     .filter((cred) => cred?.$variant === 'ScriptCredential');
@@ -553,13 +519,32 @@ function governorOf(CSL, call, deployment, problems) {
     problems.push('the governor is not the script the deployment names');
     return null;
   }
-  return { hash: scripts[0].hash, rewardAddress: rewardAddressOf(CSL, scripts[0].hash, deployment.networkId) };
+  return { hash: scripts[0].hash, rewardAddress: rewardAddressOf(scripts[0].hash, deployment.networkId) };
 }
 
-export function paymentKeyHashOf(CSL, address) {
-  const cred = CSL.BaseAddress.from_address(address)?.payment_cred() ?? CSL.EnterpriseAddress.from_address(address)?.payment_cred()
-    ?? CSL.PointerAddress.from_address(address)?.payment_cred();
-  return cred?.to_keyhash()?.to_hex() ?? null;
+/**
+ * The payment key hash of a base, enterprise or pointer address (bech32), or null. ({@code (CSL, address)}, with a
+ * ledger library's address, is still accepted.)
+ */
+export function paymentKeyHashOf(...args) {
+  let a = args.at(-1);
+  if (typeof a !== 'string') a = a.to_bech32();
+  try {
+    const p = addressParts(a);
+    return ['base', 'enterprise', 'pointer'].includes(p.kind) && p.payment?.type === 'key' ? p.payment.hash : null;
+  } catch {
+    return null;
+  }
+}
+
+/** An enterprise address of one of the wallet's payment keys: no stake credential, so wholly the wallet's. */
+export function isWalletEnterprise(bech32, wallet) {
+  try {
+    const p = addressParts(bech32);
+    return p.kind === 'enterprise' && p.payment?.type === 'key' && wallet.keyHashes.includes(p.payment.hash);
+  } catch {
+    return false;
+  }
 }
 
 export function decodeNext(c, xj, call, datum) {
