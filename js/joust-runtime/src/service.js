@@ -88,8 +88,9 @@ export function engineService(o) {
     async prepare(request) {
       const r = await run(request);
       const out = { cbor: r.cbor, txHash: r.txHash, validTo: Number(r.validTo), signers: r.signers, plan: r.plan ? JSON.parse(r.plan) : null };
-      if (request.kind === 'init' && r.created) out.instance = r.created;
-      if (request.kind === 'ownedInit' && r.created) out.object = r.created;
+      if (request.calls) out.created = r.created ? JSON.parse(r.created) : [];
+      else if (request.kind === 'init' && r.created) out.instance = r.created;
+      else if (request.kind === 'ownedInit' && r.created) out.object = r.created;
       return out;
     },
 

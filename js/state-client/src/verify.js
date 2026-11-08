@@ -21,9 +21,9 @@ export const DEFAULT_LIMITS = {
   maxFee: 3_000_000n,            // an absolute bound: the fee cap above trusts the chain API's protocol parameters (r5)
 };
 
-const SPEND_KINDS = new Set(['action', 'destroy', 'ownedAction', 'ownedDestroy']);
-const DESTROYS = new Set(['destroy', 'ownedDestroy']);
-const CREATIONS = new Set(['init', 'ownedInit']);
+export const SPEND_KINDS = new Set(['action', 'destroy', 'ownedAction', 'ownedDestroy']);
+export const DESTROYS = new Set(['destroy', 'ownedDestroy']);
+export const CREATIONS = new Set(['init', 'ownedInit']);
 
 /** "txhash#index" of a CSL TransactionInput. */
 export const refOf = (input) => `${input.transaction_id().to_hex()}#${input.index()}`;
@@ -55,7 +55,7 @@ export function valueMap(v) {
   return m;
 }
 
-const add = (into, m, sign = 1n) => { for (const [k, v] of m) into.set(k, (into.get(k) ?? 0n) + sign * v); };
+export const add = (into, m, sign = 1n) => { for (const [k, v] of m) into.set(k, (into.get(k) ?? 0n) + sign * v); };
 
 /** The description's redeemer definitions, from its validators. */
 export function redeemerDefs(c, description) {
@@ -478,7 +478,7 @@ export async function verifyPrepared(o) {
  * @Params (the deployment pins the applied script's policy), @Reads (checked as reference inputs) and MerkleMaps (the
  * map verifier's zero withdrawal, pinned by the deployment).
  */
-function verifiableWithoutService(meta, description, deployment) {
+export function verifiableWithoutService(meta, description, deployment) {
   const r = meta.recipe;
   if (!r) return false;
   const p = meta.policies ?? {};
@@ -496,13 +496,13 @@ function verifiableWithoutService(meta, description, deployment) {
   return true;
 }
 
-function paymentKeyHashOf(CSL, address) {
+export function paymentKeyHashOf(CSL, address) {
   const cred = CSL.BaseAddress.from_address(address)?.payment_cred() ?? CSL.EnterpriseAddress.from_address(address)?.payment_cred()
     ?? CSL.PointerAddress.from_address(address)?.payment_cred();
   return cred?.to_keyhash()?.to_hex() ?? null;
 }
 
-function decodeNext(c, xj, call, datum) {
+export function decodeNext(c, xj, call, datum) {
   if (call.kind === 'action' || call.kind === 'init') return c.decode(xj.state, datum);
   const owned = xj.owned.find((o) => o.type === call.meta.owned);
   if (!owned) throw new Error('unknown owned type ' + call.meta.owned);

@@ -2,7 +2,7 @@
 // engine (Wasm) from the chain as a Blockfrost-style API serves it; @julclang/state-client verifies each transaction
 // against the contract's description before the wallet signs it (D7), and submits it.
 
-import { blockfrostChain, assemble, planOf, toJson } from '@julclang/state-client';
+import { blockfrostChain, assemble, planOf, toJson, runComposed } from '@julclang/state-client';
 import { blockfrostApi, fetchNeed } from './snapshot.js';
 import { engineService } from './service.js';
 
@@ -11,7 +11,7 @@ export { engineService } from './service.js';
 export { blockfrostApi, emptySnapshot, fetchNeed } from './snapshot.js';
 export { devkitClock, devkitTopUp, devkitMint, devkitSweep } from './devkit.js';
 export { memoryMapStore, fileMapStore } from './maps.js';
-export { JoustContract, VerificationError, blockfrostChain, toJson } from '@julclang/state-client';
+export { JoustContract, VerificationError, blockfrostChain, toJson, runComposed, verifyComposed } from '@julclang/state-client';
 export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-client/devwallet';
 
 /**
@@ -40,14 +40,17 @@ export function joustRuntime(o) {
   async function prefetch(call, snapshot) {
     const want = [['tip', ''], ['protocolParams', '']];
     if (call.address) want.push(['utxos', call.address]);
-    const d = deploymentOf(call.contract);
-    if (d) {
+    for (const c of call.calls ?? [call]) {
+      const d = deploymentOf(c.contract);
+      if (!d) continue;
       for (const r of d.referenceScripts ?? []) want.push(['output', r]);
       want.push(['script', d.policy]);
-      if (call.instance) want.push(['assetUtxos', `${d.address}|${d.policy}${call.instance}`]);
-      if (call.object) want.push(['assetUtxos', `${d.address}|${d.policy}${call.object}`]);
+      if (c.instance) want.push(['assetUtxos', `${d.address}|${d.policy}${c.instance}`]);
+      if (c.object) want.push(['assetUtxos', `${d.address}|${d.policy}${c.object}`]);
     }
-    await Promise.all(want.map(([k, key]) => fetchNeed(api, snapshot, k, key).catch(() => {})));
+    const seen = new Set();
+    await Promise.all(want.filter(([k, key]) => !seen.has(k + key) && seen.add(k + key))
+      .map(([k, key]) => fetchNeed(api, snapshot, k, key).catch(() => {})));
   }
 
   const engine = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs,
@@ -66,14 +69,17 @@ export function joustRuntime(o) {
   const service = {
     ...engine,
     prepare(request) {
-      const d = deploymentOf(request.contract);
-      const extra = {};
-      if (d?.referenceScripts?.length) extra.referenceScripts = d.referenceScripts;
-      if (d?.params) extra.params = d.params;   // the deployment's @Params (ADR-0009 D1)
-      for (const v of [d?.mapVerifier, d?.outputVerifier]) {
-        if (v?.referenceScripts?.length) extra.referenceScripts = [...(extra.referenceScripts ?? []), ...v.referenceScripts];
-      }
-      return engine.prepare({ ...request, ...extra });
+      // Each call (one, or a composition's) carries its deployment's @Params; the request carries every pinned
+      // reference script (the contracts' and their verifiers').
+      const refs = new Set();
+      const withDeployment = (c) => {
+        const d = deploymentOf(c.contract);
+        for (const r of d?.referenceScripts ?? []) refs.add(r);
+        for (const v of [d?.mapVerifier, d?.outputVerifier]) for (const r of v?.referenceScripts ?? []) refs.add(r);
+        return d?.params ? { ...c, params: d.params } : c;
+      };
+      const req = request.calls ? { ...request, calls: request.calls.map(withDeployment) } : withDeployment(request);
+      return engine.prepare(refs.size ? { ...req, referenceScripts: [...refs] } : req);
     },
   };
   const verifiers = {};
@@ -134,11 +140,20 @@ export function joustRuntime(o) {
       const desc = descriptionOf(contract);
       if (usesMaps(desc)) d.mapVerifier = await ensureVerifier('joust:mapVerifier', wallet, payer);
       // Sends go through JOUST's output verifier (ADR-0007 D5), published and registered once per network.
-      if ([...(desc?.['x-joust']?.actions ?? [])].some((a) => a.returns?.sends)) {
+      // Deposits and @Receives are claimed through it too (ADR-0011 D3).
+      if ([...(desc?.['x-joust']?.actions ?? [])].some((a) => a.returns?.sends || a.returns?.deposits || a.policies?.receives)) {
         d.outputVerifier = await ensureVerifier('joust:outputVerifier', wallet, payer);
       }
       deployments[d.contract] = d;
       return d;
+    },
+
+    /**
+     * Several calls in one transaction (ADR-0011): [{ contract: JoustContract, method, args, pay, instance, object }],
+     * prepared by the engine, verified call by call and as a whole (verifyComposed), signed by {@code api}.
+     */
+    compose(api, steps, extra = {}) {
+      return runComposed({ CSL: o.CSL, service, chain, api, steps, ...extra });
     },
 
     /** Options for a generated client of {@code contract} (its description's title, or its simple name). */

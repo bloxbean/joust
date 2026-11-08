@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devkitSweep, devWallet, JoustContract } from '../src/index.js';
+import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devkitSweep, devWallet, JoustContract, runComposed } from '../src/index.js';
 import { build } from '../../joust/src/build.js';
 import { tamperings } from '../../../examples/dapp/frontend/src/tamper.js';
 
@@ -280,4 +280,54 @@ test('Dex: liquidity minted as LP tokens (ByAction), swaps both ways, LP burned'
   for (const u of await rt.chain.utxosAt(lp.address)) left += u.value.get(lpUnit) ?? 0n;
   assert.equal(left, 0n, 'every LP token burned');
   await d.call(admin, 'close', {});
+});
+
+test('Fees: a sale deposits its fee into the Pot in the same transaction (composition, @Receives)', { skip, timeout: 900_000 }, async () => {
+  const { rt, wallets, contract } = await setup(['fees']);
+  const [owner, buyer] = await wallets(2);
+  const pot = await contract('Pot', owner);
+  const potId = (await pot.deploy(owner, {})).instance;
+  const stall = await contract('Stall', owner, { pot: { policy: pot.deployment.policy, instance: potId }, feeBps: 500n });
+  const stallId = (await stall.deploy(owner, {})).instance;
+  // A deposit needs its receiver in the same transaction; the pot cannot collect nothing.
+  await assert.rejects(stall.at(stallId).call(buyer, 'sell', { price: 10n * ADA }, { lovelace: 10n * ADA }));
+  await assert.rejects(pot.at(potId).call(buyer, 'collect', {}));
+  for (let i = 0; i < 2; i++) {
+    await rt.compose(buyer, [
+      { contract: stall, method: 'sell', instance: stallId, args: { price: 10n * ADA }, pay: { lovelace: 10n * ADA } },
+      { contract: pot, method: 'collect', instance: potId, args: {} },
+    ]);
+  }
+  let s = await pot.at(potId).state();
+  assert.equal(s.collected, ADA);
+  assert.equal(s.deposits, 2n);
+  // The receiver may come first: its call sees the deposits made after it.
+  await rt.compose(buyer, [
+    { contract: pot, method: 'collect', instance: potId, args: {} },
+    { contract: stall, method: 'sell', instance: stallId, args: { price: 20n * ADA }, pay: { lovelace: 20n * ADA } },
+  ]);
+  s = await pot.at(potId).state();
+  assert.equal(s.collected, 2n * ADA);
+  // I5 over composed transactions: every tampering is refused before the wallet is asked to sign.
+  const steps = [
+    { contract: stall, method: 'sell', instance: stallId, args: { price: 10n * ADA }, pay: { lovelace: 10n * ADA } },
+    { contract: pot, method: 'collect', instance: potId, args: {} },
+  ];
+  let refused = 0;
+  for (let i = 0; ; i++) {
+    let total = 0;
+    const evil = { ...rt.service, async prepare(req) {
+      const p = await rt.service.prepare(req);
+      const all = Object.entries(tamperings(CSL, p.cbor, [buyer.address]));
+      total = all.length;
+      return { ...p, cbor: all[i][1] };
+    } };
+    let asked = false;
+    const watched = { ...buyer, signTx: (...a) => { asked = true; return buyer.signTx(...a); } };
+    await assert.rejects(runComposed({ CSL, service: evil, chain: rt.chain, api: watched, steps }), /refused/, `tampering ${i}`);
+    assert.equal(asked, false, `tampering ${i} reached the wallet`);
+    refused++;
+    if (i + 1 >= total) break;
+  }
+  console.log(`I5: ${refused} tamperings of an engine-built composed transaction refused before signing`);
 });

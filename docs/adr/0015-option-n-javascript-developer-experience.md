@@ -848,9 +848,25 @@ direct `Tx` building, gated by S3.
   - `@Receives` actions take the composition's incoming claims through `Funds`.
   - On DevKit (JVM, `DescribedFeesDevnetTest`), a Stall's sale deposits its fee into a Pot whose `collect` takes it
     in one composed transaction, also with the receiver first.
-- **Composition through npm** needs the page verifier to check a composed transaction call by call: each call's
-  target, redeemer and continuation, with the wallet's outflow and what others receive bounded over the whole
-  transaction. That is the next piece. Moves, co-signers (`@Quorum`, `@AuthorizedBy`) and batches build on it.
+- **Composition through npm.** Fees passes on DevKit: a Stall's sale and the Pot's `collect` in one transaction, in
+  either order.
+  - **The engine** takes `{ calls: [...], address }` (one `Compose` over the described contracts) and returns what
+    each call created.
+  - **The runtime** gives each call its deployment's params and the request every pinned reference script, and
+    prefetches for every call. `rt.compose(api, steps)` runs a composition.
+  - **`verifyComposed`** (`@julclang/state-client`) checks each call against its own description and deployment:
+    its target input, its one spend redeemer and its arguments, Ctx and offered assets, its mint (a destroy's burn,
+    a minting method's own tokens), its continuation and datum.
+  - It checks the transaction as a whole: inputs only the wallet's and the calls' targets, withdrawals only to the
+    pinned verifiers, signers, validity, fee, collateral, balance, the wallet's outflow at most the calls' payments
+    plus the fee, and what others receive at most what the scripts release.
+  - Deposits and `@Receives` are verifiable in a composition: their claims go through the pinned output verifier.
+    Deployments that deposit or receive now pin it.
+  - Spending calls only for now (no creations in a composition).
+  - **I5:** all 10 of the dApp's tamperings of a composed transaction are refused before signing.
+  - **I3:** `fixtures/m3`, re-recorded, holds 69 calls (Fees' compositions included), all byte-identical on the JVM.
+- **Next in M3:** owned moves (a composition of a move and an `@Admits` call), co-signers (`@Quorum`,
+  `@AuthorizedBy`), batches, and creations inside compositions.
 
 ## Revision history
 

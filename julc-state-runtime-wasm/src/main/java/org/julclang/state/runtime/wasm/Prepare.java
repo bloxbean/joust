@@ -71,6 +71,7 @@ public final class Prepare {
     public static Result prepare(Request r) {
         try {
             JsonNode call = JSON.readTree(r.call());
+            if (call.has("calls")) return composed(r, call);
             String contract = call.path("contract").asText();
             if (contract.equals("joust:mapVerifier") || contract.equals("joust:outputVerifier")) return verifier(r, call, contract);
             // Only the called contract is loaded: the bundle may hold others this engine cannot serve yet.
@@ -133,6 +134,67 @@ public final class Prepare {
                     call.path("method").asText(), call.path("instance").asText(null), call.path("object").asText(null),
                     call.path("args"), pay, call.get("params"), call.path("pay").get("assets"))).prepare();
             return new Result(true, p.cbor(), p.txHash(), made[0], p.validTo(), p.requiredSigners(),
+                    JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
+        } catch (Throwable t) {
+            for (Throwable c = t; c != null; c = c.getCause()) {
+                if (c instanceof Need n) return new Result(false, null, null, null, -1, List.of(), null, n.kind(), n.key(), null, Map.of());
+            }
+            return refused(t.getMessage() != null ? t.getMessage() : t.toString());
+        }
+    }
+
+    /** The described contract called {@code title}, from the request's contracts (only it is loaded). */
+    private static DescribedContract contract(Request r, String title) throws Exception {
+        for (Contract c : r.contracts()) {
+            if (JSON.readTree(c.description()).path("preamble").path("title").asText().equals(title)) return load(c);
+        }
+        throw new IllegalArgumentException("unknown contract " + title);
+    }
+
+    /** The runtime over the request's snapshot, as for one call. */
+    private static StateRuntime runtime(Request r, JsonNode call, SnapshotBackend backend,
+                                        org.julclang.state.runtime.snapshot.SnapshotNodeStore nodes) throws Exception {
+        Network network = r.networkId() == 1 ? Networks.mainnet() : Networks.testnet();
+        var time = new SlotChainTime(r.zeroSlot(), r.zeroTimeMs(), r.slotLengthMs(), backend);
+        var builder = StateRuntime.builder(backend).mapStore(nodes);
+        for (JsonNode ref : call.path("referenceScripts")) {
+            String[] p = ref.asText().split("#");
+            var u = backend.getUtxoService().getTxOutput(p[0], Integer.parseInt(p[1]));
+            if (u.isSuccessful()) builder.referenceScript(u.getValue());
+        }
+        return builder.network(network).chainTime(time).ttl(Duration.ofMillis(r.ttlMs()))
+                .evaluator(new JulcTransactionEvaluator(
+                        new DefaultUtxoSupplier(backend.getUtxoService()),
+                        new DefaultProtocolParamsSupplier(backend.getEpochService()),
+                        new DefaultScriptSupplier(backend.getScriptService()),
+                        new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())))
+                .build();
+    }
+
+    /**
+     * Several JOUST calls in one transaction (ADR-0011, ADR-0015 D6): {@code { calls: [call...], address,
+     * referenceScripts }}, paid by one wallet. {@code created} is a JSON array: what each creation made, else null.
+     */
+    private static Result composed(Request r, JsonNode call) {
+        try {
+            Network network = r.networkId() == 1 ? Networks.mainnet() : Networks.testnet();
+            var backend = new SnapshotBackend(Snapshot.fromJson(r.snapshot()));
+            var nodes = new org.julclang.state.runtime.snapshot.SnapshotNodeStore(r.mapNodes());
+            var rt = runtime(r, call, backend, nodes);
+            var wallet = WalletAccount.of(call.path("address").asText(), network);
+            var compose = Compose.of(rt, wallet).allowSharedSigners();
+            var made = new java.util.ArrayList<String>();
+            for (JsonNode c : call.get("calls")) {
+                DescribedContract dc = contract(r, c.path("contract").asText());
+                BigInteger pay = new BigInteger(c.path("pay").path("lovelace").asText("0"));
+                int slot = made.size();
+                made.add(null);
+                compose.add(() -> made.set(slot, dc.call(rt, wallet, c.path("kind").asText(), c.path("method").asText(),
+                        c.path("instance").asText(null), c.path("object").asText(null), c.path("args"), pay, c.get("params"),
+                        c.path("pay").get("assets"))));
+            }
+            PreparedTx p = compose.prepare();
+            return new Result(true, p.cbor(), p.txHash(), JSON.writeValueAsString(made), p.validTo(), p.requiredSigners(),
                     JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
         } catch (Throwable t) {
             for (Throwable c = t; c != null; c = c.getCause()) {
