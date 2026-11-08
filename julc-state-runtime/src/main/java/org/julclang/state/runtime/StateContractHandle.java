@@ -194,6 +194,11 @@ public final class StateContractHandle<S> {
      */
     public Utxo findReferenceScript() {
         if (referenceScript != null) return referenceScript;
+        var pinned = runtime.referenceScript(policyId);
+        if (pinned != null && pinned.getAddress() != null && pinned.getAddress().equals(address)) {
+            referenceScript = pinned;
+            return pinned;
+        }
         try {
             for (int page = 1; page < 20; page++) {
                 var r = runtime.backend().getUtxoService().getUtxos(address, 100, page);

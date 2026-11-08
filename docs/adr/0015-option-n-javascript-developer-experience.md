@@ -728,9 +728,9 @@ direct `Tx` building, gated by S3.
 - **Up-front needs (D5):** before the first run, the JS layer fetches in parallel what the request and the deployment
   name: the tip, the parameters, the wallet's UTxOs, the reference script's output and the script, and the instance's
   or object's UTxO by its token.
-  - Each prepare then takes 2 engine runs instead of 2 to 8.
-  - The remaining need is the contract address's listing, which `findReferenceScript` scans. The pinned reference
-    script will answer it.
+  - Each request also carries its deployment's pinned reference scripts (`StateRuntime.Builder.referenceScript`),
+    which the engine reads by reference instead of scanning the contract's address.
+  - A call now takes one engine run (2 to 8 before).
 - **I5 over engine-built transactions** (`js/joust-runtime/test/devkit.test.js`): each tampering of the dApp's suite
   (`examples/dapp/frontend/src/tamper.js`) is applied to engine-built transactions, and the page verifier refuses
   every one before the wallet is asked to sign.

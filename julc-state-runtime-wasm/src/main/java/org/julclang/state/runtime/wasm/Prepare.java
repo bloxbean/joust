@@ -81,7 +81,14 @@ public final class Prepare {
             Network network = r.networkId() == 1 ? Networks.mainnet() : Networks.testnet();
             var backend = new SnapshotBackend(Snapshot.fromJson(r.snapshot()));
             var time = new SlotChainTime(r.zeroSlot(), r.zeroTimeMs(), r.slotLengthMs(), backend);
-            var rt = StateRuntime.builder(backend)
+            var builder = StateRuntime.builder(backend);
+            // The deployment's pinned reference scripts, from the snapshot (one lookup each, not an address scan).
+            for (JsonNode ref : call.path("referenceScripts")) {
+                String[] p = ref.asText().split("#");
+                var u = backend.getUtxoService().getTxOutput(p[0], Integer.parseInt(p[1]));
+                if (u.isSuccessful()) builder.referenceScript(u.getValue());
+            }
+            var rt = builder
                     .network(network)
                     .chainTime(time)
                     .ttl(Duration.ofMillis(r.ttlMs()))

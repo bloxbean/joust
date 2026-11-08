@@ -29,6 +29,7 @@ public final class StateRuntime {
     private final Consumer<String> log;
     private final com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
     private final Consumer<BuiltTx> onBuilt;
+    private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts;
 
     /** A transaction the runtime built: what it is for, and the transaction (signed when submitted, unsigned when prepared). */
     public record BuiltTx(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {}
@@ -45,6 +46,7 @@ public final class StateRuntime {
         this.log = b.log;
         this.mapStore = b.mapStore != null ? b.mapStore : new InMemoryNodeStore();
         this.onBuilt = b.onBuilt;
+        this.referenceScripts = Map.copyOf(b.referenceScripts);
         org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
     }
 
@@ -92,6 +94,11 @@ public final class StateRuntime {
         return addressBook.get(HexUtil.encodeHexString(pkh));
     }
 
+    /** The pinned reference script output for {@code scriptHash}, or null. */
+    com.bloxbean.cardano.client.api.model.Utxo referenceScript(String scriptHash) {
+        return referenceScripts.get(scriptHash.toLowerCase());
+    }
+
     public static final class Builder {
         private final BackendService backend;
         private TransactionEvaluator evaluator;
@@ -104,6 +111,7 @@ public final class StateRuntime {
         private Consumer<String> log = msg -> { };
         private com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
         private Consumer<BuiltTx> onBuilt;
+        private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts = new HashMap<>();
 
         private Builder(BackendService backend) {
             this.backend = backend;
@@ -131,6 +139,15 @@ public final class StateRuntime {
         public Builder onBuilt(Consumer<BuiltTx> observer) { this.onBuilt = observer; return this; }
         /** Where MerkleMap mirrors keep their trie nodes; default in memory. Use a persistent store to reconnect later. */
         public Builder mapStore(com.bloxbean.cardano.vds.core.api.NodeStore store) { this.mapStore = store; return this; }
+
+        /**
+         * A known reference script output (a deployment's pin, ADR-0013 D2): contracts whose script hash it carries use it
+         * instead of scanning their address for one (ADR-0015 D5: fewer reads).
+         */
+        public Builder referenceScript(com.bloxbean.cardano.client.api.model.Utxo utxo) {
+            if (utxo != null && utxo.getReferenceScriptHash() != null) referenceScripts.put(utxo.getReferenceScriptHash().toLowerCase(), utxo);
+            return this;
+        }
 
         public StateRuntime build() {
             return new StateRuntime(this);

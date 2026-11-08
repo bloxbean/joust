@@ -49,8 +49,17 @@ export function joustRuntime(o) {
     await Promise.all(want.map(([k, key]) => fetchNeed(api, snapshot, k, key).catch(() => {})));
   }
 
-  const service = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs,
+  const engine = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs,
     prefetch: o.prefetch === false ? undefined : prefetch });
+  // Each request carries its deployment's pinned reference scripts: the engine reads them by reference instead of
+  // scanning the contract's address (which grows with every instance).
+  const service = {
+    ...engine,
+    prepare(request) {
+      const d = deploymentOf(request.contract);
+      return engine.prepare(d?.referenceScripts?.length ? { ...request, referenceScripts: d.referenceScripts } : request);
+    },
+  };
   return {
     api, chain, service, deployments,
     /**
