@@ -132,7 +132,7 @@ function walletChoices() {
   // in-page DevKit wallets, which need no extension.
   if (injected.length) {
     sel.append(el('optgroup', { label: 'CIP-30 wallet extensions' },
-      injected.map(([key, w]) => el('option', { value: `cip30:${key}` }, `${w.name ?? key}${key.toLowerCase().includes('yano') ? ' (Yano)' : ''}`))));
+      injected.map(([key, w]) => el('option', { value: `cip30:${key}` }, `${w.name ?? key}${/yano/i.test(key) && !/yano/i.test(w.name ?? '') ? ' (Yano)' : ''}`))));
   }
   sel.append(el('optgroup', { label: 'DevKit wallets (in-page keys, no extension)' },
     [1, 2, 3, 4, 5].map((i) => el('option', { value: `dev:${i}` }, `DevKit wallet #${i}`))));
