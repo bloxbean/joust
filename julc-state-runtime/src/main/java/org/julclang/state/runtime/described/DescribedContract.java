@@ -9,6 +9,9 @@ import org.julclang.ledger.TxOutRef;
 import org.julclang.state.api.Ctx;
 import org.julclang.state.api.Payout;
 import org.julclang.state.runtime.Call;
+import org.julclang.state.runtime.Batcher;
+import org.julclang.state.runtime.IntentHandle;
+import org.julclang.state.runtime.IntentCodec;
 import org.julclang.state.runtime.Keys;
 import org.julclang.state.runtime.ContractSpec;
 import org.julclang.state.runtime.Deploy;
@@ -474,7 +477,7 @@ public final class DescribedContract {
 
     /** What this dispatcher cannot run yet (ADR-0015 M3): batches, composition and deposits, moves, mints, events, co-signers. */
     boolean unsupported(JsonNode meta) {
-        return meta.path("policies").path("batched").asBoolean();
+        return false;   // a @Batched action that is not batch-only may also be called directly
     }
 
     /**
@@ -580,6 +583,141 @@ public final class DescribedContract {
     }
 
     /** The round limit of read discovery (ADR-0015 D3). */
+    // ------------------------------------------------------------------ intents (ADR-0004; ADR-0015 M3)
+
+    /** The intent entry of the batched action {@code method}: its IntentCall constructor, arguments and recipe. */
+    JsonNode intentMeta(String method) {
+        for (JsonNode i : x.path("intents").path("calls")) if (i.path("name").asText().equals(method)) return i;
+        throw new IllegalArgumentException(name + " has no @Batched action " + method);
+    }
+
+    /**
+     * The contract's intents over its description: datums, redeemers and the batch fold's steps, which run the batched
+     * actions as transition programs. {@code params} are the deployment's (a batched action may read them).
+     */
+    public IntentCodec<PlutusData> intents(JsonNode params) {
+        JsonNode in = x.get("intents");
+        if (in == null) throw new IllegalArgumentException(name + " has no @Batched actions");
+        if (x.path("assetAware").asBoolean()) throw new IllegalArgumentException(name + ": batches of an asset-aware contract: not supported yet (ADR-0015 M3)");
+        if (spec.layout().hasMaps()) throw new IllegalArgumentException(name + ": batches over MerkleMaps: not supported yet (ADR-0015 M3)");
+        PlutusData paramsData = x.has("params") && params != null ? codec.encode(x.get("params"), params, "params") : null;
+        int create = in.path("create").path("index").asInt();
+        int batch = in.path("batch").path("index").asInt();
+        int inBatch = in.path("inBatch").path("index").asInt();
+        int cancel = in.path("cancel").path("index").asInt();
+        int burn = in.path("burn").path("index").asInt();
+        return new IntentCodec<>() {
+            @Override public Class<?> intentClass() { return PlutusData.class; }
+
+            @Override public IntentData read(Object o) {
+                var f = ((PlutusData.ConstrData) o).fields();
+                var refund = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(f.get(2)), org.julclang.ledger.Address.class);
+                return new IntentData(((PlutusData.BytesData) f.get(0)).value(), ((PlutusData.BytesData) f.get(1)).value(), refund,
+                        ((PlutusData.IntData) f.get(3)).value(), ((PlutusData.IntData) f.get(4)).value(), f.get(5));
+            }
+
+            @Override public Object intent(byte[] instance, byte[] owner, org.julclang.ledger.Address refund, BigInteger deadline,
+                                           BigInteger received, Object call) {
+                return new PlutusData.ConstrData(0, List.of(PlutusData.bytes(instance), PlutusData.bytes(owner),
+                        PlutusDataAdapter.fromClientLib(PlutusDataAdapter.convert(refund)), PlutusData.integer(deadline),
+                        PlutusData.integer(received), (PlutusData) call));
+            }
+
+            @Override public Object create(org.julclang.ledger.TxOutRef seed, Object intent) {
+                return new PlutusData.ConstrData(create, List.of(PlutusDataAdapter.fromClientLib(PlutusDataAdapter.convert(seed)), (PlutusData) intent));
+            }
+
+            @Override public Object batch(BigInteger from, BigInteger to) {
+                return new PlutusData.ConstrData(batch, List.of(PlutusData.integer(from), PlutusData.integer(to)));
+            }
+
+            @Override public Object inBatch() { return new PlutusData.ConstrData(inBatch, List.of()); }
+
+            @Override public Object cancel() { return new PlutusData.ConstrData(cancel, List.of()); }
+
+            @Override public Object burn() { return new PlutusData.ConstrData(burn, List.of()); }
+
+            @Override public Object refundTag(org.julclang.ledger.TxOutRef ref) {
+                return new PlutusData.ConstrData(0, List.of(PlutusDataAdapter.fromClientLib(PlutusDataAdapter.convert(ref))));
+            }
+
+            @Override public Transition<PlutusData> step(PlutusData state, Object call, Ctx ctx) {
+                var c = (PlutusData.ConstrData) call;
+                JsonNode meta = null;
+                for (JsonNode i : in.path("calls")) if (i.path("call").path("index").asInt() == c.tag()) meta = i;
+                if (meta == null) throw new IllegalArgumentException("not an intent call of " + name + ": constructor " + c.tag());
+                var byName = new java.util.HashMap<String, PlutusData>();
+                int k = 0;
+                for (JsonNode a : meta.path("args")) byName.put(a.get("name").asText(), c.fields().get(k++));
+                var layout = new ArrayList<PlutusData>();
+                for (JsonNode n : meta.path("recipe").path("transitionArgs")) {
+                    String a = n.asText();
+                    if (a.equals("$params")) layout.add(paramsData);
+                    else if (a.startsWith("$")) throw new IllegalArgumentException(meta.path("name").asText() + ": " + a + " in a batched action: not supported yet (ADR-0015 M3)");
+                    else layout.add(byName.get(a));
+                }
+                var r = fn.run(meta.path("recipe").path("transition").asText(), state, NONE,
+                        new PlutusData.ConstrData(0, layout), ctxData(ctx, true));
+                if (r.step() == null) throw new org.julclang.state.api.RequireException(r.refusal());
+                return transition(r.step());
+            }
+        };
+    }
+
+    /**
+     * Locks an intent to call the batched action {@code method} on {@code instance} (ADR-0004 D2): {@code received}
+     * goes to the contract when a batch applies it, before {@code deadlineMs}. Returns the intent id.
+     */
+    public String intent(StateRuntime runtime, Account owner, String method, String instance, JsonNode args,
+                         BigInteger received, JsonNode params, long deadlineMs) {
+        JsonNode meta = intentMeta(method);
+        if (!meta.path("payable").asBoolean() && received.signum() != 0) throw new IllegalArgumentException(method + " is not payable");
+        if (args == null || !args.isObject()) throw new IllegalArgumentException("args must be an object");
+        var names = new ArrayList<String>();
+        meta.path("args").forEach(a -> names.add(a.get("name").asText()));
+        args.fieldNames().forEachRemaining(n -> {
+            if (!names.contains(n)) throw new IllegalArgumentException("unknown argument " + n);
+        });
+        var fields = new ArrayList<PlutusData>();
+        for (JsonNode a : meta.path("args")) {
+            String n = a.get("name").asText();
+            fields.add(codec.encode(a.get("schema"), args.get(n), n));
+        }
+        var call = new PlutusData.ConstrData(meta.path("call").path("index").asInt(), fields);
+        var at = handle(runtime, params).at(requireInstance(instance));
+        return IntentHandle.create(at, intents(params), owner, call, received, IntentHandle.DEFAULT_DEPOSIT,
+                java.time.Instant.ofEpochMilli(deadlineMs)).intentId();
+    }
+
+    /** Withdraws a pending intent (its owner signs): burns its token and returns what it holds. */
+    public String cancelIntent(StateRuntime runtime, Account owner, String instance, String intentId, JsonNode params) {
+        if (intentId == null || !intentId.matches("49[0-9a-f]{56}")) throw new IllegalArgumentException("an intent id is 0x49 and 28 bytes, in hex");
+        var at = handle(runtime, params).at(requireInstance(instance));
+        return IntentHandle.at(at, intents(params), intentId).cancel(owner);
+    }
+
+    /** Applies up to {@code max} pending intents of {@code instance} in one transaction, paid by {@code batcher}. */
+    public Batcher.BatchResult<PlutusData> batch(StateRuntime runtime, Account batcher, String instance, int max, JsonNode params) {
+        var at = handle(runtime, params).at(requireInstance(instance));
+        return new Batcher<>(at, intents(params)).run(batcher, max);
+    }
+
+    /** Pending intents of {@code instance}: id, owner, deadline, received and the call, as JSON. */
+    public JsonNode pendingIntents(StateRuntime runtime, String instance, JsonNode params) {
+        var at = handle(runtime, params).at(requireInstance(instance));
+        var out = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+        for (var p : new Batcher<>(at, intents(params)).pending()) {
+            var o = out.addObject();
+            o.put("intent", p.intentId());
+            o.put("ref", HexFormat.of().formatHex(p.ref().txId().hash()) + "#" + p.ref().index());
+            o.put("owner", HexFormat.of().formatHex(p.data().owner()));
+            o.put("deadline", p.data().deadline().toString());
+            o.put("received", p.data().received().toString());
+            o.put("lovelace", p.lovelace().toString());
+        }
+        return out;
+    }
+
     static final int MAX_READ_ROUNDS = 4;
 
     /** The current state of {@code instance}, as JSON by the description's state schema. */

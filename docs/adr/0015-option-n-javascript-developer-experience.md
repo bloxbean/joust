@@ -899,8 +899,34 @@ direct `Tx` building, gated by S3.
     order on the wire varied from run to run. They also reach scripts as `txInfo.signatories`. `TxRunner` now sorts
     them before balancing. Upstream: a CCL issue to keep them ordered.
   - **I3:** `fixtures/m3` holds 102 calls, Treasury's 16 included, all byte-identical on the JVM, run after run.
-- **Next in M3:** batches (`@Batched` intents: lock, cancel, batch), script governors for `@AuthorizedBy`, and
-  creations inside compositions.
+- **Batches (`@Batched` intents, ADR-0004) through npm.** Pool passes on DevKit:
+  - users lock intents (donations, and batch-only buys);
+  - one is withdrawn, which another wallet cannot do;
+  - a batcher applies the rest in one transaction.
+  - **Descriptions carry the intents:** the `Intent`, `IntentCall` and `IntentRefund` schemas, and `x-joust.intents`
+    (each batched action's `IntentCall` constructor, arguments, recipe and `only`; the constructors of
+    `CreateIntent`, `Batch`, `InBatch`, `CancelIntent` and `BurnInstance`; the deposit).
+  - **Transitions:** batch-only actions get transition programs too. The batch fold runs each step in the JuLC VM
+    with the intent's Ctx.
+  - **The dispatcher:** an `IntentCodec` over the description (`intents(params)`) and `intent`, `cancelIntent`,
+    `batch` and `pendingIntents`. The engine's request kinds have the same names.
+  - **Capture:** `IntentHandle` and `Batcher` now build through `TxRunner`'s helpers and skip waiting when
+    captured, so a wallet's prepare can contain them.
+  - **Page verifier (`intents.js`):**
+    - **A lock** mints exactly the new intent token, named by a wallet input. Its one output at the contract holds
+      the token, the payment and the deposit, with a datum equal to the minted one: this instance, the wallet's key
+      as owner, the wallet's address as refund, the page's deadline and payment, and the page's call and arguments.
+    - **A cancel** spends only the wallet's own intent with `CancelIntent`, burns its token, and returns everything
+      it held to the wallet, less the fee.
+    - **A batch** spends the instance with `Batch` and intents of it with `InBatch`, burns exactly their tokens,
+      keeps the instance at the contract, and costs the batcher at most the fee. The fold itself is the
+      validator's to check (I24, I25).
+  - **I5:** all 10 tamperings of an intent lock and all 10 of a batch are refused before signing.
+  - **I3:** `fixtures/m3` holds 129 calls, Pool's 27 included, all byte-identical on the JVM.
+  - On the JVM, `DescribedPoolDevnetTest` runs the same flow.
+  - **Not yet:** batches of asset-aware contracts or over MerkleMaps, and `@Params`-reading batched steps that also
+    `@Reads`.
+- **Next in M3:** script governors for `@AuthorizedBy`, and creations inside compositions.
 
 ### 13.9 Planned for M4: a pluggable chain provider
 

@@ -179,15 +179,14 @@ public final class Batcher<S> {
         Datums.checkCanonical(spec, datum, what);
         BigInteger next = plan.balance().add(BigInteger.valueOf(spec.minAda()));
 
-        var tx = new Tx()
-                .collectFrom(own, PlutusDataAdapter.convert(codec.batch(window.fromMs(), window.toMs())))
+        var tx = TxRunner.collect(TxRunner.newTx(), own, PlutusDataAdapter.convert(codec.batch(window.fromMs(), window.toMs())))
                 .readFrom(contract.findReferenceScript());
         PlutusData inBatch = PlutusDataAdapter.convert(codec.inBatch());
         var burns = new ArrayList<Asset>();
         var expectedPayouts = new ArrayList<TxRunner.ExpectedPayout>();
         for (int i = 0; i < plan.applied().size(); i++) {
             Pending p = plan.applied().get(i);
-            tx.collectFrom(p.utxo(), inBatch);
+            TxRunner.collect(tx, p.utxo(), inBatch);
             burns.add(new Asset("0x" + p.intentId(), BigInteger.ONE.negate()));
             // Refund: the intent's surplus to its refund address, tagged IntentRefund(intentRef) (I24).
             PlutusData refundTag = PlutusDataAdapter.convert(codec.refundTag(p.ref()));
@@ -206,7 +205,7 @@ public final class Batcher<S> {
                 expectedPayouts.add(new TxRunner.ExpectedPayout(addr, e.getValue(), tag));
             }
         }
-        tx.mintAsset(contract.policyId, burns, PlutusDataAdapter.convert(codec.burn()));
+        TxRunner.mint(tx, contract.policyId, burns, PlutusDataAdapter.convert(codec.burn()));
         tx.payToContract(contract.address, List.of(Amount.lovelace(next), new Amount(instance.unit(), BigInteger.ONE)), datum);
 
         String txHash = new TxRunner(contract.runtime).submit(tx, batcher, window, new byte[0][],

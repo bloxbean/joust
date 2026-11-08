@@ -189,7 +189,8 @@ public final class DescriptionWriter {
             for (int i = 0; i < batched.size(); i++) intents.add(intent(batched.get(i), i));
             xj.put("intents", map("datum", ref(intentKey), "calls", intents,
                     "refund", ref(c.packageName() + "." + V + ".IntentRefund"),
-                    "deposit", "IntentHandle.DEFAULT_DEPOSIT lovelace, refunded with the intent",
+                    // Lovelace locked with each intent beyond what it pays, refunded with it (IntentHandle.DEFAULT_DEPOSIT).
+                    "deposit", 2_000_000L,
                     "batch", map("constructor", "Batch", "index", spend.size()),
                     "inBatch", map("constructor", "InBatch", "index", spend.size() + 1),
                     "cancel", map("constructor", "CancelIntent", "index", spend.size() + 2),

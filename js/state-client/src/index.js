@@ -9,3 +9,4 @@ export { instanceIdOf, objectIdOf } from './tokens.js';
 export { planOf, planDifference } from './plan.js';
 export { hexToBytes, bytesToHex } from './hex.js';
 export { verifyComposed, runComposed } from './compose.js';
+export { verifyIntent, verifyCancel, verifyBatch, intentIdOf, ledgerAddressJson } from './intents.js';

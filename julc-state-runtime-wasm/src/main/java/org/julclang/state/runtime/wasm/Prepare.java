@@ -128,6 +128,41 @@ public final class Prepare {
                         tx.getBody().getTtl(), List.of(com.bloxbean.cardano.client.util.HexUtil.encodeHexString(pkh)),
                         JSON.writeValueAsString(org.julclang.state.runtime.TxPlan.of(tx)), null, null, null, Map.of());
             }
+            String kind = call.path("kind").asText();
+            if (kind.equals("pendingIntents")) {
+                // An instance's pending intents (ADR-0004), read through the snapshot: no transaction.
+                var list = dc.pendingIntents(rt, call.path("instance").asText(null), call.get("params"));
+                return new Result(true, null, null, null, -1, List.of(), list.toString(), null, null, null, Map.of());
+            }
+            if (kind.equals("intent") || kind.equals("cancelIntent") || kind.equals("batch")) {
+                // Batched actions (ADR-0004; ADR-0015 M3): lock an intent, withdraw it, or apply pending ones.
+                String[] out = new String[1];
+                final DescribedContract d = dc;
+                String instance = call.path("instance").asText(null);
+                JsonNode params = call.get("params");
+                PreparedTx p = Compose.of(rt, wallet).add(() -> {
+                    switch (kind) {
+                        case "intent" -> out[0] = d.intent(rt, wallet, call.path("method").asText(), instance, call.path("args"),
+                                pay, params, call.path("deadline").asLong());
+                        case "cancelIntent" -> d.cancelIntent(rt, wallet, instance, call.path("intent").asText(null), params);
+                        default -> {
+                            var b = d.batch(rt, wallet, instance, call.path("max").asInt(8), params);
+                            if (b.applied().isEmpty()) {
+                                throw new org.julclang.state.api.RequireException("nothing to batch" + (b.skipped().isEmpty() ? ""
+                                        : ": " + b.skipped()));
+                            }
+                            var o = JSON.createObjectNode();
+                            var applied = o.putArray("applied");
+                            b.applied().forEach(applied::add);
+                            var skipped = o.putObject("skipped");
+                            b.skipped().forEach(skipped::put);
+                            out[0] = o.toString();
+                        }
+                    }
+                }).prepare();
+                return new Result(true, p.cbor(), p.txHash(), out[0], p.validTo(), p.requiredSigners(),
+                        JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
+            }
             String[] made = new String[1];
             DescribedContract target = dc;
             var cosigners = cosigners(call, network);

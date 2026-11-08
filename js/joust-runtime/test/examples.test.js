@@ -418,3 +418,61 @@ test('Treasury: @Quorum co-signers sign the same transaction; the guardian (@Aut
   await t.call(b, 'close', { to: a.keyHash }, {}, { cosigners: [a] });
   assert.equal(await t.state(), null);
 });
+
+test('Pool: @Batched intents locked by users, one cancelled, the rest applied by a batcher', { skip, timeout: 900_000 }, async () => {
+  const { wallets, contract } = await setup(['pool']);
+  const [admin, batcher, u0, u1, u2, u3] = await wallets(6, 100);
+  const pool = await contract('Pool', admin);
+  const p = pool.at((await pool.deploy(admin, { price: 10n * ADA, step: ADA })).instance);
+  const d0 = (await p.intent(u0, 'donate', {}, { lovelace: 5n * ADA })).intent;
+  const d1 = (await p.intent(u1, 'donate', {}, { lovelace: 6n * ADA })).intent;
+  // buy is batch-only (@Batched(only = true)): the buyer pays 20 and accepts up to 20; the change is paid out.
+  await p.intent(u2, 'buy', { maxPrice: 20n * ADA }, { lovelace: 20n * ADA });
+  // I5: every tampering of an engine-built intent lock is refused before the wallet is asked.
+  let refused = 0;
+  for (let i = 0, total = 1; i < total; i++) {
+    const evil = { ...pool.service, async prepare(req) {
+      const r = await pool.service.prepare(req);
+      const all = Object.entries(tamperings(CSL, r.cbor, [u3.address]));
+      total = all.length;
+      return { ...r, cbor: all[i][1] };
+    } };
+    const k = new JoustContract({ CSL, description: pool.description, deployment: pool.deployment, service: evil, chain: pool.chain });
+    let asked = false;
+    const watched = { ...u3, signTx: (...x) => { asked = true; return u3.signTx(...x); } };
+    await assert.rejects(k.at(p.id).intent(watched, 'buy', { maxPrice: 20n * ADA }, { lovelace: 20n * ADA }), undefined, `tampering ${i}`);
+    assert.equal(asked, false, `tampering ${i} reached the wallet`);
+    refused++;
+  }
+  console.log(`I5: ${refused} tamperings of an engine-built intent lock refused before signing`);
+  await p.intent(u3, 'buy', { maxPrice: 20n * ADA }, { lovelace: 20n * ADA });
+  await assert.rejects(async () => p.call(u2, 'buy', { maxPrice: 1n }, { lovelace: ADA }), /no action/);   // batch-only
+  assert.equal((await p.pendingIntents()).length, 4);
+  await assert.rejects(p.cancelIntent(u0, d1));                  // only its owner withdraws it
+  await p.cancelIntent(u1, d1);
+  // I5 for a batch: the batcher's wallet is never asked to sign a tampered one.
+  refused = 0;
+  for (let i = 0, total = 1; i < total; i++) {
+    const evil = { ...pool.service, async prepare(req) {
+      const r = await pool.service.prepare(req);
+      const all = Object.entries(tamperings(CSL, r.cbor, [batcher.address]));
+      total = all.length;
+      return { ...r, cbor: all[i][1] };
+    } };
+    const k = new JoustContract({ CSL, description: pool.description, deployment: pool.deployment, service: evil, chain: pool.chain });
+    let asked = false;
+    const watched = { ...batcher, signTx: (...x) => { asked = true; return batcher.signTx(...x); } };
+    await assert.rejects(k.at(p.id).batch(watched), undefined, `tampering ${i}`);
+    assert.equal(asked, false, `tampering ${i} reached the wallet`);
+    refused++;
+  }
+  console.log(`I5: ${refused} tamperings of an engine-built batch refused before signing`);
+  const b = await p.batch(batcher);
+  assert.equal(b.applied.length, 3, 'a donation and two buys');
+  assert.ok(b.applied.includes(d0));
+  const s = await p.state();
+  assert.equal(s.donated, 5n * ADA);
+  assert.equal(s.sold, 2n);
+  assert.equal(s.price, 12n * ADA);
+  assert.equal((await p.pendingIntents()).length, 0);
+});

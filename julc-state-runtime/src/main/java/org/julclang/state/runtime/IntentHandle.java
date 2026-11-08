@@ -109,13 +109,13 @@ public final class IntentHandle<S> {
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
         PlutusData redeemer = PlutusDataAdapter.convert(codec.create(seedRef, intent));
         BigInteger lovelace = received.add(deposit);
-        var tx = new Tx()
-                .collectFrom(java.util.List.of(seed))
-                .readFrom(ref)
-                .mintAsset(contract.policyId, List.of(new Asset("0x" + intentId, BigInteger.ONE)), redeemer)
-                .payToContract(contract.address, List.of(Amount.lovelace(lovelace), new Amount(handle.unit(), BigInteger.ONE)), datum);
+        // Built into the composition's transaction when captured (a wallet's prepare; ADR-0013, ADR-0015 M3).
+        var tx = TxRunner.collect(TxRunner.newTx(), seed, null).readFrom(ref);
+        TxRunner.mint(tx, contract.policyId, List.of(new Asset("0x" + intentId, BigInteger.ONE)), redeemer);
+        tx.payToContract(contract.address, List.of(Amount.lovelace(lovelace), new Amount(handle.unit(), BigInteger.ONE)), datum);
         String txHash = new TxRunner(rt).submit(tx, owner, null, new byte[][]{ownerPkh},
                 new TxRunner.ExpectedState(handle.unit(), lovelace, datum), List.of(), new PlutusScript[]{contract.script}, what);
+        if (TxRunner.capture() != null) return handle;   // composed: Compose submits and confirms
         for (int i = 0; i < 60 && !handle.isPending(); i++) TxRunner.sleep(500);
         if (!handle.isPending()) throw new PendingTransactionException(txHash, what + ": included, but not visible yet");
         rt.log(what + " " + intentId.substring(0, 10) + "… locked in " + txHash);
@@ -134,12 +134,11 @@ public final class IntentHandle<S> {
         if (!Arrays.equals(Batcher.decode(codec, u).owner(), ownerPkh)) throw new RequireException(what + ": only the owner can cancel");
         BigInteger lovelace = u.getAmount().stream().filter(a -> a.getUnit().equals("lovelace"))
                 .map(Amount::getQuantity).findFirst().orElse(BigInteger.ZERO);
-        var tx = new Tx()
-                .collectFrom(u, PlutusDataAdapter.convert(codec.cancel()))
-                .readFrom(contract.findReferenceScript())
-                .mintAsset(contract.policyId, List.of(new Asset("0x" + intentId, BigInteger.ONE.negate())),
-                        PlutusDataAdapter.convert(codec.burn()))
-                .payToAddress(owner.enterpriseAddress(), Amount.lovelace(lovelace));
+        var tx = TxRunner.collect(TxRunner.newTx(), u, PlutusDataAdapter.convert(codec.cancel()))
+                .readFrom(contract.findReferenceScript());
+        TxRunner.mint(tx, contract.policyId, List.of(new Asset("0x" + intentId, BigInteger.ONE.negate())),
+                PlutusDataAdapter.convert(codec.burn()));
+        tx.payToAddress(owner.enterpriseAddress(), Amount.lovelace(lovelace));
         return new TxRunner(contract.runtime).submit(tx, owner, null, new byte[][]{ownerPkh}, null, List.of(),
                 new PlutusScript[]{contract.script}, what);
     }

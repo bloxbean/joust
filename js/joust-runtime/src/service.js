@@ -91,6 +91,7 @@ export function engineService(o) {
       if (request.calls) out.created = r.created ? JSON.parse(r.created) : [];
       else if (request.kind === 'init' && r.created) out.instance = r.created;
       else if (request.kind === 'ownedInit' && r.created) out.object = r.created;
+      else if ((request.kind === 'intent' || request.kind === 'batch') && r.created) out.created = r.created;   // the intent id; a batch's outcome
       return out;
     },
 

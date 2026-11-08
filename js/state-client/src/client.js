@@ -6,6 +6,7 @@ import { codec, toJson, dataEqual } from './data.js';
 import { verifyPrepared, redeemerDefs } from './verify.js';
 import { walletView, assemble } from './wallet.js';
 import { planOf, planDifference } from './plan.js';
+import { verifyIntent, verifyCancel, verifyBatch } from './intents.js';
 
 export class VerificationError extends Error {
   constructor(problems, report) {
@@ -279,6 +280,37 @@ JoustContract.prototype.recompute = async function recompute(call, report, probl
   report.recomputedFrom = source.verified ? 'chain transactions (hash-checked)' : 'the chain API';
 };
 
+/**
+ * Prepares one intent operation (ADR-0004; ADR-0015 M3), verifies it with {@code verify}, reviews, signs, submits and
+ * confirms it. {@code request} is the service request (kind intent, cancelIntent or batch).
+ */
+JoustContract.prototype.runIntentOp = async function runIntentOp(api, request, verify, call) {
+  const { CSL } = this;
+  const wallet = await walletView(CSL, api);
+  if (wallet.networkId !== this.deployment.networkId) throw new Error('the wallet is on another network');
+  const address = fundingAddress(wallet);
+  const prepared = await this.service.prepare({ contract: this.description.preamble.title, ...request, address });
+  const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
+  const { problems, report } = await verify({
+    CSL, description: this.description, deployment: this.deployment, txHex: prepared.cbor, call: { ...call, address },
+    wallet, chain: { tip, params, utxo: (r) => this.chain.utxo(r) }, limits: this.limits,
+  });
+  report.plan = planOf(CSL, prepared.cbor);
+  if (prepared.plan) {
+    const d = planDifference(prepared.plan, report.plan);
+    if (d) problems.push('the service\'s plan does not describe its transaction: ' + d);
+  }
+  if (problems.length) throw new VerificationError(problems, report);
+  const txHash = CSL.FixedTransaction.from_hex(prepared.cbor).transaction_hash().to_hex();
+  if (this.onReview) await this.onReview({ contract: this.name, call: { ...call, kind: request.kind }, report, txHash });
+  const signed = assemble(CSL, prepared.cbor, await api.signTx(prepared.cbor, true));
+  if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
+  const submitted = await api.submitTx(signed.cbor);
+  if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
+  await this.chain.awaitTx(signed.txHash);
+  return { txHash: signed.txHash, report, created: prepared.instance ?? prepared.created ?? null };
+};
+
 export class JoustInstance {
   constructor(contract, id) {
     this.contract = contract;
@@ -300,6 +332,59 @@ export class JoustInstance {
   /** An action or destroy on this instance. */
   call(api, name, args = {}, pay = {}, opts = {}) {
     return this.contract.run(api, { kind: this.kindOf(name, ['action', 'destroy']), meta: this.contract.meta(name, ['action', 'destroy']), args, pay, instance: this.id, cosigners: opts.cosigners });
+  }
+
+  /**
+   * Locks an intent to call the @Batched action {@code name} (ADR-0004): {@code pay.lovelace} goes to the contract
+   * when a batch applies it before {@code opts.deadline} (ms; default 30 minutes). Returns { txHash, intent, report }.
+   */
+  async intent(api, name, args = {}, pay = {}, opts = {}) {
+    const k = this.contract;
+    const meta = (k.x.intents?.calls ?? []).find((i) => i.name === name);
+    if (!meta) throw new Error(`${k.name} has no @Batched action ${name}`);
+    for (const a of meta.args) if (!(a.name in args)) throw new Error(`${name}: missing argument ${a.name}`);
+    const canon = {};
+    for (const a of meta.args) canon[a.name] = k.codec.decode(a.schema, k.codec.encode(a.schema, args[a.name], a.name));
+    const lovelace = BigInt(pay.lovelace ?? 0);
+    if (!meta.payable && lovelace !== 0n) throw new Error(`${name} is not payable`);
+    const deadline = BigInt(opts.deadline ?? Date.now() + 30 * 60_000);
+    const r = await k.runIntentOp(api, { kind: 'intent', method: name, instance: this.id, args: toJson(canon),
+      pay: toJson({ lovelace, assets: [] }), deadline: Number(deadline) }, verifyIntent,
+    { meta, args: canon, pay: { lovelace }, instance: this.id, deadline });
+    return { ...r, intent: r.report.intent };
+  }
+
+  /** Withdraws the wallet's pending intent {@code intentId}: its token burned, everything it holds back. */
+  cancelIntent(api, intentId) {
+    return this.contract.runIntentOp(api, { kind: 'cancelIntent', instance: this.id, intent: intentId }, verifyCancel,
+      { instance: this.id, intent: intentId });
+  }
+
+  /** As a batcher: applies up to {@code opts.max} (8) pending intents in one transaction; pays only the fee. */
+  async batch(api, opts = {}) {
+    const r = await this.contract.runIntentOp(api, { kind: 'batch', instance: this.id, max: opts.max ?? 8 }, verifyBatch,
+      { instance: this.id });
+    const outcome = r.created ? JSON.parse(r.created) : { applied: r.report.applied, skipped: {} };
+    return { ...r, applied: r.report.applied, skipped: outcome.skipped ?? {} };
+  }
+
+  /** This instance's pending intents on chain: [{ intent, ref, owner, deadline, received, call, lovelace }]. */
+  async pendingIntents() {
+    const k = this.contract;
+    const xi = k.x.intents;
+    if (!xi) return [];
+    const out = [];
+    for (const u of await k.chain.utxosAt(k.deployment.address)) {
+      const unit = [...u.value.keys()].find((x) => x.startsWith(k.deployment.policy + '49') && x.length === 56 + 58);
+      if (!unit || !u.inlineDatum) continue;
+      try {
+        const d = k.codec.decode(xi.datum, u.inlineDatum);
+        if (d.instance === this.id) out.push({ intent: unit.slice(56), ref: u.ref, owner: d.owner, deadline: d.deadline, received: d.received, call: d.call, lovelace: u.value.get('lovelace') });
+      } catch (e) {
+        // not an intent of this contract
+      }
+    }
+    return out;
   }
 
   /** Creates an owned object with the creation {@code name}; returns { txHash, object, report }. */
