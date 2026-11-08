@@ -725,12 +725,27 @@ direct `Tx` building, gated by S3.
   - From the local registry, `npm create joust`, `npm install` (no jar installed), `npm run build` (2 s),
     `npm run deploy` (3 s) and `npm test` (22 s on DevKit) all pass.
   - Also run: a changed contract, so `joust deploy` published its reference script itself.
-- **Still open in M2:**
-  - I4 on linux-x64.
-  - Needs returned up front, all at once (D5), rather than one per run.
-  - I7: the runtime does not yet refuse programs and descriptions of another major version.
-  - The verifier's tamper suite over engine-built transactions (I5).
-  - The engine in a page, in a worker (M4).
+- **Up-front needs (D5):** before the first run, the JS layer fetches in parallel what the request and the deployment
+  name: the tip, the parameters, the wallet's UTxOs, the reference script's output and the script, and the instance's
+  or object's UTxO by its token.
+  - Each prepare then takes 2 engine runs instead of 2 to 8.
+  - The remaining need is the contract address's listing, which `findReferenceScript` scans. The pinned reference
+    script will answer it.
+- **I5 over engine-built transactions** (`js/joust-runtime/test/devkit.test.js`): each tampering of the dApp's suite
+  (`examples/dapp/frontend/src/tamper.js`) is applied to engine-built transactions, and the page verifier refuses
+  every one before the wallet is asked to sign.
+  - All 10 of an increment, and all 11 of a `@Shared` withdraw from an owned object.
+- **I7:**
+  - `joust build` records the toolchain's version with each contract (`contracts.json`).
+  - The runtime refuses a description of another version than 2, and a build by an incompatible toolchain: another
+    major version, or another minor while the major is 0.
+  - Tests: `js/joust-runtime/test/compat.test.js`.
+- **I4 on linux-x64** (`js/acceptance/linux-x64.sh`) passed in a `linux/amd64` Node 22 container (emulated on Apple
+  silicon) with no Java in the image.
+  - The registry and the DevKit were on the host.
+  - Build 5.6 s, deploy 5.4 s, test 18 s.
+  - The engines are Wasm and JS, so nothing in them depends on the platform.
+- **Still open:** the engine in a page, in a worker (M4); everything M3 covers.
 
 ## Revision history
 

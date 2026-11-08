@@ -47,7 +47,7 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     const { js, dts } = generate(description);
     writeFileSync(join(dir, c.name + '.js'), js);
     writeFileSync(join(dir, c.name + '.d.ts'), dts);
-    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions });
+    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, built: { joust: VERSION } });
     log(`${c.packageName}.${c.name}: ${c.scriptSizeBytes} bytes, hash ${c.scriptHash || '(parameterised)'}, `
       + `${Object.keys(c.transitions).length} transitions`);
   }

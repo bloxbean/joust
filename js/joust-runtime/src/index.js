@@ -3,7 +3,7 @@
 // against the contract's description before the wallet signs it (D7), and submits it.
 
 import { blockfrostChain, assemble, planOf } from '@julclang/state-client';
-import { blockfrostApi } from './snapshot.js';
+import { blockfrostApi, fetchNeed } from './snapshot.js';
 import { engineService } from './service.js';
 
 export { loadEngine } from './engine.js';
@@ -27,8 +27,30 @@ export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-clien
 export function joustRuntime(o) {
   const api = blockfrostApi(o.chainUrl, { projectId: o.projectId, fetchImpl: o.fetchImpl });
   const chain = blockfrostChain(o.chainUrl, { projectId: o.projectId, fetchImpl: o.fetchImpl, CSL: o.CSL });
-  const service = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs });
   const deployments = { ...(o.deployments ?? {}) };
+  const deploymentOf = (contract) => deployments[contract]
+    ?? Object.values(deployments).find((x) => x.contract === contract || x.contract.endsWith('.' + contract));
+
+  /**
+   * The up-front needs (ADR-0015 D5), from the request and the deployment: the tip, the parameters, the wallet's UTxOs,
+   * the reference script and its output, and the instance's or object's UTxO (by its token). Fetched in parallel; a
+   * read that fails here is left for the engine to ask for.
+   */
+  async function prefetch(call, snapshot) {
+    const want = [['tip', ''], ['protocolParams', '']];
+    if (call.address) want.push(['utxos', call.address]);
+    const d = deploymentOf(call.contract);
+    if (d) {
+      for (const r of d.referenceScripts ?? []) want.push(['output', r]);
+      want.push(['script', d.policy]);
+      if (call.instance) want.push(['assetUtxos', `${d.address}|${d.policy}${call.instance}`]);
+      if (call.object) want.push(['assetUtxos', `${d.address}|${d.policy}${call.object}`]);
+    }
+    await Promise.all(want.map(([k, key]) => fetchNeed(api, snapshot, k, key).catch(() => {})));
+  }
+
+  const service = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs,
+    prefetch: o.prefetch === false ? undefined : prefetch });
   return {
     api, chain, service, deployments,
     /**
@@ -64,7 +86,7 @@ export function joustRuntime(o) {
 
     /** Options for a generated client of {@code contract} (its description's title, or its simple name). */
     options(contract, extra = {}) {
-      const d = deployments[contract] ?? Object.values(deployments).find((x) => x.contract === contract || x.contract.endsWith('.' + contract));
+      const d = deploymentOf(contract);
       if (!d) throw new Error(`no deployment of ${contract}: run joust deploy (or pass deployments)`);
       return { CSL: o.CSL, service, chain, deployment: d, ...extra };
     },
