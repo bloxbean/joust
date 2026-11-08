@@ -29,7 +29,38 @@ export interface Deployment {
   referenceScripts?: string[];
 }
 
+/** A normalised UTxO, as chain providers answer (ADR-0015 §13.9). */
+export interface ProviderUtxo {
+  txHash: Hex; index: number; address: string; value: Array<{ unit: string; quantity: string }>;
+  datumHash: Hex | null; inlineDatum: Hex | null; referenceScriptHash: Hex | null;
+}
+
+/**
+ * A chain provider (ADR-0015 §13.9), the counterpart of cardano-client-lib's BackendService: it backs both the engine's
+ * reads and the page's chain view. protocolParams() answers Blockfrost's parameter object.
+ */
+export interface ChainProvider {
+  readonly name?: string;
+  tip(): Promise<{ slot: number; hash: Hex; height: number | null; epoch: number | null; time: number | null }>;
+  protocolParams(): Promise<Record<string, unknown>>;
+  utxos(address: string): Promise<ProviderUtxo[]>;
+  assetUtxos?(address: string, unit: string): Promise<ProviderUtxo[]>;
+  output(ref: string): Promise<ProviderUtxo | null>;
+  scriptCbor(hash: Hex): Promise<Hex | null>;
+  submit(cbor: Hex): Promise<Hex>;
+  awaitTx(hash: Hex, o?: { timeoutMs?: number; intervalMs?: number }): Promise<boolean>;
+  txCbor?(hash: Hex): Promise<Hex | null>;
+  account?(stakeAddress: string): Promise<{ registered: boolean | undefined; rewards: bigint }>;
+}
+
+export declare function blockfrostProvider(baseUrl: string, o?: { projectId?: string; fetchImpl?: typeof fetch }): ChainProvider & { base: string; get(path: string, o?: { allow404?: boolean }): Promise<any> };
+export declare function ogmiosProvider(url: string, o?: { fetchImpl?: typeof fetch }): ChainProvider & { rpc(method: string, params?: object): Promise<any> };
+export declare function chainOf(provider: ChainProvider, o?: { CSL?: any }): Chain;
+
 export interface Chain {
+  readonly provider?: ChainProvider;
+  registered(stakeAddress: string): Promise<boolean | undefined>;
+  rewards(stakeAddress: string): Promise<bigint>;
   tip(): Promise<number>;
   params(): Promise<Record<string, unknown>>;
   utxo(ref: string): Promise<{ address: string; value: Map<string, bigint>; referenceScriptHash: Hex | null; inlineDatum: Hex | null } | null>;

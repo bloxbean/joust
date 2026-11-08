@@ -1,6 +1,6 @@
 // @julclang/joust-runtime (ADR-0015): JOUST contracts from JavaScript with no JVM.
-import type { JoustOptions, Cip30Api } from '@julclang/state-client';
-export { JoustContract, VerificationError, blockfrostChain, toJson } from '@julclang/state-client';
+import type { JoustOptions, Cip30Api, ChainProvider } from '@julclang/state-client';
+export { JoustContract, VerificationError, blockfrostChain, chainOf, blockfrostProvider, ogmiosProvider, toJson } from '@julclang/state-client';
 
 export interface Clock { zeroSlot: number; zeroTimeMs: number; slotLengthMs: number }
 /** A contract as `joust build` writes it in build/joust/contracts.json. */
@@ -21,7 +21,8 @@ export interface EngineService {
 }
 
 export interface JoustRuntime {
-  readonly api: ChainApi;
+  readonly api: ChainProvider;
+  readonly provider: ChainProvider;
   readonly chain: any;
   readonly service: EngineService;
   readonly deployments: Record<string, Deployment>;
@@ -31,14 +32,14 @@ export interface JoustRuntime {
 }
 
 export function joustRuntime(o: {
-  CSL: any; chainUrl: string; projectId?: string; contracts: BuiltContract[]; clock: Clock; networkId?: number;
+  CSL: any; provider?: ChainProvider; chainUrl?: string; projectId?: string; contracts: BuiltContract[]; clock: Clock; networkId?: number;
   deployments?: Record<string, Deployment>; validators?: BuiltValidator[]; ttlMs?: number; fetchImpl?: typeof fetch;
 }): JoustRuntime;
-export function engineService(o: { api: ChainApi; contracts: BuiltContract[]; clock: Clock; networkId?: number; ttlMs?: number; maxRounds?: number }): EngineService;
+export function engineService(o: { api: ChainProvider | ChainApi; contracts: BuiltContract[]; clock: Clock; networkId?: number; ttlMs?: number; maxRounds?: number }): EngineService;
 export function loadEngine(o?: { dir?: string }): Promise<any>;
 export function blockfrostApi(baseUrl: string, o?: { projectId?: string; fetchImpl?: typeof fetch }): ChainApi;
 export function emptySnapshot(): object;
-export function fetchNeed(api: ChainApi, snapshot: object, kind: string, key: string): Promise<void>;
+export function fetchNeed(provider: ChainProvider | ChainApi, snapshot: object, kind: string, key: string): Promise<void>;
 export function devkitClock(adminUrl?: string): Promise<Clock>;
 export function devkitTopUp(address: string, ada: number, adminUrl?: string): Promise<void>;
 export function devWallet(o: { CSL: any; chain: any; mnemonic?: string; index?: number; networkId?: number; confirm?: (txHex: string) => Promise<boolean> }): Cip30Api & { address: string; keyHash: string };

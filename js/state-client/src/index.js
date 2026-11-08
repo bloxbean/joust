@@ -2,7 +2,8 @@
 
 export { codec, toJson, dataEqual, DataError } from './data.js';
 export { verifyPrepared, DEFAULT_LIMITS, valueMap, ledgerOrder, refOf, redeemerDefs } from './verify.js';
-export { blockfrostChain } from './chain.js';
+export { blockfrostChain, chainOf } from './chain.js';
+export { blockfrostProvider, ogmiosProvider, ogmiosParams, plutusScriptHash } from './providers.js';
 export { walletView, assemble, paymentKeyHash } from './wallet.js';
 export { JoustContract, JoustInstance, JoustObject, VerificationError, httpService } from './client.js';
 export { instanceIdOf, objectIdOf } from './tokens.js';

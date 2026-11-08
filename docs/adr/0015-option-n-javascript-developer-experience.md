@@ -1048,6 +1048,39 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
 - **The dApp's connect button uses `cardano-connect-with-wallet` (Cardano Foundation)** instead of its own CIP-30
   picker. The button only selects and enables a wallet; the page verifier and the signing flow are unchanged.
 
+### 13.11 M4 (in progress)
+
+- **The pluggable chain provider (§13.9) is in.** `@julclang/state-client` defines the interface (`providers.js`):
+  - `tip`, `protocolParams`, `utxos`, `assetUtxos` (optional), `output`, `scriptCbor`, `submit` and `awaitTx`;
+  - optionally `txCbor` and `account`.
+  - It answers normalised UTxOs (`{ txHash, index, address, value: [{ unit, quantity }], datumHash, inlineDatum,
+    referenceScriptHash }`). The protocol parameters are Blockfrost's object, the de facto shape that
+    cardano-client-lib reads.
+  - **Wiring:** `joustRuntime({ provider })` backs both the engine's needs and the page's chain view (`chainOf`), so
+    the verifier reads from the source the engine built from.
+  - **Ownership of formats:** the runtime owns the conversion into the snapshot's JSON (`fetchNeed`, `utxoJson`). A
+    provider never sees the snapshot's or CCL's formats.
+  - **Compatibility:** `blockfrostChain(url)` and `blockfrostApi(url)` remain, as shorthands over `blockfrostProvider`.
+    `joust deploy` takes `"provider": "ogmios"` per network.
+- **Shipped providers:**
+  - **`blockfrostProvider`:** Blockfrost, and Yaci Store's `/api/v1`.
+  - **`ogmiosProvider`:** Ogmios v6, JSON-RPC over HTTP; the node's own ledger state.
+    - Protocol parameters are mapped as CCL's Ogmios supplier maps them.
+    - Scripts are known by their hash from the reference-script outputs it serves; the hash is
+      `blake2b-224(0x03 ++ cbor)`, checked against Blockfrost's.
+    - A transaction is on chain once its first output is.
+    - Stake accounts come from `rewardAccountSummaries`, which tells registration exactly; Yaci Store cannot.
+    - Plain-text server errors under load are retried.
+  - Koios, and Ogmios with Kupo for spent outputs, can follow on the same interface.
+- **Exit evidence (DevKit):**
+  - All 14 example flows pass over Ogmios (`PROVIDER=ogmios`), as they do over Yaci Store. That includes the
+    governor, StakedVault and every I5 tamper loop.
+  - `providers.test.js` checks `conformance(candidate, reference, probes)`: Ogmios against Yaci Store on the tip,
+    protocol parameters (fees, deposits, budgets, prices, the three cost models), an address's UTxOs, recorded
+    reference-script outputs and their scripts, and stake accounts.
+  - It also checks that the engine gets the same snapshot from either provider.
+  - The same check applies to any provider an app brings.
+
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.

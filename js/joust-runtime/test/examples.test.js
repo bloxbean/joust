@@ -10,12 +10,15 @@ import { join } from 'node:path';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devkitSweep, devWallet, JoustContract, runComposed } from '../src/index.js';
+import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devkitSweep, devWallet, JoustContract, runComposed, ogmiosProvider } from '../src/index.js';
 import { walletView, verifyRegistration, approvalsData } from '@julclang/state-client';
 import { build } from '../../joust/src/build.js';
 import { tamperings } from '../../../examples/dapp/frontend/src/tamper.js';
 
 const STORE = process.env.STORE ?? 'http://localhost:8080/api/v1';
+// PROVIDER=ogmios runs every flow over Ogmios (ADR-0015 §13.9) instead of Yaci Store's Blockfrost-style API.
+const PROVIDER = process.env.PROVIDER ?? 'blockfrost';
+const OGMIOS = process.env.OGMIOS ?? 'http://localhost:1337';
 const ADMIN = process.env.ADMIN ?? 'http://localhost:10000';
 const ADA = 1_000_000n;
 const EXAMPLES = new URL('../../../examples/', import.meta.url).pathname;
@@ -70,7 +73,7 @@ const contractsByDescription = new Map();
 async function setup(names, group = names.join('+')) {
   const contracts = (await Promise.all(names.map(built))).flat();
   for (const c of contracts) contractsByDescription.set(c.description, c);
-  const rt = joustRuntime({ CSL, chainUrl: STORE, contracts, validators: validatorsBuilt, clock: await devkitClock(ADMIN), networkId: 0,
+  const rt = joustRuntime({ CSL, chainUrl: STORE, provider: PROVIDER === 'ogmios' ? ogmiosProvider(OGMIOS) : undefined, contracts, validators: validatorsBuilt, clock: await devkitClock(ADMIN), networkId: 0,
     ttlMs: 20_000, record: recorder(group) });
   const wallets = async (n, ada = 300) => {
     const ws = Array.from({ length: n }, () => devWallet({ CSL, chain: rt.chain, mnemonic: generateMnemonic(wordlist, 256) }));

@@ -37,8 +37,11 @@ export async function deploy({ root = process.cwd(), config, networkName, log = 
   if (!existsSync(bundleFile)) throw new Error('no build: run joust build first');
   const contracts = JSON.parse(readFileSync(bundleFile, 'utf8'));
   const { default: CSL } = await import('@emurgo/cardano-serialization-lib-nodejs');
-  const { joustRuntime } = await import('@julclang/joust-runtime');
-  const rt = joustRuntime({ CSL, chainUrl: net.chain, projectId: net.projectId, contracts, clock: net.clock, networkId: net.networkId });
+  const { joustRuntime, ogmiosProvider } = await import('@julclang/joust-runtime');
+  // The network's chain provider (ADR-0015 §13.9): "provider": "ogmios" with "ogmios": url; else the Blockfrost-style
+  // API at "chain" (Blockfrost, Yaci Store).
+  const provider = net.provider === 'ogmios' ? ogmiosProvider(net.ogmios ?? 'http://localhost:1337') : undefined;
+  const rt = joustRuntime({ CSL, chainUrl: net.chain, provider, projectId: net.projectId, contracts, clock: net.clock, networkId: net.networkId });
   const wallet = await deployer(root, net, rt, CSL);
   const out = {};
   for (const c of contracts) {

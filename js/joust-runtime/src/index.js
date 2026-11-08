@@ -2,23 +2,27 @@
 // engine (Wasm) from the chain as a Blockfrost-style API serves it; @julclang/state-client verifies each transaction
 // against the contract's description before the wallet signs it (D7), and submits it.
 
-import { blockfrostChain, assemble, planOf, toJson, runComposed, walletView, governorParams, verifyRegistration } from '@julclang/state-client';
-import { blockfrostApi, fetchNeed } from './snapshot.js';
+import { chainOf, blockfrostProvider, assemble, planOf, toJson, runComposed, walletView, governorParams, verifyRegistration } from '@julclang/state-client';
+import { fetchNeed } from './snapshot.js';
 import { engineService } from './service.js';
 
 export { loadEngine } from './engine.js';
 export { engineService } from './service.js';
-export { blockfrostApi, emptySnapshot, fetchNeed } from './snapshot.js';
+export { blockfrostApi, emptySnapshot, fetchNeed, asProvider, utxoJson } from './snapshot.js';
 export { devkitClock, devkitTopUp, devkitMint, devkitSweep } from './devkit.js';
 export { memoryMapStore, fileMapStore } from './maps.js';
-export { JoustContract, VerificationError, blockfrostChain, toJson, runComposed, verifyComposed } from '@julclang/state-client';
+export { JoustContract, VerificationError, blockfrostChain, chainOf, blockfrostProvider, ogmiosProvider, toJson, runComposed, verifyComposed } from '@julclang/state-client';
 export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-client/devwallet';
 
 /**
  * A runtime over one chain: the options a generated client takes ({ CSL, service, chain, deployment }), per contract.
  *
  * @param o.CSL        cardano-serialization-lib 15.x (nodejs or browser)
- * @param o.chainUrl   a Blockfrost-style API: Blockfrost, or Yaci Store's http://localhost:8080/api/v1
+ * @param o.provider   a chain provider (ADR-0015 §13.9): blockfrostProvider(url), ogmiosProvider(url), or the app's
+ *                     own. It backs both the engine's reads and the page's chain view, so the verifier reads from the
+ *                     source the engine built from.
+ * @param o.chainUrl   instead of a provider: a Blockfrost-style API (Blockfrost, or Yaci Store's
+ *                     http://localhost:8080/api/v1)
  * @param o.projectId  Blockfrost's project id, if any
  * @param o.contracts  build/joust/contracts.json (joust build)
  * @param o.clock      { zeroSlot, zeroTimeMs, slotLengthMs } (devkitClock(), or the network's)
@@ -27,8 +31,9 @@ export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-clien
  * @param o.validators   build/joust/validators.json (joust build): plain JuLC validators, such as governors
  */
 export function joustRuntime(o) {
-  const api = blockfrostApi(o.chainUrl, { projectId: o.projectId, fetchImpl: o.fetchImpl });
-  const chain = blockfrostChain(o.chainUrl, { projectId: o.projectId, fetchImpl: o.fetchImpl, CSL: o.CSL });
+  const provider = o.provider ?? blockfrostProvider(o.chainUrl, { projectId: o.projectId, fetchImpl: o.fetchImpl });
+  const api = provider;
+  const chain = chainOf(provider, { CSL: o.CSL });
   const deployments = { ...(o.deployments ?? {}) };
   const deploymentOf = (contract) => deployments[contract]
     ?? Object.values(deployments).find((x) => x.contract === contract || x.contract.endsWith('.' + contract));
@@ -109,7 +114,7 @@ export function joustRuntime(o) {
   const governors = {};
 
   return {
-    api, chain, service, deployments,
+    api, provider, chain, service, deployments,
 
     /**
      * A script governor for @AuthorizedBy (ADR-0009 D3): the plain validator {@code name} (validators.json) with its

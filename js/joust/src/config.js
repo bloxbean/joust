@@ -1,4 +1,6 @@
-// joust.config.json: where the contracts are and which networks to use.
+// joust.config.json: where the contracts are and which networks to use. A network reads the chain through a provider
+// (ADR-0015 §13.9): the Blockfrost-style API at "chain" (Blockfrost, Yaci Store; "projectIdEnv" names the variable
+// holding Blockfrost's project id), or Ogmios ("provider": "ogmios", "ogmios": its URL).
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
