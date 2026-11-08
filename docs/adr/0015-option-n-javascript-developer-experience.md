@@ -747,6 +747,34 @@ direct `Tx` building, gated by S3.
   - The engines are Wasm and JS, so nothing in them depends on the platform.
 - **Still open:** the engine in a page, in a worker (M4); everything M3 covers.
 
+### 13.8 M3 (in progress): feature parity through npm
+- **Through the npm path on DevKit** (`js/joust-runtime/test/examples.test.js`): each example is built from its Java
+  source by the toolchain engine, every call is prepared by the runtime engine, verified by the page verifier and
+  signed by a key wallet. The flows mirror the examples' Java DevKit tests:
+  - Vault: `@Payable` and `@ValidAfter`.
+  - Crowdfund: a sorted map in the state; a deadline in the contract.
+  - Escrow: payouts to others; the contract's refusals.
+  - Oracle: `@SignedBy`.
+  - Shop: `@Params` naming the oracle, and `@Reads` of its price.
+- **`@Params` (ADR-0009 D1):**
+  - The script is the compiled validator with the params applied, as JuLC's loader does
+    (`StateContractHandle.scriptFor` for a described contract).
+  - A deployment carries its params; the runtime adds them to each request, and `joust deploy` reads them from
+    `joust.config.json` (`"params"`).
+  - Transitions that take params get them as the args record's leading field (`joustParams`).
+- **`@Reads` (ADR-0011 D2):** the dispatcher reads the foreign instance named by the params (`ForeignReads`, as Data),
+  adds it as a reference input, and passes its state to the transition after the params.
+  - The recipe gives the layout: `params`, `reads` (with the params field and its index), and `transitionArgs`.
+- **The page verifier (D7)** now verifies methods that need the service only for `@Params` and `@Reads`:
+  - The deployment pins the applied script's policy.
+  - A reference input is allowed if it holds the token of a foreign instance the deployment's params name for that
+    read.
+  - Maps, assets, batches, moves, sends, mints, events, deposits and co-signers stay refused until supported.
+- **Engines in one process:** the engines install distinct globals (`joustRuntime`, `joustToolchain`) and load one at a
+  time through julc-wasm's `onJulcReady`. The engine loads only the called contract from a bundle.
+- **Next in M3:** MerkleMaps (S2b's discovery, proofs from a local mirror), native assets, co-signers (`@Quorum`,
+  `@AuthorizedBy`), batches, composition and deposits, moves; and call requests in every example's fixtures (I3).
+
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.

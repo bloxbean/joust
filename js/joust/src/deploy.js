@@ -43,7 +43,13 @@ export async function deploy({ root = process.cwd(), config, networkName, log = 
   const out = {};
   for (const c of contracts) {
     const title = JSON.parse(c.description).preamble.title;
-    const d = await rt.ensureDeployment(title, wallet);
+    // @Params (ADR-0009 D1): joust.config.json "params": { "<contract>": { ... } }, by the description's schema.
+    const params = config.params?.[title] ?? config.params?.[title.slice(title.lastIndexOf('.') + 1)];
+    if (JSON.parse(c.description)['x-joust'].params && params === undefined) {
+      log(`${title}: takes @Params; give them in joust.config.json "params" to deploy it (skipped)`);
+      continue;
+    }
+    const d = await rt.ensureDeployment(title, wallet, params);
     out[title] = d;
     log(`${title}: ${d.address} (reference script ${d.referenceScripts[0]})`);
   }

@@ -114,7 +114,7 @@ public final class TransitionsGenerator {
     }
 
     private static boolean unsupported(TransitionIR t) {
-        return t.takesParams() || !t.reads().isEmpty() || t.hasFunds() || ValidatorGenerator.takesAssets(t) || t.batched()
+        return t.hasFunds() || ValidatorGenerator.takesAssets(t) || t.batched()
                 || t.moves() || t.admits() || t.receives() || t.resultDeposits() || t.resultSends() || t.resultMint()
                 || t.resultAccepted() || t.resultEvents();
     }
@@ -123,16 +123,23 @@ public final class TransitionsGenerator {
     private String transition(TransitionIR t, ExecutableElement m, String targetType, String step) {
         var argNames = t.params().stream().map(ParamIR::name).toList();
         String argsRecord = cap(t.method()) + "Args";
-        var argFields = new ArrayList<String>();
+        var argFields = leadingFields(t, m);
         for (ParamIR p : t.params()) argFields.add(paramType(m, p.name()) + " " + p.name());
         String sharedType = "PlutusData";
         var call = new ArrayList<String>();
         boolean first = true;
+        boolean paramsTaken = false;
+        var readNames = t.reads().stream().map(TransitionIR.ReadIR::name).toList();
         for (VariableElement p : m.getParameters()) {
             String name = p.getSimpleName().toString();
             if (first) {
                 call.add("target");
                 first = false;
+            } else if (t.takesParams() && !paramsTaken) {
+                call.add("args.joustParams()");
+                paramsTaken = true;
+            } else if (readNames.contains(name)) {
+                call.add("args." + name + "()");
             } else if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Shared"))) {
                 sharedType = render(p.asType());
                 call.add("shared");
@@ -181,13 +188,17 @@ public final class TransitionsGenerator {
     private String creation(TransitionIR t, ExecutableElement m, String step) {
         var argNames = t.params().stream().map(ParamIR::name).toList();
         String argsRecord = cap(t.method()) + "Args";
-        var argFields = new ArrayList<String>();
+        var argFields = leadingFields(t, m);
         for (ParamIR p : t.params()) argFields.add(paramType(m, p.name()) + " " + p.name());
         String sharedType = "PlutusData";
         var call = new ArrayList<String>();
+        boolean paramsTaken = false;
         for (VariableElement p : m.getParameters()) {
             String name = p.getSimpleName().toString();
-            if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Shared"))) {
+            if (t.takesParams() && !paramsTaken) {
+                call.add("args.joustParams()");
+                paramsTaken = true;
+            } else if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Shared"))) {
                 sharedType = render(p.asType());
                 call.add("shared");
             } else if (named(p.asType(), API + "Ctx")) {
@@ -206,6 +217,14 @@ public final class TransitionsGenerator {
         sb.append("        return new ").append(step).append("(Optional.of(").append(c.name()).append(".").append(t.method())
                 .append("(").append(String.join(", ", call)).append(")), Payouts.none());\n    }\n");
         return sb.toString();
+    }
+
+    /** The args record's leading fields: the {@code @Params} record and the {@code @Reads} states, before the arguments. */
+    private List<String> leadingFields(TransitionIR t, ExecutableElement m) {
+        var out = new ArrayList<String>();
+        if (t.takesParams()) out.add(c.paramsType() + " joustParams");
+        for (var rd : t.reads()) out.add(paramType(m, rd.name()) + " " + rd.name());
+        return out;
     }
 
     private String paramType(ExecutableElement m, String name) {

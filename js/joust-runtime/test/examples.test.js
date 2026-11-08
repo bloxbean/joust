@@ -45,10 +45,10 @@ async function setup(names) {
     for (const w of ws) for (let i = 0; i < 30 && !(await rt.chain.utxosAt(w.address)).length; i++) await sleep(1000);
     return ws;
   };
-  const contract = async (simple, payer) => {
+  const contract = async (simple, payer, params) => {
     const c = contracts.find((x) => JSON.parse(x.description).preamble.title.endsWith('.' + simple));
     const d = JSON.parse(c.description);
-    const deployment = await rt.ensureDeployment(d.preamble.title, payer);
+    const deployment = await rt.ensureDeployment(d.preamble.title, payer, params);
     return new JoustContract({ CSL, description: d, deployment, service: rt.service, chain: rt.chain });
   };
   return { rt, wallets, contract };
@@ -123,14 +123,21 @@ test('Escrow: released by the buyer; refunded by anyone after the deadline', { s
   assert.equal(await deal2.state(), null);
 });
 
-test('Oracle: posted by its publisher only', { skip, timeout: 600_000 }, async () => {
+test('Oracle and Shop: @SignedBy; @Params naming the oracle; @Reads of its price', { skip, timeout: 600_000 }, async () => {
   const { wallets, contract } = await setup(['oracle']);
-  const [publisher, other] = await wallets(2);
+  const [publisher, other, shopOwner, buyer] = await wallets(4);
   const oracle = await contract('Oracle', publisher);
   const o = oracle.at((await oracle.deploy(publisher, { price: 3_000_000n })).instance);
-  await o.call(publisher, 'post', { price: 5_000_000n });
-  assert.equal((await o.state()).price, 5_000_000n);
+  await o.call(publisher, 'post', { price: 3_000_000n });
+  assert.equal((await o.state()).price, 3_000_000n);
   await assert.rejects(o.call(other, 'post', { price: 1n }));
+  // The shop's script carries its oracle (@Params); buy reads the oracle's state as a reference input (@Reads).
+  const shop = await contract('Shop', shopOwner, { oracle: { policy: oracle.deployment.policy, instance: o.id }, maxAgeMs: 600_000n });
+  const sh = shop.at((await shop.deploy(shopOwner, {})).instance);
+  await sh.call(buyer, 'buy', { qty: 2n }, { lovelace: 6_000_000n });
+  assert.equal((await sh.state()).sold, 2n);
+  await assert.rejects(sh.call(buyer, 'buy', { qty: 1n }, { lovelace: 2_000_000n }), /pay exactly/);
+  await sh.call(shopOwner, 'close', {});
   await o.call(publisher, 'close', {});
   assert.equal(await o.state(), null);
 });

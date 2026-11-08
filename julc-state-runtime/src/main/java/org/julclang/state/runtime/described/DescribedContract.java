@@ -47,7 +47,6 @@ public final class DescribedContract {
         this.description = description;
         this.x = description.get("x-joust");
         if (x == null || x.path("version").asInt() < 2) throw new IllegalArgumentException("a JOUST description of version 2 is needed (with call recipes)");
-        if (x.has("params")) throw new IllegalArgumentException(x.get("contract").asText() + " takes @Params: not supported yet (ADR-0015 M3)");
         this.name = description.path("preamble").path("title").asText();
         this.codec = new SchemaCodec(description);
         this.spec = ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
@@ -69,7 +68,20 @@ public final class DescribedContract {
     }
 
     public StateContractHandle<PlutusData> handle(StateRuntime runtime) {
+        if (x.has("params")) throw new IllegalArgumentException(name + " takes @Params: give them (handle(runtime, params))");
         return new StateContractHandle<>(runtime, spec);
+    }
+
+    /** The contract on a network with its deploy-time {@code @Params} (JSON, by the description's schema; ADR-0009 D1). */
+    public StateContractHandle<PlutusData> handle(StateRuntime runtime, JsonNode params) {
+        if (!x.has("params")) return new StateContractHandle<>(runtime, spec);
+        if (params == null || params.isNull() || params.isMissingNode()) throw new IllegalArgumentException(name + " takes @Params: the call must give them");
+        return new StateContractHandle<>(runtime, spec, DataFidelity.check(codec.encode(x.get("params"), params, "params"), "the params"));
+    }
+
+    /** Whether this contract takes {@code @Params}. */
+    public boolean takesParams() {
+        return x.has("params");
     }
 
     /** The x-joust entry of a creation or action called {@code method} of {@code kind}. */
@@ -87,11 +99,17 @@ public final class DescribedContract {
      */
     public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
                        JsonNode args, BigInteger lovelace) {
+        return call(runtime, caller, kind, method, instance, object, args, lovelace, null);
+    }
+
+    /** As {@link #call(StateRuntime, Account, String, String, String, String, JsonNode, BigInteger)}, with the {@code @Params}. */
+    public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
+                       JsonNode args, BigInteger lovelace, JsonNode params) {
         JsonNode meta = meta(kind, method);
         JsonNode recipe = meta.get("recipe");
         if (recipe == null) throw new IllegalArgumentException(method + ": no call recipe (rebuild with JOUST's processor)");
         if (meta.path("takesAssets").asBoolean()) throw new IllegalArgumentException(method + " takes native assets: not supported yet (ADR-0015 M3)");
-        if (meta.path("needsService").asBoolean()) throw new IllegalArgumentException(method + " needs maps, intents, reads or composition: not supported yet (ADR-0015 M3)");
+        if (unsupported(meta)) throw new IllegalArgumentException(method + " needs maps, intents, moves, sends, mints or composition: not supported yet (ADR-0015 M3)");
         if (!meta.path("payable").asBoolean() && lovelace.signum() != 0) throw new IllegalArgumentException(method + " is not payable");
         if (lovelace.signum() < 0) throw new IllegalArgumentException("a negative payment");
 
@@ -110,7 +128,22 @@ public final class DescribedContract {
             byName.put(n, d);
             argList.add(d);
         }
-        PlutusData argsData = new PlutusData.ConstrData(0, argList);
+        var handle = handle(runtime, params);
+        // @Params and @Reads lead the transition's arguments (the recipe's transitionArgs); reads are reference inputs.
+        var reads = new ArrayList<org.julclang.state.runtime.ForeignReads.Read<PlutusData>>();
+        var lead = new ArrayList<PlutusData>();
+        if (recipe.path("params").asBoolean()) lead.add(codec.encode(x.get("params"), params, "params"));
+        for (JsonNode rd : recipe.path("reads")) {
+            var fi = (PlutusData.ConstrData) field(lead.isEmpty() ? codec.encode(x.get("params"), params, "params") : lead.get(0),
+                    rd.get("index").asInt());
+            var read = org.julclang.state.runtime.ForeignReads.read(runtime, new org.julclang.state.api.ForeignInstance(
+                    ((PlutusData.BytesData) fi.fields().get(0)).value(), ((PlutusData.BytesData) fi.fields().get(1)).value()),
+                    PlutusData.class);
+            reads.add(read);
+            lead.add(read.state());
+        }
+        lead.addAll(argList);
+        PlutusData argsData = new PlutusData.ConstrData(0, lead);
         boolean usesCtx = meta.path("ctx").asBoolean();
         String transition = recipe.get("transition").asText();
         int alternative = meta.get("redeemer").get("index").asInt();
@@ -121,14 +154,15 @@ public final class DescribedContract {
                 var d = new Deploy<PlutusData>(caller, lovelace, usesCtx,
                         ctx -> next(fn.apply(transition, NONE, NONE, argsData, ctxData(ctx, usesCtx)), method),
                         (seed, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), seed, null));
-                return handle(runtime).deploy(d).instance().instanceId();
+                return handle.deploy(d).instance().instanceId();
             }
             case "action", "destroy" -> {
-                StateInstance<PlutusData> at = handle(runtime).at(requireInstance(instance));
+                StateInstance<PlutusData> at = handle.at(requireInstance(instance));
                 var b = kind.equals("destroy")
                         ? Call.<PlutusData>destroy(method, caller, burn(recipe))
                         : Call.<PlutusData>action(method, caller);
                 rules(b, recipe);
+                for (var rd : reads) b.referenceInputs(rd.utxo());
                 b.usesCtx(usesCtx).received(lovelace)
                         .run((s, ctx) -> transition(fn.apply(transition, s, NONE, argsData, ctxData(ctx, usesCtx))))
                         .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null));
@@ -136,7 +170,7 @@ public final class DescribedContract {
                 return null;
             }
             case "ownedInit" -> {
-                StateInstance<PlutusData> at = handle(runtime).at(requireInstance(instance));
+                StateInstance<PlutusData> at = handle.at(requireInstance(instance));
                 boolean shared = recipe.path("shared").asBoolean();
                 var create = new OwnedObject.Create<PlutusData>(method, caller, lovelace, usesCtx, shared,
                         (sh, ctx) -> next(fn.apply(transition, NONE, shared ? (PlutusData) sh : NONE, argsData, ctxData(ctx, usesCtx)), method),
@@ -145,7 +179,7 @@ public final class DescribedContract {
             }
             case "ownedAction", "ownedDestroy" -> {
                 if (object == null || !object.matches("4f[0-9a-f]{56}")) throw new IllegalArgumentException("an owned call needs an object id");
-                StateInstance<PlutusData> at = handle(runtime).at(requireInstance(instance));
+                StateInstance<PlutusData> at = handle.at(requireInstance(instance));
                 var obj = OwnedObject.at(at, object, ownedCodec(meta.get("owned").asText()));
                 var b = kind.equals("ownedDestroy")
                         ? Call.<PlutusData>destroy(method, caller, burn(recipe))
@@ -254,9 +288,32 @@ public final class DescribedContract {
         throw new IllegalArgumentException(name + " has no owned type " + type);
     }
 
+    /** What this dispatcher cannot run yet (ADR-0015 M3): maps, assets, batches, composition, moves, sends, mints, events. */
+    boolean unsupported(JsonNode meta) {
+        JsonNode p = meta.path("policies");
+        boolean cosigned = !p.path("quorum").isNull() && !p.path("quorum").isMissingNode() || !p.path("authorizedBy").isEmpty();
+        JsonNode r = meta.path("returns");
+        return meta.path("takesAssets").asBoolean() || p.path("batched").asBoolean() || p.path("into").asBoolean()
+                || !p.path("admits").isNull() && !p.path("admits").isMissingNode() || p.path("receives").asBoolean()
+                || r.path("sends").asBoolean() || r.path("mint").asBoolean() || r.path("deposits").asBoolean()
+                || r.path("events").asBoolean() || cosigned || hasMaps(meta.path("recipe").path("target").asText());
+    }
+
+    /** The record {@code key} has a MerkleMap component (ADR-0002): its calls need proofs (M3). */
+    private boolean hasMaps(String key) {
+        if (key.isEmpty()) return false;
+        JsonNode d = description.path("definitions").path(key);
+        for (JsonNode alt : d.path("anyOf")) {
+            for (JsonNode f : alt.path("fields")) {
+                if (f.path("$ref").asText().endsWith("/org.julclang.state.api.MerkleMap")) return true;
+            }
+        }
+        return false;
+    }
+
     /** The current state of {@code instance}, as JSON by the description's state schema. */
     public JsonNode state(StateRuntime runtime, String instance) {
-        return codec.decode(x.get("state"), handle(runtime).at(requireInstance(instance)).state());
+        return codec.decode(x.get("state"), handle(runtime, null).at(requireInstance(instance)).state());
     }
 
     /** Names of the creations and actions this dispatcher can run (no maps, assets, params, batches, …). */
@@ -264,7 +321,7 @@ public final class DescribedContract {
         var out = new ArrayList<String>();
         for (String list : List.of("creations", "actions")) {
             for (JsonNode m : x.path(list)) {
-                if (m.has("recipe") && !m.path("needsService").asBoolean() && !m.path("takesAssets").asBoolean()) {
+                if (m.has("recipe") && !unsupported(m)) {
                     out.add(m.get("kind").asText() + " " + m.get("name").asText());
                 }
             }

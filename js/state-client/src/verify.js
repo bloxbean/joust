@@ -99,7 +99,9 @@ export async function verifyPrepared(o) {
   }
   const body = tx.body();
 
-  if (call.meta.needsService) problems.push(`${call.meta.name} needs data only the service computes; the page cannot verify it`);
+  if (call.meta.needsService && !verifiableWithoutService(call.meta, description)) {
+    problems.push(`${call.meta.name} needs data only the service computes; the page cannot verify it`);
+  }
   if (!SPEND_KINDS.has(call.kind) && !CREATIONS.has(call.kind)) problems.push('unknown call kind ' + call.kind);
 
   // Nothing beyond the call.
@@ -416,17 +418,41 @@ export async function verifyPrepared(o) {
     if (!wallet.keyHashes.includes(rs.get(i).to_hex())) problems.push('a required signer that is not the wallet');
   }
 
-  // Reference inputs: the pinned script's reference UTxOs, and UTxOs of the pinned script (the instance, read).
+  // Reference inputs: the pinned script's reference UTxOs, UTxOs of the pinned script (the instance, read), and the
+  // foreign instances the call reads (@Reads), as the deployment's @Params name them (ADR-0011 D2).
+  const foreign = (call.meta.recipe?.reads ?? []).map((rd) => {
+    const fi = deployment.params?.[rd.params];
+    return fi ? fi.policy + fi.instance : null;
+  }).filter(Boolean);
   const refIns = body.reference_inputs();
   for (let i = 0; refIns && i < refIns.len(); i++) {
     const r = refOf(refIns.get(i));
     if ((deployment.referenceScripts ?? []).includes(r)) continue;
     const u = await chain.utxo(r);
-    const ok = u && (u.referenceScriptHash === policy || (atScript(u.address) && u.value.get(policy + call.instance) === 1n));
+    const ok = u && (u.referenceScriptHash === policy || (atScript(u.address) && u.value.get(policy + call.instance) === 1n)
+      || foreign.some((unit) => u.value.get(unit) === 1n));
     if (!ok) problems.push(`a reference input the page does not know: ${r}`);
   }
 
   return { problems, report };
+}
+
+/**
+ * A method marked as needing the service that the page can still verify (ADR-0015 D7): one that needs it only for
+ * @Params (the deployment pins the applied script's policy) and @Reads (checked as reference inputs above).
+ */
+function verifiableWithoutService(meta, description) {
+  const r = meta.recipe;
+  if (!r) return false;
+  const p = meta.policies ?? {};
+  const out = meta.returns ?? {};
+  if (meta.takesAssets || p.batched || p.into || p.admits || p.receives || p.quorum || p.authorizedBy?.length) return false;
+  if (out.sends || out.mint || out.deposits || out.events) return false;
+  const target = description.definitions?.[r.target];
+  for (const alt of target?.anyOf ?? []) {
+    for (const f of alt.fields ?? []) if (f.$ref?.endsWith('/org.julclang.state.api.MerkleMap')) return false;
+  }
+  return true;
 }
 
 function paymentKeyHashOf(CSL, address) {

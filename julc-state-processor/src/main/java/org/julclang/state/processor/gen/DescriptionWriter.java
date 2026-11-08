@@ -265,6 +265,24 @@ public final class DescriptionWriter {
         r.put("signers", fieldPaths(target, t.signedBy()));
         r.put("validAfter", fieldPaths(target, t.validAfter()));
         r.put("validBefore", fieldPaths(target, t.validBefore()));
+        // @Params and @Reads (ADR-0009 D1, ADR-0011 D2): the transition gets them before the call's arguments.
+        r.put("params", t.takesParams());
+        var reads = new ArrayList<Object>();
+        for (var rd : t.reads()) {
+            String field = rd.path().startsWith("params.") ? rd.path().substring(7) : rd.path();
+            int index = -1;
+            if (c.hasParams()) {
+                var comps = Records.components((TypeElement) ((DeclaredType) paramsMirror()).asElement());
+                for (int i = 0; i < comps.size(); i++) if (comps.get(i).getSimpleName().contentEquals(field)) index = i;
+            }
+            reads.add(map("name", rd.name(), "params", field, "index", index, "type", rd.type()));
+        }
+        r.put("reads", reads);
+        var layout = new ArrayList<String>();
+        if (t.takesParams()) layout.add("$params");
+        for (var rd : t.reads()) layout.add("$read:" + rd.name());
+        for (var p : t.params()) layout.add(p.name());
+        r.put("transitionArgs", layout);
         return r;
     }
 

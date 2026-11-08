@@ -2,7 +2,7 @@
 // engine (Wasm) from the chain as a Blockfrost-style API serves it; @julclang/state-client verifies each transaction
 // against the contract's description before the wallet signs it (D7), and submits it.
 
-import { blockfrostChain, assemble, planOf } from '@julclang/state-client';
+import { blockfrostChain, assemble, planOf, toJson } from '@julclang/state-client';
 import { blockfrostApi, fetchNeed } from './snapshot.js';
 import { engineService } from './service.js';
 
@@ -57,7 +57,10 @@ export function joustRuntime(o) {
     ...engine,
     prepare(request) {
       const d = deploymentOf(request.contract);
-      return engine.prepare(d?.referenceScripts?.length ? { ...request, referenceScripts: d.referenceScripts } : request);
+      const extra = {};
+      if (d?.referenceScripts?.length) extra.referenceScripts = d.referenceScripts;
+      if (d?.params) extra.params = d.params;   // the deployment's @Params (ADR-0009 D1)
+      return engine.prepare({ ...request, ...extra });
     },
   };
   return {
@@ -65,14 +68,16 @@ export function joustRuntime(o) {
     /**
      * The deployment of {@code contract}, publishing its reference script first if it is not on chain yet (paid and
      * signed by {@code wallet}, a CIP-30 API). The publication is a plain payment to the contract's own address carrying
-     * the script; it is checked to be exactly that before the wallet signs.
+     * the script; it is checked to be exactly that before the wallet signs. A contract with {@code @Params} is one
+     * deployment per params value (JSON by the description's schema; bigints allowed).
      */
-    async ensureDeployment(contract, wallet) {
+    async ensureDeployment(contract, wallet, params) {
       const CSL = o.CSL;
       const payer = CSL.Address.from_hex(await wallet.getChangeAddress()).to_bech32();
-      let d = await service.deployment(contract, payer);
+      const pj = params === undefined ? undefined : toJson(params);
+      let d = await service.deployment(contract, payer, pj);
       if (!d.referenceScripts.length) {
-        const p = await service.publish(contract, payer);
+        const p = await service.publish(contract, payer, pj);
         if (p) {
           const plan = planOf(CSL, p.cbor);
           const bad = plan.outputs.filter((x) => x.address !== d.address && x.address !== payer);
@@ -84,7 +89,7 @@ export function joustRuntime(o) {
           await chain.awaitTx(signed.txHash);
         }
         for (let i = 0; i < 30 && !d.referenceScripts.length; i++) {
-          d = await service.deployment(contract, payer);
+          d = await service.deployment(contract, payer, pj);
           if (!d.referenceScripts.length) await new Promise((r) => setTimeout(r, 1000));
         }
         if (!d.referenceScripts.length) throw new Error(`the ${contract} reference script is not visible yet`);

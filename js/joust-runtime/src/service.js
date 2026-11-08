@@ -79,14 +79,14 @@ export function engineService(o) {
     },
 
     /** What a page pins for {@code contract}: { contract, policy, address, networkId, referenceScripts }. */
-    async deployment(contract, address) {
-      const r = await run({ contract, kind: 'deployment', address });
+    async deployment(contract, address, params) {
+      const r = await run({ contract, kind: 'deployment', address, ...(params ? { params } : {}) });
       return JSON.parse(r.plan);
     },
 
     /** The transaction publishing {@code contract}'s reference script, paid from {@code address}; null if published. */
-    async publish(contract, address) {
-      const r = await run({ contract, kind: 'publish', address });
+    async publish(contract, address, params) {
+      const r = await run({ contract, kind: 'publish', address, ...(params ? { params } : {}) });
       return r.cbor ? { cbor: r.cbor, txHash: r.txHash, signers: r.signers, plan: JSON.parse(r.plan) } : null;
     },
 

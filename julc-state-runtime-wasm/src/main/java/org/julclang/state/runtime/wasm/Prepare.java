@@ -102,20 +102,21 @@ public final class Prepare {
             BigInteger pay = new BigInteger(call.path("pay").path("lovelace").asText("0"));
             if (call.path("kind").asText().equals("deployment")) {
                 // What a page pins (ADR-0013 D2): policy, address, network and the reference script, if published.
-                var h = dc.handle(rt);
+                var h = dc.handle(rt, call.get("params"));
                 var ref = h.findReferenceScript();
                 var d = JSON.createObjectNode();
                 d.put("contract", dc.name());
                 d.put("policy", h.policyId());
                 d.put("address", h.address());
                 d.put("networkId", r.networkId());
+                if (call.has("params")) d.set("params", call.get("params"));
                 var refs = d.putArray("referenceScripts");
                 if (ref != null) refs.add(ref.getTxHash() + "#" + ref.getOutputIndex());
                 return new Result(true, null, null, null, -1, List.of(), d.toString(), null, null, null);
             }
             if (call.path("kind").asText().equals("publish")) {
                 // The contract's reference script, paid by the caller (joust deploy).
-                var tx = dc.handle(rt).prepareReferenceScript(wallet.baseAddress());
+                var tx = dc.handle(rt, call.get("params")).prepareReferenceScript(wallet.baseAddress());
                 if (tx == null) return new Result(true, null, null, null, -1, List.of(), null, null, null, null);
                 byte[] pkh = new com.bloxbean.cardano.client.address.Address(wallet.baseAddress()).getPaymentCredentialHash().orElseThrow();
                 return new Result(true, com.bloxbean.cardano.client.util.HexUtil.encodeHexString(tx.serialize()),
@@ -127,7 +128,7 @@ public final class Prepare {
             DescribedContract target = dc;
             PreparedTx p = Compose.of(rt, wallet).add(() -> made[0] = target.call(rt, wallet, call.path("kind").asText(),
                     call.path("method").asText(), call.path("instance").asText(null), call.path("object").asText(null),
-                    call.path("args"), pay)).prepare();
+                    call.path("args"), pay, call.get("params"))).prepare();
             return new Result(true, p.cbor(), p.txHash(), made[0], p.validTo(), p.requiredSigners(),
                     JSON.writeValueAsString(p.plan()), null, null, null);
         } catch (Throwable t) {

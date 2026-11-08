@@ -151,10 +151,12 @@ public final class StateContractHandle<S> {
 
     /** The applied script of {@code spec} for {@code params} (null: none); refuses one too large to publish by reference. */
     public static PlutusV3Script scriptFor(ContractSpec<?> spec, Object params) {
-        if (spec.scriptCborHex() != null && params != null) {
-            throw new JoustException(spec.name() + ": a described contract with @Params is not supported yet (ADR-0015 M3)");
-        }
-        PlutusV3Script s = spec.scriptCborHex() != null ? PlutusV3Script.builder().cborHex(spec.scriptCborHex()).build()
+        PlutusV3Script s = spec.scriptCborHex() != null && params != null
+                // A described contract (ADR-0015 D4): its compiled script with the params (Data) applied.
+                ? org.julclang.clientlib.JulcScriptAdapter.fromProgram(org.julclang.clientlib.JulcScriptAdapter
+                        .toProgram(spec.scriptCborHex()).applyParams(params instanceof org.julclang.core.PlutusData d ? d
+                                : PlutusDataAdapter.fromClientLib(PlutusDataAdapter.convert(params))))
+                : spec.scriptCborHex() != null ? PlutusV3Script.builder().cborHex(spec.scriptCborHex()).build()
                 : params == null ? JulcScriptLoader.load(spec.validatorClass())
                 : JulcScriptLoader.load(spec.validatorClass(), PlutusDataAdapter.convert(params));
         int size = HexUtil.decodeHexString(s.getCborHex()).length;
