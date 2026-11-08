@@ -134,9 +134,19 @@ function walletChoices() {
   if (sel.dataset.signature === signature && sel.options.length) return;   // nothing new
   sel.dataset.signature = signature;
   sel.replaceChildren();
-  for (const [key, w] of injected) sel.append(el('option', { value: `cip30:${key}` }, `${w.name ?? key} (CIP-30 extension)`));
-  for (let i = 1; i <= 5; i++) sel.append(el('option', { value: `dev:${i}` }, `DevKit wallet #${i} (in-page keys, no extension)`));
+  // Both kinds: the browser's CIP-30 extensions (Yano, Lace, Eternl, …: they sign in their own window), and the
+  // in-page DevKit wallets, which need no extension.
+  if (injected.length) {
+    sel.append(el('optgroup', { label: 'CIP-30 wallet extensions' },
+      injected.map(([key, w]) => el('option', { value: `cip30:${key}` }, `${w.name ?? key}${key.toLowerCase().includes('yano') ? ' (Yano)' : ''}`))));
+  }
+  sel.append(el('optgroup', { label: 'DevKit wallets (in-page keys, no extension)' },
+    [1, 2, 3, 4, 5].map((i) => el('option', { value: `dev:${i}` }, `DevKit wallet #${i}`))));
   if (current && [...sel.options].some((o) => o.value === current)) sel.value = current;
+  const yano = injected.find(([key, w]) => /yano/i.test(key) || /yano/i.test(w.name ?? ''));
+  $('wallet-detect').textContent = injected.length
+    ? `CIP-30 wallets found: ${injected.map(([k, w]) => w.name ?? k).join(', ')}${yano ? '' : ' (no Yano wallet)'}. Or use a DevKit wallet.`
+    : 'No CIP-30 wallet extension found (Yano, Lace, Eternl, …): use a DevKit wallet, or install one and reload.';
 }
 
 /** A CIP-30 error ({ code, info }) or an Error, as text. */
