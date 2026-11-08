@@ -85,7 +85,8 @@ public final class DappServer {
                 .allowOrigin("http://127.0.0.1:5174")
                 .handler("/chain/", new ChainProxy(DevKit.STORE_URL))
                 .handler("/dev/topup", DappServer::topUp)
-                .preparesPerMinute(preparesPerMinute);
+                .preparesPerMinute(preparesPerMinute)
+                .onPrepared((req, out) -> DevKit.recordCall(req));
         if (port != 0) {
             // The page served here calls the API from this origin (allow-listed: the Host header proves nothing).
             builder.allowOrigin("http://localhost:" + port).allowOrigin("http://127.0.0.1:" + port);

@@ -27,7 +27,8 @@ class FixturesTest {
         assertTrue(Files.isDirectory(ROOT), "fixtures/m0 is missing");
         int fixtures = 0, reads = 0;
         try (Stream<Path> files = Files.walk(ROOT)) {
-            for (Path f : files.filter(p -> p.toString().endsWith(".json") && !p.toString().contains("/blobs/")).toList()) {
+            for (Path f : files.filter(p -> p.toString().endsWith(".json") && !p.toString().contains("/blobs/")
+                    && !p.getFileName().toString().equals("devkit.json")).toList()) {
                 JsonNode d = JSON.readTree(f.toFile());
                 Transaction tx = Transaction.deserialize(HexUtil.decodeHexString(d.get("unsignedTx").asText()));
                 assertEquals(d.get("txHash").asText(), TransactionUtil.getTxHash(tx), f.toString());
