@@ -78,7 +78,7 @@ async function act(label, fn) {
     if (e instanceof VerificationError) {
       entry.bad(`${label}: REFUSED by the page's verifier${app.tampered ? ` (the service slipped in ${app.tampered})` : ''}; the wallet was not asked to sign`, e.problems);
     } else {
-      entry.bad(`${label}: ${e.message ?? e}`);
+      entry.bad(`${label}: ${reason(e)}`);
     }
   }
 }
@@ -119,13 +119,45 @@ function review({ contract, call, report }) {
 
 // ------------------------------------------------------------------ wallets
 
+/** CIP-30 wallets the browser injected (window.cardano.<key>), first, then the in-page DevKit wallets. */
 function walletChoices() {
   const sel = $('wallet-choice');
+  const current = sel.value;
+  const injected = Object.entries(window.cardano ?? {}).filter(([, w]) => w && typeof w.enable === 'function');
+  const signature = injected.map(([k]) => k).join(',');
+  if (sel.dataset.signature === signature && sel.options.length) return;   // nothing new
+  sel.dataset.signature = signature;
   sel.replaceChildren();
-  for (let i = 1; i <= 5; i++) sel.append(el('option', { value: `dev:${i}` }, `DevKit wallet #${i} (in-page keys)`));
-  for (const [key, w] of Object.entries(window.cardano ?? {})) {
-    if (w && typeof w.enable === 'function' && w.name) sel.append(el('option', { value: `cip30:${key}` }, `${w.name} (CIP-30)`));
-  }
+  for (const [key, w] of injected) sel.append(el('option', { value: `cip30:${key}` }, `${w.name ?? key} (CIP-30 extension)`));
+  for (let i = 1; i <= 5; i++) sel.append(el('option', { value: `dev:${i}` }, `DevKit wallet #${i} (in-page keys, no extension)`));
+  if (current && [...sel.options].some((o) => o.value === current)) sel.value = current;
+}
+
+/** A CIP-30 error ({ code, info }) or an Error, as text. */
+const reason = (e) => e?.message ?? e?.info ?? (typeof e === 'object' ? JSON.stringify(e) : String(e));
+
+/** The extension's API, logging when it is asked to sign and submit (the user then answers in the extension). */
+function watched(api, name) {
+  return new Proxy(api, {
+    get(target, key) {
+      const v = target[key];
+      if (typeof v !== 'function') return v;
+      if (key === 'signTx') {
+        return async (...args) => {
+          const entry = log(`Waiting for ${name} to sign (answer in the extension)…`);
+          try {
+            const r = await v.apply(target, args);
+            entry.ok(`${name} signed`);
+            return r;
+          } catch (e) {
+            entry.bad(`${name} did not sign: ${reason(e)}`);
+            throw e;
+          }
+        };
+      }
+      return v.bind(target);
+    },
+  });
 }
 
 async function connect() {
@@ -135,16 +167,21 @@ async function connect() {
       app.api = devWallet({ CSL, chain, index: Number(choice.slice(4)), networkId: deployment.networkId });
       app.dev = true;
     } else {
-      app.api = await window.cardano[choice.slice(6)].enable();
+      const key = choice.slice(6);
+      const name = window.cardano[key].name ?? key;
+      log(`Asking ${name} to connect (answer in the extension)…`);
+      app.api = watched(await window.cardano[key].enable(), name);
       app.dev = false;
     }
     app.view = await walletView(CSL, app.api);
-    if (app.view.networkId !== deployment.networkId) throw new Error('the wallet is on another network than this DevKit');
+    if (app.view.networkId !== deployment.networkId) {
+      throw new Error(`the wallet is on network ${app.view.networkId}, this DevKit is ${deployment.networkId}: switch the wallet to a testnet pointing at the DevKit`);
+    }
     log(`Connected ${choice.startsWith('dev:') ? app.api.name : choice.slice(6)}: ${short(app.view.change)}`, 'ok');
     await refresh();
   } catch (e) {
     app.api = null;
-    log(`Could not connect: ${e.message ?? e}`, 'bad');
+    log(`Could not connect: ${reason(e)}`, 'bad');
   }
 }
 
@@ -156,9 +193,9 @@ async function walletInfo() {
   $('wallet-info').replaceChildren(
     el('div', { class: 'mono' }, app.view.change),
     el('div', {}, `key ${short(app.view.keyHashes[0])} · balance ${ada(total)} `,
-      app.dev ? el('button', { class: 'small secondary', onclick: topUp }, 'Top up 1000 ADA') : null),
+      deployment.network === 'devkit' ? el('button', { class: 'small secondary', onclick: topUp }, 'Top up 1000 ADA') : null),
   );
-  if (app.dev && total < 50_000_000n) banner('This development wallet is low on ADA: use "Top up".');
+  if (deployment.network === 'devkit' && total < 50_000_000n) banner('This wallet is low on ADA on the DevKit: use "Top up".');
   else banner(null);
 }
 
@@ -292,6 +329,9 @@ $('bank-open').addEventListener('click', () => act('Bank.open', () => bank.at($(
 
 walletChoices();
 bankChoices();
-setTimeout(walletChoices, 500);   // CIP-30 wallets inject themselves after load
+// CIP-30 wallets inject themselves after load, some late: look again for a while, and whenever the list is opened.
+for (const ms of [300, 1000, 2500, 5000]) setTimeout(walletChoices, ms);
+$('wallet-choice').addEventListener('focus', walletChoices);
+$('wallet-choice').addEventListener('mousedown', walletChoices);
 refresh();
 setInterval(() => { if (!document.querySelector('dialog[open]')) refresh().catch(() => {}); }, 15_000);
