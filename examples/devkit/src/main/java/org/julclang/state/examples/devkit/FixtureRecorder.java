@@ -40,6 +40,7 @@ public final class FixtureRecorder {
     private final Path dir;
     private final AtomicInteger seq = new AtomicInteger();
     private final ThreadLocal<ArrayNode> reads = ThreadLocal.withInitial(JSON::createArrayNode);
+    private final ThreadLocal<Path> last = new ThreadLocal<>();
 
     private final Path blobs;
 
@@ -122,10 +123,26 @@ public final class FixtureRecorder {
             f.set("reads", reads.get());
             reads.remove();
             String name = String.format("%04d-%s.json", n, b.what().replaceAll("[^A-Za-z0-9.]+", "_"));
-            Files.writeString(dir.resolve(name.length() > 120 ? name.substring(0, 115) + ".json" : name),
-                    JSON.writerWithDefaultPrettyPrinter().writeValueAsString(f));
+            Path file = dir.resolve(name.length() > 120 ? name.substring(0, 115) + ".json" : name);
+            Files.writeString(file, JSON.writerWithDefaultPrettyPrinter().writeValueAsString(f));
+            last.set(file);
         } catch (Exception e) {
             System.err.println("  [fixtures] could not record " + b.what() + ": " + e);
+        }
+    }
+
+    /** Adds the call request behind the transaction last recorded on this thread (a prepare service's request). */
+    void call(com.fasterxml.jackson.databind.JsonNode request) {
+        Path file = last.get();
+        if (file == null) return;
+        try {
+            ObjectNode f = (ObjectNode) JSON.readTree(file.toFile());
+            f.set("call", request);
+            Files.writeString(file, JSON.writerWithDefaultPrettyPrinter().writeValueAsString(f));
+        } catch (Exception e) {
+            System.err.println("  [fixtures] could not record the call of " + file + ": " + e);
+        } finally {
+            last.remove();
         }
     }
 }
