@@ -18,10 +18,10 @@ yaci-devkit up --enable-yaci-store                 # devnet, Yaci Store on :8080
 
 ./gradlew :examples:dapp:jsClients                 # frontend/src/generated/{Counter,Bank}.js + .d.ts
 (cd examples/dapp/frontend && npm install && npm run build)
-./gradlew :examples:dapp:run                       # http://localhost:8090
+./gradlew :examples:dapp:run                       # http://localhost:8095 (DevKit's submit API has 8090)
 ```
 
-Open http://localhost:8090, pick a **DevKit wallet**, **Connect** and **Top up 1000 ADA**. Then:
+Open http://localhost:8095, pick a **DevKit wallet**, **Connect** and **Top up 1000 ADA**. Then:
 
 - **Create my counter.** Your wallet pays its 2.2 ADA deposit. Then **+1**, **+10**, **Reset** and **Close** (the
   deposit comes back). **+0** is refused by the contract: increments must be positive.
@@ -30,7 +30,7 @@ Open http://localhost:8090, pick a **DevKit wallet**, **Connect** and **Top up 1
 - Tick **Simulate a malicious prepare service** and try any call. The page lists why it refused the transaction.
 
 To develop the page, run `npm run dev` in `frontend` (http://localhost:5174). It proxies `/api`, `/chain` and `/dev` to
-the server on :8090, which must be running.
+the server on :8095, which must be running.
 
 ## Pieces
 

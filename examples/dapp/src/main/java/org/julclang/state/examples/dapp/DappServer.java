@@ -29,7 +29,7 @@ import java.util.Set;
  * <pre>
  *   ./gradlew :examples:dapp:jsClients              # the page's typed clients
  *   (cd examples/dapp/frontend && npm install && npm run build)
- *   ./gradlew :examples:dapp:run                   # http://localhost:8090
+ *   ./gradlew :examples:dapp:run                   # http://localhost:8095
  * </pre>
  * Or, while developing the page, {@code npm run dev} in {@code frontend} (http://localhost:5174, proxied here).
  * <p>
@@ -55,7 +55,7 @@ public final class DappServer {
             System.err.println("Yaci DevKit is not reachable at " + DevKit.STORE_URL + " (yaci-devkit up --enable-yaci-store)");
             System.exit(1);
         }
-        int port = Integer.getInteger("port", 8090);
+        int port = Integer.getInteger("port", 8095);
         Path frontend = Path.of(System.getProperty("frontend", "frontend"));
         var dapp = start(DevKit.runtime(), frontend, "127.0.0.1", port);
         System.out.println("JOUST dApp: http://localhost:" + dapp.port() + (Files.isDirectory(frontend.resolve("dist")) ? ""
