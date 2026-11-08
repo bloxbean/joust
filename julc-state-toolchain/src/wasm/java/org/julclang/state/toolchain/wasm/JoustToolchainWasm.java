@@ -29,15 +29,45 @@ public final class JoustToolchainWasm {
     public record Diagnostic(String severity, String message, String file, long line, String source) {}
 
     public record Contract(String name, String packageName, String validatorName, String validatorSource,
-                           String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson) {}
+                           String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson,
+                           String transitionsSource, Map<String, String> transitions) {}
 
     public record BuildResult(boolean ok, List<Contract> contracts, List<Diagnostic> diagnostics) {}
+
+    /** A transition program (script CBOR hex) and its Data arguments (CBOR hex). */
+    public record RunRequest(String program, List<String> args) {}
+
+    /** Its result Data (CBOR hex), or the refusal: the program failed, with the contract's message in the traces. */
+    public record RunResult(boolean ok, String result, String error, List<String> traces, long cpu, long mem) {}
 
     public static void main(String[] args) {
         var api = new ApiRegistry();
         new VmApi().register(api);
         api.add("joust.build", BuildRequest.class, JoustToolchainWasm::build);
+        api.add("joust.run", RunRequest.class, JoustToolchainWasm::run);
         JsApi.install(api, new EngineInfo("joust", "joust-toolchain", VERSION, List.of("vm", "debug", "joust")));
+    }
+
+    private static final org.julclang.vm.JulcVm VM = org.julclang.vm.JulcVm.create();
+
+    /** Runs a transition program (ADR-0015 D3) at the ledger's semantics (Plutus V3, PV11) and the ledger's per-tx budget. */
+    static ServiceResult<RunResult> run(RunRequest request) {
+        var hex = java.util.HexFormat.of();
+        var program = org.julclang.clientlib.JulcScriptAdapter.toProgram(request.program());
+        var args = new java.util.ArrayList<org.julclang.core.PlutusData>();
+        for (String a : request.args()) args.add(org.julclang.core.cbor.PlutusDataCborDecoder.decode(hex.parseHex(a)));
+        var r = VM.evaluateWithArgs(program, org.julclang.vm.LedgerEvaluationTarget.pv11(org.julclang.vm.PlutusLanguage.PLUTUS_V3),
+                args, new org.julclang.vm.ExBudget(10_000_000_000L, 14_000_000L), org.julclang.vm.EvalOptions.DEFAULT);
+        if (r instanceof org.julclang.vm.EvalResult.Success s) {
+            var data = org.julclang.vm.TermExtractor.extractData(s.resultTerm());
+            return ServiceResult.ok(new RunResult(true, hex.formatHex(org.julclang.core.cbor.PlutusDataCborEncoder.encode(data)), null,
+                    s.traces(), s.consumed().cpuSteps(), s.consumed().memoryUnits()));
+        }
+        if (r instanceof org.julclang.vm.EvalResult.Failure f) {
+            return ServiceResult.ok(new RunResult(false, null, f.error(), f.traces(), f.consumed().cpuSteps(), f.consumed().memoryUnits()));
+        }
+        var b = (org.julclang.vm.EvalResult.BudgetExhausted) r;
+        return ServiceResult.ok(new RunResult(false, null, "budget exhausted", b.traces(), b.consumed().cpuSteps(), b.consumed().memoryUnits()));
     }
 
     static ServiceResult<BuildResult> build(BuildRequest request) {
@@ -45,7 +75,8 @@ public final class JoustToolchainWasm {
                 request.options() == null ? Map.of() : request.options());
         return ServiceResult.ok(new BuildResult(r.ok(),
                 r.contracts().stream().map(c -> new Contract(c.name(), c.packageName(), c.validatorName(), c.validatorSource(),
-                        c.scriptCborHex(), c.scriptHash(), c.scriptSizeBytes(), c.descriptionJson())).toList(),
+                        c.scriptCborHex(), c.scriptHash(), c.scriptSizeBytes(), c.descriptionJson(), c.transitionsSource(),
+                        c.transitions())).toList(),
                 r.diagnostics().stream().map(d -> new Diagnostic(d.severity().name().toLowerCase(), d.message(), d.file(), d.line(),
                         d.source())).toList()));
     }

@@ -39,7 +39,7 @@ public class JoustProcessor extends AbstractProcessor {
 
     @Override
     public Set<String> getSupportedOptions() {
-        return Set.of("joust.traces", "joust.portable", "joust.jsMode");
+        return Set.of("joust.traces", "joust.portable", "joust.jsMode", "joust.transitions");
     }
 
     @Override

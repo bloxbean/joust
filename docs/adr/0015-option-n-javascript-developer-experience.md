@@ -558,6 +558,27 @@ direct `Tx` building, gated by S3.
   (`Credential`) had lost their variants' fields; the toolchain, reading JuLC's ledger as sources, had them right.
   `Records.components` completes the symbol first; every record read goes through it.
 
+### 13.3 S2 (gate passed)
+- **`TransitionsGenerator`** writes `<Name>Transitions`: one on-chain static method per transition,
+  `(target, shared, <M>Args args, Ctx ctx) → Step(Optional next, JulcList<Payout> payouts)`.
+  - The arguments arrive as a per-method record, so JuLC decodes every field type natively.
+  - The result's encoding is phase 4's `step` format: `Constr 0 [Some next | None, payouts]`.
+  - Unsupported transitions (maps, reads, params, assets, batches, composition, sends, mints, events) are left for
+    S2b and M3.
+- **Compiling:** the toolchain compiles each method with JuLC's `compileMethod` over the validator's library pool, and
+  `Toolchain.Contract.transitions` carries the programs (script CBOR).
+- **Evaluating:** programs run at the ledger's semantics. `JulcVm`'s language-only default is PV10, but the programs
+  use PV11 features (case on builtin constants), so the target is `LedgerEvaluationTarget.pv11(PLUTUS_V3)`, with the
+  ledger's per-transaction budget.
+- **The engine** gains `joust.run(program, args)`, which returns the result Data's CBOR, or the refusal with the VM's
+  traces. A `Require`'s message is the trace ("increment must be positive").
+- **I2** (`TransitionParityTest`): 114 Counter and Bank transitions are byte-identical to the JVM methods encoded as
+  the runtime encodes them, refusals included (44):
+  - integers up to 2^200 and negative;
+  - byte strings over 64 bytes;
+  - Bool, `@Shared` reads, Ctx and payouts.
+- **In Wasm** (`run-transitions.mjs`): the same 114 vectors through the engine, all identical, in 111 ms.
+
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.

@@ -9,10 +9,18 @@ dependencies {
     implementation libs.cardano.client.lib                 // PlutusV3Script, JulcScriptAdapter's result
     // JOUST's on-chain API sources, found on the class path as JuLC library sources (as on Gradle's processor path).
     runtimeOnly project(path: ':julc-state-api', configuration: 'onchainSources')
+
+    // S2: transition programs evaluated by JuLC's VM against the contracts' JVM methods.
+    testImplementation project(':examples:counter')
+    testImplementation project(':examples:bank')
+    testImplementation libs.julc.vm.java
+    testImplementation project(':julc-state-api')
+    testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes
 }
 
 // I1 compares with what the Gradle build of the examples wrote.
 tasks.named('test') {
+    systemProperty 'joust.s2.debug', System.getProperty('joust.s2.debug', 'false')
     dependsOn ':examples:counter:classes', ':examples:bank:classes', ':examples:vault:classes', ':examples:escrow:classes',
             ':examples:dsl:classes', ':examples:guild:classes', ':examples:token:classes', ':examples:treasury:classes',
             ':examples:market:classes', ':examples:fees:classes', ':examples:crowdfund:classes', ':examples:pool:classes',
@@ -80,6 +88,12 @@ tasks.register('toolchainWasmTest', Exec) {
     group = 'verification'
     dependsOn 'toolchainWasm'
     dependsOn tasks.named('test').get().dependsOn
+    dependsOn 'test'   // writes build/s2-vectors.json (TransitionParityTest)
+    doLast {
+        // S2 in Wasm: every transition vector through the engine's VM, against the JVM's answers.
+        project.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
+                'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2-vectors.json'; workingDir rootDir }
+    }
     workingDir rootDir
     commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/build-in-node.mjs',
             'julc-state-toolchain/build/wasm', 'examples', 'counter', 'bank', 'vault', 'escrow', 'crowdfund', 'dsl', 'guild',

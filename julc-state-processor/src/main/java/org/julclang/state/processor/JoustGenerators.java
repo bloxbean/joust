@@ -3,6 +3,7 @@ package org.julclang.state.processor;
 import org.julclang.state.processor.gen.ClientGenerator;
 import org.julclang.state.processor.gen.DescriptionWriter;
 import org.julclang.state.processor.gen.PortableGenerator;
+import org.julclang.state.processor.gen.TransitionsGenerator;
 import org.julclang.state.processor.gen.ValidatorGenerator;
 import org.julclang.state.processor.ir.ContractIR;
 
@@ -21,17 +22,19 @@ public final class JoustGenerators {
     }
 
     /** What to generate. */
-    public record Options(boolean traces, boolean javaClient, boolean portable) {
+    public record Options(boolean traces, boolean javaClient, boolean portable, boolean transitions) {
         public static Options of(ProcessingEnvironment env) {
             return new Options(Boolean.parseBoolean(env.getOptions().getOrDefault("joust.traces", "false")),
                     !Boolean.parseBoolean(env.getOptions().getOrDefault("joust.jsMode", "false")),
-                    Boolean.parseBoolean(env.getOptions().getOrDefault("joust.portable", "false")));
+                    Boolean.parseBoolean(env.getOptions().getOrDefault("joust.portable", "false")),
+                    Boolean.parseBoolean(env.getOptions().getOrDefault("joust.transitions", "false")));
         }
     }
 
     /** The generated sources of one contract. {@code clientSource} and {@code portableSource} may be null. */
     public record Generated(String packageName, String contractName, String validatorName, String validatorSource,
-                            String clientName, String clientSource, String descriptionJson, String portableSource) {
+                            String clientName, String clientSource, String descriptionJson, String portableSource,
+                            TransitionsGenerator.Transitions transitions) {
         public String validatorFqcn() {
             return packageName + "." + validatorName;
         }
@@ -50,6 +53,7 @@ public final class JoustGenerators {
                 ValidatorGenerator.generate(ir, options.traces()),
                 ir.clientName(), options.javaClient() ? ClientGenerator.generate(ir) : null,
                 DescriptionWriter.generate(ir, type, env),
-                options.portable() ? PortableGenerator.generate(ir, type, env) : null);
+                options.portable() ? PortableGenerator.generate(ir, type, env) : null,
+                options.transitions() ? TransitionsGenerator.generate(ir, type, env) : null);
     }
 }

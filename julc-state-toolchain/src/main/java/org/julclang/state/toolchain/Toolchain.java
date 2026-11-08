@@ -53,7 +53,8 @@ public final class Toolchain {
 
     /** One compiled contract. */
     public record Contract(String name, String packageName, String validatorName, String validatorSource,
-                           String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson) {}
+                           String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson,
+                           String transitionsSource, Map<String, String> transitions) {}
 
     /** The build's result: the contracts, and every diagnostic; {@code ok} when there is no error. */
     public record Result(boolean ok, List<Contract> contracts, List<Diagnostic> diagnostics) {}
@@ -116,7 +117,11 @@ public final class Toolchain {
                 });
                 if (!clean) continue;
                 try {
-                    JoustGenerators.generate(env, type, JoustGenerators.Options.of(env)).ifPresent(generated::add);
+                    var o = JoustGenerators.Options.of(env);
+                    // Transition programs are on unless asked otherwise: the runtime engine runs them (D3).
+                    o = new JoustGenerators.Options(o.traces(), o.javaClient(), o.portable(),
+                            !"false".equals(options.get("joust.transitions")));
+                    JoustGenerators.generate(env, type, o).ifPresent(generated::add);
                 } catch (RuntimeException e) {
                     diagnostics.add(new Diagnostic(Severity.ERROR, "JOUST could not generate " + type.getSimpleName() + ": " + e,
                             null, -1, "joust"));
@@ -159,12 +164,48 @@ public final class Toolchain {
                 continue;
             }
             var program = result.program();
+            // Transition programs (D3): each transition method compiled on its own over the same pool.
+            var transitions = new LinkedHashMap<String, String>();
+            String transitionsSource = null;
+            if (g.transitions() != null) {
+                transitionsSource = g.transitions().source();
+                var libs = withMarker(LibrarySourceResolver.resolveLibrarySources(transitionsSource, libraryPool), project, libraryPool);
+                for (String m : g.transitions().methods()) {
+                    try {
+                        var tr = compiler.compileMethod(transitionsSource, m, libs.stream().map(LibrarySource::source).toList());
+                        if (tr.hasErrors()) {
+                            tr.diagnostics().forEach(d -> diagnostics.add(new Diagnostic(Severity.WARNING,
+                                    "transition " + m + " not compiled: " + d, g.contractName(), -1, "julc")));
+                        } else {
+                            transitions.put(m, JulcScriptAdapter.fromProgram(tr.program()).getCborHex());
+                        }
+                    } catch (RuntimeException e) {
+                        diagnostics.add(new Diagnostic(Severity.WARNING, "transition " + m + " not compiled: " + e.getMessage(),
+                                g.contractName(), -1, "julc"));
+                    }
+                }
+            }
             contracts.add(new Contract(g.contractName(), g.packageName(), g.validatorName(), g.validatorSource(),
                     JulcScriptAdapter.fromProgram(program).getCborHex(),
                     result.isParameterized() ? "" : JulcScriptAdapter.scriptHash(program),
-                    result.scriptSizeBytes(), g.descriptionJson()));
+                    result.scriptSizeBytes(), g.descriptionJson(), transitionsSource, transitions));
         }
         return new Result(!hasErrors(diagnostics), contracts, diagnostics);
+    }
+
+    /** The resolved libraries, plus JOUST's {@code @StateContract} marker for a project contract (JuLC ADR-071). */
+    private static List<LibrarySource> withMarker(List<LibrarySource> resolved, Map<String, LibrarySource> project,
+                                                  Map<String, LibrarySource> pool) {
+        var out = new ArrayList<>(resolved);
+        var names = new HashSet<String>();
+        out.forEach(l -> names.add(l.fqcn()));
+        for (var l : List.copyOf(out)) {
+            if (project.containsKey(l.fqcn()) && l.source().contains("@StateContract") && names.add(STATE_CONTRACT)
+                    && pool.containsKey(STATE_CONTRACT)) {
+                out.add(pool.get(STATE_CONTRACT));
+            }
+        }
+        return out;
     }
 
     private static boolean isStateContract(TypeElement type) {
