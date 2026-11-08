@@ -41,6 +41,15 @@ class TokenDevnetTest {
         assertEquals(BigInteger.valueOf(240), token.balanceOf(Keys.pkh(holders[1])));
         assertEquals(BigInteger.ZERO, token.balanceOf(Keys.pkh(holders[2])));
 
+        // A process that never saw this map (a restart, another machine): a fresh node store. Its mirror is rebuilt from
+        // the chain history (the claims in the map-verifier redeemers, each new root checked; ADR-0015 §13.12 M4).
+        var fresh = TokenClient.at(DevKit.runtime(new org.julclang.state.runtime.InMemoryNodeStore()), token.instanceId());
+        assertEquals(BigInteger.valueOf(240), fresh.balanceOf(Keys.pkh(holders[1])), "read through the rebuilt mirror");
+        fresh.transfer(holders[1], Keys.pkh(holders[0]), BigInteger.valueOf(40));
+        // And the first runtime, which missed that write, catches up the same way.
+        token.transfer(holders[0], Keys.pkh(holders[1]), BigInteger.valueOf(40));
+        assertEquals(BigInteger.valueOf(360), token.balanceOf(Keys.pkh(holders[0])));
+
         assertThrows(RequireException.class, () -> token.transfer(holders[2], Keys.pkh(holders[0]), BigInteger.ONE));
         assertThrows(RequireException.class, () -> token.close(admin), "supply not zero");
 

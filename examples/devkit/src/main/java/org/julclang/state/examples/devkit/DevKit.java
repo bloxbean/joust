@@ -62,6 +62,14 @@ public final class DevKit {
 
     /** A runtime for the DevKit; the evaluator is JuLC's local one unless {@code -Djulc.evaluator=backend}. */
     public static StateRuntime runtime() {
+        return runtime(null);
+    }
+
+    /**
+     * As {@link #runtime()}, with its MerkleMap node store ({@code null}: the default, in memory for tests): a fresh
+     * store stands for a process that never saw a map, whose mirror is rebuilt from the chain (ADR-0015 §13.12 M4).
+     */
+    public static StateRuntime runtime(com.bloxbean.cardano.vds.core.api.NodeStore mapStore) {
         BackendService backend = backend();
         FixtureRecorder recorder = recorder();
         // Wrap first: the clock reads the tip through the backend, and a replayed snapshot must include those reads.
@@ -83,6 +91,7 @@ public final class DevKit {
                     new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())));
         }
         if (recorder != null) b.onBuilt(recorder::built);
+        if (mapStore != null) b.mapStore(mapStore);
         return b.build();
     }
 

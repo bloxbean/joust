@@ -34,6 +34,7 @@ export interface JoustRuntime {
 export function joustRuntime(o: {
   CSL?: any; provider?: ChainProvider; chainUrl?: string; projectId?: string; contracts: BuiltContract[]; clock: Clock; networkId?: number;
   deployments?: Record<string, Deployment>; validators?: BuiltValidator[]; ttlMs?: number; fetchImpl?: typeof fetch;
+  mapMirror?: MapMirror;
 }): JoustRuntime;
 export function engineService(o: { api: ChainProvider | ChainApi; contracts: BuiltContract[]; clock: Clock; networkId?: number; ttlMs?: number; maxRounds?: number }): EngineService;
 export function loadEngine(o?: { dir?: string }): Promise<any>;
@@ -45,3 +46,23 @@ export function devkitTopUp(address: string, ada: number, adminUrl?: string): Pr
 export function devWallet(o: { chain: any; mnemonic?: string; index?: number; networkId?: number; confirm?: (txHex: string) => Promise<boolean> }): Cip30Api & { address: string; keyHash: string };
 export function deriveAccount(mnemonic: string, index?: number, networkId?: number): { address: string; reward: string; keyHash: string; publicKey: string };
 export const DEVKIT_MNEMONIC: string;
+
+/** A MerkleMap mirror (ADR-0015 §13.12): Aiken's MPF; answers the engine's map proofs; rebuilt from the chain. */
+export interface MapMirror {
+  readonly states: Map<string, Map<string, string>>;
+  get(root: string, key: string): Promise<string | undefined>;
+  answer(need: string, units?: string[]): Promise<string>;
+  stage(txHex: string): Promise<number>;
+  sync(unit: string): Promise<number>;
+}
+export interface MirrorCache {
+  state(root: string): Promise<Map<string, string> | null>;
+  putState(root: string, state: Map<string, string>): Promise<void>;
+  seen(unit: string): Promise<Set<string>>;
+  putSeen(unit: string, seen: Set<string>): Promise<void>;
+  close(): Promise<void>;
+}
+export function mapMirror(o?: { provider?: ChainProvider; cache?: MirrorCache }): MapMirror;
+/** A persistent mirror cache over level: LevelDB in Node (a directory), IndexedDB in browsers (a name). */
+export function levelMirrorCache(location: string): Promise<MirrorCache>;
+export const EMPTY_ROOT: string;

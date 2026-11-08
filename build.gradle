@@ -63,6 +63,8 @@ subprojects {
         useJUnitPlatform()
         jvmArgs '--enable-native-access=ALL-UNNAMED'
         maxHeapSize = '1g'
+        // MerkleMap mirrors in memory for tests (ADR-0015 §13.12 M3: applications default to RocksDB).
+        systemProperty 'joust.mapStore', 'memory'
         if (project.hasProperty('joust.failedTerm')) systemProperty 'joust.failedTerm', 'true'
         if (project.hasProperty('joust.dumpTx')) systemProperty 'joust.dumpTx', project.property('joust.dumpTx')
         // A hung test (a DevKit call that never returns) fails after 10 minutes with its stack trace, rather than

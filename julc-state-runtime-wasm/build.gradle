@@ -17,6 +17,13 @@ tasks.named('test') {
 
 // ---- The runtime engine: a GraalVM Web Image embedding julc-wasm (JuLC ADR-064).
 //   ./gradlew :julc-state-runtime-wasm:runtimeWasm -PgraalvmHome=/path/to/graalvm-25.3   (Binaryen on PATH)
+// The engine is given its map prover (§13.12 M1): the runtime's native RocksDB default store stays out of the image.
+configurations.configureEach {
+    if (name.startsWith('wasm') || name == 'runtimeClasspath') {
+        exclude group: 'org.rocksdb'
+        exclude group: 'com.bloxbean.cardano', module: 'cardano-client-merkle-patricia-forestry-rocksdb'
+    }
+}
 sourceSets {
     wasm {
         compileClasspath += sourceSets.main.output + configurations.runtimeClasspath

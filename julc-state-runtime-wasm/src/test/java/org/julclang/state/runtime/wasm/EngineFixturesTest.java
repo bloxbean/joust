@@ -46,10 +46,13 @@ class EngineFixturesTest {
                 for (JsonNode sha : x.get("contracts")) cs.add(contracts.get(sha.asText()));
                 Map<String, String> nodes = new LinkedHashMap<>();
                 x.path("mapNodes").fields().forEachRemaining(e -> nodes.put(e.getKey(), e.getValue().asText()));
+                // Map proofs the page's mirror supplied (ADR-0015 §13.12 M1); earlier fixtures carry nodes instead.
+                Map<String, String> proofs = new LinkedHashMap<>();
+                x.path("mapProofs").fields().forEachRemaining(e -> proofs.put(e.getKey(), e.getValue().asText()));
                 JsonNode clock = x.get("clock");
                 var r = Prepare.prepare(new Prepare.Request(x.get("call").toString(), x.get("snapshot").toString(), cs,
                         clock.get("zeroSlot").asLong(), clock.get("zeroTimeMs").asLong(), clock.get("slotLengthMs").asLong(),
-                        x.get("ttlMs").asLong(), x.get("networkId").asInt(), nodes));
+                        x.get("ttlMs").asLong(), x.get("networkId").asInt(), nodes, proofs));
                 String name = FIXTURES.relativize(f).toString();
                 if (!r.ok()) diffs.add(name + ": " + (r.needKind() != null ? "needs " + r.needKind() + " " + r.needKey() : r.error()));
                 else if (!r.cbor().equals(x.get("cbor").asText())) {

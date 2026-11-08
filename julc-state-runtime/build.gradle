@@ -6,6 +6,7 @@ dependencies {
     api libs.cardano.client.lib
     api libs.cardano.client.backend
     api libs.cardano.client.mpf          // MerkleMap mirrors (ADR-0002)
+    runtimeOnly libs.cardano.client.mpf.rocksdb   // their default store, loaded by name (ADR-0015 §13.12 M3)
     api project(':julc-state-verifier')  // the map verifier script (ADR-0002 D9)
     // JulcScriptLoader (loads the compiled validator from META-INF/plutus) lives in the annotation processor artifact
     implementation libs.julc.annotation.processor

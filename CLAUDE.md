@@ -131,6 +131,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   (tests and the dApp's tamper/serverless demos keep it, as an independent implementation). `devwallet.js` awaits
   libsodium at import (top-level await). Chain reads go through a provider (`providers.js`: Blockfrost/Yaci Store,
   Ogmios; `PROVIDER=ogmios` runs the example flows over Ogmios on DevKit :1337).
+- ADR-0015 §13.12 (MerkleMap mirrors): the engine takes map *proofs* (`SuppliedProver`, needs `mapProof`), answered
+  by JS mirrors over Aiken's MPF (`js/joust-runtime/src/mirror.js`, level cache); the JVM's default node store is
+  RocksDB (`./.joust/mpf`, `-Djoust.mapStore=memory` in all Gradle tests); missing maps are rebuilt from the chain
+  history (`MapHistory`, `mirror.sync`). Installing in one JS package can prune another's linked deps: re-run
+  `npm install` in js/state-client if imports go missing.
 - ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). JuLC
   pinned at `deb72bb` (branch `feat/joust-embedder-attribution`, bloxbean/julc#313, stacked on #311: `JavacFrontend.attribute` public).

@@ -21,6 +21,7 @@ julc-vm-java = { module = "org.julclang:julc-vm-java", version.ref = "julc" }
 cardano-client-lib = { module = "com.bloxbean.cardano:cardano-client-lib", version.ref = "cardano-client-lib" }
 cardano-client-backend = { module = "com.bloxbean.cardano:cardano-client-backend", version.ref = "cardano-client-lib" }
 cardano-client-mpf = { module = "com.bloxbean.cardano:cardano-client-merkle-patricia-forestry", version.ref = "cardano-client-lib" }
+cardano-client-mpf-rocksdb = { module = "com.bloxbean.cardano:cardano-client-merkle-patricia-forestry-rocksdb", version.ref = "cardano-client-lib" }
 cardano-client-backend-blockfrost = { module = "com.bloxbean.cardano:cardano-client-backend-blockfrost", version.ref = "cardano-client-lib" }
 
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }

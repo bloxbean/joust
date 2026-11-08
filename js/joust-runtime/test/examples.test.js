@@ -87,7 +87,7 @@ async function setup(names, group = names.join('+')) {
     const deployment = await rt.ensureDeployment(d.preamble.title, payer, params);
     return new JoustContract({ CSL, description: d, deployment, service: rt.service, chain: rt.chain });
   };
-  return { rt, wallets, contract };
+  return { rt, wallets, contract, contracts };
 }
 
 /** Waits until the chain's clock (tip time) passes {@code ms}. */
@@ -179,7 +179,7 @@ test('Oracle and Shop: @SignedBy; @Params naming the oracle; @Reads of its price
 });
 
 test('Token: MerkleMap balances, read discovery, the map verifier', { skip, timeout: 600_000 }, async () => {
-  const { rt, wallets, contract } = await setup(['token']);
+  const { rt, wallets, contract, contracts } = await setup(['token']);
   const [admin, ann, ben] = await wallets(3);
   const token = await contract('Token', admin);
   assert.ok(token.deployment.mapVerifier?.referenceScripts?.length, 'the map verifier is pinned');
@@ -230,6 +230,17 @@ test('Token: MerkleMap balances, read discovery, the map verifier', { skip, time
     if (i + 1 >= total) break;
   }
   console.log(`I5: ${refused} tamperings of an engine-built map transfer refused before signing`);
+  // Another page, with an empty mirror (a second device): its mirror is rebuilt from the chain history (the claims in
+  // the instance's map-verifier redeemers, each new root checked), then it calls the map (ADR-0015 §13.12 M4).
+  // (Its chain is the Blockfrost-style API: Ogmios alone serves no history.)
+  const rt2 = joustRuntime({ CSL, chainUrl: STORE, contracts,
+    deployments: rt.deployments, clock: await devkitClock(ADMIN), networkId: 0, ttlMs: 20_000 });
+  assert.equal(rt2.service.mirror.states.size, 1, 'the second page starts with no map');
+  const t2 = new JoustContract({ CSL, description: token.description, deployment: token.deployment, service: rt2.service, chain: rt2.chain }).at(t.id);
+  await t2.call(ben, 'transfer', { to: ann.keyHash, amount: 50n });
+  assert.ok(rt2.service.mirror.states.size > 1, 'the second page rebuilt the map from the chain');
+  // The first page's mirror missed that write: it catches up from the chain the same way.
+  await t.call(ann, 'transfer', { to: ben.keyHash, amount: 50n });
   await t.call(ben, 'transfer', { to: ben.keyHash, amount: 100n });   // to itself
   await assert.rejects(t.call(ann, 'transfer', { to: ben.keyHash, amount: 751n }), /insufficient balance/);
   await t.call(ann, 'burn', { amount: 750n });                          // emptied: removed from the map

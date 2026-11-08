@@ -11,6 +11,7 @@ export { engineService } from './service.js';
 export { blockfrostApi, emptySnapshot, fetchNeed, asProvider, utxoJson } from './snapshot.js';
 export { devkitClock, devkitTopUp, devkitMint, devkitSweep } from './devkit.js';
 export { memoryMapStore, fileMapStore } from './maps.js';
+export { mapMirror, levelMirrorCache, claimsOf, EMPTY_ROOT } from './mirror.js';
 export { JoustContract, VerificationError, blockfrostChain, chainOf, blockfrostProvider, ogmiosProvider, toJson, runComposed, verifyComposed } from '@julclang/state-client';
 export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-client/devwallet';
 
@@ -59,8 +60,13 @@ export function joustRuntime(o) {
       .map(([k, key]) => fetchNeed(api, snapshot, k, key).catch(() => {})));
   }
 
+  // The instance and object tokens a call touches: their chain history rebuilds a missing map (ADR-0015 §13.12 M4).
+  const unitsOf = (call) => (call.calls ?? [call]).flatMap((c) => {
+    const d = deploymentOf(c.contract);
+    return d ? [c.instance, c.object].filter(Boolean).map((id) => d.policy + id) : [];
+  });
   const engine = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs,
-    prefetch: o.prefetch === false ? undefined : prefetch, mapStore: o.mapStore, record: o.record });
+    prefetch: o.prefetch === false ? undefined : prefetch, mapStore: o.mapStore, mapMirror: o.mapMirror, unitsOf, record: o.record });
   const descriptionOf = (contract) => {
     for (const c of o.contracts) {
       const d = typeof c.description === 'string' ? JSON.parse(c.description) : c.description;

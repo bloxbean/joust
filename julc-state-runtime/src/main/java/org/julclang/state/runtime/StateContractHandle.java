@@ -309,7 +309,7 @@ public final class StateContractHandle<S> {
                 ? new Ctx(callerPkh, d.received(), BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO)
                 : new Ctx(callerPkh, d.received(), BigInteger.ZERO, window.fromMs(), window.toMs());
         if (d.assetRun() != null) return deployAssets(d, ref, seed, instance, ctx, window, callerPkh);
-        MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapStore()) : null;
+        MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapProver()) : null;
         S made = maps ? merkle.run(() -> d.run().apply(ctx)) : d.run().apply(ctx);   // the developer's @Init, on the JVM
         var seedOwner = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())),
                 BigInteger.valueOf(seed.getOutputIndex()));
@@ -354,7 +354,7 @@ public final class StateContractHandle<S> {
         var funds = new org.julclang.state.api.Funds(policy, id, d.receivedAssets(), org.julclang.state.api.Assets.none(),
                 org.julclang.core.types.JulcList.empty());
         boolean maps = spec.layout().hasMaps();
-        MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapStore()) : null;
+        MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapProver()) : null;
         Transition<S> t = maps ? merkle.run(() -> d.assetRun().apply(ctx, funds)) : d.assetRun().apply(ctx, funds);
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
         S stored = t.next();

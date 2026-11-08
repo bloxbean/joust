@@ -5,6 +5,7 @@
 import { loadEngine } from './engine.js';
 import { emptySnapshot, fetchNeed } from './snapshot.js';
 import { memoryMapStore } from './maps.js';
+import { mapMirror } from './mirror.js';
 import { readFileSync } from 'node:fs';
 
 /** This runtime's version: contracts built by an incompatible toolchain are refused (ADR-0015 I7). */
@@ -37,7 +38,10 @@ const big = (x) => BigInt(x);
  * @param o.networkId  0 (test networks) or 1 (mainnet)
  * @param o.ttlMs      how long a prepared transaction stays valid (default 120 s; a DevKit's horizon is minutes)
  * @param o.maxRounds  needs fetched before giving up (default 64)
- * @param o.mapStore   the MerkleMap mirror's nodes (memoryMapStore() by default; fileMapStore(path) to keep them)
+ * @param o.mapMirror  MerkleMap mirrors (ADR-0015 §13.12): they answer the engine's map proofs (mapMirror(), over
+ *                     Aiken's MPF, by default; rebuilt from the chain through o.api when missing)
+ * @param o.unitsOf    (call) => the instance and object tokens a call touches (whose history rebuilds its maps)
+ * @param o.mapStore   instead of mirrors: the earlier node store (memoryMapStore, fileMapStore), passed whole
  * @param o.record     (fixture) => void: each prepared call as an I3 fixture (request, snapshot, map nodes, clock,
  *                     the contracts' hashes, the transaction), for the JVM to replay (ADR-0015 I3)
  * @param o.prefetch   async (call, snapshot) => void: fills what the call will surely read before the first run (the
@@ -50,29 +54,39 @@ export function engineService(o) {
     script: c.script, transitions: c.transitions,
   }));
   const rounds = [];
-  const maps = o.mapStore ?? memoryMapStore();
+  // Map calls: proofs from the mirrors by default; the whole node store only when the caller gives one (earlier form).
+  const maps = o.mapStore ?? null;
+  const mirror = maps ? null : (o.mapMirror ?? mapMirror({ provider: o.api }));
 
   async function run(call) {
     const engine = await loadEngine(o.engine);
     const snapshot = emptySnapshot();
+    const mapProofs = {};
     if (o.prefetch) await o.prefetch(call, snapshot);
     for (let round = 1; round <= (o.maxRounds ?? 64); round++) {
-      const mapNodes = { ...maps.all() };
+      const mapNodes = maps ? { ...maps.all() } : {};
       const r = engine.joust.prepare({
         call: JSON.stringify(call), snapshot: JSON.stringify(snapshot), contracts,
         zeroSlot: big(o.clock.zeroSlot), zeroTimeMs: big(o.clock.zeroTimeMs), slotLengthMs: big(o.clock.slotLengthMs),
-        ttlMs: big(o.ttlMs ?? 120_000), networkId: o.networkId ?? 0, mapNodes,
+        ttlMs: big(o.ttlMs ?? 120_000), networkId: o.networkId ?? 0, mapNodes, mapProofs,
       });
       if (r.ok) {
         rounds.push(round);
         if (o.record && r.cbor) {
-          o.record({ call, snapshot: JSON.parse(JSON.stringify(snapshot)), mapNodes, clock: o.clock, ttlMs: o.ttlMs ?? 120_000,
-            networkId: o.networkId ?? 0, contracts: contracts.map((c) => c.description), cbor: r.cbor, txHash: r.txHash });
+          o.record({ call, snapshot: JSON.parse(JSON.stringify(snapshot)), ...(maps ? { mapNodes } : { mapProofs: { ...mapProofs } }),
+            clock: o.clock, ttlMs: o.ttlMs ?? 120_000, networkId: o.networkId ?? 0, contracts: contracts.map((c) => c.description),
+            cbor: r.cbor, txHash: r.txHash });
         }
-        maps.putAll(r.mapNodes);   // the mirror's new nodes (the next call's map roots)
+        if (maps) maps.putAll(r.mapNodes);   // the node store's new nodes (the next call's map roots)
+        else if (r.cbor) await mirror.stage(r.cbor);   // the map states this transaction leads to
         return r;
       }
       if (!r.needKind) throw new Error(r.error);
+      if (r.needKind === 'mapProof') {
+        // The mirror proves; the engine checks each proof against the chain's root (ADR-0015 §13.12 M1).
+        mapProofs[r.needKey] = await mirror.answer(r.needKey, o.unitsOf ? o.unitsOf(call) : []);
+        continue;
+      }
       if (r.needKind === 'mapNode') {
         throw new Error(`the MerkleMap mirror has no node ${r.needKey}: this app did not build that map's history`
           + ' (keep the map store; rebuilding a mirror from the chain comes later, ADR-0015 D5)');
@@ -116,6 +130,9 @@ export function engineService(o) {
       if (kind === 'deployment') return JSON.parse(r.plan);
       return { cbor: r.cbor, txHash: r.txHash, signers: r.signers, plan: JSON.parse(r.plan) };
     },
+
+    /** The MerkleMap mirrors (null when a node store was given): read a map's value without the engine. */
+    mirror,
 
     /** How many engine runs each prepare took (needs fetched one at a time; ADR-0015 D5). */
     rounds,

@@ -157,7 +157,7 @@ public final class OwnedObject<S, R> {
                 window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
         if (spec.assetRun() != null) return createAssets(parent, spec, codec, ref, instanceUtxo, shared, seed, object, ctx, window, what);
         boolean maps = codec.hasMaps();
-        MerkleSupport merkle = maps ? new MerkleSupport(rt.mapStore()) : null;
+        MerkleSupport merkle = maps ? new MerkleSupport(rt.mapProver()) : null;
         R made = maps ? merkle.run(() -> spec.run().apply(shared, ctx)) : spec.run().apply(shared, ctx);
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
         List<org.julclang.state.api.mpf.MapClaim> claims = List.of();
@@ -195,7 +195,7 @@ public final class OwnedObject<S, R> {
         var funds = new org.julclang.state.api.Funds(policy, id, spec.receivedAssets(), org.julclang.state.api.Assets.none(),
                 org.julclang.core.types.JulcList.empty());
         boolean maps = codec.hasMaps();
-        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapProver()) : null;
         Transition<R> t = maps ? merkle.run(() -> spec.assetRun().apply(shared, ctx, funds)) : spec.assetRun().apply(shared, ctx, funds);
         byte[] instance = HexUtil.decodeHexString(parent.instanceId());
         var seedRef = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())), BigInteger.valueOf(seed.getOutputIndex()));
@@ -295,7 +295,7 @@ public final class OwnedObject<S, R> {
         java.util.function.Function<R, Transition<R>> method = o -> call.sharedRun != null
                 ? call.sharedRun.apply(o, sharedState, ctx) : call.run.apply(o, ctx);
         boolean maps = codec.hasMaps();
-        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapProver(contract.policyId + objectId)) : null;
         Transition<R> t = maps ? merkle.run(() -> method.apply(current)) : method.apply(current);
         TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(own.getTxHash())), BigInteger.valueOf(own.getOutputIndex()));
         List<org.julclang.state.api.mpf.MapClaim> claims = List.of();
@@ -393,7 +393,7 @@ public final class OwnedObject<S, R> {
         var incoming = call.receives ? AssetTx.incoming(unit()) : org.julclang.core.types.JulcList.<org.julclang.state.api.DepositClaim>empty();
         var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id), incoming);
         boolean maps = codec.hasMaps();
-        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapProver(contract.policyId + objectId)) : null;
         Transition<R> t = maps ? merkle.run(() -> call.assetRun.apply(current, shared, ctx, funds))
                 : call.assetRun.apply(current, shared, ctx, funds);
         TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(own.getTxHash())), BigInteger.valueOf(own.getOutputIndex()));

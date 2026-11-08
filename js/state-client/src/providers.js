@@ -14,6 +14,10 @@
 //   awaitTx(hash, opts)       resolves once the transaction is on chain
 //   txCbor(hash)              (optional) a transaction's CBOR, or null
 //   account(stakeAddress)     (optional) { registered: boolean | undefined, rewards: bigint }
+//   assetHistory(unit)        (optional) the hashes of the transactions that moved a unit, oldest first (rebuilding
+//                             a MerkleMap mirror from the chain, ADR-0015 §13.12 M4)
+//   redeemers(txHash)         (optional) a transaction's redeemers: [{ purpose: spend | mint | cert | reward | ..., data }]
+//                             (data: hex CBOR)
 //
 // Utxo: { txHash, index, address, value: [{ unit, quantity }], datumHash, inlineDatum, referenceScriptHash }
 //   unit "lovelace" or policy ++ asset name (hex); quantity a decimal string; absent fields null.
@@ -111,6 +115,23 @@ export function blockfrostProvider(baseUrl, { projectId, fetchImpl } = {}) {
     },
     async txCbor(hash) {
       return (await get(`/txs/${hash}/cbor`, { allow404: true }).catch(() => null))?.cbor ?? null;
+    },
+    async assetHistory(unit) {
+      return (await pages(`/assets/${unit}/transactions?order=asc`)).map((t) => t.tx_hash);
+    },
+    async redeemers(txHash) {
+      const list = (await get(`/txs/${txHash}/redeemers`, { allow404: true })) ?? [];
+      const out = [];
+      for (const r of list) {
+        const cbor = (await get(`/scripts/datum/${r.redeemer_data_hash}/cbor`, { allow404: true }))?.cbor;
+        if (!cbor) continue;
+        // Data by its hash: the API cannot change it without the hash showing.
+        if (bytesToHex(blake2b(hexToBytes(cbor), { dkLen: 32 })) !== r.redeemer_data_hash) {
+          throw new Error(`the chain API served other data for ${r.redeemer_data_hash}`);
+        }
+        out.push({ purpose: r.purpose === 'withdrawal' ? 'reward' : r.purpose, index: r.tx_index, data: cbor });
+      }
+      return out;
     },
     async account(stakeAddress) {
       const j = await get(`/accounts/${stakeAddress}`, { allow404: true });

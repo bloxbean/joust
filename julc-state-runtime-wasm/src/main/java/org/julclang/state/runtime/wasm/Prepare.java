@@ -46,7 +46,27 @@ public final class Prepare {
      * 0 (test networks) or 1 (mainnet).
      */
     public record Request(String call, String snapshot, List<Contract> contracts, long zeroSlot, long zeroTimeMs,
-                          long slotLengthMs, long ttlMs, int networkId, Map<String, String> mapNodes) {}
+                          long slotLengthMs, long ttlMs, int networkId, Map<String, String> mapNodes,
+                          Map<String, String> mapProofs) {
+        /** As before ADR-0015 §13.12: the caller's map nodes, no proofs. */
+        public Request(String call, String snapshot, List<Contract> contracts, long zeroSlot, long zeroTimeMs,
+                       long slotLengthMs, long ttlMs, int networkId, Map<String, String> mapNodes) {
+            this(call, snapshot, contracts, zeroSlot, zeroTimeMs, slotLengthMs, ttlMs, networkId, mapNodes, null);
+        }
+    }
+
+    /**
+     * How map calls are proven (§13.12 M1): from the caller's nodes (a request of earlier fixtures), else from the
+     * proofs the caller's mirror supplies, each checked against the chain's root (a missing one is a need).
+     */
+    static StateRuntime.Builder maps(StateRuntime.Builder b, Request r,
+                                     org.julclang.state.runtime.snapshot.SnapshotNodeStore nodes) {
+        b.mapStore(nodes);
+        if (r.mapNodes() == null || r.mapNodes().isEmpty()) {
+            b.mapProver(new org.julclang.state.runtime.snapshot.SuppliedProver(r.mapProofs()));
+        }
+        return b;
+    }
 
     /**
      * The unsigned transaction (hex CBOR), its hash, what a creation made, the end of its validity (slot, or -1), the key
@@ -86,7 +106,7 @@ public final class Prepare {
             var time = new SlotChainTime(r.zeroSlot(), r.zeroTimeMs(), r.slotLengthMs(), backend);
             // The MerkleMap mirror: the caller's nodes; a missing one is a need; the written ones go back (ADR-0015 D5).
             var nodes = new org.julclang.state.runtime.snapshot.SnapshotNodeStore(r.mapNodes());
-            var builder = StateRuntime.builder(backend).mapStore(nodes);
+            var builder = maps(StateRuntime.builder(backend), r, nodes);
             // The deployment's pinned reference scripts, from the snapshot (one lookup each, not an address scan).
             for (JsonNode ref : call.path("referenceScripts")) {
                 String[] p = ref.asText().split("#");
@@ -280,7 +300,7 @@ public final class Prepare {
                                         org.julclang.state.runtime.snapshot.SnapshotNodeStore nodes) throws Exception {
         Network network = r.networkId() == 1 ? Networks.mainnet() : Networks.testnet();
         var time = new SlotChainTime(r.zeroSlot(), r.zeroTimeMs(), r.slotLengthMs(), backend);
-        var builder = StateRuntime.builder(backend).mapStore(nodes);
+        var builder = maps(StateRuntime.builder(backend), r, nodes);
         for (JsonNode ref : call.path("referenceScripts")) {
             String[] p = ref.asText().split("#");
             var u = backend.getUtxoService().getTxOutput(p[0], Integer.parseInt(p[1]));

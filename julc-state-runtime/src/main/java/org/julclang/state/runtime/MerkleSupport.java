@@ -36,19 +36,42 @@ import java.util.function.Supplier;
  */
 public final class MerkleSupport {
 
-    private final NodeStore store;
+    /**
+     * Where a call's map reads and writes come from (ADR-0015 §13.12 M1): a trie over a node store (the JVM's mirror),
+     * or proofs the caller supplies (the engine's; each checked against the root before it is used).
+     */
+    public interface Prover {
+        /** The entry for {@code key} in the map with {@code root}, with its proof. */
+        ReadProof read(byte[] root, byte[] key);
+
+        /** The proofs for {@code net} applied in order from {@code root}, and the root they lead to. */
+        WriteResult write(byte[] root, JulcList<MapEntry> net);
+    }
+
+    /** Write proofs, in order, and the new root. */
+    public record WriteResult(JulcList<WriteProof> proofs, byte[] root) {}
+
+    private final Prover prover;
     private final Map<String, Set<String>> readsByRoot = new LinkedHashMap<>();
+    private final Map<String, ReadProof> readCache = new java.util.HashMap<>();
 
     public MerkleSupport(NodeStore store) {
-        this.store = store;
+        this(new TrieProver(store));
+    }
+
+    public MerkleSupport(Prover prover) {
+        this.prover = prover;
+    }
+
+    private ReadProof readProof(byte[] root, byte[] key) {
+        return readCache.computeIfAbsent(hex(root) + ":" + hex(key), k -> prover.read(root, key));
     }
 
     /** Runs {@code body} with lookups outside the read set served from the mirror and recorded. */
     public <T> T run(Supplier<T> body) {
         return MerkleMaps.withReads((root, key) -> {
             readsByRoot.computeIfAbsent(hex(root), r -> new LinkedHashSet<>()).add(hex(key));
-            byte[] v = trie(root).get(key);
-            return v == null ? new MapEntry(key, false, new byte[0]) : new MapEntry(key, true, v);
+            return readProof(root, key).entry();
         }, body);
     }
 
@@ -271,45 +294,73 @@ public final class MerkleSupport {
         Set<String> keys = readsByRoot.getOrDefault(hex(root), Set.of());
         // No reads: no proofs, and no need for the mirror (an escape hatch must work even without it; ADR-0012 r4).
         if (keys.isEmpty()) return JulcList.empty();
-        var trie = trie(root);
         var list = new ArrayList<ReadProof>();
-        for (String k : keys) {
-            byte[] key = HexFormat.of().parseHex(k);
-            byte[] v = trie.get(key);
-            MapEntry e = v == null ? new MapEntry(key, false, new byte[0]) : new MapEntry(key, true, v);
-            list.add(new ReadProof(e, proof(trie, key)));
-        }
+        for (String k : keys) list.add(readProof(root, HexFormat.of().parseHex(k)));
         JulcList<ReadProof> out = JulcList.empty();
         for (int i = list.size() - 1; i >= 0; i--) out = out.prepend(list.get(i));
         return out;
     }
 
-    private record WriteResult(JulcList<WriteProof> proofs, byte[] root) {}
-
     private WriteResult writeProofs(byte[] root, JulcList<MapEntry> net) {
         if (net.isEmpty()) return new WriteResult(JulcList.empty(), root);
-        var trie = trie(root);
-        var list = new ArrayList<WriteProof>();
-        for (MapEntry n : net) {
-            byte[] old = trie.get(n.key());
-            MapEntry before = old == null ? new MapEntry(n.key(), false, new byte[0]) : new MapEntry(n.key(), true, old);
-            list.add(new WriteProof(before, n, proof(trie, n.key())));
-            if (n.present()) trie.put(n.key(), n.value());
-            else if (old != null) trie.delete(n.key());
-        }
-        JulcList<WriteProof> out = JulcList.empty();
-        for (int i = list.size() - 1; i >= 0; i--) out = out.prepend(list.get(i));
-        return new WriteResult(out, normalize(trie.getRootHash()));
+        return prover.write(root, net);
     }
 
-    private MpfTrie trie(byte[] root) {
-        if (Arrays.equals(root, Mpf.emptyRoot())) return new MpfTrie(store);
-        // An MpfTrie over a store missing this root's nodes answers "absent" for everything: refuse instead.
-        if (store.get(root) == null) {
-            throw new JoustException("the MerkleMap mirror holds no nodes for root " + hex(root) + ": use a store that"
-                    + " has this instance's map (StateRuntime.mapStore; ADR-0002 D5)");
+    /** The JVM's prover: an {@code MpfTrie} over a content-addressed node store (every past root stays readable). */
+    public static final class TrieProver implements Prover {
+        private final NodeStore store;
+        private final Runnable rebuild;
+
+        public TrieProver(NodeStore store) {
+            this(store, null);
         }
-        return new MpfTrie(store, root);
+
+        /** {@code rebuild}: run once when a root is missing from the store (rebuilding from the chain, §13.12 M4). */
+        public TrieProver(NodeStore store, Runnable rebuild) {
+            this.store = store;
+            this.rebuild = rebuild;
+        }
+
+        private boolean rebuilt;
+
+        @Override
+        public ReadProof read(byte[] root, byte[] key) {
+            var trie = trie(root);
+            byte[] v = trie.get(key);
+            MapEntry e = v == null ? new MapEntry(key, false, new byte[0]) : new MapEntry(key, true, v);
+            return new ReadProof(e, proof(trie, key));
+        }
+
+        @Override
+        public WriteResult write(byte[] root, JulcList<MapEntry> net) {
+            var trie = trie(root);
+            var list = new ArrayList<WriteProof>();
+            for (MapEntry n : net) {
+                byte[] old = trie.get(n.key());
+                MapEntry before = old == null ? new MapEntry(n.key(), false, new byte[0]) : new MapEntry(n.key(), true, old);
+                list.add(new WriteProof(before, n, proof(trie, n.key())));
+                if (n.present()) trie.put(n.key(), n.value());
+                else if (old != null) trie.delete(n.key());
+            }
+            JulcList<WriteProof> out = JulcList.empty();
+            for (int i = list.size() - 1; i >= 0; i--) out = out.prepend(list.get(i));
+            return new WriteResult(out, normalize(trie.getRootHash()));
+        }
+
+        private MpfTrie trie(byte[] root) {
+            if (Arrays.equals(root, Mpf.emptyRoot())) return new MpfTrie(store);
+            // A root the store lacks: rebuild this map from the chain once (the history is checked, not trusted).
+            if (store.get(root) == null && rebuild != null && !rebuilt) {
+                rebuilt = true;
+                rebuild.run();
+            }
+            // An MpfTrie over a store missing this root's nodes answers "absent" for everything: refuse instead.
+            if (store.get(root) == null) {
+                throw new JoustException("the MerkleMap mirror holds no nodes for root " + hex(root) + ": use a store that"
+                        + " has this instance's map (StateRuntime.mapStore; ADR-0002 D5)");
+            }
+            return new MpfTrie(store, root);
+        }
     }
 
     /** cardano-client-lib's proof (Plutus data) as JuLC {@link ProofStep}s. */

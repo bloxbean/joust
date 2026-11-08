@@ -67,7 +67,7 @@ public final class StateInstance<S> {
     public <T> T view(java.util.function.Function<S, T> f) {
         S s = state();
         if (!contract.spec.layout().hasMaps()) return f.apply(s);
-        return new MerkleSupport(contract.runtime.mapStore()).run(() -> f.apply(s));
+        return new MerkleSupport(contract.runtime.mapProver(contract.policyId + instanceId)).run(() -> f.apply(s));
     }
 
     /** Lovelace the state UTxO holds (deposit included). */
@@ -135,7 +135,7 @@ public final class StateInstance<S> {
                 window == null ? BigInteger.ZERO : window.fromMs(), window == null ? BigInteger.ZERO : window.toMs());
 
         boolean maps = spec.layout().hasMaps();
-        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapProver(contract.policyId + instanceId)) : null;
         if (call.run == null) throw new JoustException(what + ": an instance call needs run(...)");
         Transition<S> t = maps ? merkle.run(() -> call.run.apply(current, ctx))   // the developer's method, on the JVM
                 : call.run.apply(current, ctx);
@@ -240,7 +240,7 @@ public final class StateInstance<S> {
         var incoming = call.receives ? AssetTx.incoming(unit()) : org.julclang.core.types.JulcList.<org.julclang.state.api.DepositClaim>empty();
         var funds = new org.julclang.state.api.Funds(policy, id, call.receivedAssets, AssetTx.held(inValue, policy, id), incoming);
         boolean maps = spec.layout().hasMaps();
-        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapStore()) : null;
+        MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapProver(contract.policyId + instanceId)) : null;
         Transition<S> t = maps ? merkle.run(() -> call.assetRun.apply(current, null, ctx, funds))   // the developer's method
                 : call.assetRun.apply(current, null, ctx, funds);
         TxOutRef ownRef = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),

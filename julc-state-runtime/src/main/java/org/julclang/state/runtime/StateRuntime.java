@@ -27,7 +27,9 @@ public final class StateRuntime {
     private final Duration confirmTimeout;
     private final Map<String, String> addressBook;
     private final Consumer<String> log;
-    private final com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
+    private volatile com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
+    private final String mapStorePath;
+    private final MerkleSupport.Prover mapProver;
     private final Consumer<BuiltTx> onBuilt;
     private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts;
 
@@ -44,7 +46,9 @@ public final class StateRuntime {
         this.confirmTimeout = b.confirmTimeout;
         this.addressBook = Map.copyOf(b.addressBook);
         this.log = b.log;
-        this.mapStore = b.mapStore != null ? b.mapStore : new InMemoryNodeStore();
+        this.mapStore = b.mapStore;               // null: the default store, opened when a map contract first needs it
+        this.mapStorePath = b.mapStorePath;
+        this.mapProver = b.mapProver;
         this.onBuilt = b.onBuilt;
         this.referenceScripts = Map.copyOf(b.referenceScripts);
         org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
@@ -87,7 +91,38 @@ public final class StateRuntime {
     }
 
     /** Node store of every MerkleMap mirror (content-addressed; ADR-0002 D5). */
-    public com.bloxbean.cardano.vds.core.api.NodeStore mapStore() { return mapStore; }
+    /**
+     * Where MerkleMap mirrors keep their trie nodes (ADR-0015 §13.12 M3): the builder's store; else RocksDB at
+     * {@code mapStorePath}, or the {@code joust.mapStore} system property, or {@code ./.joust/mpf}, opened on first use
+     * and shared by every runtime of this JVM on that path; {@code joust.mapStore=memory} keeps it in memory (tests).
+     */
+    public com.bloxbean.cardano.vds.core.api.NodeStore mapStore() {
+        var s = mapStore;
+        if (s == null) {
+            synchronized (this) {
+                if (mapStore == null) mapStore = DefaultMapStore.open(mapStorePath);
+                s = mapStore;
+            }
+        }
+        return s;
+    }
+
+    /** How map calls get their reads and writes proven (§13.12 M1): the builder's prover, else a trie over {@link #mapStore}. */
+    public MerkleSupport.Prover mapProver() {
+        return mapProver != null ? mapProver : new MerkleSupport.TrieProver(mapStore());
+    }
+
+    /**
+     * As {@link #mapProver()}, for the maps of {@code unit} (an instance's or object's token): a root the store lacks
+     * is rebuilt from that unit's chain history first (ADR-0015 §13.12 M4).
+     */
+    public MerkleSupport.Prover mapProver(String unit) {
+        if (mapProver != null) return mapProver;
+        return new MerkleSupport.TrieProver(mapStore(), () -> {
+            int n = MapHistory.rebuild(this, unit);
+            log.accept("rebuilt the maps of " + unit + " from the chain (" + n + " claims)");
+        });
+    }
 
     /** A known address (bech32) for a payment key hash, used for payouts; null if unknown. */
     String addressOf(byte[] pkh) {
@@ -110,6 +145,8 @@ public final class StateRuntime {
         private final Map<String, String> addressBook = new HashMap<>();
         private Consumer<String> log = msg -> { };
         private com.bloxbean.cardano.vds.core.api.NodeStore mapStore;
+        private String mapStorePath;
+        private MerkleSupport.Prover mapProver;
         private Consumer<BuiltTx> onBuilt;
         private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts = new HashMap<>();
 
@@ -137,8 +174,12 @@ public final class StateRuntime {
         public Builder log(Consumer<String> log) { this.log = log; return this; }
         /** Called with every transaction the runtime builds, before it is submitted or returned (ADR-0015 M0 fixtures). */
         public Builder onBuilt(Consumer<BuiltTx> observer) { this.onBuilt = observer; return this; }
-        /** Where MerkleMap mirrors keep their trie nodes; default in memory. Use a persistent store to reconnect later. */
+        /** Where MerkleMap mirrors keep their trie nodes; default RocksDB (see {@link StateRuntime#mapStore()}). */
         public Builder mapStore(com.bloxbean.cardano.vds.core.api.NodeStore store) { this.mapStore = store; return this; }
+        /** The default RocksDB store's directory (default {@code joust.mapStore}, else {@code ./.joust/mpf}). */
+        public Builder mapStorePath(String path) { this.mapStorePath = path; return this; }
+        /** Map proofs from elsewhere: the runtime engine's caller supplies them (ADR-0015 §13.12 M1). */
+        public Builder mapProver(MerkleSupport.Prover prover) { this.mapProver = prover; return this; }
 
         /**
          * A known reference script output (a deployment's pin, ADR-0013 D2): contracts whose script hash it carries use it

@@ -1120,6 +1120,98 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
   - The DevKit's in-page wallets stay beside the extensions, since browser wallets cannot join a private devnet.
   - The page verifier and the signing flow are unchanged.
 
+### 13.12 MerkleMap mirrors (M4): proofs for the engine, Aiken's MPF in JS, RocksDB on the JVM, rebuilt from the chain
+
+**Problem.**
+- A JOUST app can only call a map whose mirror (the off-chain MPF) it has kept itself. That holds on every platform.
+  - The JVM runtime's default store is in memory (`InMemoryNodeStore`).
+  - The npm runtime hands the engine every node it has before each prepare (`mapNodes`).
+  - Neither can rebuild a mirror it did not build.
+- In a browser this fails twice:
+  - a second device, or another user's writes, leaves the page without the nodes;
+  - the whole trie would be copied into Wasm on every call.
+
+**On-chain facts this rests on.**
+- The datum holds each map's root.
+- Every change is in that transaction's map-verifier redeemer: `MapClaims [MapClaim(policy, owner, field, oldRoot,
+  reads, writes, newRoot)]`, each write with its full entries (raw key and value, before and after) and its proof.
+- Redeemers stay in the blocks after the UTxOs are spent. So a map can be rebuilt from history alone.
+
+**Decisions.**
+- **M1. The engine takes proofs, not nodes.** `MerkleSupport` reads and writes through a prover:
+  - *On the JVM:* the trie prover, an `MpfTrie` over a node store, as today.
+  - *In the engine:* the supplied prover. It takes proofs from the JS layer and checks each against the on-chain
+    root with the validator's own `Mpf` logic (`has`/`miss` for reads; `update`/`insert`/`delete` for each write,
+    from the previous root). It computes the new roots itself, never taking them from the JS layer.
+  - *A missing proof is a need:* a read is (root, key); the writes are (root, the call's net writes in order), answered
+    as one list of write proofs against the successive roots.
+  - *Size:* the engine then holds only the proofs a call touches.
+  - *Old fixtures:* recorded ones with nodes (`mapNodes`) still replay through the trie prover (I3).
+- **M2. JS keeps its mirrors with Aiken's MPF** (`@aiken-lang/merkle-patricia-forestry`, MPL-2.0):
+  - it answers the proof needs, and the page can read map values without the engine;
+  - mirrors are found by root, since a proof depends only on the map's content;
+  - persistence goes through `level` (LevelDB in Node, IndexedDB in browsers), as a cache.
+- **M3. The JVM's default store is RocksDB** (CCL's `cardano-client-merkle-patricia-forestry-rocksdb`) at a
+  configured path; in memory is for tests.
+  - RocksDB is native and never enters the Wasm image: the runtime loads it only when no store is given, and the
+    image's class path excludes it.
+- **M4. A mirror is rebuilt from the chain, trustlessly:**
+  1. list the transactions that moved the instance's token (`/assets/{unit}/transactions`);
+  2. read their redeemers (`/txs/{hash}/redeemers`, the data by hash, checked against it);
+  3. starting from the empty root, apply every claim whose old root is a known state, checking each write's proof and
+     each new root;
+  4. accept the map only if the final root equals the on-chain datum's.
+
+  The history source is not trusted: anything dropped, altered or invented stops matching, and an alternative history
+  reaching the same root would need a blake2b collision.
+  - *JS:* the chain provider gains `assetHistory(unit)` and `redeemers(txHash)` (Blockfrost and Yaci Store; Ogmios
+    alone has no history).
+  - *JVM:* the same replay over a `BackendService`, into the node store.
+  - *Order:* mirrors sync before a map call (only the transactions since the last sync), and after their own calls.
+
+**Spike (2026-11-08), Aiken's JS MPF 1.3.1 against the CCL-built claims recorded in `fixtures/m3`:**
+- all 26 Token and Locker claims are rebuilt by replay from the empty root;
+- 52 of 52 roots are equal (old and new, every claim);
+- all 70 proofs (34 reads, 36 writes, each against its intermediate root) are equal as Data;
+- 62 of the 70 proofs are byte-identical. The other 8 are empty proofs, which Aiken writes as an indefinite list and
+  CCL as a definite one. The engine re-encodes every proof it receives, so this does not matter.
+
+**Gates:**
+- I3 holds on fixtures re-recorded with proofs;
+- Aiken and CCL agree on every recorded map (roots and proofs, as above);
+- I5 is unchanged on the map flows;
+- a page on a second wallet, with an empty cache, calls a map another wallet built;
+- a JVM process does the same after a restart.
+
+**Implemented (2026-11-09):**
+- **M1:** `MerkleSupport.Prover`, with `TrieProver` (JVM) and `SuppliedProver` (engine; needs `mapProof`). The engine
+  takes `mapProofs` in its request, and a request with `mapNodes` (earlier fixtures) still uses the trie.
+  `SuppliedProverTest` shows honest answers give the trie's exact proofs and roots, and that stale, forged and
+  wrong-key answers are refused.
+- **M2:** `mapMirror` in `@julclang/joust-runtime` (Aiken's MPF 1.3.1).
+  - It answers the needs, stages the states its own calls lead to, and reads values without the engine
+    (`mirror.get`).
+  - `levelMirrorCache(location)` persists the states: LevelDB in Node, IndexedDB in browsers.
+  - The npm runtime uses mirrors by default (`mapStore` keeps the earlier node-store path).
+- **M3:** `DefaultMapStore` opens RocksDB at `joust.mapStore`, or `./.joust/mpf`, by name.
+  - It is shared per path per JVM; `-Djoust.mapStore=memory` keeps it in memory, and every Gradle test sets it.
+  - The Wasm image's class path excludes RocksDB.
+- **M4:** rebuilding works on both sides. `MapHistory.rebuild` on the JVM runs from `TrieProver` when a root is
+  missing, for the call's unit. `mirror.sync` in JS uses the provider's new `assetHistory` and `redeemers`, with
+  redeemer data checked against its hash.
+- **Gate results:**
+  - *I3:* `fixtures/m3` holds 192 calls, with Token and Locker re-recorded with proofs, all byte-identical on the JVM.
+  - *I5:* unchanged; 13 tamperings of a map transfer are refused, as before.
+  - *JS, second page:* in the Token flow, a second page with an empty mirror rebuilds the map from the chain and
+    transfers. The first page's mirror, which missed that write, catches up the same way.
+  - *JVM, restart:* in `TokenDevnetTest`, a runtime with a fresh store rebuilds the map from 5 claims and transfers,
+    and the first runtime catches up with the 1 claim it missed.
+  - *Offline (`mirror.test.js`):* the recorded claims replay, answers decode as the engine expects, history with a
+    forged new root is refused, and the level cache survives a new session.
+- **Not yet:**
+  - Ogmios alone cannot rebuild, having no history; it would need Kupo or an indexer beside it.
+  - The browser worker, which runs the engine and the mirror off the page's main thread, is still to do.
+
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.
