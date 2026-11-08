@@ -39,7 +39,7 @@ import java.util.Set;
  * Comparisons of {@code int} results ({@code a.compareTo(b) >= 0}) and plain literals as arguments stay allowed.
  * Identity equality on arrays is rejected by JuLC itself (JULC0087).
  */
-final class SubsetLint {
+public final class SubsetLint {
 
     private static final Set<TypeKind> FIXED_WIDTH = Set.of(
             TypeKind.INT, TypeKind.LONG, TypeKind.SHORT, TypeKind.CHAR, TypeKind.BYTE, TypeKind.FLOAT, TypeKind.DOUBLE);
@@ -61,14 +61,42 @@ final class SubsetLint {
             "intValue", "longValue", "shortValue", "byteValue", "intValueExact", "longValueExact", "shortValueExact",
             "byteValueExact", "doubleValue", "floatValue");
 
+    /** Where findings go: javac's log under Gradle; a collector in the toolchain (ADR-0015 D2). */
+    public interface Reporter {
+        void error(Trees trees, Tree node, com.sun.source.tree.CompilationUnitTree unit, String message);
+    }
+
+    private static final Reporter JAVAC = (trees, node, unit, message) -> trees.printMessage(Diagnostic.Kind.ERROR, message, node, unit);
+
     private final ProcessingEnvironment env;
     private final Trees trees;
+    private final Reporter reporter;
     private final Set<String> pending = new HashSet<>();
     /** Trees of the context javac compiles in after processing (taken in the final round); see {@link #finalRound}. */
     private volatile Trees finalTrees;
 
+    /** For embedders: lints over an already attributed model (no task listener; both passes run at once). */
+    private SubsetLint(Trees trees, Reporter reporter) {
+        this.env = null;
+        this.trees = trees;
+        this.reporter = reporter;
+    }
+
+    /**
+     * Both passes over {@code type}, which javac has already attributed (JuLC's {@code JavacFrontend.attribute}), with
+     * findings sent to {@code reporter}. Returns whether the syntactic pass was clean; typed findings are reported only.
+     */
+    public static boolean lint(Trees trees, TypeElement type, Reporter reporter) {
+        var lint = new SubsetLint(trees, reporter);
+        boolean clean = lint.check(type);
+        TreePath path = trees.getPath(type);
+        if (path != null) lint.typed(trees, path.getCompilationUnit(), type.getSimpleName().toString());
+        return clean;
+    }
+
     SubsetLint(ProcessingEnvironment env) {
         this.env = env;
+        this.reporter = JAVAC;
         Trees t;
         try {
             t = Trees.instance(env);
@@ -224,14 +252,10 @@ final class SubsetLint {
     }
 
     private void report(Tree node, TreePath at, String message) {
-        report(trees, node, at, message);
+        reporter.error(trees, node, at.getCompilationUnit(), message);
     }
 
-    private static void report(Trees trees, Tree node, TreePath at, String message) {
-        trees.printMessage(Diagnostic.Kind.ERROR, message, node, at.getCompilationUnit());
-    }
-
-    private static void reportTyped(Trees trees, Tree node, TreePath at, String message) {
-        trees.printMessage(Diagnostic.Kind.ERROR, message, node, at.getCompilationUnit());
+    private void reportTyped(Trees trees, Tree node, TreePath at, String message) {
+        reporter.error(trees, node, at.getCompilationUnit(), message);
     }
 }

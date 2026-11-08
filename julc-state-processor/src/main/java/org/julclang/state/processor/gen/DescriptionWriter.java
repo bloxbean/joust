@@ -1,5 +1,6 @@
 package org.julclang.state.processor.gen;
 
+import org.julclang.state.processor.Records;
 import org.julclang.state.processor.ir.ContractIR;
 import org.julclang.state.processor.ir.ParamIR;
 import org.julclang.state.processor.ir.TransitionIR;
@@ -330,7 +331,7 @@ public final class DescriptionWriter {
         if (fq.startsWith("org.julclang.ledger.") && LEDGER_HASHES.contains(e.getSimpleName().toString())) return bytes();
         if (fq.startsWith("org.julclang.core.") && fq.endsWith("PlutusData")) return data();
         if (e.getKind() == ElementKind.RECORD && isNewType(e)) {
-            var comps = e.getRecordComponents();
+            var comps = Records.components(e);
             return comps.size() == 1 ? schemaOf(comps.get(0).asType()) : data();
         }
         if (e.getKind() == ElementKind.RECORD || isSealed(e)) {
@@ -360,7 +361,7 @@ public final class DescriptionWriter {
 
     private List<Object> fieldsOf(TypeElement record) {
         var out = new ArrayList<Object>();
-        for (RecordComponentElement rc : record.getRecordComponents()) {
+        for (RecordComponentElement rc : Records.components(record)) {
             out.add(field(rc.getSimpleName().toString(), schemaOf(rc.asType())));
         }
         return out;
@@ -420,7 +421,7 @@ public final class DescriptionWriter {
         // An init may return a record with a `state` component (assets): the state is that component.
         if (ret instanceof DeclaredType d && ((TypeElement) d.asElement()).getKind() == ElementKind.RECORD
                 && !keyOf(ret).equals(c.packageName() + "." + c.stateType())) {
-            for (var rc : ((TypeElement) d.asElement()).getRecordComponents()) {
+            for (var rc : Records.components(((TypeElement) d.asElement()))) {
                 if (rc.getSimpleName().contentEquals("state")) return rc.asType();
             }
         }
@@ -448,7 +449,7 @@ public final class DescriptionWriter {
     /** The {@code events} component of the method's result record, or any list. */
     private Object eventsSchema(ExecutableElement m) {
         if (m != null && m.getReturnType() instanceof DeclaredType d) {
-            for (var rc : ((TypeElement) d.asElement()).getRecordComponents()) {
+            for (var rc : Records.components(((TypeElement) d.asElement()))) {
                 if (rc.getSimpleName().contentEquals("events")) return schemaOf(rc.asType());
             }
         }

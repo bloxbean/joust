@@ -1,0 +1,8 @@
+{
+  "reflection": [
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$BuildRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$BuildResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$Contract", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$Diagnostic", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true }
+  ]
+}

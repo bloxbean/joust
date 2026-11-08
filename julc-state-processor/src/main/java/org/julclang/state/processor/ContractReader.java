@@ -182,7 +182,7 @@ final class ContractReader {
             error(initMethod, "@Init must return the state record");
             return Optional.empty();
         }
-        for (RecordComponentElement c : stateElement.getRecordComponents()) {
+        for (RecordComponentElement c : Records.components(stateElement)) {
             if (!isNamed(c.asType(), API + "MerkleMap") && mentionsMap(c.asType(), new java.util.HashSet<>())) {
                 error(initMethod, "state component '" + c.getSimpleName() + "' nests a MerkleMap or MapEntry; MerkleMaps"
                         + " are supported only as direct components of the state record (ADR-0002 D6)");
@@ -190,7 +190,7 @@ final class ContractReader {
         }
         List<ParamIR> stateComponents = new ArrayList<>();
         Map<String, ParamIR> componentsByName = new LinkedHashMap<>();
-        for (RecordComponentElement c : stateElement.getRecordComponents()) {
+        for (RecordComponentElement c : Records.components(stateElement)) {
             var p = new ParamIR(c.getSimpleName().toString(), types.render(c.asType()), kindOf(c.asType()));
             stateComponents.add(p);
             componentsByName.put(p.name(), p);
@@ -214,7 +214,7 @@ final class ContractReader {
         for (TypeElement oe : ownedElements) {
             List<ParamIR> comps = new ArrayList<>();
             Map<String, ParamIR> byName = new LinkedHashMap<>();
-            for (RecordComponentElement c : oe.getRecordComponents()) {
+            for (RecordComponentElement c : Records.components(oe)) {
                 if (!isNamed(c.asType(), API + "MerkleMap") && mentionsMap(c.asType(), new java.util.HashSet<>())) {
                     error(oe, "owned component '" + c.getSimpleName() + "' nests a MerkleMap or MapEntry; MerkleMaps are"
                             + " supported only as direct components of an owned record (ADR-0012 D2)");
@@ -240,7 +240,7 @@ final class ContractReader {
         }
         Map<String, ParamIR> paramsByName = new LinkedHashMap<>();
         if (paramsElement != null) {
-            for (RecordComponentElement c : paramsElement.getRecordComponents()) {
+            for (RecordComponentElement c : Records.components(paramsElement)) {
                 if (mentionsMap(c.asType(), new java.util.HashSet<>())) error(paramsElement, "@Params cannot hold MerkleMaps");
                 paramsByName.put(c.getSimpleName().toString(),
                         new ParamIR(c.getSimpleName().toString(), types.render(c.asType()), kindOf(c.asType())));
@@ -559,7 +559,7 @@ final class ContractReader {
             TypeElement rec = asRecord(subject);
             boolean direct = byType.values().stream().anyMatch(r -> same(r.stateType(), m.getReturnType()));
             if (!direct && rec != null) {
-                for (RecordComponentElement c : rec.getRecordComponents()) {
+                for (RecordComponentElement c : Records.components(rec)) {
                     if (c.getSimpleName().contentEquals("state")) subject = c.asType();
                 }
             }
@@ -626,7 +626,7 @@ final class ContractReader {
                 error(m, "@Migrate's parameter after the params must be the previous contract's state record");
             } else {
                 reads.add(new TransitionIR.ReadIR(ps.get(first).getSimpleName().toString(), from,
-                        r.types().render(ps.get(first).asType()), rec.getRecordComponents().size()));
+                        r.types().render(ps.get(first).asType()), Records.components(rec).size()));
                 first++;
             }
         }
@@ -649,7 +649,7 @@ final class ContractReader {
             }
             if (creates) error(p, "@Reads is not supported in a creation yet");
             reads.add(new TransitionIR.ReadIR(p.getSimpleName().toString(), path, r.types().render(p.asType()),
-                    rec == null ? 0 : rec.getRecordComponents().size()));
+                    rec == null ? 0 : Records.components(rec).size()));
             first++;
         }
         for (int i = first; i < ps.size(); i++) {
@@ -894,13 +894,13 @@ final class ContractReader {
         boolean state = false, payouts = false, sends = false, mint = false, accepted = false, events = false, deposits = false;
         String eventsType = null;
         var known = java.util.Set.of("state", "payouts", "sends", "mint", "accepted", "events", "deposits");
-        for (RecordComponentElement c : e.getRecordComponents()) {
+        for (RecordComponentElement c : Records.components(e)) {
             if (!known.contains(c.getSimpleName().toString())) {
                 error(m, what + " must return " + expected + "; component '" + c.getSimpleName() + "' is none of these");
                 return new ResultShape(false, false, false, false, false, null, false);
             }
         }
-        for (RecordComponentElement c : e.getRecordComponents()) {
+        for (RecordComponentElement c : Records.components(e)) {
             String n = c.getSimpleName().toString();
             TypeMirror t = c.asType();
             switch (n) {
@@ -1062,7 +1062,7 @@ final class ContractReader {
         if (!seen.add(name)) return false;
         for (TypeMirror a : d.getTypeArguments()) if (mentionsMap(a, seen)) return true;
         if (e.getKind() == ElementKind.RECORD) {
-            for (RecordComponentElement c : e.getRecordComponents()) if (mentionsMap(c.asType(), seen)) return true;
+            for (RecordComponentElement c : Records.components(e)) if (mentionsMap(c.asType(), seen)) return true;
         }
         return false;
     }

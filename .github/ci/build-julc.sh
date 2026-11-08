@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds JuLC into the local Maven repository (mavenLocal), at the commit JOUST builds against.
 #
-# JOUST needs JuLC's ADR-071 (bloxbean/julc#311: meta-annotated on-chain libraries, a robust library-source scan),
+# JOUST needs JuLC's ADR-071 (bloxbean/julc#311: meta-annotated on-chain libraries, a robust library-source scan)
+# and the embedder attribution API (branch feat/joust-embedder-attribution, on top of #311; ADR-0015 S1),
 # which is not published yet. Until it is, CI builds it from source: the julc build appends the commit to the
 # version, so this produces exactly the `julc` version in gradle/libs.versions.toml, which is checked below.
 # Remove this script, and its steps in the workflows, once JOUST depends on a published JuLC.
@@ -10,7 +11,7 @@
 # -Dmaven.repo.local=... for a local test).
 set -euo pipefail
 
-JULC_REF=${JULC_REF:-566ea845bf51797ca2ffbfe4c2a8f2f6dc537fec}
+JULC_REF=${JULC_REF:-3a8e149a20c1bfb95ce27eb84413da24e314b558}
 WORK_DIR=${WORK_DIR:-${RUNNER_TEMP:-/tmp}}
 expected=$(sed -nE 's/^julc[[:space:]]*=[[:space:]]*"(.*)"/\1/p' gradle/libs.versions.toml)
 if [[ -z "$expected" ]]; then

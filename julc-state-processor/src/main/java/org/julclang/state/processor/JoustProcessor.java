@@ -1,9 +1,5 @@
 package org.julclang.state.processor;
 
-import org.julclang.state.processor.gen.ClientGenerator;
-import org.julclang.state.processor.gen.DescriptionWriter;
-import org.julclang.state.processor.gen.PortableGenerator;
-import org.julclang.state.processor.gen.ValidatorGenerator;
 import org.julclang.state.processor.ir.ContractIR;
 
 import javax.annotation.processing.AbstractProcessor;
@@ -43,7 +39,7 @@ public class JoustProcessor extends AbstractProcessor {
 
     @Override
     public Set<String> getSupportedOptions() {
-        return Set.of("joust.traces", "joust.portable");
+        return Set.of("joust.traces", "joust.portable", "joust.jsMode");
     }
 
     @Override
@@ -69,25 +65,30 @@ public class JoustProcessor extends AbstractProcessor {
     }
 
     private void generate(ContractIR ir, TypeElement origin) {
-        boolean traces = Boolean.parseBoolean(processingEnv.getOptions().getOrDefault("joust.traces", "false"));
-        write(ir.packageName() + "." + ir.validatorName(), ValidatorGenerator.generate(ir, traces), origin);
-        write(ir.packageName() + "." + ir.clientName(), ClientGenerator.generate(ir), origin);
-        describe(ir, origin);
-        if (Boolean.parseBoolean(processingEnv.getOptions().getOrDefault("joust.portable", "false"))) {
-            write(ir.packageName() + "." + ir.name() + "Portable", PortableGenerator.generate(ir, origin, processingEnv), origin);
+        var options = JoustGenerators.Options.of(processingEnv);
+        JoustGenerators.Generated g;
+        try {
+            g = JoustGenerators.generate(ir, origin, processingEnv, options);
+        } catch (RuntimeException e) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "JOUST could not generate " + ir.name() + ": " + e, origin);
+            return;
         }
+        write(g.validatorFqcn(), g.validatorSource(), origin);
+        if (g.clientSource() != null) write(g.packageName() + "." + g.clientName(), g.clientSource(), origin);
+        describe(ir, g.descriptionJson(), origin);
+        if (g.portableSource() != null) write(g.packageName() + "." + g.contractName() + "Portable", g.portableSource(), origin);
     }
 
     /** {@code META-INF/joust/<package>.<Contract>.json}: the description JavaScript clients use (ADR-0013 D3). */
-    private void describe(ContractIR ir, TypeElement origin) {
+    private void describe(ContractIR ir, String json, TypeElement origin) {
         String name = "META-INF/joust/" + ir.packageName() + "." + ir.name() + ".json";
         try {
-            String json = DescriptionWriter.generate(ir, origin, processingEnv);
             var file = processingEnv.getFiler().createResource(StandardLocation.CLASS_OUTPUT, "", name, origin);
             try (Writer w = file.openWriter()) {
                 w.write(json);
             }
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException e) {
             processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                     "JOUST could not describe " + ir.name() + ": " + e, origin);
         }

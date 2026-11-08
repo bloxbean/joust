@@ -520,6 +520,44 @@ With those, the remaining objection to TxPlan (no room for JOUST's hooks and che
 SPI. D6 now makes JOUST a QuickTx extension, with byte-exact hex datums and a `verify` check (I9) and a fallback to
 direct `Tx` building, gated by S3.
 
+## 13. Implementation notes
+
+### 13.1 M0 (PR #24)
+- **`Tx`, not `ScriptTx`:** the runtime builds QuickTx `Tx`. QuickTxBuilder gives a `Tx` with script intents the fee
+  payer as its `from` and change address, as `ScriptTx` had; single non-script collects use `collectFrom(List)`. All
+  279 tests pass unchanged.
+- **Observing builds:** `StateRuntime.Builder.onBuilt` observes every built transaction.
+- **The oracle:** `examples/devkit`'s `FixtureRecorder` (`-PjoustFixtures`) recorded `fixtures/m0`, 199
+  transactions and 3712 chain reads from all 20 example modules. Each transaction is stored unsigned, with the reads
+  behind it; results are content-addressed in `blobs/` (7.8 MB). `FixturesTest` checks it.
+
+### 13.2 S1 (gate passed)
+- **JuLC change** (embedder API, on top of #311): `JavacFrontend.attribute()` and `Attribution` are public. Route
+  (b) of D2 is taken:
+  - JOUST's generators run over the attributed elements;
+  - no processor runs inside javac, which keeps `-proc:none`;
+  - no other JuLC change was needed. In particular, JOUST's API sources enter as JAR pool units, and JuLC's
+    ownership check accepts them.
+- **One generation path:** `JoustGenerators` is the processor's and the toolchain's single generation path.
+  `SubsetLint.lint(trees, type, reporter)` runs both lint passes over an attributed model.
+- **`julc-state-toolchain`:** `Toolchain.build(files, options)`:
+  1. lowers `.jsc` with the bare file name, as Gradle's `generateJsc` does; the lowering embeds it;
+  2. attributes with JuLC's embedded javac;
+  3. lints and generates;
+  4. compiles each validator as `JulcAnnotationProcessor` does (`compileContract`, the same library pool and
+     ADR-071 marker).
+- **I1 on the JVM** (`ToolchainParityTest`): all 25 contracts of the 18 example modules match the Gradle build
+  exactly: validator source, script bytes and hash, description.
+- **I1 in Node** (`toolchainWasm`, `toolchainWasmTest`): the Web Image `joust-toolchain` is a `julc-wasm` embedder
+  with `joust.build` beside JuLC's `vm.*` and `debug.*`.
+  - It is 28.5 MB of Wasm (Elci: 30.0 MB) and ready in about 0.4 s.
+  - Built in Node with no JDK, all 25 contracts are the same as Gradle's, at 0.3–1.5 s each.
+  - The image includes JOUST's on-chain API sources and the verifiers' compiled scripts as resources.
+- **A bug found and fixed:** javac's `ClassSymbol.getRecordComponents()` does not complete a symbol read from a
+  class file, so a record from a jar reported no components. The Gradle descriptions of ledger sum types
+  (`Credential`) had lost their variants' fields; the toolchain, reading JuLC's ledger as sources, had them right.
+  `Records.components` completes the symbol first; every record read goes through it.
+
 ## Revision history
 
 - r1 (2026-11-08): initial proposal, after the design review in §12.

@@ -1,0 +1,87 @@
+description = 'JOUST toolchain: compiles .java and .jsc contracts without Gradle or a JDK (validators, descriptions, TS clients); the core of the Wasm toolchain engine (ADR-0015 D2)'
+
+dependencies {
+    implementation project(':julc-state-processor')
+    implementation project(':julc-state-dsl')
+    implementation libs.julc.compiler
+    implementation libs.julc.stdlib
+    implementation libs.julc.cardano.client.lib            // JulcScriptAdapter: script CBOR and hash, as JuLC's processor
+    implementation libs.cardano.client.lib                 // PlutusV3Script, JulcScriptAdapter's result
+    // JOUST's on-chain API sources, found on the class path as JuLC library sources (as on Gradle's processor path).
+    runtimeOnly project(path: ':julc-state-api', configuration: 'onchainSources')
+}
+
+// I1 compares with what the Gradle build of the examples wrote.
+tasks.named('test') {
+    dependsOn ':examples:counter:classes', ':examples:bank:classes', ':examples:vault:classes', ':examples:escrow:classes',
+            ':examples:dsl:classes', ':examples:guild:classes', ':examples:token:classes', ':examples:treasury:classes',
+            ':examples:market:classes', ':examples:fees:classes', ':examples:crowdfund:classes', ':examples:pool:classes',
+            ':examples:rollup:classes', ':examples:dex:classes', ':examples:staking:classes', ':examples:oracle:classes',
+            ':examples:upgrade:classes', ':examples:locker:classes'
+}
+
+tasks.register('i1Dump', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.julclang.state.toolchain.DumpForDiff'
+    args 'dsl', 'market', 'treasury'
+    systemProperty 'joust.toolchain.debug', 'true'
+}
+
+// ---- The toolchain engine (ADR-0015 D1): a GraalVM Web Image embedding julc-wasm (JuLC ADR-064).
+//   ./gradlew :julc-state-toolchain:toolchainWasm -PgraalvmHome=/path/to/graalvm-25.3   (Binaryen on PATH)
+sourceSets {
+    wasm {
+        compileClasspath += sourceSets.main.output + configurations.runtimeClasspath
+        runtimeClasspath += sourceSets.main.output + configurations.runtimeClasspath
+    }
+}
+dependencies {
+    wasmImplementation "org.julclang:julc-wasm:${libs.versions.julc.get()}"
+    wasmCompileOnly 'org.graalvm.sdk:webimage-preview:25.3.4.1'
+    wasmRuntimeOnly 'org.slf4j:slf4j-nop:2.0.17'
+}
+def toolchainGraalvm = providers.gradleProperty('graalvmHome').orElse(providers.environmentVariable('GRAALVM_HOME'))
+def toolchainWasmDir = layout.buildDirectory.dir('wasm')
+tasks.register('toolchainWasm', Exec) {
+    group = 'build'
+    description = 'Builds build/wasm/joust-toolchain.js(.wasm) with GraalVM Web Image'
+    dependsOn 'wasmClasses'
+    def cp = sourceSets.wasm.runtimeClasspath
+    inputs.files(cp)
+    inputs.property('graalvmHome', toolchainGraalvm.orElse(''))
+    outputs.dir(toolchainWasmDir)
+    doFirst {
+        if (!toolchainGraalvm.isPresent()) throw new GradleException('set -PgraalvmHome=/path/to/graalvm-25.3 (or GRAALVM_HOME)')
+        def ni = new File(toolchainGraalvm.get(), 'bin/native-image')
+        def dir = toolchainWasmDir.get().asFile
+        dir.mkdirs()
+        executable ni.absolutePath
+        args '--tool:svm-wasm', '-cp', cp.files.findAll { it.exists() }.collect { it.absolutePath }.join(File.pathSeparator),
+                // JuLC's recipe: leave out the metadata registering JuLC's compiler services and CCL for its full image.
+                '--exclude-config', '.*[/\\\\](julc-tools|julc-blueprint|cardano-client-[a-z0-9-]+|json-schema-validator)-[0-9][^/\\\\]*\\.jar',
+                'META-INF/native-image/',
+                // JOUST's on-chain API sources: the toolchain reads them as JuLC library sources.
+                '-H:IncludeResources=META-INF/plutus-sources/.*',
+                // The verifiers' compiled scripts, which the generators embed (MapVerifierInfo).
+                '-H:IncludeResources=META-INF/plutus/.*\\.plutus\\.json',
+                '-H:+UnlockExperimentalVMOptions', '-H:AbortOnTypeReachable=com.github.javaparser.*',
+                '-H:+ReportExceptionStackTraces', "-Djoust.version=${project.version}",
+                '-o', new File(dir, 'joust-toolchain').absolutePath,
+                'org.julclang.state.toolchain.wasm.JoustToolchainWasm'
+    }
+    doLast {
+        new File(toolchainWasmDir.get().asFile, 'joust-toolchain.js.wat').delete()
+        new File(toolchainWasmDir.get().asFile, 'package.json').text = '{ "type": "commonjs" }\n'
+    }
+}
+
+// ADR-0015 S1: the engine compiles every example contract in Node, the same as Gradle (I1). Needs the image.
+tasks.register('toolchainWasmTest', Exec) {
+    group = 'verification'
+    dependsOn 'toolchainWasm'
+    dependsOn tasks.named('test').get().dependsOn
+    workingDir rootDir
+    commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/build-in-node.mjs',
+            'julc-state-toolchain/build/wasm', 'examples', 'counter', 'bank', 'vault', 'escrow', 'crowdfund', 'dsl', 'guild',
+            'token', 'treasury', 'market', 'fees', 'pool', 'rollup', 'dex', 'staking', 'oracle', 'upgrade', 'locker'
+}

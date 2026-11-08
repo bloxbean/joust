@@ -1,5 +1,6 @@
 package org.julclang.state.processor.gen;
 
+import org.julclang.state.processor.Records;
 import org.julclang.state.processor.ir.ContractIR;
 import org.julclang.state.processor.ir.TransitionIR;
 
@@ -188,7 +189,7 @@ public final class PortableGenerator {
         }
         if (r instanceof DeclaredType d && ((TypeElement) d.asElement()).getKind() == ElementKind.RECORD) {
             TypeMirror state = null, payouts = null;
-            for (RecordComponentElement rc : ((TypeElement) d.asElement()).getRecordComponents()) {
+            for (RecordComponentElement rc : Records.components(((TypeElement) d.asElement()))) {
                 switch (rc.getSimpleName().toString()) {
                     case "state" -> state = rc.asType();
                     case "payouts" -> payouts = rc.asType();
@@ -249,7 +250,7 @@ public final class PortableGenerator {
         if (fq.startsWith(LEDGER)) return hasStaticFromPlutusData(e);
         if (fq.startsWith(API + "mpf.") || fq.equals(API + "MerkleMap")) return false;
         if (e.getKind() == ElementKind.RECORD) {
-            return e.getRecordComponents().stream().allMatch(rc -> supported(rc.asType(), depth + 1));
+            return Records.components(e).stream().allMatch(rc -> supported(rc.asType(), depth + 1));
         }
         if (e.getKind() == ElementKind.INTERFACE && e.getModifiers().contains(Modifier.SEALED)) {
             return e.getPermittedSubclasses().stream().allMatch(s -> supported(s, depth + 1));
@@ -291,7 +292,7 @@ public final class PortableGenerator {
         }
         if (fq.startsWith(LEDGER)) return v + ".toPlutusData()";
         if (e.getKind() == ElementKind.RECORD) {
-            var comps = e.getRecordComponents();
+            var comps = Records.components(e);
             if (isNewType(e) && comps.size() == 1) return encoder(comps.get(0).asType(), v + "." + comps.get(0).getSimpleName() + "()").orElseThrow();
             var fs = new ArrayList<String>();
             for (RecordComponentElement rc : comps) fs.add(encoder(rc.asType(), v + "." + rc.getSimpleName() + "()").orElseThrow());
@@ -363,7 +364,7 @@ public final class PortableGenerator {
                 if (fq.startsWith(LEDGER)) {
                     w.line("return " + fq + ".fromPlutusData(d);");
                 } else if (e.getKind() == ElementKind.RECORD) {
-                    var comps = e.getRecordComponents();
+                    var comps = Records.components(e);
                     if (isNewType(e) && comps.size() == 1) {
                         w.line("return new " + typeName(t) + "(" + decoder(comps.get(0).asType(), "d").orElseThrow() + ");");
                     } else {

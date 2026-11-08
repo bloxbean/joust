@@ -28,6 +28,9 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   consumer's `generateJsc` JavaExec task into `build/generated/sources/jsc`.
 - `julc-state-server`: the prepare service (ADR-0013 D2) over generated clients by reflection; `js/state-client`: the
   JS client (codec, verifier, CIP-30 flow, dev wallet, `joust-gen`); `examples/dapp`: the browser dApp on DevKit.
+- `julc-state-toolchain`: ADR-0015's toolchain. `Toolchain.build(files)` compiles `.java`/`.jsc` without Gradle,
+  through JuLC's embedded javac and the shared `JoustGenerators`; `toolchainWasm` builds the Web Image (`joust.build`
+  in Node), and `toolchainWasmTest` checks it against the Gradle outputs.
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
 - `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees,locker,wallet,dapp}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
   DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D
@@ -116,6 +119,9 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `fixtures/m0` holds the oracle (each DevKit transaction, unsigned, with the chain reads behind it, results
   content-addressed in `blobs/`). Re-record with DevKit up: `./gradlew :examples:<m>:test -PjoustFixtures` (or all
   examples); `FixturesTest` checks the oracle. `StateRuntime.Builder.onBuilt` observes every built transaction.
+- ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
+  in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). JuLC
+  pinned at `3a8e149a` (branch `feat/joust-embedder-attribution` on top of #311: `JavacFrontend.attribute` public).
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).
