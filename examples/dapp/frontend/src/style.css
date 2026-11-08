@@ -26,6 +26,7 @@ h2 { margin: 0; font-size: 17px; }
 .brand p { margin: 6px 0 0; color: var(--muted); max-width: 560px; font-size: 14px; }
 .wallet { display: grid; grid-template-columns: auto auto; gap: 8px; align-items: center; min-width: 360px; }
 .wallet #wallet-info { grid-column: 1 / span 2; font-size: 13px; word-break: break-all; }
+.wallet #wallet-detect { grid-column: 1 / span 2; }
 
 main { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 18px; padding: 22px 28px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
