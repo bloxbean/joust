@@ -72,7 +72,7 @@ public final class Prepare {
         try {
             JsonNode call = JSON.readTree(r.call());
             String contract = call.path("contract").asText();
-            if (contract.equals("joust:mapVerifier")) return mapVerifier(r, call);
+            if (contract.equals("joust:mapVerifier") || contract.equals("joust:outputVerifier")) return verifier(r, call, contract);
             // Only the called contract is loaded: the bundle may hold others this engine cannot serve yet.
             DescribedContract dc = null;
             for (Contract c : r.contracts()) {
@@ -131,7 +131,7 @@ public final class Prepare {
             DescribedContract target = dc;
             PreparedTx p = Compose.of(rt, wallet).add(() -> made[0] = target.call(rt, wallet, call.path("kind").asText(),
                     call.path("method").asText(), call.path("instance").asText(null), call.path("object").asText(null),
-                    call.path("args"), pay, call.get("params"))).prepare();
+                    call.path("args"), pay, call.get("params"), call.path("pay").get("assets"))).prepare();
             return new Result(true, p.cbor(), p.txHash(), made[0], p.validTo(), p.requiredSigners(),
                     JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
         } catch (Throwable t) {
@@ -142,16 +142,19 @@ public final class Prepare {
         }
     }
 
-    /** JOUST's shared MerkleMap verifier (ADR-0002 D9): its deployment, or the transaction publishing it. */
-    private static Result mapVerifier(Request r, JsonNode call) throws Exception {
+    /**
+     * JOUST's shared withdraw-zero verifiers: the MerkleMap verifier (ADR-0002 D9) and the output verifier for sends
+     * (ADR-0007 D5). Their deployment, or the transaction publishing and registering one.
+     */
+    private static Result verifier(Request r, JsonNode call, String which) throws Exception {
         Network network = r.networkId() == 1 ? Networks.mainnet() : Networks.testnet();
         var backend = new SnapshotBackend(Snapshot.fromJson(r.snapshot()));
         var rt = StateRuntime.builder(backend).network(network)
                 .chainTime(new SlotChainTime(r.zeroSlot(), r.zeroTimeMs(), r.slotLengthMs(), backend)).build();
-        var v = rt.mapVerifier();
+        var v = which.equals("joust:mapVerifier") ? rt.mapVerifier() : rt.outputVerifier();
         if (call.path("kind").asText().equals("deployment")) {
             var d = JSON.createObjectNode();
-            d.put("contract", "joust:mapVerifier");
+            d.put("contract", which);
             d.put("hash", v.hash());
             d.put("address", v.holder());
             d.put("rewardAddress", v.rewardAddress());

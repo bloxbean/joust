@@ -25,7 +25,7 @@ import java.util.stream.Stream;
 public final class CodecFeature implements Feature {
 
     /** Packages whose records the runtime encodes: the API's and the contracts'. */
-    static final List<String> PACKAGES = List.of("org/julclang/state/");
+    static final List<String> PACKAGES = List.of("org/julclang/state/", "org/julclang/ledger/");
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
@@ -42,7 +42,22 @@ public final class CodecFeature implements Feature {
             Class<?> c = access.findClassByName(name);
             if (c == null) continue;
             if (c.isSealed()) RuntimeReflection.registerAllPermittedSubclasses(c);
-            if (!c.isRecord()) continue;
+            // Ledger types decode through a static fromPlutusData (sealed interfaces included).
+            for (Method m : c.getDeclaredMethods()) {
+                if (m.getName().equals("fromPlutusData") && java.lang.reflect.Modifier.isStatic(m.getModifiers())) {
+                    RuntimeReflection.register(m);
+                }
+            }
+            if (!c.isRecord()) {
+                if (c.isSealed()) {
+                    try {
+                        meta.invoke(null, c);
+                    } catch (ReflectiveOperationException | RuntimeException e) {
+                        // not described by the codec
+                    }
+                }
+                continue;
+            }
             RuntimeReflection.register(c);
             RuntimeReflection.registerAllRecordComponents(c);
             RuntimeReflection.registerAllDeclaredConstructors(c);

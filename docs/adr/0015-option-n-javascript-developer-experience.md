@@ -791,8 +791,29 @@ direct `Tx` building, gated by S3.
   - On the JVM, `DescribedTokenDevnetTest` runs the same Token flow through the dispatcher with key accounts.
 - **DevKit's faucet can run dry:** `devkitTopUp` then pays from the default mnemonic's genesis accounts, as
   `DevKit.topUp` does.
-- **Next in M3:** native assets, co-signers (`@Quorum`, `@AuthorizedBy`), batches, composition and deposits, moves;
-  the tamper suite over map transactions; and call requests in every example's fixtures (I3).
+- **I5 over map transactions:** the dApp's tamperings, plus the verifier's withdrawal made non-zero, doubled with an
+  attacker's, or removed. All 13 are refused before the wallet is asked to sign.
+- **Native assets (ADR-0007) through npm.** Locker passes on DevKit: tokens minted in JS, locked with offered assets,
+  unlocked as sends, a MerkleMap of balances, and every token back.
+  - **Transitions** of an asset-aware contract take `Funds` (a leading args field, `$funds` in the recipe's
+    `transitionArgs`) and return a fuller step: `[next?, payouts, sends, mint, accepted]`.
+  - **The dispatcher:**
+    - runs asset-aware calls through `runAssets` and the asset variants of `Deploy` and `OwnedObject.Create`;
+    - fills `Funds` per run;
+    - puts the offered assets (`pay.assets`) in `receivedAssets` and the redeemer's `assetsIn`;
+    - decodes the step into a full `Transition`.
+  - Minting (`ByAction`) stays refused for now.
+  - **The output verifier:** the engine answers `joust:outputVerifier` as it does the map verifier. Deployments of
+    contracts that send pin it, and the page verifier allows zero withdrawals to each pinned verifier, with their
+    reward redeemers and reference inputs.
+  - **The page verifier** counts the enterprise address of one of the wallet's own keys as the wallet's: a contract
+    may send to `ctx.caller()`. A wallet key under a stranger's stake key stays refused.
+  - **The engine image** also registers JuLC's ledger records and the static `fromPlutusData` of its sealed ledger
+    types (`CodecFeature`).
+  - **`devkitMint`:** a single-signature native-script mint, for tests and demos.
+  - On the JVM, `DescribedLockerDevnetTest` runs the same flow through the dispatcher.
+- **Next in M3:** minting (`ByAction`), co-signers (`@Quorum`, `@AuthorizedBy`), batches, composition and deposits,
+  moves; and call requests in every example's fixtures (I3).
 
 ## Revision history
 

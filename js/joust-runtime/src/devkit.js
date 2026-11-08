@@ -59,3 +59,37 @@ async function payFromGenesis(CSL, chain, to, lovelace) {
   }
   throw new Error('DevKit: the faucet is dry and no genesis account can pay ' + lovelace + ' lovelace');
 }
+
+/**
+ * Mints {@code quantity} of a token named {@code name} (UTF-8) to {@code wallet} under a single-signature native
+ * script of the wallet's key; returns { policy, unit }. A DevKit convenience for tests and demos.
+ */
+export async function devkitMint(CSL, chain, wallet, name, quantity) {
+  const p = await chain.params();
+  const num = (x) => CSL.BigNum.from_str(String(x));
+  const cfg = CSL.TransactionBuilderConfigBuilder.new()
+    .fee_algo(CSL.LinearFee.new(num(p.min_fee_a), num(p.min_fee_b)))
+    .pool_deposit(num(p.pool_deposit)).key_deposit(num(p.key_deposit))
+    .max_value_size(Number(p.max_val_size)).max_tx_size(Number(p.max_tx_size))
+    .coins_per_utxo_byte(num(p.coins_per_utxo_size ?? p.coins_per_utxo_byte ?? 4310))
+    .build();
+  const script = CSL.NativeScript.new_script_pubkey(CSL.ScriptPubkey.new(CSL.Ed25519KeyHash.from_hex(wallet.keyHash)));
+  const policy = script.hash().to_hex();
+  const assetName = CSL.AssetName.new(new TextEncoder().encode(name));
+  const tb = CSL.TransactionBuilder.new(cfg);
+  const utxos = CSL.TransactionUnspentOutputs.new();
+  for (const h of await wallet.getUtxos()) utxos.add(CSL.TransactionUnspentOutput.from_hex(h));
+  const mb = CSL.MintBuilder.new();
+  mb.add_asset(CSL.MintWitness.new_native_script(CSL.NativeScriptSource.new(script)), assetName, CSL.Int.new(num(quantity)));
+  tb.set_mint_builder(mb);
+  // The minted tokens go to the wallet with the change (a mint counts as input when balancing).
+  tb.add_inputs_from(utxos, CSL.CoinSelectionStrategyCIP2.LargestFirst);
+  tb.add_change_if_needed(CSL.Address.from_bech32(wallet.address));
+  const fixed = CSL.FixedTransaction.from_hex(tb.build_tx().to_hex());
+  const ws = CSL.TransactionWitnessSet.from_hex(await wallet.signTx(fixed.to_hex(), true));
+  const vkeys = ws.vkeys();
+  for (let i = 0; vkeys && i < vkeys.len(); i++) fixed.add_vkey_witness(vkeys.get(i));
+  const hash = await chain.submit(fixed.to_hex());
+  await chain.awaitTx(hash);
+  return { policy, unit: policy + Buffer.from(name).toString('hex') };
+}

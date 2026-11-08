@@ -87,7 +87,10 @@ export async function verifyPrepared(o) {
   const problems = [];
   const report = { outputs: [], next: null, redeemer: null, created: null };
   const policy = deployment.policy;
-  const isWallet = (addr) => wallet.addresses.includes(addr.to_bech32());
+  // The wallet's addresses, and the enterprise address of one of its payment keys: no stake credential, so wholly the
+  // wallet's (a contract may send there, e.g. to ctx.caller()). A wallet key under a stranger's stake key stays refused.
+  const isWallet = (addr) => wallet.addresses.includes(addr.to_bech32())
+    || (CSL.EnterpriseAddress.from_address(addr) && wallet.keyHashes.includes(paymentKeyHashOf(CSL, addr)));
   const atScript = (bech32) => bech32 === deployment.address;
   const pay = { lovelace: BigInt(call.pay?.lovelace ?? 0), assets: call.pay?.assets ?? [] };
 
@@ -109,16 +112,20 @@ export async function verifyPrepared(o) {
   if (body.certs() && body.certs().len() > 0) problems.push('certificates');
   if (body.voting_procedures() || body.voting_proposals()) problems.push('votes or proposals');
   if (body.donation() || body.current_treasury_value()) problems.push('a treasury donation');
-  // Withdrawals: none, except one zero withdrawal from JOUST's map verifier (the call's MerkleMap claims, checked on
-  // chain by the verifier and the contract; ADR-0002 D9), pinned by the deployment.
-  const mv = deployment.mapVerifier;
+  // Withdrawals: none, except zero withdrawals from JOUST's verifiers the deployment pins: the map verifier (the
+  // call's MerkleMap claims; ADR-0002 D9) and the output verifier (its sends; ADR-0007 D5), checked on chain.
+  const pinnedVerifiers = [deployment.mapVerifier, deployment.outputVerifier].filter(Boolean);
+  const verifierRewards = new Set(pinnedVerifiers.map((v) => v.rewardAddress));
   const ws = body.withdrawals();
   if (ws && ws.len() > 0) {
     const keys = ws.keys();
-    const only = ws.len() === 1 && mv && keys.get(0).to_address().to_bech32() === mv.rewardAddress
-      && ws.get(keys.get(0)).to_str() === '0';
-    if (!only) problems.push('withdrawals');
+    let ok = ws.len() <= verifierRewards.size;
+    for (let i = 0; i < keys.len(); i++) {
+      if (!verifierRewards.has(keys.get(i).to_address().to_bech32()) || ws.get(keys.get(i)).to_str() !== '0') ok = false;
+    }
+    if (!ok) problems.push('withdrawals');
   }
+  const withdrawalCount = ws ? ws.len() : 0;
   if (tx.auxiliary_data()) problems.push('auxiliary data');
   if (body.network_id() && body.network_id().kind() !== (deployment.networkId === 1 ? CSL.NetworkIdKind.Mainnet : CSL.NetworkIdKind.Testnet)) {
     problems.push('another network');
@@ -169,7 +176,7 @@ export async function verifyPrepared(o) {
     const kind = r.tag().kind();
     if (kind === CSL.RedeemerTagKind.Spend) spends.push(r);
     else if (kind === CSL.RedeemerTagKind.Mint) mints.push(r);
-    else if (kind === CSL.RedeemerTagKind.Reward && mv && ws && ws.len() === 1 && r.index().to_str() === '0') { /* the map verifier's */ }
+    else if (kind === CSL.RedeemerTagKind.Reward && Number(r.index().to_str()) < withdrawalCount) { /* a pinned verifier's */ }
     else problems.push('a redeemer that is neither a spend nor a mint');
   }
 
@@ -438,7 +445,7 @@ export async function verifyPrepared(o) {
   for (let i = 0; refIns && i < refIns.len(); i++) {
     const r = refOf(refIns.get(i));
     if ((deployment.referenceScripts ?? []).includes(r)) continue;
-    if ((mv?.referenceScripts ?? []).includes(r)) continue;
+    if (pinnedVerifiers.some((v) => (v.referenceScripts ?? []).includes(r))) continue;
     const u = await chain.utxo(r);
     const ok = u && (u.referenceScriptHash === policy || (atScript(u.address) && u.value.get(policy + call.instance) === 1n)
       || foreign.some((unit) => u.value.get(unit) === 1n));
@@ -458,8 +465,11 @@ function verifiableWithoutService(meta, description, deployment) {
   if (!r) return false;
   const p = meta.policies ?? {};
   const out = meta.returns ?? {};
-  if (meta.takesAssets || p.batched || p.into || p.admits || p.receives || p.quorum || p.authorizedBy?.length) return false;
-  if (out.sends || out.mint || out.deposits || out.events) return false;
+  if (p.batched || p.into || p.admits || p.receives || p.quorum || p.authorizedBy?.length) return false;
+  if (out.mint || out.deposits || out.events) return false;
+  // Sends: verifiable when the deployment pins JOUST's output verifier (the outputs are checked on chain; the page
+  // still bounds what others receive by what the script releases).
+  if (out.sends && !deployment?.outputVerifier) return false;
   const target = description.definitions?.[r.target];
   // MerkleMaps: verifiable when the deployment pins JOUST's map verifier (its claims are checked on chain).
   for (const alt of target?.anyOf ?? []) {

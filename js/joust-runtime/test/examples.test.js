@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import { joustRuntime, devkitClock, devkitTopUp, devWallet, JoustContract } from '../src/index.js';
+import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devWallet, JoustContract } from '../src/index.js';
 import { build } from '../../joust/src/build.js';
 import { tamperings } from '../../../examples/dapp/frontend/src/tamper.js';
 
@@ -203,4 +203,25 @@ test('Token: MerkleMap balances, read discovery, the map verifier', { skip, time
   await t.call(ben, 'burn', { amount: 750n });
   await t.call(admin, 'close', {});
   assert.equal(await t.state(), null);
+});
+
+test('Locker: native assets accepted and sent back (the output verifier), balances in a MerkleMap', { skip, timeout: 600_000 }, async () => {
+  const { rt, wallets, contract } = await setup(['locker']);
+  const [admin, ann] = await wallets(2);
+  const { policy, unit } = await devkitMint(CSL, rt.chain, ann, 'GOLD', 1000n);
+  const gold = Buffer.from('GOLD').toString('hex');
+  const locker = await contract('Locker', admin);
+  assert.ok(locker.deployment.outputVerifier?.referenceScripts?.length, 'the output verifier is pinned');
+  const l = locker.at((await locker.deploy(admin, { tokenPolicy: policy, tokenName: gold })).instance);
+  await l.call(ann, 'lock', { qty: 400n }, { lovelace: 0n, assets: [[policy, [[gold, 400n]]]] });
+  await l.call(ann, 'unlock', { qty: 150n });
+  assert.equal((await l.state()).total, 250n);
+  await assert.rejects(l.call(ann, 'unlock', { qty: 251n }), /not that many locked/);
+  await l.call(ann, 'unlock', { qty: 250n });
+  await l.call(admin, 'close', {});
+  let back = 0n;
+  for (const u of await rt.chain.utxosAt(ann.address)) back += u.value.get(unit) ?? 0n;
+  const ent = CSL.EnterpriseAddress.new(0, CSL.Credential.from_keyhash(CSL.Ed25519KeyHash.from_hex(ann.keyHash))).to_address().to_bech32();
+  for (const u of await rt.chain.utxosAt(ent)) back += u.value.get(unit) ?? 0n;
+  assert.equal(back, 1000n, 'every token came back');
 });

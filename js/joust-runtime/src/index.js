@@ -9,7 +9,7 @@ import { engineService } from './service.js';
 export { loadEngine } from './engine.js';
 export { engineService } from './service.js';
 export { blockfrostApi, emptySnapshot, fetchNeed } from './snapshot.js';
-export { devkitClock, devkitTopUp } from './devkit.js';
+export { devkitClock, devkitTopUp, devkitMint } from './devkit.js';
 export { memoryMapStore, fileMapStore } from './maps.js';
 export { JoustContract, VerificationError, blockfrostChain, toJson } from '@julclang/state-client';
 export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-client/devwallet';
@@ -70,30 +70,32 @@ export function joustRuntime(o) {
       const extra = {};
       if (d?.referenceScripts?.length) extra.referenceScripts = d.referenceScripts;
       if (d?.params) extra.params = d.params;   // the deployment's @Params (ADR-0009 D1)
-      if (d?.mapVerifier?.referenceScripts?.length) extra.referenceScripts = [...(extra.referenceScripts ?? []), ...d.mapVerifier.referenceScripts];
+      for (const v of [d?.mapVerifier, d?.outputVerifier]) {
+        if (v?.referenceScripts?.length) extra.referenceScripts = [...(extra.referenceScripts ?? []), ...v.referenceScripts];
+      }
       return engine.prepare({ ...request, ...extra });
     },
   };
-  let mapVerifier = null;
-  async function ensureMapVerifier(wallet, payer) {
-    if (mapVerifier?.referenceScripts?.length) return mapVerifier;
+  const verifiers = {};
+  async function ensureVerifier(name, wallet, payer) {
+    if (verifiers[name]?.referenceScripts?.length) return verifiers[name];
     const CSL = o.CSL;
-    let v = await engine.deployment('joust:mapVerifier', payer);
+    let v = await engine.deployment(name, payer);
     if (!v.referenceScripts.length) {
-      const p = await engine.publish('joust:mapVerifier', payer);
+      const p = await engine.publish(name, payer);
       if (p) {
         const plan = planOf(CSL, p.cbor);
-        if (plan.outputs.some((x) => x.address !== v.address && x.address !== payer)) throw new Error('the map verifier transaction pays elsewhere: refused');
+        if (plan.outputs.some((x) => x.address !== v.address && x.address !== payer)) throw new Error(`the ${name} transaction pays elsewhere: refused`);
         const signed = assemble(CSL, p.cbor, await wallet.signTx(p.cbor, true));
         await chain.submit(signed.cbor);
         await chain.awaitTx(signed.txHash);
       }
       for (let i = 0; i < 30 && !v.referenceScripts.length; i++) {
-        v = await engine.deployment('joust:mapVerifier', payer);
+        v = await engine.deployment(name, payer);
         if (!v.referenceScripts.length) await new Promise((r) => setTimeout(r, 1000));
       }
     }
-    mapVerifier = v;
+    verifiers[name] = v;
     return v;
   }
 
@@ -129,7 +131,12 @@ export function joustRuntime(o) {
         if (!d.referenceScripts.length) throw new Error(`the ${contract} reference script is not visible yet`);
       }
       // A contract with MerkleMaps needs JOUST's map verifier (published and registered once per network; ADR-0002 D9).
-      if (usesMaps(descriptionOf(contract))) d.mapVerifier = await ensureMapVerifier(wallet, payer);
+      const desc = descriptionOf(contract);
+      if (usesMaps(desc)) d.mapVerifier = await ensureVerifier('joust:mapVerifier', wallet, payer);
+      // Sends go through JOUST's output verifier (ADR-0007 D5), published and registered once per network.
+      if ([...(desc?.['x-joust']?.actions ?? [])].some((a) => a.returns?.sends)) {
+        d.outputVerifier = await ensureVerifier('joust:outputVerifier', wallet, payer);
+      }
       deployments[d.contract] = d;
       return d;
     },

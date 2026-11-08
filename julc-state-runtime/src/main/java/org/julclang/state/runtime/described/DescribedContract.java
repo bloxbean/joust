@@ -108,10 +108,23 @@ public final class DescribedContract {
     /** As {@link #call(StateRuntime, Account, String, String, String, String, JsonNode, BigInteger)}, with the {@code @Params}. */
     public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
                        JsonNode args, BigInteger lovelace, JsonNode params) {
+        return call(runtime, caller, kind, method, instance, object, args, lovelace, params, null);
+    }
+
+    /**
+     * As {@link #call(StateRuntime, Account, String, String, String, String, JsonNode, BigInteger, JsonNode)}, offering
+     * native assets ({@code [[policy, [[name, quantity]]]]}, hex; ADR-0007) to a method that takes them.
+     */
+    public String call(StateRuntime runtime, Account caller, String kind, String method, String instance, String object,
+                       JsonNode args, BigInteger lovelace, JsonNode params, JsonNode payAssets) {
         JsonNode meta = meta(kind, method);
         JsonNode recipe = meta.get("recipe");
         if (recipe == null) throw new IllegalArgumentException(method + ": no call recipe (rebuild with JOUST's processor)");
-        if (meta.path("takesAssets").asBoolean()) throw new IllegalArgumentException(method + " takes native assets: not supported yet (ADR-0015 M3)");
+        org.julclang.ledger.Value offered = assets(payAssets);
+        if (!meta.path("takesAssets").asBoolean() && !org.julclang.state.api.Assets.isEmpty(offered)) {
+            throw new IllegalArgumentException(method + " takes no native assets");
+        }
+        boolean assetAware = x.path("assetAware").asBoolean();
         if (unsupported(meta)) throw new IllegalArgumentException(method + " needs maps, intents, moves, sends, mints or composition: not supported yet (ADR-0015 M3)");
         if (!meta.path("payable").asBoolean() && lovelace.signum() != 0) throw new IllegalArgumentException(method + " is not payable");
         if (lovelace.signum() < 0) throw new IllegalArgumentException("a negative payment");
@@ -147,6 +160,31 @@ public final class DescribedContract {
         }
         lead.addAll(argList);
         PlutusData argsData = new PlutusData.ConstrData(0, lead);
+        // The recipe's layout of the transition's arguments; Funds (an asset-aware method's) are filled in per run.
+        var layoutArgs = new ArrayList<PlutusData>();
+        int fundsAt = -1;
+        int readAt = 0;
+        int leadParams = recipe.path("params").asBoolean() ? 1 : 0;
+        if (recipe.has("transitionArgs")) {
+            for (JsonNode n : recipe.get("transitionArgs")) {
+                String a = n.asText();
+                if (a.equals("$params")) layoutArgs.add(lead.get(0));
+                else if (a.startsWith("$read:")) layoutArgs.add(lead.get(leadParams + readAt++));
+                else if (a.equals("$funds")) {
+                    fundsAt = layoutArgs.size();
+                    layoutArgs.add(NONE);
+                } else layoutArgs.add(byName.get(a));
+            }
+        } else {
+            layoutArgs.addAll(lead);
+        }
+        int fundsSlot = fundsAt;
+        java.util.function.Function<org.julclang.state.api.Funds, PlutusData> argsWith = funds -> {
+            var l = new ArrayList<>(layoutArgs);
+            if (fundsSlot >= 0) l.set(fundsSlot, PlutusDataAdapter.fromClientLib(PlutusDataAdapter.convert(funds)));
+            return new PlutusData.ConstrData(0, l);
+        };
+        PlutusData offeredData = offered.toPlutusData();
         boolean usesCtx = meta.path("ctx").asBoolean();
         String transition = recipe.get("transition").asText();
         int alternative = meta.get("redeemer").get("index").asInt();
@@ -154,6 +192,12 @@ public final class DescribedContract {
 
         switch (kind) {
             case "init" -> {
+                if (assetAware) {
+                    var d = new Deploy<PlutusData>(caller, lovelace, usesCtx, null,
+                            (seed, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), seed, null, offeredData),
+                            offered, (ctx, funds) -> full(fn.apply(transition, NONE, NONE, argsWith.apply(funds), ctxData(ctx, usesCtx))));
+                    return handle.deploy(d).instance().instanceId();
+                }
                 var d = new Deploy<PlutusData>(caller, lovelace, usesCtx,
                         ctx -> next(fn.apply(transition, NONE, NONE, argsData, ctxData(ctx, usesCtx)), method),
                         (seed, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), seed, null));
@@ -167,14 +211,26 @@ public final class DescribedContract {
                 rules(b, recipe);
                 for (var rd : reads) b.referenceInputs(rd.utxo());
                 b.usesCtx(usesCtx).received(lovelace)
-                        .run((s, ctx) -> transition(discover(transition, spec.layout(), s, NONE, argsData, ctxData(ctx, usesCtx))))
-                        .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null));
+                        .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                if (assetAware) {
+                    b.receivedAssets(offered).runAssets(false, (s, sh, ctx, funds) -> full(discover(transition, spec.layout(), s, NONE,
+                            argsWith.apply(funds), ctxData(ctx, usesCtx))));
+                } else {
+                    b.run((s, ctx) -> transition(discover(transition, spec.layout(), s, NONE, argsData, ctxData(ctx, usesCtx))));
+                }
                 at.call(b.build());
                 return null;
             }
             case "ownedInit" -> {
                 StateInstance<PlutusData> at = handle.at(requireInstance(instance));
                 boolean shared = recipe.path("shared").asBoolean();
+                if (assetAware) {
+                    var create = new OwnedObject.Create<PlutusData>(method, caller, lovelace, usesCtx, shared, null,
+                            (seed, inst, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), seed, inst, offeredData),
+                            offered, (sh, ctx, funds) -> full(fn.apply(transition, NONE, shared ? (PlutusData) sh : NONE,
+                                    argsWith.apply(funds), ctxData(ctx, usesCtx))));
+                    return OwnedObject.create(at, create, ownedCodec(meta.get("owned").asText())).objectId();
+                }
                 var create = new OwnedObject.Create<PlutusData>(method, caller, lovelace, usesCtx, shared,
                         (sh, ctx) -> next(fn.apply(transition, NONE, shared ? (PlutusData) sh : NONE, argsData, ctxData(ctx, usesCtx)), method),
                         (seed, inst, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), seed, inst));
@@ -191,8 +247,12 @@ public final class DescribedContract {
                         : Call.<PlutusData>action(method, caller);
                 rules(b, recipe);
                 b.usesCtx(usesCtx).received(lovelace)
-                        .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null));
-                if (recipe.path("shared").asBoolean()) {
+                        .redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                if (assetAware) {
+                    boolean sharedObj = recipe.path("shared").asBoolean();
+                    b.receivedAssets(offered).runAssets(sharedObj, (o, sh, ctx, funds) -> full(discover(transition, ownedLayout, o,
+                            sharedObj ? (PlutusData) sh : NONE, argsWith.apply(funds), ctxData(ctx, usesCtx))));
+                } else if (recipe.path("shared").asBoolean()) {
                     b.runShared((o, sh, ctx) -> transition(discover(transition, ownedLayout, o, (PlutusData) sh, argsData, ctxData(ctx, usesCtx))));
                 } else {
                     b.run((o, ctx) -> transition(discover(transition, ownedLayout, o, NONE, argsData, ctxData(ctx, usesCtx))));
@@ -238,6 +298,11 @@ public final class DescribedContract {
     /** The redeemer: the recipe's fields in order. */
     private static PlutusData redeemer(int alternative, JsonNode fields, java.util.Map<String, PlutusData> args, PlutusData ctx,
                                        TxOutRef seed, byte[] instance) {
+        return redeemer(alternative, fields, args, ctx, seed, instance, null);
+    }
+
+    private static PlutusData redeemer(int alternative, JsonNode fields, java.util.Map<String, PlutusData> args, PlutusData ctx,
+                                       TxOutRef seed, byte[] instance, PlutusData assetsIn) {
         var out = new ArrayList<PlutusData>();
         for (JsonNode f : fields) {
             String n = f.asText();
@@ -245,6 +310,10 @@ public final class DescribedContract {
                 case "seed" -> out.add(seed.toPlutusData());
                 case "instance" -> out.add(PlutusData.bytes(instance));
                 case "ctx" -> out.add(ctx);
+                case "assetsIn" -> {
+                    if (assetsIn == null) throw new IllegalArgumentException("the redeemer's assetsIn without offered assets");
+                    out.add(assetsIn);
+                }
                 default -> {
                     PlutusData a = args.get(n);
                     if (a == null) throw new IllegalArgumentException("redeemer field " + n + " is not supported yet (ADR-0015 M3)");
@@ -274,6 +343,34 @@ public final class DescribedContract {
         return next != null ? Transition.of(next, payouts) : Transition.end(payouts);
     }
 
+    /** An asset-aware step ({@code Constr 0 [next?, payouts, sends, mint, accepted]}) as the runtime's full transition. */
+    static Transition<PlutusData> full(PlutusData step) {
+        var c = (PlutusData.ConstrData) DataFidelity.check(step, "the method's result");
+        var base = transition(new PlutusData.ConstrData(0, List.of(c.fields().get(0), c.fields().get(1))));
+        var items = ((PlutusData.ListData) c.fields().get(2)).items();
+        JulcList<org.julclang.state.api.Send> sends = JulcList.empty();
+        for (int i = items.size() - 1; i >= 0; i--) {
+            sends = sends.prepend(PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(items.get(i)), org.julclang.state.api.Send.class));
+        }
+        var mint = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(c.fields().get(3)), org.julclang.ledger.Value.class);
+        var accepted = PlutusDataAdapter.convert(PlutusDataAdapter.toClientLib(c.fields().get(4)), org.julclang.ledger.Value.class);
+        return Transition.full(base.next(), base.payouts(), sends, mint, accepted);
+    }
+
+    /** Offered native assets: {@code [[policy, [[name, quantity]]]]} (hex), as the JS client sends them. */
+    static org.julclang.ledger.Value assets(JsonNode json) {
+        var v = org.julclang.state.api.Assets.none();
+        if (json == null || json.isNull() || json.isMissingNode()) return v;
+        for (JsonNode p : json) {
+            byte[] policy = HexFormat.of().parseHex(p.get(0).asText());
+            for (JsonNode a : p.get(1)) {
+                v = org.julclang.state.api.Assets.add(v, org.julclang.state.api.Assets.of(policy, HexFormat.of().parseHex(a.get(0).asText()),
+                        new BigInteger(a.get(1).asText())));
+            }
+        }
+        return v;
+    }
+
     /** What a creation makes. */
     private static PlutusData next(PlutusData step, String method) {
         PlutusData n = transition(step).next();
@@ -293,14 +390,14 @@ public final class DescribedContract {
         throw new IllegalArgumentException(name + " has no owned type " + type);
     }
 
-    /** What this dispatcher cannot run yet (ADR-0015 M3): maps, assets, batches, composition, moves, sends, mints, events. */
+    /** What this dispatcher cannot run yet (ADR-0015 M3): batches, composition and deposits, moves, mints, events, co-signers. */
     boolean unsupported(JsonNode meta) {
         JsonNode p = meta.path("policies");
         boolean cosigned = !p.path("quorum").isNull() && !p.path("quorum").isMissingNode() || !p.path("authorizedBy").isEmpty();
         JsonNode r = meta.path("returns");
-        return meta.path("takesAssets").asBoolean() || p.path("batched").asBoolean() || p.path("into").asBoolean()
+        return p.path("batched").asBoolean() || p.path("into").asBoolean()
                 || !p.path("admits").isNull() && !p.path("admits").isMissingNode() || p.path("receives").asBoolean()
-                || r.path("sends").asBoolean() || r.path("mint").asBoolean() || r.path("deposits").asBoolean()
+                || r.path("mint").asBoolean() || r.path("deposits").asBoolean()
                 || r.path("events").asBoolean() || cosigned;
     }
 

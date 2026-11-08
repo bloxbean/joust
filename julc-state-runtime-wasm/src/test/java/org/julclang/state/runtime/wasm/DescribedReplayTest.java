@@ -41,6 +41,22 @@ class DescribedReplayTest {
         return new Prepare.Contract(c.descriptionJson(), c.scriptCborHex(), c.transitions());
     }
 
+    /** The contract {@code simple} of {@code examples/<example>} (an example may hold several). */
+    static Prepare.Contract contract(String example, String simple) throws Exception {
+        Path root = Path.of("../examples", example, "src/main/java");
+        Map<String, String> files = new LinkedHashMap<>();
+        try (Stream<Path> s = Files.walk(root)) {
+            for (Path p : s.filter(f -> f.toString().endsWith(".java")).toList()) {
+                String text = Files.readString(p);
+                if (text.contains("@StateContract")) files.put(root.relativize(p).toString(), text);
+            }
+        }
+        var r = Toolchain.build(files, Map.of());
+        assertTrue(r.ok(), example + ": " + r.diagnostics());
+        var c = r.contracts().stream().filter(x -> x.name().equals(simple)).findFirst().orElseThrow();
+        return new Prepare.Contract(c.descriptionJson(), c.scriptCborHex(), c.transitions());
+    }
+
     @Test
     void recordedPreparesReplayThroughDescriptionsAndPrograms() throws Exception {
         var contracts = List.of(contract("counter"), contract("bank"));

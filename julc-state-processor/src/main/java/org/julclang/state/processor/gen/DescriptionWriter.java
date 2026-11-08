@@ -281,6 +281,7 @@ public final class DescriptionWriter {
         var layout = new ArrayList<String>();
         if (t.takesParams()) layout.add("$params");
         for (var rd : t.reads()) layout.add("$read:" + rd.name());
+        if (t.hasFunds()) layout.add("$funds");
         for (var p : t.params()) layout.add(p.name());
         r.put("transitionArgs", layout);
         return r;
