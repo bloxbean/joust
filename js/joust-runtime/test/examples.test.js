@@ -3,7 +3,8 @@
 // verified by @julclang/state-client and signed by a key wallet. Mirrors the examples' Java DevKit tests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateMnemonic } from '@scure/bip39';
@@ -37,9 +38,34 @@ async function built(name) {
   return JSON.parse(readFileSync(join(out, 'contracts.json'), 'utf8'));
 }
 
+/**
+ * JOUST_RECORD=<dir>: every engine-prepared call as an I3 fixture (ADR-0015), replayed on the JVM by
+ * julc-state-runtime-wasm's EngineFixturesTest. Contracts are stored once, by the hash of their description.
+ */
+function recorder(group) {
+  const dir = process.env.JOUST_RECORD;
+  if (!dir) return undefined;
+  let seq = 0;
+  return (f) => {
+    mkdirSync(join(dir, 'contracts'), { recursive: true });
+    mkdirSync(join(dir, group), { recursive: true });
+    const refs = f.contracts.map((d) => {
+      const sha = createHash('sha256').update(d).digest('hex');
+      const file = join(dir, 'contracts', sha + '.json');
+      if (!existsSync(file)) writeFileSync(file, JSON.stringify(contractsByDescription.get(d)));
+      return sha;
+    });
+    const name = `${String(++seq).padStart(3, '0')}-${f.call.method ?? f.call.kind}.json`;
+    writeFileSync(join(dir, group, name), JSON.stringify({ ...f, contracts: refs }));
+  };
+}
+const contractsByDescription = new Map();
+
 async function setup(names) {
   const contracts = (await Promise.all(names.map(built))).flat();
-  const rt = joustRuntime({ CSL, chainUrl: STORE, contracts, clock: await devkitClock(ADMIN), networkId: 0, ttlMs: 20_000 });
+  for (const c of contracts) contractsByDescription.set(c.description, c);
+  const rt = joustRuntime({ CSL, chainUrl: STORE, contracts, clock: await devkitClock(ADMIN), networkId: 0, ttlMs: 20_000,
+    record: recorder(names.join('+')) });
   const wallets = async (n, ada = 300) => {
     const ws = Array.from({ length: n }, () => devWallet({ CSL, chain: rt.chain, mnemonic: generateMnemonic(wordlist, 256) }));
     for (const w of ws) await devkitTopUp(w.address, ada, ADMIN, { CSL, chain: rt.chain });

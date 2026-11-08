@@ -38,6 +38,8 @@ const big = (x) => BigInt(x);
  * @param o.ttlMs      how long a prepared transaction stays valid (default 120 s; a DevKit's horizon is minutes)
  * @param o.maxRounds  needs fetched before giving up (default 64)
  * @param o.mapStore   the MerkleMap mirror's nodes (memoryMapStore() by default; fileMapStore(path) to keep them)
+ * @param o.record     (fixture) => void: each prepared call as an I3 fixture (request, snapshot, map nodes, clock,
+ *                     the contracts' hashes, the transaction), for the JVM to replay (ADR-0015 I3)
  * @param o.prefetch   async (call, snapshot) => void: fills what the call will surely read before the first run (the
  *                     up-front needs of ADR-0015 D5); the engine still asks for anything missing
  */
@@ -55,13 +57,18 @@ export function engineService(o) {
     const snapshot = emptySnapshot();
     if (o.prefetch) await o.prefetch(call, snapshot);
     for (let round = 1; round <= (o.maxRounds ?? 64); round++) {
+      const mapNodes = { ...maps.all() };
       const r = engine.joust.prepare({
         call: JSON.stringify(call), snapshot: JSON.stringify(snapshot), contracts,
         zeroSlot: big(o.clock.zeroSlot), zeroTimeMs: big(o.clock.zeroTimeMs), slotLengthMs: big(o.clock.slotLengthMs),
-        ttlMs: big(o.ttlMs ?? 120_000), networkId: o.networkId ?? 0, mapNodes: maps.all(),
+        ttlMs: big(o.ttlMs ?? 120_000), networkId: o.networkId ?? 0, mapNodes,
       });
       if (r.ok) {
         rounds.push(round);
+        if (o.record && r.cbor) {
+          o.record({ call, snapshot: JSON.parse(JSON.stringify(snapshot)), mapNodes, clock: o.clock, ttlMs: o.ttlMs ?? 120_000,
+            networkId: o.networkId ?? 0, contracts: contracts.map((c) => c.description), cbor: r.cbor, txHash: r.txHash });
+        }
         maps.putAll(r.mapNodes);   // the mirror's new nodes (the next call's map roots)
         return r;
       }

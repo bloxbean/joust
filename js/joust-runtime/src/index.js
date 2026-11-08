@@ -51,7 +51,7 @@ export function joustRuntime(o) {
   }
 
   const engine = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs,
-    prefetch: o.prefetch === false ? undefined : prefetch, mapStore: o.mapStore });
+    prefetch: o.prefetch === false ? undefined : prefetch, mapStore: o.mapStore, record: o.record });
   const descriptionOf = (contract) => {
     for (const c of o.contracts) {
       const d = typeof c.description === 'string' ? JSON.parse(c.description) : c.description;

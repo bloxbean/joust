@@ -833,8 +833,18 @@ direct `Tx` building, gated by S3.
   UTxOs apart by equality.
 - **`devkitSweep`** moves what contracts sent to the wallet key's enterprise address to its base address, as
   `DevKit.sweepEnterprise` does.
-- **Next in M3:** co-signers (`@Quorum`, `@AuthorizedBy`), batches, composition and deposits, moves; and call requests
-  in every example's fixtures (I3).
+- **I3 across the examples (`fixtures/m3`).** With `JOUST_RECORD=<dir>`, the npm path's DevKit flows record each call
+  the Wasm engine prepares: the request, the final snapshot, the map nodes, the clock, the contracts (stored once, by
+  their description's hash) and the transaction.
+  - `EngineFixturesTest` prepares each one again on the JVM.
+  - All 53 are byte-identical: Vault 4, Crowdfund 6, Escrow 4, Oracle and Shop 7, Token 21 (its tamper loop
+    included), Locker 5, Dex 6.
+  - They cover time rules, a sorted map in the state, `@Params`/`@Reads`, MerkleMaps, native assets, sends and
+    minting.
+  - The examples' M0 fixtures came from key accounts (the signing path), so they are not prepares; these come from
+    the path a JS developer uses.
+- **Next in M3:** composition and deposits, moves, co-signers (`@Quorum`, `@AuthorizedBy`) and batches; each recorded
+  into `fixtures/m3` the same way.
 
 ## Revision history
 
