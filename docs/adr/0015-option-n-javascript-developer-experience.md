@@ -1,6 +1,6 @@
 # ADR-0015: Option N — JOUST for JavaScript developers: an npm toolchain and off-chain runtime on a Wasm engine
 
-**Status:** Proposed (r4)
+**Status:** Accepted (r5): approved by review at `6510aee` (PR #23), accepted by the maintainer on 2026-11-08
 **Date:** 2026-11-08
 **Builds on:** ADR-0013 (wallets, descriptions, the JS client, the page verifier, phase 4's Wasm spike), ADR-0005
 (`.jsc`), ADR-0011 (`Compose`), JuLC ADR-057/064/068 (the `julc-wasm` engine, embedders, javac in Web Image).
