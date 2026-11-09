@@ -78,9 +78,11 @@ public record ContractIR(String packageName,
      * @param simple     its simple name ({@code Hero})
      * @param components its components, in order
      * @param holding    the datum record wrapping it: {@code Holding} with one owned type, {@code Holding_Hero} with several
-     * @param tag        the datum's constructor tag: its index among the owned records
+     * @param tag        the datum's constructor tag: its index among the owned records; for a keyed type, its node's
+     *                   ({@code Keyed_T}) tag
+     * @param keyed      how the type is keyed (ADR-0016), or null for a plain owned type
      */
-    public record OwnedIR(String type, String simple, List<ParamIR> components, String holding, int tag) {
+    public record OwnedIR(String type, String simple, List<ParamIR> components, String holding, int tag, KeyedIR keyed) {
         /** Indexes of its MerkleMap components (ADR-0012 D2). */
         public List<Integer> mapComponents() {
             var out = new java.util.ArrayList<Integer>();
@@ -93,7 +95,29 @@ public record ContractIR(String packageName,
         public boolean hasMaps() {
             return !mapComponents().isEmpty();
         }
+
+        /** A keyed type (ADR-0016). */
+        public boolean isKeyed() {
+            return keyed != null;
+        }
     }
+
+    /**
+     * How an owned type is keyed (ADR-0016 D1, D2).
+     *
+     * @param keyField    the record component that is the key
+     * @param keyIndex    its index among the record's components
+     * @param maxKeyBytes longest key
+     * @param signedKey   the key is a key hash that signs the insert (I53)
+     * @param cooldownMs  {@code C}, least time between relinks (0: none)
+     * @param windowMs    {@code W}, widest validity window of a relink
+     * @param typeId      {@code I2OSP(len(name), 1) ++ utf8(name)}, hashed into every key token of the type
+     * @param headTag     constructor tag of {@code Head_T}
+     * @param nodeTag     constructor tag of {@code Keyed_T}
+     * @param retiredTag  constructor tag of {@code Retired_T}
+     */
+    public record KeyedIR(String keyField, int keyIndex, int maxKeyBytes, boolean signedKey, long cooldownMs,
+                          long windowMs, byte[] typeId, int headTag, int nodeTag, int retiredTag) {}
 
     /** The state or some owned record has MerkleMaps: the validator reads the map verifier's claims. */
     public boolean anyMaps() {
@@ -112,6 +136,29 @@ public record ContractIR(String packageName,
     /** Several owned types: the datum is a sealed {@code Holding} with one variant per type (ADR-0012 D1). */
     public boolean multiOwned() {
         return owned.size() > 1;
+    }
+
+    /** Some owned type is keyed (ADR-0016). */
+    public boolean hasKeyed() {
+        return owned.stream().anyMatch(OwnedIR::isKeyed);
+    }
+
+    /** The keyed owned types, in source order. */
+    public List<OwnedIR> keyedTypes() {
+        return owned.stream().filter(OwnedIR::isKeyed).toList();
+    }
+
+    /**
+     * The objects' datum is a sealed {@code Holding} told apart by constructor tag: with several owned types
+     * (ADR-0012 D1), and whenever a type is keyed (ADR-0016 D2, I42 amended).
+     */
+    public boolean sealedHolding() {
+        return multiOwned() || hasKeyed();
+    }
+
+    /** A keyed type's removing destroys ({@code @OwnedDestroy} without {@code retire}; ADR-0016 D5). */
+    public List<TransitionIR> removals(OwnedIR o) {
+        return ownedDestroys.stream().filter(t -> t.ownedType().equals(o.type()) && !t.retire()).toList();
     }
 
     /** The owned record named by source text {@code type}. */

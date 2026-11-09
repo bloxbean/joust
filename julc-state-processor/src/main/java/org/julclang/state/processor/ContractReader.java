@@ -210,6 +210,16 @@ final class ContractReader {
         }
         List<ContractIR.OwnedIR> ownedIRs = new ArrayList<>();
         Map<String, Map<String, ParamIR>> ownedFields = new LinkedHashMap<>();
+        // Keyed types (ADR-0016 D1): an @Owned(key = ...) record. Their datum variants take three constructor tags each.
+        boolean anyKeyed = false;
+        for (TypeElement oe : ownedElements) {
+            if (!annotation(oe, OWNED).flatMap(a -> value(a, "key")).map(v -> (String) v.getValue()).orElse("").isEmpty()) {
+                anyKeyed = true;
+            }
+        }
+        long maxValidityEarly = annotation(type, STATE_CONTRACT).flatMap(a -> value(a, "maxValidityMs"))
+                .map(v -> ((Number) v.getValue()).longValue()).orElse(3_600_000L);
+        int nextTag = 0;
         for (TypeElement oe : ownedElements) {
             List<ParamIR> comps = new ArrayList<>();
             Map<String, ParamIR> byName = new LinkedHashMap<>();
@@ -224,8 +234,15 @@ final class ContractReader {
             }
             String text = types.render(oe.asType());
             String simpleName = oe.getSimpleName().toString();
-            String holding = ownedElements.size() == 1 ? "Holding" : "Holding_" + simpleName;
-            ownedIRs.add(new ContractIR.OwnedIR(text, simpleName, List.copyOf(comps), holding, ownedIRs.size()));
+            ContractIR.KeyedIR keyed = anyKeyed ? readKeyed(oe, comps, maxValidityEarly, nextTag) : null;
+            if (keyed != null) {
+                nextTag += 3;
+                ownedIRs.add(new ContractIR.OwnedIR(text, simpleName, List.copyOf(comps), "Keyed_" + simpleName, keyed.nodeTag(),
+                        keyed));
+            } else {
+                String holding = ownedElements.size() == 1 && !anyKeyed ? "Holding" : "Holding_" + simpleName;
+                ownedIRs.add(new ContractIR.OwnedIR(text, simpleName, List.copyOf(comps), holding, nextTag++, null));
+            }
             ownedFields.put(text, byName);
         }
         // ---- the @Params record (ADR-0009 D1)
@@ -273,6 +290,16 @@ final class ContractReader {
             }
             for (var m : ownedDestroys) {
                 ownedDestroyIRs.add(readTransition(m, TransitionIR.Kind.OWNED_DESTROY, ownedReading(m, false, ownedCtxs)));
+            }
+            // ADR-0016: a keyed type's methods; its initializers insert (Insert_<method>) instead of creating from a seed.
+            for (var list : List.of(ownedInitIRs, ownedActionIRs, ownedDestroyIRs)) {
+                for (int i = 0; i < list.size(); i++) {
+                    var t = list.get(i);
+                    boolean keyedType = ownedIRs.stream().anyMatch(o -> o.isKeyed() && o.type().equals(t.ownedType()));
+                    if (keyedType) {
+                        list.set(i, t.asKeyed(t.kind() == TransitionIR.Kind.OWNED_INIT ? "Insert_" + t.method() : t.variant()));
+                    }
+                }
             }
         }
 
@@ -322,6 +349,19 @@ final class ContractReader {
         }
         reserved.add(type.getSimpleName() + "Validator");
         reserved.add(type.getSimpleName() + "Client");
+        if (anyKeyed) {
+            // ADR-0016 D1: names the validator generates for keyed types.
+            var keyedNames = new HashSet<String>(List.of("Link"));
+            for (var o : ownedIRs) {
+                if (!o.isKeyed()) continue;
+                keyedNames.addAll(List.of("Head_" + o.simple(), "Keyed_" + o.simple(), "Retired_" + o.simple(),
+                        "Remove_" + o.simple()));
+            }
+            for (String n : keyedNames) {
+                if (!reserved.add(n)) error(type, "generated name " + n + " (ADR-0016) clashes with another name; rename it");
+            }
+            types.checkNoClash(keyedNames).forEach(msg -> error(type, msg));
+        }
         for (var t : concat(List.of(init), actionIRs, destroyIRs, ownedInitIRs, ownedActionIRs, ownedDestroyIRs)) {
             if (!reserved.add(t.variant()) && t.kind() != TransitionIR.Kind.INIT) {
                 error(type, "redeemer variant name " + t.variant() + " (from method " + t.method()
@@ -338,6 +378,7 @@ final class ContractReader {
         if (ownedIRs.size() > 1) {
             var holdings = new HashSet<String>();
             for (var o : ownedIRs) {
+                if (o.isKeyed()) continue;   // a keyed type's datum names are reserved with its other generated names
                 holdings.add(o.holding());
                 if (!reserved.add(o.holding())) error(type, "generated datum name " + o.holding() + " clashes; rename a method");
             }
@@ -358,6 +399,7 @@ final class ContractReader {
                 if (ownedInitIRs.stream().noneMatch(t -> t.ownedType().equals(o.type()))) {
                     error(type, "@Owned record " + o.simple() + " needs at least one @OwnedInit method to create objects");
                 }
+                if (o.isKeyed()) continue;   // a keyed type's escape hatch is its retiring exit (ADR-0016 D1, checked below)
                 if (ownedDestroyIRs.stream().noneMatch(t -> !t.shared() && t.ownedType().equals(o.type()))) {
                     error(type, "owned objects of type " + o.simple() + " need an escape hatch: an @OwnedDestroy on "
                             + o.simple() + " without @Shared, so an owner can always close their object whatever the"
@@ -431,7 +473,8 @@ final class ContractReader {
                 }
             }
             for (var t : concat(ownedActionIRs, ownedDestroyIRs)) {
-                if (t.signedBy().isEmpty()) {
+                // A keyed action authorized otherwise is covered by the keyed rules' own warning (ADR-0016 D1).
+                if (t.signedBy().isEmpty() && !(t.keyed() && (t.quorumKeys() != null || !t.authorizedBy().isEmpty()))) {
                     messager.printMessage(Diagnostic.Kind.WARNING, "owned method " + t.method() + " has no @SignedBy:"
                             + " anyone can call it on anyone's object (and keep the owner's own calls failing)", type);
                 }
@@ -496,6 +539,17 @@ final class ContractReader {
                 error(type, "@MigrateTo is not supported yet with MerkleMaps, owned objects or native assets (ADR-0011 r2)");
             }
         }
+        for (var t : ownedDestroyIRs) {
+            if (t.retire() && !t.keyed()) {
+                error(type, "@OwnedDestroy(retire = true) on " + t.method() + ": only a keyed type (@Owned(key = ...)) can"
+                        + " retire (ADR-0016 D10)");
+            }
+        }
+        if (anyKeyed) {
+            keyedRules(type, ownedIRs, ownedInitIRs, ownedActionIRs, ownedDestroyIRs, actionIRs, maxDatumBytes,
+                    assetAware || purposeMethods.containsKey("WITHDRAW"), anyBatched || !migrateMethods.isEmpty()
+                            || destroyIRs.stream().anyMatch(t -> t.migrateTo() != null), ownedInits);
+        }
         if (!invariants.isEmpty() && anyBatched) {
             error(type, "@Invariant cannot be combined with @Batched yet: a batch passes through intermediate states that"
                     + " the validator does not check (ADR-0009 r2)");
@@ -507,6 +561,186 @@ final class ContractReader {
                 List.copyOf(ownedIRs), ownedInitIRs,
                 ownedActionIRs, ownedDestroyIRs, paramsType == null ? null : types.render(paramsType), List.copyOf(invariants),
                 List.copyOf(purposes), stakeSelf, migrateIR));
+    }
+
+    // ------------------------------------------------------------------ keyed types (ADR-0016)
+
+    /** Most keyed types in one contract (ADR-0016 D1: the instance creation's transaction envelope, D4c). */
+    static final int MAX_KEYED_TYPES = 16;
+
+    /** Largest maxDatumBytes of a contract with keyed types (ADR-0016 D1, D4c). */
+    static final int MAX_KEYED_DATUM_BYTES = 2048;
+
+    /**
+     * The keyed attributes of {@code @Owned} record {@code oe}, checked (ADR-0016 D1), or null for a plain owned type.
+     * {@code firstTag} is the constructor tag of its head; the node and the retired node take the next two.
+     */
+    private ContractIR.KeyedIR readKeyed(TypeElement oe, List<ParamIR> comps, long maxValidityMs, int firstTag) {
+        var ann = annotation(oe, OWNED).orElseThrow();
+        String key = value(ann, "key").map(v -> (String) v.getValue()).orElse("");
+        if (key.isEmpty()) return null;
+        int maxKeyBytes = value(ann, "maxKeyBytes").map(v -> ((Number) v.getValue()).intValue()).orElse(32);
+        boolean signedKey = value(ann, "signedKey").map(v -> (Boolean) v.getValue()).orElse(false);
+        var cooldownValue = value(ann, "linkCooldownMs");
+        long cooldown = cooldownValue.map(v -> ((Number) v.getValue()).longValue()).orElse(60_000L);
+        long window = value(ann, "linkWindowMs").map(v -> ((Number) v.getValue()).longValue()).orElse(-1L);
+        String simple = oe.getSimpleName().toString();
+        int keyIndex = -1;
+        for (int i = 0; i < comps.size(); i++) if (comps.get(i).name().equals(key)) keyIndex = i;
+        if (keyIndex < 0) {
+            error(oe, "@Owned(key = \"" + key + "\") does not name a component of " + simple + " (ADR-0016 D1)");
+        } else if (comps.get(keyIndex).kind() != ParamIR.TypeKind.BYTES) {
+            error(oe, "@Owned(key = \"" + key + "\") must name a byte[] component, not " + comps.get(keyIndex).type()
+                    + " (ADR-0016 D1)");
+        }
+        if (maxKeyBytes < 1 || maxKeyBytes > 64) {
+            error(oe, "@Owned(maxKeyBytes) must be between 1 and 64: serialiseData chunks byte strings over 64 bytes"
+                    + " (ADR-0016 D1)");
+        }
+        if (signedKey && maxKeyBytes < 28) {
+            error(oe, "@Owned(signedKey = true) keys are 28-byte key hashes: maxKeyBytes must be at least 28 (ADR-0016 I53)");
+        }
+        if (cooldown == 0L) {
+            messager.printMessage(Diagnostic.Kind.WARNING, "@Owned(linkCooldownMs = 0) on " + simple + ": without a link"
+                    + " cooldown, anyone can keep a node permanently in flight by relinking it every block, so its retiring"
+                    + " exit is no longer guaranteed against churn (ADR-0016 §2, D9)", oe);
+        } else if (cooldown < 60_000L || cooldown > 3_600_000L) {
+            error(oe, "@Owned(linkCooldownMs) must be 0 or between 60000 and 3600000 (ADR-0016 D1)");
+        }
+        long windowCap = Math.min(900_000L, maxValidityMs);
+        if (window == -1L) {
+            window = Math.min(120_000L, maxValidityMs);
+        } else if (window < 20_000L || window > windowCap) {
+            error(oe, "@Owned(linkWindowMs) must be between 20000 and min(900000, maxValidityMs) = " + windowCap
+                    + " (ADR-0016 D1)");
+        }
+        byte[] name = simple.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (name.length > 255) error(oe, "a keyed type's simple name must be at most 255 bytes (ADR-0016 D2: typeId)");
+        byte[] typeId = new byte[Math.min(name.length, 255) + 1];
+        typeId[0] = (byte) Math.min(name.length, 255);
+        System.arraycopy(name, 0, typeId, 1, typeId.length - 1);
+        for (var c : comps) {
+            if (c.kind() == ParamIR.TypeKind.MERKLE_MAP) {
+                error(oe, "keyed type " + simple + " cannot hold MerkleMaps yet (ADR-0016 D1)");
+            }
+        }
+        return new ContractIR.KeyedIR(key, Math.max(keyIndex, 0), maxKeyBytes, signedKey, cooldown, window, typeId,
+                firstTag, firstTag + 1, firstTag + 2);
+    }
+
+    /** The contract-level rules of keyed types (ADR-0016 D1); errors and warnings on {@code type}. */
+    private void keyedRules(TypeElement type, List<ContractIR.OwnedIR> owned, List<TransitionIR> inits,
+                            List<TransitionIR> ownedActions, List<TransitionIR> ownedDestroys, List<TransitionIR> actions,
+                            int maxDatumBytes, boolean assetAware, boolean batchedOrMigrating,
+                            List<ExecutableElement> initElements) {
+        var keyed = owned.stream().filter(ContractIR.OwnedIR::isKeyed).toList();
+        if (assetAware) {
+            error(type, "keyed types cannot be combined with native assets yet (Funds, sends, mints, deposits, @Withdraw):"
+                    + " a follow-up ADR (ADR-0016 D1, M4)");
+        }
+        if (batchedOrMigrating) {
+            error(type, "keyed types cannot be combined with @Batched actions or migration (@Migrate, @MigrateTo) yet"
+                    + " (ADR-0016 D1)");
+        }
+        if (keyed.size() > MAX_KEYED_TYPES) {
+            error(type, "at most " + MAX_KEYED_TYPES + " keyed types per contract: the instance creation mints a head for"
+                    + " each (ADR-0016 D1, D4c)");
+        }
+        var names = new HashSet<String>();
+        for (var o : keyed) {
+            if (!names.add(o.simple())) error(type, "two keyed types share the simple name " + o.simple() + " (ADR-0016 D1)");
+        }
+        if (maxDatumBytes > MAX_KEYED_DATUM_BYTES) {
+            error(type, "@StateContract(maxDatumBytes) is at most " + MAX_KEYED_DATUM_BYTES + " in a contract with keyed"
+                    + " types: an insert carries two datums in one 16 KB transaction (ADR-0016 D1, D4c)");
+        }
+        for (var t : ownedActions) {
+            if (t.keyed() && t.moves()) {
+                error(type, "@Into moves of keyed objects are not supported: a move would remove from one list and insert"
+                        + " into another in one transaction (ADR-0016 D1, Q4)");
+            }
+        }
+        if (owned.stream().anyMatch(ContractIR.OwnedIR::hasMaps)) {
+            // Measured in M1: two keyed types with only their inserts and retires beside one plain owned type with a
+            // MerkleMap compile to 15,977 bytes, over the runtime's 15,000 (StateContractHandle.scriptFor).
+            error(type, "MerkleMaps cannot be combined with keyed types: the map verifier's support and the keyed list's"
+                    + " checks together exceed the 15,000-byte script limit (ADR-0016 M1 implementation notes)");
+        }
+        for (var a : actions) {
+            if (a.admits() && keyed.stream().anyMatch(o -> o.type().equals(a.admitsType()))) {
+                error(type, "@Admits " + a.method() + " admits a keyed type: moves of keyed objects are not supported"
+                        + " (ADR-0016 D1, Q4)");
+            }
+        }
+        for (var o : keyed) {
+            var k = o.keyed();
+            // Heads and retired nodes have only bounded fields: their worst case must fit statically (ADR-0016 D2). A
+            // constructor tag takes at most 3 bytes, an indefinite list 2, a byte string of n <= 64 bytes n + 2, a
+            // linkedAt 9.
+            int retiredWorst = 3 + 2 + (32 + 2) + (k.maxKeyBytes() + 2) + 9 + (k.maxKeyBytes() + 2);
+            if (retiredWorst > maxDatumBytes) {
+                error(type, "keyed type " + o.simple() + ": a retired node may need " + retiredWorst + " datum bytes, over"
+                        + " maxDatumBytes = " + maxDatumBytes + "; raise it or lower maxKeyBytes (ADR-0016 D2)");
+            }
+            var retires = ownedDestroys.stream().filter(t -> t.retire() && t.ownedType().equals(o.type())).toList();
+            if (retires.isEmpty()) {
+                error(type, "keyed type " + o.simple() + " needs an escape hatch: an @OwnedDestroy(retire = true) on "
+                        + o.simple() + " without @Shared, which needs no neighbour (ADR-0016 D1, D10)");
+            }
+            for (var t : retires) {
+                if (t.shared() || !t.reads().isEmpty() || t.payable() || t.quorumKeys() != null || !t.authorizedBy().isEmpty()
+                        || !t.validAfter().isEmpty() || !t.validBefore().isEmpty()) {
+                    error(type, "retiring exit " + t.method() + " must need nobody else: no @Shared, @Reads, @Payable,"
+                            + " @Quorum, @AuthorizedBy, @ValidAfter or @ValidBefore (ADR-0016 D1, §2)");
+                }
+            }
+            var retireSigners = new HashSet<String>();
+            for (var t : retires) retireSigners.addAll(t.signedBy());
+            for (var t : ownedActions) {
+                if (!t.ownedType().equals(o.type())) continue;
+                if (t.signedBy().isEmpty() && t.quorumKeys() == null && t.authorizedBy().isEmpty()) {
+                    error(type, "keyed @OwnedAction " + t.method() + " must be authorized (@SignedBy, @Quorum or"
+                            + " @AuthorizedBy): otherwise anyone could spend the node every block and block its owner's"
+                            + " exit (ADR-0016 D1, §2)");
+                } else if (t.quorumKeys() != null || !t.authorizedBy().isEmpty()
+                        || !retireSigners.containsAll(t.signedBy()) || retireSigners.isEmpty()) {
+                    messager.printMessage(Diagnostic.Kind.WARNING, "keyed @OwnedAction " + t.method() + " is authorized by"
+                            + " someone other than the retiring exit's @SignedBy field: that party can spend the node every"
+                            + " block and delay the owner's exit (ADR-0016 §2)", type);
+                }
+            }
+            for (var list : List.of(inits, ownedActions, ownedDestroys)) {
+                for (var t : list) {
+                    if (!t.ownedType().equals(o.type())) continue;
+                    for (ParamIR p : t.params()) {
+                        if (p.name().equals("anchor") || p.name().equals("removed") || p.name().equals("instance")) {
+                            error(type, "parameter name \"" + p.name() + "\" of " + t.method() + " is used by a keyed"
+                                    + " type's generated redeemers; rename it (ADR-0016 D1)");
+                        }
+                    }
+                }
+            }
+            for (var t : inits) {
+                if (!t.ownedType().equals(o.type()) || k.signedKey()) continue;
+                ExecutableElement m = initElements.stream().filter(e -> e.getSimpleName().contentEquals(t.method()))
+                        .findFirst().orElse(null);
+                if (m == null || !mentionsCaller(m)) {
+                    messager.printMessage(Diagnostic.Kind.WARNING, "keyed @OwnedInit " + t.method() + " neither uses"
+                            + " @Owned(signedKey = true) nor compares the key with ctx.caller(): anyone can take a key"
+                            + " first (squatting, ADR-0016 §2)", m == null ? type : m);
+                }
+            }
+        }
+    }
+
+    /** The method's body mentions {@code caller()} (the squatting heuristic of ADR-0016 D1); false if unreadable. */
+    private boolean mentionsCaller(ExecutableElement m) {
+        try {
+            var tree = com.sun.source.util.Trees.instance(env).getTree(m);
+            return tree != null && tree.getBody() != null && tree.getBody().toString().contains("caller()");
+        } catch (RuntimeException | LinkageError e) {
+            return false;
+        }
     }
 
     /** Coins per UTxO byte on mainnet and the public testnets (Conway). Governance can change it; ADR-0001 §10. */
@@ -862,11 +1096,13 @@ final class ContractReader {
         }
         boolean resultDeposits = shape != null && shape.deposits();
         String ownedTypeText = ownedKind ? r.types().render(r.stateType()) : null;
+        boolean retire = kind == TransitionIR.Kind.OWNED_DESTROY && annotation(m, OWNED_DESTROY)
+                .flatMap(a -> value(a, "retire")).map(v -> (Boolean) v.getValue()).orElse(false);
         return new TransitionIR(kind, name, variant, List.copyOf(params), hasCtx, payable, returns, resultType,
                 List.copyOf(signedBy), List.copyOf(validAfter), List.copyOf(validBefore), shared, batched, batchOnly,
                 hasFunds, shape != null && shape.payouts(), shape != null && shape.sends(), shape != null && shape.mint(),
                 accepts, takesParams, quorumKeys, quorumThreshold, List.copyOf(authorizedBy), events, eventsType,
-                List.copyOf(reads), migrateTo, ownedTypeText, into, admitsType, null, resultDeposits, receives);
+                List.copyOf(reads), migrateTo, ownedTypeText, into, admitsType, null, resultDeposits, receives, false, retire);
     }
 
     /** Which effect components a result record has (ADR-0007 D1). */
