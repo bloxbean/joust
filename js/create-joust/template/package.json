@@ -12,9 +12,9 @@
   },
   "dependencies": {
     "@cardano-foundation/cardano-connect-with-wallet-core": "0.2.12",
-    "@julclang/joust": "^0.1.0",
-    "@julclang/joust-runtime": "^0.1.0",
-    "@julclang/state-client": "^0.1.0",
+    "@julclang/joust": "0.1.0-pre1-snapshot",
+    "@julclang/joust-runtime": "0.1.0-pre1-snapshot",
+    "@julclang/state-client": "0.1.0-pre1-snapshot",
     "@scure/bip39": "1.6.0"
   },
   "devDependencies": {

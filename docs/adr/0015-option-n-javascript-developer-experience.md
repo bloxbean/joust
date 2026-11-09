@@ -1184,7 +1184,14 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
     - *Preview:* the same flow passes with a CIP-30 extension stand-in, injected into `window.cardano` before load as
       extensions are, with the key in the Node process. It goes through the connector's enable and network check,
       `getUtxos`, `signTx` and `submitTx`.
-    - The run with Eternl or Lace (M4's exit) is next.
+    - *Preview, with a real wallet (M4's exit, 2026-11-09):* a maintainer ran the template's page on preview with a
+      browser wallet. The page prepared, reviewed and verified each transaction, and the wallet signed and submitted
+      it: two creations (`9ff46b90…`, `6554982d…`, 303,656 lovelace each) and two `Increment(1)` calls (`7f8d3376…`,
+      `3a9c4fd6…`, 292,146 lovelace each). The fees overpay by one vkey witness (4,563 lovelace; issue #33); the
+      reference-script fee is 29% of a call's fee (issue #34). That run used the template with the repository's
+      packages linked. The same template installed from the local registry (`0.1.0-pre1-snapshot`) builds, deploys,
+      passes its test and serves the page on DevKit; repeating the wallet run from that install closes "built from npm
+      only".
 
 ### 13.12 MerkleMap mirrors (M4): proofs for the engine, Aiken's MPF in JS, RocksDB on the JVM, rebuilt from the chain
 

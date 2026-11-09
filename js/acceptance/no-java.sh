@@ -22,7 +22,7 @@ export npm_config_cache="$WORK/npm-cache"
 export npm_config_update_notifier=false
 
 cd "$WORK"
-time npm create joust@0.1.0 app --yes
+time npm create joust@0.1.0-pre1-snapshot app --yes
 cd app
 if [[ -n "${DEVKIT_HOST:-}" ]]; then
   # The DevKit on another host (e.g. host.docker.internal from a container).

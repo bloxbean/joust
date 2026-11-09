@@ -1,6 +1,6 @@
 {
   "name": "create-joust",
-  "version": "0.1.0",
+  "version": "0.1.0-pre1-snapshot",
   "description": "Creates a JOUST app: a Cardano state contract in Java, built and used with npm only (npm create joust)",
   "type": "module",
   "bin": {

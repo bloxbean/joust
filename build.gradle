@@ -2,7 +2,7 @@ plugins {
     alias(libs.plugins.julc) apply false
 }
 
-// Development snapshots carry the commit (release-ops docs/12): 0.1.0-SNAPSHOT -> 0.1.0-<sha7>-SNAPSHOT, one version
+// Development snapshots carry the commit (release-ops docs/12): 0.1.0-pre1-SNAPSHOT -> 0.1.0-pre1-<sha7>-SNAPSHOT, one version
 // per commit in https://repo.bloxbean.org/maven/snapshots. Plain git rather than grgit, which can't open worktrees.
 if (version.toString().endsWith('-SNAPSHOT')) {
     def commit = providers.exec {

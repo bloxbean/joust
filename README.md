@@ -31,7 +31,7 @@
 
 [![snapshot](https://img.shields.io/maven-metadata/v?metadataUrl=https%3A%2F%2Frepo.bloxbean.org%2Fmaven%2Fsnapshots%2Forg%2Fjulclang%2Fjulc-state-runtime%2Fmaven-metadata.xml&strategy=latestProperty&label=snapshot)](https://github.com/bloxbean/joust/releases/tag/snapshot)
 
-Development snapshots are in the BloxBean Maven repository, one version per commit (`0.1.0-<sha7>-SNAPSHOT`). The
+Development snapshots are in the BloxBean Maven repository, one version per commit (`0.1.0-pre1-<sha7>-SNAPSHOT`). The
 newest version is on the [Development snapshot](https://github.com/bloxbean/joust/releases/tag/snapshot) page.
 
 ```gradle

@@ -8,7 +8,7 @@ snapshot cleanup, CODEOWNERS and rulesets come later, when the project becomes p
 
 | Piece | What it does |
 |---|---|
-| `build.gradle` | Snapshot versions carry the commit: `0.1.0-SNAPSHOT` becomes `0.1.0-<sha7>-SNAPSHOT`. The six library modules publish a jar, sources, javadoc and POM; `julc-state-api` adds its `onchain` jar (the on-chain sources for consumers' annotation processor path). Includes the `stagingRepository` hook and `verifyMavenReleasePublicationScope` |
+| `build.gradle` | Snapshot versions carry the commit: `0.1.0-pre1-SNAPSHOT` becomes `0.1.0-pre1-<sha7>-SNAPSHOT`. The six library modules publish a jar, sources, javadoc and POM; `julc-state-api` adds its `onchain` jar (the on-chain sources for consumers' annotation processor path). Includes the `stagingRepository` hook and `verifyMavenReleasePublicationScope` |
 | `.github/workflows/build.yml` | CI on pushes to `main`/`release/**` and on PRs: builds JuLC, starts Yaci DevKit, `./gradlew build`, scope check |
 | `.github/workflows/bloxbean-snapshot.yml` | Manual. Publishes a commit whose `build.yml` passed. From the release-ops template, adapted for JuLC (below) |
 | `.github/scripts/` | The release-ops scripts, unchanged |

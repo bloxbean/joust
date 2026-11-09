@@ -1,6 +1,6 @@
 {
   "name": "@julclang/joust",
-  "version": "0.1.0",
+  "version": "0.1.0-pre1-snapshot",
   "description": "JOUST for JavaScript developers: build Cardano state contracts written in Java (.java) or JOUST's DSL (.jsc) with npm only, no JDK or GraalVM (ADR-0015)",
   "type": "module",
   "bin": {
@@ -16,8 +16,8 @@
     "engine"
   ],
   "dependencies": {
-    "@julclang/joust-runtime": "0.1.0",
-    "@julclang/state-client": "0.1.0",
+    "@julclang/joust-runtime": "0.1.0-pre1-snapshot",
+    "@julclang/state-client": "0.1.0-pre1-snapshot",
     "vite-plugin-node-polyfills": "0.28.0",
     "@rollup/plugin-inject": "5.0.5"
   },
