@@ -21,6 +21,8 @@ final class KeyedObjects {
 
     /** Ordinary wallet UTxOs reserved by an operation in this JVM: two operations never share one. */
     private static final Set<String> RESERVED = ConcurrentHashMap.newKeySet();
+    /** The designated input of the operation running on this thread (reserved and released on it), if any. */
+    private static final ThreadLocal<String> OWN = new ThreadLocal<>();
 
     /**
      * One ordinary wallet UTxO, spent by every attempt of one logical operation (a keyed call or a composition with
@@ -51,7 +53,57 @@ final class KeyedObjects {
 
         void release() {
             RESERVED.remove(ref());
+            if (ref().equals(OWN.get())) OWN.remove();
         }
+    }
+
+    /**
+     * The QuickTx builder for a transaction of this JVM: while keyed operations hold designated inputs, coin and
+     * collateral selection skip those of other operations (this thread's own stays selectable, for collateral), so one
+     * operation never spends another's, which would make that one's retry rule (D7) read a false "spent". With no other
+     * reservation, the plain builder.
+     */
+    static com.bloxbean.cardano.client.quicktx.QuickTxBuilder builder(com.bloxbean.cardano.client.backend.api.BackendService backend) {
+        String own = OWN.get();
+        if (RESERVED.isEmpty() || (RESERVED.size() == 1 && RESERVED.contains(own))) {
+            return new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend);
+        }
+        var all = new com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier(backend.getUtxoService());
+        return new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend, new com.bloxbean.cardano.client.api.UtxoSupplier() {
+            @Override
+            public List<Utxo> getPage(String address, Integer nrOfItems, Integer page,
+                                      com.bloxbean.cardano.client.api.common.OrderEnum order) {
+                return free(all.getPage(address, nrOfItems, page, order), own);
+            }
+
+            @Override
+            public java.util.Optional<Utxo> getTxOutput(String txHash, int outputIndex) {
+                return all.getTxOutput(txHash, outputIndex);
+            }
+
+            @Override
+            public List<Utxo> getAll(String address) {
+                return free(all.getAll(address), own);
+            }
+
+            @Override
+            public boolean isUsedAddress(com.bloxbean.cardano.client.address.Address address) {
+                return all.isUsedAddress(address);
+            }
+
+            @Override
+            public void setSearchByAddressVkh(boolean flag) {
+                all.setSearchByAddressVkh(flag);
+            }
+        });
+    }
+
+    private static List<Utxo> free(List<Utxo> utxos, String own) {
+        if (utxos == null) return null;
+        return utxos.stream().filter(u -> {
+            String ref = u.getTxHash() + "#" + u.getOutputIndex();
+            return ref.equals(own) || !RESERVED.contains(ref);
+        }).toList();
     }
 
     /**
@@ -78,7 +130,10 @@ final class KeyedObjects {
             } catch (Exception e) {
                 throw new JoustException(what + ": cannot read the payer's UTxOs", e);
             }
-            if (best != null && RESERVED.add(best.getTxHash() + "#" + best.getOutputIndex())) return new Designated(best, address);
+            if (best != null && RESERVED.add(best.getTxHash() + "#" + best.getOutputIndex())) {
+                OWN.set(best.getTxHash() + "#" + best.getOutputIndex());
+                return new Designated(best, address);
+            }
         }
         throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate (ADR-0016 D7:"
                 + " each concurrent keyed operation of a wallet needs its own)");
@@ -110,7 +165,7 @@ final class KeyedObjects {
                     last = e;
                     rt.log(what + ": attempt " + (i + 1) + " rejected (" + e.getMessage() + "); rebuilding with the same designated"
                             + " input " + d.ref());
-                    if (StateInstance.staleInput(e)) TxRunner.sleep(2000);
+                    TxRunner.sleep(2000);   // let the provider's index catch up with whatever won (a neighbour's relink)
                 }
             }
             throw new ContentionException(what + ": rejected " + (rt.maxRetries() + 1) + " times", last);

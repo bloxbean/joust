@@ -184,7 +184,7 @@ final class TxRunner {
         }
         Transaction signed;
         try {
-            var ctx = new QuickTxBuilder(rt.backend()).compose(tx)
+            var ctx = KeyedObjects.builder(rt.backend()).compose(tx)
                     .withSigner(SignerProviders.signerFrom(allSigners(caller)))
                     .feePayer(caller.baseAddress())
                     .collateralPayer(caller.baseAddress())
