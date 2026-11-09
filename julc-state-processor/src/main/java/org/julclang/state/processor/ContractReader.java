@@ -802,13 +802,13 @@ final class ContractReader {
 
                 @Override
                 public Void visitAssignment(com.sun.source.tree.AssignmentTree a, Void v) {
-                    if (a.getVariable().toString().equals(ctxVar)) ctxAssigned[0] = true;   // 3
+                    if (unparenthesized(a.getVariable()).toString().equals(ctxVar)) ctxAssigned[0] = true;   // 3
                     return super.visitAssignment(a, v);
                 }
 
                 @Override
                 public Void visitCompoundAssignment(com.sun.source.tree.CompoundAssignmentTree a, Void v) {
-                    if (a.getVariable().toString().equals(ctxVar)) ctxAssigned[0] = true;
+                    if (unparenthesized(a.getVariable()).toString().equals(ctxVar)) ctxAssigned[0] = true;
                     return super.visitCompoundAssignment(a, v);
                 }
 
@@ -1543,5 +1543,11 @@ final class ContractReader {
             }
             return out;
         }
+    }
+
+    /** The expression inside any parentheses: {@code (ctx)} and {@code ((ctx))} are {@code ctx} (F49). */
+    private static com.sun.source.tree.ExpressionTree unparenthesized(com.sun.source.tree.ExpressionTree e) {
+        while (e instanceof com.sun.source.tree.ParenthesizedTree p) e = p.getExpression();
+        return e;
     }
 }

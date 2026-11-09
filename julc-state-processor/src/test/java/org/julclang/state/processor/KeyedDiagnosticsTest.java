@@ -249,6 +249,8 @@ class KeyedDiagnosticsTest {
                 {"", "ctx = new Ctx(voter, ctx.received(), ctx.balance(), ctx.validFrom(), ctx.validTo()); return new Ballot(ctx.caller(), voter);"},
                 // F48: reassigned inside a nested block (a loop, where JuLC would allow it).
                 {"", "for (int i = 0; i < 1; i++) { ctx = new Ctx(voter, ctx.received(), ctx.balance(), ctx.validFrom(), ctx.validTo()); } return new Ballot(ctx.caller(), voter);"},
+                // F49 (Codex): a parenthesised target, (ctx) = ..., is still an assignment to ctx.
+                {"", "boolean once = true; while (once) { (ctx) = new Ctx(voter, ctx.received(), ctx.balance(), ctx.validFrom(), ctx.validTo()); once = false; } return new Ballot(ctx.caller(), voter);"},
         };
         for (String[] f : fooled) {
             var r = compile(body.formatted(f[0], f[1]));
