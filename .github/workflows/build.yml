@@ -180,17 +180,23 @@ jobs:
           TASKS: ${{ matrix.shard.tasks }}
         run: ./gradlew $TASKS -PdevnetOnly --continue --stacktrace
 
-      # DevKit tests skip themselves when a prerequisite is missing, which would pass silently: list every skip.
-      - name: List skipped DevKit tests
+      # Per-module test time (to rebalance .github/ci/devnet-shards.txt) and every skipped test: DevKit tests skip
+      # themselves when a prerequisite is missing, which would otherwise pass silently.
+      - name: Summarize the DevKit tests
         if: always()
         run: |
           python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          import glob, xml.etree.ElementTree as ET
-          skipped = [f"{c.get('classname')}.{c.get('name')}"
-                     for f in glob.glob('**/build/test-results/test/*.xml', recursive=True)
-                     for c in ET.parse(f).getroot().iter('testcase') if c.find('skipped') is not None]
-          print(f"### devnet (${{ matrix.shard.index }}): {len(skipped)} skipped")
-          for t in skipped: print(f"- {t}")
+          import glob, re, xml.etree.ElementTree as ET
+          times, skipped = {}, []
+          for f in glob.glob('**/build/test-results/test/*.xml', recursive=True):
+              module = ':' + re.sub(r'/build/.*', '', f).replace('/', ':') + ':test'
+              for c in ET.parse(f).getroot().iter('testcase'):
+                  times[module] = times.get(module, 0) + float(c.get('time') or 0)
+                  if c.find('skipped') is not None:
+                      skipped.append(f"{c.get('classname')}.{c.get('name')}")
+          print(f"### devnet (${{ matrix.shard.index }}): {round(sum(times.values()))} s in tests, {len(skipped)} skipped")
+          for m, t in sorted(times.items(), key=lambda x: -x[1]): print(f"- `{m}` {round(t)} s")
+          for t in skipped: print(f"- skipped: {t}")
           EOF
 
       - name: Upload test reports
