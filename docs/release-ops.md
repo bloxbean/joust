@@ -18,20 +18,27 @@ snapshot" workflow), in the same BloxBean snapshot repository. So JOUST snapshot
 repository, and the snapshot workflow's Gradle consumer check runs. (Until JuLC #311/#313 were published, CI built
 JuLC from source with `.github/ci/build-julc.sh` and skipped the consumer check; both are gone.)
 
-## Releasing (Maven Central and npm)
+## Releasing (Maven Central, the BloxBean repository and npm)
 
-`.github/workflows/release.yml` runs on a `v*` tag. While the repository is private, a maintainer pushes the
-tag by hand (release-ops' `tag-release.yml` and the release App come later).
+`.github/workflows/release.yml` (release-ops' `release.yml`, as JuLC's) runs on a `v*` tag. While the repository is
+private, a maintainer pushes the tag by hand (release-ops' `tag-release.yml` and the release App come later).
 
 1. Set `version` in `gradle.properties` to the release (no `-SNAPSHOT`), pin released dependencies in
    `gradle/libs.versions.toml` (the workflow refuses a SNAPSHOT), and merge.
 2. Push `v<version>` from that commit. In the `release-staging` environment the workflow:
-   - builds, and signs with the in-memory subkey (`SIGNING_KEY_ASC`, `SIGNING_KEY_ID`, `SIGNING_PASSWORD`);
-   - checks that the Central bundle holds only what Central requires: each jar and POM with its `.asc`, `.md5` and
-     `.sha1` (116 files for the seven modules; no `maven-metadata.xml`, no checksums of signatures, no SHA-256/512, no
-     `.module` files). Central limits the files the `org.julclang` namespace may hold, and JuLC shares it;
-   - uploads a `USER_MANAGED` deployment (`OSSRH_USERNAME`, `OSSRH_TOKEN`) and stops once it is validated. **Publish
-     it in the Central Portal**: nothing is on Maven Central before that, and publishing cannot be undone;
+   - builds, and signs once with the in-memory subkey (`SIGNING_KEY_ASC`, `SIGNING_KEY_ID`, `SIGNING_PASSWORD`): one
+     Gradle run builds the staged repository and the Central bundle, and `verify-maven-staging.py` checks them byte
+     for byte, so both destinations get the same signed files;
+   - checks that the Central bundle holds only what Central needs: each jar, POM and `.module` file with its `.asc`,
+     `.md5` and `.sha1` (144 files for the seven modules; no `maven-metadata.xml`, no checksums of signatures, no
+     SHA-256/512). Central limits the files the `org.julclang` namespace may hold, and JuLC shares it;
+   - with `bloxbean_repo_publish=true`: uploads to `https://repo.bloxbean.org/maven/releases` first (`R2_ACCESS_KEY_ID`,
+     `R2_SECRET_ACCESS_KEY`, vars `R2_BUCKET`, `R2_ENDPOINT`), public and permanent at once, then verifies the public
+     copy and resolves it with a Gradle consumer. A version the repository already has is refused;
+   - with `maven_central_publish=true`: uploads a `USER_MANAGED` deployment (`OSSRH_USERNAME`, `OSSRH_TOKEN`) and
+     stops once it is validated. **Publish it in the Central Portal**: nothing is on Maven Central before that, and
+     publishing cannot be undone. If that upload fails after the BloxBean upload, upload the run's
+     `central-bundle-<version>` artifact in the portal;
    - builds the two Wasm engines (Oracle GraalVM 25 with Web Image, and Binaryen) and publishes
      `@julclang/state-client`, `@julclang/joust-runtime`, `@julclang/joust` and `create-joust` at the release version,
      through **npm trusted publishing** (GitHub OIDC, no npm token), as cardano-client-bindings, mesmo and yano do. A
@@ -46,7 +53,9 @@ tag by hand (release-ops' `tag-release.yml` and the release App come later).
    workflow `release.yml`, environment `release-staging`.
 3. Then set `npm_publish=true` in `gradle.properties` for the release.
 
-`maven_central_publish` and `npm_publish` in `gradle.properties` must each be `true` or `false`.
+`maven_central_publish`, `bloxbean_repo_publish` and `npm_publish` in `gradle.properties` must each be `true` or
+`false`. Gradle module metadata (`.module`) is published because release-ops' `verify-maven-staging.py`, shared and
+identical across repositories, requires it.
 
 ## One-time settings (a maintainer runs these)
 
