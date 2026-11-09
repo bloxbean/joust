@@ -38,6 +38,11 @@
     "node": ">=22"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bloxbean/joust.git",
+    "directory": "js/joust-runtime"
+  },
   "publishConfig": {
     "registry": "http://127.0.0.1:4873/"
   },

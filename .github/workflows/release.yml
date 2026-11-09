@@ -379,8 +379,8 @@ jobs:
           }
           EOF
 
-      # In dependency order. Prereleases get a matching dist-tag (as cardano-client-bindings), so they never become
-      # `latest`. Provenance attestations need a public repository: added once JOUST's repository is public.
+      # In dependency order. Beta and rc versions get their own dist-tag; before 1.0, -preN versions go to `latest`
+      # (below). Provenance attestations need a public repository: added once JOUST's repository is public.
       - name: Publish the packages
         env:
           REPO_PRIVATE: ${{ github.event.repository.private }}
@@ -388,8 +388,12 @@ jobs:
         run: |
           set -euo pipefail
           TAG=latest
+          # Before 1.0, a -preN version is published as `latest` (as mesmo): npm made each package's first version, the
+          # trusted-publishing placeholder, `latest` whatever --tag said, and `npm install`/`npm create joust` resolve only
+          # `latest`. A semver range never matches a prerelease either. At 1.0.0, change the -pre arm back to preview
+          # so a later 1.1.0-pre1 cannot displace the stable release on `latest`.
           case "$VERSION" in
-            *-preview*|*-pre*|*-alpha*) TAG=preview ;;
+            *-preview*|*-pre*|*-alpha*) TAG=latest ;;
             *-beta*)                    TAG=beta ;;
             *-rc*)                      TAG=next ;;
           esac
