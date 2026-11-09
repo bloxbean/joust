@@ -8,6 +8,7 @@ dependencies {
     annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
 
     testImplementation project(':julc-state-testkit')
+    testImplementation project(':examples:devkit')   // the keyed runtime on Yaci DevKit (ADR-0016 M2)
     // The widest test contract (ADR-0016 M1 size gate) is compiled from the test sources.
     testAnnotationProcessor project(':julc-state-processor')
     testAnnotationProcessor libs.julc.annotation.processor
