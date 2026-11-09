@@ -1,6 +1,6 @@
 # ADR-0016: Keyed objects — one UTxO per key, unique per instance, in a sorted on-chain list
 
-**Status:** Proposed (r4)
+**Status:** Proposed (r5)
 **Date:** 2026-11-09
 **Builds on:** ADR-0001 (A: I1–I14), ADR-0003 (owned objects: I18–I21), ADR-0007 (reserved token kinds: I27), ADR-0009
 (invariants, quorums), ADR-0012 (several owned types: I42, I43), ADR-0011 (composition), ADR-0013 (page verifier),
@@ -65,8 +65,15 @@ Facts this design relies on:
     conditions:
     - `C > 0`. With `C = 0`, an attacker can chain relinks of a node in the mempool, so the node always has a pending
       spend;
-    - every keyed owned action is authorized (D1, an error otherwise), so nobody else can spend the node by an action;
-    - the retire itself carries no gate that a third party controls (D1).
+    - **every party that keyed owned actions authorize is cooperative.** D1 requires each keyed action to be
+      authorized, so an anonymous third party cannot spend the node by an action. But an action may authorize someone
+      other than the owner (`@SignedBy` of another field, a `@Quorum` of a council, an `@AuthorizedBy` governor). That
+      party can spend the node every block and keep racing the owner's retire, as with plain owned objects (ADR-0003's
+      escape-hatch risk). The processor warns when a keyed action's authority is not the retire's `@SignedBy` field
+      (D1);
+    - the retire itself carries no gate that a third party controls (D1), and its body depends on nothing a third
+      party controls: no `@Shared`, no `@Reads`, and no `Require` on anything but the node and `Ctx`. The processor
+      checks the first two; the third is the author's responsibility.
 - **Adversarial churn** (mitigated). Without limits, an attacker could keep a node permanently "in flight", spending it
   with `Link` every block: insert a throwaway key next to it, remove it, insert again. That blocks the owner's updates
   and the inserts into the gaps around it, for fees only. The `Link` cooldown (D9) forces at least `C` between relinks
@@ -114,11 +121,13 @@ Rules, checked by the processor:
   `Insert_<method>` (F11). Keyed types never get the seed-based `CreateObject` arm.
 - **Exits (an error otherwise).** Each keyed type needs an `@OwnedDestroy(retire = true)` without `@Shared`. It is the
   escape hatch, since it needs nobody else (D10). It may carry `@SignedBy` and nothing that can stop the owner:
-  `@Quorum`, `@AuthorizedBy`, `@ValidAfter`, `@ValidBefore` and `@Payable` are errors on it. Removing exits
+  `@Quorum`, `@AuthorizedBy`, `@ValidAfter`, `@ValidBefore`, `@Payable` and `@Reads` parameters are errors on it.
+  Removing exits
   (`@OwnedDestroy` without `retire`, D5) are optional. A type with only retiring exits gives "once ever" uniqueness.
 - **Every keyed `@OwnedAction` is authorized (an error otherwise):** it carries `@SignedBy`, `@Quorum` or
   `@AuthorizedBy`. An unauthorized keyed action would let anyone spend the node every block, without a cooldown, and so
-  block its owner's retire (§2).
+  block its owner's retire (§2). The processor warns when the authority is anything but the retire's `@SignedBy` field
+  (another field, a quorum, a governor): that party can delay the owner's exit (§2).
 - **Checks shared with plain owned methods.** `@Invariant` and events apply to keyed methods as to plain owned methods
   (ADR-0009), and their generated output checks (invariants, reachable `@Quorum` shapes) run on inserted records and
   keyed action results (D4a, D6). As for every creation, an `@OwnedInit` cannot carry `@SignedBy`, `@ValidAfter`,
@@ -128,9 +137,10 @@ Rules, checked by the processor:
 - **Cooldown parameters (D9):**
   - `linkCooldownMs` (`C`) is 0, or between 60,000 and 3,600,000 (default 60,000);
   - `linkWindowMs` (`W`) is between 20,000 and `min(900,000, maxValidityMs)` (default `min(120,000, maxValidityMs)`).
-    The 900 s cap keeps a won race from locking a gap for long, and keeps keyed calls within the page verifier's
-    validity limit (900 slots, `verify.js:18–24`);
-  - the runtime refuses to deploy where `W` is shorter than two slots of the target network;
+    The 900 s cap keeps a won race from locking a gap for long. It is a cap on the on-chain rule, not a promise about
+    the page: the runtime derives the effective window from the network's slot length and the page's limits (D7);
+  - the runtime refuses to deploy where `W` is shorter than two slots of the target network, and warns where `W` is
+    longer than the page verifier's window limit in that network's slots (`maxValiditySlots × slotLength`);
   - `C = 0` must be written explicitly. The processor's warning says that the retiring exit is then no longer guaranteed
     against churn (§2).
 - **Limits, refused by the processor in this ADR** (§10 lists them as follow-ups):
@@ -248,7 +258,8 @@ The transaction:
 
 The extra lovelace lets anyone top up a deposit that a raised `coinsPerUTxOByte` has left short. On chain it is a gift
 to the node's owner, or stays locked in a head or a retired node. It is never taken out of the anchor. Off chain, the
-page counts it as a transfer to a third party, bounded by the page's own computation (D11).
+page bounds it by its own allowance and counts it in the wallet's net outflow; it is not a payment covered by what
+the script releases (D11).
 
 There is no `datumFits` check here: by the size rule, any `n` of at most `maxKeyBytes` and any `linkedAt` in the time
 domain fit (D2).
@@ -330,8 +341,11 @@ The transaction:
 - **Retired keys.** `<type>(key)` returns a handle whose state is "retired" (no actions). `exists(key)` is true (the
   key is taken). `keys()` lists retired keys, marked.
 - **Insert.**
-  1. The runtime fixes the transaction's validity window: at most `W`, and for a composition the intersection of all
-     calls' windows.
+  1. The runtime fixes the transaction's validity window, in slots of the target network, before any method runs. Its
+     length is at most `W`, `maxValidityMs` and every composed call's window. When the call goes through a page
+     (ADR-0013), it also keeps the page's absolute limits: a start at most `maxStartSlots` and an upper bound at most
+     `maxValiditySlots` after the current slot, both converted with the network's slot length (`Window`,
+     `SlotChainTime`).
   2. It runs the `@OwnedInit` method on the JVM within that window to learn the key.
   3. It lists the type's nodes. keyIds are hashes, so it lists every UTxO at the state address and decodes the datums,
      keeping this instance's and type's.
@@ -339,20 +353,25 @@ The transaction:
      ends after the window's start, it moves the window's start to the first slot whose time is at least
      `A.linkedAt + C` (rounding up, not down), and starts again at step 1, a bounded number of times. When `C = 0` it
      never waits.
-  5. When it has waited for a cooldown, it prepares the call no earlier than the page verifier's start limit (60 slots)
-     before the expiry, so the wallet can sign within `W`, and submits at the expiry. It may send the same signed bytes
-     to several relays.
+  5. When it has waited for a cooldown, it prepares the call only once the window chosen in step 1 satisfies the page's
+     limits (its start at most `maxStartSlots` ahead and its upper bound at most `maxValiditySlots` ahead), shortening
+     the window if needed, and submits at the expiry. It may send the same signed bytes to several relays.
 - **Remove** finds the predecessor the same way. **Retire** (D10) needs no neighbour.
 - **Retries never resubmit.** Following ADR-0001 D14, a transaction that was accepted, or whose fate is unknown (an
   ambiguous submission), is never automatically rebuilt.
   - With several relays, the outcome is transaction-wide. Any acceptance, or any unresolved delivery (a timeout, an
     unknown answer), dominates every rejection.
   - Rebroadcasting the *same signed bytes* is always allowed.
-  - Building *another* transaction is allowed only after every relay rejected definitely, or after the upper bound has
-    passed *and* the transaction id is absent from the chain at a settled depth. An expiry alone does not prove the
-    transaction was never included.
+  - Building *another* transaction after a rejection is allowed only when that transaction **conflicts** with the
+    abandoned one: it re-spends at least one of the abandoned transaction's inputs (a wallet UTxO the runtime keeps for
+    that purpose). Then at most one of the two can ever be included, whatever any relay or provider claims, and no
+    evidence of non-inclusion is needed. Relays and providers are untrusted (§2), so their answers alone never justify
+    a non-conflicting rebuild.
+  - Otherwise the runtime raises the existing `PendingTransactionException` (`TxRunner`) and leaves the decision to the
+    caller.
   - A rebuild redoes the whole call or composition: the window, every method's JVM result, the shared references and
-    the anchor. It may produce a different key, when the key depends on `Ctx`.
+    the anchor. It may produce a different key, when the key depends on `Ctx`; the conflict rule keeps both keys from
+    being inserted.
 - **Traversal.** `keys()` walks from the head. A missing link, a duplicate or a cycle in a provider's answer is reported
   as an inconsistent snapshot. It cannot exist on chain (I47).
 - **The provider's power.** A lying provider can make a structural call fail, or make a read (`exists`, `keys`)
@@ -492,14 +511,38 @@ The transaction:
     - `topUpR = lovelace(out(R)) − minAda`, which must lie in `[0, allowR]` (D10: the payouts are exactly
       `in − minAda`);
     - every head output must hold exactly `depositᵢ`.
-  - **Net outflow.** The wallet's net lovelace loss must be at most
-    `fee + pay + Σ topUpA + Σ topUpR + (creation ? created + Σ depositᵢ : 0)`. `pay` and `created` are as in ADR-0013.
-  - **Masking.** What the script releases is computed with each retire's top-up removed from its continuation:
-    `released = value(target) − (value(continuation) − topUpR)`. For a retire this is `in − minAda`, and for a removal
-    the whole node. As today, outputs to parties other than the wallet must be covered by `released` minus the wallet's
-    payouts. Anchor and head outputs are not "other parties" in this check: they are bounded by their allowances
-    above. A gift beyond `allowA` is refused, so the remove-with-gift transaction is refused.
-  - **Composition.** The same equations are summed over the calls of a composition (`compose.js`).
+  - **Net outflow, per transaction.** The wallet's net lovelace loss must be at most:
+
+    ```
+    fee                                  (once per transaction)
+    + Σ payments of the non-creation calls
+    + Σ whole new outputs of the creation calls (instance, object or keyed node: created, payment included)
+    + Σ depositᵢ                         (heads)
+    + Σ topUpA                           (anchors)
+    + Σ topUpR                           (retires)
+    ```
+
+    This is ADR-0013's bound (`verify.js:366–370`: `created` or `pay`, never both), summed over calls with the fee
+    counted once (`compose.js:306`), plus the keyed contributions.
+  - **Masking, per transaction.** What the scripts release is computed by output role, **aggregated with signs before
+    any clamping** (as `compose.js:315–322` does today):
+
+    ```
+    released = Σ over spending calls (value(target) − value(continuation))     (signed, every spending call)
+             + Σ topUpR                                                         (each retire's top-up, once)
+             + the transaction's mint adjustment, once                          (as compose.js:319)
+    ```
+
+    - *Creation calls contribute nothing.* Their new outputs (and heads) are wallet-funded and already counted in the
+      net outflow; they are neither released funds nor third-party payments.
+    - *Anchors are not spending calls here.* Their outputs are bounded by `allowA`; they are neither released funds nor
+      third-party payments.
+    - *A retire* contributes `in − (minAda + topUpR) + topUpR = in − minAda`. *A removal* contributes the whole node.
+
+    As today, outputs to parties other than the wallet must be covered by `released` minus the wallet's payouts. A gift
+    to an anchor beyond `allowA` is refused, so the remove-with-gift transaction is refused.
+  - **Composition** uses exactly these transaction-wide equations. They are not per-call bounds added together.
+    Compositions with a creation call are new to the page (`compose.js:47` refuses them today), and M3 adds them.
   - **What a lying chain read can cost.** At most each allowance, which is the ledger minimum's shortfall for one
     output, a few ADA at the capped parameters, locked in a node or a head. It cannot move other funds.
 - **Without the service.** Keyed calls are prepared by the engine (ADR-0015), which needs the provider to list the
@@ -517,7 +560,13 @@ The transaction:
   - a retire with the owner's top-up and a third-party beneficiary (input 100 ADA, deposit 4 ADA, new minimum 5 ADA,
     96 ADA to the beneficiary, 1 ADA plus the fee from the wallet);
   - an insert with an anchor top-up;
-  - a creation with heads above `minAda`.
+  - a creation with heads above `minAda`;
+  - a composition of an insert (anchor 10 → 10, new node 4) and a retire (100 → 4 + 1 top-up, 96 to a beneficiary),
+    with the wallet paying 5 plus the fee: `released = 96` covers the beneficiary;
+  - a composition with a foreign contract's `ByAction` mint sent to a beneficiary (the mint adjustment counted once).
+
+  **Refused compositions (M3):** a deposit pair with an extra attacker output, which shows that aggregation must come
+  before clamping; and a creation whose payment is claimed twice.
 
 ### 3.1. Why I47 holds, and what may share a transaction
 
@@ -635,7 +684,9 @@ throughput is bounded by the number of gaps (D9).
 | M2 | Java runtime and client (D7), including Compose, on DevKit | M1 | **Deployment:** `registry` publishes as a reference script. **Capacity:** the D4c worst cases (an insert at both datum caps with 4,096 bytes of arguments; a creation with 16 heads) are accepted. **Concurrency:** on a pre-populated list, inserts from separate threads into different gaps all land; two inserts into one gap, one retries and lands; an insert into an empty list and at the tail; a contested gap, where an honest insert lands within 3 cooldowns against one contesting attacker. **Hostility:** a hostile predecessor updates every block while the victim retires; a remove while the predecessor is updated retries and lands. **Rejections:** a duplicate key refused on the JVM and, forced past the JVM, on-chain. **Cooldown:** `C = 0` (consecutive operations before the previous upper bound), the minimum `C`, a `C` not aligned
 to slots (rounded up), and the default, with boundary times. **Composition:** a time-derived key in a composition is rebuilt. **Submission:** across relays, acceptance plus
 rejection, timeout plus rejection, and expiry after an ambiguous delivery are never rebuilt; identical bytes may be
-rebroadcast. **Envelope:** the `@Init` argument cap with 16 heads |
+rebroadcast; a relay that lies "rejected" while the transaction lands: the rebuild conflicts, so only one lands.
+**Window:** a future start at the maximum `W` keeps the page's limits, and so does a network with 100 ms slots.
+**Envelope:** the `@Init` argument cap with 16 heads |
 | M3 | Description, page verifier rules, JS client, engine (D11) | M2 | The registry flows through npm on DevKit; the D11 tamper tests are refused by the page; recorded fixtures replay; ordering vectors agree across Java, JS and on-chain |
 | M4 (follow-up ADR) | Keyed types in asset-aware contracts | M3 | A composition matrix for assets, sends and user mints with structural operations; both generator paths covered |
 
@@ -856,3 +907,18 @@ rebroadcast. **Envelope:** the `@Init` argument cap with 16 heads |
   - **Default `W`:** D F17 → `min(120,000, maxValidityMs)` (D1).
   - **Precision items:** D F18 → retired nodes accumulate (§5); the matrix wording (§3.1); heads funded at
     `max(minAda, ledgerMin)` (D3, D7); `k = 3` in M2.
+- r5 (2026-11-09, responds to the round-4 reviews of `f193fa0`; design and security approved, Codex requested
+  changes):
+  - **Release accounting by role:** C F29 (P1) → signed aggregation before clamping; creations contribute nothing;
+    anchors excluded; each retire's top-up added once; the mint adjustment once. Mixed insert/retire and foreign-mint
+    compositions accepted in M3, and the deposit-pair attack refused (D11).
+  - **Net outflow:** C F30, D F20, S F22 → the transaction-wide formula, with the fee once and `created` or `pay`,
+    never both. Inserts count as creations. D4b's off-chain sentence aligned (D4b, D11).
+  - **Rebuild by conflict:** C F28, S F21 → another transaction is built only if it re-spends an input of the
+    abandoned one, so at most one lands; otherwise `PendingTransactionException` (D7).
+  - **Cooperative authorities:** C F31, S F20, D F19 → §2 states that every authorized party must be cooperative. The
+    processor warns when a keyed action's authority is not the retire's signer field, and a retire may not take
+    `@Reads` (§2, D1).
+  - **Effective window:** C F32, D F21 → derived in slots from `W`, `maxValidityMs`, the composition and the page's
+    absolute start and upper-bound limits; a deploy-time warning where `W` exceeds the page's limit in that network's
+    slots (D1, D7).
