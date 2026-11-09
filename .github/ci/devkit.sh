@@ -2,15 +2,17 @@
 # Yaci DevKit for the devnet jobs of .github/workflows/build.yml.
 #   devkit.sh start   start a new devnet with Yaci Store in the background (log: $RUNNER_TEMP/yaci-devkit.log)
 #   devkit.sh wait    wait until it is ready; if it is not, restart it once and wait again
+#   devkit.sh monitor log the node's and Yaci Store's block heights every 15 s (in the background, until the job ends)
 # Ready means the admin API answers and Yaci Store follows the chain: its latest block height advances. Once in
 # three CI runs Yaci Store stayed at an early height after DevKit's bootstrap while the node went on producing
 # blocks ("Yaci Store did not reach chain tip within 60s. Proceeding anyway"): every test's top-up then timed out.
 set -euo pipefail
 
 LOG="${RUNNER_TEMP:-/tmp}/yaci-devkit.log"
-# 200 ms slots and blocks (default 1 s) make every confirmation wait shorter. The runtime reads the slot length from
-# DevKit; the time horizon (3k/f = 300 slots) is then 60 s, still above the runtime's 20 s TTL (100 ms would leave 30 s).
-ARGS=(--enable-yaci-store --block-time 0.2 --slot-length 0.2)
+HEIGHTS="${RUNNER_TEMP:-/tmp}/yaci-devkit-heights.log"
+# DevKit's default 1 s slots. 200 ms slots saved only ~10% of the DevKit test time (the tests wait mostly on Yaci Store
+# polling and fixed sleeps) and DevKit stalled in 2 of 12 shard runs with them (bloxbean/joust#39).
+ARGS=(--enable-yaci-store)
 
 start() {
   nohup yaci-devkit up "${ARGS[@]}" >> "$LOG" 2>&1 &
@@ -20,7 +22,12 @@ store_height() {
   curl -sf -m 5 http://localhost:8080/api/v1/blocks/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["height"])' 2>/dev/null || echo -1
 }
 
-# Up to $1 seconds: the admin API answers, and Yaci Store's height advances over 10 s (50 blocks at 200 ms).
+node_height() {
+  curl -sf -m 5 -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","method":"queryNetwork/blockHeight"}' \
+    http://localhost:1337 | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"])' 2>/dev/null || echo -1
+}
+
+# Up to $1 seconds: the admin API answers, and Yaci Store's height advances over 10 s (~10 blocks at 1 s).
 ready_within() {
   local deadline=$((SECONDS + $1)) h1 h2
   while ((SECONDS < deadline)); do
@@ -59,5 +66,11 @@ case "${1:-}" in
     tail -n 200 "$LOG"
     exit 1
     ;;
-  *) echo "usage: $0 start|wait" >&2; exit 2 ;;
+  monitor)
+    nohup bash -c 'while true; do echo "$(date -u +%H:%M:%S) node $('"$0"' node-height) store $('"$0"' store-height)"; sleep 15; done' \
+      > "$HEIGHTS" 2>&1 &
+    ;;
+  node-height) node_height ;;
+  store-height) store_height ;;
+  *) echo "usage: $0 start|wait|monitor" >&2; exit 2 ;;
 esac

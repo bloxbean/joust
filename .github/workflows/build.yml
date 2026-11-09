@@ -144,7 +144,7 @@ jobs:
         with:
           node-version: '22'
 
-      # Devnet + Yaci Store (localhost:8080), admin API on localhost:10000, 200 ms slots (.github/ci/devkit.sh).
+      # Devnet + Yaci Store (localhost:8080), admin API on localhost:10000 (.github/ci/devkit.sh).
       # Started first: it boots while the rest installs and compiles.
       - name: Start Yaci DevKit
         run: |
@@ -173,7 +173,9 @@ jobs:
 
       # Restarts DevKit once if Yaci Store does not follow the chain.
       - name: Wait for Yaci DevKit
-        run: .github/ci/devkit.sh wait
+        run: |
+          .github/ci/devkit.sh wait
+          .github/ci/devkit.sh monitor
 
       - name: DevKit tests
         env:
@@ -211,4 +213,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: yaci-devkit-log-${{ matrix.shard.index }}
-          path: ${{ runner.temp }}/yaci-devkit.log
+          path: |
+            ${{ runner.temp }}/yaci-devkit.log
+            ${{ runner.temp }}/yaci-devkit-heights.log
