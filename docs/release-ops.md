@@ -55,8 +55,10 @@ private, a maintainer pushes the tag by hand (release-ops' `tag-release.yml` and
    workflow `release.yml`, environment `release-staging`.
 3. Then set `npm_publish=true` in `gradle.properties` for the release.
 
-`maven_central_publish`, `bloxbean_repo_publish` and `npm_publish` in `gradle.properties` must each be `true` or
-`false`. Gradle module metadata (`.module`) is published because release-ops' `verify-maven-staging.py`, shared and
+`maven_central_publish`, `bloxbean_repo_publish`, `npm_publish` and `allow_snapshot_dependencies` in
+`gradle.properties` must each be `true` or `false`. `allow_snapshot_dependencies=true` lets a release depend on a
+SNAPSHOT pin with a warning: use it only to rehearse (Central staged then dropped, `bloxbean_repo_publish=false`,
+`npm_publish=false`), since a published release naming a snapshot breaks once the snapshot is pruned. Gradle module metadata (`.module`) is published because release-ops' `verify-maven-staging.py`, shared and
 identical across repositories, requires it.
 
 ## One-time settings (a maintainer runs these)
