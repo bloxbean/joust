@@ -140,6 +140,15 @@ class WidestTest {
         assertTrue(r.reason().startsWith("script failed"), what + ": " + r.reason());
     }
 
+    /** Refused by a script, with {@code label} among the purposes that failed (others may fail too). */
+    void rejectedWith(Ledger.Tx t, String what, String label) {
+        var r = ledger.check(t);
+        assertFalse(r.accepted(), what + ": expected rejection");
+        assertTrue(r.reason().startsWith("script failed: "), what + ": " + r.reason());
+        assertTrue(java.util.Arrays.asList(r.reason().substring("script failed: ".length()).split(", ")).contains(label),
+                what + ": expected " + label + " among the failing purposes: " + r.reason());
+    }
+
     String mintLabel() {
         return "MINT " + HexFormat.of().formatHex(policy).substring(0, 8);
     }
@@ -346,8 +355,8 @@ class WidestTest {
         openVault(both, both.inputs.get(0), BOB);
         Ledger.Tx underInsert = both.copy();
         underInsert.redeemers.put(mint(), data(new WidestValidator.Insert_claim(inst, entry, c, cx)));
-        rejectedByAScript(balanced(underInsert, BOB), "an insert and a vault under the insert's redeemer");
-        rejectedByAScript(balanced(both, BOB), "an insert and a vault under OpenVault");
+        rejectedWith(balanced(underInsert, BOB), "an insert and a vault under the insert's redeemer", mintLabel());
+        rejectedWith(balanced(both, BOB), "an insert and a vault under OpenVault", mintLabel());
     }
 
     @Test
@@ -371,8 +380,8 @@ class WidestTest {
         openVault(withVault, withVault.inputs.get(0), ANN);
         Ledger.Tx underRemove = withVault.copy();
         underRemove.redeemers.put(mint(), data(new WidestValidator.Remove_Entry(entryHead, entry)));
-        rejectedByAScript(balanced(underRemove, ANN), "a remove and a vault under Remove_Entry");
-        rejectedByAScript(balanced(withVault, ANN), "a remove and a vault under OpenVault");
+        rejectedWith(balanced(underRemove, ANN), "a remove and a vault under Remove_Entry", mintLabel());
+        rejectedWith(balanced(withVault, ANN), "a remove and a vault under OpenVault", mintLabel());
         // The remove beside a plain destroy (closing the vault burns its 0x4F token under BurnInstance).
         Ctx close = ctx(ANN, BigInteger.ZERO, minAda);
         Ledger.Tx withClose = rm.copy();
@@ -381,9 +390,9 @@ class WidestTest {
         withClose.mint(policy, vaultId, BigInteger.ONE.negate());
         withClose.outputs.add(new TxOut(StateHarness.pkhAddress(ANN), Value.lovelace(minAda), new OutputDatum.OutputDatumInline(data(vault)),
                 Optional.empty()));
-        rejectedByAScript(balanced(withClose.copy(), ANN), "a remove and a plain destroy under Remove_Entry");
+        rejectedWith(balanced(withClose.copy(), ANN), "a remove and a plain destroy under Remove_Entry", mintLabel());
         withClose.redeemers.put(mint(), data(new WidestValidator.BurnInstance()));
-        rejectedByAScript(balanced(withClose, ANN), "a remove and a plain destroy under BurnInstance");
+        rejectedWith(balanced(withClose, ANN), "a remove and a plain destroy under BurnInstance", mintLabel());
     }
 
     @Test
