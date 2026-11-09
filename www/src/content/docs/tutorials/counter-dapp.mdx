@@ -5,6 +5,10 @@ description: Build the template's Counter dApp end to end, from the Java contrac
 
 import { Aside, Steps, LinkCard, CardGrid, FileTree } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 In this tutorial you build the Counter dApp that `npm create joust` gives you, and read every file that makes it work.
 At the end you have a page, served on Yaci DevKit, that creates counters, increments them and closes them, with each
 transaction prepared in the page itself, checked by the page and signed by a wallet.

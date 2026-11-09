@@ -1,9 +1,13 @@
 ---
-title: "Quick start: npm & JavaScript"
-description: Create a JOUST app with npm only, build and deploy its Counter contract on Yaci DevKit, and use it from a test and a browser page.
+title: "Quick start: JavaScript & TypeScript"
+description: (Experimental) Create a JOUST app with npm only, build and deploy its Counter contract on Yaci DevKit, and use it from a test and a browser page.
 ---
 
 import { Aside, Steps, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
 
 This page takes you from an empty folder to a Cardano contract you can call from a test and from a browser page, with
 Node and npm only: no JDK, no Gradle, no GraalVM. The contract is written in Java, but `joust build` compiles it with a
@@ -214,6 +218,29 @@ prepare service. See [Pages](/apps/pages/).
 DevKit's slot clock changes when DevKit restarts. After a restart, run `npm run deploy` and `npm run build:page`
 again.
 </Aside>
+
+## Use TypeScript
+
+The page can be TypeScript. Vite compiles `.ts` files (it does not type-check them), so renaming is enough to run:
+
+```sh
+mv page/main.js page/main.ts
+sed -i.bak 's#./main.js#./main.ts#' page/index.html && rm page/index.html.bak
+npm install --save-dev typescript
+```
+
+The generated client is typed already: `npm run build` writes `build/joust/Counter.d.ts` beside `Counter.js`, with a
+type for every state, argument and result. A call with a wrong argument name fails to compile:
+
+```ts
+await counter.at(id).increment(wallet, { amount: 1n });
+// error TS2353: Object literal may only specify known properties, and 'amount' does not exist in type '{ by: Int; }'.
+```
+
+Two modules a page imports ship no declarations yet (`virtual:joust/network` and `@julclang/joust-runtime/page`).
+Declare them in `page/joust-env.d.ts`, add a `tsconfig.json`, and type-check with `npx tsc --noEmit`: the
+[TypeScript page](/languages/typescript/#typing-a-page) has both declarations and a typed `main.ts`, checked with
+`strict` on. The template's `main.js` is plain JavaScript: under `strict` it needs parameter types before `tsc` passes.
 
 ## Try it on preview with Eternl or Lace
 

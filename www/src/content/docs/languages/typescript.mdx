@@ -5,6 +5,10 @@ description: The TypeScript types JOUST generates for each contract, how schemas
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 JOUST contracts are written in Java or `.jsc`, not TypeScript. But every contract comes with TypeScript types for the
 code that calls it: `joust build` (or `joust-gen`) writes `<Contract>.d.ts` next to the generated client, from the
 contract's description. Your editor then knows each method, its arguments and the shape of the state, and `tsc`

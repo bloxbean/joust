@@ -5,6 +5,10 @@ description: How a JOUST npm project is laid out, what joust build, deploy, dev 
 
 import { Aside, FileTree, LinkCard, CardGrid, Steps } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 `@julclang/joust` is the command line of a JOUST project. It compiles contracts with the toolchain engine (JOUST's
 annotation processor and JuLC's compiler, compiled to Wasm), publishes their reference scripts, and serves pages
 during development and after a build. It needs Node 22 or newer and nothing else: no JDK, no Gradle.

@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 520" width="980" height="520" role="img" aria-label="One method, run twice: off chain on the JVM and on chain in the validator" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>One method, run twice: off chain on the JVM and on chain in the validator</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#3a3f5c"/></marker>
+    <marker id="arrow-indigo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#4f4ce0"/></marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#c46a06"/></marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b1d3a" flood-opacity="0.08"/></filter>
+  </defs>
+  <rect width="980" height="520" rx="18" fill="#f7f8fc"/>
+  <text x="28" y="40" font-size="17" font-weight="800" fill="#151729">One method, run twice</text>
+  <text x="28" y="60" font-size="12.5" fill="#5b6074">The rule you write is the rule the chain enforces</text>
+  <g filter="url(#shadow)"><rect x="350" y="74" width="280" height="92" rx="12" fill="#eceeff" stroke="#b9b8f6" stroke-width="1.5"/></g>
+  <text x="490" y="100" text-anchor="middle" font-size="15" font-weight="700" fill="#151729" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">increment(state, by)</text>
+  <text x="490" y="119" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4f4ce0">[your method]</text>
+  <text x="490" y="144" text-anchor="middle" font-size="12.5" fill="#5b6074">The state and the call in, the next</text>
+  <text x="490" y="161" text-anchor="middle" font-size="12.5" fill="#5b6074">state out</text>
+  <text x="190" y="214" text-anchor="middle" font-size="12.5" font-weight="800" fill="#0f7a55">OFF CHAIN: the JVM</text>
+  <text x="790" y="214" text-anchor="middle" font-size="12.5" font-weight="800" fill="#c46a06">ON CHAIN: UPLC</text>
+  <g filter="url(#shadow)"><rect x="60" y="230" width="260" height="74" rx="12" fill="#e6f6ef" stroke="#9fd9c0" stroke-width="1.5"/></g>
+  <text x="190" y="256" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">1. Run the method</text>
+  <text x="190" y="281" text-anchor="middle" font-size="12.5" fill="#5b6074">A failing Require costs nothing: no</text>
+  <text x="190" y="298" text-anchor="middle" font-size="12.5" fill="#5b6074">transaction is built</text>
+  <g filter="url(#shadow)"><rect x="60" y="324" width="260" height="74" rx="12" fill="#e6f6ef" stroke="#9fd9c0" stroke-width="1.5"/></g>
+  <text x="190" y="350" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">2. Build the transaction</text>
+  <text x="190" y="375" text-anchor="middle" font-size="12.5" fill="#5b6074">cardano-client-lib: the new datum is</text>
+  <text x="190" y="392" text-anchor="middle" font-size="12.5" fill="#5b6074">the result</text>
+  <g filter="url(#shadow)"><rect x="60" y="418" width="260" height="74" rx="12" fill="#e6f6ef" stroke="#9fd9c0" stroke-width="1.5"/></g>
+  <text x="190" y="444" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">3. Sign and submit</text>
+  <text x="190" y="469" text-anchor="middle" font-size="12.5" fill="#5b6074">The caller signs; the client waits</text>
+  <text x="190" y="486" text-anchor="middle" font-size="12.5" fill="#5b6074">for confirmation</text>
+  <g filter="url(#shadow)"><rect x="660" y="230" width="260" height="74" rx="12" fill="#fff4e2" stroke="#f2c47c" stroke-width="1.5"/></g>
+  <text x="790" y="256" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">1. Compile it with JuLC</text>
+  <text x="790" y="281" text-anchor="middle" font-size="12.5" fill="#5b6074">The same Java method becomes part of</text>
+  <text x="790" y="298" text-anchor="middle" font-size="12.5" fill="#5b6074">the validator</text>
+  <g filter="url(#shadow)"><rect x="660" y="324" width="260" height="74" rx="12" fill="#fff4e2" stroke="#f2c47c" stroke-width="1.5"/></g>
+  <text x="790" y="350" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">2. Re-run it</text>
+  <text x="790" y="375" text-anchor="middle" font-size="12.5" fill="#5b6074">On the spent state and the call in</text>
+  <text x="790" y="392" text-anchor="middle" font-size="12.5" fill="#5b6074">the redeemer</text>
+  <g filter="url(#shadow)"><rect x="660" y="418" width="260" height="74" rx="12" fill="#fff4e2" stroke="#f2c47c" stroke-width="1.5"/></g>
+  <text x="790" y="444" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">3. Enforce the result</text>
+  <text x="790" y="469" text-anchor="middle" font-size="12.5" fill="#5b6074">New datum equals the result; exact</text>
+  <text x="790" y="486" text-anchor="middle" font-size="12.5" fill="#5b6074">value; signer; token</text>
+  <polyline points="350,120 190,120 190,226" fill="none" stroke="#4f4ce0" stroke-width="1.6" marker-end="url(#arrow-indigo)"/>
+  <polyline points="630,120 790,120 790,226" fill="none" stroke="#4f4ce0" stroke-width="1.6" marker-end="url(#arrow-indigo)"/>
+  <polyline points="190,304 190,320" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <polyline points="190,398 190,414" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <polyline points="790,304 790,320" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <polyline points="790,398 790,414" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <g filter="url(#shadow)"><rect x="380" y="418" width="220" height="74" rx="12" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/></g>
+  <text x="490" y="444" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">The transaction</text>
+  <text x="490" y="469" text-anchor="middle" font-size="12.5" fill="#5b6074">Accepted only if both sides</text>
+  <text x="490" y="486" text-anchor="middle" font-size="12.5" fill="#5b6074">agree</text>
+  <polyline points="320,455 376,455" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <polyline points="656,455 604,455" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="594.65" y="418" width="70.69999999999999" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="630" y="433" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">validates</text>
+
+</svg>

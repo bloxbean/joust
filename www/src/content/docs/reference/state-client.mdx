@@ -5,6 +5,10 @@ description: API reference of @julclang/state-client - clients, services, chain 
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 `@julclang/state-client` is the JavaScript client for JOUST contracts: it encodes calls from a contract's description,
 verifies prepared transactions before a CIP-30 wallet signs them, and reads the chain. It has no engine and no Wasm,
 so it is what a page bundles. Ledger formats go through cardano-js-sdk (`@cardano-sdk/core` 0.47.1, pinned exactly);

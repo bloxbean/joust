@@ -5,6 +5,10 @@ description: API reference of @julclang/joust-runtime - joustRuntime and its opt
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 `@julclang/joust-runtime` calls JOUST contracts from JavaScript with no JVM. It holds the **runtime engine**: JOUST's
 off-chain runtime compiled to Wasm (a GraalVM Web Image), a pure function of a call request and a snapshot of the
 chain, with no I/O and no keys. The JavaScript layer fetches what the engine asks for from a chain provider, keeps

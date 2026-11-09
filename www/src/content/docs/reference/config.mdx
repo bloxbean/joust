@@ -5,6 +5,10 @@ description: Every key of a JOUST project's joust.config.json, with its default,
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 `joust.config.json`, at the project's root, tells the `joust` CLI and the Vite plugin where the contracts are, where
 the build goes, which networks to use and how to deploy. Every key is optional: a missing file means the defaults.
 The source of truth is [`js/joust/src/config.js`](https://github.com/bloxbean/joust/blob/main/js/joust/src/config.js);

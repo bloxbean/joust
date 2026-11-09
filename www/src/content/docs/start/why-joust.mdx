@@ -96,6 +96,8 @@ counter.close(alice);                                            // the 2.2 ADA 
 
 ## One method, run twice
 
+![One method, run twice: off chain on the JVM to build the transaction, on chain in the validator to enforce it](../../../assets/diagrams/same-method.svg)
+
 The idea that makes this work is to compute off chain and re-check on chain with the same code:
 
 ```text
@@ -152,10 +154,11 @@ The cost is measured, not guessed: the counter's validator is 5,631 bytes, and a
 [`examples/README.md`](https://github.com/bloxbean/joust/blob/main/examples/README.md), measured by the harness
 tests).
 
-## Java, .jsc or JavaScript
+## Java first; .jsc and JavaScript too
 
-You can write a contract in Java or in `.jsc`, a smaller Solidity-like syntax that lowers to the same Java. You can
-call it from Java or from JavaScript.
+Java is JOUST's first-class language: you write the contract in Java (or in `.jsc`, a smaller syntax that lowers to
+the same Java) and call it from Java through a generated client on cardano-client-lib. JavaScript is supported too,
+experimentally: its toolchain and runtime run as WebAssembly built with GraalVM Web Image, itself experimental.
 
 <Tabs syncKey="lang">
 <TabItem label="Java">
@@ -188,7 +191,7 @@ contract Counter(maxDatumBytes = 128) {
 </TabItem>
 <TabItem label="JavaScript">
 
-The npm path needs only Node: the toolchain compiles `.java` and `.jsc` contracts in Node (no JDK), and pages and
+**Experimental.** The npm path needs only Node: the toolchain compiles `.java` and `.jsc` contracts in Node (no JDK), and pages and
 Node apps call them through generated JavaScript clients, with a CIP-30 browser wallet signing. Start with the
 [npm quick start](/start/quick-start-npm/) and [JavaScript clients](/apps/javascript-clients/).
 
@@ -196,6 +199,8 @@ Node apps call them through generated JavaScript clients, with a CIP-30 browser 
 </Tabs>
 
 ## Beyond one state UTxO
+
+![The five kinds of state: inline, MerkleMaps, owned objects, batched intents, native assets](../../../assets/diagrams/state-kinds.svg)
 
 A single state UTxO can be updated about once per block, and holds only what fits in one datum. JOUST makes the way
 state maps onto UTxOs an explicit choice, so you can pick the one your contract needs:

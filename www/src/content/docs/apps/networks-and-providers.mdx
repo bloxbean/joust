@@ -5,6 +5,10 @@ description: Configure networks for JOUST's npm tooling, read the chain through 
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 Everything JOUST does off chain reads the chain: the engine fetches the UTxOs and parameters a transaction needs, the
 page verifier reads the outputs a transaction spends, and `joust deploy` looks for reference scripts. A **network**
 in `joust.config.json` says where that chain is and how its time works. A **chain provider** is the JavaScript object

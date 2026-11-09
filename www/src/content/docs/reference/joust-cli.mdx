@@ -5,6 +5,10 @@ description: Reference of @julclang/joust - every joust command and flag, enviro
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 `@julclang/joust` is JOUST's command line and Vite plugin. It carries the **toolchain engine**: JOUST's annotation
 processor and JuLC's compiler, compiled to Wasm, which build `.java` and `.jsc` contracts in Node exactly as the
 Gradle build does. Source: [`js/joust`](https://github.com/bloxbean/joust/tree/main/js/joust). For a guided tour, see

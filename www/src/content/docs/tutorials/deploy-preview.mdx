@@ -5,6 +5,10 @@ description: Take the Counter dApp from Yaci DevKit to Cardano's preview testnet
 
 import { Aside, Steps, LinkCard, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 Yaci DevKit is private and fast, but browser wallets cannot join it. **Preview** is a public Cardano testnet: its ADA
 (tADA) is free from a faucet, and Eternl, Lace and other CIP-30 wallets work there. In this tutorial you deploy the
 template's Counter on preview, use it with a real wallet, then build the page as static files you can host anywhere.

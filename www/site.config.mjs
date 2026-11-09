@@ -5,5 +5,5 @@ export const SITE = {
   name: 'JOUST',
   tagline: 'State contracts for Cardano',
   description:
-    'JOUST: write Cardano smart contracts as state plus actions, in Java, .jsc or from JavaScript. The same method runs on chain and off; JOUST generates the validator, a typed client and the checks between them.',
+    'JOUST: write Cardano smart contracts in Java as state plus actions. The same method runs on chain and off; JOUST generates the validator and a typed client on cardano-client-lib. Also .jsc, and JavaScript (experimental).',
 };

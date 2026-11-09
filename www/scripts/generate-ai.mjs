@@ -119,7 +119,8 @@ export async function generateAi({ outDir, logger = console }) {
     '- The **same method runs twice**: off chain (JVM, or the Wasm engine in Node or a browser worker) to compute the next state and build the transaction, and on chain, compiled by JuLC to UPLC, where the generated validator re-runs it and requires the output datum to equal the result.',
     '- Contract code is a **JuLC subset of Java**: records and sealed interfaces, `BigInteger` (never int/long), immutable locals, `Require.that(cond, "msg")` for rules, `ByteStringLib.equals` for byte arrays (never `==` or `.equals`), no generic records, no exceptions.',
     '- State lives in one UTxO per instance (inline datum + a one-shot thread token). Larger state: `MerkleMap` fields (off-chain MPF, proofs checked on chain), owned objects (`@Owned`, one UTxO each), `@Batched` intents.',
-    '- From JavaScript: `npm create joust`, `joust build` (no JDK), `joust deploy`, `joust dev`; generated typed clients (`<Contract>.js`) call `deploy`, `at(id).<action>(wallet, args)`; every transaction is verified by the page before a CIP-30 wallet signs.',
+    '- Java is the first-class path: Gradle, the JOUST annotation processor, and a generated `<Name>Client` on cardano-client-lib (`CounterClient.deploy(runtime, account)`, `counter.increment(account, BigInteger.ONE)`).',
+    '- JavaScript is **experimental** (the toolchain and runtime run as WebAssembly built with GraalVM Web Image): `npm create joust`, `joust build` (no JDK), `joust deploy`, `joust dev`; generated typed clients (`<Contract>.js`) call `deploy`, `at(id).<action>(wallet, args)`; every transaction is verified by the page before a CIP-30 wallet signs.',
     '- Status: pre-release. Maven snapshots are published; the npm packages are not on npmjs.org yet.',
     '',
   );

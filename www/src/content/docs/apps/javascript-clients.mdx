@@ -5,6 +5,10 @@ description: Call JOUST contracts from JavaScript - generated clients, JoustCont
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 A JavaScript app calls a JOUST contract through three parts that do not trust one another:
 
 - a **client** (generated, or `JoustContract`) that holds the contract's description and its deployment;

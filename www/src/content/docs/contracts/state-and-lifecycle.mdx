@@ -26,6 +26,8 @@ JOUST maps your contract onto that model:
 - `@Destroy` spends the state UTxO, burns the token and pays everything out. The instance is gone.
 - `@View` reads the current state. It runs only off chain and builds no transaction.
 
+![An instance's life on chain: create, actions, destroy](../../../assets/diagrams/lifecycle.svg)
+
 The same method runs twice: on the JVM (or in the npm engine) to compute the next state and build the transaction,
 and on chain, where the generated validator re-runs it and checks that the output datum equals its result.
 

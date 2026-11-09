@@ -5,6 +5,10 @@ description: Connect CIP-30 browser wallets such as Eternl and Lace, review and 
 
 import { Aside, LinkCard, CardGrid, Steps } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 JOUST never holds a user's keys. A transaction is prepared without them, verified by the page, and signed by the
 user's wallet. To the client, a wallet is a **CIP-30 API object**: what a browser wallet extension's `enable()`
 returns. CIP-30 is the Cardano standard for dApp-to-wallet communication; JOUST's clients use six of its calls:

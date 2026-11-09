@@ -5,6 +5,10 @@ description: Run JOUST's runtime engine in a page's Web Worker, configure Vite w
 
 import { Aside, Steps, FileTree, LinkCard, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
 A JOUST page prepares its own transactions. The runtime engine, about 20 MB of Wasm, runs in a Web Worker; the page
 verifies every transaction the worker returns, then asks the user's wallet to sign. No backend builds anything: a
 built page is static files plus a chain API. This page explains each piece: the worker, the Vite plugin, the
@@ -16,6 +20,8 @@ The npm packages are not on npmjs.org yet. Install them from a local registry, a
 </Aside>
 
 ## The pieces
+
+![A JOUST page from the browser to the chain](../../../assets/diagrams/browser-path.svg)
 
 | Piece | Package | Runs in |
 |---|---|---|

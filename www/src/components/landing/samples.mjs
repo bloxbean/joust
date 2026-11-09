@@ -25,6 +25,11 @@ public class Counter {
     public static JulcList<Payout> close(State s, Ctx ctx) {
         return Payouts.of(s.owner(), ctx.balance());
     }
+
+    @View
+    public static BigInteger count(State s) {
+        return s.count();
+    }
 }`;
 
 export const JSC = `contract Counter(maxDatumBytes = 128) {
@@ -77,3 +82,23 @@ export const GRADLE = `dependencies {
     annotationProcessor "org.julclang:julc-annotation-processor:$julcVersion"
     testImplementation  "org.julclang:julc-state-testkit:$joustVersion"
 }`;
+
+// The Java client: generated from Counter.java, on cardano-client-lib (examples/counter's CounterApp does the same).
+export const JAVA_CLIENT = `// A runtime over any cardano-client-lib backend: Blockfrost, Yaci Store, ...
+BackendService backend = new BFBackendService(Constants.BLOCKFROST_PREVIEW_URL, projectId);
+StateRuntime runtime = StateRuntime.builder(backend)
+        .network(Networks.preview())
+        .chainTime(new SlotChainTime(0, 1_666_656_000_000L, 1000, backend))
+        .build();
+
+// CounterClient is generated from Counter.java; alice and bob are CCL Accounts.
+CounterClient counter = CounterClient.deploy(runtime, alice);
+counter.increment(bob, BigInteger.valueOf(5));   // runs increment() on the JVM, then submits
+System.out.println("count = " + counter.count()); // the @View, read from the chain
+
+try {
+    counter.reset(bob);                           // bob is not the owner
+} catch (RequireException e) {
+    // refused on the JVM: nothing was built or submitted
+}
+counter.close(alice);                             // burns the token, pays the deposit back`;
