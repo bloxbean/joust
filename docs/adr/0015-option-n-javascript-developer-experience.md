@@ -1289,6 +1289,10 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
       worker ran, bundled them again and reloaded the page. The plugin scans `*.worker.js` files with the HTML entries
       and pre-bundles `node:buffer`.
     - `JOUST_VITE_LOG=info` shows Vite's messages from `joust dev` (dependency bundling, reloads).
+  - **A page reads map values:** `engineWorker(...).mapValue(root, key, units)` answers from the worker's mirror
+    (null when the key is absent). A root the mirror has not seen is rebuilt first from the units' chain history, every
+    claim checked. A Token demo page on DevKit showed balances from it (750 and 250 after a mint and a transfer) and
+    refused an over-transfer before signing.
 
 ### 13.12 MerkleMap mirrors (M4): proofs for the engine, Aiken's MPF in JS, RocksDB on the JVM, rebuilt from the chain
 
