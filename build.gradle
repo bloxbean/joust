@@ -96,6 +96,9 @@ configure(subprojects.findAll { it.name in publishedModules }) { candidate ->
     tasks.withType(Javadoc).configureEach {
         options.encoding = 'UTF-8'
         options.addStringOption('Xdoclint:none', '-quiet')
+        // JDK 21+ embeds ~4 MB of DejaVu web fonts in every javadoc output: 28.4 of a version's 29.4 MiB across the
+        // seven published modules. Without them the pages fall back to system fonts (as JuLC does).
+        options.addBooleanOption('-no-fonts', true)
     }
 
     afterEvaluate {
