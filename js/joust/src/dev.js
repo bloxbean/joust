@@ -157,7 +157,7 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
         return res.end(JSON.stringify({ network: name, networkId: net.networkId, chain: '/chain',
           engine: { url: '/joust/engine/joust-runtime.js', integrity: { script: engine.script.integrity, wasm: engine.wasm.integrity } },
           contracts: '/joust/contracts.json', service: '/joust/service',
-          clock: net.clock, ttlMs: pageTtlMs(config, net), deployments: deployed ?? {} }));
+          clock: net.clock, ttlMs: pageTtlMs(config, net), explorer: net.explorer ?? null, deployments: deployed ?? {} }));
       }
       if (url.pathname === '/joust/service/prepare' && req.method === 'POST') {
         const body = await new Promise((ok) => { let s = ''; req.on('data', (c) => { s += c; }); req.on('end', () => ok(s)); });

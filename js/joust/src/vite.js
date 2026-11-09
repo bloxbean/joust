@@ -16,6 +16,7 @@
 // - The page may import the build's clients (build/joust/*.js) from the project root, outside the page directory.
 // - `virtual:joust/network` is what the page runs on: { network, networkId, chain, clock, ttlMs, deployments,
 //   contracts, validators, engine: { url, integrity } }.
+//   (explorer: the network's block-explorer transaction page, "{tx}" for the hash, or null.)
 //   - Under joust dev it reads /joust/network.json and the contracts when the page loads (a save redeploys).
 //   - In a build it is inlined, for the network `joust({ network })`, JOUST_NETWORK, Vite's mode when it names a
 //     network (vite build --mode preview) or joust.config.json names, from
@@ -55,7 +56,7 @@ function builtNetwork(ctx, root, name, base, mode) {
   for (const f of [engine.script, engine.wasm]) ctx.emitFile({ type: 'asset', fileName: `${dir}/${f.name}`, source: f.bytes });
   const value = {
     network, networkId: n.networkId ?? d.networkId, chain: n.pageChain ?? '/chain', clock: d.clock ?? n.clock,
-    ttlMs: pageTtlMs(config, n), deployments: d.contracts ?? {}, contracts: read('contracts.json'),
+    ttlMs: pageTtlMs(config, n), explorer: n.explorer ?? null, deployments: d.contracts ?? {}, contracts: read('contracts.json'),
     validators: existsSync(join(out, 'validators.json')) ? read('validators.json') : [],
     engine: { url: `${base}${dir}/${engine.script.name}`, integrity: { script: engine.script.integrity, wasm: engine.wasm.integrity } },
   };

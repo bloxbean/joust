@@ -28,6 +28,10 @@ const ada = (lovelace) => {
   return `${n < 0n ? '-' : ''}${a / 1_000_000n}.${(a % 1_000_000n).toString().padStart(6, '0').replace(/0{1,4}$/, '')} ADA`;
 };
 const short = (hex) => (hex && hex.length > 20 ? `${hex.slice(0, 10)}…${hex.slice(-8)}` : hex);
+// A transaction's hash, linked to the network's block explorer when it has one (joust.config.json "explorer").
+const txLink = (hash) => (net.explorer
+  ? el('a', { href: net.explorer.replace('{tx}', hash), target: '_blank', rel: 'noopener' }, short(hash))
+  : short(hash));
 const reason = (e) => e?.message ?? e?.info ?? (typeof e === 'object' ? JSON.stringify(e) : String(e));
 const el = (tag, attrs = {}, ...children) => {
   const e = document.createElement(tag);
@@ -47,7 +51,7 @@ function log(text, cls = 'pending') {
   const li = el('li', { class: cls }, text);
   $('log').prepend(li);
   return {
-    ok: (t) => { li.className = 'ok'; li.textContent = t; },
+    ok: (...parts) => { li.className = 'ok'; li.replaceChildren(...parts); },
     bad: (t, problems) => {
       li.className = 'bad';
       li.textContent = t;
@@ -61,7 +65,7 @@ async function act(label, fn) {
   const entry = log(`${label}…`);
   try {
     const r = await fn();
-    entry.ok(`${label}: on chain, tx ${short(r.txHash)}`);
+    entry.ok(`${label}: on chain, tx `, txLink(r.txHash));
     await refresh();
   } catch (e) {
     if (e instanceof VerificationError) entry.bad(`${label}: refused by this page's verifier; the wallet was not asked to sign`, e.problems);

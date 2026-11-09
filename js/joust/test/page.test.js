@@ -88,6 +88,9 @@ async function flow({ page, logText, until }) {
     await until(async () => /increment\(0\): .*must be positive/.test(await logText()), '+0 refused');
     await page.locator('.item button', { hasText: 'Close' }).first().click();
     await until(async () => /close: on chain/.test(await logText()), 'close');
+    // Each transaction on chain links to the network's explorer (DevKit's Yaci Viewer).
+    const links = await page.locator('#log a').evaluateAll((as) => as.map((a) => a.href));
+    assert.equal(links.filter((h) => /^http:\/\/localhost:5173\/transactions\/[0-9a-f]{64}$/.test(h)).length, 3, `explorer links: ${links}`);
   } finally {
     clearInterval(signer);
   }
