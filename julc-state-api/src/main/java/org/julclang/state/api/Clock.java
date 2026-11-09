@@ -1,5 +1,7 @@
 package org.julclang.state.api;
 
+import org.julclang.state.api.Ctx;
+
 import org.julclang.stdlib.annotation.OnchainLibrary;
 
 import java.math.BigInteger;

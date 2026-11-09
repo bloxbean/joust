@@ -1,9 +1,74 @@
 plugins {
     alias(libs.plugins.julc) apply false
+    // Central Portal publisher (as JuLC): nmcp per published module, aggregated here into one deployment.
+    id 'com.gradleup.nmcp' version '1.6.2' apply false
+    id 'com.gradleup.nmcp.aggregation' version '1.6.2'
 }
 
+// The root publishes nothing, but nmcp resolves its tasks from here.
+repositories {
+    mavenCentral()
+}
+
+// Development snapshots carry the commit (release-ops docs/12): 0.1.0-pre1-SNAPSHOT -> 0.1.0-pre1-<sha7>-SNAPSHOT, one version
+// per commit in https://repo.bloxbean.org/maven/snapshots. Plain git rather than grgit, which can't open worktrees.
+if (version.toString().endsWith('-SNAPSHOT')) {
+    def commit = providers.exec {
+        commandLine 'git', 'rev-parse', '--short=7', 'HEAD'
+        ignoreExitValue = true
+    }.standardOutput.asText.get().trim()
+    if (commit) version = version.toString().replace('-SNAPSHOT', "-${commit}-SNAPSHOT")
+}
+
+// Signing (as JuLC). CI signs with an ASCII-armored signing subkey held in memory, passed as the project properties
+// signingInMemoryKey, signingInMemoryKeyId (last 8 hex chars of the subkey id) and signingInMemoryKeyPassword
+// (ORG_GRADLE_PROJECT_* environment variables in the release workflow). Without them, local builds use the signing.*
+// properties from ~/.gradle/gradle.properties. Only release versions sign, and -PskipSigning turns it off.
+ext.configureReleaseSigning = { Project candidate ->
+    candidate.signing {
+        def inMemoryKey = candidate.findProperty('signingInMemoryKey')
+        if (inMemoryKey) {
+            useInMemoryPgpKeys(candidate.findProperty('signingInMemoryKeyId'), inMemoryKey,
+                    candidate.findProperty('signingInMemoryKeyPassword'))
+        }
+        sign candidate.publishing.publications
+    }
+}
+
+// Central Portal publishing through the native publisher API (nmcp), as JuLC (release-ops docs/02). `USER_MANAGED`
+// uploads the deployment and stops at VALIDATED: nothing reaches Maven Central until a human publishes it in the
+// Central Portal. The release workflow (.github/workflows/release.yml) passes the portal token as
+// MAVEN_USERNAME/MAVEN_PASSWORD. Do not set `publishingTimeout` here: nmcp rejects it under USER_MANAGED.
+nmcpAggregation {
+    centralPortal {
+        username = System.getenv('MAVEN_USERNAME')
+        password = System.getenv('MAVEN_PASSWORD')
+        publishingType = 'USER_MANAGED'
+        publicationName = "joust:${project.version}"
+        validationTimeout = java.time.Duration.ofMinutes(30)
+    }
+}
+
+// The modules published to the BloxBean Maven repository; examples are never published.
+def publishedModules = ['julc-state-api', 'julc-state-processor', 'julc-state-runtime', 'julc-state-testkit',
+                        'julc-state-verifier', 'julc-state-dsl', 'julc-state-server']
+
 subprojects {
-    apply plugin: path.startsWith(':examples') ? 'java' : 'java-library'
+    apply plugin: 'java-library'
+
+    // -PjoustFixtures: the examples' tests record ADR-0015 M0 fixtures (every built transaction with the chain reads
+    // behind it) into fixtures/m0/<module>; DevKit must be running. See examples/devkit FixtureRecorder.
+    if (rootProject.hasProperty('joustFixtures') && path.startsWith(':examples:')) {
+        tasks.withType(Test).configureEach {
+            systemProperty 'joust.fixtures', "${rootDir}/fixtures/m0/${project.name}"
+            outputs.upToDateWhen { false }
+        }
+    }
+
+    // -PjoustPortableAll: generate <Name>Portable for every example contract (checks PortableGenerator; ADR-0013 D4).
+    if (rootProject.hasProperty('joustPortableAll') && path.startsWith(':examples:')) {
+        tasks.withType(JavaCompile).configureEach { options.compilerArgs += ['-Ajoust.portable=true'] }
+    }
 
     group = rootProject.group
     version = rootProject.version
@@ -14,6 +79,11 @@ subprojects {
         maven {
             url = uri("https://central.sonatype.com/repository/maven-snapshots")
             content { snapshotsOnly() }
+        }
+        // BloxBean Maven repository: development snapshots of BloxBean projects (release-ops docs/12).
+        maven {
+            url "https://repo.bloxbean.org/maven/snapshots"
+            mavenContent { snapshotsOnly() }
         }
     }
 
@@ -30,6 +100,14 @@ subprojects {
         useJUnitPlatform()
         jvmArgs '--enable-native-access=ALL-UNNAMED'
         maxHeapSize = '1g'
+        // MerkleMap mirrors in memory for tests (ADR-0015 §13.12 M3: applications default to RocksDB).
+        systemProperty 'joust.mapStore', 'memory'
+        if (project.hasProperty('joust.failedTerm')) systemProperty 'joust.failedTerm', 'true'
+        if (project.hasProperty('joust.dumpTx')) systemProperty 'joust.dumpTx', project.property('joust.dumpTx')
+        // A hung test (a DevKit call that never returns) fails after 10 minutes with its stack trace, rather than
+        // holding the build until the CI job times out.
+        systemProperty 'junit.jupiter.execution.timeout.default', '10m'
+        systemProperty 'junit.jupiter.execution.timeout.thread.mode.default', 'SEPARATE_THREAD'
         testLogging {
             events 'passed', 'skipped', 'failed'
             exceptionFormat = 'full'
@@ -42,4 +120,134 @@ subprojects {
         testImplementation rootProject.libs.assertj.core
         testRuntimeOnly rootProject.libs.junit.platform.launcher
     }
+}
+
+// ---- publishing (release-ops docs/12): the library modules, with sources and javadoc
+configure(subprojects.findAll { it.name in publishedModules }) { candidate ->
+    apply plugin: 'maven-publish'
+    apply plugin: 'signing'
+    // Exposes this module's publication to the root nmcpAggregation (the Central deployment).
+    apply plugin: 'com.gradleup.nmcp'
+
+    java {
+        withSourcesJar()
+        withJavadocJar()
+    }
+    tasks.withType(Javadoc).configureEach {
+        options.encoding = 'UTF-8'
+        options.addStringOption('Xdoclint:none', '-quiet')
+        // JDK 21+ embeds ~4 MB of DejaVu web fonts in every javadoc output: 28.4 of a version's 29.4 MiB across the
+        // seven published modules. Without them the pages fall back to system fonts (as JuLC does).
+        options.addBooleanOption('-no-fonts', true)
+    }
+
+    // Gradle module metadata (.module) stays: release-ops' verify-maven-staging.py (shared, kept identical across
+    // repositories) requires it for every jar module, in the snapshot and release workflows alike.
+
+    afterEvaluate {
+        publishing {
+            publications {
+                mavenJava(MavenPublication) {
+                    from components.java
+                    artifactId = candidate.name
+                    pom {
+                        name = candidate.name
+                        description = candidate.description ?: "JOUST ${candidate.name}"
+                        url = 'https://github.com/bloxbean/joust'
+                        licenses {
+                            license {
+                                name = 'The MIT License'
+                                url = 'https://opensource.org/licenses/mit-license.php'
+                            }
+                        }
+                        developers {
+                            developer {
+                                id = 'satran004'
+                                name = 'Satya'
+                            }
+                        }
+                        scm {
+                            connection = 'scm:git:git://github.com/bloxbean/joust.git'
+                            developerConnection = 'scm:git:ssh://git@github.com/bloxbean/joust.git'
+                            url = 'https://github.com/bloxbean/joust'
+                        }
+                    }
+                }
+            }
+        }
+        if (!candidate.version.toString().endsWith('SNAPSHOT') && !candidate.hasProperty('skipSigning')) {
+            configureReleaseSigning(candidate)
+        }
+    }
+}
+
+// The `stagingRepository` hook (release-ops docs/12-bloxbean-maven-repository.md). Publishes the same
+// MavenPublications to an isolated repository - no second publication definition. CI passes an absolute path:
+// `./gradlew publishAllPublicationsToStagingRepository -PstagingRepository=$PWD/...`.
+def stagingRepository = providers.gradleProperty('stagingRepository')
+allprojects { candidate ->
+    candidate.pluginManager.withPlugin('maven-publish') {
+        if (stagingRepository.isPresent()) {
+            candidate.publishing.repositories {
+                maven {
+                    name = 'staging'
+                    url = candidate.uri(stagingRepository.get())
+                }
+            }
+        }
+    }
+}
+
+// The publication scope (release-ops docs/12, `discover`): the projects that publish must be exactly the published
+// modules, each with a POM name and description. JOUST is not on Maven Central yet, so this is the scope of the
+// BloxBean repository; the line it logs is what .github/scripts/bloxbean-maven.sh counts.
+// The Central deployment: every published module, in one aggregated bundle.
+dependencies {
+    subprojects.findAll { it.name in publishedModules }.each { candidate ->
+        nmcpAggregation(project(candidate.path))
+    }
+}
+
+tasks.register('verifyMavenReleasePublicationScope') {
+    group = 'verification'
+    description = 'Asserts the published modules are exactly the projects that declare a Maven publication.'
+    def expected = subprojects.findAll { it.name in publishedModules }.collect { it.path }.toSet()
+    doLast {
+        def declared = allprojects.findAll { candidate ->
+            candidate.pluginManager.hasPlugin('maven-publish') &&
+                    !candidate.publishing.publications.withType(MavenPublication).isEmpty()
+        }.collect { it.path }.toSet()
+        def missing = declared - expected
+        def extra = expected - declared
+        if (!missing.isEmpty() || !extra.isEmpty()) {
+            throw new GradleException('Publication scope does not match declared publications. ' +
+                    "Publishing but not in scope: ${missing.sort()}; in scope but publishes nothing: ${extra.sort()}")
+        }
+        def incomplete = allprojects.findAll { it.pluginManager.hasPlugin('maven-publish') }.collectMany { candidate ->
+            candidate.publishing.publications.withType(MavenPublication).findAll {
+                it.pom.name.getOrElse('').isBlank() || it.pom.description.getOrElse('').isBlank()
+            }.collect { "${candidate.path}:${it.name}" }
+        }
+        if (!incomplete.isEmpty()) {
+            throw new GradleException("Publications with no POM name or description: ${incomplete.sort()}")
+        }
+        logger.lifecycle("Central deployment scope: ${expected.size()} projects")
+    }
+}
+
+
+// ---- ADR-0015 M2: JOUST for JavaScript developers, from a local npm registry (js/verdaccio, http://127.0.0.1:4873).
+//   ./gradlew npmPublishLocal -PgraalvmHome=/path/to/graalvm-25.3   builds both engines, publishes the four packages
+//   ./gradlew npmAcceptance -PgraalvmHome=...                        I4: create, install, build, deploy, test with no Java
+tasks.register('npmPublishLocal', Exec) {
+    group = 'publishing'
+    description = 'Publishes @julclang/state-client, @julclang/joust-runtime, @julclang/joust and create-joust to the local registry'
+    dependsOn ':julc-state-runtime-wasm:runtimeWasm', ':julc-state-toolchain:toolchainWasm'
+    commandLine 'bash', 'js/publish-local.sh'
+}
+tasks.register('npmAcceptance', Exec) {
+    group = 'verification'
+    description = 'ADR-0015 I4 on a Yaci DevKit: the npm-only developer flow in a shell where no Java can be found'
+    dependsOn 'npmPublishLocal'
+    commandLine 'bash', 'js/acceptance/no-java.sh'
 }

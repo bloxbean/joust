@@ -1,0 +1,23 @@
+{
+  "name": "joust-dapp",
+  "private": true,
+  "type": "module",
+  "description": "A JOUST dApp page on Yaci DevKit: generated clients, verified transactions, CIP-30 wallets (ADR-0013)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "e2e": "node e2e/run.mjs"
+  },
+  "dependencies": {
+    "@cardano-foundation/cardano-connect-with-wallet-core": "0.2.12",
+    "@emurgo/cardano-serialization-lib-browser": "15.0.3",
+    "@julclang/state-client": "file:../../../js/state-client",
+    "@noble/hashes": "1.8.0",
+    "@scure/bip39": "1.6.0"
+  },
+  "devDependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "15.0.3",
+    "vite": "6.4.5",
+    "vite-plugin-wasm": "3.6.0"
+  }
+}

@@ -9,5 +9,5 @@ package org.julclang.state.processor.ir;
  */
 public record ParamIR(String name, String type, TypeKind kind) {
 
-    public enum TypeKind { INTEGER, BYTES, BOOLEAN, STRING, OTHER }
+    public enum TypeKind { INTEGER, BYTES, BOOLEAN, STRING, MERKLE_MAP, OTHER }
 }

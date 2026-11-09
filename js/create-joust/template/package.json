@@ -1,0 +1,28 @@
+{
+  "name": "joust-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "joust build",
+    "deploy": "joust deploy",
+    "deploy:preview": "joust deploy --network preview",
+    "dev": "joust dev",
+    "dev:preview": "joust dev --network preview",
+    "build:page": "vite build",
+    "build:page:preview": "vite build --mode preview",
+    "serve": "joust serve",
+    "serve:preview": "joust serve --network preview",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@cardano-foundation/cardano-connect-with-wallet-core": "0.2.12",
+    "@julclang/joust": "0.1.0-pre1-snapshot",
+    "@julclang/joust-runtime": "0.1.0-pre1-snapshot",
+    "@julclang/state-client": "0.1.0-pre1-snapshot",
+    "@scure/bip39": "1.6.0"
+  },
+  "devDependencies": {
+    "vite": "6.4.5"
+  }
+}

@@ -1,7 +1,7 @@
 [versions]
-# JuLC main, built locally: `./gradlew publishToMavenLocal -Pversion=0.1.0-local-SNAPSHOT` in ../julc
-# (the julc build appends the commit hash). Switch back to a released version once one includes what we need.
-julc = "0.1.0-local-728cb83-SNAPSHOT"
+# JuLC main at 71b3a735 (includes bloxbean/julc#311 and #313), published to the BloxBean snapshot repository
+# (https://repo.bloxbean.org/maven/snapshots; bloxbean/julc Actions run 42607888567).
+julc = "0.1.0-pre21-71b3a73-SNAPSHOT"
 cardano-client-lib = "0.8.0-pre7"
 junit = "5.11.4"
 bouncycastle = "1.83"
@@ -19,6 +19,8 @@ julc-vm-java = { module = "org.julclang:julc-vm-java", version.ref = "julc" }
 
 cardano-client-lib = { module = "com.bloxbean.cardano:cardano-client-lib", version.ref = "cardano-client-lib" }
 cardano-client-backend = { module = "com.bloxbean.cardano:cardano-client-backend", version.ref = "cardano-client-lib" }
+cardano-client-mpf = { module = "com.bloxbean.cardano:cardano-client-merkle-patricia-forestry", version.ref = "cardano-client-lib" }
+cardano-client-mpf-rocksdb = { module = "com.bloxbean.cardano:cardano-client-merkle-patricia-forestry-rocksdb", version.ref = "cardano-client-lib" }
 cardano-client-backend-blockfrost = { module = "com.bloxbean.cardano:cardano-client-backend-blockfrost", version.ref = "cardano-client-lib" }
 
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }

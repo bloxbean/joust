@@ -5,6 +5,11 @@ pluginManagement {
             url = uri("https://central.sonatype.com/repository/maven-snapshots")
             content { snapshotsOnly() }
         }
+        // BloxBean Maven repository: JuLC's Gradle plugin (org.julclang.julc) and other BloxBean snapshots.
+        maven {
+            url = uri("https://repo.bloxbean.org/maven/snapshots")
+            mavenContent { snapshotsOnly() }
+        }
         gradlePluginPortal()
     }
 }
@@ -15,7 +20,32 @@ include 'julc-state-api'
 include 'julc-state-processor'
 include 'julc-state-runtime'
 include 'julc-state-testkit'
+include 'julc-state-verifier'
+include 'julc-state-dsl'
+include 'julc-state-server'
+include 'julc-state-toolchain'
+include 'julc-state-runtime-wasm'
+include 'examples:devkit'
 include 'examples:counter'
+include 'examples:vault'
+include 'examples:escrow'
+include 'examples:crowdfund'
+include 'examples:token'
+include 'examples:bank'
+include 'examples:pool'
+include 'examples:dsl'
+include 'examples:rollup'
+include 'examples:dex'
+include 'examples:market'
+include 'examples:treasury'
+include 'examples:staking'
+include 'examples:oracle'
+include 'examples:upgrade'
+include 'examples:guild'
+include 'examples:fees'
+include 'examples:locker'
+include 'examples:wallet'
+include 'examples:dapp'
 
 // Local development against a JuLC checkout (opt-in, untested so far):
 //   ./gradlew build -PuseLocalJulc            (expects ../julc)

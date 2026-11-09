@@ -29,6 +29,11 @@ final class SourceWriter {
     }
 
     /** Indents the following lines (after a {@code close("} else {")}). */
+    SourceWriter dedent() {
+        depth--;
+        return this;
+    }
+
     SourceWriter indent() {
         depth++;
         return this;

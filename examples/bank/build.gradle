@@ -1,0 +1,29 @@
+plugins {
+    id 'application'
+}
+
+description = 'JOUST example: bank (owned accounts, ADR-0003)'
+
+dependencies {
+    implementation project(':julc-state-runtime')
+    implementation project(':examples:devkit')
+
+    annotationProcessor project(':julc-state-processor')
+    annotationProcessor libs.julc.annotation.processor
+    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+
+    testImplementation project(':julc-state-testkit')
+}
+
+application {
+    mainClass = 'org.julclang.state.examples.bank.BankApp'
+}
+
+tasks.named('run', JavaExec) {
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+// The portable transitions (ADR-0013 D4, experimental), compiled to Wasm by examples/dapp.
+tasks.named('compileJava', JavaCompile) {
+    options.compilerArgs += ['-Ajoust.portable=true']
+}

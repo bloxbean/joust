@@ -1,27 +1,18 @@
 plugins {
     id 'application'
-    alias(libs.plugins.julc)
 }
 
-description = 'JOUST example: counter (generated files are hand-written until the processor exists)'
+description = 'JOUST example: counter'
 
 dependencies {
-    implementation project(':julc-state-api')
+    implementation project(':julc-state-runtime')
+    implementation project(':examples:devkit')
 
-    implementation libs.julc.stdlib
-    implementation libs.julc.cardano.client.lib
+    annotationProcessor project(':julc-state-processor')
     annotationProcessor libs.julc.annotation.processor
-    annotationProcessor project(path: ":julc-state-api", configuration: "onchainSources")   // JOUST on-chain sources for JuLC (ADR-0001 D17)
-    implementation libs.julc.annotation.processor   // JulcScriptLoader at runtime
-    runtimeOnly libs.julc.vm.java
+    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
 
-    implementation libs.cardano.client.lib
-    implementation libs.cardano.client.backend.blockfrost
-
-    testImplementation libs.bouncycastle.bcprov
-    testImplementation libs.julc.testkit
-    testImplementation libs.julc.compiler
-    testRuntimeOnly libs.julc.vm.java
+    testImplementation project(':julc-state-testkit')
 }
 
 application {
@@ -30,4 +21,9 @@ application {
 
 tasks.named('run', JavaExec) {
     jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+// The portable transitions (ADR-0013 D4, experimental), compiled to Wasm by examples/dapp.
+tasks.named('compileJava', JavaCompile) {
+    options.compilerArgs += ['-Ajoust.portable=true']
 }

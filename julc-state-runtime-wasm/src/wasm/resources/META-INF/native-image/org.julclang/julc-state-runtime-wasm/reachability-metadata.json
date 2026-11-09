@@ -1,0 +1,68 @@
+{
+  "reflection": [
+    {
+      "type": "org.julclang.state.runtime.wasm.Prepare$Contract",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.julclang.state.runtime.wasm.Prepare$Result",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.julclang.state.runtime.wasm.Prepare$Request",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "com.bloxbean.cardano.client.api.model.Utxo",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.bloxbean.cardano.client.api.model.Amount",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.bloxbean.cardano.client.api.model.ProtocolParams",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.bloxbean.cardano.client.backend.model.Block",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.fasterxml.jackson.databind.PropertyNamingStrategies$SnakeCaseStrategy",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true
+    },
+    {
+      "type": "com.fasterxml.jackson.databind.PropertyNamingStrategies$NamingBase",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true
+    },
+    {
+      "type": "com.fasterxml.jackson.databind.PropertyNamingStrategy",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true
+    }
+  ]
+}

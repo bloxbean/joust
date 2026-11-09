@@ -1,0 +1,41 @@
+{
+  "name": "@julclang/state-client",
+  "version": "0.1.0-pre1-snapshot",
+  "description": "JavaScript client for JOUST state contracts: encodes calls from the contract's description, verifies prepared transactions before a CIP-30 wallet signs them (ADR-0013); ledger formats through cardano-js-sdk",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./devwallet": "./src/devwallet.js",
+    "./codegen": "./src/codegen.js",
+    "./ledger": "./src/ledger.js",
+    "./pdata": "./src/pdata.js"
+  },
+  "bin": {
+    "joust-gen": "bin/joust-gen.js"
+  },
+  "files": [
+    "src",
+    "bin"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@cardano-sdk/core": "0.47.1",
+    "@cardano-sdk/crypto": "0.4.7",
+    "@cardano-sdk/util": "0.17.2",
+    "@noble/hashes": "1.8.0",
+    "@scure/bip39": "1.6.0"
+  },
+  "devDependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "15.0.3"
+  },
+  "license": "MIT",
+  "types": "./src/index.d.ts",
+  "publishConfig": {
+    "registry": "http://127.0.0.1:4873/"
+  }
+}

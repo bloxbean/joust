@@ -1,72 +1,60 @@
 package org.julclang.state.examples.counter;
 
+import org.julclang.core.types.JulcList;
 import org.julclang.state.api.Action;
+import org.julclang.state.api.Ctx;
+import org.julclang.state.api.Destroy;
 import org.julclang.state.api.Init;
+import org.julclang.state.api.OnlyOwner;
+import org.julclang.state.api.Payout;
+import org.julclang.state.api.Payouts;
+import org.julclang.state.api.Require;
 import org.julclang.state.api.StateContract;
 import org.julclang.state.api.View;
-import org.julclang.stdlib.Builtins;
-import org.julclang.stdlib.annotation.OnchainLibrary;
-import org.julclang.stdlib.lib.ByteStringLib;
 
 import java.math.BigInteger;
 
 /**
- * ============================================================================
- *  THE ONLY FILE THE DEVELOPER WRITES.
- * ============================================================================
- *
- * A counter that anyone can increment and only the owner can reset.
- * There's nothing about UTxOs, datums, redeemers, thread tokens or tx building here:
- * just a state record and pure functions that compute the next state.
- *
- * The same methods run in two places:
- *   - on the JVM, inside the generated CounterClient, to compute the next state
- *     and build the transaction;
- *   - on-chain, compiled by JuLC into the generated CounterValidator, which
- *     re-runs them and checks that the tx's output datum equals the result.
- *
- * {@code caller} is supplied by the framework. It's the PubKeyHash that the generated
- * validator has verified signed the transaction (the eUTxO equivalent of msg.sender).
- *
- * Today's stand-in: {@code @OnchainLibrary} is what lets JuLC compile this class for
- * on-chain use. In the proposed framework, {@code @StateContract} would imply it.
+ * A counter anyone can increment and only its owner can reset or close.
+ * <p>
+ * This is the only file the developer writes. The JOUST processor generates {@code CounterValidator} (compiled to
+ * UPLC by JuLC) and {@code CounterClient}. The same methods run on the JVM (to compute the next state) and on-chain
+ * (to check it).
  */
-@StateContract
-@OnchainLibrary
+@StateContract(maxDatumBytes = 128)
 public class Counter {
 
-    /** The contract's state. Stored as the inline datum of the state UTxO. */
+    /** The state, stored as the inline datum of the state UTxO. */
     public record State(BigInteger count, byte[] owner) {}
 
-    /** Called once when the contract is deployed. The caller becomes the owner. */
+    /** The deployer becomes the owner. */
     @Init
-    public static State init(byte[] caller) {
-        return new State(BigInteger.ZERO, caller);
+    public static State init(Ctx ctx) {
+        return new State(BigInteger.ZERO, ctx.caller());
     }
 
-    /** Anyone can increment by a positive amount. */
+    /** Anyone can increment by a positive amount (no Ctx: no signature needed, cheaper). */
     @Action
-    public static State increment(State s, BigInteger by, byte[] caller) {
-        if (by.compareTo(BigInteger.ZERO) <= 0) {          // proposed sugar: require(by > 0, "positive")
-            Builtins.error();
-            return s;
-        } else {
-            return new State(s.count().add(by), s.owner());
-        }
+    public static State increment(State s, BigInteger by) {
+        Require.that(by.compareTo(BigInteger.ZERO) > 0, "increment must be positive");
+        return new State(s.count().add(by), s.owner());
     }
 
     /** Only the owner can reset. */
     @Action
-    public static State reset(State s, byte[] caller) {
-        if (!ByteStringLib.equals(caller, s.owner())) {     // proposed sugar: require(caller == owner, "owner only")
-            Builtins.error();
-            return s;
-        } else {
-            return new State(BigInteger.ZERO, s.owner());
-        }
+    @OnlyOwner
+    public static State reset(State s) {
+        return new State(BigInteger.ZERO, s.owner());
     }
 
-    /** Read-only view. Runs off-chain only (no transaction). */
+    /** Only the owner can close the counter; the deposit goes back to them. */
+    @Destroy
+    @OnlyOwner
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        return Payouts.of(s.owner(), ctx.balance());
+    }
+
+    /** Read-only view (off-chain, no transaction). */
     @View
     public static BigInteger count(State s) {
         return s.count();

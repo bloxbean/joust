@@ -1,5 +1,7 @@
 package org.julclang.state.api;
 
+import org.julclang.state.api.Payout;
+
 import org.julclang.core.types.JulcList;
 import org.julclang.stdlib.annotation.OnchainLibrary;
 

@@ -43,7 +43,7 @@ Two rules:
 
 | Annotation | Purpose |
 |---|---|
-| `@Payable` | The action may add ADA (later tokens) to the contract. Generates an exact "output value = input value + received − payouts" check |
+| `@Payable` | The action may add ADA and, with `Funds` (ADR-0007), native assets it names in `accepted` to the contract. Generates an exact "output value = input value + received − payouts" check |
 | `@Deposit(ada = 2)` | Min-ADA buffer held by the state UTxO, topped up automatically as the state grows |
 
 Payouts need no annotation: the action returns them (see ADR-0001), and the generator turns each one into "an output pays
@@ -57,7 +57,7 @@ at least X to Y, tagged with this instance's input", plus the matching decrease 
 | `@Owned(by="holder")` | record | One UTxO per user, no contention (positions, balances) |
 | `@Shared` | record | Single global state. The compiler warns that writes are limited to about one per block |
 | `@ReadOnly` | action parameter | Another contract's state, read via a reference input (prices, config) |
-| `@Batched(max = 20)` | action | Intent mode: users submit requests, a generated batcher applies them |
+| `@Batched(only = false)` | action | **Shipped (ADR-0004).** Intent mode: users lock requests in their own UTxOs; a permissionless batcher applies many in one transaction. `only = true` removes the direct call. The batch size comes from the budget (about 8), not from an annotation attribute |
 
 ## Lifecycle, events, composition
 
@@ -106,5 +106,7 @@ public class Vault {
 - **Milestone 1 (Option A, ADR-0001):** `@StateContract`, `@Init`, `@Action`, `@View`, `@Destroy`, `@OnlyOwner`/`@SignedBy`,
   `@Payable`, `@ValidAfter`/`@ValidBefore`, plus `Ctx` (`caller`, `received`, `balance`, `validFrom`, `validTo`),
   `Payout`/`Payouts` and `Require`.
-- **Later:** `@Param`, `@Deposit`, `@Anonymous`/`@MultiSig`/`@ScriptCaller`, storage and concurrency (`@Storage`, `@Owned`,
+- **Shipped in ADR-0009:** `@Params` (deploy-time parameters), `@Quorum` (M-of-N), `@AuthorizedBy` (key or script
+  caller), `@Invariant`, events (a result component, carried and checked in the redeemer).
+- **Later:** `@Deposit`, `@Anonymous`/`@MultiSig`/`@ScriptCaller`, storage and concurrency (`@Storage`, `@Owned`,
   `@Shared`, `@Batched`), then `@Event`, `@Invariant`, `@Upgradeable` and `@Calls`.

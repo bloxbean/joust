@@ -1,0 +1,78 @@
+{
+  "seq" : 1,
+  "what" : "deploy Dex",
+  "prepared" : false,
+  "txHash" : "fc4085737af0c988cbb80dd922c6b6f7cb22048c22c1e8efb2ad25556df0d4a2",
+  "unsignedTx" : "84ac00d9010281825820296dfcf70f1967aa40e0f01752923bef7af71c6628d225ea30029985ebe57439000182a300581d706e52919ceea3ac6cc2f9340835ea4c4c2da7f8eb223ac7c2028d615f01821a0033e140a1581c6e52919ceea3ac6cc2f9340835ea4c4c2da7f8eb223ac7c2028d615fa1582056de9aca2e12af08393d3134cb5dc18253831123f1e39cd852440f47e9899d2e01028201d8185865d8799f581c5cc4819c814cd800dc5b47d860da97f3a1dfa1ee7b04726ededab543581c41aa77162ea2b826982f80120afcec85c454f17f4d0757beccfcc52445484f534b59581ce6098c822dcc530370e8b7aa9cc75570c44737f36005cb4e2a4f007200ff825839005cc4819c814cd800dc5b47d860da97f3a1dfa1ee7b04726ededab54367d28bc6d1a7c55ffe4ad83b87b9616882dce7e6321edc8002c574f11a0bb1a6ed021a000639d3031a0003948e081a0003947a09a1581c6e52919ceea3ac6cc2f9340835ea4c4c2da7f8eb223ac7c2028d615fa1582056de9aca2e12af08393d3134cb5dc18253831123f1e39cd852440f47e9899d2e010b5820fdda4160b6c943d260407348a9ec3b1e278242f8cb6b832d997da62e762dcd210dd9010281825820296dfcf70f1967aa40e0f01752923bef7af71c6628d225ea30029985ebe57439000ed9010281581c5cc4819c814cd800dc5b47d860da97f3a1dfa1ee7b04726ededab54310825839005cc4819c814cd800dc5b47d860da97f3a1dfa1ee7b04726ededab54367d28bc6d1a7c55ffe4ad83b87b9616882dce7e6321edc8002c574f11a0be26b43111a000956bd12d9010281825820ef5f19e2970a15da49aae339a06ae3942c90604549683bc07e33aa2a80ce6c1500a105a182010082d8799fd8799f5820296dfcf70f1967aa40e0f01752923bef7af71c6628d225ea30029985ebe5743900ff581c41aa77162ea2b826982f80120afcec85c454f17f4d0757beccfcc52445484f534b59d8799f581c5cc4819c814cd800dc5b47d860da97f3a1dfa1ee7b04726ededab54300001b000001a1bf3fc1881b000001a1bf400fa8ffff821a0005188b1a0689873df5f6",
+  "reads" : [ {
+    "service" : "UtxoService",
+    "method" : "getUtxos",
+    "args" : [ "addr_test1wph99yvua636cmxzly6qsd02f3xzmflcav3r437zq2xkzhczlufvn", 100, 1 ],
+    "result" : {
+      "$ref" : "2c0fb200f2ddebb1921db44acb9bd49ecaddd378476bb820039cf0150de59cdd"
+    }
+  }, {
+    "service" : "UtxoService",
+    "method" : "getUtxos",
+    "args" : [ "addr_test1qpwvfqvus9xdsqxutdrascx6jle6rhapaeasgunwmmdt2sm8629ud5d8c40lujkc8wrmjctgstww0e3jrmwgqqk9wncspk6p89", 50, 1 ],
+    "result" : {
+      "$ref" : "62556c432a2f816bceccc0b1f958f09eaa53940275689a43906930a431a555da"
+    }
+  }, {
+    "service" : "BlockService",
+    "method" : "getLatestBlock",
+    "args" : [ ],
+    "result" : {
+      "$ref" : "89aa7dd4c3d6465f8d3f1753431ae384a6f3625a5a98c8c47f25aec41f492057"
+    }
+  }, {
+    "service" : "EpochService",
+    "method" : "getProtocolParameters",
+    "args" : [ ],
+    "result" : {
+      "$ref" : "b58abd72354bf471cfcfbb86b48363973359034674ece33c1a3ee21d8ec8c5b2"
+    }
+  }, {
+    "service" : "EpochService",
+    "method" : "getProtocolParameters",
+    "args" : [ ],
+    "result" : {
+      "$ref" : "b58abd72354bf471cfcfbb86b48363973359034674ece33c1a3ee21d8ec8c5b2"
+    }
+  }, {
+    "service" : "UtxoService",
+    "method" : "getUtxos",
+    "args" : [ "addr_test1qpwvfqvus9xdsqxutdrascx6jle6rhapaeasgunwmmdt2sm8629ud5d8c40lujkc8wrmjctgstww0e3jrmwgqqk9wncspk6p89", 100, 1, "asc" ],
+    "result" : {
+      "$ref" : "e6fa946d8aca3f669d6a7d3803e9f30d34b2d049b752799ff1571e032343d4b7"
+    }
+  }, {
+    "service" : "EpochService",
+    "method" : "getProtocolParameters",
+    "args" : [ ],
+    "result" : {
+      "$ref" : "b58abd72354bf471cfcfbb86b48363973359034674ece33c1a3ee21d8ec8c5b2"
+    }
+  }, {
+    "service" : "UtxoService",
+    "method" : "getTxOutput",
+    "args" : [ "296dfcf70f1967aa40e0f01752923bef7af71c6628d225ea30029985ebe57439", 0 ],
+    "result" : {
+      "$ref" : "a66fdd7a2571cfadc51358bcdebc3541edfb9a15f14acd814ba2dffaf5657f33"
+    }
+  }, {
+    "service" : "UtxoService",
+    "method" : "getTxOutput",
+    "args" : [ "ef5f19e2970a15da49aae339a06ae3942c90604549683bc07e33aa2a80ce6c15", 0 ],
+    "result" : {
+      "$ref" : "86c3a6f26308690f109d8d714769fe3dd3d58e9163425c60b0f55002913b9231"
+    }
+  }, {
+    "service" : "ScriptService",
+    "method" : "getPlutusScript",
+    "args" : [ "6e52919ceea3ac6cc2f9340835ea4c4c2da7f8eb223ac7c2028d615f" ],
+    "result" : {
+      "$ref" : "d690660f4742d74d3f262d484bfbe78c7ebf41da67074600c0a54b025136070e"
+    }
+  } ]
+}

@@ -1,0 +1,48 @@
+{
+  "name": "@julclang/joust-runtime",
+  "version": "0.1.0-pre1-snapshot",
+  "description": "JOUST off-chain runtime for JavaScript: prepares contract calls in a Wasm engine (no JVM), from the chain as a Blockfrost-style API serves it; the page verifier checks every transaction before a wallet signs (ADR-0015)",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./worker": "./src/worker.js",
+    "./page": "./src/page.js",
+    "./load": "./src/load.js"
+  },
+  "imports": {
+    "#engine": {
+      "browser": "./src/browser/engine.js",
+      "default": "./src/engine.js"
+    },
+    "#file-map-store": {
+      "browser": "./src/browser/file-map-store.js",
+      "default": "./src/file-map-store.js"
+    }
+  },
+  "files": [
+    "src",
+    "engine"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@aiken-lang/merkle-patricia-forestry": "1.3.1",
+    "@julclang/state-client": "0.1.0-pre1-snapshot",
+    "level": "8.0.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "registry": "http://127.0.0.1:4873/"
+  },
+  "devDependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "15.0.3",
+    "@scure/bip39": "1.6.0"
+  }
+}

@@ -1,0 +1,81 @@
+description = 'JOUST runtime engine (ADR-0015 D4/D5, gate S0): prepares calls from a snapshot in a GraalVM Web Image'
+
+// The runtime path (Compose.prepare, TxRunner, CCL QuickTx, JuLC's evaluator) over a SnapshotBackend, for contracts
+// known by their descriptions and transition programs (DescribedContract): no contract classes in the image.
+dependencies {
+    implementation project(':julc-state-runtime')
+    implementation libs.julc.vm.java
+
+    testImplementation project(':examples:devkit')       // Fixtures: the M0 fixtures as snapshots
+    testImplementation project(':julc-state-toolchain')  // descriptions, scripts and transition programs, as npm builds them
+}
+
+// I3 on the JVM, and the vectors for I3 in Wasm (build/prepare-vectors.json).
+tasks.named('test') {
+    dependsOn ':examples:counter:classes', ':examples:bank:classes'
+}
+
+// ---- The runtime engine: a GraalVM Web Image embedding julc-wasm (JuLC ADR-064).
+//   ./gradlew :julc-state-runtime-wasm:runtimeWasm -PgraalvmHome=/path/to/graalvm-25.3   (Binaryen on PATH)
+// The engine is given its map prover (§13.12 M1): the runtime's native RocksDB default store stays out of the image.
+configurations.configureEach {
+    if (name.startsWith('wasm') || name == 'runtimeClasspath') {
+        exclude group: 'org.rocksdb'
+        exclude group: 'com.bloxbean.cardano', module: 'cardano-client-merkle-patricia-forestry-rocksdb'
+    }
+}
+sourceSets {
+    wasm {
+        compileClasspath += sourceSets.main.output + configurations.runtimeClasspath
+        runtimeClasspath += sourceSets.main.output + configurations.runtimeClasspath
+    }
+}
+dependencies {
+    wasmImplementation "org.julclang:julc-wasm:${libs.versions.julc.get()}"
+    wasmCompileOnly 'org.graalvm.sdk:webimage-preview:25.3.4.1'
+    wasmCompileOnly 'org.graalvm.sdk:nativeimage:25.3.4.1'
+    wasmRuntimeOnly 'org.slf4j:slf4j-nop:2.0.17'
+}
+def runtimeGraalvm = providers.gradleProperty('graalvmHome').orElse(providers.environmentVariable('GRAALVM_HOME'))
+def runtimeWasmDir = layout.buildDirectory.dir('wasm')
+tasks.register('runtimeWasm', Exec) {
+    group = 'build'
+    description = 'Builds build/wasm/joust-runtime.js(.wasm) with GraalVM Web Image'
+    dependsOn 'wasmClasses'
+    def cp = sourceSets.wasm.runtimeClasspath
+    inputs.files(cp)
+    inputs.property('graalvmHome', runtimeGraalvm.orElse(''))
+    outputs.dir(runtimeWasmDir)
+    doFirst {
+        if (!runtimeGraalvm.isPresent()) throw new GradleException('set -PgraalvmHome=/path/to/graalvm-25.3 (or GRAALVM_HOME)')
+        def ni = new File(runtimeGraalvm.get(), 'bin/native-image')
+        def dir = runtimeWasmDir.get().asFile
+        dir.mkdirs()
+        executable ni.absolutePath
+        args '--tool:svm-wasm', '-cp', cp.files.findAll { it.exists() }.collect { it.absolutePath }.join(File.pathSeparator),
+                '--exclude-config', '.*[/\\\\](julc-tools|julc-blueprint|cardano-client-[a-z0-9-]+|json-schema-validator)-[0-9][^/\\\\]*\\.jar',
+                'META-INF/native-image/',
+                // The contracts' compiled validators (JulcScriptLoader) and the verifiers' scripts.
+                '-H:IncludeResources=META-INF/plutus/.*',
+                // JuLC's codec metadata built on the build JVM (permits order; CodecFeature), kept in the image heap.
+                '--features=org.julclang.state.runtime.wasm.CodecFeature',
+                '--initialize-at-build-time=org.julclang.clientlib.ReflectivePlutusDataConverter,org.julclang.clientlib.ReflectivePlutusDataConverter$TypeMetadata',
+                '-H:+UnlockExperimentalVMOptions', '-H:+ReportExceptionStackTraces',
+                "-Djoust.version=${project.version}",
+                '-o', new File(dir, 'joust-runtime').absolutePath,
+                'org.julclang.state.runtime.wasm.JoustRuntimeWasm'
+    }
+    doLast {
+        new File(runtimeWasmDir.get().asFile, 'joust-runtime.js.wat').delete()
+        new File(runtimeWasmDir.get().asFile, 'package.json').text = '{ "type": "commonjs" }\n'
+    }
+}
+
+// I3 in Wasm: each prepare the dApp's DevKit run recorded, prepared again in Node from its call request and snapshot.
+tasks.register('runtimeWasmTest', Exec) {
+    group = 'verification'
+    dependsOn 'runtimeWasm', 'test'
+    workingDir rootDir
+    commandLine 'node', '--experimental-wasm-exnref', 'julc-state-runtime-wasm/src/test/js/prepare.mjs',
+            'julc-state-runtime-wasm/build/wasm', 'julc-state-runtime-wasm/build/prepare-vectors.json'
+}

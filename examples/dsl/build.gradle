@@ -1,0 +1,32 @@
+description = 'JOUST example: contracts written in .jsc (ADR-0005)'
+
+configurations {
+    jsc
+}
+
+dependencies {
+    jsc project(':julc-state-dsl')
+
+    implementation project(':julc-state-runtime')
+    implementation project(':examples:devkit')
+
+    annotationProcessor project(':julc-state-processor')
+    annotationProcessor libs.julc.annotation.processor
+    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+
+    testImplementation project(':julc-state-testkit')
+}
+
+// .jsc -> Java @StateContract, before compileJava (ADR-0005 D5). The generated Java is ordinary source: the JOUST
+// processor turns it into a validator and a client like hand-written contracts.
+def jscSrc = file('src/main/jsc')
+def jscOut = layout.buildDirectory.dir('generated/sources/jsc/java/main')
+def generateJsc = tasks.register('generateJsc', JavaExec) {
+    description = 'Lowers src/main/jsc/**/*.jsc to Java'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    inputs.dir(jscSrc)
+    outputs.dir(jscOut)
+    args jscSrc.path, jscOut.get().asFile.path
+}
+sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))

@@ -2,6 +2,12 @@ description = 'JOUST public API: @StateContract, Ctx, Payout, Require (on-chain 
 
 dependencies {
     api libs.julc.stdlib
+
+    // MPF differential tests: the JuLC-subset Mpf library against cardano-client-lib's MpfTrie.
+    testImplementation libs.cardano.client.mpf
+    testImplementation libs.cardano.client.lib
+    testImplementation libs.julc.testkit
+    testRuntimeOnly libs.bouncycastle.bcprov
 }
 
 // JuLC compiles validators against a fixed class path (its own on-chain API) plus *library sources*:
@@ -13,11 +19,13 @@ dependencies {
 // throws with the message, on-chain traces and errors). A file there replaces the src/main/java file of the
 // same path in the bundle. Keep that set tiny; ADR-0001 D7.
 def onchainOverrides = file('src/onchain/java')
+def discoveryOverrides = file('src/discovery/java')
 def bundleDir = layout.buildDirectory.dir('generated/julc-state/onchain-sources')
 def bundleOnchainSources = tasks.register('bundleOnchainSources') {
     def srcDir = file('src/main/java')
     inputs.dir(srcDir)
     if (onchainOverrides.exists()) inputs.dir(onchainOverrides)
+    if (discoveryOverrides.exists()) inputs.dir(discoveryOverrides)
     outputs.dir(bundleDir)
     doLast {
         def root = bundleDir.get().asFile
@@ -42,9 +50,23 @@ def bundleOnchainSources = tasks.register('bundleOnchainSources') {
             out.text = file.getText('UTF-8')
         }
         new File(target, 'index.txt').text = sources.keySet().join('\n') + '\n'
+        // ADR-0015 D3: variants compiled only into transition programs (MerkleMaps' read discovery), never into
+        // validators; the toolchain swaps them in. Not under plutus-sources, so JuLC's source scan never sees them.
+        if (discoveryOverrides.exists()) {
+            fileTree(discoveryOverrides).matching { include '**/*.java' }.visit { d ->
+                if (!d.directory) {
+                    def out = new File(root, 'META-INF/joust/discovery/' + d.relativePath.pathString)
+                    out.parentFile.mkdirs()
+                    out.text = d.file.getText('UTF-8')
+                }
+            }
+        }
     }
 }
-sourceSets.main.resources.srcDir(bundleOnchainSources)
+// Not added to the main jar on purpose: julc-state-processor depends on this module, so the jar also lands on the
+// processor path, and a rebuilt jar there makes JuLC's source scan abort (it stops at the first unreadable index,
+// skipping julc-stdlib's sources too; ADR-0001 F8). The bundle ships only through `onchainSources` below.
+// Publishing will add it as a separate `onchain` classifier jar.
 
 // Consumers in this build put the bundle on their annotation processor path as a *directory*:
 //   annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
@@ -59,3 +81,17 @@ configurations {
 artifacts {
     onchainSources(bundleDir) { builtBy bundleOnchainSources }
 }
+
+// External consumers put this jar on their annotation processor path:
+//   annotationProcessor "org.julclang:julc-state-api:<version>:onchain"
+def onchainJar = tasks.register('onchainJar', Jar) {
+    archiveClassifier = 'onchain'
+    from(bundleDir)
+    dependsOn bundleOnchainSources
+}
+pluginManager.withPlugin('maven-publish') {
+    afterEvaluate {
+        publishing.publications.withType(MavenPublication).configureEach { artifact onchainJar }
+    }
+}
+

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JOUST dApp · Yaci DevKit</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>JOUST <span>dApp</span></h1>
+      <p>Java state contracts, called from the browser with a CIP-30 wallet. Every transaction is verified in this page before the wallet signs it.</p>
+    </div>
+    <div class="wallet" id="wallet">
+      <select id="wallet-choice" aria-label="Wallet"></select>
+      <button id="connect">Connect</button>
+      <div id="wallet-detect" class="muted small"></div>
+      <div id="wallet-info" class="muted">No wallet connected</div>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <main>
+    <section class="card" id="counter-card">
+      <div class="card-head">
+        <h2>Counter</h2>
+        <p class="muted">Anyone can increment; only its owner can reset or close it (and gets the deposit back).</p>
+      </div>
+      <div class="row">
+        <button id="counter-deploy" data-needs-wallet>Create my counter</button>
+        <input id="counter-open-id" placeholder="or open a counter by instance id" spellcheck="false" />
+        <button id="counter-open" class="secondary">Open</button>
+      </div>
+      <div id="counters" class="list"></div>
+    </section>
+
+    <section class="card" id="bank-card">
+      <div class="card-head">
+        <h2>Bank</h2>
+        <p class="muted">A bank instance with accounts as owned objects: each account is its own UTxO, so customers never contend.</p>
+      </div>
+      <div class="row">
+        <select id="bank-choice" aria-label="Bank"></select>
+        <button id="bank-deploy" class="secondary" data-needs-wallet>Create my bank</button>
+        <label class="inline">limit <input id="bank-limit" type="number" min="1" value="50" class="narrow" /> ADA</label>
+      </div>
+      <div id="bank-state" class="state"></div>
+      <div class="row">
+        <label class="inline">deposit <input id="open-amount" type="number" min="1" value="25" class="narrow" /> ADA</label>
+        <button id="bank-open" data-needs-wallet>Open an account</button>
+      </div>
+      <div id="accounts" class="list"></div>
+    </section>
+
+    <section class="card" id="log-card">
+      <div class="card-head">
+        <h2>Activity</h2>
+        <label class="inline danger-toggle"><input type="checkbox" id="malicious" /> Simulate a malicious prepare service</label>
+      </div>
+      <p class="muted small">With the switch on, the service's transactions are tampered with before they reach the page: an output to an attacker, a redirected collateral return, another call, a certificate. The page's verifier must refuse each one; the wallet is never asked to sign.</p>
+      <ol id="log" class="log"></ol>
+    </section>
+  </main>
+
+  <dialog id="review">
+    <form method="dialog">
+      <h2>Review before signing</h2>
+      <p class="muted small">Checked by this page against its own copy of the contract's description and the chain, not against the service.</p>
+      <div id="review-body"></div>
+      <div class="row end">
+        <button value="cancel" class="secondary">Cancel</button>
+        <button value="sign" id="review-sign">Sign with wallet</button>
+      </div>
+    </form>
+  </dialog>
+
+  <footer class="muted small">
+    JOUST · ADR-0013 · Yaci DevKit. Development wallets hold their keys in this page: never use them with real funds.
+  </footer>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
