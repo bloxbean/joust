@@ -185,7 +185,7 @@ jobs:
       - name: Summarize the DevKit tests
         if: always()
         run: |
-          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
           import glob, re, xml.etree.ElementTree as ET
           times, skipped = {}, []
           for f in glob.glob('**/build/test-results/test/*.xml', recursive=True):
