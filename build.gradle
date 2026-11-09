@@ -12,6 +12,21 @@ if (version.toString().endsWith('-SNAPSHOT')) {
     if (commit) version = version.toString().replace('-SNAPSHOT', "-${commit}-SNAPSHOT")
 }
 
+// Signing (as JuLC). CI signs with an ASCII-armored signing subkey held in memory, passed as the project properties
+// signingInMemoryKey, signingInMemoryKeyId (last 8 hex chars of the subkey id) and signingInMemoryKeyPassword
+// (ORG_GRADLE_PROJECT_* environment variables in the release workflow). Without them, local builds use the signing.*
+// properties from ~/.gradle/gradle.properties. Only release versions sign, and -PskipSigning turns it off.
+ext.configureReleaseSigning = { Project candidate ->
+    candidate.signing {
+        def inMemoryKey = candidate.findProperty('signingInMemoryKey')
+        if (inMemoryKey) {
+            useInMemoryPgpKeys(candidate.findProperty('signingInMemoryKeyId'), inMemoryKey,
+                    candidate.findProperty('signingInMemoryKeyPassword'))
+        }
+        sign candidate.publishing.publications
+    }
+}
+
 // The modules published to the BloxBean Maven repository; examples are never published.
 def publishedModules = ['julc-state-api', 'julc-state-processor', 'julc-state-runtime', 'julc-state-testkit',
                         'julc-state-verifier', 'julc-state-dsl', 'julc-state-server']
@@ -88,6 +103,7 @@ subprojects {
 // ---- publishing (release-ops docs/12): the library modules, with sources and javadoc
 configure(subprojects.findAll { it.name in publishedModules }) { candidate ->
     apply plugin: 'maven-publish'
+    apply plugin: 'signing'
 
     java {
         withSourcesJar()
@@ -116,6 +132,12 @@ configure(subprojects.findAll { it.name in publishedModules }) { candidate ->
                         name = candidate.name
                         description = candidate.description ?: "JOUST ${candidate.name}"
                         url = 'https://github.com/bloxbean/joust'
+                        licenses {
+                            license {
+                                name = 'The MIT License'
+                                url = 'https://opensource.org/licenses/mit-license.php'
+                            }
+                        }
                         developers {
                             developer {
                                 id = 'satran004'
@@ -130,6 +152,9 @@ configure(subprojects.findAll { it.name in publishedModules }) { candidate ->
                     }
                 }
             }
+        }
+        if (!candidate.version.toString().endsWith('SNAPSHOT') && !candidate.hasProperty('skipSigning')) {
+            configureReleaseSigning(candidate)
         }
     }
 }
