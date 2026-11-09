@@ -114,6 +114,13 @@ jobs:
               exit 1
             fi
           done
+          # The BloxBean repository's bucket and endpoint are variables (vars.R2_BUCKET, vars.R2_ENDPOINT), from this
+          # environment or the organization; organization variables reach only the repositories they are shared with.
+          if [[ "$BLOXBEAN_REPO_PUBLISH" == true && ( -z "$BUCKET" || -z "$AWS_ENDPOINT_URL" ) ]]; then
+            echo "::error::bloxbean_repo_publish=true needs the variables R2_BUCKET and R2_ENDPOINT (empty here): add them" \
+              "to the release-staging environment, or share the organization's with this repository." >&2
+            exit 1
+          fi
           {
             echo "version=$VERSION"
             echo "is_final=$IS_FINAL"
