@@ -1,9 +1,10 @@
 # ADR-0016: Keyed objects — one UTxO per key, unique per instance, in a sorted on-chain list
 
-**Status:** Proposed (r2)
+**Status:** Proposed (r3)
 **Date:** 2026-11-09
-**Builds on:** ADR-0001 (A: I1–I14), ADR-0003 (owned objects: I18–I21), ADR-0007 (reserved token kinds: I27), ADR-0012
-(several owned types: I42, I43), ADR-0011 (composition), ADR-0013 (page verifier), ADR-0015 (npm parity).
+**Builds on:** ADR-0001 (A: I1–I14), ADR-0003 (owned objects: I18–I21), ADR-0007 (reserved token kinds: I27), ADR-0009
+(invariants, quorums), ADR-0012 (several owned types: I42, I43), ADR-0011 (composition), ADR-0013 (page verifier),
+ADR-0015 (npm parity).
 **Stack:** #1–#32, #36, then this. Design only: no code changes.
 **Risk:** high. Anyone may spend a *neighbour's* UTxO to relink it. A mistake here moves other users' funds, breaks
 uniqueness, or makes keys impossible to insert or remove for good.
@@ -28,16 +29,18 @@ Facts this design relies on:
 | # | Fact | Source |
 |---|---|---|
 | F1 | An asset name is at most 32 bytes | Conway CDDL, `cardano-ledger@7827506b`, `eras/conway/impl/cddl/data/conway.cddl` line 52: `asset_name = bytes .size (0 .. 32)` |
-| F2 | A transaction has one redeemer per minting policy, so one JOUST mint redeemer (`Lifecycle`) per contract per transaction. (One redeemer *could* describe several operations; this ADR chooses one structural operation per redeemer, §5) | ADR-0003 r2 (Security 9), ADR-0012 D1 |
+| F2 | A transaction has one redeemer per minting policy, so one JOUST mint redeemer (`Lifecycle`) per contract per transaction. One redeemer *could* describe several operations; this ADR chooses one structural operation per redeemer (§5) | ADR-0003 r2 (Security 9), ADR-0012 D1 |
 | F3 | A spend validator can read its own policy's mint redeemer from `tx.redeemers()` (`mintMatches`), as it reads the map verifier's | `ValidatorGenerator.java:1696–1708`; ADR-0002 D9 |
 | F4 | Reserved token names today: 32 bytes (instance), 29 bytes `0x4F…` (object), 29 bytes `0x49…` (intent). `isReserved` exists only in asset-aware contracts and keeps user mints (`ByAction`) and method values off these names | ADR-0007 D2b, I27; `ValidatorGenerator.java:1486–1490, 1581` |
 | F5 | `BurnInstance` (also used for objects) requires every policy entry to be −1 (`onlyBurns`); only in asset-aware contracts does it also require reserved names | `ValidatorGenerator.java:1966–1980`; ADR-0003 D3 |
 | F6 | JuLC exposes `Builtins.lessThanByteString` (Plutus V3): unsigned lexicographic order, a proper prefix sorts first; its JVM body uses `Arrays.compareUnsigned` | `julc-stdlib/.../Builtins.java:370–372` |
 | F7 | A contract with owned objects cannot `@Destroy` its instance, and each owned type needs an `@OwnedDestroy` without `@Shared` (an escape hatch) | ADR-0003 r2, ADR-0012 D1; `ContractReader.java:354–362` |
 | F8 | The sorted-linked-list pattern: each element a UTxO with a unique NFT and a `next` link; insert consumes the predecessor ("anchor") and checks `anchor < new < anchor.next`; structural checks live in the minting policy | Scalus docs, "Linked List" design pattern, https://scalus.org/docs/design-patterns/linked-list (unversioned page, fetched 2026-11-09; the rules used are restated in §8) |
-| F9 | `datumFits` is a runtime check of the datum actually written; `maxDatumBytes` is one declared constant (16..8192) from which `minAda` is derived | `ValidatorGenerator.java:2040`; `ContractReader.java:280–303, 519–521` |
+| F9 | `datumFits` is a runtime check of the datum actually written; `maxDatumBytes` is one declared constant (16..8192) from which `minAda` is derived; integers serialise in CBOR by magnitude | `ValidatorGenerator.java:2040`; `ContractReader.java:280–303, 519–521`; JuLC `PlutusDataCborEncoder` |
 | F10 | The runtime refuses an applied script over 15,000 bytes (room for the publishing transaction) | `StateContractHandle.java:156–167` |
 | F11 | A type may have several `@OwnedInit` methods; each gets its own creation variant | `ContractReader.java:264–270, 355–360`; `ValidatorGenerator.java:139` |
+| F12 | A destroy today allocates everything the UTxO holds, deposit included (`ctx.balance` = all of it; payouts == in + received) | ADR-0001 D3/I8; `ValidatorGenerator.java:354, 389, 423` |
+| F13 | A validity interval is `[lower, upper)` with finite bounds checked by the generator; the runtime builds windows of at least one slot; `upper − lower ≤ maxValidityMs` (≥ 60 s) | `ValidatorGenerator.java:2083–2092`; `Window.java:39`; ADR-0001 D3 |
 
 ## 2. Threat model and trust assumptions
 
@@ -48,27 +51,30 @@ Facts this design relies on:
   - the prepare service and the Wasm engine (ADR-0013/0015): the page verifies what they prepare (D11).
 - **Trusted:**
   - the ledger's phase-1 and phase-2 rules, including the exact-redeemer-set check (every script input, mint and
-    withdrawal runs its script; no extraneous redeemers);
+    withdrawal runs its script; no extraneous redeemers) and mempool admission (a transaction whose lower bound lies in
+    the future is not admitted);
   - blake2b-224 collision resistance;
   - JuLC compiling the generated validator faithfully, as for every JOUST contract.
 - **At stake:**
   - *funds:* every node's value. A relink spends a node without its owner's signature, so its continuing output is
-    pinned exactly (D4b);
-  - *uniqueness:* at most one live token per (instance, type, key). Removal frees a key, so this is "at a time"
-    unless the type uses only retiring exits (D10);
-  - *liveness:* the list must stay well formed, and every owner must be able to leave with their funds.
-- **Adversarial churn** (accepted, with a mitigation). Without limits, an attacker could keep a node permanently "in
-  flight", spending it with `Link` every block. One way is an insert of a throwaway key next to it, then its removal,
-  then another insert. That blocks the owner's updates and the inserts into the gaps around it, for fees only (about one
-  transaction per block, roughly 4.3k a day; the deposit is refunded on each remove). The `Link` cooldown (D9) bounds
-  how often a node can be relinked, so its owner always has windows. The owner's own exit needs no neighbour when it
-  retires (D10).
-- **Accepted residual risks:**
-  - *Gap blocking.* The owner of the node just before a gap can update it every block (with signed owned actions, fees
-    only) and so delay inserts into that gap; any owner can do this to the gap after their own key.
-  - *Squatting.* Where the key is not bound to a signer, anyone can take a victim's key first (front-running): D1's
+    pinned (D4b);
+  - *uniqueness:* at most one token per (instance, type, key). Removal frees a key, so this is "at a time" unless the
+    type has only retiring exits (D10);
+  - *liveness:* the list must stay well formed, and every owner must be able to leave with their funds. That is
+    guaranteed by the retiring exit, which spends only the owner's own UTxO (D10, required by D1).
+- **Adversarial churn** (mitigated). Without limits, an attacker could keep a node permanently "in flight", spending it
+  with `Link` every block: insert a throwaway key next to it, remove it, insert again. That blocks the owner's updates
+  and the inserts into the gaps around it, for fees only. The `Link` cooldown (D9) forces at least `C` between relinks
+  of a node, so the owner has exclusive intervals. The retiring exit needs no neighbour at all.
+- **Accepted residual risks**, each at the attacker's cost in fees:
+  - *Gap blocking.* The owner of the node just before a gap can update it with owned actions every block, which delays
+    inserts into that gap and removals of the node after it. Retiring is unaffected.
+  - *Timed races.* Under the cooldown, a gap's next structural operation is a race at a known instant (`linkedAt + C`).
+    A third party can contest it with one transaction per `C` (about 1,440 a day at 60 s), alternately inserting and
+    removing a throwaway key. That delays others' inserts into that gap. The runtime submits at the expiry instant and
+    retries (D7).
+  - *Squatting.* Where the key is not bound to a signer, anyone can take a victim's key first (front-running). D1's
     `signedKey` and a processor warning address the common case.
-  - *Cost.* Both cost the attacker fees per block, and are documented.
 - **Out of scope:** privacy (keys are public), and fairness between honest users racing for the same gap.
 
 ## 3. Decision
@@ -84,22 +90,32 @@ public record Ballot(byte[] voter, BigInteger choice) {}
 
 @OwnedInit static Ballot cast(@Shared State s, byte[] voter, BigInteger choice, Ctx ctx) { ... }
 @OwnedAction @SignedBy("voter")                  static Ballot change(Ballot b, BigInteger choice) { ... }
-@OwnedDestroy(retire = true) @SignedBy("voter")  static JulcList<Payout> leave(Ballot b, Ctx ctx) { ... }
+@OwnedDestroy(retire = true) @SignedBy("voter")  static JulcList<Payout> leave(Ballot b, Ctx ctx) {
+    return Payouts.of(b.voter(), ctx.balance());   // everything but the deposit (D10)
+}
 ```
 
 Rules, checked by the processor:
-- `key` names a `byte[]` component of the record. `maxKeyBytes` is between 1 and 64 (default 32). At most 64, because
-  Plutus `serialiseData` encodes byte strings over 64 bytes in chunks, which would break the size rule in D2.
-- **The key is fixed** for the object's life (I50). Changing a key means removing (or retiring) and inserting again, in
+- **The key.** `key` names a `byte[]` component of the record. `maxKeyBytes` is between 1 and 64 (default 32). The
+  64-byte limit exists because Plutus `serialiseData` encodes byte strings over 64 bytes in chunks, which would break
+  the size rule in D2.
+- **The key is fixed** for the object's life (I50). Changing a key means retiring (or removing) and inserting again, in
   two transactions.
 - **Binding the key to a signer.** With `signedKey = true`, the key must be a 28-byte key hash that signed the insert
   (a generated check, I53). Otherwise binding is the method's job (`Require`). The processor warns when a keyed
   `@OwnedInit` neither uses `signedKey` nor compares the key with `ctx.caller()` (squatting, §2).
-- **One `@OwnedInit` per keyed type?** No: several are allowed. Each gets its own insert variant `Insert_<method>`
-  (F11). Keyed types never get the seed-based `CreateObject` arm.
-- **Escape hatch.** Everything ADR-0003/0012 require of owned types holds: an `@OwnedInit`, and an `@OwnedDestroy`
-  without `@Shared`. For a keyed type that exit may remove (D5) or retire (D10). The processor warns when the only exit
-  removes, since removing depends on a neighbour.
+- **Initializers.** Several `@OwnedInit` methods are allowed per keyed type; each gets its own insert variant
+  `Insert_<method>` (F11). Keyed types never get the seed-based `CreateObject` arm.
+- **Exits (an error otherwise).** Each keyed type needs an `@OwnedDestroy(retire = true)` without `@Shared`. It is the
+  escape hatch, since it needs nobody else (D10). Removing exits (`@OwnedDestroy` without `retire`, D5) are optional.
+  A type with only retiring exits gives "once ever" uniqueness. A retiring destroy cannot be `@Payable`.
+- **Checks shared with plain owned methods.** `@Invariant`, events, `@SignedBy`, `@ValidAfter`/`@ValidBefore`,
+  `@Quorum` and `@AuthorizedBy` apply to keyed methods as they do to plain owned methods (ADR-0009). Their generated
+  output checks run on inserted records and keyed action results (D4a, D6).
+- **Cooldown parameters (D9):**
+  - `linkCooldownMs` (`C`) is 0, or between 60,000 and 3,600,000 (default 60,000);
+  - `linkWindowMs` (`W`) is between 20,000 and the contract's `maxValidityMs` (default 120,000);
+  - the runtime refuses to deploy where `W` is shorter than two slots of the target network.
 - **Limits, refused by the processor in this ADR** (§10 lists them as follow-ups):
   - keyed types in an **asset-aware** contract (`ContractIR.assetAware()`: any `Funds`, sends, mints, accepted assets,
     deposits or a `@Withdraw` handler);
@@ -107,18 +123,20 @@ Rules, checked by the processor:
   - `@Into` moves of keyed objects;
   - keyed types in contracts with `@Batched` actions or migration;
   - more than 16 keyed types in a contract;
-  - `maxDatumBytes` above 4096 in a contract with keyed types (transaction-size liveness, D4b);
-  - generated names (`Link`, `Remove_*`, `Insert_*`, `Retire_*`, `anchor`, `removed`) used by the contract.
+  - two keyed types with the same simple name;
+  - `maxDatumBytes` above 2048 in a contract with keyed types (the transaction envelope, D4c);
+  - generated names (`Link`, `Remove_*`, `Insert_*`, `anchor`, `removed`) used by the contract.
 
-### D2. Identity, layout, ordering
+### D2. Identity, layout, ordering, size
 
 - **The key token.** `(policy, keyId)`, quantity 1, where
   `keyId = 0x4B ‖ blake2b_224(instance ‖ typeId ‖ key)` and `typeId = I2OSP(len(name), 1) ‖ utf8(name)` for the
   record's simple name (at most 255 bytes).
   - It is 29 bytes (F1), a new reserved kind (I44).
   - The instance id has a fixed 32 bytes and `typeId` is length-prefixed, so the preimage is unambiguous.
-  - The type's identity does not depend on declaration order: reordering records in source changes nothing; renaming
-    a type changes its tokens, but it is a new script anyway.
+  - **`typeId` does not depend on declaration order.** The generated validator as a whole does: constructor tags
+    follow declaration order, as today. Reordering records therefore changes the script (and its policy id), though not
+    the scheme by which keys become token names.
   - Because the name is a function of the key, a client finds an object by key without knowing who created it (D7).
 - **The datum.** The contract's datum is a sealed type. For each keyed type `T` it gains three variants, with
   constructor tags assigned by the generator and published in the description. They are distinct from `typeId` and from
@@ -133,15 +151,24 @@ Rules, checked by the processor:
 - **The head.** Each (instance, keyed type) has a head with key `""` and token `keyId(instance, typeId, "")`. Real keys
   are non-empty (I46), so the head is the list's lower sentinel.
 - **Value.**
-  - A node holds `{lovelace: L, policy.keyId: 1}`, where `L` is `minAda` plus the owner's funds;
-  - a head holds `{lovelace: L ≥ minAda, policy.keyId: 1}`;
+  - A node holds `{lovelace: L, policy.keyId: 1}`, where `L` is at least `minAda` (the deposit, plus the owner's funds);
+  - a head or a retired node holds `{lovelace: L ≥ minAda, policy.keyId: 1}`;
   - `minAda` is the contract's.
-  - Lovelace may grow on a relink (D4b), never shrink, and no other asset may change.
+  - Lovelace may grow on a relink (D4b) or a retire (D10). It may never shrink there, and no other asset may change.
+- **The time domain.** `linkedAt` is 0 (a fresh head), or an upper validity bound in `[2³², 2⁶⁴)` POSIX ms. Every
+  real chain time lies in that range, and every such integer serialises to exactly 9 CBOR bytes. A `Link` requires its
+  upper bound in that range (I54).
 - **The size rule (I13 amended).** Every keyed datum that the contract *creates or continues through a user method*
-  must fit `maxDatumBytes` with its `next` replaced by a `maxKeyBytes`-long placeholder:
-  `datumFits(Keyed_T(instance, pad(maxKeyBytes), linkedAt, value))` (D4b, D6). Heads and retired nodes satisfy it by
-  the processor's choice of `maxDatumBytes` (both have fixed-size fields plus a key of at most `maxKeyBytes`). A relink
-  then never needs room it does not have.
+  must fit `maxDatumBytes` with:
+  - its `next` replaced by a `maxKeyBytes`-long placeholder;
+  - its `linkedAt` replaced by a 9-byte placeholder (2⁶³).
+
+  That is, `datumFits(Keyed_T(instance, pad(maxKeyBytes), 2⁶³, value))` (D4a, D6). Heads and retired nodes have only
+  fixed or bounded fields (an instance, a key and `next` of at most `maxKeyBytes`, a 9-byte time), so the processor
+  checks statically that their worst case fits `maxDatumBytes`.
+  - *Why a relink always fits:* a relink changes only `next` (to at most `maxKeyBytes`, at most a 2-byte CBOR header)
+    and `linkedAt` (to 9 bytes), each within its placeholder's encoded size. So the relinked datum is never larger than
+    the checked envelope. A relink needs no `datumFits` of its own (D4b).
 - **Ordering** is `lessThanByteString` (F6): unsigned lexicographic, a proper prefix first (`"ab" < "ab00"`). The Java
   runtime, the JS client and the engine use the same order; shared vectors include `7f`/`80`, `ab`/`ab00` and the empty
   key. Monotonic keys (sequence numbers, timestamps) all insert at the tail and contend there. Such contracts should key
@@ -160,7 +187,7 @@ Rules, checked by the processor:
 
 The seed makes the instance one-shot (I1), so its heads are one-shot too. Nothing else mints a head (I45), and heads
 never burn. F7 already forbids destroying such an instance, so heads live as long as the contract, and their deposits
-are a one-time cost of the instance.
+are a one-time cost of the instance. The page verifier bounds what a wallet pays for heads (D11).
 
 ### D4. Insert: creating a keyed object
 
@@ -176,7 +203,7 @@ The transaction:
    equals `keyId(A.instance, typeId(T), key(A))` (I51), where `key(A)` is `""` for a head, `value.<key>` for a node and
    `key` for a retired node. `A.instance == instance`, and `A`'s constructor is `Head_T`, `Keyed_T` or `Retired_T`.
 2. **The new key's place.** `key(A) < key`; `A.next == ""` or `key < A.next`; `1 ≤ length(key) ≤ maxKeyBytes` (I46).
-3. **The cooldown** (D9) on `A`.
+3. **The cooldown** (D9, I54) on `A`.
 4. **The mint.** Under the policy it is exactly `{keyId(instance, typeId(T), key): 1}`.
 5. **The relinked anchor** satisfies `relinked(A, next := key)` (D4b).
 6. **The new node.** Exactly one output holds the new token:
@@ -185,10 +212,14 @@ The transaction:
      `v.<key> == key`;
    - satisfying the size rule (D2);
    - value exactly `minAda + received`, plus the token.
-7. **The usual creation checks.** The `Ctx` checks of ADR-0003, and `signedKey` when declared (I53). The instance's
-   reference input is needed only when `<m>` takes `@Shared`. It must hold `(policy, instance)` at the state address,
-   as `sharedState` checks today. The anchor already proves the instance exists, since only its creation minted the
-   head (I45).
+7. **The usual creation checks, all retained from `CreateObject`:**
+   - the `Ctx` checks of ADR-0003;
+   - the generated output checks (per-type `@Invariant`s and reachable `@Quorum` shapes, ADR-0009 D2/D4), on `v`;
+   - the method's annotations (`@SignedBy`, `@ValidAfter`, `@ValidBefore`, `@AuthorizedBy`);
+   - `signedKey` when declared (I53);
+   - the instance's reference input, only when `<m>` takes `@Shared`. It must hold `(policy, instance)` at the state
+     address, as `sharedState` checks today. The anchor already proves the instance exists, since only its creation
+     minted the head (I45).
 
 **D4b. `relinked(X, next := n)`**, shared by insert and remove (I48): exactly one output holds `X`'s token, and it:
 - sits at the same address as `X`, with no reference script;
@@ -196,14 +227,12 @@ The transaction:
   `linkedAt := upperBound(tx)`;
 - holds at least `X`'s lovelace, and exactly `X`'s other assets (none, in this ADR).
 
-The extra lovelace lets anyone top up a deposit that a raised `coinsPerUTxOByte` has left short. It is a gift to the
-node's owner, or stays locked in a head or a retired node; it can never be taken out.
+The extra lovelace lets anyone top up a deposit that a raised `coinsPerUTxOByte` has left short. On chain it is a gift
+to the node's owner, or stays locked in a head or a retired node. It is never taken out of the anchor. Off chain, the
+page counts it as a transfer to a third party, bounded by the page's own computation (D11).
 
-There is no `datumFits` check here: the size rule guarantees room for any `n` of at most `maxKeyBytes`.
-
-**Transaction size.** An insert carries two inline datums of at most `maxDatumBytes` each. With the 4096-byte cap (D1)
-and 16 heads at most, an insert and an instance creation stay below the 16,384-byte transaction limit with room for
-inputs, redeemers and witnesses. This is an estimate, to be confirmed by the capacity tests in M1.
+There is no `datumFits` check here: by the size rule, any `n` of at most `maxKeyBytes` and any `linkedAt` in the time
+domain fit (D2).
 
 **The anchor's spend (`Link`).** It checks, in its own arm:
 - its token is a `0x4B` token (I52);
@@ -212,6 +241,17 @@ inputs, redeemers and witnesses. This is an estimate, to be confirmed by the cap
 
 Every other check runs once, in the policy (F8's coupling). Since there is one mint redeemer per policy (F2), at most
 one `Link` spend of a policy passes per transaction, so a second node cannot ride along unchecked.
+
+**D4c. The transaction envelope.** With `maxDatumBytes` at most 2048 (D1), the estimates are:
+- *An insert:* two inline datums of at most 2,048 bytes each. On top of that:
+  - the initializer's serialised arguments, up to the 4,096 bytes the runtime admits for a keyed initializer (a
+    documented client limit; larger arguments are refused before building);
+  - inputs, the mint, the redeemers, a few signatures, and the reference inputs (scripts are read by reference).
+
+  That stays under the 16,384-byte transaction limit, with roughly 6 KB to spare.
+- *An instance creation* with 16 heads adds about 16 × 120 bytes.
+
+These are estimates. M2's capacity tests build the worst cases on DevKit.
 
 ### D5. Remove: destroying a keyed object and freeing its key
 
@@ -227,20 +267,27 @@ The transaction:
   - `P.next == N.key`, and the cooldown on `P` (D9);
   - the mint under the policy is exactly `{keyId(N): −1}`;
   - `relinked(P, next := N.next)`, and no output holds `N`'s token.
-- **`N`'s removing arm** runs the user's destroy, which must allocate everything (A's I8). It requires the mint
-  redeemer to be `Remove_T` naming its own input as `removed` (I49).
+- **`N`'s removing arm** runs the user's destroy, which must allocate everything, deposit included (F12, A's I8). It
+  requires the mint redeemer to be `Remove_T` naming its own input as `removed` (I49). The `Ctx`, annotation and
+  payout checks of a plain owned destroy are retained.
 - **`BurnInstance` refuses `0x4B` tokens in contracts with keyed types** (F5): its generated `onlyBurns` checks names
   there (I49). A burn without a relink would leave `P.next` pointing at a key nobody holds, and the keys between it and
   the old `N.next` could never be inserted again.
-- **Liveness.** Removing needs `P` and its cooldown, so a hostile owner of `P` can delay it (§2). That is why the escape
-  hatch may retire instead (D10).
+- **Liveness.** Removing needs `P`, so anyone can delay it:
+  - `P`'s owner, by updating `P`;
+  - a third party, by contesting `P`'s cooldown (§2).
+
+  A removing exit is therefore never the escape hatch; the required retiring exit is (D1, D10).
 
 ### D6. Every other spend of a node keeps the list
 
 - **A keyed node's `@OwnedAction` arms** check:
   - the token kind (I52), the constructor tag `Keyed_T` (I42), and the datum/token binding (I51);
-  - that the continuing datum keeps `instance`, `next`, `linkedAt` and `value.<key>` (I50);
-  - the size rule (D2).
+  - that the continuing output holds the node's own token, and that its datum keeps `instance`, `next`, `linkedAt` and
+    `value.<key>` (I50);
+  - the size rule (D2);
+  - everything a plain owned action checks: `Ctx`, annotations, value and payouts, and the generated output checks
+    (invariants, quorum shapes).
 - **A head is only ever spent with `Link`.** No user method runs on a head, and no retired node takes owned actions.
 - **A plain owned arm** (`isObjectToken`, `0x4F`) never accepts a `0x4B` token, and a keyed arm never accepts a `0x4F`
   token (I52).
@@ -253,28 +300,40 @@ The transaction:
 - **Validating every result.** It checks the policy and token, the address, the constructor, the instance and the
   key's binding (I51). It reports "not found" as *the provider returned nothing*, never as proven absence, which needs
   Q3.
+- **Retired keys.** `<type>(key)` returns a handle whose state is "retired" (no actions). `exists(key)` is true (the
+  key is taken). `keys()` lists retired keys, marked.
 - **Insert.**
-  1. The runtime runs the `@OwnedInit` method on the JVM to learn the key.
-  2. It lists the type's nodes. keyIds are hashes, so it lists every UTxO at the state address and decodes the
-     datums, keeping this instance's and type's.
-  3. It chooses the anchor `A` with `key(A) < key && (A.next == "" || key < A.next)`.
-  4. It builds the transaction, waiting out `A`'s cooldown if needed.
-
-  If `A` was spent meanwhile, the runtime retries with a freshly resolved anchor, a bounded number of times, and then
-  reports contention.
+  1. The runtime fixes the transaction's validity window: at most `W`, and for a composition the intersection of all
+     calls' windows.
+  2. It runs the `@OwnedInit` method on the JVM within that window to learn the key.
+  3. It lists the type's nodes. keyIds are hashes, so it lists every UTxO at the state address and decodes the datums,
+     keeping this instance's and type's.
+  4. It chooses the anchor `A` with `key(A) < key && (A.next == "" || key < A.next)`. If `A`'s cooldown ends after
+     the window's start, it moves the window to `A.linkedAt + C` and starts again at step 1, a bounded number of times.
+  5. It submits at the cooldown's expiry when it has waited for one, to several relays.
 - **Remove** finds the predecessor the same way. **Retire** (D10) needs no neighbour.
+- **Retries never resubmit.** Following ADR-0001 D14, a transaction that was accepted, or whose fate is unknown (an
+  ambiguous submission), is never automatically resubmitted. A retry happens only after a definite rejection or a
+  definite expiry. It rebuilds the whole call or composition: the window, every method's JVM result, the shared
+  references and the anchor. A rebuild may produce a different key, when the key depends on `Ctx`.
 - **Traversal.** `keys()` walks from the head. A missing link, a duplicate or a cycle in a provider's answer is reported
   as an inconsistent snapshot. It cannot exist on chain (I47).
 - **The provider's power.** A lying provider can make a structural call fail, or make a read (`exists`, `keys`)
   wrong. It cannot make the runtime build a transaction that breaks an invariant, because the anchor is checked
   on-chain.
-- **Compose (ADR-0011).** Inserts, removes and retires run inside `Compose`, alongside other calls. The runtime refuses,
-  before building, a composition with two structural operations of one contract, or one together with a `CreateObject`,
-  `BurnInstance` or another mint of the same policy (F2). Keyed owned actions combine freely.
+- **Compose (ADR-0011).** Inserts, removes and retires run inside `Compose`, alongside other calls. The compatibility
+  matrix (per contract, per transaction) is in §3.1. The runtime refuses before building:
+  - two structural operations (insert or remove) of one contract;
+  - a structural operation together with a `CreateObject`, `BurnInstance` or another mint of the same policy;
+  - any call whose input is also an anchor, predecessor or removed node of a structural operation in the same
+    transaction (role overlap);
+  - a composition whose calls' windows cannot fit a `Link` window (at most `W`, starting at or after the anchor's
+    cooldown).
 - **Runtime changes:**
   - `StateInstance`'s creation mints the heads;
   - `OwnedObject` gains keyed creation (no seed; an anchor);
-  - `TxRunner`'s expected continuing state allows the relinked anchor beside the call's own output.
+  - `TxRunner`'s expected continuing state allows the relinked anchor beside the call's own output;
+  - `Window` respects `W`.
 
 ### D8. Invariants
 
@@ -283,103 +342,167 @@ The transaction:
 | ID | Invariant | Decisions |
 |---|---|---|
 | I44 | In a contract with keyed types, keyed and head tokens are 29 bytes `0x4B ‖ blake2b_224(instance ‖ typeId ‖ key)`, a reserved kind there (I27 amended): no user mint or method value may use the name. Contracts without keyed types are unchanged | D2 |
-| I45 | Exactly one head per (instance, keyed type), minted only by `CreateInstance` (whose mint is exactly the instance token plus the heads), with key `""`; heads never burn | D3 |
+| I45 | Exactly one head per (instance, keyed type), minted only by `CreateInstance` (whose mint under the policy is exactly the instance token plus the heads), with key `""`; heads never burn | D3 |
 | I46 | A keyed token is minted only by an `Insert_*` of its type, alone under the policy, with a `Link`-spent anchor of the same instance and type such that `key(A) < key`, (`A.next == ""` or `key < A.next`), and `1 ≤ len(key) ≤ maxKeyBytes` | D4 |
 | I47 | **List integrity:** for each (instance, type), following `next` from the head visits strictly increasing keys. The set visited is exactly the set of `0x4B` units of that instance and type with total supply 1, live or retired, and no such unit has another quantity. Uniqueness: two tokens of one key would need two positions in a strictly increasing list. *(Global; proved per operation in §3.1, and tested by the ledger-model test, §8)* | D3–D6, D9, D10 |
 | I48 | A `Link` spend is valid only when the policy's mint redeemer is an `Insert_*`/`Remove_T` of the node's type naming that input as anchor. The anchor continues by `relinked` (D4b): same address, no reference script, the datum with only `next` and `linkedAt` replaced, lovelace not lower, other assets exact | D4, D5 |
 | I49 | A keyed token burns only by `Remove_T`, which spends `N` (a `Keyed_T`, ≠ the anchor) and its predecessor `P` (`P.next == N.key`) and relinks `P` to `N.next`. `BurnInstance` refuses `0x4B` tokens; a removing `@OwnedDestroy` requires `Remove_T` naming its own input | D5 |
-| I50 | Owned actions on a keyed node keep `instance`, `next`, `linkedAt` and the key, and satisfy the size rule | D6 |
+| I50 | Owned actions on a keyed node continue its own token with `instance`, `next`, `linkedAt` and the key unchanged, and satisfy the size rule and the plain owned checks | D6 |
 | I51 | A node's token name is `keyId(datum.instance, typeId(T), key(datum))`, checked whenever a node is spent or used as an anchor or a removed node | D4–D6, D10 |
 | I52 | Token kinds decide arms: `0x4B` tokens take only `Link` (heads, nodes, retired nodes), keyed owned arms of their own type (`Keyed_T`), and retire (`Keyed_T`); `0x4F` tokens take only plain owned arms; 32-byte tokens take only shared arms | D2, D4, D6, D10 |
 | I53 | With `signedKey`, the inserted key is a 28-byte key hash among the transaction's signatories | D1, D4 |
-| I54 | **Cooldown.** A `Link` spend requires finite validity bounds, `upperBound − lowerBound ≤ C` and `lowerBound ≥ A.linkedAt + C`, and sets `linkedAt := upperBound` | D9 |
-| I55 | A retire continues the node as `Retired_T(instance, next, linkedAt, key)` with its token, lovelace at least `minAda` and no other asset, and mints and burns nothing | D10 |
+| I54 | **Cooldown and window.** A `Link` spend requires finite bounds `[lower, upper)` with `upper − lower ≤ W` and `upper ∈ [2³², 2⁶⁴)`. When `C > 0` it also requires `lower ≥ A.linkedAt + C`. In both cases it sets `linkedAt := upper` | D2, D9 |
+| I55 | **Retire.** The node continues as `Retired_T(instance, next, linkedAt, key)` with its own token and no other asset under the policy. Its method sees `ctx.balance = in − minAda` and `received = 0`. Its payouts total exactly `ctx.balance`, each tagged (I7). The continuing output holds `minAda + t` lovelace, where `t ≥ 0` is paid by the transaction builder. Its unit is neither minted nor burned | D10 |
 
 **Amended invariants:**
 
 | ID | Before | After (in contracts with keyed types) | Decision |
 |---|---|---|---|
-| I1 | One seed → exactly one thread token minted | One seed → the instance token plus exactly one head per keyed type, and nothing else | D3 |
+| I1 | One seed → exactly one thread token minted | One seed → the instance token plus exactly one head per keyed type, and nothing else under the policy | D3 |
+| I3 | Exact value, no lovelace added or skimmed | Except: a relink may add lovelace (D4b); a retire's output holds `minAda` plus a builder-paid top-up (D10). Neither may lose lovelace or change other assets | D4b, D10 |
+| I6 | `balance` = in − deposit (actions), everything (destroy) | A retiring destroy sees `balance = in − minAda` and `received = 0` (I55) | D10 |
+| I8 | A destroy burns its token and allocates everything | A retiring destroy keeps its token and its deposit, and allocates everything else (I55). A removing destroy is unchanged (I49) | D5, D10 |
 | I9 | The burn redeemer only burns | …and never a `0x4B` token | D5 |
-| I13 | The datum fits `maxDatumBytes` | Keyed datums fit with `next` counted at `maxKeyBytes` | D2 |
-| I18 | Object tokens minted only by `CreateObject` from a consumed seed, under a reference input | Holds for `0x4F` tokens; `0x4B` tokens follow I46 (no seed; the anchor proves the instance) | D4 |
+| I13 | The datum fits `maxDatumBytes` | Keyed datums fit with `next` and `linkedAt` at their placeholders (D2) | D2 |
+| I18 | Object tokens minted only by `CreateObject`, from a consumed seed, under a reference input | Holds for `0x4F` tokens; `0x4B` tokens follow I46 (no seed; the anchor proves the instance) | D4 |
 | I19 | The datum stays `Holding(instance, …)` | Keyed datums are `Keyed_T`/`Head_T`/`Retired_T`, with `instance` fixed by I50/I48/I55 | D2 |
 | I21 | Instance tokens take shared redeemers, `0x4F` tokens owned ones | Extended by I52 | D6 |
 | I27 | Reserved: 32 bytes, `0x4F`, `0x49` | Plus `0x4B` (I44) | D2 |
 | I42 | Constructor tags checked with several owned types | Also checked whenever a keyed type exists | D2 |
 
-### 3.1. Why I47 holds
+### D9. Link cooldown and window (against churn)
 
-The induction is over every transaction the ledger accepts. The question at each step is: which redeemers can mint or
-burn a `0x4B` unit of this policy, or change the datum, address or value of a UTxO holding one?
+- **`linkedAt`.** Each node and head records `linkedAt`: the upper validity bound of its last relink. It is 0 for a
+  fresh head, and a new node starts at the insert's upper bound.
+- **The rule (I54).** A `Link` spend requires:
+  - finite bounds `[lower, upper)`, with `upper − lower ≤ W` and `upper` in the time domain (D2);
+  - when `C > 0`, also `lower ≥ A.linkedAt + C`.
 
-| Redeemer or arm | Effect on `0x4B` units | Why I47 is preserved |
-|---|---|---|
-| `CreateInstance` | mints exactly the heads of a fresh instance | **Base.** A fresh instance id is new (I1), so no unit of it existed. Each list is `head → end` |
-| `Insert_<m>` | mints one key `k`; relinks `A` | The only mint (D4a.4). `key(A) < k < A.next`, the new node's `next` is `A`'s old one, and everything else in `A` is pinned (I48). The list gains exactly `k`, still strictly increasing |
-| `Remove_T` | burns `N`; relinks `P` | `P.next == N.key`, `N` is a `Keyed_T` (not a head), `P.next := N.next`, no output keeps `N`'s token. The list loses exactly `N.key` |
-| retire (D10) | no mint; `N` stays in place | Token, `instance`, `next` and key kept (I55). The list is unchanged |
-| keyed owned action | no mint | `instance`, `next`, `linkedAt` and the key kept (I50). The list is unchanged |
-| `Link` alone (no structural redeemer naming it) | — | Rejected (I48) |
-| `CreateObject_*`, `CreateIntent`, `ByAction`, `Adopt` | mint `0x4F`, `0x49` or user names | Each checks its exact mint, which has no `0x4B` entry. `ByAction` and `Adopt` cannot coexist with keyed types (D1). `0x4B` is reserved (I44) |
-| `BurnInstance` | burns | Refuses `0x4B` (I49) |
-| shared, plain owned, batch arms | none on `0x4B` UTxOs | They reject `0x4B` tokens by kind (I52) |
-| any transaction moving a `0x4B` token elsewhere | — | Spending a `0x4B` UTxO runs one of the arms above, and each pins its token's output |
-
-### D9. Link cooldown (against churn)
-
-- Each node and head records `linkedAt`, the upper validity bound of its last relink (0 for a fresh head; for a new node,
-  the insert's upper bound).
-- A `Link` spend requires that `lowerBound(tx) ≥ A.linkedAt + C`, and that `upperBound(tx) − lowerBound(tx) ≤ C`.
-  It sets `linkedAt := upperBound(tx)` (I54).
-- Using the *upper* bound defeats stale lower bounds: the next relink can only be included at or after
-  `upperBound + C`, so at least `C` after this one. Bounding the window to `C` stops an attacker from naming a far-future
-  upper bound to freeze a node.
-- `C` is `@Owned(linkCooldownMs = …)`, default 60,000 ms. 0 disables it; the processor warns then.
-- **Effect:**
-  - a node can be relinked at most once per `C`, so between relinks its owner can act and leave;
-  - churn costs the attacker a transaction per `C` per node instead of per block, and still cannot freeze a node;
-  - the cost is a structural rate of at most one per `C` in each gap. With random keys, gaps are many and this rarely
-    binds. Monotonic keys are throttled at the tail (D2).
+  It sets `linkedAt := upper`. With `C = 0` only the window rule applies.
+- **Why these bounds:**
+  - *The upper bound.* A relink included at time `t` has `upper > t`, and the next relink cannot be admitted before
+    its own lower bound (§2, mempool admission). So the next relink is included at least `C` after this one: an
+    **exclusion interval** of at least `C` for further relinks of the node. This defeats stale lower bounds.
+  - *The window bound.* Bounding the window by `W`, a constant separate from `C`, stops an attacker from naming a
+    far-future upper bound to freeze a node (a freeze lasts at most `W + C`).
+- **The values** are `C` (`linkCooldownMs`) and `W` (`linkWindowMs`), with domains in D1. `C = 0` disables the
+  cooldown, and the processor warns. A `W` shorter than two slots is refused by the runtime.
+- **What it guarantees.** It guarantees an exclusion interval, not a successful transaction. In that interval the
+  owner's own actions and the retiring exit are not displaced by relinks. Whether the owner's transaction lands depends
+  on the network as always.
+- **Waits.** An honest operation that finds a relink just made waits until the relink's `upper + C`. That is at most
+  `W + C` after the relink's inclusion (about 3 minutes with the defaults).
+- **Throughput.**
+  - Each gap admits at most one structural operation per `C` (plus the window actually used).
+  - An empty registry has one gap (after the head), so a launch serialises at first: about one insert per 80 s with
+    `C = 60 s` and a 20 s window.
+  - Capacity then grows with the number of gaps, to about `(n + 1)/(C + w)` operations per second for `n` keys and
+    window `w`.
+  - A contract expecting a rush of inserts into an empty registry can choose a smaller `C` (or 0), at the price of
+    weaker churn protection (Q6).
 
 ### D10. Retire: leaving without a neighbour, keeping the key
 
-`@OwnedDestroy(retire = true)` declares a retiring exit.
+`@OwnedDestroy(retire = true)` declares a retiring exit; every keyed type has one without `@Shared` (D1).
 
-- **The arm.** It runs the user's destroy, which pays out as it decides. The node continues in place as
-  `Retired_T(instance, next, linkedAt, value.<key>)`, keeping its token. The continuing output holds the node's
-  lovelace minus the payouts, at least `minAda`, at the same address, with no reference script. Nothing is minted or
-  burned (I55).
+- **The value rule (I55):**
+  - The method sees `ctx.balance = in − minAda`, the node's funds without the deposit, and `received = 0` (a retiring
+    destroy cannot be `@Payable`).
+  - It must return payouts totalling exactly `ctx.balance`, each tagged against double satisfaction (I7).
+  - The continuing output holds `minAda + t` lovelace, `t ≥ 0`. A top-up `t` is paid from the transaction builder's
+    own inputs: it is the owner's choice, needed only when a raised `coinsPerUTxOByte` puts the ledger minimum above
+    `minAda`. The page bounds it (D11).
+- **The arm** also runs every check of a plain owned destroy: `Ctx`, annotations (`@SignedBy`, …), payouts. The node
+  continues in place as `Retired_T(instance, next, linkedAt, value.<key>)`:
+  - its own token is kept, neither minted nor burned (other mints of the policy in the same transaction are governed by
+    the matrix in §3.1);
+  - same address, an inline datum, no reference script.
 - **What a retired node can do.** It takes only `Link`: it can be an anchor or a predecessor. It is never removed and
-  never takes owned actions, so its key stays taken for good, and its deposit stays locked.
+  never takes owned actions, so its key stays taken for good, and its deposit (and any top-up) stays locked.
 - **What it gives:**
-  - an exit that spends only the owner's own UTxO, immune to churn (D9 aside), to a hostile predecessor and to a raised
-    `coinsPerUTxOByte` (the output may keep more than `minAda`);
-  - "once ever" uniqueness, for types whose only exits retire (one claim per address ever).
-- **The escape hatch** of a keyed type may be a retiring or a removing `@OwnedDestroy` without `@Shared` (D1). The
-  processor warns when it can only remove.
+  - an exit that spends only the owner's own UTxO. Neighbours, churn and a hostile predecessor cannot block it, and a
+    raised `coinsPerUTxOByte` can be met by the owner's top-up;
+  - "once ever" uniqueness, for types whose only exits retire.
 
 ### D11. The page verifier and descriptions (ADR-0013, ADR-0015)
 
 - **The description** gains, per keyed type:
-  - the key field, `maxKeyBytes`, `signedKey`, `linkCooldownMs` and `typeId`;
+  - the key field, `maxKeyBytes`, `signedKey`, `linkCooldownMs`, `linkWindowMs` and `typeId`;
   - the constructor tags of `Head_T`, `Keyed_T` and `Retired_T`;
   - the `Insert_*`, `Remove_T` and `Link` redeemers;
   - and per call, its kind (insert, remove, retire, keyed action).
-- **The page verifier's rules** change only for these calls. Each is a security rule:
-  - *Inputs.* An anchor input is admitted only:
-    - with a `Link` redeemer;
-    - when the mint redeemer names exactly that input;
-    - when its datum and token pass I51 against the description;
-    - and, for a remove, when the removed node is the call's target.
-  - *Outputs.* The anchor's relinked output must satisfy `relinked` (checked by the verifier itself). Head outputs are
-    admitted only on an instance creation of a contract with keyed types.
-  - *Accounting.* The anchor's value is excluded from the wallet's accounting, except a top-up the wallet pays, which
-    counts as wallet outflow. The wallet's net outflow is bounded as today.
+- **Inputs.** An anchor input is admitted only:
+  - with a `Link` redeemer;
+  - when the mint redeemer names exactly that input;
+  - when its datum and token pass I51 against the description;
+  - and, for a remove, when the removed node is the call's target.
+- **Outputs.**
+  - The anchor's relinked output must satisfy `relinked` (checked by the page).
+  - Head outputs are admitted only on an instance creation of a contract with keyed types.
+  - For an insert, the page reads the key from the new node's datum and checks that the minted unit is
+    `keyId(instance, typeId, key)`.
+- **Accounting.** These rules extend ADR-0013's net-outflow bound and its separate check that wallet payouts do not
+  mask transfers of wallet funds to others (`verify.js` `:377`; `compose.js` `:313`):
+  - *Anchor deltas are transfers to third parties.* For each anchor, the page computes the allowed top-up itself:
+    `allowed = max(0, ledgerMin(relinkedOutput) − lovelace(A))`.
+    - `lovelace(A)` comes from the page's own chain read, not the service's.
+    - The protocol parameters are bounded like the fee (an absolute cap).
+    - Any increase above `allowed` is refused.
+    - The increase counts in the third-party-transfer check, not only in the net outflow. So the remove-with-gift
+      transaction (a user's removal funding an attacker's predecessor while a payout masks it) is refused.
+  - *Retire.* The top-up `t` is allowed up to `max(0, ledgerMin(retiredOutput) − minAda)`, computed by the page in the
+    same way.
+  - *Head deposits.* A creation of a contract with `k` keyed types may lock exactly `k × max(minAda, ledgerMin(head))`
+    beyond the instance's own deposit, computed by the page; more is refused.
+  - The same equations apply to standalone and composed verification.
 - **Without the service.** Keyed calls are prepared by the engine (ADR-0015), which needs the provider to list the
-  state address (D7); `verifiableWithoutService` holds for them.
-- **Tamper tests (M3):** a substituted anchor, a skimmed or re-addressed relink, a relink with a reference script, an
-  extra `Link` input, and heads on a non-creation.
+  state address (D7).
+- **Tamper tests (M3):**
+  - a substituted anchor;
+  - a skimmed or re-addressed relink, or a relink with a reference script;
+  - an extra `Link` input;
+  - heads on a non-creation, or an excessive head deposit;
+  - an anchor top-up above `allowed`, and the remove-with-gift transaction;
+  - a retire top-up above its bound.
+
+### 3.1. Why I47 holds, and what may share a transaction
+
+**The compatibility matrix.** Under one policy, one transaction may hold:
+- **one** of the following:
+  - a `CreateInstance`;
+  - a `CreateObject_*` (plain types);
+  - a `BurnInstance`;
+  - one structural operation, an `Insert_*` or a `Remove_T`;
+- plus any number of the following, **on distinct inputs not used in a structural role** (anchor, predecessor, removed
+  node):
+  - keyed owned actions;
+  - retires;
+  - plain owned actions;
+  - shared actions;
+  - purpose handlers (ADR-0010).
+
+Role overlap is impossible on chain, since one input has one redeemer. The runtime also refuses it before building
+(D7). Calls of other contracts are unconstrained.
+
+**The proof.** The induction is over every transaction the ledger accepts. At each step, consider every redeemer or arm
+that can mint or burn a `0x4B` unit of this policy, or change the datum, address or value of a UTxO holding one. In a
+transaction, each `0x4B` input is spent by exactly one arm, and each arm pins the output of its own token. So the effect
+on the lists is the union of the effects below, on distinct units:
+
+| Redeemer or arm | Effect on `0x4B` units | Why I47 is preserved |
+|---|---|---|
+| `CreateInstance` | mints exactly the heads of a fresh instance | **Base.** A fresh instance id is new (I1), so no unit of it existed. Each list is `head → end` |
+| `Insert_<m>` | mints one key `k`; relinks `A` | The only mint under the policy (D4a.4). `key(A) < k < A.next`, the new node's `next` is `A`'s old one, and everything else in `A` is pinned (I48). The list gains exactly `k`, still strictly increasing |
+| `Remove_T` | burns `N`; relinks `P` | `P.next == N.key`, `N` is a `Keyed_T` (not a head or retired), `P.next := N.next`, no output keeps `N`'s token. The list loses exactly `N.key` |
+| retire (D10) | turns `Keyed_T` into `Retired_T`; the same unit | Token, `instance`, `next` and key kept (I55). The list is unchanged; the unit is still counted |
+| keyed owned action | continues its own unit | `instance`, `next`, `linkedAt` and the key kept (I50). The list is unchanged |
+| `Link` with no structural redeemer naming it | — | Rejected (I48) |
+| `CreateObject_*` | mints one `0x4F` unit | Its exact mint has no `0x4B` entry |
+| `CreateIntent`, `ByAction`, `Adopt` | — | Absent: `@Batched`, asset-aware contracts and migration cannot coexist with keyed types (D1). `0x4B` is reserved (I44) |
+| `BurnInstance` | burns | Refuses `0x4B` (I49) |
+| shared, plain owned arms | none on `0x4B` UTxOs | They reject `0x4B` tokens by kind (I52) |
+| purpose handlers (ADR-0010: certify, vote, propose, withdraw) | none | They spend no UTxO and mint nothing under the policy |
+| any transaction moving a `0x4B` token elsewhere | — | Spending a `0x4B` UTxO runs one of the arms above, and each pins its token's output |
 
 ## 4. Alternatives considered
 
@@ -404,10 +527,12 @@ burn a `0x4B` unit of this policy, or change the datum, address or value of a UT
 - **A `Link` that runs its own structural checks in each node's spend** (no coupling). It would double the code and the
   budget per insert; the policy runs once anyway (F8).
 
-**Contention (an estimate).** `m` concurrent inserts of random keys into a list of `n` nodes collide (share a gap)
-with probability about `m(m−1)/(2(n+1))` (the birthday bound). With 10 concurrent inserts into 1,000 nodes, that is
-about 4.5%; the loser retries. Removes and owners' updates add neighbour collisions in proportion. The cooldown adds
-at most `C` of waiting to an unlucky retry.
+**Contention (an estimate, assuming uniformly random keys).** With `n` existing random keys, the gaps have unequal
+lengths, and two new random keys share a gap with probability `2/(n+2)`. So `m` concurrent inserts collide with
+probability about `1 − (1 − 2/(n+2))^(m(m−1)/2)`. With `n = 1,000` and `m = 10`, that is about 8.6%; the loser retries,
+after the winner's relink plus the cooldown (D9, at most `W + C`). Removes and owners' updates add neighbour collisions
+in proportion. Keys that are not uniform (common prefixes, monotonic keys) collide more. While a registry is small,
+throughput is bounded by the number of gaps (D9).
 
 ## 5. Consequences
 
@@ -420,20 +545,21 @@ at most `C` of waiting to an unlucky retry.
 **Negative and limits:**
 - **Neighbour contention.** An insert or remove spends a neighbour, so the neighbour's own concurrent update fails and
   retries, and two inserts into one gap race.
-- **The cooldown** (D9) caps structural operations per gap at one per `C`.
-- **Gap blocking and squatting** remain possible at the attacker's cost (§2).
+- **The cooldown** (D9) caps structural operations per gap, and makes an empty registry fill slowly at first.
+- **Gap blocking, timed races and squatting** remain possible at the attacker's cost (§2).
 - **Monotonic keys** contend at the tail (D2).
 - **Off-chain listing is O(UTxOs at the state address)** for each insert and remove: every instance's and type's UTxOs,
   decoded. A lookup by key is one query only on providers that filter by asset (D7). A cached index is a runtime
   optimisation, not part of this design.
 - **One structural operation per contract per transaction.** This is a choice of this ADR's redeemer design, not a
-  ledger rule: one redeemer could describe several operations (F2). There is no insert with a remove, and no keyed
-  insert beside another creation or burn of the same contract.
+  ledger rule: one redeemer could describe several operations (F2). See §3.1 for what may share a transaction.
 - **Locked deposits.** Heads' and retired nodes' deposits stay locked, with any top-ups.
 - **No upgrade path yet.** A keyed registry can be neither migrated (refused, D1) nor destroyed (F7), so it is permanent
   (Q5).
-- **Script size and budgets** grow by the insert, remove, link and retire arms. This is unmeasured: M1 must measure the
-  applied script against the runtime's 15,000-byte limit (F10), and the budgets.
+- **Caps.** `maxDatumBytes` ≤ 2048 and keyed initializer arguments ≤ 4,096 serialised bytes (D4c).
+- **Script size and budgets** grow by the insert, remove, link and retire arms. This is unmeasured; M1 gates it (§7).
+- **An existing limit, not removed here.** A non-`@Payable` initializer creates nodes with exactly `minAda`. After a
+  raise of `coinsPerUTxOByte` above the contract's per-byte rate, such inserts fail; this is ADR-0001 §10's limit.
 
 ## 6. Compatibility
 
@@ -448,31 +574,34 @@ at most `C` of waiting to an unlucky retry.
 
 | M | Scope | Entry gate | Exit criteria |
 |---|---|---|---|
-| M1 | Processor rules (D1); validator (D2–D6, D9, D10); harness ledger model (§8); example `registry` (contract and harness tests only) | This ADR accepted | Every attack in §8 rejected; the I47 ledger-model test with mutations passes; capacity tests (an insert at `maxDatumBytes` 4096, a creation with 16 heads) stay under the transaction limit; the applied `registry` script is ≤ 15,000 bytes and publishes as a reference script; budgets of insert, remove, retire and `Link` recorded; existing examples' validators byte-identical and `FixturesTest` unchanged |
-| M2 | Java runtime and client (D7), including Compose | M1 | DevKit: inserts from separate threads into different gaps all land; two inserts into one gap, one retries and lands; insert into an empty list and at the tail; a remove while the predecessor is updated concurrently retries and lands; a retire while neighbours churn; a duplicate key refused on the JVM and, forced past the JVM, on-chain; the cooldown observed |
+| M1 | Processor rules (D1); validator (D2–D6, D9, D10); the harness ledger model (§8); example `registry` (contract and harness tests only), plus a "widest" test contract (two keyed types, a plain owned type with a MerkleMap) | This ADR accepted | **Correctness:** every attack in §8 rejected; the I47 ledger-model test with mutations passes. **Size:** the applied scripts of `registry` and of the widest contract are ≤ 15,000 bytes (F10), measured offline. A combination that does not fit is refused by the processor, or documented as a limit. **Budgets:** the aggregate budget of every script in an insert and in a remove (at the size caps) is within 50% of the per-transaction CPU and memory limits. **Compatibility:** existing examples' validators byte-identical, and `FixturesTest` unchanged |
+| M2 | Java runtime and client (D7), including Compose, on DevKit | M1 | **Deployment:** `registry` publishes as a reference script. **Capacity:** the D4c worst cases (an insert at both datum caps with 4,096 bytes of arguments; a creation with 16 heads) are accepted. **Concurrency:** on a pre-populated list, inserts from separate threads into different gaps all land; two inserts into one gap, one retries and lands; an insert into an empty list and at the tail; a contested gap, where an honest insert lands within k cooldowns. **Hostility:** a hostile predecessor updates every block while the victim retires; a remove while the predecessor is updated retries and lands. **Rejections:** a duplicate key refused on the JVM and, forced past the JVM, on-chain. **Cooldown:** `C = 0`, the minimum `C` and the default, with boundary times. **Composition:** a time-derived key in a composition is rebuilt; an ambiguous submission is not resubmitted |
 | M3 | Description, page verifier rules, JS client, engine (D11) | M2 | The registry flows through npm on DevKit; the D11 tamper tests are refused by the page; recorded fixtures replay; ordering vectors agree across Java, JS and on-chain |
 | M4 (follow-up ADR) | Keyed types in asset-aware contracts | M3 | A composition matrix for assets, sends and user mints with structural operations; both generator paths covered |
 
 ## 8. Verification
 
 - **The harness ledger model (new in M1).** Today `StateHarness.evaluate` runs only the redeemers a test supplies. The
-  ledger model applies whole transactions to a UTxO set. Before accepting a transaction, it:
-  - checks input uniqueness and value conservation;
-  - derives every required script purpose (each script input, each minting policy, each withdrawal) and runs each one;
-  - requires exactly the needed redeemers.
+  ledger model applies whole transactions to a UTxO set, with:
+  - **a slot clock:** validity intervals are checked, and a transaction is applied only within its window;
+  - **protocol parameters:** min-UTxO is checked, so raised `coinsPerUTxOByte` tests are meaningful;
+  - **phase-1 checks:** input uniqueness and value conservation;
+  - **every required script purpose** (each script input, each minting policy, each withdrawal) derived and run;
+  - **exactly the needed redeemers.**
 
-  This mirrors the ledger's exact-redeemer-set rule (trusted, §2), so a test cannot "accept" a transaction whose
-  removed node's script never ran.
-- **The I47 test.** Random sequences of inserts, removes, retires and updates are drawn independently of the generated
-  code, and **honest transactions are randomly mutated** (outputs, redeemers, extra inputs, values, datums). After
-  every accepted transaction:
+  This mirrors the ledger's rules (trusted, §2), so a test cannot "accept" a transaction whose removed node's script
+  never ran.
+- **The I47 test.** Random sequences of inserts, removes, retires, updates and clock advances are drawn independently
+  of the generated code, and **honest transactions are randomly mutated** (outputs, redeemers, extra inputs, values,
+  datums, validity bounds). After every accepted transaction:
   - the head walk must equal a reference sorted set kept by the test;
   - the set of all `0x4B` units of the instance and type held anywhere must equal the walk, each with quantity 1.
 
-  Any mutant the ledger model accepts must leave both true. Anchor values and payouts are tracked.
+  Any mutant the ledger model accepts must leave both true. Anchor values, top-ups and payouts are tracked.
 - **The attack suite** (each must be rejected), by operation:
   - *Insert:*
-    - the place: `key(A) ≥ key`; `next ≤ key`; the empty key; a key longer than `maxKeyBytes`;
+    - the place: `key(A) ≥ key`; `next ≤ key`; the empty key; a key longer than `maxKeyBytes`; a retired key
+      inserted again;
     - the anchor:
       - of another instance or type, or of an `Insert_T1` with a `T2` anchor;
       - a redeemer `instance` other than `A.instance`;
@@ -483,8 +612,15 @@ at most `C` of waiting to an unlucky retry.
       - another `next`, `linkedAt` other than the upper bound, another field changed;
       - moved to another address or to the other state-address variant;
       - a datum hash, or a reference script;
-    - the new node: the wrong `next`, the wrong key field, the wrong value, two tokens minted;
-    - the cooldown: violated, or a validity window longer than `C`;
+    - the new node:
+      - the wrong `next`, the wrong key field, or the wrong value;
+      - two tokens minted;
+      - a record that violates an `@Invariant`, or an unreachable `@Quorum` shape;
+    - the cooldown and window:
+      - `lower < A.linkedAt + C`;
+      - a window longer than `W`;
+      - an infinite bound;
+      - an upper bound outside the time domain;
     - binding: `signedKey` without the signature;
     - `@Shared` read from another instance.
   - *Remove:*
@@ -500,6 +636,11 @@ at most `C` of waiting to an unlucky retry.
       - `N`'s token kept in an output;
     - the relink: `P` not relinked, or relinked wrong (as for insert);
     - the ledger model's own case: `N`'s redeemer omitted, with its funds redirected.
+  - *Retire:*
+    - payouts above `ctx.balance` (paying the deposit), below it (funds left in the node), or untagged;
+    - an output below `minAda`, with a datum change other than the retire, or with a reference script;
+    - minting or burning the node's unit;
+    - a retire with `received`.
   - *Link:*
     - a second node spent with `Link`;
     - `Link` on an instance, a plain object or an intent UTxO;
@@ -507,19 +648,19 @@ at most `C` of waiting to an unlucky retry.
     - an insert whose anchor is also spent by its owner's action.
   - *Kinds:* a keyed node spent by a plain owned arm, and the reverse; a head spent with anything but `Link`; owned
     actions on a retired node.
-  - *Owned actions:* changing `next`, `linkedAt`, the key or the instance; a datum that breaks the size rule.
-  - *Retire:* minting or burning; keeping less than `minAda`; changing the key, `next` or the instance.
+  - *Owned actions:* changing `next`, `linkedAt`, the key or the instance; a datum that breaks the size rule; an
+    `@Invariant` violated.
   - *Creation:*
     - `CreateInstance`: no head; two heads; a head of an unknown type, of another instance, or with a non-empty `next`;
       an extra keyed token; a user token; a burn; a non-state address;
     - `ByAction` or a method value with a `0x4B` name.
   - *Combinations:* insert or remove with `CreateObject`, a plain destroy or another structural operation of the same
-    policy.
+    policy; a role overlap.
   - *Liveness, accepted:*
-    - a node at the size limit, then the longest key inserted after it;
+    - a node at the size limit (padded), then the longest key inserted after it, with a time near 2⁶⁴;
     - a remove where `N.next` is longer than `N.key`;
     - inserts and removes at a raised `coinsPerUTxOByte`, with a top-up;
-    - a retire at a raised `coinsPerUTxOByte`.
+    - a retire at a raised `coinsPerUTxOByte`, with the owner's top-up.
 - **Independent cross-check with Scalus** (F8). These rules are taken from the page:
   - insert requires `anchor < new < anchor.next` with the anchor reproduced and relinked;
   - exactly one NFT is minted per structural insert and burned per remove;
@@ -532,6 +673,8 @@ at most `C` of waiting to an unlucky retry.
     which runs the user's method;
   - Scalus's spend side only checks that list tokens are minted or burned, while JOUST's `Link` names the exact anchor,
     which is stricter.
+
+  Scalus has no cooldown and no retire; both are JOUST additions against churn.
 - **No expected values from the code under test.** Expected lists and values come from the reference model.
 
 ## 9. Open questions
@@ -550,7 +693,8 @@ at most `C` of waiting to an unlucky retry.
 - **Q5. Upgrading a keyed registry.** Options: a later `Adopt` that carries a list across, a drain (everyone retires or
   removes, then the heads stay), or accepting permanence. *Lean:* accept permanence for now, and record it in the
   example's documentation.
-- **Q6. The cooldown's default** (60 s) and whether it may be 0. *Lean:* 60 s, 0 allowed with a warning.
+- **Q6. The cooldown's defaults** (`C` = 60 s, `W` = 120 s), and `C = 0` (allowed, with a warning). This trades launch
+  throughput (D9) against churn protection (§2). *Lean:* these defaults; contracts expecting a launch rush lower `C`.
 
 ## 10. Related findings and follow-ups (out of scope)
 
@@ -559,7 +703,7 @@ at most `C` of waiting to an unlucky retry.
 - `@Batched` cannot be combined with native assets or MerkleMaps today (`ContractReader`). That limits hot shared state
   more than any missing state kind, and deserves its own ADR.
 - Follow-ups of this ADR: keyed types in asset-aware contracts (M4); MerkleMaps in keyed records; moves (Q4); absence
-  evidence (Q3); a second index (Q1).
+  evidence (Q3); a second index (Q1); composite structural redeemers.
 
 ## Revision history
 
@@ -594,3 +738,31 @@ at most `C` of waiting to an unlucky retry.
     dependence (§4, D7).
   - **Ordering:** D F10 → ordering defined, with shared vectors (D2).
   - **Nits:** S F11 and D F11 → applied, with the Scalus differences argued in §8.
+- r3 (2026-11-09, responds to the round-2 reviews of `7bb696c`):
+  - **Retire's value rule:** S F13, C F14, D F12 → `ctx.balance = in − minAda`, no `received`, payouts exactly the
+    balance, output `minAda` plus a builder top-up; I3, I6 and I8 amended (D10, I55, D8).
+  - **A required retiring exit:** S F12 → every keyed type must have a retiring escape hatch; removing exits are
+    optional and never the hatch (D1, D5).
+  - **Cooldown parameters:** S F14, C F16, D F14 → a window bound `W` separate from `C`; the `C = 0` branch; domains
+    for both; a slot check at deploy; throughput stated (D1, D9, I54, §4, §5, Q6).
+  - **Page accounting:** S F15, C F15 → top-ups and head deposits are computed by the page and counted as third-party
+    transfers; the remove-with-gift and excessive-deposit tamper tests (D11).
+  - **Timed races:** S F16 → documented, with the runtime submitting at expiry and an M2 test (§2, D7, M2).
+  - **Nits and attack additions:** S F17, D F15 → the time domain, the attack additions, the §3.1 rows, the creation
+    residual (§8, §3.1, §5).
+  - **Milestones:** D F13 → the ledger model gains a slot clock and min-UTxO; publication and capacity tests move to M2
+    on DevKit (§7, §8).
+  - **Size gates:** C F4 → a widest test contract under the size gate, and an aggregate budget gate (M1).
+  - **The transaction envelope:** C F5 → including arguments: `maxDatumBytes` ≤ 2048, arguments ≤ 4,096 bytes, and
+    capacity tests (D1, D4c, M2).
+  - **Timestamp width:** C F17 → the time domain `[2³², 2⁶⁴)` and a 9-byte placeholder in the size rule (D2, I54).
+  - **Compose:** C F18 → rebuilt against the final window; no resubmission after acceptance or ambiguity (ADR-0001 D14)
+    (D7).
+  - **Inherited checks:** C F19 → output checks (invariants, quorum shapes) and plain owned checks retained on inserts
+    and keyed actions (D1, D4a, D6).
+  - **Mint scope:** C F20 → the compatibility matrix, with effects stated per unit and the proof over distinct inputs
+    (§3.1, I50, I55).
+  - **Estimates:** C F21 → contention corrected (`2/(n+2)`, about 8.6%), assumptions stated; waits at most `W + C`;
+    an exclusion interval, not a guaranteed exit (§4, D9).
+  - **Reordering claim:** C F22 → narrowed: `typeId` is order-independent, the script is not (D2).
+  - **Structure:** §3.1 moved after D11.
