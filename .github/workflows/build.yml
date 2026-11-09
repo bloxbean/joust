@@ -42,10 +42,6 @@ jobs:
           npm install -g @bloxbean/yaci-devkit
           nohup yaci-devkit up --enable-yaci-store > "$RUNNER_TEMP/yaci-devkit.log" 2>&1 &
 
-      # JuLC's ADR-071 is not published yet: build it from source into mavenLocal (see the script).
-      - name: Build JuLC
-        run: bash .github/ci/build-julc.sh
-
       # The wallet example's page proof of concept (examples/wallet/js) needs its Node dependencies.
       - name: Install the wallet page's Node dependencies
         working-directory: examples/wallet/js
@@ -61,6 +57,12 @@ jobs:
       - name: Install the dApp page's Node dependencies
         working-directory: examples/dapp/frontend
         run: npm ci
+
+      # The dApp page uses JOUST's Vite plugin from source (js/joust/src/vite.js). js/joust's package.json also names
+      # this repository's npm packages, which only a local registry serves (ADR-0015 M2), so install just the plugin's
+      # two dependencies beside it (js/node_modules); nothing is saved or tracked.
+      - name: Install the Vite plugin's Node dependencies
+        run: npm install --no-save --no-package-lock --prefix js vite-plugin-node-polyfills@0.28.0 @rollup/plugin-inject@5.0.5
 
       - name: Compile
         run: ./gradlew assemble testClasses --stacktrace

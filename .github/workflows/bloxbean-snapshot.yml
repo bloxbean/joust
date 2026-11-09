@@ -1,6 +1,5 @@
 # From bloxbean/release-ops templates/workflows/bloxbean-snapshot.yml (docs/12-bloxbean-maven-repository.md).
-# JOUST adaptations: JuLC is built from source first (it is not published yet), and the Gradle consumer check is
-# skipped while it is, because a consumer can't resolve that JuLC either (JULC_FROM_SOURCE below).
+# JOUST resolves JuLC from this same repository (a published JuLC snapshot), so the Gradle consumer check runs.
 name: Publish snapshot to the BloxBean Maven repository
 
 # Publishes the commit's Maven publications to the BloxBean Maven repository on Cloudflare R2, which consumers
@@ -48,9 +47,6 @@ jobs:
       CONSUMER_REQUIRED: julc-state-api julc-state-runtime julc-state-processor julc-state-testkit julc-state-verifier julc-state-dsl
       # Absolute, because build.gradle resolves stagingRepository against each project's own directory.
       STAGING_DIR: ${{ github.workspace }}/build/bloxbean-maven
-      # The published POMs name a JuLC built from source (.github/ci/build-julc.sh), which no public repository has
-      # yet, so a consumer can't resolve them until it is published. While true, the consumer check is skipped.
-      JULC_FROM_SOURCE: 'true'
       AWS_ENDPOINT_URL: ${{ vars.R2_ENDPOINT }}
       AWS_DEFAULT_REGION: auto
       # AWS CLI 2.23+ sends request checksums R2 does not accept by default; send them only when an API needs one.
@@ -74,11 +70,6 @@ jobs:
           distribution: 'temurin'
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
-
-      # JuLC's ADR-071 (bloxbean/julc#311) is not published yet: build it from source into mavenLocal. Remove this
-      # step, and set JULC_FROM_SOURCE to false, once JOUST depends on a published JuLC.
-      - name: Build JuLC
-        run: bash .github/ci/build-julc.sh
 
       # Only -SNAPSHOT versions belong in the snapshot repository. build.gradle inserts the short commit id, so
       # each commit publishes its own version, e.g. 0.1.0-pre18-1a2b3c4-SNAPSHOT.
@@ -138,16 +129,10 @@ jobs:
         run: bash .github/scripts/bloxbean-maven.sh verify-public
 
       - name: Resolve with a Gradle consumer
-        if: env.JULC_FROM_SOURCE != 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           ARTIFACTS: ${{ steps.discover.outputs.artifacts }}
         run: bash .github/scripts/bloxbean-maven.sh consume
-
-      - name: Note the skipped consumer check
-        if: env.JULC_FROM_SOURCE == 'true'
-        run: |
-          echo "::warning::Consumer check skipped: the published POMs depend on a JuLC built from source (bloxbean/julc#311), which consumers must build into mavenLocal until it is published."
 
       - name: Record the publication
         env:
