@@ -647,6 +647,25 @@ final class RegistryWorld {
         }
     }
 
+    /** The ledger model's label of the policy's MINT purpose. */
+    String mintLabel() {
+        return "MINT " + hex(policy).substring(0, 8);
+    }
+
+    /** The ledger model's label of the SPEND purpose of {@code ref}. */
+    static String spendLabel(TxOutRef ref) {
+        return "SPEND " + hex(ref.txId().hash()).substring(0, 8) + "#" + ref.index();
+    }
+
+    /** As {@link #reject}, and {@code label} (MINT, or the SPEND of an input) is among the purposes that failed. */
+    void rejectBy(Built b, Ledger.Tx tx, String what, String label) {
+        reject(b, tx, what);
+        String reason = ledger.check(tx).reason();
+        if (!java.util.Arrays.asList(reason.substring("script failed: ".length()).split(", ")).contains(label)) {
+            fail(b.op + " / " + what + ": expected " + label + " to refuse it, but: " + reason);
+        }
+    }
+
     /** The attack must be refused by the ledger's own rules (phase 1), with a reason starting with {@code reason}. */
     void rejectByLedger(Built b, Ledger.Tx tx, String reason, String what) {
         Ledger.Result r = ledger.check(tx);
@@ -676,7 +695,11 @@ final class RegistryWorld {
                 Utxo x = holder(unit);
                 assertEquals(state, x.out().address(), "a list UTxO left the state address");
                 assertTrue(x.lovelace().compareTo(minAda) >= 0, "a list UTxO holds less than its deposit");
-                assertEquals(1, Ledger.entries(x.out().value()).size() - 1, "a list UTxO holds another policy");
+                var held = Ledger.entries(x.out().value());
+                assertEquals(java.util.Set.of("", hex(policy)), held.keySet(), "a list UTxO holds another policy");
+                assertEquals(Map.of(hex(unit), BigInteger.ONE), held.get(hex(policy)), "a list UTxO holds more than its unit");
+                assertTrue(x.out().datum() instanceof OutputDatum.OutputDatumInline, "a list UTxO without an inline datum");
+                assertTrue(x.out().referenceScript().isEmpty(), "a list UTxO with a reference script");
                 PlutusData.ConstrData d = x.datum();
                 assertTrue(Arrays.equals(inst, bytesAt(d, 0)), "a node of another instance in the walk");
                 int tag = d.constructorTag().intValueExact();

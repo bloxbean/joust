@@ -44,41 +44,74 @@ class ListIntegrityTest {
     static final int MUTANTS = Integer.getInteger("joust.i47.mutants", 4);
 
     /**
-     * Why an accepted mutant differs from its honest transaction in a way the ADR does not allow, or null. Allowed
-     * (D4b, D10, I3 amended): the relinked anchor holding more lovelace; the retired node's top-up changed while it
-     * keeps at least minAda; extra signers; and the change output, which balances them.
+     * Why an accepted mutant left a list UTxO in a state the ADR does not allow, or null. After the mutant, each 0x4B
+     * unit's UTxO must equal either the UTxO the honest transaction would leave, up to the allowed lovelace changes (a
+     * relinked anchor's top-up, D4b; a retired node's top-up at or above minAda, D10), or the UTxO before (a mutant that
+     * does not touch it). Fees, signers, payouts to keys and token-less outputs are the builder's business; I47 itself is
+     * checked by checkLists against the honest operation's effect.
      */
-    String disallowed(RegistryWorld.Built b, Ledger.Tx t) {
-        Ledger.Tx h = b.tx;
-        if (!t.inputs.equals(h.inputs) || !t.referenceInputs.equals(h.referenceInputs)) return "other inputs";
-        if (!t.mint.equals(h.mint)) return "another mint";
-        if (!Map.copyOf(t.redeemers).equals(Map.copyOf(h.redeemers))) return "other redeemers";
-        if (!java.util.Objects.equals(t.lower, h.lower) || !java.util.Objects.equals(t.upper, h.upper)) return "other bounds";
-        var honestSigners = h.signers.stream().map(RegistryWorld::hex).toList();
-        var signers = t.signers.stream().map(RegistryWorld::hex).toList();
-        if (!signers.containsAll(honestSigners)) return "a signer removed";
-        if (t.outputs.size() != h.outputs.size()) return "other outputs";
+    String disallowed(RegistryWorld.Built b, Map<TxOutRef, TxOut> pre) {
+        var before = units(pre);
+        var honest = new TreeMap<>(before);
+        for (TxOutRef in : b.tx.inputs) {
+            var names = Ledger.entries(pre.get(in).value()).get(hex(w.policy));
+            if (names != null) names.keySet().forEach(honest::remove);
+        }
+        for (int i = 0; i < b.tx.outputs.size(); i++) {
+            var names = Ledger.entries(b.tx.outputs.get(i).value()).get(hex(w.policy));
+            if (names != null) for (String n : names.keySet()) honest.put(n, new Placed(i, b.tx.outputs.get(i)));
+        }
+        var after = units(w.ledger.utxos());
+        var all = new java.util.TreeSet<>(after.keySet());
+        all.addAll(honest.keySet());
         boolean retiring = b.op.equals("retire") || b.op.equals("leave");
-        for (int i = 0; i < h.outputs.size(); i++) {
-            if (i == b.change) continue;
-            TxOut o = t.outputs.get(i);
-            TxOut x = h.outputs.get(i);
-            if (!o.address().equals(x.address()) || !o.datum().equals(x.datum()) || !o.referenceScript().equals(x.referenceScript())) {
-                return "output " + i + " changed beyond its lovelace";
+        for (String u : all) {
+            Placed m = after.get(u);
+            Placed hx = honest.get(u);
+            Placed x = before.get(u);
+            if (m != null && x != null && same(m.out(), x.out())) continue;   // untouched
+            if (m == null || hx == null) return "unit " + u.substring(0, 10) + " " + (m == null ? "gone" : "unexpected");
+            TxOut o = m.out();
+            TxOut e = hx.out();
+            if (!o.address().equals(e.address()) || !o.datum().equals(e.datum()) || !o.referenceScript().equals(e.referenceScript())) {
+                return "unit " + u.substring(0, 10) + "'s UTxO differs beyond its lovelace";
             }
             var oe = new TreeMap<>(Ledger.entries(o.value()));
-            var xe = new TreeMap<>(Ledger.entries(x.value()));
+            var ee = new TreeMap<>(Ledger.entries(e.value()));
             BigInteger ol = o.value().lovelaceOf();
-            BigInteger xl = x.value().lovelaceOf();
+            BigInteger el = e.value().lovelaceOf();
             oe.remove("");
-            xe.remove("");
-            if (!oe.equals(xe)) return "output " + i + "'s tokens changed";
-            if (ol.equals(xl)) continue;
-            if (i == b.anchorOut && ol.compareTo(xl) > 0) continue;
-            if (retiring && i == b.nodeOut && ol.compareTo(w.minAda) >= 0) continue;
-            return "output " + i + "'s lovelace changed (" + xl + " -> " + ol + ")";
+            ee.remove("");
+            if (!oe.equals(ee)) return "unit " + u.substring(0, 10) + "'s UTxO holds other tokens";
+            if (ol.equals(el)) continue;
+            if (hx.index() == b.anchorOut && ol.compareTo(el) > 0) continue;
+            if (retiring && hx.index() == b.nodeOut && ol.compareTo(w.minAda) >= 0) continue;
+            return "unit " + u.substring(0, 10) + "'s lovelace changed (" + el + " -> " + ol + ")";
         }
         return null;
+    }
+
+    /** A UTxO holding a unit, and (for an honest output) its index. */
+    record Placed(int index, TxOut out) {}
+
+    Map<String, Placed> units(Map<TxOutRef, TxOut> utxos) {
+        var out = new TreeMap<String, Placed>();
+        for (TxOut o : utxos.values()) {
+            var names = Ledger.entries(o.value()).get(hex(w.policy));
+            if (names != null) for (String n : names.keySet()) out.put(n, new Placed(-1, o));
+        }
+        return out;
+    }
+
+    static boolean sameUnits(Map<String, Placed> a, Map<String, Placed> b) {
+        if (!a.keySet().equals(b.keySet())) return false;
+        for (String u : a.keySet()) if (!same(a.get(u).out(), b.get(u).out())) return false;
+        return true;
+    }
+
+    static boolean same(TxOut a, TxOut b) {
+        return a.address().equals(b.address()) && a.datum().equals(b.datum()) && a.referenceScript().equals(b.referenceScript())
+                && Ledger.entries(a.value()).equals(Ledger.entries(b.value()));
     }
     static final long SEED = Long.getLong("joust.i47.seed", 47L);
 
@@ -102,6 +135,10 @@ class ListIntegrityTest {
         instances.add(w.createInstance());
         w.checkLists();
         for (int step = 0; step < STEPS; step++) {
+            if (rnd.nextDouble() < 0.06) {
+                duplicateInsert();
+                continue;
+            }
             RegistryWorld.Built b;
             try {
                 b = drawOperation();
@@ -117,12 +154,16 @@ class ListIntegrityTest {
                 Ledger.Tx t = mutant(b, mutation);
                 if (t == null || mutation.isEmpty() || fingerprint(t).equals(fingerprint(b.tx))) continue;   // a no-op
                 count("mutants tried");
+                var pre = new java.util.LinkedHashMap<>(w.ledger.utxos());
                 Ledger.Result r = w.ledger.submit(t);
                 if (r.accepted()) {
                     count("mutants accepted: " + String.join(" + ", mutation));
-                    String why = disallowed(b, t);
+                    String why = disallowed(b, pre);
                     if (why != null) fail("step " + step + ": a mutant of " + b.op + " was accepted with " + mutation + ": " + why);
-                    b.effect.run();
+                    // A mutant that left every list UTxO as it was (it no longer touches the lists) is a no-op on them;
+                    // any other accepted mutant must have the honest operation's effect.
+                    if (sameUnits(units(pre), units(w.ledger.utxos()))) count("accepted mutants that touch no list");
+                    else b.effect.run();
                     try {
                         w.checkLists();
                     } catch (AssertionError e) {
@@ -227,6 +268,24 @@ class ListIntegrityTest {
         return w.recover(inst, name, party(), gs);
     }
 
+    /**
+     * An honest-looking duplicate: an insert of a key already in a list (live or retired), with the right token and the
+     * model's predecessor as anchor. It must be refused by the policy.
+     */
+    void duplicateInsert() {
+        byte[] inst = instances.get(rnd.nextInt(instances.size()));
+        boolean ballot = rnd.nextBoolean();
+        var l = new RegistryWorld.ListId(hex(inst), ballot ? Kind.BALLOT : Kind.ENTRY);
+        var keys = new ArrayList<>(w.model.get(l).keySet());
+        if (keys.isEmpty()) return;
+        byte[] key = RegistryWorld.hex(keys.get(rnd.nextInt(keys.size())));
+        RegistryWorld.Built b = ballot ? w.cast(inst, key, BigInteger.ONE) : w.claim(inst, party(), key, ada(2));
+        Ledger.Result r = w.ledger.check(b.tx);
+        if (r.accepted()) fail("a duplicate insert of " + hex(key) + " into " + l + " was accepted");
+        if (!r.reason().contains(w.mintLabel())) fail("a duplicate insert was not refused by the policy: " + r.reason());
+        count("duplicate inserts refused by the policy");
+    }
+
     // ------------------------------------------------------------------ mutations
 
     /** 1 or 2 random mutations of {@code b}'s transaction, rebalanced; null if it cannot be balanced. */
@@ -255,8 +314,8 @@ class ListIntegrityTest {
     /** One mutation; returns the change output's index afterwards. */
     int mutateOnce(RegistryWorld.Built b, Ledger.Tx t, int change, List<String> names) {
         var outs = stateOutputs(t, change);
-        int kind = rnd.nextInt(13);
-        if (outs.isEmpty() && kind < 6) kind = 6 + rnd.nextInt(7);
+        int kind = rnd.nextInt(16);
+        if (outs.isEmpty() && kind < 6) kind = 6 + rnd.nextInt(10);
         switch (kind) {
             case 0 -> {
                 int i = pick(outs);
@@ -348,6 +407,27 @@ class ListIntegrityTest {
                     names.add("an extra signer");
                     t.signers.add(party());
                 }
+            }
+            case 13 -> {
+                // An input dropped, with its redeemer (never the payer's wallet input, the last one).
+                if (t.inputs.size() < 2) break;
+                TxOutRef x = t.inputs.get(rnd.nextInt(t.inputs.size() - 1));
+                names.add("an input dropped");
+                t.inputs.remove(x);
+                t.redeemers.remove(RegistryWorld.spend(x));
+            }
+            case 14 -> {
+                if (outs.isEmpty()) break;
+                int i = pick(outs);
+                names.add(rnd.nextBoolean() ? "a state output duplicated" : "a state output added");
+                TxOut o = t.outputs.get(i);
+                t.outputs.add(0, names.getLast().equals("a state output duplicated") ? o
+                        : withValue(o, Ledger.value(w.minAda, w.policy, RegistryWorld.keyIdOfType(pick(instances), "Entry", randomName()))));
+                change++;
+            }
+            case 15 -> {
+                names.add("the fee changed");
+                t.fee = t.fee.add(pick(List.of(BigInteger.ONE, BigInteger.ONE.negate(), ada(1))));
             }
             default -> {
                 // Another anchor: a random state UTxO in place of the structural operation's anchor.

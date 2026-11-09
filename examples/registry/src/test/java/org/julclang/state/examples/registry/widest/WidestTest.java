@@ -18,6 +18,7 @@ import java.math.BigInteger;
 import java.util.HexFormat;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -139,6 +140,124 @@ class WidestTest {
         assertTrue(r.reason().startsWith("script failed"), what + ": " + r.reason());
     }
 
+    String mintLabel() {
+        return "MINT " + HexFormat.of().formatHex(policy).substring(0, 8);
+    }
+
+    static String spendLabel(TxOutRef r) {
+        return "SPEND " + HexFormat.of().formatHex(r.txId().hash()).substring(0, 8) + "#" + r.index();
+    }
+
+    /** Refused by a script, the purposes that failed being exactly {@code labels}. */
+    void rejectedBy(Ledger.Tx t, String what, String... labels) {
+        var r = ledger.check(t);
+        assertFalse(r.accepted(), what + ": expected rejection");
+        assertEquals("script failed: " + String.join(", ", labels), r.reason(), what);
+    }
+
+    // ------------------------------------------------------------------ the Ctx-less insert, C > 0 (Ballot)
+
+    /**
+     * Inserts Bob's ballot after the Ballot head (key at component index 1, no Ctx: only linkUpper bounds the window),
+     * with the head last relinked at {@code headLinkedAt} and validity {@code [lower, upper)}.
+     */
+    Ledger.Tx castAfterHead(BigInteger headLinkedAt, BigInteger lower, BigInteger upper, BigInteger nodeLinkedAt) {
+        TxOutRef head = ledger.fund(at(value(minAda, keyIdOfType(inst, "Ballot", new byte[0])),
+                new WidestValidator.Head_Ballot(inst, new byte[0], headLinkedAt)));
+        Ledger.Tx t = tx(BOB);
+        t.window(lower, upper);
+        t.referenceInputs.add(state);
+        t.inputs.add(head);
+        t.redeemers.put(new ScriptPurpose.Spending(head), data(new WidestValidator.Link()));
+        t.outputs.add(at(value(minAda, keyIdOfType(inst, "Ballot", new byte[0])), new WidestValidator.Head_Ballot(inst, BOB, nodeLinkedAt)));
+        byte[] id = keyIdOfType(inst, "Ballot", BOB);
+        t.mint(policy, id, BigInteger.ONE);
+        t.redeemers.put(mint(), data(new WidestValidator.Insert_cast(inst, head, BOB, BigInteger.TWO)));
+        t.outputs.add(at(value(minAda, id), new WidestValidator.Keyed_Ballot(inst, new byte[0], nodeLinkedAt,
+                Widest.cast(new Widest.State(ANN, true), BOB, BigInteger.TWO))));
+        lastHead = head;
+        return balanced(t, BOB);
+    }
+
+    TxOutRef lastHead;
+
+    @Test
+    void aCtxLessInsertIsBoundByTheLinkChecksAlone() {
+        BigInteger w = BigInteger.valueOf(120_000);
+        accepted(castAfterHead(BigInteger.ZERO, T, T.add(w), T.add(w)), "the Ctx-less insert");
+        var unsigned = castAfterHead(BigInteger.ZERO, T, T.add(w), T.add(w));
+        unsigned.signers.clear();
+        rejectedBy(unsigned, "signedKey without the voter's signature", mintLabel());
+        var infiniteUpper = castAfterHead(BigInteger.ZERO, T, T.add(w), T.add(w));
+        infiniteUpper.upper = null;
+        rejectedBy(infiniteUpper, "an infinite upper bound", mintLabel());
+        var infiniteLower = castAfterHead(BigInteger.ZERO, T, T.add(w), T.add(w));
+        infiniteLower.lower = null;
+        rejectedBy(infiniteLower, "an infinite lower bound", mintLabel());
+        BigInteger longer = T.add(w).add(BigInteger.valueOf(1_000));
+        rejectedBy(castAfterHead(BigInteger.ZERO, T, longer, longer), "a window longer than W", mintLabel());
+        // The head was relinked 30 s before T: with C = 60 s, a relink starting at T is too early, one at T + 30 s is not.
+        BigInteger relinked = T.subtract(BigInteger.valueOf(30_000));
+        rejectedBy(castAfterHead(relinked, T, T.add(w), T.add(w)), "lower < A.linkedAt + C", mintLabel());
+        ledger.setNow(T.add(BigInteger.valueOf(30_000)));
+        BigInteger lo = T.add(BigInteger.valueOf(30_000));
+        accepted(castAfterHead(relinked, lo, lo.add(w), lo.add(w)), "lower == A.linkedAt + C");
+    }
+
+    @Test
+    void keyAtIndexOneActsAndRetires() {
+        BigInteger w = BigInteger.valueOf(120_000);
+        var r = ledger.submit(castAfterHead(BigInteger.ZERO, T, T.add(w), T.add(w)));
+        assertTrue(r.accepted(), r.toString());
+        TxOutRef node = new TxOutRef(r.txId(), BigInteger.ONE);
+        byte[] id = keyIdOfType(inst, "Ballot", BOB);
+        Ledger.Tx change = tx(BOB);
+        change.window(null, null);
+        change.inputs.add(node);
+        change.redeemers.put(new ScriptPurpose.Spending(node), data(new WidestValidator.Change(BigInteger.ONE)));
+        change.outputs.add(at(value(minAda, id), new WidestValidator.Keyed_Ballot(inst, new byte[0], T.add(w),
+                new Widest.Ballot(BigInteger.ONE, BOB))));
+        accepted(balanced(change.copy(), BOB), "a keyed action on a key at index 1");
+        Ledger.Tx moved = change.copy();
+        moved.outputs.set(0, at(value(minAda, id), new WidestValidator.Keyed_Ballot(inst, new byte[0], T.add(w),
+                new Widest.Ballot(BigInteger.ONE, ANN))));
+        rejectedBy(balanced(moved, BOB), "the key at index 1 changed", spendLabel(node));
+        Ledger.Tx leave = tx(BOB);
+        leave.inputs.add(node);
+        leave.redeemers.put(new ScriptPurpose.Spending(node), data(new WidestValidator.Leave(ctx(BOB, BigInteger.ZERO, BigInteger.ZERO))));
+        leave.outputs.add(at(value(minAda, id), new WidestValidator.Retired_Ballot(inst, new byte[0], T.add(w), BOB)));
+        accepted(balanced(leave, BOB), "a retire of a key at index 1");
+    }
+
+    // ------------------------------------------------------------------ C = 0 (Entry)
+
+    @Test
+    void noCooldown() {
+        // b was relinked "in the future" (its last upper bound is T + 100 s): with C = 0 only the window rule applies.
+        TxOutRef b = ledger.fund(at(value(minAda, keyIdOfType(inst, "Entry", new byte[]{0x70})),
+                new WidestValidator.Keyed_Entry(inst, new byte[0], T.add(BigInteger.valueOf(100_000)),
+                        new Widest.Entry(new byte[]{0x70}, ANN, BigInteger.ZERO))));
+        java.util.function.BiFunction<BigInteger, BigInteger, Ledger.Tx> insert = (lower, upper) -> {
+            byte[] c = {0x71};
+            Ctx cx = new Ctx(BOB, BigInteger.ZERO, BigInteger.ZERO, lower, upper);
+            Ledger.Tx t = tx(BOB);
+            t.window(lower, upper);
+            t.inputs.add(b);
+            t.redeemers.put(new ScriptPurpose.Spending(b), data(new WidestValidator.Link()));
+            TxOut bo = ledger.utxo(b);
+            t.outputs.add(at(bo.value(), new WidestValidator.Keyed_Entry(inst, c, upper, new Widest.Entry(new byte[]{0x70}, ANN,
+                    BigInteger.ZERO))));
+            byte[] cid = keyIdOfType(inst, "Entry", c);
+            t.mint(policy, cid, BigInteger.ONE);
+            t.outputs.add(at(value(minAda, cid), new WidestValidator.Keyed_Entry(inst, new byte[0], upper, Widest.claim(c, cx))));
+            t.redeemers.put(mint(), data(new WidestValidator.Insert_claim(inst, b, c, cx)));
+            return balanced(t, BOB);
+        };
+        BigInteger w = BigInteger.valueOf(120_000);
+        accepted(insert.apply(T, T.add(w)), "a relink before the previous upper bound, with C = 0");
+        rejectedBy(insert.apply(T, T.add(w).add(BigInteger.valueOf(1_000))), "a window longer than W, with C = 0", mintLabel());
+    }
+
     /** Spends {@code ref} with {@code redeemer}, continuing it with {@code next} (or unchanged). */
     Ledger.Tx spend(TxOutRef ref, Object redeemer, TxOut next, BigInteger received) {
         Ledger.Tx t = tx(ANN);
@@ -171,25 +290,27 @@ class WidestTest {
         rejectedByAScript(spend(vault, new WidestValidator.Retire(v), null, BigInteger.ZERO), "a plain object retired");
     }
 
-    /** OpenVault: a plain creation from a wallet seed, under the instance as a reference input. */
-    Ledger.Tx openVault(Ledger.Tx t, TxOutRef seed) {
+    /** OpenVault by {@code caller} (who must sign): a plain creation from a wallet seed, the instance by reference. */
+    Ledger.Tx openVault(Ledger.Tx t, TxOutRef seed, byte[] caller) {
         byte[] id = HexFormat.of().parseHex(OwnedObject.objectIdOf(HexFormat.of().formatHex(seed.txId().hash()),
                 seed.index().intValueExact()));
-        Ctx c = ctx(ANN, BigInteger.ZERO, BigInteger.ZERO);
+        Ctx c = ctx(caller, BigInteger.ZERO, BigInteger.ZERO);
         t.referenceInputs.add(state);
         t.mint(policy, id, BigInteger.ONE);
         t.redeemers.put(mint(), data(new WidestValidator.OpenVault(seed, inst, c)));
         t.outputs.add(at(value(minAda, id), new WidestValidator.Holding_Vault(inst, Widest.openVault(new Widest.State(ANN, true), c))));
+        if (t.signers.stream().noneMatch(x -> java.util.Arrays.equals(x, caller))) t.signers.add(caller);
+        if (t.witnesses.stream().noneMatch(x -> java.util.Arrays.equals(x, caller))) t.witnesses.add(caller);
         return t;
     }
 
     @Test
     void linkUnderAPlainCreation() {
         Ledger.Tx t = tx(ANN);
-        openVault(t, t.inputs.get(0));
+        openVault(t, t.inputs.get(0), ANN);
         accepted(balanced(t, ANN), "OpenVault alone");
         Ledger.Tx withLink = tx(ANN);
-        openVault(withLink, withLink.inputs.get(0));
+        openVault(withLink, withLink.inputs.get(0), ANN);
         withLink.inputs.add(entry);
         withLink.redeemers.put(new ScriptPurpose.Spending(entry), data(new WidestValidator.Link()));
         withLink.outputs.add(ledger.utxo(entry));
@@ -217,8 +338,12 @@ class WidestTest {
         t.outputs.add(at(value(minAda, cid), new WidestValidator.Keyed_Entry(inst, new byte[0], upper, Widest.claim(c, cx))));
         t.redeemers.put(mint(), data(new WidestValidator.Insert_claim(inst, entry, c, cx)));
         accepted(balanced(t.copy(), BOB), "the insert alone");
+        // F44: Bob's vault creation, validated on its own before it is combined with Bob's insert.
+        Ledger.Tx vaultOnly = tx(BOB);
+        openVault(vaultOnly, vaultOnly.inputs.get(0), BOB);
+        accepted(balanced(vaultOnly, BOB), "Bob's vault alone");
         Ledger.Tx both = t.copy();
-        openVault(both, both.inputs.get(0));
+        openVault(both, both.inputs.get(0), BOB);
         Ledger.Tx underInsert = both.copy();
         underInsert.redeemers.put(mint(), data(new WidestValidator.Insert_claim(inst, entry, c, cx)));
         rejectedByAScript(balanced(underInsert, BOB), "an insert and a vault under the insert's redeemer");
@@ -243,7 +368,7 @@ class WidestTest {
                 Optional.empty()));
         accepted(balanced(rm.copy(), ANN), "the remove alone");
         Ledger.Tx withVault = rm.copy();
-        openVault(withVault, withVault.inputs.get(0));
+        openVault(withVault, withVault.inputs.get(0), ANN);
         Ledger.Tx underRemove = withVault.copy();
         underRemove.redeemers.put(mint(), data(new WidestValidator.Remove_Entry(entryHead, entry)));
         rejectedByAScript(balanced(underRemove, ANN), "a remove and a vault under Remove_Entry");

@@ -32,15 +32,20 @@ public class Widest {
 
     public record State(byte[] admin, boolean open) {}
 
-    @Owned(key = "voter", maxKeyBytes = 28, signedKey = true)
-    public record Ballot(byte[] voter, BigInteger choice) {}
-
-    @Owned(key = "name", maxKeyBytes = 64)
-    public record Entry(byte[] name, byte[] owner, BigInteger stake) {}
-
-    /** A plain owned type (a MerkleMap here would not fit with keyed types; see above). */
+    /**
+     * A plain owned type, declared first so the keyed types' tags start at 1 (a MerkleMap here would not fit with keyed
+     * types; see above).
+     */
     @Owned
     public record Vault(byte[] owner, BigInteger count) {}
+
+    /** The key at component index 1, inserted without a Ctx (so only the link checks bound its window). */
+    @Owned(key = "voter", maxKeyBytes = 28, signedKey = true)
+    public record Ballot(BigInteger choice, byte[] voter) {}
+
+    /** No link cooldown (C = 0): only the window rule applies to its relinks. */
+    @Owned(key = "name", maxKeyBytes = 64, linkCooldownMs = 0)
+    public record Entry(byte[] name, byte[] owner, BigInteger stake) {}
 
     @Init
     public static State init(Ctx ctx) {
@@ -54,15 +59,15 @@ public class Widest {
     }
 
     @OwnedInit
-    public static Ballot cast(@Shared State s, byte[] voter, BigInteger choice, Ctx ctx) {
+    public static Ballot cast(@Shared State s, byte[] voter, BigInteger choice) {
         Require.that(s.open(), "voting is closed");
-        return new Ballot(voter, choice);
+        return new Ballot(choice, voter);
     }
 
     @OwnedAction
     @SignedBy("voter")
     public static Ballot change(Ballot b, BigInteger choice) {
-        return new Ballot(b.voter(), choice);
+        return new Ballot(choice, b.voter());
     }
 
     @OwnedDestroy

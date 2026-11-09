@@ -82,34 +82,34 @@ class RegistryAttacksTest {
             control(w.claim(inst, BOB, C, ada(2)));
             w.anchoredAt(inst, Kind.ENTRY, D);
             var b = w.claim(inst, BOB, C, ada(2));
-            w.reject(b, b.tx, "key(A) >= key (c after d)");
+            w.rejectBy(b, b.tx, "key(A) >= key (c after d)", w.mintLabel());
             w.anchoredAt(inst, Kind.ENTRY, B);
             b = w.claim(inst, BOB, B, ada(2));
-            w.reject(b, b.tx, "key(A) == key (b after b)");
+            w.rejectBy(b, b.tx, "key(A) == key (b after b)", w.mintLabel());
             w.anchoredAt(inst, Kind.ENTRY, B);
             b = w.claim(inst, BOB, E, ada(2));
-            w.reject(b, b.tx, "A.next <= key (e after b, whose next is d)");
+            w.rejectBy(b, b.tx, "A.next <= key (e after b, whose next is d)", w.mintLabel());
             b = w.claim(inst, BOB, D, ada(2));
-            w.reject(b, b.tx, "A.next == key (d again: a duplicate)");
+            w.rejectBy(b, b.tx, "A.next == key (d again: a duplicate)", w.mintLabel());
             b = w.claim(inst, BOB, EMPTY, ada(2));
-            w.reject(b, b.tx, "the empty key");
+            w.rejectBy(b, b.tx, "the empty key", w.mintLabel());
             b = w.claim(inst, BOB, StateHarness.fill(65, 0x70), ada(2));
-            w.reject(b, b.tx, "a key longer than maxKeyBytes (65 > 64)");
+            w.rejectBy(b, b.tx, "a key longer than maxKeyBytes (65 > 64)", w.mintLabel());
             b = w.cast(inst, ALICE, BigInteger.TWO);
-            w.reject(b, b.tx, "a second ballot of the same voter");
+            w.rejectBy(b, b.tx, "a second ballot of the same voter", w.mintLabel());
         }
 
         @Test
         void aRetiredKeyInsertedAgain() {
             w.accept(w.retire(inst, Kind.ENTRY, B, BigInteger.ZERO));
             var b = w.claim(inst, BOB, B, ada(2));
-            w.reject(b, b.tx, "b again, after the head (whose next is the retired b)");
+            w.rejectBy(b, b.tx, "b again, after the head (whose next is the retired b)", w.mintLabel());
             w.anchoredAt(inst, Kind.ENTRY, B);
             b = w.claim(inst, BOB, B, ada(2));
-            w.reject(b, b.tx, "b again, after the retired b itself");
+            w.rejectBy(b, b.tx, "b again, after the retired b itself", w.mintLabel());
             w.accept(w.retire(inst, Kind.BALLOT, ALICE, BigInteger.ZERO));
             b = w.cast(inst, ALICE, BigInteger.TWO);
-            w.reject(b, b.tx, "a ballot again after leaving: once ever");
+            w.rejectBy(b, b.tx, "a ballot again after leaving: once ever", w.mintLabel());
         }
 
         @Test
@@ -118,13 +118,13 @@ class RegistryAttacksTest {
             w.accept(w.claim(other, BOB, A, ada(2)));
             w.anchoredAt(other, Kind.ENTRY, A);
             var b = w.claim(inst, BOB, C, ada(2));
-            w.reject(b, b.tx, "an anchor of another instance");
+            w.rejectBy(b, b.tx, "an anchor of another instance", w.mintLabel());
             w.anchoredAt(inst, Kind.BALLOT, EMPTY);
             b = w.claim(inst, BOB, C, ada(2));
-            w.reject(b, b.tx, "Insert_claim (an Entry) with a Ballot anchor");
+            w.rejectBy(b, b.tx, "Insert_claim (an Entry) with a Ballot anchor", w.mintLabel());
             w.anchoredAt(inst, Kind.ENTRY, EMPTY);
             b = w.cast(inst, BOB, BigInteger.ONE);
-            w.reject(b, b.tx, "Insert_cast (a Ballot) with an Entry anchor");
+            w.rejectBy(b, b.tx, "Insert_cast (a Ballot) with an Entry anchor", w.mintLabel());
 
             // A redeemer instance other than A.instance: the node and its token under the other instance.
             var h = w.claim(inst, BOB, C, ada(2));
@@ -137,7 +137,7 @@ class RegistryAttacksTest {
                 mapOutput(x, h.nodeOut, o -> withDatum(Ledger.canonical(new TxOut(o.address(), Ledger.value(o.value().lovelaceOf(),
                         w.policy, fake), o.datum(), o.referenceScript())), field(datum(o), 0, bytes(other))));
             });
-            w.reject(h, t, "the redeemer's instance is not the anchor's");
+            w.rejectBy(h, t, "the redeemer's instance is not the anchor's", w.mintLabel());
         }
 
         @Test
@@ -147,7 +147,7 @@ class RegistryAttacksTest {
                     BigInteger.ZERO)));
             w.anchoredAt(forged);
             var b = w.claim(inst, BOB, A, ada(2));
-            w.reject(b, b.tx, "a forged anchor without a key token");
+            w.rejectBy(b, b.tx, "a forged anchor without a key token", w.mintLabel());
             // A node whose datum and token disagree (a fabricated token: the datum says b, the token is zz's).
             var entry = new Registry.Entry(B, ALICE, BigInteger.ZERO, BigInteger.ONE, JulcList.<byte[]>empty().prepend(ALICE),
                     BigInteger.ONE);
@@ -155,7 +155,7 @@ class RegistryAttacksTest {
                     RegistryWorld.keyed(Kind.ENTRY, inst, D, BigInteger.ZERO, entry)));
             w.anchoredAt(liar);
             b = w.claim(inst, BOB, C, ada(2));
-            w.reject(b, b.tx, "an anchor whose datum and token disagree");
+            w.rejectBy(b, b.tx, "an anchor whose datum and token disagree", w.mintLabel());
         }
 
         @Test
@@ -167,7 +167,7 @@ class RegistryAttacksTest {
                 x.redeemers.put(RegistryWorld.spend(b.anchor), data(new RegistryValidator.Upgrade(BigInteger.ONE, ctx)));
                 x.signers.add(ALICE);
             });
-            w.reject(b, t, "the anchor spent with its owner's action instead of Link");
+            w.rejectBy(b, t, "the anchor spent with its owner's action instead of Link", w.mintLabel());
         }
 
         @Test
@@ -176,23 +176,23 @@ class RegistryAttacksTest {
             control(b);
             int a = b.anchorOut;
             BigInteger upper = b.tx.upper;
-            w.reject(b, w.mutate(b, x -> mapOutput(x, a, o -> plusLovelace(o, BigInteger.ONE.negate()))), "lovelace skimmed");
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, a, o -> plusLovelace(o, BigInteger.ONE.negate()))), "lovelace skimmed", w.mintLabel());
             byte[] foreign = StateHarness.fill(28, 0xF0);
             TxOutRef src = w.ledger.fund(new TxOut(StateHarness.pkhAddress(BOB), Ledger.value(ada(2), foreign, new byte[]{1}),
                     new OutputDatum.NoOutputDatum(), Optional.empty()));
-            w.reject(b, w.mutate(b, x -> {
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.inputs.add(src);
                 mapOutput(x, a, o -> plusToken(o, foreign, new byte[]{1}, BigInteger.ONE));
-            }), "a token added to the relinked anchor");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, a, d -> field(d, 1, bytes(E)))), "another next");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, a, d -> field(d, 2, integer(upper.subtract(BigInteger.valueOf(1000)))))),
-                    "linkedAt other than the upper bound");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, a, d -> nested(d, 3, 2, integer(ada(6))))), "another field changed");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, a, d -> tag(d, 5))), "the constructor changed (retired)");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, a, o -> withAddress(o, StateHarness.pkhAddress(BOB)))), "moved to a key address");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, a, Tamper::withStake)), "moved to the other state-address variant");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, a, Tamper::withDatumHash)), "a datum hash");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, a, Tamper::withRefScript)), "a reference script");
+            }), "a token added to the relinked anchor", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, a, d -> field(d, 1, bytes(E)))), "another next", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, a, d -> field(d, 2, integer(upper.subtract(BigInteger.valueOf(1000)))))),
+                    "linkedAt other than the upper bound", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, a, d -> nested(d, 3, 2, integer(ada(6))))), "another field changed", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, a, d -> tag(d, 5))), "the constructor changed (retired)", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, a, o -> withAddress(o, StateHarness.pkhAddress(BOB)))), "moved to a key address", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, a, Tamper::withStake)), "moved to the other state-address variant", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, a, Tamper::withDatumHash)), "a datum hash", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, a, Tamper::withRefScript)), "a reference script", w.mintLabel());
             var ok = w.mutate(b, x -> mapOutput(x, a, o -> plusLovelace(o, ada(1))));
             assertTrue(w.ledger.check(ok).accepted(), "a relink may add lovelace (D4b)");
         }
@@ -202,19 +202,19 @@ class RegistryAttacksTest {
             var b = w.claim(inst, BOB, C, ada(2));
             control(b);
             int n = b.nodeOut;
-            w.reject(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 1, bytes(E)))), "the wrong next");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, n, d -> nested(d, 3, 0, bytes(new byte[]{0x63, 0x63})))), "the wrong key field");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, n, d -> nested(d, 3, 2, integer(ada(3))))), "the wrong value (stake)");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 2, integer(b.tx.lower)))), "linkedAt other than the upper bound");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, n, o -> plusLovelace(o, BigInteger.ONE))), "one lovelace more than minAda + received");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, n, Tamper::withStake)), "the node at the other address variant");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, n, Tamper::withRefScript)), "the node with a reference script");
-            w.reject(b, w.mutate(b, x -> x.mint(w.policy, keyId(inst, Kind.ENTRY, C), BigInteger.ONE)), "two tokens minted");
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 1, bytes(E)))), "the wrong next", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, n, d -> nested(d, 3, 0, bytes(new byte[]{0x63, 0x63})))), "the wrong key field", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, n, d -> nested(d, 3, 2, integer(ada(3))))), "the wrong value (stake)", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 2, integer(b.tx.lower)))), "linkedAt other than the upper bound", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, n, o -> plusLovelace(o, BigInteger.ONE))), "one lovelace more than minAda + received", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, n, Tamper::withStake)), "the node at the other address variant", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, n, Tamper::withRefScript)), "the node with a reference script", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> x.mint(w.policy, keyId(inst, Kind.ENTRY, C), BigInteger.ONE)), "two tokens minted", w.mintLabel());
             JulcList<byte[]> bob = JulcList.<byte[]>empty().prepend(BOB);
             var bad = w.claim(inst, BOB, C, ada(2), BigInteger.valueOf(7), bob, BigInteger.ONE);
-            w.reject(bad, bad.tx, "a record violating the tier @Invariant");
+            w.rejectBy(bad, bad.tx, "a record violating the tier @Invariant", w.mintLabel());
             bad = w.claim(inst, BOB, C, ada(2), BigInteger.ONE, bob, BigInteger.TWO);
-            w.reject(bad, bad.tx, "an unreachable @Quorum shape (2 of 1 guardian)");
+            w.rejectBy(bad, bad.tx, "an unreachable @Quorum shape (2 of 1 guardian)", w.mintLabel());
         }
 
         @Test
@@ -222,16 +222,16 @@ class RegistryAttacksTest {
             w.accept(w.claim(inst, BOB, C, ada(2)));   // relinks b at the current upper bound
             w.waitForCooldown = false;
             var b = w.claim(inst, BOB, BB, ada(2));
-            w.reject(b, b.tx, "lower < A.linkedAt + C");
+            w.rejectBy(b, b.tx, "lower < A.linkedAt + C", w.mintLabel());
             w.waitForCooldown = true;
             w.windowLength = RegistryWorld.W + 1_000;
             b = w.claim(inst, BOB, BB, ada(2));
-            w.reject(b, b.tx, "a window longer than W");
+            w.rejectBy(b, b.tx, "a window longer than W", w.mintLabel());
             w.windowLength = RegistryWorld.W;
             b = w.claim(inst, BOB, BB, ada(2));
             control(b);
-            w.reject(b, w.mutate(b, x -> x.upper = null), "an infinite upper bound");
-            w.reject(b, w.mutate(b, x -> x.lower = null), "an infinite lower bound");
+            w.rejectBy(b, w.mutate(b, x -> x.upper = null), "an infinite upper bound", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> x.lower = null), "an infinite lower bound", w.mintLabel());
         }
 
         @Test
@@ -250,7 +250,7 @@ class RegistryAttacksTest {
         @Test
         void signedKeyWithoutTheSignature() {
             var b = w.castBy(inst, CAROL, BOB, BigInteger.ONE);
-            w.reject(b, b.tx, "a ballot for Bob, cast by Carol without Bob's signature");
+            w.rejectBy(b, b.tx, "a ballot for Bob, cast by Carol without Bob's signature", w.mintLabel());
             var signed = w.mutate(b, x -> x.signers.add(BOB));
             assertTrue(w.ledger.check(signed).accepted(), "with Bob's signature too, it is accepted");
         }
@@ -260,10 +260,10 @@ class RegistryAttacksTest {
             byte[] other = w.createInstance();
             var b = w.cast(inst, BOB, BigInteger.ONE);
             control(b);
-            w.reject(b, w.mutate(b, x -> {
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.referenceInputs.clear();
                 x.referenceInputs.add(w.instanceUtxo(other).ref());
-            }), "@Shared read from another instance");
+            }), "@Shared read from another instance", w.mintLabel());
         }
     }
 
@@ -282,11 +282,11 @@ class RegistryAttacksTest {
             control(w.release(inst, D));
             w.anchoredAt(inst, Kind.ENTRY, B);
             var b = w.release(inst, F);
-            w.reject(b, b.tx, "P.next != N.key (f after b)");
+            w.rejectBy(b, b.tx, "P.next != N.key (f after b)", w.mintLabel());
             var rm = w.release(inst, D);
             b = rm;
             var self = w.mutate(rm, x -> x.redeemers.put(w.mint(), data(new RegistryValidator.Remove_Entry(rm.node, rm.node))));
-            w.reject(rm, self, "anchor == removed");
+            w.rejectBy(rm, self, "anchor == removed", w.mintLabel());
             // N a head: the Entry head spent as the removed node, its token burned.
             var head = w.node(inst, Kind.ENTRY, EMPTY);
             var h = w.mutate(rm, x -> {
@@ -297,16 +297,16 @@ class RegistryAttacksTest {
                 x.mint(w.policy, keyId(inst, Kind.ENTRY, EMPTY), BigInteger.ONE.negate());
                 x.redeemers.put(w.mint(), data(new RegistryValidator.Remove_Entry(rm.anchor, head.ref())));
             });
-            w.reject(rm, h, "N is a head");
-            w.reject(rm, w.mutate(rm, x -> mapRedeemer(x, RegistryWorld.spend(rm.anchor), r -> data(new RegistryValidator.Upgrade(
-                    BigInteger.ONE, new Ctx(ALICE, BigInteger.ZERO, ada(5), rm.tx.lower, rm.tx.upper))))), "P spent with an owned action");
+            w.rejectBy(rm, h, "N is a head", w.mintLabel());
+            w.rejectBy(rm, w.mutate(rm, x -> mapRedeemer(x, RegistryWorld.spend(rm.anchor), r -> data(new RegistryValidator.Upgrade(
+                    BigInteger.ONE, new Ctx(ALICE, BigInteger.ZERO, ada(5), rm.tx.lower, rm.tx.upper))))), "P spent with an owned action", w.mintLabel());
         }
 
         @Test
         void aRetiredNodeIsNeverRemoved() {
             w.accept(w.retire(inst, Kind.ENTRY, D, BigInteger.ZERO));
             var b = w.release(inst, D);
-            w.reject(b, b.tx, "N is a retired node");
+            w.rejectBy(b, b.tx, "N is a retired node", w.mintLabel());
         }
 
         @Test
@@ -316,7 +316,7 @@ class RegistryAttacksTest {
             w.accept(w.claim(other, BOB, D, ada(2)));
             w.anchoredAt(other, Kind.ENTRY, B);
             var b = w.release(inst, D);
-            w.reject(b, b.tx, "P of another instance (its next is d too)");
+            w.rejectBy(b, b.tx, "P of another instance (its next is d too)", w.mintLabel());
             // P a Ballot whose next equals an Entry's key: Bob's and Carol's ballots, and an entry named Carol's key.
             byte[] lo = BOB.clone();
             byte[] hi = CAROL.clone();
@@ -325,25 +325,25 @@ class RegistryAttacksTest {
             w.accept(w.claim(inst, CAROL, hi, ada(2)));
             w.anchoredAt(inst, Kind.BALLOT, lo);
             b = w.release(inst, hi);
-            w.reject(b, b.tx, "P a Ballot whose next is the Entry's key");
+            w.rejectBy(b, b.tx, "P a Ballot whose next is the Entry's key", w.mintLabel());
         }
 
         @Test
         void burning() {
             var b = w.release(inst, D);
             control(b);
-            w.reject(b, w.mutate(b, x -> x.redeemers.put(w.mint(), data(new RegistryValidator.BurnInstance()))),
-                    "the burn through BurnInstance (P still spent with Link)");
-            w.reject(b, w.mutate(b, b.change - 1, x -> {
+            w.rejectBy(b, w.mutate(b, x -> x.redeemers.put(w.mint(), data(new RegistryValidator.BurnInstance()))),
+                    "the burn through BurnInstance (P still spent with Link)", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, b.change - 1, x -> {
                 x.inputs.remove(b.anchor);
                 x.redeemers.remove(RegistryWorld.spend(b.anchor));
                 x.outputs.remove(b.anchorOut);
                 x.redeemers.put(w.mint(), data(new RegistryValidator.BurnInstance()));
-            }), "N destroyed through BurnInstance, without P");
-            w.reject(b, w.mutate(b, x -> {
+            }), "N destroyed through BurnInstance, without P", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.mint.clear();
                 x.redeemers.remove(w.mint());
-            }), "N's token kept (sent to the change), no burn");
+            }), "N's token kept (sent to the change), no burn: no MINT runs, N's arm refuses", RegistryWorld.spendLabel(b.node));
         }
 
         @Test
@@ -352,11 +352,11 @@ class RegistryAttacksTest {
             control(b);
             int a = b.anchorOut;
             var p = w.node(inst, Kind.ENTRY, B);
-            w.reject(b, w.mutate(b, x -> mapOutput(x, a, o -> withDatum(o, p.datum()))), "P not relinked");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, a, d -> field(d, 1, bytes(D)))), "P relinked to N itself");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, a, d -> field(d, 1, bytes(E)))), "P relinked to another key");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, a, o -> plusLovelace(o, BigInteger.ONE.negate()))), "P skimmed");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, a, Tamper::withRefScript)), "P with a reference script");
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, a, o -> withDatum(o, p.datum()))), "P not relinked", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, a, d -> field(d, 1, bytes(D)))), "P relinked to N itself", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, a, d -> field(d, 1, bytes(E)))), "P relinked to another key", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, a, o -> plusLovelace(o, BigInteger.ONE.negate()))), "P skimmed", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, a, Tamper::withRefScript)), "P with a reference script", w.mintLabel());
         }
 
         @Test
@@ -376,8 +376,8 @@ class RegistryAttacksTest {
             var r = w.ledger.check(t);
             assertFalse(r.accepted());
             assertTrue(r.reason().startsWith("missing redeemer"), r.reason());
-            w.reject(b, w.mutate(b, x -> x.redeemers.put(RegistryWorld.spend(b.node), data(new RegistryValidator.Link()))),
-                    "N spent with Link instead of its removing destroy");
+            w.rejectBy(b, w.mutate(b, x -> x.redeemers.put(RegistryWorld.spend(b.node), data(new RegistryValidator.Link()))),
+                    "N spent with Link instead of its removing destroy", RegistryWorld.spendLabel(b.node));
         }
     }
 
@@ -399,31 +399,31 @@ class RegistryAttacksTest {
             BigInteger in = n.lovelace();
             // ctx.balance = everything (the deposit paid out too); the node keeps nothing.
             Ctx all = new Ctx(ALICE, BigInteger.ZERO, in, b.tx.lower, b.tx.upper);
-            w.reject(b, w.mutate(b, x -> {
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.redeemers.put(RegistryWorld.spend(b.node), data(new RegistryValidator.Retire(all)));
                 mapOutput(x, payout, o -> plusLovelace(o, w.minAda));   // the builder funds the retired node's deposit
-            }), "payouts above ctx.balance (paying the deposit)");
+            }), "payouts above ctx.balance (paying the deposit)", RegistryWorld.spendLabel(b.node));
             Ctx less = new Ctx(ALICE, BigInteger.ZERO, in.subtract(w.minAda).subtract(ada(1)), b.tx.lower, b.tx.upper);
-            w.reject(b, w.mutate(b, x -> {
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.redeemers.put(RegistryWorld.spend(b.node), data(new RegistryValidator.Retire(less)));
                 mapOutput(x, payout, o -> plusLovelace(o, ada(1).negate()));
                 mapOutput(x, 0, o -> plusLovelace(o, ada(1)));
-            }), "payouts below ctx.balance (funds left in the node)");
-            w.reject(b, w.mutate(b, x -> {
+            }), "payouts below ctx.balance (funds left in the node)", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> {
                 mapOutput(x, payout, o -> plusLovelace(o, ada(1).negate()));
                 mapOutput(x, 0, o -> plusLovelace(o, ada(1)));
-            }), "less paid than the payouts owe, the rest left in the node");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, payout, o -> new TxOut(o.address(), o.value(),
-                    new OutputDatum.NoOutputDatum(), o.referenceScript()))), "an untagged payout");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, 0, o -> plusLovelace(o, BigInteger.ONE.negate()))), "the output below minAda");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, 0, d -> field(d, 1, bytes(E)))), "a datum change besides the retire");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, 0, o -> withDatum(o, n.datum()))), "the node kept live (not retired)");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, 0, Tamper::withRefScript)), "a reference script");
+            }), "less paid than the payouts owe, the rest left in the node", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, payout, o -> new TxOut(o.address(), o.value(),
+                    new OutputDatum.NoOutputDatum(), o.referenceScript()))), "an untagged payout", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, 0, o -> plusLovelace(o, BigInteger.ONE.negate()))), "the output below minAda", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, 0, d -> field(d, 1, bytes(E)))), "a datum change besides the retire", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, 0, o -> withDatum(o, n.datum()))), "the node kept live (not retired)", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, 0, Tamper::withRefScript)), "a reference script", RegistryWorld.spendLabel(b.node));
             Ctx paid = new Ctx(ALICE, ada(1), in.subtract(w.minAda), b.tx.lower, b.tx.upper);
-            w.reject(b, w.mutate(b, x -> {
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.redeemers.put(RegistryWorld.spend(b.node), data(new RegistryValidator.Retire(paid)));
                 mapOutput(x, 0, o -> plusLovelace(o, ada(1)));
-            }), "a retire with received");
+            }), "a retire with received", RegistryWorld.spendLabel(b.node));
         }
 
         @Test
@@ -431,15 +431,15 @@ class RegistryAttacksTest {
             var b = w.retire(inst, Kind.ENTRY, B, BigInteger.ZERO);
             control(b);
             byte[] unit = keyId(inst, Kind.ENTRY, B);
-            w.reject(b, w.mutate(b, x -> {
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.mint(w.policy, unit, BigInteger.ONE.negate());
                 x.redeemers.put(w.mint(), data(new RegistryValidator.BurnInstance()));
                 mapOutput(x, 0, o -> plusToken(o, w.policy, unit, BigInteger.ONE.negate()));
-            }), "the unit burned");
-            w.reject(b, w.mutate(b, x -> {
+            }), "the unit burned", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.mint(w.policy, unit, BigInteger.ONE);
                 x.redeemers.put(w.mint(), data(new RegistryValidator.BurnInstance()));
-            }), "a second unit minted");
+            }), "a second unit minted", RegistryWorld.spendLabel(b.node));
         }
 
         @Test
@@ -472,19 +472,22 @@ class RegistryAttacksTest {
         void aSecondNodeWithLink() {
             var b = w.claim(inst, BOB, C, ada(2));
             control(b);
-            w.reject(b, withPassThrough(b, w.node(inst, Kind.ENTRY, D)), "a second node spent with Link");
-            w.reject(b, withPassThrough(b, w.node(inst, Kind.BALLOT, EMPTY)), "a head of the other type spent with Link");
+            var d = w.node(inst, Kind.ENTRY, D);
+            w.rejectBy(b, withPassThrough(b, d), "a second node spent with Link", RegistryWorld.spendLabel(d.ref()));
+            var head = w.node(inst, Kind.BALLOT, EMPTY);
+            w.rejectBy(b, withPassThrough(b, head), "a head of the other type spent with Link", RegistryWorld.spendLabel(head.ref()));
         }
 
         @Test
         void linkOnOtherKinds() {
             var b = w.claim(inst, BOB, C, ada(2));
-            w.reject(b, withPassThrough(b, w.instanceUtxo(inst)), "Link on the instance");
+            var instance = w.instanceUtxo(inst);
+            w.rejectBy(b, withPassThrough(b, instance), "Link on the instance", RegistryWorld.spendLabel(instance.ref()));
             for (int kind : new int[]{0x4F, 0x49}) {
                 byte[] fake = StateHarness.fill(29, kind);
                 TxOutRef r = w.ledger.fund(w.stateOut(Ledger.value(ada(3), w.policy, fake), integer(BigInteger.ZERO)));
-                w.reject(b, withPassThrough(b, new RegistryWorld.Utxo(r, w.ledger.utxo(r))),
-                        "Link on a " + (kind == 0x4F ? "plain object" : "intent") + " token");
+                w.rejectBy(b, withPassThrough(b, new RegistryWorld.Utxo(r, w.ledger.utxo(r))),
+                        "Link on a " + (kind == 0x4F ? "plain object" : "intent") + " token", RegistryWorld.spendLabel(r));
             }
         }
 
@@ -493,8 +496,8 @@ class RegistryAttacksTest {
             w.accept(w.claim(inst, ALICE, F, ada(5)));
             var b = w.release(inst, D);
             control(b);
-            w.reject(b, w.mutate(b, x -> x.redeemers.put(w.mint(), data(new RegistryValidator.BurnInstance()))),
-                    "Link while the mint redeemer is BurnInstance");
+            w.rejectBy(b, w.mutate(b, x -> x.redeemers.put(w.mint(), data(new RegistryValidator.BurnInstance()))),
+                    "Link while the mint redeemer is BurnInstance", RegistryWorld.spendLabel(b.anchor));
         }
     }
 
@@ -526,7 +529,7 @@ class RegistryAttacksTest {
                     new RegistryValidator.Release(ctx), new RegistryValidator.Recover(BOB), new RegistryValidator.Link(),
                     new RegistryValidator.SetOpen(false))) {
                 var b = alone(head, r, ALICE, ctx);
-                w.reject(b, b.tx, "a head spent with " + r.getClass().getSimpleName());
+                w.rejectBy(b, b.tx, "a head spent with " + r.getClass().getSimpleName(), RegistryWorld.spendLabel(head.ref()));
             }
         }
 
@@ -539,18 +542,18 @@ class RegistryAttacksTest {
             for (Object r : List.of(new RegistryValidator.Upgrade(BigInteger.ONE, ctx), new RegistryValidator.Retire(ctx),
                     new RegistryValidator.Withdraw(BigInteger.ONE, ctx))) {
                 var b = alone(x, r, ALICE, ctx);
-                w.reject(b, b.tx, "a retired node spent with " + r.getClass().getSimpleName());
+                w.rejectBy(b, b.tx, "a retired node spent with " + r.getClass().getSimpleName(), RegistryWorld.spendLabel(x.ref()));
             }
         }
 
         @Test
         void aStateRedeemerOnANodeAndAKeyedOneOnTheInstance() {
             var b = alone(w.node(inst, Kind.ENTRY, B), new RegistryValidator.SetOpen(false), ADMIN, null);
-            w.reject(b, b.tx, "the instance's action on a node");
+            w.rejectBy(b, b.tx, "the instance's action on a node", RegistryWorld.spendLabel(b.tx.inputs.get(0)));
             b = alone(w.instanceUtxo(inst), new RegistryValidator.Change(BigInteger.ONE), ALICE, null);
-            w.reject(b, b.tx, "a keyed action on the instance");
+            w.rejectBy(b, b.tx, "a keyed action on the instance", RegistryWorld.spendLabel(b.tx.inputs.get(0)));
             b = alone(w.node(inst, Kind.BALLOT, ALICE), new RegistryValidator.Recover(BOB), ALICE, null);
-            w.reject(b, b.tx, "an Entry action on a Ballot");
+            w.rejectBy(b, b.tx, "an Entry action on a Ballot", RegistryWorld.spendLabel(b.tx.inputs.get(0)));
         }
 
         @Test
@@ -558,13 +561,13 @@ class RegistryAttacksTest {
             var b = w.upgrade(inst, B, ALICE, ada(1));
             control(b);
             int n = b.nodeOut;
-            w.reject(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 1, bytes(E)))), "next changed");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 2, integer(BigInteger.ONE)))), "linkedAt changed");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 0, bytes(StateHarness.fill(32, 0x11))))), "instance changed");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, n, d -> nested(d, 3, 0, bytes(BB)))), "the key changed");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, n, d -> tag(d, 5))), "retired by an action");
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 1, bytes(E)))), "next changed", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 2, integer(BigInteger.ONE)))), "linkedAt changed", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, n, d -> field(d, 0, bytes(StateHarness.fill(32, 0x11))))), "instance changed", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, n, d -> nested(d, 3, 0, bytes(BB)))), "the key changed", RegistryWorld.spendLabel(b.node));
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, n, d -> tag(d, 5))), "retired by an action", RegistryWorld.spendLabel(b.node));
             var bad = w.upgrade(inst, B, ALICE, ada(1), BigInteger.valueOf(7));
-            w.reject(bad, bad.tx, "an @Invariant violated (tier 7)");
+            w.rejectBy(bad, bad.tx, "an @Invariant violated (tier 7)", RegistryWorld.spendLabel(bad.node));
             // recover sets an arbitrary owner. The size rule (I13 amended) measures the datum with next padded to
             // maxKeyBytes and linkedAt at 9 bytes: find the owner length where that envelope first exceeds 384 bytes;
             // there the actual datum (next = "d", one byte) still fits, and the action is refused.
@@ -579,7 +582,7 @@ class RegistryAttacksTest {
             var big = w.recover(inst, B, StateHarness.fill(boundary, 0x77), List.of(ALICE));
             int actual = org.julclang.core.cbor.PlutusDataCborEncoder.encode(datum(big.tx.outputs.get(big.nodeOut))).length;
             assertTrue(actual <= 384, "the actual datum fits: " + actual);
-            w.reject(big, big.tx, "a datum whose envelope breaks the size rule (owner of " + boundary + " bytes)");
+            w.rejectBy(big, big.tx, "a datum whose envelope breaks the size rule (owner of " + boundary + " bytes)", RegistryWorld.spendLabel(big.node));
             var fits = w.recover(inst, B, StateHarness.fill(boundary - 1, 0x77), List.of(ALICE));
             control(fits);
             System.out.println("[size rule] owner of " + (boundary - 1) + " bytes accepted, " + boundary + " refused (actual datum "
@@ -603,39 +606,39 @@ class RegistryAttacksTest {
             byte[] inst = RegistryWorld.hex(b.list.instance());
             byte[] ballotHead = keyId(inst, Kind.BALLOT, EMPTY);
             int headOut = 1;   // the Ballot head
-            w.reject(b, w.mutate(b, b.change - 1, x -> {
+            w.rejectBy(b, w.mutate(b, b.change - 1, x -> {
                 x.outputs.remove(headOut);
                 x.mint(w.policy, ballotHead, BigInteger.ONE.negate());
-            }), "no Ballot head");
-            w.reject(b, w.mutate(b, b.change + 1, x -> {
+            }), "no Ballot head", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, b.change + 1, x -> {
                 x.mint(w.policy, ballotHead, BigInteger.ONE);
                 x.outputs.add(0, x.outputs.get(headOut));
-            }), "two Ballot heads");
+            }), "two Ballot heads", w.mintLabel());
             byte[] unknown = keyId(inst, Kind.BALLOT, EMPTY).clone();
             byte[] foo = RegistryWorld.keyIdOfType(inst, "Foo", EMPTY);
-            w.reject(b, w.mutate(b, b.change + 1, x -> {
+            w.rejectBy(b, w.mutate(b, b.change + 1, x -> {
                 x.mint(w.policy, foo, BigInteger.ONE);
                 x.outputs.add(0, w.stateOut(Ledger.value(w.minAda, w.policy, foo), RegistryWorld.head(Kind.BALLOT, inst, EMPTY,
                         BigInteger.ZERO)));
-            }), "a head of an unknown type");
+            }), "a head of an unknown type", w.mintLabel());
             byte[] other = StateHarness.fill(32, 0x0E);
             byte[] otherHead = keyId(other, Kind.BALLOT, EMPTY);
-            w.reject(b, w.mutate(b, x -> {
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.mint(w.policy, ballotHead, BigInteger.ONE.negate());
                 x.mint(w.policy, otherHead, BigInteger.ONE);
                 x.outputs.set(headOut, w.stateOut(Ledger.value(w.minAda, w.policy, otherHead), RegistryWorld.head(Kind.BALLOT,
                         other, EMPTY, BigInteger.ZERO)));
-            }), "a head of another instance");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, headOut, d -> field(d, 1, bytes(A)))), "a head with a non-empty next");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, headOut, d -> field(d, 2, integer(BigInteger.ONE)))), "a head with linkedAt != 0");
-            w.reject(b, w.mutate(b, x -> mapDatum(x, headOut, d -> tag(d, 3))), "a Ballot head with the Entry head's constructor");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, headOut, o -> plusLovelace(o, BigInteger.ONE.negate()))), "a head below minAda");
-            w.reject(b, w.mutate(b, x -> x.mint(w.policy, keyId(inst, Kind.ENTRY, A), BigInteger.ONE)), "an extra keyed token");
-            w.reject(b, w.mutate(b, x -> x.mint(w.policy, new byte[]{(byte) 0xCA, (byte) 0xFE}, BigInteger.ONE)), "a user token");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, headOut, o -> withAddress(o, StateHarness.pkhAddress(ADMIN)))),
-                    "a head at a key address");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, headOut, Tamper::withStake)), "a head at the other address variant");
-            w.reject(b, w.mutate(b, x -> mapOutput(x, headOut, Tamper::withRefScript)), "a head with a reference script");
+            }), "a head of another instance", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, headOut, d -> field(d, 1, bytes(A)))), "a head with a non-empty next", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, headOut, d -> field(d, 2, integer(BigInteger.ONE)))), "a head with linkedAt != 0", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapDatum(x, headOut, d -> tag(d, 3))), "a Ballot head with the Entry head's constructor", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, headOut, o -> plusLovelace(o, BigInteger.ONE.negate()))), "a head below minAda", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> x.mint(w.policy, keyId(inst, Kind.ENTRY, A), BigInteger.ONE)), "an extra keyed token", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> x.mint(w.policy, new byte[]{(byte) 0xCA, (byte) 0xFE}, BigInteger.ONE)), "a user token", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, headOut, o -> withAddress(o, StateHarness.pkhAddress(ADMIN)))),
+                    "a head at a key address", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, headOut, Tamper::withStake)), "a head at the other address variant", w.mintLabel());
+            w.rejectBy(b, w.mutate(b, x -> mapOutput(x, headOut, Tamper::withRefScript)), "a head with a reference script", w.mintLabel());
             assertTrue(unknown.length == 29);
         }
 
@@ -646,12 +649,12 @@ class RegistryAttacksTest {
             var n = w.node(inst, Kind.ENTRY, B);
             var b = w.createInstanceTx();
             Ctx ctx = new Ctx(ALICE, BigInteger.ZERO, n.lovelace(), b.tx.lower, b.tx.upper);
-            w.reject(b, w.mutate(b, x -> {
+            w.rejectBy(b, w.mutate(b, x -> {
                 x.inputs.add(n.ref());
                 x.redeemers.put(RegistryWorld.spend(n.ref()), data(new RegistryValidator.Release(ctx)));
                 x.mint(w.policy, keyId(inst, Kind.ENTRY, B), BigInteger.ONE.negate());
                 x.signers.add(ALICE);
-            }), "CreateInstance burning a node");
+            }), "CreateInstance burning a node", w.mintLabel());
         }
     }
 
@@ -684,10 +687,10 @@ class RegistryAttacksTest {
         void twoStructuralOperations() {
             var c = w.claim(inst, BOB, C, ada(2));
             var e = w.claim(inst, BOB, E, ada(2));
-            w.reject(c, merged(c, e), "two inserts under one mint redeemer");
+            w.rejectBy(c, merged(c, e), "two inserts under one mint redeemer", w.mintLabel());
             var r = w.release(inst, F);
-            w.reject(c, merged(c, r), "an insert and a remove under the insert's redeemer");
-            w.reject(r, merged(r, c), "a remove and an insert under the remove's redeemer");
+            w.rejectBy(c, merged(c, r), "an insert and a remove under the insert's redeemer", w.mintLabel());
+            w.rejectBy(r, merged(r, c), "a remove and an insert under the remove's redeemer", w.mintLabel());
         }
     }
 
@@ -742,6 +745,20 @@ class RegistryAttacksTest {
             var head = w.node(inst, Kind.ENTRY, EMPTY);
             BigInteger need = w.ledger.minLovelace(head.out());
             assertTrue(need.compareTo(head.lovelace()) > 0, "the parameters were raised enough: " + need);
+            // A known liveness limit (ADR-0001 §10, ADR-0016 §5): a non-payable insert makes a node of exactly minAda, and
+            // a keyed action keeps a node's value exact; neither can top up, so both fail once minAda is below the
+            // ledger's minimum for the node.
+            // (Each anchor is topped up to the raised minimum, so only the new node's own output is short.)
+            java.util.function.Function<RegistryWorld.Built, Ledger.Tx> anchorTopped = x -> w.mutate(x, t -> mapOutput(t, x.anchorOut,
+                    o -> plusLovelace(o, w.ledger.minLovelace(o).subtract(o.value().lovelaceOf()).max(BigInteger.ZERO))));
+            var cast = w.cast(inst, BOB, BigInteger.ONE);
+            w.rejectByLedger(cast, anchorTopped.apply(cast), "output " + cast.nodeOut + " below the minimum",
+                    "a non-payable insert at the raised minimum");
+            var grant = w.grant(inst, A, BOB);
+            w.rejectByLedger(grant, anchorTopped.apply(grant), "output " + grant.nodeOut + " below the minimum",
+                    "a granted entry at the raised minimum");
+            var change = w.change(inst, ALICE, BigInteger.TWO);
+            w.rejectByLedger(change, change.tx, "output " + change.nodeOut + " below the minimum", "a keyed action at the raised minimum");
             var b = w.claim(inst, BOB, A, ada(10));
             var r = w.ledger.check(b.tx);
             assertFalse(r.accepted(), "without a top-up the relinked head is below the ledger minimum");
