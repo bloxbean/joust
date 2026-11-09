@@ -81,7 +81,10 @@ public final class Ledger {
         public final List<TxOut> outputs = new ArrayList<>();
         /** policy hex -> token name hex -> quantity (non-zero). */
         public final Map<String, Map<String, BigInteger>> mint = new TreeMap<>();
+        /** Required signers: what scripts see as the transaction's signatories. Each must also be a witness. */
         public final List<byte[]> signers = new ArrayList<>();
+        /** Key witnesses (phase 1): every key-locked input's owner, required signer and key withdrawal needs one. */
+        public final List<byte[]> witnesses = new ArrayList<>();
         /** Validity bounds in POSIX ms: {@code [lower, upper)}; null means unbounded. */
         public BigInteger lower;
         public BigInteger upper;
@@ -96,6 +99,7 @@ public final class Ledger {
             c.outputs.addAll(outputs);
             mint.forEach((p, m) -> c.mint.put(p, new TreeMap<>(m)));
             c.signers.addAll(signers);
+            c.witnesses.addAll(witnesses);
             c.lower = lower;
             c.upper = upper;
             c.redeemers.putAll(redeemers);
@@ -152,6 +156,8 @@ public final class Ledger {
 
     private final Map<TxOutRef, TxOut> utxos = new LinkedHashMap<>();
     private final Map<String, Program> scripts = new HashMap<>();
+    private final Map<String, Integer> scriptSizes = new HashMap<>();
+    private final Map<Credential, BigInteger> rewards = new HashMap<>();
     private Params params;
     private BigInteger now;
     private long counter;
@@ -166,6 +172,23 @@ public final class Ledger {
     /** Makes {@code program} the script of hash {@code hash} (its policy id, address credential and stake credential). */
     public void register(byte[] hash, Program program) {
         scripts.put(hex(hash), program);
+    }
+
+    /**
+     * The size in bytes of the script with hash {@code hash}, for outputs that carry it as a reference script. Without it,
+     * a reference script counts only its CBOR framing (7 bytes), so such outputs' minimum is underestimated.
+     */
+    public void setReferenceScriptSize(byte[] hash, int bytes) {
+        scriptSizes.put(hex(hash), bytes);
+    }
+
+    /** Sets the reward balance of a stake credential (default 0). A withdrawal must take exactly this balance. */
+    public void setReward(Credential c, BigInteger balance) {
+        rewards.put(c, balance);
+    }
+
+    public BigInteger reward(Credential c) {
+        return rewards.getOrDefault(c, BigInteger.ZERO);
     }
 
     /** Adds an output out of thin air (genesis funds); returns its reference. */
@@ -222,6 +245,7 @@ public final class Ledger {
         // Phase 2: every required purpose, each with the whole transaction.
         long cpu = 0;
         long mem = 0;
+        var failed = new ArrayList<String>();
         for (var e : requiredPurposes(tx).entrySet()) {
             ScriptPurpose purpose = e.getKey();
             Program program = scripts.get(e.getValue());
@@ -238,8 +262,10 @@ public final class Ledger {
             scriptsRun.put(label(purpose), r);
             cpu += r.budgetConsumed().cpuSteps();
             mem += r.budgetConsumed().memoryUnits();
-            if (!r.isSuccess()) return new Result(false, "script failed: " + label(purpose), scriptsRun, cpu, mem, null);
+            if (!r.isSuccess()) failed.add(label(purpose));
         }
+        // Every script runs, so a refusal names each purpose that failed (the ledger stops at the first).
+        if (!failed.isEmpty()) return new Result(false, "script failed: " + String.join(", ", failed), scriptsRun, cpu, mem, null);
         if (cpu > params.maxTxCpu() || mem > params.maxTxMem()) {
             return new Result(false, "execution budget exceeded", scriptsRun, cpu, mem, null);
         }
@@ -252,6 +278,7 @@ public final class Ledger {
         if (!r.accepted()) return r;
         TxId id = nextTxId();
         for (TxOutRef in : tx.inputs) utxos.remove(in);
+        tx.withdrawals.forEach((c, amount) -> rewards.put(c, reward(c).subtract(amount)));
         for (int i = 0; i < tx.outputs.size(); i++) {
             utxos.put(new TxOutRef(id, BigInteger.valueOf(i)), canonical(tx.outputs.get(i)));
         }
@@ -266,6 +293,10 @@ public final class Ledger {
             if (!utxos.containsKey(in)) return "missing reference input " + show(in);
             if (tx.inputs.contains(in)) return "an input is also a reference input";
         }
+        BigInteger slot = BigInteger.valueOf(SLOT_MS);
+        if ((tx.lower != null && tx.lower.mod(slot).signum() != 0) || (tx.upper != null && tx.upper.mod(slot).signum() != 0)) {
+            return "a validity bound not on a slot boundary";
+        }
         if (tx.lower != null && now.compareTo(tx.lower) < 0) return "not valid yet (lower bound in the future)";
         if (tx.upper != null && now.compareTo(tx.upper) >= 0) return "expired (upper bound passed)";
         if (tx.fee.signum() < 0) return "negative fee";
@@ -276,6 +307,16 @@ public final class Ledger {
         for (TxOut o : tx.outputs) {
             for (var p : entries(o.value()).entrySet()) {
                 for (var q : p.getValue().values()) if (q.signum() <= 0) return "non-positive quantity in an output";
+            }
+        }
+        // Withdrawals: exactly the reward balance, never negative, a key credential's by its key's witness.
+        for (var w : tx.withdrawals.entrySet()) {
+            if (w.getValue().signum() < 0) return "negative withdrawal";
+            if (!w.getValue().equals(reward(w.getKey()))) {
+                return "a withdrawal must take the whole reward balance (" + reward(w.getKey()) + ")";
+            }
+            if (w.getKey() instanceof Credential.PubKeyCredential pk && !witnessed(tx, pk.hash().hash())) {
+                return "a key withdrawal without its key's witness";
             }
         }
         // Value conservation, asset by asset.
@@ -301,13 +342,13 @@ public final class Ledger {
                 return "output " + i + " below the minimum lovelace (" + o.value().lovelaceOf() + " < " + min + ")";
             }
         }
-        // Key witnesses: every key-locked input is signed (the model's signers are the witnesses and required signers).
+        // Key witnesses: every key-locked input's owner and every required signer.
         for (TxOutRef in : tx.inputs) {
-            if (utxos.get(in).address().credential() instanceof Credential.PubKeyCredential pk
-                    && tx.signers.stream().noneMatch(s -> Arrays.equals(s, pk.hash().hash()))) {
+            if (utxos.get(in).address().credential() instanceof Credential.PubKeyCredential pk && !witnessed(tx, pk.hash().hash())) {
                 return "input " + show(in) + " is not signed by its key";
             }
         }
+        for (byte[] s : tx.signers) if (!witnessed(tx, s)) return "a required signer without a witness";
         // Exactly the needed redeemers, each for a known script.
         var required = requiredPurposes(tx);
         for (var e : required.entrySet()) {
@@ -324,6 +365,10 @@ public final class Ledger {
             }
         }
         return null;
+    }
+
+    private static boolean witnessed(Tx tx, byte[] key) {
+        return tx.witnesses.stream().anyMatch(w -> Arrays.equals(w, key));
     }
 
     /** Every purpose the transaction requires, with its script's hash (hex). */
@@ -358,23 +403,67 @@ public final class Ledger {
             prev = s;
         }
         b.validRange(tx.interval());
-        tx.redeemers.forEach(b::redeemerEntry);
+        // The redeemer map in ledger order: Minting, Spending, Rewarding (Plutus V3's constructor order), then by key.
+        var redeemers = new ArrayList<>(tx.redeemers.entrySet());
+        redeemers.sort(Comparator.comparing((Map.Entry<ScriptPurpose, PlutusData> e) -> purposeOrder(e.getKey()))
+                .thenComparing(e -> purposeKey(e.getKey()), Arrays::compareUnsigned));
+        redeemers.forEach(e -> b.redeemerEntry(e.getKey(), e.getValue()));
         b.txId(id);
         return b;
+    }
+
+    private static int purposeOrder(ScriptPurpose p) {
+        return switch (p) {
+            case ScriptPurpose.Minting m -> 0;
+            case ScriptPurpose.Spending s -> 1;
+            case ScriptPurpose.Rewarding r -> 2;
+            default -> 3;
+        };
+    }
+
+    /** The bytes a purpose is ordered by within its kind (Spending: tx id then index; credentials: kind then hash). */
+    private static byte[] purposeKey(ScriptPurpose p) {
+        return switch (p) {
+            case ScriptPurpose.Minting m -> m.policyId().hash();
+            case ScriptPurpose.Spending s -> {
+                byte[] id = s.txOutRef().txId().hash();
+                byte[] k = Arrays.copyOf(id, id.length + 8);
+                long ix = s.txOutRef().index().longValueExact();
+                for (int i = 0; i < 8; i++) k[id.length + i] = (byte) (ix >>> (56 - 8 * i));
+                yield k;
+            }
+            case ScriptPurpose.Rewarding r -> {
+                boolean script = r.credential() instanceof Credential.ScriptCredential;
+                byte[] h = script ? ((Credential.ScriptCredential) r.credential()).hash().hash()
+                        : ((Credential.PubKeyCredential) r.credential()).hash().hash();
+                byte[] k = new byte[h.length + 1];
+                k[0] = (byte) (script ? 1 : 0);
+                System.arraycopy(h, 0, k, 1, h.length);
+                yield k;
+            }
+            default -> new byte[0];
+        };
     }
 
     // ------------------------------------------------------------------ minimum lovelace
 
     /** {@code (160 + |output|) * coinsPerUTxOByte}, with the output's CBOR size computed as the ledger encodes it. */
     public BigInteger minLovelace(TxOut o) {
-        return BigInteger.valueOf((160L + outputSize(o)) * params.coinsPerUtxoByte());
+        int script = o.referenceScript().map(h -> scriptSizes.getOrDefault(hex(h.hash()), 0)).orElse(0);
+        return BigInteger.valueOf((160L + outputSize(o, script)) * params.coinsPerUtxoByte());
     }
 
-    /** The CBOR size of a post-Babbage output {0: address, 1: value, 2: datum option, 3: script ref}. */
-    static long outputSize(TxOut o) {
-        long size = 1;                                    // map header
+    /**
+     * The CBOR size of an output as cardano-client-lib writes it: the post-Babbage map {0: address, 1: value, 2: datum
+     * option, 3: script ref} when it has a datum or a reference script, else the legacy array [address, value].
+     * {@code scriptBytes} is the reference script's size (0 if unknown).
+     */
+    public static long outputSize(TxOut o, int scriptBytes) {
+        boolean legacy = o.datum() instanceof OutputDatum.NoOutputDatum && o.referenceScript().isEmpty();
+        long size = 1;                                    // map or array header
+        long key = legacy ? 0 : 1;                        // a map key before each field
         int addressBytes = o.address().stakingCredential().isPresent() ? 57 : 29;
-        size += 1 + bytesSize(addressBytes);
+        size += key + bytesSize(addressBytes);
         var e = entries(o.value());
         long coin = o.value().lovelaceOf().longValueExact();
         long assets = 0;
@@ -385,14 +474,16 @@ public final class Ledger {
             assets += bytesSize(p.getKey().length() / 2) + headerSize(p.getValue().size());
             for (var t : p.getValue().entrySet()) assets += bytesSize(t.getKey().length() / 2) + uintSize(t.getValue().longValueExact());
         }
-        size += 1 + (policies == 0 ? uintSize(coin) : 1 + uintSize(coin) + headerSize(policies) + assets);
+        size += key + (policies == 0 ? uintSize(coin) : 1 + uintSize(coin) + headerSize(policies) + assets);
         if (o.datum() instanceof OutputDatum.OutputDatumInline d) {
             int datum = org.julclang.core.cbor.PlutusDataCborEncoder.encode(d.datum()).length;
             size += 1 + 1 + 1 + 2 + bytesSize(datum);    // key, [1, #6.24(bytes)]
         } else if (o.datum() instanceof OutputDatum.OutputDatumHash) {
-            size += 1 + 1 + 1 + bytesSize(32);
+            size += 1 + 1 + 1 + bytesSize(32);            // key, [0, hash]
         }
-        if (o.referenceScript().isPresent()) size += 1 + 2 + 3 + 1;
+        if (o.referenceScript().isPresent()) {
+            size += 1 + 2 + bytesSize(1 + 1 + bytesSize(scriptBytes));   // key, #6.24(bytes [type, script])
+        }
         return size;
     }
 

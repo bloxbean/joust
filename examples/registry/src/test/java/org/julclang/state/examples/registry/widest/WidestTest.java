@@ -103,6 +103,7 @@ class WidestTest {
         TxOutRef w = ledger.at(StateHarness.pkhAddress(payer)).get(0).getKey();
         t.inputs.add(w);
         t.signers.add(payer);
+        t.witnesses.add(payer);
         t.window(T, T.add(BigInteger.valueOf(120_000)));
         return t;
     }

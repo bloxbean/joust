@@ -288,7 +288,7 @@ final class RegistryWorld {
         b.payer = payer;
         TxOutRef w = wallet(payer, ada(500), b.tx.inputs);
         b.tx.inputs.add(w);
-        if (b.tx.signers.stream().noneMatch(s -> Arrays.equals(s, payer))) b.tx.signers.add(payer);
+        b.tx.witnesses.add(payer);   // the payer witnesses its input; it is a required signer only if the call needs it
         b.tx.fee = FEE;
         b.tx.outputs.add(StateHarness.walletOut(payer, BigInteger.ONE));
         b.change = b.tx.outputs.size() - 1;
@@ -301,6 +301,8 @@ final class RegistryWorld {
      * something would be negative (the transaction then cannot be valid in phase 1).
      */
     boolean rebalance(Ledger.Tx tx, int change) {
+        // A builder witnesses every required signer it lists (dropping a signer keeps its witness).
+        for (byte[] s : tx.signers) if (tx.witnesses.stream().noneMatch(x -> Arrays.equals(x, s))) tx.witnesses.add(s);
         var bal = new TreeMap<String, Map<String, BigInteger>>();
         for (TxOutRef in : tx.inputs) {
             TxOut o = ledger.utxo(in);

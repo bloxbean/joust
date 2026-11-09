@@ -341,9 +341,9 @@ class ListIntegrityTest {
                 }
             }
             case 11 -> {
-                if (t.signers.size() > 1 && rnd.nextBoolean()) {
-                    names.add("a signer removed");
-                    t.signers.remove(t.signers.size() - 2);
+                if (!t.signers.isEmpty() && rnd.nextBoolean()) {
+                    names.add("a required signer dropped (its witness kept)");
+                    t.signers.remove(rnd.nextInt(t.signers.size()));
                 } else {
                     names.add("an extra signer");
                     t.signers.add(party());
@@ -381,7 +381,8 @@ class ListIntegrityTest {
         var outs = new ArrayList<Object>();
         for (TxOut o : t.outputs) outs.add(List.of(o.address(), Ledger.entries(o.value()), o.datum(), o.referenceScript()));
         var signers = t.signers.stream().map(RegistryWorld::hex).sorted().toList();
-        return java.util.Arrays.asList(List.copyOf(t.inputs), List.copyOf(t.referenceInputs), outs, t.mint, signers, t.lower,
+        var witnesses = t.witnesses.stream().map(RegistryWorld::hex).sorted().distinct().toList();
+        return java.util.Arrays.asList(List.copyOf(t.inputs), List.copyOf(t.referenceInputs), outs, t.mint, signers, witnesses, t.lower,
                 t.upper, Map.copyOf(t.redeemers), t.fee, Map.copyOf(t.withdrawals));
     }
 
