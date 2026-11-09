@@ -114,6 +114,14 @@ jobs:
               exit 1
             fi
           done
+          # A snapshot dependency is for rehearsals only, which publish nothing: Central refuses the deployment (it validates
+          # dependencies), and a BloxBean or npm release naming a snapshot breaks once the snapshot is pruned.
+          if [[ "$ALLOW_SNAPSHOTS" == true && ( "$MAVEN_CENTRAL_PUBLISH" == true || "$BLOXBEAN_REPO_PUBLISH" == true \
+              || "$NPM_PUBLISH" == true ) ]]; then
+            echo "::error::allow_snapshot_dependencies=true is for rehearsals: set maven_central_publish," \
+              "bloxbean_repo_publish and npm_publish to false (or pin JuLC releases and set it to false)." >&2
+            exit 1
+          fi
           # The BloxBean repository's bucket and endpoint are variables (vars.R2_BUCKET, vars.R2_ENDPOINT), from this
           # environment or the organization; organization variables reach only the repositories they are shared with.
           if [[ "$BLOXBEAN_REPO_PUBLISH" == true && ( -z "$BUCKET" || -z "$AWS_ENDPOINT_URL" ) ]]; then
@@ -133,8 +141,8 @@ jobs:
             "BloxBean repository: $BLOXBEAN_REPO_PUBLISH, npm: $NPM_PUBLISH, snapshot dependencies allowed: $ALLOW_SNAPSHOTS"
 
       # A release that names a snapshot cannot be resolved for long: snapshots are pruned (JuLC keeps 20 commit
-      # versions or 60 days), and Central hosts none. allow_snapshot_dependencies=true (rehearsals only: a staged Central
-      # deployment that is dropped, no BloxBean upload, npm --dry-run) turns the refusal into a warning.
+      # versions or 60 days), and Central hosts none. allow_snapshot_dependencies=true (rehearsals only, with every
+      # publish flag false: the flag step enforces it) turns the refusal into a warning.
       - name: Refuse snapshot dependencies
         env:
           ALLOW_SNAPSHOTS: ${{ steps.version.outputs.allow_snapshot_dependencies }}
