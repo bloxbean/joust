@@ -106,8 +106,9 @@ jobs:
           MAVEN_CENTRAL_PUBLISH=$(awk '/^maven_central_publish:/ { print $2; exit }' <<< "$PROPS")
           BLOXBEAN_REPO_PUBLISH=$(awk '/^bloxbean_repo_publish:/ { print $2; exit }' <<< "$PROPS")
           NPM_PUBLISH=$(awk '/^npm_publish:/ { print $2; exit }' <<< "$PROPS")
+          ALLOW_SNAPSHOTS=$(awk '/^allow_snapshot_dependencies:/ { print $2; exit }' <<< "$PROPS")
           for flag in "maven_central_publish=$MAVEN_CENTRAL_PUBLISH" "bloxbean_repo_publish=$BLOXBEAN_REPO_PUBLISH" \
-              "npm_publish=$NPM_PUBLISH"; do
+              "npm_publish=$NPM_PUBLISH" "allow_snapshot_dependencies=$ALLOW_SNAPSHOTS"; do
             if [[ "${flag#*=}" != true && "${flag#*=}" != false ]]; then
               echo "::error::gradle.properties must set ${flag%%=*} to true or false." >&2
               exit 1
@@ -119,19 +120,28 @@ jobs:
             echo "maven_central_publish=$MAVEN_CENTRAL_PUBLISH"
             echo "bloxbean_repo_publish=$BLOXBEAN_REPO_PUBLISH"
             echo "npm_publish=$NPM_PUBLISH"
+            echo "allow_snapshot_dependencies=$ALLOW_SNAPSHOTS"
           } >> "$GITHUB_OUTPUT"
           echo "Version $VERSION (final: $IS_FINAL), Maven Central: $MAVEN_CENTRAL_PUBLISH," \
-            "BloxBean repository: $BLOXBEAN_REPO_PUBLISH, npm: $NPM_PUBLISH"
+            "BloxBean repository: $BLOXBEAN_REPO_PUBLISH, npm: $NPM_PUBLISH, snapshot dependencies allowed: $ALLOW_SNAPSHOTS"
 
       # A release that names a snapshot cannot be resolved for long: snapshots are pruned (JuLC keeps 20 commit
-      # versions or 60 days), and Central hosts none.
+      # versions or 60 days), and Central hosts none. allow_snapshot_dependencies=true (rehearsals only: a staged Central
+      # deployment that is dropped, no BloxBean upload, npm --dry-run) turns the refusal into a warning.
       - name: Refuse snapshot dependencies
+        env:
+          ALLOW_SNAPSHOTS: ${{ steps.version.outputs.allow_snapshot_dependencies }}
         shell: bash
         run: |
           set -euo pipefail
           if grep -nE '^[a-zA-Z0-9-]+ *= *"[^"]*SNAPSHOT"' gradle/libs.versions.toml; then
-            echo "::error::gradle/libs.versions.toml pins a SNAPSHOT (above). Release it first, then pin the release." >&2
-            exit 1
+            if [[ "$ALLOW_SNAPSHOTS" == true ]]; then
+              echo "::warning::gradle/libs.versions.toml pins a SNAPSHOT (above), allowed by allow_snapshot_dependencies=true." \
+                "This release's POMs name it: do not publish it beyond a rehearsal."
+            else
+              echo "::error::gradle/libs.versions.toml pins a SNAPSHOT (above). Release it first, then pin the release." >&2
+              exit 1
+            fi
           fi
 
       # Tests tagged devnet skip themselves: no Yaci DevKit runs here (build.yml runs them on every PR).
@@ -379,8 +389,8 @@ jobs:
           }
           EOF
 
-      # In dependency order. Prereleases get a matching dist-tag (as cardano-client-bindings), so they never become
-      # `latest`. Provenance attestations need a public repository: added once JOUST's repository is public.
+      # In dependency order. Beta and rc versions get their own dist-tag; before 1.0, -preN versions go to `latest`
+      # (below). Provenance attestations need a public repository: added once JOUST's repository is public.
       - name: Publish the packages
         env:
           REPO_PRIVATE: ${{ github.event.repository.private }}
@@ -388,8 +398,12 @@ jobs:
         run: |
           set -euo pipefail
           TAG=latest
+          # Before 1.0, a -preN version is published as `latest` (as mesmo): npm made each package's first version, the
+          # trusted-publishing placeholder, `latest` whatever --tag said, and `npm install`/`npm create joust` resolve only
+          # `latest`. A semver range never matches a prerelease either. At 1.0.0, change the -pre arm back to preview
+          # so a later 1.1.0-pre1 cannot displace the stable release on `latest`.
           case "$VERSION" in
-            *-preview*|*-pre*|*-alpha*) TAG=preview ;;
+            *-preview*|*-pre*|*-alpha*) TAG=latest ;;
             *-beta*)                    TAG=beta ;;
             *-rc*)                      TAG=next ;;
           esac

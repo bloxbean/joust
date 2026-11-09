@@ -41,8 +41,10 @@ private, a maintainer pushes the tag by hand (release-ops' `tag-release.yml` and
      `central-bundle-<version>` artifact in the portal;
    - builds the two Wasm engines (Oracle GraalVM 25 with Web Image, and Binaryen) and publishes
      `@julclang/state-client`, `@julclang/joust-runtime`, `@julclang/joust` and `create-joust` at the release version,
-     through **npm trusted publishing** (GitHub OIDC, no npm token), as cardano-client-bindings, mesmo and yano do. A
-     prerelease gets a matching dist-tag (`preview` for `-pre`), so it never becomes `latest`. With `npm_publish=false`
+     through **npm trusted publishing** (GitHub OIDC, no npm token), as cardano-client-bindings, mesmo and yano do. Before
+     1.0, a `-preN` version is published as `latest` (as mesmo): npm made each package's first version, the
+     trusted-publishing placeholder, `latest`, and `npm install` / `npm create joust` resolve only `latest`. `-beta` and
+     `-rc` versions go to `beta` and `next`. At 1.0.0, switch `-pre` back to `preview` in `release.yml`. With `npm_publish=false`
      in `gradle.properties` it runs `npm publish --dry-run` only. Provenance attestations are added once the repository
      is public (npm requires a public source repository for them).
 
@@ -53,8 +55,10 @@ private, a maintainer pushes the tag by hand (release-ops' `tag-release.yml` and
    workflow `release.yml`, environment `release-staging`.
 3. Then set `npm_publish=true` in `gradle.properties` for the release.
 
-`maven_central_publish`, `bloxbean_repo_publish` and `npm_publish` in `gradle.properties` must each be `true` or
-`false`. Gradle module metadata (`.module`) is published because release-ops' `verify-maven-staging.py`, shared and
+`maven_central_publish`, `bloxbean_repo_publish`, `npm_publish` and `allow_snapshot_dependencies` in
+`gradle.properties` must each be `true` or `false`. `allow_snapshot_dependencies=true` lets a release depend on a
+SNAPSHOT pin with a warning: use it only to rehearse (Central staged then dropped, `bloxbean_repo_publish=false`,
+`npm_publish=false`), since a published release naming a snapshot breaks once the snapshot is pruned. Gradle module metadata (`.module`) is published because release-ops' `verify-maven-staging.py`, shared and
 identical across repositories, requires it.
 
 ## One-time settings (a maintainer runs these)
