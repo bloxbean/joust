@@ -1045,7 +1045,7 @@ What M1 built, what it measured, and where the code differs from the text above.
   - `Entry`: a name registry with a removing and a retiring exit, a tier `@Invariant`, and a guardian `@Quorum`.
   - Contract and harness tests only.
 
-**Tests** (`examples/registry`, 48; `julc-state-processor`, `KeyedDiagnosticsTest`, 13; `julc-state-testkit`,
+**Tests** (`examples/registry`, 48; `julc-state-processor`, `KeyedDiagnosticsTest`, 12; `julc-state-testkit`,
 `LedgerTest`, 6; counts after the review below):
 - *The attack suite (`RegistryAttacksTest`, by operation as in §8).* Each case starts from an honest control that the
   model accepts, and must be refused **by a script**: a phase-1 refusal fails the test.
