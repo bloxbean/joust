@@ -20,7 +20,7 @@ JuLC from source with `.github/ci/build-julc.sh` and skipped the consumer check;
 
 ## Releasing (Maven Central and npm)
 
-`.github/workflows/publish-central.yml` runs on a `v*` tag. While the repository is private, a maintainer pushes the
+`.github/workflows/release.yml` runs on a `v*` tag. While the repository is private, a maintainer pushes the
 tag by hand (release-ops' `tag-release.yml` and the release App come later).
 
 1. Set `version` in `gradle.properties` to the release (no `-SNAPSHOT`), pin released dependencies in
@@ -43,7 +43,7 @@ tag by hand (release-ops' `tag-release.yml` and the release App come later).
 1. A trusted publisher can only be added to a package that exists: publish a placeholder once by hand (e.g.
    `0.0.0-oidc-bootstrap.0` under a non-`latest` dist-tag), as mesmo did.
 2. On npmjs.com, package settings → Trusted publisher → GitHub Actions: organization `bloxbean`, repository `joust`,
-   workflow `publish-central.yml`, environment `release-staging`.
+   workflow `release.yml`, environment `release-staging`.
 3. Then set `npm_publish=true` in `gradle.properties` for the release.
 
 `maven_central_publish` and `npm_publish` in `gradle.properties` must each be `true` or `false`.

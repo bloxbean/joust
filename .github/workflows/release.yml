@@ -1,6 +1,7 @@
-# From the release-ops standard (templates/workflows/release.yml and publish-central.yml), adapted for JOUST while the
-# repository is private: a v* tag, created by hand for now, runs the release.
-name: Publish to Maven Central and npm
+# From the release-ops standard (templates/workflows/release.yml), adapted for JOUST while the repository is private: a
+# v* tag, created by hand for now, runs the release. Publishing the staged Central deployment is a human step in the
+# Central Portal for now; release-ops' approval-gated publish-central.yml will automate it later.
+name: Release (Maven Central staging and npm)
 
 # A v* tag builds and signs every Maven module once, and uploads a USER_MANAGED Central Portal deployment. It stops
 # there: nothing is on Maven Central until a human publishes the deployment in the Central Portal (publishing cannot
@@ -187,7 +188,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Trusted publishing: npm exchanges the GitHub OIDC token for publish credentials, so there is no npm token secret.
-    # Each package's trusted publisher on npmjs.com names this repository, this workflow file (publish-central.yml:
+    # Each package's trusted publisher on npmjs.com names this repository, this workflow file (release.yml:
     # the publish commands must stay in THIS file, which npm validates) and this environment. Requires npm >= 11.5.1
     # and Node >= 22.14.
     environment: release-staging
