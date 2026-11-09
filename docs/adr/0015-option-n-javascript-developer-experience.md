@@ -1193,6 +1193,45 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
       passes its test and serves the page on DevKit; repeating the wallet run from that install closes "built from npm
       only".
 
+- **The engine in a page worker (2026-11-09).** The page prepares its own transactions: no prepare service.
+  - **Packages:**
+    - `@julclang/joust-runtime/worker`: importing it in a module worker serves the runtime (`joustRuntime`) there.
+    - `@julclang/joust-runtime/page`: `engineWorker(worker, options)` is a prepare service, as `httpService` gives one,
+      so generated clients verify, sign and submit unchanged. It has no dependencies, so the page's bundle does not
+      grow with the engine.
+    - The worker holds no keys and is not trusted either: the page verifies every transaction it returns (D7).
+  - **Loading the engine:** the Web Image is a classic script that fetches its Wasm from "the current file" +
+    `.wasm`. A module worker cannot `importScripts`, so the worker fetches the script and evaluates it in its global
+    scope, with `__filename` naming its URL (the image reads that global first). The page says where the engine is
+    served; `joust dev` serves it at `/joust/engine/` (streamed, with an ETag), and `network.json` names it and
+    `contracts.json`.
+  - **Node-only modules have browser twins** through `package.json` `imports` with the `browser` condition (any
+    bundler): `#engine` (the loader above) and `#file-map-store` (no file system). Node does not allow a built-in as
+    an `imports` target, so each Node-only piece is a file of its own. The version comes from a JSON import, not
+    `readFileSync`.
+  - **MerkleMap mirrors** are cached in IndexedDB (`levelMirrorCache` through `level`'s browser build, database
+    `joust-mirrors`); in memory if IndexedDB is unavailable. Aiken's MPF needs Node's `assert` too, now in the Vite
+    plugin.
+  - **Two traps found:**
+    - A module worker takes messages before a dependency's top-level await settles (libsodium's, through
+      `@julclang/state-client`), and drops them: the page's first message was lost, silently. The worker now
+      announces that it listens, and the page posts nothing before that.
+    - A build bundles workers separately, with `worker.plugins`. There the `Buffer`/`process` injection ran before
+      the CommonJS conversion, so `serialize-error` (CommonJS, uses `Buffer`) looked like an ES module and lost its
+      exports. The plugin injects with `enforce: 'post'` in workers.
+  - **Evidence:**
+    - *DevKit, dev server:* `page.test.js` runs connect, top up, create, `+1`, `+0` (refused) and close. Every call
+      is prepared in the worker: the engine's Wasm is fetched, and no request reaches `/joust/service`.
+    - *In the worker:* the MPF root and a proof for three entries equal Node's, and a mirror-cache state survives a
+      close and reopen in IndexedDB. The Counter has no map, so a map contract's flow in a page is still to run.
+    - *Production build:* `vite build` of the page (the worker is a 702 kB bundle; the engine's 20 MB Wasm loads at
+      run time, not bundled), served by a plain static server with `/joust`, `/chain` and `/dev` forwarded, passes
+      the same flow: three reviews, no page errors, no prepare-service calls.
+    - The Node suites pass unchanged (joust-runtime 23, one skipped without preview's environment; state-client 8).
+  - **Still to come in M4:** SRI for the engine (the worker checks the script's and the Wasm's hashes before running
+    them), and the plugin emitting the engine and `contracts.json` into a build, so a page deploys as static files
+    with no dev server.
+
 ### 13.12 MerkleMap mirrors (M4): proofs for the engine, Aiken's MPF in JS, RocksDB on the JVM, rebuilt from the chain
 
 **Problem.**

@@ -1,15 +1,20 @@
-// The Counter page. `joust dev` serves it, with the chain at /chain (a Blockfrost project id stays in the dev server)
-// and a prepare service at /joust/service. This page trusts neither: every transaction is checked against the
-// contract's description and the chain before the wallet is asked to sign (VerificationError otherwise).
-import { blockfrostChain, httpService, walletView, VerificationError, toJson } from '@julclang/state-client';
+// The Counter page. `joust dev` serves it, with the chain at /chain (a Blockfrost project id stays in the dev server).
+// The page prepares its own transactions: the runtime engine (Wasm) runs in a worker (engine.worker.js). Neither the
+// chain API nor the engine is trusted: every transaction is checked against the contract's description and the chain
+// before the wallet is asked to sign (VerificationError otherwise).
+import { blockfrostChain, walletView, VerificationError, toJson } from '@julclang/state-client';
+import { engineWorker } from '@julclang/joust-runtime/page';
 import { Wallet, NetworkType } from '@cardano-foundation/cardano-connect-with-wallet-core';
 import { Counter } from '../build/joust/Counter.js';
 
 const $ = (id) => document.getElementById(id);
 const net = await (await fetch('/joust/network.json', { cache: 'no-store' })).json();
 const chain = blockfrostChain(location.origin + net.chain);
-const service = httpService(location.origin + net.service);
 const deployment = net.deployments['app.Counter'];
+const service = engineWorker(new Worker(new URL('./engine.worker.js', import.meta.url), { type: 'module' }), {
+  engine: net.engine, chain: net.chain, clock: net.clock, networkId: net.networkId, ttlMs: net.ttlMs,
+  deployments: net.deployments, contracts: await (await fetch(net.contracts, { cache: 'no-store' })).json(),
+});
 const counter = new Counter({ service, chain, deployment, onReview: review });
 const app = { api: null, view: null };
 
@@ -194,6 +199,13 @@ $('create').addEventListener('click', () => act('create', async () => {
   remember(r.instance.id);
   return r;
 }));
+{
+  // The engine loads in its worker (about 20 MB of Wasm, once per page load): calls wait for it.
+  const started = performance.now();
+  const entry = log('Loading the runtime engine (in a worker)…');
+  service.ready.then(() => entry.ok(`Runtime engine ready in ${((performance.now() - started) / 1000).toFixed(1)} s: this page prepares its own transactions`),
+    (e) => entry.bad(`The runtime engine did not load: ${reason(e)}`));
+}
 walletChoices();
 // Wallet extensions inject themselves after the page loads (some late): the connector watches for them.
 Wallet.addEventListener('installedWalletExtensions', walletChoices);

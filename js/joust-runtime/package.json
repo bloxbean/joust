@@ -8,7 +8,19 @@
       "types": "./src/index.d.ts",
       "default": "./src/index.js"
     },
+    "./worker": "./src/worker.js",
+    "./page": "./src/page.js",
     "./load": "./src/load.js"
+  },
+  "imports": {
+    "#engine": {
+      "browser": "./src/browser/engine.js",
+      "default": "./src/engine.js"
+    },
+    "#file-map-store": {
+      "browser": "./src/browser/file-map-store.js",
+      "default": "./src/file-map-store.js"
+    }
   },
   "files": [
     "src",

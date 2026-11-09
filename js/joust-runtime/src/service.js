@@ -2,14 +2,13 @@
 // over HTTP, so @julclang/state-client's JoustContract (and every generated client) verifies, has the wallet sign and
 // submits exactly as before; only the builder moved into the page or the Node process.
 
-import { loadEngine } from './engine.js';
+import { loadEngine } from '#engine';
 import { emptySnapshot, fetchNeed, utxoJson } from './snapshot.js';
-import { memoryMapStore } from './maps.js';
 import { mapMirror } from './mirror.js';
-import { readFileSync } from 'node:fs';
+import pkg from '../package.json' with { type: 'json' };
 
 /** This runtime's version: contracts built by an incompatible toolchain are refused (ADR-0015 I7). */
-export const RUNTIME_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+export const RUNTIME_VERSION = pkg.version;
 
 /** The part of a version that must match: the major, or major.minor while the major is 0 (semver's 0.x rule). */
 const compatibility = (v) => {
@@ -93,7 +92,7 @@ export function engineService(o) {
         throw new Error(`the MerkleMap mirror has no node ${r.needKey}: this app did not build that map's history`
           + ' (keep the map store; rebuilding a mirror from the chain comes later, ADR-0015 D5)');
       }
-      if (process.env.JOUST_DEBUG_NEEDS) console.error(`[joust] round ${round}: needs ${r.needKind} ${r.needKey}`);
+      if (globalThis.process?.env?.JOUST_DEBUG_NEEDS) console.error(`[joust] round ${round}: needs ${r.needKind} ${r.needKey}`);
       await fetchNeed(o.api, snapshot, r.needKind, r.needKey);
     }
     throw new Error(`prepare needed more than ${o.maxRounds ?? 64} chain reads`);

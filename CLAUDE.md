@@ -138,8 +138,12 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `npm install` in js/state-client if imports go missing.
 - ADR-0015 M4 pages: a page using the runtime packages needs `@julclang/joust/vite` (browser versions of buffer, events,
   util, stream and process for cardano-js-sdk's crypto; es2022). Node tests cannot catch a page that fails at load:
-  `js/joust/test/page.test.js` loads the template's page in Chromium. `joust dev` serves a prepare service at
-  `/joust/service` (the engine in the dev server) until the engine runs in a page worker.
+  `js/joust/test/page.test.js` loads the template's page in Chromium. The engine runs in a page worker
+  (`@julclang/joust-runtime/worker` + `/page`'s `engineWorker`); `joust dev` serves it at `/joust/engine/` (and still
+  offers `/joust/service`). Node-only runtime modules have browser twins through package.json `imports` (`#engine`,
+  `#file-map-store`; Node forbids builtins as targets). The worker announces itself before the page posts (a module
+  worker drops messages until a dependency's top-level await settles). In a worker's build, inject Buffer/process
+  with `enforce: 'post'` (else CommonJS modules lose their exports).
 - ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). JuLC
   pinned at `deb72bb` (branch `feat/joust-embedder-attribution`, bloxbean/julc#313, stacked on #311: `JavacFrontend.attribute` public).

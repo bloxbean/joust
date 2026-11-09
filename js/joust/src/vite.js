@@ -9,7 +9,10 @@
 //   them. crypto is not needed (the SDK uses WebCrypto and libsodium in browsers).
 // - Every polyfill is resolved from this package, by absolute path: it works however the project's node_modules are
 //   laid out (npm hoisting or not, pnpm).
+// - The MerkleMap mirrors (Aiken's MPF) also use Node's assert, so that is aliased too.
 // - The packages use top-level await: es2022 for the dev server's dependency bundling and for builds.
+// - The runtime engine runs in a module worker (@julclang/joust-runtime/worker): workers are built as ES modules, with
+//   the same aliases and globals (a build bundles workers separately, with their own plugins).
 // - The page may import the build's clients (build/joust/*.js) from the project root, outside the page directory.
 import { createRequire } from 'node:module';
 import { realpathSync } from 'node:fs';
@@ -22,9 +25,12 @@ const shim = (name) => require.resolve(`vite-plugin-node-polyfills/shims/${name}
 export function joust({ root = process.cwd() } = {}) {
   const buffer = shim('buffer');
   const proc = shim('process');
+  // Module aliases only (absolute paths); the globals are injected below, from absolute paths too.
+  const polyfills = () => nodePolyfills({ include: ['buffer', 'events', 'util', 'stream', 'process', 'assert'],
+    globals: { Buffer: false, global: false, process: false } });
+  const globals = () => inject({ Buffer: [buffer, 'Buffer'], process: [proc, 'process'] });
   return [
-    // Module aliases only (absolute paths); the globals are injected below, from absolute paths too.
-    nodePolyfills({ include: ['buffer', 'events', 'util', 'stream', 'process'], globals: { Buffer: false, global: false, process: false } }),
+    polyfills(),
     {
       name: 'joust',
       config: (c) => ({
@@ -35,7 +41,10 @@ export function joust({ root = process.cwd() } = {}) {
           plugins: [{ name: 'joust-shims', setup(b) {
             for (const p of [buffer, proc]) b.onResolve({ filter: new RegExp(`^${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }, () => ({ path: p, external: false }));
           } }] } },
-        build: { target: 'es2022', rollupOptions: { plugins: [inject({ Buffer: [buffer, 'Buffer'], process: [proc, 'process'] })] } },
+        build: { target: 'es2022', rollupOptions: { plugins: [globals()] } },
+        // In a worker's bundle, inject after the CommonJS conversion ('post'): an import added to a CommonJS module
+        // first (serialize-error uses Buffer) makes it look like an ES module, and its exports are lost.
+        worker: { format: 'es', plugins: () => [polyfills(), { ...globals(), enforce: 'post' }] },
         server: { fs: { allow: [...new Set([root, c.root ?? root].flatMap((p) => [p, realpathSync(p)]))] } },
       }),
     },

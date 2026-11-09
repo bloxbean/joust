@@ -6,16 +6,19 @@
 //
 //   /chain/<path>              the network's chain API (GET, and POST /tx/submit)
 //   /joust/<file>              build/joust: contracts.json, validators.json, deployments.<network>.json, clients
-//   /joust/network.json        { network, networkId, chain: "/chain", service: "/joust/service", clock, deployments }
-//   /joust/service/prepare     POST: a prepare service (the runtime engine, in this process) for the page's
-//                              JoustContract (httpService("/joust/service")). The page verifies every transaction it
-//                              returns before the wallet signs (D7): this server is not trusted with anything.
+//   /joust/network.json        { network, networkId, chain: "/chain", engine, contracts, service, clock, deployments }
+//   /joust/engine/<file>       the runtime engine (joust-runtime.js and its .wasm, from @julclang/joust-runtime): a page
+//                              runs it in a worker (@julclang/joust-runtime/worker) and prepares its own transactions
+//   /joust/service/prepare     POST: the same engine in this process, as a prepare service (httpService("/joust/service"))
+//                              for pages without the worker. Either way the page verifies every transaction before the
+//                              wallet signs (D7): this server is not trusted with anything.
 //   /dev/topup                 POST { address, ada? } (DevKit only)
 //   anything else              the page: Vite (when the project has it) or the page directory's files
 
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, statSync, watch } from 'node:fs';
+import { readFileSync, existsSync, statSync, watch, createReadStream } from 'node:fs';
 import { join, resolve, extname, normalize, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { build } from './build.js';
 import { deploy } from './deploy.js';
@@ -160,6 +163,20 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
   }
   const notFound = (res) => { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); };
 
+  // The engine a page's worker loads: the one this server's own runtime uses. Large (about 20 MB of Wasm), so it is
+  // streamed, with an ETag: a reload revalidates instead of downloading it again.
+  const engineDir = fileURLToPath(new URL('../engine/', import.meta.resolve('@julclang/joust-runtime')));
+  function engineFile(req, res, rel) {
+    const p = normalize(join(engineDir, rel));
+    if (!p.startsWith(engineDir) || !existsSync(p) || statSync(p).isDirectory()) return notFound(res);
+    const st = statSync(p);
+    const etag = `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+    if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag }); return res.end(); }
+    res.writeHead(200, { 'content-type': TYPES[extname(p)] ?? 'application/octet-stream', 'content-length': st.size,
+      etag, 'cache-control': 'no-cache' });
+    createReadStream(p).pipe(res);
+  }
+
   const server = createServer(async (req, res) => {
     res.setHeader('access-control-allow-origin', '*');
     res.setHeader('access-control-allow-headers', 'content-type');
@@ -169,8 +186,9 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
       if (url.pathname.startsWith('/chain/')) return await proxyChain(req, res, url.pathname.slice('/chain'.length) + url.search);
       if (url.pathname === '/joust/network.json') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({ network: name, networkId: net.networkId, chain: '/chain', service: '/joust/service',
-          clock: net.clock, deployments: deployed ?? {} }));
+        return res.end(JSON.stringify({ network: name, networkId: net.networkId, chain: '/chain',
+          engine: '/joust/engine/joust-runtime.js', contracts: '/joust/contracts.json', service: '/joust/service',
+          clock: net.clock, ttlMs: config.dev?.ttlMs ?? (net.admin ? 20_000 : 180_000), deployments: deployed ?? {} }));
       }
       if (url.pathname === '/joust/service/prepare' && req.method === 'POST') {
         const body = await new Promise((ok) => { let s = ''; req.on('data', (c) => { s += c; }); req.on('end', () => ok(s)); });
@@ -185,6 +203,7 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
           return res.end(JSON.stringify({ error: String(e.message ?? e) }));
         }
       }
+      if (url.pathname.startsWith('/joust/engine/')) return engineFile(req, res, url.pathname.slice('/joust/engine/'.length));
       if (url.pathname.startsWith('/joust/')) return file(res, out, url.pathname.slice('/joust/'.length));
       if (url.pathname === '/dev/topup' && req.method === 'POST' && net.admin) {
         const body = await new Promise((ok) => { let s = ''; req.on('data', (c) => { s += c; }); req.on('end', () => ok(s)); });

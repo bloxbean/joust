@@ -6,7 +6,7 @@ import { chainOf, blockfrostProvider, bech32Of, assemble, planOf, toJson, runCom
 import { fetchNeed } from './snapshot.js';
 import { engineService } from './service.js';
 
-export { loadEngine } from './engine.js';
+export { loadEngine } from '#engine';
 export { engineService } from './service.js';
 export { blockfrostApi, emptySnapshot, fetchNeed, asProvider, utxoJson } from './snapshot.js';
 export { devkitClock, devkitTopUp, devkitMint, devkitSweep } from './devkit.js';
@@ -30,6 +30,7 @@ export { devWallet, deriveAccount, DEVKIT_MNEMONIC } from '@julclang/state-clien
  * @param o.networkId  0 (test networks) or 1 (mainnet)
  * @param o.deployments  { [contract]: deployment } (joust deploy writes them)
  * @param o.validators   build/joust/validators.json (joust build): plain JuLC validators, such as governors
+ * @param o.engine     where the engine is: { dir } in Node (default: this package's engine/), { url } in a browser
  */
 export function joustRuntime(o) {
   const provider = o.provider ?? blockfrostProvider(o.chainUrl, { projectId: o.projectId, fetchImpl: o.fetchImpl });
@@ -66,7 +67,8 @@ export function joustRuntime(o) {
     return d ? [c.instance, c.object].filter(Boolean).map((id) => d.policy + id) : [];
   });
   const engine = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs,
-    prefetch: o.prefetch === false ? undefined : prefetch, mapStore: o.mapStore, mapMirror: o.mapMirror, unitsOf, record: o.record });
+    prefetch: o.prefetch === false ? undefined : prefetch, mapStore: o.mapStore, mapMirror: o.mapMirror, unitsOf, record: o.record,
+    engine: o.engine });
   const descriptionOf = (contract) => {
     for (const c of o.contracts) {
       const d = typeof c.description === 'string' ? JSON.parse(c.description) : c.description;

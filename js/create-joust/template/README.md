@@ -10,6 +10,10 @@ npm test           # creates a counter and calls it, through @julclang/joust-run
 npm run dev        # builds, deploys and serves the page (page/) at http://127.0.0.1:5178; redeploys on save
 ```
 
+The page prepares its own transactions: JOUST's runtime engine (Wasm, about 20 MB) runs in a Web Worker
+(`page/engine.worker.js`), and the page checks every transaction it builds before the wallet signs. `joust dev` serves
+the engine, the chain (`/chain`, so a Blockfrost project id stays in the dev server) and the build.
+
 A local devnet: `yaci-devkit up --enable-yaci-store` (Yaci Store on :8080, admin API on :10000). Browser wallets
 cannot join a DevKit: the page offers an in-page DevKit key, and a "Top up" button.
 

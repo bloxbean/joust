@@ -1,7 +1,6 @@
 // The MerkleMap mirror's node store (ADR-0002 D5, ADR-0015 D5): content-addressed MPF nodes (hash -> node, hex) the
-// engine reads and writes. In memory, or persisted to a JSON file (Node). A page keeps it in IndexedDB (M4).
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
-import { dirname } from 'node:path';
+// engine reads and writes. In memory, or persisted to a JSON file (Node only).
+export { fileMapStore } from '#file-map-store';
 
 export function memoryMapStore(initial = {}) {
   const nodes = { ...initial };
@@ -9,22 +8,6 @@ export function memoryMapStore(initial = {}) {
     all: () => nodes,
     putAll(written) {
       Object.assign(nodes, written ?? {});
-    },
-  };
-}
-
-/** A node store kept in {@code file} (written after each prepare that adds nodes). */
-export function fileMapStore(file) {
-  const nodes = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
-  return {
-    all: () => nodes,
-    putAll(written) {
-      const keys = Object.keys(written ?? {});
-      if (!keys.length) return;
-      for (const k of keys) nodes[k] = written[k];
-      mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file + '.tmp', JSON.stringify(nodes));
-      renameSync(file + '.tmp', file);
     },
   };
 }

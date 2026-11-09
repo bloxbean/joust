@@ -1,6 +1,7 @@
 // The template's page in a browser (ADR-0015 M4): joust dev on Yaci DevKit serves it with Vite and
 // @julclang/joust/vite; Chromium connects the in-page DevKit key, tops it up, creates a counter, increments it, sees the
-// contract refuse +0, and closes it. Every transaction goes through the page's verifier before the key signs it.
+// contract refuse +0, and closes it. The page prepares every transaction itself, with the runtime engine in a worker
+// (no request reaches the dev server's prepare service), and its verifier checks each one before the key signs it.
 // Runs when DevKit is up (Yaci Store on :8080).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,6 +48,8 @@ test('the template page on DevKit: connect, top up, create, increment, refusal, 
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.stack ?? String(e)));
+    const requests = [];
+    page.on('request', (r) => requests.push(new URL(r.url()).pathname));   // the page's and its worker's
     const logText = () => page.locator('#log').innerText();
     const until = async (pred, what, ms = 180_000) => {
       for (const end = Date.now() + ms; Date.now() < end; await page.waitForTimeout(1000)) if (await pred()) return;
@@ -65,6 +68,7 @@ test('the template page on DevKit: connect, top up, create, increment, refusal, 
     try {
       await page.goto(d.url);
       await until(async () => /On devkit: app\.Counter/.test(await page.locator('#network').innerText()), 'the page loads');
+      await until(async () => /Runtime engine ready/.test(await logText()), 'the engine loads in its worker');
       await page.selectOption('#wallet-choice', 'dev');
       await page.click('#connect');
       await until(async () => /Connected/.test(await logText()), 'connect');
@@ -85,6 +89,35 @@ test('the template page on DevKit: connect, top up, create, increment, refusal, 
     }
     assert.equal(reviews, 3, 'create, +1 and close were reviewed in the page before signing');
     assert.deepEqual(errors, []);
+    assert.ok(requests.includes('/joust/engine/joust-runtime.js.wasm'), 'the worker loaded the engine');
+    assert.ok(!requests.some((p) => p.startsWith('/joust/service')), 'no call went to the dev server\'s prepare service');
+
+    // The MerkleMap pieces in the worker (the Counter has no map, so its flow does not reach them): Aiken's MPF on the
+    // browser polyfills gives Node's root and proof, and the mirror cache is IndexedDB, persistent across a reopen.
+    const worker = page.workers()[0];
+    const mpfUrl = requests.find((p) => p.includes('@aiken-lang_merkle-patricia-forestry'));
+    const mirrorUrl = requests.find((p) => p.endsWith('/joust-runtime/src/mirror.js'));
+    assert.ok(worker && mpfUrl && mirrorUrl, 'the worker loaded the MPF library and the mirrors');
+    const entries = [{ key: 'alice', value: '1' }, { key: 'bob', value: '2' }, { key: 'carol', value: '3' }];
+    const inWorker = await worker.evaluate(async ([mpf, mirror, list]) => {
+      const { Trie } = await import(mpf);
+      const t = await Trie.fromList(list);
+      const proof = (await t.prove('bob')).toCBOR().toString('hex');
+      const { levelMirrorCache } = await import(mirror);
+      let c = await levelMirrorCache('joust-page-test');
+      await c.putState('r1', new Map([['k', 'v']]));
+      await c.close();
+      c = await levelMirrorCache('joust-page-test');
+      const back = [...(await c.state('r1'))];
+      await c.close();
+      return { root: t.hash.toString('hex'), proof, back, dbs: (await indexedDB.databases()).map((d) => d.name) };
+    }, [mpfUrl, mirrorUrl, entries]);
+    const { Trie } = await import(join(JS, 'joust-runtime', 'node_modules', '@aiken-lang', 'merkle-patricia-forestry', 'dist', 'index.js'));
+    const t = await Trie.fromList(entries);
+    assert.equal(inWorker.root, t.hash.toString('hex'), 'the MPF root in the worker is Node\'s');
+    assert.equal(inWorker.proof, (await t.prove('bob')).toCBOR().toString('hex'), 'the MPF proof in the worker is Node\'s');
+    assert.deepEqual(inWorker.back, [['k', 'v']], 'the mirror cache keeps a state across a reopen');
+    assert.ok(inWorker.dbs.some((n) => n.includes('joust-page-test')), `the mirror cache is IndexedDB (${inWorker.dbs})`);
   } finally {
     await browser.close();
     await d.close();
