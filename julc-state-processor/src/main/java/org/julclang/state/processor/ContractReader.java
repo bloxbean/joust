@@ -749,9 +749,10 @@ final class ContractReader {
                 ExecutableElement m = initElements.stream().filter(e -> e.getSimpleName().contentEquals(t.method()))
                         .findFirst().orElse(null);
                 if (m == null || !keyBoundToCaller(m, o.simple(), k.keyIndex())) {
-                    messager.printMessage(Diagnostic.Kind.WARNING, "keyed @OwnedInit " + t.method() + " neither uses"
-                            + " @Owned(signedKey = true) nor checks the key against ctx.caller(): anyone can take a key"
-                            + " first (squatting, ADR-0016 §2)", m == null ? type : m);
+                    messager.printMessage(Diagnostic.Kind.WARNING, "keyed @OwnedInit " + t.method() + " lets anyone take"
+                            + " a key first (squatting, ADR-0016 §2): to silence this, use @Owned(signedKey = true), or take"
+                            + " the key from ctx.caller() in every return (return new " + o.simple() + "(..., ctx.caller(),"
+                            + " ...))", m == null ? type : m);
                 }
             }
         }
@@ -763,46 +764,45 @@ final class ContractReader {
     }
 
     /**
-     * The squatting check of ADR-0016 D1 (review F42): the initializer binds its key to the caller when the key it
-     * writes ({@code new T(...)}'s argument at the key's index) is {@code caller()} itself, or is compared with
-     * {@code caller()} by an {@code equals(a, b)} call (as in {@code Require.that(ByteStringLib.equals(key, ctx.caller()),
-     * ...)}). Writing {@code caller()} into another field does not count. False if the body cannot be read.
+     * The squatting check of ADR-0016 D1 (review F42, F45): the initializer takes its key from the caller when every
+     * return statement is {@code new T(...)} whose argument at the key's index is, syntactically,
+     * {@code <ctx>.caller()} ({@code <ctx>} the method's Ctx parameter). No flow analysis: anything else, a legitimate
+     * equality check included, does not count. False if the body cannot be read.
      */
     private boolean keyBoundToCaller(ExecutableElement m, String typeName, int keyIndex) {
+        String ctxName = null;
+        for (var p : m.getParameters()) if (isNamed(p.asType(), CTX)) ctxName = p.getSimpleName().toString();
+        if (ctxName == null) return false;
+        String caller = ctxName + ".caller()";
         try {
             var tree = com.sun.source.util.Trees.instance(env).getTree(m);
             if (tree == null || tree.getBody() == null) return false;
-            var keys = new HashSet<String>();
-            var compared = new ArrayList<List<String>>();
+            var returns = new ArrayList<com.sun.source.tree.ExpressionTree>();
             new com.sun.source.util.TreeScanner<Void, Void>() {
                 @Override
-                public Void visitNewClass(com.sun.source.tree.NewClassTree n, Void v) {
-                    String id = n.getIdentifier().toString();
-                    if ((id.equals(typeName) || id.endsWith("." + typeName)) && n.getArguments().size() > keyIndex) {
-                        keys.add(n.getArguments().get(keyIndex).toString());
-                    }
-                    return super.visitNewClass(n, v);
+                public Void visitReturn(com.sun.source.tree.ReturnTree r, Void v) {
+                    returns.add(r.getExpression());
+                    return super.visitReturn(r, v);
                 }
 
                 @Override
-                public Void visitMethodInvocation(com.sun.source.tree.MethodInvocationTree n, Void v) {
-                    String sel = n.getMethodSelect().toString();
-                    if ((sel.equals("equals") || sel.endsWith(".equals")) && n.getArguments().size() == 2) {
-                        compared.add(List.of(n.getArguments().get(0).toString(), n.getArguments().get(1).toString()));
-                    }
-                    return super.visitMethodInvocation(n, v);
+                public Void visitLambdaExpression(com.sun.source.tree.LambdaExpressionTree l, Void v) {
+                    return null;   // a lambda's returns are not the initializer's
+                }
+
+                @Override
+                public Void visitClass(com.sun.source.tree.ClassTree c, Void v) {
+                    return null;
                 }
             }.scan(tree.getBody(), null);
-            for (String key : keys) {
-                if (key.endsWith("caller()")) return true;
-                for (var pair : compared) {
-                    if ((pair.get(0).equals(key) && pair.get(1).endsWith("caller()"))
-                            || (pair.get(1).equals(key) && pair.get(0).endsWith("caller()"))) {
-                        return true;
-                    }
-                }
+            if (returns.isEmpty()) return false;
+            for (var e : returns) {
+                if (!(e instanceof com.sun.source.tree.NewClassTree n)) return false;
+                String id = n.getIdentifier().toString();
+                if (!(id.equals(typeName) || id.endsWith("." + typeName)) || n.getArguments().size() <= keyIndex) return false;
+                if (!n.getArguments().get(keyIndex).toString().equals(caller)) return false;
             }
-            return false;
+            return true;
         } catch (RuntimeException | LinkageError e) {
             return false;
         }

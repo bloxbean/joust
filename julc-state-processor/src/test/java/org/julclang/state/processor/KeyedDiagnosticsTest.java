@@ -17,13 +17,12 @@ class KeyedDiagnosticsTest {
                 @Init public static S init(Ctx ctx) { return new S(ctx.caller(), true); }
             """;
 
-    /** A keyed type whose insert binds its key to the caller, with a signed retire and a signed action. */
+    /** A keyed type whose insert takes its key from the caller, with a signed retire and a signed action. */
     static String keyed(String owned, String extra) {
         return STATE + owned + "\n" + """
                     public record K(byte[] name, byte[] owner, BigInteger n) {}
                     @OwnedInit public static K add(byte[] name, Ctx ctx) {
-                        Require.that(ByteStringLib.equals(name, ctx.caller()), "your own key");
-                        return new K(name, ctx.caller(), BigInteger.ZERO);
+                        return new K(ctx.caller(), ctx.caller(), BigInteger.ZERO);
                     }
                     @OwnedAction @SignedBy("owner") public static K bump(K k) { return new K(k.name(), k.owner(), k.n().add(BigInteger.ONE)); }
                     @OwnedDestroy(retire = true) @SignedBy("owner") public static JulcList<Payout> leave(K k, Ctx ctx) { return Payouts.none(); }
@@ -194,18 +193,36 @@ class KeyedDiagnosticsTest {
                     @OwnedInit public static Ballot cast(byte[] voter, Ctx ctx) { %s }
                     @OwnedDestroy(retire = true) @SignedBy("owner") public static JulcList<Payout> leave(Ballot b, Ctx ctx) { return Payouts.none(); }
                 }""";
-        // Codex F42: the caller is written into another field, the key is not bound.
-        var codex = compile(body.formatted("return new Ballot(voter, ctx.caller());"));
-        ok(codex);
-        warning(codex, "squatting");
-        warning(compile(body.formatted("Require.that(ctx.caller() != null, \"x\"); return new Ballot(voter, voter);")), "squatting");
-        noWarning(compile(body.formatted("return new Ballot(ctx.caller(), ctx.caller());")), "squatting");
-        noWarning(compile(body.formatted("Require.that(ByteStringLib.equals(voter, ctx.caller()), \"own\"); return new Ballot(voter, voter);")),
-                "squatting");
-        noWarning(compile(body.formatted("Require.that(ByteStringLib.equals(ctx.caller(), voter), \"own\"); return new Ballot(voter, voter);")),
-                "squatting");
+        // Silenced only by signedKey, or when every return takes the key from ctx.caller() (F42, F45).
+        noWarning(compile(body.formatted("return new Ballot(ctx.caller(), voter);")), "squatting");
         noWarning(compile(body.formatted("return new Ballot(voter, voter);").replace("@Owned(key = \"voter\")",
                 "@Owned(key = \"voter\", maxKeyBytes = 28, signedKey = true)")), "squatting");
+        noWarning(compile(body.formatted("if (voter.length > 0) { return new Ballot(ctx.caller(), voter); } return new Ballot(ctx.caller(), ctx.caller());")),
+                "squatting");
+        String[] fooled = {
+                // Codex F42: caller() written into another field.
+                "return new Ballot(voter, ctx.caller());",
+                // F45: a discarded comparison.
+                "ByteStringLib.equals(voter, ctx.caller()); return new Ballot(voter, ctx.caller());",
+                // F45: a negated comparison.
+                "Require.that(!ByteStringLib.equals(voter, ctx.caller()), \"x\"); return new Ballot(voter, voter);",
+                // F45: an unrelated construction binding the caller beside the one returned.
+                "Ballot unused = new Ballot(ctx.caller(), ctx.caller()); return new Ballot(voter, ctx.caller());",
+                // F45: reassignment through a local after the check.
+                "Require.that(ByteStringLib.equals(voter, ctx.caller()), \"own\"); byte[] k = voter; return new Ballot(k, voter);",
+                // An alias local of the caller (a legitimate binding, but not syntactically ctx.caller()).
+                "byte[] c = ctx.caller(); return new Ballot(c, voter);",
+                // A legitimate equality check: still warns (no flow analysis).
+                "Require.that(ByteStringLib.equals(voter, ctx.caller()), \"own\"); return new Ballot(voter, voter);",
+                // Two returns, only one binding the key.
+                "if (voter.length > 0) { return new Ballot(ctx.caller(), voter); } return new Ballot(voter, voter);",
+        };
+        for (String f : fooled) {
+            var r = compile(body.formatted(f));
+            ok(r);
+            warning(r, "squatting");
+            warning(r, "use @Owned(signedKey = true), or take the key from ctx.caller()");
+        }
     }
 
     @Test
