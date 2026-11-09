@@ -226,6 +226,38 @@ class KeyedDiagnosticsTest {
     }
 
     @Test
+    void theSquattingRuleIsConservative() {
+        // F47, F48: the key argument's position means the key only for the record's own canonical construction, and
+        // only while the Ctx parameter is the caller's. (JuLC itself rejects constructor bodies, JULC0099, and
+        // reassignment outside a loop, JULC0061; the processor's rule holds regardless.)
+        String body = STATE + """
+                    @Owned(key = "voter") public record Ballot(byte[] voter, byte[] owner) { %s }
+                    @OwnedInit public static Ballot cast(byte[] voter, Ctx ctx) { %s }
+                    @OwnedDestroy(retire = true) @SignedBy("owner") public static JulcList<Payout> leave(Ballot b, Ctx ctx) { return Payouts.none(); }
+                }""";
+        noWarning(compile(body.formatted("", "return new Ballot(ctx.caller(), voter);")), "squatting");
+        String[][] fooled = {
+                // F47 (Codex): an extra constructor that swaps its arguments, called with the caller first.
+                {"public Ballot(byte[] owner, byte[] voter, boolean reorder) { this(voter, owner); }",
+                        "return new Ballot(ctx.caller(), voter, true);"},
+                // F47: a compact constructor that replaces the key.
+                {"public Ballot { voter = owner; }", "return new Ballot(ctx.caller(), voter);"},
+                // Rule 1: an explicit constructor, even one never called, voids the rule.
+                {"public Ballot(byte[] owner, byte[] voter, boolean reorder) { this(voter, owner); }",
+                        "return new Ballot(ctx.caller(), voter);"},
+                // F48 (Codex): the Ctx parameter reassigned before the return.
+                {"", "ctx = new Ctx(voter, ctx.received(), ctx.balance(), ctx.validFrom(), ctx.validTo()); return new Ballot(ctx.caller(), voter);"},
+                // F48: reassigned inside a nested block (a loop, where JuLC would allow it).
+                {"", "for (int i = 0; i < 1; i++) { ctx = new Ctx(voter, ctx.received(), ctx.balance(), ctx.validFrom(), ctx.validTo()); } return new Ballot(ctx.caller(), voter);"},
+        };
+        for (String[] f : fooled) {
+            var r = compile(body.formatted(f[0], f[1]));
+            assertTrue(r.errors().isEmpty() || r.errors().stream().noneMatch(e -> e.contains("squatting")), r.errors().toString());
+            warning(r, "squatting");
+        }
+    }
+
+    @Test
     void refusedCombinations() {
         String assets = "keyed types cannot be combined with native assets";
         error(compile(keyed("@Action @Payable public static S fund(S s, Ctx ctx, Funds funds) { return s; }")), assets);

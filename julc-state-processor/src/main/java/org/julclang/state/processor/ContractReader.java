@@ -748,7 +748,9 @@ final class ContractReader {
                 if (!t.ownedType().equals(o.type()) || k.signedKey()) continue;
                 ExecutableElement m = initElements.stream().filter(e -> e.getSimpleName().contentEquals(t.method()))
                         .findFirst().orElse(null);
-                if (m == null || !keyBoundToCaller(m, o.simple(), k.keyIndex())) {
+                TypeElement rec = ElementFilter.typesIn(type.getEnclosedElements()).stream()
+                        .filter(e -> e.getSimpleName().contentEquals(o.simple())).findFirst().orElse(null);
+                if (m == null || rec == null || !keyBoundToCaller(m, rec, k.keyIndex())) {
                     messager.printMessage(Diagnostic.Kind.WARNING, "keyed @OwnedInit " + t.method() + " lets anyone take"
                             + " a key first (squatting, ADR-0016 §2): to silence this, use @Owned(signedKey = true), or take"
                             + " the key from ctx.caller() in every return (return new " + o.simple() + "(..., ctx.caller(),"
@@ -764,12 +766,23 @@ final class ContractReader {
     }
 
     /**
-     * The squatting check of ADR-0016 D1 (review F42, F45): the initializer takes its key from the caller when every
-     * return statement is {@code new T(...)} whose argument at the key's index is, syntactically,
-     * {@code <ctx>.caller()} ({@code <ctx>} the method's Ctx parameter). No flow analysis: anything else, a legitimate
-     * equality check included, does not count. False if the body cannot be read.
+     * The squatting check of ADR-0016 D1 (review F42, F45, F47, F48): the initializer takes its key from the caller only
+     * when all of these hold, syntactically, with no flow analysis:
+     * <ol>
+     *   <li>the keyed record declares no constructor of its own (compact, canonical or other), so {@code new T(...)}
+     *   stores its arguments as they are;</li>
+     *   <li>every return statement is {@code new T(...)} with exactly as many arguments as T has components, its
+     *   argument at the key's index being {@code <ctx>.caller()} ({@code <ctx>} the method's Ctx parameter);</li>
+     *   <li>the Ctx parameter is never assigned anywhere in the body.</li>
+     * </ol>
+     * Anything else, a legitimate equality check included, does not count. False if the body cannot be read.
      */
-    private boolean keyBoundToCaller(ExecutableElement m, String typeName, int keyIndex) {
+    private boolean keyBoundToCaller(ExecutableElement m, TypeElement record, int keyIndex) {
+        String typeName = record.getSimpleName().toString();
+        int components = Records.components(record).size();
+        for (ExecutableElement c : ElementFilter.constructorsIn(record.getEnclosedElements())) {
+            if (env.getElementUtils().getOrigin(c) != javax.lang.model.util.Elements.Origin.MANDATED) return false;   // 1
+        }
         String ctxName = null;
         for (var p : m.getParameters()) if (isNamed(p.asType(), CTX)) ctxName = p.getSimpleName().toString();
         if (ctxName == null) return false;
@@ -778,11 +791,25 @@ final class ContractReader {
             var tree = com.sun.source.util.Trees.instance(env).getTree(m);
             if (tree == null || tree.getBody() == null) return false;
             var returns = new ArrayList<com.sun.source.tree.ExpressionTree>();
+            var ctxAssigned = new boolean[1];
+            final String ctxVar = ctxName;
             new com.sun.source.util.TreeScanner<Void, Void>() {
                 @Override
                 public Void visitReturn(com.sun.source.tree.ReturnTree r, Void v) {
                     returns.add(r.getExpression());
                     return super.visitReturn(r, v);
+                }
+
+                @Override
+                public Void visitAssignment(com.sun.source.tree.AssignmentTree a, Void v) {
+                    if (a.getVariable().toString().equals(ctxVar)) ctxAssigned[0] = true;   // 3
+                    return super.visitAssignment(a, v);
+                }
+
+                @Override
+                public Void visitCompoundAssignment(com.sun.source.tree.CompoundAssignmentTree a, Void v) {
+                    if (a.getVariable().toString().equals(ctxVar)) ctxAssigned[0] = true;
+                    return super.visitCompoundAssignment(a, v);
                 }
 
                 @Override
@@ -795,11 +822,11 @@ final class ContractReader {
                     return null;
                 }
             }.scan(tree.getBody(), null);
-            if (returns.isEmpty()) return false;
+            if (returns.isEmpty() || ctxAssigned[0]) return false;
             for (var e : returns) {
                 if (!(e instanceof com.sun.source.tree.NewClassTree n)) return false;
                 String id = n.getIdentifier().toString();
-                if (!(id.equals(typeName) || id.endsWith("." + typeName)) || n.getArguments().size() <= keyIndex) return false;
+                if (!(id.equals(typeName) || id.endsWith("." + typeName)) || n.getArguments().size() != components) return false;   // 2
                 if (!n.getArguments().get(keyIndex).toString().equals(caller)) return false;
             }
             return true;
