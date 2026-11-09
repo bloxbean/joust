@@ -101,6 +101,11 @@ configure(subprojects.findAll { it.name in publishedModules }) { candidate ->
         options.addBooleanOption('-no-fonts', true)
     }
 
+    // No Gradle module metadata (.module): consumers resolve from the POM, the `onchain` jar by its classifier. Central
+    // limits the files a namespace may hold (org.julclang holds JuLC's too), and the POM expresses everything JOUST's
+    // publications need.
+    tasks.withType(GenerateModuleMetadata).configureEach { enabled = false }
+
     afterEvaluate {
         publishing {
             publications {
