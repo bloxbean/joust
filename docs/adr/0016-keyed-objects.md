@@ -1,6 +1,6 @@
 # ADR-0016: Keyed objects — one UTxO per key, unique per instance, in a sorted on-chain list
 
-**Status:** Proposed (r7)
+**Status:** Proposed (r8)
 **Date:** 2026-11-09
 **Builds on:** ADR-0001 (A: I1–I14), ADR-0003 (owned objects: I18–I21), ADR-0007 (reserved token kinds: I27), ADR-0009
 (invariants, quorums), ADR-0012 (several owned types: I42, I43), ADR-0011 (composition), ADR-0013 (page verifier),
@@ -510,11 +510,28 @@ The transaction:
     node low and the predecessor high and hide a gift to the predecessor (Codex review round 6, F37). So every script
     input's **value** (the anchor or predecessor, the removed node, the target) is read from its producing transaction,
     whose body must hash to the input's transaction id: `chain.verifiedOutput` already does this for the address and
-    the datum (`chain.js:36–44`) and gains the value. As defence in depth, a call whose redeemer carries `Ctx` must
-    also agree with it: the target's value equals what `ctx.balance` states (checked on chain against the real input,
-    `ValidatorGenerator.java:354–356`). Where the provider serves no transaction CBOR (Ogmios; Yaci Store without
-    `save-cbor`), the page accepts only a call whose every script input value is bound by `Ctx` or, for the single
-    remaining script input, by the balance equation. Otherwise it refuses the call.
+    the datum (`chain.js:36–44`) and gains the value. It hashes the body bytes exactly as served (as
+    `ledger.js:103–105` does), never a re-serialised copy, and a body that does not parse is refused.
+  - **`Ctx` as a second binding.** `ctx.balance` is checked on chain against the real input
+    (`ValidatorGenerator.java:354–356`), with an offset that depends on the operation. The page applies:
+
+    | Operation | Binding of the target's lovelace |
+    |---|---|
+    | removing destroy | `in = ctx.balance` |
+    | keyed action, retire | `in = ctx.balance + minAda` |
+    | insert, instance creation | `ctx.balance = 0`; it binds no existing input (the anchor has no `Ctx`) |
+    | `Link` (anchor, predecessor) | no `Ctx`: authenticated directly, or solved as the sole remaining input |
+
+    `Ctx` binds lovelace only; token and value shape are checked separately (D2, I51).
+  - **Without transaction CBOR** (Ogmios; Yaci Store without `save-cbor`), the page accepts only a call whose script
+    inputs are all bound: by `Ctx` (table above), or, for at most one remaining script input, by the balance equation.
+    Otherwise it refuses the call. This rests on the page's existing refusals (`verify.js:114–131`: no certificates,
+    votes, proposals, donations or non-zero withdrawals) and on its input allowlist (`verify.js:143–166`). So no term
+    enters the balance equation unseen, and wallet inputs come from the wallet.
+    - *Insert:* the anchor is the one remaining input.
+    - *Remove:* the node is bound by its destroy's `Ctx`, and the predecessor is the one remaining input.
+    - *Retire, keyed action with `Ctx`:* bound by `Ctx`.
+    - *Keyed action without `Ctx`:* its target is the one remaining input.
   - **The page's own allowances.** All are computed from those authenticated input values, with protocol parameters
     bounded like the fee (an absolute cap). Anything above an allowance is refused:
     - per anchor `A`: `allowA = max(0, ledgerMin(relinked(A)) − lovelace(A))`;
@@ -546,7 +563,8 @@ The transaction:
     - *a creation* (instance with heads, or an insert) releases nothing. Its new output, heads and anchor top-up are
       wallet-funded and bounded above; no other party may be paid;
     - *a retire* releases `value(target) − (value(continuation) − topUpR) = in − minAda`;
-    - *a removal* releases the whole node;
+    - *a removal* releases the whole node plus its page-authorized payment, counted once
+      (`value(target) + pay`): a payable removing destroy pays `in + received` (`ValidatorGenerator.java:423`);
     - *a keyed action* releases `value(target) + pay − value(continuation)`: the page-authorized payment, bound to the
       call's `received` (`verify.js:233`), is counted once. So a payable action that pays a beneficiary from the
       payment plus its own funds passes (100 + 10 → 90, beneficiary 20, release 20).
@@ -559,9 +577,13 @@ The transaction:
     allowance (a ledger minimum's shortfall for one output, a few ADA at the capped parameters), locked in a node or a
     head. It cannot move other funds.
   - **Retries through a page** follow D7's designated-input rule. The page records the designated wallet input of a
-    keyed call's first attempt, and signs a retry only when that retry spends the same input. So a hostile service
-    reporting "rejected" cannot get the user to sign two transactions that could both land (security review round 6,
-    F24).
+    keyed call's first attempt (one of its ordinary spending inputs, never a reference or collateral input), and signs
+    a retry only when that retry spends the same input. So a hostile service reporting "rejected" cannot get the user
+    to sign two transactions that could both land (security review round 6, F24).
+    - The record belongs to the logical operation, is persisted (IndexedDB) until the first attempt is settled
+      (included, or its input spent elsewhere) or the user abandons the operation, and so survives a reload.
+    - After a reload, any keyed call of an operation with an unsettled record must spend that input. A new operation
+      starts only by the user's explicit choice.
 - **Without the service.** Keyed calls are prepared by the engine (ADR-0015), which needs the provider to list the
   state address (D7).
 - **Tamper tests (M3):**
@@ -579,10 +601,12 @@ The transaction:
   - an insert with an anchor top-up;
   - a creation with heads above `minAda`.
 
-  **Also accepted (M3):** a payable keyed action paying a beneficiary from the payment and its funds.
+  **Also accepted (M3):** a payable keyed action paying a beneficiary from the payment and its funds; a payable removal
+  paying `in + received`; a keyed action and a retire, each with and without transaction CBOR (the `Ctx` offset).
 
   **Also refused (M3):** the two-input forgery (a removal whose provider reports the node low and the predecessor high,
-  hiding a gift); a retry through the page that does not spend the first attempt's designated input; a payable keyed
+  hiding a gift); a `Ctx` with the wrong offset; a retry through the page, including after a reload, that does not
+  spend the first attempt's designated input; a payable removal with an extra third-party output; a payable keyed
   action with an extra third-party output; any composition containing a keyed call; an insert with an extra output to a
   third party; a
   creation whose payment is claimed twice.
@@ -971,3 +995,13 @@ input, so only one lands.
   - **Page retries:** S F24 → the page signs a retry only if it spends the first attempt's designated input (D11, M3).
   - **Designated inputs and citations:** D F23 → one designated input reserved per operation, and enough UTxOs for
     M2's threads; the stale `compose.js` citation removed (D7, D11).
+- r8 (2026-11-09, responds to the round-7 reviews of `1109f04`; design and security approved, Codex requested
+  changes):
+  - **`Ctx` offsets:** C F39 (P1) → `Ctx` binds the target per operation: `in = ctx.balance` for removals,
+    `ctx.balance + minAda` for actions and retires; creations and `Link` bind nothing by `Ctx`. Tests with and without
+    transaction CBOR, and for a wrong offset (D11, M3).
+  - **Payable removals:** C F40 → a removal releases the node plus its authorized payment, once (D11, M3).
+  - **Persisted retry record:** D F24, S F25 → the page's designated-input record is per operation, persisted until
+    settled, and survives reloads (D11, M3).
+  - **Fallback grounding:** D F24, S F25 → the `verify.js:114–131` refusals cited; `verifiedOutput` hashes the body as
+    served (D11).
