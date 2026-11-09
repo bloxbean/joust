@@ -55,6 +55,8 @@ final class TxRunner {
         final java.util.LinkedHashMap<String, Account> accounts = new java.util.LinkedHashMap<>();
         final java.util.LinkedHashMap<String, com.bloxbean.cardano.client.plutus.spec.PlutusScript> scripts = new java.util.LinkedHashMap<>();
         final java.util.Set<String> inputs = new java.util.HashSet<>();
+        /** The script inputs the calls spend (ADR-0016 D7: a failure is contention only if one of them moved). */
+        final java.util.List<Utxo> scriptInputs = new java.util.ArrayList<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
         /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
@@ -142,6 +144,7 @@ final class TxRunner {
         if (c != null && !c.inputs.add(u.getTxHash() + "#" + u.getOutputIndex())) {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
+        if (c != null && redeemer != null) c.scriptInputs.add(u);
         return redeemer == null ? tx.collectFrom(java.util.List.of(u)) : tx.collectFrom(u, redeemer);
     }
 
@@ -185,9 +188,9 @@ final class TxRunner {
             cap.record(caller, requiredSigners, expected, extraExpected, payouts, sends, referenceScripts, cosigners, what);
             return "composed";
         }
-        Transaction signed;
+        Designation.Claimed built;
         try {
-            var ctx = KeyedObjects.builder(rt.backend()).compose(tx)
+            var ctx = Designation.builder(rt.backend(), designated).compose(tx)
                     .withSigner(SignerProviders.signerFrom(allSigners(caller)))
                     .feePayer(caller.baseAddress())
                     .collateralPayer(caller.baseAddress())
@@ -201,76 +204,167 @@ final class TxRunner {
                 // full script context it saw. Never for normal use.
                 ctx = ctx.ignoreScriptCostEvaluationError(true);
             }
-            signed = ctx.buildAndSign();
+            var finalCtx = ctx;
+            // Selected and claimed under the payer's lock: no keyed operation designates these inputs meanwhile (D7).
+            built = Designation.build(caller.baseAddress(), finalCtx::buildAndSign);
         } catch (Exception e) {
-            throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
+            throw new SubmitException(SubmitException.Kind.BUILD, what + ": could not build the transaction: " + rootMessage(e), e);
         }
-        rt.built(what, signed, false);
+        Transaction signed = built.tx();
+        boolean pending = false;
+        try {
+            rt.built(what, signed, false);
 
-        verify(signed, expected, what);
-        for (ExpectedState e : extraExpected) verify(signed, e, what);
-        verifyPayouts(signed, payouts, what);
-        verifySends(signed, sends, what);
+            verify(signed, expected, what);
+            for (ExpectedState e : extraExpected) verify(signed, e, what);
+            verifyPayouts(signed, payouts, what);
+            verifySends(signed, sends, what);
+            if (designated != null) requireSpends(signed, designated.ref(), what);
 
-        String txHash = TransactionUtil.getTxHash(signed);
-        if (System.getProperty("joust.dumpTx") != null) {
-            try {
-                java.nio.file.Files.writeString(java.nio.file.Path.of(System.getProperty("joust.dumpTx"), txHash + ".cbor"),
-                        HexUtil.encodeHexString(signed.serialize()));
-            } catch (Exception ignored) {
-                // diagnostics only
+            String txHash = TransactionUtil.getTxHash(signed);
+            if (System.getProperty("joust.dumpTx") != null) {
+                try {
+                    java.nio.file.Files.writeString(java.nio.file.Path.of(System.getProperty("joust.dumpTx"), txHash + ".cbor"),
+                            HexUtil.encodeHexString(signed.serialize()));
+                } catch (Exception ignored) {
+                    // diagnostics only
+                }
+            }
+            if (designated == null) {
+                submitToBackend(signed, txHash, what);
+            } else {
+                // A keyed operation's attempt (ADR-0016 D7): sent at its window's start, to every relay.
+                if (window != null) awaitWindow(window, what);
+                byte[] cbor;
+                try {
+                    cbor = signed.serialize();
+                } catch (Exception e) {
+                    throw new SubmitException(SubmitException.Kind.BUILD, what + ": cannot serialise the transaction: " + rootMessage(e), e);
+                }
+                designated.handedOut(txHash, window != null ? window.toSlot() : Long.MAX_VALUE);
+                deliver(rt.relays(), cbor, txHash, what);
+            }
+            rt.log(what + ": submitted " + txHash);
+            awaitInclusion(txHash, what);
+            return txHash;
+        } catch (PendingTransactionException e) {
+            pending = true;
+            throw e;
+        } finally {
+            if (pending && window != null) {
+                Designation.unclaimAt(built.refs(), rt.chainTime().slotToPosixMs(window.toSlot()) + 10_000);
+            } else {
+                Designation.unclaim(built.refs());
             }
         }
-        if (awaitStart && window != null) awaitSlot(window.fromSlot(), what);
-        deliver(signed, txHash, what);
-        rt.log(what + ": submitted " + txHash);
-        if (onSubmitted != null) onSubmitted.accept(txHash);
-        awaitInclusion(txHash, what);
-        return txHash;
     }
 
-    /** Wait until the chain reaches {@code slot} before submitting (a keyed call's window may start later; D7 step 5). */
-    boolean awaitStart;
-    /** Observes the hash of every transaction this runner delivered (a keyed operation's attempts; D7). */
-    java.util.function.Consumer<String> onSubmitted;
+    /**
+     * The keyed operation this transaction is an attempt of (ADR-0016 D7), or null. With one, the built transaction must
+     * spend its designated input, it is sent at its window's start to every relay, and its hash is recorded first. With
+     * none, it goes to the backend alone, as before M2.
+     */
+    Designation.Designated designated;
 
-    private void awaitSlot(long slot, String what) {
-        long tip = rt.chainTime().tipSlot();
-        if (tip >= slot) return;
-        rt.log(what + ": waiting for slot " + slot + " (tip " + tip + ") to submit");
-        while (tip < slot) {
-            sleep(Math.max(200, Math.min(2_000, (slot - tip) * rt.chainTime().slotLengthMs() / 2)));
-            tip = rt.chainTime().tipSlot();
+    /** The longest the runtime waits for a window to start (beyond D9's longest cooldown, an hour). */
+    static final long MAX_START_WAIT_MS = 2 * 3_600_000L;
+
+    /**
+     * Waits until the current slot (this machine's clock, the network's slot configuration: slots pass without blocks)
+     * reaches the window's start, then checks the window is still open: an attempt that was never handed out and whose
+     * window closed is refused as transient, so the operation rebuilds it with the same designated input (F57, R-C18).
+     */
+    private void awaitWindow(Window window, String what) {
+        ChainTime time = rt.chainTime();
+        long now = time.currentSlot();
+        if (now < window.fromSlot()) {
+            long waitMs = time.slotToPosixMs(window.fromSlot()) - System.currentTimeMillis();
+            if (waitMs > MAX_START_WAIT_MS) {
+                throw new JoustException(what + ": its window starts at slot " + window.fromSlot() + ", " + waitMs / 1000
+                        + " s from now: too far ahead (the provider's link times may be wrong)");
+            }
+            rt.log(what + ": waiting for slot " + window.fromSlot() + " (now " + now + ") to submit");
+            while (time.currentSlot() < window.fromSlot()) {
+                sleep(Math.max(50, Math.min(2_000, time.slotToPosixMs(window.fromSlot()) - System.currentTimeMillis())));
+            }
         }
+        if (time.currentSlot() >= window.toSlot()) {
+            throw new SubmitException(SubmitException.Kind.TRANSIENT, what + ": its window [" + window.fromSlot() + ", "
+                    + window.toSlot() + ") closed before it was handed out; rebuilding");
+        }
+    }
+
+    /** The pre-M2 submission, kept as it was for every transaction that is not a keyed operation's attempt. */
+    private void submitToBackend(Transaction signed, String txHash, String what) {
+        try {
+            var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
+            if (!r.isSuccessful()) {
+                // A definite answer from the node: not accepted.
+                throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
+            }
+        } catch (SubmitException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
+        }
+    }
+
+    /**
+     * D7's safety rests on every attempt spending the designated input: checked on the signed body, before anything is
+     * handed out (R-C9). A failure is a defect, not contention: never retried.
+     */
+    static void requireSpends(Transaction signed, String designatedRef, String what) {
+        for (var in : signed.getBody().getInputs()) {
+            if (Designation.ref(in).equals(designatedRef)) return;
+        }
+        throw new JoustException(what + ": the built transaction does not spend its designated input " + designatedRef
+                + "; not submitting it (ADR-0016 D7)");
     }
 
     /**
      * Sends the same signed bytes to every relay (ADR-0016 D7). The outcome is transaction-wide: any acceptance means
      * submitted; otherwise any unknown delivery means its fate is unknown ({@link PendingTransactionException}: never
-     * rebuilt); only rejections by every relay are a rejection ({@link SubmitException}).
+     * rebuilt). A relay that throws, or answers nothing, is an unknown delivery (R-C3). Only rejections by every relay
+     * are a rejection ({@link SubmitException}): of kind SCRIPT when every reason is a phase-2 script failure.
      */
-    private void deliver(Transaction signed, String txHash, String what) {
-        byte[] cbor;
-        try {
-            cbor = signed.serialize();
-        } catch (Exception e) {
-            throw new SubmitException(what + ": cannot serialise the transaction: " + rootMessage(e), e);
-        }
+    static void deliver(java.util.List<Relay> relays, byte[] cbor, String txHash, String what) {
         boolean accepted = false;
-        String unknown = null;
+        boolean unknown = false;
+        String unknownWhy = null;
         String rejected = null;
-        for (Relay relay : rt.relays()) {
-            Relay.Outcome o = relay.submit(cbor);
+        boolean allScript = true;
+        for (Relay relay : relays) {
+            Relay.Outcome o;
+            try {
+                o = relay.submit(cbor);
+            } catch (Throwable t) {
+                o = Relay.Outcome.unknown("the relay threw " + t.getClass().getSimpleName() + ": " + rootMessage(t));
+            }
+            if (o == null || o.answer() == null) o = Relay.Outcome.unknown("the relay gave no answer");
             switch (o.answer()) {
                 case ACCEPTED -> accepted = true;
-                case UNKNOWN -> { if (unknown == null) unknown = o.message(); }
-                case REJECTED -> { if (rejected == null) rejected = o.message(); }
+                case UNKNOWN -> {
+                    if (!unknown) unknownWhy = o.message();
+                    unknown = true;
+                }
+                case REJECTED -> {
+                    if (rejected == null) rejected = o.message();
+                    if (!scriptFailure(o.message())) allScript = false;
+                }
             }
         }
         if (accepted) return;
-        if (unknown != null) throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + unknown + ")");
+        if (unknown) throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + unknownWhy + ")");
+        if (rejected == null) throw new PendingTransactionException(txHash, what + ": no relay to submit to");
         // A definite answer from every relay: not accepted.
-        throw new SubmitException(what + ": the node rejected the transaction: " + rejected);
+        throw new SubmitException(allScript ? SubmitException.Kind.SCRIPT : SubmitException.Kind.REJECTED,
+                what + ": the node rejected the transaction: " + rejected);
+    }
+
+    /** A node's phase-2 refusal: a script failed (not an input, the window, or the fee). */
+    static boolean scriptFailure(String message) {
+        return message != null && (message.contains("PlutusFailure") || message.contains("ValidationTagMismatch")
+                || message.contains("ScriptFailure"));
     }
 
     /**
@@ -313,7 +407,7 @@ final class TxRunner {
         }
         Transaction unsigned;
         try {
-            var ctx = new QuickTxBuilder(rt.backend()).compose(tx)
+            var ctx = Designation.builder(rt.backend(), null).compose(tx)
                     .feePayer(payer.baseAddress())
                     .collateralPayer(payer.baseAddress())
                     .mergeOutputs(false)
@@ -393,6 +487,7 @@ final class TxRunner {
                 for (Utxo u : r.getValue()) {
                     if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null) continue;
                     if (spent.contains(u.getTxHash() + "#" + u.getOutputIndex())) continue;
+                    if (Designation.isDesignated(Designation.ref(u))) continue;   // another operation's (ADR-0016 D7)
                     BigInteger q = lovelace(u);
                     if (q.compareTo(BigInteger.valueOf(3_000_000)) < 0) continue;
                     if (best == null || q.compareTo(lovelace(best)) > 0) best = u;
@@ -454,15 +549,23 @@ final class TxRunner {
             throw new JoustException(what + ": needs a key-holding account to pay and sign; publish reference scripts and"
                     + " the verifiers before wallet users call the contract (ADR-0013)");
         }
-        Transaction signed;
+        Designation.Claimed built;
         try {
-            signed = new QuickTxBuilder(rt.backend()).compose(tx)
+            var ctx = Designation.builder(rt.backend(), null).compose(tx)
                     .withSigner(SignerProviders.signerFrom(payer))
-                    .feePayer(payer.baseAddress())
-                    .buildAndSign();
+                    .feePayer(payer.baseAddress());
+            built = Designation.build(payer.baseAddress(), ctx::buildAndSign);
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
+        try {
+            return submitPlain(built.tx(), what);
+        } finally {
+            Designation.unclaim(built.refs());
+        }
+    }
+
+    private String submitPlain(Transaction signed, String what) {
         rt.built(what, signed, false);
         String txHash = TransactionUtil.getTxHash(signed);
         if (System.getProperty("joust.dumpTx") != null) {
@@ -496,18 +599,18 @@ final class TxRunner {
             }
         }
         if (expected == null) return;
-        if (count != 1) throw new SubmitException(what + ": built transaction has " + count + " state outputs");
+        if (count != 1) throw new SubmitException(SubmitException.Kind.BUILD, what + ": built transaction has " + count + " state outputs");
         if (found.getValue().getCoin().compareTo(expected.lovelace()) != 0) {
-            throw new SubmitException(what + ": builder changed the state output's lovelace to "
+            throw new SubmitException(SubmitException.Kind.BUILD, what + ": builder changed the state output's lovelace to "
                     + found.getValue().getCoin() + " (expected " + expected.lovelace()
                     + "); raise @StateContract(minAda) for this state size");
         }
         if (found.getInlineDatum() == null || !Datums.hex(found.getInlineDatum()).equals(Datums.hex(expected.datum()))) {
-            throw new SubmitException(what + ": built transaction's state datum differs from the JVM result");
+            throw new SubmitException(SubmitException.Kind.BUILD, what + ": built transaction's state datum differs from the JVM result");
         }
         if (expected.value() != null && !org.julclang.state.api.Assets.isEmpty(
                 org.julclang.state.api.Assets.subtract(valueOf(found), expected.value()))) {
-            throw new SubmitException(what + ": built transaction's state output value differs from the JVM result");
+            throw new SubmitException(SubmitException.Kind.BUILD, what + ": built transaction's state output value differs from the JVM result");
         }
     }
 
@@ -515,7 +618,7 @@ final class TxRunner {
     private static void verifySends(Transaction t, java.util.List<ExpectedSend> sends, String what) {
         var outs = t.getBody().getOutputs();
         for (ExpectedSend s : sends) {
-            if (s.index() >= outs.size()) throw new SubmitException(what + ": send output " + s.index() + " is missing");
+            if (s.index() >= outs.size()) throw new SubmitException(SubmitException.Kind.BUILD, what + ": send output " + s.index() + " is missing");
             TransactionOutput o = outs.get(s.index());
             boolean datumOk = s.inlineDatumHex() != null
                     ? o.getInlineDatum() != null && Datums.hex(o.getInlineDatum()).equals(s.inlineDatumHex())
@@ -524,7 +627,7 @@ final class TxRunner {
                     : o.getInlineDatum() == null && o.getDatumHash() == null;
             boolean covers = org.julclang.state.api.Assets.covers(valueOf(o), s.value());
             if (!o.getAddress().equals(s.address()) || !datumOk || !covers) {
-                throw new SubmitException(what + ": the balanced transaction's output " + s.index()
+                throw new SubmitException(SubmitException.Kind.BUILD, what + ": the balanced transaction's output " + s.index()
                         + " no longer delivers the send to " + s.address() + " (the builder moved or changed it)");
             }
         }
@@ -559,7 +662,7 @@ final class TxRunner {
                 }
             }
             if (!ok) {
-                throw new SubmitException(what + ": the balanced transaction no longer pays " + p.lovelace()
+                throw new SubmitException(SubmitException.Kind.BUILD, what + ": the balanced transaction no longer pays " + p.lovelace()
                         + " lovelace to " + p.address() + " (the builder adjusted the payout output)");
             }
         }
@@ -588,9 +691,22 @@ final class TxRunner {
             } catch (Exception ignored) {
                 // keep polling
             }
-            sleep(1000);
+            sleepOrPending(1000, txHash, what);
         }
         throw new PendingTransactionException(txHash, what + ": not seen on chain within " + rt.confirmTimeout());
+    }
+
+    /**
+     * Sleeps while a handed-out transaction may land: an interrupt then leaves it pending (the flag restored; R-C4),
+     * not a plain failure.
+     */
+    static void sleepOrPending(long ms, String txHash, String what) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new PendingTransactionException(txHash, what + ": interrupted while waiting for the transaction");
+        }
     }
 
     static void sleep(long ms) {

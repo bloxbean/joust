@@ -15,6 +15,38 @@ public final class ForeignReads {
     /** One read: the reference input and the decoded state. */
     public record Read<T>(Utxo utxo, T state) {}
 
+    /**
+     * A read that a keyed operation resolves again for every attempt (ADR-0016 D7: a rebuild redoes the shared
+     * references; F56): the reference input and the state its JVM run sees always come from one read.
+     */
+    public static final class Ref<T> {
+        private final StateRuntime runtime;
+        private final ForeignInstance instance;
+        private final Class<T> type;
+        private volatile Read<T> read;
+
+        /** Reads at once (a missing instance fails here, as a plain read does). */
+        public Ref(StateRuntime runtime, ForeignInstance instance, Class<T> type) {
+            this.runtime = runtime;
+            this.instance = instance;
+            this.type = type;
+            this.read = ForeignReads.read(runtime, instance, type);
+        }
+
+        /** Reads again: the instance's current UTxO and state. */
+        public void refresh() {
+            read = ForeignReads.read(runtime, instance, type);
+        }
+
+        public T state() {
+            return read.state();
+        }
+
+        public Utxo utxo() {
+            return read.utxo();
+        }
+    }
+
     private ForeignReads() {}
 
     public static <T> Read<T> read(StateRuntime runtime, ForeignInstance fi, Class<T> type) {

@@ -5,11 +5,11 @@ import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.plutus.spec.ListPlutusData;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import com.bloxbean.cardano.client.util.HexUtil;
+import org.julclang.state.runtime.Designation.Designated;
 
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /** What keyed lists and objects share (ADR-0016 D7): the designated input, link windows, argument sizes, retries. */
@@ -17,138 +17,21 @@ final class KeyedObjects {
 
     private KeyedObjects() {}
 
-    // ------------------------------------------------------------------ the designated input (D7)
+    // ------------------------------------------------------------------ the series of attempts (D7)
 
-    /** Ordinary wallet UTxOs reserved by an operation in this JVM: two operations never share one. */
-    private static final Set<String> RESERVED = ConcurrentHashMap.newKeySet();
-    /**
-     * The designated input of the innermost operation running on this thread (reserved and released on it), if any. An
-     * operation started inside another (a relay or callback calling the runtime) restores the outer one's on release.
-     */
-    private static final ThreadLocal<String> OWN = new ThreadLocal<>();
+    /** Thrown by a composition's first pass when a keyed call takes part and nothing is designated yet. */
+    static final class NeedsDesignated extends RuntimeException {
+        /** The inputs the first pass collected: not to be designated. */
+        final Set<String> avoid;
 
-    /**
-     * One ordinary wallet UTxO, spent by every attempt of one logical operation (a keyed call or a composition with
-     * one), the first included: any two attempts conflict, so at most one of the series can land, whatever relays and
-     * providers claim. It is never replaced; while it cannot be spent, nothing is rebuilt.
-     */
-    record Designated(Utxo utxo, String address, String outer) {
-        String ref() {
-            return utxo.getTxHash() + "#" + utxo.getOutputIndex();
-        }
-
-        /** Still unspent, as far as the provider shows. */
-        boolean unspent(StateRuntime rt) {
-            try {
-                for (int page = 1; page <= 20; page++) {
-                    var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                    if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) return false;
-                    for (Utxo u : r.getValue()) {
-                        if (u.getTxHash().equals(utxo.getTxHash()) && u.getOutputIndex() == utxo.getOutputIndex()) return true;
-                    }
-                    if (r.getValue().size() < 100) return false;
-                }
-            } catch (Exception e) {
-                return false;   // unknown: treat as spent, so nothing is rebuilt
-            }
-            return false;
-        }
-
-        void release() {
-            RESERVED.remove(ref());
-            if (outer == null) OWN.remove();
-            else OWN.set(outer);
+        NeedsDesignated(Set<String> avoid) {
+            super(null, null, false, false);
+            this.avoid = Set.copyOf(avoid);
         }
     }
 
     /**
-     * The QuickTx builder for a transaction of this JVM: while keyed operations hold designated inputs, coin and
-     * collateral selection skip those of other operations (this thread's own stays selectable, for collateral), so one
-     * operation never spends another's, which would make that one's retry rule (D7) read a false "spent". With no other
-     * reservation, the plain builder.
-     */
-    static com.bloxbean.cardano.client.quicktx.QuickTxBuilder builder(com.bloxbean.cardano.client.backend.api.BackendService backend) {
-        String own = OWN.get();
-        if (RESERVED.isEmpty() || (own != null && RESERVED.size() == 1 && RESERVED.contains(own))) {
-            return new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend);
-        }
-        var all = new com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier(backend.getUtxoService());
-        return new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend, new com.bloxbean.cardano.client.api.UtxoSupplier() {
-            @Override
-            public List<Utxo> getPage(String address, Integer nrOfItems, Integer page,
-                                      com.bloxbean.cardano.client.api.common.OrderEnum order) {
-                return free(all.getPage(address, nrOfItems, page, order), own);
-            }
-
-            @Override
-            public java.util.Optional<Utxo> getTxOutput(String txHash, int outputIndex) {
-                return all.getTxOutput(txHash, outputIndex);
-            }
-
-            @Override
-            public List<Utxo> getAll(String address) {
-                return free(all.getAll(address), own);
-            }
-
-            @Override
-            public boolean isUsedAddress(com.bloxbean.cardano.client.address.Address address) {
-                return all.isUsedAddress(address);
-            }
-
-            @Override
-            public void setSearchByAddressVkh(boolean flag) {
-                all.setSearchByAddressVkh(flag);
-            }
-        });
-    }
-
-    private static List<Utxo> free(List<Utxo> utxos, String own) {
-        if (utxos == null) return null;
-        return utxos.stream().filter(u -> {
-            String ref = u.getTxHash() + "#" + u.getOutputIndex();
-            return ref.equals(own) || !RESERVED.contains(ref);
-        }).toList();
-    }
-
-    /**
-     * Reserves an ordinary (lovelace-only, no datum, no reference script) UTxO of {@code payer} of at least 5 ADA that no
-     * other operation of this JVM holds; the largest such.
-     */
-    static Designated reserve(StateRuntime rt, Account payer, String what) {
-        String address = payer.baseAddress();
-        for (int tries = 0; tries < 3; tries++) {
-            Utxo best = null;
-            try {
-                for (int page = 1; page <= 20; page++) {
-                    var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                    if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                    for (Utxo u : r.getValue()) {
-                        if (u.getAmount().size() != 1 || u.getInlineDatum() != null || u.getDataHash() != null
-                                || u.getReferenceScriptHash() != null) continue;
-                        BigInteger q = u.getAmount().get(0).getQuantity();
-                        if (q.compareTo(BigInteger.valueOf(5_000_000)) < 0 || RESERVED.contains(u.getTxHash() + "#" + u.getOutputIndex())) continue;
-                        if (best == null || q.compareTo(best.getAmount().get(0).getQuantity()) > 0) best = u;
-                    }
-                    if (r.getValue().size() < 100) break;
-                }
-            } catch (Exception e) {
-                throw new JoustException(what + ": cannot read the payer's UTxOs", e);
-            }
-            if (best != null && RESERVED.add(best.getTxHash() + "#" + best.getOutputIndex())) {
-                String outer = OWN.get();
-                OWN.set(best.getTxHash() + "#" + best.getOutputIndex());
-                return new Designated(best, address, outer);
-            }
-        }
-        throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate (ADR-0016 D7:"
-                + " each concurrent keyed operation of a wallet needs its own)");
-    }
-
-    /**
-     * Runs a keyed operation (D7): designates an input, then attempts; after a definite rejection it rebuilds the whole
-     * call (window, JVM result, anchor), but only while the designated input can still be spent; an attempt whose fate is
-     * unknown is never rebuilt ({@link PendingTransactionException} propagates). Inside a composition, the composition
-     * designates and retries.
+     * Runs a keyed operation (D7) as a {@link #series}; inside a composition, the composition designates and retries.
      */
     static <T> T operation(StateRuntime rt, Account payer, String what, Function<Designated, T> attempt) {
         var cap = TxRunner.capture();
@@ -156,27 +39,187 @@ final class KeyedObjects {
             cap.keyed = true;
             return attempt.apply(null);
         }
-        Designated d = reserve(rt, payer, what);
+        return series(rt, payer, what, false, attempt);
+    }
+
+    /**
+     * The attempts of one logical operation (D7). It designates an input (at once, or, when {@code lazy}, when the first
+     * pass asks for it with {@link NeedsDesignated}), which every attempt spends. After a definite rejection it rebuilds
+     * the whole call (window, JVM results, references, anchor) while the designated input can be spent: always after a
+     * rejection or a transient refusal; after a script or build failure only if an input it spent has moved (otherwise
+     * the failure is deterministic). An attempt whose fate is unknown is never rebuilt ({@link PendingTransactionException}).
+     * <p>The series ends in a failure only once no attempt it handed out can still land: it waits until the provider
+     * has seen the end of every attempt's window and then finds the designated input unspent; otherwise the outcome is
+     * pending (F51, R-D1). A pending operation keeps its designated input reserved until those windows have passed.
+     */
+    static <T> T series(StateRuntime rt, Account payer, String what, boolean lazy, Function<Designated, T> attempt) {
+        if (!lazy) refuseWallet(payer, what);
+        Designated d = lazy ? null : Designation.reserve(rt, payer, what, Set.of());
+        boolean pending = false;
         try {
-            SubmitException last = null;
-            for (int i = 0; i <= rt.maxRetries(); i++) {
-                if (i > 0 && !d.unspent(rt)) {
-                    throw new PendingTransactionException(d.ref(), what + ": the designated input is spent, so an earlier attempt"
-                            + " may have landed; not rebuilding (ADR-0016 D7)");
-                }
+            int retries = 0;
+            while (true) {
+                RuntimeException failure;
                 try {
+                    if (d != null && retries > 0) requireUnspent(rt, d, what);
                     return attempt.apply(d);
+                } catch (NeedsDesignated n) {
+                    if (d != null) throw new IllegalStateException(what + ": designated twice");
+                    refuseWallet(payer, what);
+                    d = Designation.reserve(rt, payer, what, n.avoid);
+                    continue;
+                } catch (PendingTransactionException p) {
+                    pending = true;
+                    if (d == null || p.designatedInput() != null) throw p;
+                    var e = new PendingTransactionException(p.getMessage(), d.attemptHashes(), d.ref());
+                    e.initCause(p);
+                    throw e;
                 } catch (SubmitException e) {
-                    last = e;
-                    rt.log(what + ": attempt " + (i + 1) + " rejected (" + e.getMessage() + "); rebuilding with the same designated"
-                            + " input " + d.ref());
-                    TxRunner.sleep(2000);   // let the provider's index catch up with whatever won (a neighbour's relink)
+                    if (d == null) throw e;   // no keyed call took part (a plain composition): as before
+                    boolean again = switch (e.kind) {
+                        case REJECTED, TRANSIENT -> true;
+                        case SCRIPT, BUILD -> inputsMoved(rt, d);
+                    };
+                    if (again && retries < rt.maxRetries()) {
+                        retries++;
+                        rt.log(what + ": attempt " + retries + " refused (" + e.getMessage() + "); rebuilding with the same"
+                                + " designated input " + d.ref());
+                        TxRunner.sleep(2000);   // let the provider's index catch up with whatever won (a neighbour's relink)
+                        continue;
+                    }
+                    failure = !again ? e : new ContentionException(what + ": refused " + (retries + 1) + " times", e,
+                            d.attemptHashes(), d.ref());
+                } catch (RuntimeException e) {
+                    failure = e;
+                }
+                RuntimeException end = settle(rt, d, what, failure);
+                pending = end instanceof PendingTransactionException;
+                throw end;
+            }
+        } finally {
+            if (d != null) {
+                if (pending) d.releaseAt(lingerUntil(rt, d));
+                else d.release();
+            }
+        }
+    }
+
+    /** A WalletAccount cannot sign here; it fails closed, and wallets prepare keyed calls only from M3 (R-C21). */
+    private static void refuseWallet(Account payer, String what) {
+        if (payer instanceof WalletAccount) {
+            throw new JoustException(what + ": a keyed operation needs a key-holding payer here: a WalletAccount fails closed,"
+                    + " and wallets prepare keyed calls from ADR-0016 M3");
+        }
+    }
+
+    /** Before a rebuild: the designated input must still be spendable (D7). */
+    private static void requireUnspent(StateRuntime rt, Designated d, String what) {
+        if (d.unspent(rt)) return;
+        if (d.attempts().isEmpty()) {
+            throw new JoustException(what + ": the designated input " + d.ref() + " was spent by another transaction before"
+                    + " any attempt was handed out; nothing of this operation can land (ADR-0016 D7)");
+        }
+        throw new PendingTransactionException(what + ": the designated input is spent, so an earlier attempt may have"
+                + " landed; not rebuilding (ADR-0016 D7)", d.attemptHashes(), d.ref());
+    }
+
+    /**
+     * The exception a series ending in {@code failure} raises: {@code failure} itself if no attempt was handed out, or
+     * once the provider has seen the end of every attempt's window and the designated input is still unspent; otherwise
+     * pending.
+     */
+    static RuntimeException settle(StateRuntime rt, Designated d, String what, RuntimeException failure) {
+        if (d == null || d.attempts().isEmpty()) return failure;
+        ChainTime time = rt.chainTime();
+        long last = d.lastToSlot();
+        rt.log(what + ": " + failure.getMessage() + "; an attempt was handed out, so waiting for the provider to pass slot "
+                + last + " (the end of its window) before reporting a failure (ADR-0016 D7)");
+        long deadline = Math.max(System.currentTimeMillis(), time.slotToPosixMs(last)) + rt.confirmTimeout().toMillis();
+        while (true) {
+            long tip;
+            try {
+                tip = time.tipSlot();
+            } catch (RuntimeException e) {
+                tip = Long.MIN_VALUE;
+            }
+            if (tip >= last) break;
+            if (System.currentTimeMillis() > deadline) {
+                return new PendingTransactionException(what + ": " + failure.getMessage() + "; the provider did not reach the"
+                        + " end of the attempts' windows, so one may have landed", d.attemptHashes(), d.ref());
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return new PendingTransactionException(what + ": interrupted while an attempt may still land ("
+                        + failure.getMessage() + ")", d.attemptHashes(), d.ref());
+            }
+        }
+        if (d.unspent(rt)) return failure;
+        return new PendingTransactionException(what + ": " + failure.getMessage() + "; but the designated input is spent,"
+                + " so an earlier attempt may have landed", d.attemptHashes(), d.ref());
+    }
+
+    /** When a pending operation's designated input may be released: after its attempts' windows (and a margin). */
+    private static long lingerUntil(StateRuntime rt, Designated d) {
+        long last = d.lastToSlot();
+        if (last == Long.MIN_VALUE) return System.currentTimeMillis();
+        return rt.chainTime().slotToPosixMs(last) + 10_000;
+    }
+
+    /**
+     * Whether an input the latest attempt spent has moved (is no longer at its address), so that a script or build
+     * failure may have come from contention. Each script input holds a unique token, looked up by unit; an unreadable
+     * answer counts as moved (a rebuild is still guarded by the designated input).
+     */
+    static boolean inputsMoved(StateRuntime rt, Designated d) {
+        for (Utxo u : d.scriptInputs()) {
+            String unit = null;
+            for (var a : u.getAmount()) {
+                if (!a.getUnit().equals("lovelace") && a.getQuantity().compareTo(BigInteger.ONE) == 0) {
+                    unit = a.getUnit();
+                    break;
                 }
             }
-            throw new ContentionException(what + ": rejected " + (rt.maxRetries() + 1) + " times", last);
-        } finally {
-            d.release();
+            try {
+                boolean found = false;
+                if (unit != null) {
+                    var r = rt.backend().getUtxoService().getUtxos(u.getAddress(), unit, 10, 1);
+                    if (!r.isSuccessful() || r.getValue() == null) return true;
+                    for (Utxo x : r.getValue()) {
+                        if (Designation.ref(x).equals(Designation.ref(u))) found = true;
+                    }
+                } else {
+                    for (int page = 1; page <= 20 && !found; page++) {
+                        var r = rt.backend().getUtxoService().getUtxos(u.getAddress(), 100, page);
+                        if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                        for (Utxo x : r.getValue()) {
+                            if (Designation.ref(x).equals(Designation.ref(u))) found = true;
+                        }
+                        if (r.getValue().size() < 100) break;
+                    }
+                }
+                if (!found) return true;
+            } catch (Exception e) {
+                return true;
+            }
         }
+        return false;
+    }
+
+    /**
+     * {@code need} lovelace for an output that holds {@code have}: the ledger minimum computed from the provider's
+     * protocol parameters. The top-up the payer adds is bounded by the runtime's allowance (R-C8): a provider that
+     * inflates {@code coinsPerUTxOByte} cannot make the wallet pay a neighbour's node more than that.
+     */
+    static BigInteger topUp(StateRuntime rt, BigInteger have, BigInteger need, String what, String output) {
+        BigInteger extra = need.subtract(have);
+        if (extra.compareTo(BigInteger.valueOf(rt.topUpAllowance())) > 0) {
+            throw new JoustException(what + ": " + output + " needs a top-up of " + extra + " lovelace to the ledger minimum the"
+                    + " provider's protocol parameters give, above the allowance of " + rt.topUpAllowance() + " lovelace"
+                    + " (StateRuntime.Builder.topUpAllowance); check the provider (ADR-0016 §2)");
+        }
+        return have.max(need);
     }
 
     // ------------------------------------------------------------------ link windows (D7, D9)
@@ -206,6 +249,49 @@ final class KeyedObjects {
             if (to <= from) throw new JoustException("the page's window limits leave no room for a link window");
         }
         return new LinkPlan(from, to, prepareAt);
+    }
+
+    /** A call's time rule, resolved for the current state: the POSIX ms in {@code field}. */
+    record TimeBound(String field, BigInteger ms) {}
+
+    /**
+     * A link window within a removing destroy's own time rules (D5 keeps a plain destroy's {@code @ValidAfter} and
+     * {@code @ValidBefore}; F55, R-C6): it ends at or before every {@code notAfter} and starts at or after every
+     * {@code notBefore}. A rule that leaves no window is refused before anything is built, as {@link Window#open} does.
+     */
+    static LinkPlan withTimeRules(ChainTime time, LinkPlan p, List<TimeBound> notBefore, List<TimeBound> notAfter, String what) {
+        long to = p.toSlot();
+        for (var b : notAfter) {
+            long last = time.posixMsToSlotFloor(b.ms().longValueExact());   // slotToPosix(last) <= the deadline
+            if (last < to) to = last;
+            if (to <= p.fromSlot()) {
+                throw new org.julclang.state.api.RequireException(what + ": too late, the deadline in '" + b.field()
+                        + "' leaves no link window (it would start at slot " + p.fromSlot() + ")");
+            }
+        }
+        BigInteger fromMs = BigInteger.valueOf(time.slotToPosixMs(p.fromSlot()));
+        for (var b : notBefore) {
+            if (fromMs.compareTo(b.ms()) < 0) {
+                throw new org.julclang.state.api.RequireException(what + ": too early, the time in '" + b.field()
+                        + "' has not been reached by the link window's start");
+            }
+        }
+        return new LinkPlan(p.fromSlot(), to, p.prepareAt());
+    }
+
+    /** A composition's one window must satisfy the removing destroy's time rules too (as {@link Window#open} checks). */
+    static void checkTimeRules(Window w, List<TimeBound> notBefore, List<TimeBound> notAfter, String what) {
+        for (var b : notAfter) {
+            if (w.toMs().compareTo(b.ms()) > 0) {
+                throw new org.julclang.state.api.RequireException(what + ": the composed window ends after the deadline in '"
+                        + b.field() + "'");
+            }
+        }
+        for (var b : notBefore) {
+            if (w.fromMs().compareTo(b.ms()) < 0) {
+                throw new org.julclang.state.api.RequireException(what + ": the composed window starts before '" + b.field() + "'");
+            }
+        }
     }
 
     /** The first slot whose time is at least {@code ms}. */

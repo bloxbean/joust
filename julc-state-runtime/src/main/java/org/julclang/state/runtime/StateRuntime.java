@@ -34,6 +34,7 @@ public final class StateRuntime {
     private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts;
     private final java.util.List<Relay> relays;
     private final long[] pageLimits;
+    private final long topUpAllowance;
 
     /** A transaction the runtime built: what it is for, and the transaction (signed when submitted, unsigned when prepared). */
     public record BuiltTx(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {}
@@ -55,6 +56,7 @@ public final class StateRuntime {
         this.referenceScripts = Map.copyOf(b.referenceScripts);
         this.relays = b.relays.isEmpty() ? java.util.List.of(Relay.of(b.backend)) : java.util.List.copyOf(b.relays);
         this.pageLimits = b.pageLimits;
+        this.topUpAllowance = b.topUpAllowance;
         org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
     }
 
@@ -70,8 +72,17 @@ public final class StateRuntime {
     public long ttlMs() { return ttlMs; }
     public int maxRetries() { return maxRetries; }
     public Duration confirmTimeout() { return confirmTimeout; }
-    /** Where signed transactions go (default: the backend's submit endpoint; ADR-0016 D7). */
+    /**
+     * Where a keyed operation's attempts go (default: the backend's submit endpoint; ADR-0016 D7). Every other
+     * transaction goes to the backend alone, as before: only an operation with a designated input may rebuild after an
+     * untrusted relay's answer.
+     */
     public java.util.List<Relay> relays() { return relays; }
+    /**
+     * The most lovelace a keyed operation adds to an output to reach the ledger minimum computed from the provider's
+     * protocol parameters (a relinked anchor or predecessor, a retired node, a padded payout, a head; ADR-0016 §2, R-C8).
+     */
+    public long topUpAllowance() { return topUpAllowance; }
     /**
      * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null: keyed
      * calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
@@ -162,6 +173,7 @@ public final class StateRuntime {
         private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts = new HashMap<>();
         private final java.util.List<Relay> relays = new java.util.ArrayList<>();
         private long[] pageLimits;
+        private long topUpAllowance = 10_000_000L;
 
         private Builder(BackendService backend) {
             this.backend = backend;
@@ -204,8 +216,10 @@ public final class StateRuntime {
         }
 
         /**
-         * Sends every signed transaction to these relays instead of the backend alone (ADR-0016 D7): the same bytes to
-         * each; any acceptance or unknown delivery dominates rejections.
+         * Sends every attempt of a keyed operation to these relays instead of the backend alone (ADR-0016 D7): the same
+         * bytes to each; any acceptance or unknown delivery (a relay that throws included) dominates rejections. Relays
+         * are untrusted, so they are used only where a designated input keeps two attempts from both landing; every
+         * other transaction (calls that are not keyed, deployments, reference scripts) goes to the backend alone.
          */
         public Builder relays(java.util.List<Relay> relays) {
             this.relays.clear();
@@ -219,6 +233,16 @@ public final class StateRuntime {
          */
         public Builder pageLimits(long maxStartSlots, long maxValiditySlots) {
             this.pageLimits = new long[]{maxStartSlots, maxValiditySlots};
+            return this;
+        }
+
+        /**
+         * The most lovelace a keyed operation adds to an output to reach the ledger minimum the provider's parameters
+         * give (default 10 ADA, about the honest worst case); above it the call is refused (ADR-0016 §2).
+         */
+        public Builder topUpAllowance(long lovelace) {
+            if (lovelace < 0) throw new IllegalArgumentException("topUpAllowance must not be negative");
+            this.topUpAllowance = lovelace;
             return this;
         }
 

@@ -270,7 +270,7 @@ public final class StateContractHandle<S> {
                 .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
                 .from(payerAddress);
         try {
-            var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(runtime.backend()).compose(tx)
+            var built = Designation.builder(runtime.backend(), null).compose(tx)
                     .feePayer(payerAddress)
                     .additionalSignersCount(1)
                     .build();
@@ -458,8 +458,9 @@ public final class StateContractHandle<S> {
             minted.add(new Asset("0x" + hid, BigInteger.ONE));
             PlutusData head = k.head(instance, new byte[0], BigInteger.ZERO);
             String unit = policyId + hid;
-            BigInteger lovelace = BigInteger.valueOf(spec.minAda())
-                    .max(minUtxoFor(address, head, List.of(Amount.lovelace(BigInteger.valueOf(spec.minAda())), new Amount(unit, BigInteger.ONE))));
+            BigInteger lovelace = KeyedObjects.topUp(runtime, BigInteger.valueOf(spec.minAda()),
+                    minUtxoFor(address, head, List.of(Amount.lovelace(BigInteger.valueOf(spec.minAda())), new Amount(unit, BigInteger.ONE))),
+                    "deploy " + spec.name(), "the " + k.name() + " head");
             out.add(new TxRunner.ExpectedState(unit, lovelace, head));
         }
         return out;
@@ -485,11 +486,13 @@ public final class StateContractHandle<S> {
             if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) {
                 throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
             }
-            // Prefer a pure-ADA UTxO; any UTxO works.
-            return r.getValue().stream()
+            // Prefer a pure-ADA UTxO; any UTxO works, but never a keyed operation's designated input (ADR-0016 D7).
+            var free = r.getValue().stream().filter(u -> !Designation.isDesignated(Designation.ref(u))).toList();
+            if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
+            return free.stream()
                     .filter(u -> u.getAmount().size() == 1)
                     .findFirst()
-                    .orElse(r.getValue().get(0));
+                    .orElse(free.get(0));
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {

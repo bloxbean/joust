@@ -64,6 +64,8 @@ public final class Call<S> {
     final Authorization authorization;
     final BiFunction<Ctx, Transition<S>, Object> redeemerWith;
     final List<com.bloxbean.cardano.client.api.model.Utxo> referenceInputs;
+    /** {@code @Reads} of a keyed call, read again for every attempt (ADR-0016 D7). */
+    final List<ForeignReads.Ref<?>> reads;
     final boolean migrates;
     /** A move's destination instance id, hex (ADR-0012 D3), or null. */
     final String into;
@@ -89,6 +91,7 @@ public final class Call<S> {
         this.authorization = b.authorization;
         this.redeemerWith = b.redeemerWith;
         this.referenceInputs = List.copyOf(b.referenceInputs);
+        this.reads = List.copyOf(b.reads);
         this.migrates = b.migrates;
         this.into = b.into;
         this.receives = b.receives;
@@ -112,9 +115,15 @@ public final class Call<S> {
         return all;
     }
 
-    /** Adds the authorization's zero withdrawal, if it is a script (ADR-0009 D3). */
+    /** Adds the reference inputs the call reads ({@code @Reads}). */
     void applyReads(com.bloxbean.cardano.client.quicktx.Tx tx) {
         for (var u : referenceInputs) tx.readFrom(u);
+        for (var r : reads) tx.readFrom(r.utxo());
+    }
+
+    /** Reads every {@link ForeignReads.Ref} again: a keyed operation's attempt sees the instances as they are now. */
+    void refreshReads() {
+        for (var r : reads) r.refresh();
     }
 
     void applyAuthorization(com.bloxbean.cardano.client.quicktx.Tx tx) {
@@ -160,6 +169,7 @@ public final class Call<S> {
         private Authorization authorization;
         private BiFunction<Ctx, Transition<S>, Object> redeemerWith;
         private final List<com.bloxbean.cardano.client.api.model.Utxo> referenceInputs = new ArrayList<>();
+        private final List<ForeignReads.Ref<?>> reads = new ArrayList<>();
         private boolean migrates;
         private String into;
         private boolean receives;
@@ -200,6 +210,12 @@ public final class Call<S> {
         /** Reference inputs the call reads ({@code @Reads}; ADR-0011 D2). */
         public Builder<S> referenceInputs(com.bloxbean.cardano.client.api.model.Utxo... utxos) {
             referenceInputs.addAll(List.of(utxos));
+            return this;
+        }
+
+        /** Reads a keyed call takes ({@code @Reads}): resolved again for every attempt (ADR-0016 D7). */
+        public Builder<S> reads(ForeignReads.Ref<?>... refs) {
+            reads.addAll(List.of(refs));
             return this;
         }
 

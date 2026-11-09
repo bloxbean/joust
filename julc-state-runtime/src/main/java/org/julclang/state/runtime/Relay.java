@@ -3,10 +3,11 @@ package org.julclang.state.runtime;
 import com.bloxbean.cardano.client.backend.api.BackendService;
 
 /**
- * Where the runtime sends a signed transaction (ADR-0016 D7). A runtime may send the same signed bytes to several relays;
- * their answers combine transaction-wide: any acceptance, or any delivery whose fate is unknown, dominates every
- * rejection. Relays are untrusted: an answer only decides whether the runtime may build another transaction, and a keyed
- * operation's designated input keeps any two of its attempts from both landing.
+ * Where the runtime sends a keyed operation's signed attempts (ADR-0016 D7). A runtime may send the same signed bytes to
+ * several relays; their answers combine transaction-wide: any acceptance, or any delivery whose fate is unknown (a relay
+ * that throws or gives no answer included), dominates every rejection. Relays are untrusted: an answer only decides
+ * whether the runtime may build another transaction, and the operation's designated input keeps any two of its attempts
+ * from both landing. Transactions without a designated input go to the backend alone.
  */
 @FunctionalInterface
 public interface Relay {
@@ -29,18 +30,36 @@ public interface Relay {
         }
     }
 
-    /** Sends {@code cbor}; never throws (a failure to deliver is {@link Answer#UNKNOWN}). */
+    /**
+     * Sends {@code cbor}. Should not throw: a failure to deliver is {@link Answer#UNKNOWN}, and so is an exception or a
+     * null answer (the runtime treats them alike).
+     */
     Outcome submit(byte[] cbor);
 
-    /** The backend's submit endpoint: a definite answer from the node, or unknown on a network error. */
+    /**
+     * The backend's submit endpoint. A 4xx answer with a body (the node's or the provider's reason: a ledger or
+     * validation error) is a rejection; a 408 or 429, any 5xx (a gateway may time out after the node accepted it), an
+     * empty body, an answer without a status, and a network error are unknown (R-C10).
+     */
     static Relay of(BackendService backend) {
         return cbor -> {
             try {
-                var r = backend.getTransactionService().submitTransaction(cbor);
-                return r.isSuccessful() ? Outcome.accepted() : Outcome.rejected(String.valueOf(r.getResponse()));
+                return classify(backend.getTransactionService().submitTransaction(cbor));
             } catch (Exception e) {
                 return Outcome.unknown(TxRunner.rootMessage(e));
             }
         };
+    }
+
+    /** A submit endpoint's answer as an {@link Outcome} (see {@link #of}). */
+    static Outcome classify(com.bloxbean.cardano.client.api.model.Result<?> r) {
+        if (r == null) return Outcome.unknown("no answer");
+        if (r.isSuccessful()) return Outcome.accepted();
+        int code = r.code();
+        String body = r.getResponse();
+        boolean definite = code >= 400 && code < 500 && code != 408 && code != 425 && code != 429
+                && body != null && !body.isBlank();
+        String why = "HTTP " + code + ": " + body;
+        return definite ? Outcome.rejected(why) : Outcome.unknown(why);
     }
 }

@@ -70,7 +70,7 @@ public final class VerifierHandle {
                 .registerStakeAddress(rewardAddress)
                 .from(payerAddress);
         try {
-            var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(runtime.backend()).compose(tx)
+            var built = Designation.builder(runtime.backend(), null).compose(tx)
                     .feePayer(payerAddress)
                     .additionalSignersCount(1)
                     .build();

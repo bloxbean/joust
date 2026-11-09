@@ -96,40 +96,13 @@ public final class Compose {
             return null;
         }
         if (prepare) return attempt(true, null);
-        // ADR-0016 D7: a composition with a keyed call designates one ordinary input of the payer, spends it in every
-        // attempt, and rebuilds the whole composition after a definite rejection only while that input can be spent.
-        KeyedObjects.Designated d = null;
-        try {
-            SubmitException last = null;
-            for (int i = 0; ; i++) {
-                if (d != null && i > 1 && !d.unspent(runtime)) {
-                    throw new PendingTransactionException(d.ref(), "composition: the designated input is spent, so an earlier"
-                            + " attempt may have landed; not rebuilding (ADR-0016 D7)");
-                }
-                try {
-                    return attempt(false, d);
-                } catch (NeedsDesignated n) {
-                    d = KeyedObjects.reserve(runtime, payer, "composition");
-                } catch (SubmitException e) {
-                    if (d == null) throw e;
-                    last = e;
-                    if (i > runtime.maxRetries()) throw new ContentionException("composition: rejected " + i + " times", last);
-                    runtime.log("composition: rejected (" + e.getMessage() + "); rebuilding with the designated input " + d.ref());
-                }
-            }
-        } finally {
-            if (d != null) d.release();
-        }
+        // ADR-0016 D7: a composition with a keyed call designates one ordinary input of the payer after its first pass,
+        // spends it in every attempt, and rebuilds the whole composition under the same rules as a single keyed call
+        // (KeyedObjects.series). A composition without keyed calls runs once, as before.
+        return KeyedObjects.series(runtime, payer, "composition", true, d -> attempt(false, d));
     }
 
-    /** Thrown after the first pass when a keyed call takes part and no input is designated yet. */
-    private static final class NeedsDesignated extends RuntimeException {
-        NeedsDesignated() {
-            super(null, null, false, false);
-        }
-    }
-
-    private Object attempt(boolean prepare, KeyedObjects.Designated designated) {
+    private Object attempt(boolean prepare, Designation.Designated designated) {
         // Pass 1: every call's own window. A receiver placed before its depositors sees no deposits yet and may refuse:
         // the pass then runs again with the deposits the first try found (ADR-0011 D3).
         var probe = new TxRunner.Capture();
@@ -142,8 +115,16 @@ public final class Compose {
             failed = runTolerant(again);
             probe = again;
         }
+        if (probe.keyed) {
+            if (prepare) {
+                // A wallet's transaction cannot designate an input across re-preparations yet (R-C7, R-D4).
+                throw new JoustException("prepare(): the composition has a keyed call (ADR-0016); wallets prepare keyed"
+                        + " calls from ADR-0016 M3");
+            }
+            // Designated before anything else is decided: a refusal of this first pass is then retried like any other.
+            if (designated == null) throw new KeyedObjects.NeedsDesignated(probe.inputs);
+        }
         if (failed != null) throw failed;
-        if (probe.keyed && !prepare && designated == null) throw new NeedsDesignated();
         Window window = probe.windows.isEmpty() ? null : Window.intersect(runtime, probe.windows);
         if (!probe.windows.isEmpty() && window == null) {
             throw new JoustException("composition: the calls' validity windows do not overlap");
@@ -155,6 +136,7 @@ public final class Compose {
         cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
         if (designated != null) TxRunner.collect(cap.tx, designated.utxo(), null);
         run(cap);
+        if (designated != null) designated.noteScriptInputs(cap.scriptInputs);
         if (!sharedSigners) {
             for (var e : cap.signerCalls.entrySet()) {
                 if (e.getValue().size() > 1) {
@@ -209,7 +191,7 @@ public final class Compose {
             if (!(payer instanceof WalletAccount)) throw new JoustException("prepare(): the payer must be a WalletAccount");
         }
         var runner = new TxRunner(runtime, prepare ? List.of() : signers);
-        runner.awaitStart = cap.keyed;   // a keyed call's window may start after the cooldown (ADR-0016 D7)
+        runner.designated = designated;   // a keyed composition's attempt (ADR-0016 D7)
         runner.extraExpected = cap.expected.size() > 1 ? cap.expected.subList(1, cap.expected.size()) : List.of();
         if (prepare) {
             return runner.prepare(cap.tx, payer, window, cap.requiredSigners.values().toArray(new byte[0][]),

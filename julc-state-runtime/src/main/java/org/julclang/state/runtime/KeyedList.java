@@ -109,15 +109,24 @@ public final class KeyedList<S, R> {
         return own ? new Listed<>(u, n) : null;
     }
 
-    /** The UTxO holding {@code key}'s token, as the provider returned it (one query with an asset filter); or empty. */
+    /**
+     * The UTxO holding {@code key}'s token, as the provider returned it (one query with an asset filter); or empty. A key
+     * of no valid length (1 to {@code maxKeyBytes}) is refused: the head's empty key is not a key (R-D10).
+     */
     Optional<Listed<R>> lookup(byte[] key) {
+        if (key == null || key.length < 1 || key.length > type.maxKeyBytes()) {
+            throw new IllegalArgumentException(type.name() + ": a key is 1 to " + type.maxKeyBytes() + " bytes, not "
+                    + (key == null ? "null" : key.length));
+        }
         var c = contract();
         try {
             var r = c.runtime.backend().getUtxoService().getUtxos(c.address, unit(key), 10, 1);
             if (r.isSuccessful() && r.getValue() != null) {
                 for (Utxo u : r.getValue()) {
                     Listed<R> l = validate(u);
-                    if (l != null && Arrays.equals(l.node().key(), key)) return Optional.of(l);
+                    if (l != null && l.node().kind() != KeyedType.Node.Kind.HEAD && Arrays.equals(l.node().key(), key)) {
+                        return Optional.of(l);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -222,7 +231,7 @@ public final class KeyedList<S, R> {
         return new KeyedObject<>(this, made[0]);
     }
 
-    private byte[] attemptInsert(Insert<R> spec, KeyedObjects.Designated d, boolean checkTaken, String what) {
+    private byte[] attemptInsert(Insert<R> spec, Designation.Designated d, boolean checkTaken, String what) {
         var c = contract();
         var rt = c.runtime;
         ChainTime time = rt.chainTime();
@@ -262,8 +271,9 @@ public final class KeyedList<S, R> {
                     anchor.node().linkedAt().add(BigInteger.valueOf(type.cooldownMs()))) : Long.MIN_VALUE;
             if (ready > w.fromSlot()) {
                 if (cap != null && cap.forced != null) {
-                    throw new JoustException(what + ": the composition's window starts before the anchor's cooldown ends (slot "
-                            + ready + "); its calls' windows cannot fit a Link window (ADR-0016 D7)");
+                    // The first pass saw another anchor, or this one before it was relinked: rebuild (R-C16).
+                    throw new SubmitException(SubmitException.Kind.TRANSIENT, what + ": the composition's window starts before"
+                            + " the anchor's cooldown ends (slot " + ready + "); the anchor moved since the first pass");
                 }
                 minStart = ready;
                 continue;
@@ -285,7 +295,7 @@ public final class KeyedList<S, R> {
         throw new ContentionException(what + ": the anchor kept moving while waiting for its cooldown", null);
     }
 
-    private void build(Insert<R> spec, KeyedObjects.Designated d, R value, byte[] key, Listed<R> anchor, Window w, Ctx ctx,
+    private void build(Insert<R> spec, Designation.Designated d, R value, byte[] key, Listed<R> anchor, Window w, Ctx ctx,
                        boolean shared, String what) {
         var c = contract();
         var rt = c.runtime;
@@ -316,8 +326,8 @@ public final class KeyedList<S, R> {
         // The relinked anchor: next := key, linkedAt := upper; topped up to the ledger minimum if needed (D4b).
         String anchorUnit = unit(anchor.node().key());
         PlutusData relinked = KeyedType.relinked(anchor.node().datum(), key, w.toMs());
-        BigInteger anchorLovelace = anchor.lovelace().max(c.minUtxoFor(c.address, relinked,
-                List.of(Amount.lovelace(anchor.lovelace()), new Amount(anchorUnit, BigInteger.ONE))));
+        BigInteger anchorLovelace = KeyedObjects.topUp(rt, anchor.lovelace(), c.minUtxoFor(c.address, relinked,
+                List.of(Amount.lovelace(anchor.lovelace()), new Amount(anchorUnit, BigInteger.ONE))), what, "the relinked anchor");
         tx.payToContract(c.address, List.of(Amount.lovelace(anchorLovelace), new Amount(anchorUnit, BigInteger.ONE)), relinked);
         PlutusData node = type.node(inst, anchor.node().next(), w.toMs(), value);
         BigInteger nodeLovelace = BigInteger.valueOf(c.spec.minAda()).add(spec.received());
@@ -326,7 +336,8 @@ public final class KeyedList<S, R> {
         if (spec.usesCtx() || type.signedKey()) signers.add(callerPkh);
         var runner = new TxRunner(rt);
         runner.extraExpected = List.of(new TxRunner.ExpectedState(anchorUnit, anchorLovelace, relinked));
-        runner.awaitStart = true;
+        runner.designated = d;
+        if (d != null) d.noteScriptInputs(List.of(anchor.utxo()));
         String txHash = runner.submit(tx, spec.caller(), w, signers.toArray(new byte[0][]),
                 new TxRunner.ExpectedState(nodeUnit, nodeLovelace, node), List.of(), new PlutusScript[]{c.script}, what);
         if (TxRunner.capture() == null) awaitHeld(key, txHash);
@@ -337,7 +348,7 @@ public final class KeyedList<S, R> {
         for (int i = 0; i < 60; i++) {
             var l = lookup(key);
             if (l.isPresent() && l.get().utxo().getTxHash().equals(txHash)) return;
-            TxRunner.sleep(500);
+            TxRunner.sleepOrPending(500, txHash, "the " + type.name() + " " + HexUtil.encodeHexString(key));
         }
         throw new PendingTransactionException(txHash, "included, but the " + type.name() + " is not visible yet");
     }

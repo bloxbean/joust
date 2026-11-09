@@ -77,4 +77,35 @@ class LinkWindowTest {
         assertTrue((p.toSlot() - p.fromSlot()) * 100 <= 900_000);
         assertEquals(p.prepareAt() + PAGE[1], p.toSlot(), "W shortened to the page's end limit");
     }
+
+    /** F55, R-C6: a removing destroy's @ValidAfter/@ValidBefore narrow its link window, or refuse it before building. */
+    @Test
+    void aRemovesTimeRulesNarrowItsLinkWindowOrRefuseIt() {
+        long tip = 1_000;
+        // The cooldown puts the start at slot 1050; W and the TTL allow 20 slots.
+        var p = KeyedObjects.plan(ONE_SECOND, tip, Long.MIN_VALUE, at(ONE_SECOND, 990), 60_000, 120_000, 3_600_000, 20_000, null);
+        assertEquals(1_050, p.fromSlot());
+        assertEquals(1_070, p.toSlot());
+        var none = java.util.List.<KeyedObjects.TimeBound>of();
+        // A deadline ten seconds after the start: the window ends at it, not at the TTL.
+        var deadline = java.util.List.of(new KeyedObjects.TimeBound("deadline", at(ONE_SECOND, 1_060).add(BigInteger.valueOf(500))));
+        var q = KeyedObjects.withTimeRules(ONE_SECOND, p, none, deadline, "t");
+        assertEquals(1_050, q.fromSlot());
+        assertEquals(1_060, q.toSlot(), "the last slot starting at or before the deadline");
+        // A deadline at or before the start: refused, nothing built.
+        var passed = java.util.List.of(new KeyedObjects.TimeBound("deadline", at(ONE_SECOND, 1_050)));
+        var late = assertThrows(org.julclang.state.api.RequireException.class, () -> KeyedObjects.withTimeRules(ONE_SECOND, p, none, passed, "t"));
+        assertTrue(late.getMessage().contains("too late"), late.getMessage());
+        // A time the cooldown's start already reaches is fine; a later one is refused as too early.
+        var reached = java.util.List.of(new KeyedObjects.TimeBound("unlockAt", at(ONE_SECOND, 1_050)));
+        assertEquals(p, KeyedObjects.withTimeRules(ONE_SECOND, p, reached, none, "t"));
+        var later = java.util.List.of(new KeyedObjects.TimeBound("unlockAt", at(ONE_SECOND, 1_050).add(BigInteger.ONE)));
+        var early = assertThrows(org.julclang.state.api.RequireException.class, () -> KeyedObjects.withTimeRules(ONE_SECOND, p, later, none, "t"));
+        assertTrue(early.getMessage().contains("too early"), early.getMessage());
+        // A composition's one window: checked against the same rules.
+        var w = KeyedObjects.window(ONE_SECOND, 1_050, 1_070);
+        assertThrows(org.julclang.state.api.RequireException.class, () -> KeyedObjects.checkTimeRules(w, none, deadline, "t"));
+        assertThrows(org.julclang.state.api.RequireException.class, () -> KeyedObjects.checkTimeRules(w, later, none, "t"));
+        assertDoesNotThrow(() -> KeyedObjects.checkTimeRules(w, reached, none, "t"));
+    }
 }

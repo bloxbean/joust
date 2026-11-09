@@ -29,6 +29,17 @@ import java.util.Map;
  */
 public final class KeyedObject<S, R> {
 
+    /**
+     * The burn redeemer a generated client passes to {@link Call#destroy} for a keyed destroy: none is needed, since the
+     * runtime builds a remove's {@code Remove_T} mint redeemer itself and a retire burns nothing (R-D11).
+     */
+    public static final Object RUNTIME_BURN = new Object() {
+        @Override
+        public String toString() {
+            return "built by the keyed runtime";
+        }
+    };
+
     private final KeyedList<S, R> list;
     private final byte[] key;
 
@@ -87,7 +98,24 @@ public final class KeyedObject<S, R> {
 
     private enum Mode { ACTION, REMOVE, RETIRE }
 
-    private CallResult<R> attempt(Call<R> call, KeyedObjects.Designated d, Mode mode) {
+    /** Control flow: a remove waited for a page's start limit and prepares again; not a retry (F60, R-C17). */
+    private static final class PageWait extends RuntimeException {
+        PageWait() {
+            super(null, null, false, false);
+        }
+    }
+
+    private CallResult<R> attempt(Call<R> call, Designation.Designated d, Mode mode) {
+        for (int waits = 0; ; waits++) {
+            try {
+                return attemptOnce(call, d, mode);
+            } catch (PageWait w) {
+                if (waits >= 16) throw new JoustException(what(call) + ": still outside the page's start limit after 16 waits");
+            }
+        }
+    }
+
+    private CallResult<R> attemptOnce(Call<R> call, Designation.Designated d, Mode mode) {
         var contract = list.contract();
         var rt = contract.runtime;
         var spec = contract.spec;
@@ -95,6 +123,7 @@ public final class KeyedObject<S, R> {
         String what = what(call);
         ChainTime time = rt.chainTime();
         byte[] inst = list.instanceBytes();
+        call.refreshReads();   // a rebuild redoes the references (D7; F56)
         KeyedList.Listed<R> own = listed();
         if (own.node().kind() != KeyedType.Node.Kind.LIVE) {
             throw new RequireException(what + ": " + type.name() + " " + keyHex() + " is retired and takes no calls (D10)");
@@ -120,22 +149,36 @@ public final class KeyedObject<S, R> {
             var all = list.listing();
             prev = KeyedList.predecessor(all, keyHex());
             if (!Arrays.equals(prev.node().next(), key)) {
-                throw new SubmitException(what + ": inconsistent snapshot, the predecessor does not point here; retrying");
+                throw new SubmitException(SubmitException.Kind.TRANSIENT, what
+                        + ": inconsistent snapshot, the predecessor does not point here; retrying");
             }
+            // The destroy's own time rules (D5 keeps them; F55, R-C6).
+            var notBefore = new ArrayList<KeyedObjects.TimeBound>();
+            var notAfter = new ArrayList<KeyedObjects.TimeBound>();
+            for (var r : call.notBefore) notBefore.add(new KeyedObjects.TimeBound(r.field(), r.time().apply(current)));
+            for (var r : call.notAfter) notAfter.add(new KeyedObjects.TimeBound(r.field(), r.time().apply(current)));
             if (cap != null && cap.forced != null) {
                 window = cap.forced;
                 long ready = type.cooldownMs() > 0 ? KeyedObjects.firstSlotAtOrAfter(time,
                         prev.node().linkedAt().add(BigInteger.valueOf(type.cooldownMs()))) : Long.MIN_VALUE;
-                if (ready > window.fromSlot() || window.toMs().subtract(window.fromMs()).compareTo(BigInteger.valueOf(type.windowMs())) > 0) {
+                if (ready > window.fromSlot()) {
+                    // The first pass saw the predecessor before it was relinked: rebuild (R-C16).
+                    throw new SubmitException(SubmitException.Kind.TRANSIENT, what + ": the composition's window starts before"
+                            + " the predecessor's cooldown ends (slot " + ready + "); it moved since the first pass");
+                }
+                if (window.toMs().subtract(window.fromMs()).compareTo(BigInteger.valueOf(type.windowMs())) > 0) {
                     throw new JoustException(what + ": the composition's window cannot fit a Link window (ADR-0016 D7)");
                 }
+                KeyedObjects.checkTimeRules(window, notBefore, notAfter, what);
             } else {
                 long tip = time.tipSlot();
                 var p = KeyedObjects.plan(time, tip, Long.MIN_VALUE, prev.node().linkedAt(), type.cooldownMs(), type.windowMs(),
                         spec.maxValidityMs(), rt.ttlMs(), rt.pageLimits());
+                p = KeyedObjects.withTimeRules(time, p, notBefore, notAfter, what);
                 if (rt.pageLimits() != null && cap == null && p.prepareAt() > tip) {
+                    // D7 step 5: prepare only once the start is within the page's limit; then everything is read again.
                     TxRunner.sleep((p.prepareAt() - tip) * time.slotLengthMs());
-                    throw new SubmitException(what + ": waited for the page's start limit; rebuilding");
+                    throw new PageWait();
                 }
                 window = KeyedObjects.window(time, p.fromSlot(), p.toSlot());
                 if (cap != null) cap.windows.add(window);
@@ -190,8 +233,8 @@ public final class KeyedObject<S, R> {
                 }
                 PlutusData retired = type.retired(inst, own.node().next(), own.node().linkedAt(), key);
                 // minAda, topped up by the builder when a raised coinsPerUTxOByte puts the ledger minimum above it (D10).
-                BigInteger keep = minAda.max(contract.minUtxoFor(contract.address, retired,
-                        List.of(Amount.lovelace(minAda), new Amount(ownUnit, BigInteger.ONE))));
+                BigInteger keep = KeyedObjects.topUp(rt, minAda, contract.minUtxoFor(contract.address, retired,
+                        List.of(Amount.lovelace(minAda), new Amount(ownUnit, BigInteger.ONE))), what, "the retired object");
                 tx.payToContract(contract.address, List.of(Amount.lovelace(keep), new Amount(ownUnit, BigInteger.ONE)), retired);
                 expected = new TxRunner.ExpectedState(ownUnit, keep, retired);
             }
@@ -205,8 +248,8 @@ public final class KeyedObject<S, R> {
                         BigInteger.ONE.negate())), PlutusDataAdapter.convert(type.remove().apply(prev.ref(), own.ref())));
                 String prevUnit = list.unit(prev.node().key());
                 PlutusData relinked = KeyedType.relinked(prev.node().datum(), own.node().next(), window.toMs());
-                BigInteger prevLovelace = prev.lovelace().max(contract.minUtxoFor(contract.address, relinked,
-                        List.of(Amount.lovelace(prev.lovelace()), new Amount(prevUnit, BigInteger.ONE))));
+                BigInteger prevLovelace = KeyedObjects.topUp(rt, prev.lovelace(), contract.minUtxoFor(contract.address, relinked,
+                        List.of(Amount.lovelace(prev.lovelace()), new Amount(prevUnit, BigInteger.ONE))), what, "the relinked predecessor");
                 tx.payToContract(contract.address, List.of(Amount.lovelace(prevLovelace), new Amount(prevUnit, BigInteger.ONE)), relinked);
                 expected = new TxRunner.ExpectedState(prevUnit, prevLovelace, relinked);
             }
@@ -216,7 +259,7 @@ public final class KeyedObject<S, R> {
         List<TxRunner.ExpectedPayout> expectedPayouts = new ArrayList<>();
         for (var e : owed.entrySet()) {
             String addr = contract.payoutAddress(HexUtil.decodeHexString(e.getKey()), call.caller);
-            BigInteger amount = e.getValue().max(contract.minUtxo(addr, tag, e.getValue()));
+            BigInteger amount = KeyedObjects.topUp(rt, e.getValue(), contract.minUtxo(addr, tag, e.getValue()), what, "a payout");
             tx.payToContract(addr, List.of(Amount.lovelace(amount)), tag);
             expectedPayouts.add(new TxRunner.ExpectedPayout(addr, e.getValue(), tag));
         }
@@ -230,7 +273,8 @@ public final class KeyedObject<S, R> {
         call.applyReads(tx);
         var runner = new TxRunner(rt, call.extraSigners());
         runner.extraExpected = extra;
-        runner.awaitStart = mode == Mode.REMOVE;
+        runner.designated = d;
+        if (d != null) d.noteScriptInputs(mode == Mode.REMOVE ? List.of(own.utxo(), prev.utxo()) : List.of(own.utxo()));
         String txHash = runner.submit(tx, call.caller, window, signers.toArray(new byte[0][]), expected, expectedPayouts,
                 new PlutusScript[]{contract.script}, what);
         if (cap == null) {
@@ -245,7 +289,7 @@ public final class KeyedObject<S, R> {
     private void awaitGone(String txHash) {
         for (int i = 0; i < 60; i++) {
             if (list.lookup(key).isEmpty()) return;
-            TxRunner.sleep(500);
+            TxRunner.sleepOrPending(500, txHash, "the removed " + list.type.name());
         }
         throw new PendingTransactionException(txHash, "included, but the removed " + list.type.name() + " is still visible");
     }
