@@ -1,6 +1,6 @@
 # ADR-0016: Keyed objects — one UTxO per key, unique per instance, in a sorted on-chain list
 
-**Status:** Proposed (r6)
+**Status:** Proposed (r7)
 **Date:** 2026-11-09
 **Builds on:** ADR-0001 (A: I1–I14), ADR-0003 (owned objects: I18–I21), ADR-0007 (reserved token kinds: I27), ADR-0009
 (invariants, quorums), ADR-0012 (several owned types: I42, I43), ADR-0011 (composition), ADR-0013 (page verifier),
@@ -368,7 +368,8 @@ The transaction:
     enough. Any two attempts then share that input, so at most one of the whole series can ever be included, whatever
     any relay or provider claims, and no evidence of non-inclusion is needed. Relays and providers are untrusted (§2).
   - The designated input is never replaced, not even when it appears spent: an apparently spent input may mean an
-    earlier attempt landed.
+    earlier attempt landed. It is reserved for its operation: two concurrent operations of one wallet never share one
+    (M2's multi-thread test funds the wallet with at least as many ADA-only UTxOs as threads).
   - Building *another* transaction after a rejection is allowed only while the designated input can be spent in it.
     Otherwise the runtime raises the existing `PendingTransactionException` (`TxRunner`) and leaves the decision to the
     caller.
@@ -502,10 +503,20 @@ The transaction:
   - Head outputs are admitted only on an instance creation of a contract with keyed types.
   - For an insert, the page reads the key from the new node's datum and checks that the minted unit is
     `keyId(instance, typeId, key)`.
-- **Accounting.** These rules extend ADR-0013's two checks (`verify.js:362–380`; `compose.js:303–313`): the wallet's
-  net outflow bound, and the check that wallet payouts do not mask transfers of wallet funds to others.
-  - **The page's own allowances.** All are computed from the page's own chain read, not the service's, with protocol
-    parameters bounded like the fee (an absolute cap). Anything above an allowance is refused:
+- **Accounting.** These rules extend ADR-0013's two checks for a single call (`verify.js:362–384`): the wallet's net
+  outflow bound, and the check that wallet payouts do not mask transfers of wallet funds to others.
+  - **Authenticated input values.** The provider is untrusted (§2), and the balance check authenticates only the *sum*
+    of the inputs, not how it splits between them. A removal has two script inputs, so a provider could report the
+    node low and the predecessor high and hide a gift to the predecessor (Codex review round 6, F37). So every script
+    input's **value** (the anchor or predecessor, the removed node, the target) is read from its producing transaction,
+    whose body must hash to the input's transaction id: `chain.verifiedOutput` already does this for the address and
+    the datum (`chain.js:36–44`) and gains the value. As defence in depth, a call whose redeemer carries `Ctx` must
+    also agree with it: the target's value equals what `ctx.balance` states (checked on chain against the real input,
+    `ValidatorGenerator.java:354–356`). Where the provider serves no transaction CBOR (Ogmios; Yaci Store without
+    `save-cbor`), the page accepts only a call whose every script input value is bound by `Ctx` or, for the single
+    remaining script input, by the balance equation. Otherwise it refuses the call.
+  - **The page's own allowances.** All are computed from those authenticated input values, with protocol parameters
+    bounded like the fee (an absolute cap). Anything above an allowance is refused:
     - per anchor `A`: `allowA = max(0, ledgerMin(relinked(A)) − lovelace(A))`;
     - per retire `R`: `allowR = max(0, ledgerMin(retired(R)) − minAda)`;
     - per head `i`: `depositᵢ = max(minAda, ledgerMin(headᵢ))`, summed over the actual heads, whose encoded sizes may
@@ -536,13 +547,21 @@ The transaction:
       wallet-funded and bounded above; no other party may be paid;
     - *a retire* releases `value(target) − (value(continuation) − topUpR) = in − minAda`;
     - *a removal* releases the whole node;
-    - *a keyed action* releases `value(target) − value(continuation)`, as any owned action.
+    - *a keyed action* releases `value(target) + pay − value(continuation)`: the page-authorized payment, bound to the
+      call's `received` (`verify.js:233`), is counted once. So a payable action that pays a beneficiary from the
+      payment plus its own funds passes (100 + 10 → 90, beneficiary 20, release 20).
 
     As today, outputs to parties other than the wallet must be covered by that release minus the wallet's tagged
     payouts. Anchor and head outputs are not "other parties": they are bounded by their allowances. A gift to an anchor
     beyond `allowA` is refused, so the remove-with-gift transaction is refused.
-  - **What a lying chain read can cost.** At most each allowance, which is the ledger minimum's shortfall for one
-    output, a few ADA at the capped parameters, locked in a node or a head. It cannot move other funds.
+  - **What a lying chain read can cost.** Input values are authenticated, so a lying provider cannot misstate them;
+    only the protocol parameters it reports remain, bounded by the absolute cap. So a lie can cost at most each
+    allowance (a ledger minimum's shortfall for one output, a few ADA at the capped parameters), locked in a node or a
+    head. It cannot move other funds.
+  - **Retries through a page** follow D7's designated-input rule. The page records the designated wallet input of a
+    keyed call's first attempt, and signs a retry only when that retry spends the same input. So a hostile service
+    reporting "rejected" cannot get the user to sign two transactions that could both land (security review round 6,
+    F24).
 - **Without the service.** Keyed calls are prepared by the engine (ADR-0015), which needs the provider to list the
   state address (D7).
 - **Tamper tests (M3):**
@@ -560,7 +579,12 @@ The transaction:
   - an insert with an anchor top-up;
   - a creation with heads above `minAda`.
 
-  **Also refused (M3):** any composition containing a keyed call; an insert with an extra output to a third party; a
+  **Also accepted (M3):** a payable keyed action paying a beneficiary from the payment and its funds.
+
+  **Also refused (M3):** the two-input forgery (a removal whose provider reports the node low and the predecessor high,
+  hiding a gift); a retry through the page that does not spend the first attempt's designated input; a payable keyed
+  action with an extra third-party output; any composition containing a keyed call; an insert with an extra output to a
+  third party; a
   creation whose payment is claimed twice.
 
 ### 3.1. Why I47 holds, and what may share a transaction
@@ -936,3 +960,14 @@ input, so only one lands.
   - **Inherited verifier gap:** C F35 (P1) → a gap in ADR-0013's page verifier (claimed sends to the wallet are not
     deducted from the release budget). Keyed calls cannot trigger it, since keyed contracts are never asset-aware. It
     is recorded in §10 and tracked as its own fix.
+- r7 (2026-11-09, responds to the round-6 reviews of `88dcb42`; design and security approved, Codex requested
+  changes):
+  - **Authenticated input values:** C F37 (P1) → every script input's value comes from its producing transaction, whose
+    body hashes to its id (`verifiedOutput` gains the value). Calls with `Ctx` must also agree with `ctx.balance`.
+    Without transaction CBOR, only calls whose inputs are bound by `Ctx` or the balance equation pass. The lying-read
+    guarantee is restated; the two-input forgery is refused in M3 (D11).
+  - **Payable keyed actions:** C F38 → the release counts the page-authorized payment once; accepted and refused cases
+    in M3 (D11).
+  - **Page retries:** S F24 → the page signs a retry only if it spends the first attempt's designated input (D11, M3).
+  - **Designated inputs and citations:** D F23 → one designated input reserved per operation, and enough UTxOs for
+    M2's threads; the stale `compose.js` citation removed (D7, D11).
