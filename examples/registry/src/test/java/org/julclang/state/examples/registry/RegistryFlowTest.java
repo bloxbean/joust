@@ -9,7 +9,6 @@ import java.nio.charset.StandardCharsets;
 import static org.julclang.state.examples.registry.RegistryWorld.PARTIES;
 import static org.julclang.state.examples.registry.RegistryWorld.ada;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Every keyed operation of the registry, accepted on the ledger model, with I47 checked after each. */
@@ -34,10 +33,9 @@ class RegistryFlowTest {
         System.out.println("[flow] leave: " + w.accept(w.retire(inst, RegistryWorld.Kind.BALLOT, alice, BigInteger.ZERO)));
     }
 
-    /** M1 scope: the Java client and the description leave keyed calls out until M2/M3 (ADR-0016 §7). */
+    /** The description omits keyed calls until M3 (ADR-0016 §7); the Java client has them since M2. */
     @Test
-    void theClientAndDescriptionOmitKeyedCallsForNow() throws Exception {
-        assertThrows(UnsupportedOperationException.class, () -> RegistryClient.deploy(null, null));
+    void theDescriptionOmitsKeyedCallsForNow() throws Exception {
         String json;
         try (InputStream in = getClass().getClassLoader().getResourceAsStream(
                 "META-INF/joust/org.julclang.state.examples.registry.Registry.json")) {

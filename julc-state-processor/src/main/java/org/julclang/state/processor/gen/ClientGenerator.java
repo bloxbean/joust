@@ -64,9 +64,17 @@ public final class ClientGenerator {
         w.line(" * transaction through {@link StateRuntime}.");
         w.line(" */");
         w.open("public final class " + C + " {").blank();
-        w.line("public static final ContractSpec<" + S + "> SPEC = new ContractSpec<>(\"" + X + "\", " + V + ".class, "
-                + S + ".class, " + c.minAda() + "L, " + c.maxDatumBytes() + ", " + c.maxValidityMs() + "L"
-                + (c.stakeSelf() ? ", true" : "") + ");").blank();
+        if (c.hasKeyed()) {
+            keyedTypes();
+            var names = c.keyedTypes().stream().map(o -> typeConstant(o)).toList();
+            w.line("public static final ContractSpec<" + S + "> SPEC = new ContractSpec<>(\"" + X + "\", " + V + ".class, "
+                    + S + ".class, " + c.minAda() + "L, " + c.maxDatumBytes() + ", " + c.maxValidityMs() + "L, " + c.stakeSelf()
+                    + ", java.util.List.of(" + String.join(", ", names) + "));").blank();
+        } else {
+            w.line("public static final ContractSpec<" + S + "> SPEC = new ContractSpec<>(\"" + X + "\", " + V + ".class, "
+                    + S + ".class, " + c.minAda() + "L, " + c.maxDatumBytes() + ", " + c.maxValidityMs() + "L"
+                    + (c.stakeSelf() ? ", true" : "") + ");").blank();
+        }
         String P = c.paramsType();
         w.line("private final StateInstance<" + S + "> instance;");
         if (P != null) w.line("private final " + P + " params;");
@@ -99,12 +107,6 @@ public final class ClientGenerator {
         if (ValidatorGenerator.takesAssets(init)) deployParams.add("org.julclang.ledger.Value payAssets");
         w.line("/** Creates a new instance by running {@link " + X + "#" + init.method() + "}. */");
         w.open("public static " + C + " deploy(" + String.join(", ", deployParams) + ") {");
-        if (c.hasKeyed()) {
-            // ADR-0016 M1: the validator requires the keyed types' heads at creation; the runtime mints them in M2 (D7).
-            w.line("throw new UnsupportedOperationException(\"" + X + " has keyed types (ADR-0016): creating an instance mints"
-                    + " their list heads, which the Java runtime supports from ADR-0016 M2\");");
-            w.close("}").blank();
-        } else {
         w.line("var result = contract(runtime" + (P != null ? ", params" : "") + ").deploy(new Deploy<" + S + ">(callerAccount, "
                 + (init.payable() ? "payLovelace" : "BigInteger.ZERO") + ", " + init.hasCtx() + ",");
         if (c.assetAware()) {
@@ -119,7 +121,6 @@ public final class ClientGenerator {
         }
         w.line("return new " + C + "(result.instance()" + (P != null ? ", params" : "") + ");");
         w.close("}").blank();
-        }
 
         c.purpose("WITHDRAW").filter(pr -> !pr.hasCtx()).ifPresent(pr -> {
             var ps = new ArrayList<String>(List.of("StateRuntime runtime", P + " params", "Account callerAccount"));
@@ -263,8 +264,144 @@ public final class ClientGenerator {
 
     /** Owned objects (ADR-0003, ADR-0012 D1): per owned type a codec, creation methods, a lookup and a typed handle. */
     private void owned() {
-        // Keyed types (ADR-0016) get their lookup, insert, remove and retire calls with the runtime support of M2 (D7).
-        for (var o : c.owned()) if (!o.isKeyed()) owned(o);
+        for (var o : c.owned()) {
+            if (o.isKeyed()) keyed(o);   // ADR-0016 D7: lookup by key, inserts, keyed actions, removes and retires
+            else owned(o);
+        }
+    }
+
+    private static String typeConstant(org.julclang.state.processor.ir.ContractIR.OwnedIR o) {
+        return o.simple().replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase() + "_TYPE";
+    }
+
+    /** The keyed types' runtime descriptions (ADR-0016), declared before SPEC, which lists them. */
+    private void keyedTypes() {
+        String V = c.validatorName();
+        for (var o : c.keyedTypes()) {
+            var k = o.keyed();
+            String remove = c.removals(o).isEmpty() ? "null" : "(anchor, removed) -> new " + V + ".Remove_" + o.simple() + "(anchor, removed)";
+            w.line("/** Keyed type " + o.simple() + " (ADR-0016): key '" + k.keyField() + "', its list's constructor tags, cooldown and window. */");
+            w.line("public static final org.julclang.state.runtime.KeyedType<" + o.type() + "> " + typeConstant(o)
+                    + " = new org.julclang.state.runtime.KeyedType<>(\"" + o.simple() + "\", " + k.headTag() + ", " + k.keyIndex() + ", "
+                    + k.maxKeyBytes() + ", " + k.signedKey() + ", " + k.cooldownMs() + "L, " + k.windowMs() + "L, " + o.type()
+                    + ".class, new " + V + ".Link(), " + remove + ");");
+        }
+        w.blank();
+    }
+
+    /** A keyed type (ADR-0016 D7): its list, lookup by key, an insert per initializer, and a handle for its calls. */
+    private void keyed(org.julclang.state.processor.ir.ContractIR.OwnedIR o) {
+        String X = c.name();
+        String S = c.stateType();
+        String R = o.type();
+        String V = c.validatorName();
+        String simple = o.simple();
+        String handle = simple + "Object";
+        String lookup = Character.toLowerCase(simple.charAt(0)) + simple.substring(1);
+        String list = "org.julclang.state.runtime.KeyedList<" + S + ", " + R + ">";
+
+        w.line("/** The " + simple + " list of this instance: keys in order, each a UTxO (ADR-0016). */");
+        w.open("public " + list + " " + lookup + "List() {");
+        w.line("return new org.julclang.state.runtime.KeyedList<>(instance, " + typeConstant(o) + ");");
+        w.close("}").blank();
+        w.line("/** The " + simple + " of {@code key}, live or retired; fails when the provider returned nothing (not proven absence). */");
+        w.open("public " + handle + " " + lookup + "(byte[] key) {");
+        w.line("return new " + handle + "(" + lookup + "List().get(key));");
+        w.close("}").blank();
+        w.line("/** The key is taken, live or retired (ADR-0016 D7). */");
+        w.open("public boolean " + lookup + "Exists(byte[] key) {");
+        w.line("return " + lookup + "List().exists(key);");
+        w.close("}").blank();
+        w.line("/** Every " + simple + " key in order, walked from the head; retired keys marked. */");
+        w.open("public java.util.List<org.julclang.state.runtime.KeyedList.Entry> " + lookup + "Keys() {");
+        w.line("return " + lookup + "List().keys();");
+        w.close("}").blank();
+
+        for (TransitionIR t : c.ownedInits()) {
+            if (!t.ownedType().equals(R)) continue;
+            var params = new ArrayList<String>(List.of("Account callerAccount"));
+            params.addAll(decls(t.params()));
+            if (t.payable()) params.add("BigInteger payLovelace");
+            var runArgs = new ArrayList<String>();
+            if (t.shared()) runArgs.add("(" + S + ") sh");
+            if (t.takesParams()) runArgs.add("params");
+            t.params().forEach(p -> runArgs.add(p.name()));
+            if (t.hasCtx()) runArgs.add("ctx");
+            var redArgs = new ArrayList<String>(List.of("inst", "anchor"));
+            t.params().forEach(p -> redArgs.add(p.name()));
+            if (t.hasCtx()) redArgs.add("ctx");
+            w.line("/** Inserts a " + simple + " with {@link " + X + "#" + t.method() + "}, after its predecessor (ADR-0016 D4). */");
+            w.open("public " + handle + " " + t.method() + "(" + String.join(", ", params) + ") {");
+            w.line("return new " + handle + "(" + lookup + "List().insert(new org.julclang.state.runtime.KeyedList.Insert<" + R + ">(\""
+                    + t.method() + "\", callerAccount, " + (t.payable() ? "payLovelace" : "BigInteger.ZERO") + ", " + t.hasCtx() + ", "
+                    + t.shared() + ",");
+            w.line("        (sh, ctx) -> " + st(X + "." + t.method() + "(" + String.join(", ", runArgs) + ")", R) + ",");
+            w.line("        (inst, anchor, ctx) -> new " + V + "." + t.variant() + "(" + String.join(", ", redArgs) + "))));");
+            w.close("}").blank();
+        }
+
+        w.line("/** One " + simple + ": its own UTxO, keyed by '" + o.keyed().keyField() + "' (ADR-0016). */");
+        w.open("public final class " + handle + " {");
+        w.line("private final org.julclang.state.runtime.KeyedObject<" + S + ", " + R + "> object;").blank();
+        w.open(handle + "(org.julclang.state.runtime.KeyedObject<" + S + ", " + R + "> object) {");
+        w.line("this.object = object;");
+        w.close("}").blank();
+        w.line("public byte[] key() { return object.key(); }");
+        w.line("public " + R + " value() { return object.value(); }");
+        w.line("/** Retired: the key is taken for good, the object takes no calls (ADR-0016 D10). */");
+        w.line("public boolean retired() { return object.retired(); }");
+        w.line("public BigInteger lovelace() { return object.lovelace(); }");
+        w.line("public org.julclang.state.runtime.KeyedObject<" + S + ", " + R + "> object() { return object; }").blank();
+        for (TransitionIR t : c.ownedSpendTransitions()) {
+            if (!t.ownedType().equals(R)) continue;
+            boolean destroy = t.destroys();
+            var params = new ArrayList<String>(List.of("Account callerAccount"));
+            params.addAll(decls(t.params()));
+            if (t.payable()) params.add("BigInteger payLovelace");
+            extraParams(t, params);
+            String verb = !destroy ? "call" : t.retire() ? "retire" : "remove";
+            w.open("public CallResult<" + R + "> " + t.method() + "(" + String.join(", ", params) + ") {");
+            fetchReads(t, "object.list().instance().contract().runtime()");
+            String start = destroy
+                    ? "Call.<" + R + ">destroy(\"" + t.method() + "\", callerAccount, \"" + verb + "\")"
+                    : "Call.<" + R + ">action(\"" + t.method() + "\", callerAccount)";
+            w.line("return object." + verb + "(" + start);
+            w.indent();
+            w.indent();
+            w.line(".usesCtx(" + t.hasCtx() + ")");
+            if (t.payable()) w.line(".received(payLovelace)");
+            for (String f : t.signedBy()) w.line(".signedBy(\"" + f + "\", o -> o." + f + "())");
+            for (String f : t.validAfter()) w.line(".validAfter(\"" + f + "\", o -> o." + f + "())");
+            for (String f : t.validBefore()) w.line(".validBefore(\"" + f + "\", o -> o." + f + "())");
+            var callArgs = new ArrayList<String>(List.of("o"));
+            if (t.shared()) callArgs.add("(" + S + ") sh");
+            if (t.takesParams()) callArgs.add("params");
+            for (var rd : t.reads()) callArgs.add("read_" + rd.name() + ".state()");
+            t.params().forEach(p -> callArgs.add(p.name()));
+            if (t.hasCtx()) callArgs.add("ctx");
+            String invoke = X + "." + t.method() + "(" + String.join(", ", callArgs) + ")";
+            String body = switch (t.returns()) {
+                case STATE -> "Transition.of(" + st(invoke, R) + ")";
+                case RESULT -> null;
+                case PAYOUTS -> "Transition.end(" + invoke + ")";
+                case SETTLE -> "Transition.end(" + (t.resultPayouts() ? invoke + ".payouts()" : "org.julclang.core.types.JulcList.empty()")
+                        + ")" + (t.resultEvents() ? ".withEvents(" + invoke + ".events())" : "");
+            };
+            if (body == null) {
+                String lam = "{ var r = " + invoke + "; return Transition.of(" + st("r.state()", R) + ", "
+                        + (t.resultPayouts() ? "r.payouts()" : "org.julclang.core.types.JulcList.empty()") + ")" + events(t) + "; }";
+                w.line(t.shared() ? ".runShared((o, sh, ctx) -> " + lam + ")" : ".run((o, ctx) -> " + lam + ")");
+            } else {
+                w.line(t.shared() ? ".runShared((o, sh, ctx) -> " + body + ")" : ".run((o, ctx) -> " + body + ")");
+            }
+            extraCalls(t);
+            redeemerLine(t);
+            w.line(".build());");
+            w.dedent();
+            w.dedent();
+            w.close("}").blank();
+        }
+        w.close("}").blank();
     }
 
     private void owned(org.julclang.state.processor.ir.ContractIR.OwnedIR o) {

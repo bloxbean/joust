@@ -759,9 +759,8 @@ final class ContractReader {
             }
         }
         if (!keyed.isEmpty()) {
-            messager.printMessage(Diagnostic.Kind.NOTE, type.getSimpleName() + " has keyed types: the generated Java client"
-                    + " cannot deploy it until ADR-0016 M2 (its deploy() throws), and its description omits keyed calls"
-                    + " until M3", type);
+            messager.printMessage(Diagnostic.Kind.NOTE, type.getSimpleName() + " has keyed types: its description omits"
+                    + " keyed calls and its portable transitions skip them until ADR-0016 M3", type);
         }
     }
 
