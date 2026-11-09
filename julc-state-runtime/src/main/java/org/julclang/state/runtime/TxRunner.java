@@ -68,6 +68,8 @@ final class TxRunner {
         java.util.List<PendingDeposit> known = java.util.List.of();
         /** Output index of each call's continuing state output, by unit (policy ++ token name). */
         final java.util.Map<String, Integer> stateOutputs = new java.util.HashMap<>();
+        /** A keyed call took part (ADR-0016 D7): the composition designates an input and may rebuild after a rejection. */
+        boolean keyed;
         /** Units whose call is {@code @Receives}: the only valid deposit targets (ADR-0011 D3). */
         final java.util.Set<String> receivers = new java.util.HashSet<>();
 
@@ -216,20 +218,56 @@ final class TxRunner {
                 // diagnostics only
             }
         }
-        try {
-            var r = rt.backend().getTransactionService().submitTransaction(signed.serialize());
-            if (!r.isSuccessful()) {
-                // A definite answer from the node: not accepted.
-                throw new SubmitException(what + ": the node rejected the transaction: " + r.getResponse());
-            }
-        } catch (SubmitException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + rootMessage(e) + ")");
-        }
+        if (awaitStart && window != null) awaitSlot(window.fromSlot(), what);
+        deliver(signed, txHash, what);
         rt.log(what + ": submitted " + txHash);
+        if (onSubmitted != null) onSubmitted.accept(txHash);
         awaitInclusion(txHash, what);
         return txHash;
+    }
+
+    /** Wait until the chain reaches {@code slot} before submitting (a keyed call's window may start later; D7 step 5). */
+    boolean awaitStart;
+    /** Observes the hash of every transaction this runner delivered (a keyed operation's attempts; D7). */
+    java.util.function.Consumer<String> onSubmitted;
+
+    private void awaitSlot(long slot, String what) {
+        long tip = rt.chainTime().tipSlot();
+        if (tip >= slot) return;
+        rt.log(what + ": waiting for slot " + slot + " (tip " + tip + ") to submit");
+        while (tip < slot) {
+            sleep(Math.max(200, Math.min(2_000, (slot - tip) * rt.chainTime().slotLengthMs() / 2)));
+            tip = rt.chainTime().tipSlot();
+        }
+    }
+
+    /**
+     * Sends the same signed bytes to every relay (ADR-0016 D7). The outcome is transaction-wide: any acceptance means
+     * submitted; otherwise any unknown delivery means its fate is unknown ({@link PendingTransactionException}: never
+     * rebuilt); only rejections by every relay are a rejection ({@link SubmitException}).
+     */
+    private void deliver(Transaction signed, String txHash, String what) {
+        byte[] cbor;
+        try {
+            cbor = signed.serialize();
+        } catch (Exception e) {
+            throw new SubmitException(what + ": cannot serialise the transaction: " + rootMessage(e), e);
+        }
+        boolean accepted = false;
+        String unknown = null;
+        String rejected = null;
+        for (Relay relay : rt.relays()) {
+            Relay.Outcome o = relay.submit(cbor);
+            switch (o.answer()) {
+                case ACCEPTED -> accepted = true;
+                case UNKNOWN -> { if (unknown == null) unknown = o.message(); }
+                case REJECTED -> { if (rejected == null) rejected = o.message(); }
+            }
+        }
+        if (accepted) return;
+        if (unknown != null) throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + unknown + ")");
+        // A definite answer from every relay: not accepted.
+        throw new SubmitException(what + ": the node rejected the transaction: " + rejected);
     }
 
     /**

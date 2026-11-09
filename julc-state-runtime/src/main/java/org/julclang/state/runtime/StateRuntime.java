@@ -32,6 +32,8 @@ public final class StateRuntime {
     private final MerkleSupport.Prover mapProver;
     private final Consumer<BuiltTx> onBuilt;
     private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts;
+    private final java.util.List<Relay> relays;
+    private final long[] pageLimits;
 
     /** A transaction the runtime built: what it is for, and the transaction (signed when submitted, unsigned when prepared). */
     public record BuiltTx(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {}
@@ -51,6 +53,8 @@ public final class StateRuntime {
         this.mapProver = b.mapProver;
         this.onBuilt = b.onBuilt;
         this.referenceScripts = Map.copyOf(b.referenceScripts);
+        this.relays = b.relays.isEmpty() ? java.util.List.of(Relay.of(b.backend)) : java.util.List.copyOf(b.relays);
+        this.pageLimits = b.pageLimits;
         org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
     }
 
@@ -66,6 +70,13 @@ public final class StateRuntime {
     public long ttlMs() { return ttlMs; }
     public int maxRetries() { return maxRetries; }
     public Duration confirmTimeout() { return confirmTimeout; }
+    /** Where signed transactions go (default: the backend's submit endpoint; ADR-0016 D7). */
+    public java.util.List<Relay> relays() { return relays; }
+    /**
+     * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null: keyed
+     * calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
+     */
+    public long[] pageLimits() { return pageLimits == null ? null : pageLimits.clone(); }
     void log(String message) { log.accept(message); }
     /** Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). */
     void built(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {
@@ -149,6 +160,8 @@ public final class StateRuntime {
         private MerkleSupport.Prover mapProver;
         private Consumer<BuiltTx> onBuilt;
         private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts = new HashMap<>();
+        private final java.util.List<Relay> relays = new java.util.ArrayList<>();
+        private long[] pageLimits;
 
         private Builder(BackendService backend) {
             this.backend = backend;
@@ -187,6 +200,25 @@ public final class StateRuntime {
          */
         public Builder referenceScript(com.bloxbean.cardano.client.api.model.Utxo utxo) {
             if (utxo != null && utxo.getReferenceScriptHash() != null) referenceScripts.put(utxo.getReferenceScriptHash().toLowerCase(), utxo);
+            return this;
+        }
+
+        /**
+         * Sends every signed transaction to these relays instead of the backend alone (ADR-0016 D7): the same bytes to
+         * each; any acceptance or unknown delivery dominates rejections.
+         */
+        public Builder relays(java.util.List<Relay> relays) {
+            this.relays.clear();
+            this.relays.addAll(relays);
+            return this;
+        }
+
+        /**
+         * Keeps keyed calls' windows within a page's absolute limits, in slots after the tip (ADR-0013's verifier:
+         * {@code maxStartSlots} 60 and {@code maxValiditySlots} 900 by default, for one-second slots; ADR-0016 D7).
+         */
+        public Builder pageLimits(long maxStartSlots, long maxValiditySlots) {
+            this.pageLimits = new long[]{maxStartSlots, maxValiditySlots};
             return this;
         }
 
