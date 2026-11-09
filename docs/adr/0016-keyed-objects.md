@@ -1106,10 +1106,17 @@ What M1 built, what it measured, and where the code differs from the text above.
   errors does not name `@Shared`, and the implementation follows §2.
 - **A retire without `@SignedBy` is a processor error** (the coordinator's decision after the review, stricter than
   D1's "may carry `@SignedBy`"): unsigned, anyone could retire anyone's node, and its key, for good.
-- **The squatting check** (after the review, F42 and F45): the warning is silenced only when `signedKey` is set, or when
-  **every** return statement of the initializer is `new T(...)` whose key argument is, syntactically,
-  `<ctx>.caller()` (`<ctx>` being the method's `Ctx` parameter). There is no flow analysis, so anything else warns,
-  including a legitimate equality check or an alias local holding the caller. The warning says how to silence it.
+- **The squatting check** (after the review: F42, F45, F47, F48). The warning is silenced only when `signedKey` is set,
+  or when all of these hold, checked syntactically and without flow analysis:
+  - the keyed record declares no constructor of its own (compact, canonical or other);
+  - every return statement of the initializer is `new T(...)` with exactly as many arguments as `T` has components,
+    and its key argument is `<ctx>.caller()` (`<ctx>` being the method's `Ctx` parameter);
+  - that parameter is never assigned in the body.
+
+  Anything else warns, including a legitimate equality check or an alias local holding the caller, and the warning
+  says how to silence it. JuLC's subset already rejects two of these shapes: a constructor with a statement in its
+  body (`JULC0099`) and reassigning `ctx` outside a loop (`JULC0061`). It still allows a reassignment inside a loop,
+  so the processor's rule holds either way.
 - **Datum names:** in a keyed contract, plain owned types use `Holding_<T>` in the sealed `Holding`, even when there is
   only one, and their arms check their tag (I42 amended).
 - **Client and description (M2/M3 scope):**
@@ -1173,6 +1180,8 @@ unless noted. R-A8 (ledger-model divergences, none of which could hide an on-cha
 | R-B9 | No honest-looking duplicate inserts | About 6% of the steps insert an existing live or retired key, with the right token and the model's predecessor as anchor. All are refused by the policy (about 55 per 1,000 steps) |
 | R-A6 | The raised-minimum liveness limit was untested | Non-payable inserts (`cast`, `grant`) and a keyed action at the raised minimum are refused by the ledger; noted in §8 |
 | F45 (Codex re-review) | The comparison-based squatting check could still be fooled: by a discarded `equals`, a negated `Require`, an unrelated `new T(ctx.caller(), ...)` beside the returned one, or a reassignment through a local after the check. A legitimate check through `byte[] c = ctx.caller()` still warned | The comparison-based suppression is gone (the coordinator's decision): only `signedKey`, or every return being `new T(...)` with the key argument `<ctx>.caller()`, silences the warning. `KeyedDiagnosticsTest` has each fooling case, an alias local, two returns of which only one binds, a legitimate equality check (all warn), and the positive cases. The registry's `claim` and `grant` warn, rightly: anyone may take a free name |
+| F47 (Codex final check) | The argument position was not tied to the constructor invoked: an extra constructor that swaps its arguments (`new Ballot(ctx.caller(), voter, true)`), or a compact constructor with `voter = owner;`, stored `voter` while the warning stayed silent | Rule (b) applies only if the record declares no constructor of its own and every returned `new T(...)` has exactly as many arguments as `T` has components. Tested: both of Codex's cases, and an extra constructor that is never called (it still warns). JuLC rejects either constructor body anyway (`JULC0099`) |
+| F48 (Codex final check) | Reassigning the `Ctx` parameter (`ctx = new Ctx(voter, ...)`) before `return new Ballot(ctx.caller(), voter)` silenced the warning | Rule (b) applies only if the `Ctx` parameter is never assigned anywhere in the body. Tested: Codex's case, and a reassignment inside a loop. JuLC rejects the first (`JULC0061`) but would accept the second |
 | F46 (Codex re-review) | `WidestTest`'s mixed tests (an insert or a remove beside a vault creation) accepted any script failure, and still passed with OpenVault's MINT forced to succeed | The mixed tests (insert or remove beside a vault creation, and a remove beside a plain destroy) require MINT among the failing purposes, while allowing the expected SPEND failures. The standalone acceptance controls stay |
 
 After the review, the I47 test passes for seeds 1–9 and 47 at 1,000 steps, and for seeds 11–12 at 4,000 steps (about
