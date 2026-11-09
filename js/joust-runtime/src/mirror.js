@@ -6,6 +6,8 @@
 // matching a root.
 
 import { Trie } from '@aiken-lang/merkle-patricia-forestry';
+// MPF works on Node Buffers; imported, not assumed global (a page gets the browser version, as MPF itself does).
+import { Buffer } from 'node:buffer';
 import { parseTx, decodeData, dataHex, Data, hexToBytes, bytesToHex } from '@julclang/state-client';
 
 export const EMPTY_ROOT = '00'.repeat(32);

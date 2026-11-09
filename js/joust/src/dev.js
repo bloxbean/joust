@@ -191,7 +191,7 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
       // @julclang/joust/vite; else that plugin alone (browser polyfills, es2022, the build's clients readable).
       const configFile = [join(pageDir, 'vite.config.js'), join(root, 'vite.config.js')].find(existsSync) ?? false;
       const { joust } = await import('./vite.js');
-      vite = await viteServer({ root: pageDir, configFile, appType: 'spa', logLevel: 'warn',
+      vite = await viteServer({ root: pageDir, configFile, appType: 'spa', logLevel: process.env.JOUST_VITE_LOG ?? 'warn',
         // Live reload over this server's own port (Vite's default is a fixed port: two dev servers would collide).
         server: { middlewareMode: true, hmr: { server } }, plugins: configFile ? [] : joust({ root }) });
       log('serving the page with Vite');

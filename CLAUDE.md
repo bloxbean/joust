@@ -107,7 +107,7 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   A move's redeemer has `into` at field 0; an `@Admits` action's first argument (the object id) is field 0. Moves run
   only inside `Compose` (`<move>Admitted`). Watch script size: three owned types + moves + maps exceeded 16 KB.
 - ADR-0013 phases 2/3: descriptions at `META-INF/joust/<pkg>.<Contract>.json`; a field's title replaces a schema's, so
-  JS recognises Bool/Optional by shape. Calls with `needsService` are not generated for pages. The page verifier
+  JS recognises Bool/Optional by shape. Calls with `needsService` are generated too since ADR-0015 M4 (the engine prepares them; I5 covers them). The page verifier
   allows outputs to other parties but requires the tx to balance and bounds the wallet's net outflow. Vite: no
   `vite-plugin-top-level-await` (swc breaks); target es2022. DevKit's default-mnemonic accounts may be empty: top up.
   Phase 4 (serverless Wasm) uses GraalVM Web Image (`/Users/satya/work/java/graalvm-25.3.4.1+1.1`), experimental; no TeaVM.
@@ -146,6 +146,9 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   with `enforce: 'post'` (else CommonJS modules lose their exports). Pages import `virtual:joust/network` (the plugin):
   fetched from joust dev, inlined by `vite build` with the engine copied into `dist/joust/engine-<id>/` and its sha384
   hashes pinned (the worker fetches with `{ integrity }`); `joust serve` serves `dist/` plus `/chain` and the faucet.
+  One Buffer class in pages: the plugin injects `Buffer` from `@julclang/joust/src/shims/buffer.js` (the polyfill
+  plugin's shim bundles a copy; MPF checks instanceof). Worker files are scanned up front (`*.worker.js`), else Vite
+  reloads the page when a worker starts; `JOUST_VITE_LOG=info` shows why.
 - ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). JuLC
   pinned at `deb72bb` (branch `feat/joust-embedder-attribution`, bloxbean/julc#313, stacked on #311: `JavacFrontend.attribute` public).

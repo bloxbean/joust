@@ -26,6 +26,7 @@
 //   - The engine's sha384 hashes are pinned in the page's own code (SRI): the worker fetches the script and the Wasm
 //     with them, so a browser refuses an engine whose bytes differ, wherever it is served from.
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { realpathSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadConfig } from './config.js';
@@ -77,7 +78,7 @@ export function joust({ root = process.cwd(), network } = {}) {
   let command = 'serve';
   let mode = 'production';
   let base = '/';
-  const buffer = shim('buffer');
+  const buffer = fileURLToPath(new URL('./shims/buffer.js', import.meta.url));   // one Buffer class (see the shim)
   const proc = shim('process');
   // Module aliases only (absolute paths); the globals are injected below, from absolute paths too.
   const polyfills = () => nodePolyfills({ include: ['buffer', 'events', 'util', 'stream', 'process', 'assert'],
@@ -98,7 +99,11 @@ export function joust({ root = process.cwd(), network } = {}) {
       config: (c, env) => (command = env.command, mode = env.mode, {
         define: { global: 'globalThis' },
         esbuild: { target: 'es2022' },
-        optimizeDeps: { esbuildOptions: { target: 'es2022', define: { global: 'globalThis' }, inject: [buffer, proc],
+        // Scan workers too (a worker's own dependencies, such as the mirrors', found only when it runs would make Vite
+        // bundle again and reload the page): the HTML entries, as by default, and *.worker.js beside them.
+        // The polyfills too, so that a source module importing one (node:buffer in the mirrors) is ready up front.
+        optimizeDeps: { entries: c.optimizeDeps?.entries ?? ['**/*.html', '**/*.worker.{js,mjs,ts}'],
+          include: ['node:buffer'], esbuildOptions: { target: 'es2022', define: { global: 'globalThis' }, inject: [buffer, proc],
           // Vite's dependency scan would mark these absolute paths external, which esbuild refuses for injected files.
           plugins: [{ name: 'joust-shims', setup(b) {
             for (const p of [buffer, proc]) b.onResolve({ filter: new RegExp(`^${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }, () => ({ path: p, external: false }));

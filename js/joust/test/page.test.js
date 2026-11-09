@@ -5,10 +5,12 @@
 //   1. joust dev serves the page with Vite and @julclang/joust/vite.
 //   2. The page built (vite build) and served as static files (joust serve): the engine comes from the build, checked
 //      against the hashes pinned in the page (SRI); a tampered engine script or Wasm is refused.
+//   3. A MerkleMap contract (examples/token) in a page: the worker's mirror answers the map proofs, keeps the map in
+//      IndexedDB across a reload, and a fresh browser profile rebuilds it from the chain's history.
 // Runs when DevKit is up (Yaci Store on :8080).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, cpSync, mkdirSync, symlinkSync, renameSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, cpSync, mkdirSync, symlinkSync, renameSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +26,7 @@ const up = await fetch('http://localhost:8080/api/v1/blocks/latest').then((r) =>
 const skip = up ? false : 'DevKit not reachable';
 
 /** A project from the template, its dependencies linked to this repository's packages (no registry), built. */
-async function project() {
+async function project(customize) {
   const root = mkdtempSync(join(tmpdir(), 'joust-page-'));
   cpSync(TEMPLATE, root, { recursive: true });
   renameSync(join(root, 'gitignore'), join(root, '.gitignore'));
@@ -38,6 +40,7 @@ async function project() {
   for (const dep of ['vite', '@cardano-foundation/cardano-connect-with-wallet-core', '@scure/bip39']) {
     link(dep, join(JS, 'joust', 'node_modules', dep));
   }
+  if (customize) customize(root);
   const { build } = await import('../src/build.js');
   assert.ok((await build({ root, src: 'contracts', out: 'build/joust', log: () => {} })).ok);
   return root;
@@ -187,5 +190,113 @@ test('the template page built and served as static files (joust serve); a tamper
     }
   } finally {
     await browser.close();
+  }
+});
+
+// A test page for the Token: the generated client, prepared in the worker, signed by an in-page DevKit key.
+const TOKEN_PAGE = `
+import net from 'virtual:joust/network';
+import { blockfrostChain } from '@julclang/state-client';
+import { devWallet } from '@julclang/state-client/devwallet';
+import { engineWorker } from '@julclang/joust-runtime/page';
+import { Token } from '../build/joust/Token.js';
+
+const chain = blockfrostChain(new URL(net.chain, location.href).href);
+const service = engineWorker(new Worker(new URL('./engine.worker.js', import.meta.url), { type: 'module' }), net);
+const deployment = Object.values(net.deployments).find((d) => d.contract.endsWith('.Token'));
+const token = new Token({ service, chain, deployment });
+const wallet = (mnemonic) => devWallet({ chain, mnemonic, networkId: net.networkId });
+window.app = {
+  ready: service.ready.then(() => true),
+  keyHash: (m) => wallet(m).keyHash,
+  async topUp(m) {
+    const w = wallet(m);
+    await fetch('/dev/topup', { method: 'POST', body: JSON.stringify({ address: w.address, ada: 1000 }) });
+    for (let i = 0; i < 60 && !(await chain.utxosAt(w.address)).length; i++) await new Promise((r) => setTimeout(r, 1000));
+  },
+  async create(m) { return (await token.deploy(wallet(m), {})).instance.id; },
+  async mint(m, id, to, amount) { return (await token.at(id).mint(wallet(m), { to, amount: BigInt(amount) })).txHash; },
+  async transfer(m, id, to, amount) { return (await token.at(id).transfer(wallet(m), { to, amount: BigInt(amount) })).txHash; },
+};
+`;
+
+test('a MerkleMap contract in a page: proofs from the worker\'s mirror, IndexedDB across a reload, a rebuild from the chain', { skip, timeout: 1_200_000 }, async () => {
+  const root = await project((r) => {
+    rmSync(join(r, 'contracts'), { recursive: true });
+    const dir = join(r, 'contracts', 'org', 'julclang', 'state', 'examples', 'token');
+    mkdirSync(dir, { recursive: true });
+    cpSync(join(JS, '..', 'examples', 'token', 'src', 'main', 'java', 'org', 'julclang', 'state', 'examples', 'token', 'Token.java'), join(dir, 'Token.java'));
+    writeFileSync(join(r, 'page', 'index.html'), '<!doctype html><title>Token</title><script type="module" src="./main.js"></script>');
+    writeFileSync(join(r, 'page', 'main.js'), TOKEN_PAGE);
+  });
+  const d = await dev({ root, config: loadConfig(root), port: 0, log: () => {} });
+  const { generateMnemonic } = await import('@scure/bip39');
+  const { wordlist } = await import('@scure/bip39/wordlists/english');
+  const m = generateMnemonic(wordlist, 256);
+  const other = 'ab'.repeat(28);
+  const history = (paths) => paths.filter((x) => /^\/chain\/assets\/[0-9a-f]+\/transactions$/.test(x));
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch();
+  try {
+    // The first visit: create, mint, transfer. The mirror stages each new map state (and keeps it in IndexedDB).
+    const p = await open(browser, d.url);
+    await p.page.waitForFunction(() => window.app);
+    await p.page.evaluate(() => window.app.ready);
+    const me = await p.page.evaluate((x) => window.app.keyHash(x), m);
+    await p.page.evaluate((x) => window.app.topUp(x), m);
+    const id = await p.page.evaluate((x) => window.app.create(x), m);
+    await p.page.evaluate(([x, i, to]) => window.app.mint(x, i, to, 1000), [m, id, me]);
+    await p.page.evaluate(([x, i, to]) => window.app.transfer(x, i, to, 250), [m, id, other]);
+
+    // A reload: a new worker with an empty memory, the map's state from IndexedDB, no history read.
+    p.requests.length = 0;
+    await p.page.reload();
+    await p.page.waitForFunction(() => window.app);
+    await p.page.evaluate(() => window.app.ready);
+    await p.page.evaluate(([x, i, to]) => window.app.transfer(x, i, to, 100), [m, id, other]);
+    assert.deepEqual(history(p.requests), [], 'after a reload the map came from IndexedDB, not the chain\'s history');
+    assert.deepEqual(p.errors, []);
+
+    // A fresh profile (another device): no cache, so the worker rebuilds the map from the chain's history, every claim
+    // checked against its root. The rebuilt balances are exact: 651 is refused (650 left), 650 goes through.
+    const fresh = await browser.newContext();
+    try {
+      const page2 = await fresh.newPage();
+      const paths2 = [];
+      page2.on('request', (r) => paths2.push(new URL(r.url()).pathname));
+      await page2.goto(d.url);
+      await page2.waitForFunction(() => window.app);
+      await page2.evaluate(() => window.app.ready);
+      await assert.rejects(page2.evaluate(([x, i, to]) => window.app.transfer(x, i, to, 651), [m, id, other]), /insufficient balance/);
+      assert.ok(history(paths2).length > 0, 'the fresh profile read the token\'s history to rebuild the map');
+      await page2.evaluate(([x, i, to]) => window.app.transfer(x, i, to, 650), [m, id, other]);
+    } finally {
+      await fresh.close();
+    }
+
+    // The same page built (vite build) and served as static files: a fresh profile rebuilds the map from the chain in
+    // the built worker (its own bundle of MPF and Buffer), then mints and transfers.
+    const { build: viteBuild } = await import('vite');
+    await viteBuild({ configFile: join(root, 'vite.config.js'), logLevel: 'warn' });
+    const s = await serve({ root, config: loadConfig(root), dir: 'dist', port: 0, log: () => {} });
+    const built = await browser.newContext();
+    try {
+      const page3 = await built.newPage();
+      const errors3 = [];
+      page3.on('pageerror', (e) => errors3.push(e.message));
+      await page3.goto(s.url);
+      await page3.waitForFunction(() => window.app);
+      await page3.evaluate(() => window.app.ready);
+      await page3.evaluate(([x, i, to]) => window.app.mint(x, i, to, 10), [m, id, me]);
+      await assert.rejects(page3.evaluate(([x, i, to]) => window.app.transfer(x, i, to, 11), [m, id, other]), /insufficient balance/);
+      await page3.evaluate(([x, i, to]) => window.app.transfer(x, i, to, 10), [m, id, other]);
+      assert.deepEqual(errors3, []);
+    } finally {
+      await built.close();
+      await s.close();
+    }
+  } finally {
+    await browser.close();
+    await d.close();
   }
 });
