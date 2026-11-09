@@ -1,0 +1,322 @@
+---
+title: Java off-chain runtime
+description: Use generated clients from Java - configure StateRuntime, deploy and call instances, read state and views, compose several calls in one transaction, and prepare transactions for browser wallets.
+---
+
+import { Aside, LinkCard, Steps } from '@astrojs/starlight/components';
+
+`julc-state-runtime` is the off-chain half of JOUST for Java applications. The processor generates a typed
+`<Name>Client` per contract; the client fills in a call and the runtime does the rest: it finds the instance's state
+UTxO, runs your method on the JVM, builds the transaction with cardano-client-lib (CCL) QuickTx, checks it, signs,
+submits, waits for it on chain, and retries if the state moved under it.
+
+This page shows how to use it. Every class and method named here is listed in the
+[Java runtime API reference](/reference/java-runtime-api/).
+
+## Configure a StateRuntime
+
+A `StateRuntime` holds everything a client needs to talk to a network. It is immutable and shared by every client;
+build one per network with `StateRuntime.builder(backend)`.
+
+Against a local Yaci DevKit, the way the examples' `DevKit.runtime()` does it:
+
+```java title="examples/devkit/.../DevKit.java (abridged)"
+BackendService backend = new BFBackendService("http://localhost:8080/api/v1/", "dummy-key");   // Yaci Store
+SlotChainTime time = new SlotChainTime(0, startSec * 1000, Math.round(slotLengthSec * 1000), backend);
+StateRuntime runtime = StateRuntime.builder(backend)
+        .network(Networks.testnet())
+        .chainTime(time)
+        .ttl(Duration.ofSeconds(20))
+        .evaluator(new JulcTransactionEvaluator(
+                new DefaultUtxoSupplier(backend.getUtxoService()),
+                new DefaultProtocolParamsSupplier(backend.getEpochService()),
+                new DefaultScriptSupplier(backend.getScriptService()),
+                new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())))
+        .log(msg -> System.out.println("  [joust] " + msg))
+        .build();
+```
+
+`startSec` and `slotLengthSec` come from DevKit's admin API
+(`GET http://localhost:10000/local-cluster/api/admin/devnet`, fields `startTime` and `slotLength`); the
+[quick start](/start/quick-start-java/#run-it-on-devkit) has a complete helper.
+
+Against the preview testnet through Blockfrost, the clock is preview's genesis (system start 1666656000, one-second
+slots from slot 0, as `js/joust/src/config.js` pins it):
+
+```java
+String projectId = System.getenv("BLOCKFROST_PREVIEW_PROJECT_ID");
+BackendService backend = new BFBackendService(Constants.BLOCKFROST_PREVIEW_URL, projectId);
+StateRuntime runtime = StateRuntime.builder(backend)
+        .network(Networks.preview())
+        .chainTime(new SlotChainTime(0, 1_666_656_000_000L, 1000, backend))
+        .build();
+```
+
+`Constants` is `com.bloxbean.cardano.client.backend.blockfrost.common.Constants`, from
+`cardano-client-backend-blockfrost`. Without an evaluator, QuickTx asks the backend to compute script budgets.
+
+What the options mean:
+
+| Builder method | Default | What it does |
+|---|---|---|
+| `chainTime(ChainTime)` | required | Slot and POSIX time conversion, and the chain tip. The runtime picks slots first and derives the milliseconds `Ctx` carries from them |
+| `network(Network)` | `Networks.testnet()` | Addresses are built for this network |
+| `evaluator(TransactionEvaluator)` | none (the backend evaluates) | Computes script budgets; the examples use JuLC's local evaluator |
+| `ttl(Duration)` | 10 minutes | The validity window of calls that read `Ctx` or time annotations, clamped to the contract's `maxValidityMs`. Must stay inside the network's time horizon: about 36 h on mainnet, minutes on DevKit |
+| `maxRetries(int)` | 3 | How often a call is rebuilt when the node rejected it because the state moved |
+| `confirmTimeout(Duration)` | 90 s | How long to wait for a submitted transaction to appear on chain |
+| `address(byte[] pkh, String bech32)` | none | Pay this key hash at this address instead of its enterprise address |
+| `log(Consumer<String>)` | silent | Progress messages (`submitted ...`, retries) |
+| `referenceScript(Utxo)` | none | A known reference-script UTxO, so contracts skip scanning their address for it |
+| `onBuilt(Consumer<BuiltTx>)` | none | Observes every transaction the runtime builds |
+| `mapStore`, `mapStorePath`, `mapProver` | RocksDB at `./.joust/mpf` | Where [MerkleMap mirrors](/apps/map-mirrors/) keep their nodes |
+
+## Deploy and call
+
+Every generated client has the same shape. For the counter:
+
+```java title="examples/counter/.../CounterApp.java"
+CounterClient counter = CounterClient.deploy(runtime, alice);   // @Init: creates an instance, alice signs and pays
+counter.increment(bob, BigInteger.valueOf(5));                   // @Action: (caller, arguments...)
+counter.reset(alice);                                            // @Action @OnlyOwner
+BigInteger n = counter.count();                                  // @View: reads the state, no transaction
+var closed = counter.close(alice);                               // @Destroy: burns the token, pays out
+```
+
+The methods follow from the contract:
+
+| Contract | Generated |
+|---|---|
+| `@Init` with arguments `a, b` | `static <Name>Client deploy(StateRuntime runtime, Account callerAccount, a, b [, BigInteger payLovelace])` |
+| `@Action` / `@Destroy` with arguments `a` | `CallResult<State> name(Account callerAccount, a [, BigInteger payLovelace] [, Value payAssets] [, Account... cosigners])` |
+| `@View` with arguments `a` | `T name(a)`: runs on the current state, off chain |
+| (always) | `static at(runtime, instanceId)`, `static contract(runtime)`, `state()`, `lovelace()`, `fullValue()`, `instanceId()`, `instance()`, and `SPEC` |
+
+`payLovelace` appears when the method is `@Payable`, `payAssets` when it takes native assets (`Funds`),
+`cosigners` with `@Quorum`, and an `Authorization` with `@AuthorizedBy`. A contract with `@Params` takes the params
+record in `deploy`, `at` and `contract`:
+
+```java title="examples/vault/.../VaultApp.java"
+var vault = VaultClient.deploy(runtime, alice, BigInteger.valueOf(unlockAt), ADA.multiply(BigInteger.TEN));   // @Payable init
+vault.deposit(bob, ADA.multiply(BigInteger.valueOf(5)));                                                       // @Payable action
+```
+
+```java title="examples/treasury/.../TreasuryClient.java (generated signatures)"
+public static TreasuryClient deploy(StateRuntime runtime, Treasury.Config params, Account callerAccount,
+                                    JulcList<byte[]> council, BigInteger quorum, BigInteger payLovelace)
+public CallResult<Treasury.State> pay(Account callerAccount, byte[] to, BigInteger amount, Account... cosigners)
+public CallResult<Treasury.State> freeze(Account callerAccount, boolean frozen, Authorization authorization)
+```
+
+Accounts are CCL `Account`s (`new Account(Networks.testnet(), mnemonic)`). The caller pays the fee, signs when the
+method needs it (`Ctx` or a signer annotation), and is `ctx.caller()`.
+
+### Results
+
+Each action and destroy returns a `CallResult<S>`:
+
+| Component | Meaning |
+|---|---|
+| `txHash()` | The transaction, included on chain |
+| `state()` | The state after the call; `null` after a destroy |
+| `payouts()` | The `Payout`s the contract made |
+| `events()`, `events(Class)` | The events the method emitted ([ADR-0009](/contracts/params-invariants-events/)) |
+
+### Reconnect to an instance
+
+An instance is identified by its id, the hex name of its thread token. Keep `counter.instanceId()` and reconnect
+later, from any process:
+
+```java title="examples/counter/.../CounterDevnetTest.java"
+var again = CounterClient.at(runtime, counter.instanceId());
+again.reset(alice);
+```
+
+## Read state
+
+| Call | Reads |
+|---|---|
+| `client.state()` | The current state, decoded from the inline datum |
+| `client.<view>(...)` | A `@View`, computed from the current state on the JVM |
+| `client.lovelace()` | Lovelace the state UTxO holds, deposit included |
+| `client.fullValue()` | Everything it holds: lovelace, the thread token, native assets |
+| `client.instance().utxo()` | The state UTxO itself (a CCL `Utxo`) |
+
+Each read queries the chain, so two reads can see two different states if someone calls in between. When an
+instance has been destroyed (or never existed), reads throw `InstanceNotFoundException`.
+
+## Errors
+
+| Exception | Means | What to do |
+|---|---|---|
+| `RequireException` (`julc-state-api`) | A rule failed on the JVM: your `Require.that`, a signer or time annotation, a payout rule. Nothing was submitted | Show `getMessage()` to the user |
+| `ContentionException` | The state kept moving; gave up after `maxRetries` | Retry later, or use [batched intents](/contracts/batched-intents/) for hot state |
+| `SubmitException` | The builder failed or the node rejected the transaction; nothing was accepted | Inspect the message; safe to rebuild |
+| `PendingTransactionException` | Submitted, but not seen on chain in time. It may still land | Check `txHash()` before trying again |
+| `InstanceNotFoundException` | No UTxO holds the instance's token | The instance was destroyed, or the id is wrong |
+
+All but `RequireException` extend `JoustException`.
+
+<Aside type="tip" title="A retried call runs against the new state">
+
+When the runtime retries after contention, it re-runs your method on the state it finds. If a call must not go
+through at a different state (a swap at a worse price), put the bound in the arguments and check it with `Require`:
+the DEX's swaps take a `minOut`.
+
+</Aside>
+
+## Where payouts go
+
+A payout names a 28-byte key hash. The runtime decides the address:
+
+- **The caller, holding keys here:** their **enterprise** address (same payment key, no stake key). QuickTx takes
+  the fee from outputs at the fee payer's own address, so a payout sent there would be under-paid.
+- **The caller, as a `WalletAccount`:** the address the wallet gave, which the wallet shows. Prepared transactions
+  restore those payouts after balancing.
+- **Anyone else:** the address registered with the builder's `address(pkh, bech32)`, else their enterprise address.
+
+Funds at an enterprise address are spendable with the same key, but some wallets list only base addresses. The
+examples move them with `DevKit.sweepEnterprise(account)`.
+
+## Below the client: handles and instances
+
+The generated client is a thin wrapper. When you need more, use what it wraps:
+
+```java
+StateContractHandle<Counter.State> contract = CounterClient.contract(runtime);
+contract.address();                     // the script address every instance lives at
+contract.policyId();                    // = the script hash
+contract.ensureReferenceScript(payer);  // publish the script once (deploy does this too)
+StateInstance<Counter.State> inst = contract.at(instanceId);
+inst.utxo(); inst.state(); inst.lovelace(); inst.value();
+inst.view(s -> Counter.count(s));       // any function of the state
+```
+
+Before a wallet user can call a contract, its reference script must be on chain, because the prepare path cannot
+publish it (the wallet's keys are not there). Publish it with `ensureReferenceScript(account)` (the dApp's server does this at start), let a first
+Java `deploy` do it, or have a wallet sign the transaction `prepareReferenceScript(payerAddress)` returns (null when
+the script is already there).
+
+Owned objects and intents have their own handles (`OwnedObject`, `IntentHandle`, `Batcher`), which the generated
+clients expose as typed methods, for example `BankClient.open(...)` returning an `AccountObject`, and
+`PoolClient.donateIntent(...)`, `batch(...)`, `pendingIntents()`. See [Owned objects](/contracts/owned-objects/) and
+[Batched intents](/contracts/batched-intents/).
+
+## Several calls in one transaction: Compose
+
+`Compose` runs ordinary client calls into **one atomic transaction**: they all land, or none does. Each validator
+still checks only its own transition, so composing adds no trust.
+
+```java title="examples/oracle/.../OracleDevnetTest.java"
+String tx = Compose.of(runtime, buyer)
+        .add(() -> shop.buy(buyer, BigInteger.ONE, BigInteger.valueOf(3_000_000)))
+        .add(() -> oracle2.post(publisher2, BigInteger.valueOf(5_000_000)))
+        .submit();
+```
+
+`Compose.of(runtime, payer)` takes the account that pays the fee. It runs the calls twice: once to learn each call's
+validity window, then again in the intersection, so every `Ctx` matches the final transaction. It refuses, before
+submitting:
+
+- the same UTxO spent by two calls;
+- two calls minting under one policy;
+- calls whose validity windows do not overlap;
+- a key that signs for more than one call (its signature would count for every `@SignedBy` in the transaction),
+  unless you call `allowSharedSigners()`.
+
+Composition is how [deposits](/contracts/deposits/), [migrations](/contracts/upgrades/) and moves of owned objects
+between instances run. See [Reads and composition](/contracts/reads-and-composition/).
+
+## Browser wallets: WalletAccount and PreparedTx
+
+A user with a CIP-30 browser wallet (Eternl, Lace, ...) keeps their keys in the wallet. To call a contract for them,
+the runtime builds the transaction **unsigned**, for the wallet to sign:
+
+<Steps>
+
+1. **Name the caller by address.** `WalletAccount.of(bech32, network)` is an `Account` known only by its address
+   (the wallet's `getChangeAddress()`). It fails closed: every key method throws.
+
+2. **Prepare.** Wrap the calls in `Compose` and call `prepare()` instead of `submit()`. The payer and every caller
+   must be `WalletAccount`s; a call that needs a key held by the server (a co-signer, an authorization) is refused.
+
+3. **Sign in the wallet.** Give `prepared.cbor()` to the wallet's `signTx(cbor, true)`. It returns a witness set
+   holding only its signatures.
+
+4. **Submit.** `prepared.submit(witnessSet)` checks each signature against the transaction hash, adds them without
+   re-encoding the body, submits and waits. Or `prepared.withWitnesses(witnessSet)` returns the signed CBOR for the
+   wallet's own `submitTx`.
+
+</Steps>
+
+```java title="examples/wallet/.../WalletDevnetTest.java"
+var ann = WalletAccount.of(annKeys.baseAddress(), Networks.testnet());
+var counter = CounterClient.deploy(runtime, admin);
+
+var prepared = Compose.of(runtime, ann).add(() -> counter.increment(ann, BigInteger.TWO)).prepare();
+String witness = cip30SignTx(annKeys, prepared.cbor());     // what the wallet's signTx(cbor, true) returns
+String txHash = prepared.submit(witness);
+```
+
+`PreparedTx` also exposes `txHash()`, `requiredSigners()` (hex key hashes that must sign), `validTo()` (the last
+valid slot: sign and submit before it), `plan()` and a copy of the `transaction()`. A witness set that carries
+anything but signatures, a signature by the wrong key or over another transaction, or a missing required signer is
+refused before submission.
+
+Pages should not trust whoever prepared the transaction: [JavaScript clients](/apps/javascript-clients/) verify
+every prepared transaction against the contract's description before asking the wallet. See [Wallets](/apps/wallets/).
+
+## The prepare service: julc-state-server
+
+`julc-state-server` serves your generated clients over HTTP, so a JavaScript page can have transactions prepared for
+its user's wallet. It holds no keys and never sees a signed transaction: pages verify, sign and submit through their
+wallets.
+
+```java title="examples/dapp/.../DappServer.java (abridged)"
+JoustServer server = JoustServer.builder(runtime)
+        .contract(CounterClient.class)
+        .contract(BankClient.class)
+        .allowOrigin("http://localhost:5174")
+        .staticFiles(frontend.resolve("dist"))          // optional: serve the built page too
+        .preparesPerMinute(30)
+        .build()
+        .start("127.0.0.1", 8095);
+```
+
+| Endpoint | Request | Answer |
+|---|---|---|
+| `GET /api/contracts` | | Each served contract's deployment: policy, address, network, reference script |
+| `GET /api/description?contract=` | The contract's class name | Its description |
+| `POST /api/prepare` | `{ contract, kind, method, instance, object, args, pay, address }` | `{ cbor, txHash, validTo, signers, plan, instance?, object? }` |
+| `POST /api/view` | `{ contract, instance, view, args }` | `{ value }` (`view` null: the state) |
+
+`kind` is `init`, `action`, `destroy`, `ownedInit`, `ownedAction` or `ownedDestroy`; `address` is the wallet's
+address; `contract` is the contract's fully qualified class name, e.g. `org.julclang.state.examples.counter.Counter`.
+Each prepare runs the call through the generated client exactly as Java code would, inside `Compose.prepare()`.
+
+The service applies a per-client rate limit (`preparesPerMinute`, default 30; `viewsPerMinute`, default 120), a bound
+on concurrent prepares (`concurrentPrepares`, default 4), a 64 KiB request limit and a strict CORS allow-list
+(`allowOrigin`, exact match). Calls that need a co-signer (`@Quorum`, `@AuthorizedBy`) are refused. `handler(path,
+handler)` adds your own endpoints (the dApp adds a chain proxy and a DevKit top-up).
+
+<Aside type="note">
+
+A JavaScript app can also prepare transactions with no server at all: the runtime engine runs JOUST's runtime in Node
+or a page worker. See [Pages](/apps/pages/).
+
+</Aside>
+
+## Debugging
+
+- `log(...)` on the builder prints each submission and each retry.
+- `onBuilt(...)` sees every transaction the runtime builds, before it is submitted or returned.
+- `-Djoust.dumpTx=<dir>` writes each submitted transaction's CBOR to `<dir>/<txHash>.cbor`.
+- A contract built with `-Ajoust.traces=true` traces the name of each failing validator check (larger scripts;
+  debugging only).
+
+## Next steps
+
+<LinkCard title="Java runtime API reference" description="Every public class and method, in tables." href="/reference/java-runtime-api/" />
+<LinkCard title="Wallets" description="CIP-30 wallets, prepared transactions and what a page must verify." href="/apps/wallets/" />
+<LinkCard title="Reads and composition" description="@Reads, Compose and migration in contracts." href="/contracts/reads-and-composition/" />
+<LinkCard title="Networks and chain providers" description="DevKit, preview and Blockfrost." href="/apps/networks-and-providers/" />

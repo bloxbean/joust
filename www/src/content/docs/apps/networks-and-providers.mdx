@@ -1,0 +1,235 @@
+---
+title: Networks and chain providers
+description: Configure networks for JOUST's npm tooling, read the chain through Blockfrost, Yaci Store or Ogmios, and handle clocks, TTLs and project ids safely.
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Everything JOUST does off chain reads the chain: the engine fetches the UTxOs and parameters a transaction needs, the
+page verifier reads the outputs a transaction spends, and `joust deploy` looks for reference scripts. A **network**
+in `joust.config.json` says where that chain is and how its time works. A **chain provider** is the JavaScript object
+that reads it.
+
+## Networks
+
+Two networks are built in ([`js/joust/src/config.js`](https://github.com/bloxbean/joust/blob/main/js/joust/src/config.js)):
+
+```js title="js/joust/src/config.js"
+networks: {
+  // Yaci DevKit: Yaci Store's Blockfrost-compatible API, and the admin API (slot clock, faucet).
+  devkit: { chain: 'http://localhost:8080/api/v1', admin: 'http://localhost:10000', networkId: 0,
+    explorer: 'http://localhost:5173/transactions/{tx}' },   // DevKit's Yaci Viewer
+  // Cardano preview through Blockfrost (its project id from the environment, never the config).
+  preview: {
+    chain: 'https://cardano-preview.blockfrost.io/api/v0', projectIdEnv: 'BLOCKFROST_PREVIEW_PROJECT_ID', networkId: 0,
+    clock: { zeroSlot: 0, zeroTimeMs: 1666656000000, slotLengthMs: 1000 },
+    explorer: 'https://preview.cardanoscan.io/transaction/{tx}',
+  },
+},
+```
+
+The config's `network` (default `devkit`) is the default for every command; `--network <name>` picks another.
+
+### Custom networks
+
+Add a network under `networks` in `joust.config.json`. A network with the name of a built-in one is **merged over
+it**, key by key, so you only write what changes:
+
+```json title="joust.config.json"
+{
+  "network": "devkit",
+  "networks": {
+    "devkit": { "start": "yaci-devkit up --enable-yaci-store" },
+    "preview": { "pageChain": "https://chain.example.org/api/v0" }
+  }
+}
+```
+
+Here `devkit` keeps its chain, admin API and explorer and gains a `start` command, which `joust dev` and `joust serve`
+run when DevKit is not answering. `preview` keeps everything and gains a `pageChain` for built pages. A network with a
+new name needs at least `chain`, `networkId` and either `admin` (a DevKit) or `clock`.
+
+<Aside type="caution" title="A public network's clock must be exact">
+A network's `clock` maps slots to time: slot `zeroSlot` began at `zeroTimeMs`, and every later slot lasts
+`slotLengthMs`. It must agree with the network for every slot a transaction uses. On a network whose earlier eras had
+other slot lengths, anchor the clock in the current era: take a recent block's `slot` and `time` (POSIX seconds) from
+the chain API's `/blocks/latest` and use `{ "zeroSlot": slot, "zeroTimeMs": time * 1000, "slotLengthMs": 1000 }`.
+JOUST checked preview's built-in clock against the tip.
+</Aside>
+
+| Key | Meaning |
+|---|---|
+| `chain` | a Blockfrost-style chain API (Blockfrost, or Yaci Store's `/api/v1`) |
+| `admin` | a Yaci DevKit admin API: the slot clock and the faucet; marks the network as a DevKit |
+| `networkId` | `0` for test networks, `1` for mainnet |
+| `projectIdEnv` | the environment variable that holds the chain API's project id |
+| `projectId` | the project id itself (avoid: prefer `projectIdEnv`) |
+| `clock` | `{ zeroSlot, zeroTimeMs, slotLengthMs }`; not needed with `admin` |
+| `explorer` | a transaction page, `{tx}` standing for the hash |
+| `pageChain` | the chain API a built page calls, instead of `/chain` |
+| `start` | a shell command that starts the network (a DevKit) |
+| `provider`, `ogmios` | `"ogmios"` and its URL, for `joust deploy` ([below](#ogmios)) |
+
+The [`joust.config.json` reference](/reference/config/) has every key and default.
+
+## Chain providers
+
+A **chain provider** is the JavaScript counterpart of cardano-client-lib's `BackendService`: a few chain reads that
+answer plain, normalised objects. The runtime turns them into the engine's snapshot and the page's chain view, so a
+provider never sees either format. It is defined in
+[`js/state-client/src/providers.js`](https://github.com/bloxbean/joust/blob/main/js/state-client/src/providers.js):
+
+| Method | Answers |
+|---|---|
+| `tip()` | `{ slot, hash, height, epoch, time }` (`time` in POSIX seconds, if known) |
+| `protocolParams()` | Blockfrost's parameter object (snake case: `min_fee_a`, `cost_models_raw`, ...) |
+| `utxos(address)` | the complete unspent set at the address: `[Utxo]` |
+| `assetUtxos(address, unit)` | *(optional)* the UTxOs there holding `unit`; otherwise the runtime filters `utxos` |
+| `output(ref)` | one output by `"txHash#index"`, or `null` |
+| `scriptCbor(hash)` | a Plutus script's CBOR, as Blockfrost's `/scripts/{hash}/cbor` serves it, or `null` |
+| `submit(cbor)` | submits a signed transaction; answers its hash |
+| `awaitTx(hash, opts)` | resolves once the transaction is on chain |
+| `txCbor(hash)` | *(optional)* a transaction's CBOR, or `null` |
+| `account(stakeAddress)` | *(optional)* `{ registered, rewards }`; `registered` is `undefined` when the API cannot tell |
+| `assetHistory(unit)` | *(optional)* the hashes of the transactions that moved a token, oldest first |
+| `redeemers(txHash)` | *(optional)* a transaction's redeemers: `[{ purpose, index, data }]` |
+
+A `Utxo` is `{ txHash, index, address, value: [{ unit, quantity }], datumHash, inlineDatum, referenceScriptHash }`,
+with `unit` either `"lovelace"` or the policy id followed by the asset name (hex), `quantity` a decimal string, and
+absent fields `null`. `assetHistory` and `redeemers` rebuild [MerkleMap mirrors](/apps/map-mirrors/) from the chain.
+
+### Using a provider
+
+```js
+import { joustRuntime, blockfrostProvider, ogmiosProvider } from '@julclang/joust-runtime';
+
+// a Blockfrost-style API by URL (a blockfrostProvider is made for you)
+const rt = joustRuntime({ chainUrl: 'http://localhost:8080/api/v1', contracts, clock, networkId: 0, deployments });
+
+// or any provider: Blockfrost, Yaci Store, Ogmios, your own
+const rt2 = joustRuntime({ provider: ogmiosProvider('http://localhost:1337'), contracts, clock, networkId: 0, deployments });
+```
+
+The same provider backs the engine's reads and the page verifier's chain view (`rt.chain`, `chainOf(provider)`), so
+the verifier reads from the source the engine built from. In a page, `blockfrostChain(url)` is shorthand for
+`chainOf(blockfrostProvider(url))`.
+
+<Tabs>
+<TabItem label="Blockfrost and Yaci Store">
+
+`blockfrostProvider(baseUrl, { projectId?, fetchImpl? })` reads Blockfrost or any Blockfrost-style API, such as Yaci
+Store's `http://localhost:8080/api/v1`. It implements every method above. It also exposes `get(path)`, the raw API,
+for anything the interface does not cover.
+
+What a public Blockfrost taught it, since Blockfrost sits behind a load balancer whose backends, indexes and submit
+node can each be a moment apart:
+
+- **It is sticky.** It keeps the `__cflb` affinity cookie, so every request reaches one backend and what it reads only
+  moves forward. (A browser keeps the cookie itself.)
+- **`awaitTx` waits for every index the next call reads**: each output's address, each spent input's removal, and the
+  by-asset index of each new token.
+- **`submit` retries.** On `BadInputsUTxO` it resubmits the same signed transaction (up to 10 times, 3 s apart), for a
+  submit node a block behind. Nothing is signed again; the transaction stays valid until its TTL.
+- **Collateral outputs are skipped.** Blockfrost lists a transaction's collateral return among its outputs, flagged;
+  `output()` ignores it.
+- **Redeemer data is checked** against its hash before a mirror uses it.
+
+Yaci Store answers registered and unknown stake credentials alike, so `account()` reports `registered: undefined`
+there. Code that registers a credential (`registerStake`, `ensureGovernor`) then attempts the registration and treats
+the ledger's "already registered" refusal as success.
+
+</TabItem>
+<TabItem label="Ogmios">
+
+`ogmiosProvider(url, { fetchImpl? })` reads Ogmios v6 over HTTP JSON-RPC: the node's own ledger state.
+
+- It serves unspent outputs only, and no transaction CBOR.
+- Protocol parameters are mapped to Blockfrost's object as cardano-client-lib's Ogmios supplier maps them
+  (`ogmiosParams`).
+- Scripts are known by their hash from the reference-script outputs it has served.
+- A transaction is on chain once its first output is.
+- `account()` tells registration exactly, from `rewardAccountSummaries`.
+- It has no history (`assetHistory`, `redeemers`), so it cannot rebuild a MerkleMap mirror alone.
+
+All 14 example flows of `js/joust-runtime/test/examples.test.js` pass over Ogmios on DevKit (`PROVIDER=ogmios`), as
+over Yaci Store.
+
+</TabItem>
+<TabItem label="Your own">
+
+Any object with the required methods is a provider: an indexer, a cache, a test double. `providers.test.js` checks
+Ogmios against Yaci Store with `conformance(candidate, reference, probes)` on the tip, protocol parameters, an
+address's UTxOs, reference-script outputs and stake accounts; the same check applies to any provider.
+
+</TabItem>
+</Tabs>
+
+### Ogmios
+
+`joust deploy` reads a network through Ogmios when the network says so:
+
+```json title="joust.config.json"
+{ "networks": { "devkit": { "provider": "ogmios", "ogmios": "http://localhost:1337" } } }
+```
+
+`ogmios` defaults to `http://localhost:1337`. `joust dev` and `joust serve` still use the network's `chain`: they probe
+it, proxy it at `/chain`, and their runtimes read it.
+
+## The `/chain` proxy
+
+A Blockfrost project id is a secret. It must never reach a page, where anyone can read it. So pages never call
+Blockfrost directly: `joust dev` and `joust serve` proxy the network's chain API at `/chain` on their own origin, adding
+the project id in the server ([`js/joust/src/routes.js`](https://github.com/bloxbean/joust/blob/main/js/joust/src/routes.js)):
+
+- `GET /chain/<path>?<query>` goes to `<chain>/<path>?<query>`, with the header `project_id`;
+- `POST /chain/tx/submit` is forwarded with its body and content type;
+- the status, content type and body come back unchanged.
+
+The proxy keeps one upstream session, with Blockfrost's affinity cookie, for everything the server reads: the deploys,
+the prepare service and every page's `/chain`. So a page verifies against the chain state the deployment and the
+engine saw.
+
+The project id is read only from the environment variable `projectIdEnv` names (`BLOCKFROST_PREVIEW_PROJECT_ID` for
+preview). A command stops with a message naming the variable if it is not set.
+
+For a page hosted elsewhere, give it the same proxy, or a chain API a browser may call directly as the network's
+`pageChain`. See [Deploy to preview](/tutorials/deploy-preview/#5-host-it).
+
+## Clocks
+
+Cardano measures time in **slots**. A contract that uses time ([Time](/contracts/time/)) sees it as a transaction's
+validity interval, in slots, so the runtime must turn milliseconds into slots exactly as the network does. A clock is
+`{ zeroSlot, zeroTimeMs, slotLengthMs }`.
+
+| Network | Clock |
+|---|---|
+| DevKit | read from the admin API (`devkitClock(adminUrl)`, `/local-cluster/api/admin/devnet`): its start time and slot length |
+| preview | from preview's genesis: `{ zeroSlot: 0, zeroTimeMs: 1666656000000, slotLengthMs: 1000 }` |
+| custom | the network's `clock`; a network without `clock` or `admin` is refused |
+
+`joust deploy` records the clock in `deployments.<network>.json`, and a built page inlines that one, so a build needs
+no chain. A DevKit's clock changes every time it restarts: deploy and build the page again after a restart.
+
+## TTLs
+
+Every prepared transaction expires: its **TTL** (time to live) is the end of its validity interval. Short TTLs keep a
+prepared transaction from lingering, and the page verifier refuses one that is valid for more than 900 slots
+(15 minutes, `limits.maxValiditySlots`).
+
+| Where | Default |
+|---|---|
+| a page (`virtual:joust/network`'s `ttlMs`) and `joust dev`'s prepare service | 20 s on a DevKit (a network with `admin`), 180 s elsewhere; the config's `dev.ttlMs` overrides both |
+| `joustRuntime` / `engineService` in Node | the `ttlMs` option; 120 s if not given |
+
+DevKit's time horizon is only minutes ahead, so a long TTL there fails with a `PastHorizon` error; the template's test
+passes `ttlMs: 20_000`. On a public network the TTL must also cover the time the user takes to read the review and sign
+in the wallet.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="joust.config.json" href="/reference/config/" description="Every key, its default and the merge rule." />
+  <LinkCard title="Deploy to preview" href="/tutorials/deploy-preview/" description="Blockfrost, a deployer key and a real wallet." />
+  <LinkCard title="MerkleMap mirrors" href="/apps/map-mirrors/" description="Why maps need chain history, and how it is checked." />
+  <LinkCard title="@julclang/state-client reference" href="/reference/state-client/" description="blockfrostProvider, ogmiosProvider, chainOf and the rest." />
+</CardGrid>

@@ -1,0 +1,209 @@
+---
+title: Security model
+description: What JOUST's generated validator enforces on chain, how the attack suite tests it, and what clients, pages, services and MerkleMap mirrors are trusted with.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+JOUST's security rests on one rule: **the chain only accepts what the generated validator checks**. Your method
+decides the next state and the payouts; the validator re-runs it on chain and enforces a fixed set of invariants
+around it. Everything off chain (the Java client, the npm engine, a prepare service, a page) is there to build
+transactions that pass, and to refuse early those that would not. None of it can make the chain accept a transaction
+the validator refuses.
+
+This page lists what is enforced, how it is tested, and what each off-chain part is trusted with.
+
+## Trust at a glance
+
+| Part | Trusted for | Not trusted for |
+|---|---|---|
+| The generated validator (on chain) | every state transition, every lovelace moved | |
+| Your contract methods | the business rules you write | nothing else: the invariants below hold whatever they return |
+| The client or engine (JVM or Wasm) | building a transaction that passes, early refusals | correctness on chain: the validator checks again |
+| A prepare service | nothing a page signs: the page verifies every transaction | |
+| A chain API | availability | data: answers feeding a transaction are checked by the verifier and the ledger |
+| A governor script (`@AuthorizedBy`) | its own approvals | anything beyond the approval it names |
+| The deployer | choosing `@Init` arguments and `@Params` | |
+
+## What the generated validator enforces
+
+The invariants come from [ADR-0001](https://github.com/bloxbean/joust/blob/main/docs/adr/0001-option-a-single-utxo-state-machine.md)
+§4 (I1 to I14) and the later ADRs. Each is a check you could write by hand, emitted around your method.
+
+### Identity: one-shot thread tokens
+
+| ID | Invariant |
+|---|---|
+| I1 | One seed gives one instance: the seed is consumed, exactly one token is minted under the policy, named `blake2b_256(seed)` |
+| I9 | The burn redeemer only burns |
+| I10 | A UTxO at the script address without exactly one thread token of the policy is never spendable (junk is inert) |
+| I12 | State outputs sit at the contract's own script address, with no reference script attached |
+
+Because the token can only be minted once per seed, and only leaves a state UTxO through the contract's own SPEND
+checks, holding the token proves a UTxO is a genuine instance. Other dApps authenticate an instance by its
+`(policy, id)` pair.
+
+### Exact state and value
+
+| ID | Invariant |
+|---|---|
+| I2 | The initial datum equals `init(args, ctx)` |
+| I3 | Exact value accounting: the continuing output holds exactly `{lovelace: in + received − payouts, token: 1}`. No token dust can be added, no lovelace skimmed |
+| I4 | Exactly one continuing output carries the token, at the same address, with an inline datum equal to the method's result |
+| I13 | The serialised state never exceeds `maxDatumBytes`, so no call can make the instance outgrow its deposit |
+| I14 | Actions never spend the deposit: the continuing lovelace is at least `minAda` |
+
+Asset-aware contracts generalise I3 to full multi-asset values (`out = in + received + accepted + mint − payouts −
+sends`), and the reserved tokens of the contract's own policy never move (ADR-0007).
+
+### Verified `Ctx`
+
+| ID | Invariant |
+|---|---|
+| I5 | `ctx.caller` signed the transaction |
+| I6 | `received`, `balance`, `validFrom` and `validTo` match the transaction; the interval is finite on both sides and at most `maxValidityMs` wide |
+| I11 | `@SignedBy`, `@ValidAfter` and `@ValidBefore` hold against the **current** state, with finite bounds |
+
+Your method can trust every `Ctx` field: a client that lies about one is refused. See
+[Ctx, funds and payouts](/contracts/ctx-and-funds/).
+
+### Payouts and destroy
+
+| ID | Invariant |
+|---|---|
+| I7 | Every payout is paid: for each recipient, outputs to its key **tagged** with this instance's input reference add up to at least what is owed |
+| I8 | A destroy burns the token and its payouts allocate the whole balance, deposit included |
+
+The tag (the payout output's inline datum is the spent state UTxO's reference) prevents **double satisfaction**: two
+instances spent in one transaction, of this or any other JOUST contract, can never count the same payout output.
+
+### Later invariants
+
+Each later layer adds its own, specified in its ADR. Among them: map claims checked against the root (ADR-0002, the
+shared MerkleMap verifier), owned objects and their kinds (ADR-0003, ADR-0012), batched intents (ADR-0004), assets,
+sends and the output-claim registry (ADR-0007, I26 to I31), quorum, script approval, invariants and events (ADR-0009,
+I32 to I35), reads, deposits and migration (ADR-0011, I39 to I41).
+
+## How it is tested: the attack suite
+
+Every example runs **the attack suite** (`Attacks` in `julc-state-testkit`, ADR-0001 D16). Given a transaction the
+harness accepts, it lists every mutation the invariants forbid that applies to it, evaluates each against the compiled
+validator, and fails if any is accepted:
+
+- a wrong datum; an extra token in the output; one lovelace skimmed or added;
+- the thread token missing, sent elsewhere, or two continuing outputs;
+- the caller not signed; `received`, `balance`, `validFrom` or `validTo` lied about;
+- a payout untagged, underpaid or paid to someone else;
+- a destroy without a burn; spending a junk UTxO;
+- for creations: the seed not consumed, two tokens minted, a wrong token name;
+- a stake credential added to the state address, a reference script attached, a datum hash instead of an inline datum;
+- a validity bound not equal to `Ctx`, an unbounded side, a window wider than `maxValidityMs`;
+- payouts exceeding the balance, a state grown past `maxDatumBytes`.
+
+On top of these, composed transactions: two instances sharing one payout output (double satisfaction), duplicate
+payouts to one recipient, a create and a burn under one policy.
+
+```java title="examples/vault/src/test/java/org/julclang/state/examples/vault/VaultTest.java"
+var tx = h.act(live, new VaultValidator.Deposit(ctx), Vault.deposit(live.state(), ctx), BOB, ctx);
+System.out.println("[deposit] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
+```
+
+Run it on every transaction your tests accept. See [Testing](/contracts/testing/).
+
+## Off chain: the client runs the method first
+
+The Java client (and the npm engine, which runs the same Java code compiled to WebAssembly) does, for every call:
+
+1. read the current state from the chain;
+2. check the policy annotations (`@SignedBy`, time) against it;
+3. run your method on the JVM with the real `Ctx`: a failing rule refuses the call here;
+4. check the result: datum size, canonical maps, invariants, payouts within the funds;
+5. build and balance the transaction, evaluate every script, and verify that the balanced transaction still has
+   exactly the expected state output and payouts;
+6. submit, then wait for **that** transaction. It never resubmits one the node accepted.
+
+This catches mistakes early and gives clear messages. It adds no trust: if the client were wrong, the validator would
+refuse the transaction.
+
+## Pages: verify before signing
+
+A browser page signs with the user's CIP-30 wallet. Whoever builds the transaction (a prepare service, or the engine
+in the page's worker) chooses what the user signs, and wallets show transactions poorly. A malicious builder could add
+an output draining the wallet, a certificate delegating the user's stake, or a collateral return it controls.
+
+So the page **verifies every transaction before the wallet is asked to sign** (ADR-0015 I5). The verifier in
+`@julclang/state-client` works from the contract description bundled in the page, never from values the builder
+sends. It checks, among other things:
+
+- the inputs are the wallet's own UTxOs and the target instance; the redeemer is exactly the call the page asked for,
+  on the pinned script and thread token;
+- `ctx.caller` is a wallet key and `ctx.received` the payment;
+- the wallet's net outflow is at most the expected payment plus the fee;
+- no certificates, votes, proposals or donation; no withdrawals except JOUST's verifiers' (and a named governor's);
+  no mint except the expected one;
+- `isValid` is true, the collateral return goes to the user, total collateral is bounded, and the network id is
+  right.
+
+A refused transaction raises `VerificationError` with its problems, and the wallet never sees it. The verifier is
+covered by **tamper tests**: the JavaScript suites build real transactions, mutate them in every way they know, and
+require each mutation to be refused before any wallet is asked to sign (for example every tampering of a co-signed
+treasury payment, and of a governor's registration). See [Wallets](/apps/wallets/).
+
+### The engine is pinned with SRI
+
+A page that prepares its own transactions runs the runtime engine (Wasm) in a worker. The page's own code pins the
+engine's sha384 hashes, and the worker fetches the engine with Subresource Integrity, so a browser refuses an engine
+whose bytes differ, wherever it is served from. Even so, the engine is not trusted with the user's funds: its output
+goes through the verifier like a service's. See [Pages](/apps/pages/).
+
+## MerkleMaps: proofs are checked, mirrors are rebuilt
+
+A [MerkleMap](/contracts/merklemaps/) keeps only a 32-byte root in the state. Every read and write a call makes comes
+with a proof, and the shared map verifier checks each against the root on chain, so a wrong value or a forged proof
+fails the transaction.
+
+Off chain, the proofs come from a **mirror** of the map. Mirrors are untrusted too:
+
+- the engine checks each supplied proof against the on-chain root with the validator's own logic, and computes new
+  roots itself;
+- a mirror rebuilt from chain history replays every map claim from the transactions' redeemers, checking each
+  write's proof and each new root, and is accepted only if the final root equals the on-chain datum's. A history
+  source that drops, alters or invents anything stops matching.
+
+See [MerkleMap mirrors](/apps/map-mirrors/).
+
+## What JOUST does not protect against
+
+<Aside type="caution">
+
+- **Your rules.** If a method lets anyone withdraw, the validator enforces exactly that. Review who can call each
+  method, especially those that pay out.
+- **Hostile `@Init` arguments.** Anyone can create an instance with any arguments (for example naming a victim as
+  an escrow's seller). Front ends should show who created an instance and with what arguments.
+- **Junk at the script address.** UTxOs sent there without a thread token can never be spent, by anyone.
+- **Parameterised clones.** Anyone can deploy your contract with other `@Params`. Pin the expected policy id.
+- **Governor scripts and admins.** `@AuthorizedBy` trusts the script's rules; a `@MigrateTo` field set by an admin
+  trusts the admin.
+- **Foreign validators.** A non-JOUST script in the same transaction that ignores JOUST's tags can still be
+  double-satisfied by a JOUST output.
+- **Stale reads.** A reference input does not run its validator: check an oracle's freshness yourself.
+
+</Aside>
+
+## Reference
+
+- [ADR-0001](https://github.com/bloxbean/joust/blob/main/docs/adr/0001-option-a-single-utxo-state-machine.md) §4 (invariants), D16 (attack suite), §10 (limits)
+- [ADR-0013](https://github.com/bloxbean/joust/blob/main/docs/adr/0013-option-m-wallets-and-js.md) D2 and §9 (the page verifier)
+- [ADR-0015](https://github.com/bloxbean/joust/blob/main/docs/adr/0015-option-n-javascript-developer-experience.md) §5 (threat model), I5, §13.12 (mirrors)
+- Sources: [`Attacks.java`](https://github.com/bloxbean/joust/blob/main/julc-state-testkit/src/main/java/org/julclang/state/testkit/Attacks.java),
+  [`verify.js`](https://github.com/bloxbean/joust/blob/main/js/state-client/src/verify.js),
+  [`ValidatorGenerator.java`](https://github.com/bloxbean/joust/blob/main/julc-state-processor/src/main/java/org/julclang/state/processor/gen/ValidatorGenerator.java)
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Testing" href="/contracts/testing/" description="Run the harness and the attack suite." />
+<LinkCard title="Wallets" href="/apps/wallets/" description="CIP-30 signing and the page verifier." />
+<LinkCard title="Authorization" href="/contracts/authorization/" description="Who may call each method." />
+<LinkCard title="Architecture decisions" href="/project/architecture-decisions/" description="The ADRs behind each invariant." />
+</CardGrid>

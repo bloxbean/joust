@@ -1,0 +1,395 @@
+---
+title: Owned objects
+description: Give each user their own UTxO with @Owned records, so calls never queue. Owned methods, @Shared reads, several types, moves and maps inside objects.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+An *owned object* is a record that lives in its own UTxO under a contract instance: one bank account, one game hero,
+one marketplace listing. Owned methods spend only the object's UTxO, never the instance's, so two users acting on their
+own objects never wait for each other. The instance keeps the shared settings, and an owned method can read them
+without spending them.
+
+Use owned objects whenever state belongs to one user and many users act at the same time. Cardano's UTxO model fits
+this directly: each object is its own output, much as Sui's owned objects skip the global sequence (ADR-0003).
+
+## A bank with one account per customer
+
+```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java"
+@StateContract(maxDatumBytes = 160)
+public class Bank {
+
+    public record State(byte[] admin, boolean paused, BigInteger withdrawLimit) {}
+
+    @Owned
+    public record Account(byte[] owner, BigInteger balance) {}
+
+    public record Withdrawal(Account state, JulcList<Payout> payouts) {}
+
+    @Init
+    public static State init(BigInteger withdrawLimit, Ctx ctx) {
+        return new State(ctx.caller(), false, withdrawLimit);
+    }
+
+    @Action
+    @SignedBy("admin")
+    public static State setPaused(State s, boolean paused) {
+        return new State(s.admin(), paused, s.withdrawLimit());
+    }
+
+    /** Opens an account for the caller, with a first deposit. */
+    @OwnedInit
+    @Payable
+    public static Account open(@Shared State bank, Ctx ctx) {
+        Require.that(!bank.paused(), "the bank is paused");
+        return new Account(ctx.caller(), ctx.received());
+    }
+
+    @OwnedAction
+    @Payable
+    @SignedBy("owner")
+    public static Account deposit(Account a, Ctx ctx) {
+        Require.that(ctx.received().compareTo(BigInteger.ZERO) > 0, "deposit must be positive");
+        return new Account(a.owner(), a.balance().add(ctx.received()));
+    }
+
+    /** Takes money out, within the bank's limit, unless the bank is paused. */
+    @OwnedAction
+    @SignedBy("owner")
+    public static Withdrawal withdraw(Account a, @Shared State bank, BigInteger amount, Ctx ctx) {
+        Require.that(!bank.paused(), "the bank is paused");
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0 && amount.compareTo(bank.withdrawLimit()) <= 0,
+                "amount outside the withdrawal limit");
+        Require.that(amount.compareTo(a.balance()) <= 0, "insufficient balance");
+        return new Withdrawal(new Account(a.owner(), a.balance().subtract(amount)), Payouts.of(a.owner(), amount));
+    }
+
+    /** The owner closes the account and takes everything (works even when the bank is paused). */
+    @OwnedDestroy
+    @SignedBy("owner")
+    public static JulcList<Payout> close(Account a, Ctx ctx) {
+        return Payouts.of(a.owner(), ctx.balance());
+    }
+}
+```
+
+The instance holds `State` (the admin, a paused flag, a limit). Each customer's `Account` is an object. `deposit`
+spends only the account. `withdraw` also reads the bank's state through `@Shared`, as a reference input, so it does not
+spend the bank either.
+
+## The annotations
+
+| Annotation | On | Shape |
+|---|---|---|
+| `@Owned` | a nested record | Marks a record as an owned object type. A contract may declare several |
+| `@OwnedInit` | a method | `R name([@Shared S shared,] args... [, Ctx] [, Funds])`: creates an object under an instance. Returns the record, or a result record with `state` (and `accepted` with `Funds`) |
+| `@OwnedAction` | a method | `R name(R object, [@Shared S shared,] [@Into S destination,] args... [, Ctx] [, Funds])`: changes one object. Returns the record or a result record (`state`, `payouts`, `sends`, …) |
+| `@OwnedDestroy` | a method | `name(R object, [@Shared S shared,] args..., Ctx [, Funds])`: ends an object, burns its token. Returns `JulcList<Payout>` or a result record, and must pay out everything it holds |
+| `@Shared` | a parameter | The instance's state, read-only, through a reference input. Must have the state type and come right after the owned record |
+| `@Into` | a parameter | The destination of a move (see [Moving objects](#moving-an-object-to-another-instance)) |
+| `@Admits` | an `@Action` | The destination's consent to a move |
+
+The owned type of a method is its first parameter (or, for `@OwnedInit`, its return type). `@SignedBy`, `@ValidAfter`
+and `@ValidBefore` on an owned method name fields of the **owned** record: `@SignedBy("owner")` above checks
+`Account.owner`. `@Payable`, `Ctx` and `Funds` work as on instance methods, with the object's own balance and deposit.
+See [Ctx, funds and payouts](/contracts/ctx-and-funds/) and [Authorization](/contracts/authorization/).
+
+## Calling objects
+
+The generated clients give each owned type a handle, and the instance a lookup per type.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/bank/src/test/java/org/julclang/state/examples/bank/BankDevnetTest.java"
+var bank = BankClient.deploy(runtime, admin, ADA.multiply(BigInteger.valueOf(20)));
+var annAcct = bank.open(ann, ADA.multiply(BigInteger.valueOf(30)));     // an AccountObject
+var benAcct = bank.open(ben, ADA.multiply(BigInteger.valueOf(40)));
+
+// Both customers deposit and withdraw at the same time: separate UTxOs, so no contention.
+var a = CompletableFuture.runAsync(() -> {
+    annAcct.deposit(ann, ADA.multiply(BigInteger.valueOf(5)));
+    annAcct.withdraw(ann, ADA.multiply(BigInteger.TEN));
+});
+var b = CompletableFuture.runAsync(() -> {
+    benAcct.deposit(ben, ADA.multiply(BigInteger.valueOf(7)));
+    benAcct.withdraw(ben, ADA.multiply(BigInteger.valueOf(20)));
+});
+CompletableFuture.allOf(a, b).join();
+
+bank.setPaused(admin, true);
+annAcct.close(ann);    // the escape hatch: closing needs no bank state
+```
+
+`bank.account(objectId)` reconnects to an existing object; `annAcct.value()` reads it.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="examples/dapp/frontend/src/main.js (adapted)"
+const bank = new Bank(options);                        // the generated client (joust-gen)
+const inst = bank.at(bankId);
+const { object } = await inst.open(wallet, {}, { lovelace: 30_000_000n });
+await object.deposit(wallet, {}, { lovelace: 5_000_000n });
+await object.withdraw(wallet, { amount: 10_000_000n });
+
+// Every account of this bank on chain, then a handle for one of them.
+const mine = (await inst.objects()).filter((o) => o.value.owner === myKeyHash);
+const acct = inst.account(mine[0].id);
+await acct.close(wallet);
+```
+
+</TabItem>
+</Tabs>
+
+## What an object is on chain
+
+An object is a UTxO at the contract's address holding:
+- **The object token** `(policy, objectId)`, quantity 1. `objectId = 0x4F ‖ blake2b_224(seedTxId ‖ I2OSP(seedIndex, 2))`:
+  29 bytes starting with `0x4F`, derived from a UTxO the creation spends.
+- **An inline datum** `Holding(instance, value)`: the id of the instance it belongs to, and your record. With several
+  owned types it is `Holding_<Type>(instance, value)`, one constructor per type.
+- **An exact value:** `minAda` plus the object's funds plus its token, as for instances.
+
+Token names tell kinds apart, and every spend arm checks the kind first:
+
+| Kind | Token name |
+|---|---|
+| Instance | 32 bytes |
+| Owned object | 29 bytes, first byte `0x4F` |
+| Intent ([batched intents](/contracts/batched-intents/)) | 29 bytes, first byte `0x49` |
+
+### What the validator checks
+
+- **Creation** (MINT, `CreateObject`): the seed is spent; exactly one token is minted, named `objectId(seed)`; a
+  reference input holds the instance token, so the instance exists, and gives the `@Shared` state; one output carries
+  the object at the script address with `Holding(instance, …)` equal to your method's result and the exact value.
+- **Owned spends:** the spent UTxO must hold an object token (I21); with several types, the datum's constructor tag
+  must be the method's type, checked before decoding (I42). Then the usual checks apply to the object: one continuing
+  output with its token, the datum equal to your method's result, an exact value, payouts tagged, signatures and time.
+  The `instance` in `Holding` never changes, except through a move (I19, I43).
+- **`@Shared` reads:** the reference input must hold the 32-byte token of exactly the object's instance, at the state
+  address, with an inline datum (I20).
+- **Owned destroys** burn the token and must allocate everything the object holds.
+
+| Invariant | Meaning |
+|---|---|
+| I18 | An object token is minted only by `CreateObject`, from a spent seed, under an existing instance |
+| I19 | An object's datum keeps its instance (except through an admitted move); owned actions never spend the instance |
+| I20 | A `@Shared` read is the current state of exactly the object's instance |
+| I21 | A token's kind decides which redeemers it accepts |
+| I42 | An owned method runs only on an object of its own type |
+| I43 | An object changes instance only by a move its destination admits in the same transaction |
+
+## Rules the processor enforces
+
+- **An escape hatch for every owned type.** Each `@Owned` type needs an `@OwnedDestroy` without `@Shared`, so an owner
+  can always close their object whatever the instance's state. The bank's `close` works while the bank is paused.
+- **No instance `@Destroy`** in a contract with owned objects: objects that read `@Shared` state would be stranded.
+- **Every `@Owned` type needs an `@OwnedInit`.**
+- **A warning** for an owned method without `@SignedBy`: anyone could call it on anyone's object.
+- **`@Shared` comes right after the owned record**, and has the state type. The state reaches an owned method only
+  through it.
+- **No MerkleMaps in the shared state** of a contract with owned objects. Put them in the owned records.
+
+<Aside type="caution" title="One mint redeemer per policy">
+The ledger allows one mint redeemer per policy in a transaction. So one transaction cannot create two objects of a
+contract, or create one and burn another, under the same policy. Use separate transactions.
+</Aside>
+
+## Several owned types
+
+Declare as many `@Owned` records as you need. The `guild` example has heroes and items:
+
+```java title="examples/guild/src/main/java/org/julclang/state/examples/guild/Guild.java"
+@Owned
+public record Hero(byte[] owner, BigInteger level) {}
+
+@Owned
+public record Item(byte[] owner, BigInteger power) {}
+
+@OwnedInit
+public static Hero recruit(@Shared State guild, Ctx ctx) {
+    Require.that(guild.open(), "the guild is closed");
+    return new Hero(ctx.caller(), BigInteger.ONE);
+}
+
+@OwnedAction
+@SignedBy("owner")
+public static Hero levelUp(Hero h) {
+    return new Hero(h.owner(), h.level().add(BigInteger.ONE));
+}
+
+@OwnedDestroy
+@SignedBy("owner")
+public static JulcList<Payout> retire(Hero h, Ctx ctx) {
+    return Payouts.of(h.owner(), ctx.balance());
+}
+
+// ... forge, enchant and scrap for Item
+
+@Invariant
+public static boolean itemPower(Item i) {
+    return i.power().compareTo(BigInteger.valueOf(100)) <= 0;
+}
+```
+
+With more than one type, the datum becomes a sealed `Holding` with one `Holding_<Type>` constructor per type, and each
+spend arm checks the constructor tag before decoding, so `levelUp` can never run on an item. Each type gets its own
+handle (`HeroObject`, `ItemObject`) and lookup in the clients, and its own invariants. A contract with one owned type
+keeps the plain `Holding(instance, value)`.
+
+## Moving an object to another instance
+
+An object can move to another instance of the same contract, for example a hero joining another guild. A move is a
+handshake in one transaction: the object's `@OwnedAction` names the destination with `@Into`, and the destination
+consents through an `@Action` marked `@Admits`.
+
+```java title="examples/guild/src/main/java/org/julclang/state/examples/guild/Guild.java"
+/** Moves the hero to {@code destination}, which must admit it; only from an open guild, and only from level 2. */
+@OwnedAction
+@SignedBy("owner")
+public static Hero transfer(Hero h, @Shared State source, @Into State destination, Ctx ctx) {
+    Require.that(source.open(), "the source guild is closed");
+    Require.that(h.level().compareTo(BigInteger.TWO) >= 0, "a hero moves from level 2");
+    return new Hero(h.owner(), h.level());
+}
+
+/** Admits a hero moving in from another guild. It sees the arriving hero, read on-chain from the hero's own input. */
+@Action
+@Admits("Hero")
+public static State admit(State s, byte[] heroId, Hero hero, Ctx ctx) {
+    Require.that(s.open(), "the guild is closed");
+    Require.that(hero.level().compareTo(s.minLevel()) >= 0, "the hero's level is too low for this guild");
+    return new State(s.master(), s.open(), s.arrivals().add(BigInteger.ONE), s.minLevel());
+}
+```
+
+- **The object's side:** the destination instance is *spent* in the same transaction with an `@Admits` action whose
+  first argument is this object's id. The continuing `Holding` names the destination, which must differ from the
+  source. The method gets the destination's state as it was before, and may also read the source with `@Shared`, so a
+  closed source can stop objects leaving.
+- **The destination's side:** its validator requires the object to be spent with a move naming this instance. Its
+  method decides whether to admit, and may update its own state. It may take the arriving object as the parameter
+  right after its id (`Hero hero` above): it is read from the object's input, not from the redeemer.
+- **Typed admits:** `@Admits("Hero")` names the owned type it admits, so a hero cannot arrive through an item's admit.
+  The name may be left out when only one owned type has moves.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/guild/src/test/java/org/julclang/state/examples/guild/GuildDevnetTest.java"
+var a = GuildClient.deploy(runtime, master, BigInteger.ONE);
+var b = GuildClient.deploy(runtime, other, BigInteger.TWO);
+var hero = a.recruit(ann);
+hero.levelUp(ann);
+
+// A move needs the destination's consent in the same transaction: alone, it is refused.
+assertThrows(JoustException.class, () -> hero.transfer(ann, b));
+var moved = hero.transferAdmitted(ann, b);     // the move and b's admit, composed
+
+// Nested: the move-and-admit joins an outer composition with another call, in one transaction.
+Compose.of(runtime, ann).allowSharedSigners()
+        .add(() -> moved.transferAdmitted(ann, c))
+        .add(() -> sword.enchant(ann, BigInteger.ONE))
+        .submit();
+```
+
+When the contract has one `@Admits` action taking only the object id (and optionally the arriving object), the client
+gets `<move>Admitted(caller, destination, …)`, which composes both calls for you.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="js/joust-runtime/test/examples.test.js (Guild)"
+const move = [
+  { contract: guild, method: 'transfer', instance: a, object: hero, into: b, args: {} },
+  { contract: guild, method: 'admit', instance: b, args: { heroId: hero } },
+];
+await rt.compose(ann, move);     // one transaction, one signature
+```
+
+</TabItem>
+</Tabs>
+
+Moves run only inside a [composition](/contracts/reads-and-composition/). A destination has one redeemer per
+transaction, so it admits one move per transaction. A move cannot take `@Reads`, and `@Admits` cannot be `@Batched`.
+With native assets, a move carries the object's full value: the `market` example relists a listing, NFT included,
+into another market (`relist`/`enlist`).
+
+## MerkleMaps inside objects
+
+An owned record may have [MerkleMap](/contracts/merklemaps/) components, so each user's object can hold a map of any
+size. The `Armory` contract gives each player a vault with an inventory:
+
+```java title="examples/guild/src/main/java/org/julclang/state/examples/guild/Armory.java"
+/** A player's vault: an inventory (item name -> count) of any size, in a MerkleMap (ADR-0012 D2). */
+@Owned
+public record Vault(byte[] owner, BigInteger kinds, MerkleMap inventory) {}
+
+@OwnedInit
+public static Vault openVault(@Shared State armory, Ctx ctx) {
+    Require.that(armory.open(), "the armory is closed");
+    return new Vault(ctx.caller(), BigInteger.ZERO, MerkleMaps.empty());
+}
+
+@OwnedAction
+@SignedBy("owner")
+public static Vault stash(Vault v, byte[] item, BigInteger count) {
+    Require.that(count.signum() > 0, "stash a positive count");
+    BigInteger have = MerkleMaps.getInt(v.inventory(), item, BigInteger.ZERO);
+    BigInteger kinds = have.signum() == 0 ? v.kinds().add(BigInteger.ONE) : v.kinds();
+    return new Vault(v.owner(), kinds, MerkleMaps.putInt(v.inventory(), item, have.add(count)));
+}
+
+/** Closes an empty vault (no @Shared: it works whatever the armory's state). */
+@OwnedDestroy
+@SignedBy("owner")
+public static JulcList<Payout> closeVault(Vault v, Ctx ctx) {
+    Require.that(v.kinds().signum() == 0, "empty the vault first");
+    return Payouts.of(v.owner(), ctx.balance());
+}
+```
+
+An object's map claims are keyed by the object's input (or its creation's seed), exactly as an instance's are, and
+the runtime keeps a mirror per object. The processor warns that an `@OwnedDestroy` discards the object's maps; the
+vault above counts its kinds so `closeVault` can require an empty inventory. An `@Invariant` cannot read an owned
+record that holds maps.
+
+## Size
+
+Owned types, moves and maps each add generated code. Measured (ADR-0012 §5):
+
+| Validator | Size |
+|---|---|
+| Bank (one owned type) | 7.9 KB |
+| Guild (two owned types, both movable, two admits, invariants) | 11.1 KB |
+| Armory (an owned type with a MerkleMap) | 12.4 KB |
+| Hero, Item and a MerkleMap Vault in one contract, with moves | 16.7 KB: over the limit |
+
+That last one is why `Armory` is a second contract. If yours grows past about 14 KB, split it the same way. See
+[Fees and script size](/contracts/fees-and-size/).
+
+## Pitfalls
+
+- **Writes to shared state still contend.** Owned methods cannot change the instance's state. A total that every
+  deposit updates is a hot shared write: use [batched intents](/contracts/batched-intents/).
+- **`@Shared` couples objects to instance writes.** An owned call reads the instance as of its reference input; if the
+  instance changes first, the call fails and the runtime retries. Keep shared writes rare and gated.
+- **Ownership is a field.** Transferring an object means an owned action that changes its owner field.
+- **Gating creation** is your method's job: check the `@Shared` state with `Require`, as `open` checks `paused`.
+
+## Reference
+
+- [Annotations](/reference/annotations/), [State API](/reference/state-api/)
+- ADR-0003 (owned objects) and ADR-0012 (several types, maps in objects, moves):
+  [Architecture decisions](/project/architecture-decisions/)
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Tutorial: a bank with owned accounts" href="/tutorials/bank-owned-objects/" description="Run the bank on DevKit and call it from Java and a page." />
+  <LinkCard title="Reads and composition" href="/contracts/reads-and-composition/" description="Compose, which moves run inside." />
+  <LinkCard title="Batched intents" href="/contracts/batched-intents/" description="For hot shared state that many users write." />
+  <LinkCard title="Native assets, mints and sends" href="/contracts/assets-mints-sends/" description="Objects that hold tokens, such as market listings." />
+</CardGrid>

@@ -1,0 +1,280 @@
+---
+title: Ctx, funds and payouts
+description: Read the caller, payments, balance and time through Ctx, accept lovelace with @Payable, pay it out with Payouts, and return everything on @Destroy.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A contract that holds money needs three things: to know who is calling, to take payments in, and to pay funds out
+safely. In JOUST these are a parameter (`Ctx`), an annotation (`@Payable`) and a return value (`Payout`s). This page
+explains each, and exactly what the generated validator checks so that the numbers your method sees are the real
+ones.
+
+## `Ctx`: transaction facts your method may read
+
+A method that needs facts about the transaction declares `Ctx` as its last parameter:
+
+```java title="julc-state-api/src/main/java/org/julclang/state/api/Ctx.java"
+public record Ctx(byte[] caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo) {}
+```
+
+The client fills it in; the validator **verifies every field** against the transaction before it calls your method.
+Your method can therefore trust each value, on the JVM and on chain.
+
+| Field | Meaning | How the validator verifies it |
+|---|---|---|
+| `caller` | Payment key hash (28 bytes) of the party calling | The transaction is signed by that key |
+| `received` | Lovelace this call adds to the contract | `received ≥ 0` if the method is `@Payable`, else `received == 0`; the exact value check then forces the state output to hold it |
+| `balance` | Funds the call may allocate | In an `@Action`: the state UTxO's lovelace before the call **minus** the `minAda` deposit. In a `@Destroy`: **everything** the UTxO holds, deposit included. In `@Init`: 0 |
+| `validFrom` | Start of the validity interval (POSIX ms, inclusive) | Equal to the transaction's finite lower bound |
+| `validTo` | End of the validity interval (POSIX ms, exclusive) | Equal to the transaction's finite upper bound, and `validTo − validFrom ≤ maxValidityMs` |
+
+Time has its own page: [Time](/contracts/time/).
+
+### When to declare `Ctx`
+
+Declare it when the method reads any of these facts. It has a cost:
+
+- the transaction must be signed by `caller`, and carry a finite validity interval;
+- the redeemer carries five more values (bigger transaction, higher size fee).
+
+A method without `Ctx` gets no caller signature and no time bounds. The counter's `increment` has no `Ctx`, so anyone
+can call it cheaply:
+
+```java title="examples/counter/.../Counter.java"
+@Action
+public static State increment(State s, BigInteger by) {
+    Require.that(by.compareTo(BigInteger.ZERO) > 0, "increment must be positive");
+    return new State(s.count().add(by), s.owner());
+}
+```
+
+Without `Ctx` the contract's value must stay unchanged, unless the method returns payouts (then nothing can be paid
+in). `@Payable` and `@Destroy` both require `Ctx`; the processor reports an error otherwise.
+
+### Who the caller is
+
+The caller is the account (Java) or wallet (JavaScript) you pass to the client call. Its payment key hash becomes
+`ctx.caller()`, and the transaction lists it as a required signer. Compare it with stored keys through
+`ByteStringLib.equals`:
+
+```java title="examples/escrow/.../Escrow.java"
+@Destroy
+public static JulcList<Payout> release(State s, Ctx ctx) {
+    boolean allowed = ByteStringLib.equals(ctx.caller(), s.buyer()) || ByteStringLib.equals(ctx.caller(), s.arbiter());
+    Require.that(allowed, "only the buyer or the arbiter can release");
+    return Payouts.of(s.seller(), ctx.balance());
+}
+```
+
+For checks that only compare the caller with a state field, the annotations on [Authorization](/contracts/authorization/)
+are shorter and are checked before your method runs.
+
+## `@Payable`: taking lovelace in
+
+`@Payable` on an `@Init` or `@Action` lets the caller add lovelace. The method sees the amount in `ctx.received()`
+and decides what to do with it. Without `@Payable`, `received` must be zero. A destroy may be `@Payable` too, to take a
+price it pays on (the market example's `buy` is a payable owned destroy); its payouts must then allocate what the UTxO
+held plus what was paid in.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/vault/src/main/java/org/julclang/state/examples/vault/Vault.java"
+/** Opens a vault, optionally with a first deposit; the deployer owns it. */
+@Init
+@Payable
+public static State open(BigInteger unlockAt, Ctx ctx) {
+    Require.that(Clock.before(ctx, unlockAt), "unlockAt must be in the future");
+    return new State(ctx.caller(), unlockAt, ctx.received());
+}
+
+/** Anyone can add funds. */
+@Action
+@Payable
+public static State deposit(State s, Ctx ctx) {
+    Require.that(ctx.received().compareTo(BigInteger.ZERO) > 0, "deposit must be positive");
+    return new State(s.owner(), s.unlockAt(), s.total().add(ctx.received()));
+}
+```
+
+</TabItem>
+<TabItem label=".jsc">
+
+```jsc
+init(unlockAt: Int) payable {
+    require before(unlockAt) "unlockAt must be in the future"
+    owner = caller
+    this.unlockAt = unlockAt
+    total = received
+}
+
+action deposit() payable {
+    require received > 0 "deposit must be positive"
+    total += received
+}
+```
+
+`received` is `ctx.received()`; a method that uses it gets a `Ctx` parameter in the lowered Java. A destroy cannot be
+`payable` in `.jsc`.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js
+// A payable call takes the payment as its last argument: { lovelace, assets? }.
+const { instance } = await vault.deploy(wallet, { unlockAt }, { lovelace: 10_000_000n });
+await instance.deposit(wallet, {}, { lovelace: 5_000_000n });
+```
+
+</TabItem>
+</Tabs>
+
+The generated Java client adds a `BigInteger payLovelace` parameter to every payable call:
+
+```java title="examples/vault/.../VaultApp.java"
+var vault = VaultClient.deploy(runtime, alice, BigInteger.valueOf(unlockAt), ADA.multiply(BigInteger.TEN));
+vault.deposit(bob, ADA.multiply(BigInteger.valueOf(5)));
+```
+
+Native assets come in through a second trailing parameter, `Funds`, and an `accepted` result component. That is
+covered in [Native assets, mints and sends](/contracts/assets-mints-sends/).
+
+## Payouts: paying funds out
+
+Your method never builds outputs. It **returns** what the contract owes, and the generated validator checks that the
+transaction pays it. A payout is lovelace to a payment key hash:
+
+```java title="julc-state-api/src/main/java/org/julclang/state/api/Payout.java"
+public record Payout(byte[] to, BigInteger lovelace) {}
+```
+
+Build lists with `Payouts`:
+
+| Method | Returns |
+|---|---|
+| `Payouts.none()` | an empty list |
+| `Payouts.of(to, lovelace)` | a list with one payout |
+| `Payouts.add(payouts, to, lovelace)` | `payouts` with one more (prepended) |
+| `Payouts.total(payouts)` | the sum of the amounts |
+
+An action that pays out returns a result record with the next state and the payouts:
+
+```java title="examples/vault/.../Vault.java"
+public record Result(State state, JulcList<Payout> payouts) {}
+
+/** The owner takes funds out once the vault is unlocked. */
+@Action
+@OnlyOwner
+@ValidAfter("unlockAt")
+public static Result withdraw(State s, BigInteger amount, Ctx ctx) {
+    Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+    Require.that(amount.compareTo(s.total()) <= 0, "insufficient funds");
+    return new Result(new State(s.owner(), s.unlockAt(), s.total().subtract(amount)), Payouts.of(s.owner(), amount));
+}
+```
+
+In `.jsc`, `pay amount to owner` adds a payout (a zero amount pays nothing; a negative one fails).
+
+### What the validator checks for payouts
+
+For every payout list a method returns:
+
+- each payout's `lovelace` is greater than zero, and its `to` is 28 bytes;
+- for each recipient `r`, the outputs that pay `r`'s key **and carry this instance's input reference as their inline
+  datum** add up to at least what the payouts owe `r` (several payouts to one key are added up);
+- in an action, the continuing state output holds exactly `in + received − total(payouts)`, and that is at least
+  `minAda`.
+
+The runtime pays one output per recipient, tagged as above, and tops an amount below the ledger's minimum UTxO up
+from the fee payer. The check is "paid ≥ owed", so a top-up is accepted.
+
+### Why payouts are tagged
+
+Without the tag, a transaction could spend two instances that each owe Alice 10 ADA and pay her once: both validators
+would look at the same 10 ADA output and be satisfied. This is **double satisfaction**. The tag (the inline datum of
+the payout output equals the spent state UTxO's reference) ties each payout to exactly one instance, so two
+instances, of this or any other JOUST contract, can never count the same output.
+
+<Aside type="note" title="Payouts go to keys">
+
+A `Payout` pays lovelace to a public-key payment credential. The Java runtime pays a key-holding caller at its
+enterprise address (cardano-client-lib's builder takes the fee from outputs at the fee payer's address, which would
+shrink the payout), a wallet caller at its wallet's address, and other recipients at an address from the runtime's
+address book, or else at their enterprise address. To pay a script, pay native assets, or set a datum, return
+a `Send` instead: see [Native assets, mints and sends](/contracts/assets-mints-sends/).
+
+</Aside>
+
+## The deposit, `balance` and `minAda`
+
+Every state UTxO holds the contract's `minAda` deposit (see [State and lifecycle](/contracts/state-and-lifecycle/))
+plus its funds:
+
+```text
+state UTxO lovelace = minAda + funds
+ctx.balance() in an action  = funds          (the deposit is not yours to spend)
+ctx.balance() in a destroy  = minAda + funds (everything: the instance ends)
+```
+
+So an action can never pay out the deposit: the validator requires the continuing lovelace to be at least `minAda`,
+and the runtime refuses the call first with `<Contract>.<method>: payouts exceed the contract's funds`.
+
+## Returning everything on `@Destroy`
+
+A destroy ends the instance, so nothing may stay behind. Its payouts must allocate **exactly** `ctx.balance()`, the
+whole UTxO including the deposit:
+
+```java title="examples/counter/.../Counter.java"
+/** Only the owner can close the counter; the deposit goes back to them. */
+@Destroy
+@OnlyOwner
+public static JulcList<Payout> close(State s, Ctx ctx) {
+    return Payouts.of(s.owner(), ctx.balance());
+}
+```
+
+The validator checks that the payouts total exactly what the state UTxO holds, that the thread token is burned, and
+that every payout is paid and tagged. The runtime checks the total before building:
+
+```text
+Counter.close: a destroy must pay out everything the instance holds (2200000 lovelace, ctx.balance()), but pays …
+```
+
+Split it however your rules say. Crowdfund's `claim` gives everything to the creator; a destroy could equally pay
+several parties with `Payouts.add`, as long as the amounts add up to `ctx.balance()`.
+
+## `@Receives`: payments from other contracts
+
+A plain action refuses value added by anyone other than its caller: the exact value check fails. An action that takes
+**deposits** from other JOUST contracts in the same transaction declares `@Receives` and a `Funds` parameter, and sees
+each deposit in `funds.deposits()`. That is covered in [Deposits](/contracts/deposits/).
+
+## Pitfalls
+
+- **Trusting the client's numbers.** You do not need to: every `Ctx` field is checked against the transaction. But
+  only if the method declares `Ctx`; values passed as ordinary arguments are whatever the caller chose.
+- **Tracking funds in the state.** A field like the vault's `total` is your bookkeeping. The validator's exact value
+  check keeps the UTxO's lovelace equal to `minAda + received − payouts` at every step, so bookkeeping that adds
+  `received` and subtracts payouts stays equal to the funds held.
+- **Paying out more than `ctx.balance()`.** Check it with `Require.that` for a clear message (the treasury does:
+  `"not enough funds"`); otherwise the runtime refuses the call with its own message.
+- **A destroy that pays only the funds.** It must pay the deposit too: use `ctx.balance()` in the destroy, not a
+  state field.
+
+## Reference
+
+- [State API](/reference/state-api/): `Ctx`, `Payout`, `Payouts`, `Funds`
+- Sources: [`Ctx.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Ctx.java),
+  [`Payouts.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Payouts.java),
+  [`Payable.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Payable.java)
+- ADR-0001: D3 (`Ctx`), D4 and D5 (payouts), D9 (I3 value, I7 payouts, I14 deposit); ADR-0007 (assets and sends)
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Authorization" href="/contracts/authorization/" description="Signers, quorums and governor scripts." />
+<LinkCard title="Time" href="/contracts/time/" description="Deadlines with validity intervals and Clock." />
+<LinkCard title="Vault tutorial" href="/tutorials/vault/" description="Payable deposits, a time-locked withdraw and close." />
+<LinkCard title="Native assets, mints and sends" href="/contracts/assets-mints-sends/" description="Funds, accepted, Send and mint." />
+</CardGrid>

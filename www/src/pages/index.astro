@@ -1,0 +1,272 @@
+---
+// The JOUST landing page. The docs are Starlight (src/content/docs); this page is standalone.
+import { Code } from 'astro:components';
+import '../styles/landing.css';
+import { SITE } from '../../site.config.mjs';
+import { JAVA, JSC, JS, NPM, GRADLE } from '../components/landing/samples.mjs';
+import mark from '../assets/joust-mark.svg?raw';
+
+const theme = 'github-dark-default';
+const why = [
+  { t: 'No datums, redeemers or UTxO plumbing', d: 'Write a state record and the methods that change it. JOUST generates the validator, the minting policy for instance tokens, the redeemers and the transaction building.' },
+  { t: 'One method, never out of sync', d: 'The method that computes the next state off chain is the method the validator re-runs on chain. The client and the contract cannot disagree.' },
+  { t: 'Safe by construction', d: 'Every generated validator enforces a one-shot thread token, the exact datum and value, a verified caller and validity window, and tagged payouts. Each example is attack-tested.' },
+  { t: 'Java, .jsc or JavaScript', d: 'Write contracts in Java or the compact .jsc language. Build and call them from Gradle, or from npm with no JDK at all: the toolchain runs as WebAssembly.' },
+  { t: 'Browser-native apps', d: 'The runtime engine runs in a Web Worker. Pages build their own transactions, verify every one before a CIP-30 wallet signs, and deploy as static files.' },
+  { t: 'All of Cardano', d: 'Native assets and minting, MerkleMap state, owned objects, batched intents, composition, staking, DRep votes and upgrades: as annotations, not hand-written scripts.' },
+];
+const kinds = [
+  { n: '01', t: 'Inline state', d: 'One UTxO per instance; the state record is its inline datum.', href: '/contracts/state-and-lifecycle/' },
+  { n: '02', t: 'MerkleMaps', d: 'Unbounded key-value state behind a 32-byte root; proofs checked on chain.', href: '/contracts/merklemaps/' },
+  { n: '03', t: 'Owned objects', d: 'One UTxO per user object, so users act in parallel.', href: '/contracts/owned-objects/' },
+  { n: '04', t: 'Batched intents', d: 'Hot shared state: users lock intents, a batcher applies them together.', href: '/contracts/batched-intents/' },
+  { n: '05', t: 'Native assets', d: 'Hold tokens, mint your own, send them anywhere with any datum.', href: '/contracts/assets-mints-sends/' },
+];
+const paths = [
+  { t: 'Java', badge: 'Gradle', d: 'Annotate a class with @StateContract. The annotation processor generates the validator and a typed client on cardano-client-lib.', href: '/start/quick-start-java/' },
+  { t: '.jsc', badge: 'Contract language', d: 'A compact syntax for state contracts: state fields, actions, require, only, pay. It lowers to the same Java contract.', href: '/languages/jsc/' },
+  { t: 'JavaScript', badge: 'npm, no JDK', d: 'npm create joust: build, deploy and call contracts from Node or a page. Typed clients, wallet support, static builds.', href: '/start/quick-start-npm/' },
+];
+const ecosystem = [
+  { t: 'JuLC', d: 'The Java to UPLC compiler', href: 'https://julc.dev' },
+  { t: 'cardano-client-lib', d: 'Transaction building on the JVM', href: 'https://github.com/bloxbean/cardano-client-lib' },
+  { t: 'Yaci DevKit', d: 'A local Cardano network in seconds', href: 'https://github.com/bloxbean/yaci-devkit' },
+  { t: 'Yaci Store', d: 'Blockfrost-compatible chain API', href: 'https://github.com/bloxbean/yaci-store' },
+  { t: 'Blockfrost', d: 'Preview and mainnet chain API', href: 'https://blockfrost.io' },
+  { t: 'Aiken MPF', d: 'Merkle Patricia Forestry in JS', href: 'https://github.com/aiken-lang/merkle-patricia-forestry' },
+];
+---
+
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JOUST: state contracts for Cardano</title>
+  <meta name="description" content={SITE.description} />
+  <link rel="canonical" href={SITE.url + '/'} />
+  <meta property="og:title" content="JOUST: state contracts for Cardano" />
+  <meta property="og:description" content={SITE.description} />
+  <meta property="og:type" content="website" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="/" aria-label="JOUST home"><span class="brand-mark" set:html={mark} /><span>JOUST</span></a>
+      <nav class="nav-links">
+        <a href="/start/why-joust/">Docs</a>
+        <a href="/tutorials/counter-dapp/">Tutorials</a>
+        <a href="/reference/annotations/">Reference</a>
+        <a href="/ai/">AI</a>
+        <a href={SITE.repo} rel="noopener">GitHub</a>
+      </nav>
+      <a class="btn btn-small" href="/start/quick-start-npm/">Get started</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="glow glow-a"></div><div class="glow glow-b"></div>
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="dot"></span> Pre-release &middot; Plutus V3 &middot; Built on JuLC</p>
+          <h1>State contracts<br /><span class="grad">for Cardano.</span></h1>
+          <p class="lead">
+            Write a state record and the methods that change it, in Java, .jsc or from JavaScript.
+            JOUST compiles the same method into the on-chain validator and into the client that builds your
+            transactions, so the two can never disagree.
+          </p>
+          <div class="ctas">
+            <a class="btn" href="/start/quick-start-npm/">Start with npm</a>
+            <a class="btn btn-ghost" href="/start/quick-start-java/">Start with Java</a>
+            <a class="link-arrow" href="/start/why-joust/">Why JOUST &rarr;</a>
+          </div>
+          <div class="terminal" aria-label="Create a JOUST app">
+            <span class="prompt">$</span> npm create joust my-app<span class="caret"></span>
+          </div>
+        </div>
+        <div class="hero-code">
+          <div class="window">
+            <div class="window-bar">
+              <span></span><span></span><span></span>
+              <div class="tabs" role="tablist">
+                <input type="radio" name="hero-tab" id="t-java" checked /><label for="t-java">Counter.java</label>
+                <input type="radio" name="hero-tab" id="t-jsc" /><label for="t-jsc">Counter.jsc</label>
+                <input type="radio" name="hero-tab" id="t-js" /><label for="t-js">page.js</label>
+              </div>
+            </div>
+            <div class="panes">
+              <div class="pane p-java"><Code code={JAVA} lang="java" theme={theme} /></div>
+              <div class="pane p-jsc"><Code code={JSC} lang="kotlin" theme={theme} /></div>
+              <div class="pane p-js"><Code code={JS} lang="js" theme={theme} /></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="wrap">
+        <h2 class="center">One method. Two places.</h2>
+        <p class="sub center">The idea JOUST is built on: the rule you write is the rule the chain enforces.</p>
+        <div class="flow">
+          <div class="flow-card src">
+            <p class="tag">You write</p>
+            <h3>increment(state, by)</h3>
+            <p>A pure, static method: the current state and the call in, the next state out. <code>Require.that</code> states the rules.</p>
+          </div>
+          <div class="flow-split">
+            <div class="flow-card off">
+              <p class="tag">Off chain</p>
+              <h3>Compute and build</h3>
+              <p>The JVM, or the Wasm engine in Node or a browser worker, runs the method, builds the transaction and checks it before any wallet signs. A failing rule costs nothing.</p>
+            </div>
+            <div class="flow-card on">
+              <p class="tag">On chain</p>
+              <h3>Re-run and enforce</h3>
+              <p>JuLC compiles the same method to UPLC. The generated validator re-runs it and requires the new datum to equal its result, the value to be exact and the caller to have signed.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Why JOUST</h2>
+        <p class="sub">Cardano's model is safe and parallel. Writing for it by hand is slow and easy to get wrong. JOUST keeps the model and removes the plumbing.</p>
+        <div class="grid3">
+          {why.map((w) => (
+            <article class="card">
+              <h3>{w.t}</h3>
+              <p>{w.d}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="wrap">
+        <h2>Five kinds of state</h2>
+        <p class="sub">Start with one UTxO. Grow into maps, per-user objects, batching and assets as your app does, with the same programming model.</p>
+        <div class="kinds">
+          {kinds.map((k) => (
+            <a class="kind" href={k.href}>
+              <span class="num">{k.n}</span>
+              <h3>{k.t}</h3>
+              <p>{k.d}</p>
+            </a>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Three ways in</h2>
+        <p class="sub">The same contracts, the same generated checks. Pick the language you know.</p>
+        <div class="grid3">
+          {paths.map((p) => (
+            <a class="card path" href={p.href}>
+              <span class="pill">{p.badge}</span>
+              <h3>{p.t}</h3>
+              <p>{p.d}</p>
+              <span class="more">Quick start &rarr;</span>
+            </a>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="wrap split">
+        <div>
+          <h2>From the page to the chain, with no server in between</h2>
+          <p class="sub left">A JOUST page carries its own engine. It prepares each transaction in a Web Worker, checks it against the contract's pinned description, and only then asks the wallet to sign.</p>
+          <ul class="checks">
+            <li><strong>Verified before signing.</strong> The page checks the call, the script, the balance and what your wallet risks. Tampered transactions never reach the wallet.</li>
+            <li><strong>Pinned engine.</strong> Static builds pin the engine's hashes (SRI): a browser refuses an engine whose bytes differ.</li>
+            <li><strong>Maps in the browser.</strong> MerkleMap state is mirrored in IndexedDB and rebuilt from the chain's history when missing, every step checked.</li>
+            <li><strong>Static hosting.</strong> <code>vite build</code> produces plain files; all a page needs is a chain API.</li>
+          </ul>
+          <a class="link-arrow" href="/apps/pages/">How pages work &rarr;</a>
+        </div>
+        <div class="pipeline">
+          <div class="step"><span>1</span><div><h4>Page</h4><p>Your app calls <code>counter.at(id).increment(wallet, args)</code></p></div></div>
+          <div class="step"><span>2</span><div><h4>Engine worker</h4><p>Runs the method as UPLC, builds the transaction from the chain</p></div></div>
+          <div class="step"><span>3</span><div><h4>Page verifier</h4><p>Checks it against the pinned contract before anything is signed</p></div></div>
+          <div class="step"><span>4</span><div><h4>CIP-30 wallet</h4><p>Eternl, Lace or any CIP-30 wallet signs and submits</p></div></div>
+          <div class="step last"><span>5</span><div><h4>Validator</h4><p>Re-runs the same method on chain and enforces the result</p></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Get started in minutes</h2>
+        <p class="sub">Run against Yaci DevKit locally, then deploy to the preview testnet.</p>
+        <div class="grid2">
+          <div class="start">
+            <div class="start-head"><h3>npm</h3><span class="pill">Node 22, no JDK</span></div>
+            <Code code={NPM} lang="sh" theme={theme} />
+            <a class="link-arrow" href="/start/quick-start-npm/">npm quick start &rarr;</a>
+          </div>
+          <div class="start">
+            <div class="start-head"><h3>Gradle</h3><span class="pill">JDK 25</span></div>
+            <Code code={GRADLE} lang="groovy" theme={theme} />
+            <a class="link-arrow" href="/start/quick-start-java/">Java quick start &rarr;</a>
+          </div>
+        </div>
+        <p class="note">JOUST is pre-release: Maven snapshots are published; the npm packages are not on npmjs.org yet. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
+      </div>
+    </section>
+
+    <section class="section ai">
+      <div class="wrap ai-grid">
+        <div>
+          <p class="eyebrow"><span class="dot amber"></span> AI-ready</p>
+          <h2>Docs your AI agent can read</h2>
+          <p class="sub left">Point your coding agent at JOUST's machine-readable docs and it writes contracts that follow the rules: the Java subset, the annotations, the patterns and the pitfalls.</p>
+          <a class="btn btn-ghost" href="/ai/">Using JOUST with AI</a>
+        </div>
+        <div class="ai-links">
+          <a href="/ai/starter-pack/"><strong>AI starter pack</strong><span>The one file to ingest before writing JOUST code</span></a>
+          <a href="/llms.txt"><strong>llms.txt</strong><span>A curated index of every page</span></a>
+          <a href="/llms-full.txt"><strong>llms-full.txt</strong><span>All the docs in one markdown file</span></a>
+          <a href="/ai/catalog.json"><strong>catalog.json</strong><span>Every annotation and example, machine-readable</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Built on the BloxBean stack</h2>
+        <div class="eco">
+          {ecosystem.map((e) => (
+            <a class="eco-item" href={e.href} rel="noopener"><strong>{e.t}</strong><span>{e.d}</span></a>
+          ))}
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div class="brand small"><span class="brand-mark" set:html={mark} /><span>JOUST</span><em>Java On UPLC STate</em></div>
+      <nav>
+        <a href="/start/why-joust/">Docs</a>
+        <a href="/reference/examples/">Examples</a>
+        <a href="/project/architecture-decisions/">Architecture decisions</a>
+        <a href="/llms.txt">llms.txt</a>
+        <a href={SITE.repo} rel="noopener">GitHub</a>
+      </nav>
+      <p class="muted">A BloxBean project. Built with JuLC, cardano-client-lib and Yaci DevKit.</p>
+    </div>
+  </footer>
+</body>
+</html>

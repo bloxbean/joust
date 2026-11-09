@@ -1,0 +1,171 @@
+---
+title: Using JOUST with AI
+description: The files this site publishes for AI agents, how to give them to Claude Code, Cursor or a chat assistant, and how to check what an agent writes.
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+JOUST is newer than the training data of today's models, so an AI agent knows nothing about it. Left alone, it writes
+code that looks like plain Java, Plutus or Solidity and does not compile. This site publishes the context an agent
+needs, generated from the repository at build time, so it stays in step with the code.
+
+## TL;DR
+
+Give your agent the [AI starter pack](/ai/starter-pack/) before it writes any JOUST code. For questions beyond it, add
+the full documentation dump.
+
+| File | What it holds | When to use it |
+|---|---|---|
+| [`/ai/starter-pack.md`](/ai/starter-pack/) | The rules, idioms, canonical contracts, anti-patterns and an error-to-fix table, as raw markdown | Always. It is written for machine ingestion: dense, explicit and imperative |
+| [`/llms.txt`](/llms.txt) | A curated index ([llmstxt.org](https://llmstxt.org/) convention): what JOUST is, the key rules, every page with its summary | For agents that browse: it tells them which page to fetch |
+| [`/llms-full.txt`](/llms-full.txt) | Every page of this site in sidebar order, as one markdown file | For long-lived projects and full coverage (guides, reference, tutorials) |
+| [`/ai/catalog.json`](/ai/catalog.json) | Every annotation of `julc-state-api` (targets, elements, defaults, Javadoc), every example, the npm packages and the CLI commands | For tools and agents that want structured data instead of prose |
+| `/ai/index.md` | This page as raw markdown | When you paste setup instructions into a tool |
+
+`catalog.json` is built from the annotation sources in `julc-state-api` and from the table in `examples/README.md`, so
+an annotation element the agent finds there exists in the code.
+
+## Per-tool setup
+
+### Claude Code
+
+Claude Code reads `CLAUDE.md` at the start of every session. Put the starter pack in your project:
+
+```sh
+curl -o CLAUDE.md https://joust.julc.dev/ai/starter-pack.md
+```
+
+If your project already has a `CLAUDE.md`, keep it and add a short section instead, so the agent fetches the pack when
+it needs it:
+
+```md title="CLAUDE.md"
+## JOUST
+This project writes Cardano contracts with JOUST (a @StateContract in Java, or .jsc).
+Before writing or changing contract code, read https://joust.julc.dev/ai/starter-pack.md and follow it strictly:
+- contract code is the JuLC subset of Java: BigInteger (never int/long), records, immutable locals,
+  Require.that(cond, "msg"), ByteStringLib.equals for byte[] (never == or .equals);
+- state maps: SortedMaps (inline) or MerkleMap (only as a direct state component, through MerkleMaps helpers);
+- after every change run the build and the tests (./gradlew build, or npx joust build && npm test).
+For anything the pack does not cover, look it up in https://joust.julc.dev/llms-full.txt.
+```
+
+For all your projects at once, add one line to `~/.claude/CLAUDE.md`:
+
+```md
+When working in a JOUST project, follow the rules at https://joust.julc.dev/ai/starter-pack.md
+```
+
+### Cursor
+
+Cursor applies the rules in `.cursor/rules/` to the project:
+
+```sh
+mkdir -p .cursor/rules
+curl -o .cursor/rules/joust.mdc https://joust.julc.dev/ai/starter-pack.md
+```
+
+### ChatGPT, Claude.ai and other chat assistants
+
+For a project (a Claude project, a custom GPT), attach `starter-pack.md` and `llms-full.txt` as project files. For a
+one-off conversation, paste the recommended prompt below.
+
+### Codex, Aider and other coding agents
+
+Most agents have a project context file (an `AGENTS.md`, a conventions file, an "always include" list). Put
+`https://joust.julc.dev/ai/starter-pack.md` there, or download it into the repository and point the tool at the file.
+
+## Working without an MCP server
+
+JOUST has no MCP server. You do not need one: the feedback loop is your build, which an agent with a shell can run
+itself. The annotation processor rejects a malformed contract at compile time with a message that names the rule (and
+usually the ADR behind it), the tests run your methods on the JVM, and the harness runs the compiled validator. Tell
+the agent to run those after each change and to read the messages: they are written to be acted on.
+
+| Path | The agent runs | What it catches |
+|---|---|---|
+| Java and Gradle | `./gradlew build` | Shape errors from the processor (`@Init must return the state record`), the numeric lint (`int`/`long` in a contract), JuLC compile errors, failing tests |
+| npm | `npx joust build`, then `npm test` | The same checks, through the Wasm toolchain (no JDK), then calls on Yaci DevKit |
+
+## A recommended prompt
+
+Paste this at the start of a conversation, then describe your contract:
+
+```text
+I am writing a Cardano smart contract with JOUST (Java On UPLC STate). A contract is a
+@StateContract class: a state record plus public static @Init/@Action/@Destroy/@View methods.
+The same method runs off chain (to build the transaction) and on chain (compiled by JuLC,
+where the generated validator checks the output datum equals its result).
+
+Read the JOUST AI starter pack at https://joust.julc.dev/ai/starter-pack.md and follow it
+strictly. In particular:
+- Contract code is the JuLC subset of Java: BigInteger only (no int, long, double), records
+  and sealed interfaces, no generic records, immutable locals, no exceptions, no null.
+- Rules are Require.that(condition, "message"). Compare byte[] with ByteStringLib.equals.
+- An @Action returns the state, or a record with 'state' and any of payouts, sends, mint,
+  accepted, events, deposits. A @Destroy returns JulcList<Payout> (or such a record without
+  'state') and takes Ctx. Ctx is the last parameter (Funds after it, if any).
+- Maps in the state: SortedMaps for small inline maps; MerkleMap (via MerkleMaps helpers)
+  for unbounded ones, only as a direct component of the state record.
+- Use only annotations and classes that exist in org.julclang.state.api; if unsure, say so
+  instead of inventing one.
+
+Contract to write: <describe the state, who may do what, and when>.
+Then write JVM unit tests for each method and, if the project has julc-state-testkit,
+StateHarness tests that run the compiled validator with Attacks.assertAllRejected.
+```
+
+## Verify what the agent writes
+
+An agent's code that compiles is not yet a correct contract. Check it the way the examples are checked, from cheapest
+to most realistic.
+
+<Steps>
+
+1. **Build.** `./gradlew build` (or `npx joust build`). The processor enforces the contract's shape and the subset
+   rules. A warning matters too: "this @StateContract has no @Destroy method" means every instance locks its min-ADA
+   deposit forever.
+
+2. **Run the methods on the JVM.** They are plain static methods: call them with a `Ctx` and assert on the state, and
+   on the `RequireException` message for each rule. This is where you check the business logic.
+
+3. **Run the compiled validator.** `StateHarness` (from `julc-state-testkit`) evaluates the validator the build
+   produced against transactions shaped like the runtime's, and `Attacks.assertAllRejected(h, tx)` mutates each
+   accepted transaction (the datum replaced, token dust added, a payout under-paid or paid to someone else, the
+   required signer missing, the thread token sent to a key address, the validity range widened, and more) and requires
+   every applicable mutation to fail. Ask for a harness test per action, and for a rejected case per rule.
+
+4. **Run it on Yaci DevKit.** The generated client (Java) or typed client (JavaScript) builds, submits and confirms
+   real transactions on a local network. The examples tag these tests `devnet`; they are skipped when DevKit is not
+   running.
+
+5. **Read the rules yourself.** Ask: who can call each method (`@OnlyOwner`, `@SignedBy`, a check on `ctx.caller()`)?
+   What stops a payout larger than the balance? Can every instance and owned object be closed? The
+   [security model](/contracts/security-model/) lists what the generated validator checks for you and what remains
+   your contract's job.
+
+</Steps>
+
+<Aside type="caution">
+JOUST is pre-release: the Maven snapshots are published, the npm packages are not on npmjs.org yet. An agent that
+"remembers" a version or a registry is guessing: take versions from the [Java quick start](/start/quick-start-java/)
+or the [npm quick start](/start/quick-start-npm/).
+</Aside>
+
+## Why this works
+
+The starter pack gives an agent, in one read, what it cannot infer from Java alone: the subset JuLC compiles, the shape
+rules the processor enforces, the reason the JVM and on-chain runs must agree (and the traps where they would not, such
+as `byte[]` equality and fixed-width numbers), and complete examples taken from the tested contracts in `examples/`.
+The processor's error messages close the loop: they name the rule that was broken, so the agent can fix its own code.
+
+If an agent keeps getting a pattern wrong, [open an issue](https://github.com/bloxbean/joust/issues): the failure
+probably belongs in the starter pack.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="AI starter pack" href="/ai/starter-pack/" description="The document to give your agent." />
+  <LinkCard title="Testing" href="/contracts/testing/" description="JVM tests, the harness and the attack suite." />
+  <LinkCard title="Annotations" href="/reference/annotations/" description="Every annotation, its elements and defaults." />
+  <LinkCard title="Troubleshooting" href="/reference/troubleshooting/" description="Symptoms, causes and fixes." />
+</CardGrid>

@@ -1,0 +1,362 @@
+---
+title: Your first contract
+description: Build the counter step by step - state, @Init, actions with and without Ctx, @OnlyOwner, @View, @Destroy - then run it on Yaci DevKit from Java or JavaScript.
+---
+
+import { Aside, LinkCard, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+In this tutorial you build the contract from
+[`examples/counter`](https://github.com/bloxbean/joust/tree/main/examples/counter): a counter anyone can increment,
+that only its owner can reset or close. It is small, but it uses every basic part of a JOUST contract, and by the end
+you will have created, changed and closed one on a local Cardano network.
+
+You need a working setup from [Quick start: Java & Gradle](/start/quick-start-java/) (or a JOUST checkout with JuLC
+built), and Yaci DevKit for the last part. Each Cardano term is explained the first time it comes up; the
+[Glossary](/reference/glossary/) has them all.
+
+## Build the contract
+
+<Steps>
+
+1. **Declare the contract and its state.**
+
+   ```java
+   @StateContract(maxDatumBytes = 128)
+   public class Counter {
+
+       /** The state, stored as the inline datum of the state UTxO. */
+       public record State(BigInteger count, byte[] owner) {}
+   }
+   ```
+
+   `@StateContract` marks the class for the JOUST processor. The state is a plain Java record.
+
+   On Cardano, coins sit in **UTxOs** (unspent transaction outputs). A UTxO at a script's address can carry a
+   **datum**, a piece of structured data: JOUST stores your `State` there, as an *inline* datum (in the UTxO
+   itself). One instance of the counter is one such UTxO.
+
+   Two details matter already:
+   - **Numbers are `BigInteger`.** On chain, integers are unbounded; a Java `int` or `long` would wrap on the JVM
+     and not on chain, so the build rejects them in contract code.
+   - **`owner` is a `byte[]`**: the 28-byte hash of a payment key, which is how Cardano names who may sign.
+
+   `maxDatumBytes = 128` caps the serialised state. Every UTxO must hold a minimum amount of ADA that grows with its
+   size (the **min-ADA deposit**). JOUST derives the counter's deposit from the cap, 2.2 ADA (2,200,000
+   **lovelace**; 1 ADA = 1,000,000 lovelace), and the validator refuses any state that grows past it, so no call can
+   make the UTxO unspendable.
+
+2. **Create instances with `@Init`.**
+
+   ```java
+   /** The deployer becomes the owner. */
+   @Init
+   public static State init(Ctx ctx) {
+       return new State(BigInteger.ZERO, ctx.caller());
+   }
+   ```
+
+   Exactly one method carries `@Init`. It returns the first state. Every contract method is `public static` and
+   pure: it gets everything as arguments and returns the result, so it can run anywhere.
+
+   `Ctx` is an optional **last** parameter with the facts of the transaction:
+
+   | Field | Meaning |
+   |---|---|
+   | `caller()` | The key hash of whoever calls. The validator requires that key's signature |
+   | `received()` | Lovelace this call adds to the contract (zero unless the method is `@Payable`) |
+   | `balance()` | Lovelace the call may allocate: the contract's funds minus the deposit (everything, in a `@Destroy`) |
+   | `validFrom()`, `validTo()` | The transaction's validity interval, in POSIX milliseconds |
+
+   The client fills these in; the generated validator checks each one against the real transaction before your
+   method runs. Here the deployer becomes the owner.
+
+   When you deploy, the transaction spends a UTxO of yours (the *seed*) and **mints** a token under the contract's
+   own **minting policy** (the script that decides when a token may be created). That token, the **thread token**,
+   marks the state UTxO; its name, derived from the seed, is the **instance id**. Because the seed can be spent only
+   once, no one can ever mint a second token for the same instance.
+
+3. **Add an action anyone can call, with no `Ctx`.**
+
+   ```java
+   /** Anyone can increment by a positive amount (no Ctx: no signature needed, cheaper). */
+   @Action
+   public static State increment(State s, BigInteger by) {
+       Require.that(by.compareTo(BigInteger.ZERO) > 0, "increment must be positive");
+       return new State(s.count().add(by), s.owner());
+   }
+   ```
+
+   An `@Action` takes the current state first, then its arguments, and returns the next state. Records are
+   immutable: you build a new one.
+
+   `Require.that(condition, message)` is how a contract states a rule. On the JVM it throws a `RequireException`
+   carrying your message, so the client refuses the call before building anything. On chain it records the message
+   and fails the script.
+
+   This method does not declare `Ctx`, so the validator does not require a signature or a validity interval: anyone
+   can increment, and the check is cheaper. The arguments travel in the **redeemer**, the data a transaction gives
+   the validator when it spends a script UTxO.
+
+4. **Add an action only the owner can call.**
+
+   ```java
+   /** Only the owner can reset. */
+   @Action
+   @OnlyOwner
+   public static State reset(State s) {
+       return new State(BigInteger.ZERO, s.owner());
+   }
+   ```
+
+   `@OnlyOwner` means "the transaction must be signed by the key in the state's `owner` field". It is shorthand for
+   `@SignedBy("owner")`, and it checks the **current** state, before the call. The method itself needs no `Ctx`:
+   the generated validator checks the signature, and the generated client refuses the call early if the caller's
+   key is not the owner's.
+
+5. **Add a read-only view.**
+
+   ```java
+   /** Read-only view (off-chain, no transaction). */
+   @View
+   public static BigInteger count(State s) {
+       return s.count();
+   }
+   ```
+
+   A `@View` never goes on chain. It becomes a getter on the client that reads the current state and computes the
+   answer locally, without a transaction.
+
+6. **Let the owner close it, and return the deposit.**
+
+   ```java
+   /** Only the owner can close the counter; the deposit goes back to them. */
+   @Destroy
+   @OnlyOwner
+   public static JulcList<Payout> close(State s, Ctx ctx) {
+       return Payouts.of(s.owner(), ctx.balance());
+   }
+   ```
+
+   A `@Destroy` ends the instance: the thread token is burned and the UTxO is not continued. It returns a list of
+   `Payout`s (a key hash and an amount of lovelace), and it must pay out **everything** the UTxO holds: in a
+   `@Destroy`, `ctx.balance()` is the whole amount, deposit included. That is why `Ctx` is required here. Without a
+   `@Destroy`, the deposit of every instance would stay locked forever (the processor warns about it).
+
+</Steps>
+
+The whole file, with its imports, is
+[`Counter.java`](https://github.com/bloxbean/joust/blob/main/examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java).
+
+## The same contract in .jsc
+
+If you prefer a shorter syntax, `.jsc` says the same thing and lowers to the same Java.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="Counter.java"
+@StateContract(maxDatumBytes = 128)
+public class Counter {
+    public record State(BigInteger count, byte[] owner) {}
+
+    @Init
+    public static State init(Ctx ctx) {
+        return new State(BigInteger.ZERO, ctx.caller());
+    }
+
+    @Action
+    public static State increment(State s, BigInteger by) {
+        Require.that(by.compareTo(BigInteger.ZERO) > 0, "increment must be positive");
+        return new State(s.count().add(by), s.owner());
+    }
+
+    @Action @OnlyOwner
+    public static State reset(State s) {
+        return new State(BigInteger.ZERO, s.owner());
+    }
+
+    @Destroy @OnlyOwner
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        return Payouts.of(s.owner(), ctx.balance());
+    }
+
+    @View
+    public static BigInteger count(State s) {
+        return s.count();
+    }
+}
+```
+
+</TabItem>
+<TabItem label=".jsc">
+
+```jsc title="Counter.jsc"
+package app
+
+contract Counter(maxDatumBytes = 128) {
+    state count: Int
+    state owner: Key
+
+    init() {
+        owner = caller
+    }
+
+    action increment(by: Int) {
+        require by > 0 "increment must be positive"
+        count += by
+    }
+
+    action reset() only owner {
+        count = 0
+    }
+
+    destroy close() only owner {
+        pay balance to owner
+    }
+
+    view count(): Int = count
+}
+```
+
+An `Int` field that `init` does not assign starts at zero (here `count`); `caller` and `balance` read `Ctx`, which the lowering adds where they are used;
+`only owner` becomes `@SignedBy("owner")`. See [.jsc](/languages/jsc/).
+
+</TabItem>
+</Tabs>
+
+## Build it
+
+```sh
+./gradlew :examples:counter:build      # in a JOUST checkout; ./gradlew build in your own project
+```
+
+The processor writes `CounterValidator` and `CounterClient` into
+`build/generated/sources/annotationProcessor/java/main`, and JuLC compiles the validator into
+`META-INF/plutus/CounterValidator.plutus.json`. Open `CounterValidator.java`: you will find your methods called from
+the spend arms, and the checks around them. For example, `reset`:
+
+```java title="CounterValidator.java (generated)"
+static boolean onReset(Reset r, Counter.State current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id, BigInteger inLovelace) {
+    boolean signed_owner = ContextsLib.signedBy(tx, current.owner());
+    Counter.State next = Counter.reset(current);
+    boolean continues = continues(tx, own, policy, id, (PlutusData) (Object) next, inLovelace.add(BigInteger.ZERO));
+    return signed_owner && continues;
+}
+```
+
+`continues` checks that exactly one output carries the thread token, at the same address, with a datum equal to
+`next` and exactly the same value. [How JOUST works](/start/how-it-works/) walks through the rest.
+
+## Run it
+
+Start Yaci DevKit (`yaci-devkit up --enable-yaci-store`), then drive the counter from an application.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/counter/.../CounterApp.java"
+var runtime = DevKit.runtime();
+var alice = DevKit.fundedAccount(500);
+var bob = DevKit.fundedAccount(500);
+
+CounterClient counter = CounterClient.deploy(runtime, alice);
+System.out.println("deployed instance " + counter.instanceId() + " at "
+        + CounterClient.contract(runtime).address());
+System.out.println("count = " + counter.count());
+
+counter.increment(bob, BigInteger.valueOf(5));
+counter.increment(alice, BigInteger.TWO);
+
+try {
+    counter.reset(bob);   // not the owner: rejected on the JVM, nothing is submitted
+} catch (RequireException e) {
+    System.out.println("bob reset rejected off-chain: " + e.getMessage());
+}
+
+counter.reset(alice);
+var closed = counter.close(alice);
+System.out.println("alice closed the counter in " + closed.txHash() + ", paid back " + closed.payouts());
+```
+
+```sh
+./gradlew :examples:counter:run
+```
+
+```text
+deployed instance d11c40ff686bcc687c6dffb98efd9b25c597c8377df049f12117ca5747b455a9 at addr_test1wptj8x0692g2q3fv8v5a5j90dwgfqkkge76s8cd0sq7fgtq9nldys
+count = 0
+bob +5   -> count = 5
+alice +2 -> count = 7
+bob reset rejected off-chain: Counter.reset: must be called by the key in 'owner'
+alice reset -> count = 0
+alice closed the counter in c4419d0b..., paid back [Payout[to=[B@78d39a69, lovelace=2200000]]
+```
+
+`DevKit` is the examples' helper for a local network: it builds the `StateRuntime` and funds fresh accounts from
+the faucet. In your own project you build the runtime yourself, as in the
+[quick start](/start/quick-start-java/#run-it-on-devkit).
+
+</TabItem>
+<TabItem label="JavaScript">
+
+The project that `npm create joust` makes contains the same counter (`contracts/app/Counter.java`). After
+`npm run build` and `npm run deploy`, its test drives it on DevKit from Node:
+
+```js title="test/counter.test.js (create-joust template)"
+const rt = joustRuntime({ chainUrl: deployed.chain, contracts, clock: deployed.clock, networkId: deployed.networkId,
+  deployments: deployed.contracts, ttlMs: 20_000 });
+// A fresh DevKit wallet with 100 ADA from the faucet.
+const wallet = devWallet({ chain: rt.chain, mnemonic: generateMnemonic(wordlist, 256) });
+await devkitTopUp(wallet.address, 100, config.networks.devkit.admin, { chain: rt.chain });
+
+const counter = new Counter(rt.options('app.Counter'));
+const { instance } = await counter.deploy(wallet, {});
+await instance.increment(wallet, { by: 5n });
+await instance.increment(wallet, { by: 2n });
+assert.equal((await instance.state()).count, 7n);
+await assert.rejects(instance.increment(wallet, { by: 0n }), /increment must be positive/);
+await instance.close(wallet);
+assert.equal(await instance.state(), null);
+```
+
+The same `Require` message comes back in JavaScript, because the same method ran (compiled to UPLC, in the
+runtime engine) before anything was signed.
+
+<Aside type="caution">
+
+The npm packages are not on npmjs.org yet: install them from a local registry as described in
+[Quick start: npm](/start/quick-start-npm/).
+
+</Aside>
+
+</TabItem>
+</Tabs>
+
+What happened on chain, call by call:
+
+| Call | Transaction |
+|---|---|
+| `deploy` | Spends a seed UTxO of Alice, mints the thread token, creates the state UTxO (datum `State(0, alice)`, 2.2 ADA). The first deploy on a network also publishes the script once as a **reference script**, a UTxO other transactions read the script from instead of carrying it |
+| `increment(bob, 5)` | Spends the state UTxO with redeemer `Increment(5)`, creates the next one with datum `State(5, alice)` |
+| `reset(bob)` | Never built: the client saw Bob is not the owner |
+| `reset(alice)` | Spends the state, signed by Alice, datum `State(0, alice)` |
+| `close(alice)` | Spends the state, burns the thread token, pays 2,200,000 lovelace to Alice in an output tagged with the state input |
+
+After `close`, `counter.state()` throws `InstanceNotFoundException`: no UTxO holds the token any more.
+
+## What you learned
+
+- A contract is a state record plus `public static` methods: `@Init` creates, `@Action` changes, `@View` reads,
+  `@Destroy` ends and pays out.
+- `Ctx` is optional and verified. Leave it out when a method needs no caller, payment or time, and the call is
+  cheaper.
+- `@OnlyOwner` (`@SignedBy`) checks a key from the current state, on the client and on chain.
+- `Require.that` fails early on the JVM with your message, and fails the script on chain.
+- The state lives in one UTxO, marked by a thread token; the deposit stays with it until the `@Destroy` pays it out.
+
+## Next steps
+
+<LinkCard title="Vault: deposits, time and payouts" description="@Payable, @ValidAfter and actions that pay out." href="/tutorials/vault/" />
+<LinkCard title="State and lifecycle" description="Method shapes, deposits and the instance lifecycle in full." href="/contracts/state-and-lifecycle/" />
+<LinkCard title="Testing" description="Unit tests, the validator harness and the attack suite." href="/contracts/testing/" />
+<LinkCard title="A counter dApp in the browser" description="The same contract, called from a page with a CIP-30 wallet." href="/tutorials/counter-dapp/" />

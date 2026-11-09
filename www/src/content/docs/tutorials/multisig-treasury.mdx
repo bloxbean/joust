@@ -1,0 +1,282 @@
+---
+title: Multisig treasury
+description: A council-governed treasury with deploy-time @Params, @Quorum payments, a guardian script approving through a zero withdrawal, an @Invariant and authenticated events.
+---
+
+import { Tabs, TabItem, Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This tutorial walks through [`examples/treasury`](https://github.com/bloxbean/joust/tree/main/examples/treasury), a
+multisig treasury, and runs it on Yaci DevKit. A council of keys decides by quorum; a guardian fixed at deploy time
+can freeze the treasury; every state keeps a reachable quorum; and payments and council changes emit events that
+indexers can trust.
+
+You will use five features from [ADR-0009](https://github.com/bloxbean/joust/blob/main/docs/adr/0009-option-i-params-auth-invariants-events.md):
+`@Params`, `@Quorum`, `@AuthorizedBy` with a script, `@Invariant`, and events.
+
+<Aside type="caution" title="Pre-release">
+
+JOUST is pre-release. The Java path needs JDK 25 and a JuLC build that is not published yet: from a JOUST checkout,
+run `bash .github/ci/build-julc.sh` once (see the [Java quick start](/start/quick-start-java/)). For the DevKit run,
+start Yaci DevKit with `yaci-devkit up --enable-yaci-store`.
+
+</Aside>
+
+## Build it
+
+<Steps>
+
+1. **Deploy-time parameters.** The guardian and the payout cap are fixed when the treasury is deployed:
+
+   ```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Treasury.java"
+   @StateContract(maxDatumBytes = 640)
+   public class Treasury {
+
+       @Params
+       public record Config(Credential guardian, BigInteger maxPayout) {}
+
+       public record State(JulcList<byte[]> council, BigInteger quorum, boolean frozen) {}
+   ```
+
+   `@Params` values are applied to the script itself, so each `Config` gives a different script hash, policy id and
+   address. Nobody can change them later, and no action can swap the guardian. `guardian` is a `Credential`: a key
+   or a script. The council and quorum live in the state, because the council can rotate.
+
+   **What this taught:** put what must never change in `@Params`; what may change, in the state.
+
+2. **Open and fund.**
+
+   ```java
+   @Init @Payable
+   public static State open(Config cfg, JulcList<byte[]> council, BigInteger quorum, Ctx ctx) {
+       return new State(council, quorum, false);
+   }
+
+   @Action @Payable
+   public static State fund(State s, Ctx ctx) {
+       Require.that(ctx.received().signum() > 0, "fund with some ADA");
+       return s;
+   }
+   ```
+
+   The params come first in `@Init` (there is no state yet), right after the state elsewhere. `fund` returns the
+   state unchanged: the validator's exact value check still requires the treasury's UTxO to grow by exactly
+   `received`.
+
+   **What this taught:** a method declares the params record to read them; callers never pass it.
+
+3. **Pay by quorum, and emit an event.**
+
+   ```java
+   public sealed interface Event permits Paid, CouncilChanged, Frozen {}
+   public record Paid(byte[] to, BigInteger amount) implements Event {}
+   public record CouncilChanged(BigInteger members, BigInteger quorum) implements Event {}
+   public record Frozen(boolean frozen) implements Event {}
+
+   public record Spent(State state, JulcList<Payout> payouts, JulcList<Event> events) {}
+   public record Changed(State state, JulcList<Event> events) {}
+
+   /** Pays {@code amount} to {@code to}; needs a quorum of the council. */
+   @Action @Quorum(keys = "council", threshold = "quorum")
+   public static Spent pay(State s, Config cfg, byte[] to, BigInteger amount, Ctx ctx) {
+       Require.that(!s.frozen(), "the treasury is frozen");
+       Require.that(amount.signum() > 0 && amount.compareTo(cfg.maxPayout()) <= 0, "amount out of range");
+       Require.that(amount.compareTo(ctx.balance()) <= 0, "not enough funds");
+       JulcList<Event> none = JulcList.empty();
+       return new Spent(s, Payouts.of(to, amount), none.prepend(new Paid(to, amount)));
+   }
+   ```
+
+   - `@Quorum(keys = "council", threshold = "quorum")` requires at least `quorum` of the transaction's signers to be
+     in the **current** council.
+   - `Spent` has three components the processor recognises by name: `state`, `payouts` and `events`.
+   - The events travel in the redeemer, and the validator requires them to equal what the method returned. An event
+     read from a valid JOUST transaction is therefore exactly what the contract emitted.
+
+   **What this taught:** an M-of-N rule is one annotation; events are part of the checked result.
+
+4. **Rotate the council, guarded by an invariant.**
+
+   ```java
+   /** Replaces the council; needs a quorum of the current one. The new council must keep a reachable quorum. */
+   @Action @Quorum(keys = "council", threshold = "quorum")
+   public static Changed rotate(State s, JulcList<byte[]> council, BigInteger quorum) {
+       JulcList<Event> none = JulcList.empty();
+       return new Changed(new State(council, quorum, s.frozen()),
+               none.prepend(new CouncilChanged(BigInteger.valueOf(council.size()), quorum)));
+   }
+
+   /** A quorum the council can reach (the generated check also requires distinct, sorted 28-byte keys). */
+   @Invariant
+   public static boolean reachable(State s) {
+       return s.quorum().signum() > 0 && s.quorum().compareTo(BigInteger.valueOf(s.council().size())) <= 0;
+   }
+   ```
+
+   The quorum check reads the **input** state, so a rotation needs the current council's approval and cannot
+   authorise itself. The `@Invariant` runs on every state the validator accepts as an output (and in the client,
+   first), so no rotation can leave a quorum nobody can reach. Because the contract uses `@Quorum`, the validator
+   also checks that council keys are strictly ascending and 28 bytes each.
+
+   **What this taught:** invariants protect the contract from transitions that would lock it.
+
+5. **Freeze through a guardian script.**
+
+   ```java
+   /** The guardian freezes or unfreezes the treasury. */
+   @Action @AuthorizedBy("params.guardian")
+   public static Changed freeze(State s, boolean frozen) {
+       JulcList<Event> none = JulcList.empty();
+       return new Changed(new State(s.council(), s.quorum(), frozen), none.prepend(new Frozen(frozen)));
+   }
+
+   /** Ends the treasury, paying everything to {@code to}; needs a quorum. */
+   @Destroy @Quorum(keys = "council", threshold = "quorum")
+   public static JulcList<Payout> close(State s, byte[] to, Ctx ctx) {
+       return Payouts.of(to, ctx.balance());
+   }
+   ```
+
+   `@AuthorizedBy("params.guardian")` needs the guardian's approval. On DevKit the guardian is a **script**, a
+   withdraw-zero governor: a transaction that withdraws zero lovelace from the script's reward account makes the
+   ledger run it. The governor's redeemer must list `Approval(policy, target, action)` naming this treasury, this
+   instance and the `freeze` action, so one approval cannot be reused elsewhere:
+
+   ```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Guardian.java"
+   @WithdrawValidator
+   public class Guardian {
+
+       @Param static byte[] owner;
+
+       @Entrypoint
+       public static boolean validate(PlutusData redeemer, ScriptContext ctx) {
+           boolean rewarding = ctx.scriptInfo() instanceof ScriptInfo.RewardingScript;
+           return rewarding && ContextsLib.signedBy(ctx.txInfo(), owner);
+       }
+   }
+   ```
+
+   `Guardian` approves when its owner signs, and refuses any other purpose, so nobody can deregister it. A real
+   governor would decide by votes or another contract's state.
+
+   **What this taught:** another script can authorise an action, bound to exactly that action.
+
+</Steps>
+
+## Run it
+
+The treasury has no app class; its DevKit test plays the whole flow.
+
+<Steps>
+
+1. **Read the flow.**
+
+   <Tabs syncKey="lang">
+   <TabItem label="Java">
+
+   ```java title="examples/treasury/src/test/java/org/julclang/state/examples/treasury/TreasuryDevnetTest.java"
+   Account[] members = {DevKit.fundedAccount(300), DevKit.fundedAccount(300), DevKit.fundedAccount(300)};
+   Arrays.sort(members, Comparator.comparing(a -> HexUtil.encodeHexString(Keys.pkh(a))));   // keys ascending
+   var a = members[0];
+   var b = members[1];
+   var owner = DevKit.fundedAccount(100);
+   var bob = DevKit.fundedAccount(10);
+
+   // The guardian script, with its owner applied, and its stake credential registered once.
+   var guardian = JulcScriptLoader.load(Guardian.class, new BytesPlutusData(Keys.pkh(owner)));
+   String reward = DevKit.registerScriptStake(guardian, owner);
+   var cfg = new Treasury.Config(new Credential.ScriptCredential(new ScriptHash(guardian.getScriptHash())),
+           ADA.multiply(BigInteger.valueOf(50)));
+   JulcList<byte[]> council = JulcList.empty();
+   for (int i = members.length - 1; i >= 0; i--) council = council.prepend(Keys.pkh(members[i]));
+
+   var t = TreasuryClient.deploy(runtime, cfg, a, council, BigInteger.TWO, ADA.multiply(BigInteger.valueOf(200)));
+   assertEquals(TreasuryClient.policyIdFor(cfg), t.instance().contract().policyId(), "the params pin the script");
+
+   // 2 of 3: a calls, b co-signs. The Paid event comes back with the result.
+   var paid = t.pay(a, Keys.pkh(bob), ADA.multiply(BigInteger.TEN), b);
+   paid.events(Treasury.Paid.class).get(0).amount();          // 10 ADA
+   assertThrows(RuntimeException.class, () -> t.pay(a, Keys.pkh(bob), ADA), "one signature is not a quorum");
+
+   // The guardian freezes: a zero withdrawal from its script, with an Approvals redeemer for this action (tag 3).
+   byte[] policy = HexUtil.decodeHexString(t.instance().contract().policyId());
+   byte[] id = HexUtil.decodeHexString(t.instanceId());
+   JulcList<Approval> approvals = JulcList.<Approval>empty().prepend(new Approval(policy, id, BigInteger.valueOf(3)));
+   var frozen = t.freeze(owner, true, Authorization.script(reward, guardian, new Approvals(approvals), owner));
+   assertThrows(RuntimeException.class, () -> t.pay(a, Keys.pkh(bob), ADA, b), "frozen");
+   t.freeze(owner, false, Authorization.script(reward, guardian, new Approvals(approvals), owner));
+
+   // Rotate to a council of two, then close by quorum.
+   t.rotate(a, JulcList.<byte[]>empty().prepend(Keys.pkh(b)).prepend(Keys.pkh(a)), BigInteger.TWO, a, b);
+   t.close(a, Keys.pkh(a), b);
+   ```
+
+   The generated client takes `@Quorum` co-signers as trailing `Account`s, and an `Authorization` for
+   `@AuthorizedBy`. `DevKit.registerScriptStake` is the examples' helper that registers the governor's stake
+   credential.
+
+   </TabItem>
+   <TabItem label="JavaScript">
+
+   ```js
+   // The same calls with the generated JavaScript client and CIP-30 wallets.
+   const treasury = new Treasury({ service, chain, deployment });     // deployment: one applied Config
+   const { instance } = await treasury.deploy(walletA, { council, quorum: 2n }, { lovelace: 200_000_000n });
+
+   const paid = await instance.pay(walletA, { to: bobKeyHash, amount: 10_000_000n }, { cosigners: [walletB] });
+   paid.report.events;   // [{ $variant: 'Paid', to: bobKeyHash, amount: 10000000n }]
+
+   await instance.freeze(walletA, { frozen: true }, { governor: { governor, signers: [ownerWallet] } });
+   ```
+
+   Each co-signer's wallet signs the same transaction, after the page has verified it.
+
+   </TabItem>
+   </Tabs>
+
+2. **Run the tests.**
+
+   ```sh
+   ./gradlew :examples:treasury:test
+   ```
+
+   With DevKit up, `TreasuryDevnetTest > quorumGuardianEvents()` runs the flow above on the local network and passes.
+   Without DevKit it is skipped, and the harness tests still run. Gradle lists each test as `PASSED`.
+
+3. **See what the harness proved.** `TreasuryTest` evaluates the compiled validator against each transaction and runs
+   the attack suite on every accepted one. Beyond the happy paths, it checks that the validator refuses:
+
+   - a council with duplicate keys, or a quorum above the council's size, at creation;
+   - a payment signed by one of three, or by one member and a stranger;
+   - forged events in the redeemer;
+   - a rotation to duplicate or unsorted keys;
+   - a freeze with no guardian withdrawal, an approval for another instance or another action, or another script's
+     withdrawal;
+   - a close with one signature.
+
+   A payment over `maxPayout` is refused by the method itself, on the JVM (`RequireException`).
+
+   Run `./gradlew :examples:treasury:test --info` to see the lines the tests print, including each transaction's
+   budget and how many attacks it rejected.
+
+</Steps>
+
+## What you built
+
+A treasury where:
+
+- spending needs a quorum of the council, checked against the council **before** the call;
+- the council can change, but never into one that cannot reach its quorum;
+- an independent script can freeze it, with an approval bound to one instance and one action;
+- the guardian and the payout cap are fixed by the script hash;
+- every payment and council change is recorded as an event the validator checked.
+
+About 70 lines of contract code; every one of those guarantees is generated.
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Authorization" href="/contracts/authorization/" description="@Quorum and @AuthorizedBy in depth." />
+<LinkCard title="Params, invariants and events" href="/contracts/params-invariants-events/" description="Pinning, invariants, event provenance." />
+<LinkCard title="Staked vault and governance" href="/tutorials/staked-vault/" description="A council that stakes and votes." />
+<LinkCard title="Security model" href="/contracts/security-model/" description="What the validator enforces." />
+</CardGrid>

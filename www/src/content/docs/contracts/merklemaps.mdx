@@ -1,0 +1,380 @@
+---
+title: MerkleMaps
+description: Keep an unbounded map in a 32-byte root. How MerkleMap fields work, the MerkleMaps API, what the map verifier checks and the rules to follow.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A `MerkleMap` is a state field that holds a map of any size while the datum keeps only a 32-byte root. Use one when a
+contract tracks something per user or per key with no fixed bound: token balances, loyalty points, an allow-list, a
+registry. Each call proves only the keys it reads and writes, so the cost of a call depends on the keys it touches,
+not on how many entries the map holds.
+
+The `token` example keeps every holder's balance in one:
+
+```java title="examples/token/src/main/java/org/julclang/state/examples/token/Token.java"
+@StateContract(maxDatumBytes = 160)
+public class Token {
+
+    public record State(byte[] admin, BigInteger supply, MerkleMap balances) {}
+
+    @Init
+    public static State create(Ctx ctx) {
+        return new State(ctx.caller(), BigInteger.ZERO, MerkleMaps.empty());
+    }
+
+    /** The admin creates new tokens for a holder. */
+    @Action
+    @SignedBy("admin")
+    public static State mint(State s, byte[] to, BigInteger amount) {
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+        BigInteger balance = MerkleMaps.getInt(s.balances(), to, BigInteger.ZERO);
+        return new State(s.admin(), s.supply().add(amount), MerkleMaps.putInt(s.balances(), to, balance.add(amount)));
+    }
+
+    @View
+    public static BigInteger balanceOf(State s, byte[] holder) {
+        return MerkleMaps.getInt(s.balances(), holder, BigInteger.ZERO);
+    }
+}
+```
+
+The datum stays about 100 bytes however many holders there are (ADR-0002 D8).
+
+## When to use a MerkleMap
+
+JOUST gives you three ways to keep many entries. Pick by size and by who writes.
+
+| You need | Use | Why |
+|---|---|---|
+| A small map, read whole on every call | `JulcMap` in the state, kept sorted with `SortedMaps` | Cheapest per call, but the datum caps it: the crowdfund example fits 27 backers in 1 KB |
+| An unbounded map, written by one call at a time | `MerkleMap` (this page) | Constant datum size; each call proves only the keys it touches |
+| Per-user state that users change in parallel | [Owned objects](/contracts/owned-objects/) | One UTxO per user, so users never contend |
+| Many writers to one hot total | [Batched intents](/contracts/batched-intents/) | Users lock requests; a batcher applies them together |
+
+A MerkleMap does not remove contention: every write still spends the instance's one UTxO, so writes to one instance
+go one after another. If many users write at once, owned objects (which can hold their own MerkleMaps) are the
+better fit.
+
+## The API
+
+You read and change a map only through the static helpers of `MerkleMaps`
+([source](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/MerkleMaps.java)).
+Keys and values are `byte[]`; the `Int` helpers store non-negative `BigInteger` values.
+
+| Method | Returns | What it does |
+|---|---|---|
+| `MerkleMaps.empty()` | `MerkleMap` | A new, empty map. Use it in `@Init` (or `@OwnedInit`) |
+| `MerkleMaps.contains(m, key)` | `boolean` | Whether `key` is in the map |
+| `MerkleMaps.get(m, key, otherwise)` | `byte[]` | The value, or `otherwise` when absent |
+| `MerkleMaps.getInt(m, key, otherwise)` | `BigInteger` | The value as an unsigned big-endian integer, or `otherwise` |
+| `MerkleMaps.put(m, key, value)` | `MerkleMap` | Sets `key` to `value` |
+| `MerkleMaps.putInt(m, key, value)` | `MerkleMap` | Sets `key` to a non-negative integer (fails on a negative value) |
+| `MerkleMaps.remove(m, key)` | `MerkleMap` | Deletes `key` |
+| `MerkleMaps.isEmpty(m)` | `boolean` | True if the map was empty before this call and this call wrote nothing |
+
+Writes return a new `MerkleMap`: put it in the state you return, as you would any other field. A lookup sees this
+call's own writes first (latest first), then what was in the map, so a method can read back what it just wrote. The
+token's `transfer` relies on this for a transfer to yourself:
+
+```java title="examples/token/src/main/java/org/julclang/state/examples/token/Token.java"
+/** A holder sends tokens; an emptied balance is removed from the map. */
+@Action
+public static State transfer(State s, byte[] to, BigInteger amount, Ctx ctx) {
+    Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+    BigInteger fromBalance = MerkleMaps.getInt(s.balances(), ctx.caller(), BigInteger.ZERO);
+    Require.that(fromBalance.compareTo(amount) >= 0, "insufficient balance");
+    BigInteger left = fromBalance.subtract(amount);
+    MerkleMap debited = left.compareTo(BigInteger.ZERO) == 0
+            ? MerkleMaps.remove(s.balances(), ctx.caller())
+            : MerkleMaps.putInt(s.balances(), ctx.caller(), left);
+    BigInteger toBalance = MerkleMaps.getInt(debited, to, BigInteger.ZERO);   // reads the debit on a self-transfer
+    return new State(s.admin(), s.supply(), MerkleMaps.putInt(debited, to, toBalance.add(amount)));
+}
+```
+
+<Aside type="note" title="Zero is present">
+`putInt(m, key, BigInteger.ZERO)` stores the empty byte string, and the key is still present. To drop a key, call
+`remove`. The token removes a holder whose balance reaches zero, which keeps the map (and its proofs) small.
+</Aside>
+
+## In `.jsc`
+
+In [`.jsc`](/languages/jsc/), a `Map<Key, Int>` state field is a MerkleMap. Reading a missing key gives `0`;
+assigning `0` removes the key; a value can never go negative. `delete`, `has(map, key)` and `isEmpty(map)` cover the
+rest.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java
+@StateContract(maxDatumBytes = 160)
+public class Token {
+    public record State(byte[] admin, BigInteger supply, MerkleMap balances) {}
+
+    @Action
+    @SignedBy("admin")
+    public static State mint(State s, byte[] to, BigInteger amount) {
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+        BigInteger balance = MerkleMaps.getInt(s.balances(), to, BigInteger.ZERO);
+        return new State(s.admin(), s.supply().add(amount), MerkleMaps.putInt(s.balances(), to, balance.add(amount)));
+    }
+}
+```
+
+</TabItem>
+<TabItem label=".jsc">
+
+```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Points.jsc"
+// Loyalty points in a Map<Key, Int> (a MerkleMap: any number of holders, a 32-byte root on chain).
+contract Points(maxDatumBytes = 160) {
+    state admin: Key
+    state supply: Int
+    state points: Map<Key, Int>
+
+    init() {
+        admin = caller
+    }
+
+    action award(to: Key, n: Int) only admin {
+        require n > 0 "award a positive amount"
+        points[to] += n
+        supply += n
+    }
+
+    // Spending everything removes the holder.
+    action spend(n: Int) {
+        let have = points[caller]
+        require n > 0 && have >= n "not enough points"
+        if have == n {
+            delete points[caller]
+        } else {
+            points[caller] -= n
+        }
+        supply -= n
+    }
+
+    destroy close() only admin {
+        require supply == 0 && isEmpty(points) "points are still out"
+        pay balance to admin
+    }
+
+    view pointsOf(who: Key): Int = points[who]
+}
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="js/joust-runtime/test/examples.test.js (Token)"
+const token = await contract('Token', admin);          // a JoustContract for the deployed Token
+const t = token.at((await token.deploy(admin, {})).instance);
+await t.call(admin, 'mint', { to: ann.keyHash, amount: 1000n });
+await t.call(ann, 'transfer', { to: ben.keyHash, amount: 250n });
+await t.call(ann, 'burn', { amount: 750n });
+```
+
+The call looks like any other. The runtime engine finds the keys the method reads, asks the map mirror for their
+proofs, and attaches the map verifier. See [MerkleMap mirrors](/apps/map-mirrors/).
+
+</TabItem>
+</Tabs>
+
+`.jsc` maps are `Map<Key, Int>` only. For other key or value shapes, write the contract in Java.
+
+## How a call works
+
+A MerkleMap in the datum is just `(root, [], [])`. The `reads` and `writes` lists exist only while a method runs.
+
+1. **Off chain, the runtime runs your method** with the map's mirror bound behind it. Every key the method looks up
+   is answered from the mirror and recorded. That set of keys becomes the call's *read set*.
+2. **It builds proofs** for the read set against the current root, and folds the method's net writes (the latest write
+   of each key, in order) over the trie to get the new root.
+3. **It replays your method** against exactly the proven reads, with any other lookup disabled, and must get the same
+   result. Then it builds the transaction: the state spend, plus a zero withdrawal from the map verifier carrying the
+   proofs.
+4. **On chain, your method runs again** inside the contract's validator, on the proven reads, and the verifier checks
+   the proofs.
+
+The same `MerkleMaps` code runs on both sides. The JVM source and the on-chain source differ only in what happens when
+a key is not in the read set: the JVM reads it from the mirror; on chain the script fails. An honest client always
+puts every key the method reads in the read set, so it never hits that failure.
+
+### The map verifier
+
+A validator that carried the Merkle Patricia Forestry (MPF) code itself would be 18 to 19 KB, above the 16 KB
+transaction limit. So proofs are checked once per transaction by a shared script,
+[`MapVerifier`](https://github.com/bloxbean/joust/blob/main/julc-state-verifier/src/main/java/org/julclang/state/verifier/MapVerifier.java)
+in `julc-state-verifier`. It is a *withdraw-zero* script: a transaction withdraws 0 ADA from its stake credential,
+which makes the ledger run it, and its redeemer carries the claims (ADR-0002 D9).
+
+- **The verifier's redeemer** is `MapClaims`: one `MapClaim(policy, owner, field, oldRoot, reads, writes, newRoot)`
+  per map per instance. It checks each claim's reads against `oldRoot` (unique keys, an empty value when absent) and
+  applies its writes in order to `oldRoot`, which must give `newRoot`.
+- **The claim key** is `(policy, owner, field)`: the contract's script hash, the input the map belongs to (the
+  instance's or object's input, or the seed when creating), and the field's index. Creations use fields -1, -2, …, so
+  they never collide with a spend in the same transaction (ADR-0014 D1). A claim made for one contract can never be
+  read by another.
+- **Your contract's validator** finds the verifier's redeemer among the transaction's redeemers, takes its own claim,
+  and requires:
+  - `oldRoot` equals the root in the current datum;
+  - your method, given the claimed reads, writes exactly the claimed writes, in order, with the same keys and values;
+  - the next datum stores the claim's `newRoot`, with empty `reads` and `writes`;
+  - the result map's root is still the opened root, so a method cannot swap in another map.
+
+The runtime publishes the verifier's reference script and registers its stake credential once per network, the first
+time a map contract needs it.
+
+| Invariant | Meaning (ADR-0002 D7) |
+|---|---|
+| I15 | Every value a method reads is proven against the pre-call root (inclusion, or exclusion when absent) |
+| I16 | The next root is exactly the old root with the method's net writes applied, each proven at its step |
+| I17 | A method cannot replace a map; the datum stores `(root, [], [])` only |
+
+The attack suite (`Attacks`, in `julc-state-testkit`) adds forged read values, reads claimed present when absent and
+the reverse, missing, extra, reordered and renamed write witnesses, a wrong root, and non-empty `reads`/`writes` in the
+output datum. The token's tests run all of them.
+
+## Rules and limits
+
+The processor enforces these; most of them close a way to read a value that nobody proved.
+
+- **Top-level components only.** A `MerkleMap` must be a direct component of the state record, or of an `@Owned`
+  record. A map nested inside another record, held in `@Params`, or passed as a method argument is a compile error.
+- **Never construct one or look inside.** `new MerkleMap(...)` and `new MapEntry(...)` are rejected in a contract, and
+  so are `.reads()`, `.writes()` and `.root()` on a map. Use `MerkleMaps.empty()` and the helpers.
+- **`maps` is a reserved parameter name.** The generated redeemers use it for the witnesses.
+- **Not combined yet** (each is a compile error):
+  - `@Batched` actions in a contract with map state (each step of a batch would need its own claim);
+  - an `@Invariant` that reads a state or owned record holding maps (on chain only the read set is visible);
+  - `@Reads` of another contract whose state holds maps;
+  - `@Migrate` and `@MigrateTo`;
+  - maps in the shared state of a contract with `@Owned` objects. Put them in the owned records instead (see
+    [Owned objects](/contracts/owned-objects/#merklemaps-inside-objects)).
+- **Bytes and integers only.** Keys and values are `byte[]`; the integer helpers store non-negative values.
+- **Proof cost grows with the keys touched,** and slowly with the map's size. There is no per-call cap besides the
+  transaction budget.
+
+<Aside type="caution" title="A destroy discards the map">
+When an instance ends, its map ends with it. The processor warns on every contract with maps and a `@Destroy` (and on
+every `@OwnedDestroy` of a record with maps). Check `MerkleMaps.isEmpty(...)` in the destroy's rules unless losing the
+contents is what you want. The token refuses to close while tokens are out:
+
+```java
+@Destroy
+@SignedBy("admin")
+public static JulcList<Payout> close(State s, Ctx ctx) {
+    Require.that(s.supply().compareTo(BigInteger.ZERO) == 0 && MerkleMaps.isEmpty(s.balances()),
+            "tokens are still in circulation");
+    return Payouts.of(s.admin(), ctx.balance());
+}
+```
+
+A destroy still opens the maps, so it needs a verifier withdrawal and a claim even when it reads nothing. A call that
+reads and writes no entry builds that claim from the root alone, without the mirror (ADR-0012 r4).
+</Aside>
+
+## MerkleMaps with native assets
+
+A contract may hold native assets and MerkleMaps together (ADR-0014 D2): maps live in the datum, assets in the value,
+and each is checked as usual. The `locker` example holds one token for many users and keeps each user's balance in a
+map:
+
+```java title="examples/locker/src/main/java/org/julclang/state/examples/locker/Locker.java"
+@StateContract(assetSlots = 2)
+public class Locker {
+
+    public record State(byte[] admin, byte[] tokenPolicy, byte[] tokenName, BigInteger total, MerkleMap balances) {}
+
+    public record Locked(State state, Value accepted) {}
+
+    /** Locks {@code qty} of the token for the caller. */
+    @Action
+    @Payable
+    public static Locked lock(State s, BigInteger qty, Ctx ctx, Funds funds) {
+        Require.that(qty.signum() > 0, "lock a positive amount");
+        Require.that(ctx.received().signum() == 0, "the locker takes the token, not ADA");
+        BigInteger had = MerkleMaps.getInt(s.balances(), ctx.caller(), BigInteger.ZERO);
+        return new Locked(new State(s.admin(), s.tokenPolicy(), s.tokenName(), s.total().add(qty),
+                MerkleMaps.putInt(s.balances(), ctx.caller(), had.add(qty))), Assets.of(s.tokenPolicy(), s.tokenName(), qty));
+    }
+}
+```
+
+<Aside type="caution" title="Watch the script size">
+A contract with maps and assets carries both sets of generated helpers. The examples come to 14.3 KB (an instance)
+and 14.4 KB (owned objects), under the 16 KB reference-script limit but close to it (ADR-0014 §3). See
+[Fees and script size](/contracts/fees-and-size/).
+</Aside>
+
+## Off chain: the mirror
+
+To call a map contract, the runtime needs the map's contents: the *mirror*, an off-chain MPF whose root matches the
+datum. You rarely touch it directly.
+
+- **On the JVM** the default node store is RocksDB at `./.joust/mpf`. Set another with `StateRuntime.Builder.mapStore`
+  or `mapStorePath`; tests use `-Djoust.mapStore=memory`. A runtime that has never seen a map rebuilds it from the
+  chain history: the claims in the instance's verifier redeemers, replayed from the empty root, each new root checked.
+  The token's DevKit test calls the map from a fresh in-memory store to show it.
+- **In JavaScript** the mirror uses Aiken's MPF library, cached with `level` (LevelDB in Node, IndexedDB in a page),
+  and is rebuilt from history the same way. The runtime engine takes proofs from it and checks every one against the
+  on-chain root.
+
+[MerkleMap mirrors](/apps/map-mirrors/) covers stores, caching and rebuilding in detail.
+
+### Views and tests
+
+A `@View` on map state runs on the JVM with the mirror bound, without a transaction: `token.balanceOf(pkh)` in the
+generated Java client. Outside a JOUST call no mirror is bound, so calling a map method directly in a plain unit test
+throws `IllegalStateException` ("no ReadSource is bound"). Run it through `MerkleSupport` or the harness, as
+[`TokenTest`](https://github.com/bloxbean/joust/blob/main/examples/token/src/test/java/org/julclang/state/examples/token/TokenTest.java)
+does:
+
+```java title="examples/token/src/test/java/org/julclang/state/examples/token/TokenTest.java"
+/** Runs {@code method} on {@code current} as the runtime does: reads from the mirror, then witnesses. */
+MerkleSupport.Prepared<Token.State> call(Token.State current, Function<Token.State, Token.State> method) {
+    var ms = new MerkleSupport(store);
+    Token.State next = ms.run(() -> method.apply(current));
+    return ms.prepare(h.policy(), Token.State.class, current, next, StateHarness.LIVE_REF);
+}
+```
+
+## Costs
+
+From the harness (examples/README.md), per script execution. The token's validator is 11,718 bytes; the shared
+`MapVerifier` is 4,700 bytes and read by reference.
+
+| Token call | Scripts | CPU | Memory |
+|---|---|---|---|
+| create | MINT + verifier | 121.2M + 32.0M | 366k + 138k |
+| mint (1 read, 1 write) | SPEND + verifier | 156.2M + 336.5M | 483k + 1,277k |
+| transfer (2 reads, 2 writes) | SPEND + verifier | 218.4M + 502.3M | 707k + 1,901k |
+| transfer, 203 holders in the map | SPEND + verifier | 218.4M + 742.4M | 707k + 2,923k |
+
+A transaction may use 10,000M CPU and 14M memory on mainnet.
+
+## Pitfalls
+
+- **Forgetting to remove emptied keys.** A zero stays present. Remove it, or `isEmpty` never becomes true and a
+  destroy guarded by it can never run.
+- **Assuming parallel writers.** Two users writing the same instance at once still contend. Use owned objects with
+  their own maps, or shard across instances.
+- **Comparing keys with `==` or `.equals`.** Use `ByteStringLib.equals` for `byte[]` in contract code; the helpers
+  already do.
+- **Losing the mirror on the JVM.** A missing store is rebuilt from the chain, but that takes one history read per
+  map. Keep the RocksDB directory in production.
+
+## Reference
+
+- [`MerkleMaps` and `MerkleMap` in the State API reference](/reference/state-api/)
+- ADR-0002 (MerkleMaps, the map verifier), ADR-0014 (namespaced claims, maps with assets), ADR-0015 §13.12 (mirrors):
+  [Architecture decisions](/project/architecture-decisions/)
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Tutorial: token balances in a MerkleMap" href="/tutorials/token-merklemap/" description="Build, run and call the token from Java and from a page." />
+  <LinkCard title="MerkleMap mirrors" href="/apps/map-mirrors/" description="Stores, caches and rebuilding a map from the chain." />
+  <LinkCard title="Owned objects" href="/contracts/owned-objects/" description="Per-user UTxOs, each of which can hold its own MerkleMap." />
+  <LinkCard title=".jsc" href="/languages/jsc/" description="Map<Key, Int> fields in the contract language." />
+</CardGrid>

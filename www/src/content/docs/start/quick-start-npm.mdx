@@ -1,0 +1,249 @@
+---
+title: "Quick start: npm & JavaScript"
+description: Create a JOUST app with npm only, build and deploy its Counter contract on Yaci DevKit, and use it from a test and a browser page.
+---
+
+import { Aside, Steps, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This page takes you from an empty folder to a Cardano contract you can call from a test and from a browser page, with
+Node and npm only: no JDK, no Gradle, no GraalVM. The contract is written in Java, but `joust build` compiles it with a
+toolchain engine that runs as WebAssembly in Node.
+
+You will:
+
+- create a project with `npm create joust`;
+- build its `Counter` contract into a validator and a typed JavaScript client;
+- deploy it on a local network (Yaci DevKit) and call it from a test;
+- open the page, connect a wallet and call the contract from the browser.
+
+## Prerequisites
+
+- **Node 22 or newer.** The engines need Wasm exception references, which the runtime switches on itself on Node 22.
+- **Yaci DevKit**, a local Cardano network, started with its indexer, Yaci Store:
+
+  ```sh
+  yaci-devkit up --enable-yaci-store
+  ```
+
+  This gives a Blockfrost-compatible chain API on `http://localhost:8080/api/v1`, DevKit's admin API (slot clock,
+  faucet) on `:10000`, and the Yaci Viewer explorer on `http://localhost:5173`.
+- **The JOUST npm packages**, from a local registry until they are published (see below).
+
+<Aside type="caution" title="Pre-release: the npm packages come from a local registry">
+
+`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client` and `create-joust` are **not on npmjs.org
+yet**. Until they are, publish them to a local registry from a JOUST checkout:
+
+```sh
+# in a JOUST checkout: builds both Wasm engines, then publishes the four packages to http://127.0.0.1:4873/
+./gradlew npmPublishLocal -PgraalvmHome=/path/to/graalvm
+# later, with the engines already built:
+bash js/publish-local.sh
+```
+
+The script starts [Verdaccio](https://verdaccio.org/) with `js/verdaccio/config.yaml` if no registry answers on
+`:4873`, so `verdaccio` must be on your `PATH`. Building the engines is the only step that needs a JDK and GraalVM;
+your app never does. Every other package is proxied from npmjs.org, so one registry setting is enough:
+
+```sh
+export npm_config_registry=http://127.0.0.1:4873/
+```
+
+</Aside>
+
+## Create and build the app
+
+<Steps>
+
+1. **Create the project.** The package version is part of the command until the packages are published:
+
+   ```sh
+   npm create joust@0.1.0-pre1-snapshot my-app
+   cd my-app
+   npm install
+   ```
+
+   `create-joust` copies its template and names the package after the folder. It refuses a folder that is not empty.
+
+2. **Build the contract.**
+
+   ```sh
+   npm run build
+   ```
+
+   `joust build` compiles every `.java` and `.jsc` file under `contracts/` into `build/joust/`:
+
+   ```txt
+   app.Counter: 5624 bytes, hash 572399fa2a90a0452c3b29da48af6b90905ac8cfb503e1af803c942c, 4 transitions
+   built 1 contract(s) into build/joust in 1201 ms
+   ```
+
+   The size and hash depend on the contract and on the toolchain's version. The four transitions are the contract's
+   four methods (`init`, `increment`, `reset`, `close`), compiled so the runtime engine can run them off chain.
+
+3. **Deploy it on DevKit.**
+
+   ```sh
+   npm run deploy
+   ```
+
+   `joust deploy` publishes the validator as a **reference script**: a UTxO that carries the script, so later
+   transactions point to it instead of including it. (A UTxO, an *unspent transaction output*, is a coin on Cardano:
+   an address, a value and optional data. See the [glossary](/reference/glossary/).) On DevKit it pays with a key it
+   makes and keeps in `.joust/devkit-wallet.json`, topped up from DevKit's faucet. It writes what it published to
+   `build/joust/deployments.devkit.json`:
+
+   ```json title="build/joust/deployments.devkit.json"
+   {
+     "network": "devkit",
+     "networkId": 0,
+     "chain": "http://localhost:8080/api/v1",
+     "clock": { "zeroSlot": 0, "zeroTimeMs": 1793975371000, "slotLengthMs": 1000 },
+     "contracts": {
+       "app.Counter": {
+         "contract": "app.Counter",
+         "policy": "572399fa2a90a0452c3b29da48af6b90905ac8cfb503e1af803c942c",
+         "address": "addr_test1wptj8x0692g2q3fv8v5a5j90dwgfqkkge76s8cd0sq7fgtq9nldys",
+         "networkId": 0,
+         "referenceScripts": ["1e4834390dae0f76de76b65d83b0f15fd99b7eb7d2e1da50e0cb1e7c10bd15c0#0"]
+       }
+     }
+   }
+   ```
+
+4. **Run the test.**
+
+   ```sh
+   npm test
+   ```
+
+   `test/counter.test.js` makes a fresh DevKit wallet, funds it from the faucet, creates a counter, increments it by 5
+   and by 2, checks that the count is 7, checks that the contract refuses an increment of 0, and closes the counter.
+   Each call is prepared by the runtime engine in Node, verified, signed by the test's key and submitted.
+
+</Steps>
+
+## The project
+
+<FileTree>
+
+- contracts/
+  - app/
+    - Counter.java the contract: a state record and pure static methods
+- page/
+  - index.html the Counter page
+  - main.js the page's code: wallet, review dialog, calls
+  - engine.worker.js the runtime engine, in a Web Worker
+- test/
+  - counter.test.js a Node test on DevKit
+- build/ written by joust build and joust deploy
+  - joust/
+    - Counter.js the typed client, with the contract's description pinned
+    - Counter.d.ts its TypeScript types
+    - Counter.json the description
+    - Counter.plutus the compiled validator (CBOR hex)
+    - contracts.json what the runtime engine needs
+    - deployments.devkit.json what joust deploy published
+    - joust.lock.json the versions that built it
+- joust.config.json contracts, output and networks
+- vite.config.js the page's Vite config, with @julclang/joust/vite
+- package.json
+
+</FileTree>
+
+The contract is ordinary Java in the subset JuLC compiles: a `State` record and static methods marked `@Init`,
+`@Action`, `@Destroy` and `@View`. The [Counter dApp tutorial](/tutorials/counter-dapp/) walks through it and every
+other file here. `package.json` holds these scripts:
+
+| Script | Runs | What it does |
+|---|---|---|
+| `npm run build` | `joust build` | compile `contracts/` into `build/joust/` |
+| `npm run deploy` | `joust deploy` | publish the reference scripts on the config's network (DevKit) |
+| `npm run deploy:preview` | `joust deploy --network preview` | the same on the preview testnet |
+| `npm test` | `node --test test/*.test.js` | the Node tests |
+| `npm run dev` | `joust dev` | build, deploy, serve the page; rebuild and redeploy on save |
+| `npm run dev:preview` | `joust dev --network preview` | the same on preview |
+| `npm run build:page` | `vite build` | the page as static files in `dist/` |
+| `npm run build:page:preview` | `vite build --mode preview` | the same, for preview |
+| `npm run serve` | `joust serve` | serve `dist/` with the chain API at `/chain` |
+| `npm run serve:preview` | `joust serve --network preview` | the same on preview |
+
+## Open the page
+
+```sh
+npm run dev
+```
+
+`joust dev` attaches to DevKit, builds and deploys, then serves the page at **http://127.0.0.1:5178**. It keeps
+watching `contracts/`: save `Counter.java` and it rebuilds and redeploys.
+
+<Steps>
+
+1. Wait for the activity log to say *Runtime engine ready*. The page loads JOUST's runtime engine (about 20 MB of
+   Wasm) into a Web Worker once per page load, and prepares its own transactions with it.
+
+2. Choose **DevKit key (in this page)** and press **Connect**. Browser wallets cannot join a private devnet, so on
+   DevKit the page offers a key it keeps in `localStorage`. Press **Top up 1000 ADA** to fund it from the faucet.
+
+3. Press **Create a counter**. A dialog shows what the page checked in the prepared transaction: the redeemer is this
+   call on the pinned script, what your wallet pays in all, the next state, and that nothing else is in it. Press
+   **Sign in the wallet**.
+
+4. Press **+1** a few times. Then press **+0**: the contract refuses it (`increment must be positive`) while the
+   transaction is being prepared, so no wallet is ever asked to sign.
+
+5. Press **Close**. Only the owner can close; the counter's deposit comes back to your wallet.
+
+</Steps>
+
+Each transaction hash in the log links to Yaci Viewer, DevKit's explorer.
+
+## Build the page as static files
+
+```sh
+npm run build:page   # vite build -> dist/
+npm run serve        # dist/ at http://127.0.0.1:5178, with the chain API at /chain
+```
+
+A build is for one network: the network, its deployments, the contracts and the engine's integrity hashes are inlined
+into the page, and the engine's two files are copied into `dist/joust/engine-<id>/`. `joust serve` serves `dist/` as
+plain files, adds the chain API at `/chain` (and DevKit's faucet), and does nothing else: no build, no deploy, no
+prepare service. See [Pages](/apps/pages/).
+
+<Aside type="note">
+DevKit's slot clock changes when DevKit restarts. After a restart, run `npm run deploy` and `npm run build:page`
+again.
+</Aside>
+
+## Try it on preview with Eternl or Lace
+
+Preview is a public Cardano testnet, so real browser wallets work there. You need a Blockfrost project id for
+preview and a funded preview key to pay the deployment:
+
+```sh
+export BLOCKFROST_PREVIEW_PROJECT_ID=preview...   # stays in the dev server; never reaches the page
+export JOUST_MNEMONIC="..."                       # a funded preview key that pays the deployment
+npm run dev:preview
+```
+
+Switch Eternl or Lace to preview, reload the page, choose it in the wallet list and connect. The
+[Deploy to preview](/tutorials/deploy-preview/) tutorial covers this and static hosting step by step.
+
+## What you just used
+
+- **The toolchain engine** (in `@julclang/joust`) compiled Java to a Cardano validator, a description and a typed
+  client, in Node.
+- **The runtime engine** (in `@julclang/joust-runtime`) prepared each transaction from the chain, in Node for the test
+  and in a Web Worker for the page. It holds no keys.
+- **The page verifier** (in `@julclang/state-client`) checked every prepared transaction against the contract's
+  description and the chain before the wallet was asked to sign.
+- **The validator** re-ran each method on chain and checked that the new state is what the method computes.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="A counter dApp in the browser" href="/tutorials/counter-dapp/" description="Every file of the template, and what the page checks." />
+  <LinkCard title="Your first contract" href="/start/first-contract/" description="Write your own state record and actions." />
+  <LinkCard title="Deploy to preview" href="/tutorials/deploy-preview/" description="From DevKit to a public testnet and a real wallet." />
+  <LinkCard title="How JOUST works" href="/start/how-it-works/" description="One method, run off chain and on chain." />
+</CardGrid>

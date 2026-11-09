@@ -1,0 +1,845 @@
+---
+title: AI starter pack
+description: Everything an AI agent needs to write correct JOUST contracts and clients on the first try. Ingest this file before generating JOUST code.
+---
+
+**Read this entire document before generating any JOUST code.** It states what JOUST is, the shapes the annotation
+processor accepts, the subset of Java that compiles on chain, the rules that keep the off-chain and on-chain runs in
+agreement, complete examples taken from the tested contracts in the repository, and the errors agents most often cause.
+Follow it literally. When something you need is not here, look it up in `https://joust.julc.dev/llms-full.txt` or
+`https://joust.julc.dev/ai/catalog.json`; never invent an annotation, class, method or option.
+
+This pack is written for machine ingestion. For people, start at [How JOUST works](/start/how-it-works/).
+
+---
+
+## 1. What JOUST is
+
+- JOUST (Java On UPLC STate, said "jowst") is a framework for Cardano smart contracts. A contract is a **state record
+  plus pure static methods**: `@Init` creates an instance, `@Action` returns the next state, `@Destroy` ends an
+  instance and returns payouts, `@View` reads.
+- The **same method runs twice**. Off chain (on the JVM, or the Wasm engine in Node or a browser worker) it computes
+  the next state and the client builds the transaction. On chain, JuLC compiles it to UPLC and the generated validator
+  re-runs it and requires the output datum to equal the result.
+- Therefore contract code must give the **same answer in both runs**. Every rule in section 7 exists for that reason.
+- The annotation processor generates, per contract `X`:
+  - `XValidator`: a JuLC multi-validator (mint and spend, plus other purposes when used), compiled to UPLC.
+  - `XClient`: a typed Java client on cardano-client-lib (CCL).
+  - a description, `META-INF/joust/<package>.X.json` (CIP-57 plus `x-joust`), from which typed JavaScript clients are
+    generated.
+- The generated validator enforces, without your code: one-shot thread token per instance; exactly one continuing
+  output at the same address holding the token; inline datum equals the method's result; exact value (no token dust);
+  a verified `Ctx` (caller signed, received, balance, validity bounds); payouts tagged against double satisfaction; the
+  token burned on destroy; the datum within `maxDatumBytes`.
+- Two languages for contracts: **Java** (a `@StateContract` class) and **.jsc** (a compact contract language lowered to
+  a Java `@StateContract` at build time). Clients: Java (`XClient`) or JavaScript (`X.js`, plus `X.d.ts`).
+- Built on JuLC (Java to UPLC compiler, julc.dev) and cardano-client-lib `0.8.0-pre7`. Plutus V3.
+- Status: pre-release. Maven snapshots `0.1.0-pre1-<sha7>-SNAPSHOT` are in `https://repo.bloxbean.org/maven/snapshots`.
+  The npm packages (`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are not on
+  npmjs.org yet; they install from a local registry (`bash js/publish-local.sh` in a JOUST checkout).
+
+## 2. Project structures
+
+### 2.1 Gradle (JDK 25)
+
+```text
+my-app/
+├── build.gradle
+└── src/
+    ├── main/java/com/example/Counter.java     # the contract: the only file you write per contract
+    ├── main/jsc/com/example/Jar.jsc           # optional .jsc contracts (need the generateJsc task)
+    └── test/java/com/example/CounterTest.java # JVM tests + StateHarness tests
+```
+
+```groovy title="build.gradle"
+repositories {
+    mavenCentral()
+    mavenLocal()     // JuLC with ADR-071, built by .github/ci/build-julc.sh until it is published
+    maven {
+        url = uri('https://repo.bloxbean.org/maven/snapshots')
+        mavenContent { snapshotsOnly() }
+    }
+}
+dependencies {
+    implementation "org.julclang:julc-state-runtime:$joustVersion"
+    annotationProcessor "org.julclang:julc-state-processor:$joustVersion"
+    annotationProcessor "org.julclang:julc-state-api:$joustVersion:onchain"   // on-chain sources for JuLC
+    annotationProcessor "org.julclang:julc-annotation-processor:$julcVersion"
+    testImplementation "org.julclang:julc-state-testkit:$joustVersion"
+}
+```
+
+Inside the JOUST repository the same three processor-path entries are `project(':julc-state-processor')`,
+`libs.julc.annotation.processor` and `project(path: ':julc-state-api', configuration: 'onchainSources')`.
+
+Build outputs for `com.example.Counter`:
+- `build/generated/sources/annotationProcessor/java/main/com/example/CounterValidator.java` and `CounterClient.java`;
+- `build/classes/java/main/META-INF/plutus/CounterValidator.plutus.json` (the compiled script);
+- `build/classes/java/main/META-INF/joust/com.example.Counter.json` (the description).
+
+Processor options (`options.compilerArgs += [...]`): `-Ajoust.portable=true` generates `CounterPortable` (experimental,
+for the Wasm engine); `-Ajulc.blueprint=false` is required for contracts with `@Votes` or `@Propose` handlers.
+
+### 2.2 npm (Node 22+, no JDK)
+
+`npm create joust@0.1.0-pre1-snapshot my-app` (with `npm_config_registry=http://127.0.0.1:4873/` while the packages are
+unpublished) produces:
+
+```text
+my-app/
+├── contracts/app/Counter.java   # contracts: .java or .jsc, any package
+├── joust.config.json            # contracts dir, out dir, default network, networks
+├── package.json                 # scripts: build, deploy, dev, build:page, serve, test
+├── page/index.html, main.js, engine.worker.js   # the browser page; the engine runs in a Web Worker
+├── test/counter.test.js         # node --test, against Yaci DevKit
+└── vite.config.js
+```
+
+```json title="joust.config.json"
+{
+  "contracts": "contracts",
+  "out": "build/joust",
+  "network": "devkit",
+  "networks": {
+    "devkit": { "chain": "http://localhost:8080/api/v1", "admin": "http://localhost:10000", "networkId": 0 }
+  }
+}
+```
+
+Commands: `npx joust build` (contracts to `build/joust/`: per contract `<Name>.json` description, `<Name>.plutus`,
+`<Name>.js` typed client, `<Name>.d.ts`; plus `contracts.json`), `npx joust deploy [--network n]` (publishes the
+reference scripts, writes `build/joust/deployments.<network>.json`), `npx joust dev` (build, deploy, serve the page,
+rebuild on save), `npx joust serve`. Networks `devkit` and `preview` are built in; preview reads the Blockfrost project
+id from `BLOCKFROST_PREVIEW_PROJECT_ID` and the deployer from `JOUST_MNEMONIC`.
+
+Local network: `yaci-devkit up --enable-yaci-store` (Yaci Store API on `:8080`, admin API on `:10000`).
+
+## 3. The contract model
+
+### 3.1 Class shape
+
+```java
+@StateContract(maxDatumBytes = 128)          // a public top-level class
+public class Counter {
+    public record State(BigInteger count, byte[] owner) {}   // the state: the type @Init returns
+    @Init    public static State init(Ctx ctx) { ... }                              // exactly one
+    @Action  public static State increment(State s, BigInteger by) { ... }          // any number
+    @Destroy public static JulcList<Payout> close(State s, Ctx ctx) { ... }         // should exist
+    @View    public static BigInteger count(State s) { ... }                        // off-chain reads
+}
+```
+
+- Every contract method is `public static`, not generic, uniquely named (no overloading).
+- A method has exactly one kind: `@Init`, `@Action`, `@Destroy`, `@View`, `@OwnedInit`, `@OwnedAction`,
+  `@OwnedDestroy`, or a purpose handler (`@Withdraw`, `@Certify`, `@Votes`, `@Propose`). Modifiers
+  (`@Payable`, `@OnlyOwner`, `@SignedBy`, `@ValidAfter`, `@ValidBefore`, `@Quorum`, `@AuthorizedBy`, `@Batched`,
+  `@Receives`, `@MigrateTo`, `@Admits`) go on top of a kind.
+- Plain `static` helper methods without an annotation are allowed (they are compiled on chain too).
+- The state record is the return type of `@Init`. Its name is free (`State`, `Pool`, ...).
+
+### 3.2 Parameter order (enforced)
+
+| Method | Parameters, in this order |
+|---|---|
+| `@Init` | [`@Params` record], arguments..., [`Ctx`], [`Funds`] |
+| `@Action`, `@Destroy` | state, [`@Params` record], [`@Reads` foreign states...], arguments..., [`Ctx`], [`Funds`] |
+| `@OwnedInit` | [`@Shared` state], [`@Params`], arguments..., [`Ctx`], [`Funds`] |
+| `@OwnedAction`, `@OwnedDestroy` | owned record, [`@Shared` state], [`@Into` state, moves only], [`@Params`], arguments..., [`Ctx`], [`Funds`] |
+| `@View` | state, arguments... (no `Ctx`) |
+| `@Invariant` | state (or owned record), [`@Params` record]; returns `boolean` |
+
+- `Ctx` is the last parameter, or the last before `Funds`. `Funds` is always last.
+- `@Payable` needs `Ctx`. `@Destroy` needs `Ctx` (it must pay out `ctx.balance()`). `@Batched` needs `Ctx`.
+- Arguments become redeemer fields: use `BigInteger`, `byte[]`, `boolean`, records, `JulcList<...>`. Never type an
+  argument `Value` (it mis-decodes on chain): use `PlutusData` if you must.
+- Reserved parameter names: `ctx` (only for the `Ctx` parameter), `maps`, `funds`, `assetsIn`; in `@Init` also `seed`
+  and `instance`.
+- `MerkleMap`/`MapEntry` are never parameters (only state components).
+
+### 3.3 Return shapes (enforced)
+
+| Kind | Returns |
+|---|---|
+| `@Init` | the state record (its return type defines the contract's state type) |
+| `@OwnedInit` | the owned record, or a record with `state` (the owned record) and `accepted` only: a creation cannot pay out, send, mint or emit events |
+| `@Action`, `@OwnedAction` | the state, or a record with `state` and any of: `payouts` (`JulcList<Payout>`), `sends` (`JulcList<Send>`), `deposits` (`JulcList<Deposit>`), `mint` (`Value`), `accepted` (`Value`), `events` (`JulcList<E>` of event records) |
+| `@Destroy`, `@OwnedDestroy` | `JulcList<Payout>`, or a record **without** `state` and with at least one of `payouts`, `sends`, `deposits`, `mint` |
+| `@View` | any value (not `void`) |
+
+- Result record components must use exactly these names. Any other name is an error.
+- A `@Payable` method that takes `Funds` must return a record with `accepted`: exactly the native assets it takes in.
+  `accepted` without `@Payable` and `Funds` is an error.
+
+### 3.4 `Ctx` and `Funds`
+
+```java
+public record Ctx(byte[] caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo) {}
+public record Funds(byte[] policy, byte[] self, Value received, Value held, JulcList<DepositClaim> deposits) {}
+```
+
+| Field | Meaning |
+|---|---|
+| `ctx.caller()` | key hash of the caller; the generated validator requires the transaction to be signed by it |
+| `ctx.received()` | lovelace this call adds (zero unless `@Payable`) |
+| `ctx.balance()` | in an action: the contract's lovelace before the call minus the min-ADA deposit; in a destroy: everything the UTxO holds, deposit included; zero in init |
+| `ctx.validFrom()`, `ctx.validTo()` | the transaction's validity interval, POSIX ms, `[from, to)`; checked equal to the transaction's bounds, width at most `maxValidityMs` |
+| `funds.policy()` | this contract's policy id (name your own tokens with it) |
+| `funds.self()` | token name of what the method acts on (instance id, or object id) |
+| `funds.received()` | native assets the caller adds (no lovelace), empty unless `@Payable` |
+| `funds.held()` | native assets the UTxO holds before the call, without lovelace and its own thread token |
+| `funds.deposits()` | deposits from other contracts, only in a `@Receives` action |
+
+A method without `Ctx` needs no signature and is cheaper (anyone can call it).
+
+### 3.5 `@StateContract` elements
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `minAda` | `long` | `0` (computed) | lovelace locked in each state UTxO; `0` computes it from `maxDatumBytes` and `assetSlots`; a value below that is an error |
+| `maxDatumBytes` | `int` | `512` | largest datum allowed (16 to 8192); checked on chain and by the runtime |
+| `maxValidityMs` | `long` | `3600000` | widest validity interval (at least 60000) |
+| `assetSlots` | `int` | `-1` | native assets a UTxO may hold (0 to 64), for the min-ADA computation |
+| `stakeSelf` | `boolean` | `false` | stake state UTxOs to the contract's own script; needs `@Withdraw` and `@Certify` handlers |
+
+## 4. Annotations (all of them)
+
+All in `org.julclang.state.api`.
+
+| Annotation | Target | Elements | Meaning |
+|---|---|---|---|
+| `@StateContract` | class | see 3.5 | marks the contract |
+| `@Init` | method | | creates an instance (exactly one per contract) |
+| `@Action` | method | | a state transition |
+| `@Destroy` | method | | ends the instance, burns its token, pays everything out |
+| `@View` | method | | an off-chain read |
+| `@Payable` | method | | the call may receive lovelace (and assets with `Funds`); needs `Ctx` |
+| `@OnlyOwner` | method | | shorthand for `@SignedBy("owner")` |
+| `@SignedBy` | method | `String value` | signed by the key hash in the named `byte[]` field of the current state |
+| `@ValidAfter` | method | `String value` | validity interval starts at or after the time in the named state field |
+| `@ValidBefore` | method | `String value` | validity interval ends at or before the time in the named state field |
+| `@Quorum` | method | `String keys`, `String threshold` | M-of-N signatures: `keys` names a `JulcList<byte[]>` state field (strictly ascending), `threshold` a `BigInteger` field |
+| `@AuthorizedBy` | method | `String value` | a script credential (`"params.guardian"`, a `Credential` of the params) must authorise the call through a zero withdrawal |
+| `@Params` | record | | deploy-time parameters (one record per contract); each parameter set is its own script |
+| `@Invariant` | method | | `static boolean` over the state (and params), checked on every output state |
+| `@Owned` | record | | an owned object type: each object is its own UTxO |
+| `@OwnedInit`, `@OwnedAction`, `@OwnedDestroy` | method | | create, change, close an owned object |
+| `@Shared` | parameter | | the instance state, read-only by reference input, in an owned method |
+| `@Into` | parameter | | marks an `@OwnedAction` as a move of the object into another instance |
+| `@Admits` | method | `String value` (default `""`) | an instance `@Action` that admits a moved object (names the owned type when several have moves) |
+| `@Batched` | method | `boolean only` (default `false`) | the action may also run as an intent applied by a batcher; `only = true`: only as an intent |
+| `@Reads` | parameter | `String value` | another contract's state by reference input; names a `ForeignInstance` field of the params (`"params.oracle"`) |
+| `@Receives` | method | | an action that takes deposits from other contracts (needs `Funds`) |
+| `@MigrateTo` | method | `String value` | on an instance `@Destroy`: migrate to the successor whose policy is in the named `byte[]` field |
+| `@Migrate` | method | `String from` | a creation that adopts a previous contract's instance (`from = "params.previous"`) |
+| `@Withdraw`, `@Certify`, `@Votes`, `@Propose` | method | | purpose handlers: reward withdrawals, certificates, DRep votes, proposals (params-governed) |
+
+`@SignedBy`, `@OnlyOwner`, `@ValidAfter`, `@ValidBefore`, `@Quorum` and `@AuthorizedBy` read the current state, so
+they are errors on `@Init`: check `ctx.caller()` and use `Require.that` in the body instead. Full reference:
+[Annotations](/reference/annotations/).
+
+## 5. State API (signatures)
+
+```java
+// Rules
+Require.that(boolean condition, String message)            // JVM: throws RequireException(message); on chain: trace + fail
+// Time (against the whole validity interval)
+Clock.after(Ctx ctx, BigInteger t)    // ctx.validFrom() >= t
+Clock.before(Ctx ctx, BigInteger t)   // ctx.validTo() <= t
+// Payouts: lovelace to a payment key hash
+record Payout(byte[] to, BigInteger lovelace)
+Payouts.none(); Payouts.of(byte[] to, BigInteger lovelace); Payouts.add(JulcList<Payout> p, byte[] to, BigInteger lovelace); Payouts.total(JulcList<Payout> p)
+// Sends: any value, any address, any datum (needs Funds in the contract)
+record Send(Address to, Value value, OutputDatum datum)
+Sends.none(); Sends.of(Address to, Value value, OutputDatum datum); Sends.add(JulcList<Send> s, Address to, Value value, OutputDatum datum)
+Datum.inline(PlutusData d); Datum.none()
+// Native assets
+Assets.none(); Assets.of(byte[] policy, byte[] name, BigInteger q); Assets.lovelace(BigInteger q)
+Assets.add(Value a, Value b); Assets.subtract(Value a, Value b); Assets.quantity(Value v, byte[] policy, byte[] name)
+Assets.lovelaceOf(Value v); Assets.withoutLovelace(Value v); Assets.isEmpty(Value v); Assets.covers(Value a, Value b)
+// Small inline maps with byte[] keys, kept in canonical order
+SortedMaps.put(JulcMap<byte[], BigInteger> m, byte[] k, BigInteger v); SortedMaps.remove(m, k); SortedMaps.getOr(m, k, BigInteger otherwise)
+// Unbounded maps (MerkleMap state components)
+MerkleMaps.empty(); MerkleMaps.isEmpty(MerkleMap m); MerkleMaps.contains(m, byte[] key)
+MerkleMaps.get(m, byte[] key, byte[] otherwise); MerkleMaps.getInt(m, byte[] key, BigInteger otherwise)
+MerkleMaps.put(m, byte[] key, byte[] value); MerkleMaps.putInt(m, byte[] key, BigInteger value); MerkleMaps.remove(m, byte[] key)
+// Deposits into another contract's instance (ADR-0011 D3)
+record ForeignInstance(byte[] policy, byte[] instance)
+Deposits.none(); Deposits.of(ForeignInstance target, Value value, PlutusData memo); Deposits.add(...); Deposits.lovelace(JulcList<DepositClaim> d)
+```
+
+Imports: `org.julclang.state.api.*` (one class per import), `org.julclang.core.types.JulcList` and `JulcMap`,
+`org.julclang.ledger.Value`, `Address`, `Credential`, `PubKeyHash`, `OutputDatum`, `org.julclang.stdlib.lib.ByteStringLib`,
+`CryptoLib`. Full reference: [State API](/reference/state-api/).
+
+## 6. Canonical examples
+
+All Java examples are real files from `examples/` in the repository, tested on the JVM, by the harness with the attack
+suite, and on Yaci DevKit.
+
+### 6.1 Counter: actions, owner, destroy, view
+
+```java title="examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java"
+package org.julclang.state.examples.counter;
+
+import org.julclang.core.types.JulcList;
+import org.julclang.state.api.Action;
+import org.julclang.state.api.Ctx;
+import org.julclang.state.api.Destroy;
+import org.julclang.state.api.Init;
+import org.julclang.state.api.OnlyOwner;
+import org.julclang.state.api.Payout;
+import org.julclang.state.api.Payouts;
+import org.julclang.state.api.Require;
+import org.julclang.state.api.StateContract;
+import org.julclang.state.api.View;
+
+import java.math.BigInteger;
+
+@StateContract(maxDatumBytes = 128)
+public class Counter {
+
+    public record State(BigInteger count, byte[] owner) {}
+
+    @Init
+    public static State init(Ctx ctx) {
+        return new State(BigInteger.ZERO, ctx.caller());
+    }
+
+    /** Anyone can increment by a positive amount (no Ctx: no signature needed, cheaper). */
+    @Action
+    public static State increment(State s, BigInteger by) {
+        Require.that(by.compareTo(BigInteger.ZERO) > 0, "increment must be positive");
+        return new State(s.count().add(by), s.owner());
+    }
+
+    @Action
+    @OnlyOwner
+    public static State reset(State s) {
+        return new State(BigInteger.ZERO, s.owner());
+    }
+
+    @Destroy
+    @OnlyOwner
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        return Payouts.of(s.owner(), ctx.balance());
+    }
+
+    @View
+    public static BigInteger count(State s) {
+        return s.count();
+    }
+}
+```
+
+### 6.2 Vault: payable, time lock, payouts in a Result record
+
+```java title="examples/vault/src/main/java/org/julclang/state/examples/vault/Vault.java (body)"
+@StateContract(maxDatumBytes = 128)
+public class Vault {
+
+    public record State(byte[] owner, BigInteger unlockAt, BigInteger total) {}
+
+    /** An action that pays out returns the next state and its payouts. */
+    public record Result(State state, JulcList<Payout> payouts) {}
+
+    @Init
+    @Payable
+    public static State open(BigInteger unlockAt, Ctx ctx) {
+        Require.that(Clock.before(ctx, unlockAt), "unlockAt must be in the future");
+        return new State(ctx.caller(), unlockAt, ctx.received());
+    }
+
+    @Action
+    @Payable
+    public static State deposit(State s, Ctx ctx) {
+        Require.that(ctx.received().compareTo(BigInteger.ZERO) > 0, "deposit must be positive");
+        return new State(s.owner(), s.unlockAt(), s.total().add(ctx.received()));
+    }
+
+    @Action
+    @OnlyOwner
+    @ValidAfter("unlockAt")
+    public static Result withdraw(State s, BigInteger amount, Ctx ctx) {
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+        Require.that(amount.compareTo(s.total()) <= 0, "insufficient funds");
+        return new Result(new State(s.owner(), s.unlockAt(), s.total().subtract(amount)), Payouts.of(s.owner(), amount));
+    }
+
+    @Destroy
+    @OnlyOwner
+    @ValidAfter("unlockAt")
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        return Payouts.of(s.owner(), ctx.balance());
+    }
+
+    @View
+    public static BigInteger total(State s) {
+        return s.total();
+    }
+}
+```
+
+### 6.3 Token: unbounded balances in a MerkleMap
+
+```java title="examples/token/src/main/java/org/julclang/state/examples/token/Token.java (body)"
+@StateContract(maxDatumBytes = 160)
+public class Token {
+
+    public record State(byte[] admin, BigInteger supply, MerkleMap balances) {}
+
+    @Init
+    public static State create(Ctx ctx) {
+        return new State(ctx.caller(), BigInteger.ZERO, MerkleMaps.empty());
+    }
+
+    @Action
+    @SignedBy("admin")
+    public static State mint(State s, byte[] to, BigInteger amount) {
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+        BigInteger balance = MerkleMaps.getInt(s.balances(), to, BigInteger.ZERO);
+        return new State(s.admin(), s.supply().add(amount), MerkleMaps.putInt(s.balances(), to, balance.add(amount)));
+    }
+
+    /** A holder sends tokens; an emptied balance is removed from the map. */
+    @Action
+    public static State transfer(State s, byte[] to, BigInteger amount, Ctx ctx) {
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+        BigInteger fromBalance = MerkleMaps.getInt(s.balances(), ctx.caller(), BigInteger.ZERO);
+        Require.that(fromBalance.compareTo(amount) >= 0, "insufficient balance");
+        BigInteger left = fromBalance.subtract(amount);
+        MerkleMap debited = left.compareTo(BigInteger.ZERO) == 0
+                ? MerkleMaps.remove(s.balances(), ctx.caller())
+                : MerkleMaps.putInt(s.balances(), ctx.caller(), left);
+        BigInteger toBalance = MerkleMaps.getInt(debited, to, BigInteger.ZERO);   // reads the debit on a self-transfer
+        return new State(s.admin(), s.supply(), MerkleMaps.putInt(debited, to, toBalance.add(amount)));
+    }
+
+    /** The admin closes the token once everything has been burned. */
+    @Destroy
+    @SignedBy("admin")
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        Require.that(s.supply().compareTo(BigInteger.ZERO) == 0 && MerkleMaps.isEmpty(s.balances()),
+                "tokens are still in circulation");
+        return Payouts.of(s.admin(), ctx.balance());
+    }
+
+    @View
+    public static BigInteger balanceOf(State s, byte[] holder) {
+        return MerkleMaps.getInt(s.balances(), holder, BigInteger.ZERO);
+    }
+}
+```
+
+The map lives off chain (a Merkle Patricia Forestry trie); the datum holds its 32-byte root. Each call proves only the
+keys it reads and writes, and a shared withdraw-zero verifier script checks the proofs. The runtime supplies the
+proofs; your code only calls `MerkleMaps` helpers.
+
+### 6.4 Bank: owned objects beside shared state
+
+```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java (body)"
+@StateContract(maxDatumBytes = 160)
+public class Bank {
+
+    public record State(byte[] admin, boolean paused, BigInteger withdrawLimit) {}
+
+    @Owned
+    public record Account(byte[] owner, BigInteger balance) {}
+
+    public record Withdrawal(Account state, JulcList<Payout> payouts) {}
+
+    @Init
+    public static State init(BigInteger withdrawLimit, Ctx ctx) {
+        return new State(ctx.caller(), false, withdrawLimit);
+    }
+
+    @Action
+    @SignedBy("admin")
+    public static State setPaused(State s, boolean paused) {
+        return new State(s.admin(), paused, s.withdrawLimit());
+    }
+
+    /** Opens an account for the caller, with a first deposit. */
+    @OwnedInit
+    @Payable
+    public static Account open(@Shared State bank, Ctx ctx) {
+        Require.that(!bank.paused(), "the bank is paused");
+        return new Account(ctx.caller(), ctx.received());
+    }
+
+    @OwnedAction
+    @SignedBy("owner")
+    public static Withdrawal withdraw(Account a, @Shared State bank, BigInteger amount, Ctx ctx) {
+        Require.that(!bank.paused(), "the bank is paused");
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0 && amount.compareTo(bank.withdrawLimit()) <= 0,
+                "amount outside the withdrawal limit");
+        Require.that(amount.compareTo(a.balance()) <= 0, "insufficient balance");
+        return new Withdrawal(new Account(a.owner(), a.balance().subtract(amount)), Payouts.of(a.owner(), amount));
+    }
+
+    /** The owner closes the account and takes everything (works even when the bank is paused). */
+    @OwnedDestroy
+    @SignedBy("owner")
+    public static JulcList<Payout> close(Account a, Ctx ctx) {
+        return Payouts.of(a.owner(), ctx.balance());
+    }
+}
+```
+
+Owned-object rules: each `@Owned` type needs at least one `@OwnedInit` and an `@OwnedDestroy` **without** `@Shared` (the
+escape hatch: an owner can always close their object). A contract with owned objects cannot have an instance
+`@Destroy`. In an owned method `@SignedBy`/`@OnlyOwner` name fields of the owned record; without one, anyone can call it
+on anyone's object (the processor warns). The `@Shared` state is read by reference input, so owned objects never contend.
+
+### 6.5 Native assets: Funds, accepted, sends, mint (Dex)
+
+```java title="examples/dex/src/main/java/org/julclang/state/examples/dex/Dex.java (excerpt)"
+@StateContract(maxDatumBytes = 256, assetSlots = 2)
+public class Dex {
+
+    public record Pool(byte[] admin, byte[] tokenPolicy, byte[] tokenName, byte[] lpName, BigInteger lpSupply) {}
+    public record Moved(Pool state, JulcList<Payout> payouts, JulcList<Send> sends, Value mint, Value accepted) {}
+
+    /** Swaps ctx.received() lovelace for at least minOut tokens. */
+    @Action @Payable
+    public static Moved swapAdaForToken(Pool p, BigInteger minOut, Ctx ctx, Funds funds) {
+        BigInteger out = amountOut(ctx.received(), ctx.balance(), Assets.quantity(funds.held(), p.tokenPolicy(), p.tokenName()));
+        Require.that(out.signum() > 0 && out.compareTo(minOut) >= 0, "slippage: output below minOut");
+        return new Moved(p, Payouts.none(),
+                Sends.of(wallet(ctx.caller()), Assets.of(p.tokenPolicy(), p.tokenName(), out), new OutputDatum.NoOutputDatum()),
+                Assets.none(), Assets.none());
+    }
+
+    /** The enterprise address of a key: never the caller's fee-paying base address (ADR-0007 D6). */
+    static Address wallet(byte[] key) {
+        return new Address(new Credential.PubKeyCredential(new PubKeyHash(key)), Optional.empty());
+    }
+}
+```
+
+Mint your own tokens under `funds.policy()`: positive quantities in `mint` mint, negative burn
+(`Assets.subtract(Assets.none(), tokens)`). `accepted` lists exactly the native assets the call takes in.
+
+### 6.6 Params, quorum, events, invariant (Treasury)
+
+```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Treasury.java (excerpt)"
+@StateContract(maxDatumBytes = 640)
+public class Treasury {
+    @Params
+    public record Config(Credential guardian, BigInteger maxPayout) {}
+
+    public record State(JulcList<byte[]> council, BigInteger quorum, boolean frozen) {}
+
+    public sealed interface Event permits Paid, CouncilChanged, Frozen {}
+    public record Paid(byte[] to, BigInteger amount) implements Event {}
+    public record CouncilChanged(BigInteger members, BigInteger quorum) implements Event {}
+    public record Frozen(boolean frozen) implements Event {}
+
+    public record Spent(State state, JulcList<Payout> payouts, JulcList<Event> events) {}
+    public record Changed(State state, JulcList<Event> events) {}
+
+    @Init @Payable
+    public static State open(Config cfg, JulcList<byte[]> council, BigInteger quorum, Ctx ctx) {
+        return new State(council, quorum, false);
+    }
+
+    @Action @Quorum(keys = "council", threshold = "quorum")
+    public static Spent pay(State s, Config cfg, byte[] to, BigInteger amount, Ctx ctx) {
+        Require.that(!s.frozen(), "the treasury is frozen");
+        Require.that(amount.signum() > 0 && amount.compareTo(cfg.maxPayout()) <= 0, "amount out of range");
+        Require.that(amount.compareTo(ctx.balance()) <= 0, "not enough funds");
+        JulcList<Event> none = JulcList.empty();
+        return new Spent(s, Payouts.of(to, amount), none.prepend(new Paid(to, amount)));
+    }
+
+    @Action @AuthorizedBy("params.guardian")
+    public static Changed freeze(State s, boolean frozen) {
+        JulcList<Event> none = JulcList.empty();
+        return new Changed(new State(s.council(), s.quorum(), frozen), none.prepend(new Frozen(frozen)));
+    }
+
+    @Invariant
+    public static boolean reachable(State s) {
+        return s.quorum().signum() > 0 && s.quorum().compareTo(BigInteger.valueOf(s.council().size())) <= 0;
+    }
+}
+```
+
+### 6.7 A .jsc contract (Jar)
+
+```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Jar.jsc"
+package org.julclang.state.examples.dsl
+
+// A tip jar: anyone tips (also as a batched intent); the owner withdraws.
+contract Jar(maxDatumBytes = 192) {
+    state owner: Key
+    state goal: Int
+    state total: Int
+    state tips: Int
+
+    init(goal: Int) payable {
+        require goal > 0 "the goal must be positive"
+        owner = caller
+        this.goal = goal
+        total = received
+    }
+
+    action tip() payable batched {
+        require received >= 1 ada "tip at least 1 ADA"
+        total += received
+        tips += 1
+    }
+
+    // Before the goal is reached, the owner may take at most half of what the jar holds.
+    action withdraw(amount: Int) only owner {
+        require amount > 0 && amount <= balance "bad amount"
+        if total < goal {
+            require amount * 2 <= balance "before the goal, at most half"
+        }
+        pay amount to owner
+    }
+
+    destroy close() only owner {
+        pay balance to owner
+    }
+
+    view reached(): Bool = total >= goal
+}
+```
+
+### 6.8 Calling a contract from JavaScript (Node, DevKit)
+
+```js title="js/create-joust/template/test/counter.test.js (excerpt)"
+import { joustRuntime, devWallet, devkitTopUp } from '@julclang/joust-runtime';
+import { Counter } from '../build/joust/Counter.js';   // generated by `joust build`
+
+const rt = joustRuntime({ chainUrl: deployed.chain, contracts, clock: deployed.clock, networkId: deployed.networkId,
+  deployments: deployed.contracts, ttlMs: 20_000 });
+const wallet = devWallet({ chain: rt.chain, mnemonic: generateMnemonic(wordlist, 256) });
+await devkitTopUp(wallet.address, 100, config.networks.devkit.admin, { chain: rt.chain });
+
+const counter = new Counter(rt.options('app.Counter'));      // key: <package>.<Contract>
+const { instance } = await counter.deploy(wallet, {});        // runs @Init
+await instance.increment(wallet, { by: 5n });                 // args by name; Int is a BigInt
+assert.equal((await instance.state()).count, 5n);
+await assert.rejects(instance.increment(wallet, { by: 0n }), /increment must be positive/);
+await instance.close(wallet);                                 // @Destroy
+assert.equal(await instance.state(), null);                   // destroyed
+```
+
+Generated JS client shape: `new X(options)`; `x.deploy(wallet, args)` returns `{ instance, ... }`; `x.at(id)`;
+`instance.<action>(wallet, args)`; payable calls take a third argument `{ lovelace: 5_000_000n }`; `instance.state()`,
+`instance.read()`. Owned objects: `instance.<ownedInit>(wallet, args, pay)` returns `{ object }`;
+`instance.<type>(objectId)`; `instance.objects()`. Bytes and key hashes are lowercase hex strings. In a page, the
+options come from `engineWorker(...)` and a CIP-30 wallet, and every transaction is verified before the wallet signs
+(`VerificationError` otherwise).
+
+### 6.9 Calling and testing from Java
+
+```java title="examples/counter (CounterApp.java and CounterTest.java, excerpts)"
+CounterClient counter = CounterClient.deploy(runtime, alice);       // runs Counter.init on the JVM, then submits
+counter.increment(bob, BigInteger.valueOf(5));
+try {
+    counter.reset(bob);   // not the owner: rejected on the JVM, nothing is submitted
+} catch (RequireException e) { ... }
+var closed = counter.close(alice);                                   // closed.txHash(), closed.payouts()
+
+// Tests: the compiled validator, against runtime-shaped transactions, plus the attack suite
+final StateHarness<Counter.State> h = StateHarness.of(CounterClient.SPEC);
+var live = h.live(new Counter.State(BigInteger.valueOf(3), ALICE), BigInteger.ZERO);
+var next = Counter.increment(live.state(), BigInteger.TEN);
+var tx = h.act(live, new CounterValidator.Increment(BigInteger.TEN), next, null, null);
+h.assertAccepted(tx);
+Attacks.assertAllRejected(h, tx);
+h.assertRejected(h.act(live, new CounterValidator.Increment(BigInteger.TEN), new Counter.State(BigInteger.valueOf(999), ALICE), null, null), "wrong next state");
+```
+
+A payable creation takes the lovelace last: `VaultClient.deploy(runtime, alice, unlockAt, tenAda)`,
+`vault.deposit(bob, fiveAda)`.
+
+## 7. Rules (MUST)
+
+### 7.1 The JuLC subset (contract code compiles to UPLC)
+
+1. Integers are `BigInteger`. Never `int`, `long`, `short`, `byte`, `double`, `float`, `Integer`, `Long`, and never
+   `intValue()`/`longValue()`: the processor's lint rejects them ("fixed-width numbers diverge between the JVM and
+   on-chain. Use BigInteger"). Compare with `compareTo`/`signum`, never `==`. Constants: `BigInteger.ZERO`, `ONE`,
+   `TWO`, `TEN`, `BigInteger.valueOf(997)`.
+2. Data types are `record`s and `sealed interface`s with record variants. No classes with fields, no generic records,
+   no enums in contract types.
+3. Locals are immutable (declare a new local instead of reassigning); only loop accumulators may be reassigned.
+4. No `throw`, `try`/`catch`, `null`, reflection, streams, lambdas stored in variables, `Function.apply`, varargs.
+5. Call static methods through the imported simple class name (`MerkleMaps.getInt(...)`, not a fully qualified name).
+6. Read a component of a call's result through a typed local: `Account a = f(x); a.balance()`, not `f(x).balance()`.
+7. An empty list or map goes into a typed local first: `JulcList<Event> none = JulcList.empty();`,
+   `JulcMap<byte[], BigInteger> none = JulcMap.empty();`.
+8. `byte[]` is a bytestring; `boolean` and `String` (messages) are fine.
+
+### 7.2 JOUST rules
+
+1. **Never compare `byte[]` with `==` or `.equals`.** On chain they compare bytes, on the JVM references: the two runs
+   disagree. Use `ByteStringLib.equals(a, b)` (`org.julclang.stdlib.lib.ByteStringLib`).
+2. **Every rule is `Require.that(cond, "message")`.** Use a literal message; it is what the client reports.
+3. **Exactly one `@Init`**, returning the state record.
+4. **Write a `@Destroy`** (or owned objects with `@OwnedDestroy`): otherwise every instance's min-ADA deposit is locked
+   forever (the processor warns). A destroy pays out everything: `Payouts.of(owner, ctx.balance())`.
+5. **Pay out only what the contract holds.** Check `amount <= ctx.balance()` (or a tracked total), and authorise who
+   may take it (`@OnlyOwner`, `@SignedBy`, `@Quorum`, or a `ctx.caller()` check).
+6. **A method without `Ctx` can be called by anyone, unsigned.** Add `Ctx` (and an authorisation) when the caller matters.
+7. **Time:** use `Clock.after(ctx, t)` / `Clock.before(ctx, t)` or `@ValidAfter`/`@ValidBefore`; they hold for the
+   whole validity window. Never compare `validFrom`/`validTo` by hand in a way that holds only for part of it.
+8. **Inline maps in the state** (`JulcMap<byte[], BigInteger>`) must stay in canonical key order: always update them
+   with `SortedMaps.put/remove/getOr`. Never `JulcMap.insert` (it prepends, duplicates stay) and never
+   `getOrDefault` (not on chain). The runtime refuses a non-canonical state.
+9. **MerkleMap rules:** a `MerkleMap` (or `MapEntry`) only as a direct component of the state record or an owned record;
+   create with `MerkleMaps.empty()`; read and write only through `MerkleMaps` helpers; never construct one, never pass
+   one as an argument, never read `.reads()`, `.writes()` or `.root()`. A `@Destroy` should check
+   `MerkleMaps.isEmpty(...)` (the processor warns). Not combinable with `@Batched`, `@Invariant`, `@Reads` of map
+   state, `@Migrate`/`@MigrateTo`, or instance-level maps beside owned objects.
+10. **Size:** set `maxDatumBytes` to the largest state you allow; a state that grows past it fails (on the JVM first).
+    Keep scripts well under the 16 KB transaction limit (several owned types plus moves plus maps exceeded it).
+11. **Payouts go to key hashes** (paid to the key's enterprise address). A `Send` to a person must use an enterprise
+    address (`new Address(new Credential.PubKeyCredential(new PubKeyHash(key)), Optional.empty())`), never the
+    caller's fee-paying base address.
+12. **`@Batched` actions** need `Ctx`; `ctx.caller()` is the intent's owner. They cannot use `@SignedBy`, `@OnlyOwner`,
+    `@ValidAfter`, `@ValidBefore`, `@Quorum`, `@AuthorizedBy`, events, params, `@Reads`, `Funds`, sends or mint.
+    The batcher picks the order and time: take bounds (a minimum out, a maximum price) as arguments and check them. A
+    batch holds about 8 intents.
+13. **`@Params`** is one record per contract; a method takes it right after the state (first in `@Init`). `@Quorum`
+    key lists must be strictly ascending.
+14. **Native assets:** a native `Value` cannot be a loop accumulator (use recursion). Do not cast a record to
+    `PlutusData` (`(PlutusData) (Object) r` throws on the JVM); build data with `Builtins.constrData`/`bData`/`iData`.
+15. **Do not name** a method like a generated client member, or a parameter `maps`, `funds`, `assetsIn`
+    (or `seed`/`instance` in `@Init`); rename when the processor says so.
+16. **Contracts with `@Votes` or `@Propose`** need `-Ajulc.blueprint=false`.
+
+## 8. Anti-patterns
+
+```java
+// BAD: fixed-width numbers (rejected by the lint)
+int count = s.count().intValue() + 1;
+// GOOD
+BigInteger count = s.count().add(BigInteger.ONE);
+
+// BAD: reference comparison on the JVM, byte comparison on chain
+Require.that(ctx.caller() == s.owner(), "not the owner");
+Require.that(Arrays.equals(ctx.caller(), s.owner()), "not the owner");   // not on chain
+// GOOD (or simply @OnlyOwner)
+Require.that(ByteStringLib.equals(ctx.caller(), s.owner()), "not the owner");
+
+// BAD: exceptions
+if (amount.signum() <= 0) throw new IllegalArgumentException("bad amount");
+// GOOD
+Require.that(amount.signum() > 0, "amount must be positive");
+
+// BAD: reassigning a local
+BigInteger total = s.total();
+total = total.add(ctx.received());
+// GOOD
+BigInteger total = s.total().add(ctx.received());
+
+// BAD: insert prepends and keeps duplicates; key order is not canonical
+JulcMap<byte[], BigInteger> backers = s.backers().insert(ctx.caller(), amount);
+// GOOD
+JulcMap<byte[], BigInteger> backers = SortedMaps.put(s.backers(), ctx.caller(), amount);
+
+// BAD: a MerkleMap passed in, or its internals read
+public static State load(State s, MerkleMap balances) { ... }
+byte[] root = s.balances().root();
+// GOOD: only MerkleMaps helpers on the state's own component
+BigInteger b = MerkleMaps.getInt(s.balances(), who, BigInteger.ZERO);
+
+// BAD: paying out with no limit and no authorisation
+@Action public static Result take(State s, BigInteger amount, Ctx ctx) {
+    return new Result(s, Payouts.of(ctx.caller(), amount));
+}
+// GOOD: authorised and bounded
+@Action @OnlyOwner public static Result take(State s, BigInteger amount, Ctx ctx) {
+    Require.that(amount.signum() > 0 && amount.compareTo(ctx.balance()) <= 0, "bad amount");
+    return new Result(s, Payouts.of(s.owner(), amount));
+}
+
+// BAD: deadline compared against one end of the window only by hand
+Require.that(ctx.validTo().compareTo(s.deadline()) > 0, "too early");
+// GOOD
+Require.that(Clock.after(ctx, s.deadline()), "too early");
+
+// BAD: a creation guarded by a state-reading annotation (there is no state yet)
+@Init @OnlyOwner public static State init(Ctx ctx) { ... }
+// GOOD: the creator becomes the owner
+@Init public static State init(Ctx ctx) { return new State(BigInteger.ZERO, ctx.caller()); }
+```
+
+## 9. .jsc in brief
+
+A `.jsc` file is lowered to a Java `@StateContract` before compilation (the Gradle `generateJsc` task, or `joust build`
+for `.jsc` files in `contracts/`). Full reference: [.jsc reference](/languages/jsc-reference/).
+
+| Element | Syntax |
+|---|---|
+| Header | `package a.b.c` then `contract Name(maxDatumBytes = 192) { ... }`; options `minAda`, `maxDatumBytes`, `maxValidityMs` |
+| State | `state name: Type`; types `Int`, `Bool`, `Bytes`, `Key`, `Map<Key, Int>` (a MerkleMap) |
+| Methods | `init(args) mods { }`, `action name(args) mods { }`, `destroy name(args) mods { }`, `view name(args): Type = expr` |
+| Modifiers | `payable`, `only <field>`, `after <field>`, `before <field>`, `batched`, `batched only`, `open` |
+| Statements | `let x = e`, `require cond "message"`, `pay amount to key`, `if c { } else { }`, `x = e`, `x += e`, `x -= e`, `this.x = e`, `m[k] = e`, `m[k] += e`, `delete m[k]` |
+| Context | `caller`, `received`, `balance`, `validFrom`, `validTo` |
+| Functions | `min(a, b)`, `max(a, b)`, `has(m, k)`, `isEmpty(m)`, `after(t)`, `before(t)` |
+| Literals | `42`, `1_000`, `5 ada` (times 1,000,000), `#deadbeef` (bytes), `true`, `false`, `"text"` (messages only) |
+| Operators | `!`, unary `-`, `* / %`, `+ -`, `< <= > >=`, `== !=`, `&&`, `\|\|`; comparisons do not chain |
+| Comments | `// ...` |
+
+- An action that pays out needs `only <key field>`, or `open` to say anyone may call it.
+- `after(t)` and `before(t)` are allowed only as requirements (in `require`, or joined with `&&`), never negated,
+  in `||` or in an `if`.
+
+## 10. Error to fix
+
+| Message (or symptom) | Cause | Fix |
+|---|---|---|
+| `'int' in a @StateContract ... Use BigInteger` / `fixed-width arithmetic` | `int`/`long`/`double` or `intValue()` in contract code | Use `BigInteger` everywhere |
+| `a @StateContract needs exactly one @Init method, found N` | none or several `@Init` | Exactly one `@Init` |
+| `@Init must return the state record` | `@Init` returns something else | Return the state record (it defines the state type) |
+| `contract methods must be public static` | instance method or not public | `public static` |
+| `contract method names must be unique (no overloading)` | overloads | Rename |
+| `@Action must return the state (...) or a record with a 'state' component and any of ...` | wrong return type or component name | Return the state or a record with the exact component names |
+| `@Destroy needs a Ctx parameter` | destroy without `Ctx` | Add `Ctx ctx` last; pay out `ctx.balance()` |
+| `@Payable needs a Ctx parameter, to read ctx.received()` | `@Payable` without `Ctx` | Add `Ctx ctx` |
+| `Ctx must be the last parameter, or the last before Funds` | parameter order | Move `Ctx` to the end (before `Funds`) |
+| `only the first parameter may be the state` | the state passed twice or late | The state is parameter 1 |
+| `@SignedBy, @OnlyOwner, @ValidAfter and @ValidBefore check the current state, which @Init does not have` | auth annotation on `@Init` | Use `ctx.caller()` and `Require.that` in the body |
+| `a @Payable method with Funds must return a record with 'accepted' (Value)` | asset-aware payable method | Add an `accepted` component listing the assets taken in |
+| `a MerkleMap or MapEntry can only be a component of the state record` | map passed as an argument | Keep maps in the state |
+| `MerkleMap.root() in a @StateContract` | internals read | Use `MerkleMaps` helpers |
+| `@Batched cannot use @SignedBy, @OnlyOwner, @ValidAfter or @ValidBefore` | batched action with auth or time annotations | Check `ctx.caller()` and `Clock` in the body |
+| `@Batched actions and MerkleMap state cannot be combined yet` | batching plus maps | Choose one (ADR-0004 D1) |
+| `@StateContract(minAda = N) is below the M lovelace a state UTxO with a K-byte datum needs` | `minAda` too low | Remove `minAda` (computed) or raise it |
+| `owned objects of type X need an escape hatch: an @OwnedDestroy on X without @Shared` | no unconditional close | Add an `@OwnedDestroy` that does not take `@Shared` |
+| `a contract with @Owned objects cannot @Destroy its instance` | instance destroy plus owned objects | Remove the instance `@Destroy` |
+| Warning: `this @StateContract has no @Destroy method` | instances can never end | Add a `@Destroy` |
+| `RequireException: <your message>` (JVM, before submitting) | a rule failed off chain | Expected: the call is invalid; nothing was submitted |
+| `the new state is N bytes, over X's maxDatumBytes (M)` | state too large | Raise `maxDatumBytes` or bound the state |
+| `the new X state contains a map whose keys are not in canonical order` | inline map built without `SortedMaps` | Use `SortedMaps.put/remove` |
+| Works on the JVM, fails on chain on a `byte[]` check | `==`/`.equals` on `byte[]` | `ByteStringLib.equals` |
+| `Undefined variable: OutputLib` (or another stdlib class) | a rebuilt `julc-state-api` jar on the processor path of a long-lived Gradle daemon hid the library sources | Put the API on the processor path through the `onchainSources` directory artifact (in the JOUST build), not the plain jar; `./gradlew --stop` |
+| `PastHorizon` on Yaci DevKit | validity interval beyond the DevKit's short horizon | Keep the TTL short (the DevKit runtime uses 20 s, `ttlMs: 20_000` in JS) |
+
+More: [Troubleshooting](/reference/troubleshooting/).
+
+## 11. Checklist before submitting code
+
+1. Is every number `BigInteger`, compared with `compareTo`/`signum`?
+2. Is every `byte[]` comparison `ByteStringLib.equals`?
+3. Is every rule a `Require.that(cond, "literal message")`, with no `throw`, `null` or `try`?
+4. Are all locals assigned once (loop accumulators aside)?
+5. Is there exactly one `@Init`, returning the state record, and a `@Destroy` (or owned escape hatches)?
+6. Do parameters follow the order: state, [params], [reads], arguments, [`Ctx`], [`Funds`]? Does every `@Payable`,
+   `@Destroy` and `@Batched` method take `Ctx`?
+7. Does each action return the state, or a record whose component names are exactly `state`, `payouts`, `sends`,
+   `deposits`, `mint`, `accepted`, `events`?
+8. Is every payout authorised and bounded by what the contract holds?
+9. Are inline state maps updated only through `SortedMaps`, and MerkleMaps only through `MerkleMaps`?
+10. Is `maxDatumBytes` large enough for the largest state the rules allow?
+11. Does every annotation, class and method you used appear in sections 4 and 5 (or in `/ai/catalog.json`)?
+12. Did you write JVM tests for each method and each rule, and, with `julc-state-testkit`, harness tests with
+    `Attacks.assertAllRejected`? Did you run `./gradlew build` (or `npx joust build && npm test`)?
+
+If any answer is no, fix the code before you present it.

@@ -1,0 +1,292 @@
+---
+title: Architecture decisions
+description: Every JOUST architecture decision record (ADR-0001 to ADR-0015), with its status, the decision in one paragraph and the guide that covers it.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+JOUST is designed in Architecture Decision Records (ADRs), kept in [`docs/adr/`](https://github.com/bloxbean/joust/tree/main/docs/adr)
+in the repository. Each ADR states the problem, the decision, the invariants the generated code must enforce, what
+reviewers found and how it was resolved, and (once built) what the implementation taught. This page is the index:
+read it to find which ADR holds the full argument behind a rule you meet in the guides.
+
+The options are layers. Option A (one state UTxO per instance) is the base; B and C are storage strategies (maps
+in a Merkle root, one UTxO per object); D adds batching; E is a second front end; G to N widen what a contract can
+do and where its off-chain code runs. They share one State IR and one invariant list (I1, I2, ... numbered across
+ADRs), so a later ADR adds invariants to the earlier ones rather than replacing them.
+
+<Aside>
+Most ADRs went through review rounds before they were accepted. "Accepted with changes (r2)" means the first
+revision drew "request changes" from the reviewers (usually a security reviewer and Codex), and the second
+revision resolved every finding. The resolution is recorded in the ADR itself.
+</Aside>
+
+## At a glance
+
+| ADR | Decision | Status | Guide |
+|---|---|---|---|
+| [0001](#adr-0001-option-a-single-utxo-state-machine) | Option A: single-UTxO state machine | Accepted, implemented (r4) | [State and lifecycle](/contracts/state-and-lifecycle/) |
+| [0002](#adr-0002-option-b-merklemap-state) | Option B: MerkleMap state, shared verifier | Accepted with changes (r2), implemented | [MerkleMaps](/contracts/merklemaps/) |
+| [0003](#adr-0003-option-c-owned-objects) | Option C: owned objects beside shared state | Accepted with changes (r2), implemented | [Owned objects](/contracts/owned-objects/) |
+| [0004](#adr-0004-option-d-batched-intents) | Option D: batched intents | Accepted with changes (r2), implemented | [Batched intents](/contracts/batched-intents/) |
+| [0005](#adr-0005-option-e-the-jsc-language) | Option E: `.jsc`, lowered to Java | Accepted with changes (r2), implemented | [.jsc](/languages/jsc/) |
+| [0006](#adr-0006-option-f-optimistic-l2-spike) | Option F: optimistic L2 (spike) | Accepted as a spike (r2) | [Examples: rollup](/reference/examples/#rollup) |
+| [0007](#adr-0007-option-g-native-assets-minting-and-general-outputs) | Option G: native assets, minting, general outputs | Accepted with changes (r2), implemented | [Native assets, mints and sends](/contracts/assets-mints-sends/) |
+| [0008](#adr-0008-option-h-lower-fees) | Option H: lower fees, smaller scripts | Accepted (r2), implemented | [Fees and script size](/contracts/fees-and-size/) |
+| [0009](#adr-0009-option-i-params-quorum-script-callers-invariants-events) | Option I: params, quorum, script callers, invariants, events | Accepted with changes (r2), implemented | [Params, invariants and events](/contracts/params-invariants-events/) |
+| [0010](#adr-0010-option-j-every-script-purpose-and-staked-state) | Option J: every script purpose, staked state | Accepted with changes (r2), implemented | [Staking and governance](/contracts/staking-and-governance/) |
+| [0011](#adr-0011-option-k-composition) | Option K: composition, reads, deposits, migration | Accepted with changes (r2), implemented | [Reads and composition](/contracts/reads-and-composition/) |
+| [0012](#adr-0012-option-l-owned-objects-v2) | Option L: owned objects v2 | Accepted with changes (r2), implemented (r4) | [Owned objects](/contracts/owned-objects/) |
+| [0013](#adr-0013-option-m-browser-wallets-and-javascript-clients) | Option M: CIP-30 wallets, JavaScript clients | Accepted (r2); phases 1 to 3 implemented, phase 4 experimental | [Wallets](/apps/wallets/) |
+| [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
+| [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
+
+## The base
+
+### ADR-0001: Option A, single-UTxO state machine
+
+[`0001-option-a-single-utxo-state-machine.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0001-option-a-single-utxo-state-machine.md)
+· Accepted, and implemented (r4: what the implementation taught, §15)
+
+Each contract instance is one UTxO identified by a one-shot **thread token**. Its state record is the inline
+datum (INLINE storage) and the user's transaction spends it (DIRECT execution). There is **one script per contract
+type**: a JuLC `@MultiValidator` (MINT + SPEND), not parameterised by the seed, so every instance lives at the same
+enterprise script address and the token name (`blake2b_256` of the seed reference) tells instances apart. A `Ctx`
+record carries the transaction facts a method may read (`caller`, `received`, `balance`, `validFrom`, `validTo`);
+the client puts it in the redeemer and the validator checks each field against the transaction. Actions return
+their payouts (the state, or a record of the state and `JulcList<Payout>`), and payouts are tagged against double
+satisfaction. The processor builds a State IR and emits code from string templates. The first annotations were
+`@StateContract`, `@Init`, `@Action`, `@View`, `@Destroy`, `@Payable`, `@SignedBy`/`@OnlyOwner` and
+`@ValidAfter`/`@ValidBefore`, each a check you could write by hand, and every invariant is covered by the
+generated attack suite (D16). §12 lists the upstream follow-ups for JuLC and cardano-client-lib.
+
+Covered in: [State and lifecycle](/contracts/state-and-lifecycle/), [Ctx, funds and payouts](/contracts/ctx-and-funds/),
+[Security model](/contracts/security-model/), [Testing](/contracts/testing/).
+
+## Storage and execution strategies
+
+### ADR-0002: Option B, MerkleMap state
+
+[`0002-option-b-merkle-state-maps.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0002-option-b-merkle-state-maps.md)
+· Accepted with changes (r2), implemented
+
+The type chooses the storage: a `JulcMap` component stays inline in the datum, a `MerkleMap` component is stored as
+a 32-byte Merkle Patricia Forestry (MPF) root, and each call proves only the keys it touches. The JVM learns the
+access set by running the method against an off-chain mirror. Reads are proven against the old root, and writes
+are applied with proofs to compute the new root. Because a validator carrying the MPF library came to 18-19 KB
+(more than a transaction may hold), D9 moves every proof check into one shared, precompiled withdraw-zero script,
+`julc-state-verifier`'s `MapVerifier`; the contract's validator only finds and matches its claims. In the datum a
+map is always `(root, [], [])`.
+
+Covered in: [MerkleMaps](/contracts/merklemaps/), [Token balances in a MerkleMap](/tutorials/token-merklemap/),
+[MerkleMap mirrors](/apps/map-mirrors/).
+
+### ADR-0003: Option C, owned objects
+
+[`0003-option-c-owned-objects.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0003-option-c-owned-objects.md)
+· Accepted with changes (r2), implemented
+
+Per-user state (accounts, positions, tickets) should not queue behind one instance UTxO. A contract may declare an
+`@Owned` record; each owned object is its own UTxO at the contract address, holding a 29-byte object token
+(`0x4F` followed by a `blake2b_224` of its seed) and an inline datum `Holding(instance, value)`. Owned methods
+(`@OwnedInit`, `@OwnedAction`, `@OwnedDestroy`) touch only their object, so owners act in parallel, and may read
+the parent instance by reference through a `@Shared` parameter. The validator tells token kinds apart by length and
+first byte before anything else.
+
+Covered in: [Owned objects](/contracts/owned-objects/), [Bank: owned objects](/tutorials/bank-owned-objects/).
+
+### ADR-0004: Option D, batched intents
+
+[`0004-option-d-batched-intents.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0004-option-d-batched-intents.md)
+· Accepted with changes (r2), implemented
+
+For hot shared state (a pool's total, a sale's price) JOUST uses intents and a batcher. An action marked
+`@Batched` may also run as an intent: the user locks a request in their own UTxO, holding a 29-byte intent token
+(prefix `0x49`) and an `Intent(instance, owner, refund, deadline, received, call)` datum, so requests never contend.
+Anyone may then apply many intents to the instance in one transaction, in order, with refunds and change paid back.
+`@Batched(only = true)` makes an action intent-only. `Ctx` is required in a batched action. A batch is
+memory-bound at about 8 intents (§6).
+
+Covered in: [Batched intents](/contracts/batched-intents/), [Pool: batched intents](/tutorials/pool-batched-intents/).
+
+### ADR-0005: Option E, the .jsc language
+
+[`0005-option-e-jsc-dsl.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0005-option-e-jsc-dsl.md)
+· Accepted with changes (r2), implemented
+
+`.jsc` gives Solidity-style syntax (`total += received`, `balances[to] += amt`) without a new back end.
+`julc-state-dsl` parses and type-checks a `.jsc` file and **emits one Java `@StateContract` class**; everything after
+that (State IR, validator, client, lint, JuLC) is unchanged. So nothing new is trusted on chain: a DSL bug can only
+produce a contract that differs from what its author meant, and that contract is still enforced as written. The
+lowering uses SSA for reassignments and one helper per `if` arm, and each generated statement carries a comment with
+its `.jsc` line. In Gradle a `generateJsc` task runs before `compileJava`.
+
+Covered in: [.jsc](/languages/jsc/), [.jsc reference](/languages/jsc-reference/).
+
+### ADR-0006: Option F, optimistic L2 (spike)
+
+[`0006-option-f-optimistic-l2.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0006-option-f-optimistic-l2.md)
+· Accepted as a spike (r2): a design and a spike, not a product
+
+A JOUST transition is a pure Java method that already compiles to UPLC, so a one-step fraud proof is that method
+run inside an L1 validator. The spike has an off-chain payments ledger (`Ledger`, a total JuLC-subset program in
+which an invalid order is a no-op) and an ordinary JOUST contract, `Rollup`, that takes commitments with the steps
+in the redeemer, opens a challenge window, finalises, and slashes the operator's bond when a challenge re-runs
+`Ledger.step` on chain and shows a wrong post-state. §3 lists what is not built: data availability at scale,
+deposits and exits, large states and checkpoints, liveness and censorship resistance, and generation from a
+contract.
+
+Covered in: [Examples: rollup](/reference/examples/#rollup).
+
+## Widening what a contract can do
+
+### ADR-0007: Option G, native assets, minting and general outputs
+
+[`0007-option-g-assets-and-outputs.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0007-option-g-assets-and-outputs.md)
+· Accepted with changes (r2), implemented (§7)
+
+Before G a state UTxO held exactly lovelace and its thread token. G makes contracts asset-aware: a method may take
+`Funds` (what the UTxO receives and holds), keep tokens in its value, mint and burn user tokens under the contract's
+own policy (`mint`), and create general outputs with `Send` (any address, any value, any datum). The exact-value
+invariant is generalised (I3 to I26): every state UTxO's value is still exactly what the method says, and the
+lifecycle tokens never move. Each `Send` is claimed in a shared output-claim registry checked by a small
+withdraw-zero `OutputVerifier`, so no output can pay for two obligations. A method names exactly what it
+`accepted`.
+
+Covered in: [Native assets, mints and sends](/contracts/assets-mints-sends/), [DEX: native assets and LP tokens](/tutorials/dex-assets/).
+
+### ADR-0008: Option H, lower fees
+
+[`0008-option-h-fees-and-size.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0008-option-h-fees-and-size.md)
+· Accepted (r2)
+
+A call pays a size-based fee, execution units and a per-byte fee for every reference script it reads. Before H the
+generated checks dominated execution (a counter increment cost 166M CPU and 554k memory, and the validator was
+8.0 KB). H rewrites each invariant check without changing what it enforces: exact value by one `equalsData`
+against the canonical encoding, one-pass token-map lookups instead of flattening values, one shared `settle`
+helper for asset-aware transitions. The attack suite is unchanged and passes. The measured result: the generated
+checks cost 30-60 % less in plain contracts and the scripts are about 2.4 KB smaller. Stripping `Require` messages
+on chain was measured and rejected.
+
+Covered in: [Fees and script size](/contracts/fees-and-size/).
+
+### ADR-0009: Option I, params, quorum, script callers, invariants, events
+
+[`0009-option-i-params-auth-invariants-events.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0009-option-i-params-auth-invariants-events.md)
+· Accepted with changes (r2), implemented
+
+Four things hand-written validators commonly do. `@Params` declares deploy-time parameters baked into the script
+(each deployment has its own hash). `@Quorum(keys, threshold)` requires M-of-N signatures, with the keys strictly
+ascending. `@AuthorizedBy` lets a key or **another script** act as the caller, a script by a zero withdrawal with
+a bound `Approvals` redeemer (a governor). `@Invariant` methods are checked on every new state. Events are
+authenticated by putting them in the redeemer, where indexers can trust them.
+
+Covered in: [Params, invariants and events](/contracts/params-invariants-events/), [Authorization](/contracts/authorization/),
+[Multisig treasury](/tutorials/multisig-treasury/).
+
+### ADR-0010: Option J, every script purpose and staked state
+
+[`0010-option-j-script-purposes-and-staking.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0010-option-j-script-purposes-and-staking.md)
+· Accepted with changes (r2), implemented
+
+A Plutus V3 script runs for six purposes; JOUST generated only minting and spending. J adds params-governed purpose
+handlers: `@Withdraw` (reward withdrawals), `@Certify` (stake and DRep certificates), `@Votes` (voting as a script
+DRep) and `@Propose` (a proposal guardrail). `@StateContract(stakeSelf = true)` puts every state and object UTxO at
+the base address whose stake credential is the contract's own script, so locked funds earn rewards, and only
+`@Withdraw` and `@Certify` can touch the reward account. Contracts with vote or propose handlers need
+`-Ajulc.blueprint=false`.
+
+Covered in: [Staking and governance](/contracts/staking-and-governance/), [Staked vault and governance](/tutorials/staked-vault/).
+
+### ADR-0011: Option K, composition
+
+[`0011-option-k-composition.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0011-option-k-composition.md)
+· Accepted with changes (r2); D1 to D4 implemented (D3 in a follow-up, §7)
+
+On Cardano composition happens in one transaction: each script checks its own part. K adds what was missing.
+`Compose` (D1) builds one atomic transaction from several contracts' calls. `@Reads` (D2) gives a typed read of
+another contract's state, pinned by a `ForeignInstance` in the params, with token kind, address and datum shape
+checked. Deposits into another instance (D3) are accepted by the receiver: only a `@Receives` action takes them, and
+both validators check their side through the output registry. Migration (D4) is a two-sided handshake: the old
+version destroys with `@MigrateTo` and the new one adopts with `@Migrate(from = ...)`.
+
+Covered in: [Reads and composition](/contracts/reads-and-composition/), [Deposits](/contracts/deposits/),
+[Upgrades and migration](/contracts/upgrades/), [Oracle and composition](/tutorials/oracle-composition/).
+
+### ADR-0012: Option L, owned objects v2
+
+[`0012-option-l-owned-objects-v2.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0012-option-l-owned-objects-v2.md)
+· Accepted with changes (r2), implemented (§5), implementation reviewed (r3), open items closed (r4)
+
+L lifts three limits of C. A contract may have **several `@Owned` types**: the datum becomes a sealed `Holding`
+with one `Holding_<Type>` constructor per type, and each spend arm checks the token kind and then the constructor
+tag. Each type needs its own escape hatch (an `@OwnedDestroy` without `@Shared`). **Owned records may hold
+MerkleMaps.** And **objects can move between instances** with the destination's consent: a move takes an `@Into`
+parameter, and the destination admits it with an `@Admits` action in the same composed transaction.
+
+Covered in: [Owned objects](/contracts/owned-objects/).
+
+### ADR-0014: MerkleMap claims v2
+
+[`0014-maps-v2.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0014-maps-v2.md)
+· Accepted, implemented
+
+Map claims are now keyed by `(policy, owner, field)`: `MapClaim(policy, owner, field, oldRoot, reads, writes,
+newRoot)`, so a claim made for one contract can never be read by another in the same transaction. And MerkleMaps
+now work with native assets, in the state and in owned records: the runtime's asset paths run the method against
+the mirror, prepare the claims and attach the map verifier beside the output verifier.
+
+Covered in: [MerkleMaps](/contracts/merklemaps/).
+
+## Off chain: wallets, JavaScript and npm
+
+### ADR-0013: Option M, browser wallets and JavaScript clients
+
+[`0013-option-m-wallets-and-js.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0013-option-m-wallets-and-js.md)
+· Accepted (r2); phase 1 implemented (§7), phases 2 and 3 implemented with a DevKit dApp (§9), phase 4 experimental (§10)
+
+A browser user's keys sit in a CIP-30 wallet, and the page has no JVM. M adopts a build service first: the runtime
+prepares an unsigned transaction for an address-only `WalletAccount` (`Compose.prepare()` returns a `PreparedTx`),
+the wallet signs, and **the page verifies every transaction before the wallet is asked** (D2). D3 describes each
+contract for JavaScript (CIP-57 plus `x-joust`), from which `@julclang/state-client` encodes calls, verifies and
+generates typed clients (`joust-gen`); `julc-state-server` is the prepare service. Phase 4 ran a contract's Java in
+the page through GraalVM Web Image (`-Ajoust.portable=true`); ADR-0015's engines replace it.
+
+Covered in: [Wallets](/apps/wallets/), [JavaScript clients](/apps/javascript-clients/),
+[Contract description](/reference/description-format/).
+
+### ADR-0015: Option N, npm toolchain and runtime on Wasm
+
+[`0015-option-n-javascript-developer-experience.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0015-option-n-javascript-developer-experience.md)
+· Accepted (r5); milestones M0 to M4 implemented (§13)
+
+The goal: a JavaScript developer installs only Node and npm, writes a contract in `.jsc` or `.java`, and builds,
+tests, deploys and uses it with the capabilities a Java developer has. JOUST ships **two prebuilt Wasm engines**,
+built once by JOUST's release with GraalVM as embedders of `julc-wasm`: a **toolchain** that compiles contracts in
+Node, and a **runtime** that prepares transactions in Node and in the browser. There is **one runtime
+implementation**, description-driven, used by the JVM and by Wasm; the engine is a pure function of a call request
+and a chain snapshot, and all I/O stays in JavaScript. The runtime builds QuickTx `Tx` directly. Verification is
+differential: Wasm results must equal the JVM's on fixtures recorded on DevKit. §13 records each milestone: the
+fixtures (M0), the packages and local registry (M2), feature parity through npm (M3), and `joust deploy`,
+`joust dev`, the Vite plugin, the page worker, SRI, pluggable chain providers, cardano-js-sdk and MerkleMap mirrors
+(M4).
+
+Covered in: [The joust CLI and projects](/apps/cli-and-projects/), [Pages](/apps/pages/),
+[Networks and chain providers](/apps/networks-and-providers/), [MerkleMap mirrors](/apps/map-mirrors/).
+
+## Research behind the ADRs
+
+- [State-oriented contracts research](https://github.com/bloxbean/joust/blob/main/docs/research/state-oriented-contracts-research.md):
+  options A to F, the design rules and the prior art. Read it before design work.
+- [Annotation catalogue](https://github.com/bloxbean/joust/blob/main/docs/research/annotation-catalog.md): every
+  annotation proposed, and which ADR ships it.
+- [Prior-art survey](https://github.com/bloxbean/joust/blob/main/docs/research/prior-art-survey.md).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Status and roadmap" href="/project/status-and-roadmap/" description="What works today and what comes next." />
+  <LinkCard title="Security model" href="/contracts/security-model/" description="The invariants the ADRs define, as a developer meets them." />
+  <LinkCard title="Annotations" href="/reference/annotations/" description="Every annotation the ADRs introduced." />
+  <LinkCard title="Examples" href="/reference/examples/" description="The example contract behind each ADR." />
+</CardGrid>

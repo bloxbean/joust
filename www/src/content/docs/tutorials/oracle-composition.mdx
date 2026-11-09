@@ -1,0 +1,203 @@
+---
+title: Oracle and composition
+description: Run a price oracle and a shop that reads it with @Reads, then put calls to both contracts into one atomic transaction with Compose.
+---
+
+import { Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+In this tutorial you run `examples/oracle`: an `Oracle` contract that a publisher updates with a price, and a `Shop`
+that sells credits at that price. The shop reads the oracle's state with [`@Reads`](/contracts/reads-and-composition/),
+checked on chain, without spending it. Then you compose a purchase and another oracle's update into one transaction,
+and see `Compose` refuse a transaction that would spend the same instance twice.
+
+<Aside type="caution" title="Pre-release">
+JOUST is pre-release and needs a JuLC build that is not published yet: from a JOUST checkout, build it into mavenLocal
+with `bash .github/ci/build-julc.sh` (JDK 25). See [Quick start: Java](/start/quick-start-java/). You also need Yaci
+DevKit: `yaci-devkit up --enable-yaci-store`.
+</Aside>
+
+## The two contracts
+
+<Steps>
+
+1. **The oracle** stores a price and when it was set:
+
+   ```java title="examples/oracle/src/main/java/org/julclang/state/examples/oracle/Oracle.java"
+   @StateContract
+   public class Oracle {
+
+       public record State(byte[] publisher, BigInteger price, BigInteger updatedAt) {}
+
+       @Init
+       public static State open(BigInteger price, Ctx ctx) {
+           Require.that(price.signum() > 0, "price must be positive");
+           return new State(ctx.caller(), price, ctx.validFrom());
+       }
+
+       @Action @SignedBy("publisher")
+       public static State post(State s, BigInteger price, Ctx ctx) {
+           Require.that(price.signum() > 0, "price must be positive");
+           return new State(s.publisher(), price, ctx.validFrom());
+       }
+   }
+   ```
+
+   `updatedAt` is `ctx.validFrom()`, the start of the transaction's validity window, which the ledger enforces. A
+   reader can then tell how old the price is.
+
+2. **The shop pins the oracle in its params:**
+
+   ```java title="examples/oracle/src/main/java/org/julclang/state/examples/oracle/Shop.java"
+   @StateContract
+   public class Shop {
+
+       @Params
+       public record Config(ForeignInstance oracle, BigInteger maxAgeMs) {}
+
+       public record State(byte[] owner, BigInteger sold) {}
+
+       @Init
+       public static State open(Config cfg, Ctx ctx) {
+           return new State(ctx.caller(), BigInteger.ZERO);
+       }
+
+       /** Buys {@code qty} credits, paying {@code qty * price} at a price no older than {@code maxAgeMs}. */
+       @Action @Payable
+       public static State buy(State s, Config cfg, @Reads("params.oracle") Oracle.State price, BigInteger qty, Ctx ctx) {
+           Require.that(qty.signum() > 0, "buy at least one credit");
+           Require.that(ctx.validFrom().subtract(price.updatedAt()).compareTo(cfg.maxAgeMs()) <= 0, "stale price");
+           Require.that(ctx.received().compareTo(qty.multiply(price.price())) == 0, "pay exactly qty * price");
+           return new State(s.owner(), s.sold().add(qty));
+       }
+   }
+   ```
+
+   `ForeignInstance(policy, instance)` names one oracle instance of one oracle script. Because it is in `@Params`,
+   it is applied to the shop's script at deploy: a different oracle means a different shop script and address.
+   `@Reads("params.oracle") Oracle.State price` hands `buy` that oracle's current state.
+
+   *What this taught:* the trusted source is part of the reader's identity, never something a caller supplies.
+
+3. **What the shop's validator checks.** For `price`, the transaction must carry a reference input that holds exactly
+   one token of the oracle's policy, named with the 32-byte instance id, at the oracle's script address, with an
+   inline datum shaped like `Oracle.State`. Freshness is not automatic: a reference input does not run the oracle's
+   validator, so an old state stays readable. That is why `buy` checks `updatedAt` against `maxAgeMs`.
+
+</Steps>
+
+## Run it
+
+<Steps>
+
+1. **Harness tests: spoofed oracles.**
+
+   ```sh
+   ./gradlew :examples:oracle:test --tests '*ShopTest'
+   ```
+
+   [`ShopTest`](https://github.com/bloxbean/joust/blob/main/examples/oracle/src/test/java/org/julclang/state/examples/oracle/ShopTest.java)
+   buys at a fresh price, then tries every way to feed the shop a price it should not trust:
+
+   ```java title="examples/oracle/src/test/java/org/julclang/state/examples/oracle/ShopTest.java"
+   h.assertRejected(buy(fresh(), null), "no oracle reference input");
+   // ... the oracle's token at a key address; another policy's token; two tokens of the policy;
+   // a datum of another shape
+   h.assertRejected(buy(stale, oracleInput(oracleAddress(), oracleValue(), stale)), "stale price");
+   ```
+
+   Each is refused by the validator.
+
+   *What this taught:* `@Reads` checks where the state comes from; your method checks whether it is recent enough.
+
+2. **Deploy an oracle, then a shop that reads it.**
+
+   ```sh
+   ./gradlew :examples:oracle:test --tests '*OracleDevnetTest'
+   ```
+
+   ```java title="examples/oracle/src/test/java/org/julclang/state/examples/oracle/OracleDevnetTest.java"
+   var oracle = OracleClient.deploy(runtime, publisher, BigInteger.valueOf(3_000_000));
+   var cfg = new Shop.Config(new ForeignInstance(HexUtil.decodeHexString(oracle.instance().contract().policyId()),
+           HexUtil.decodeHexString(oracle.instanceId())), BigInteger.valueOf(600_000));
+   var shop = ShopClient.deploy(runtime, cfg, shopOwner);
+
+   shop.buy(buyer, BigInteger.TWO, BigInteger.valueOf(6_000_000));
+   assertEquals(BigInteger.TWO, shop.state().sold());
+   assertThrows(RequireException.class, () -> shop.buy(buyer, BigInteger.ONE, BigInteger.valueOf(2_000_000)),
+           "pays less than the oracle price");
+   ```
+
+   The oracle starts at 3 ADA. Two credits cost exactly 6 ADA; one credit for 2 ADA is refused by the JVM run before
+   anything is submitted. The client finds the oracle's UTxO and adds it as a reference input: `buy` takes only the
+   quantity and the payment.
+
+   *What this taught:* reading another contract costs the caller nothing extra to write.
+
+3. **Compose a purchase with another contract's call.**
+
+   ```java
+   // A second oracle (another instance of the same contract) posts while the shop sells: one transaction.
+   var oracle2 = OracleClient.deploy(runtime, publisher2, BigInteger.valueOf(1_000_000));
+   String tx = Compose.of(runtime, buyer)
+           .add(() -> shop.buy(buyer, BigInteger.ONE, BigInteger.valueOf(3_000_000)))
+           .add(() -> oracle2.post(publisher2, BigInteger.valueOf(5_000_000)))
+           .submit();
+   assertEquals(BigInteger.valueOf(3), shop.state().sold());
+   assertEquals(BigInteger.valueOf(5_000_000), oracle2.state().price());
+   ```
+
+   Inside `add`, each call is an ordinary client call. `Compose` runs it in capture mode, so it writes into one shared
+   transaction instead of submitting: the shop's spend with the first oracle as a reference input, the second oracle's
+   spend, both redeemers, and the signatures of the buyer and `publisher2`. It picks a validity window both calls
+   accept, runs both methods in it, checks every output after balancing, and submits once. Both happen, or neither.
+
+   *What this taught:* composition is a runtime feature; each validator still checks only its own transition.
+
+4. **Watch a composition be refused.**
+
+   ```java
+   assertThrows(JoustException.class, () -> Compose.of(runtime, buyer)
+           .add(() -> shop.buy(buyer, BigInteger.ONE, BigInteger.valueOf(3_000_000)))
+           .add(() -> shop.buy(buyer, BigInteger.ONE, BigInteger.valueOf(3_000_000)))
+           .submit(), "the same instance spent twice is refused before submitting");
+   ```
+
+   Two calls on one instance would spend the same UTxO twice. `Compose` refuses before building, as it does for two
+   mints under one policy, an empty common window, or one key signing for two calls without `allowSharedSigners()`.
+
+</Steps>
+
+## From JavaScript
+
+The npm runtime runs the same contracts, and composes the same way:
+
+```js title="js/joust-runtime/test/examples.test.js (Oracle and Shop)"
+const oracle = await contract('Oracle', publisher);
+const o = oracle.at((await oracle.deploy(publisher, { price: 3_000_000n })).instance);
+await o.call(publisher, 'post', { price: 3_000_000n });
+await assert.rejects(o.call(other, 'post', { price: 1n }));          // not the publisher
+// The shop's script carries its oracle (@Params); buy reads the oracle's state as a reference input (@Reads).
+const shop = await contract('Shop', shopOwner, { oracle: { policy: oracle.deployment.policy, instance: o.id }, maxAgeMs: 600_000n });
+const sh = shop.at((await shop.deploy(shopOwner, {})).instance);
+await sh.call(buyer, 'buy', { qty: 2n }, { lovelace: 6_000_000n });
+await assert.rejects(sh.call(buyer, 'buy', { qty: 1n }, { lovelace: 2_000_000n }), /pay exactly/);
+```
+
+To compose, pass steps to `rt.compose(wallet, steps)`, each `{ contract, method, instance, args, pay }`. A composed
+transaction is verified call by call and as a whole before the wallet signs; see
+[Reads and composition](/contracts/reads-and-composition/).
+
+## What you built
+
+- A reader whose trusted source is fixed in its script, checked on chain by token, address and datum shape.
+- A freshness rule, written by you, on top of that.
+- One transaction that calls two contracts, all or nothing.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Reads and composition" href="/contracts/reads-and-composition/" description="The rules for @Reads and everything Compose refuses." />
+  <LinkCard title="Deposits" href="/contracts/deposits/" description="Pay into another contract inside a composition." />
+  <LinkCard title="Upgrading a contract" href="/tutorials/upgrades/" description="Migration, which is also a composition." />
+  <LinkCard title="Staked vault and governance" href="/tutorials/staked-vault/" description="Staking rewards and governance handlers." />
+</CardGrid>

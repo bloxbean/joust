@@ -1,0 +1,342 @@
+---
+title: Token balances in a MerkleMap
+description: Run an account-model token whose balances live in a MerkleMap, from Java on DevKit and from a browser page that reads balances from its own mirror.
+---
+
+import { Steps, Aside, LinkCard, CardGrid, FileTree } from '@astrojs/starlight/components';
+
+In this tutorial you run `examples/token`: a fungible token in the account model, where every holder's balance sits
+in one [MerkleMap](/contracts/merklemaps/). The datum stays about 100 bytes however many holders there are. You will
+run it twice: from Java against Yaci DevKit, then from a browser page that prepares its own transactions and reads
+balances from the map's mirror in a Web Worker.
+
+You need [Yaci DevKit](/apps/networks-and-providers/) running: `yaci-devkit up --enable-yaci-store` (Yaci Store's API
+on `:8080`, the admin API on `:10000`).
+
+<Aside type="caution" title="Pre-release">
+JOUST is pre-release. The Java path needs a JuLC build that is not published yet; the npm packages are not on
+npmjs.org yet and install from a local registry. Both are covered in the steps below and in the quick starts
+([Java](/start/quick-start-java/), [npm](/start/quick-start-npm/)).
+</Aside>
+
+## The contract
+
+```java title="examples/token/src/main/java/org/julclang/state/examples/token/Token.java"
+@StateContract(maxDatumBytes = 160)
+public class Token {
+
+    public record State(byte[] admin, BigInteger supply, MerkleMap balances) {}
+
+    @Init
+    public static State create(Ctx ctx) {
+        return new State(ctx.caller(), BigInteger.ZERO, MerkleMaps.empty());
+    }
+
+    /** The admin creates new tokens for a holder. */
+    @Action
+    @SignedBy("admin")
+    public static State mint(State s, byte[] to, BigInteger amount) {
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+        BigInteger balance = MerkleMaps.getInt(s.balances(), to, BigInteger.ZERO);
+        return new State(s.admin(), s.supply().add(amount), MerkleMaps.putInt(s.balances(), to, balance.add(amount)));
+    }
+
+    /** A holder sends tokens; an emptied balance is removed from the map. */
+    @Action
+    public static State transfer(State s, byte[] to, BigInteger amount, Ctx ctx) {
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+        BigInteger fromBalance = MerkleMaps.getInt(s.balances(), ctx.caller(), BigInteger.ZERO);
+        Require.that(fromBalance.compareTo(amount) >= 0, "insufficient balance");
+        BigInteger left = fromBalance.subtract(amount);
+        MerkleMap debited = left.compareTo(BigInteger.ZERO) == 0
+                ? MerkleMaps.remove(s.balances(), ctx.caller())
+                : MerkleMaps.putInt(s.balances(), ctx.caller(), left);
+        BigInteger toBalance = MerkleMaps.getInt(debited, to, BigInteger.ZERO);   // reads the debit on a self-transfer
+        return new State(s.admin(), s.supply(), MerkleMaps.putInt(debited, to, toBalance.add(amount)));
+    }
+
+    /** A holder destroys some of their tokens. */
+    @Action
+    public static State burn(State s, BigInteger amount, Ctx ctx) {
+        BigInteger balance = MerkleMaps.getInt(s.balances(), ctx.caller(), BigInteger.ZERO);
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0 && balance.compareTo(amount) >= 0, "cannot burn that much");
+        BigInteger left = balance.subtract(amount);
+        MerkleMap updated = left.compareTo(BigInteger.ZERO) == 0
+                ? MerkleMaps.remove(s.balances(), ctx.caller())
+                : MerkleMaps.putInt(s.balances(), ctx.caller(), left);
+        return new State(s.admin(), s.supply().subtract(amount), updated);
+    }
+
+    /** The admin closes the token once everything has been burned. */
+    @Destroy
+    @SignedBy("admin")
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        Require.that(s.supply().compareTo(BigInteger.ZERO) == 0 && MerkleMaps.isEmpty(s.balances()),
+                "tokens are still in circulation");
+        return Payouts.of(s.admin(), ctx.balance());
+    }
+
+    @View
+    public static BigInteger balanceOf(State s, byte[] holder) {
+        return MerkleMaps.getInt(s.balances(), holder, BigInteger.ZERO);
+    }
+}
+```
+
+Three things to notice:
+- `balances` is a `MerkleMap`, a direct component of the state, created with `MerkleMaps.empty()`.
+- Every read and write goes through `MerkleMaps`. The methods never look at the map's internals.
+- An emptied balance is removed, so `close` can require `MerkleMaps.isEmpty(...)` and never discard live balances.
+
+## Part 1: from Java
+
+<Steps>
+
+1. **Build JuLC and check the example compiles.** From a JOUST checkout, with JDK 25:
+
+   ```sh
+   bash .github/ci/build-julc.sh     # JuLC into mavenLocal (not published yet)
+   ./gradlew :examples:token:compileJava
+   ```
+
+   The annotation processor generates `TokenValidator` (the on-chain script, compiled by JuLC) and `TokenClient` (the
+   typed Java client) under `examples/token/build/generated/`. Because the state has a MerkleMap, every redeemer
+   gains the map witnesses and the validator looks for the map verifier's claims.
+
+   *What this taught:* a MerkleMap field changes what is generated, not how you write the method.
+
+2. **Run the tests.**
+
+   ```sh
+   ./gradlew :examples:token:test
+   ```
+
+   [`TokenTest`](https://github.com/bloxbean/joust/blob/main/examples/token/src/test/java/org/julclang/state/examples/token/TokenTest.java)
+   runs each method the way the runtime does (reads from an in-memory mirror, then proofs), evaluates the compiled
+   validator against the resulting transactions, runs the attack suite on each, and attacks the map witnesses directly:
+   a forged read value, a read claimed absent, a missing or reordered write. Every one is rejected. The DevKit test,
+   `TokenDevnetTest`, runs too when DevKit is up.
+
+   *What this taught:* the same `transfer` runs on the JVM and on chain, and the proofs are what tie the two together.
+
+3. **Run the app on DevKit.**
+
+   ```sh
+   ./gradlew :examples:token:run
+   ```
+
+   [`TokenApp`](https://github.com/bloxbean/joust/blob/main/examples/token/src/main/java/org/julclang/state/examples/token/TokenApp.java)
+   deploys a token, mints 1,000 to Ann and 500 to Ben, and has Ann send Ben 250:
+
+   ```java title="examples/token/src/main/java/org/julclang/state/examples/token/TokenApp.java"
+   var token = TokenClient.deploy(runtime, admin);
+   System.out.println("token " + token.instanceId() + " deployed (script read by reference)");
+   token.mint(admin, Keys.pkh(ann), BigInteger.valueOf(1_000));
+   token.mint(admin, Keys.pkh(ben), BigInteger.valueOf(500));
+   token.transfer(ann, Keys.pkh(ben), BigInteger.valueOf(250));
+   System.out.println("ann " + token.balanceOf(Keys.pkh(ann)) + ", ben " + token.balanceOf(Keys.pkh(ben))
+           + ", supply " + token.supply());
+   ```
+
+   It prints `ann 750, ben 750, supply 1500`. Look at the transfer in Yaci Viewer (`http://localhost:5173`, under
+   the contract's address): beside the token's spend there is a zero withdrawal from the map verifier, whose redeemer
+   carries the two reads and two writes.
+   The first map call of a network also publishes the verifier's reference script and registers its stake credential.
+
+   *What this taught:* `balanceOf` is a `@View`, run on the JVM against the mirror with no transaction; the transfer
+   carries its proofs to the shared verifier.
+
+4. **Lose the mirror and carry on.** The runtime keeps the map in RocksDB at `./.joust/mpf` by default. A process
+   that never saw this map rebuilds it from the chain. The DevKit test shows it with a fresh in-memory store:
+
+   ```java title="examples/token/src/test/java/org/julclang/state/examples/token/TokenDevnetTest.java"
+   // A process that never saw this map (a restart, another machine): a fresh node store. Its mirror is rebuilt from
+   // the chain history (the claims in the map-verifier redeemers, each new root checked; ADR-0015 §13.12 M4).
+   var fresh = TokenClient.at(DevKit.runtime(new org.julclang.state.runtime.InMemoryNodeStore()), token.instanceId());
+   assertEquals(BigInteger.valueOf(240), fresh.balanceOf(Keys.pkh(holders[1])), "read through the rebuilt mirror");
+   fresh.transfer(holders[1], Keys.pkh(holders[0]), BigInteger.valueOf(40));
+   // And the first runtime, which missed that write, catches up the same way.
+   token.transfer(holders[0], Keys.pkh(holders[1]), BigInteger.valueOf(40));
+   ```
+
+   *What this taught:* the chain holds everything needed to rebuild a map; the mirror is a cache, checked against the
+   root on chain.
+
+</Steps>
+
+## Part 2: from a page
+
+Now the same contract in a browser. The page runs JOUST's runtime engine (Wasm) in a Web Worker, which prepares each
+transaction; the page verifies it before the key signs. The worker also keeps the map's mirror, in IndexedDB.
+
+<Steps>
+
+1. **Create a project.** With Node 22 or newer, and the packages published to a local registry (in a JOUST checkout:
+   `./gradlew npmPublishLocal -PgraalvmHome=...` then `bash js/publish-local.sh`, which serves them at
+   `http://127.0.0.1:4873/`):
+
+   ```sh
+   npm_config_registry=http://127.0.0.1:4873/ npm create joust@0.1.0-pre1-snapshot token-app
+   cd token-app
+   npm_config_registry=http://127.0.0.1:4873/ npm install
+   ```
+
+   The template holds a Counter contract, a page and a test.
+
+2. **Swap in the token.** Delete `contracts/app/Counter.java` and `test/counter.test.js`. Copy
+   `examples/token/src/main/java/org/julclang/state/examples/token/Token.java` to `contracts/app/Token.java` and change
+   its first line to `package app;`.
+
+   <FileTree>
+   - contracts
+     - app
+       - Token.java
+   - page
+     - index.html
+     - main.js
+     - engine.worker.js
+   - joust.config.json
+   - vite.config.js
+   </FileTree>
+
+   `npm run build` compiles it with the toolchain (no JDK) into `build/joust/`: the validator, the contract's
+   description and a typed client, `Token.js`.
+
+   *What this taught:* the npm path compiles the same Java source, through JuLC in Wasm.
+
+3. **Write the page.** Replace `page/index.html`:
+
+   ```html title="page/index.html"
+   <!doctype html>
+   <title>Token</title>
+   <h1>Token</h1>
+   <p>
+     <button id="create">Create a token</button>
+     <button id="mint">Mint 1000 to me</button>
+     <button id="send">Send 250</button>
+   </p>
+   <p>Instance: <code id="id">none</code></p>
+   <p>Mine: <b id="mine">0</b> · Theirs: <b id="theirs">0</b> · Supply: <b id="supply">0</b></p>
+   <pre id="log"></pre>
+   <script type="module" src="./main.js"></script>
+   ```
+
+   And `page/main.js`. `engine.worker.js` stays as the template has it (`import '@julclang/joust-runtime/worker';`).
+
+   ```js title="page/main.js"
+   import net from 'virtual:joust/network';
+   import { blockfrostChain } from '@julclang/state-client';
+   import { devWallet } from '@julclang/state-client/devwallet';
+   import { engineWorker } from '@julclang/joust-runtime/page';
+   import { generateMnemonic } from '@scure/bip39';
+   import { wordlist } from '@scure/bip39/wordlists/english';
+   import { Token } from '../build/joust/Token.js';
+
+   const $ = (id) => document.getElementById(id);
+   const log = (line) => { $('log').textContent = line + '\n' + $('log').textContent; };
+
+   // The chain through joust dev's /chain proxy; the engine in a worker (it holds no keys and is not trusted).
+   const chain = blockfrostChain(new URL(net.chain, location.href).href);
+   const service = engineWorker(new Worker(new URL('./engine.worker.js', import.meta.url), { type: 'module' }), net);
+   const deployment = net.deployments['app.Token'];
+   const token = new Token({ service, chain, deployment });
+
+   // An in-page DevKit key, kept across reloads (browser wallets cannot join a DevKit).
+   const mnemonic = localStorage.getItem('joust.devkitKey') ?? generateMnemonic(wordlist, 256);
+   localStorage.setItem('joust.devkitKey', mnemonic);
+   const me = devWallet({ chain, mnemonic, networkId: net.networkId });
+   const other = 'ab'.repeat(28);   // any 28-byte key hash
+   let id = localStorage.getItem('joust.token');
+
+   /** A balance from the worker's mirror: the value is an unsigned big-endian integer; an absent key is 0. */
+   async function balanceOf(root, keyHash) {
+     const hex = await service.mapValue(root, keyHash, [deployment.policy + id]);
+     return hex ? BigInt('0x' + hex) : 0n;
+   }
+
+   async function show() {
+     if (!id) return;
+     $('id').textContent = id;
+     const s = await token.at(id).state();     // { admin, supply, balances: { root, reads, writes } }
+     if (!s) return log('the token is closed');
+     $('supply').textContent = s.supply;
+     $('mine').textContent = await balanceOf(s.balances.root, me.keyHash);
+     $('theirs').textContent = await balanceOf(s.balances.root, other);
+   }
+
+   async function run(what, call) {
+     log(`${what}…`);
+     try {
+       await call();
+       log(`${what}: on chain`);
+       await show();
+     } catch (e) {
+       log(`${what}: ${e.message}`);
+     }
+   }
+
+   $('create').onclick = () => run('create', async () => {
+     await fetch('/dev/topup', { method: 'POST', body: JSON.stringify({ address: me.address, ada: 1000 }) });
+     for (let i = 0; i < 60 && !(await chain.utxosAt(me.address)).length; i++) await new Promise((r) => setTimeout(r, 1000));
+     id = (await token.deploy(me, {})).instance.id;
+     localStorage.setItem('joust.token', id);
+   });
+   $('mint').onclick = () => run('mint 1000', () => token.at(id).mint(me, { to: me.keyHash, amount: 1000n }));
+   $('send').onclick = () => run('send 250', () => token.at(id).transfer(me, { to: other, amount: 250n }));
+
+   await service.ready;
+   log('engine ready');
+   await show();
+   ```
+
+   Three calls do the map work:
+   - `token.at(id).state()` decodes the datum. The map field is just `{ root, reads, writes }`: the datum holds only
+     the root.
+   - `service.mapValue(root, key, units)` asks the worker's mirror for one key under that root. `units` is the
+     instance's token (policy plus instance id): if the mirror has never seen the root, it rebuilds the map from that
+     token's chain history first.
+   - `mint` and `transfer` look like any other call. The engine discovers the keys each method reads, asks the mirror
+     for proofs, checks every proof against the on-chain root, and attaches the map verifier.
+
+   *What this taught:* a page never needs the whole map; it asks for the keys it shows.
+
+4. **Run it.**
+
+   ```sh
+   npm run dev
+   ```
+
+   `joust dev` builds, deploys the Token (and the map verifier) to DevKit, and serves the page at
+   `http://127.0.0.1:5178`. Click **Create a token** (it tops up the in-page key first), **Mint 1000 to me**, then
+   **Send 250**. The page shows `Mine: 750 · Theirs: 250 · Supply: 1000`.
+
+5. **Reload, then try another browser profile.** Reload the page: the balances come back without reading the chain's
+   history, because the worker kept the map in IndexedDB (database `joust-mirrors`).
+
+   Now open the page in a private window, which starts with an empty IndexedDB and `localStorage`. In its console, run
+   `localStorage.setItem('joust.token', '<the instance id>')` and reload. The worker has no copy of the map, so the
+   first `mapValue` rebuilds it from the token's chain history, checking every claim against its root, and the page
+   shows `Theirs: 250 · Supply: 1000`. `Mine` is 0: the private window made itself a new key.
+
+   *What this taught:* mirrors are caches. The chain is the source of truth, and a second device catches up from it
+   without trusting anyone.
+
+</Steps>
+
+## What you built
+
+- A token whose datum is constant-size, with each call proving only the balances it touches.
+- The same Java contract driven from a JVM app and from a browser page with no JDK.
+- Balances read from a mirror that survives reloads and rebuilds itself from the chain.
+
+`js/joust/test/page.test.js` runs this flow in Chromium (its third test): a reload served from IndexedDB, a fresh
+profile rebuilding from history, and the page built as static files.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="MerkleMaps" href="/contracts/merklemaps/" description="The full API, rules and what the verifier checks." />
+  <LinkCard title="MerkleMap mirrors" href="/apps/map-mirrors/" description="Stores, caching and rebuilding in depth." />
+  <LinkCard title="Pages: worker, Vite, static builds" href="/apps/pages/" description="Ship the page as static files." />
+  <LinkCard title="Bank: owned objects" href="/tutorials/bank-owned-objects/" description="Per-user state that users change in parallel." />
+</CardGrid>

@@ -1,0 +1,204 @@
+---
+title: Wallets
+description: Connect CIP-30 browser wallets such as Eternl and Lace, review and sign JOUST transactions, use the DevKit dev wallet, and know what a wallet risks.
+---
+
+import { Aside, LinkCard, CardGrid, Steps } from '@astrojs/starlight/components';
+
+JOUST never holds a user's keys. A transaction is prepared without them, verified by the page, and signed by the
+user's wallet. To the client, a wallet is a **CIP-30 API object**: what a browser wallet extension's `enable()`
+returns. CIP-30 is the Cardano standard for dApp-to-wallet communication; JOUST's clients use six of its calls:
+
+| CIP-30 call | Used for |
+|---|---|
+| `getNetworkId()` | refusing a wallet on another network than the deployment |
+| `getChangeAddress()`, `getUsedAddresses()` | the wallet's addresses and payment keys |
+| `getUtxos()` | the wallet's UTxOs: the engine builds from them, the verifier checks against them |
+| `signTx(cbor, true)` | a witness set for the prepared transaction (partial signing) |
+| `submitTx(cbor)` | submitting the signed transaction |
+
+Anything that implements these works: Eternl, Lace, any CIP-30 extension, the dev wallet below, or your own test
+double.
+
+## Browser wallets
+
+The template's page finds the browser's wallets with the Cardano Foundation's connector,
+`@cardano-foundation/cardano-connect-with-wallet-core` (0.2.12, framework-independent). It lists the extensions,
+including those injected after the page loads, and enables the chosen one with a network check:
+
+```js title="page/main.js"
+import { Wallet, NetworkType } from '@cardano-foundation/cardano-connect-with-wallet-core';
+import { walletView } from '@julclang/state-client';
+
+// Extensions inject themselves after load, some late: list them as they arrive.
+Wallet.addEventListener('installedWalletExtensions', walletChoices);
+Wallet.startInjectWalletListener();
+
+// Connect the one the user chose (key: its name in window.cardano, such as "eternl" or "lace").
+await new Promise((resolve, reject) => {
+  Wallet.connect(key, net.networkId === 1 ? NetworkType.MAINNET : NetworkType.TESTNET, resolve, reject).catch(reject);
+});
+const api = await window.cardano[key].enable();
+const view = await walletView(api);
+if (view.networkId !== net.networkId) throw new Error(`the wallet is on network ${view.networkId}; this app is on ${net.network}`);
+```
+
+The connector only selects and enables a wallet. The verifier and the signing flow do not depend on it: any code that
+ends with a CIP-30 API object works.
+
+<Aside type="note" title="Browser wallets cannot join a DevKit">
+Eternl and Lace connect to public networks only. On Yaci DevKit, use the [dev wallet](#the-dev-wallet); for a real
+wallet, use [preview](/tutorials/deploy-preview/).
+</Aside>
+
+## What the client reads from a wallet
+
+`walletView(api)` takes a snapshot of the wallet:
+
+```js
+const view = await walletView(api);
+// { api, networkId, change, addresses, keyHashes, utxos }
+//   change      the change address (bech32)
+//   addresses   the change address and the used addresses (bech32)
+//   keyHashes   their payment key hashes (hex)
+//   utxos       Map "txHash#index" -> { address, value: Map unit -> bigint, inlineDatum, datumHash }
+```
+
+From it the client picks the **funding address**: the change address when it holds lovelace, otherwise the wallet
+address holding the most. The request to the service carries that address and `walletUtxos`, the UTxOs the wallet
+itself reports there. The engine builds only from those, so it never spends an input the wallet does not know about.
+This matters on public networks: chain APIs behind load balancers can lag one another, and a wallet keeps its own
+index.
+
+Payouts to the caller go to the funding address too. A contract may also send to the caller's key
+(`ctx.caller()`): the verifier counts the enterprise address of one of the wallet's own payment keys as the
+wallet's, so such an output is allowed. A wallet key under someone else's stake key is not.
+
+## Signing and submitting
+
+<Steps>
+
+1. The client verifies the prepared transaction. A refusal throws `VerificationError`; the wallet is not asked.
+2. It calls `onReview` (below), if the client has one.
+3. It asks the wallet for a witness set: `signTx(cbor, true)`. Co-signers' wallets, if the call has any, sign the
+   same transaction.
+4. It adds the witnesses to the **original** transaction bytes (`assemble`), refusing any change to the body, and
+   checks that the signed transaction's hash is the one it computed before signing.
+5. It submits through the user's wallet (`submitTx`) and checks the hash the wallet returns.
+6. It waits for the chain view to show the transaction (`awaitTx`).
+
+</Steps>
+
+Because the body bytes never change after verification, the wallet signs exactly the transaction the page checked.
+
+## The review step
+
+`onReview` runs after verification and before the wallet is asked. It is your place to show the user what the
+transaction does, in your app's terms. Resolve to go on; throw to cancel.
+
+```js
+const counter = new Counter({ service, chain, deployment, onReview: async ({ contract, call, report, txHash }) => {
+  // call:   { kind, meta (the description's entry), args, pay, instance?, object? }
+  // report: { fee, walletNet, next, redeemer, created, outputs, ... }
+  if (!confirm(`${contract}.${call.meta.name}: your wallet pays ${report.walletNet} lovelace (fee ${report.fee})`)) {
+    throw new Error('cancelled before signing');
+  }
+} });
+```
+
+The [Counter dApp tutorial](/tutorials/counter-dapp/#6-the-review-dialog) shows the template's dialog. The wallet
+shows its own prompt as well; the review step adds what only the page knows: which contract, which call, the next
+state.
+
+## Co-signers
+
+Methods with `@Quorum` or `@AuthorizedBy` need other keys to sign ([Authorization](/contracts/authorization/)).
+Pass their wallets, as CIP-30 API objects on the same network, in `opts.cosigners`:
+
+```js title="js/joust-runtime/test/examples.test.js"
+await t.call(a, 'pay', { to: bob.keyHash, amount: 10n * ADA }, {}, { cosigners: [watched] });
+```
+
+Each co-signer is named by the payment key of its change address. The calling wallet counts towards a quorum already,
+and naming a wallet twice is refused. The verifier requires every named co-signer to be a required signer, and every
+required signer to be the wallet's key or a named co-signer. Each co-signer signs the same transaction before it is
+submitted.
+
+## The dev wallet
+
+`devWallet` (from `@julclang/state-client/devwallet`, re-exported by `@julclang/joust-runtime`) is a CIP-30 wallet
+for development networks: one key from a mnemonic, with UTxOs read and transactions submitted through a chain view.
+
+```js
+import { devWallet } from '@julclang/state-client/devwallet';
+
+const wallet = devWallet({ chain, mnemonic, networkId: 0 });
+wallet.address;   // its base address (bech32)
+wallet.keyHash;   // its payment key hash (hex)
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `chain` | (required) | the chain view it reads UTxOs from and submits through |
+| `mnemonic` | `DEVKIT_MNEMONIC` | a BIP39 mnemonic; the default is DevKit's, whose genesis accounts are funded |
+| `index` | `0` | the payment key `m/1852'/1815'/0'/0/<index>` (stake key `m/1852'/1815'/0'/2/0`) |
+| `networkId` | `0` | `0` for test networks, `1` for mainnet |
+| `confirm` | yes | `async (txHex) => boolean`, asked before signing, like a real wallet's prompt |
+
+It derives keys as cardano-client-lib does, so the same mnemonic gives the same address on the JVM. It implements
+`getNetworkId`, `getUtxos`, `getBalance`, `getCollateral` (none), `getUsedAddresses`, `getUnusedAddresses`,
+`getChangeAddress`, `getRewardAddresses`, `signTx` and `submitTx`. `deriveAccount(mnemonic, index, networkId)` gives
+the keys and addresses without a wallet.
+
+The template's page uses it for its in-page DevKit key, kept in `localStorage`:
+
+```js title="page/main.js"
+const { devWallet } = await import('@julclang/state-client/devwallet');
+const mnemonic = localStorage.getItem('joust.devkitKey') ?? generateMnemonic(wordlist, 256);
+localStorage.setItem('joust.devkitKey', mnemonic);
+app.api = devWallet({ chain, mnemonic, networkId: net.networkId });
+```
+
+The page's **Top up** button posts the address to `/dev/topup` on `joust dev` or `joust serve`, which funds it from
+DevKit's faucet. In Node, `devkitTopUp(address, ada, adminUrl, { chain })` does the same, and falls back to DevKit's
+genesis accounts when the faucet is dry. `joust deploy` uses a dev wallet too, with `JOUST_MNEMONIC` or a DevKit key it
+keeps in `.joust/`.
+
+<Aside type="danger" title="Never use the dev wallet with real funds">
+Its key lives in your page's JavaScript (and, in the template, in `localStorage`). It is for DevKit and for tests on
+test networks only.
+</Aside>
+
+`@julclang/state-client/devwallet` loads libsodium (cardano-js-sdk's crypto) with a top-level await when it is
+imported; the template imports it only when the user chooses the DevKit key.
+
+## Wallets in Java
+
+On the JVM, a dApp backend that prepares transactions for browser wallets uses `WalletAccount`: an account that has
+only an address, never a key, and fails closed if asked to sign. See the
+[Java off-chain runtime](/apps/java-runtime/).
+
+## Security notes
+
+- **Keys never enter the engine.** The runtime engine (Wasm, in Node or in a worker) receives addresses, UTxOs and
+  co-signers' key hashes, never a key. Signing happens only in the wallet.
+- **The page verifies, the wallet signs.** Every prepared transaction is verified against the pinned description and
+  deployment and the wallet's own UTxOs before `signTx` is called. The engine, the service and the chain API are not
+  trusted.
+- **Collateral is bounded.** A transaction that runs a script names collateral, which the network takes only if a
+  script fails. The verifier requires it to be the wallet's own UTxOs, with a collateral return to the wallet and at
+  most 5 ADA at risk (`limits.maxCollateral`).
+- **The wallet loses at most what the call says**: its payment and the fee (and a new UTxO's minimum ADA for a
+  creation). Required signers are the wallet's and the named co-signers only; the transaction expires within 15
+  minutes.
+- **Networks are checked twice**: the connector checks the wallet's network type, and the client compares
+  `getNetworkId()` with the deployment's.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="JavaScript clients" href="/apps/javascript-clients/" description="Calls, services and the verifier's full rules." />
+  <LinkCard title="Deploy to preview" href="/tutorials/deploy-preview/" description="Run the page with Eternl or Lace." />
+  <LinkCard title="Security model" href="/contracts/security-model/" description="What the validator guarantees on chain." />
+  <LinkCard title="Java off-chain runtime" href="/apps/java-runtime/" description="WalletAccount and prepared transactions on the JVM." />
+</CardGrid>

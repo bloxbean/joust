@@ -1,0 +1,531 @@
+---
+title: "State API (julc-state-api)"
+description: "Every class of julc-state-api besides the annotations, with exact signatures: Ctx, Require, Clock, Payouts, Funds, Assets, MerkleMaps and more."
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+`julc-state-api` (package `org.julclang.state.api`) is the library your contract code calls. Every class here runs in
+two places: on the JVM, when the generated client runs your method to compute the next state, and on chain, compiled
+by JuLC into the validator. Both must give the same answer on the same inputs, so the API is written in the JuLC
+subset of Java and a few classes ship a separate on-chain body (see [On-chain variants](#on-chain-variants)).
+
+This page covers the records and helper classes. The annotations have their own page:
+[Annotations](/reference/annotations/). Sources:
+[`julc-state-api/src/main/java/org/julclang/state/api/`](https://github.com/bloxbean/joust/tree/main/julc-state-api/src/main/java/org/julclang/state/api).
+
+Types such as `JulcList`, `JulcMap` and `PlutusData` come from JuLC (`org.julclang.core`), and `Value`, `Address`,
+`Credential`, `OutputDatum`, `TxOutRef`, `TxCert` and `DRep` from JuLC's ledger types (`org.julclang.ledger`).
+
+## Overview
+
+| Class | Kind | Used by | What it is for |
+|---|---|---|---|
+| [`Ctx`](#ctx) | record | contract methods | Verified transaction facts: caller, received, balance, validity bounds |
+| [`Require`](#require-and-requireexception) | class | contract methods | Contract rules: `Require.that(cond, "msg")` |
+| [`RequireException`](#require-and-requireexception) | exception | JVM callers | What a failed rule throws on the JVM |
+| [`Clock`](#clock) | class | contract methods | Deadline checks against the validity interval |
+| [`Payout`, `Payouts`](#payout-and-payouts) | record, class | actions, destroys | Lovelace paid to key hashes |
+| [`Funds`](#funds) | record | asset-aware methods | Native assets: own policy, own token name, received, held, deposits |
+| [`Send`, `Sends`](#send-and-sends) | record, class | actions, destroys, `@Withdraw` | Outputs to any address with any datum |
+| [`Datum`](#datum) | class | contract methods | Output datums for sends |
+| [`Assets`](#assets) | class | contract methods | Multi-asset `Value` arithmetic, canonical on both sides |
+| [`Deposit`, `Deposits`, `DepositClaim`](#deposit-deposits-and-depositclaim) | records, class | depositors, `@Receives` | Payments into another JOUST instance |
+| [`ForeignInstance`](#foreigninstance) | record | `@Params` | Another contract's instance, for `@Reads` and deposits |
+| [`Approval`, `Approvals`](#approvals-and-approval) | records | governor scripts | Approvals a script grants for `@AuthorizedBy` |
+| [`Certs`](#certs) | class | `@Certify` handlers | Exact certificate checks |
+| [`MerkleMap`, `MapEntry`](#merklemap-and-mapentry) | records | state records | An unbounded map held as a 32-byte root |
+| [`MerkleMaps`](#merklemaps) | class | contract methods | Reading and writing a `MerkleMap` |
+| [`SortedMaps`](#sortedmaps) | class | contract methods | `JulcMap` state kept in canonical CBOR key order |
+| [`OutputClaim`, `OutputClaims`](#outputclaim-and-outputclaims) | records | generated code | The shared output-claim registry |
+| [`mpf.*`](#the-mpf-package) | package | generated code, verifier | Merkle Patricia Forestry proofs and map claims |
+
+## Ctx
+
+```java title="Ctx.java"
+public record Ctx(byte[] caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo) {}
+```
+
+Transaction facts an `@Init`, `@Action` or `@Destroy` method (and owned methods) may read. Declare it as the method's
+last parameter, or the last before `Funds`. The client supplies it; the generated validator verifies every field
+against the transaction before calling your method (ADR-0001 D3).
+
+| Component | Meaning |
+|---|---|
+| `caller` | Key hash of the party calling. The transaction is signed by it. In a `@Batched` run, the intent's owner |
+| `received` | Lovelace this call adds to the contract. Zero unless the method is `@Payable` |
+| `balance` | Funds the call may allocate. In actions: the contract's lovelace before the call minus the min-ADA deposit. In destroys: everything the state UTxO holds, deposit included. Zero in `@Init` |
+| `validFrom` | Start of the transaction's validity interval (POSIX ms, inclusive) |
+| `validTo` | End of the validity interval (POSIX ms, exclusive) |
+
+The validator checks that `validFrom` and `validTo` equal the transaction's finite bounds, and that
+`validTo - validFrom` is at most `@StateContract(maxValidityMs)` (default one hour). For deadlines prefer
+[`Clock`](#clock). A method without `Ctx` needs no signature and costs less.
+
+Source: [`Ctx.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Ctx.java).
+Guide: [Ctx, funds and payouts](/contracts/ctx-and-funds/).
+
+## Require and RequireException
+
+```java title="Require.java"
+public static void that(boolean condition, String message)
+```
+
+`Require.that(cond, "message")` fails the call when `cond` is false. On the JVM it throws `RequireException` with the
+message, so the client reports why a call was rejected before submitting anything. On chain (the bundled source in
+`src/onchain/java`) it traces the message and fails the script. Both fail on exactly the same inputs (ADR-0001 D7).
+
+```java title="RequireException.java"
+public class RequireException extends RuntimeException {
+    public RequireException(String message)
+}
+```
+
+Thrown only on the JVM. Contract code never constructs it (JuLC has no `throw`): use `Require.that`.
+
+```java title="examples/token/src/main/java/org/julclang/state/examples/token/Token.java"
+Require.that(fromBalance.compareTo(amount) >= 0, "insufficient balance");
+```
+
+Sources: [`Require.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Require.java),
+[on-chain `Require.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/onchain/java/org/julclang/state/api/Require.java),
+[`RequireException.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/RequireException.java).
+Guide: [Require and errors](/contracts/require-and-errors/).
+
+## Clock
+
+Deadline checks against the transaction's validity interval `[ctx.validFrom(), ctx.validTo())`. They hold for every
+moment the transaction could be valid, which makes them the safe way to use time.
+
+| Method | Returns | True when |
+|---|---|---|
+| `static boolean after(Ctx ctx, BigInteger t)` | `boolean` | `ctx.validFrom() >= t`: the call happens at or after `t` |
+| `static boolean before(Ctx ctx, BigInteger t)` | `boolean` | `ctx.validTo() <= t`: the call happens strictly before `t` |
+
+```java title="examples/crowdfund/src/main/java/org/julclang/state/examples/crowdfund/Crowdfund.java"
+Require.that(Clock.before(ctx, s.deadline()), "the campaign has ended");
+```
+
+<Aside type="caution">
+`Clock.before` needs the whole validity window to end before the deadline. On Yaci DevKit, whose time horizon is
+minutes, keep the transaction's TTL short (the DevKit runtime uses 20 s).
+</Aside>
+
+Source: [`Clock.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Clock.java).
+Guide: [Time](/contracts/time/).
+
+## Payout and Payouts
+
+```java title="Payout.java"
+public record Payout(byte[] to, BigInteger lovelace) {}
+```
+
+Lovelace the contract pays to a public-key payment credential: `to` is the recipient's payment key hash, `lovelace`
+is greater than zero. The validator tags payouts against double satisfaction.
+
+`Payouts` builds the payout list an action or destroy returns:
+
+| Method | Returns | Meaning |
+|---|---|---|
+| `static JulcList<Payout> none()` | `JulcList<Payout>` | No payouts |
+| `static JulcList<Payout> of(byte[] to, BigInteger lovelace)` | `JulcList<Payout>` | One payout |
+| `static JulcList<Payout> add(JulcList<Payout> payouts, byte[] to, BigInteger lovelace)` | `JulcList<Payout>` | Prepends one payout |
+| `static BigInteger total(JulcList<Payout> payouts)` | `BigInteger` | Sum of the payouts' lovelace |
+
+```java title="examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java"
+return Payouts.of(s.owner(), ctx.balance());
+```
+
+<Aside>
+The Java runtime pays a payout to the key's enterprise address unless you map the key to another address with
+`StateRuntime.Builder.address(pkh, bech32)`. Never map it to the fee payer's address: CCL's QuickTx takes the fee
+from an output there.
+</Aside>
+
+Sources: [`Payout.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Payout.java),
+[`Payouts.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Payouts.java).
+
+## Funds
+
+```java title="Funds.java"
+public record Funds(byte[] policy, byte[] self, Value received, Value held, JulcList<DepositClaim> deposits) {}
+```
+
+Native assets seen by a method of an asset-aware contract (ADR-0007 D1). Declare it as the last parameter, after `Ctx`
+if there is one. The client supplies it; the generated validator checks every field.
+
+| Component | Meaning |
+|---|---|
+| `policy` | This contract's policy id (its script hash): name your own tokens with it |
+| `self` | The token name of what the method acts on: the instance id, or the object id for owned methods |
+| `received` | Native assets the caller adds in this call. No lovelace entry (that is `Ctx.received`), positive amounts only, empty unless the method is `@Payable` |
+| `held` | Native assets the UTxO holds before the call, without lovelace and without its own thread token. Empty when creating |
+| `deposits` | Deposits from other contracts into this call's continuing output, in registry order. Filled only for a `@Receives` action |
+
+A `@Payable` method with `Funds` must return a result record with `accepted`: exactly the native assets it takes.
+
+```java title="examples/dex/src/main/java/org/julclang/state/examples/dex/Dex.java"
+BigInteger reserveToken = Assets.quantity(funds.held(), p.tokenPolicy(), p.tokenName());
+```
+
+Source: [`Funds.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Funds.java).
+Guide: [Native assets, mints and sends](/contracts/assets-mints-sends/).
+
+## Send and Sends
+
+```java title="Send.java"
+public record Send(Address to, Value value, OutputDatum datum) {}
+```
+
+An output a method sends from the UTxO it acts on (ADR-0007 D5): to any address, key or script, with any datum. The
+generated validator requires an output at `to` with exactly `datum`, no reference script and at least `value`, claimed
+for this call in the shared output registry so no other obligation can count it. For lovelace to a key, `Payout` is
+cheaper.
+
+| `Sends` method | Returns | Meaning |
+|---|---|---|
+| `static JulcList<Send> none()` | `JulcList<Send>` | No sends |
+| `static JulcList<Send> of(Address to, Value value, OutputDatum datum)` | `JulcList<Send>` | One send |
+| `static JulcList<Send> add(JulcList<Send> sends, Address to, Value value, OutputDatum datum)` | `JulcList<Send>` | Prepends one send |
+
+```java title="examples/dex/src/main/java/org/julclang/state/examples/dex/Dex.java"
+Sends.of(wallet(ctx.caller()), Assets.of(p.tokenPolicy(), p.tokenName(), tokenOut), new OutputDatum.NoOutputDatum())
+```
+
+Sources: [`Send.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Send.java),
+[`Sends.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Sends.java).
+
+## Datum
+
+Output datums for sends, the same on the JVM and on chain.
+
+| Method | Returns |
+|---|---|
+| `static OutputDatum inline(PlutusData d)` | An inline datum |
+| `static OutputDatum none()` | No datum |
+
+<Aside type="caution">
+A record cannot be passed as data in shared code: `(PlutusData) (Object) record` works on chain but throws on the JVM.
+Build the datum with `Builtins.constrData`, `bData`, `iData` and `mkCons`, which run on both. A record `R(a, b)` is
+`constrData(0, mkCons(a, mkCons(b, mkNilData())))`.
+</Aside>
+
+```java title="examples/market/src/main/java/org/julclang/state/examples/market/Market.java"
+Datum.inline(royalty(l))
+```
+
+Source: [`Datum.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Datum.java).
+
+## Assets
+
+Multi-asset values for contract code (ADR-0007), with the same results on the JVM and on chain. Every value these
+functions return is canonical, as the ledger writes values: policies and token names in ascending byte order, no zero
+quantities, no empty token maps. Lovelace is the entry with the empty policy and the empty token name.
+
+| Method | Returns | Meaning |
+|---|---|---|
+| `static Value none()` | `Value` | The empty value |
+| `static Value of(byte[] policy, byte[] name, BigInteger quantity)` | `Value` | `quantity` of `(policy, name)`; empty if the quantity is zero |
+| `static Value lovelace(BigInteger quantity)` | `Value` | `quantity` lovelace |
+| `static Value add(Value a, Value b)` | `Value` | Entry-wise sum; zero sums vanish |
+| `static Value subtract(Value a, Value b)` | `Value` | Entry-wise `a - b`; zero differences vanish, negative ones stay |
+| `static BigInteger quantity(Value v, byte[] policy, byte[] name)` | `BigInteger` | Quantity of `(policy, name)`, zero if absent |
+| `static BigInteger lovelaceOf(Value v)` | `BigInteger` | The lovelace in `v` |
+| `static Value withoutLovelace(Value v)` | `Value` | `v` without its lovelace |
+| `static boolean isEmpty(Value v)` | `boolean` | True if `v` holds nothing |
+| `static boolean covers(Value a, Value b)` | `boolean` | True if `a` holds at least `b` of every entry. Both must be non-negative: on chain a negative quantity fails the script, on the JVM it throws |
+| `static void check(Value v, String what)` | `void` | **JVM only.** Throws unless `v` is canonical (sorted, no zero quantities, no empty token maps, keys at most 32 bytes). The runtime and the harness run it on every value a method returns |
+| `static TreeMap<String, TreeMap<String, BigInteger>> read(Value v)` | `TreeMap` | **JVM only.** Entries by policy and token name, as lower-case hex, in ledger order |
+
+On chain the functions use the PV11 native Value builtins (CIP-153), which reject a non-canonical argument; ledger
+values and the results of these functions always are canonical. The JVM body normalises instead, and `check` makes
+sure a JVM test never passes on a value the chain would reject.
+
+<Aside type="caution">
+A native `Value` cannot be a JuLC loop accumulator (use recursion). A redeemer field typed `Value` mis-decodes in JuLC:
+use `PlutusData` there.
+</Aside>
+
+Sources: [`Assets.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Assets.java),
+[on-chain `Assets.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/onchain/java/org/julclang/state/api/Assets.java).
+Guide: [Native assets, mints and sends](/contracts/assets-mints-sends/).
+
+## Deposit, Deposits and DepositClaim
+
+Deposits are payments from one JOUST contract's call into another instance's continuing output in the same
+transaction (ADR-0011 D3).
+
+```java title="Deposit.java"
+public record Deposit(byte[] policy, byte[] instance, Value value, PlutusData memo) {}
+```
+
+`value` goes into the continuing output of instance `instance` of contract `policy`, which must be spent in the same
+transaction by an action that `@Receives` deposits. `memo` is any data the receiver may read (a beneficiary, an order
+id). A method returns its deposits in a `deposits` result component.
+
+| `Deposits` method | Returns | Meaning |
+|---|---|---|
+| `static JulcList<Deposit> none()` | `JulcList<Deposit>` | No deposits |
+| `static JulcList<Deposit> of(ForeignInstance target, Value value, PlutusData memo)` | `JulcList<Deposit>` | One deposit into `target` |
+| `static JulcList<Deposit> add(JulcList<Deposit> deposits, ForeignInstance target, Value value, PlutusData memo)` | `JulcList<Deposit>` | Prepends one deposit |
+| `static BigInteger lovelace(JulcList<DepositClaim> deposits)` | `BigInteger` | The lovelace of every deposit a receiver got (`funds.deposits()`) |
+
+```java title="DepositClaim.java"
+public record DepositClaim(BigInteger output, TxOutRef by, Value value, PlutusData memo) {}
+```
+
+A deposit in the shared output registry: output `output` receives `value` from the input `by`, with `memo`. The output
+verifier checks the value is canonical and positive, free of reserved tokens, and that `by` is an input. The depositor
+checks its own claims; the receiver counts every claim on its continuing output exactly once.
+
+```java title="examples/fees/src/main/java/org/julclang/state/examples/fees/Stall.java"
+Deposits.of(cfg.pot(), Assets.lovelace(fee), Builtins.bData(ctx.caller()))
+```
+
+Sources: [`Deposit.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Deposit.java),
+[`Deposits.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Deposits.java),
+[`DepositClaim.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/DepositClaim.java).
+Guide: [Deposits](/contracts/deposits/).
+
+## ForeignInstance
+
+```java title="ForeignInstance.java"
+public record ForeignInstance(byte[] policy, byte[] instance) {}
+```
+
+Another JOUST contract's instance (ADR-0011 D2): its applied script hash (policy) and its 32-byte instance id. Held
+only in a `@Params` record, so the script it trusts is fixed at deploy. `@Reads("params.x")` and `Deposits.of` take it.
+
+```java title="examples/oracle/src/main/java/org/julclang/state/examples/oracle/Shop.java"
+public record Config(ForeignInstance oracle, BigInteger maxAgeMs) {}
+```
+
+Source: [`ForeignInstance.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/ForeignInstance.java).
+Guide: [Reads and composition](/contracts/reads-and-composition/).
+
+## Approvals and Approval
+
+```java
+public record Approval(byte[] policy, byte[] target, BigInteger action) {}
+public record Approvals(JulcList<Approval> approvals) {}
+```
+
+`Approvals` is the Rewarding redeemer a Plutus governor script uses to approve JOUST actions for `@AuthorizedBy` with a
+script credential (ADR-0009 r2). Each `Approval` says the JOUST contract `policy` may run its action with redeemer tag
+`action` on `target` (an instance or object id). The governor's own rules decide which approvals it lists; each JOUST
+validator accepts only the one naming itself, its target and its action.
+
+Sources: [`Approval.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Approval.java),
+[`Approvals.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Approvals.java).
+Guide: [Authorization](/contracts/authorization/).
+
+## Certs
+
+Exact certificate checks for `@Certify` handlers (ADR-0010 r2), the same on the JVM and on chain.
+
+| Method | True when |
+|---|---|
+| `static boolean isRegistration(TxCert cert)` | A stake registration (with or without a deposit) |
+| `static boolean delegatesOnlyTo(TxCert cert, byte[] pool)` | A stake delegation (alone or with registration) to exactly `pool`, and only stake: no vote delegation |
+| `static boolean delegatesVoteTo(TxCert cert, DRep drep)` | A vote delegation (alone or with registration) to exactly `drep`, and only votes |
+| `static boolean isDRepLifecycle(TxCert cert)` | DRep registration or update of the contract's own credential |
+| `static boolean sameDRep(DRep a, DRep b)` | DRep equality that also holds on the JVM |
+| `static boolean sameCredential(Credential a, Credential b)` | Credential equality that also holds on the JVM |
+
+Records with byte arrays do not compare by value on the JVM, which is why `sameDRep` and `sameCredential` exist.
+
+```java title="examples/staking/src/main/java/org/julclang/state/examples/staking/StakedVault.java"
+return Certs.isRegistration(cert) || Certs.delegatesOnlyTo(cert, cfg.pool()) || Certs.isDRepLifecycle(cert);
+```
+
+Source: [`Certs.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Certs.java).
+Guide: [Staking and governance](/contracts/staking-and-governance/).
+
+## MerkleMap and MapEntry
+
+```java
+public record MerkleMap(byte[] root, JulcList<MapEntry> reads, JulcList<MapEntry> writes) {}
+public record MapEntry(byte[] key, boolean present, byte[] value) {}
+```
+
+A `MerkleMap` is a map stored as a Merkle Patricia Forestry root (ADR-0002). Use it as a component of the state record
+(or of an owned record) to hold an unbounded map: the datum keeps only the 32-byte `root`, and each call proves the
+keys it touches. `reads` and `writes` exist only while a contract method runs: the proven entries this call may read,
+and this call's writes, latest first. In the datum both are empty.
+
+A `MapEntry` is one key: present with a value, or absent (with an empty value).
+
+<Aside type="caution">
+Use `MerkleMap` and `MapEntry` only as top-level components of the state or owned record. Never construct them, never
+pass them as arguments, and never read `.reads()`, `.writes()` or `.root()` in contract code: go through
+[`MerkleMaps`](#merklemaps).
+</Aside>
+
+Sources: [`MerkleMap.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/MerkleMap.java),
+[`MapEntry.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/MapEntry.java).
+
+## MerkleMaps
+
+Reading and changing a `MerkleMap` (ADR-0002 D2). A lookup sees this call's writes (latest first), then its read set.
+Writes add to the map's pending writes; the root never changes inside a method. The verifier (a shared withdraw-zero
+script) proves the reads and computes the new root.
+
+| Method | Returns | Meaning |
+|---|---|---|
+| `static MerkleMap empty()` | `MerkleMap` | A new, empty map (for `@Init` and `@OwnedInit`) |
+| `static boolean isEmpty(MerkleMap m)` | `boolean` | The map was empty before this call and this call wrote nothing. Check it before destroying |
+| `static boolean contains(MerkleMap m, byte[] key)` | `boolean` | The key is present |
+| `static byte[] get(MerkleMap m, byte[] key, byte[] otherwise)` | `byte[]` | The value, or `otherwise` |
+| `static BigInteger getInt(MerkleMap m, byte[] key, BigInteger otherwise)` | `BigInteger` | The value as an unsigned big-endian integer, or `otherwise` |
+| `static MerkleMap put(MerkleMap m, byte[] key, byte[] value)` | `MerkleMap` | Sets `key` to `value` |
+| `static MerkleMap putInt(MerkleMap m, byte[] key, BigInteger value)` | `MerkleMap` | Stores a non-negative integer as its minimal big-endian bytes (zero is the empty byte string). Fails on a negative value |
+| `static MerkleMap remove(MerkleMap m, byte[] key)` | `MerkleMap` | Removes `key` |
+| `static MapEntry lookup(MerkleMap m, byte[] key)` | `MapEntry` | This call's latest write for `key`, else the read set |
+| `static JulcList<MapEntry> netWrites(MerkleMap m)` | `JulcList<MapEntry>` | The latest write of each key (used by generated code) |
+
+Methods are pure: always use the returned map.
+
+```java title="examples/token/src/main/java/org/julclang/state/examples/token/Token.java"
+BigInteger balance = MerkleMaps.getInt(s.balances(), to, BigInteger.ZERO);
+return new State(s.admin(), s.supply().add(amount), MerkleMaps.putInt(s.balances(), to, balance.add(amount)));
+```
+
+**A key outside the read set** behaves differently on each side, which is the only difference between the sources:
+
+| Where | Source | What happens |
+|---|---|---|
+| JVM | `src/main/java` | Read from the `ReadSource` the runtime (or the test harness) binds, and recorded so it joins the read set |
+| On chain | `src/onchain/java` | Fails the script (ADR-0002 D3) |
+| Transition programs | `src/discovery/java` | Answered as absent and named in a `joust:read <root hex> <key hex>` trace, so the engine can prove every read and run again (ADR-0015 D3) |
+
+The empty root holds no key, so lookups on an empty map need no proof (this lets `@Init` read the maps it creates).
+The JVM source also has runtime hooks you do not call from contract code: the `ReadSource` interface
+(`MapEntry read(byte[] root, byte[] key)`), `static <T> T withReads(ReadSource source, Supplier<T> body)`, and
+`static MapEntry read(byte[] root, byte[] key)`.
+
+Sources: [`MerkleMaps.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/MerkleMaps.java),
+[on-chain](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/onchain/java/org/julclang/state/api/MerkleMaps.java),
+[discovery](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/discovery/java/org/julclang/state/api/MerkleMaps.java).
+Guide: [MerkleMaps](/contracts/merklemaps/). Tutorial: [Token balances in a MerkleMap](/tutorials/token-merklemap/).
+
+## SortedMaps
+
+Maps with `byte[]` keys kept in canonical CBOR key order (shorter key first, then byte-wise), on the JVM and on chain
+alike. Use them for `JulcMap` fields of the state.
+
+| Method | Returns | Meaning |
+|---|---|---|
+| `static boolean before(byte[] a, byte[] b)` | `boolean` | `a` sorts before `b` in canonical CBOR order |
+| `static JulcMap<byte[], BigInteger> put(JulcMap<byte[], BigInteger> m, byte[] k, BigInteger v)` | `JulcMap` | `m` with `k` set to `v`, keeping canonical order |
+| `static JulcMap<byte[], BigInteger> remove(JulcMap<byte[], BigInteger> m, byte[] k)` | `JulcMap` | `m` without `k` (order is kept) |
+| `static BigInteger getOr(JulcMap<byte[], BigInteger> m, byte[] k, BigInteger otherwise)` | `BigInteger` | The value for `k`, or `otherwise` |
+
+Why: a `JulcMap` is an ordered association list and `insert` prepends, but cardano-client-lib writes inline datums in
+canonical CBOR, which sorts map keys. A state map not already in canonical order would be written differently from
+what the validator recomputes, and the call would fail on chain. The runtime refuses to submit such a state.
+
+```java title="examples/crowdfund/src/main/java/org/julclang/state/examples/crowdfund/Crowdfund.java"
+BigInteger before = SortedMaps.getOr(s.backers(), ctx.caller(), BigInteger.ZERO);
+```
+
+Source: [`SortedMaps.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/SortedMaps.java).
+Tutorial: [Escrow and crowdfunding](/tutorials/escrow-crowdfund/).
+
+## OutputClaim and OutputClaims
+
+```java
+public record OutputClaim(BigInteger output, TxOutRef by) {}
+public record OutputClaims(JulcList<OutputClaim> claims, JulcList<DepositClaim> deposits) {}
+```
+
+The shared output-claim registry (ADR-0007 D5). An `OutputClaim` says output `output` of the transaction is a `Send`
+of the transition whose UTxO is `by`. `OutputClaims` is the redeemer of the JOUST output verifier: every send claim,
+by strictly increasing output index (no output is claimed twice), and every deposit claim, by non-decreasing output
+index (an output may receive several deposits). The runtime builds it; contract code does not.
+
+Sources: [`OutputClaim.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/OutputClaim.java),
+[`OutputClaims.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/OutputClaims.java).
+
+## The mpf package
+
+`org.julclang.state.api.mpf` holds the Merkle Patricia Forestry code behind MerkleMaps. Generated validators, the
+shared map verifier and the runtime use it; contract code uses [`MerkleMaps`](#merklemaps) instead.
+
+### Mpf
+
+Roots and updates compatible with Aiken's `aiken-lang/merkle-patricia-forestry` and cardano-client-lib's `MpfTrie`
+(blake2b-256, radix 16, keys and values hashed). A port of CCL's `WireProof` in the JuLC subset: it runs on chain and
+on the JVM alike. Proofs are in the form `MpfTrie.getProofPlutusData` returns.
+
+| Method | Returns | Meaning |
+|---|---|---|
+| `static byte[] emptyRoot()` | `byte[]` | The empty trie's root: 32 zero bytes |
+| `static boolean has(byte[] root, byte[] key, byte[] value, JulcList<ProofStep> proof)` | `boolean` | `key -> value` is in the trie |
+| `static boolean miss(byte[] root, byte[] key, JulcList<ProofStep> proof)` | `boolean` | `key` is absent |
+| `static byte[] insert(byte[] root, byte[] key, byte[] value, JulcList<ProofStep> proof)` | `byte[]` | Root after inserting an absent key; fails if the proof does not show it absent |
+| `static byte[] delete(byte[] root, byte[] key, byte[] value, JulcList<ProofStep> proof)` | `byte[]` | Root after deleting `key -> value`; fails if not present with that value |
+| `static byte[] update(byte[] root, byte[] key, JulcList<ProofStep> proof, byte[] oldValue, byte[] newValue)` | `byte[]` | Root after changing `key` from `oldValue` to `newValue` |
+| `static byte[] including(byte[] key, byte[] value, JulcList<ProofStep> proof)` | `byte[]` | Root of a trie holding `key -> value` at the position the proof describes |
+| `static byte[] excluding(byte[] key, JulcList<ProofStep> proof)` | `byte[]` | Root of the trie the proof describes, without `key` |
+
+### Proof and claim records
+
+| Type | Definition | Meaning |
+|---|---|---|
+| `ProofStep` | `sealed interface ProofStep permits Branch, Fork, Leaf` | One proof step, in Aiken's Plutus encoding |
+| `ProofStep.Branch` | `record Branch(BigInteger skip, byte[] neighbors)` | A branch node: the neighbour hashes along the path (4 x 32 bytes) |
+| `ProofStep.Fork` | `record Fork(BigInteger skip, Neighbor neighbor)` | A branch with exactly one other child |
+| `ProofStep.Leaf` | `record Leaf(BigInteger skip, byte[] key, byte[] value)` | A branch whose one other child is a leaf: its key hash and value hash |
+| `ProofStep.Neighbor` | `record Neighbor(BigInteger nibble, byte[] prefix, byte[] root)` | The other child of a fork |
+| `ReadProof` | `record ReadProof(MapEntry entry, JulcList<ProofStep> proof)` | A read-set entry and its proof against the pre-call root |
+| `WriteProof` | `record WriteProof(MapEntry before, MapEntry after, JulcList<ProofStep> proof)` | One net write: the entry before and after, and the proof of its position at this step |
+| `MapClaim` | `record MapClaim(byte[] policy, TxOutRef owner, BigInteger field, byte[] oldRoot, JulcList<ReadProof> reads, JulcList<WriteProof> writes, byte[] newRoot)` | What the verifier proves for one map of one instance; found by `(policy, owner, field)` (ADR-0014) |
+| `MapClaims` | `record MapClaims(JulcList<MapClaim> claims)` | The map verifier's redeemer: every claim of the transaction |
+
+### MapWitnesses
+
+MerkleMap checks, split between the generic map verifier (a withdraw-zero script that does the MPF work) and each
+contract's validator (which only matches claims to its own maps). ADR-0002 D3 and D9.
+
+| Method | Side | Meaning |
+|---|---|---|
+| `static boolean verify(MapClaim c)` | verifier | The claim's reads are proven against its old root, and its writes, applied in order, turn the old root into the new root |
+| `static MapClaim claimFor(MapClaims claims, byte[] policy, TxOutRef owner, long field)` | contract | The claim for map `field` of the instance whose state input (or seed) is `owner`; fails if none |
+| `static MerkleMap open(byte[] root, MapClaim c)` | contract | The map a method sees: the claim's verified reads over `root`, which must be the claim's old root |
+| `static byte[] commit(byte[] root, MerkleMap after, MapClaim c)` | contract | The new root, once the claim's writes are exactly the method's net writes in order |
+
+Sources: [`mpf/`](https://github.com/bloxbean/joust/tree/main/julc-state-api/src/main/java/org/julclang/state/api/mpf).
+The verifier itself is the `julc-state-verifier` module.
+
+## On-chain variants
+
+A few classes need a different body on chain. Their on-chain sources live in `src/onchain/java` and replace the JVM
+source in the bundle JuLC compiles; ADR-0001 D7 keeps that set tiny.
+
+| Class | JVM body (`src/main/java`) | On-chain body (`src/onchain/java`) |
+|---|---|---|
+| `Require` | Throws `RequireException(message)` | `ContextsLib.trace(message)`, then `Builtins.error()` |
+| `Assets` | `TreeMap` arithmetic that normalises; adds `check` and `read` | PV11 native Value builtins (`insertCoin`, `unionValue`, `scaleValue`, `lookupCoin`, ...) |
+| `MerkleMaps` | Reads missing keys from the bound `ReadSource` | A missing key fails the script |
+
+`src/discovery/java` holds a third `MerkleMaps`, compiled only into transition programs (ADR-0015 D3), never into
+validators.
+
+The build's `bundleOnchainSources` task writes the JuLC library sources (`META-INF/plutus-sources/`) with these
+overrides in place. A consumer puts them on its annotation processor path: inside the JOUST build as
+`project(path: ':julc-state-api', configuration: 'onchainSources')` (a directory), and from the snapshot repository as
+`org.julclang:julc-state-api:<version>:onchain`.
+
+<Aside type="caution">
+Shared code (contracts and this API) must never compare `byte[]` with `==` or `.equals`: on chain that compares bytes,
+on the JVM it compares references. Use `ByteStringLib.equals`.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Annotations" description="Every annotation, its elements and what it checks" href="/reference/annotations/" />
+  <LinkCard title="Ctx, funds and payouts" description="How Ctx, Funds and payouts fit together in a method" href="/contracts/ctx-and-funds/" />
+  <LinkCard title="MerkleMaps" description="Unbounded maps in a 32-byte root, with the shared verifier" href="/contracts/merklemaps/" />
+  <LinkCard title="Java" description="The JuLC subset your contract code is written in" href="/languages/java/" />
+</CardGrid>

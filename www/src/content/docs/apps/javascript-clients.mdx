@@ -1,0 +1,335 @@
+---
+title: JavaScript clients
+description: Call JOUST contracts from JavaScript - generated clients, JoustContract, joustRuntime in Node, prepare services, the page verifier and JSON conventions.
+---
+
+import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A JavaScript app calls a JOUST contract through three parts that do not trust one another:
+
+- a **client** (generated, or `JoustContract`) that holds the contract's description and its deployment;
+- a **prepare service** that builds the unsigned transaction: the runtime engine in Node or in a page's worker, or a
+  Java service over HTTP;
+- a **chain view** the client reads on its own, to verify what the service built.
+
+Every call goes the same way: encode the call from the description, have the service prepare it, **verify** it, show
+it for review, have the wallet sign, submit, and wait for the chain. This page covers each part. For pages
+specifically, see [Pages](/apps/pages/); for wallets, [Wallets](/apps/wallets/).
+
+<Aside type="caution" title="Pre-release: the npm packages come from a local registry">
+`@julclang/state-client`, `@julclang/joust-runtime` and `@julclang/joust` are not on npmjs.org yet. Install them from
+a local registry, as the [npm quick start](/start/quick-start-npm/#prerequisites) shows.
+</Aside>
+
+## Generated clients
+
+`joust build` writes a client for each contract next to its description: `build/joust/<Contract>.js` and
+`<Contract>.d.ts`. The module inlines the description, so the page **pins** it: a service can never hand the page a
+different contract to verify against.
+
+For a contract built with Gradle, generate the same client from the description the processor writes
+(`META-INF/joust/<package>.<Contract>.json`) with `joust-gen`, the bin of `@julclang/state-client`:
+
+```sh
+npx joust-gen build/classes/java/main/META-INF/joust/com.example.Counter.json --out src/generated
+# joust-gen <description.json>... --out <dir> [--import <module>]
+```
+
+`--import` replaces the module the client imports `JoustContract` from (default `@julclang/state-client`). Both
+`joust build` and `joust-gen` call `generate(description)` from `@julclang/state-client/codegen`.
+
+### What a client contains
+
+For a contract `C`:
+
+| Generated | From | Methods |
+|---|---|---|
+| `class C` | the contract | `constructor(options)`, `deploy(wallet, args, pay?)` (the `@Init`), `at(instanceId)`, `contract` (the `JoustContract`) |
+| `class CInstance` | one instance | `id`, `read()`, `state()`, one method per `@Action` and `@Destroy` |
+| method of a `@Batched` action | | submits an intent (see [Batched intents](/contracts/batched-intents/)) |
+| method of a `@Quorum` or `@AuthorizedBy` action | | takes a further `opts`: `{ cosigners, governor }` |
+| `@OwnedInit` methods, a lookup method, `objects()` | owned objects | on `CInstance`; each creation returns `{ ..., object }` |
+| `class C<Type>Object` | one owned object | `id`, `read()`, one method per owned action and destroy |
+
+`pay` appears only on payable methods. Since ADR-0015 M4 every call is generated, including those that need MerkleMap
+proofs, foreign reads, sends, moves, deposits and batches: the engine prepares them and the page verifier covers each.
+
+```js
+import { Bank } from './build/joust/Bank.js';
+
+const bank = new Bank({ service, chain, deployment });
+const { instance } = await bank.deploy(wallet, { withdrawLimit: 50_000_000n });
+const { object: account } = await instance.open(wallet, {}, { lovelace: 10_000_000n });
+await account.withdraw(wallet, { amount: 2_000_000n });
+console.log(await account.read());   // { ref, type: 'Account', value: { ... }, lovelace }
+```
+
+## `JoustContract`
+
+The generated classes are thin wrappers. You can use `JoustContract` from `@julclang/state-client` directly, with a
+description you load yourself:
+
+```js
+import { JoustContract, httpService, blockfrostChain } from '@julclang/state-client';
+
+const counter = new JoustContract({
+  description,            // the contract's description, bundled with the app
+  deployment,             // { contract, policy, address, networkId, referenceScripts }, bundled
+  service,                // a prepare service
+  chain,                  // the app's own chain view
+  onReview: async ({ contract, call, report, txHash }) => { /* show it; throw to cancel */ },
+});
+const { instance } = await counter.deploy(wallet, {});
+await counter.at(instance).call(wallet, 'increment', { by: 3n });
+```
+
+| Option | Meaning |
+|---|---|
+| `description` | the contract's description (never fetched from the service) |
+| `deployment` | `{ contract, policy, address, networkId, referenceScripts }`, from `deployments.<network>.json`; also `params`, `mapVerifier`, `outputVerifier` when the contract has them, and optionally `slotConfig` (below) |
+| `service` | a prepare service: `engineService`, `engineWorker` or `httpService` |
+| `chain` | a chain view: `chainOf(provider)` or `blockfrostChain(url)` |
+| `onReview` | `async (review) => void`, called after verification and before signing; throw to cancel |
+| `limits` | overrides of the verifier's limits (`DEFAULT_LIMITS`, below) |
+| `requirePlan` | `false` to accept a service that sends no plan (a JOUST service always does) |
+
+### Calls
+
+| Method | What it does | Resolves to |
+|---|---|---|
+| `contract.deploy(wallet, args?, pay?)` | creates an instance with the `@Init` method | `{ txHash, report, instance }` (the id, hex) |
+| `contract.at(id)` | an instance (`JoustInstance`) | |
+| `instance.call(wallet, name, args?, pay?, opts?)` | an action or destroy; `opts`: `{ cosigners, governor }` | `{ txHash, report }` |
+| `instance.create(wallet, name, args?, pay?)` | an `@OwnedInit` creation | `{ txHash, report, object }` |
+| `instance.object(id)` | an owned object (`JoustObject`) | |
+| `object.call(wallet, name, args?, pay?)` | an owned action or destroy | `{ txHash, report }` |
+| `instance.intent(wallet, name, args?, pay?, opts?)` | locks an intent for a `@Batched` action; `opts.deadline` in ms (default 30 minutes) | `{ txHash, report, created, intent }` |
+| `instance.cancelIntent(wallet, intentId)` | withdraws the wallet's pending intent | `{ txHash, report, created }` |
+| `instance.batch(wallet, opts?)` | as a batcher, applies up to `opts.max` (8) intents | `{ txHash, report, applied, skipped }` |
+| `contract.registerStake(wallet)` | registers the contract's stake credential (ADR-0010) | the hash, or `null` if registered already |
+| `contract.delegate(wallet, pool, opts?)` | delegates its stake through its `@Certify` handler | `{ txHash, report }` |
+| `contract.collect(wallet, opts?)` | withdraws its rewards through `@Withdraw`; `opts.amount`, `opts.args` | `{ txHash, report }` |
+
+`wallet` is always a [CIP-30](/apps/wallets/) API object. `pay` is `{ lovelace?, assets? }`, with assets as
+`[[policyHex, [[assetNameHex, quantity]]]]`. A missing argument, a payment to a method that is not payable, or a wallet
+on another network is refused before anything is prepared.
+
+### Reading state
+
+| Method | Resolves to |
+|---|---|
+| `instance.read()` | `{ ref, state, lovelace }`, or `null` once destroyed |
+| `instance.state()` | the decoded state, or `null` |
+| `instance.objects()` | every owned object of the instance: `[{ id, type, value, lovelace }]` |
+| `object.read()` | `{ ref, type, value, lovelace }`, or `null` once closed |
+| `instance.pendingIntents()` | the instance's intents on chain: `[{ intent, ref, owner, deadline, received, call, lovelace }]` |
+
+These read the chain view, by the instance's or object's token at the deployment's address, and decode with the
+description. A MerkleMap field decodes as its root (`{ root, reads, writes }`); read its values through a mirror (see
+[MerkleMap mirrors](/apps/map-mirrors/)).
+
+<Aside type="note" title="Views">
+The description lists the contract's `@View` methods (`x-joust.views`), but the JavaScript client generates no view
+methods yet. Read the state with `state()` and compute in JavaScript, or call a Java prepare service's view endpoint
+through `httpService(url).view({ contract, instance, view, args })` (`julc-state-server`'s `POST /api/view`).
+</Aside>
+
+## In Node: `joustRuntime`
+
+In Node, `@julclang/joust-runtime` gives you everything at once: the engine as a prepare service, a chain view over
+one provider, and the deployments. This is the template's test:
+
+```js title="test/counter.test.js"
+import { joustRuntime, devWallet, devkitTopUp } from '@julclang/joust-runtime';
+import { Counter } from '../build/joust/Counter.js';
+
+const rt = joustRuntime({ chainUrl: deployed.chain, contracts, clock: deployed.clock, networkId: deployed.networkId,
+  deployments: deployed.contracts, ttlMs: 20_000 });
+const wallet = devWallet({ chain: rt.chain, mnemonic: generateMnemonic(wordlist, 256) });
+await devkitTopUp(wallet.address, 100, config.networks.devkit.admin, { chain: rt.chain });
+
+const counter = new Counter(rt.options('app.Counter'));
+const { instance } = await counter.deploy(wallet, {});
+await instance.increment(wallet, { by: 5n });
+```
+
+`rt.options(contract)` returns `{ service, chain, deployment }` for a generated client, finding the deployment by the
+contract's full title (`app.Counter`) or its simple name. The runtime's members:
+
+| Member | What it is |
+|---|---|
+| `rt.provider` (also `rt.api`) | the chain provider: the one given, or `blockfrostProvider(chainUrl, { projectId })` |
+| `rt.chain` | `chainOf(provider)`: the chain view the verifier reads |
+| `rt.service` | the engine as a prepare service (each request gets its deployment's `@Params` and every pinned reference script) |
+| `rt.deployments` | the deployments, by contract title |
+| `rt.options(contract, extra?)` | `{ service, chain, deployment, ...extra }` for a client |
+| `rt.ensureDeployment(contract, wallet, params?)` | the contract's deployment, publishing its reference script first if it is not on chain; also publishes JOUST's map and output verifiers when the contract needs them |
+| `rt.ensureGovernor(name, params, wallet)` | a plain JuLC validator from `validators.json` as an `@AuthorizedBy` governor: parameters applied, stake credential registered once |
+| `rt.compose(wallet, steps, extra?)` | several calls in one transaction |
+
+Every option of `joustRuntime` is in the [`@julclang/joust-runtime` reference](/reference/joust-runtime/#joustruntimeoptions).
+`ensureDeployment` checks the publishing transaction before the wallet signs it: it may pay only the contract's
+address (holding the script) and the payer.
+
+### Composition
+
+`rt.compose` puts several spending calls into one transaction ([Reads and composition](/contracts/reads-and-composition/)).
+Each step names a `JoustContract` (a generated client's `.contract`), the method, the instance and the arguments. From
+the Fees example's flow:
+
+```js title="js/joust-runtime/test/examples.test.js"
+await rt.compose(buyer, [
+  { contract: stall, method: 'sell', instance: stallId, args: { price: 10n * ADA }, pay: { lovelace: 10n * ADA } },
+  { contract: pot, method: 'collect', instance: potId, args: {} },
+]);
+```
+
+`verifyComposed` checks each call against its own description and deployment, then the transaction as a whole.
+`extra` may carry `onReview` (called with `{ calls, report, txHash }`) and `limits`.
+
+## Prepare services
+
+A prepare service is any object with `prepare(request)`. Clients do not care which one they get:
+
+| Service | Where the engine runs | Use it for |
+|---|---|---|
+| `engineService(o)` (`@julclang/joust-runtime`; `rt.service`) | in this Node process | tests, scripts, backends |
+| `engineWorker(worker, o)` (`@julclang/joust-runtime/page`) | in a page's Web Worker | pages ([Pages](/apps/pages/)) |
+| `httpService(url)` (`@julclang/state-client`) | in a server: `POST <url>/prepare` | a Java prepare service ([Java runtime](/apps/java-runtime/)), or `joust dev`'s `/joust/service` |
+
+The request is plain JSON, which the client builds:
+
+```js
+{
+  contract: 'app.Counter',            // the description's title
+  kind: 'action',                     // init, action, destroy, ownedInit, ownedAction, ownedDestroy, ...
+  method: 'increment',
+  instance: '9f1c...', object: null,
+  args: { by: '1' },                  // JSON conventions (below)
+  pay: { lovelace: '0', assets: [] },
+  address: 'addr_test1...',           // the wallet's funding address
+  walletUtxos: [ /* the UTxOs the wallet reports there */ ],
+  // cosigners: [keyHash...], governor: { script, signers }   when the call has them
+}
+```
+
+It answers `{ cbor, txHash, validTo, signers, plan }`, plus `instance` or `object` for a creation. The engine builds
+only from `walletUtxos`, the UTxOs the wallet itself reports at its funding address, so it never picks an input the
+wallet does not know about.
+
+## Verification
+
+Before `onReview`, and before the wallet is asked, the client verifies the prepared transaction against what it knows
+itself: the pinned description and deployment, the wallet's UTxOs, the chain (tip, protocol parameters, the outputs the
+transaction reads) and the call it asked for. Nothing the service says is taken on trust: the transaction hash is the
+client's own, computed from the body bytes, and the service's plan must match the plan the client derives.
+
+| Call | Verifier (`@julclang/state-client`) |
+|---|---|
+| creations, actions, destroys, owned calls | `verifyPrepared` |
+| `rt.compose` | `verifyComposed` |
+| intents, cancels, batches | `verifyIntent`, `verifyCancel`, `verifyBatch` |
+| `delegate`, `collect` | `verifyPurpose` |
+| `registerStake`, `ensureGovernor` | `verifyRegistration` |
+
+For a single call, `verifyPrepared` refuses:
+
+- inputs other than the wallet's own UTxOs and the instance or object the call targets;
+- a redeemer that is not exactly the call, with the page's arguments, on the target input; a `Ctx` whose caller is not
+  this wallet, or whose received amount is not the page's payment;
+- certificates, votes, proposals, treasury donations, metadata, and withdrawals other than zero withdrawals to the
+  verifiers or governor the deployment pins;
+- a mint by an action that does not mint; anything but its own token burned by a destroy; anything but its new token
+  minted by a creation; any mint under another policy;
+- anything but exactly one continuation of the instance or object, with an inline datum that decodes;
+- a transaction that does not balance; a wallet losing more than its payment plus the fee (plus the minimum ADA of a
+  new UTxO); others receiving more than the script releases;
+- a fee above the protocol's for this size and budget (times 1.2, plus `feeMargin`) or above `maxFee`; execution
+  budgets above the protocol's limits;
+- collateral that is not the wallet's, not returned to the wallet, or above `maxCollateral`;
+- a validity interval that is too long or starts too late (and, for a call that reads `Ctx`, one backdated);
+- required signers other than the wallet's keys and the co-signers the page named; reference inputs the page does not
+  know.
+
+The pinned validator checks the rest on chain: that the next state is what the method computes, that payouts are paid
+and that the script's value is conserved.
+
+### `VerificationError`
+
+A refused transaction throws `VerificationError`. Its `problems` is a list of reasons; its `report` is what the
+verifier read.
+
+```js
+import { VerificationError } from '@julclang/state-client';
+
+try {
+  await instance.increment(wallet, { by: 1n });
+} catch (e) {
+  if (e instanceof VerificationError) console.error('refused before signing:', e.problems);
+  else throw e;   // a contract refusal (Require.that's message), a wallet decline, a chain error
+}
+```
+
+`rt.compose` refuses with an `Error` carrying the same `problems` and `report` fields.
+
+| `report` field | Meaning |
+|---|---|
+| `fee` | the transaction's fee (lovelace, `bigint`) |
+| `walletNet` | what the wallet loses in lovelace, fee included; negative when it gains |
+| `next` | the next state (or object value), decoded; `null` for a destroy |
+| `redeemer` | the decoded redeemer |
+| `created` | the new instance or object id, for a creation |
+| `outputs` | the transaction's outputs: `[{ address, value }]` |
+| `plan` | the plan the client derived from the transaction |
+
+### Limits
+
+`limits` overrides any of `DEFAULT_LIMITS`:
+
+| Limit | Default | Meaning |
+|---|---|---|
+| `maxCollateral` | `5_000_000n` | lovelace a failing script may cost the wallet |
+| `maxValiditySlots` | `900` | the transaction must expire within this many slots of now (15 minutes) |
+| `maxStartSlots` | `60` | its validity may start at most this many slots after now |
+| `maxBackdateSlots` | `120` | a `Ctx` call's validity may start at most this many slots before now |
+| `feeMargin` | `500_000n` | lovelace allowed over 1.2 times the protocol's fee |
+| `maxFee` | `3_000_000n` | an absolute fee bound, which does not rely on the chain API's parameters |
+
+"Now" is the chain's tip. Give the deployment a `slotConfig` (`{ zeroSlot, zeroTimeMs, slotLengthMs }`) and the
+verifier also checks the validity against the page's own clock, so a lying chain API cannot stretch the window.
+
+## JSON conventions
+
+Arguments, payments and decoded state use one JSON form, recorded in each description's `x-joust.encoding.json`:
+
+| Schema | JavaScript value |
+|---|---|
+| integer | `bigint`, a decimal string, or a safe integer; decoded as `bigint` |
+| bytes | lowercase hex string |
+| record (constructor) | an object by field name |
+| sealed variant | an object with `"$variant"` (its constructor's title) |
+| `Bool` | `true` / `false` |
+| `Optional` | `null` for none, else the value |
+| list | an array |
+| map | an array of `[key, value]` pairs, encoded in canonical key order |
+| `Data` | hex CBOR of any Plutus data |
+
+`toJson(value)` turns `bigint`s into decimal strings, so a value can go through `JSON.stringify`. Requests to a service
+use it. To encode or decode by schema yourself, use `codec(description)`:
+
+```js
+import { codec } from '@julclang/state-client';
+
+const c = codec(description);
+const data = c.encode({ dataType: 'integer' }, 5n, 'by');   // Plutus data
+const state = c.decode(description['x-joust'].state, inlineDatumHex);
+```
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Wallets" href="/apps/wallets/" description="CIP-30 wallets, signing, the review step, the dev wallet." />
+  <LinkCard title="Pages: worker, Vite, static builds" href="/apps/pages/" description="The engine in a Web Worker, and shipping a page." />
+  <LinkCard title="@julclang/state-client reference" href="/reference/state-client/" description="Every export with its signature." />
+  <LinkCard title="Contract description" href="/reference/description-format/" description="What the client reads: schemas, calls, policies." />
+</CardGrid>

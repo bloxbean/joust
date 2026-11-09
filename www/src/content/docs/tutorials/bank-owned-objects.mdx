@@ -1,0 +1,215 @@
+---
+title: "Bank: owned objects"
+description: Run a bank where each customer's account is its own UTxO, so customers act in parallel, with shared settings read by reference and an escape hatch.
+---
+
+import { Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+In this tutorial you run `examples/bank`: a bank with shared settings (an admin, a paused flag, a withdrawal limit)
+and one account per customer. Each account is an [owned object](/contracts/owned-objects/), its own UTxO, so two
+customers can deposit and withdraw in the same block without queueing behind each other. You will see the shared
+settings read without being spent, and an account closed while the bank is paused.
+
+<Aside type="caution" title="Pre-release">
+JOUST is pre-release and needs a JuLC build that is not published yet: from a JOUST checkout, build it into mavenLocal
+with `bash .github/ci/build-julc.sh` (JDK 25). See [Quick start: Java](/start/quick-start-java/). You also need Yaci
+DevKit: `yaci-devkit up --enable-yaci-store`.
+</Aside>
+
+## The contract
+
+```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java"
+@StateContract(maxDatumBytes = 160)
+public class Bank {
+
+    public record State(byte[] admin, boolean paused, BigInteger withdrawLimit) {}
+
+    @Owned
+    public record Account(byte[] owner, BigInteger balance) {}
+
+    public record Withdrawal(Account state, JulcList<Payout> payouts) {}
+
+    @Init
+    public static State init(BigInteger withdrawLimit, Ctx ctx) {
+        return new State(ctx.caller(), false, withdrawLimit);
+    }
+
+    @Action
+    @SignedBy("admin")
+    public static State setPaused(State s, boolean paused) {
+        return new State(s.admin(), paused, s.withdrawLimit());
+    }
+
+    /** Opens an account for the caller, with a first deposit. */
+    @OwnedInit
+    @Payable
+    public static Account open(@Shared State bank, Ctx ctx) {
+        Require.that(!bank.paused(), "the bank is paused");
+        return new Account(ctx.caller(), ctx.received());
+    }
+
+    @OwnedAction
+    @Payable
+    @SignedBy("owner")
+    public static Account deposit(Account a, Ctx ctx) {
+        Require.that(ctx.received().compareTo(BigInteger.ZERO) > 0, "deposit must be positive");
+        return new Account(a.owner(), a.balance().add(ctx.received()));
+    }
+
+    /** Takes money out, within the bank's limit, unless the bank is paused. */
+    @OwnedAction
+    @SignedBy("owner")
+    public static Withdrawal withdraw(Account a, @Shared State bank, BigInteger amount, Ctx ctx) {
+        Require.that(!bank.paused(), "the bank is paused");
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0 && amount.compareTo(bank.withdrawLimit()) <= 0,
+                "amount outside the withdrawal limit");
+        Require.that(amount.compareTo(a.balance()) <= 0, "insufficient balance");
+        return new Withdrawal(new Account(a.owner(), a.balance().subtract(amount)), Payouts.of(a.owner(), amount));
+    }
+
+    /** The owner closes the account and takes everything (works even when the bank is paused). */
+    @OwnedDestroy
+    @SignedBy("owner")
+    public static JulcList<Payout> close(Account a, Ctx ctx) {
+        return Payouts.of(a.owner(), ctx.balance());
+    }
+}
+```
+
+- `State` is the instance: one UTxO, changed only by the admin's `@Action`s.
+- `Account` is `@Owned`: every `open` creates a new UTxO holding an `Account`, with a 29-byte token starting `0x4F`.
+- `@Shared State bank` gives `open` and `withdraw` the bank's settings through a reference input. They read it; they
+  never spend it.
+- `close` takes no `@Shared` parameter. That makes it the *escape hatch*: it needs nothing from the bank, so it works
+  whatever the bank's state. The processor requires one for every owned type.
+
+## Run it
+
+<Steps>
+
+1. **Run the harness tests.**
+
+   ```sh
+   ./gradlew :examples:bank:test --tests '*BankTest'
+   ```
+
+   [`BankTest`](https://github.com/bloxbean/joust/blob/main/examples/bank/src/test/java/org/julclang/state/examples/bank/BankTest.java)
+   evaluates the compiled validator on account transactions and runs the attack suite on each. Look at the tests that
+   must fail: `withdraw_byAStranger_rejected` (`@SignedBy("owner")` names the account's field),
+   `sharedReadOfAnotherInstance_rejected` (a reference to another bank does not count),
+   `anObjectSpentWithASharedRedeemer_rejected` (an account token cannot take an instance's redeemer) and
+   `openUnderAnObjectInsteadOfAnInstance_rejected`. Then `close_escapeHatchWorksWhilePaused`, which asserts that the
+   close transaction has no reference inputs at all.
+
+   *What this taught:* the token's kind and the `Holding(instance, …)` datum are what keep objects, instances and
+   other banks apart.
+
+2. **Run the app on DevKit.**
+
+   ```sh
+   ./gradlew :examples:bank:run
+   ```
+
+   ```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/BankApp.java"
+   var bank = BankClient.deploy(runtime, admin, ada.multiply(BigInteger.valueOf(20)));
+   var acct = bank.open(ann, ada.multiply(BigInteger.valueOf(30)));
+   acct.withdraw(ann, ada.multiply(BigInteger.TEN));
+   System.out.println("account " + acct.objectId() + " balance " + acct.value().balance());
+   acct.close(ann);
+   System.out.println("closed");
+   ```
+
+   It deploys a bank with a 20 ADA withdrawal limit, opens Ann's account with 30 ADA, withdraws 10, and prints the
+   account's id (29 bytes, so 58 hex characters starting `4f`) and a balance of `20000000` lovelace. Then it closes the
+   account, and Ann gets everything back, the account's deposit included.
+
+   *What this taught:* `bank.open` returns a typed handle (`AccountObject`) whose methods are the `@OwnedAction`s and
+   `@OwnedDestroy`s.
+
+3. **Two customers at once.** The DevKit test runs two customers from separate threads:
+
+   ```java title="examples/bank/src/test/java/org/julclang/state/examples/bank/BankDevnetTest.java"
+   var annAcct = bank.open(ann, ADA.multiply(BigInteger.valueOf(30)));
+   var benAcct = bank.open(ben, ADA.multiply(BigInteger.valueOf(40)));
+
+   // Both customers deposit and withdraw at the same time: separate UTxOs, so no contention.
+   var a = CompletableFuture.runAsync(() -> {
+       annAcct.deposit(ann, ADA.multiply(BigInteger.valueOf(5)));
+       annAcct.withdraw(ann, ADA.multiply(BigInteger.TEN));
+   });
+   var b = CompletableFuture.runAsync(() -> {
+       benAcct.deposit(ben, ADA.multiply(BigInteger.valueOf(7)));
+       benAcct.withdraw(ben, ADA.multiply(BigInteger.valueOf(20)));
+   });
+   CompletableFuture.allOf(a, b).join();
+   assertEquals(ADA.multiply(BigInteger.valueOf(25)), annAcct.value().balance());
+   assertEquals(ADA.multiply(BigInteger.valueOf(27)), benAcct.value().balance());
+   ```
+
+   Run it with `./gradlew :examples:bank:test --tests '*BankDevnetTest'` while DevKit is up. Both threads finish
+   without a contention retry: each spends only its own account, and both read the bank by reference.
+
+   *What this taught:* reference inputs do not contend, so a shared configuration costs nothing in parallelism.
+
+4. **Pause the bank, then close anyway.** The same test continues:
+
+   ```java
+   assertThrows(RequireException.class, () -> annAcct.withdraw(ben, ADA), "not the owner");
+   assertThrows(RequireException.class, () -> annAcct.withdraw(ann, ADA.multiply(BigInteger.valueOf(21))), "over limit");
+
+   bank.setPaused(admin, true);
+   assertThrows(RequireException.class, () -> annAcct.withdraw(ann, ADA), "paused");
+   // The escape hatch: closing needs no bank state.
+   var closed = annAcct.close(ann);
+   ```
+
+   The refusals come from the JVM run of the same methods, before anything is submitted: `RequireException` carries
+   the `Require.that` message. The close pays Ann her 25 ADA plus the account's deposit.
+
+   *What this taught:* an admin can stop new activity, but can never trap customers' funds.
+
+</Steps>
+
+## From a page
+
+The `dapp` example puts the bank in a browser page, using a typed client generated from the contract's description.
+Follow [its README](https://github.com/bloxbean/joust/blob/main/examples/dapp/README.md) to run it
+(`./gradlew :examples:dapp:run`, then `http://localhost:8095`). Open an account, deposit, withdraw and close; every
+transaction is checked by the page before the wallet signs. The calls are short:
+
+```js title="examples/dapp/frontend/src/main.js (adapted)"
+const inst = bank.at(bankId);
+await inst.open(wallet, {}, { lovelace: 30_000_000n });               // @OwnedInit @Payable
+
+const accounts = (await inst.objects()).filter((o) => o.value.owner === myKeyHash);
+const acct = inst.account(accounts[0].id);                           // a handle per owned type
+await acct.deposit(wallet, {}, { lovelace: 5_000_000n });
+await acct.withdraw(wallet, { amount: 10_000_000n });
+await acct.close(wallet);
+```
+
+`inst.objects()` lists every owned object of the instance on chain, each with its id, type, decoded value and
+lovelace.
+
+## What you built
+
+- Per-customer state with no contention between customers.
+- Shared settings read by reference, so the admin can pause new activity.
+- An escape hatch that keeps every customer's funds reachable.
+
+## Going further
+
+- **Several owned types and moves.** `examples/guild` has heroes and items, and moves a hero to another guild with
+  `@Into` and `@Admits`; see [Owned objects](/contracts/owned-objects/#moving-an-object-to-another-instance).
+- **Maps inside objects.** `Armory` in the same example gives each player a vault with a MerkleMap inventory.
+- **Objects holding tokens.** The [DEX tutorial](/tutorials/dex-assets/) ends with a marketplace whose listings hold
+  their NFT.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Owned objects" href="/contracts/owned-objects/" description="Every rule, the datum layout, moves and maps in objects." />
+  <LinkCard title="Pool: batched intents" href="/tutorials/pool-batched-intents/" description="When the shared state itself is hot." />
+  <LinkCard title="JavaScript clients" href="/apps/javascript-clients/" description="Generated clients and the page verifier." />
+  <LinkCard title="Testing" href="/contracts/testing/" description="The harness and the attack suite." />
+</CardGrid>

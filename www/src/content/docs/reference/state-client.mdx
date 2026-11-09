@@ -1,0 +1,246 @@
+---
+title: "@julclang/state-client"
+description: API reference of @julclang/state-client - clients, services, chain providers, wallets, verifiers, data codecs, ledger helpers and joust-gen.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+`@julclang/state-client` is the JavaScript client for JOUST contracts: it encodes calls from a contract's description,
+verifies prepared transactions before a CIP-30 wallet signs them, and reads the chain. It has no engine and no Wasm,
+so it is what a page bundles. Ledger formats go through cardano-js-sdk (`@cardano-sdk/core` 0.47.1, pinned exactly);
+Plutus data through its own model and CBOR (`pdata.js`). Source:
+[`js/state-client/src/index.js`](https://github.com/bloxbean/joust/blob/main/js/state-client/src/index.js), types in
+`src/index.d.ts`.
+
+<Aside type="caution" title="Pre-release: from a local registry">
+Version `0.1.0-pre1-snapshot`, not on npmjs.org yet: install it from a local registry, as the
+[npm quick start](/start/quick-start-npm/#prerequisites) shows.
+</Aside>
+
+| Entry point | Contents |
+|---|---|
+| `@julclang/state-client` | everything below, unless marked otherwise |
+| `@julclang/state-client/devwallet` | `devWallet`, `deriveAccount`, `DEVKIT_MNEMONIC` |
+| `@julclang/state-client/codegen` | `generate` |
+| `@julclang/state-client/ledger` | the cardano-js-sdk adapter (ledger helpers) |
+| `@julclang/state-client/pdata` | Plutus data: `Data`, `decodeData`, `encodeData`, `dataHex`, `dataEqual`, `CborError` |
+| bin `joust-gen` | generates typed clients from descriptions |
+
+Functions that once took cardano-serialization-lib (`CSL`) as their first argument still accept it, and ignore it.
+
+## Clients
+
+| Export | Signature | Description |
+|---|---|---|
+| `JoustContract` | `new JoustContract({ description, deployment, service, chain, onReview?, limits?, requirePlan? })` | a contract: builds calls from its description, verifies, reviews, signs, submits |
+| `JoustInstance` | `contract.at(id)` | one instance of a contract |
+| `JoustObject` | `instance.object(id)` | one owned object of an instance |
+| `VerificationError` | `class extends Error { problems: string[]; report }` | thrown when a prepared transaction is refused |
+| `httpService` | `httpService(baseUrl, { fetchImpl? })` | a prepare service over HTTP: `prepare(request)` posts to `<base>/prepare`, `view(request)` to `<base>/view` |
+
+### `JoustContract`
+
+| Member | Signature | Resolves to / is |
+|---|---|---|
+| `deploy` | `deploy(wallet, args = {}, pay = {})` | `{ txHash, report, instance }`: a new instance (`@Init`) |
+| `at` | `at(instanceId)` | a `JoustInstance` |
+| `registerStake` | `registerStake(wallet)` | the hash, or `null` when already registered (ADR-0010) |
+| `delegate` | `delegate(wallet, pool, { cosigners? })` | `{ txHash, report }`: delegation through `@Certify` |
+| `collect` | `collect(wallet, { amount?, args?, cosigners? })` | `{ txHash, report }`: rewards through `@Withdraw` |
+| `rewardAddress` | getter | the reward address of the contract's stake credential |
+| `name` | getter | the contract's simple name |
+| `meta` | `meta(name, kinds)` | the description's entry for a call |
+| `run` | `run(wallet, call)` | prepares, verifies, reviews, signs, submits one call (what the methods above use) |
+| `codec` | property | `codec(description)` |
+
+### `JoustInstance`
+
+| Member | Signature | Resolves to |
+|---|---|---|
+| `id` | property | the instance id (hex) |
+| `read` | `read()` | `{ ref, state, lovelace }` or `null` |
+| `state` | `state()` | the decoded state, or `null` |
+| `call` | `call(wallet, name, args = {}, pay = {}, { cosigners?, governor? } = {})` | `{ txHash, report }` |
+| `create` | `create(wallet, name, args = {}, pay = {})` | `{ txHash, report, object }` |
+| `object` | `object(objectId)` | a `JoustObject` |
+| `objects` | `objects()` | `[{ id, type, value, lovelace }]` |
+| `intent` | `intent(wallet, name, args = {}, pay = {}, { deadline? } = {})` | `{ txHash, report, created, intent }` |
+| `cancelIntent` | `cancelIntent(wallet, intentId)` | `{ txHash, report, created }` |
+| `batch` | `batch(wallet, { max = 8 } = {})` | `{ txHash, report, created, applied, skipped }` |
+| `pendingIntents` | `pendingIntents()` | `[{ intent, ref, owner, deadline, received, call, lovelace }]` |
+
+### `JoustObject`
+
+| Member | Signature | Resolves to |
+|---|---|---|
+| `id` | property | the object id (hex) |
+| `call` | `call(wallet, name, args = {}, pay = {})` | `{ txHash, report }` |
+| `read` | `read()` | `{ ref, type, value, lovelace }` or `null` |
+
+## Chain
+
+| Export | Signature | Description |
+|---|---|---|
+| `blockfrostProvider` | `blockfrostProvider(baseUrl, { projectId?, fetchImpl? })` | a chain provider over Blockfrost or Yaci Store; also `base` and `get(path, { allow404 })` |
+| `ogmiosProvider` | `ogmiosProvider(url, { fetchImpl? })` | a chain provider over Ogmios v6 (JSON-RPC over HTTP); also `rpc(method, params)` |
+| `ogmiosParams` | `ogmiosParams(params, epoch)` | Ogmios' protocol parameters as Blockfrost's object |
+| `plutusScriptHash` | `plutusScriptHash(cborHex, version = 3)` | a Plutus script's hash from its CBOR and language |
+| `chainOf` | `chainOf(provider)` | the chain view the verifier reads |
+| `blockfrostChain` | `blockfrostChain(baseUrl, { projectId?, fetchImpl? })` | `chainOf(blockfrostProvider(...))` |
+
+The provider interface is in [Networks and chain providers](/apps/networks-and-providers/#chain-providers).
+
+### The chain view (`chainOf`)
+
+| Member | Resolves to |
+|---|---|
+| `provider` | the provider |
+| `tip()` | the latest slot |
+| `params()` | protocol parameters (Blockfrost's object) |
+| `utxo(ref)` | `{ address, value: Map, referenceScriptHash, inlineDatum }` or `null` |
+| `verifiedOutput(ref)` | `{ address, inlineDatum }` read from the producing transaction's CBOR, hash-checked; `null` without `txCbor` |
+| `utxosAt(address)` | `[{ ref, address, value: Map, inlineDatum }]` |
+| `findUnit(address, unit)` | the UTxO at `address` holding one `unit`, or `null` |
+| `registered(stakeAddress)` | `true`, `false`, or `undefined` when the provider cannot tell |
+| `rewards(stakeAddress)` | withdrawable rewards (`bigint`) |
+| `submit(cborHex)` | the transaction's hash |
+| `awaitTx(hash, { timeoutMs?, intervalMs? })` | `true` once on chain |
+
+## Wallets
+
+| Export | Signature | Description |
+|---|---|---|
+| `walletView` | `walletView(api)` | `{ api, networkId, change, addresses, keyHashes, utxos }` from a CIP-30 API |
+| `assemble` | `assemble(cbor, ...witnessSets)` | `{ cbor, txHash }`: the transaction with vkey witnesses added, body bytes unchanged |
+| `paymentKeyHash` | `paymentKeyHash(bech32)` | the payment key hash of a base or enterprise key address, or `null` |
+
+`@julclang/state-client/devwallet`:
+
+| Export | Signature | Description |
+|---|---|---|
+| `devWallet` | `devWallet({ chain, mnemonic = DEVKIT_MNEMONIC, index = 0, networkId = 0, confirm? })` | a CIP-30 wallet for DevKit and tests; also `name`, `address`, `keyHash` |
+| `deriveAccount` | `deriveAccount(mnemonic, index = 0, networkId = 0)` | `{ privateKey, publicKey, address, reward, keyHash }` (CIP-1852, as cardano-client-lib) |
+| `DEVKIT_MNEMONIC` | constant | Yaci DevKit's default mnemonic (its genesis accounts are funded) |
+
+The module awaits libsodium at import. See [Wallets](/apps/wallets/#the-dev-wallet).
+
+## Verification
+
+Each verifier returns `{ problems: string[], report }`; no problems means the wallet may sign.
+
+| Export | Signature | Verifies |
+|---|---|---|
+| `verifyPrepared` | `await verifyPrepared({ description, deployment, txHex, call, wallet, chain, limits? })` | a creation, action, destroy or owned call |
+| `verifyComposed` | `await verifyComposed({ steps, txHex, wallet, chain, limits? })` | several calls in one transaction; `steps`: `[{ description, deployment, call }]` |
+| `verifyIntent` | `await verifyIntent({ description, deployment, txHex, call, wallet, chain, limits? })` | an intent lock (ADR-0004) |
+| `verifyCancel` | same | an intent's cancellation |
+| `verifyBatch` | same | a batch, from the batcher's side |
+| `verifyPurpose` | `await verifyPurpose({ description, deployment, txHex, wallet, chain, op, pool?, amount?, args?, cosignerKeys?, limits? })` | a delegation or a reward collection |
+| `verifyRegistration` | `verifyRegistration({ txHex, governor: { hash }, wallet, chain: { params, tip }, networkId, limits? })` | a stake credential's registration |
+| `runComposed` | `await runComposed({ service, chain, api, steps, limits?, onReview? })` | prepares, verifies, signs and submits a composition; `steps`: `[{ contract, method, args, pay?, instance, object?, into?, cosigners? }]` |
+| `DEFAULT_LIMITS` | constant | the verifiers' limits (below) |
+
+`wallet` is a `walletView`; `chain` is `{ tip, params, utxo }` (the tip slot, protocol parameters, an output reader).
+
+`DEFAULT_LIMITS`:
+
+| Key | Value |
+|---|---|
+| `maxCollateral` | `5_000_000n` |
+| `maxValiditySlots` | `900` |
+| `maxStartSlots` | `60` |
+| `maxBackdateSlots` | `120` |
+| `feeMargin` | `500_000n` |
+| `maxFee` | `3_000_000n` |
+
+Plans and helpers the verifiers use:
+
+| Export | Signature | Description |
+|---|---|---|
+| `planOf` | `planOf(cbor)` | the transaction's plan (ADR-0013 D4): what it spends, reads, creates, mints, runs, requires |
+| `planDifference` | `planDifference(a, b, path = 'plan')` | the first difference between two plans, `""` when equal |
+| `redeemerDefs` | `redeemerDefs(codec, description)` | the description's spend and mint redeemer definitions |
+| `valueMap` | `valueMap(value)` | a value as `Map` unit to `bigint` |
+| `ledgerOrder` | `ledgerOrder(refs)` | input references in ledger order (transaction id, then index) |
+| `refOf` | `refOf(input)` | `"txHash#index"` of an input |
+
+## Data
+
+| Export | Signature | Description |
+|---|---|---|
+| `codec` | `codec(description)` | `{ encode(schema, value, path?), decode(schema, dataOrHex, path?), resolve, ... }`: JSON values to Plutus data and back, by the description's schemas |
+| `toJson` | `toJson(value)` | the value with every `bigint` as a decimal string |
+| `dataEqual` | `dataEqual(a, b)` | whether two Plutus data are equal, whatever their CBOR encoding (data or hex) |
+| `DataError` | class | a value that does not fit its schema |
+| `Data` | `Data.constr(index, fields)`, `Data.int(n)`, `Data.bytes(hexOrBytes)`, `Data.list(items)`, `Data.map(entries)` | builds Plutus data |
+| `decodeData` | `decodeData(cborHexOrBytes)` | Plutus data from CBOR; decoded nodes keep their original bytes |
+| `encodeData` | `encodeData(data)` | CBOR bytes, as the ledger and cardano-client-lib write them |
+| `dataHex` | `dataHex(data)` | CBOR hex |
+
+Plutus data is `{ constr, fields } | { int } | { bytes } | { list } | { map }`. The JSON conventions are in
+[JavaScript clients](/apps/javascript-clients/#json-conventions).
+
+## Tokens
+
+| Export | Signature | Description |
+|---|---|---|
+| `instanceIdOf` | `instanceIdOf(txHash, index)` | an instance's thread token: blake2b-256 of the seed reference, 32 bytes |
+| `objectIdOf` | `objectIdOf(txHash, index)` | an owned object's token: `4f` + blake2b-224 of the seed reference, 29 bytes |
+| `intentIdOf` | `intentIdOf(txHash, index)` | an intent's token: `49` + blake2b-224 of the seed reference, 29 bytes |
+
+## Governors and purposes
+
+| Export | Signature | Description |
+|---|---|---|
+| `governorParams` | `governorParams(validator, values)` | a plain validator's parameters as Data hex, from JSON by their Java types |
+| `rewardAddressOf` | `rewardAddressOf(scriptHash, networkId)` | the reward address of a script credential |
+| `approvalsData` | `approvalsData(policy, target, action)` | `Approvals [Approval(policy, target, action)]`: what a governor grants one call |
+| `purposeOf` | `purposeOf(description, purpose)` | the contract's handler for `withdraw`, `certify`, `vote` or `propose`, or `null` |
+| `rewardsData` | `rewardsData(description, meta, amount, args = {})` | a `@Withdraw` redeemer |
+
+## Ledger helpers
+
+From the main entry point:
+
+| Export | Signature | Description |
+|---|---|---|
+| `parseTx` | `parseTx(cborHex)` | the transaction as plain values: inputs, outputs, mint, redeemers, withdrawals (ledger order), certificates, signers, validity, ... |
+| `txHash` | `txHash(cborHex)` | the hash of the body's own bytes |
+| `bech32Of` | `bech32Of(address)` | an address (hex, as CIP-30 gives it, or bech32) as bech32 |
+| `addressParts` | `addressParts(bech32)` | `{ kind, payment, stake, networkId }` |
+| `rewardAddress` | `rewardAddress({ type, hash }, networkId)` | a credential's reward address |
+| `enterpriseAddress` | `enterpriseAddress({ type, hash }, networkId)` | a credential's enterprise address |
+| `baseAddress` | `baseAddress(payment, stake, networkId)` | a base address |
+| `poolKeyHash` | `poolKeyHash(pool)` | a pool id (`pool1…` or hex) as its key hash |
+| `ledgerAddressJson` | `ledgerAddressJson(bech32)` | a ledger `Address` as the description's JSON |
+| `hexToBytes`, `bytesToHex` | | hex conversion |
+
+`@julclang/state-client/ledger` also exports `assemble`, `paymentKeyHash`, `unspentOutput(hex)`, `addressHex(bech32)`,
+`valueCbor(value)`, `unspentOutputCbor(utxo)`, `vkeyWitnessSet(publicKeyHex, signatureHex)`,
+`singleKeyPolicy(keyHash)`, `buildPlainTx({ inputs, outputs, change, params, mint?, signers?, ttl? })` (plain
+development transactions: never contract calls) and `LedgerError`.
+
+## Code generation
+
+`@julclang/state-client/codegen`:
+
+| Export | Signature | Description |
+|---|---|---|
+| `generate` | `generate(description, { importFrom = '@julclang/state-client' } = {})` | `{ js, dts }`: a typed client for one description |
+
+The `joust-gen` bin wraps it:
+
+```sh
+joust-gen <description.json>... --out <dir> [--import <module>]
+```
+
+It writes `<Contract>.js` and `<Contract>.d.ts` for each description. See [TypeScript](/languages/typescript/).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="JavaScript clients" href="/apps/javascript-clients/" description="How these pieces fit together, with examples." />
+  <LinkCard title="@julclang/joust-runtime" href="/reference/joust-runtime/" description="The engine, the Node runtime and the worker." />
+  <LinkCard title="Wallets" href="/apps/wallets/" description="CIP-30, the review step and the dev wallet." />
+  <LinkCard title="Contract description" href="/reference/description-format/" description="The format the codec and verifiers read." />
+</CardGrid>

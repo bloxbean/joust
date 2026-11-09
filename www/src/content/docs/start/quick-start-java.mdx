@@ -1,0 +1,511 @@
+---
+title: "Quick start: Java & Gradle"
+description: Build JuLC, run the counter example, then set up your own Gradle project with JOUST, write a contract, test it and run it on Yaci DevKit.
+---
+
+import { Aside, FileTree, LinkCard, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+This page takes you from an empty machine to a contract running on a local Cardano network, with Java 25 and
+Gradle. It has two parts: first you run the counter example inside a JOUST checkout (the quickest way to see
+everything work), then you set up a project of your own.
+
+If you would rather use Node and no JDK, see [Quick start: npm & JavaScript](/start/quick-start-npm/).
+
+<Aside type="caution" title="Pre-release: nothing is on Maven Central yet">
+
+JOUST snapshots are published to the BloxBean snapshot repository
+(`https://repo.bloxbean.org/maven/snapshots`, versions `0.1.0-pre1-<sha7>-SNAPSHOT`), and they need a build of JuLC
+that is not published anywhere: you build it into your local Maven repository (`~/.m2`) first, with a script in the
+JOUST repository. The steps below do this.
+
+</Aside>
+
+## Prerequisites
+
+- **JDK 25.** The build uses a Java toolchain of version 25.
+- **Git and Bash,** to fetch and build JuLC.
+- **Yaci DevKit,** the local Cardano network, for the last step. Start it with Yaci Store (its Blockfrost-compatible
+  API) enabled:
+
+  ```sh
+  yaci-devkit up --enable-yaci-store
+  ```
+
+  Yaci Store then answers on `http://localhost:8080`, the DevKit admin API on `http://localhost:10000`, and the Yaci
+  Viewer explorer on `http://localhost:5173`. See [Networks and chain providers](/apps/networks-and-providers/).
+
+You do not need Gradle installed: the JOUST checkout has a wrapper (Gradle 9.2), and you can copy it.
+
+## Part 1: run the counter in a JOUST checkout
+
+<Steps>
+
+1. **Get JOUST and build JuLC into mavenLocal.**
+
+   ```sh
+   git clone https://github.com/bloxbean/joust.git
+   cd joust
+   bash .github/ci/build-julc.sh
+   ```
+
+   `build-julc.sh` fetches JuLC at the commit this JOUST checkout pins, builds it with
+   `-Pversion=0.1.0-adr071-SNAPSHOT` (the JuLC build appends the commit), publishes it to `~/.m2`, and checks that
+   the result is exactly the `julc` version in `gradle/libs.versions.toml`. It prints, for example,
+   `JuLC 0.1.0-adr071-deb72bb-SNAPSHOT is in /Users/you/.m2/repository`.
+
+2. **Run the counter's tests.**
+
+   ```sh
+   ./gradlew :examples:counter:test
+   ```
+
+   This compiles `Counter.java`, generates `CounterValidator` and `CounterClient`, compiles the validator to UPLC,
+   and runs three kinds of tests: the contract's methods as plain Java, the compiled validator against
+   transactions shaped like the runtime's, and the attack suite on each accepted transaction. The DevKit test
+   (`CounterDevnetTest`) runs too if DevKit is up, and skips itself otherwise.
+
+3. **Run it on DevKit.**
+
+   ```sh
+   ./gradlew :examples:counter:run
+   ```
+
+   `CounterApp` funds two fresh accounts from the DevKit faucet, deploys a counter as Alice, increments it as Bob and
+   Alice, shows Bob's reset being refused before anything is submitted, and closes the counter:
+
+   ```text
+     [joust] deploy Counter: submitted 34ba07cb2b9d13c18dba4c629966584fe06047283c2d5b5bb9e847f5cd3328b9
+   deployed instance d11c40ff686bcc687c6dffb98efd9b25c597c8377df049f12117ca5747b455a9 at addr_test1wptj8x0692g2q3fv8v5a5j90dwgfqkkge76s8cd0sq7fgtq9nldys
+   count = 0
+     [joust] Counter.increment: submitted 85ec809e34d3d0e37e2a6c62177e2ddb3d2da3da92841e162ced7f81e92af19a
+   bob +5   -> count = 5
+     [joust] Counter.increment: submitted c1733515f595a25a569ebeb5a4ce7fa73b190d33fe45173714b4722f305633de
+   alice +2 -> count = 7
+   bob reset rejected off-chain: Counter.reset: must be called by the key in 'owner'
+     [joust] Counter.reset: submitted f1f17a47fcb0f0f77888786bbd960def8bfef0b33a57f7ea41b3fdbe7e3c2648
+   alice reset -> count = 0
+     [joust] Counter.close: submitted c4419d0bb7e0b1f6fdf025eb90ae699e1d6c54c4a8907cb31e85862d36d4306d
+   alice closed the counter in c4419d0bb7e0b1f6fdf025eb90ae699e1d6c54c4a8907cb31e85862d36d4306d, paid back [Payout[to=[B@78d39a69, lovelace=2200000]]
+   ```
+
+   Your hashes will differ. The first run on a fresh DevKit also logs `published the Counter reference script in
+   ...`: the first deploy of a contract on a network publishes its script once, for every later transaction to read.
+   Open the address in Yaci Viewer (`http://localhost:5173`) to see the state UTxOs and their datums.
+
+</Steps>
+
+Every example in `examples/` runs the same way: `./gradlew :examples:vault:run`, `:examples:escrow:run`, and so on.
+See [Examples](/reference/examples/).
+
+## Part 2: your own project
+
+### Choose where JOUST comes from
+
+<Tabs>
+<TabItem label="Snapshot repository">
+
+Pick a snapshot version from the
+[Development snapshot](https://github.com/bloxbean/joust/releases/tag/snapshot) page, for example
+`0.1.0-pre1-<sha7>-SNAPSHOT`. The JuLC it needs is the one pinned at that commit, so build JuLC from the same
+commit:
+
+```sh
+cd joust
+git checkout <sha7>
+bash .github/ci/build-julc.sh
+grep '^julc ' gradle/libs.versions.toml     # the JuLC version to put in your build
+```
+
+</TabItem>
+<TabItem label="Your checkout, via mavenLocal">
+
+Publish the library modules of your checkout to `~/.m2` (after `build-julc.sh`):
+
+```sh
+cd joust
+./gradlew publishToMavenLocal
+git rev-parse --short=7 HEAD                 # your version is 0.1.0-pre1-<this>-SNAPSHOT
+grep '^julc ' gradle/libs.versions.toml     # and this is the JuLC version
+```
+
+This publishes `julc-state-api` (with its `onchain` jar), `-processor`, `-runtime`, `-testkit`, `-verifier`, `-dsl`
+and `-server`.
+
+</TabItem>
+</Tabs>
+
+<Aside type="note">
+
+Inside the JOUST repository, modules depend on each other through Gradle projects, and CI builds them that way. A
+project outside the repository that resolves the published artifacts follows the README's "Development snapshots"
+setup below, but that path is not exercised in CI yet (the snapshot workflow skips its consumer check while JuLC is
+built from source). If something does not resolve, the in-repository examples are the reference.
+
+</Aside>
+
+### Create the project
+
+<FileTree>
+
+- my-counter/
+  - settings.gradle
+  - gradle.properties
+  - build.gradle
+  - gradlew (copied from the JOUST checkout, with gradle/wrapper/)
+  - src/
+    - main/java/app/
+      - Counter.java
+      - Devnet.java
+      - CounterMain.java
+    - test/java/app/
+      - CounterTest.java
+
+</FileTree>
+
+```groovy title="settings.gradle"
+rootProject.name = 'my-counter'
+```
+
+```properties title="gradle.properties"
+joustVersion=0.1.0-pre1-<sha7>-SNAPSHOT
+julcVersion=0.1.0-adr071-deb72bb-SNAPSHOT
+```
+
+Set `julcVersion` to the `julc` entry of `gradle/libs.versions.toml` at the JOUST commit you use.
+
+```groovy title="build.gradle"
+plugins {
+    id 'application'
+}
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+}
+
+repositories {
+    mavenCentral()
+    mavenLocal()     // JuLC, built by build-julc.sh (and JOUST, if you published your checkout)
+    maven {
+        url = uri('https://repo.bloxbean.org/maven/snapshots')
+        mavenContent { snapshotsOnly() }
+    }
+}
+
+dependencies {
+    implementation "org.julclang:julc-state-runtime:$joustVersion"
+    implementation 'com.bloxbean.cardano:cardano-client-backend-blockfrost:0.8.0-pre7'   // Yaci Store / Blockfrost
+
+    annotationProcessor "org.julclang:julc-state-processor:$joustVersion"
+    annotationProcessor "org.julclang:julc-annotation-processor:$julcVersion"
+    annotationProcessor "org.julclang:julc-state-api:$joustVersion:onchain"   // on-chain sources for JuLC
+
+    testImplementation "org.julclang:julc-state-testkit:$joustVersion"
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-parameters'
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    systemProperty 'joust.mapStore', 'memory'    // MerkleMap mirrors in memory for tests
+}
+
+application {
+    mainClass = 'app.CounterMain'
+}
+
+tasks.named('run', JavaExec) {
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+```
+
+What each line on the annotation processor path is for:
+
+| Dependency | Why it is there |
+|---|---|
+| `julc-state-processor` | The JOUST processor: generates `<Name>Validator`, `<Name>Client` and the description |
+| `julc-annotation-processor` | JuLC's processor: compiles the generated validator to UPLC in the next round |
+| `julc-state-api:<version>:onchain` | The `julc-state-api` **sources**, under `META-INF/plutus-sources/`. JuLC compiles against its own on-chain API plus library sources it finds on the processor path; without these it cannot see `Ctx`, `Require`, `Payouts` and the rest |
+
+<Aside type="tip" title="Inside the JOUST build: a directory, not a jar">
+
+Modules inside the JOUST repository use the same bundle as a **directory**:
+`annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')`, as in
+[`examples/counter/build.gradle`](https://github.com/bloxbean/joust/blob/main/examples/counter/build.gradle). A jar
+that is rebuilt while a Gradle daemon is running can make JuLC's source scan silently find nothing (ADR-0001 F8). A
+published jar does not change, so this rarely matters outside the repository; if a build suddenly reports that JuLC
+cannot resolve `Ctx` or `Require`, run `./gradlew --stop` and build again.
+
+</Aside>
+
+### Write the contract
+
+```java title="src/main/java/app/Counter.java"
+package app;
+
+import org.julclang.core.types.JulcList;
+import org.julclang.state.api.Action;
+import org.julclang.state.api.Ctx;
+import org.julclang.state.api.Destroy;
+import org.julclang.state.api.Init;
+import org.julclang.state.api.OnlyOwner;
+import org.julclang.state.api.Payout;
+import org.julclang.state.api.Payouts;
+import org.julclang.state.api.Require;
+import org.julclang.state.api.StateContract;
+import org.julclang.state.api.View;
+
+import java.math.BigInteger;
+
+@StateContract(maxDatumBytes = 128)
+public class Counter {
+
+    public record State(BigInteger count, byte[] owner) {}
+
+    @Init
+    public static State init(Ctx ctx) {
+        return new State(BigInteger.ZERO, ctx.caller());
+    }
+
+    @Action
+    public static State increment(State s, BigInteger by) {
+        Require.that(by.compareTo(BigInteger.ZERO) > 0, "increment must be positive");
+        return new State(s.count().add(by), s.owner());
+    }
+
+    @Action
+    @OnlyOwner
+    public static State reset(State s) {
+        return new State(BigInteger.ZERO, s.owner());
+    }
+
+    @Destroy
+    @OnlyOwner
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        return Payouts.of(s.owner(), ctx.balance());
+    }
+
+    @View
+    public static BigInteger count(State s) {
+        return s.count();
+    }
+}
+```
+
+This is the [counter example](https://github.com/bloxbean/joust/blob/main/examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java)
+in package `app`. [Your first contract](/start/first-contract/) explains every line.
+
+### Build
+
+```sh
+./gradlew build
+```
+
+The build writes:
+
+| Output | Where | What it is |
+|---|---|---|
+| `CounterValidator.java` | `build/generated/sources/annotationProcessor/java/main/app/` | The on-chain validator source (MINT + SPEND) |
+| `CounterClient.java` | same | The typed client: `deploy`, `at`, `increment`, `reset`, `close`, `count`, `state` |
+| `CounterValidator.plutus.json` | `build/classes/java/main/META-INF/plutus/` | The compiled UPLC script; the runtime and the testkit load it from the classpath |
+| `app.Counter.json` | `build/classes/java/main/META-INF/joust/` | The description (CIP-57 plus `x-joust`) JavaScript clients are generated from |
+
+Read the generated sources: they are ordinary Java, and every check the validator makes is visible in
+`CounterValidator.java`. If your contract breaks a rule (an `int` in a method, two `@Init` methods, a `@Payable`
+without `Ctx`), the build fails with a compiler error on the offending line; see [Java](/languages/java/).
+
+### Test it on the JVM
+
+`julc-state-testkit` gives you `StateHarness`, which evaluates the compiled validator against transactions shaped
+like the ones the runtime builds, and `Attacks`, which mutates each accepted transaction in every way the
+invariants forbid:
+
+```java title="src/test/java/app/CounterTest.java"
+package app;
+
+import org.julclang.state.api.Ctx;
+import org.julclang.state.api.RequireException;
+import org.julclang.state.testkit.Attacks;
+import org.julclang.state.testkit.StateHarness;
+import org.junit.jupiter.api.Test;
+
+import java.math.BigInteger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+class CounterTest {
+
+    static final byte[] ALICE = StateHarness.fill(28, 0x11);
+    static final byte[] BOB = StateHarness.fill(28, 0x22);
+
+    final StateHarness<Counter.State> h = StateHarness.of(CounterClient.SPEC);
+
+    @Test
+    void plainJava() {
+        var s0 = Counter.init(h.ctx(ALICE, BigInteger.ZERO, BigInteger.ZERO));
+        var s1 = Counter.increment(s0, BigInteger.valueOf(5));
+        assertEquals(BigInteger.valueOf(5), Counter.count(s1));
+        var e = assertThrows(RequireException.class, () -> Counter.increment(s1, BigInteger.ZERO));
+        assertEquals("increment must be positive", e.getMessage());
+    }
+
+    @Test
+    void incrementOnChain() {
+        var live = h.live(new Counter.State(BigInteger.valueOf(3), ALICE), BigInteger.ZERO);
+        var next = Counter.increment(live.state(), BigInteger.TEN);
+        var tx = h.act(live, new CounterValidator.Increment(BigInteger.TEN), next, null, null);
+        System.out.println(h.assertAccepted(tx));
+        Attacks.assertAllRejected(h, tx);
+    }
+
+    @Test
+    void resetByStrangerRejectedOnChain() {
+        var live = h.live(new Counter.State(BigInteger.valueOf(42), ALICE), BigInteger.ZERO);
+        h.assertRejected(h.act(live, new CounterValidator.Reset(), Counter.reset(live.state()), BOB, null), "@OnlyOwner");
+    }
+}
+```
+
+```sh
+./gradlew test
+```
+
+The examples' [`CounterTest`](https://github.com/bloxbean/joust/blob/main/examples/counter/src/test/java/org/julclang/state/examples/counter/CounterTest.java)
+covers every call, including the create and the close; [Testing](/contracts/testing/) explains the harness.
+
+### Run it on DevKit
+
+The runtime needs a `StateRuntime`: a chain backend, the network's slot clock, and a few options. The examples get
+one from a small helper, [`examples/devkit/.../DevKit.java`](https://github.com/bloxbean/joust/blob/main/examples/devkit/src/main/java/org/julclang/state/examples/devkit/DevKit.java).
+This is a trimmed copy of it:
+
+```java title="src/main/java/app/Devnet.java"
+package app;
+
+import com.bloxbean.cardano.client.account.Account;
+import com.bloxbean.cardano.client.backend.api.BackendService;
+import com.bloxbean.cardano.client.backend.api.DefaultProtocolParamsSupplier;
+import com.bloxbean.cardano.client.backend.api.DefaultScriptSupplier;
+import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier;
+import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService;
+import com.bloxbean.cardano.client.common.model.Networks;
+import org.julclang.clientlib.eval.JulcTransactionEvaluator;
+import org.julclang.clientlib.eval.SlotConfig;
+import org.julclang.state.runtime.SlotChainTime;
+import org.julclang.state.runtime.StateRuntime;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.regex.Pattern;
+
+/** Yaci DevKit: Yaci Store on :8080, the admin API on :10000. Adapted from the examples' DevKit helper. */
+final class Devnet {
+    static final String STORE = "http://localhost:8080/api/v1/";
+    static final String ADMIN = "http://localhost:10000";
+    static final HttpClient HTTP = HttpClient.newHttpClient();
+
+    static StateRuntime runtime() throws Exception {
+        BackendService backend = new BFBackendService(STORE, "dummy-key");
+        // The DevKit's slot clock, from its genesis.
+        String genesis = get(ADMIN + "/local-cluster/api/admin/devnet");
+        long startSec = Long.parseLong(find(genesis, "startTime", "-?\\d+"));
+        double slotSec = Double.parseDouble(find(genesis, "slotLength", "[\\d.]+"));
+        SlotChainTime time = new SlotChainTime(0, startSec * 1000, Math.round(slotSec * 1000), backend);
+        return StateRuntime.builder(backend)
+                .network(Networks.testnet())
+                .chainTime(time)
+                .ttl(Duration.ofSeconds(20))      // DevKit's time horizon is minutes: keep the validity window short
+                .evaluator(new JulcTransactionEvaluator(   // script budgets computed locally by JuLC
+                        new DefaultUtxoSupplier(backend.getUtxoService()),
+                        new DefaultProtocolParamsSupplier(backend.getEpochService()),
+                        new DefaultScriptSupplier(backend.getScriptService()),
+                        new SlotConfig(time.zeroSlot(), time.zeroTimeMs(), time.slotLengthMs())))
+                .log(msg -> System.out.println("  [joust] " + msg))
+                .build();
+    }
+
+    /** A fresh account with {@code ada} ADA from the DevKit faucet. */
+    static Account fundedAccount(long ada) throws Exception {
+        var account = new Account(Networks.testnet());
+        HTTP.send(HttpRequest.newBuilder(URI.create(ADMIN + "/local-cluster/api/addresses/topup"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(
+                        "{\"address\":\"" + account.baseAddress() + "\",\"adaAmount\":" + ada + "}"))
+                .build(), HttpResponse.BodyHandlers.ofString());
+        Thread.sleep(2000);   // let Yaci Store index the top-up
+        return account;
+    }
+
+    private static String get(String url) throws Exception {
+        return HTTP.send(HttpRequest.newBuilder(URI.create(url)).GET().build(), HttpResponse.BodyHandlers.ofString()).body();
+    }
+
+    private static String find(String json, String key, String valuePattern) {
+        var m = Pattern.compile("\"" + key + "\"\\s*:\\s*(" + valuePattern + ")").matcher(json);
+        if (!m.find()) throw new IllegalArgumentException("key not found: " + key);
+        return m.group(1);
+    }
+}
+```
+
+```java title="src/main/java/app/CounterMain.java"
+package app;
+
+import org.julclang.state.api.RequireException;
+
+import java.math.BigInteger;
+
+public class CounterMain {
+    public static void main(String[] args) throws Exception {
+        var runtime = Devnet.runtime();
+        var alice = Devnet.fundedAccount(500);
+        var bob = Devnet.fundedAccount(500);
+
+        CounterClient counter = CounterClient.deploy(runtime, alice);
+        System.out.println("deployed instance " + counter.instanceId());
+
+        counter.increment(bob, BigInteger.valueOf(5));
+        counter.increment(alice, BigInteger.TWO);
+        System.out.println("count = " + counter.count());               // 7
+
+        try {
+            counter.reset(bob);                                         // not the owner
+        } catch (RequireException e) {
+            System.out.println("refused before submitting: " + e.getMessage());
+        }
+
+        var closed = counter.close(alice);                              // the deposit goes back to alice
+        System.out.println("closed in " + closed.txHash());
+    }
+}
+```
+
+```sh
+./gradlew run
+```
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `Could not find org.julclang:julc-...:0.1.0-adr071-...-SNAPSHOT` | JuLC is not in `~/.m2`, or not the version your JOUST needs. Run `build-julc.sh` at the matching JOUST commit and use the `julc` version it prints |
+| JuLC errors such as "cannot resolve" `Ctx` or `Require` | The `onchain` bundle is missing from the annotation processor path, or a long-lived daemon holds a stale jar: check the dependency, then `./gradlew --stop` |
+| `'int' in a @StateContract ... Use BigInteger` | `SubsetLint`: contract code computes in `BigInteger` only. See [Java](/languages/java/) |
+| `PastHorizon` from the node | The validity window reaches beyond what the network can convert to time. Keep `ttl` short on DevKit (20 s in the examples) |
+
+More in [Troubleshooting](/reference/troubleshooting/).
+
+## Next steps
+
+<LinkCard title="Your first contract" description="Every line of the counter, and how a call becomes a transaction." href="/start/first-contract/" />
+<LinkCard title="Java off-chain runtime" description="StateRuntime options, clients, Compose and wallets." href="/apps/java-runtime/" />
+<LinkCard title="Testing" description="JVM tests, the harness, the attack suite and DevKit tests." href="/contracts/testing/" />
+<LinkCard title="Vault tutorial" description="Deposits, time locks and payouts." href="/tutorials/vault/" />

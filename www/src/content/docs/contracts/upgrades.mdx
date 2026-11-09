@@ -1,0 +1,208 @@
+---
+title: Upgrades and migration
+description: Move a live instance, state and funds, to a new contract version with @MigrateTo on the old side and @Migrate on the new, in one composed transaction.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A deployed script never changes: its hash is its identity. To ship a new version of a contract you deploy a new
+script and **migrate** each instance into it. JOUST makes migration a two-sided handshake, checked by both validators
+in one transaction:
+
+- the **old** contract ends the instance with a `@Destroy` marked `@MigrateTo`, which may send its funds only into the
+  successor it names;
+- the **new** contract creates the replacement with a `@Migrate` method, which adopts only an instance of the
+  predecessor it names, and only if that instance ends in the same transaction.
+
+Neither side alone can move funds. The example is [`examples/upgrade`](https://github.com/bloxbean/joust/tree/main/examples/upgrade):
+`CounterV1` migrates into `CounterV2`, which adds a step size and keeps the admin, the count and the funds.
+
+## The old side: `@MigrateTo`
+
+`@MigrateTo("field")` goes on an instance `@Destroy`. The field is a `byte[]` holding the successor's policy id: a
+state field an admin sets, or `params.<component>`.
+
+```java title="examples/upgrade/src/main/java/org/julclang/state/examples/upgrade/CounterV1.java"
+@StateContract
+public class CounterV1 {
+
+    public record State(byte[] admin, byte[] successor, BigInteger count) {}
+
+    @Init @Payable
+    public static State open(Ctx ctx) {
+        return new State(ctx.caller(), new byte[]{}, BigInteger.ZERO);
+    }
+
+    @Action
+    public static State increment(State s) {
+        return new State(s.admin(), s.successor(), s.count().add(BigInteger.ONE));
+    }
+
+    @Action @SignedBy("admin")
+    public static State setSuccessor(State s, byte[] successor) {
+        return new State(s.admin(), successor, s.count());
+    }
+
+    /** Ends v1 by migrating: nothing is paid out, everything moves to the successor's new instance. */
+    @Destroy @SignedBy("admin") @MigrateTo("successor")
+    public static JulcList<Payout> upgrade(State s, Ctx ctx) {
+        return Payouts.none();
+    }
+}
+```
+
+A migrating destroy does not pay out `ctx.balance()`: the funds go to the successor instead. What its validator
+checks, besides the usual destroy checks (the method's rules, `@SignedBy`, `Ctx`, its own token burned, payouts
+paid and tagged):
+
+- exactly one token is minted under the **successor policy**, named `blake2b_256(own input)`: the instance id the
+  successor derives from this state UTxO;
+- exactly one output holds that token, at an address whose payment credential is the successor script;
+- that output holds at least this instance's lovelace, plus what was paid in, minus the method's payouts.
+
+So the funds can only move into an instance of the contract the field names.
+
+## The new side: `@Migrate`
+
+`@Migrate(from = "params.previous")` marks a creation method that adopts an instance of the previous version. `from`
+must name a `byte[]` component of the new contract's `@Params` record, holding the previous policy id. The method
+takes the params, then the **previous contract's state record**, then any arguments and an optional `Ctx`, and
+returns the new state:
+
+```java title="examples/upgrade/src/main/java/org/julclang/state/examples/upgrade/CounterV2.java"
+/** Version 2: adds a step size; adopts v1 instances, keeping their admin, count and funds (ADR-0011 D4). */
+@StateContract
+public class CounterV2 {
+
+    @Params
+    public record Config(byte[] previous) {}
+
+    public record State(byte[] admin, BigInteger count, BigInteger step) {}
+
+    @Init
+    public static State open(Config cfg, Ctx ctx) {
+        return new State(ctx.caller(), BigInteger.ZERO, BigInteger.ONE);
+    }
+
+    @Migrate(from = "params.previous")
+    public static State adopt(Config cfg, CounterV1.State old) {
+        return new State(old.admin(), old.count(), BigInteger.ONE);
+    }
+
+    @Action
+    public static State increment(State s) {
+        return new State(s.admin(), s.count().add(s.step()), s.step());
+    }
+
+    @Action @SignedBy("admin")
+    public static State setStep(State s, BigInteger step) {
+        return new State(s.admin(), s.count(), step);
+    }
+
+    @Destroy @SignedBy("admin")
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        return Payouts.of(s.admin(), ctx.balance());
+    }
+}
+```
+
+The adoption's validator (its MINT side, with its own `Adopt` redeemer) checks:
+
+- the seed it names is a state UTxO of the previous policy: one 32-byte token of that policy, at that policy's script
+  address, with an inline datum;
+- the datum has the shape of the previous state record: constructor 0 and the record's number of fields (JuLC's casts
+  are unchecked, so this is what refuses another layout);
+- the previous instance's token is **burned** (−1) in the same transaction, so the old instance ends;
+- exactly one new token is minted, named `blake2b_256(seed)`, and one output holds it at the new contract's state
+  address, without a reference script;
+- the output's datum equals `adopt(params, old)` and fits `maxDatumBytes`;
+- its value is **exactly** the old UTxO's lovelace plus the new token, and at least the new `minAda`.
+
+## Why the old side names its successor in the state
+
+Both sides pin each other. If both did it through `@Params`, each script hash would depend on the other's: v1's
+params would hold v2's hash and v2's params v1's. That is circular, so the example splits it:
+
+- **v2** pins v1 in its params (`Config(previous)`), fixed when v2 is deployed;
+- **v1** names v2 in a state field, `successor`, that only its admin may set (`setSuccessor`, `@SignedBy("admin")`).
+
+This puts trust in v1's admin: the admin decides where every instance may migrate. Users of v1 should know that. A
+contract that must never move needs no `@MigrateTo` at all.
+
+## The migration transaction
+
+The two halves must be in **one** transaction: v1's destroy is only valid if v2 mints the successor, and v2's
+adoption is only valid if v1's token burns. The Java runtime builds it with `Compose`, which runs several client
+calls into one transaction:
+
+```java title="examples/upgrade/src/test/java/org/julclang/state/examples/upgrade/UpgradeDevnetTest.java"
+var v1 = CounterV1Client.deploy(runtime, admin, ADA.multiply(BigInteger.TEN));
+v1.increment(admin);
+v1.increment(admin);
+
+// v2's params pin v1; v1's admin names v2.
+var cfg = new CounterV2.Config(HexUtil.decodeHexString(v1.instance().contract().policyId()));
+String v2Policy = CounterV2Client.policyIdFor(cfg);
+v1.setSuccessor(admin, HexUtil.decodeHexString(v2Policy));
+
+// One transaction: v1's migrating destroy and v2's adoption.
+var adopted = new CounterV2Client[1];
+String tx = Compose.of(runtime, admin)
+        .add(() -> v1.upgrade(admin))
+        .add(() -> adopted[0] = CounterV2Client.adopt(runtime, cfg, admin, v1.instance()))
+        .submit();
+
+var v2 = CounterV2Client.at(runtime, cfg, adopted[0].instanceId());
+v2.state().count();   // 2: the count moved
+v2.lovelace();        // the funds moved
+```
+
+The generated `CounterV2Client.adopt(runtime, params, caller, prior)` takes the old instance's `StateInstance`. Called
+outside a `Compose`, it refuses: `adopt runs inside a Compose, together with the old instance's migrating destroy`.
+
+<Aside type="note" title="The instance id changes">
+
+The new instance's id is `blake2b_256` of the old **state UTxO's** reference, not the old id. Store the new id
+(`adopted[0].instanceId()`). Anything that refers to the old instance by `(policy, id)`, including other contracts
+that read it through `@Reads` pinned in their params, must migrate too.
+
+</Aside>
+
+## Rules and limits
+
+- At most one `@Migrate` per contract. `@Migrate` is its own kind of creation: no other lifecycle annotation on the
+  same method, and no `@Quorum` or `@AuthorizedBy`.
+- `@MigrateTo` goes only on an instance `@Destroy`, and names a `byte[]`.
+- Not supported yet with **MerkleMaps**, **owned objects** or **native assets**, on either side. The processor reports
+  an error.
+- A migrating destroy should return `Payouts.none()`: the new side requires the new instance to hold exactly the
+  old UTxO's lovelace, so nothing can be paid out of it.
+- Migration is an atomic transaction of two contracts, so both reference scripts' fees and both executions count
+  toward one transaction's limits (see [Fees and script size](/contracts/fees-and-size/)).
+
+## What the harness tests
+
+`examples/upgrade/src/test/.../UpgradeTest.java` evaluates the migration transaction with each contract's harness and
+checks that the handshake holds:
+
+- v1 refuses a successor its admin did not name;
+- both sides refuse when the new instance holds less than the old;
+- v1 refuses when no successor token is minted;
+- v2 refuses to adopt when the old token is not burned.
+
+## Reference
+
+- [Annotations](/reference/annotations/): `@MigrateTo`, `@Migrate`; [Java runtime API](/reference/java-runtime-api/): `Compose`
+- Sources: [`MigrateTo.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/MigrateTo.java),
+  [`Migrate.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Migrate.java),
+  [`examples/upgrade`](https://github.com/bloxbean/joust/tree/main/examples/upgrade)
+- [ADR-0011](https://github.com/bloxbean/joust/blob/main/docs/adr/0011-option-k-composition.md) D4 (I41), §6 (why the old side uses a state field)
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Upgrading a contract (tutorial)" href="/tutorials/upgrades/" description="Run CounterV1 to CounterV2 on Yaci DevKit." />
+<LinkCard title="Reads and composition" href="/contracts/reads-and-composition/" description="Compose, and contracts that read others." />
+<LinkCard title="Params, invariants and events" href="/contracts/params-invariants-events/" description="Pin the previous version in params." />
+<LinkCard title="Security model" href="/contracts/security-model/" description="What each side's validator guarantees." />
+</CardGrid>

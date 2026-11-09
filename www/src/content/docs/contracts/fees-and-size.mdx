@@ -1,0 +1,153 @@
+---
+title: Fees and script size
+description: What a JOUST call costs on Cardano (size fee, execution units, reference-script fee), measured script sizes and budgets, the 16 KB limit, and how to stay small.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Every JOUST call is a Cardano transaction, and its fee is set by the ledger's rules, not by JOUST. But the generated
+validator's size and cost are a large part of that fee, and they decide what fits in one transaction. This page
+explains the fee, gives the measured numbers for the examples, and lists what you can do to keep a contract small.
+
+## What a call costs
+
+A Cardano transaction pays three things (mainnet parameters, as [ADR-0008](https://github.com/bloxbean/joust/blob/main/docs/adr/0008-option-h-fees-and-size.md) uses them):
+
+| Part | Rule | What drives it in JOUST |
+|---|---|---|
+| **Size fee** | 155,381 lovelace plus 44 per byte of the transaction | inputs, outputs, the inline datum (your state), the redeemer (arguments, `Ctx`, events), collateral, witnesses |
+| **Execution** | 0.0577 lovelace per memory unit and 0.0000721 per CPU step | the generated checks plus your method, for every script that runs |
+| **Reference scripts** | 15 lovelace per byte of every reference script the transaction reads (the first 25,600-byte tier; more costs more per byte) | the size of the compiled validator, and of any shared verifier the call uses |
+
+A **reference script** is a script stored in a UTxO on chain (CIP-33). A transaction that reads it does not carry the
+script's bytes, but since Conway it pays for them by size. JOUST validators are always read by reference, so their
+size is a fixed charge on every call.
+
+What a call costs, from ADR-0008 (mainnet parameters, a transaction of about 1.2 KB):
+
+| Call | Size fee | Execution | Reference script | Total |
+|---|---|---|---|---|
+| counter increment | 0.208 | 0.018 | 0.084 | **0.310 ADA** |
+| market buy | about 0.25 | 0.106 | 0.170 + 0.011 | **about 0.54 ADA** |
+
+For a simple call the size fee is now the largest part; the reference-script fee is next.
+
+## Reference scripts in JOUST
+
+JOUST publishes each contract's validator once, as a reference script at the contract's own address, and every
+transaction reads it from there:
+
+- the Java runtime publishes it on the first `deploy` of a contract type (`StateContractHandle.ensureReferenceScript`),
+  and finds it on chain afterwards;
+- on the npm path, `joust deploy` publishes it and records it in `build/joust/deployments.<network>.json`.
+
+The reference-script UTxO holds no thread token, so the validator never lets it be spent (junk UTxOs at a script
+address are never spendable). Its min-ADA deposit, about 4.3 lovelace per script byte plus a margin, stays locked
+with it for good.
+
+Shared scripts (the MerkleMap verifier, the output verifier) are published the same way, once per network, and are
+read only by calls that use them.
+
+## Measured sizes and budgets
+
+Exact bytes of each compiled script, and per-script execution budgets from the harness tests, after the ADR-0008
+optimisations. Compiled by JuLC for `plutus-v3-pv11` with the `pv11-safe` optimisation. For scale: a transaction may
+use at most 10,000M CPU steps and 14M memory units on mainnet (16.5M memory on DevKit).
+
+| Contract | Script size | Call | CPU | Mem |
+|---|---|---|---|---|
+| Counter | 5,631 B | increment | 73.4M | 213k |
+| | | close (spend + burn) | 94.1M + 17.6M | 317k + 64k |
+| Vault | 6,273 B | deposit | 99.4M | 303k |
+| | | withdraw | 140.6M | 445k |
+| Escrow | 5,688 B | release / refund (spend + burn) | 92.1M + 17.6M | 309k + 64k |
+| Crowdfund | 7,976 B | contribute | 132.8M | 385k |
+| | | refund, 27 backers (at capacity) | 286.6M | 559k |
+| Bank | 7,920 B | withdraw (owned, `@Shared` read) | 171.4M | 547k |
+| Pool | 9,586 B | batch of 10 donations (all scripts) | 4,629.8M | 13,976k |
+| Token | 11,718 B (+ MapVerifier 4,700 B) | transfer (spend + verifier) | 218.4M + 502.3M | 707k + 1,901k |
+| Dex | 12,008 B (+ OutputVerifier 703 B) | swapAdaForToken (spend + verifier) | 221.6M + 21.2M | 688k + 86k |
+| Market | 11,325 B | buy (spend + mint + verifier) | 345.7M + 24.0M + 35.3M | 1,127k + 100k + 145k |
+
+The full table, every call of every example, is in [`examples/README.md`](https://github.com/bloxbean/joust/blob/main/examples/README.md#script-sizes-and-budgets).
+Other measured sizes: Treasury 9.1 KB before its params are applied (ADR-0009), CounterV1 5.9 KB and CounterV2 6.9 KB
+(ADR-0011), Pot 8.6 KB and Stall 9.4 KB (ADR-0011 §7). Maps and native assets together reach about 14.3 KB.
+
+Two observations from these numbers:
+
+- **The generated checks dominate execution**, not your logic. A counter `increment` and `reset` cost almost the
+  same.
+- **Size grows with features.** Each feature a contract uses (assets, maps, owned objects, moves) adds generated code
+  to its one validator.
+
+## What ADR-0008 changed
+
+ADR-0008 cut the generated checks' cost by 30 to 60 % for plain contracts and the scripts by about 2.4 KB, with no
+source change and no change to what is checked. The main moves:
+
+- the exact value check (I3) became a single Data equality against the canonical value, built directly, instead of
+  generic value arithmetic and comparison;
+- token lookups walk only one policy's map (`ledgerTokensOf`) instead of flattening whole values;
+- the mint checks and the unique-output search became one-pass loops;
+- asset-aware transitions share one settlement helper.
+
+Two ideas were measured and rejected: JuLC's `pv11-costed` profile gave byte-identical scripts, and stripping
+`Require` messages saved only 100 to 300 bytes per contract at the cost of every failure reason.
+
+## Limits
+
+| Limit | Value | Consequence |
+|---|---|---|
+| Transaction size | 16 KB (16,384 bytes) | everything in the transaction, reference scripts excluded, must fit |
+| Reference script the runtime publishes | 15,000 bytes | the runtime refuses an applied script larger than this |
+| Execution per transaction | 10,000M CPU, 14M memory (mainnet) | bounds batches (about 8 intents) and compositions |
+| State size | `maxDatumBytes` | see [State and lifecycle](/contracts/state-and-lifecycle/) |
+
+Composition adds up: a transaction that touches several contracts pays every reference script it reads and every
+script it runs, within one transaction's limits.
+
+## Keeping scripts small and calls cheap
+
+- **Skip `Ctx` where you don't need it.** A method without `Ctx` has no caller signature, no validity interval and a
+  smaller redeemer. Counter's `increment` has none.
+- **Use annotations for simple policies.** `@SignedBy` and `@ValidAfter` are one generated check each, and the client
+  checks them before building.
+- **Keep the state small.** The datum is paid for in every transaction that writes it (size fee), and it sets the
+  deposit. Store hashes or roots for large data ([MerkleMaps](/contracts/merklemaps/)).
+- **Keep `Require` messages short.** Each is in the script.
+- **Use only the features you need.** Native assets, MerkleMaps and owned objects each add generated code; a contract
+  that uses three owned types plus moves plus maps has exceeded 16 KB.
+- **Move heavy logic into a shared withdraw-zero script** when a contract nears the size limit. This helps with the
+  16 KB transaction limit only: the transaction still reads that script, and pays for its bytes.
+- **Compose calls.** Several calls in one transaction share the fixed part of the size fee
+  ([Reads and composition](/contracts/reads-and-composition/)).
+
+## Known issues
+
+<Aside type="caution" title="Open work">
+
+- **Script size** ([#34](https://github.com/bloxbean/joust/issues/34)). The reference-script fee is charged on every
+  call, so every kilobyte removed saves 15,000 lovelace per transaction. The issue plans a size report per generated
+  function, trimming unused generated helpers per contract, and possibly moving creation and closing out of the spend
+  script (an ADR-level change). Any change to the generated validators changes script hashes and addresses.
+- **Fee estimate for wallet-prepared transactions** ([#33](https://github.com/bloxbean/joust/issues/33)).
+  Transactions prepared for a CIP-30 wallet (pages, `joust dev`) are estimated with one more key witness than the
+  wallet adds, so they overpay by the size of one witness (a few thousand lovelace). It never underpays. The fix is
+  planned in cardano-client-lib.
+
+</Aside>
+
+## Reference
+
+- [ADR-0008](https://github.com/bloxbean/joust/blob/main/docs/adr/0008-option-h-fees-and-size.md): the optimisations and the cost tables
+- [`examples/README.md`](https://github.com/bloxbean/joust/blob/main/examples/README.md): sizes and budgets of every example
+- [`StateContractHandle.java`](https://github.com/bloxbean/joust/blob/main/julc-state-runtime/src/main/java/org/julclang/state/runtime/StateContractHandle.java): reference-script publishing and the 15,000-byte check
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Security model" href="/contracts/security-model/" description="What the generated checks buy you." />
+<LinkCard title="Testing" href="/contracts/testing/" description="Measure budgets in the harness." />
+<LinkCard title="Reads and composition" href="/contracts/reads-and-composition/" description="Several calls in one transaction." />
+<LinkCard title="Deploy to preview" href="/tutorials/deploy-preview/" description="Publish reference scripts on a public testnet." />
+</CardGrid>

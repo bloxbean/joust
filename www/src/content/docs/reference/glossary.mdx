@@ -1,0 +1,358 @@
+---
+title: Glossary
+description: The Cardano and JOUST terms used across these docs, from UTxO and redeemer to thread token, mirror and page verifier, each with a link to more.
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Short definitions of the Cardano terms JOUST builds on and the JOUST terms the docs use. Each entry links to the page
+that covers it in depth.
+
+## A–C
+
+### ADA, lovelace and tADA
+
+ADA is Cardano's currency. **Lovelace** is its smallest unit: 1 ADA = 1,000,000 lovelace. Contract code counts in
+lovelace (`BigInteger`). **tADA** is test ADA on a test network (preview, Yaci DevKit), with no value.
+
+### Attack suite
+
+`Attacks` in `julc-state-testkit`: for every transaction a test accepts, it applies every applicable mutation (a
+replaced datum, a lovelace skimmed, a required signer missing, two thread tokens minted, ...) and requires the validator to reject each
+one (ADR-0001 D16). See [Testing](/contracts/testing/).
+
+### Batcher
+
+Anyone who collects pending [intents](#intent) and applies them to an instance in one transaction (ADR-0004). The
+batcher is permissionless: the validator checks each intent's effect, so the batcher cannot cheat. See
+[Batched intents](/contracts/batched-intents/).
+
+### Blockfrost
+
+A hosted Cardano chain API. JOUST reads the chain through Blockfrost-style APIs: Blockfrost itself (for preview,
+with a project id from `BLOCKFROST_PREVIEW_PROJECT_ID`) or Yaci Store's compatible API on DevKit. See
+[Networks and chain providers](/apps/networks-and-providers/).
+
+### ByAction
+
+The mint redeemer a contract uses to mint or burn its own user tokens (LP tokens, NFTs) during an action. It names the
+input being spent (`by`), so the mint is valid only together with that call (ADR-0007). See
+[Native assets, mints and sends](/contracts/assets-mints-sends/).
+
+### CCL (cardano-client-lib)
+
+The Java library for Cardano transactions JOUST's off-chain runtime builds on (QuickTx, addresses, CBOR). JOUST uses
+version 0.8.0-pre7. See [Java off-chain runtime](/apps/java-runtime/).
+
+### CIP-30
+
+The browser-wallet standard (Eternl, Lace, ...). A page asks the wallet for its addresses and UTxOs, and to sign
+(`signTx`) and submit a transaction. JOUST pages verify every transaction before the wallet is asked to sign. See
+[Wallets](/apps/wallets/).
+
+### CIP-57
+
+The Plutus blueprint standard: a JSON document typing a script's datum and redeemers. A JOUST
+[description](#description) is a CIP-57 document with an extra `x-joust` key. See
+[Contract description](/reference/description-format/).
+
+### Collateral
+
+Lovelace a transaction with scripts puts up, taken only if a script fails during validation. The runtime adds it;
+the page verifier checks it. See [Fees and script size](/contracts/fees-and-size/).
+
+### Compose
+
+The runtime's way to put several contracts' calls into one transaction (ADR-0011), for example a purchase that reads
+an oracle and a post to that oracle. `Compose.prepare()` builds the transaction for a wallet to sign. See
+[Reads and composition](/contracts/reads-and-composition/).
+
+### Ctx
+
+The record of transaction facts a contract method may read: `caller`, `received`, `balance`, `validFrom`, `validTo`.
+The client supplies it and the generated validator checks every field against the transaction. See
+[Ctx, funds and payouts](/contracts/ctx-and-funds/).
+
+## D–I
+
+### Datum
+
+The data attached to a UTxO at a script address. A JOUST instance's datum is its state record. See
+[State and lifecycle](/contracts/state-and-lifecycle/).
+
+### Deployment
+
+A contract published to a network: its applied script hash (policy), address and reference-script UTxOs. `joust deploy`
+writes them to `deployments.<network>.json`; they are not part of the description. See
+[The joust CLI and projects](/apps/cli-and-projects/).
+
+### Deposit
+
+A payment from one contract call into another JOUST instance, taken in by a `@Receives` action in the same composed
+transaction (ADR-0011 D3). See [Deposits](/contracts/deposits/).
+
+### Description
+
+The JSON document the processor writes for each contract (`META-INF/joust/<package>.<Contract>.json`): CIP-57 plus
+`x-joust`, version 2. Clients encode calls, decode state and verify transactions from it. See
+[Contract description](/reference/description-format/).
+
+### Double satisfaction
+
+An attack where one output is counted as paying two obligations in the same transaction. JOUST tags payouts with the
+instance they come from, and claims sends in a shared output registry, so no output counts twice. See
+[Security model](/contracts/security-model/).
+
+### Engine
+
+The JOUST runtime compiled to WebAssembly (GraalVM [Web Image](#web-image)), shipped in `@julclang/joust-runtime`. It
+prepares transactions in Node or in a page's worker, as a pure function of a call request and a chain snapshot: all
+I/O stays in JavaScript (ADR-0015 D5). A second engine, the toolchain, compiles contracts in Node for `joust build`.
+See [@julclang/joust-runtime](/reference/joust-runtime/).
+
+### Governor
+
+A plain JuLC validator, used as a withdraw-zero script, whose approval an `@AuthorizedBy` method requires. A call it
+approves withdraws zero from its stake credential with an `Approvals` redeemer naming exactly that call (ADR-0009 D3).
+See [Authorization](/contracts/authorization/).
+
+### Harness
+
+`StateHarness` in `julc-state-testkit`: evaluates the compiled validator against transactions shaped like the
+runtime's, without a network, and reports the budget. See [Testing](/contracts/testing/).
+
+### Holding
+
+The datum of an [owned object](#owned-object): the owning instance's id and the owned record. With several owned types
+each has its own `Holding_<Type>` (ADR-0012). See [Owned objects](/contracts/owned-objects/).
+
+### Inline datum
+
+A datum stored in the output itself rather than by hash. JOUST state is always an inline datum, written as canonical
+CBOR (map keys sorted). See [State and lifecycle](/contracts/state-and-lifecycle/).
+
+### Instance
+
+One deployed copy of a contract's state: a UTxO at the contract's script address holding the instance's
+[thread token](#thread-token) and the state as its inline datum. One contract type (one script) has many instances.
+See [State and lifecycle](/contracts/state-and-lifecycle/).
+
+### Intent
+
+A request a user locks at the contract's address for a `@Batched` action: the call, its payment, a refund address and
+a deadline. Its token is 29 bytes starting `0x49`. A [batcher](#batcher) applies it; the owner can cancel it. See
+[Batched intents](/contracts/batched-intents/).
+
+## J–O
+
+### .jsc
+
+JOUST's compact contract language, lowered to a Java `@StateContract` at build time (ADR-0005). See
+[.jsc](/languages/jsc/).
+
+### JuLC
+
+The Java to UPLC compiler JOUST builds on (julc.dev). It compiles the generated validator, and the transition programs,
+from a subset of Java. See [Java](/languages/java/).
+
+### MapVerifier
+
+The shared withdraw-zero script (`julc-state-verifier`) that checks every [MerkleMap](#merklemap) claim in a
+transaction: each read and write proven against the old root, leading to the new root (ADR-0002 D9). Published and
+registered once per network. See [MerkleMaps](/contracts/merklemaps/).
+
+### MerkleMap
+
+A state component holding an unbounded key-value map as a 32-byte [root](#root). Calls carry proofs of the keys they
+read and write. See [MerkleMaps](/contracts/merklemaps/).
+
+### Min-ADA
+
+The lovelace every output must hold, which grows with its size. Each state UTxO keeps `@StateContract(minAda)`
+lovelace for it. See [Ctx, funds and payouts](/contracts/ctx-and-funds/).
+
+### Minting policy
+
+A script that decides when tokens under its policy id may be minted or burned. A JOUST contract's validator is also
+its minting policy: it mints the thread token when an instance is created and burns it when the instance is
+destroyed. See [How JOUST works](/start/how-it-works/).
+
+### Mirror
+
+The off-chain copy of a MerkleMap (an MPF trie) that answers the proofs a call needs. The JVM keeps it in RocksDB
+(`./.joust/mpf`), a page in IndexedDB; a missing map is rebuilt from the chain's history, every claim checked
+against its root. See [MerkleMap mirrors](/apps/map-mirrors/).
+
+### MPF (Merkle Patricia Forestry)
+
+The authenticated trie behind MerkleMaps, with Aiken's on-chain format: a 32-byte root and compact membership and
+non-membership proofs. See [MerkleMaps](/contracts/merklemaps/).
+
+### Ogmios
+
+A JSON interface to a Cardano node. `@julclang/state-client` has an Ogmios chain provider beside the Blockfrost one.
+See [Networks and chain providers](/apps/networks-and-providers/).
+
+### Output verifier
+
+The shared withdraw-zero script that checks the output-claim registry: each `Send` claims one output, so no output
+counts for two obligations (ADR-0007 D5). See [Native assets, mints and sends](/contracts/assets-mints-sends/).
+
+### Owned object
+
+A per-user UTxO beside an instance (`@Owned` record), with its own 29-byte token starting `0x4F`. Users act on their
+own objects in parallel, reading the shared state by reference (ADR-0003, ADR-0012). See
+[Owned objects](/contracts/owned-objects/).
+
+## P–S
+
+### Page
+
+A browser app over JOUST contracts: it calls typed clients, prepares transactions in a worker (the engine) or through
+a service, verifies them, and has a CIP-30 wallet sign. See [Pages](/apps/pages/).
+
+### Page verifier
+
+The checks a page runs on a prepared transaction before the wallet signs it (`verifyPrepared` and its relatives in
+`@julclang/state-client`): exactly the call asked for, only the wallet's and the target's inputs, the right redeemers
+and mint, a balanced transaction, a bounded outflow and a short validity window. A malicious service cannot get
+anything else signed. See [JavaScript clients](/apps/javascript-clients/).
+
+### Payout
+
+`Payout(to, lovelace)`: lovelace a call pays to a key, returned by an action or destroy (`Payouts.of(...)`). The
+validator requires a matching output, tagged against double satisfaction. See
+[Ctx, funds and payouts](/contracts/ctx-and-funds/).
+
+### Prepare service
+
+A server that builds a transaction for a wallet address without holding its keys: `julc-state-server` over HTTP
+(`/api/prepare`), or the engine at `/joust/service` under `joust dev`. The page trusts it with nothing and verifies its
+result. See [Pages](/apps/pages/).
+
+### Redeemer
+
+The argument given to a script when a transaction spends, mints or withdraws through it. In JOUST the redeemer names
+the call and carries its arguments (and `Ctx`); the client builds it. See [How JOUST works](/start/how-it-works/).
+
+### Reference script
+
+A script stored in a UTxO that transactions read instead of carrying it, which keeps them small and cheap. Every JOUST
+contract reads its script by reference; the first deploy of a contract type publishes it. See
+[Fees and script size](/contracts/fees-and-size/).
+
+### Require
+
+`Require.that(cond, "msg")`: the contract's way to refuse a call. On the JVM it throws `RequireException` with the
+message; on chain it traces the message and fails. See [Require and errors](/contracts/require-and-errors/).
+
+### Root
+
+The 32-byte hash that stands for a whole MerkleMap in the state. A call's proofs lead from the old root to the new one.
+See [MerkleMaps](/contracts/merklemaps/).
+
+### Script purpose
+
+Why a script runs: spending a UTxO, minting, withdrawing rewards, certifying, voting or proposing. JOUST methods use
+spend and mint; `@Withdraw`, `@Certify`, `@Votes` and `@Propose` handle the others (ADR-0010). See
+[Staking and governance](/contracts/staking-and-governance/).
+
+### Seed
+
+The input a creation spends whose reference (`txId`, `index`) makes the new token name unique: the instance, object
+or intent id is a hash of it. See [State and lifecycle](/contracts/state-and-lifecycle/).
+
+### Send
+
+`Send(to, value, datum)`: an output a call sends to any address, key or script, with any datum and native assets
+(ADR-0007). See [Native assets, mints and sends](/contracts/assets-mints-sends/).
+
+### SRI (Subresource Integrity)
+
+The browser check that a fetched file matches a hash. A built page pins the engine's sha384 hashes, and the worker
+fetches the engine's script and Wasm with them, so a browser refuses an engine whose bytes differ, wherever it is
+served from. See [Pages](/apps/pages/).
+
+### State
+
+The record a contract keeps, stored as the instance's inline datum. Contract methods take it and return the next
+one. See [State and lifecycle](/contracts/state-and-lifecycle/).
+
+### State IR
+
+The processor's internal model of a contract (`ContractIR`), between reading the source and generating the validator,
+client and description. It is what makes several surface languages and storage strategies possible. See
+[How JOUST works](/start/how-it-works/).
+
+## T–Z
+
+### Thread token
+
+The token that marks an instance's state UTxO: minted once when the instance is created (one-shot, from the
+[seed](#seed)), carried by every continuing output, burned on destroy. Its name is 32 bytes. A UTxO without it is not
+the instance. See [Security model](/contracts/security-model/).
+
+### Transition program
+
+A contract method compiled on its own to UPLC, which the engine runs (in JuLC's VM) to compute the next state where
+the contract's Java classes do not exist (ADR-0015 D3). See [@julclang/joust-runtime](/reference/joust-runtime/).
+
+### TTL and validity interval
+
+A transaction's validity interval is the time range in which it may be included; the TTL is its upper bound. `Ctx`'s
+`validFrom` and `validTo` are that interval, which the contract treats as "now". On DevKit keep it short, or the node
+answers PastHorizon (see [Troubleshooting](/reference/troubleshooting/#pasthorizon)). See [Time](/contracts/time/).
+
+### UPLC
+
+Untyped Plutus Core, the language Cardano's script interpreter runs. JuLC compiles the generated validator to UPLC
+(Plutus V3).
+
+### UTxO
+
+An unspent transaction output: an address, a value (ADA and native assets) and optionally a datum. Cardano has no
+accounts: a transaction spends UTxOs and creates new ones. A JOUST instance is a UTxO whose datum is the state. See
+[How JOUST works](/start/how-it-works/).
+
+### Validator
+
+The script that decides whether a UTxO at its address may be spent (and, in JOUST, whether tokens may be minted). The
+processor generates `<Name>Validator`, which re-runs your method on chain and checks the result. See
+[How JOUST works](/start/how-it-works/).
+
+### View
+
+A `@View` method: reads the state off chain, with no transaction. See [State and lifecycle](/contracts/state-and-lifecycle/).
+
+### WalletAccount
+
+An address-only account for the Java runtime: it has no keys, so the transaction is prepared (`Compose.prepare()`) for
+a wallet to sign (ADR-0013). See [Wallets](/apps/wallets/).
+
+### Web Image
+
+GraalVM's compilation of Java to WebAssembly plus JavaScript, which builds the two engines. Developers never need
+GraalVM; only the engines' builds do. See [Status and roadmap](/project/status-and-roadmap/).
+
+### Withdraw-zero
+
+A pattern that runs a script once per transaction: the transaction withdraws zero rewards from the script's stake
+credential, which makes the script run with the whole transaction in view. JOUST's MapVerifier, output verifier and
+governors use it. See [Security model](/contracts/security-model/).
+
+### Yaci DevKit
+
+A local Cardano network for development: `yaci-devkit up --enable-yaci-store`. It has a faucet and a time horizon of
+minutes. See [Networks and chain providers](/apps/networks-and-providers/).
+
+### Yaci Store
+
+The indexer that runs with DevKit and serves a Blockfrost-compatible API on `:8080` (the admin API is on `:10000`).
+Yaci Viewer, the explorer, is on `:5173`. See [Networks and chain providers](/apps/networks-and-providers/).
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="How JOUST works" href="/start/how-it-works/" description="The model behind the terms." />
+<LinkCard title="Troubleshooting" href="/reference/troubleshooting/" description="Symptoms, causes and fixes." />
+</CardGrid>

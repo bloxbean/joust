@@ -1,0 +1,202 @@
+---
+title: Upgrading a contract
+description: Migrate a live CounterV1 instance, with its count and funds, into CounterV2 in one composed transaction on Yaci DevKit.
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A deployed script cannot change. To ship a new version you deploy a new contract and move each live instance into
+it. In this tutorial you run [`examples/upgrade`](https://github.com/bloxbean/joust/tree/main/examples/upgrade): a
+`CounterV1` instance, with a count and some funds, migrates into `CounterV2`, which adds a step size. Both
+validators check the move in one transaction, so the funds can only go where both sides agree.
+
+<Aside type="caution" title="Pre-release">
+
+JOUST is pre-release. The Java path needs JDK 25 and a JuLC build that is not published yet: from a JOUST checkout,
+run `bash .github/ci/build-julc.sh` once (see the [Java quick start](/start/quick-start-java/)). For the DevKit run,
+start Yaci DevKit with `yaci-devkit up --enable-yaci-store`.
+
+</Aside>
+
+## Build it
+
+<Steps>
+
+1. **Version 1 names its successor.** `CounterV1` holds an admin, a successor policy (empty at first) and a count:
+
+   ```java title="examples/upgrade/src/main/java/org/julclang/state/examples/upgrade/CounterV1.java"
+   @StateContract
+   public class CounterV1 {
+
+       public record State(byte[] admin, byte[] successor, BigInteger count) {}
+
+       @Init @Payable
+       public static State open(Ctx ctx) {
+           return new State(ctx.caller(), new byte[]{}, BigInteger.ZERO);
+       }
+
+       @Action
+       public static State increment(State s) {
+           return new State(s.admin(), s.successor(), s.count().add(BigInteger.ONE));
+       }
+
+       @Action @SignedBy("admin")
+       public static State setSuccessor(State s, byte[] successor) {
+           return new State(s.admin(), successor, s.count());
+       }
+   ```
+
+   Only the admin can set `successor`. If you are writing a v1 today and may want to upgrade later, this is the hook
+   to add: a field for the successor's policy id, and an admin-only setter.
+
+   **What this taught:** an upgradeable contract plans for it; the admin is trusted to name the successor.
+
+2. **Version 1 migrates out.**
+
+   ```java
+       /** Ends v1 by migrating: nothing is paid out, everything moves to the successor's new instance. */
+       @Destroy @SignedBy("admin") @MigrateTo("successor")
+       public static JulcList<Payout> upgrade(State s, Ctx ctx) {
+           return Payouts.none();
+       }
+   }
+   ```
+
+   `@MigrateTo("successor")` turns this destroy into a migration. Instead of paying `ctx.balance()` out, its
+   validator requires that the policy in `successor` mints a token named `blake2b_256(this state UTxO)`, that one
+   output at that policy's script address holds it, and that this output holds at least everything the instance held.
+
+   **What this taught:** the old side lets its funds go only into the successor it names.
+
+3. **Version 2 adopts.** `CounterV2` pins v1 in its `@Params` and adopts its state:
+
+   ```java title="examples/upgrade/src/main/java/org/julclang/state/examples/upgrade/CounterV2.java"
+   @StateContract
+   public class CounterV2 {
+
+       @Params
+       public record Config(byte[] previous) {}
+
+       public record State(byte[] admin, BigInteger count, BigInteger step) {}
+
+       @Init
+       public static State open(Config cfg, Ctx ctx) {
+           return new State(ctx.caller(), BigInteger.ZERO, BigInteger.ONE);
+       }
+
+       @Migrate(from = "params.previous")
+       public static State adopt(Config cfg, CounterV1.State old) {
+           return new State(old.admin(), old.count(), BigInteger.ONE);
+       }
+
+       @Action
+       public static State increment(State s) {
+           return new State(s.admin(), s.count().add(s.step()), s.step());
+       }
+
+       @Action @SignedBy("admin")
+       public static State setStep(State s, BigInteger step) {
+           return new State(s.admin(), s.count(), step);
+       }
+
+       @Destroy @SignedBy("admin")
+       public static JulcList<Payout> close(State s, Ctx ctx) {
+           return Payouts.of(s.admin(), ctx.balance());
+       }
+   }
+   ```
+
+   `adopt` takes the params and **v1's state record**, and maps it to v2's: the admin and count carry over, the new
+   `step` starts at 1. Its validator checks that the seed is a genuine v1 state UTxO (v1's 32-byte token at v1's
+   address, with a datum shaped like `CounterV1.State`), that v1's token is burned in the same transaction, and that
+   the new instance holds exactly v1's lovelace.
+
+   Why does v2 pin v1 in params while v1 names v2 in its state? If both used params, each script hash would depend on
+   the other's: a cycle. So one side must use a state field.
+
+   **What this taught:** the new side accepts only an instance of the predecessor it names, and only if that
+   instance ends.
+
+</Steps>
+
+## Run the migration
+
+<Steps>
+
+1. **Read the flow.** The DevKit test plays the whole migration:
+
+   ```java title="examples/upgrade/src/test/java/org/julclang/state/examples/upgrade/UpgradeDevnetTest.java"
+   var runtime = DevKit.runtime();
+   var admin = DevKit.fundedAccount(200);
+   var v1 = CounterV1Client.deploy(runtime, admin, ADA.multiply(BigInteger.TEN));
+   v1.increment(admin);
+   v1.increment(admin);
+   BigInteger lovelace = v1.lovelace();
+
+   // v2's params pin v1's policy; v1's admin names v2's policy.
+   var cfg = new CounterV2.Config(HexUtil.decodeHexString(v1.instance().contract().policyId()));
+   String v2Policy = CounterV2Client.policyIdFor(cfg);
+   v1.setSuccessor(admin, HexUtil.decodeHexString(v2Policy));
+
+   // One transaction: v1's migrating destroy and v2's adoption.
+   var adopted = new CounterV2Client[1];
+   String tx = Compose.of(runtime, admin)
+           .add(() -> v1.upgrade(admin))
+           .add(() -> adopted[0] = CounterV2Client.adopt(runtime, cfg, admin, v1.instance()))
+           .submit();
+
+   var v2 = CounterV2Client.at(runtime, cfg, adopted[0].instanceId());
+   assertEquals(BigInteger.TWO, v2.state().count(), "the count moved");
+   assertEquals(lovelace, v2.lovelace(), "the funds moved");
+   assertThrows(InstanceNotFoundException.class, v1::state, "v1 ended");
+   v2.increment(admin);
+   assertEquals(BigInteger.valueOf(3), v2.state().count());
+   ```
+
+   `CounterV2Client.policyIdFor(cfg)` computes v2's policy id from its params before anything is deployed, so v1's
+   admin can name it. `Compose` captures the two client calls and builds **one** transaction from them; on its own,
+   neither half is valid. `adopt` refuses to run outside a `Compose`.
+
+2. **Run it.**
+
+   ```sh
+   ./gradlew :examples:upgrade:test
+   ```
+
+   With DevKit up, `UpgradeDevnetTest > v1MigratesToV2()` passes: the v1 counter (count 2, 10 ADA plus its deposit)
+   becomes a v2 counter with the same count and exactly the same lovelace, v1's instance is gone, and v2's
+   `increment` works. Without DevKit it is skipped, and the harness test still runs.
+
+3. **See what the harness proved.** `UpgradeTest` builds the migration transaction and evaluates it with **both**
+   contracts' harnesses (v1's spend and burn, v2's adoption). It then checks the handshake against tampering:
+
+   - v1 refuses a successor its admin did not name;
+   - both sides refuse when the new instance holds less than the old;
+   - v1 refuses when no successor token is minted;
+   - v2 refuses to adopt when v1's token is not burned.
+
+</Steps>
+
+<Aside type="note" title="A new id">
+
+The migrated instance has a new id: `blake2b_256` of v1's state UTxO reference. Keep `adopted[0].instanceId()`. The
+old instance is gone: `v1.state()` throws `InstanceNotFoundException`.
+
+</Aside>
+
+## What you learned
+
+- A migration is a handshake: `@MigrateTo` on the old side's `@Destroy`, `@Migrate` on the new side's creation.
+- The old side names the successor in an admin-set state field; the new side pins the predecessor in `@Params`.
+- Both halves must be in one transaction, built with `Compose`.
+- State moves through a plain Java function from the old record to the new one; funds move exactly.
+- Not yet supported for contracts with MerkleMaps, owned objects or native assets.
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Upgrades and migration" href="/contracts/upgrades/" description="Every rule and check, in reference form." />
+<LinkCard title="Oracle and composition" href="/tutorials/oracle-composition/" description="More with Compose and @Reads." />
+<LinkCard title="Params, invariants and events" href="/contracts/params-invariants-events/" description="@Params and policy pinning." />
+<LinkCard title="Deploy to preview" href="/tutorials/deploy-preview/" description="Run on a public testnet." />
+</CardGrid>

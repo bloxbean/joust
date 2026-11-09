@@ -1,0 +1,426 @@
+---
+title: Examples
+description: Every JOUST example contract, what it shows, its key annotations, how to run it, and the measured script sizes and execution budgets.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The repository's [`examples/`](https://github.com/bloxbean/joust/tree/main/examples) directory holds one tested
+example per feature. Each is real code, built by the same Gradle build as JOUST itself: when a guide shows a contract,
+it usually comes from here. Use this page to find the example closest to what you are building.
+
+## What every example contains
+
+- **The contract:** the only file a developer writes. The processor generates `<Name>Validator` and `<Name>Client`
+  from it at build time.
+- **Tests at three levels:**
+  - **JVM** (`<Name>Test`): the contract's methods as plain Java.
+  - **On-chain harness:** the validator as compiled by the build, evaluated against transactions shaped like the
+    runtime's. Every accepted transaction also runs the attack suite (ADR-0001 D16), and every applicable mutation
+    must be rejected.
+  - **DevKit** (`<Name>DevnetTest`, tagged `devnet`): the generated client end to end on a live Yaci DevKit. It skips
+    itself when DevKit is not running.
+- **`DescriptionTest`:** checks the generated [contract description](/reference/description-format/).
+
+## Running an example
+
+From a JOUST checkout (JDK 25, and JuLC built into mavenLocal with `bash .github/ci/build-julc.sh`):
+
+```sh
+./gradlew :examples:token:test                   # JVM, harness and attack-suite tests; DevKit tests if it is up
+yaci-devkit up --enable-yaci-store               # optional: the local network (Yaci Store on :8080, admin on :10000)
+./gradlew :examples:vault:run                    # the example's app against DevKit
+./gradlew :examples:token:test -PjoustFixtures   # re-record the ADR-0015 fixtures (DevKit must be up)
+```
+
+`./gradlew build` runs every example. The `run` task has an app for `counter`, `vault`, `escrow`, `crowdfund`,
+`token` and `bank` (`<Name>App`), and for `dapp` (a web server); the other examples run their flows in their DevKit
+tests.
+
+<Aside type="caution" title="Pre-release">
+JOUST is not published yet. The examples build from a checkout: see [Quick start: Java & Gradle](/start/quick-start-java/)
+for the JuLC build they need. To try a contract without a JDK, start from the npm template instead
+([Quick start: npm & JavaScript](/start/quick-start-npm/)).
+</Aside>
+
+## At a glance
+
+| Example | Feature | ADR | Covered in |
+|---|---|---|---|
+| [counter](#counter) | State machine basics | 0001 | [A counter dApp in the browser](/tutorials/counter-dapp/) |
+| [vault](#vault) | Deposits, time locks, payouts | 0001 | [Vault](/tutorials/vault/) |
+| [escrow](#escrow) | Two exits, a deadline | 0001 | [Escrow and crowdfunding](/tutorials/escrow-crowdfund/) |
+| [crowdfund](#crowdfund) | An inline `JulcMap`, refunds | 0001 | [Escrow and crowdfunding](/tutorials/escrow-crowdfund/) |
+| [token](#token) | MerkleMap balances | 0002 | [Token balances in a MerkleMap](/tutorials/token-merklemap/) |
+| [bank](#bank) | Owned objects | 0003 | [Bank: owned objects](/tutorials/bank-owned-objects/) |
+| [pool](#pool) | Batched intents | 0004 | [Pool: batched intents](/tutorials/pool-batched-intents/) |
+| [dsl](#dsl) | `.jsc` contracts | 0005 | [.jsc](/languages/jsc/) |
+| [rollup](#rollup) | Optimistic L2 spike | 0006 | [Architecture decisions](/project/architecture-decisions/#adr-0006-option-f-optimistic-l2-spike) |
+| [dex](#dex) | Native assets, LP tokens | 0007 | [DEX: native assets and LP tokens](/tutorials/dex-assets/) |
+| [market](#market) | NFTs in owned objects, sends | 0007 | [Native assets, mints and sends](/contracts/assets-mints-sends/) |
+| [treasury](#treasury) | Params, quorum, governor, invariants, events | 0009 | [Multisig treasury](/tutorials/multisig-treasury/) |
+| [staking](#staking) | Staked state, every script purpose | 0010 | [Staked vault and governance](/tutorials/staked-vault/) |
+| [oracle](#oracle) | `@Reads`, `Compose` | 0011 | [Oracle and composition](/tutorials/oracle-composition/) |
+| [upgrade](#upgrade) | Migration | 0011 | [Upgrading a contract](/tutorials/upgrades/) |
+| [fees](#fees) | Deposits into another instance | 0011 D3 | [Deposits](/contracts/deposits/) |
+| [guild](#guild) | Several owned types, moves, owned maps | 0012 | [Owned objects](/contracts/owned-objects/) |
+| [locker](#locker) | MerkleMaps with native assets | 0014 | [MerkleMaps](/contracts/merklemaps/) |
+| [wallet](#wallet) | Wallet-signed transactions | 0013 | [Wallets](/apps/wallets/) |
+| [dapp](#dapp) | A browser dApp on DevKit | 0013 | [JavaScript clients](/apps/javascript-clients/) |
+| [devkit](#devkit) | DevKit helper, fixtures | 0015 | [Testing](/contracts/testing/) |
+
+## Option A: single-UTxO state machines
+
+### counter
+
+[`examples/counter`](https://github.com/bloxbean/joust/tree/main/examples/counter) · `Counter.java`
+
+The smallest contract: a count and an owner. `increment` is an `@Action` anyone can call, with no `Ctx` and no
+value; `reset` and the `@Destroy` `close` are `@OnlyOwner`, and `close` returns the deposit. The starting point for
+every tutorial; the browser dApp uses it, and the npm template (`create-joust`) starts from a counter too.
+
+- **Annotations:** `@StateContract(maxDatumBytes = 128)`, `@Init`, `@Action`, `@OnlyOwner`, `@Destroy`, `@View`
+- **Run:** `./gradlew :examples:counter:run`
+- **Read:** [Your first contract](/start/first-contract/), [A counter dApp in the browser](/tutorials/counter-dapp/),
+  [State and lifecycle](/contracts/state-and-lifecycle/)
+
+### vault
+
+[`examples/vault`](https://github.com/bloxbean/joust/tree/main/examples/vault) · `Vault.java`
+
+A time-locked vault. `open` (`@Init @Payable`) records the owner and an unlock time; anyone may `deposit`
+(`@Payable`); the owner may `withdraw` only after `unlockAt` and gets a payout, so the action returns a `Result`
+record of the new state and its payouts. `close` pays everything out.
+
+- **Annotations:** `@Payable`, `@OnlyOwner`, `@ValidAfter("unlockAt")`, `@Destroy`, `@View`
+- **Run:** `./gradlew :examples:vault:run`
+- **Read:** [Vault: deposits, time and payouts](/tutorials/vault/), [Time](/contracts/time/),
+  [Ctx, funds and payouts](/contracts/ctx-and-funds/)
+
+### escrow
+
+[`examples/escrow`](https://github.com/bloxbean/joust/tree/main/examples/escrow) · `Escrow.java`
+
+The buyer funds the escrow at creation (`@Payable @Init`). It has two `@Destroy`s: `release` pays the seller, and
+`refund` returns the funds, which anyone may trigger after the deadline (`Clock.after`).
+
+- **Annotations:** `@Init @Payable`, two `@Destroy`, `@View`
+- **Run:** `./gradlew :examples:escrow:run`
+- **Read:** [Escrow and crowdfunding](/tutorials/escrow-crowdfund/), [Time](/contracts/time/)
+
+### crowdfund
+
+[`examples/crowdfund`](https://github.com/bloxbean/joust/tree/main/examples/crowdfund) · `Crowdfund.java`
+
+A crowdfund with its backers in a `JulcMap` inside the state, kept in canonical order with `SortedMaps`. Refunds pay
+the caller; the creator claims with `@SignedBy("creator")`. Its tests fill the datum to `maxDatumBytes = 1024`
+(27 backers) to measure capacity.
+
+- **Annotations:** `@StateContract(maxDatumBytes = 1024)`, `@Payable`, `@SignedBy("creator")`, two `@Destroy`, `@View`
+- **Run:** `./gradlew :examples:crowdfund:run`
+- **Read:** [Escrow and crowdfunding](/tutorials/escrow-crowdfund/), [State and lifecycle](/contracts/state-and-lifecycle/)
+
+## Storage and execution strategies
+
+### token
+
+[`examples/token`](https://github.com/bloxbean/joust/tree/main/examples/token) · `Token.java`
+
+An account-model token whose balances live in a `MerkleMap`: an unbounded map behind a 32-byte root. `mint`,
+`transfer` and `burn` prove only the keys they touch; the MPF proofs are checked by the shared map verifier
+(withdraw-zero). The script is read by reference. Its DevKit test also rebuilds the map from the chain's history
+with a fresh store.
+
+- **Annotations:** `@StateContract(maxDatumBytes = 160)`, `@SignedBy("admin")`, `@Action`, `@View`
+- **Run:** `./gradlew :examples:token:run`
+- **Read:** [Token balances in a MerkleMap](/tutorials/token-merklemap/), [MerkleMaps](/contracts/merklemaps/),
+  [MerkleMap mirrors](/apps/map-mirrors/)
+
+### bank
+
+[`examples/bank`](https://github.com/bloxbean/joust/tree/main/examples/bank) · `Bank.java`
+
+Shared bank configuration (admin, paused, withdrawal limit) plus one owned `Account` per customer. Customers act in
+parallel; `withdraw` reads the config by reference (`@Shared`); `close` works even when the bank is paused, the
+escape hatch every owned type needs.
+
+- **Annotations:** `@Owned`, `@OwnedInit`, `@OwnedAction`, `@OwnedDestroy`, `@Shared`, `@SignedBy("owner")`,
+  `@SignedBy("admin")`
+- **Run:** `./gradlew :examples:bank:run`
+- **Read:** [Bank: owned objects](/tutorials/bank-owned-objects/), [Owned objects](/contracts/owned-objects/)
+
+### pool
+
+[`examples/pool`](https://github.com/bloxbean/joust/tree/main/examples/pool) · `Pool.java`
+
+Donations and order-dependent ticket sales as intents. Users lock requests concurrently; a permissionless batcher
+applies them to the instance in one transaction, with refunds, change payouts, a cancel and an expired intent in the
+tests. `donate` is `@Batched` (direct call or intent); `buy` is `@Batched(only = true)`, because its price depends
+on the order of the batch.
+
+- **Annotations:** `@Batched`, `@Batched(only = true)`, `@Payable`, `@SignedBy("admin")`
+- **Run:** `./gradlew :examples:pool:test`
+- **Read:** [Pool: batched intents](/tutorials/pool-batched-intents/), [Batched intents](/contracts/batched-intents/)
+
+### dsl
+
+[`examples/dsl`](https://github.com/bloxbean/joust/tree/main/examples/dsl) · `src/main/jsc/.../{Jar,Points,Guards}.jsc`
+
+Contracts written in `.jsc` and lowered to Java at build time by the `generateJsc` task (into
+`build/generated/sources/jsc`):
+
+- `Jar.jsc`: a tip jar. `tip` is `payable batched` (also an intent); `withdraw` has a rule inside an `if`.
+- `Points.jsc`: loyalty points in a `Map<Key, Int>` (a MerkleMap), with `delete` and transfers to oneself.
+- `Guards.jsc`: a semantics fixture. An untaken `if` arm and the right side of a false `||` must not run, on the JVM
+  or on chain.
+
+- **Run:** `./gradlew :examples:dsl:test`
+- **Read:** [.jsc](/languages/jsc/), [.jsc reference](/languages/jsc-reference/)
+
+### rollup
+
+[`examples/rollup`](https://github.com/bloxbean/joust/tree/main/examples/rollup) · `Ledger.java`, `Rollup.java`, `Sequencer.java`
+
+The Option F spike. `Ledger` is an off-chain payments ledger, a total JuLC-subset program (`@OnchainLibrary`) with
+ed25519-signed orders. `Rollup` is an L1 contract that takes commitments (`commit`), opens a challenge window,
+`finalize`s, and slashes the operator's bond when a `challenge` re-runs `Ledger.step` on chain and finds a wrong
+step. `Sequencer` is the off-chain sequencer and watcher.
+
+- **Annotations:** `@StateContract(maxDatumBytes = 320)`, `@SignedBy("operator")`, `@Payable`
+- **Run:** `./gradlew :examples:rollup:test`
+- **Read:** [ADR-0006](/project/architecture-decisions/#adr-0006-option-f-optimistic-l2-spike). It is a spike, not a product.
+
+## Assets, governance and composition
+
+### dex
+
+[`examples/dex`](https://github.com/bloxbean/joust/tree/main/examples/dex) · `Dex.java`
+
+A constant-product AMM for one ADA/token pair. The reserves are what the UTxO holds (lovelace above the deposit,
+`ctx.balance()`, and the token, `funds.held()`), so the state cannot drift from the funds. LP tokens are minted and
+burned by the contract's own policy, one name per pool; swaps send tokens with `Send`. Every call names exactly what
+it `accepted`. Swaps pay a 0.3 % fee to the pool.
+
+- **Annotations:** `@StateContract(maxDatumBytes = 256, assetSlots = 2)`, `@Payable`, `@SignedBy("admin")`;
+  methods take `Funds` and return records with `payouts`, `sends`, `mint` and `accepted`
+- **Run:** `./gradlew :examples:dex:test`
+- **Read:** [DEX: native assets and LP tokens](/tutorials/dex-assets/), [Native assets, mints and sends](/contracts/assets-mints-sends/)
+
+### market
+
+[`examples/market`](https://github.com/bloxbean/joust/tree/main/examples/market) · `Market.java`
+
+An NFT marketplace. Each listing is an owned object holding its NFT, so listings never contend. `buy` (a `@Payable`
+owned destroy) pays the seller, sends the NFT to the buyer and a royalty to a script address with an inline datum.
+`cancel` lets the seller take the NFT back whatever the market's state.
+
+- **Annotations:** `@StateContract(maxDatumBytes = 384, assetSlots = 1)`, `@Owned`, `@OwnedInit`, `@OwnedAction`,
+  `@OwnedDestroy`, `@Shared`, `@Into`, `@Admits`, `@SignedBy("seller")`
+- **Run:** `./gradlew :examples:market:test`
+- **Read:** [Native assets, mints and sends](/contracts/assets-mints-sends/), [Owned objects](/contracts/owned-objects/)
+
+### treasury
+
+[`examples/treasury`](https://github.com/bloxbean/joust/tree/main/examples/treasury) · `Treasury.java`, `Guardian.java`
+
+A multisig treasury. Deploy-time `@Params` hold a guardian credential and a payout cap. A council decides by
+`@Quorum`. A guardian *script* (`Guardian`, a plain JuLC withdraw-zero validator) can freeze the treasury through a
+zero withdrawal (`@AuthorizedBy("params.guardian")`, with a bound `Approvals` redeemer). An `@Invariant` holds on
+every state, and `Paid`, `CouncilChanged` and `Frozen` events are authenticated in the redeemer.
+
+- **Annotations:** `@Params`, `@Quorum(keys = "council", threshold = "quorum")`, `@AuthorizedBy`, `@Invariant`;
+  `Guardian` uses JuLC's `@WithdrawValidator`
+- **Run:** `./gradlew :examples:treasury:test`
+- **Read:** [Multisig treasury](/tutorials/multisig-treasury/), [Params, invariants and events](/contracts/params-invariants-events/),
+  [Authorization](/contracts/authorization/)
+
+### staking
+
+[`examples/staking`](https://github.com/bloxbean/joust/tree/main/examples/staking) · `StakedVault.java`
+
+A council-governed vault whose state UTxOs are staked to its own script (`stakeSelf = true`). `@Certify` allows only
+registration and exact delegation to the params' pool; `@Withdraw` sends rewards only to the payee (claimed in the
+output registry); `@Votes` votes as a script DRep by quorum; `@Propose` is a treasury-withdrawal guardrail. Built
+with `-Ajulc.blueprint=false`.
+
+- **Annotations:** `@StateContract(stakeSelf = true)`, `@Params`, `@Quorum(keys = "params.council", threshold = "params.quorum")`,
+  `@Withdraw`, `@Certify`, `@Votes`, `@Propose`
+- **Run:** `./gradlew :examples:staking:test`
+- **Read:** [Staked vault and governance](/tutorials/staked-vault/), [Staking and governance](/contracts/staking-and-governance/)
+
+<Aside>
+DevKit pays no rewards within a test (rewards take epochs), so the DevKit flow withdraws a zero balance. Votes and
+proposals are covered by the harness, not on DevKit.
+</Aside>
+
+### oracle
+
+[`examples/oracle`](https://github.com/bloxbean/joust/tree/main/examples/oracle) · `Oracle.java`, `Shop.java`
+
+A price `Oracle` and a `Shop` that reads it with `@Reads("params.oracle")`. The oracle instance is pinned in the
+shop's params as a `ForeignInstance`; the generated code checks its token kind, address and datum shape, and the
+shop checks freshness itself. The DevKit test composes a purchase and another oracle's update into one transaction
+with `Compose`.
+
+- **Annotations:** `@Params`, `@Reads`, `@Payable`, `@SignedBy("publisher")`
+- **Run:** `./gradlew :examples:oracle:test`
+- **Read:** [Oracle and composition](/tutorials/oracle-composition/), [Reads and composition](/contracts/reads-and-composition/)
+
+### upgrade
+
+[`examples/upgrade`](https://github.com/bloxbean/joust/tree/main/examples/upgrade) · `CounterV1.java`, `CounterV2.java`
+
+`CounterV1` names a successor (`setSuccessor`) and migrates with `@Destroy @MigrateTo("successor")`. `CounterV2`
+adopts it with `@Migrate(from = "params.previous")`, keeping its count and funds, in one composed transaction.
+
+- **Annotations:** `@MigrateTo`, `@Migrate`, `@Params`, `@SignedBy("admin")`
+- **Run:** `./gradlew :examples:upgrade:test`
+- **Read:** [Upgrading a contract](/tutorials/upgrades/), [Upgrades and migration](/contracts/upgrades/)
+
+### fees
+
+[`examples/fees`](https://github.com/bloxbean/joust/tree/main/examples/fees) · `Stall.java`, `Pot.java`
+
+A `Stall` deposits a 5 % fee from each sale into a `Pot` instance fixed in its params (a `ForeignInstance`).
+`Pot.collect` takes the deposit in with `@Receives` in the same composed transaction. The output registry carries
+the deposit claim, and both validators check their side.
+
+- **Annotations:** `@Params`, `@Receives`, `@Payable`, `@SignedBy("owner")`; `Stall`'s sale returns a list of `Deposit`s
+- **Run:** `./gradlew :examples:fees:test`
+- **Read:** [Deposits](/contracts/deposits/)
+
+### guild
+
+[`examples/guild`](https://github.com/bloxbean/joust/tree/main/examples/guild) · `Guild.java`, `Armory.java`
+
+`Guild` has two owned types, `Hero` and `Item`. Each owned method runs only on its own type's datum, and each type
+has its own invariants. A hero moves to another guild with `@Into`, which that guild admits with `@Admits("Hero")`
+in the same transaction (`transferAdmitted`). `Armory` holds `Vault` objects, each with a MerkleMap inventory.
+
+- **Annotations:** two `@Owned` types, `@OwnedInit`, `@OwnedAction`, `@OwnedDestroy`, `@Shared`, `@Into`,
+  `@Admits`, `@Invariant`
+- **Run:** `./gradlew :examples:guild:test`
+- **Read:** [Owned objects](/contracts/owned-objects/)
+
+### locker
+
+[`examples/locker`](https://github.com/bloxbean/joust/tree/main/examples/locker) · `Locker.java`, `Safes.java`
+
+MerkleMaps with native assets (ADR-0014). `Locker` holds a native token for many users, with their balances in a
+MerkleMap so the datum stays small: locking takes tokens in (`accepted`), unlocking sends them back. `Safes` has
+owned safes, each holding tokens and a MerkleMap written at creation.
+
+- **Annotations:** `@StateContract(assetSlots = 2)`, `@Owned`, `@OwnedInit`, `@OwnedAction`, `@OwnedDestroy`, `@Payable`
+- **Run:** `./gradlew :examples:locker:test`
+- **Read:** [MerkleMaps](/contracts/merklemaps/), [Native assets, mints and sends](/contracts/assets-mints-sends/)
+
+## Wallets and pages
+
+### wallet
+
+[`examples/wallet`](https://github.com/bloxbean/joust/tree/main/examples/wallet) · tests and `js/page.mjs`
+
+Wallet-signed transactions. A counter and a bank are used from an address-only `WalletAccount`:
+`Compose.prepare()`, a CIP-30-style witness set, `PreparedTx.submit`. `js/page.mjs` (Node) plays the page: it
+verifies the prepared transaction, refuses malicious variants, signs and submits.
+
+- **Run:** `(cd examples/wallet/js && npm install)`, then `./gradlew :examples:wallet:test`
+- **Read:** [Wallets](/apps/wallets/)
+
+### dapp
+
+[`examples/dapp`](https://github.com/bloxbean/joust/tree/main/examples/dapp) · [README](https://github.com/bloxbean/joust/blob/main/examples/dapp/README.md)
+
+A browser dApp for `Counter` and `Bank` on DevKit. It uses typed JS clients generated from the contracts'
+descriptions (`joust-gen`), the prepare service (`julc-state-server`), a page that verifies every transaction and
+shows what it checked before a CIP-30 wallet signs, and a "malicious service" switch whose tampered transactions
+the page refuses. `DappDevnetTest` runs the flows in Node.
+
+```sh
+./gradlew :examples:dapp:jsClients                      # frontend/src/generated/{Counter,Bank}.js + .d.ts
+(cd examples/dapp/frontend && npm install && npm run build)
+./gradlew :examples:dapp:run                            # http://localhost:8095
+```
+
+- **Read:** [JavaScript clients](/apps/javascript-clients/), [Pages](/apps/pages/), [Wallets](/apps/wallets/)
+
+### devkit
+
+[`examples/devkit`](https://github.com/bloxbean/joust/tree/main/examples/devkit) · `DevKit.java`, `Fixtures.java`, `FixtureRecorder.java`
+
+Not a contract: the Yaci DevKit connection helper every example's DevKit tests use (top-ups fall back to the
+default-mnemonic genesis accounts when the faucet runs dry), and the ADR-0015 fixture recorder. `FixturesTest` checks
+the recorded oracle in `fixtures/`.
+
+- **Read:** [Testing](/contracts/testing/), [Networks and chain providers](/apps/networks-and-providers/)
+
+## Script sizes and budgets
+
+The validators are compiled by JuLC (target `plutus-v3-pv11`, `pv11-safe` optimisation), after the ADR-0008
+optimisations. The budgets are per script execution, from the harness tests. For scale, a transaction may use
+10,000M CPU and 14M memory units on mainnet (16.5M memory on DevKit). The ADR-0008 tables give the numbers from
+before the optimisations.
+
+| Contract | Script size | Call | Purpose | CPU | Mem |
+|---|---|---|---|---|---|
+| Counter | 5,631 B | create | MINT | 86.2M | 271k |
+| | | increment | SPEND | 73.4M | 213k |
+| | | reset | SPEND | 74.2M | 216k |
+| | | close | SPEND + MINT (burn) | 94.1M + 17.6M | 317k + 64k |
+| Vault | 6,273 B | open | MINT | 92.7M | 290k |
+| | | deposit | SPEND | 99.4M | 303k |
+| | | withdraw | SPEND | 140.6M | 445k |
+| | | close | SPEND + MINT | 97.9M + 17.6M | 330k + 64k |
+| Escrow | 5,688 B | open | MINT | 102.5M | 314k |
+| | | release / refund | SPEND + MINT | 92.1M + 17.6M | 309k + 64k |
+| Crowdfund | 7,976 B | launch | MINT | 102.8M | 317k |
+| | | contribute | SPEND | 132.8M | 385k |
+| | | refund | SPEND | 156.9M | 460k |
+| | | refund, 27 backers (`maxDatumBytes` = 1024, at capacity) | SPEND | 286.6M | 559k |
+| | | claim | SPEND + MINT | 99.0M + 17.6M | 336k + 64k |
+| Bank | 7,920 B | open account | MINT | 124.1M | 392k |
+| | | deposit (owned) | SPEND | 105.9M | 323k |
+| | | withdraw (owned, `@Shared` read) | SPEND | 171.4M | 547k |
+| | | close (owned) | SPEND | 96.4M | 327k |
+| Pool | 9,586 B | create intent | MINT | 110.3M | 321k |
+| | | cancel intent | SPEND | 48.3M | 165k |
+| | | batch of 3 (donate, buy, buy) | SPEND instance | 517.6M | 1,619k |
+| | | batch of 10 donations (all scripts) | | 4,629.8M | 13,976k |
+| Jar (.jsc) | 9,507 B | tip | SPEND | 102.3M | 312k |
+| | | withdraw (with an `if` arm) | SPEND | 144.5M | 460k |
+| Points (.jsc) | 12,276 B (+ MapVerifier) | give | SPEND + VERIFIER | 235.1M + 393.6M | 768k + 1,496k |
+| Rollup | 10,447 B | commit (16 steps) | SPEND | 651.9M | 1,892k |
+| | | challenge, worst case (32 accounts, 16 steps) | SPEND | 2,644.1M | 7,781k |
+| Token | 11,718 B (+ MapVerifier 4,700 B, shared) | create | MINT + VERIFIER | 121.2M + 32.0M | 366k + 138k |
+| | | mint (1 read, 1 write) | SPEND + VERIFIER | 156.2M + 336.5M | 483k + 1,277k |
+| | | transfer (2 reads, 2 writes) | SPEND + VERIFIER | 218.4M + 502.3M | 707k + 1,901k |
+| | | transfer, 203 holders in the map | SPEND + VERIFIER | 218.4M + 742.4M | 707k + 2,923k |
+| Dex | 12,008 B (+ OutputVerifier 703 B, shared) | open | MINT | 100.4M | 302k |
+| | | addLiquidity (LP minted, sent) | SPEND + MINT + VERIFIER | 256.5M + 57.8M + 21.2M | 793k + 214k + 86k |
+| | | swapAdaForToken | SPEND + VERIFIER | 221.6M + 21.2M | 688k + 86k |
+| | | swapTokenForAda | SPEND | 197.8M | 611k |
+| | | removeLiquidity (LP burned) | SPEND + MINT + VERIFIER | 296.3M + 69.5M + 22.1M | 913k + 260k + 90k |
+| Market | 11,325 B | offer (NFT in) | MINT | 159.1M | 497k |
+| | | buy (payout, NFT send, royalty send) | SPEND + MINT + VERIFIER | 345.7M + 24.0M + 35.3M | 1,127k + 100k + 145k |
+| | | cancel | SPEND + MINT + VERIFIER | 191.0M + 24.0M + 21.2M | 634k + 100k + 86k |
+
+All contracts read their script by reference (ADR-0002 D9); the first deploy of a contract type publishes it.
+ADR-0008 cut the generated checks' cost by 30-60 % in plain contracts and the scripts by about 2.4 KB, so the
+size-based fee is now the largest part of a simple call's fee. The source of this table is
+[`examples/README.md`](https://github.com/bloxbean/joust/blob/main/examples/README.md).
+
+<Aside type="tip">
+A MerkleMap call runs two scripts: the contract's spend and the shared `MapVerifier`. The verifier's cost grows with
+the number of keys touched and, slowly, with the map's size (compare the Token transfer with 203 holders). A batch
+of 10 donations uses 13,976k memory, close to mainnet's 14M limit: the batcher's default is 8 intents
+(`Batcher.DEFAULT_MAX`, ADR-0004 §6).
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Your first contract" href="/start/first-contract/" description="Write a counter from scratch." />
+  <LinkCard title="Fees and script size" href="/contracts/fees-and-size/" description="What a call costs, and how to keep scripts small." />
+  <LinkCard title="Testing" href="/contracts/testing/" description="The JVM, harness and DevKit levels every example uses." />
+  <LinkCard title="Architecture decisions" href="/project/architecture-decisions/" description="The ADR behind each example." />
+</CardGrid>

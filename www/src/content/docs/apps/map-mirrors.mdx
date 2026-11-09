@@ -1,0 +1,205 @@
+---
+title: MerkleMap mirrors
+description: How JOUST keeps MerkleMaps off chain - mirrors over Aiken's MPF that answer the engine's proofs, persist in LevelDB, IndexedDB or RocksDB, and rebuild from chain history.
+---
+
+import { Aside, Steps, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A [MerkleMap](/contracts/merklemaps/) keeps a contract's large map off chain. The datum stores only the map's
+**root**, a 32-byte hash of a Merkle Patricia Forestry (MPF) holding every entry. A call that reads or writes entries
+carries **proofs** against that root, which JOUST's map verifier checks on chain. So someone off chain must hold the
+map itself, to produce those proofs. That copy is a **mirror**.
+
+This page is about the off-chain side: where mirrors live, how they answer the engine, how they are cached, and how a
+missing one is rebuilt from the chain without trusting anyone. For writing contracts with maps, see
+[MerkleMaps](/contracts/merklemaps/) and the [Token tutorial](/tutorials/token-merklemap/). The design is ADR-0015
+§13.12.
+
+## Why a map needs off-chain data
+
+On chain there is only the root. To prove that Alice's balance is 650, or to compute the root after a transfer, you
+need the map's entries. An app has them if it built the map, call by call. But:
+
+- another device, or a fresh browser profile, starts with nothing;
+- another user's (or another app's) writes change the map without you;
+- copying a whole map into the engine on every call does not scale.
+
+So JOUST keeps mirrors outside the engine, gives the engine only the proofs a call needs, and can rebuild any mirror
+from the chain.
+
+## How a call uses a mirror
+
+<Steps>
+
+1. The engine runs the method. Each map key it reads or writes becomes a **need**: `read:<root>:<key>`, or
+   `writes:<root>:<key>=<value|->,...` for the call's net writes in order.
+2. The runtime asks the mirror for the map with that root. The mirror answers with the proofs, as Plutus data: a read's
+   entry and its proof; for writes, one proof per write, each against the root the previous write led to.
+3. The engine **checks every proof** against the on-chain root with the validator's own MPF logic, and computes each
+   new root itself. It never takes a root from the JavaScript side.
+4. After the transaction is prepared, the mirror **stages** the map states it leads to (from the transaction's map
+   claims), so the next call finds them.
+
+</Steps>
+
+A mirror is found by its root, since a proof depends only on the map's content. The engine holds only the proofs a
+call touches.
+
+## The JavaScript mirror
+
+`mapMirror` in `@julclang/joust-runtime`
+([`js/joust-runtime/src/mirror.js`](https://github.com/bloxbean/joust/blob/main/js/joust-runtime/src/mirror.js)) keeps
+mirrors with Aiken's MPF (`@aiken-lang/merkle-patricia-forestry` 1.3.1). `joustRuntime` uses one by default; you only
+pass your own to persist it or share it.
+
+```js
+import { joustRuntime, mapMirror, levelMirrorCache, blockfrostProvider } from '@julclang/joust-runtime';
+
+const provider = blockfrostProvider('http://localhost:8080/api/v1');
+const mirror = mapMirror({ provider, cache: await levelMirrorCache('.joust/mirrors') });
+const rt = joustRuntime({ provider, contracts, clock, networkId: 0, deployments, mapMirror: mirror });
+```
+
+| `mapMirror` member | What it does |
+|---|---|
+| `get(root, key)` | the value (hex) of `key` (hex) in the map with `root`, or `undefined` |
+| `known(root)` | whether this mirror holds the map with `root` (in memory or in its cache) |
+| `answer(need, units?)` | the engine's proof need, answered as hex Plutus data; rebuilds from the history of `units` first if the root is unknown |
+| `stage(txHex)` | records the map states a prepared transaction leads to |
+| `sync(unit)` | replays the history of a token not replayed yet; returns how many claims it applied |
+| `states` | the in-memory states: root to `Map(key hex -> value hex)` |
+
+Options: `provider` (with `assetHistory` and `redeemers`, to rebuild from the chain) and `cache` (to persist). Without
+a cache, mirrors live in memory for the process.
+
+Aiken's MPF and JOUST's on-chain MPF (CCL's, on the JVM) agree on every recorded map: in ADR-0015's spike, all 52 roots
+and all 70 proofs of the recorded Token and Locker claims were equal as Data.
+
+## Rebuilding from the chain
+
+A map's history is on chain. Each call that changes a map spends JOUST's map verifier with a zero withdrawal whose
+redeemer lists the call's claims: `MapClaims [MapClaim(policy, owner, field, oldRoot, reads, writes, newRoot)]`, each
+write with its full entries (key and value, before and after) and its proof. Redeemers stay in the blocks after the
+UTxOs are spent. So a mirror can be rebuilt from history alone:
+
+<Steps>
+
+1. List the transactions that moved the instance's token, oldest first (`provider.assetHistory(unit)`; Blockfrost's
+   `/assets/{unit}/transactions`).
+2. Read each one's redeemers (`provider.redeemers(txHash)`). Blockfrost serves redeemer data by its hash; the provider
+   checks the data against the hash.
+3. Starting from the empty root, apply every claim whose old root is a known state, writing each entry and checking
+   that the result is the claim's new root.
+4. The map is usable once its root is one the chain holds: the engine checks every proof against the datum's root.
+
+</Steps>
+
+The history source is not trusted. A dropped, altered or invented claim stops matching a root, and is refused (`a map
+claim does not lead to its new root`). An alternative history reaching the same root would need a blake2b collision.
+
+Rebuilding is automatic. When the engine needs a root the mirror does not have, the runtime syncs the history of the
+tokens the call touches (the instance's, or the object's) and answers. A mirror remembers which transactions it has
+replayed per token, so a later sync reads only the new ones: a mirror that missed another user's write catches up the
+same way.
+
+<Aside type="note" title="Providers with history">
+Rebuilding needs a provider with `assetHistory` and `redeemers`: `blockfrostProvider` (Blockfrost and Yaci Store) has
+both. Ogmios alone has no history, so a map contract over Ogmios needs mirrors the app built itself, or an indexer
+beside it.
+</Aside>
+
+## Caches
+
+<Tabs>
+<TabItem label="Node">
+
+`levelMirrorCache(location)` persists mirror states with `level`: LevelDB in a directory. Pass it to `mapMirror`:
+
+```js
+const cache = await levelMirrorCache('.joust/mirrors');
+const mirror = mapMirror({ provider, cache });
+```
+
+It stores each map state by root, and per token the transactions already replayed. A new process with the same
+directory starts where the last one stopped. `cache.close()` closes the database.
+
+</TabItem>
+<TabItem label="Pages">
+
+`@julclang/joust-runtime/worker` keeps mirrors in **IndexedDB** by default, through `level`'s browser build, in the
+database `joust-mirrors`. A reload or the next visit reads the map from IndexedDB, not the chain's history. Choose
+another database with the worker's `mirrorCache` option, or `mirrorCache: false` for memory only. Without IndexedDB the
+worker warns and keeps mirrors in memory.
+
+In `page.test.js`, after a reload the Token page transferred without requesting the token's history; a fresh browser
+profile rebuilt the map from the chain, and its balances were exact (651 refused with `insufficient balance` when 650
+were left, then 650 transferred).
+
+</TabItem>
+<TabItem label="JVM">
+
+The Java runtime's default node store is **RocksDB** (cardano-client-lib's
+`cardano-client-merkle-patricia-forestry-rocksdb`), at `./.joust/mpf`. Choose the path with
+`StateRuntime.Builder.mapStorePath(...)` or the system property `-Djoust.mapStore=<path>`, give your own store with
+`StateRuntime.Builder.mapStore(...)`, or keep it in memory with `-Djoust.mapStore=memory` (every Gradle test sets it).
+The store is shared per path within a JVM. When a root is missing, `MapHistory.rebuild` replays the chain's history
+into it over a `BackendService`, the same way. See the [Java runtime](/apps/java-runtime/).
+
+RocksDB is native and never enters the Wasm engine: the runtime loads it by name only when no store is given.
+
+</TabItem>
+</Tabs>
+
+## Reading map values
+
+A page or app can read a map without a transaction. The decoded state gives the map's root:
+
+```js
+const state = await token.at(id).state();   // { admin, supply, balances: { root, reads, writes } }
+```
+
+<Tabs>
+<TabItem label="Page">
+
+Ask the worker, which holds the mirror:
+
+```js
+const hex = await service.mapValue(state.balances.root, ownerKeyHash, [deployment.policy + id]);
+```
+
+</TabItem>
+<TabItem label="Node">
+
+Ask the mirror directly, syncing first if it does not know the root:
+
+```js
+const mirror = rt.service.mirror;
+if (!(await mirror.known(state.balances.root))) await mirror.sync(deployment.policy + id);
+const hex = await mirror.get(state.balances.root, ownerKeyHash);
+```
+
+</TabItem>
+</Tabs>
+
+Keys and values are the raw bytes the contract used, as hex; an absent key is `null` (page) or `undefined` (mirror).
+`MerkleMaps.putInt` stores a non-negative integer as its minimal big-endian bytes, zero as the empty byte string:
+
+```js
+const balance = hex ? BigInt('0x' + hex) : 0n;
+```
+
+## The earlier node store
+
+Before mirrors, the runtime passed the whole node store to the engine on every call. `joustRuntime({ mapStore })`
+still takes one (`memoryMapStore()`, or `fileMapStore(file)` in Node), and recorded fixtures with nodes still replay
+through it. It cannot rebuild a map it did not build: a missing node fails with `this app did not build that map's
+history`. Prefer mirrors.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="MerkleMaps" href="/contracts/merklemaps/" description="Writing contracts with maps, and what the validator checks." />
+  <LinkCard title="Token balances in a MerkleMap" href="/tutorials/token-merklemap/" description="A token contract built on a map, end to end." />
+  <LinkCard title="Pages: worker, Vite, static builds" href="/apps/pages/" description="The worker that holds a page's mirrors." />
+  <LinkCard title="@julclang/joust-runtime reference" href="/reference/joust-runtime/" description="mapMirror, levelMirrorCache and the rest." />
+</CardGrid>

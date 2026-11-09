@@ -1,0 +1,176 @@
+---
+title: "@julclang/joust (CLI, Vite)"
+description: Reference of @julclang/joust - every joust command and flag, environment variables, the dev server's routes, the Vite plugin and virtual:joust/network, and create-joust.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+`@julclang/joust` is JOUST's command line and Vite plugin. It carries the **toolchain engine**: JOUST's annotation
+processor and JuLC's compiler, compiled to Wasm, which build `.java` and `.jsc` contracts in Node exactly as the
+Gradle build does. Source: [`js/joust`](https://github.com/bloxbean/joust/tree/main/js/joust). For a guided tour, see
+[The joust CLI and projects](/apps/cli-and-projects/).
+
+<Aside type="caution" title="Pre-release: from a local registry">
+Version `0.1.0-pre1-snapshot`, not on npmjs.org yet: install it from a local registry, as the
+[npm quick start](/start/quick-start-npm/#prerequisites) shows. Node 22 or newer.
+</Aside>
+
+| Entry point | Contents |
+|---|---|
+| bin `joust` | the CLI |
+| `@julclang/joust` | `build`, `deploy`, `loadConfig`, `network`, `loadToolchain`, `VERSION` (the commands as functions) |
+| `@julclang/joust/vite` | the Vite plugin, `joust(options)` (also the default export) |
+
+## Commands
+
+Every command reads `joust.config.json` from the working directory (see [`joust.config.json`](/reference/config/)).
+`--network <name>` defaults to the config's `network` (`devkit`).
+
+| Command | Flags | What it does |
+|---|---|---|
+| `joust build` | `--src <dir>` (default config `contracts`), `--out <dir>` (default config `out`) | compiles every `.java` and `.jsc` file under the source folder into the output folder; exits 1 on a compile error |
+| `joust deploy` | `--network <name>` | publishes each contract's reference script (once) and writes `<out>/deployments.<network>.json` |
+| `joust dev` | `--network <name>`, `--port <port>` (default config `dev.port`, else 5178) | attaches to the chain (starting it with the network's `start` command if needed), builds, deploys, serves the page; rebuilds and redeploys on save |
+| `joust serve` | `--network <name>`, `--dir <dir>` (default `dist`), `--port <port>` (default as `dev`) | serves a built page as static files, with the chain API at `/chain` and on DevKit the faucet |
+| `joust version` | (also `joust --version`) | prints the package version |
+
+`joust` with no command prints the usage; an unknown command prints it and exits 1. Errors are printed as
+`joust: <message>` with exit status 1. `joust dev` and `joust serve` bind to `127.0.0.1` and stop on `SIGINT` or
+`SIGTERM`.
+
+### Outputs of `joust build`
+
+| File | Content |
+|---|---|
+| `contracts.json` | `[{ description, script, transitions, built: { joust } }]` for the runtime |
+| `<Contract>.json` | the description (CIP-57 + `x-joust`, version 2) |
+| `<Contract>.plutus` | the validator, CBOR hex |
+| `<Contract>.js`, `<Contract>.d.ts` | the typed client and its types |
+| `validators.json` | plain JuLC validators: `[{ name, package, purpose, script, scriptHash, params, built }]` (only if there are any) |
+| `<Validator>.plutus` | each plain validator's script, parameters not applied |
+| `joust.lock.json` | `{ joust, descriptionVersion, contracts: { <title>: { scriptHash } }, validators? }` |
+
+### `joust deploy`
+
+`<out>/deployments.<network>.json` is `{ network, networkId, chain, clock, contracts: { <title>: deployment } }`, each
+deployment `{ contract, policy, address, networkId, referenceScripts }` plus `params`, `mapVerifier` and
+`outputVerifier` when the contract has them. The deployer is `JOUST_MNEMONIC`'s key; without it, on a network with an
+`admin` API (DevKit), a key kept in `.joust/<network>-wallet.json`, topped up with 1000 ADA when it holds less than
+200 ADA. A contract with `@Params` is deployed with the config's `params` for it (by title or simple name) and skipped
+without them.
+
+## Environment variables
+
+| Variable | Read by | Meaning |
+|---|---|---|
+| `JOUST_MNEMONIC` | `joust deploy`, `joust dev` | the deployer's mnemonic; required on networks without an `admin` API |
+| `BLOCKFROST_PREVIEW_PROJECT_ID` | any command on `preview` | the Blockfrost project id (the built-in `preview`'s `projectIdEnv`) |
+| (a network's `projectIdEnv`) | any command on that network | its chain API's project id |
+| `JOUST_NETWORK` | the Vite plugin, in `vite build` | the network a build is for, unless the plugin's `network` option names one |
+| `JOUST_VITE_LOG` | `joust dev` | Vite's log level (default `warn`); `info` shows dependency bundling and reloads |
+| `JOUST_DEBUG_NEEDS` | `@julclang/joust-runtime` | logs each chain read the engine asks for |
+
+A command on a network whose `projectIdEnv` is not set stops and names the variable.
+
+## The dev server
+
+`joust dev` serves one origin (default `http://127.0.0.1:5178`):
+
+| Route | Method | Answers |
+|---|---|---|
+| `/chain/<path>` | GET, POST (`/chain/tx/submit`) | the network's chain API, proxied with its project id; one upstream session (Blockfrost's affinity cookie) |
+| `/joust/network.json` | GET | `{ network, networkId, chain: "/chain", engine: { url, integrity: { script, wasm } }, contracts: "/joust/contracts.json", service: "/joust/service", clock, ttlMs, explorer, deployments }` |
+| `/joust/engine/<file>` | GET | the runtime engine (`joust-runtime.js`, `joust-runtime.js.wasm`), streamed, with an ETag |
+| `/joust/service/prepare` | POST | the engine in the dev server as a prepare service (`httpService('/joust/service')`); 422 `{ error }` on a contract's refusal |
+| `/joust/<file>` | GET | files of the build folder |
+| `/dev/topup` | POST `{ address, ada? }` | DevKit only: funds the address from the faucet (default 1000 ADA) |
+| anything else | | the page: Vite in middleware mode when the project has `vite` and an `index.html` in the page folder, else the page folder's files |
+
+Responses carry `access-control-allow-origin: *`. The page folder is the config's `page`, else `page/` if it exists,
+else the project root.
+
+`joust serve` answers `/chain/<path>`, `/dev/topup` (DevKit only) and the files of its folder (`/` is `index.html`).
+It has no `/joust` routes.
+
+## The Vite plugin
+
+```js title="vite.config.js"
+import { joust } from '@julclang/joust/vite';
+
+export default { root: 'page', plugins: [joust({ root: process.cwd() })] };
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `root` | the working directory | the project: where `joust.config.json` and the build folder are |
+| `network` | `JOUST_NETWORK`, else Vite's mode if it names a network, else the config's `network` | the network a `vite build` is for |
+
+It returns a list of plugins that:
+
+- alias Node's `buffer`, `events`, `util`, `stream`, `process` and `assert` to browser versions, resolved from the
+  plugin's own package by absolute path, and inject the `Buffer` (one class, `src/shims/buffer.js`) and `process`
+  globals;
+- set `global` to `globalThis` and target es2022 for the dev server's dependency bundling and for builds;
+- build workers as ES modules with the same aliases and globals (injected `post` in workers);
+- scan `**/*.html` and `**/*.worker.{js,mjs,ts}` for dependencies (unless the config sets `optimizeDeps.entries`), and
+  pre-bundle `node:buffer`;
+- allow the project root in `server.fs.allow`, so a page imports `build/joust/*.js`;
+- provide `virtual:joust/network`.
+
+`vite-plugin-node-polyfills` and `@rollup/plugin-inject` are dependencies of the package; `vite` (5 or newer) is an
+optional peer dependency.
+
+### `virtual:joust/network`
+
+The default export, in a build:
+
+| Field | Value |
+|---|---|
+| `network` | the network's name |
+| `networkId` | the network's `networkId`, else the deployments file's |
+| `chain` | the network's `pageChain`, else `"/chain"` |
+| `clock` | the deployments file's clock, else the network's |
+| `ttlMs` | the config's `dev.ttlMs`, else 20 000 on a DevKit, 180 000 elsewhere |
+| `explorer` | the network's `explorer`, or `null` |
+| `deployments` | the deployments file's `contracts` |
+| `contracts` | `contracts.json` |
+| `validators` | `validators.json`, or `[]` |
+| `engine` | `{ url: "<base>joust/engine-<id>/joust-runtime.js", integrity: { script, wasm } }` |
+
+A build emits the engine's two files to `joust/engine-<id>/` (`id`: 8 hex characters from the files' hashes) and fails
+without `contracts.json` or `deployments.<network>.json`. Under `joust dev`, the module instead fetches
+`/joust/network.json` and then its `contracts` when the page loads (the fields of the dev server's `network.json`,
+above).
+
+## `create-joust`
+
+```sh
+npm create joust@0.1.0-pre1-snapshot [dir]
+```
+
+Copies the template into `dir` (default `joust-app`), which must be empty or absent, renames `gitignore` to
+`.gitignore` and names the package after the folder. The template: a `Counter` contract, `joust.config.json` for
+DevKit, a page (`page/`) with the Cardano Foundation's connect button and an in-page DevKit key, `vite.config.js`, a
+DevKit test, and the npm scripts listed in the [npm quick start](/start/quick-start-npm/#the-project).
+
+## Functions
+
+The commands are also functions, for scripts and tests:
+
+| Export | Signature | Description |
+|---|---|---|
+| `build` | `await build({ root?, src?, out?, options?, log?, keep? })` | `{ ok, contracts, validators, diagnostics }` |
+| `deploy` | `await deploy({ root?, config, networkName?, log?, fetchImpl? })` | the deployments written |
+| `loadConfig` | `loadConfig(root = process.cwd())` | the config, merged over the defaults |
+| `network` | `await network(config, name?)` | the network with its clock resolved (a DevKit's from its admin API) and `projectId` read |
+| `loadToolchain` | `loadToolchain({ dir? } = {})` | the toolchain engine (`engine.joust.build({ files, options })`) |
+| `VERSION` | constant | the package version |
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="joust.config.json" href="/reference/config/" description="Every key, default and the merge rule." />
+  <LinkCard title="The joust CLI and projects" href="/apps/cli-and-projects/" description="The commands in context." />
+  <LinkCard title="Pages: worker, Vite, static builds" href="/apps/pages/" description="The plugin and virtual:joust/network at work." />
+  <LinkCard title="@julclang/joust-runtime" href="/reference/joust-runtime/" description="The runtime engine's API." />
+</CardGrid>

@@ -1,0 +1,254 @@
+---
+title: Java
+description: The Java subset contract code is written in - types, numbers, byte[] equality, records and sealed interfaces, loops, maps, library code - and the checks that enforce it.
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+A JOUST contract is ordinary Java source that is compiled twice: by javac for the JVM, where the client runs your
+methods to build transactions, and by [JuLC](https://julc.dev) to UPLC, where the validator runs them again to check
+those transactions. So contract code must stay inside the part of Java that **both compilers accept and that means
+the same thing in both places**. This page lists the rules, the idioms the examples use, and what checks them.
+
+The rules apply to the `@StateContract` class (all of it: actions, views, helper methods, nested records) and to any
+`@OnchainLibrary` helper class it calls. Your application, tests and other off-chain code are unrestricted Java.
+
+## Where the rules come from
+
+| Check | When | What it catches |
+|---|---|---|
+| javac | Compile | Ordinary Java errors |
+| `SubsetLint` (JOUST) | Compile, on each `@StateContract` class | Code whose JVM and on-chain meanings differ: fixed-width numbers, narrowing calls, hand-built MerkleMaps |
+| `ContractReader` (JOUST) | Compile | The contract's shape: method kinds and signatures, `Ctx` placement, annotation targets, reserved names |
+| JuLC | Compile, round 2 | Anything outside JuLC's subset (`throw`, generic records, identity equality on arrays, ...), with `JULC` error codes |
+| The testkit | Test | Disagreements that compile fine: run your methods on the JVM and through the compiled validator, on the same inputs |
+
+All three compile-time checks report errors on the offending line, so a contract that builds is inside the subset as
+far as these checks can tell. Some rules below are not checked by anything yet; they are marked.
+
+## Types
+
+| Use | For | Notes |
+|---|---|---|
+| `BigInteger` | Every number: amounts, counts, times (POSIX ms) | Unbounded, like on-chain integers |
+| `byte[]` | Key hashes, policy ids, token names, hashes, raw bytes | A bytestring. Compare with `ByteStringLib.equals` |
+| `boolean` | Flags | |
+| Records | The state, results, arguments, events | Immutable; no generic records |
+| Sealed interfaces of records | Alternatives (events, kinds of request) | Match with `switch` patterns or `instanceof` |
+| `JulcList<T>` | Lists | From `org.julclang.core.types`; `JulcList.empty()`, `prepend`, for-each |
+| `JulcMap<K, V>` | Small maps inside the datum | Keep them canonical (see [Maps](#maps)) |
+| `Optional<T>` | Optional values | |
+| `MerkleMap` | Unbounded maps, as a state component only | See [MerkleMaps](/contracts/merklemaps/) |
+| JOUST and ledger types | `Ctx`, `Payout`, `Funds`, `Send`, `Credential`, `Value`, ... | From `julc-state-api` and JuLC's ledger API |
+
+Method arguments and state components must be types that encode as Plutus data: the list above.
+[ADR-0001 D2](https://github.com/bloxbean/joust/blob/main/docs/adr/0001-option-a-single-utxo-state-machine.md) gives
+the method shapes; [Annotations](/reference/annotations/) lists each annotation.
+
+## Numbers: BigInteger only
+
+On chain, integers are unbounded. JuLC compiles `int` and `long` arithmetic as unbounded integers and
+`intValue()`/`longValue()` as the identity, while the JVM wraps at 32 or 64 bits. A method using them could compute
+one result in the client and another in the validator, and the transaction would fail or, worse, pass with a value you
+did not intend. So `SubsetLint` rejects, anywhere in a `@StateContract` class:
+
+- the types `int`, `long`, `short`, `char`, `float` and `double` written out;
+- locals of those types, including `var` inferred as one (`var n = list.size()`);
+- arithmetic whose type is one of them (`a + 1` on `int`s), and compound assignments (`n += 1`);
+- narrowing calls: `intValue`, `longValue`, `shortValue`, `byteValue`, their `...Exact` forms, `doubleValue`,
+  `floatValue`.
+
+Two things stay allowed, because they mean the same on both sides: comparing an `int` result
+(`a.compareTo(b) >= 0`, `ByteStringLib.length(genesis) == 32`) and passing a plain literal
+(`BigInteger.valueOf(2_000_000)`).
+
+```java
+// Rejected by SubsetLint:
+int fee = amount.intValue() / 100;
+// Write instead:
+BigInteger fee = amount.divide(BigInteger.valueOf(100));
+```
+
+The error message says why, for example: `'int' in a @StateContract: JuLC treats it as an unbounded integer on-chain
+while the JVM wraps or rounds it, so the two runs could disagree. Use BigInteger`.
+
+<Aside type="note">
+
+`SubsetLint` checks the `@StateContract` class only. An `@OnchainLibrary` helper class of yours is compiled by JuLC
+but not linted by JOUST, so keep the same discipline there by hand.
+
+</Aside>
+
+## byte[] equality
+
+<Aside type="danger" title="Never compare byte[] with == or .equals">
+
+On chain, comparing two bytestrings compares their bytes. On the JVM, `==` and `byte[].equals` compare references,
+so two equal key hashes are "different". Always use `ByteStringLib.equals(a, b)` (from
+`org.julclang.stdlib.lib`), which compares bytes in both places.
+
+JuLC rejects `==` on arrays (`JULC0087`). `.equals` is **not** caught by any check today.
+
+</Aside>
+
+```java title="examples/rollup/.../Rollup.java"
+Require.that(ByteStringLib.equals(Ledger.logHash(steps), s.pendingLog()), "not the committed log");
+```
+
+Other bytestring helpers live in `ByteStringLib` too: `length`, `append`, `cons`, `empty`,
+`integerToByteString`. Constants are `byte[]` literals: `new byte[]{106, 111, 117, 115, 116}`.
+
+## Records and sealed interfaces
+
+Records are the data model: the state, a result that carries payouts, arguments, events. They are immutable, so a
+transition builds a new one:
+
+```java
+return new State(s.owner(), s.unlockAt(), s.total().add(ctx.received()));
+```
+
+**No generic records** (JuLC: `Cannot resolve type: type parameter S`). That is why a contract that pays out declares
+its own result record, which JOUST recognises by its shape:
+
+```java title="examples/vault/.../Vault.java"
+public record Result(State state, JulcList<Payout> payouts) {}
+```
+
+**Sealed interfaces** model alternatives. The treasury's events:
+
+```java title="examples/treasury/.../Treasury.java"
+public sealed interface Event permits Paid, CouncilChanged, Frozen {}
+public record Paid(byte[] to, BigInteger amount) implements Event {}
+public record CouncilChanged(BigInteger members, BigInteger quorum) implements Event {}
+public record Frozen(boolean frozen) implements Event {}
+```
+
+Match on them with a `switch` over patterns (with a `default` if you do not list every case):
+
+```java title="examples/staking/.../StakedVault.java"
+return switch (p.governanceAction()) {
+    case GovernanceAction.TreasuryWithdrawals t -> totalOf(t).compareTo(cfg.cap()) <= 0;
+    default -> true;
+};
+```
+
+**Accessors on a call result need a typed local first.** Write `Lookup l = lookup(b, key); return l.balance();`
+rather than `lookup(b, key).balance()`.
+
+## Locals, loops and control flow
+
+- **Locals are immutable,** except loop accumulators: a variable declared before a loop and reassigned inside it.
+- **Loops:** for-each over a `JulcList` (or a `JulcMap`'s `keys()`), and `while`.
+- **No `throw`.** State rules with `Require.that(condition, "message")`; `Builtins.error()` fails without a message.
+- **No `Function.apply`:** pass behaviour as a call to a static helper method, not as a function value.
+- **Static calls go through an imported simple class name** (`ByteStringLib.equals`, not the fully qualified name).
+
+The accumulator idiom, from the rollup's ledger:
+
+```java title="examples/rollup/.../Ledger.java"
+public static Lookup lookup(Book b, byte[] key) {
+    boolean found = false;
+    BigInteger balance = BigInteger.ZERO;
+    BigInteger nonce = BigInteger.ZERO;
+    BigInteger size = BigInteger.ZERO;
+    for (var a : b.accounts()) {
+        if (ByteStringLib.equals(a.key(), key)) {
+            found = true;
+            balance = a.balance();
+            nonce = a.nonce();
+        }
+        size = size.add(BigInteger.ONE);
+    }
+    return new Lookup(found, balance, nonce, size);
+}
+```
+
+A native-asset `Value` cannot be a loop accumulator; use recursion for that (ADR-0007).
+
+## Maps
+
+`JulcMap` is an association list, and its on-chain semantics are strict:
+
+- `insert` **prepends**, and a duplicate key stays: update with `m.delete(k).insert(k, v)`.
+- `get` fails on chain for a missing key: check `containsKey` first.
+- `getOrDefault` has no on-chain lowering: do not use it.
+- The datum is written as canonical CBOR (map keys sorted), so a map in the state must be kept in canonical key
+  order, or the datum the client writes differs from the one the validator recomputes.
+
+For the common case, a `JulcMap<byte[], BigInteger>` keyed by key hash, `SortedMaps` does all of this:
+
+```java title="examples/crowdfund/.../Crowdfund.java"
+BigInteger before = SortedMaps.getOr(s.backers(), ctx.caller(), BigInteger.ZERO);
+JulcMap<byte[], BigInteger> backers = SortedMaps.put(s.backers(), ctx.caller(), before.add(ctx.received()));
+```
+
+A map in the datum is bounded by `maxDatumBytes`. For unbounded maps use a [MerkleMap](/contracts/merklemaps/), and
+only through `MerkleMaps`: never construct a `MerkleMap` or `MapEntry`, and never read `.reads()`, `.writes()` or
+`.root()` (`SubsetLint` rejects both).
+
+## Time
+
+Use `Clock.after(ctx, t)` (the call happens at or after `t`) and `Clock.before(ctx, t)` (strictly before `t`), which
+hold for every moment the transaction could be valid. If you read the validity interval yourself, note that
+`IntervalLib.finiteLowerBound`/`finiteUpperBound` return `-1` for an infinite bound: never compare them without
+checking that the bound is finite. See [Time](/contracts/time/).
+
+## Helper code and library sources
+
+Put helpers in the contract class as `static` methods without a JOUST annotation, or in a separate class annotated
+`@OnchainLibrary` (`org.julclang.stdlib.annotation.OnchainLibrary`). JuLC compiles `@OnchainLibrary` sources of the
+current compilation with the validator. `@StateContract` is itself meta-annotated with `@OnchainLibrary`, which is
+how JuLC finds your contract class. The rollup example keeps its whole L2 program in such a class:
+
+```java title="examples/rollup/.../Ledger.java"
+@OnchainLibrary
+public final class Ledger {
+    public record Acct(byte[] key, BigInteger balance, BigInteger nonce) {}
+    public record Book(byte[] domain, JulcList<Acct> accounts) {}
+
+    public static BigInteger balanceOf(Book b, byte[] key) {
+        Lookup l = lookup(b, key);
+        return l.balance();
+    }
+    // ...
+}
+```
+
+Code from a **jar** reaches JuLC as *library sources*: `.java` files under `META-INF/plutus-sources/` with an
+`index.txt`, in an entry of the annotation processor path. That is how `julc-state-api` ships (its `onchain` jar, or
+the `onchainSources` directory inside the JOUST build). If you ship your own library that way:
+
+- JuLC follows imports and `Class.member` references only: a reference to a type in the same package needs an
+  explicit import in a bundled source.
+- Static fields must be literals (use `byte[]` literals for constants).
+- `@Documented` is not available to on-chain code; avoid enums (JOUST's own on-chain sources use sealed interfaces
+  of records instead).
+
+## Things that compile but differ
+
+These pass the compile-time checks and still diverge; avoid them:
+
+| Do not | Because | Instead |
+|---|---|---|
+| `a.equals(b)` on `byte[]` | Reference comparison on the JVM, byte comparison on chain | `ByteStringLib.equals(a, b)` |
+| `(PlutusData) (Object) record` in code that runs on the JVM | Fine on chain, where a record already is data; it throws on the JVM | Build data with `Builtins.constrData`, `bData`, `iData` |
+| A redeemer (method argument) typed `Value` | It mis-decodes on chain | Take `PlutusData` and read it |
+| `JulcMap.insert` to update a key | The old entry stays | `delete(k).insert(k, v)`, or `SortedMaps` |
+
+## Names the generated code reserves
+
+- Contract methods are `public static`, not generic, and uniquely named (no overloading). A method name becomes a
+  redeemer variant (`increment` becomes `Increment`) and must not clash with generated names.
+- Method names used by the generated client are reserved: `deploy`, `at`, `contract`, `state`, `instance`,
+  `instanceId`, `lovelace`, `fullValue`, `SPEC`, `params`, `policyIdFor`, `checkedState`, `checkedObject`.
+- Parameter names `ctx`, `maps`, `callerAccount`, `payLovelace`, `payAssets`, `runtime`, `params`, `authorization`
+  and `cosigners` are reserved, and so are `seed` and `instance` in `@Init`.
+
+`ContractReader` reports each clash with the fix ("rename the method").
+
+## Next steps
+
+<LinkCard title="Require and errors" description="How rules fail on the JVM and on chain." href="/contracts/require-and-errors/" />
+<LinkCard title="State and lifecycle" description="Method shapes and what each annotation generates." href="/contracts/state-and-lifecycle/" />
+<LinkCard title="Testing" description="Catch disagreements the compilers cannot." href="/contracts/testing/" />
+<LinkCard title=".jsc" description="A shorter syntax that lowers to this subset for you." href="/languages/jsc/" />

@@ -1,0 +1,260 @@
+---
+title: Params, invariants and events
+description: Fix values at deploy time with @Params, enforce rules on every state with @Invariant, and emit events that indexers can trust.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Three features from [ADR-0009](https://github.com/bloxbean/joust/blob/main/docs/adr/0009-option-i-params-auth-invariants-events.md)
+that hand-written validators often need:
+
+- **`@Params`**: values fixed when the contract is deployed (a guardian, a fee rate, another contract's policy),
+  baked into the script itself;
+- **`@Invariant`**: rules every state must satisfy, checked on chain after every transition;
+- **events**: records a method emits, carried in the redeemer and checked by the validator, so indexers can trust
+  them.
+
+All three appear in [`examples/treasury`](https://github.com/bloxbean/joust/tree/main/examples/treasury), a multisig
+treasury. This page uses it throughout. `.jsc` has none of them yet: write these contracts in Java.
+
+## `@Params`: deploy-time parameters
+
+Mark one nested record with `@Params`:
+
+```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Treasury.java"
+@StateContract(maxDatumBytes = 640)
+public class Treasury {
+
+    @Params
+    public record Config(Credential guardian, BigInteger maxPayout) {}
+
+    public record State(JulcList<byte[]> council, BigInteger quorum, boolean frozen) {}
+    …
+}
+```
+
+A method receives the parameters by declaring a parameter of that type:
+
+- right after the state, in actions, destroys and views;
+- first, in the `@Init` (there is no state yet);
+- right after the `@Shared` state, in [owned methods](/contracts/owned-objects/).
+
+```java
+@Init @Payable
+public static State open(Config cfg, JulcList<byte[]> council, BigInteger quorum, Ctx ctx) {
+    return new State(council, quorum, false);
+}
+
+@Action @Quorum(keys = "council", threshold = "quorum")
+public static Spent pay(State s, Config cfg, byte[] to, BigInteger amount, Ctx ctx) {
+    Require.that(!s.frozen(), "the treasury is frozen");
+    Require.that(amount.signum() > 0 && amount.compareTo(cfg.maxPayout()) <= 0, "amount out of range");
+    …
+}
+```
+
+The parameter is not part of the redeemer: callers cannot choose it.
+
+### How it works
+
+The parameters are **applied to the script** (JuLC's partial application of `@Param` fields). So:
+
+- each set of parameters is a different script, with its own hash, so its own policy id and its own address;
+- the parameters are public and fixed by that hash: nobody can change them for a deployed script;
+- whoever deploys chooses them, as with any parameterised validator.
+
+The generated validator declares `@Param static PlutusData PARAMS` and reads it through a **typed local** before any
+accessor:
+
+```java title="TreasuryValidator.java (generated)"
+static boolean onPay(Pay r, Treasury.State current, TxInfo tx, TxInInfo own, byte[] policy, byte[] id, BigInteger inLovelace) {
+    Treasury.Config params = (Treasury.Config) (Object) PARAMS;
+    …
+    Treasury.Spent result = Treasury.pay(current, params, r.to(), r.amount(), r.ctx());
+```
+
+JuLC needs a typed receiver before an accessor call (`params.guardian()`, not `((Config) PARAMS).guardian()`). Your
+contract code never sees `PARAMS`: it gets the typed record as a parameter. Keep the idiom in mind when you write
+plain JuLC validators with `@Param` fields, and for accessors on call results in general (`f(x).field()` needs a
+typed local first).
+
+### Naming params in annotations
+
+Annotations that name a field accept `params.<component>`:
+
+| Annotation | Example |
+|---|---|
+| `@AuthorizedBy` | `@AuthorizedBy("params.guardian")` |
+| `@Quorum` | `@Quorum(keys = "params.council", threshold = "params.quorum")` |
+| `@Reads` | `@Reads("params.oracle") Oracle.State price` ([composition](/contracts/reads-and-composition/)) |
+| `@Migrate` | `@Migrate(from = "params.previous")` ([upgrades](/contracts/upgrades/)) |
+| `@MigrateTo` | `@MigrateTo("params.next")` |
+
+Put anything a caller must not be able to change after deployment in the params: a governor credential, an oracle's
+policy, a cap. A state field can be changed by an action; a parameter cannot.
+
+### Clients and pinning
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/treasury/src/test/java/org/julclang/state/examples/treasury/TreasuryDevnetTest.java"
+var cfg = new Treasury.Config(new Credential.ScriptCredential(new ScriptHash(guardian.getScriptHash())),
+        ADA.multiply(BigInteger.valueOf(50)));
+
+var t = TreasuryClient.deploy(runtime, cfg, a, council, BigInteger.TWO, ADA.multiply(BigInteger.valueOf(200)));
+assertEquals(TreasuryClient.policyIdFor(cfg), t.instance().contract().policyId(), "the params pin the script");
+
+var again = TreasuryClient.at(runtime, cfg, t.instanceId());   // reconnecting needs the params too
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js
+// A deployment is one applied script: the params are fixed in deployment.policy and address.
+const treasury = new Treasury({ service, chain, deployment });
+const { instance } = await treasury.deploy(walletA, { council, quorum: 2n }, { lovelace: 200_000_000n });
+```
+
+</TabItem>
+</Tabs>
+
+**Pin the policy id.** Anyone can deploy the same contract with other parameters, and its types would look the same.
+A front end that trusts a deployment should know its expected policy id (`policyIdFor(params)`) and check it.
+
+Limits:
+
+- at most one `@Params` record per contract, and it cannot hold MerkleMaps;
+- `@Batched` methods cannot take the params yet;
+- the runtime refuses an applied script over 15,000 bytes, which could not be published as a reference script.
+
+## `@Invariant`: rules every state keeps
+
+An invariant is a `public static boolean` method that takes the state (or an owned record), optionally followed by
+the `@Params` record, and nothing else:
+
+```java title="examples/treasury/.../Treasury.java"
+/** A quorum the council can reach (the generated check also requires distinct, sorted 28-byte keys). */
+@Invariant
+public static boolean reachable(State s) {
+    return s.quorum().signum() > 0 && s.quorum().compareTo(BigInteger.valueOf(s.council().size())) <= 0;
+}
+```
+
+Where it is checked:
+
+- **On chain**, on every state the validator accepts as an output: the initial state, every action's result (plain
+  and asset-aware, shared and owned), and every owned object's creation. A destroy has no output to check.
+- **On the JVM**, by the generated client, before anything is built. It throws `RequireException("invariant reachable")`.
+
+So a call that would break the invariant is refused off chain, and could not pass on chain anyway. In the treasury,
+`rotate` to a council of two with a quorum of three is refused both ways.
+
+```java title="TreasuryValidator.java (generated)"
+boolean invariant_0 = Treasury.reachable(next);
+boolean quorumShape_1 = quorumWellFormed(next.council(), next.quorum());
+return quorum && continues && paid && invariant_0 && quorumShape_1 && eventsOk;
+```
+
+The second line is not yours: every contract with `@Quorum` gets a generated well-formedness check (strictly
+ascending, 28-byte keys, `1 ≤ threshold ≤ n`) on the same outputs. See [Authorization](/contracts/authorization/).
+
+Rules and limits:
+
+- an invariant is not also an `@Init`, `@Action`, `@Destroy` or `@View`;
+- not with `@Batched` actions: a batch passes through intermediate states that are not checked;
+- not over MerkleMap state: on chain only the opened entries are visible, so the JVM and the chain would disagree;
+- an instance whose state already breaks an invariant (deployed by an older version, say) can only be destroyed.
+
+<Aside type="tip">
+
+Invariants cost execution on every call. Keep them to rules that guard against locking or draining the contract
+(a reachable quorum, a total that matches its parts), and keep them cheap.
+
+</Aside>
+
+## Events: authenticated, in the redeemer
+
+Cardano scripts cannot see transaction metadata, so events written there are unauthenticated: anyone can put anything
+in. JOUST carries events in the **redeemer** instead, where the validator checks them.
+
+A method emits events by returning an `events` component: a `JulcList<E>`, where `E` is a record or a sealed interface
+of the contract.
+
+```java title="examples/treasury/.../Treasury.java"
+public sealed interface Event permits Paid, CouncilChanged, Frozen {}
+public record Paid(byte[] to, BigInteger amount) implements Event {}
+public record CouncilChanged(BigInteger members, BigInteger quorum) implements Event {}
+public record Frozen(boolean frozen) implements Event {}
+
+public record Spent(State state, JulcList<Payout> payouts, JulcList<Event> events) {}
+public record Changed(State state, JulcList<Event> events) {}
+
+@Action @AuthorizedBy("params.guardian")
+public static Changed freeze(State s, boolean frozen) {
+    JulcList<Event> none = JulcList.empty();
+    return new Changed(new State(s.council(), s.quorum(), frozen), none.prepend(new Frozen(frozen)));
+}
+```
+
+The redeemer carries `events` as its last field, and the validator requires it to equal the method's result
+(`listData(redeemer.events) == listData(result.events)`). A client cannot add, drop or alter an event.
+
+Events are allowed on actions and destroys, shared and owned. Not on `@Init` or `@Batched` actions yet. They cost
+redeemer bytes, so size-based fees.
+
+### Reading events
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/treasury/.../TreasuryDevnetTest.java"
+var paid = t.pay(a, Keys.pkh(bob), ADA.multiply(BigInteger.TEN), b);
+BigInteger amount = paid.events(Treasury.Paid.class).get(0).amount();
+```
+
+`CallResult.events(Class)` returns the events of a call the client submitted.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js
+const paid = await treasury.at(id).pay(walletA, { to: bobKeyHash, amount: 10_000_000n }, { cosigners: [walletB] });
+paid.report.events;   // [{ $variant: 'Paid', to: bobKeyHash, amount: 10000000n }]
+```
+
+</TabItem>
+</Tabs>
+
+### When an event is authentic
+
+An indexer reading events from the chain must apply the provenance rule. Events are authentic only if:
+
+- the transaction is phase-2 valid (a transaction with `isValid = false` is on chain, but none of its scripts ran);
+- the redeemer is the **Spending** redeemer of the input holding the `(policy, id)` token of the instance or object
+  being followed;
+- `policy` is the expected applied script hash: with `@Params`, every parameter set is its own script, and anyone can
+  deploy one, so pin `policyIdFor(params)`;
+- the instance's lineage goes back to a deploy you know.
+
+Deduplicate by `(txHash, input, eventIndex)`. An indexer integration that applies the rule to chain data is planned,
+not built.
+
+## Reference
+
+- [Annotations](/reference/annotations/): `@Params`, `@Invariant`; [State API](/reference/state-api/)
+- Sources: [`Params.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Params.java),
+  [`Invariant.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Invariant.java),
+  [`CallResult.java`](https://github.com/bloxbean/joust/blob/main/julc-state-runtime/src/main/java/org/julclang/state/runtime/CallResult.java),
+  [`examples/treasury`](https://github.com/bloxbean/joust/tree/main/examples/treasury)
+- ADR-0009: D1 (`@Params`), D4 (`@Invariant`, I34), D5 (events, I35)
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Multisig treasury tutorial" href="/tutorials/multisig-treasury/" description="All three features in one contract, end to end." />
+<LinkCard title="Authorization" href="/contracts/authorization/" description="@Quorum and @AuthorizedBy in detail." />
+<LinkCard title="Upgrades and migration" href="/contracts/upgrades/" description="Params that pin a previous version." />
+<LinkCard title="Reads and composition" href="/contracts/reads-and-composition/" description="Read another contract pinned in params." />
+</CardGrid>

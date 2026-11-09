@@ -1,0 +1,259 @@
+---
+title: Why JOUST
+description: The work a Cardano contract normally needs, what JOUST does instead, what it generates and checks for you, and where the project stands today.
+---
+
+import { Aside, Card, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
+
+JOUST (Java On UPLC STate, pronounced "jowst") lets you write a Cardano smart contract as a **state record plus pure
+static methods**, much as you would write an account-based contract. From that one class it generates the on-chain
+validator and a typed off-chain client. The same Java method runs in both places: on your machine to build the
+transaction, and on chain to check it.
+
+## The problem: a contract is three programs
+
+Cardano uses the extended UTxO model (eUTxO). There are no accounts with storage. Instead:
+
+- A **UTxO** (unspent transaction output) is a coin sitting at an address. A transaction spends some UTxOs and
+  creates new ones.
+- A UTxO at a script address can carry a **datum**: a piece of data, which is where a contract keeps its state.
+- To spend it, the transaction supplies a **redeemer** (the arguments of the call), and the **validator** script
+  decides whether the spending transaction is acceptable.
+
+The validator never computes anything for you. It only says yes or no to a transaction someone else built. So a
+working contract is really three programs that must agree:
+
+1. **The validator,** which inspects the whole transaction and approves or rejects it.
+2. **The off-chain builder,** which finds the current state UTxO, computes the next state, encodes datum and
+   redeemer, picks inputs and outputs, sets the validity interval and signers, and submits.
+3. **The glue between them:** the datum and redeemer encodings, which both sides must read and write identically.
+
+Most of the validator's code has nothing to do with your business rule. It defends the state against transactions
+that are well formed but malicious:
+
+| A validator must check that... | Or an attacker can... |
+|---|---|
+| the state UTxO carries a unique token, minted once | forge a second "instance" with any state |
+| exactly one output continues the state, at the same address | drop the state, or move it to their own address |
+| the new datum is exactly the computed next state | write any state they like |
+| the output holds exactly the right value | skim lovelace, or add junk tokens that make it unspendable |
+| payouts are tagged per instance | let one output pay for two contracts (double satisfaction) |
+| the caller signed, and time claims match the transaction | act for someone else, or lie about the time |
+| the datum stays small enough for its min-ADA deposit | grow the state until the UTxO can never be spent |
+
+Get any of these wrong and funds can be stolen or locked forever. And every rule you write on chain you write again
+off chain, in another shape, and keep in sync by hand.
+
+## The JOUST model: state plus actions
+
+In JOUST you describe the state and the transitions, and nothing else. This is the whole counter contract from
+[`examples/counter`](https://github.com/bloxbean/joust/blob/main/examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java):
+
+```java title="examples/counter/.../Counter.java"
+@StateContract(maxDatumBytes = 128)
+public class Counter {
+
+    public record State(BigInteger count, byte[] owner) {}
+
+    @Init
+    public static State init(Ctx ctx) {
+        return new State(BigInteger.ZERO, ctx.caller());
+    }
+
+    @Action
+    public static State increment(State s, BigInteger by) {
+        Require.that(by.compareTo(BigInteger.ZERO) > 0, "increment must be positive");
+        return new State(s.count().add(by), s.owner());
+    }
+
+    @Action
+    @OnlyOwner
+    public static State reset(State s) {
+        return new State(BigInteger.ZERO, s.owner());
+    }
+
+    @Destroy
+    @OnlyOwner
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        return Payouts.of(s.owner(), ctx.balance());
+    }
+
+    @View
+    public static BigInteger count(State s) {
+        return s.count();
+    }
+}
+```
+
+No UTxOs, no datums, no redeemers, no thread tokens. The application code is just as plain:
+
+```java title="examples/counter/.../CounterApp.java"
+CounterClient counter = CounterClient.deploy(runtime, alice);   // creates an instance; alice owns it
+counter.increment(bob, BigInteger.valueOf(5));                   // anyone can increment
+counter.reset(bob);                                              // RequireException: bob is not the owner, nothing submitted
+counter.close(alice);                                            // the 2.2 ADA deposit goes back to alice
+```
+
+## One method, run twice
+
+The idea that makes this work is to compute off chain and re-check on chain with the same code:
+
+```text
+on your machine:   next = Counter.increment(current, by)        -> build a transaction whose new datum is `next`
+on chain:          Counter.increment(datumIn, redeemer.by) == datumOut   (the validator re-runs the same method)
+```
+
+[JuLC](https://julc.dev) compiles a subset of Java to UPLC, Cardano's on-chain language, and its data types
+(records, `JulcList`, `JulcMap`) also run as plain Java. So the method you wrote is both the transaction builder's
+logic and the validator's logic. There is no second implementation to keep in sync.
+
+Two practical consequences:
+
+- **Rules fail early and cheaply.** The generated client runs your method first. A failing `Require.that` throws a
+  `RequireException` with your message before anything is built or submitted, and costs nothing.
+- **You test the real thing.** The same method is unit-testable as plain Java, and the testkit evaluates the
+  validator as compiled, against the transactions the runtime builds.
+
+## What is generated and checked for you
+
+For each `@StateContract` class, the JOUST annotation processor generates:
+
+- **`<Name>Validator`:** a JuLC multi-validator (minting and spending in one script), compiled to UPLC.
+- **`<Name>Client`:** a typed client on [cardano-client-lib](https://github.com/bloxbean/cardano-client-lib), with
+  one method per action, destroy and view.
+- **A description** (`META-INF/joust/<package>.<Name>.json`): a CIP-57 schema plus JOUST metadata, from which
+  JavaScript clients are generated.
+
+The generated validator enforces the invariants of
+[ADR-0001 §4](https://github.com/bloxbean/joust/blob/main/docs/adr/0001-option-a-single-utxo-state-machine.md),
+whatever your methods do:
+
+| ID | The validator enforces |
+|---|---|
+| I1 | One seed UTxO gives one instance: it is consumed, and exactly one thread token is minted, named by its hash |
+| I2 | The initial datum equals your `@Init` result, at the contract's address |
+| I3 | Exact value: no lovelace skimmed or added, no token dust; a destroy allocates everything |
+| I4 | Exactly one continuing output, at the same address, whose inline datum equals your method's result |
+| I5, I6 | The `Ctx` caller signed; `received`, `balance` and the validity bounds match the transaction |
+| I7 | Every payout is paid, tagged with this instance's input, so one output cannot satisfy two instances |
+| I8, I9 | A destroy burns the thread token; the burn redeemer can only burn |
+| I10 | UTxOs at the script address without a thread token can never be spent |
+| I11 | `@OnlyOwner`, `@SignedBy`, `@ValidAfter`, `@ValidBefore` hold against the current state |
+| I12 | State outputs sit at the script's own address, with no reference script attached |
+| I13 | The serialised state never exceeds `maxDatumBytes`, so no call can outgrow the deposit |
+| I14 | Actions never spend the min-ADA deposit |
+
+Each example runs the **attack suite** (`Attacks` in `julc-state-testkit`), which mutates every accepted
+transaction in each way these invariants forbid and checks that the validator rejects every mutation. See
+[Testing](/contracts/testing/) and the [Security model](/contracts/security-model/).
+
+The cost is measured, not guessed: the counter's validator is 5,631 bytes, and an `increment` costs 73.4M CPU and
+213k memory units on chain (from the budgets table in
+[`examples/README.md`](https://github.com/bloxbean/joust/blob/main/examples/README.md), measured by the harness
+tests).
+
+## Java, .jsc or JavaScript
+
+You can write a contract in Java or in `.jsc`, a smaller Solidity-like syntax that lowers to the same Java. You can
+call it from Java or from JavaScript.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+Write the contract in Java and build it with Gradle on JDK 25. The processor generates the validator and a Java
+client; the [Java runtime](/apps/java-runtime/) builds, submits and confirms transactions. Start with the
+[Java quick start](/start/quick-start-java/).
+
+</TabItem>
+<TabItem label=".jsc">
+
+```jsc
+contract Counter(maxDatumBytes = 128) {
+    state count: Int
+    state owner: Key
+
+    init() {
+        owner = caller
+    }
+
+    action increment(by: Int) {
+        require by > 0 "increment must be positive"
+        count += by
+    }
+}
+```
+
+`.jsc` is lowered to a Java `@StateContract`, then compiled exactly like hand-written Java. See [.jsc](/languages/jsc/).
+
+</TabItem>
+<TabItem label="JavaScript">
+
+The npm path needs only Node: the toolchain compiles `.java` and `.jsc` contracts in Node (no JDK), and pages and
+Node apps call them through generated JavaScript clients, with a CIP-30 browser wallet signing. Start with the
+[npm quick start](/start/quick-start-npm/) and [JavaScript clients](/apps/javascript-clients/).
+
+</TabItem>
+</Tabs>
+
+## Beyond one state UTxO
+
+A single state UTxO can be updated about once per block, and holds only what fits in one datum. JOUST makes the way
+state maps onto UTxOs an explicit choice, so you can pick the one your contract needs:
+
+<CardGrid>
+<Card title="MerkleMaps" icon="seti:db">
+Unbounded maps (token balances, registries) in a 32-byte root, with proofs checked by a shared verifier.
+[MerkleMaps](/contracts/merklemaps/)
+</Card>
+<Card title="Owned objects" icon="seti:folder">
+One UTxO per user object beside shared state, so users never contend with each other.
+[Owned objects](/contracts/owned-objects/)
+</Card>
+<Card title="Batched intents" icon="list-format">
+Users lock requests in parallel; a permissionless batcher applies many in one transaction.
+[Batched intents](/contracts/batched-intents/)
+</Card>
+<Card title="Assets and composition" icon="puzzle">
+Native tokens, contract-minted tokens, several contracts in one transaction, reads of other contracts.
+[Native assets](/contracts/assets-mints-sends/), [Composition](/contracts/reads-and-composition/)
+</Card>
+</CardGrid>
+
+There is more: deploy-time parameters, M-of-N quorums, invariants and events, staking and governance purposes,
+upgrades, and deposits between contracts. [How JOUST works](/start/how-it-works/) gives the overview.
+
+## Who it is for
+
+- **Java developers** who want to write Cardano contracts without learning a new language or the eUTxO plumbing.
+- **JavaScript and TypeScript developers** who want a typed client and a page that verifies every transaction before
+  the wallet signs it.
+- **Cardano developers** who want the safety invariants generated, attack-tested and the same every time, and the
+  business logic written once.
+
+JOUST is not the right tool if you need to hand-tune every byte of a script, or if your design depends on a
+transaction shape that the state-machine model does not express. Generated checks cost bytes and budget, though
+the examples stay far below the limits (see [Fees and script size](/contracts/fees-and-size/)).
+
+## Status
+
+<Aside type="caution" title="Pre-release">
+
+JOUST is not released. Maven snapshots are published to the BloxBean snapshot repository
+(`https://repo.bloxbean.org/maven/snapshots`, versions `0.1.0-pre1-<sha7>-SNAPSHOT`), and they need a JuLC build
+that is not published yet: you build it into your local Maven repository first. The npm packages
+(`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are not on npmjs.org yet;
+you install them from a local registry. Both quick starts walk through this.
+
+</Aside>
+
+What works today: every example in [`examples/`](/reference/examples/) is generated, tested against the attack
+suite, and runs end to end on [Yaci DevKit](/apps/networks-and-providers/), a local Cardano network. The optimistic
+L2 (`examples/rollup`) is a working spike, not a product. APIs can still change before the first release; the
+[Status and roadmap](/project/status-and-roadmap/) page tracks what is next.
+
+## Next steps
+
+<LinkCard title="How JOUST works" description="The processor, the generated validator and client, and the runtime." href="/start/how-it-works/" />
+<LinkCard title="Quick start: Java & Gradle" description="Set up a project, build the counter, run it on DevKit." href="/start/quick-start-java/" />
+<LinkCard title="Quick start: npm & JavaScript" description="Create a project with npm and no JDK." href="/start/quick-start-npm/" />
+<LinkCard title="Your first contract" description="The counter, step by step." href="/start/first-contract/" />

@@ -1,0 +1,232 @@
+---
+title: Staked vault and governance
+description: Run a council-governed vault whose funds earn staking rewards; delegate by quorum with @Certify, collect rewards with @Withdraw, and vote as a script DRep.
+---
+
+import { Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+In this tutorial you run `examples/staking`: a vault whose state UTxOs are staked to its own script, so the ADA they
+lock earns rewards. A council of three, two of whom must sign, decides where the stake is delegated and where the
+rewards go, can vote as a script DRep, and a guardrail caps treasury withdrawals. Along the way you see how the
+non-spending [script purposes](/contracts/staking-and-governance/) work and why each handler is governed by params.
+
+<Aside type="caution" title="Pre-release">
+JOUST is pre-release and needs a JuLC build that is not published yet: from a JOUST checkout, build it into mavenLocal
+with `bash .github/ci/build-julc.sh` (JDK 25). See [Quick start: Java](/start/quick-start-java/). You also need Yaci
+DevKit: `yaci-devkit up --enable-yaci-store`.
+</Aside>
+
+## The contract
+
+<Steps>
+
+1. **Staked state and params.**
+
+   ```java title="examples/staking/src/main/java/org/julclang/state/examples/staking/StakedVault.java"
+   @StateContract(stakeSelf = true)
+   public class StakedVault {
+
+       @Params
+       public record Config(JulcList<byte[]> council, BigInteger quorum, byte[] pool, byte[] payee, BigInteger cap) {}
+
+       public record State(BigInteger deposits) {}
+
+       @Init @Payable
+       public static State open(Config cfg, Ctx ctx) {
+           return new State(ctx.received());
+       }
+
+       @Action @Payable
+       public static State deposit(State s, Ctx ctx) {
+           Require.that(ctx.received().signum() > 0, "deposit some ADA");
+           return new State(s.deposits().add(ctx.received()));
+       }
+
+       @Destroy @Quorum(keys = "params.council", threshold = "params.quorum")
+       public static JulcList<Payout> close(State s, Config cfg, Ctx ctx) {
+           return Payouts.of(cfg.payee(), ctx.balance());
+       }
+   ```
+
+   `stakeSelf = true` puts every state UTxO at a base address whose stake credential is this script. The council, the
+   quorum, the one pool it may delegate to, the payee of rewards and the guardrail's cap are deploy-time
+   [params](/contracts/params-invariants-events/): they are applied to the script, so changing them means a new
+   script.
+
+2. **The purpose handlers.**
+
+   ```java
+   /** Rewards go only to the payee. */
+   @Withdraw @Quorum(keys = "params.council", threshold = "params.quorum")
+   public static JulcList<Send> collect(Config cfg, BigInteger amount) {
+       return amount.signum() == 0 ? Sends.none()
+               : Sends.of(wallet(cfg.payee()), Assets.lovelace(amount), new OutputDatum.NoOutputDatum());
+   }
+
+   /** Registration, and delegation of stake only (no vote delegation) to the pool in the params; nothing else. */
+   @Certify @Quorum(keys = "params.council", threshold = "params.quorum")
+   public static boolean certificate(Config cfg, TxCert cert) {
+       return Certs.isRegistration(cert) || Certs.delegatesOnlyTo(cert, cfg.pool()) || Certs.isDRepLifecycle(cert);
+   }
+
+   /** The council votes as the script DRep: a quorum signing is the decision. */
+   @Votes @Quorum(keys = "params.council", threshold = "params.quorum")
+   public static boolean vote(Config cfg, Voter voter, GovernanceActionId action, Vote vote) {
+       return true;
+   }
+
+   /** Guardrail: no treasury withdrawal above the cap in total. */
+   @Propose
+   public static boolean proposal(Config cfg, ProposalProcedure p) {
+       return switch (p.governanceAction()) {
+           case GovernanceAction.TreasuryWithdrawals t -> totalOf(t).compareTo(cfg.cap()) <= 0;
+           default -> true;
+       };
+   }
+   ```
+
+   These run when the ledger runs the script for a withdrawal, a certificate, a vote or a proposal. No instance is
+   spent, so they see the params, not any instance's state. That is why `@Quorum` names `params.council`: the
+   processor refuses an ungoverned `@Withdraw`, `@Certify` or `@Votes`.
+
+   *What this taught:* rewards, delegation and votes belong to the contract type and its params, shared by all its
+   instances.
+
+3. **The build flag.** The example compiles with `-Ajulc.blueprint=false`, because JuLC's pinned CIP-57 revision has
+   no vocabulary for vote and propose handlers yet:
+
+   ```groovy title="examples/staking/build.gradle"
+   tasks.named('compileJava') { options.compilerArgs += ['-Ajulc.blueprint=false'] }
+   ```
+
+</Steps>
+
+## Run it
+
+<Steps>
+
+1. **Harness tests: every handler, every way to cheat.**
+
+   ```sh
+   ./gradlew :examples:staking:test --tests '*StakingTest'
+   ```
+
+   [`StakingTest`](https://github.com/bloxbean/joust/blob/main/examples/staking/src/test/java/org/julclang/state/examples/staking/StakingTest.java)
+   covers:
+   - the staked address (open and deposit, with the attack suite);
+   - withdrawals: one signature, a wrong amount, a wrong marker, rewards sent to someone else, a send not claimed in
+     the output registry, all refused;
+   - certificates: delegation to another pool, a stake-and-vote delegation to an attacker's DRep, stake and DRep
+     unregistration, a committee certificate and a single signature, all refused;
+   - votes: one signature, and no votes for this voter, refused;
+   - the guardrail: a treasury withdrawal over the cap, refused.
+
+   *What this taught:* `Certs.delegatesOnlyTo` refuses a delegation that would also move the vote, which a hand-written
+   check can easily miss.
+
+2. **Deploy at a staked address.**
+
+   ```sh
+   ./gradlew :examples:staking:test --tests '*StakingDevnetTest'
+   ```
+
+   ```java title="examples/staking/src/test/java/org/julclang/state/examples/staking/StakingDevnetTest.java"
+   Account[] council = {DevKit.fundedAccount(300), DevKit.fundedAccount(300), DevKit.fundedAccount(300)};
+   Arrays.sort(council, Comparator.comparing(a -> HexUtil.encodeHexString(Keys.pkh(a))));
+   var payee = DevKit.fundedAccount(5);
+   JulcList<byte[]> keys = JulcList.empty();
+   for (int i = council.length - 1; i >= 0; i--) keys = keys.prepend(Keys.pkh(council[i]));
+   String pool = DevKit.poolId();
+   var cfg = new StakedVault.Config(keys, BigInteger.TWO, HexUtil.decodeHexString(pool), Keys.pkh(payee),
+           ADA.multiply(BigInteger.valueOf(1000)));
+
+   var vault = StakedVaultClient.deploy(runtime, cfg, council[0], ADA.multiply(BigInteger.valueOf(100)));
+   String address = vault.instance().contract().address();
+   assertTrue(address.startsWith("addr_test1x"), "a base address staked to the script: " + address);
+   vault.deposit(council[1], ADA.multiply(BigInteger.valueOf(20)));
+   ```
+
+   Quorum keys must be strictly ascending, so the test sorts the council first. The vault's address starts
+   `addr_test1x`: a base address with a script payment credential and a script stake credential.
+
+3. **Register and delegate by quorum.**
+
+   ```java
+   var handle = StakedVaultClient.contract(runtime, cfg);
+   handle.registerStake(council[0]);
+   handle.delegateTo(pool, council[0], council[1]);
+   assertThrows(RuntimeException.class, () -> handle.delegateTo(pool, council[2]), "one signature is not a quorum");
+   ```
+
+   Registration is the legacy kind, which needs no script witness: anyone may register the credential, harmlessly.
+   Delegation runs `@Certify` on chain, so it needs two council signatures; one is refused.
+
+   *What this taught:* the ledger runs your handler for every certificate of the script's credential, and the
+   built-in filter refuses unregistration before your method is even asked.
+
+4. **Collect the rewards, then close.**
+
+   ```java
+   // Rewards take epochs to accrue on DevKit; withdrawing whatever is there (zero now) runs @Withdraw.
+   StakedVaultClient.collect(runtime, cfg, council[0], council[2]);
+   vault.close(council[1], council[2]);
+   ```
+
+   `collect` withdraws the whole reward balance (the ledger allows nothing else) through `@Withdraw`, and the sends the
+   handler returns are claimed in the output registry so no other obligation can count them. On a DevKit run the
+   balance is zero, since rewards take epochs; the handler still runs. `close` needs a quorum too, and pays everything
+   to the payee.
+
+</Steps>
+
+## From JavaScript
+
+```js title="js/joust-runtime/test/examples.test.js (StakedVault)"
+const council = (await wallets(3)).sort((x, y) => (x.keyHash < y.keyHash ? -1 : 1));
+const [a, b, c] = council;
+const pool = (await (await fetch(STORE + '/pools/registrations?page=0&count=1')).json())[0].pool_id;
+const params = { council: council.map((m) => m.keyHash), quorum: 2n, pool, payee: payee.keyHash, cap: 1000n * ADA };
+const vault = await contract('StakedVault', a, params);
+const v = vault.at((await vault.deploy(a, {}, { lovelace: 100n * ADA })).instance);
+await v.call(b, 'deposit', {}, { lovelace: 20n * ADA });
+
+await vault.registerStake(a);
+await assert.rejects(vault.delegate(a, pool));                                  // one signature is not a quorum
+await assert.rejects(vault.delegate(a, 'ab'.repeat(28), { cosigners: [b] }));    // another pool: @Certify refuses
+await vault.delegate(a, pool, { cosigners: [b] });
+
+const amount = await rt.chain.rewards(vault.rewardAddress);
+await vault.collect(a, { amount, cosigners: [c] });
+await v.call(b, 'close', {}, {}, { cosigners: [c] });
+```
+
+Co-signers are other wallets: each signs the same transaction after the page verifies it. The test also tampers with
+every engine-built delegation and collection, and checks that each is refused before any wallet is asked.
+
+<Aside type="note" title="Registration on Yaci Store">
+Yaci Store answers the same for registered and unknown stake credentials, so the client cannot tell whether
+registration is needed. `registerStake` registers anyway and resolves to `null` when the chain refuses it as already
+registered.
+</Aside>
+
+## Votes and the guardrail
+
+The clients do not cast votes or submit proposals, and DevKit would need an enacted constitution and live governance
+actions to exercise them. `StakingTest` covers both in the harness: `votes_asAScriptDRep_byQuorum` checks that the
+script's vote needs the quorum and that a transaction with no votes for this voter is refused, and
+`guardrail_capsTreasuryWithdrawals` checks that a treasury withdrawal over `cap` fails the guardrail.
+
+## What you built
+
+- A vault whose locked ADA earns rewards for a council to direct.
+- Delegation restricted to one pool, by quorum, with every other certificate refused.
+- Rewards that can only go to the payee, each output counted once.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Staking and governance" href="/contracts/staking-and-governance/" description="Every handler's shape, filter and limit." />
+  <LinkCard title="Multisig treasury" href="/tutorials/multisig-treasury/" description="@Quorum, @AuthorizedBy and events in depth." />
+  <LinkCard title="Authorization" href="/contracts/authorization/" description="Quorums and governors." />
+  <LinkCard title="Deploy to preview" href="/tutorials/deploy-preview/" description="Take a contract to the public testnet." />
+</CardGrid>
