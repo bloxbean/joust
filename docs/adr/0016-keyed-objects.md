@@ -1,6 +1,6 @@
 # ADR-0016: Keyed objects — one UTxO per key, unique per instance, in a sorted on-chain list
 
-**Status:** Proposed (r5)
+**Status:** Proposed (r6)
 **Date:** 2026-11-09
 **Builds on:** ADR-0001 (A: I1–I14), ADR-0003 (owned objects: I18–I21), ADR-0007 (reserved token kinds: I27), ADR-0009
 (invariants, quorums), ADR-0012 (several owned types: I42, I43), ADR-0011 (composition), ADR-0013 (page verifier),
@@ -362,12 +362,15 @@ The transaction:
   - With several relays, the outcome is transaction-wide. Any acceptance, or any unresolved delivery (a timeout, an
     unknown answer), dominates every rejection.
   - Rebroadcasting the *same signed bytes* is always allowed.
-  - Building *another* transaction after a rejection is allowed only when that transaction **conflicts** with the
-    abandoned one: it re-spends at least one of the abandoned transaction's inputs (a wallet UTxO the runtime keeps for
-    that purpose). Then at most one of the two can ever be included, whatever any relay or provider claims, and no
-    evidence of non-inclusion is needed. Relays and providers are untrusted (§2), so their answers alone never justify
-    a non-conflicting rebuild.
-  - Otherwise the runtime raises the existing `PendingTransactionException` (`TxRunner`) and leaves the decision to the
+  - **A designated input for the whole series.** Before the first attempt of a logical operation (a call or a
+    composition), the runtime designates one ordinary wallet UTxO and spends it in **every** attempt of that
+    operation, the first included. Conflict is not transitive, so conflicting only with the attempt just before is not
+    enough. Any two attempts then share that input, so at most one of the whole series can ever be included, whatever
+    any relay or provider claims, and no evidence of non-inclusion is needed. Relays and providers are untrusted (§2).
+  - The designated input is never replaced, not even when it appears spent: an apparently spent input may mean an
+    earlier attempt landed.
+  - Building *another* transaction after a rejection is allowed only while the designated input can be spent in it.
+    Otherwise the runtime raises the existing `PendingTransactionException` (`TxRunner`) and leaves the decision to the
     caller.
   - A rebuild redoes the whole call or composition: the window, every method's JVM result, the shared references and
     the anchor. It may produce a different key, when the key depends on `Ctx`; the conflict rule keeps both keys from
@@ -377,8 +380,9 @@ The transaction:
 - **The provider's power.** A lying provider can make a structural call fail, or make a read (`exists`, `keys`)
   wrong. It cannot make the runtime build a transaction that breaks an invariant, because the anchor is checked
   on-chain.
-- **Compose (ADR-0011).** Inserts, removes and retires run inside `Compose`, alongside other calls. The compatibility
-  matrix (per contract, per transaction) is in §3.1. The runtime refuses before building:
+- **Compose (ADR-0011).** In the Java runtime, inserts, removes and retires run inside `Compose`, alongside other
+  calls. The compatibility matrix (per contract, per transaction) is in §3.1. A page refuses compositions that contain
+  a keyed call, for now (D11). The runtime refuses before building:
   - two structural operations (insert or remove) of one contract;
   - a structural operation together with a `CreateObject`, `BurnInstance` or another mint of the same policy;
   - any *additional* call whose input is also the anchor, predecessor or removed node of a structural operation in the
@@ -511,38 +515,32 @@ The transaction:
     - `topUpR = lovelace(out(R)) − minAda`, which must lie in `[0, allowR]` (D10: the payouts are exactly
       `in − minAda`);
     - every head output must hold exactly `depositᵢ`.
-  - **Net outflow, per transaction.** The wallet's net lovelace loss must be at most:
+  - **Scope: one keyed call per transaction.** The page verifies a keyed call on its own: an insert, a remove, a
+    retire, a keyed action, or an instance creation with heads. It refuses a composition that contains a keyed call.
+    Composed accounting (with adoptions, other contracts' sends to the wallet, payable payments of other calls) needs
+    its own design, and is a follow-up (§10). Keyed contracts are never asset-aware (D1), so a standalone keyed call
+    has no sends and no user mints.
+  - **Net outflow.** The wallet's net lovelace loss must be at most:
 
     ```
-    fee                                  (once per transaction)
-    + Σ payments of the non-creation calls
-    + Σ whole new outputs of the creation calls (instance, object or keyed node: created, payment included)
-    + Σ depositᵢ                         (heads)
-    + Σ topUpA                           (anchors)
-    + Σ topUpR                           (retires)
+    fee
+    + (the call creates ? created, its whole new output, payment included : pay)
+    + Σ depositᵢ   (heads, on an instance creation)
+    + topUpA       (the anchor, on an insert or a remove)
+    + topUpR       (on a retire)
     ```
 
-    This is ADR-0013's bound (`verify.js:366–370`: `created` or `pay`, never both), summed over calls with the fee
-    counted once (`compose.js:306`), plus the keyed contributions.
-  - **Masking, per transaction.** What the scripts release is computed by output role, **aggregated with signs before
-    any clamping** (as `compose.js:315–322` does today):
+    This is ADR-0013's bound (`verify.js:366–370`: `created` or `pay`, never both), plus the keyed contributions.
+  - **Masking.** What the script releases, from the call's own target:
+    - *a creation* (instance with heads, or an insert) releases nothing. Its new output, heads and anchor top-up are
+      wallet-funded and bounded above; no other party may be paid;
+    - *a retire* releases `value(target) − (value(continuation) − topUpR) = in − minAda`;
+    - *a removal* releases the whole node;
+    - *a keyed action* releases `value(target) − value(continuation)`, as any owned action.
 
-    ```
-    released = Σ over spending calls (value(target) − value(continuation))     (signed, every spending call)
-             + Σ topUpR                                                         (each retire's top-up, once)
-             + the transaction's mint adjustment, once                          (as compose.js:319)
-    ```
-
-    - *Creation calls contribute nothing.* Their new outputs (and heads) are wallet-funded and already counted in the
-      net outflow; they are neither released funds nor third-party payments.
-    - *Anchors are not spending calls here.* Their outputs are bounded by `allowA`; they are neither released funds nor
-      third-party payments.
-    - *A retire* contributes `in − (minAda + topUpR) + topUpR = in − minAda`. *A removal* contributes the whole node.
-
-    As today, outputs to parties other than the wallet must be covered by `released` minus the wallet's payouts. A gift
-    to an anchor beyond `allowA` is refused, so the remove-with-gift transaction is refused.
-  - **Composition** uses exactly these transaction-wide equations. They are not per-call bounds added together.
-    Compositions with a creation call are new to the page (`compose.js:47` refuses them today), and M3 adds them.
+    As today, outputs to parties other than the wallet must be covered by that release minus the wallet's tagged
+    payouts. Anchor and head outputs are not "other parties": they are bounded by their allowances. A gift to an anchor
+    beyond `allowA` is refused, so the remove-with-gift transaction is refused.
   - **What a lying chain read can cost.** At most each allowance, which is the ledger minimum's shortfall for one
     output, a few ADA at the capped parameters, locked in a node or a head. It cannot move other funds.
 - **Without the service.** Keyed calls are prepared by the engine (ADR-0015), which needs the provider to list the
@@ -556,17 +554,14 @@ The transaction:
   - a retire top-up above `allowR`;
   - head deposits of differing constructor widths, each funded at the other's amount.
 
-  **Accepted cases (M3):** standalone and composed, after a raised `coinsPerUTxOByte`:
+  **Accepted cases (M3):** standalone, after a raised `coinsPerUTxOByte`:
   - a retire with the owner's top-up and a third-party beneficiary (input 100 ADA, deposit 4 ADA, new minimum 5 ADA,
     96 ADA to the beneficiary, 1 ADA plus the fee from the wallet);
   - an insert with an anchor top-up;
-  - a creation with heads above `minAda`;
-  - a composition of an insert (anchor 10 → 10, new node 4) and a retire (100 → 4 + 1 top-up, 96 to a beneficiary),
-    with the wallet paying 5 plus the fee: `released = 96` covers the beneficiary;
-  - a composition with a foreign contract's `ByAction` mint sent to a beneficiary (the mint adjustment counted once).
+  - a creation with heads above `minAda`.
 
-  **Refused compositions (M3):** a deposit pair with an extra attacker output, which shows that aggregation must come
-  before clamping; and a creation whose payment is claimed twice.
+  **Also refused (M3):** any composition containing a keyed call; an insert with an extra output to a third party; a
+  creation whose payment is claimed twice.
 
 ### 3.1. Why I47 holds, and what may share a transaction
 
@@ -684,7 +679,8 @@ throughput is bounded by the number of gaps (D9).
 | M2 | Java runtime and client (D7), including Compose, on DevKit | M1 | **Deployment:** `registry` publishes as a reference script. **Capacity:** the D4c worst cases (an insert at both datum caps with 4,096 bytes of arguments; a creation with 16 heads) are accepted. **Concurrency:** on a pre-populated list, inserts from separate threads into different gaps all land; two inserts into one gap, one retries and lands; an insert into an empty list and at the tail; a contested gap, where an honest insert lands within 3 cooldowns against one contesting attacker. **Hostility:** a hostile predecessor updates every block while the victim retires; a remove while the predecessor is updated retries and lands. **Rejections:** a duplicate key refused on the JVM and, forced past the JVM, on-chain. **Cooldown:** `C = 0` (consecutive operations before the previous upper bound), the minimum `C`, a `C` not aligned
 to slots (rounded up), and the default, with boundary times. **Composition:** a time-derived key in a composition is rebuilt. **Submission:** across relays, acceptance plus
 rejection, timeout plus rejection, and expiry after an ambiguous delivery are never rebuilt; identical bytes may be
-rebroadcast; a relay that lies "rejected" while the transaction lands: the rebuild conflicts, so only one lands.
+rebroadcast; relays that lie "rejected" twice while the first attempt lands: all three attempts share the designated
+input, so only one lands.
 **Window:** a future start at the maximum `W` keeps the page's limits, and so does a network with 100 ms slots.
 **Envelope:** the `@Init` argument cap with 16 heads |
 | M3 | Description, page verifier rules, JS client, engine (D11) | M2 | The registry flows through npm on DevKit; the D11 tamper tests are refused by the page; recorded fixtures replay; ordering vectors agree across Java, JS and on-chain |
@@ -819,8 +815,17 @@ rebroadcast; a relay that lies "rejected" while the transaction lands: the rebui
   review on #22. Confidential state is deferred by the maintainer.
 - `@Batched` cannot be combined with native assets or MerkleMaps today (`ContractReader`). That limits hot shared state
   more than any missing state kind, and deserves its own ADR.
+- **An inherited gap in the page verifier (ADR-0013), found in this review** (Codex round 5, F35). A wallet output
+  without a payout tag counts as wallet change, not as a payout (`verify.js:317–322`, `compose.js:266–272`), while
+  the budget for other parties is "released minus tagged payouts". When an asset-aware contract's registry-claimed
+  `Send` pays the wallet without a datum, the same released value can be granted again to an extra output, funded by
+  the wallet's own tokens. Keyed calls cannot trigger it, but existing asset-aware contracts can. It needs its own fix:
+  deduct wallet-directed claimed sends from the budget, and test it standalone and composed. Tracked separately.
+- **Composed page accounting** (Codex round 5, F33 and F36): adoptions are funded by the prior instance, not the
+  wallet; and a payable payment in one call lowers the release available to another. A follow-up specifies composed
+  accounting before the page accepts compositions with keyed calls.
 - Follow-ups of this ADR: keyed types in asset-aware contracts (M4); MerkleMaps in keyed records; moves (Q4); absence
-  evidence (Q3); a second index (Q1); composite structural redeemers.
+  evidence (Q3); a second index (Q1); composite structural redeemers; keyed calls in page compositions.
 
 ## Revision history
 
@@ -922,3 +927,12 @@ rebroadcast; a relay that lies "rejected" while the transaction lands: the rebui
   - **Effective window:** C F32, D F21 → derived in slots from `W`, `maxValidityMs`, the composition and the page's
     absolute start and upper-bound limits; a deploy-time warning where `W` exceeds the page's limit in that network's
     slots (D1, D7).
+- r6 (2026-11-09, responds to the round-5 reviews of `5ab7362`; design and security approved, Codex requested
+  changes):
+  - **A designated input for a retry series:** C F34 (P1), S F23 → spent by every attempt of an operation, never
+    replaced; otherwise `PendingTransactionException`; M2 tests three attempts (D7, M2).
+  - **Page accounting scope:** C F33 (P1), C F36, D F22 → the page verifies keyed calls standalone and refuses
+    compositions containing one; composed accounting (adoptions, payable payments) becomes a follow-up (D11, D7, §10).
+  - **Inherited verifier gap:** C F35 (P1) → a gap in ADR-0013's page verifier (claimed sends to the wallet are not
+    deducted from the release budget). Keyed calls cannot trigger it, since keyed contracts are never asset-aware. It
+    is recorded in §10 and tracked as its own fix.
