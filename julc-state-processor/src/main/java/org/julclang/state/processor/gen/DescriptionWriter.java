@@ -81,7 +81,9 @@ public final class DescriptionWriter {
         var createFields = new ArrayList<Object>(List.of(field("seed", txOutRef())));
         createFields.addAll(redeemerFields(c.init()));
         lifecycle.add(constructor("CreateInstance", li, createFields));
-        creations.add(creation(c.init(), "init", li++));
+        // A keyed contract's creation also mints the list heads (ADR-0016 D3): no client can make it until M2/M3.
+        if (!c.hasKeyed()) creations.add(creation(c.init(), "init", li));
+        li++;
         lifecycle.add(constructor("BurnInstance", li++, List.of()));
         for (var t : c.ownedInits()) {
             if (t.keyed()) {

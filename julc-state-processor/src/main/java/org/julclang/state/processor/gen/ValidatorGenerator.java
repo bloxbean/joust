@@ -2427,7 +2427,10 @@ public final class ValidatorGenerator {
             var ops = new ArrayList<String>();
             var inserts = c.ownedInits().stream().filter(t -> t.ownedType().equals(o.type()))
                     .map(t -> "op == " + lifecycleTag(t.variant()) + "L").toList();
-            ops.add("((" + String.join(" || ", inserts) + ") && Builtins.equalsData(fieldAt(rd, 1L), self))");
+            if (!inserts.isEmpty()) {   // the reader refuses a keyed type without an initializer; never emit "()"
+                ops.add("((" + String.join(" || ", inserts) + ") && Builtins.equalsData(fieldAt(rd, 1L), self))");
+            }
+            if (inserts.isEmpty() && c.removals(o).isEmpty()) ops.add("false");
             if (!c.removals(o).isEmpty()) {
                 ops.add("(op == " + lifecycleTag("Remove_" + o.simple()) + "L && Builtins.equalsData(fieldAt(rd, 0L), self))");
             }

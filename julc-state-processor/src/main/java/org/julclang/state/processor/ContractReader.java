@@ -235,6 +235,7 @@ final class ContractReader {
             String text = types.render(oe.asType());
             String simpleName = oe.getSimpleName().toString();
             ContractIR.KeyedIR keyed = anyKeyed ? readKeyed(oe, comps, maxValidityEarly, nextTag) : null;
+            if (keyed == null) keylessAttributes(oe);
             if (keyed != null) {
                 nextTag += 3;
                 ownedIRs.add(new ContractIR.OwnedIR(text, simpleName, List.copyOf(comps), "Keyed_" + simpleName, keyed.nodeTag(),
@@ -361,6 +362,12 @@ final class ContractReader {
                 if (!reserved.add(n)) error(type, "generated name " + n + " (ADR-0016) clashes with another name; rename it");
             }
             types.checkNoClash(keyedNames).forEach(msg -> error(type, msg));
+            for (TypeElement nested : ElementFilter.typesIn(type.getEnclosedElements())) {
+                if (keyedNames.contains(nested.getSimpleName().toString())) {
+                    error(nested, "type name " + nested.getSimpleName() + " is generated for a keyed type (ADR-0016 D1);"
+                            + " rename it");
+                }
+            }
         }
         for (var t : concat(List.of(init), actionIRs, destroyIRs, ownedInitIRs, ownedActionIRs, ownedDestroyIRs)) {
             if (!reserved.add(t.variant()) && t.kind() != TransitionIR.Kind.INIT) {
@@ -628,6 +635,20 @@ final class ContractReader {
                 firstTag, firstTag + 1, firstTag + 2);
     }
 
+    /** A plain owned type may not set the keyed attributes to anything but their defaults (they would mean nothing). */
+    private void keylessAttributes(TypeElement oe) {
+        var ann = annotation(oe, OWNED).orElseThrow();
+        var defaults = Map.<String, Object>of("maxKeyBytes", 32, "signedKey", false, "linkCooldownMs", 60_000L,
+                "linkWindowMs", -1L);
+        for (var d : defaults.entrySet()) {
+            var v = value(ann, d.getKey());
+            if (v.isPresent() && !String.valueOf(v.get().getValue()).equals(String.valueOf(d.getValue()))) {
+                error(oe, "@Owned(" + d.getKey() + ") has no effect without @Owned(key = ...): name the key, or drop it"
+                        + " (ADR-0016 D1)");
+            }
+        }
+    }
+
     /** The contract-level rules of keyed types (ADR-0016 D1); errors and warnings on {@code type}. */
     private void keyedRules(TypeElement type, List<ContractIR.OwnedIR> owned, List<TransitionIR> inits,
                             List<TransitionIR> ownedActions, List<TransitionIR> ownedDestroys, List<TransitionIR> actions,
@@ -688,14 +709,17 @@ final class ContractReader {
                         + o.simple() + " without @Shared, which needs no neighbour (ADR-0016 D1, D10)");
             }
             for (var t : retires) {
+                if (t.signedBy().isEmpty()) {
+                    // Stricter than D1 ("may carry @SignedBy"): unsigned, anyone could retire anyone's node for good.
+                    error(type, "retiring exit " + t.method() + " needs @SignedBy: otherwise anyone can retire anyone's"
+                            + " node, and its key, for good (ADR-0016 M1 review)");
+                }
                 if (t.shared() || !t.reads().isEmpty() || t.payable() || t.quorumKeys() != null || !t.authorizedBy().isEmpty()
                         || !t.validAfter().isEmpty() || !t.validBefore().isEmpty()) {
                     error(type, "retiring exit " + t.method() + " must need nobody else: no @Shared, @Reads, @Payable,"
                             + " @Quorum, @AuthorizedBy, @ValidAfter or @ValidBefore (ADR-0016 D1, §2)");
                 }
             }
-            var retireSigners = new HashSet<String>();
-            for (var t : retires) retireSigners.addAll(t.signedBy());
             for (var t : ownedActions) {
                 if (!t.ownedType().equals(o.type())) continue;
                 if (t.signedBy().isEmpty() && t.quorumKeys() == null && t.authorizedBy().isEmpty()) {
@@ -703,7 +727,7 @@ final class ContractReader {
                             + " @AuthorizedBy): otherwise anyone could spend the node every block and block its owner's"
                             + " exit (ADR-0016 D1, §2)");
                 } else if (t.quorumKeys() != null || !t.authorizedBy().isEmpty()
-                        || !retireSigners.containsAll(t.signedBy()) || retireSigners.isEmpty()) {
+                        || retires.stream().anyMatch(r -> r.signedBy().isEmpty() || !r.signedBy().containsAll(t.signedBy()))) {
                     messager.printMessage(Diagnostic.Kind.WARNING, "keyed @OwnedAction " + t.method() + " is authorized by"
                             + " someone other than the retiring exit's @SignedBy field: that party can spend the node every"
                             + " block and delay the owner's exit (ADR-0016 §2)", type);
@@ -724,20 +748,61 @@ final class ContractReader {
                 if (!t.ownedType().equals(o.type()) || k.signedKey()) continue;
                 ExecutableElement m = initElements.stream().filter(e -> e.getSimpleName().contentEquals(t.method()))
                         .findFirst().orElse(null);
-                if (m == null || !mentionsCaller(m)) {
+                if (m == null || !keyBoundToCaller(m, o.simple(), k.keyIndex())) {
                     messager.printMessage(Diagnostic.Kind.WARNING, "keyed @OwnedInit " + t.method() + " neither uses"
-                            + " @Owned(signedKey = true) nor compares the key with ctx.caller(): anyone can take a key"
+                            + " @Owned(signedKey = true) nor checks the key against ctx.caller(): anyone can take a key"
                             + " first (squatting, ADR-0016 §2)", m == null ? type : m);
                 }
             }
         }
+        if (!keyed.isEmpty()) {
+            messager.printMessage(Diagnostic.Kind.NOTE, type.getSimpleName() + " has keyed types: the generated Java client"
+                    + " cannot deploy it until ADR-0016 M2 (its deploy() throws), and its description omits keyed calls"
+                    + " until M3", type);
+        }
     }
 
-    /** The method's body mentions {@code caller()} (the squatting heuristic of ADR-0016 D1); false if unreadable. */
-    private boolean mentionsCaller(ExecutableElement m) {
+    /**
+     * The squatting check of ADR-0016 D1 (review F42): the initializer binds its key to the caller when the key it
+     * writes ({@code new T(...)}'s argument at the key's index) is {@code caller()} itself, or is compared with
+     * {@code caller()} by an {@code equals(a, b)} call (as in {@code Require.that(ByteStringLib.equals(key, ctx.caller()),
+     * ...)}). Writing {@code caller()} into another field does not count. False if the body cannot be read.
+     */
+    private boolean keyBoundToCaller(ExecutableElement m, String typeName, int keyIndex) {
         try {
             var tree = com.sun.source.util.Trees.instance(env).getTree(m);
-            return tree != null && tree.getBody() != null && tree.getBody().toString().contains("caller()");
+            if (tree == null || tree.getBody() == null) return false;
+            var keys = new HashSet<String>();
+            var compared = new ArrayList<List<String>>();
+            new com.sun.source.util.TreeScanner<Void, Void>() {
+                @Override
+                public Void visitNewClass(com.sun.source.tree.NewClassTree n, Void v) {
+                    String id = n.getIdentifier().toString();
+                    if ((id.equals(typeName) || id.endsWith("." + typeName)) && n.getArguments().size() > keyIndex) {
+                        keys.add(n.getArguments().get(keyIndex).toString());
+                    }
+                    return super.visitNewClass(n, v);
+                }
+
+                @Override
+                public Void visitMethodInvocation(com.sun.source.tree.MethodInvocationTree n, Void v) {
+                    String sel = n.getMethodSelect().toString();
+                    if ((sel.equals("equals") || sel.endsWith(".equals")) && n.getArguments().size() == 2) {
+                        compared.add(List.of(n.getArguments().get(0).toString(), n.getArguments().get(1).toString()));
+                    }
+                    return super.visitMethodInvocation(n, v);
+                }
+            }.scan(tree.getBody(), null);
+            for (String key : keys) {
+                if (key.endsWith("caller()")) return true;
+                for (var pair : compared) {
+                    if ((pair.get(0).equals(key) && pair.get(1).endsWith("caller()"))
+                            || (pair.get(1).equals(key) && pair.get(0).endsWith("caller()"))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         } catch (RuntimeException | LinkageError e) {
             return false;
         }
