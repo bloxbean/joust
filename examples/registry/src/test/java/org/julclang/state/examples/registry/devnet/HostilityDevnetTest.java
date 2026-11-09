@@ -33,7 +33,10 @@ class HostilityDevnetTest {
         return JulcList.<byte[]>empty().prepend(Keys.pkh(a));
     }
 
-    /** The predecessor's owner updates it every block; the victim's retire spends only its own UTxO and lands at once. */
+    /**
+     * The predecessor's owner updates it again and again (each update waits for its inclusion, about every two blocks on
+     * DevKit); the victim's retire spends only its own UTxO and lands at once.
+     */
     @Test
     void aHostilePredecessorUpdatingEveryBlockCannotBlockTheRetire() throws Exception {
         var attackerRig = M2Kit.rig();
@@ -96,7 +99,7 @@ class HostilityDevnetTest {
         var built = victimRig.built("Registry.release");
         System.out.println("[hostility] the remove landed in " + built.size() + " attempts: " + r.txHash());
         assertTrue(built.size() >= 2, "rejected once, rebuilt");
-        assertFalse(M2Kit.sharedInputs(built).isEmpty(), "the designated input, pinned across the attempts");
+        M2Kit.designatedInput(victimRig.backend(), built, victim);   // pinned across the attempts: an ordinary input of the payer
         assertFalse(M2Kit.onChain(victimRig.backend(), built.get(0).hash()), "the first attempt never landed");
         assertFalse(regV.entryExists(new byte[]{0x79}));
         assertEquals(List.of("78"), regV.entryKeys().stream().map(e -> e.keyHex()).toList());

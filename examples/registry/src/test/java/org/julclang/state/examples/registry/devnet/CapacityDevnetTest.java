@@ -78,6 +78,7 @@ class CapacityDevnetTest {
         byte[] owner = Keys.pkh(ann);
         byte[] k1 = fill(64, 0x41);
         byte[] k2 = fill(64, 0x42);
+        byte[] k3 = fill(64, 0x43);
         int blobLen = 2_048;
         while (envelope(k1, owner, new byte[blobLen]) > 2_048) blobLen--;
         byte[] blob = fill(blobLen, 0x5a);
@@ -86,16 +87,33 @@ class CapacityDevnetTest {
                 + argumentBytes(k1, blob, note) + " bytes");
         var cap = CapacityClient.deploy(rig.runtime(), ann, new byte[16]);
         cap.put(ann, k1, blob, note);
-        cap.put(ann, k2, blob, note);   // anchored at k1, whose datum is at the cap too
-        var second = rig.built("Capacity.put").get(1);
-        System.out.println("[capacity] the insert at both caps: " + second.size() + " bytes (limit 16,384)");
-        assertTrue(second.size() <= 16_384);
-        assertEquals(2, cap.bigKeys().size());
+        cap.put(ann, k3, blob, note);
+        // Between two 64-byte keys (R-D12): the relinked anchor k1 now points at k2, and the new node k2 at k3, so both
+        // datums carry a 64-byte next and the blob: both at the 2,048-byte cap.
+        cap.put(ann, k2, blob, note);
+        var third = rig.built("Capacity.put").get(2);
+        int anchorDatum = -1, nodeDatum = -1;
+        for (var out : third.tx().getBody().getOutputs()) {
+            if (out.getInlineDatum() == null) continue;
+            var d = (com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData) out.getInlineDatum();
+            var fields = d.getData().getPlutusDataList();
+            if (fields.size() < 4) continue;
+            byte[] next = ((BytesPlutusData) fields.get(1)).getValue();
+            int size = org.julclang.core.cbor.PlutusDataCborEncoder.encode(
+                    org.julclang.clientlib.PlutusDataAdapter.fromClientLib(d)).length;
+            if (Arrays.equals(next, k2)) anchorDatum = size;
+            if (Arrays.equals(next, k3)) nodeDatum = size;
+        }
+        System.out.println("[capacity] the insert between two 64-byte keys: " + third.size() + " bytes (limit 16,384); datums "
+                + anchorDatum + " (the relinked anchor) and " + nodeDatum + " (the new node), envelope " + envelope(k1, owner, blob));
+        assertTrue(anchorDatum > 2_048 - 16 && nodeDatum > 2_048 - 16, "both datums at the cap: " + anchorDatum + ", " + nodeDatum);
+        assertEquals(3, cap.bigKeys().size());
         byte[] tooLong = new byte[note.length + 16];
-        assertThrows(RequireException.class, () -> cap.put(ann, fill(64, 0x43), blob, tooLong), "arguments over 4,096 bytes");
+        var args = assertThrows(RequireException.class, () -> cap.put(ann, fill(64, 0x45), blob, tooLong));
+        assertTrue(args.getMessage().contains("at most 4096"), args.getMessage());
         byte[] tooBig = fill(blob.length + 8, 0x5a);
-        assertThrows(RequireException.class, () -> cap.put(ann, fill(64, 0x44), tooBig, new byte[1]),
-                "a datum over the envelope");
+        var datum = assertThrows(RequireException.class, () -> cap.put(ann, fill(64, 0x44), tooBig, new byte[1]));
+        assertTrue(datum.getMessage().contains("exceeds maxDatumBytes"), datum.getMessage());
     }
 
     @Test
@@ -136,5 +154,6 @@ class CapacityDevnetTest {
         // Sixteen keyed types (D1's cap) do not fit the script limit: the runtime refuses the script.
         var e = assertThrows(JoustException.class, () -> StateContractHandle.scriptFor(SixteenClient.SPEC, null));
         System.out.println("[capacity] sixteen keyed types: " + e.getMessage());
+        assertTrue(e.getMessage().contains("the applied script is") && e.getMessage().contains("bytes"), e.getMessage());
     }
 }

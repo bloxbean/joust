@@ -53,6 +53,7 @@ class ConcurrencyDevnetTest {
         M2Kit.sleep(80_000);   // past every node's cooldown (C plus the 20 s window)
 
         // Four threads, four gaps: before b (the head), b..f, f..n, and after n (the tail).
+        int start = rig.built("Registry.claim").size();
         long t0 = System.currentTimeMillis();
         var futures = new java.util.ArrayList<CompletableFuture<Void>>();
         for (int k : new int[]{0x61, 0x63, 0x68, 0x70}) {
@@ -63,6 +64,7 @@ class ConcurrencyDevnetTest {
         System.out.println("[concurrency] four threads into four gaps: " + (System.currentTimeMillis() - t0) / 1000 + " s, "
                 + rig.built("Registry.claim").size() + " transactions built in all");
         assertEquals(List.of("61", "62", "63", "66", "68", "6e", "70"), keys(reg));
+        assertEquals(4, rig.built("Registry.claim").size() - start, "four gaps, four transactions: none refused (R-D13.2)");
 
         // Two threads into one gap (c..f), both anchored at c, just inserted: they race at its cooldown's end; the loser
         // is rejected (its anchor was spent), rebuilds against the winner's node, and lands after that one's cooldown.

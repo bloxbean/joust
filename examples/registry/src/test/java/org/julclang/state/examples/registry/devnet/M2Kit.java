@@ -117,6 +117,39 @@ final class M2Kit {
     }
 
     /**
+     * The designated input of {@code attempts} (D7): the one input every attempt spends that is an ordinary UTxO of
+     * {@code payer} (lovelace only, no datum, no reference script). Fails unless there is exactly one.
+     */
+    static String designatedInput(BackendService backend, List<Built> attempts, Account payer) {
+        var ordinary = new java.util.ArrayList<String>();
+        for (String ref : sharedInputs(attempts)) {
+            if (ordinaryInputOf(backend, ref, payer)) ordinary.add(ref);
+        }
+        if (ordinary.size() != 1) throw new AssertionError("expected one shared ordinary input of the payer, found " + ordinary);
+        return ordinary.get(0);
+    }
+
+    /** {@code ref} was an ordinary UTxO (lovelace only, no datum, no reference script) at {@code payer}'s address. */
+    static boolean ordinaryInputOf(BackendService backend, String ref, Account payer) {
+        String[] p = ref.split("#");
+        try {
+            var r = backend.getUtxoService().getTxOutput(p[0], Integer.parseInt(p[1]));
+            if (!r.isSuccessful() || r.getValue() == null) throw new AssertionError("cannot resolve " + ref + ": " + r.getResponse());
+            var u = r.getValue();
+            return u.getAddress().equals(payer.baseAddress()) && u.getAmount().size() == 1
+                    && u.getAmount().get(0).getUnit().equals("lovelace") && u.getInlineDatum() == null
+                    && u.getDataHash() == null && u.getReferenceScriptHash() == null;
+        } catch (com.bloxbean.cardano.client.api.exception.ApiException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    /** The 8-byte big-endian encoding of {@code ms} (a Stamps.now key). */
+    static byte[] be8(long ms) {
+        return java.nio.ByteBuffer.allocate(8).putLong(ms).array();
+    }
+
+    /**
      * Spends every lovelace-only UTxO of {@code a} in one plain transaction back to itself (and waits for it): whatever
      * input an operation of {@code a} designated is then spent elsewhere.
      */

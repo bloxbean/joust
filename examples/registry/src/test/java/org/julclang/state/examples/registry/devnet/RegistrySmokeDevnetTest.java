@@ -60,5 +60,15 @@ class RegistrySmokeDevnetTest {
         var leave = ballot.leave(ann);
         assertTrue(reg.ballot(Keys.pkh(ann)).retired());
         System.out.println("ballot keys " + reg.ballotKeys());
+        // Every keyed call read the reference script, none carried the script itself (R-D13.4).
+        var calls = rig.built().stream().filter(x -> x.what().startsWith("Registry.")).toList();
+        assertEquals(7, calls.size(), calls.stream().map(M2Kit.Built::what).toList().toString());
+        for (var c : calls) {
+            var refs = c.tx().getBody().getReferenceInputs();
+            assertTrue(refs != null && refs.stream().anyMatch(i -> i.getTransactionId().equals(ref.getTxHash())
+                    && i.getIndex() == ref.getOutputIndex()), c.what() + " reads the reference script");
+            var ws = c.tx().getWitnessSet();
+            assertTrue(ws.getPlutusV3Scripts() == null || ws.getPlutusV3Scripts().isEmpty(), c.what() + " carries no script");
+        }
     }
 }

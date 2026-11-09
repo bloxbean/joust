@@ -43,7 +43,9 @@ class ContestedGapDevnetTest {
     @org.junit.jupiter.api.Timeout(value = 20, unit = java.util.concurrent.TimeUnit.MINUTES)
     void anHonestInsertLandsAgainstOneContestingAttacker() {
         var attackerRig = M2Kit.rig();
-        var honestRig = M2Kit.rig(null, 8);   // room to observe the losses, if any
+        // 8 retries, not the default 3: each contested instant is a fair race, so with 3 an honest insert gives up in about
+        // 1 run in 16 (four lost races in a row); this test is about landing under contention, not the retry budget.
+        var honestRig = M2Kit.rig(null, 8);
         var attacker = M2Kit.wallet(4, 300);
         var honest = M2Kit.wallet(3, 300);
         var reg = RegistryClient.deploy(attackerRig.runtime(), attacker);
@@ -71,17 +73,20 @@ class ContestedGapDevnetTest {
 
         var regH = RegistryClient.at(honestRig.runtime(), reg.instanceId());
         long t0 = System.currentTimeMillis();
+        int before = contests.get();
         regH.claim(honest, new byte[]{0x6a}, BigInteger.ONE, guardians(honest), BigInteger.ONE, ADA.multiply(BigInteger.TWO));
         long took = System.currentTimeMillis() - t0;
+        int during = contests.get() - before;
         stop.set(true);
         hostile.join();
         int attempts = honestRig.built("Registry.claim").size();
         System.out.println("[contested] the honest insert landed in " + took / 1000 + " s, at its attempt " + attempts
-                + "; the attacker landed " + contests.get() + " contesting transactions");
+                + "; the attacker landed " + contests.get() + " contesting transactions, " + during + " of them while it waited");
         // Each contested instant is a race between two clients submitting at the same slot on one node: the attacker,
         // running this same runtime, wins about half of them. Landing within 3 instants is therefore the likely case
-        // (7/8), not a guarantee; the test requires that it lands, and reports the instants it took.
-        assertTrue(attempts <= 9, "landed: " + attempts);
+        // (7/8), not a guarantee (an attacker with a latency edge can hold the gap for its fees; ADR-0016 M2 notes);
+        // the test requires that the gap was contested while the honest insert waited, and that it landed.
+        assertTrue(during >= 1, "the attacker contested the gap while the honest insert waited (R-D6)");
         List<String> keys = regH.entryKeys().stream().map(KeyedList.Entry::keyHex).toList();
         assertTrue(keys.contains("6a"), keys.toString());
     }
