@@ -6,7 +6,10 @@
 //
 //   /chain/<path>              the network's chain API (GET, and POST /tx/submit)
 //   /joust/<file>              build/joust: contracts.json, validators.json, deployments.<network>.json, clients
-//   /joust/network.json        { network, networkId, chain: "/chain", clock, deployments }
+//   /joust/network.json        { network, networkId, chain: "/chain", service: "/joust/service", clock, deployments }
+//   /joust/service/prepare     POST: a prepare service (the runtime engine, in this process) for the page's
+//                              JoustContract (httpService("/joust/service")). The page verifies every transaction it
+//                              returns before the wallet signs (D7): this server is not trusted with anything.
 //   /dev/topup                 POST { address, ada? } (DevKit only)
 //   anything else              the page: Vite (when the project has it) or the page directory's files
 
@@ -75,6 +78,16 @@ export async function attach(config, name, { log = console.log, waitMs = 180_000
 export async function dev({ root = process.cwd(), config, networkName, port = config.dev?.port ?? 5178, log = console.log, signal } = {}) {
   const name = networkName ?? config.network;
   const net = await attach(config, name, { log });
+  // One upstream session for everything this server reads (deploys, the prepare service, the page's /chain): Blockfrost's
+  // load balancer keeps a session on one backend by its affinity cookie, so the page verifies against the chain state
+  // the engine built from.
+  let affinity = null;
+  const upstream = async (u, init = {}) => {
+    const r = await fetch(u, { ...init, headers: { ...(init.headers ?? {}), ...(affinity ? { cookie: affinity } : {}) } });
+    const m = /__cflb=([^;]+)/.exec(r.headers.get('set-cookie') ?? '');
+    if (m) affinity = '__cflb=' + m[1];
+    return r;
+  };
   const out = resolve(root, config.out);
   log(`attached to ${name} (${net.chain}${net.admin ? ', admin ' + net.admin : ''})`);
 
@@ -82,6 +95,7 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
   let running = null;
   let again = false;
   let deployed = null;
+  let runtime = null;   // the prepare service over the current build and deployments
   async function cycle() {
     if (running) {
       again = true;
@@ -96,7 +110,12 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
           continue;
         }
         try {
-          deployed = await deploy({ root, config, networkName: name, log });
+          deployed = await deploy({ root, config, networkName: name, log, fetchImpl: upstream });
+          const { joustRuntime } = await import('@julclang/joust-runtime');
+          const read = (f) => JSON.parse(readFileSync(join(out, f), 'utf8'));
+          runtime = joustRuntime({ chainUrl: net.chain, projectId: net.projectId, fetchImpl: upstream, contracts: read('contracts.json'),
+            validators: existsSync(join(out, 'validators.json')) ? read('validators.json') : [],
+            clock: net.clock, networkId: net.networkId, deployments: deployed, ttlMs: config.dev?.ttlMs ?? (net.admin ? 20_000 : 180_000) });
         } catch (e) {
           log('deploy failed: ' + e.message);
         }
@@ -124,7 +143,7 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
       req.on('data', (c) => parts.push(c));
       req.on('end', () => ok(Buffer.concat(parts)));
     }) : undefined;
-    const r = await fetch(chainBase + path, {
+    const r = await upstream(chainBase + path, {
       method: req.method, body,
       headers: { ...headers, ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {}) },
     });
@@ -150,8 +169,21 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
       if (url.pathname.startsWith('/chain/')) return await proxyChain(req, res, url.pathname.slice('/chain'.length) + url.search);
       if (url.pathname === '/joust/network.json') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({ network: name, networkId: net.networkId, chain: '/chain', clock: net.clock,
-          deployments: deployed ?? {} }));
+        return res.end(JSON.stringify({ network: name, networkId: net.networkId, chain: '/chain', service: '/joust/service',
+          clock: net.clock, deployments: deployed ?? {} }));
+      }
+      if (url.pathname === '/joust/service/prepare' && req.method === 'POST') {
+        const body = await new Promise((ok) => { let s = ''; req.on('data', (c) => { s += c; }); req.on('end', () => ok(s)); });
+        if (!runtime) throw new Error('no deployment yet (see the dev server\'s log)');
+        try {
+          const r = await runtime.service.prepare(JSON.parse(body));
+          res.writeHead(200, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify(r));
+        } catch (e) {
+          // A contract's refusal (Require.that) or a build failure: the page shows it.
+          res.writeHead(422, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e.message ?? e) }));
+        }
       }
       if (url.pathname.startsWith('/joust/')) return file(res, out, url.pathname.slice('/joust/'.length));
       if (url.pathname === '/dev/topup' && req.method === 'POST' && net.admin) {
@@ -175,7 +207,13 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
   if (existsSync(join(pageDir, 'index.html'))) {
     try {
       const { createServer: viteServer } = await import(resolveFrom(root, 'vite'));
-      vite = await viteServer({ root: pageDir, server: { middlewareMode: true }, appType: 'spa', logLevel: 'warn' });
+      // The project's vite.config.js (beside the page, or at the root) when it has one, which should use
+      // @julclang/joust/vite; else that plugin alone (browser polyfills, es2022, the build's clients readable).
+      const configFile = [join(pageDir, 'vite.config.js'), join(root, 'vite.config.js')].find(existsSync) ?? false;
+      const { joust } = await import('./vite.js');
+      vite = await viteServer({ root: pageDir, configFile, appType: 'spa', logLevel: 'warn',
+        // Live reload over this server's own port (Vite's default is a fixed port: two dev servers would collide).
+        server: { middlewareMode: true, hmr: { server } }, plugins: configFile ? [] : joust({ root }) });
       log('serving the page with Vite');
     } catch {
       log('serving the page directory as is (add vite to the project to bundle modules)');

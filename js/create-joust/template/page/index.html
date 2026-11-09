@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JOUST Counter</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #1d2330; background: #f6f7f9; }
+    body { max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; margin-bottom: .2rem; }
+    section { background: #fff; border: 1px solid #dde1e7; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    h2 { font-size: 1rem; margin: 0 0 .6rem; }
+    button { font: inherit; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #2f5bd3; background: #2f5bd3; color: #fff; cursor: pointer; }
+    button.secondary { background: #fff; color: #2f5bd3; }
+    button:disabled { opacity: .45; cursor: default; }
+    select { font: inherit; padding: .3rem; }
+    .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    .muted { color: #6b7280; }
+    .mono { font-family: ui-monospace, monospace; font-size: .85rem; word-break: break-all; }
+    .count { font-size: 1.8rem; font-weight: 600; min-width: 3ch; }
+    .item { border-top: 1px solid #eef0f3; padding: .6rem 0; }
+    #log { list-style: none; padding: 0; margin: 0; font-size: .9rem; }
+    #log li { padding: .2rem 0; }
+    #log li.ok::before { content: '✓ '; color: #15803d; }
+    #log li.bad { color: #b91c1c; }
+    #log li.bad::before { content: '✗ '; }
+    #log li.pending::before { content: '… '; }
+    dialog { border: 1px solid #dde1e7; border-radius: 8px; max-width: 560px; }
+    dialog ul { padding-left: 1.2rem; }
+  </style>
+</head>
+<body>
+  <h1>Counter</h1>
+  <p class="muted" id="network">Loading…</p>
+
+  <section>
+    <h2>Wallet</h2>
+    <div class="row">
+      <select id="wallet-choice"></select>
+      <button id="connect">Connect</button>
+    </div>
+    <p class="muted" id="wallet-detect"></p>
+    <div id="wallet-info" class="muted">No wallet connected</div>
+  </section>
+
+  <section>
+    <h2>Counters</h2>
+    <div class="row">
+      <button id="create" data-needs-wallet disabled>Create a counter</button>
+      <span class="muted">Your wallet pays the counter's deposit, which comes back when you close it.</span>
+    </div>
+    <div id="counters"></div>
+  </section>
+
+  <section>
+    <h2>Activity</h2>
+    <ul id="log"></ul>
+  </section>
+
+  <dialog id="review">
+    <form method="dialog">
+      <div id="review-body"></div>
+      <div class="row">
+        <button value="sign">Sign in the wallet</button>
+        <button value="cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

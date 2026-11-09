@@ -20,4 +20,5 @@ console.log(`Created ${dir}
   npm install
   npm run build
   npm run deploy     # needs a DevKit: yaci-devkit up --enable-yaci-store
-  npm test`);
+  npm test
+  npm run dev        # the page at http://127.0.0.1:5178 (npm run dev:preview for preview)`);

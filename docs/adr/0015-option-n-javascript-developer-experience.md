@@ -1155,6 +1155,37 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
     changes the code but not the description served the old script. The cache key now includes the script and the
     transition programs.
 
+- **The template's page, and the Vite plugin (2026-11-09).**
+  - **`create-joust` now makes a page** (`page/`): a Counter dApp with the Cardano Foundation's connect button. It lists
+    the browser's CIP-30 wallets (Eternl, Lace, …), and on a DevKit also an in-page key with a "Top up" button, since
+    browser wallets cannot join a private devnet. Every call is shown for review (what the page checked) before the
+    wallet is asked to sign. `npm run dev` serves it on DevKit, and `npm run dev:preview` on preview.
+  - **`joust dev` serves a prepare service at `/joust/service`**: the runtime engine in the dev server, over the current
+    build and deployments, for the page's `httpService`. The page trusts it with nothing: it verifies each transaction
+    (D7) as it does any service's.
+    - Until the engine runs in a page worker, a page needs this service, or another one, at run time.
+    - The deploys, the service and the page's `/chain` share one upstream session (Blockfrost's affinity cookie), so the
+      page verifies against the chain state the engine built from.
+  - **`@julclang/joust/vite`, the start of the Vite plugin.** cardano-js-sdk's crypto dependencies (`pbkdf2`,
+    `safe-buffer`, `readable-stream`) expect Node's `buffer`, `events`, `util`, `stream` and `process`. Without them a page
+    fails at load ("Cannot read properties of undefined (reading 'from')"). `crypto` is not needed.
+    - The plugin aliases those modules to their browser versions (node-stdlib-browser), injects the `Buffer` and
+      `process` globals, sets es2022 (top-level await), and lets the page import the build's clients.
+    - It resolves every polyfill from its own package, by absolute path: vite-plugin-node-polyfills alone resolves its
+      shims from the working directory, which fails when a project's packages are not hoisted (pnpm; linked packages).
+  - **A regression this found:** the example dApp's page had failed in browsers since the switch to cardano-js-sdk.
+    `DappDevnetTest` drives its flow in Node, and bundle sizes were measured with `vite build`, which succeeds; nothing
+    loaded the page. The dApp now uses the plugin, and `js/joust/test/page.test.js` loads the template's page in
+    Chromium (Playwright).
+  - **Evidence:**
+    - *DevKit:* `page.test.js` connects the in-page key, tops it up, creates a counter, increments it, sees the contract
+      refuse `+0`, and closes it. All three transactions are reviewed in the page before signing, and there are no page
+      errors. A production `vite build` of the page passes the same flow.
+    - *Preview:* the same flow passes with a CIP-30 extension stand-in, injected into `window.cardano` before load as
+      extensions are, with the key in the Node process. It goes through the connector's enable and network check,
+      `getUtxos`, `signTx` and `submitTx`.
+    - The run with Eternl or Lace (M4's exit) is next.
+
 ### 13.12 MerkleMap mirrors (M4): proofs for the engine, Aiken's MPF in JS, RocksDB on the JVM, rebuilt from the chain
 
 **Problem.**

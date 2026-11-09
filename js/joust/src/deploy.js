@@ -31,7 +31,7 @@ async function deployer(root, net, rt) {
   return wallet;
 }
 
-export async function deploy({ root = process.cwd(), config, networkName, log = console.log } = {}) {
+export async function deploy({ root = process.cwd(), config, networkName, log = console.log, fetchImpl } = {}) {
   const net = await network(config, networkName);
   const bundleFile = join(root, config.out, 'contracts.json');
   if (!existsSync(bundleFile)) throw new Error('no build: run joust build first');
@@ -40,7 +40,7 @@ export async function deploy({ root = process.cwd(), config, networkName, log = 
   // The network's chain provider (ADR-0015 §13.9): "provider": "ogmios" with "ogmios": url; else the Blockfrost-style
   // API at "chain" (Blockfrost, Yaci Store).
   const provider = net.provider === 'ogmios' ? ogmiosProvider(net.ogmios ?? 'http://localhost:1337') : undefined;
-  const rt = joustRuntime({ chainUrl: net.chain, provider, projectId: net.projectId, contracts, clock: net.clock, networkId: net.networkId });
+  const rt = joustRuntime({ chainUrl: net.chain, provider, projectId: net.projectId, fetchImpl, contracts, clock: net.clock, networkId: net.networkId });
   const wallet = await deployer(root, net, rt);
   const out = {};
   for (const c of contracts) {

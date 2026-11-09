@@ -6,12 +6,18 @@
   "scripts": {
     "build": "joust build",
     "deploy": "joust deploy",
+    "dev": "joust dev",
+    "dev:preview": "joust dev --network preview",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
+    "@cardano-foundation/cardano-connect-with-wallet-core": "0.2.12",
     "@julclang/joust": "^0.1.0",
     "@julclang/joust-runtime": "^0.1.0",
     "@julclang/state-client": "^0.1.0",
     "@scure/bip39": "1.6.0"
+  },
+  "devDependencies": {
+    "vite": "6.4.5"
   }
 }
