@@ -1264,7 +1264,9 @@ unless marked JVM.
   a fee input. That operation was then rejected, and could have read its own input as spent: a false pending. In the
   first four-thread run, 3 of 7 attempts were rejected this way. Coin and collateral selection now skip other
   operations' designated inputs (only while some are reserved, so other transactions are built as before). In the
-  later runs, no attempt was rejected.
+  later runs, no attempt was rejected. An operation started on the same thread inside another (in the tests, a relay
+  that updates the predecessor) restores the outer operation's input when it ends. The first full build showed that
+  this was missing: the outer remove could not be built.
 - *Compositions and the cooldown.* A call without time rules (for example, `setOpen`) has no window of its own, so a
   composition with a cooling insert simply starts after the cooldown. A refusal needs a call whose own window ends
   before the cooldown does. The test uses `Stamps.now` (C = 0, from the tip) together with a cooling claim. It is

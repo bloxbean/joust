@@ -21,7 +21,10 @@ final class KeyedObjects {
 
     /** Ordinary wallet UTxOs reserved by an operation in this JVM: two operations never share one. */
     private static final Set<String> RESERVED = ConcurrentHashMap.newKeySet();
-    /** The designated input of the operation running on this thread (reserved and released on it), if any. */
+    /**
+     * The designated input of the innermost operation running on this thread (reserved and released on it), if any. An
+     * operation started inside another (a relay or callback calling the runtime) restores the outer one's on release.
+     */
     private static final ThreadLocal<String> OWN = new ThreadLocal<>();
 
     /**
@@ -29,7 +32,7 @@ final class KeyedObjects {
      * one), the first included: any two attempts conflict, so at most one of the series can land, whatever relays and
      * providers claim. It is never replaced; while it cannot be spent, nothing is rebuilt.
      */
-    record Designated(Utxo utxo, String address) {
+    record Designated(Utxo utxo, String address, String outer) {
         String ref() {
             return utxo.getTxHash() + "#" + utxo.getOutputIndex();
         }
@@ -53,7 +56,8 @@ final class KeyedObjects {
 
         void release() {
             RESERVED.remove(ref());
-            if (ref().equals(OWN.get())) OWN.remove();
+            if (outer == null) OWN.remove();
+            else OWN.set(outer);
         }
     }
 
@@ -65,7 +69,7 @@ final class KeyedObjects {
      */
     static com.bloxbean.cardano.client.quicktx.QuickTxBuilder builder(com.bloxbean.cardano.client.backend.api.BackendService backend) {
         String own = OWN.get();
-        if (RESERVED.isEmpty() || (RESERVED.size() == 1 && RESERVED.contains(own))) {
+        if (RESERVED.isEmpty() || (own != null && RESERVED.size() == 1 && RESERVED.contains(own))) {
             return new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(backend);
         }
         var all = new com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier(backend.getUtxoService());
@@ -131,8 +135,9 @@ final class KeyedObjects {
                 throw new JoustException(what + ": cannot read the payer's UTxOs", e);
             }
             if (best != null && RESERVED.add(best.getTxHash() + "#" + best.getOutputIndex())) {
+                String outer = OWN.get();
                 OWN.set(best.getTxHash() + "#" + best.getOutputIndex());
-                return new Designated(best, address);
+                return new Designated(best, address, outer);
             }
         }
         throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate (ADR-0016 D7:"
