@@ -1,5 +1,13 @@
 plugins {
     alias(libs.plugins.julc) apply false
+    // Central Portal publisher (as JuLC): nmcp per published module, aggregated here into one deployment.
+    id 'com.gradleup.nmcp' version '1.6.2' apply false
+    id 'com.gradleup.nmcp.aggregation' version '1.6.2'
+}
+
+// The root publishes nothing, but nmcp resolves its tasks from here.
+repositories {
+    mavenCentral()
 }
 
 // Development snapshots carry the commit (release-ops docs/12): 0.1.0-pre1-SNAPSHOT -> 0.1.0-pre1-<sha7>-SNAPSHOT, one version
@@ -24,6 +32,20 @@ ext.configureReleaseSigning = { Project candidate ->
                     candidate.findProperty('signingInMemoryKeyPassword'))
         }
         sign candidate.publishing.publications
+    }
+}
+
+// Central Portal publishing through the native publisher API (nmcp), as JuLC (release-ops docs/02). `USER_MANAGED`
+// uploads the deployment and stops at VALIDATED: nothing reaches Maven Central until a human publishes it in the
+// Central Portal. The release workflow (.github/workflows/publish-central.yml) passes the portal token as
+// MAVEN_USERNAME/MAVEN_PASSWORD. Do not set `publishingTimeout` here: nmcp rejects it under USER_MANAGED.
+nmcpAggregation {
+    centralPortal {
+        username = System.getenv('MAVEN_USERNAME')
+        password = System.getenv('MAVEN_PASSWORD')
+        publishingType = 'USER_MANAGED'
+        publicationName = "joust:${project.version}"
+        validationTimeout = java.time.Duration.ofMinutes(30)
     }
 }
 
@@ -104,6 +126,8 @@ subprojects {
 configure(subprojects.findAll { it.name in publishedModules }) { candidate ->
     apply plugin: 'maven-publish'
     apply plugin: 'signing'
+    // Exposes this module's publication to the root nmcpAggregation (the Central deployment).
+    apply plugin: 'com.gradleup.nmcp'
 
     java {
         withSourcesJar()
@@ -179,6 +203,13 @@ allprojects { candidate ->
 // The publication scope (release-ops docs/12, `discover`): the projects that publish must be exactly the published
 // modules, each with a POM name and description. JOUST is not on Maven Central yet, so this is the scope of the
 // BloxBean repository; the line it logs is what .github/scripts/bloxbean-maven.sh counts.
+// The Central deployment: every published module, in one aggregated bundle.
+dependencies {
+    subprojects.findAll { it.name in publishedModules }.each { candidate ->
+        nmcpAggregation(project(candidate.path))
+    }
+}
+
 tasks.register('verifyMavenReleasePublicationScope') {
     group = 'verification'
     description = 'Asserts the published modules are exactly the projects that declare a Maven publication.'

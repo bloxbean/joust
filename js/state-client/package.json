@@ -33,7 +33,7 @@
   "devDependencies": {
     "@emurgo/cardano-serialization-lib-nodejs": "15.0.3"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "types": "./src/index.d.ts",
   "publishConfig": {
     "registry": "http://127.0.0.1:4873/"
