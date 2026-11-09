@@ -1005,3 +1005,122 @@ input, so only one lands.
     settled, and survives reloads (D11, M3).
   - **Fallback grounding:** D F24, S F25 → the `verify.js:114–131` refusals cited; `verifiedOutput` hashes the body as
     served (D11).
+
+## Implementation notes (M1)
+
+What M1 built, what it measured, and where the code differs from the text above. The decisions are unchanged.
+
+**Built.**
+- *API:* `@Owned(key, maxKeyBytes, signedKey, linkCooldownMs, linkWindowMs)` and `@OwnedDestroy(retire)`.
+- *Processor (D1):* `ContractReader` reads keyed types into `ContractIR.KeyedIR` (key field, bounds, `C`, `W`, `typeId`,
+  the `Head_T`/`Keyed_T`/`Retired_T` tags) and enforces D1's rules and refusals. `KeyedDiagnosticsTest` covers them.
+- *Validator (D2–D6, D9, D10):* generated only when a contract declares a keyed type:
+  - `CreateInstance` with heads (I1 amended, I45);
+  - `Insert_<m>` (D4a, I46, I53), with `Remove_T` (D5, I49) only for types that have a removing destroy (a type with
+    only retiring exits has no burn path at all);
+  - the `Link` spend arm (I48), keyed actions (I50), the retire arm (I55), token binding (I51) and kinds (I52) in
+    every keyed arm;
+  - `onlyBurns` refuses `0x4B` names, and `isReserved` reserves them (I44; unreachable, since asset-aware keyed
+    contracts are refused).
+- *Shape of the generated code:* the structural checks are generic Data-level helpers (`inserted`, `neighbour`,
+  `relinked`, `linkUpper`, `keyedContinues`, `retires`, `keyBound`, `keyOf`) that take a type's `typeId`, tags and
+  bounds as arguments. Each keyed arm only runs the user's method and calls one helper. The first per-arm version
+  compiled the registry to 15,920 bytes; this one compiles it to 14,717.
+- *Byte identity:* the generated validators, scripts (`plutus.json`) and descriptions of every existing example were
+  captured before the generator changed and compared after: 96 files, all identical.
+- *Testkit:* `Ledger`, the ledger model of §8:
+  - a UTxO set and a slot clock, and protocol parameters (`coinsPerUTxOByte`, per-transaction budgets);
+  - phase 1: inputs exist, are unique and disjoint from reference inputs; value is conserved; outputs meet the
+    minimum `(160 + size) × coinsPerUTxOByte`; key-locked inputs are signed;
+  - every required purpose (script inputs, minting policies, script withdrawals) is derived from the transaction,
+    with exactly those redeemers;
+  - phase 2: every required script runs against the whole transaction, within the summed per-transaction budget.
+
+  Not modelled: collateral, the transaction size limit, datum witnesses and certificates.
+- *Example `registry`:*
+  - `Ballot`: `signedKey`, retire only, so one ballot per voter ever.
+  - `Entry`: a name registry with a removing and a retiring exit, a tier `@Invariant`, and a guardian `@Quorum`.
+  - Contract and harness tests only.
+
+**Tests** (`examples/registry`, 45; `julc-state-processor`, `KeyedDiagnosticsTest`, 9):
+- *The attack suite (`RegistryAttacksTest`, by operation as in §8).* Each case starts from an honest control that the
+  model accepts, and must be refused **by a script**: a phase-1 refusal fails the test.
+- *Combinations and kinds on the widest contract (`WidestTest`):* plain and keyed arms; `Link` under `CreateObject`;
+  inserts and removes beside plain creations and destroys; the zero payout.
+- *Phase-1 cases (`LedgerModelTest`):* among them, a removed node whose redeemer is omitted and whose funds are
+  redirected.
+- *Not applicable:* `ByAction`, method values with a `0x4B` name, `CreateIntent` and `Adopt`. Their combinations with
+  keyed types are refused by the processor (D1), and those refusals are tested.
+- *The I47 test (`ListIntegrityTest`):*
+  - Setup: two instances, both types, and random inserts (claim, grant, cast), removes, retires, keyed actions and
+    clock advances, drawn from the test's reference model. Keys come from a prefix-rich alphabet (`00 61 62 7f 80 ab
+    ff`), with lengths 1–3 and sometimes 64.
+  - Mutations: up to four mutants of each honest transaction, one or two mutations each, rebalanced through the
+    change output. They change output values, datum leaves, addresses, reference scripts and datum hashes; move
+    tokens; mint extra units; change redeemer leaves; swap spend redeemers; add `Link` inputs; change validity
+    bounds and signers; and replace anchors.
+  - Checks after every accepted transaction: the head walks equal the reference sets (retired keys marked, strictly
+    increasing, every list UTxO at the state address with at least `minAda`), and the `0x4B` units held anywhere
+    equal the walks' units, each with quantity 1.
+  - Accepted mutants: they must differ from their honest transaction only by an anchor top-up, a change to a retired
+    node's top-up that keeps at least `minAda` (D10's `t ≥ 0`), or extra signers.
+  - Default run (seed 47, 1,000 steps): passes. Seeds 1–9 at 600 steps and seeds 11–12 at 4,000 steps also pass; at
+    4,000 steps there are about 2,000 accepted honest transactions and 3,100–3,600 mutants, 92% refused by a script.
+    Parameters: `-Djoust.i47.seed`, `-Djoust.i47.steps`, `-Djoust.i47.mutants`.
+
+**Measurements.**
+- *Applied script sizes (limit 15,000 bytes):*
+  - `RegistryValidator`: 14,717 bytes, two keyed types and every kind of keyed call;
+  - `WidestValidator` (test only): 13,342 bytes, two keyed types and a plain owned type without a MerkleMap.
+- *Budgets* (ledger model; whole transaction, every script summed; limits 10,000M CPU and 14M or 16.5M memory). The
+  first three rows are at the size caps: 64-byte keys and datums at the envelope limit (307 bytes, next padded to 64).
+
+  | Transaction | CPU | Mem | % of CPU / 14M mem |
+  |---|---|---|---|
+  | insert, anchor and node at the caps (MINT + Link) | 387.1M | 1,212,522 | 3.9% / 8.7% |
+  | remove, P and N at the caps (MINT + Link + destroy) | 432.7M | 1,416,484 | 4.3% / 10.1% |
+  | retire at the cap | 190.8M | 655,308 | 1.9% / 4.7% |
+  | keyed action (upgrade) at the cap | 229.2M | 712,127 | 2.3% / 5.1% |
+  | instance creation with two heads | 382.7M | 1,230,285 | 3.8% / 8.8% |
+
+**Deviations and decisions to confirm.**
+- **MerkleMaps are refused in contracts with keyed types (processor error), so the widest contract has no
+  MerkleMap.** The ADR's widest contract (two keyed types, a plain owned type with a MerkleMap) does not fit:
+  - 18,375 bytes as first written;
+  - 15,977 bytes with each keyed type cut to its insert and retire.
+
+  The map verifier's support costs about 5 KB here (the same contract with a plain field instead: 13,297 bytes). M1
+  allows refusing a combination that does not fit, and every such contract would fail at deployment
+  (`scriptFor`). Lifting this needs smaller scripts, for example the structural checks moved into a shared
+  withdraw-zero script, as for MerkleMap claims. **The registry has 283 bytes to spare**, so richer keyed contracts
+  will reach the limit soon.
+- **`linkUpper` also requires a closed lower bound and an open upper bound,** as `ctxValid` does. The ledger always
+  builds such intervals (§2, trusted), so this refuses nothing an honest transaction does.
+- **`signedKey` with `maxKeyBytes < 28` is a processor error:** such a type could never be inserted.
+- **The retire may not take `@Shared` at all, nor `@Reads`.** §2 says the processor checks these; D1's list of
+  errors does not name `@Shared`, and the implementation follows §2.
+- **The squatting warning is a heuristic:** it is silenced when the initializer's body mentions `caller()`.
+- **Datum names:** in a keyed contract, plain owned types use `Holding_<T>` in the sealed `Holding`, even when there is
+  only one, and their arms check their tag (I42 amended).
+- **Client and description (M2/M3 scope):**
+  - The Java client leaves keyed types out. A keyed contract's generated `deploy()` throws
+    `UnsupportedOperationException`, because creating the instance must mint the heads (M2).
+  - The description has the complete `Lifecycle`/`Calls` schemas (`Insert_*`, `Remove_T`, `Link`) and an
+    `x-joust.keyed` list of the keyed types. It describes no keyed calls, owned types or datums (D11, M3).
+  - `PortableGenerator` skips keyed calls.
+
+**Found while implementing (for M2).**
+- **A sub-minimum gift.** A relink may add lovelace to a neighbour (D4b). A gift smaller than an output's ledger
+  minimum (about 1.06 ADA here) leaves its owner a payout that cannot stand alone as an output. The retire still works:
+  the payout check accepts `paid ≥ owed`, so the owner pads the tagged payout output with their own lovelace. The
+  test world does this; **the M2 runtime must pad payout outputs to the ledger minimum** (this also affects plain owned
+  payouts below the minimum).
+- **Rejection reasons matter.** Two attacks first passed only because phase 1 refused them, through an expired window
+  and an output below the minimum. The suite now requires a script refusal.
+
+**Known gaps.**
+- A negative payout is refused by the same check as a zero one (`payoutsPaid`: `lovelace <= 0`), but has no test of
+  its own.
+- An insert beside a plain destroy is not tested on its own; a remove beside one, and an insert beside a plain
+  creation, are.
+- The ledger model does not check the 16 KB transaction size, so D4c's envelope is still M2's DevKit capacity test.
