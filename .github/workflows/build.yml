@@ -144,15 +144,12 @@ jobs:
         with:
           node-version: '22'
 
-      # Devnet + Yaci Store (localhost:8080), admin API on localhost:10000. Started first: it boots while the rest
-      # installs and compiles. 200 ms slots and blocks (default 1 s) make every confirmation wait shorter. The runtime
-      # reads the slot length from DevKit; the time horizon (3k/f = 300 slots) is then 60 s, still above the runtime's
-      # 20 s TTL (100 ms slots would leave 30 s).
+      # Devnet + Yaci Store (localhost:8080), admin API on localhost:10000, 200 ms slots (.github/ci/devkit.sh).
+      # Started first: it boots while the rest installs and compiles.
       - name: Start Yaci DevKit
         run: |
           npm install -g @bloxbean/yaci-devkit@0.12.0
-          nohup yaci-devkit up --enable-yaci-store --block-time 0.2 --slot-length 0.2 \
-            > "$RUNNER_TEMP/yaci-devkit.log" 2>&1 &
+          .github/ci/devkit.sh start
 
       # The DevKit tests of the wallet page, the dApp and the Wasm runtime drive Node.
       - name: Install the Node dependencies the DevKit tests use
@@ -174,19 +171,9 @@ jobs:
           ./gradlew :examples:dapp:jsClients --stacktrace
           (cd examples/dapp/frontend && npm run build)
 
+      # Restarts DevKit once if Yaci Store does not follow the chain.
       - name: Wait for Yaci DevKit
-        run: |
-          for _ in $(seq 1 60); do
-            if curl -sf -o /dev/null http://localhost:8080/api/v1/blocks/latest \
-                && curl -sf -o /dev/null http://localhost:10000/local-cluster/api/admin/devnet; then
-              echo "Yaci DevKit is up"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Yaci DevKit did not start within 5 minutes"
-          tail -n 200 "$RUNNER_TEMP/yaci-devkit.log"
-          exit 1
+        run: .github/ci/devkit.sh wait
 
       - name: DevKit tests
         env:
