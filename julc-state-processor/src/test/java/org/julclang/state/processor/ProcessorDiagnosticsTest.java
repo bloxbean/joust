@@ -74,7 +74,7 @@ class ProcessorDiagnosticsTest {
 
     @Test
     void stateContractAloneIsEnough() {
-        // JuLC ADR-071: @StateContract is meta-annotated with @OnchainLibrary.
+        // JuLC treats @StateContract as a fixed alias of @OnchainLibrary (bloxbean/julc#311).
         assertTrue(compile(GOOD).success());
     }
 

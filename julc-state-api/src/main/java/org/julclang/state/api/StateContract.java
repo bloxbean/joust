@@ -1,7 +1,5 @@
 package org.julclang.state.api;
 
-import org.julclang.stdlib.annotation.OnchainLibrary;
-
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -12,10 +10,9 @@ import java.lang.annotation.Target;
  * {@link Destroy} and {@link View} methods. The JOUST processor generates {@code <Name>Validator} (a JuLC
  * {@code @MultiValidator}) and {@code <Name>Client} in the same package.
  * <p>
- * {@code @StateContract} implies {@code @OnchainLibrary} (it is meta-annotated with it; JuLC ADR-071), so JuLC compiles
- * the contract class for on-chain use without a second annotation.
+ * JuLC treats {@code @StateContract} exactly like {@code @OnchainLibrary} (a fixed alias, bloxbean/julc#311), so it
+ * compiles the contract class for on-chain use without a second annotation.
  */
-@OnchainLibrary
 @Retention(RetentionPolicy.CLASS)
 @Target(ElementType.TYPE)
 public @interface StateContract {

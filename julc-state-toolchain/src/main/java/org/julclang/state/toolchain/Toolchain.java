@@ -20,7 +20,6 @@ import org.julclang.stdlib.StdlibRegistry;
 
 import javax.lang.model.element.TypeElement;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +54,9 @@ public final class Toolchain {
     public record Contract(String name, String packageName, String validatorName, String validatorSource,
                            String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson,
                            String transitionsSource, Map<String, String> transitions) {}
+
+    /** A plain validator of the project, read inside the attribution query: plain strings, no javac model. */
+    private record PlainValidator(String name, String packageName, String purpose, String source) {}
 
     /** A {@code @Param} of a plain validator: its name and Java type, as JuLC reports them. */
     public record Param(String name, String type) {}
@@ -112,59 +114,63 @@ public final class Toolchain {
         Map<String, LibrarySource> classpathLibraries = LibrarySourceResolver.scanClasspathSources(
                 Toolchain.class.getClassLoader(), problem -> diagnostics.add(new Diagnostic(Severity.WARNING, problem, null, -1, "julc")));
 
-        // 3. Attribute with JuLC's embedded javac: the project's sources as roots, the library sources as JAR units.
+        // 3. Attribute with JuLC's embedded javac (the project's sources as roots, the library sources as JAR units), and
+        // 4. lint, read and generate each @StateContract, as the annotation processor does. JuLC hands the attributed
+        //    model to one scoped query: the model is used only inside it, on this thread, and nothing of it (no
+        //    Element, TypeMirror or Tree) is kept past it: the query returns plain values (JuLC ADR-068).
         var roots = new ArrayList<JavacFrontend.Unit>();
         sources.values().forEach(t -> roots.add(JavacFrontend.Unit.of(t)));
         var pool = new ArrayList<JavacFrontend.Unit>();
         classpathLibraries.values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
-        JavacFrontend.Attribution attribution = JavacFrontend.shared().attribute(roots, pool);
-        for (var d : attribution.result().diagnostics()) {
-            diagnostics.add(new Diagnostic(d.message().startsWith("warning") ? Severity.WARNING : Severity.ERROR, d.message(),
-                    d.fileName(), d.line(), "javac"));
-        }
-        if (!attribution.result().isAccepted() || attribution.trees() == null) return new Result(false, List.of(), diagnostics);
-
-        // 4. Lint, read and generate each @StateContract, as the annotation processor does.
-        var env = new AttributedEnvironment(attribution.elements(), attribution.types(), attribution.trees(), options, diagnostics);
         var generated = new ArrayList<JoustGenerators.Generated>();
-        var plain = new ArrayList<Map.Entry<TypeElement, String>>();   // plain validators: the type, its purpose
-        var plainSources = new LinkedHashMap<TypeElement, String>();
-        for (CompilationUnitTree unit : attribution.roots()) {
-            for (Tree decl : unit.getTypeDecls()) {
-                if (!(decl instanceof ClassTree)) continue;
-                var element = attribution.trees().getElement(new TreePath(new TreePath(unit), decl));
-                if (element instanceof TypeElement type && validatorPurpose(type) != null) {
-                    plain.add(Map.entry(type, validatorPurpose(type)));
-                    try {
-                        plainSources.put(type, unit.getSourceFile().getCharContent(true).toString());
-                    } catch (java.io.IOException e) {
-                        throw new java.io.UncheckedIOException(e);
+        var plain = new ArrayList<PlainValidator>();   // the project's plain validators, as strings
+        boolean attributed = JavacFrontend.shared().attribute(roots, pool, attribution -> {
+            for (var d : attribution.result().diagnostics()) {
+                diagnostics.add(new Diagnostic(d.message().startsWith("warning") ? Severity.WARNING : Severity.ERROR, d.message(),
+                        d.fileName(), d.line(), "javac"));
+            }
+            if (!attribution.result().isAccepted() || attribution.trees() == null) return false;
+            var env = new AttributedEnvironment(attribution.elements(), attribution.types(), attribution.trees(), options, diagnostics);
+            for (CompilationUnitTree unit : attribution.roots()) {
+                for (Tree decl : unit.getTypeDecls()) {
+                    if (!(decl instanceof ClassTree)) continue;
+                    var element = attribution.trees().getElement(new TreePath(new TreePath(unit), decl));
+                    if (element instanceof TypeElement type && validatorPurpose(type) != null) {
+                        String qualified = type.getQualifiedName().toString();
+                        try {
+                            plain.add(new PlainValidator(type.getSimpleName().toString(),
+                                    qualified.contains(".") ? qualified.substring(0, qualified.lastIndexOf('.')) : "",
+                                    validatorPurpose(type), unit.getSourceFile().getCharContent(true).toString()));
+                        } catch (java.io.IOException e) {
+                            throw new java.io.UncheckedIOException(e);
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                if (!(element instanceof TypeElement type) || !isStateContract(type)) continue;
-                boolean clean = SubsetLint.lint(attribution.trees(), type, (trees, node, cu, message) -> {
-                    long pos = trees.getSourcePositions().getStartPosition(cu, node);
-                    diagnostics.add(new Diagnostic(Severity.ERROR, message, cu.getSourceFile().getName(),
-                            pos < 0 ? -1 : cu.getLineMap().getLineNumber(pos), "joust-lint"));
-                });
-                if (!clean) continue;
-                try {
-                    var o = JoustGenerators.Options.of(env);
-                    // Transition programs are on unless asked otherwise: the runtime engine runs them (D3).
-                    o = new JoustGenerators.Options(o.traces(), o.javaClient(), o.portable(),
-                            !"false".equals(options.get("joust.transitions")));
-                    JoustGenerators.generate(env, type, o).ifPresent(generated::add);
-                } catch (RuntimeException e) {
-                    diagnostics.add(new Diagnostic(Severity.ERROR, "JOUST could not generate " + type.getSimpleName() + ": " + e,
-                            null, -1, "joust"));
+                    if (!(element instanceof TypeElement type) || !isStateContract(type)) continue;
+                    boolean clean = SubsetLint.lint(attribution.trees(), type, (trees, node, cu, message) -> {
+                        long pos = trees.getSourcePositions().getStartPosition(cu, node);
+                        diagnostics.add(new Diagnostic(Severity.ERROR, message, cu.getSourceFile().getName(),
+                                pos < 0 ? -1 : cu.getLineMap().getLineNumber(pos), "joust-lint"));
+                    });
+                    if (!clean) continue;
+                    try {
+                        var o = JoustGenerators.Options.of(env);
+                        // Transition programs are on unless asked otherwise: the runtime engine runs them (D3).
+                        o = new JoustGenerators.Options(o.traces(), o.javaClient(), o.portable(),
+                                !"false".equals(options.get("joust.transitions")));
+                        JoustGenerators.generate(env, type, o).ifPresent(generated::add);
+                    } catch (RuntimeException e) {
+                        diagnostics.add(new Diagnostic(Severity.ERROR, "JOUST could not generate " + type.getSimpleName() + ": " + e,
+                                null, -1, "joust"));
+                    }
                 }
             }
-        }
-        if (hasErrors(diagnostics)) return new Result(false, List.of(), diagnostics);
+            return true;
+        });
+        if (!attributed || hasErrors(diagnostics)) return new Result(false, List.of(), diagnostics);
 
         // 5. Compile each validator with JuLC, over the processor's pool: the class path's libraries and the project's
-        //    @OnchainLibrary sources (a @StateContract is one, meta-annotated; JuLC ADR-071), with its marker.
+        //    on-chain library sources (a @StateContract is one; JuLC's resolver adds the annotation's own source).
         Map<String, LibrarySource> project = new LinkedHashMap<>();
         for (String text : sources.values()) {
             LibrarySource l = LibrarySourceResolver.librarySource(text);
@@ -178,15 +184,7 @@ public final class Toolchain {
         var compiler = new JulcCompiler(StdlibRegistry.defaultRegistry(), compilerOptions);
         var contracts = new ArrayList<Contract>();
         for (var g : generated) {
-            var resolved = new ArrayList<>(LibrarySourceResolver.resolveLibrarySources(g.validatorSource(), libraryPool));
-            var names = new HashSet<String>();
-            resolved.forEach(l -> names.add(l.fqcn()));
-            for (var l : List.copyOf(resolved)) {
-                if (project.containsKey(l.fqcn()) && l.source().contains("@StateContract") && names.add(STATE_CONTRACT)
-                        && libraryPool.containsKey(STATE_CONTRACT)) {
-                    resolved.add(libraryPool.get(STATE_CONTRACT));
-                }
-            }
+            var resolved = LibrarySourceResolver.resolveLibrarySources(g.validatorSource(), libraryPool);
             if (Boolean.getBoolean("joust.toolchain.debug")) {
                 System.err.println("[toolchain] " + g.validatorName() + " libraries: " + resolved.stream().map(LibrarySource::fqcn).toList());
             }
@@ -202,7 +200,7 @@ public final class Toolchain {
             String transitionsSource = null;
             if (g.transitions() != null) {
                 transitionsSource = g.transitions().source();
-                var libs = discovery(withMarker(LibrarySourceResolver.resolveLibrarySources(transitionsSource, libraryPool), project, libraryPool));
+                var libs = discovery(LibrarySourceResolver.resolveLibrarySources(transitionsSource, libraryPool));
                 for (String m : g.transitions().methods()) {
                     try {
                         var tr = compiler.compileMethod(transitionsSource, m, libs.stream().map(LibrarySource::source).toList());
@@ -225,22 +223,17 @@ public final class Toolchain {
         }
         // 6. The project's plain validators (governors, ...), compiled as JuLC's annotation processor does.
         var validators = new ArrayList<Validator>();
-        for (var e : plain) {
-            TypeElement type = e.getKey();
-            String source = plainSources.get(type);
-            var libs = LibrarySourceResolver.resolveLibrarySources(source, libraryPool);
-            var result = compiler.compileContract(source, libs.stream().map(LibrarySource::source).toList()).compileResult();
-            String simple = type.getSimpleName().toString();
+        for (var v : plain) {
+            var libs = LibrarySourceResolver.resolveLibrarySources(v.source(), libraryPool);
+            var result = compiler.compileContract(v.source(), libs.stream().map(LibrarySource::source).toList()).compileResult();
             if (result.hasErrors()) {
-                result.diagnostics().forEach(d -> diagnostics.add(new Diagnostic(Severity.ERROR, String.valueOf(d), simple, -1, "julc")));
+                result.diagnostics().forEach(d -> diagnostics.add(new Diagnostic(Severity.ERROR, String.valueOf(d), v.name(), -1, "julc")));
                 continue;
             }
             var program = result.program();
             var params = new ArrayList<Param>();
             result.params().forEach(p -> params.add(new Param(p.name(), p.type())));
-            String pkg = type.getQualifiedName().toString();
-            pkg = pkg.contains(".") ? pkg.substring(0, pkg.lastIndexOf('.')) : "";
-            validators.add(new Validator(simple, pkg, e.getValue(), JulcScriptAdapter.fromProgram(program).getCborHex(),
+            validators.add(new Validator(v.name(), v.packageName(), v.purpose(), JulcScriptAdapter.fromProgram(program).getCborHex(),
                     result.isParameterized() ? "" : JulcScriptAdapter.scriptHash(program), result.scriptSizeBytes(),
                     List.copyOf(params)));
         }
@@ -270,21 +263,6 @@ public final class Toolchain {
                 out.add(in == null ? l : LibrarySourceResolver.librarySource(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)));
             } catch (java.io.IOException e) {
                 throw new java.io.UncheckedIOException("cannot read " + path, e);
-            }
-        }
-        return out;
-    }
-
-    /** The resolved libraries, plus JOUST's {@code @StateContract} marker for a project contract (JuLC ADR-071). */
-    private static List<LibrarySource> withMarker(List<LibrarySource> resolved, Map<String, LibrarySource> project,
-                                                  Map<String, LibrarySource> pool) {
-        var out = new ArrayList<>(resolved);
-        var names = new HashSet<String>();
-        out.forEach(l -> names.add(l.fqcn()));
-        for (var l : List.copyOf(out)) {
-            if (project.containsKey(l.fqcn()) && l.source().contains("@StateContract") && names.add(STATE_CONTRACT)
-                    && pool.containsKey(STATE_CONTRACT)) {
-                out.add(pool.get(STATE_CONTRACT));
             }
         }
         return out;

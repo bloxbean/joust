@@ -42,10 +42,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - JDK 25. `./gradlew build`.
 - Build JuLC locally with `bash .github/ci/build-julc.sh` (as CI does): a fresh shallow clone, so the commit hash
   JuLC appends to its version has the same length as in CI (a worktree build may append a longer one).
-- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is **built locally** from the worktree
-  `../julc-joust` (julc main + PR #311): `./gradlew publishToMavenLocal -Pversion=0.1.0-adr071-SNAPSHOT -x test -x check`;
-  the julc build appends the commit hash, then update `julc` in the catalog. JuLC changes JOUST needs: worktree + PR
-  labelled `joust`.
+- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is **JuLC main, built locally** (no published
+  snapshot has #311/#313 yet): `.github/ci/build-julc.sh` clones the pinned commit (`JULC_REF`) and runs
+  `./gradlew publishToMavenLocal`; JuLC's build appends the commit to its version (`0.1.0-pre21-71b3a73-SNAPSHOT`),
+  which must equal `julc` in the catalog. JuLC changes JOUST needs: a JuLC PR labelled `joust`.
 - A consumer of JOUST needs on its processor path: `julc-state-processor`, `julc-annotation-processor`, and
   `project(path: ':julc-state-api', configuration: 'onchainSources')` (a *directory*, not the jar; see gotchas).
 - `-PuseLocalJulc[=path]` adds `../julc` as a composite build. Not tested yet.
@@ -150,14 +150,15 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   plugin's shim bundles a copy; MPF checks instanceof). Worker files are scanned up front (`*.worker.js`), else Vite
   reloads the page when a worker starts; `JOUST_VITE_LOG=info` shows why.
 - ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
-  in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). JuLC
-  pinned at `deb72bb` (branch `feat/joust-embedder-attribution`, bloxbean/julc#313, stacked on #311: `JavacFrontend.attribute` public).
+  in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). The
+  toolchain reads javac's model through JuLC's scoped query `JavacFrontend.attribute(roots, pool, query)` (bloxbean/julc#313):
+  use the model only inside the query, on the calling thread, and return plain values (no Element, TypeMirror or Tree).
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).
 - JuLC's subset: immutable locals (except loop accumulators), no `Function.apply`, records and sealed interfaces only.
-- `@StateContract` is meta-annotated with `@OnchainLibrary` (JuLC ADR-071, bloxbean/julc#311, label `joust`); JOUST
-  builds against a local JuLC from the worktree `../julc-joust` (branch `feat/joust-library-annotations`) until released.
+- JuLC treats `@StateContract` exactly like `@OnchainLibrary` (a fixed alias, bloxbean/julc#311): contracts need no
+  `@OnchainLibrary`, and JuLC's resolver adds `StateContract`'s own source (from the API's `META-INF/plutus-sources`).
 - JuLC's annotation processor reads validators via the `Trees` API and keeps `@OnchainLibrary` sources across rounds,
   so a validator generated in round 1 should compile in round 2. **Verify this first** when writing the processor.
 
