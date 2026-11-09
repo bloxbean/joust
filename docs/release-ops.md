@@ -33,9 +33,18 @@ tag by hand (release-ops' `tag-release.yml` and the release App come later).
    - uploads a `USER_MANAGED` deployment (`OSSRH_USERNAME`, `OSSRH_TOKEN`) and stops once it is validated. **Publish
      it in the Central Portal**: nothing is on Maven Central before that, and publishing cannot be undone;
    - builds the two Wasm engines (Oracle GraalVM 25 with Web Image, and Binaryen) and publishes
-     `@julclang/state-client`, `@julclang/joust-runtime`, `@julclang/joust` and `create-joust` at the release version
-     (`NPM_TOKEN`; dist-tag `next` for a prerelease, `latest` for a final release). With `npm_publish=false` in
-     `gradle.properties` it runs `npm publish --dry-run` only.
+     `@julclang/state-client`, `@julclang/joust-runtime`, `@julclang/joust` and `create-joust` at the release version,
+     through **npm trusted publishing** (GitHub OIDC, no npm token), as cardano-client-bindings, mesmo and yano do. A
+     prerelease gets a matching dist-tag (`preview` for `-pre`), so it never becomes `latest`. With `npm_publish=false`
+     in `gradle.properties` it runs `npm publish --dry-run` only. Provenance attestations are added once the repository
+     is public (npm requires a public source repository for them).
+
+**npm trusted publishing, one-time per package** (an npm org owner of `@julclang`):
+1. A trusted publisher can only be added to a package that exists: publish a placeholder once by hand (e.g.
+   `0.0.0-oidc-bootstrap.0` under a non-`latest` dist-tag), as mesmo did.
+2. On npmjs.com, package settings → Trusted publisher → GitHub Actions: organization `bloxbean`, repository `joust`,
+   workflow `publish-central.yml`, environment `release-staging`.
+3. Then set `npm_publish=true` in `gradle.properties` for the release.
 
 `maven_central_publish` and `npm_publish` in `gradle.properties` must each be `true` or `false`.
 

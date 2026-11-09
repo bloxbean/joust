@@ -4,8 +4,9 @@ name: Publish to Maven Central and npm
 
 # A v* tag builds and signs every Maven module once, and uploads a USER_MANAGED Central Portal deployment. It stops
 # there: nothing is on Maven Central until a human publishes the deployment in the Central Portal (publishing cannot
-# be undone: a released version can never be replaced). Then the npm job publishes JOUST's four npm packages, or
-# only checks them (`npm publish --dry-run`) while npm_publish is false in gradle.properties.
+# be undone: a released version can never be replaced). Then the npm job publishes JOUST's four npm packages through
+# npm trusted publishing (GitHub OIDC, no npm token; as cardano-client-bindings, mesmo, yaci-devkit and yano), or only
+# checks them (`npm publish --dry-run`) while npm_publish is false in gradle.properties.
 #
 # To release: set `version` in gradle.properties to the release (no -SNAPSHOT) and pin released dependencies, merge,
 # then push the tag v<version> from that commit.
@@ -185,10 +186,14 @@ jobs:
     needs: maven
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # The npm token is a secret of this environment.
+    # Trusted publishing: npm exchanges the GitHub OIDC token for publish credentials, so there is no npm token secret.
+    # Each package's trusted publisher on npmjs.com names this repository, this workflow file (publish-central.yml:
+    # the publish commands must stay in THIS file, which npm validates) and this environment. Requires npm >= 11.5.1
+    # and Node >= 22.14.
     environment: release-staging
     permissions:
       contents: read
+      id-token: write
     env:
       VERSION: ${{ needs.maven.outputs.version }}
       IS_FINAL: ${{ needs.maven.outputs.is_final }}
@@ -223,8 +228,11 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
 
       - name: Build the engines
         run: >-
@@ -256,19 +264,26 @@ jobs:
           }
           EOF
 
-      # In dependency order. A prerelease goes to the `next` dist-tag, so `latest` stays on a final release.
+      # In dependency order. Prereleases get a matching dist-tag (as cardano-client-bindings), so they never become
+      # `latest`. Provenance attestations need a public repository: added once JOUST's repository is public.
       - name: Publish the packages
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
         shell: bash
         run: |
           set -euo pipefail
           TAG=latest
-          if [[ "$IS_FINAL" != true ]]; then TAG=next; fi
-          DRY=()
-          if [[ "$NPM_PUBLISH" != true ]]; then DRY=(--dry-run); fi
+          case "$VERSION" in
+            *-preview*|*-pre*|*-alpha*) TAG=preview ;;
+            *-beta*)                    TAG=beta ;;
+            *-rc*)                      TAG=next ;;
+          esac
+          ARGS=(--access public --tag "$TAG" --ignore-scripts)
+          if [[ "$REPO_PRIVATE" != true ]]; then ARGS+=(--provenance); fi
+          if [[ "$NPM_PUBLISH" != true ]]; then ARGS+=(--dry-run); fi
           for p in state-client joust-runtime joust create-joust; do
-            (cd "js/$p" && npm publish --access public --tag "$TAG" --ignore-scripts "${DRY[@]}")
+            # Leading ./ : npm would read a bare path as a github:owner/repo shorthand.
+            npm publish "./js/$p" "${ARGS[@]}"
           done
 
       - name: Record the npm release
@@ -280,8 +295,8 @@ jobs:
             echo "## JOUST \`$VERSION\`: npm packages"
             echo
             if [[ "$NPM_PUBLISH" == true ]]; then
-              echo "Published @julclang/state-client, @julclang/joust-runtime, @julclang/joust and create-joust \`$VERSION\`" \
-                "(dist-tag \`$([[ "$IS_FINAL" == true ]] && echo latest || echo next)\`), if the step above succeeded."
+              echo "Published @julclang/state-client, @julclang/joust-runtime, @julclang/joust and create-joust" \
+                "\`$VERSION\` through npm trusted publishing, if the step above succeeded."
             else
               echo "Checked only (npm_publish=false in gradle.properties): \`npm publish --dry-run\`."
             fi
