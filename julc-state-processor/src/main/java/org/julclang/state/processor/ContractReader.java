@@ -74,7 +74,6 @@ final class ContractReader {
     static final String FOREIGN = API + "ForeignInstance";
     static final java.util.Map<String, String> PURPOSES = java.util.Map.of(API + "Withdraw", "WITHDRAW",
             API + "Certify", "CERTIFY", API + "Votes", "VOTE", API + "Propose", "PROPOSE");
-    static final String ONCHAIN_LIBRARY = "org.julclang.stdlib.annotation.OnchainLibrary";
     static final String JULC_LIST = "org.julclang.core.types.JulcList";
     static final String BIG_INTEGER = "java.math.BigInteger";
 

@@ -86,6 +86,13 @@ tasks.register('toolchainWasm', Exec) {
     }
 }
 
+// Gradle 9 removed Project.exec: a task action runs a process through an injected ExecOperations.
+interface InjectedExecOps {
+    @javax.inject.Inject
+    ExecOperations getExecOps()
+}
+def injectedExec = objects.newInstance(InjectedExecOps)
+
 // ADR-0015 S1: the engine compiles every example contract in Node, the same as Gradle (I1). Needs the image.
 tasks.register('toolchainWasmTest', Exec) {
     group = 'verification'
@@ -94,10 +101,10 @@ tasks.register('toolchainWasmTest', Exec) {
     dependsOn 'test'   // writes build/s2-vectors.json (TransitionParityTest)
     doLast {
         // S2 in Wasm: every transition vector through the engine's VM, against the JVM's answers.
-        project.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
+        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2-vectors.json'; workingDir rootDir }
         // S2b in Wasm: read discovery (build/s2b-vectors.json, from ReadDiscoveryTest).
-        project.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-discovery.mjs',
+        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-discovery.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2b-vectors.json', 'examples/token/src/main/java'; workingDir rootDir }
     }
     workingDir rootDir

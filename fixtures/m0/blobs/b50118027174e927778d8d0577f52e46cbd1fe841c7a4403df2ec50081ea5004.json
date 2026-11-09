@@ -1,1 +1,0 @@
-{"successful":true,"response":"Response{protocol=http/1.1, code=200, message=, url=http://localhost:8080/api/v1/addresses/addr_test1qz066fd3zy492924kapw492tnedc2p2phl627f38ddeutt4dpnkfnpsnw62tz0tpzd4m3y2548z0mk66kyd8ky9z53nqrf5064/utxos?count=100&page=2&order=asc}","value":[]}
