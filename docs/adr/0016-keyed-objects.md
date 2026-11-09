@@ -1106,9 +1106,10 @@ What M1 built, what it measured, and where the code differs from the text above.
   errors does not name `@Shared`, and the implementation follows §2.
 - **A retire without `@SignedBy` is a processor error** (the coordinator's decision after the review, stricter than
   D1's "may carry `@SignedBy`"): unsigned, anyone could retire anyone's node, and its key, for good.
-- **The squatting check** (after the review, F42): the warning fires unless `signedKey` is set, or the key the
-  initializer writes (`new T(...)`'s argument at the key's index) is `caller()` itself or is compared with `caller()`
-  by an `equals(a, b)` call. Writing `caller()` into another field does not silence it.
+- **The squatting check** (after the review, F42 and F45): the warning is silenced only when `signedKey` is set, or when
+  **every** return statement of the initializer is `new T(...)` whose key argument is, syntactically,
+  `<ctx>.caller()` (`<ctx>` being the method's `Ctx` parameter). There is no flow analysis, so anything else warns,
+  including a legitimate equality check or an alias local holding the caller. The warning says how to silence it.
 - **Datum names:** in a keyed contract, plain owned types use `Holding_<T>` in the sealed `Holding`, even when there is
   only one, and their arms check their tag (I42 amended).
 - **Client and description (M2/M3 scope):**
@@ -1152,7 +1153,7 @@ unless noted. R-A8 (ledger-model divergences, none of which could hide an on-cha
 |---|---|---|
 | R-A7, R-B2 | A keyed retire may be unsigned: anyone could retire anyone's node | Coordinator's decision: an error (above). `theSquattingWarning` and `atMostSixteenKeyedTypes` now use signed retires |
 | (decision) | The MerkleMap refusal and sub-minimum payouts | Both stay as follow-ups (above) |
-| F42, R-B3 | The squatting warning was silenced by any mention of `caller()` | The binding check above. Codex's case (`Ballot(voter, owner)`, `new Ballot(voter, ctx.caller())`) warns |
+| F42, R-B3 | The squatting warning was silenced by any mention of `caller()` | First replaced by a comparison-based check, then by the syntactic rule above (F45). Codex's case (`Ballot(voter, owner)`, `new Ballot(voter, ctx.caller())`) warns |
 | R-B1 | `signedKey`, `maxKeyBytes`, `linkCooldownMs` or `linkWindowMs` set on a keyless `@Owned` type was silently ignored | A processor error when set to a non-default value |
 | R-A5 | A keyed type without `@OwnedInit` could make the `Link` arm emit `(() && ...)` | The reader's existing "needs at least one @OwnedInit" error covers it (now tested), and the generator never emits an empty disjunction |
 | R-B8 | The authority warning compared an action with the union of the retires' signers | It compares with each retire's signers |
@@ -1171,6 +1172,8 @@ unless noted. R-A8 (ledger-model divergences, none of which could hide an on-cha
 | R-B9 | The mutations missed some shapes | Added: an input dropped with its redeemer, a state output added or duplicated, and the fee changed. Accepted mutants are now judged by the list UTxOs they leave: as the honest transaction leaves them (up to the allowed top-ups) or untouched. A mutant touching no list leaves the model unchanged. Such mutants appear: junk outputs without tokens, and transactions that drop the node |
 | R-B9 | No honest-looking duplicate inserts | About 6% of the steps insert an existing live or retired key, with the right token and the model's predecessor as anchor. All are refused by the policy (about 55 per 1,000 steps) |
 | R-A6 | The raised-minimum liveness limit was untested | Non-payable inserts (`cast`, `grant`) and a keyed action at the raised minimum are refused by the ledger; noted in §8 |
+| F45 (Codex re-review) | The comparison-based squatting check could still be fooled: by a discarded `equals`, a negated `Require`, an unrelated `new T(ctx.caller(), ...)` beside the returned one, or a reassignment through a local after the check. A legitimate check through `byte[] c = ctx.caller()` still warned | The comparison-based suppression is gone (the coordinator's decision): only `signedKey`, or every return being `new T(...)` with the key argument `<ctx>.caller()`, silences the warning. `KeyedDiagnosticsTest` has each fooling case, an alias local, two returns of which only one binds, a legitimate equality check (all warn), and the positive cases. The registry's `claim` and `grant` warn, rightly: anyone may take a free name |
+| F46 (Codex re-review) | `WidestTest`'s mixed tests (an insert or a remove beside a vault creation) accepted any script failure, and still passed with OpenVault's MINT forced to succeed | The mixed tests (insert or remove beside a vault creation, and a remove beside a plain destroy) require MINT among the failing purposes, while allowing the expected SPEND failures. The standalone acceptance controls stay |
 
 After the review, the I47 test passes for seeds 1–9 and 47 at 1,000 steps, and for seeds 11–12 at 4,000 steps (about
 1,900–2,000 honest transactions, about 2,800 mutants and about 230 duplicate inserts each, every one refused).
