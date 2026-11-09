@@ -148,6 +148,11 @@ export function mapMirror({ provider, cache } = {}) {
       return (await stateAt(root))?.get(key);
     },
 
+    /** Whether this mirror holds the map with {@code root} (in memory or its cache). */
+    async known(root) {
+      return Boolean(await stateAt(root));
+    },
+
     /**
      * The answer to an engine need ({@code read:<root>:<key>} or {@code writes:<root>:<k>=<v|->,...}), as hex Plutus
      * data. {@code units}: the instance (or object) tokens the call touches, whose history rebuilds a missing map.

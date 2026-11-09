@@ -9,7 +9,8 @@
  * @param options  what the worker's runtime needs: { engine: { url, integrity }, contracts, chain, clock, networkId,
  *                 ttlMs, deployments, validators?, projectId?, mirrorCache? } (see worker.js); `virtual:joust/network`
  *                 (@julclang/joust/vite) gives them all. URLs are relative to the page.
- * @returns { ready, prepare(request), deployments(d), terminate() }: ready resolves once the engine has loaded
+ * @returns { ready, prepare(request), mapValue(root, key, units), deployments(d), terminate() }: ready resolves
+ *          once the engine has loaded
  */
 export function engineWorker(worker, options) {
   let next = 0;
@@ -57,6 +58,14 @@ export function engineWorker(worker, options) {
     async deployments(d) {
       await ready;
       return call('deployments', d);
+    },
+    /**
+     * A MerkleMap value from the worker's mirror: hex, or null when {@code key} is absent. {@code units}: the instance's
+     * token (policy + instance id), whose chain history rebuilds a map the mirror has not seen.
+     */
+    async mapValue(root, key, units = []) {
+      await ready;
+      return call('mapValue', { root, key, units });
     },
     terminate() {
       fail(new Error('the engine worker was terminated'));

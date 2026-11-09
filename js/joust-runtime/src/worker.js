@@ -57,6 +57,19 @@ const ops = {
     return runtime.service.prepare(request);
   },
 
+  /**
+   * A MerkleMap value, read from the worker's mirror: the value (hex) of {@code key} (hex) in the map with {@code root},
+   * or null when the key is absent. A root the mirror has not seen is rebuilt first from the history of {@code units}
+   * (the instance's token: policy + id), every claim checked against its root.
+   */
+  async mapValue({ root, key, units = [] }) {
+    const m = runtime?.service.mirror;
+    if (!m) throw new Error('this runtime keeps no MerkleMap mirror');
+    if (!(await m.known(root))) for (const u of units) await m.sync(u);
+    if (!(await m.known(root))) throw new Error(`no MerkleMap with root ${root} in the chain history of ${units.join(', ') || 'the call'}`);
+    return (await m.get(root, key)) ?? null;
+  },
+
   /** New deployments (after a redeploy), for the calls that follow. */
   deployments(d) {
     if (!runtime) throw new Error('the engine worker is not initialised');
