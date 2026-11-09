@@ -65,6 +65,7 @@ public final class DescriptionWriter {
         for (int i = 0; i < spend.size(); i++) {
             calls.add(constructor(spend.get(i).variant(), i, redeemerFields(spend.get(i))));
         }
+        if (c.hasKeyed()) calls.add(constructor("Link", spend.size(), List.of()));   // ADR-0016 I48
         if (c.hasBatched()) {
             int b = spend.size();
             calls.add(constructor("Batch", b, List.of(field("validFrom", integer()), field("validTo", integer()))));
@@ -83,10 +84,22 @@ public final class DescriptionWriter {
         creations.add(creation(c.init(), "init", li++));
         lifecycle.add(constructor("BurnInstance", li++, List.of()));
         for (var t : c.ownedInits()) {
+            if (t.keyed()) {
+                // ADR-0016 D4: an insert names its anchor. Keyed calls are described from M3 (D11); the schema is complete.
+                var fs = new ArrayList<Object>(List.of(field("instance", bytes()), field("anchor", txOutRef())));
+                fs.addAll(redeemerFields(t));
+                lifecycle.add(constructor(t.variant(), li++, fs));
+                continue;
+            }
             var fs = new ArrayList<Object>(List.of(field("seed", txOutRef()), field("instance", bytes())));
             fs.addAll(redeemerFields(t));
             lifecycle.add(constructor(t.variant(), li, fs));
             creations.add(creation(t, "ownedInit", li++));
+        }
+        for (var o : c.keyedTypes()) {
+            if (c.removals(o).isEmpty()) continue;
+            lifecycle.add(constructor("Remove_" + o.simple(), li++, List.of(field("anchor", txOutRef()),
+                    field("removed", txOutRef()))));
         }
         String intentKey = c.packageName() + "." + V + ".Intent";
         if (c.hasBatched()) {
@@ -129,6 +142,7 @@ public final class DescriptionWriter {
         schemaOf(stateMirror());
         var owned = new ArrayList<Object>();
         for (var o : c.owned()) {
+            if (o.isKeyed()) continue;   // ADR-0016: keyed types are described from M3 (D11)
             TypeMirror m = ownedMirror(o.simple());
             String valueKey = keyOf(m);
             schemaOf(m);
@@ -137,7 +151,7 @@ public final class DescriptionWriter {
                     List.of(field("instance", bytes()), field("value", ref(valueKey)))))));
             owned.add(map("type", valueKey, "simple", o.simple(), "lookup",
                     Character.toLowerCase(o.simple().charAt(0)) + o.simple().substring(1), "holding", ref(holdingKey),
-                    "tag", o.tag(), "multi", c.multiOwned()));
+                    "tag", o.tag(), "multi", c.sealedHolding()));
         }
 
         var validators = new ArrayList<Object>();
@@ -147,7 +161,7 @@ public final class DescriptionWriter {
             Object datum = ref(stateKey);
             if (!owned.isEmpty()) {
                 var alts = new ArrayList<Object>(List.of(ref(stateKey)));
-                for (var o : c.owned()) alts.add(ref(c.packageName() + "." + V + "." + o.holding()));
+                for (var o : c.owned()) if (!o.isKeyed()) alts.add(ref(c.packageName() + "." + V + "." + o.holding()));
                 datum = map("title", "Datum", "description", "The state (instance tokens) or an owned object's Holding (0x4f tokens)",
                         "anyOf", alts);
             }
@@ -158,7 +172,7 @@ public final class DescriptionWriter {
 
         // ---- x-joust: the contract's model
         var actions = new ArrayList<Object>();
-        for (int i = 0; i < spend.size(); i++) actions.add(action(spend.get(i), i));
+        for (int i = 0; i < spend.size(); i++) if (!spend.get(i).keyed()) actions.add(action(spend.get(i), i));
         var views = new ArrayList<Object>();
         for (var v : c.views()) views.add(view(v));
         var xj = new LinkedHashMap<String, Object>();
@@ -179,6 +193,10 @@ public final class DescriptionWriter {
         xj.put("maxDatumBytes", c.maxDatumBytes());
         xj.put("assetAware", c.assetAware());
         xj.put("owned", owned);
+        if (c.hasKeyed()) {
+            // ADR-0016 M1: keyed types exist but their calls are not described yet (D11, M3); JS clients do not list them.
+            xj.put("keyed", c.keyedTypes().stream().map(o -> o.simple()).toList());
+        }
         xj.put("creations", creations);
         xj.put("actions", actions);
         xj.put("views", views);

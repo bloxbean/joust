@@ -142,6 +142,7 @@ public final class PortableGenerator {
     }
 
     private static String unsupported(TransitionIR t) {
+        if (t.keyed()) return "keyed objects (ADR-0016 M3)";
         if (t.takesParams()) return "params";
         if (!t.reads().isEmpty()) return "foreign reads";
         if (t.hasFunds() || ValidatorGenerator.takesAssets(t)) return "native assets";

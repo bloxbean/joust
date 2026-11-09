@@ -99,6 +99,12 @@ public final class ClientGenerator {
         if (ValidatorGenerator.takesAssets(init)) deployParams.add("org.julclang.ledger.Value payAssets");
         w.line("/** Creates a new instance by running {@link " + X + "#" + init.method() + "}. */");
         w.open("public static " + C + " deploy(" + String.join(", ", deployParams) + ") {");
+        if (c.hasKeyed()) {
+            // ADR-0016 M1: the validator requires the keyed types' heads at creation; the runtime mints them in M2 (D7).
+            w.line("throw new UnsupportedOperationException(\"" + X + " has keyed types (ADR-0016): creating an instance mints"
+                    + " their list heads, which the Java runtime supports from ADR-0016 M2\");");
+            w.close("}").blank();
+        } else {
         w.line("var result = contract(runtime" + (P != null ? ", params" : "") + ").deploy(new Deploy<" + S + ">(callerAccount, "
                 + (init.payable() ? "payLovelace" : "BigInteger.ZERO") + ", " + init.hasCtx() + ",");
         if (c.assetAware()) {
@@ -113,6 +119,7 @@ public final class ClientGenerator {
         }
         w.line("return new " + C + "(result.instance()" + (P != null ? ", params" : "") + ");");
         w.close("}").blank();
+        }
 
         c.purpose("WITHDRAW").filter(pr -> !pr.hasCtx()).ifPresent(pr -> {
             var ps = new ArrayList<String>(List.of("StateRuntime runtime", P + " params", "Account callerAccount"));
@@ -256,7 +263,8 @@ public final class ClientGenerator {
 
     /** Owned objects (ADR-0003, ADR-0012 D1): per owned type a codec, creation methods, a lookup and a typed handle. */
     private void owned() {
-        for (var o : c.owned()) owned(o);
+        // Keyed types (ADR-0016) get their lookup, insert, remove and retire calls with the runtime support of M2 (D7).
+        for (var o : c.owned()) if (!o.isKeyed()) owned(o);
     }
 
     private void owned(org.julclang.state.processor.ir.ContractIR.OwnedIR o) {
