@@ -368,6 +368,36 @@ final class ContractReader {
                             + " rename it");
                 }
             }
+            // The generated client's members for keyed types (ADR-0016 D7; R-D11): a view of the same name, or two types
+            // with one constant, would be a javac error in the generated source. (Calls and inserts take the caller's
+            // Account first, so they overload these members without clashing.)
+            var constants = new java.util.HashMap<String, String>();
+            var members = new java.util.HashMap<String, String>();
+            for (var o : ownedIRs) {
+                if (!o.isKeyed()) continue;
+                String constant = org.julclang.state.processor.gen.ClientGenerator.typeConstant(o.simple());
+                String other = constants.putIfAbsent(constant, o.simple());
+                if (other != null) {
+                    error(type, "keyed types " + other + " and " + o.simple() + " both give the generated client constant "
+                            + constant + "; rename one");
+                }
+                for (String m : org.julclang.state.processor.gen.ClientGenerator.keyedMembers(o.simple())) members.put(m, o.simple());
+            }
+            for (var v : views) {
+                String n = v.getSimpleName().toString();
+                if (members.containsKey(n)) {
+                    error(v, "view " + n + " clashes with a member the generated client has for keyed type "
+                            + members.get(n) + " (ADR-0016 D7); rename the view");
+                }
+            }
+            for (var t : concat(ownedActionIRs, ownedDestroyIRs)) {
+                var o = ownedIRs.stream().filter(x -> x.type().equals(t.ownedType())).findFirst().orElse(null);
+                if (o != null && o.isKeyed()
+                        && org.julclang.state.processor.gen.ClientGenerator.KEYED_HANDLE_MEMBERS.contains(t.method())) {
+                    error(type, "method " + t.method() + " clashes with a member of the generated " + o.simple() + "Object"
+                            + " handle (ADR-0016 D7); rename the method");
+                }
+            }
         }
         for (var t : concat(List.of(init), actionIRs, destroyIRs, ownedInitIRs, ownedActionIRs, ownedDestroyIRs)) {
             if (!reserved.add(t.variant()) && t.kind() != TransitionIR.Kind.INIT) {

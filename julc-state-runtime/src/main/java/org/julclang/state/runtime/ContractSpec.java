@@ -25,10 +25,16 @@ public record ContractSpec<S>(String name, Class<?> validatorClass, Class<S> sta
                 java.util.List.of());
     }
 
-    /** A contract with keyed types (ADR-0016): its instances are created with one list head per type. */
-    public ContractSpec(String name, Class<?> validatorClass, Class<S> stateClass, long minAda, int maxDatumBytes,
-                        long maxValidityMs, boolean stakeSelf, java.util.List<KeyedType<?>> keyed) {
-        this(name, validatorClass, stateClass, minAda, maxDatumBytes, maxValidityMs, stakeSelf, null, null, java.util.List.copyOf(keyed));
+    /**
+     * A contract with keyed types (ADR-0016): its instances are created with one list head per type. A factory, not a
+     * constructor: an overload ending in a {@code List} made {@code new ContractSpec<>(..., stakeSelf, null)} ambiguous
+     * (R-C20).
+     */
+    public static <S> ContractSpec<S> keyed(String name, Class<?> validatorClass, Class<S> stateClass, long minAda,
+                                            int maxDatumBytes, long maxValidityMs, boolean stakeSelf,
+                                            java.util.List<KeyedType<?>> keyed) {
+        return new ContractSpec<>(name, validatorClass, stateClass, minAda, maxDatumBytes, maxValidityMs, stakeSelf, null, null,
+                java.util.List.copyOf(keyed));
     }
 
     /** The contract has keyed types (ADR-0016). */
@@ -49,12 +55,12 @@ public record ContractSpec<S>(String name, Class<?> validatorClass, Class<S> sta
 
     public ContractSpec(String name, Class<?> validatorClass, Class<S> stateClass, long minAda, int maxDatumBytes,
                         long maxValidityMs) {
-        this(name, validatorClass, stateClass, minAda, maxDatumBytes, maxValidityMs, false, (String) null);
+        this(name, validatorClass, stateClass, minAda, maxDatumBytes, maxValidityMs, false, null);
     }
 
     public ContractSpec(String name, Class<?> validatorClass, Class<S> stateClass, long minAda, int maxDatumBytes,
                         long maxValidityMs, boolean stakeSelf) {
-        this(name, validatorClass, stateClass, minAda, maxDatumBytes, maxValidityMs, stakeSelf, (String) null);
+        this(name, validatorClass, stateClass, minAda, maxDatumBytes, maxValidityMs, stakeSelf, null);
     }
 
     /** A contract known by its description and compiled script, with its state as Plutus data (ADR-0015 D4). */

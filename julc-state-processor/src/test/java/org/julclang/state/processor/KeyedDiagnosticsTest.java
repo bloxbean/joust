@@ -330,4 +330,55 @@ class KeyedDiagnosticsTest {
                     "add(byte[] name, byte[] " + p + ", Ctx ctx)")), "parameter name \"" + p + "\"");
         }
     }
+
+    /** R-D11: the generated client's members for keyed types are reserved; a clash is a processor error, not javac's. */
+    @Test
+    void theGeneratedClientsKeyedMembers() {
+        for (String v : new String[]{"kKeys", "kList", "kExists", "k"}) {
+            error(compile(keyed("@View public static BigInteger " + v + "(S s) { return BigInteger.ONE; }")),
+                    "view " + v + " clashes with a member the generated client has for keyed type K");
+        }
+        for (String m : new String[]{"value", "key", "retired", "lovelace", "object"}) {
+            error(compile(keyed("@OwnedAction @SignedBy(\"owner\") public static K " + m + "(K k) { return k; }")),
+                    "clashes with a member of the generated KObject handle");
+        }
+        error(compile(STATE + """
+                    @Owned(key = "name") public record FooBar(byte[] name, byte[] owner) {}
+                    @OwnedInit public static FooBar add1(byte[] name, Ctx ctx) { return new FooBar(ctx.caller(), ctx.caller()); }
+                    @OwnedDestroy(retire = true) @SignedBy("owner") public static JulcList<Payout> leave1(FooBar k, Ctx ctx) { return Payouts.none(); }
+                    @Owned(key = "name") public record Foo_Bar(byte[] name, byte[] owner) {}
+                    @OwnedInit public static Foo_Bar add2(byte[] name, Ctx ctx) { return new Foo_Bar(ctx.caller(), ctx.caller()); }
+                    @OwnedDestroy(retire = true) @SignedBy("owner") public static JulcList<Payout> leave2(Foo_Bar k, Ctx ctx) { return Payouts.none(); }
+                }"""), "both give the generated client constant FOO_BAR_TYPE");
+        // An insert overloads the lookup of the same name (it takes the caller first): no clash.
+        ok(compile(keyed("@Owned(key = \"name\")", "").replace("add(byte[] name, Ctx ctx)", "k(byte[] name, Ctx ctx)")));
+    }
+
+    /** F56: a keyed call's @Reads are read again for every attempt: the generated client passes them as reads. */
+    @Test
+    void aKeyedCallsReadsAreResolvedPerAttempt() throws Exception {
+        var r = compile(IMPORTS + """
+                @StateContract(maxDatumBytes = 384)
+                public class C {
+                    public record S(byte[] admin, boolean open) {}
+                    public record O(BigInteger x) {}
+                    @Params public record P(ForeignInstance other) {}
+                    @Init public static S init(Ctx ctx) { return new S(ctx.caller(), true); }
+                    @Owned(key = "name") public record K(byte[] name, byte[] owner, BigInteger n) {}
+                    @OwnedInit public static K add(byte[] name, Ctx ctx) { return new K(ctx.caller(), ctx.caller(), BigInteger.ZERO); }
+                    @OwnedAction @SignedBy("owner") public static K sync(K k, P p, @Reads("params.other") O o) { return new K(k.name(), k.owner(), o.x()); }
+                    @OwnedDestroy(retire = true) @SignedBy("owner") public static JulcList<Payout> leave(K k, Ctx ctx) { return Payouts.none(); }
+                }""");
+        ok(r);
+        String client;
+        try (var files = java.nio.file.Files.walk(r.out().toPath())) {
+            var path = files.filter(f -> f.getFileName().toString().equals("CClient.java")).findFirst().orElseThrow();
+            client = java.nio.file.Files.readString(path);
+        }
+        String sync = client.substring(client.indexOf("public CallResult<C.K> sync("));
+        sync = sync.substring(0, sync.indexOf("\n    }\n"));
+        assertTrue(sync.contains("new org.julclang.state.runtime.ForeignReads.Ref<>("), sync);
+        assertTrue(sync.contains(".reads(read_o)"), sync);
+        assertTrue(!sync.contains(".referenceInputs("), "not a reference input fixed before the first attempt: " + sync);
+    }
 }

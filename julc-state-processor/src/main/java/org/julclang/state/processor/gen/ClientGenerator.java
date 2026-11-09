@@ -67,7 +67,7 @@ public final class ClientGenerator {
         if (c.hasKeyed()) {
             keyedTypes();
             var names = c.keyedTypes().stream().map(o -> typeConstant(o)).toList();
-            w.line("public static final ContractSpec<" + S + "> SPEC = new ContractSpec<>(\"" + X + "\", " + V + ".class, "
+            w.line("public static final ContractSpec<" + S + "> SPEC = ContractSpec.keyed(\"" + X + "\", " + V + ".class, "
                     + S + ".class, " + c.minAda() + "L, " + c.maxDatumBytes() + ", " + c.maxValidityMs() + "L, " + c.stakeSelf()
                     + ", java.util.List.of(" + String.join(", ", names) + "));").blank();
         } else {
@@ -271,8 +271,22 @@ public final class ClientGenerator {
     }
 
     private static String typeConstant(org.julclang.state.processor.ir.ContractIR.OwnedIR o) {
-        return o.simple().replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase() + "_TYPE";
+        return typeConstant(o.simple());
     }
+
+    /** The client constant of keyed type {@code simple} (ADR-0016): {@code FooBar} gives {@code FOO_BAR_TYPE}. */
+    public static String typeConstant(String simple) {
+        return simple.replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase() + "_TYPE";
+    }
+
+    /** The client's members for keyed type {@code simple} (ADR-0016 D7): its lookup, list, existence and keys methods. */
+    public static List<String> keyedMembers(String simple) {
+        String lookup = Character.toLowerCase(simple.charAt(0)) + simple.substring(1);
+        return List.of(lookup, lookup + "List", lookup + "Exists", lookup + "Keys");
+    }
+
+    /** Members of a keyed type's generated handle ({@code <Type>Object}). */
+    public static final List<String> KEYED_HANDLE_MEMBERS = List.of("key", "value", "retired", "lovelace", "object");
 
     /** The keyed types' runtime descriptions (ADR-0016), declared before SPEC, which lists them. */
     private void keyedTypes() {
@@ -361,9 +375,13 @@ public final class ClientGenerator {
             extraParams(t, params);
             String verb = !destroy ? "call" : t.retire() ? "retire" : "remove";
             w.open("public CallResult<" + R + "> " + t.method() + "(" + String.join(", ", params) + ") {");
-            fetchReads(t, "object.list().instance().contract().runtime()");
+            // @Reads: read again for every attempt of the operation (ADR-0016 D7; F56).
+            for (var rd : t.reads()) {
+                w.line("var read_" + rd.name() + " = new org.julclang.state.runtime.ForeignReads.Ref<>("
+                        + "object.list().instance().contract().runtime(), params." + rd.path().substring(7) + "(), " + rd.type() + ".class);");
+            }
             String start = destroy
-                    ? "Call.<" + R + ">destroy(\"" + t.method() + "\", callerAccount, \"" + verb + "\")"
+                    ? "Call.<" + R + ">destroy(\"" + t.method() + "\", callerAccount, org.julclang.state.runtime.KeyedObject.RUNTIME_BURN)"
                     : "Call.<" + R + ">action(\"" + t.method() + "\", callerAccount)";
             w.line("return object." + verb + "(" + start);
             w.indent();
@@ -395,7 +413,10 @@ public final class ClientGenerator {
                 w.line(t.shared() ? ".runShared((o, sh, ctx) -> " + body + ")" : ".run((o, ctx) -> " + body + ")");
             }
             extraCalls(t);
-            redeemerLine(t);
+            if (!t.reads().isEmpty()) {
+                w.line(".reads(" + String.join(", ", t.reads().stream().map(rd -> "read_" + rd.name()).toList()) + ")");
+            }
+            redeemerLine(t, false);
             w.line(".build());");
             w.dedent();
             w.dedent();
@@ -705,8 +726,13 @@ public final class ClientGenerator {
     }
 
     private void redeemerLine(TransitionIR t) {
+        redeemerLine(t, true);
+    }
+
+    /** {@code readsAsInputs}: the reads' UTxOs as fixed reference inputs (a keyed call passes them as reads instead). */
+    private void redeemerLine(TransitionIR t, boolean readsAsInputs) {
         String V = c.validatorName();
-        if (!t.reads().isEmpty()) {
+        if (readsAsInputs && !t.reads().isEmpty()) {
             var refs = new ArrayList<String>();
             for (var rd : t.reads()) refs.add("read_" + rd.name() + ".utxo()");
             w.line(".referenceInputs(" + String.join(", ", refs) + ")");
