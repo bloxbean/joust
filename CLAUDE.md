@@ -143,7 +143,9 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   offers `/joust/service`). Node-only runtime modules have browser twins through package.json `imports` (`#engine`,
   `#file-map-store`; Node forbids builtins as targets). The worker announces itself before the page posts (a module
   worker drops messages until a dependency's top-level await settles). In a worker's build, inject Buffer/process
-  with `enforce: 'post'` (else CommonJS modules lose their exports).
+  with `enforce: 'post'` (else CommonJS modules lose their exports). Pages import `virtual:joust/network` (the plugin):
+  fetched from joust dev, inlined by `vite build` with the engine copied into `dist/joust/engine-<id>/` and its sha384
+  hashes pinned (the worker fetches with `{ integrity }`); `joust serve` serves `dist/` plus `/chain` and the faucet.
 - ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). JuLC
   pinned at `deb72bb` (branch `feat/joust-embedder-attribution`, bloxbean/julc#313, stacked on #311: `JavacFrontend.attribute` public).

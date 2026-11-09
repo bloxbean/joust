@@ -1228,9 +1228,36 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
       run time, not bundled), served by a plain static server with `/joust`, `/chain` and `/dev` forwarded, passes
       the same flow: three reviews, no page errors, no prepare-service calls.
     - The Node suites pass unchanged (joust-runtime 23, one skipped without preview's environment; state-client 8).
-  - **Still to come in M4:** SRI for the engine (the worker checks the script's and the Wasm's hashes before running
-    them), and the plugin emitting the engine and `contracts.json` into a build, so a page deploys as static files
-    with no dev server.
+
+- **A page as static files, and SRI for the engine (2026-11-09).**
+  - **`virtual:joust/network`** (`@julclang/joust/vite`): what a page runs on (network, network id, chain URL, clock,
+    TTL, deployments, contracts, validators, and the engine with its hashes).
+    - Under `joust dev` it reads `/joust/network.json` and the contracts when the page loads, since a save redeploys.
+    - In `vite build` it is inlined, for one network (the plugin's `network`, `JOUST_NETWORK`, `--mode <network>`, or
+      the config's), from `build/joust`: `contracts.json` and `deployments.<network>.json`, whose clock is the one
+      recorded at deploy time, so a build needs no chain.
+    - The build copies the engine into `dist/joust/engine-<id>/` (`id` from the files' hashes).
+  - **SRI:** the page's own code pins the engine's sha384 hashes. The worker fetches the script with
+    `fetch(url, { integrity })`. The image fetches its Wasm through the global `fetch`, so during loading the worker
+    wraps it to add the Wasm's hash to that one request. A browser then refuses an engine whose bytes differ, wherever
+    it is served from. `joust dev` computes the same hashes from the files it serves, so development runs the same
+    check.
+  - **The chain for a static page:** `"/chain"` by default (a proxy that adds the Blockfrost project id), or a
+    network's `pageChain`, a chain API a browser may call directly. A page resolves both URLs against itself, not
+    against the worker's script.
+  - **`joust serve [--network n] [--dir dist]`:** `dist/` as plain static files, plus `/chain` and a DevKit's faucet.
+    Nothing is built, deployed or bundled, and there is no engine route or prepare service. `joust dev` and
+    `joust serve` share the chain proxy (`routes.js`, one upstream session).
+  - **Evidence** (`page.test.js`, second test, DevKit):
+    - The template's page, built with `vite build` and served by `joust serve`, passes the flow (three reviews, no page
+      errors). Its only requests besides `/assets/` and `/chain/` are `/`, the engine from the build and `/dev/topup`.
+    - Two tampered copies of the build, one character of the engine's script and one bit of its Wasm, are refused:
+      the page reports that the engine does not match its integrity hash, and the engine never starts.
+    - The same holds for a project made with `npm create joust` from the local registry, installed and built with
+      npm only.
+  - **M4's remaining exit item:** the wallet run from a registry install (one call with Eternl or Lace on preview,
+    `npm run build:page:preview` and `npm run serve:preview`, or `npm run dev:preview`). A map contract's flow in a
+    page is not run yet: the worker's MPF and IndexedDB are checked directly.
 
 ### 13.12 MerkleMap mirrors (M4): proofs for the engine, Aiken's MPF in JS, RocksDB on the JVM, rebuilt from the chain
 

@@ -6,8 +6,13 @@
   "scripts": {
     "build": "joust build",
     "deploy": "joust deploy",
+    "deploy:preview": "joust deploy --network preview",
     "dev": "joust dev",
     "dev:preview": "joust dev --network preview",
+    "build:page": "vite build",
+    "build:page:preview": "vite build --mode preview",
+    "serve": "joust serve",
+    "serve:preview": "joust serve --network preview",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

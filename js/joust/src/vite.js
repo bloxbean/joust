@@ -14,15 +14,68 @@
 // - The runtime engine runs in a module worker (@julclang/joust-runtime/worker): workers are built as ES modules, with
 //   the same aliases and globals (a build bundles workers separately, with their own plugins).
 // - The page may import the build's clients (build/joust/*.js) from the project root, outside the page directory.
+// - `virtual:joust/network` is what the page runs on: { network, networkId, chain, clock, ttlMs, deployments,
+//   contracts, validators, engine: { url, integrity } }.
+//   - Under joust dev it reads /joust/network.json and the contracts when the page loads (a save redeploys).
+//   - In a build it is inlined, for the network `joust({ network })`, JOUST_NETWORK, Vite's mode when it names a
+//     network (vite build --mode preview) or joust.config.json names, from
+//     build/joust (run joust deploy first), and the engine's two files are copied into the build at
+//     joust/engine-<id>/. A built page is static files: it needs only a chain API, at `chain` (the network's
+//     "pageChain" in joust.config.json; "/chain" by default, as joust serve and joust dev proxy it).
+//   - The engine's sha384 hashes are pinned in the page's own code (SRI): the worker fetches the script and the Wasm
+//     with them, so a browser refuses an engine whose bytes differ, wherever it is served from.
 import { createRequire } from 'node:module';
-import { realpathSync } from 'node:fs';
+import { realpathSync, readFileSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { loadConfig } from './config.js';
+import { engineFiles, pageTtlMs } from './engine-files.js';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import inject from '@rollup/plugin-inject';
 
 const require = createRequire(import.meta.url);
 const shim = (name) => require.resolve(`vite-plugin-node-polyfills/shims/${name}`).replace(/index\.cjs$/, 'index.js');
 
-export function joust({ root = process.cwd() } = {}) {
+const VIRTUAL = 'virtual:joust/network';
+const RESOLVED = '\0joust:network';
+
+/** The inlined network module of a build (see above). */
+function builtNetwork(ctx, root, name, base, mode) {
+  const config = loadConfig(root);
+  const network = name ?? process.env.JOUST_NETWORK ?? (config.networks[mode] ? mode : config.network);
+  const n = config.networks[network];
+  if (!n) ctx.error(`no network ${network} in joust.config.json`);
+  const out = resolve(root, config.out);
+  const read = (f) => JSON.parse(readFileSync(join(out, f), 'utf8'));
+  if (!existsSync(join(out, 'contracts.json'))) ctx.error(`no ${config.out}/contracts.json: run joust build first`);
+  const deployments = join(out, `deployments.${network}.json`);
+  if (!existsSync(deployments)) ctx.error(`no ${config.out}/deployments.${network}.json: deploy first (joust deploy --network ${network})`);
+  const d = read(`deployments.${network}.json`);
+  const engine = engineFiles();
+  const dir = `joust/engine-${engine.id}`;
+  for (const f of [engine.script, engine.wasm]) ctx.emitFile({ type: 'asset', fileName: `${dir}/${f.name}`, source: f.bytes });
+  const value = {
+    network, networkId: n.networkId ?? d.networkId, chain: n.pageChain ?? '/chain', clock: d.clock ?? n.clock,
+    ttlMs: pageTtlMs(config, n), deployments: d.contracts ?? {}, contracts: read('contracts.json'),
+    validators: existsSync(join(out, 'validators.json')) ? read('validators.json') : [],
+    engine: { url: `${base}${dir}/${engine.script.name}`, integrity: { script: engine.script.integrity, wasm: engine.wasm.integrity } },
+  };
+  return `export default ${JSON.stringify(value)};\n`;
+}
+
+// Under joust dev: what the dev server says now (it redeploys on save).
+const DEV_NETWORK = `const net = await (await fetch('/joust/network.json', { cache: 'no-store' })).json();
+net.contracts = await (await fetch(net.contracts, { cache: 'no-store' })).json();
+export default net;
+`;
+
+/**
+ * @param o.root     the project (joust.config.json, build/joust); default the working directory
+ * @param o.network  the network a build is for (default JOUST_NETWORK, else joust.config.json's)
+ */
+export function joust({ root = process.cwd(), network } = {}) {
+  let command = 'serve';
+  let mode = 'production';
+  let base = '/';
   const buffer = shim('buffer');
   const proc = shim('process');
   // Module aliases only (absolute paths); the globals are injected below, from absolute paths too.
@@ -33,7 +86,15 @@ export function joust({ root = process.cwd() } = {}) {
     polyfills(),
     {
       name: 'joust',
-      config: (c) => ({
+      resolveId: (id) => (id === VIRTUAL ? RESOLVED : null),
+      load(id) {
+        if (id !== RESOLVED) return null;
+        return command === 'build' ? builtNetwork(this, root, network, base, mode) : DEV_NETWORK;
+      },
+      configResolved(c) {
+        base = c.base ?? '/';
+      },
+      config: (c, env) => (command = env.command, mode = env.mode, {
         define: { global: 'globalThis' },
         esbuild: { target: 'es2022' },
         optimizeDeps: { esbuildOptions: { target: 'es2022', define: { global: 'globalThis' }, inject: [buffer, proc],

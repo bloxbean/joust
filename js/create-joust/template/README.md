@@ -10,6 +10,22 @@ npm test           # creates a counter and calls it, through @julclang/joust-run
 npm run dev        # builds, deploys and serves the page (page/) at http://127.0.0.1:5178; redeploys on save
 ```
 
+## The page as static files
+
+```sh
+npm run build:page   # vite build -> dist/: the page, its worker and the runtime engine, for the network in joust.config.json
+npm run serve        # dist/ as plain static files at http://127.0.0.1:5178, with the chain API at /chain
+```
+
+A build is for one network and its deployments (run `npm run deploy` first; `deploy:preview`, `build:page:preview` and
+`serve:preview` for preview). They are inlined in the page, with the engine's sha384 hashes: the page's worker
+refuses an engine whose bytes differ, wherever it is served from. A DevKit's clock changes when it restarts: deploy
+and build again then.
+
+`dist/` can go on any static host. The page reads the chain at `/chain` by default: put a proxy there that adds the
+Blockfrost project id (as `joust serve` does), or give the network a `pageChain` in `joust.config.json`, the URL of a
+chain API a browser may call directly.
+
 The page prepares its own transactions: JOUST's runtime engine (Wasm, about 20 MB) runs in a Web Worker
 (`page/engine.worker.js`), and the page checks every transaction it builds before the wallet signs. `joust dev` serves
 the engine, the chain (`/chain`, so a Blockfrost project id stays in the dev server) and the build.

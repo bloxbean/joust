@@ -19,7 +19,8 @@ let runtime = null;
 
 const ops = {
   /**
-   * @param o.engine       where joust-runtime.js is served (its .wasm beside it)
+   * @param o.engine       { url, integrity: { script, wasm } }: where joust-runtime.js is served (its .wasm beside it)
+   *                       and the files' SRI hashes (or just the URL: unchecked)
    * @param o.contracts    contracts.json as joust build writes it
    * @param o.validators   validators.json (optional)
    * @param o.chain        a Blockfrost-style chain API, absolute or relative to the page (a proxy that keeps the
@@ -32,7 +33,8 @@ const ops = {
    * @param o.mirrorCache  the IndexedDB database for MerkleMap mirrors (default "joust-mirrors"); false: in memory
    */
   async init(o) {
-    const engine = { url: new URL(o.engine, self.location.href).href };
+    const e = typeof o.engine === 'string' ? { url: o.engine } : (o.engine ?? {});
+    const engine = { url: new URL(e.url, self.location.href).href, integrity: e.integrity };
     await loadEngine(engine);   // started now: the first call does not wait for 20 MB of Wasm
     const provider = blockfrostProvider(new URL(o.chain, self.location.href).href, { projectId: o.projectId });
     let cache;

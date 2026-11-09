@@ -4,10 +4,13 @@
 //   joust deploy [--network n]  publish the reference scripts; write build/joust/deployments.<n>.json
 //   joust dev [--network n] [--port p]  attach to the chain (DevKit/Yaci Store, or Blockfrost), build, deploy, rebuild
 //                               on save, serve the page with the chain API proxied at /chain
+//   joust serve [--network n] [--dir dist] [--port p]  serve a built page (vite build) as static files, with the chain
+//                               API proxied at /chain (and a DevKit's faucet): nothing built, deployed or bundled
 //   joust version
 import { build, VERSION } from '../src/build.js';
 import { deploy } from '../src/deploy.js';
 import { dev } from '../src/dev.js';
+import { serve } from '../src/serve.js';
 import { loadConfig } from '../src/config.js';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -35,12 +38,19 @@ try {
       process.on('SIGTERM', stop);
       break;
     }
+    case 'serve': {
+      const d = await serve({ config, networkName: flag('network'), dir: flag('dir'), port: flag('port') ? Number(flag('port')) : undefined });
+      const stop = async () => { await d.close(); process.exit(0); };
+      process.on('SIGINT', stop);
+      process.on('SIGTERM', stop);
+      break;
+    }
     case 'version':
     case '--version':
       console.log(VERSION);
       break;
     default:
-      console.log('usage: joust build | deploy [--network <name>] | dev [--network <name>] [--port <port>] | version');
+      console.log('usage: joust build | deploy [--network <name>] | dev [--network <name>] [--port <port>]\n       | serve [--network <name>] [--dir <dir>] [--port <port>] | version');
       process.exit(cmd ? 1 : 0);
   }
 } catch (e) {

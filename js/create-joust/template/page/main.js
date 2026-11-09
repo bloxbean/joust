@@ -1,19 +1,21 @@
-// The Counter page. `joust dev` serves it, with the chain at /chain (a Blockfrost project id stays in the dev server).
-// The page prepares its own transactions: the runtime engine (Wasm) runs in a worker (engine.worker.js). Neither the
-// chain API nor the engine is trusted: every transaction is checked against the contract's description and the chain
-// before the wallet is asked to sign (VerificationError otherwise).
+// The Counter page. `joust dev` serves it, with the chain at /chain (a Blockfrost project id stays in the dev server);
+// built (`npm run build:page`), it is static files that `joust serve` (or any static host with a chain API) serves.
+// The page prepares its own transactions: the runtime engine (Wasm) runs in a worker (engine.worker.js), checked against
+// the hashes pinned in this page's build. Neither the chain API nor the engine is trusted: every transaction is checked
+// against the contract's description and the chain before the wallet is asked to sign (VerificationError otherwise).
 import { blockfrostChain, walletView, VerificationError, toJson } from '@julclang/state-client';
 import { engineWorker } from '@julclang/joust-runtime/page';
 import { Wallet, NetworkType } from '@cardano-foundation/cardano-connect-with-wallet-core';
 import { Counter } from '../build/joust/Counter.js';
+// The network, deployments, contracts and engine: from joust dev while developing, inlined in a build.
+import net from 'virtual:joust/network';
 
 const $ = (id) => document.getElementById(id);
-const net = await (await fetch('/joust/network.json', { cache: 'no-store' })).json();
-const chain = blockfrostChain(location.origin + net.chain);
+const chain = blockfrostChain(new URL(net.chain, location.href).href);
 const deployment = net.deployments['app.Counter'];
 const service = engineWorker(new Worker(new URL('./engine.worker.js', import.meta.url), { type: 'module' }), {
   engine: net.engine, chain: net.chain, clock: net.clock, networkId: net.networkId, ttlMs: net.ttlMs,
-  deployments: net.deployments, contracts: await (await fetch(net.contracts, { cache: 'no-store' })).json(),
+  deployments: net.deployments, contracts: net.contracts, validators: net.validators,
 });
 const counter = new Counter({ service, chain, deployment, onReview: review });
 const app = { api: null, view: null };

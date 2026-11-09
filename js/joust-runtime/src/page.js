@@ -6,8 +6,9 @@
  * A prepare service backed by the engine in {@code worker}.
  *
  * @param worker   a Worker running @julclang/joust-runtime/worker (a module worker)
- * @param options  what the worker's runtime needs: { engine, contracts, chain, clock, networkId, ttlMs, deployments,
- *                 validators?, projectId?, mirrorCache? } (see worker.js)
+ * @param options  what the worker's runtime needs: { engine: { url, integrity }, contracts, chain, clock, networkId,
+ *                 ttlMs, deployments, validators?, projectId?, mirrorCache? } (see worker.js); `virtual:joust/network`
+ *                 (@julclang/joust/vite) gives them all. URLs are relative to the page.
  * @returns { ready, prepare(request), deployments(d), terminate() }: ready resolves once the engine has loaded
  */
 export function engineWorker(worker, options) {
@@ -41,7 +42,11 @@ export function engineWorker(worker, options) {
     pending.set(id, { resolve, reject });
     heard.then(() => worker.postMessage({ id, op, args }));
   });
-  const ready = call('init', options);
+  // URLs relative to the page, not to the worker's script (which a bundler puts elsewhere).
+  const at = (u) => new URL(u, globalThis.location?.href).href;
+  const engine = typeof options.engine === 'string' ? { url: options.engine } : options.engine;
+  const ready = call('init', { ...options, chain: at(options.chain),
+    engine: engine?.url ? { ...engine, url: at(engine.url) } : engine });
   ready.catch(() => {});   // reported through prepare; a page that never calls one does not see an unhandled rejection
   return {
     ready,

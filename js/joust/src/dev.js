@@ -17,15 +17,13 @@
 
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync, watch, createReadStream } from 'node:fs';
-import { join, resolve, extname, normalize, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve, extname, normalize } from 'node:path';
 import { spawn } from 'node:child_process';
 import { build } from './build.js';
 import { deploy } from './deploy.js';
 import { network } from './config.js';
-
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json',
-  '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.ts': 'text/plain', '.map': 'application/json' };
+import { TYPES, chainRoutes, staticFile as file, notFound } from './routes.js';
+import { engineFiles, pageTtlMs } from './engine-files.js';
 
 /** Whether the chain API answers (its latest block). */
 async function chainUp(net) {
@@ -81,16 +79,9 @@ export async function attach(config, name, { log = console.log, waitMs = 180_000
 export async function dev({ root = process.cwd(), config, networkName, port = config.dev?.port ?? 5178, log = console.log, signal } = {}) {
   const name = networkName ?? config.network;
   const net = await attach(config, name, { log });
-  // One upstream session for everything this server reads (deploys, the prepare service, the page's /chain): Blockfrost's
-  // load balancer keeps a session on one backend by its affinity cookie, so the page verifies against the chain state
-  // the engine built from.
-  let affinity = null;
-  const upstream = async (u, init = {}) => {
-    const r = await fetch(u, { ...init, headers: { ...(init.headers ?? {}), ...(affinity ? { cookie: affinity } : {}) } });
-    const m = /__cflb=([^;]+)/.exec(r.headers.get('set-cookie') ?? '');
-    if (m) affinity = '__cflb=' + m[1];
-    return r;
-  };
+  // One upstream session for everything this server reads (deploys, the prepare service, the page's /chain).
+  const chainProxy = chainRoutes(net);
+  const upstream = chainProxy.upstream;
   const out = resolve(root, config.out);
   log(`attached to ${name} (${net.chain}${net.admin ? ', admin ' + net.admin : ''})`);
 
@@ -118,7 +109,7 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
           const read = (f) => JSON.parse(readFileSync(join(out, f), 'utf8'));
           runtime = joustRuntime({ chainUrl: net.chain, projectId: net.projectId, fetchImpl: upstream, contracts: read('contracts.json'),
             validators: existsSync(join(out, 'validators.json')) ? read('validators.json') : [],
-            clock: net.clock, networkId: net.networkId, deployments: deployed, ttlMs: config.dev?.ttlMs ?? (net.admin ? 20_000 : 180_000) });
+            clock: net.clock, networkId: net.networkId, deployments: deployed, ttlMs: pageTtlMs(config, net) });
         } catch (e) {
           log('deploy failed: ' + e.message);
         }
@@ -137,35 +128,11 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
 
   // The page: Vite when the project uses it (it proxies to this server), else the page directory's files.
   const pageDir = resolve(root, config.page ?? (existsSync(join(root, 'page')) ? 'page' : '.'));
-  const chainBase = net.chain.replace(/\/$/, '');
-  const headers = net.projectId ? { project_id: net.projectId } : {};
-
-  async function proxyChain(req, res, path) {
-    const body = req.method === 'POST' ? await new Promise((ok) => {
-      const parts = [];
-      req.on('data', (c) => parts.push(c));
-      req.on('end', () => ok(Buffer.concat(parts)));
-    }) : undefined;
-    const r = await upstream(chainBase + path, {
-      method: req.method, body,
-      headers: { ...headers, ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {}) },
-    });
-    res.writeHead(r.status, { 'content-type': r.headers.get('content-type') ?? 'application/json' });
-    res.end(Buffer.from(await r.arrayBuffer()));
-  }
-
-  function file(res, base, rel) {
-    const p = normalize(join(base, rel));
-    if (!p.startsWith(base + sep) && p !== base) return notFound(res);
-    if (!existsSync(p) || statSync(p).isDirectory()) return notFound(res);
-    res.writeHead(200, { 'content-type': TYPES[extname(p)] ?? 'application/octet-stream' });
-    res.end(readFileSync(p));
-  }
-  const notFound = (res) => { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); };
 
   // The engine a page's worker loads: the one this server's own runtime uses. Large (about 20 MB of Wasm), so it is
   // streamed, with an ETag: a reload revalidates instead of downloading it again.
-  const engineDir = fileURLToPath(new URL('../engine/', import.meta.resolve('@julclang/joust-runtime')));
+  const engine = engineFiles();
+  const engineDir = engine.dir;
   function engineFile(req, res, rel) {
     const p = normalize(join(engineDir, rel));
     if (!p.startsWith(engineDir) || !existsSync(p) || statSync(p).isDirectory()) return notFound(res);
@@ -183,12 +150,14 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
     if (req.method === 'OPTIONS') return res.end();
     const url = new URL(req.url, 'http://localhost');
     try {
-      if (url.pathname.startsWith('/chain/')) return await proxyChain(req, res, url.pathname.slice('/chain'.length) + url.search);
+      if (await chainProxy.handle(req, res, url)) return;
       if (url.pathname === '/joust/network.json') {
+        // The engine with its hashes: the page's worker loads it as a built page does (SRI), from this server.
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ network: name, networkId: net.networkId, chain: '/chain',
-          engine: '/joust/engine/joust-runtime.js', contracts: '/joust/contracts.json', service: '/joust/service',
-          clock: net.clock, ttlMs: config.dev?.ttlMs ?? (net.admin ? 20_000 : 180_000), deployments: deployed ?? {} }));
+          engine: { url: '/joust/engine/joust-runtime.js', integrity: { script: engine.script.integrity, wasm: engine.wasm.integrity } },
+          contracts: '/joust/contracts.json', service: '/joust/service',
+          clock: net.clock, ttlMs: pageTtlMs(config, net), deployments: deployed ?? {} }));
       }
       if (url.pathname === '/joust/service/prepare' && req.method === 'POST') {
         const body = await new Promise((ok) => { let s = ''; req.on('data', (c) => { s += c; }); req.on('end', () => ok(s)); });
@@ -205,14 +174,6 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
       }
       if (url.pathname.startsWith('/joust/engine/')) return engineFile(req, res, url.pathname.slice('/joust/engine/'.length));
       if (url.pathname.startsWith('/joust/')) return file(res, out, url.pathname.slice('/joust/'.length));
-      if (url.pathname === '/dev/topup' && req.method === 'POST' && net.admin) {
-        const body = await new Promise((ok) => { let s = ''; req.on('data', (c) => { s += c; }); req.on('end', () => ok(s)); });
-        const { address, ada = 1000 } = JSON.parse(body || '{}');
-        const { devkitTopUp } = await import('@julclang/joust-runtime');
-        await devkitTopUp(address, ada, net.admin);
-        res.writeHead(200, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({ ok: true }));
-      }
       if (vite) return vite.middlewares(req, res, () => notFound(res));
       return file(res, pageDir, url.pathname === '/' ? 'index.html' : url.pathname.slice(1));
     } catch (e) {
