@@ -20,12 +20,18 @@ JuLC from source with `.github/ci/build-julc.sh` and skipped the consumer check;
 
 ## Releasing (Maven Central, the BloxBean repository and npm)
 
-`.github/workflows/release.yml` (release-ops' `release.yml`, as JuLC's) runs on a `v*` tag. While the repository is
-private, a maintainer pushes the tag by hand (release-ops' `tag-release.yml` and the release App come later).
+`.github/workflows/release.yml` (release-ops' `release.yml`, as JuLC's) runs on a `v*` tag, which
+`.github/workflows/tag-release.yml` (release-ops' `tag-release.yml`, as JuLC's) creates.
 
 1. Set `version` in `gradle.properties` to the release (no `-SNAPSHOT`), pin released dependencies in
-   `gradle/libs.versions.toml` (the workflow refuses a SNAPSHOT), and merge.
-2. Push `v<version>` from that commit. In the `release-staging` environment the workflow:
+   `gradle/libs.versions.toml` (the workflow refuses a SNAPSHOT), and merge to `main` (or a `release/**` branch).
+2. `tag-release.yml` runs on that merge (a push touching `gradle.properties`): `resolve` skips SNAPSHOT versions and
+   tags that exist; `authorize` waits for a release owner's approval in the `release` environment; `tag` mints the
+   release App's token (`RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY` in `release-staging`) and pushes `v<version>` on
+   the merged commit. A tag pushed with the default `GITHUB_TOKEN` would not start `release.yml`, hence the App. To tag
+   later (a rejected or expired approval, or no push run), run it by hand on the branch, which tags its current commit:
+   `gh workflow run tag-release.yml --repo bloxbean/joust --ref main`.
+3. The tag starts `release.yml`. In the `release-staging` environment it:
    - builds, and signs once with the in-memory subkey (`SIGNING_KEY_ASC`, `SIGNING_KEY_ID`, `SIGNING_PASSWORD`): one
      Gradle run builds the staged repository and the Central bundle, and `verify-maven-staging.py` checks them byte
      for byte, so both destinations get the same signed files;
@@ -57,8 +63,10 @@ private, a maintainer pushes the tag by hand (release-ops' `tag-release.yml` and
 
 `maven_central_publish`, `bloxbean_repo_publish`, `npm_publish` and `allow_snapshot_dependencies` in
 `gradle.properties` must each be `true` or `false`. `allow_snapshot_dependencies=true` lets a release depend on a
-SNAPSHOT pin with a warning: use it only to rehearse (Central staged then dropped, `bloxbean_repo_publish=false`,
-`npm_publish=false`), since a published release naming a snapshot breaks once the snapshot is pruned. Gradle module metadata (`.module`) is published because release-ops' `verify-maven-staging.py`, shared and
+SNAPSHOT pin with a warning: use it only to rehearse, with `maven_central_publish`, `bloxbean_repo_publish` and `npm_publish` all `false` (the
+workflow refuses anything else). Central refuses snapshot dependencies when it validates a deployment, and a published
+release naming a snapshot breaks once the snapshot is pruned. A rehearsal builds, stages, signs and verifies the bundle,
+and runs `npm publish --dry-run`. Gradle module metadata (`.module`) is published because release-ops' `verify-maven-staging.py`, shared and
 identical across repositories, requires it.
 
 ## One-time settings (a maintainer runs these)
@@ -81,6 +89,18 @@ identical across repositories, requires it.
    gh secret set R2_SECRET_ACCESS_KEY --env release-staging --repo $R   # prompts
    ```
 3. **Check** (names only): `gh api repos/$R/environments/release-staging/secrets --jq '.secrets[].name'`.
+4. **The release App and the `release` environment** (`tag-release.yml`). The App (`RELEASE_APP_ID`,
+   `RELEASE_APP_PRIVATE_KEY`, already in `release-staging`) must be installed on this repository with contents write.
+   The `release` environment holds no secrets: its reviewers are the team `release-owners`, with prevent self-review,
+   deployable from `main` and `release/**` (release-ops `docs/04-github-settings.md` §2):
+   ```bash
+   RO=~/work/bloxbean/release-ops
+   gh api -X PUT repos/$R/environments/release --input $RO/templates/github/environment-release.json
+   gh api -X POST repos/$R/environments/release/deployment-branch-policies -f name=main -f type=branch
+   gh api -X POST repos/$R/environments/release/deployment-branch-policies -f name='release/**' -f type=branch
+   ```
+   Until it exists, the first run creates it without reviewers, and `authorize` passes at once. Once the repository is
+   public, also add release-ops' `v*` tag ruleset with the App on its bypass list.
 
 ## Publishing a snapshot
 
