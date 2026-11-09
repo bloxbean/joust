@@ -40,12 +40,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 
 ## Build / test
 - JDK 25. `./gradlew build`.
-- Build JuLC locally with `bash .github/ci/build-julc.sh` (as CI does): a fresh shallow clone, so the commit hash
-  JuLC appends to its version has the same length as in CI (a worktree build may append a longer one).
-- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is **JuLC main, built locally** (no published
-  snapshot has #311/#313 yet): `.github/ci/build-julc.sh` clones the pinned commit (`JULC_REF`) and runs
-  `./gradlew publishToMavenLocal`; JuLC's build appends the commit to its version (`0.1.0-pre21-71b3a73-SNAPSHOT`),
-  which must equal `julc` in the catalog. JuLC changes JOUST needs: a JuLC PR labelled `joust`.
+- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is a **published snapshot of JuLC main**
+  (`0.1.0-pre21-71b3a73-SNAPSHOT`, with #311/#313), resolved from the BloxBean snapshot repository
+  (`https://repo.bloxbean.org/maven/snapshots`; `settings.gradle` lists it for the `org.julclang.julc` plugin too). To
+  move to a newer JuLC, pin the version JuLC's "Publish snapshot" workflow printed. JuLC changes JOUST needs: a JuLC PR
+  labelled `joust`.
 - A consumer of JOUST needs on its processor path: `julc-state-processor`, `julc-annotation-processor`, and
   `project(path: ':julc-state-api', configuration: 'onchainSources')` (a *directory*, not the jar; see gotchas).
 - `-PuseLocalJulc[=path]` adds `../julc` as a composite build. Not tested yet.

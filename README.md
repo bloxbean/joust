@@ -37,8 +37,8 @@ newest version is on the [Development snapshot](https://github.com/bloxbean/jous
 ```gradle
 repositories {
     mavenCentral()
-    mavenLocal()     // JuLC main, until a published snapshot has it (below)
-    maven {
+    maven {          // JOUST and JuLC snapshots
+
         url = uri('https://repo.bloxbean.org/maven/snapshots')
         mavenContent { snapshotsOnly() }
     }
@@ -52,8 +52,10 @@ dependencies {
 }
 ```
 
-JOUST needs JuLC `main` at 80490306 or later (bloxbean/julc#311 and #313), which no published JuLC snapshot has yet:
-build it into mavenLocal first with `.github/ci/build-julc.sh` (from a JOUST checkout). Publishing is described in [docs/release-ops.md](docs/release-ops.md).
+JOUST needs JuLC `main` at 80490306 or later (bloxbean/julc#311 and #313): `julcVersion` is the `julc` entry of
+`gradle/libs.versions.toml` (`0.1.0-pre21-71b3a73-SNAPSHOT`), a JuLC snapshot in the same repository. A project that
+applies JuLC's Gradle plugin (`org.julclang.julc`) also needs that repository in `pluginManagement`. Publishing is
+described in [docs/release-ops.md](docs/release-ops.md).
 
 JOUST lets Java developers write Cardano smart contracts as **state plus actions**, the way they would write an
 account-based contract, instead of UTxOs, datums and redeemers. You write a state record and pure static methods.
@@ -120,10 +122,9 @@ vault.close(alice);                                                 // burns the
 ## Build
 
 - JDK 25. Versions live in `gradle/libs.versions.toml`.
-- CCL is `0.8.0-pre7`. JuLC is JuLC `main` (with [julc#311](https://github.com/bloxbean/julc/pull/311) and
-  [julc#313](https://github.com/bloxbean/julc/pull/313)), built locally until a published snapshot has them: run
-  `.github/ci/build-julc.sh`. It builds the pinned commit into mavenLocal; the JuLC build appends the commit to the
-  version, which matches `julc` in the catalog.
+- CCL is `0.8.0-pre7`. JuLC is a snapshot of JuLC `main` (with [julc#311](https://github.com/bloxbean/julc/pull/311)
+  and [julc#313](https://github.com/bloxbean/julc/pull/313)), `0.1.0-pre21-71b3a73-SNAPSHOT`, resolved from the
+  BloxBean snapshot repository (`https://repo.bloxbean.org/maven/snapshots`), plugin included.
 - `./gradlew build` runs everything. Tests tagged `devnet` run only when Yaci DevKit answers on `localhost:8080`
   (Store) and `:10000` (admin); otherwise they are skipped.
 - `./gradlew :examples:vault:run` (likewise `counter`, `escrow`, `crowdfund`) runs an example against Yaci DevKit.

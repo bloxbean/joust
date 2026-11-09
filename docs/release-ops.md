@@ -9,19 +9,14 @@ snapshot cleanup, CODEOWNERS and rulesets come later, when the project becomes p
 | Piece | What it does |
 |---|---|
 | `build.gradle` | Snapshot versions carry the commit: `0.1.0-pre1-SNAPSHOT` becomes `0.1.0-pre1-<sha7>-SNAPSHOT`. The six library modules publish a jar, sources, javadoc and POM; `julc-state-api` adds its `onchain` jar (the on-chain sources for consumers' annotation processor path). Includes the `stagingRepository` hook and `verifyMavenReleasePublicationScope` |
-| `.github/workflows/build.yml` | CI on pushes to `main`/`release/**` and on PRs: builds JuLC, starts Yaci DevKit, `./gradlew build`, scope check |
-| `.github/workflows/bloxbean-snapshot.yml` | Manual. Publishes a commit whose `build.yml` passed. From the release-ops template, adapted for JuLC (below) |
+| `.github/workflows/build.yml` | CI on pushes to `main`/`release/**` and on PRs: starts Yaci DevKit, `./gradlew build`, scope check |
+| `.github/workflows/bloxbean-snapshot.yml` | Manual. Publishes a commit whose `build.yml` passed, then resolves it with a Gradle consumer. From the release-ops template |
 | `.github/scripts/` | The release-ops scripts, unchanged |
-| `.github/ci/build-julc.sh` | Builds JuLC from bloxbean/julc#311 into mavenLocal (temporary, below) |
 
-**JuLC.** JOUST needs JuLC's ADR-071 (bloxbean/julc#311), which is not published yet. CI builds it from source at the
-pinned commit, producing the `julc` version in `gradle/libs.versions.toml`. The published JOUST POMs name that
-version, which no public repository has. So:
-- consumers must run `.github/ci/build-julc.sh` (or build julc#311 themselves) before resolving JOUST snapshots;
-- the snapshot workflow skips its Gradle consumer check, with a warning, while `JULC_FROM_SOURCE` is `true`.
-
-Once JuLC with ADR-071 is published, pin it in `gradle/libs.versions.toml`, then remove `build-julc.sh`, its workflow
-steps and `JULC_FROM_SOURCE`.
+**JuLC.** JOUST depends on a published JuLC snapshot (`julc` in `gradle/libs.versions.toml`, from JuLC's own "Publish
+snapshot" workflow), in the same BloxBean snapshot repository. So JOUST snapshots resolve for consumers with that one
+repository, and the snapshot workflow's Gradle consumer check runs. (Until JuLC #311/#313 were published, CI built
+JuLC from source with `.github/ci/build-julc.sh` and skipped the consumer check; both are gone.)
 
 ## One-time settings (a maintainer runs these)
 
