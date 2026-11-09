@@ -1143,33 +1143,34 @@ What M1 built, what it measured, and where the code differs from the text above.
 ### Review of M1
 
 Three reviews (Codex; an on-chain safety reviewer; a processor and testkit reviewer) of `bcadcde..2687154`. None found
-a P0 or P1, and none could build a transaction that breaks the keyed invariants. The coordinator assigned the IDs:
-Codex's are F42–F44. The other findings are numbered R-B1–B10, then R-A1–A8, in the order the coordinator listed
-them. Each is fixed in the commits after `2687154`, unless noted.
+a P0 or P1, and none could build a transaction that breaks the keyed invariants. IDs are the reviewers' own numbers:
+Codex's F42–F44; R-A1–A8 the on-chain reviewer's findings 1–8; R-B1–B10 the processor and testkit reviewer's findings
+1–10. One row may answer several findings (the reviewers overlapped). Each is fixed in the commits after `2687154`,
+unless noted. R-A8 (ledger-model divergences, none of which could hide an on-chain bug) is answered by the R-B7 rows.
 
 | ID | Finding | What changed |
 |---|---|---|
-| R-B1 | A keyed retire may be unsigned: anyone could retire anyone's node | Coordinator's decision: an error (above). `theSquattingWarning` and `atMostSixteenKeyedTypes` now use signed retires |
-| R-B2 | The MerkleMap refusal and sub-minimum payouts | Both stay as follow-ups (above) |
-| F42 | The squatting warning was silenced by any mention of `caller()` | The binding check above. Codex's case (`Ballot(voter, owner)`, `new Ballot(voter, ctx.caller())`) warns |
-| R-B3 | `signedKey`, `maxKeyBytes`, `linkCooldownMs` or `linkWindowMs` set on a keyless `@Owned` type was silently ignored | A processor error when set to a non-default value |
-| R-B4 | A keyed type without `@OwnedInit` could make the `Link` arm emit `(() && ...)` | The reader's existing "needs at least one @OwnedInit" error covers it (now tested), and the generator never emits an empty disjunction |
-| R-B5 | The authority warning compared an action with the union of the retires' signers | It compares with each retire's signers |
+| R-A7, R-B2 | A keyed retire may be unsigned: anyone could retire anyone's node | Coordinator's decision: an error (above). `theSquattingWarning` and `atMostSixteenKeyedTypes` now use signed retires |
+| (decision) | The MerkleMap refusal and sub-minimum payouts | Both stay as follow-ups (above) |
+| F42, R-B3 | The squatting warning was silenced by any mention of `caller()` | The binding check above. Codex's case (`Ballot(voter, owner)`, `new Ballot(voter, ctx.caller())`) warns |
+| R-B1 | `signedKey`, `maxKeyBytes`, `linkCooldownMs` or `linkWindowMs` set on a keyless `@Owned` type was silently ignored | A processor error when set to a non-default value |
+| R-A5 | A keyed type without `@OwnedInit` could make the `Link` arm emit `(() && ...)` | The reader's existing "needs at least one @OwnedInit" error covers it (now tested), and the generator never emits an empty disjunction |
+| R-B8 | The authority warning compared an action with the union of the retires' signers | It compares with each retire's signers |
 | R-B6 | The client boundary: a keyed contract's description listed its creation, which no client can perform | The description leaves the creation out, `PortableGenerator` marks it not portable, and the processor prints a NOTE |
-| R-B7 | Gaps in `KeyedDiagnosticsTest` | Added: a retire with `@Reads`; `@Migrate`; assets through sends, mints, deposits and `@Withdraw`; `@Admits` alone; parameters `removed` and `instance`; `Head_`/`Keyed_`/`Retired_`/`Remove_T` clashes (nested types were not caught: they now are); quorum and governor authority warnings; `W` above `maxValidityMs`; the accepted boundaries (`maxKeyBytes` 1 and 64, `C` 60,000 and 3,600,000, `W` 20,000 and the cap, 16 keyed types, `maxDatumBytes` 2048, `signedKey` with 28) |
-| F43 | The ledger model's withdrawals: no reward balances, no witness for key withdrawals | Reward balances (default 0); a withdrawal takes exactly the balance, never a negative amount, and a key credential's needs its witness. A zero script withdrawal works with its redeemer. `LedgerTest` covers it |
-| R-B8 | Required signers and vkey witnesses were one list, and input owners became signatories | Kept apart: input owners and required signers must be witnessed, and scripts see only the required signers. I47 now drops required signers while keeping their witness |
-| R-B9 | Validity bounds off slot boundaries were accepted | Refused in phase 1 |
-| R-B10 | Reference scripts were sized by a fixed approximation | A registered size per script (`setReferenceScriptSize`); without it, only the framing counts (documented) |
-| R-A1 | Redeemers were passed in insertion order | Passed in ledger order (Minting, Spending, Rewarding, then by key) |
-| R-A2 | `outputSize`/`minLovelace` were not checked against a real serialisation | `LedgerTest` compares them with cardano-client-lib's serialisation, and they agree. Outputs without a datum now use the legacy array form, as cardano-client-lib writes them |
+| R-B8 | Gaps in `KeyedDiagnosticsTest` | Added: a retire with `@Reads`; `@Migrate`; assets through sends, mints, deposits and `@Withdraw`; `@Admits` alone; parameters `removed` and `instance`; `Head_`/`Keyed_`/`Retired_`/`Remove_T` clashes (nested types were not caught: they now are); quorum and governor authority warnings; `W` above `maxValidityMs`; the accepted boundaries (`maxKeyBytes` 1 and 64, `C` 60,000 and 3,600,000, `W` 20,000 and the cap, 16 keyed types, `maxDatumBytes` 2048, `signedKey` with 28) |
+| F43, R-B5 | The ledger model's withdrawals: no reward balances, no witness for key withdrawals | Reward balances (default 0); a withdrawal takes exactly the balance, never a negative amount, and a key credential's needs its witness. A zero script withdrawal works with its redeemer. `LedgerTest` covers it |
+| R-B4 | Required signers and vkey witnesses were one list, and input owners became signatories | Kept apart: input owners and required signers must be witnessed, and scripts see only the required signers. I47 now drops required signers while keeping their witness |
+| R-B7, R-A8 | Validity bounds off slot boundaries were accepted | Refused in phase 1 |
+| R-B7, R-A8 | Reference scripts were sized by a fixed approximation | A registered size per script (`setReferenceScriptSize`); without it, only the framing counts (documented) |
+| R-B7 | Redeemers were passed in insertion order | Passed in ledger order (Minting, Spending, Rewarding, then by key) |
+| R-B7 | `outputSize`/`minLovelace` were not checked against a real serialisation | `LedgerTest` compares them with cardano-client-lib's serialisation, and they agree. Outputs without a datum now use the legacy array form, as cardano-client-lib writes them |
 | F44 | `WidestTest` built the vault creation for Ann inside Bob's transaction, so the creation could fail for its own reason | The creation's caller is a parameter, and Bob's creation is validated alone before it is combined |
-| R-A3 | Widest did not cover a key at index ≥ 1, keyed tags not starting at 0, a Ctx-less insert, or `C = 0` | Widest now has all four, at 13,248 bytes. Infinite bounds, a long window and the cooldown are refused by `linkUpper` alone; `C = 0` accepts a relink before the previous upper bound and refuses a long window |
-| R-A4 | Refusals were not attributed: the right check refusing was not shown | The ledger model now runs every script and names each failing purpose, and every attack asserts its purpose: MINT for structural attacks (two exceptions with no MINT or with N's own arm refusing, as D5 assigns), and the SPEND of the input for the rest. Traces were not used: with them, the registry exceeds 15,000 bytes and `scriptFor` refuses it |
-| R-A5 | `checkLists` did not check a list UTxO's exact value, datum form or reference script | It asserts exactly `{lovelace, its unit}`, an inline datum and no reference script |
-| R-A6 | The mutations missed some shapes | Added: an input dropped with its redeemer, a state output added or duplicated, and the fee changed. Accepted mutants are now judged by the list UTxOs they leave: as the honest transaction leaves them (up to the allowed top-ups) or untouched. A mutant touching no list leaves the model unchanged. Such mutants appear: junk outputs without tokens, and transactions that drop the node |
-| R-A7 | No honest-looking duplicate inserts | About 6% of the steps insert an existing live or retired key, with the right token and the model's predecessor as anchor. All are refused by the policy (about 55 per 1,000 steps) |
-| R-A8 | The raised-minimum liveness limit was untested | Non-payable inserts (`cast`, `grant`) and a keyed action at the raised minimum are refused by the ledger; noted in §8 |
+| R-A1, R-A3, R-A4 | Widest did not cover a key at index ≥ 1, keyed tags not starting at 0, a Ctx-less insert, or `C = 0` | Widest now has all four, at 13,248 bytes. Infinite bounds, a long window and the cooldown are refused by `linkUpper` alone; `C = 0` accepts a relink before the previous upper bound and refuses a long window |
+| R-A2, R-B10 | Refusals were not attributed: the right check refusing was not shown | The ledger model now runs every script and names each failing purpose, and every attack asserts its purpose: MINT for structural attacks (two exceptions with no MINT or with N's own arm refusing, as D5 assigns), and the SPEND of the input for the rest. Traces were not used: with them, the registry exceeds 15,000 bytes and `scriptFor` refuses it |
+| R-B9 | `checkLists` did not check a list UTxO's exact value, datum form or reference script | It asserts exactly `{lovelace, its unit}`, an inline datum and no reference script |
+| R-B9 | The mutations missed some shapes | Added: an input dropped with its redeemer, a state output added or duplicated, and the fee changed. Accepted mutants are now judged by the list UTxOs they leave: as the honest transaction leaves them (up to the allowed top-ups) or untouched. A mutant touching no list leaves the model unchanged. Such mutants appear: junk outputs without tokens, and transactions that drop the node |
+| R-B9 | No honest-looking duplicate inserts | About 6% of the steps insert an existing live or retired key, with the right token and the model's predecessor as anchor. All are refused by the policy (about 55 per 1,000 steps) |
+| R-A6 | The raised-minimum liveness limit was untested | Non-payable inserts (`cast`, `grant`) and a keyed action at the raised minimum are refused by the ledger; noted in §8 |
 
 After the review, the I47 test passes for seeds 1–9 and 47 at 1,000 steps, and for seeds 11–12 at 4,000 steps (about
 1,900–2,000 honest transactions, about 2,800 mutants and about 230 duplicate inserts each, every one refused).
