@@ -1187,3 +1187,93 @@ unless noted. R-A8 (ledger-model divergences, none of which could hide an on-cha
 
 After the review, the I47 test passes for seeds 1–9 and 47 at 1,000 steps, and for seeds 11–12 at 4,000 steps (about
 1,900–2,000 honest transactions, about 2,800 mutants and about 230 duplicate inserts each, every one refused).
+
+## Implementation notes (M2)
+
+What M2 built, what it measured on Yaci DevKit (one-second slots, the runtime's 20-second TTL), and where the code
+differs from the text above. The decisions are unchanged.
+
+**Built.**
+- *Runtime (D7):*
+  - `KeyedType` (a type's tags, key, bounds, `C`, `W` and redeemer factories), `KeyedList` (lookup by key with I51
+    validation, listing, `keys()` from the head, inserts) and `KeyedObject` (keyed actions, removes, retires).
+  - `KeyedObjects`: the designated input, link windows (`plan`: cooldown rounded up to a slot, `W`, the TTL and a
+    page's limits) and argument sizes.
+  - `Relay` and `StateRuntime.Builder.relays(...)`: every attempt goes to every relay. Acceptance dominates an unknown
+    answer, which dominates rejections. An unknown outcome raises `PendingTransactionException` at once and is never
+    rebuilt.
+  - `StateContractHandle`: the creation mints and funds the heads (`max(minAda, ledger minimum)`), and refuses `@Init`
+    arguments over 4,096 bytes. Making a handle refuses a `W` shorter than two slots, and warns when `W` exceeds the
+    page's limit.
+  - `Compose`: a composition with a keyed call designates one input after its first pass, spends it in every attempt,
+    and rebuilds the whole composition only while that input is unspent.
+- *Generated client:* per keyed type, `<type>List()`, `<type>(key)`, `<type>Exists`, `<type>Keys`, one insert per
+  `@OwnedInit`, and a `<Type>Object` handle with the keyed actions, removes and retires. The M1 stopgap (a keyed
+  `deploy()` that threw) is gone. The description and portable exclusions stay until M3.
+- *Payouts (decision D-c):* the runtime already padded every payout output to the ledger minimum (`minUtxo`). Keyed
+  actions, removes and retires use the same path.
+
+**Exit criteria.** All are DevKit tests in `examples/registry` (`devnet/`, `@Tag("devnet")`, skipped without DevKit)
+unless marked JVM.
+
+| Criterion | Test | Evidence |
+|---|---|---|
+| Deployment as a reference script | `RegistrySmokeDevnetTest` | The registry (14,717 bytes) is published by reference and read by every call |
+| An insert at both datum caps with 4,096 bytes of arguments | `CapacityDevnetTest` | Datums at 2,048 bytes (1,777-byte blob), arguments at 4,096 bytes: the transaction is 9,077 bytes |
+| A creation with 16 heads | `CapacityDevnetTest` | Not feasible (see Deviations). 11 heads with a 3,968-byte `@Init` argument: 6,906 bytes |
+| Inserts from separate threads into different gaps | `ConcurrencyDevnetTest` | Four threads (before the first key, two inner gaps, the tail) land in 5 s, with no rejections |
+| Two inserts into one gap | `ConcurrencyDevnetTest` | Three transactions: the loser is rejected, rebuilt against the winner's node, and lands after its cooldown (157 s in all) |
+| An empty list and the tail | `ConcurrencyDevnetTest`, `RegistrySmokeDevnetTest` | The first insert anchors at the head; one thread inserts after the last key |
+| A contested gap against one attacker | `ContestedGapDevnetTest` | The honest insert landed at its third contested instant (239 s), while the attacker landed 4 transactions (see Deviations) |
+| A hostile predecessor updating every block while the victim retires | `HostilityDevnetTest` | One attempt, landed in 2 s, while the predecessor was updated 5 times |
+| A remove retried against predecessor updates | `HostilityDevnetTest` | The first attempt is rejected (the predecessor moved); the second, with the same designated input, lands |
+| Duplicate keys | `DuplicateKeyDevnetTest` | Live and retired keys refused on the JVM. Forced past the JVM, the node refuses the insert (the validator's place check) |
+| The cooldowns | `CooldownDevnetTest`, `LinkWindowTest` (JVM) | `C = 0`: the next relink starts before the previous upper bound. `C = 60 s` (minimum and default): it starts exactly at `upper + 60` slots. `C = 60.5 s`: `upper + 61`, rounded up |
+| The designated input, pinned | `SubmissionDevnetTest`, `HostilityDevnetTest`, `ComposeDevnetTest` | All attempts of one operation share an input |
+| `PendingTransactionException` when it is spent elsewhere | `SubmissionDevnetTest` | The wallet spends it while the first attempt is refused: nothing is rebuilt |
+| A time-derived key in a composition | `ComposeDevnetTest` | Refused once, rebuilt 5 s later with the same designated input; only the second window's key is inserted |
+| Submission across relays | `SubmissionDevnetTest` | Acceptance plus rejection: one build. Timeout plus rejection: pending, one build, and the delivered attempt lands. An ambiguous delivery: pending, one build, expired and absent. Identical bytes over three relays: one build |
+| Relays that lie "rejected" twice while the first attempt lands | `SubmissionDevnetTest` | Three attempts sharing the designated input; only the first lands; the runtime then stops (pending) |
+| A future start at the maximum `W`, and 100 ms slots, within page limits | `LinkWindowTest` (JVM) | See Deviations |
+| The `@Init` argument cap with 16 heads | `CapacityDevnetTest` | Measured with 11 heads, projected to 16 (see Deviations). Arguments over 4,096 bytes are refused |
+| Payout padding (D-c) | `RegistrySmokeDevnetTest` | A 0.3 ADA withdrawal pays 1,055,950 lovelace |
+| `W` shorter than two slots | `KeyedRuntimeChecksTest` (JVM) | Refused; a `W` above a page's limit is warned |
+
+**Deviations and measurements.**
+- *Sixteen heads do not fit a script.* D1 allows 16 keyed types, but no such validator fits the 15,000-byte reference
+  script limit, so a creation with 16 heads cannot be built. Minimal keyed types (a key, an owner, one insert, a
+  signed retire) measure:
+
+  | Types | 10 | 11 | 12 | 16 |
+  |---|---|---|---|---|
+  | Script bytes | 14,236 | 14,892 | 15,546 | 18,169 |
+
+  `Sixteen` (16 types) is refused by `scriptFor`; `Eleven` is the creation test. Its measured head (output and mint
+  entry) is 182 bytes. Projected to 16 heads, with the instance datum at 2,048 bytes and the same 3,968-byte `@Init`
+  argument, the creation is about 9,830 bytes, matching D4c's estimate of about 9 KB. The D1 cap could be lowered to
+  what fits, or kept for when scripts shrink (open question).
+- *The contested gap is a fair race.* On one node, each contested instant is won by whichever client's transaction
+  arrives first. Both clients submit at the same slot, and the attacker uses this same runtime, so it wins about half
+  of the instants. "Within 3 cooldowns" therefore holds with probability about 7/8 per run, not always. The measured
+  run took 3. The test gives the honest client 8 retries, requires that it lands, and prints the instants it took.
+- *Window criteria on the JVM.* DevKit runs one-second slots, so "100 ms slots" and "a future start at the maximum
+  `W`" are checked by `LinkWindowTest` against `KeyedObjects.plan`, with the page verifier's defaults (60 start
+  slots, 900 validity slots). In the Java runtime, page limits are opt-in (`StateRuntime.Builder.pageLimits`).
+  Pages arrive in M3.
+- *One wallet, many threads.* At first, QuickTx's coin selection could spend another operation's designated input as
+  a fee input. That operation was then rejected, and could have read its own input as spent: a false pending. In the
+  first four-thread run, 3 of 7 attempts were rejected this way. Coin and collateral selection now skip other
+  operations' designated inputs (only while some are reserved, so other transactions are built as before). In the
+  later runs, no attempt was rejected.
+- *Compositions and the cooldown.* A call without time rules (for example, `setOpen`) has no window of its own, so a
+  composition with a cooling insert simply starts after the cooldown. A refusal needs a call whose own window ends
+  before the cooldown does. The test uses `Stamps.now` (C = 0, from the tip) together with a cooling claim. It is
+  refused before building, as "the calls' validity windows do not overlap".
+- *Retries.* Every definite rejection is rebuilt, after 2 s for the provider's index, up to `maxRetries`
+  (default 3). That includes a script failure: the forced duplicate is refused 4 times. Each rebuild checks first
+  that the designated input is unspent.
+- *The page and the wallet path.* `Compose.prepare()` (CIP-30 wallets, ADR-0013) designates no input. Pages refuse
+  keyed compositions until M3 (D11).
+
+**Compatibility.** The generated validators, scripts and descriptions of every existing example are byte-identical
+to the pre-ADR baseline (96 files). `FixturesTest` passes with the recorded fixtures unchanged.
