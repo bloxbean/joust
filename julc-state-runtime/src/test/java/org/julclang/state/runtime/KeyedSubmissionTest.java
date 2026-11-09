@@ -73,6 +73,40 @@ class KeyedSubmissionTest {
     }
 
     @Test
+    void aRejectionWithoutAReason_isStillARejection() {
+        // F67: rejection presence is tracked apart from its (nullable) reason, in either order.
+        var e = assertThrows(SubmitException.class, () -> TxRunner.deliver(
+                List.of(answer(Relay.Outcome.rejected(null)), answer(Relay.Outcome.rejected(null))), CBOR, "h", "test"));
+        assertEquals(SubmitException.Kind.REJECTED, e.kind);
+        assertTrue(e.getMessage().contains("no reason given"), e.getMessage());
+        for (var order : List.of(List.of(Relay.Outcome.rejected(null), Relay.Outcome.rejected("BadInputsUTxO")),
+                List.of(Relay.Outcome.rejected("BadInputsUTxO"), Relay.Outcome.rejected(null)))) {
+            var m = assertThrows(SubmitException.class, () -> TxRunner.deliver(
+                    List.of(answer(order.get(0)), answer(order.get(1))), CBOR, "h", "test"));
+            assertEquals(SubmitException.Kind.REJECTED, m.kind);
+        }
+    }
+
+    @Test
+    void relaysAreCalledInParallel_andOneThatDoesNotAnswerInTimeIsUnknown() {
+        // R-E8.
+        Relay slow = cbor -> {
+            try {
+                Thread.sleep(5_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return Relay.Outcome.rejected("too late");
+        };
+        long t0 = System.currentTimeMillis();
+        assertThrows(PendingTransactionException.class, () -> TxRunner.deliver(List.of(slow, answer(Relay.Outcome.rejected("no"))),
+                CBOR, "h", "test", java.time.Duration.ofMillis(300)));
+        assertDoesNotThrow(() -> TxRunner.deliver(List.of(slow, slow, answer(Relay.Outcome.accepted())), CBOR, "h", "test",
+                java.time.Duration.ofMillis(300)));
+        assertTrue(System.currentTimeMillis() - t0 < 3_000, "the slow relays ran side by side, bounded by the timeout");
+    }
+
+    @Test
     void theBackendRelayClassifiesHttpAnswers() {
         // R-C10: a 4xx with the node's reason is a rejection; a gateway's 5xx, 408 and 429 are unknown.
         assertEquals(Relay.Answer.ACCEPTED, Relay.classify(Result.success("ok")).answer());

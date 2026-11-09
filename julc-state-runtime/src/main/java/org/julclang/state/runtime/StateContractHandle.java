@@ -270,10 +270,13 @@ public final class StateContractHandle<S> {
                 .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
                 .from(payerAddress);
         try {
-            var built = Designation.builder(runtime.backend(), null).compose(tx)
+            var ctx = Designation.builder(runtime.backend(), null).compose(tx)
                     .feePayer(payerAddress)
-                    .additionalSignersCount(1)
-                    .build();
+                    .additionalSignersCount(1);
+            // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
+            var claimed = Designation.build(payerAddress, null, ctx::build);
+            claimed.claim().releaseAt(System.currentTimeMillis() + TxRunner.UNBOUNDED_CLAIM_MS);
+            var built = claimed.tx();
             runtime.built("publish the " + spec.name() + " reference script", built, true);
             return built;
         } catch (Exception e) {
@@ -480,7 +483,15 @@ public final class StateContractHandle<S> {
         return pickSeed(caller);
     }
 
+    /**
+     * A seed of {@code caller}: picked and claimed under the caller's lock, so no keyed operation designates it before
+     * the transaction spending it is built (F63, R-E4).
+     */
     private Utxo pickSeed(Account caller) {
+        return Designation.pick(caller.baseAddress(), System.currentTimeMillis() + TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
+    }
+
+    private Utxo seedOf(Account caller) {
         try {
             var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, 1);
             if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) {

@@ -149,13 +149,13 @@ class KeyedSeriesTest {
         chain.wallet.addAll(List.of(big, small));
         var rt = chain.runtime(3);
         // A plain transaction selected the largest UTxO: until it is resolved, no operation designates it (F52).
-        var claimed = Designation.build(a, () -> spending(big));
+        var claimed = Designation.build(a, null, () -> spending(big));
         try {
             var d = Designation.reserve(rt, payer, "test", Set.of());
             assertEquals(Designation.ref(small), d.ref());
             d.release();
         } finally {
-            Designation.unclaim(claimed.refs());
+            claimed.claim().release();
         }
         var d = Designation.reserve(rt, payer, "test", Set.of(Designation.ref(big)));
         assertEquals(Designation.ref(small), d.ref(), "a composition's first-pass inputs are avoided");
@@ -253,7 +253,7 @@ class KeyedSeriesTest {
             } catch (InterruptedException ignored) {
                 return;
             }
-            chain.tip.set(1_020);   // the provider passes the attempt's window
+            chain.tip.set(1_030);   // the provider passes the attempt's window (and the settlement depth)
         });
         tipper.start();
         var e = assertThrows(PendingTransactionException.class, () -> series(chain, 3, payer, d -> {
@@ -265,7 +265,10 @@ class KeyedSeriesTest {
             throw new RequireException("test: key is already taken");
         }));
         assertEquals(2, attempts.get());
-        assertTrue(System.currentTimeMillis() - t0 >= 2_500, "waited for the provider to pass the window");
+        long took = System.currentTimeMillis() - t0;
+        assertTrue(took >= 2_500, "waited for the provider to pass the window");
+        assertTrue(took < 30_000, "and no longer: it settled, not timed out (" + took + " ms)");
+        assertTrue(e.getMessage().contains("designated input is spent"), e.getMessage());
         assertEquals(List.of(h), e.attempts());
     }
 
@@ -296,7 +299,7 @@ class KeyedSeriesTest {
         var attempts = new AtomicInteger();
         var e = assertThrows(SubmitException.class, () -> series(chain, 3, payer, d -> {
             attempts.incrementAndGet();
-            d.noteScriptInputs(List.of(node));
+            d.noteInputs(List.of(node), List.of());
             throw new SubmitException(SubmitException.Kind.BUILD, "test: the script failed");
         }));
         assertEquals(1, attempts.get(), "deterministic: not rebuilt (R-C21)");
@@ -314,7 +317,7 @@ class KeyedSeriesTest {
         var attempts = new AtomicInteger();
         String out = series(chain, 3, payer, d -> {
             if (attempts.incrementAndGet() == 1) {
-                d.noteScriptInputs(List.of(node));
+                d.noteInputs(List.of(node), List.of());
                 chain.spend(node);
                 chain.script.add(utxo("addr_test1script", 2_000_000, new Amount(unit, BigInteger.ONE)));   // moved on
                 throw new SubmitException(SubmitException.Kind.SCRIPT, "test: PlutusFailure");
@@ -372,5 +375,174 @@ class KeyedSeriesTest {
             interrupted.set(Thread.interrupted());
         }
         assertTrue(interrupted.get(), "the interrupt is kept (R-C4)");
+    }
+
+    // ------------------------------------------------------------------ the review of M2, round 2
+
+    @Test
+    void anInterruptDuringTheBackOff_pendingAndTheInputStaysReserved() {
+        // F62, R-E1: maxRetries >= 1, so the series reaches its 2 s back-off with an attempt handed out.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        chain.wallet.add(utxo(payer.baseAddress(), 30_000_000));
+        String h = hash();
+        long open = System.currentTimeMillis() / 1000 + 600;   // the attempt's window is still open
+        var attempts = new AtomicInteger();
+        boolean flag;
+        PendingTransactionException e;
+        try {
+            e = assertThrows(PendingTransactionException.class, () -> series(chain, 3, payer, d -> {
+                attempts.incrementAndGet();
+                d.handedOut(h, open);
+                Thread.currentThread().interrupt();   // an executor shutting down
+                throw new SubmitException(SubmitException.Kind.REJECTED, "test: a lie");
+            }));
+        } finally {
+            flag = Thread.interrupted();
+        }
+        assertTrue(flag, "the interrupt is kept");
+        assertEquals(1, attempts.get(), "not rebuilt");
+        assertEquals(List.of(h), e.attempts());
+        assertTrue(Designation.isDesignated(e.designatedInput()), "reserved while the attempt may land");
+    }
+
+    @Test
+    void aLogThatThrowsDuringTheBackOff_pending() {
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        chain.wallet.add(utxo(payer.baseAddress(), 30_000_000));
+        String h = hash();
+        var rt = StateRuntime.builder(chain.backend()).chainTime(chain.time()).network(Networks.testnet()).maxRetries(3)
+                .log(m -> { throw new IllegalStateException("test: the log consumer failed"); }).build();
+        // The attempt (its window already past the provider's tip) landed though a relay said "rejected": the failing
+        // log in the back-off must not hide that.
+        var e = assertThrows(PendingTransactionException.class, () -> KeyedObjects.series(rt, payer, "test", false, d -> {
+            d.handedOut(h, 990);
+            chain.spend(d.utxo());
+            throw new SubmitException(SubmitException.Kind.REJECTED, "test: a lie");
+        }));
+        assertEquals(List.of(h), e.attempts());
+    }
+
+    @Test
+    void anErrorAfterAnAttemptWasHandedOut_keepsTheInputReserved() {
+        // R-E9: an Error is not converted, but the input is not released while the attempt may land.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var u = utxo(payer.baseAddress(), 30_000_000);
+        chain.wallet.add(u);
+        String h = hash();
+        long open = System.currentTimeMillis() / 1000 + 600;
+        assertThrows(StackOverflowError.class, () -> series(chain, 3, payer, d -> {
+            d.handedOut(h, open);
+            throw new StackOverflowError("test");
+        }));
+        assertTrue(Designation.isDesignated(Designation.ref(u)));
+    }
+
+    @Test
+    void everyHandedOutAttemptHasAFiniteWindow_andSlotTimesNeverWrap() {
+        // F65, R-E2: an unbounded attempt could never be settled, and its slot used to wrap into a past time.
+        var d = new Designation.Designated(utxo("addr_test1x", 30_000_000), "addr_test1x");
+        assertThrows(IllegalArgumentException.class, () -> d.handedOut(hash(), Long.MAX_VALUE));
+        var devkit = new SlotChainTime(0, System.currentTimeMillis() - 3_600_000, 1000, null);
+        assertThrows(ArithmeticException.class, () -> devkit.slotToPosixMs(Long.MAX_VALUE));
+        assertTrue(TxRunner.safeMs(devkit, Long.MAX_VALUE) > System.currentTimeMillis(), "saturates into the future");
+    }
+
+    @Test
+    void twoClaimsOfTheSameInputsAreReleasedSeparately() throws Exception {
+        // F66, R-E3: claims are identities, not input lists.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        String a = payer.baseAddress();
+        var u = utxo(a, 30_000_000);
+        var first = Designation.build(a, null, () -> spending(u));
+        var second = Designation.build(a, null, () -> spending(u));
+        long now = System.currentTimeMillis();
+        first.claim().releaseAt(now + 200);
+        second.claim().releaseAt(now + 300);
+        assertTrue(Designation.isClaimed(Designation.ref(u)));
+        Thread.sleep(400);
+        assertFalse(Designation.isClaimed(Designation.ref(u)), "both cleared");
+    }
+
+    @Test
+    void aHandedOutAttemptsInputsStayClaimedForItsOperationOnly() {
+        // F64: after a relay's "rejected", an attempt's fee input may still be spent by it; only its own operation may
+        // select it again, and no other operation designates it.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        String a = payer.baseAddress();
+        var big = utxo(a, 40_000_000);
+        var fee = utxo(a, 30_000_000);
+        var other = utxo(a, 20_000_000);
+        chain.wallet.addAll(List.of(big, fee, other));
+        var rt = chain.runtime(3);
+        var d = Designation.reserve(rt, payer, "test", Set.of());
+        assertEquals(Designation.ref(big), d.ref());
+        d.hold(List.of(d.ref(), Designation.ref(fee)));
+        var page = List.of(big, fee, other);
+        try {
+            assertEquals(page, Designation.free(page, d.ref(), d), "its own retries may reuse it");
+            var e = Designation.reserve(rt, payer, "test", Set.of());
+            try {
+                assertEquals(Designation.ref(other), e.ref(), "another operation does not designate it");
+                assertEquals(List.of(other), Designation.free(page, e.ref(), e), "nor select it");
+            } finally {
+                e.release();
+            }
+        } finally {
+            d.release();
+        }
+        assertFalse(Designation.isClaimed(Designation.ref(fee)), "released with the series");
+    }
+
+    @Test
+    void anExplicitPickIsClaimed_andABuildSpendingAnotherOperationsInputIsRefused() {
+        // F63, R-E4.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        String a = payer.baseAddress();
+        var seed = utxo(a, 40_000_000);
+        var rest = utxo(a, 20_000_000);
+        chain.wallet.addAll(List.of(seed, rest));
+        var rt = chain.runtime(3);
+        Utxo picked = Designation.pick(a, System.currentTimeMillis() + 60_000, () -> seed);
+        assertSame(seed, picked);
+        var d = Designation.reserve(rt, payer, "test", Set.of());
+        try {
+            assertEquals(Designation.ref(rest), d.ref(), "the picked seed is not designated before its build");
+            var e = assertThrows(SubmitException.class, () -> Designation.build(a, null, () -> spending(rest)));
+            assertEquals(SubmitException.Kind.TRANSIENT, e.kind);
+            var own = Designation.build(a, d, () -> spending(rest));   // its own operation may spend it
+            own.claim().release();
+        } finally {
+            d.release();
+        }
+    }
+
+    @Test
+    void aBuildFailureAfterOnlyAReferenceMoved_isContentionAndRebuilt() {
+        // F68: the object is unchanged; the instance (or an @Reads instance) it read moved.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        chain.wallet.add(utxo(payer.baseAddress(), 30_000_000));
+        var node = utxo("addr_test1script", 2_000_000, new Amount("cd".repeat(28) + "4b03", BigInteger.ONE));
+        String oracleUnit = "ef".repeat(28) + "01";
+        var oracle = utxo("addr_test1oracle", 2_000_000, new Amount(oracleUnit, BigInteger.ONE));
+        chain.script.addAll(List.of(node, oracle));
+        var attempts = new AtomicInteger();
+        String out = series(chain, 3, payer, d -> {
+            if (attempts.incrementAndGet() == 1) {
+                d.noteInputs(List.of(node), List.of(oracle));
+                chain.spend(oracle);
+                chain.script.add(utxo("addr_test1oracle", 2_000_000, new Amount(oracleUnit, BigInteger.ONE)));
+                throw new SubmitException(SubmitException.Kind.BUILD, "test: evaluation refused a spent reference input");
+            }
+            return "landed";
+        });
+        assertEquals("landed", out);
+        assertEquals(2, attempts.get());
     }
 }

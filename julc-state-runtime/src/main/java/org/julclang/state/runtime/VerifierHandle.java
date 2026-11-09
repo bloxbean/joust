@@ -70,10 +70,13 @@ public final class VerifierHandle {
                 .registerStakeAddress(rewardAddress)
                 .from(payerAddress);
         try {
-            var built = Designation.builder(runtime.backend(), null).compose(tx)
+            var ctx = Designation.builder(runtime.backend(), null).compose(tx)
                     .feePayer(payerAddress)
-                    .additionalSignersCount(1)
-                    .build();
+                    .additionalSignersCount(1);
+            // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
+            var claimed = Designation.build(payerAddress, null, ctx::build);
+            claimed.claim().releaseAt(System.currentTimeMillis() + TxRunner.UNBOUNDED_CLAIM_MS);
+            var built = claimed.tx();
             runtime.built("publish and register the JOUST " + label, built, true);
             return built;
         } catch (Exception e) {

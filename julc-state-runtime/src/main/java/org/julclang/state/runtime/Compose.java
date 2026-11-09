@@ -136,7 +136,7 @@ public final class Compose {
         cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
         if (designated != null) TxRunner.collect(cap.tx, designated.utxo(), null);
         run(cap);
-        if (designated != null) designated.noteScriptInputs(cap.scriptInputs);
+        if (designated != null) designated.noteInputs(cap.scriptInputs, cap.readInputs);
         if (!sharedSigners) {
             for (var e : cap.signerCalls.entrySet()) {
                 if (e.getValue().size() > 1) {

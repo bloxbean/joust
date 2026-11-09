@@ -274,7 +274,13 @@ public final class KeyedObject<S, R> {
         var runner = new TxRunner(rt, call.extraSigners());
         runner.extraExpected = extra;
         runner.designated = d;
-        if (d != null) d.noteScriptInputs(mode == Mode.REMOVE ? List.of(own.utxo(), prev.utxo()) : List.of(own.utxo()));
+        // What the attempt depends on: the UTxOs it spends and the ones it reads (the instance, @Reads; F68).
+        var read = new ArrayList<Utxo>();
+        if (sharedUtxo != null) read.add(sharedUtxo);
+        for (var r : call.reads) read.add(r.utxo());
+        read.addAll(call.referenceInputs);
+        if (cap != null) cap.readInputs.addAll(read);
+        if (d != null) d.noteInputs(mode == Mode.REMOVE ? List.of(own.utxo(), prev.utxo()) : List.of(own.utxo()), read);
         String txHash = runner.submit(tx, call.caller, window, signers.toArray(new byte[0][]), expected, expectedPayouts,
                 new PlutusScript[]{contract.script}, what);
         if (cap == null) {

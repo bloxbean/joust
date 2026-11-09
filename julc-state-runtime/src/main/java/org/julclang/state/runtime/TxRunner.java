@@ -57,6 +57,8 @@ final class TxRunner {
         final java.util.Set<String> inputs = new java.util.HashSet<>();
         /** The script inputs the calls spend (ADR-0016 D7: a failure is contention only if one of them moved). */
         final java.util.List<Utxo> scriptInputs = new java.util.ArrayList<>();
+        /** The reference inputs keyed calls read (the instance, @Reads): a keyed composition's dependencies too (F68). */
+        final java.util.List<Utxo> readInputs = new java.util.ArrayList<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
         /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
@@ -188,6 +190,12 @@ final class TxRunner {
             cap.record(caller, requiredSigners, expected, extraExpected, payouts, sends, referenceScripts, cosigners, what);
             return "composed";
         }
+        if (designated != null && window == null) {
+            // Every attempt with a designated input expires (F65, R-E2): a call that uses no time gets the runtime's TTL
+            // as its validity window (its validator does not read it, and its Ctx stays zero), so the series can settle.
+            long from = rt.chainTime().tipSlot();
+            window = KeyedObjects.window(rt.chainTime(), from, from + Math.max(1, rt.ttlMs() / rt.chainTime().slotLengthMs()));
+        }
         Designation.Claimed built;
         try {
             var ctx = Designation.builder(rt.backend(), designated).compose(tx)
@@ -206,12 +214,15 @@ final class TxRunner {
             }
             var finalCtx = ctx;
             // Selected and claimed under the payer's lock: no keyed operation designates these inputs meanwhile (D7).
-            built = Designation.build(caller.baseAddress(), finalCtx::buildAndSign);
+            built = Designation.build(caller.baseAddress(), designated, finalCtx::buildAndSign);
+        } catch (SubmitException e) {
+            throw e;
         } catch (Exception e) {
             throw new SubmitException(SubmitException.Kind.BUILD, what + ": could not build the transaction: " + rootMessage(e), e);
         }
         Transaction signed = built.tx();
         boolean pending = false;
+        boolean handedOut = false;
         try {
             rt.built(what, signed, false);
 
@@ -241,8 +252,9 @@ final class TxRunner {
                 } catch (Exception e) {
                     throw new SubmitException(SubmitException.Kind.BUILD, what + ": cannot serialise the transaction: " + rootMessage(e), e);
                 }
-                designated.handedOut(txHash, window != null ? window.toSlot() : Long.MAX_VALUE);
-                deliver(rt.relays(), cbor, txHash, what);
+                designated.handedOut(txHash, window.toSlot());
+                handedOut = true;
+                deliver(rt.relays(), cbor, txHash, what, rt.relayTimeout());
             }
             rt.log(what + ": submitted " + txHash);
             awaitInclusion(txHash, what);
@@ -251,11 +263,35 @@ final class TxRunner {
             pending = true;
             throw e;
         } finally {
-            if (pending && window != null) {
-                Designation.unclaimAt(built.refs(), rt.chainTime().slotToPosixMs(window.toSlot()) + 10_000);
+            if (handedOut) {
+                // A handed-out attempt's inputs stay claimed for its operation until the series ends, whatever a relay
+                // answered (F64): it may still land.
+                designated.hold(built.claim().refs);
+                built.claim().release();
+            } else if (pending) {
+                built.claim().releaseAt(window != null ? safeMs(rt.chainTime(), window.toSlot()) + 10_000
+                        : System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
             } else {
-                Designation.unclaim(built.refs());
+                built.claim().release();
             }
+        }
+    }
+
+    /**
+     * How long a pending transaction without a validity bound (a reference-script publication, a prepared publication)
+     * keeps its inputs claimed: it could land at any time, so this is a bound on the bookkeeping, not on the chain.
+     */
+    static final long UNBOUNDED_CLAIM_MS = 600_000L;
+
+    /** How long an explicit pick (a seed, a funding input) stays claimed before the build that spends it claims it. */
+    static final long PICK_CLAIM_MS = 120_000L;
+
+    /** {@code slot}'s POSIX ms, saturating instead of overflowing (an absurd slot from a provider is not a time). */
+    static long safeMs(ChainTime time, long slot) {
+        try {
+            return time.slotToPosixMs(slot);
+        } catch (ArithmeticException e) {
+            return slot > 0 ? Long.MAX_VALUE / 2 : Long.MIN_VALUE / 2;
         }
     }
 
@@ -328,17 +364,50 @@ final class TxRunner {
      * are a rejection ({@link SubmitException}): of kind SCRIPT when every reason is a phase-2 script failure.
      */
     static void deliver(java.util.List<Relay> relays, byte[] cbor, String txHash, String what) {
+        deliver(relays, cbor, txHash, what, java.time.Duration.ofSeconds(60));
+    }
+
+    /** Threads that call relays: all at once, so one slow relay delays no other (R-E8). */
+    private static final java.util.concurrent.ExecutorService RELAYS = java.util.concurrent.Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "joust-relay");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /**
+     * As {@link #deliver(java.util.List, byte[], String, String)}, with every relay called in parallel and given until
+     * {@code timeout}: a relay that has not answered by then is an unknown delivery (R-E8). An interrupt while waiting
+     * makes the unanswered ones unknown too (the flag kept).
+     */
+    static void deliver(java.util.List<Relay> relays, byte[] cbor, String txHash, String what, java.time.Duration timeout) {
+        var futures = new java.util.ArrayList<java.util.concurrent.Future<Relay.Outcome>>();
+        for (Relay relay : relays) futures.add(RELAYS.submit(() -> relay.submit(cbor)));
+        long deadline = System.nanoTime() + timeout.toNanos();
+        boolean interrupted = false;
         boolean accepted = false;
         boolean unknown = false;
         String unknownWhy = null;
+        boolean rejectedAny = false;   // tracked apart from its (nullable) reason (F67)
         String rejected = null;
         boolean allScript = true;
-        for (Relay relay : relays) {
+        for (var f : futures) {
             Relay.Outcome o;
-            try {
-                o = relay.submit(cbor);
-            } catch (Throwable t) {
-                o = Relay.Outcome.unknown("the relay threw " + t.getClass().getSimpleName() + ": " + rootMessage(t));
+            if (interrupted) {
+                o = Relay.Outcome.unknown("interrupted before the relay answered");
+            } else {
+                try {
+                    o = f.get(Math.max(0, deadline - System.nanoTime()), java.util.concurrent.TimeUnit.NANOSECONDS);
+                } catch (java.util.concurrent.TimeoutException e) {
+                    o = Relay.Outcome.unknown("the relay did not answer within " + timeout);
+                } catch (java.util.concurrent.ExecutionException e) {
+                    Throwable t = e.getCause() != null ? e.getCause() : e;
+                    o = Relay.Outcome.unknown("the relay threw " + t.getClass().getSimpleName() + ": " + rootMessage(t));
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                    o = Relay.Outcome.unknown("interrupted before the relay answered");
+                } catch (RuntimeException e) {
+                    o = Relay.Outcome.unknown("the relay failed: " + rootMessage(e));
+                }
             }
             if (o == null || o.answer() == null) o = Relay.Outcome.unknown("the relay gave no answer");
             switch (o.answer()) {
@@ -349,16 +418,18 @@ final class TxRunner {
                 }
                 case REJECTED -> {
                     if (rejected == null) rejected = o.message();
+                    rejectedAny = true;
                     if (!scriptFailure(o.message())) allScript = false;
                 }
             }
         }
+        if (interrupted) Thread.currentThread().interrupt();
         if (accepted) return;
         if (unknown) throw new PendingTransactionException(txHash, what + ": submission outcome unknown (" + unknownWhy + ")");
-        if (rejected == null) throw new PendingTransactionException(txHash, what + ": no relay to submit to");
+        if (!rejectedAny) throw new PendingTransactionException(txHash, what + ": no relay to submit to");
         // A definite answer from every relay: not accepted.
         throw new SubmitException(allScript ? SubmitException.Kind.SCRIPT : SubmitException.Kind.REJECTED,
-                what + ": the node rejected the transaction: " + rejected);
+                what + ": the node rejected the transaction: " + (rejected != null ? rejected : "(no reason given)"));
     }
 
     /** A node's phase-2 refusal: a script failed (not an input, the window, or the fee). */
@@ -402,7 +473,9 @@ final class TxRunner {
         // A payout to the payer's own address can be the only output at it, and the balancer would then take the fee
         // out of it. Spending one of the payer's UTxOs gives it a change output to pay the fee from (restorePayouts).
         if (payouts.stream().anyMatch(p -> p.address().equals(payer.baseAddress()))) {
-            Utxo funding = largestAdaOnly(payer.baseAddress(), spent);
+            // Picked and claimed under the payer's lock, so no keyed operation designates it before the build (F63).
+            Utxo funding = Designation.pick(payer.baseAddress(), System.currentTimeMillis() + PICK_CLAIM_MS,
+                    () -> largestAdaOnly(payer.baseAddress(), spent));
             if (funding != null) tx.collectFrom(java.util.List.of(funding));
         }
         Transaction unsigned;
@@ -426,7 +499,13 @@ final class TxRunner {
                 ctx = ctx.validTo(tip + Math.max(1, rt.ttlMs() / rt.chainTime().slotLengthMs()));
             }
             if (rt.evaluator() != null) ctx = ctx.withTxEvaluator(rt.evaluator());
-            unsigned = ctx.build();
+            var finalCtx = ctx;
+            // Built and claimed under the payer's lock; the claim lasts until the transaction's TTL, as the wallet may
+            // sign and submit it any time before (F63).
+            var built = Designation.build(payer.baseAddress(), null, finalCtx::build);
+            unsigned = built.tx();
+            long ttl = unsigned.getBody().getTtl();
+            built.claim().releaseAt(ttl > 0 ? safeMs(rt.chainTime(), ttl) + 10_000 : System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
@@ -554,14 +633,20 @@ final class TxRunner {
             var ctx = Designation.builder(rt.backend(), null).compose(tx)
                     .withSigner(SignerProviders.signerFrom(payer))
                     .feePayer(payer.baseAddress());
-            built = Designation.build(payer.baseAddress(), ctx::buildAndSign);
+            built = Designation.build(payer.baseAddress(), null, ctx::buildAndSign);
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
+        boolean pending = false;
         try {
             return submitPlain(built.tx(), what);
+        } catch (PendingTransactionException e) {
+            pending = true;
+            throw e;
         } finally {
-            Designation.unclaim(built.refs());
+            // A pending publication may still land: it has no validity bound, so its inputs stay claimed for a while.
+            if (pending) built.claim().releaseAt(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
+            else built.claim().release();
         }
     }
 

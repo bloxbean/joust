@@ -319,7 +319,10 @@ public final class KeyedList<S, R> {
         if (d != null) TxRunner.collect(tx, d.utxo(), null);
         TxRunner.collect(tx, anchor.utxo(), PlutusDataAdapter.convert(type.link()));
         tx.readFrom(ref);
-        if (shared) tx.readFrom(instance.utxo());
+        Utxo sharedUtxo = shared ? instance.utxo() : null;
+        if (sharedUtxo != null) tx.readFrom(sharedUtxo);
+        var cap = TxRunner.capture();
+        if (cap != null && sharedUtxo != null) cap.readInputs.add(sharedUtxo);
         byte[] id = type.keyId(inst, key);
         String nodeUnit = c.policyId + HexUtil.encodeHexString(id);
         TxRunner.mint(tx, c.policyId, List.of(new Asset("0x" + HexUtil.encodeHexString(id), BigInteger.ONE)), redeemer);
@@ -337,7 +340,8 @@ public final class KeyedList<S, R> {
         var runner = new TxRunner(rt);
         runner.extraExpected = List.of(new TxRunner.ExpectedState(anchorUnit, anchorLovelace, relinked));
         runner.designated = d;
-        if (d != null) d.noteScriptInputs(List.of(anchor.utxo()));
+        // What the attempt depends on: the anchor it spends and the instance it reads (F68).
+        if (d != null) d.noteInputs(List.of(anchor.utxo()), sharedUtxo != null ? List.of(sharedUtxo) : List.of());
         String txHash = runner.submit(tx, spec.caller(), w, signers.toArray(new byte[0][]),
                 new TxRunner.ExpectedState(nodeUnit, nodeLovelace, node), List.of(), new PlutusScript[]{c.script}, what);
         if (TxRunner.capture() == null) awaitHeld(key, txHash);

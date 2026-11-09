@@ -19,13 +19,15 @@ import java.util.function.Supplier;
 
 /**
  * Designated inputs (ADR-0016 D7) and how every transaction of this JVM selects wallet UTxOs around them. All selection
- * goes through here: coin and collateral selection ({@link #builder}), seeds and funding picks ({@link #isDesignated}).
+ * goes through here: coin and collateral selection ({@link #builder}), seeds and funding picks ({@link #pick}).
  * <ul>
  *   <li>A designated input is reserved for its operation: no other transaction of this JVM selects it. The exemption
  *       belongs to the operation (its {@link Designated}, passed explicitly), never to a thread.</li>
- *   <li>A transaction's own inputs are claimed from its build until it is resolved, so an operation does not designate
- *       an input another transaction has already selected. Building and designating for one address are serialised
- *       (a lock per address), so neither can slip between the other's read and claim.</li>
+ *   <li>Claims keep an operation from designating what another transaction holds: an explicit pick until its build,
+ *       a built transaction's inputs until it is resolved, a keyed attempt's inputs (once handed out) until its series
+ *       ends, a prepared transaction's until its TTL. Picking, building and designating for one address are serialised
+ *       (a lock per address), so none can slip between another's read and claim. Plain transactions do not skip
+ *       claimed inputs (they select as before M2 while nothing is designated); keyed attempts skip other claims.</li>
  *   <li>The scope is one JVM: separate processes sharing a wallet must use separate UTxOs (or wallets).</li>
  * </ul>
  */
@@ -37,11 +39,36 @@ final class Designation {
     private static final Set<String> DESIGNATED = ConcurrentHashMap.newKeySet();
     /** Designated inputs kept after their operation ended pending, until this wall-clock time (ms). */
     private static final Map<String, Long> LINGERING = new ConcurrentHashMap<>();
-    /** Inputs of transactions built and not yet resolved, with the number of such transactions. */
-    private static final Map<String, Integer> CLAIMED = new ConcurrentHashMap<>();
-    /** Claims kept after their transaction ended pending, until this wall-clock time (ms). */
-    private static final Map<List<String>, Long> LINGERING_CLAIMS = new ConcurrentHashMap<>();
+    /** Claims of transactions built (or inputs picked) and not yet resolved; each claim is its own identity. */
+    private static final Set<Claim> CLAIMS = ConcurrentHashMap.newKeySet();
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
+
+    /**
+     * Inputs held by one transaction, or by every handed-out attempt of one keyed operation, until resolved. Claims are
+     * compared by identity, so two claims of the same inputs are released separately (F66, R-E3). {@code owner} is the
+     * keyed operation ({@link Designated}) whose attempts may reuse these inputs, or the claim itself.
+     */
+    static final class Claim {
+        final Object owner;
+        final Set<String> refs = ConcurrentHashMap.newKeySet();
+        /** Released at this wall-clock time (ms); {@code Long.MAX_VALUE}: until released explicitly. */
+        volatile long until = Long.MAX_VALUE;
+
+        Claim(Object owner) {
+            this.owner = owner == null ? this : owner;
+        }
+
+        /** Ends the claim now. */
+        void release() {
+            CLAIMS.remove(this);
+        }
+
+        /** Ends the claim at {@code untilMs} (wall clock). */
+        void releaseAt(long untilMs) {
+            if (untilMs <= System.currentTimeMillis()) CLAIMS.remove(this);
+            else until = untilMs;
+        }
+    }
 
     /** One attempt handed to the relays: its hash and its window's end (exclusive). */
     record Attempt(String txHash, long toSlot) {}
@@ -55,8 +82,13 @@ final class Designation {
         private final Utxo utxo;
         private final String address;
         private final List<Attempt> attempts = new ArrayList<>();
-        /** The script inputs the latest attempt spends (to tell a deterministic failure from contention). */
-        private List<Utxo> scriptInputs = List.of();
+        /** The inputs of every handed-out attempt (F64): held until the series ends, then released or kept pending. */
+        private final Claim held = new Claim(this);
+        /**
+         * What the latest attempt depends on: the script inputs it spends and the reference inputs it reads (to tell a
+         * deterministic failure from contention; F68).
+         */
+        private List<Utxo> dependencies = List.of();
         private boolean released;
 
         Designated(Utxo utxo, String address) {
@@ -72,9 +104,21 @@ final class Designation {
             return Designation.ref(utxo);
         }
 
-        /** Records an attempt about to be handed out (any relay may deliver it, whatever it answers). */
+        /**
+         * Records an attempt about to be handed out (any relay may deliver it, whatever it answers). Its window must be
+         * finite: an attempt that never expires could never be settled (F65, R-E2).
+         */
         synchronized void handedOut(String txHash, long toSlot) {
+            if (toSlot == Long.MAX_VALUE || toSlot == Long.MIN_VALUE) {
+                throw new IllegalArgumentException(txHash + ": an attempt with a designated input needs a finite window");
+            }
             attempts.add(new Attempt(txHash, toSlot));
+        }
+
+        /** Keeps a handed-out attempt's inputs claimed for this operation until the series ends (F64). */
+        void hold(java.util.Collection<String> refs) {
+            held.refs.addAll(refs);
+            CLAIMS.add(held);
         }
 
         synchronized List<Attempt> attempts() {
@@ -90,12 +134,15 @@ final class Designation {
             return attempts.stream().mapToLong(Attempt::toSlot).max().orElse(Long.MIN_VALUE);
         }
 
-        void noteScriptInputs(List<Utxo> inputs) {
-            this.scriptInputs = List.copyOf(inputs);
+        /** The script inputs the latest attempt spends and the reference inputs it reads (F68). */
+        void noteInputs(List<Utxo> spent, List<Utxo> read) {
+            var all = new ArrayList<Utxo>(spent);
+            all.addAll(read);
+            this.dependencies = List.copyOf(all);
         }
 
-        List<Utxo> scriptInputs() {
-            return scriptInputs;
+        List<Utxo> dependencies() {
+            return dependencies;
         }
 
         /** Still unspent, as far as the provider shows; an unreadable answer counts as spent (nothing is rebuilt). */
@@ -115,19 +162,21 @@ final class Designation {
             return false;
         }
 
-        /** Ends the reservation now. */
+        /** Ends the reservation, and the claims of its attempts' inputs, now. */
         void release() {
             if (released) return;
             released = true;
             DESIGNATED.remove(ref());
+            held.release();
         }
 
-        /** Ends the reservation at {@code untilMs} (wall clock): an attempt may still land until then. */
+        /** Ends the reservation and its attempts' claims at {@code untilMs} (wall clock): an attempt may land until then. */
         void releaseAt(long untilMs) {
             if (released) return;
             released = true;
             if (untilMs <= System.currentTimeMillis()) DESIGNATED.remove(ref());
             else LINGERING.put(ref(), untilMs);
+            held.releaseAt(untilMs);
         }
     }
 
@@ -146,14 +195,26 @@ final class Designation {
     }
 
     private static void purge() {
-        if (LINGERING.isEmpty() && LINGERING_CLAIMS.isEmpty()) return;
         long now = System.currentTimeMillis();
-        LINGERING.forEach((ref, until) -> {
-            if (until <= now && LINGERING.remove(ref, until)) DESIGNATED.remove(ref);
-        });
-        LINGERING_CLAIMS.forEach((refs, until) -> {
-            if (until <= now && LINGERING_CLAIMS.remove(refs, until)) unclaim(refs);
-        });
+        if (!LINGERING.isEmpty()) {
+            LINGERING.forEach((ref, until) -> {
+                if (until <= now && LINGERING.remove(ref, until)) DESIGNATED.remove(ref);
+            });
+        }
+        CLAIMS.removeIf(c -> c.until <= now);
+    }
+
+    /** Some unresolved transaction of this JVM claims {@code ref}. */
+    static boolean isClaimed(String ref) {
+        purge();
+        for (Claim c : CLAIMS) if (c.refs.contains(ref)) return true;
+        return false;
+    }
+
+    /** A claim on {@code ref} by anyone but {@code owner}. */
+    private static boolean claimedByOther(String ref, Object owner) {
+        for (Claim c : CLAIMS) if (c.owner != owner && c.refs.contains(ref)) return true;
+        return false;
     }
 
     private static Object lock(String address) {
@@ -167,30 +228,32 @@ final class Designation {
      */
     static Designated reserve(StateRuntime rt, Account payer, String what, Set<String> avoid) {
         String address = payer.baseAddress();
-        var candidates = new ArrayList<Utxo>();
-        try {
-            for (int page = 1; page <= 20; page++) {
-                var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
-                for (Utxo u : r.getValue()) {
-                    if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
-                            || u.getInlineDatum() != null || u.getDataHash() != null || u.getReferenceScriptHash() != null) {
-                        continue;
-                    }
-                    if (u.getAmount().get(0).getQuantity().compareTo(BigInteger.valueOf(5_000_000)) < 0) continue;
-                    candidates.add(u);
-                }
-                if (r.getValue().size() < 100) break;
-            }
-        } catch (Exception e) {
-            throw new JoustException(what + ": cannot read the payer's UTxOs", e);
-        }
-        candidates.sort(Comparator.comparing((Utxo u) -> u.getAmount().get(0).getQuantity()).reversed());
         purge();
+        // Read and chosen under the address's lock (F63): no build of that address can spend and release a candidate
+        // between the read and the designation.
         synchronized (lock(address)) {
+            var candidates = new ArrayList<Utxo>();
+            try {
+                for (int page = 1; page <= 20; page++) {
+                    var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
+                    if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                    for (Utxo u : r.getValue()) {
+                        if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
+                                || u.getInlineDatum() != null || u.getDataHash() != null || u.getReferenceScriptHash() != null) {
+                            continue;
+                        }
+                        if (u.getAmount().get(0).getQuantity().compareTo(BigInteger.valueOf(5_000_000)) < 0) continue;
+                        candidates.add(u);
+                    }
+                    if (r.getValue().size() < 100) break;
+                }
+            } catch (Exception e) {
+                throw new JoustException(what + ": cannot read the payer's UTxOs", e);
+            }
+            candidates.sort(Comparator.comparing((Utxo u) -> u.getAmount().get(0).getQuantity()).reversed());
             for (Utxo u : candidates) {
                 String ref = ref(u);
-                if (avoid.contains(ref) || CLAIMED.containsKey(ref)) continue;
+                if (avoid.contains(ref) || isClaimed(ref)) continue;
                 if (DESIGNATED.add(ref)) return new Designated(u, address);
             }
         }
@@ -211,11 +274,12 @@ final class Designation {
         var all = new com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier(backend.getUtxoService());
         String ownRef = own == null ? null : own.ref();
         boolean skipClaimed = own != null;
+        Object owner = own;
         UtxoSupplier free = new UtxoSupplier() {
             @Override
             public List<Utxo> getPage(String address, Integer nrOfItems, Integer page,
                                       com.bloxbean.cardano.client.api.common.OrderEnum order) {
-                return free(all.getPage(address, nrOfItems, page, order), ownRef, skipClaimed);
+                return free(all.getPage(address, nrOfItems, page, order), ownRef, skipClaimed ? owner : null);
             }
 
             @Override
@@ -225,7 +289,7 @@ final class Designation {
 
             @Override
             public List<Utxo> getAll(String address) {
-                return free(all.getAll(address), ownRef, skipClaimed);
+                return free(all.getAll(address), ownRef, skipClaimed ? owner : null);
             }
 
             @Override
@@ -250,17 +314,20 @@ final class Designation {
 
     /** {@code utxos} without the designated inputs of other operations: the same list when there is none. */
     static List<Utxo> free(List<Utxo> utxos, String ownRef) {
-        return free(utxos, ownRef, false);
+        return free(utxos, ownRef, null);
     }
 
-    /** As {@link #free(List, String)}; with {@code skipClaimed}, also without other unresolved transactions' inputs. */
-    static List<Utxo> free(List<Utxo> utxos, String ownRef, boolean skipClaimed) {
+    /**
+     * As {@link #free(List, String)}; with an {@code owner} (a keyed operation), also without inputs other unresolved
+     * transactions claim; the operation's own claims (its earlier attempts' inputs) stay selectable.
+     */
+    static List<Utxo> free(List<Utxo> utxos, String ownRef, Object owner) {
         if (utxos == null) return null;
         purge();
-        if (DESIGNATED.isEmpty() && (!skipClaimed || CLAIMED.isEmpty())) return utxos;
+        if (DESIGNATED.isEmpty() && (owner == null || CLAIMS.isEmpty())) return utxos;
         boolean any = false;
         for (Utxo u : utxos) {
-            if (!selectable(ref(u), ownRef, skipClaimed)) {
+            if (!selectable(ref(u), ownRef, owner)) {
                 any = true;
                 break;
             }
@@ -268,48 +335,67 @@ final class Designation {
         if (!any) return utxos;
         var out = new ArrayList<Utxo>(utxos.size());
         for (Utxo u : utxos) {
-            if (selectable(ref(u), ownRef, skipClaimed)) out.add(u);
+            if (selectable(ref(u), ownRef, owner)) out.add(u);
         }
         return out;
     }
 
-    private static boolean selectable(String ref, String ownRef, boolean skipClaimed) {
+    private static boolean selectable(String ref, String ownRef, Object owner) {
         if (ref.equals(ownRef)) return true;
-        return !DESIGNATED.contains(ref) && !(skipClaimed && CLAIMED.containsKey(ref));
+        return !DESIGNATED.contains(ref) && !(owner != null && claimedByOther(ref, owner));
     }
 
-    /** A built transaction and the inputs it claims until {@link #unclaim}. */
-    record Claimed(Transaction tx, List<String> refs) {}
-
-    /**
-     * Builds under {@code address}'s lock and claims the transaction's inputs (spent and collateral) before the lock is
-     * released: a designation for that address made afterwards skips them, one made before was skipped by the build.
-     */
-    static Claimed build(String address, Supplier<Transaction> build) {
-        synchronized (lock(address)) {
-            Transaction t = build.get();
-            var refs = new ArrayList<String>();
-            for (var in : t.getBody().getInputs()) refs.add(ref(in));
-            if (t.getBody().getCollateral() != null) for (var in : t.getBody().getCollateral()) refs.add(ref(in));
-            for (String r : refs) CLAIMED.merge(r, 1, Integer::sum);
-            return new Claimed(t, refs);
+    /** A built transaction and its claim. */
+    record Claimed(Transaction tx, Claim claim) {
+        List<String> refs() {
+            return List.copyOf(claim.refs);
         }
     }
 
-    /** Ends a transaction's claims (it was resolved: included or refused). */
-    static void unclaim(List<String> refs) {
-        for (String r : refs) CLAIMED.computeIfPresent(r, (k, n) -> n <= 1 ? null : n - 1);
+    /**
+     * Builds under {@code address}'s lock and claims the transaction's inputs (spent and collateral) before the lock is
+     * released: a designation for that address made afterwards skips them, one made before was skipped by the build. An
+     * input another keyed operation designated since it was picked (a seed, a funding input) is refused (F63).
+     */
+    static Claimed build(String address, Designated own, Supplier<Transaction> build) {
+        synchronized (lock(address)) {
+            Transaction t = build.get();
+            var claim = new Claim(own);
+            for (var in : t.getBody().getInputs()) claim.refs.add(ref(in));
+            if (t.getBody().getCollateral() != null) for (var in : t.getBody().getCollateral()) claim.refs.add(ref(in));
+            String ownRef = own == null ? null : own.ref();
+            for (String r : claim.refs) {
+                if (!r.equals(ownRef) && isDesignated(r)) {
+                    throw new SubmitException(SubmitException.Kind.TRANSIENT, "input " + r + " was designated by a keyed"
+                            + " operation after it was picked; rebuild");
+                }
+            }
+            CLAIMS.add(claim);
+            return new Claimed(t, claim);
+        }
     }
 
-    /** Ends a pending transaction's claims at {@code untilMs} (wall clock), when its window has passed. */
-    static void unclaimAt(List<String> refs, long untilMs) {
-        if (untilMs <= System.currentTimeMillis()) unclaim(refs);
-        else LINGERING_CLAIMS.put(new ArrayList<>(refs), untilMs);
+    /**
+     * Picks a UTxO of {@code address} explicitly (a seed, a funding input) under its lock, and claims it until
+     * {@code untilMs}: no keyed operation designates it before the transaction that spends it is built (and claims it
+     * itself). Null when {@code pick} finds none.
+     */
+    static Utxo pick(String address, long untilMs, Supplier<Utxo> pick) {
+        synchronized (lock(address)) {
+            Utxo u = pick.get();
+            if (u != null) {
+                var claim = new Claim(null);
+                claim.refs.add(ref(u));
+                claim.until = untilMs;
+                CLAIMS.add(claim);
+            }
+            return u;
+        }
     }
 
     /** For tests: nothing designated or claimed. */
     static boolean idle() {
         purge();
-        return DESIGNATED.isEmpty() && CLAIMED.isEmpty();
+        return DESIGNATED.isEmpty() && CLAIMS.isEmpty();
     }
 }
