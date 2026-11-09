@@ -79,14 +79,24 @@ class ContestedGapDevnetTest {
         int during = contests.get() - before;
         stop.set(true);
         hostile.join();
-        int attempts = honestRig.built("Registry.claim").size();
+        var honestAttempts = honestRig.built("Registry.claim");
+        int attempts = honestAttempts.size();
+        // Contested: an attacker transaction was built for the same instant as one of the honest attempts (its window
+        // starts inside that attempt's window), whichever of the two won.
+        var attackerTxs = new java.util.ArrayList<M2Kit.Built>(attackerRig.built("Registry.claim"));
+        attackerTxs.addAll(attackerRig.built("Registry.release"));
+        long raced = attackerTxs.stream().filter(x -> honestAttempts.stream().anyMatch(h ->
+                x.validFrom() >= h.validFrom() && x.validFrom() < h.validTo())).count();
         System.out.println("[contested] the honest insert landed in " + took / 1000 + " s, at its attempt " + attempts
-                + "; the attacker landed " + contests.get() + " contesting transactions, " + during + " of them while it waited");
+                + "; the attacker landed " + contests.get() + " contesting transactions, " + during + " of them while it waited, and"
+                + " built " + raced + " for the honest attempts' instants");
         // Each contested instant is a race between two clients submitting at the same slot on one node: the attacker,
         // running this same runtime, wins about half of them. Landing within 3 instants is therefore the likely case
         // (7/8), not a guarantee (an attacker with a latency edge can hold the gap for its fees; ADR-0016 M2 notes);
-        // the test requires that the gap was contested while the honest insert waited, and that it landed.
-        assertTrue(during >= 1, "the attacker contested the gap while the honest insert waited (R-D6)");
+        // the test requires that the attacker raced the honest insert for at least one of its instants (whoever won), and
+        // that the honest insert landed. (The first version required an attacker transaction to *land* meanwhile, which
+        // fails whenever the honest insert wins its first race.)
+        assertTrue(raced >= 1, "the attacker raced the honest insert at its instant (R-D6)");
         List<String> keys = regH.entryKeys().stream().map(KeyedList.Entry::keyHex).toList();
         assertTrue(keys.contains("6a"), keys.toString());
     }
