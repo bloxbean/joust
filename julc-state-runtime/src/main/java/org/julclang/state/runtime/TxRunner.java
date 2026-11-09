@@ -73,9 +73,9 @@ final class TxRunner {
         /** Units whose call is {@code @Receives}: the only valid deposit targets (ADR-0011 D3). */
         final java.util.Set<String> receivers = new java.util.HashSet<>();
 
-        void record(Account caller, byte[][] signers, ExpectedState exp, java.util.List<ExpectedPayout> pays,
-                    java.util.List<ExpectedSend> snds, com.bloxbean.cardano.client.plutus.spec.PlutusScript[] scs,
-                    java.util.List<Account> cos, String what) {
+        void record(Account caller, byte[][] signers, ExpectedState exp, java.util.List<ExpectedState> extra,
+                    java.util.List<ExpectedPayout> pays, java.util.List<ExpectedSend> snds,
+                    com.bloxbean.cardano.client.plutus.spec.PlutusScript[] scs, java.util.List<Account> cos, String what) {
             if (walletOnly) {
                 // Refused here, before anything is recorded, and whatever address the account claims (review r3 L1).
                 if (!(caller instanceof WalletAccount)) throw keyHeld(caller, what);
@@ -91,6 +91,9 @@ final class TxRunner {
                 if (!calls.contains(label)) calls.add(label);
             }
             if (exp != null) expected.add(exp);
+            // A keyed insert also continues its anchor, a keyed creation its heads (ADR-0016 D7): verified like the
+            // call's own state output, and counted, so later calls' output indices stay right (F54, R-C1).
+            expected.addAll(extra);
             payouts.addAll(pays);
             sends.addAll(snds);
             if (scs != null) {
@@ -102,7 +105,7 @@ final class TxRunner {
                     }
                 }
             }
-            outputs += (exp != null ? 1 : 0) + pays.size() + snds.size();
+            outputs += (exp != null ? 1 : 0) + extra.size() + pays.size() + snds.size();
         }
     }
 
@@ -179,7 +182,7 @@ final class TxRunner {
                   com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts, String what) {
         Capture cap = CAPTURE.get();
         if (cap != null) {
-            cap.record(caller, requiredSigners, expected, payouts, sends, referenceScripts, cosigners, what);
+            cap.record(caller, requiredSigners, expected, extraExpected, payouts, sends, referenceScripts, cosigners, what);
             return "composed";
         }
         Transaction signed;
