@@ -48,10 +48,10 @@ You do not need Gradle installed: the JOUST checkout has a wrapper (Gradle 9.2),
    bash .github/ci/build-julc.sh
    ```
 
-   `build-julc.sh` fetches JuLC at the commit this JOUST checkout pins, builds it with
-   `-Pversion=0.1.0-adr071-SNAPSHOT` (the JuLC build appends the commit), publishes it to `~/.m2`, and checks that
-   the result is exactly the `julc` version in `gradle/libs.versions.toml`. It prints, for example,
-   `JuLC 0.1.0-adr071-deb72bb-SNAPSHOT is in /Users/you/.m2/repository`.
+   `build-julc.sh` fetches JuLC at the commit this JOUST checkout pins, builds it (the JuLC build
+   appends the commit to its version), publishes it to `~/.m2`, and checks that the result is exactly the `julc`
+   version in `gradle/libs.versions.toml`. It prints, for example,
+   `JuLC 0.1.0-pre21-71b3a73-SNAPSHOT is in /Users/you/.m2/repository`.
 
 2. **Run the counter's tests.**
 
@@ -168,7 +168,7 @@ rootProject.name = 'my-counter'
 
 ```properties title="gradle.properties"
 joustVersion=0.1.0-pre1-<sha7>-SNAPSHOT
-julcVersion=0.1.0-adr071-deb72bb-SNAPSHOT
+julcVersion=0.1.0-pre21-71b3a73-SNAPSHOT
 ```
 
 Set `julcVersion` to the `julc` entry of `gradle/libs.versions.toml` at the JOUST commit you use.
@@ -496,7 +496,7 @@ public class CounterMain {
 
 | Symptom | Cause and fix |
 |---|---|
-| `Could not find org.julclang:julc-...:0.1.0-adr071-...-SNAPSHOT` | JuLC is not in `~/.m2`, or not the version your JOUST needs. Run `build-julc.sh` at the matching JOUST commit and use the `julc` version it prints |
+| `Could not find org.julclang:julc-...:0.1.0-pre21-...-SNAPSHOT` | JuLC is not in `~/.m2`, or not the version your JOUST needs. Run `build-julc.sh` at the matching JOUST commit and use the `julc` version it prints |
 | JuLC errors such as "cannot resolve" `Ctx` or `Require` | The `onchain` bundle is missing from the annotation processor path, or a long-lived daemon holds a stale jar: check the dependency, then `./gradlew --stop` |
 | `'int' in a @StateContract ... Use BigInteger` | `SubsetLint`: contract code computes in `BigInteger` only. See [Java](/languages/java/) |
 | `PastHorizon` from the node | The validity window reaches beyond what the network can convert to time. Keep `ttl` short on DevKit (20 s in the examples) |

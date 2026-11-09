@@ -139,8 +139,9 @@ From this one file the JOUST annotation processor generates `CounterValidator` (
 
 ## `@StateContract` options
 
-`@StateContract` marks the class. The class must be top-level and public. The annotation is meta-annotated with
-JuLC's `@OnchainLibrary`, so JuLC compiles the class for on-chain use without a second annotation.
+`@StateContract` marks the class. The class must be top-level and public. JuLC treats
+`@StateContract` exactly like its own `@OnchainLibrary` (a fixed alias), so JuLC compiles the class for on-chain use
+without a second annotation.
 
 | Element | Default | Meaning |
 |---|---|---|

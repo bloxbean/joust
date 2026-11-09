@@ -197,7 +197,7 @@ checking that the bound is finite. See [Time](/contracts/time/).
 
 Put helpers in the contract class as `static` methods without a JOUST annotation, or in a separate class annotated
 `@OnchainLibrary` (`org.julclang.stdlib.annotation.OnchainLibrary`). JuLC compiles `@OnchainLibrary` sources of the
-current compilation with the validator. `@StateContract` is itself meta-annotated with `@OnchainLibrary`, which is
+current compilation with the validator. JuLC treats `@StateContract` as a fixed alias of `@OnchainLibrary`, which is
 how JuLC finds your contract class. The rollup example keeps its whole L2 program in such a class:
 
 ```java title="examples/rollup/.../Ledger.java"

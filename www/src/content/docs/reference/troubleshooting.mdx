@@ -32,9 +32,9 @@ annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSour
 
 ### Gradle cannot resolve the `julc` artifacts
 
-**Cause.** JOUST builds against a JuLC that is not published yet (ADR-071, bloxbean/julc#311, and #313). Its version
-in `gradle/libs.versions.toml` (`0.1.0-adr071-<commit>-SNAPSHOT`) exists only in your local Maven repository once
-you build it.
+**Cause.** JOUST builds against JuLC `main` (with bloxbean/julc#311 and #313), which no published JuLC snapshot has
+yet. Its version in `gradle/libs.versions.toml` (`0.1.0-pre21-<commit>-SNAPSHOT`) exists only in your local Maven
+repository once you build it.
 
 **Fix.** From a JOUST checkout, run `bash .github/ci/build-julc.sh`. It clones JuLC at the pinned commit and publishes
 it to `mavenLocal` with the exact version the catalog names. Keep `mavenLocal()` among your repositories. See

@@ -94,8 +94,8 @@ name(State s | Owned o,            // not in creations
 ### @StateContract
 
 Marks a class as a JOUST state contract. The processor generates `<Name>Validator` (a JuLC `@MultiValidator`) and
-`<Name>Client` in the same package. It is meta-annotated with JuLC's `@OnchainLibrary` (JuLC ADR-071), so JuLC
-compiles the class for on-chain use without a second annotation.
+`<Name>Client` in the same package. JuLC treats it exactly like its own `@OnchainLibrary` (a fixed alias,
+bloxbean/julc#311), so JuLC compiles the class for on-chain use without a second annotation.
 
 **Target:** a public top-level class. **Source:**
 [`StateContract.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/StateContract.java)

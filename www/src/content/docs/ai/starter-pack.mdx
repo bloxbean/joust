@@ -54,7 +54,7 @@ my-app/
 ```groovy title="build.gradle"
 repositories {
     mavenCentral()
-    mavenLocal()     // JuLC with ADR-071, built by .github/ci/build-julc.sh until it is published
+    mavenLocal()     // JuLC main, built by .github/ci/build-julc.sh until a published snapshot has it
     maven {
         url = uri('https://repo.bloxbean.org/maven/snapshots')
         mavenContent { snapshotsOnly() }

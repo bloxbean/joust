@@ -11,7 +11,7 @@ the compiled validator in a harness with the attack suite, and end to end on Yac
 
 <Aside type="caution" title="Not published yet">
 Maven snapshots are in the BloxBean snapshot repository (`https://repo.bloxbean.org/maven/snapshots`, version
-`0.1.0-pre1-<sha7>-SNAPSHOT`), but they need a JuLC build that is not published: build it into mavenLocal with
+`0.1.0-pre1-<sha7>-SNAPSHOT`), but they need a JuLC build that no published snapshot has yet: build it into mavenLocal with
 `.github/ci/build-julc.sh` from a JOUST checkout. The npm packages (`@julclang/joust`, `@julclang/joust-runtime`,
 `@julclang/state-client`, `create-joust`) are **not on npmjs.org**: install them from a local registry
 (`bash js/publish-local.sh`, see [Quick start: npm](/start/quick-start-npm/)).
@@ -100,9 +100,10 @@ The maintainer's preview run with a real wallet (ADR-0015 §13.11) found two fee
 
 ### Upstream
 
-- **JuLC.** JOUST needs JuLC's ADR-071 (`@OnchainLibrary` meta-annotations and a robust library-source scan,
-  bloxbean/julc#311) and the embedder change of bloxbean/julc#313 (stacked on #311). Neither is published, so JOUST
-  pins a locally built JuLC (`0.1.0-adr071-deb72bb-SNAPSHOT` in `gradle/libs.versions.toml`). When they are released,
+- **JuLC.** JOUST needs JuLC `main` at 80490306 or later: `@StateContract` as a fixed alias of `@OnchainLibrary`
+  with a robust library-source scan (bloxbean/julc#311), and the scoped attribution query the npm toolchain uses
+  (bloxbean/julc#313). Both are merged, but no published JuLC snapshot has them yet, so JOUST pins a locally built
+  JuLC main (`0.1.0-pre21-71b3a73-SNAPSHOT` in `gradle/libs.versions.toml`). Once a published snapshot has them,
   `build-julc.sh` and the snapshot workflow's `JULC_FROM_SOURCE` switch go away. JuLC's CIP-57 blueprint also lacks
   vocabulary for vote and propose handlers (hence `-Ajulc.blueprint=false`).
 - **cardano-client-lib.** ADR-0001 §12 and ADR-0015 list: an option to keep an inline datum's map order instead of
@@ -124,7 +125,7 @@ The process is in [`docs/release-ops.md`](https://github.com/bloxbean/joust/blob
 | [`.github/workflows/build.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/build.yml) | CI on pushes to `main` and `release/**` and on pull requests: builds JuLC from source, starts Yaci DevKit, runs `./gradlew build` (JVM, harness and DevKit tests, the JavaScript client's tests) and checks the publication scope |
 | [`.github/workflows/bloxbean-snapshot.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/bloxbean-snapshot.yml) | Manual. Publishes a commit of `main` or `release/**` whose `build.yml` run passed, to `https://repo.bloxbean.org/maven/snapshots`, and updates the [Development snapshot](https://github.com/bloxbean/joust/releases/tag/snapshot) pre-release |
 | `build.gradle` | Snapshot versions carry the commit: `0.1.0-pre1-SNAPSHOT` becomes `0.1.0-pre1-<sha7>-SNAPSHOT`. Six library modules publish a jar, sources, javadoc and POM; `julc-state-api` adds its `onchain` jar for consumers' annotation processor path |
-| `.github/ci/build-julc.sh` | Builds the pinned JuLC into mavenLocal, as CI does (temporary, until JuLC is published) |
+| `.github/ci/build-julc.sh` | Builds the pinned JuLC main into mavenLocal, as CI does (temporary, until a published JuLC snapshot has it) |
 
 The published modules are `julc-state-api`, `julc-state-dsl`, `julc-state-processor`, `julc-state-runtime`,
 `julc-state-testkit` and `julc-state-verifier`. The snapshots are read anonymously, but their POMs name the locally

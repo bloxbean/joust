@@ -59,8 +59,8 @@ In detail, inside the build:
      package. With `-Ajoust.portable=true` they also write `<Name>Portable` (experimental, for Wasm pages).
 
 2. **Round 2: JuLC.** JuLC's annotation processor finds the generated `@MultiValidator` and compiles it to UPLC,
-   together with everything it calls: your contract class (`@StateContract` is meta-annotated with JuLC's
-   `@OnchainLibrary`, so JuLC treats it as an on-chain library) and the `julc-state-api` sources it finds on the
+   together with everything it calls: your contract class (JuLC treats `@StateContract` as an alias of its
+   `@OnchainLibrary`, so the class is an on-chain library) and the `julc-state-api` sources it finds on the
    annotation processor path. The compiled script lands in `META-INF/plutus/<Name>Validator.plutus.json`, where
    the runtime and the testkit load it.
 
