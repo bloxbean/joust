@@ -1229,7 +1229,7 @@ unless marked JVM.
 | Inserts from separate threads into different gaps | `ConcurrencyDevnetTest` | Four threads (before the first key, two inner gaps, the tail) land with no rejections: exactly four transactions built (asserted since the review), in 3 s after the review's changes |
 | Two inserts into one gap | `ConcurrencyDevnetTest` | Three transactions: the loser is rejected, rebuilt against the winner's node, and lands after its cooldown (157 s in all; 158 s after the review) |
 | An empty list and the tail | `ConcurrencyDevnetTest`, `RegistrySmokeDevnetTest` | The first insert anchors at the head; one thread inserts after the last key |
-| A contested gap against one attacker | `ContestedGapDevnetTest` | Probabilistic, not met as a bound (see Deviations). The test asserts that the attacker landed contesting transactions while the honest insert waited, and that it lands. After the review: landed at its second attempt (159 s); the attacker landed 3 contesting transactions, 1 of them while the honest insert waited. The first run (239 s, third instant) was before the review |
+| A contested gap against one attacker | `ContestedGapDevnetTest` | Probabilistic, not met as a bound (see Deviations). The test asserts that the attacker raced the honest insert at one of its instants (an attacker transaction whose window starts inside an honest attempt's window, whoever won), and that the honest insert lands. Runs: 239 s at the third instant (before the review); 159 s at the second; 80 s at the first, twice, with the attacker's transactions built for that instant losing (round 2) |
 | A hostile predecessor updating every block while the victim retires | `HostilityDevnetTest` | One attempt, landed in 2 s, while the predecessor was updated 5 times. Not "every block": each update waits for its inclusion, so about every two blocks on DevKit; the test shows the retire does not depend on the predecessor |
 | A remove retried against predecessor updates | `HostilityDevnetTest` | The first attempt is rejected (the predecessor moved); the second, with the same designated input, lands |
 | Duplicate keys | `DuplicateKeyDevnetTest` | Live and retired keys refused on the JVM. Forced past the JVM: in the first version the node refused a transaction with placeholder budgets (JuLC's evaluator had refused it, so the budgets were never filled in: "overspending the budget"), which shows nothing about the place check. Now the forcing runtime answers generous budgets where local evaluation fails, and the node refuses it with the validator's own error ("terminated because of an error"); as a script failure whose inputs did not move, it is not rebuilt (one attempt) |
@@ -1268,8 +1268,10 @@ unless marked JVM.
   there is no bound: it can hold the gap for as long as it pays about one fee per `C` (§2: 1,440 a day at 60 s). That
   is the "timed races" residual of §2, a griefing cost, not a safety issue: nothing it does breaks an invariant, and
   the retiring exit is unaffected. The M2 criterion "lands within 3 cooldowns" is therefore not met as stated (open
-  question below). The test now asserts that the attacker landed contesting transactions while the honest insert
-  waited (the first version did not, and its `attempts <= 9` could not fail), and gives the honest client 8 retries
+  question below). The test now asserts that the attacker raced the honest insert at one of its instants, whoever
+  won (the first version asserted nothing of the kind, and its `attempts <= 9` could not fail; the first fix required
+  an attacker transaction to land during the wait, which fails whenever the honest insert wins its first race, as it
+  did in a round-2 full build), and gives the honest client 8 retries
   instead of the default 3: with 3, a fair race gives up in about 1 run in 16, which would test the retry budget
   rather than the race.
 - *Window criteria on the JVM: the planner only.* DevKit runs one-second slots, so "100 ms slots" and "a future start
@@ -1306,30 +1308,55 @@ its recorded hash. Since the review, the baseline also holds every existing exam
 `ReplayTest` and `DescribedReplayTest` rebuild the recorded transactions from their chain snapshots, through the
 selection path every transaction now takes (`Designation`), and pass. For transactions that are not keyed, submission
 is the pre-M2 code (one backend submit; a serialisation failure is pending, as before), and selection with nothing
-designated returns the provider's own lists.
+designated returns the provider's own lists. The second review (E) confirmed all 27 non-keyed generated clients and all
+52 generated sources of the 21 non-registry examples byte-identical from `35e0841` to `4bac87d`. Behaviour is not
+identical in every respect, though: see "Selection around designated inputs" below for what changes for plain
+transactions while a keyed operation of the same wallet runs.
 
 **After the review of M2 (how the runtime now reads D7).** These refine D7 without changing a decision; the table below
 maps them to the findings.
 - *Which transactions use relays.* Only attempts of an operation with a designated input (a keyed call, a composition
-  with one). Every other transaction (calls that are not keyed, deployments, reference scripts, wallet submissions)
+  with one). Relays are called in parallel, each given `relayTimeout` (default 60 s); no answer by then is an unknown
+  delivery (R-E8). A rejection counts as one whether or not it gives a reason (F67). Every other transaction (calls that are not keyed, deployments, reference scripts, wallet submissions)
   goes to the backend alone, through the pre-M2 code: ADR-0001 D14's trust in the backend is unchanged for them.
 - *How a series ends.* A series rebuilds, under its designated input, after a rejection or a transient refusal; after a
-  build failure or a phase-2 script failure only if an input the attempt spent has moved. Once any attempt was handed
-  to a relay (whatever the relay answered), the series ends in a failure (`ContentionException`, or a rebuild's own
-  error such as "key already taken") only after the provider's tip has passed the end of every handed-out attempt's
-  window and the designated input is still unspent. Otherwise it is pending. On DevKit that wait is at most the 20-second
-  TTL; in general it is at most `W`.
+  build failure or a phase-2 script failure only if an input the attempt spent, or a reference input it read (the
+  instance, `@Reads`), has moved. Once any attempt was handed to a relay (whatever the relay answered), every exit from
+  the series goes through one rule (the first version missed the back-off, a failing log and `Error`s; F62, R-E1,
+  R-E9): it ends in a failure (`ContentionException`, or a rebuild's own error such as "key already taken") only after
+  the provider's tip has passed the end of every handed-out attempt's window by `settlementSlots` (default 2; R-E7) and
+  the designated input is still unspent. Otherwise it is pending; an `Error` propagates, but the input stays reserved.
+  Every attempt with a designated input has a finite window: a link window, the call's own, or, for a call that uses
+  no time, the runtime's TTL (the first version built those with no validity bound at all, so they could never be
+  settled; F65, R-E2). So the wait is at most that window: on DevKit the 20-second TTL.
 - *Pending, and resuming after it.* `PendingTransactionException` names every handed-out attempt (`attempts()`, the
-  last also as `txHash()`) and the designated input (`designatedInput()`). The input stays reserved in this JVM until
-  the attempts' windows have passed. A caller resumes by looking the attempts up: if one landed, the operation happened;
+  last also as `txHash()`) and the designated input (`designatedInput()`). The input, and every input the handed-out
+  attempts spend, stay reserved in this JVM until the attempts' windows (and the settlement depth) have passed. A caller resumes by looking the attempts up: if one landed, the operation happened;
   if none did and the designated input is unspent once their windows have passed, it did not, and a new call is safe.
   Reservations are per JVM: separate processes sharing a wallet must use separate UTxOs (or wallets), or coordinate
   outside JOUST.
-- *Selection around designated inputs.* Every transaction of the JVM, keyed or not, selects wallet UTxOs through one
-  place (`Designation`): designated inputs of other operations are never selected (fees, collateral, seeds, funding,
-  reference-script publication, the verifiers, wallet preparation). A built transaction's inputs are claimed until it is
-  resolved, and building and designating for one address are serialised, so no operation designates an input another
-  transaction has just selected. With nothing designated, builds are byte-identical to the pre-M2 ones.
+- *Selection around designated inputs.* Every transaction the runtime builds selects wallet UTxOs through one place
+  (`Designation`): designated inputs of other operations are never selected (fees, collateral, seeds, funding,
+  reference-script publication, the verifiers, wallet preparation), and a build that ends up spending one (an explicit
+  input picked earlier) is refused. Claims keep an operation from designating what another transaction holds: a seed
+  or funding input from its pick (under the address's lock) until its build claims it; a built transaction's inputs
+  until it is resolved; a keyed attempt's inputs, once handed out, until its series ends, even after a relay said
+  "rejected" (the operation's own rebuilds may reuse them, no one else's; F64); a prepared (wallet) transaction's until
+  its TTL, a publication without a validity bound for 10 minutes. Claims are identities, so two claims of the same
+  inputs are released separately (F66). `reserve` reads its candidates under the address's lock. What the first
+  version overclaimed (F63, R-E4, R-E5), and what holds now:
+  - Plain transactions do not skip claimed inputs (a wallet with one UTxO still serves two plain calls one after the
+    other). So a plain call of the same wallet can spend the fee or collateral input of a keyed attempt waiting for its
+    window, which then fails and is rebuilt (liveness only; R-E5a).
+  - A designated UTxO is withheld from plain calls while its operation runs and while a pending operation lingers; a
+    wallet whose only UTxO is designated cannot build a plain call meanwhile (R-E5b).
+  - Builds of one payer are serialised in the JVM: the lock is held across `buildAndSign`, including its provider
+    reads and script evaluation (R-E6). A slow provider delays that payer's other builds; an evaluator that waited for
+    another build of the same payer would deadlock.
+  - Inputs that application code collects explicitly from a wallet are not claimed before the build; if a keyed
+    operation designated one meanwhile, the build is refused.
+  - "Pre-M2 selection" therefore holds for plain transactions only while none of the wallet's UTxOs is designated or
+    claimed by a keyed attempt. With nothing designated, builds are byte-identical to the pre-M2 ones.
 - *Windows.* A keyed attempt waits for its window's start on the current slot (the machine's clock and the network's
   slot configuration), not the tip block's slot, and is never handed out after its window has closed (rebuilt instead).
   A removing destroy's `@ValidAfter`/`@ValidBefore` narrow its link window, or refuse it before building.
@@ -1388,7 +1415,7 @@ findings. Each is fixed in the commits after `a5758df`, unless the row says othe
 | F60, R-C17, R-D9.4 | Waiting for a page's start limit in a remove used up a retry | The remove waits and prepares again inside the attempt, as the insert does | `R/KeyedObject.java` (`PageWait`) |
 | R-C21, R-D9.1 | Deterministic failures were retried | A `WalletAccount` payer is refused before anything is reserved. A build failure (the builder, its script evaluation, the post-build checks) or a node rejection whose every reason is a phase-2 script failure is rebuilt only if an input the attempt spent has moved (then it was contention); otherwise it is reported (after the series has settled) | `R/SubmitException.java` (`Kind`), `R/KeyedObjects.java` (`inputsMoved`); `KeyedSeriesTest` |
 | F61, R-D2 | The tests cited for the designated input would pass without it: their attempts already shared a script input | Each now names the shared ordinary payer UTxO (`M2Kit.designatedInput`). A new test has attempts that conflict only through it: a time-derived key, with a node `b` between the first attempt's key and the second's, so they are anchored in different gaps; the relay withholds the first, delivers it with the second; the first lands, the second is refused, the series ends pending | `T/devnet/SubmissionDevnetTest.attemptsInDifferentGapsShareOnlyTheDesignatedInput_atMostOneLands`; `KeyedSubmissionTest` for the pre-delivery check |
-| R-D6 | The contested-gap claim understated the risk; the test could not fail on its criterion | The notes state the bound as probabilistic for an equal-latency attacker and none against a faster one (a griefing cost, not a safety issue); the test asserts that the attacker landed contesting transactions while the honest insert waited. It keeps 8 retries: with the default 3, a fair race gives up in about 1 run in 16, which would test the budget, not the race | `T/devnet/ContestedGapDevnetTest.java`; below |
+| R-D6 | The contested-gap claim understated the risk; the test could not fail on its criterion | The notes state the bound as probabilistic for an equal-latency attacker and none against a faster one (a griefing cost, not a safety issue); the test asserts that the attacker raced the honest insert at one of its instants (corrected in round 2: requiring an attacker transaction to land during the wait failed when the honest insert won its first race). It keeps 8 retries: with the default 3, a fair race gives up in about 1 run in 16, which would test the budget, not the race | `T/devnet/ContestedGapDevnetTest.java`; below |
 | R-D3 | The forced duplicate reached the node with placeholder budgets, so the node refused a starved budget | The forcing runtime's evaluator answers generous budgets where JuLC's evaluation fails; the node runs the validator with real units and refuses it with the validator's error ("terminated because of an error", not "overspending the budget"); as a script failure whose inputs did not move, it is not rebuilt | `T/../runtime/DuplicateKeyDevnetTest.java` |
 | R-C20 | The new `ContractSpec(…, boolean, List)` overload made `(…, stakeSelf, null)` ambiguous | A static factory `ContractSpec.keyed(...)` instead | `R/ContractSpec.java`, `ClientGenerator` |
 | R-D7 | The compatibility evidence did not cover generated clients | The baseline now holds every existing example's generated `*Client.java` and `*Portable.java` (27 files, taken from `a5758df`), 123 files in all; byte-identical. `FixturesTest` only checks hashes: `ReplayTest`/`DescribedReplayTest` rebuild the recorded transactions | below |
@@ -1399,6 +1426,28 @@ findings. Each is fixed in the commits after `a5758df`, unless the row says othe
 | R-D14 | The window criteria test a planner the page path does not use | Marked "planner only; end to end in M3" | below |
 | R-D9.5 | `submitSigned`/`submitPlain` ignore relays | By design now (R-C5): relays only carry keyed attempts | — |
 
-After the review's changes, a full `./gradlew build --continue` with Yaci DevKit up passes (43 min; the three tests
-that need a browser or a Web Image skip, as before), the compatibility baseline (123 files) is byte-identical, and
-`fixtures/m0` is unchanged.
+**Round 2.** Two re-reviews of `a5758df..4bac87d`: Codex (F62–F68, and the status of F50–F61: eight resolved, four
+partly) and a concurrency and failure-path reviewer (R-E1–R-E9, with JVM reproductions). Neither found two attempts of
+one series able to land; both found exits and bookkeeping that let a series *report* in a way that invites a second
+operation while the first may still land.
+
+| ID | Finding | What changed | Where |
+|---|---|---|---|
+| F62, R-E1, R-E9 | The retry back-off (an interrupt, a throwing log consumer) and `Error`s bypassed settlement and released the input at once | The back-off runs outside the catch, guarded: an interrupt or a failure there becomes the series' failure and goes through `settle` (an interrupt keeps its flag and ends pending while an attempt may land). Logging cannot fail the series. The input is released at once only when the outcome is definite; any other exit, an `Error` included, keeps it until the attempts' windows have passed | `R/KeyedObjects.java` (`series`, `settle`); `KeyedSeriesTest` (an interrupt during the back-off with `maxRetries` 3; a throwing log; an `Error`) |
+| F65, R-E2 | Keyed actions and retires that use no time were built with no validity window: recorded as ending at `Long.MAX_VALUE`, which wrapped into a past time, so the input was released at once and the series could never settle | Every attempt with a designated input gets a finite window (the runtime's TTL when the call has none; compositions likewise); `handedOut` refuses an unbounded one; `SlotChainTime.slotToPosixMs` is exact (throws on overflow) and the runtime saturates instead of wrapping. Non-keyed transactions are unchanged | `R/TxRunner.java`, `R/Designation.java`, `R/SlotChainTime.java`; `UntimedKeyedPendingDevnetTest` (`Registry.change` going pending: a 20 s window, reserved until it passes, then released; the attempt never lands) |
+| F64, R-E5a | A keyed attempt's claims were dropped when a relay said "rejected", though the attempt may still land; a pending publication dropped its claims | A handed-out attempt's inputs are held by its operation until the series ends (released when definite, kept pending otherwise); the operation's own rebuilds may reuse them, other operations may not. A pending publication keeps its claims for 10 minutes (it has no validity bound) | `R/Designation.java` (`Claim`, `hold`), `R/TxRunner.java`; `KeyedSeriesTest` |
+| F66, R-E3 | Lingering claims were keyed by their input list: two equal lists lost one release | Claims are identities, each released at its own time | `R/Designation.java`; `KeyedSeriesTest.twoClaimsOfTheSameInputsAreReleasedSeparately` |
+| F67 | A rejection without a reason was not counted as a rejection | Counted apart from its reason | `R/TxRunner.java` (`deliver`); `KeyedSubmissionTest` (all-null, and mixed in both orders) |
+| F68 | A build or script failure was judged deterministic from the spent inputs only, so a moved reference input (`@Reads`, the instance) stopped the series | The attempt's dependencies include the reference inputs it reads (keyed calls and keyed compositions) | `R/KeyedObject.java`, `R/KeyedList.java`, `R/Compose.java`; `KeyedSeriesTest.aBuildFailureAfterOnlyAReferenceMoved_isContentionAndRebuilt` |
+| F63, R-E4 | Explicit seed and funding picks, and prepared transactions, were outside the claim protocol; `reserve` read its candidates before taking the lock | Seeds (deploy, owned creations, intents) and prepare's funding input are picked and claimed under the address's lock; a build refuses an input designated by another operation since it was picked; prepared transactions claim their inputs until their TTL (reference-script and verifier preparations, which have none, for 10 minutes); `reserve` reads under the lock. Inputs application code collects itself are covered only by the build's refusal (the ADR says so) | `R/Designation.java` (`pick`, `build`, `reserve`), `R/StateContractHandle.java`, `R/VerifierHandle.java`, `R/TxRunner.java`; `KeyedSeriesTest` |
+| R-E8 | Relays were called one after another with no deadline | In parallel, each with `relayTimeout` (default 60 s); no answer by then is unknown | `R/TxRunner.java`, `R/StateRuntime.java`; `KeyedSubmissionTest` |
+| R-E7 | A definite failure needed only the tip at the window's end | `StateRuntime.Builder.settlementSlots` (default 2) past the last window, for `settle` and the linger | `R/KeyedObjects.java`, `R/StateRuntime.java` |
+| R-E5b | A designated sole UTxO blocks plain calls during the operation and its linger | Documented ("Selection around designated inputs") | — |
+| R-E6 | One lock per payer across `buildAndSign` serialises that payer's builds and holds across provider reads | Documented (same place). Narrowing the lock to selection and claim would need an optimistic rebuild of plain transactions, which risks their byte-identity; not done | — |
+
+After the first round's changes, a full `./gradlew build --continue` with Yaci DevKit up passed (43 min; the three
+tests that need a browser or a Web Image skip, as before), the compatibility baseline (123 files) was byte-identical, and
+`fixtures/m0` unchanged. After round 2, the first full build (45 min) failed only `ContestedGapDevnetTest`, whose
+round-1 assertion was wrong (above); with it corrected, `./gradlew build --continue` with DevKit up passes (26 min: the
+test tasks whose inputs had not changed since the first run were up to date, the registry's ran in full), the baseline
+(123 files) is byte-identical, and `fixtures/m0` is unchanged.
