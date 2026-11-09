@@ -75,9 +75,16 @@ public final class VerifierHandle {
                     .additionalSignersCount(1);
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
             var claimed = Designation.build(payerAddress, null, ctx::build);
-            claimed.claim().releaseAt(System.currentTimeMillis() + TxRunner.UNBOUNDED_CLAIM_MS);
             var built = claimed.tx();
-            runtime.built("publish and register the JOUST " + label, built, true);
+            try {
+                runtime.built("publish and register the JOUST " + label, built, true);
+            } catch (RuntimeException e) {
+                claimed.claim().release();   // nothing returned: nothing to submit (F71)
+                throw e;
+            }
+            // Returned for a wallet to sign; it has no validity bound, so its claim lasts a fixed time (a bookkeeping
+            // bound, not proof it cannot land: see ADR-0016's limits).
+            claimed.claim().releaseAt(System.currentTimeMillis() + TxRunner.UNBOUNDED_CLAIM_MS);
             return built;
         } catch (Exception e) {
             throw new SubmitException("publish the " + label + ": could not build the transaction: " + e.getMessage(), e);

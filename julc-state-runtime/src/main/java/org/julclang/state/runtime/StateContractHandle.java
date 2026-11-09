@@ -275,9 +275,16 @@ public final class StateContractHandle<S> {
                     .additionalSignersCount(1);
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
             var claimed = Designation.build(payerAddress, null, ctx::build);
-            claimed.claim().releaseAt(System.currentTimeMillis() + TxRunner.UNBOUNDED_CLAIM_MS);
             var built = claimed.tx();
-            runtime.built("publish the " + spec.name() + " reference script", built, true);
+            try {
+                runtime.built("publish the " + spec.name() + " reference script", built, true);
+            } catch (RuntimeException e) {
+                claimed.claim().release();   // nothing returned: nothing to submit (F71)
+                throw e;
+            }
+            // Returned for a wallet to sign; it has no validity bound, so its claim lasts a fixed time (a bookkeeping
+            // bound, not proof it cannot land: see ADR-0016's limits).
+            claimed.claim().releaseAt(System.currentTimeMillis() + TxRunner.UNBOUNDED_CLAIM_MS);
             return built;
         } catch (Exception e) {
             throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
@@ -317,6 +324,13 @@ public final class StateContractHandle<S> {
 
     /** Creates a new instance: consumes a seed UTxO of the caller, mints the thread token, locks the initial state. */
     public DeployResult<S> deploy(Deploy<S> d) {
+        // The seed is picked and claimed in this scope, released once the deployment was built (or failed; F71).
+        try (var picks = Designation.scope()) {
+            return deployInScope(d);
+        }
+    }
+
+    private DeployResult<S> deployInScope(Deploy<S> d) {
         Account caller = d.caller();
         byte[] callerPkh = Keys.pkh(caller);
         // Publish reference scripts first: doing so spends the caller's UTxOs, so the seed is picked afterwards.
@@ -488,7 +502,7 @@ public final class StateContractHandle<S> {
      * the transaction spending it is built (F63, R-E4).
      */
     private Utxo pickSeed(Account caller) {
-        return Designation.pick(caller.baseAddress(), System.currentTimeMillis() + TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
+        return Designation.pick(caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
     }
 
     private Utxo seedOf(Account caller) {
@@ -498,7 +512,7 @@ public final class StateContractHandle<S> {
                 throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
             }
             // Prefer a pure-ADA UTxO; any UTxO works, but never a keyed operation's designated input (ADR-0016 D7).
-            var free = r.getValue().stream().filter(u -> !Designation.isDesignated(Designation.ref(u))).toList();
+            var free = r.getValue().stream().filter(Designation::pickable).toList();
             if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
             return free.stream()
                     .filter(u -> u.getAmount().size() == 1)

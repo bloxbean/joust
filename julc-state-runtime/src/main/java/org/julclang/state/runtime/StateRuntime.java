@@ -276,10 +276,15 @@ public final class StateRuntime {
          * (R-E7).
          */
         public Builder settlementSlots(long slots) {
-            if (slots < 0) throw new IllegalArgumentException("settlementSlots must not be negative");
+            if (slots < 0 || slots > MAX_SETTLEMENT_SLOTS) {
+                throw new IllegalArgumentException("settlementSlots must be 0 to " + MAX_SETTLEMENT_SLOTS);
+            }
             this.settlementSlots = slots;
             return this;
         }
+
+        /** The deepest settlement allowed (F75): about a day of one-second slots. */
+        public static final long MAX_SETTLEMENT_SLOTS = 100_000;
 
         public StateRuntime build() {
             return new StateRuntime(this);

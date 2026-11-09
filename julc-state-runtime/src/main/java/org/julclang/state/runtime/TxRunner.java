@@ -42,7 +42,7 @@ final class TxRunner {
 
     /** What {@link Compose} collects while it runs several calls into one transaction. */
     static final class Capture {
-        final Tx tx = new Tx();
+        final Tx tx = new RecordingTx();
         Window forced;
         final java.util.List<Window> windows = new java.util.ArrayList<>();
         int outputs;
@@ -55,10 +55,6 @@ final class TxRunner {
         final java.util.LinkedHashMap<String, Account> accounts = new java.util.LinkedHashMap<>();
         final java.util.LinkedHashMap<String, com.bloxbean.cardano.client.plutus.spec.PlutusScript> scripts = new java.util.LinkedHashMap<>();
         final java.util.Set<String> inputs = new java.util.HashSet<>();
-        /** The script inputs the calls spend (ADR-0016 D7: a failure is contention only if one of them moved). */
-        final java.util.List<Utxo> scriptInputs = new java.util.ArrayList<>();
-        /** The reference inputs keyed calls read (the instance, @Reads): a keyed composition's dependencies too (F68). */
-        final java.util.List<Utxo> readInputs = new java.util.ArrayList<>();
         final java.util.Set<String> mintPolicies = new java.util.HashSet<>();
         /** Map verifier claims of every call (ADR-0002 D9): one withdrawal carries them all. */
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
@@ -131,7 +127,44 @@ final class TxRunner {
     /** The transaction a call builds into: a fresh one, or the composition's shared one. */
     static Tx newTx() {
         Capture c = CAPTURE.get();
-        return c != null ? c.tx : new Tx();
+        return c != null ? c.tx : new RecordingTx();
+    }
+
+    /**
+     * The transaction every call builds into ({@link #newTx()}): a {@code Tx} that also records the script inputs it
+     * spends and the reference inputs it reads, whichever call added them, so a keyed operation's attempt knows what it
+     * depends on without each call reporting it (ADR-0016 D7: a failure is contention only if one of them moved; F68).
+     * It only records: the transaction built is the same.
+     */
+    static final class RecordingTx extends Tx {
+        final java.util.List<Utxo> spent = new java.util.ArrayList<>();
+        final java.util.List<Utxo> read = new java.util.ArrayList<>();
+
+        @Override
+        public Tx collectFrom(Utxo utxo, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
+            spent.add(utxo);
+            return super.collectFrom(utxo, redeemer);
+        }
+
+        @Override
+        public Tx collectFrom(Utxo utxo, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer,
+                              com.bloxbean.cardano.client.plutus.spec.PlutusData datum) {
+            spent.add(utxo);
+            return super.collectFrom(utxo, redeemer, datum);
+        }
+
+        @Override
+        public Tx collectFrom(java.util.List<Utxo> utxos, com.bloxbean.cardano.client.plutus.spec.PlutusData redeemer) {
+            spent.addAll(utxos);
+            return super.collectFrom(utxos, redeemer);
+        }
+
+        @Override
+        public Tx readFrom(Utxo... utxos) {
+            // A reference script never moves; everything else read may (an instance, a foreign read).
+            for (Utxo u : utxos) if (u != null && u.getReferenceScriptHash() == null) read.add(u);
+            return super.readFrom(utxos);
+        }
     }
 
     /** Index of the next output a call adds (0 outside a composition). */
@@ -146,7 +179,6 @@ final class TxRunner {
         if (c != null && !c.inputs.add(u.getTxHash() + "#" + u.getOutputIndex())) {
             throw new JoustException("composition: " + u.getTxHash() + "#" + u.getOutputIndex() + " is spent by two calls");
         }
-        if (c != null && redeemer != null) c.scriptInputs.add(u);
         return redeemer == null ? tx.collectFrom(java.util.List.of(u)) : tx.collectFrom(u, redeemer);
     }
 
@@ -190,12 +222,10 @@ final class TxRunner {
             cap.record(caller, requiredSigners, expected, extraExpected, payouts, sends, referenceScripts, cosigners, what);
             return "composed";
         }
-        if (designated != null && window == null) {
-            // Every attempt with a designated input expires (F65, R-E2): a call that uses no time gets the runtime's TTL
-            // as its validity window (its validator does not read it, and its Ctx stays zero), so the series can settle.
-            long from = rt.chainTime().tipSlot();
-            window = KeyedObjects.window(rt.chainTime(), from, from + Math.max(1, rt.ttlMs() / rt.chainTime().slotLengthMs()));
-        }
+        if (designated != null && window == null) window = untimedWindow(rt.chainTime(), rt.ttlMs());
+        // What the attempt depends on, as the calls built it: the script inputs it spends and the references it reads
+        // (ADR-0016 D7: a build or script failure is contention only if one of them moved; F68).
+        if (designated != null && tx instanceof RecordingTx r) designated.noteInputs(r.spent, r.read);
         Designation.Claimed built;
         try {
             var ctx = Designation.builder(rt.backend(), designated).compose(tx)
@@ -296,6 +326,17 @@ final class TxRunner {
     }
 
     /**
+     * The window of a keyed attempt whose calls use no time (F65, R-E2; F74): from the current slot, the clock its
+     * expiry is checked against before delivery (not the tip block's, which lags when slots pass without blocks), for
+     * the runtime's TTL. Its validator does not read it, and its Ctx stays zero.
+     */
+    static Window untimedWindow(ChainTime time, long ttlMs) {
+        long from = time.currentSlot();
+        long to = Math.addExact(from, Math.max(1, ttlMs / time.slotLengthMs()));
+        return KeyedObjects.window(time, from, to);
+    }
+
+    /**
      * The keyed operation this transaction is an attempt of (ADR-0016 D7), or null. With one, the built transaction must
      * spend its designated input, it is sent at its window's start to every relay, and its hash is recorded first. With
      * none, it goes to the backend alone, as before M2.
@@ -367,8 +408,17 @@ final class TxRunner {
         deliver(relays, cbor, txHash, what, java.time.Duration.ofSeconds(60));
     }
 
-    /** Threads that call relays: all at once, so one slow relay delays no other (R-E8). */
-    private static final java.util.concurrent.ExecutorService RELAYS = java.util.concurrent.Executors.newCachedThreadPool(r -> {
+    /** The most relay calls running at once in this JVM (F70). */
+    static final int RELAY_THREADS = 64;
+
+    /**
+     * Threads that call relays: all of one attempt's at once, so one slow relay delays no other (R-E8), and at most
+     * {@link #RELAY_THREADS} in all (F70). A relay call still running when its attempt stops waiting is cancelled
+     * (interrupted); one that ignores interrupts keeps its thread until it returns. A relay that cannot be started
+     * because every thread is busy is an unknown delivery: it never got the bytes, but another relay may have.
+     */
+    private static final java.util.concurrent.ExecutorService RELAYS = new java.util.concurrent.ThreadPoolExecutor(0,
+            RELAY_THREADS, 30, java.util.concurrent.TimeUnit.SECONDS, new java.util.concurrent.SynchronousQueue<>(), r -> {
         Thread t = new Thread(r, "joust-relay");
         t.setDaemon(true);
         return t;
@@ -381,7 +431,24 @@ final class TxRunner {
      */
     static void deliver(java.util.List<Relay> relays, byte[] cbor, String txHash, String what, java.time.Duration timeout) {
         var futures = new java.util.ArrayList<java.util.concurrent.Future<Relay.Outcome>>();
-        for (Relay relay : relays) futures.add(RELAYS.submit(() -> relay.submit(cbor)));
+        try {
+            for (Relay relay : relays) {
+                try {
+                    futures.add(RELAYS.submit(() -> relay.submit(cbor)));
+                } catch (java.util.concurrent.RejectedExecutionException e) {
+                    futures.add(java.util.concurrent.CompletableFuture.completedFuture(
+                            Relay.Outcome.unknown("no relay thread free (" + RELAY_THREADS + " busy)")));
+                }
+            }
+            combine(futures, txHash, what, timeout);
+        } finally {
+            // Unanswered relays are not waited for: cancel them (an unknown delivery all the same; F70).
+            for (var f : futures) if (!f.isDone()) f.cancel(true);
+        }
+    }
+
+    private static void combine(java.util.List<java.util.concurrent.Future<Relay.Outcome>> futures, String txHash, String what,
+                                java.time.Duration timeout) {
         long deadline = System.nanoTime() + timeout.toNanos();
         boolean interrupted = false;
         boolean accepted = false;
@@ -399,6 +466,8 @@ final class TxRunner {
                     o = f.get(Math.max(0, deadline - System.nanoTime()), java.util.concurrent.TimeUnit.NANOSECONDS);
                 } catch (java.util.concurrent.TimeoutException e) {
                     o = Relay.Outcome.unknown("the relay did not answer within " + timeout);
+                } catch (java.util.concurrent.CancellationException e) {
+                    o = Relay.Outcome.unknown("the relay call was cancelled");
                 } catch (java.util.concurrent.ExecutionException e) {
                     Throwable t = e.getCause() != null ? e.getCause() : e;
                     o = Relay.Outcome.unknown("the relay threw " + t.getClass().getSimpleName() + ": " + rootMessage(t));
@@ -467,6 +536,16 @@ final class TxRunner {
                        java.util.List<ExpectedPayout> payouts, java.util.List<ExpectedSend> sends,
                        com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts, String what,
                        java.util.Set<String> spent) {
+        // The funding pick is claimed in this scope, released once the transaction was built and claimed (F71).
+        try (var picks = Designation.scope()) {
+            return prepareInScope(tx, payer, window, requiredSigners, expected, payouts, sends, referenceScripts, what, spent);
+        }
+    }
+
+    private PreparedTx prepareInScope(Tx tx, Account payer, Window window, byte[][] requiredSigners, ExpectedState expected,
+                                      java.util.List<ExpectedPayout> payouts, java.util.List<ExpectedSend> sends,
+                                      com.bloxbean.cardano.client.plutus.spec.PlutusScript[] referenceScripts, String what,
+                                      java.util.Set<String> spent) {
         var needed = new java.util.LinkedHashMap<String, byte[]>();
         needed.put(HexUtil.encodeHexString(Keys.pkh(payer)), Keys.pkh(payer));   // the payer's inputs
         for (byte[] sg : requiredSigners) needed.put(HexUtil.encodeHexString(sg), sg);
@@ -474,11 +553,11 @@ final class TxRunner {
         // out of it. Spending one of the payer's UTxOs gives it a change output to pay the fee from (restorePayouts).
         if (payouts.stream().anyMatch(p -> p.address().equals(payer.baseAddress()))) {
             // Picked and claimed under the payer's lock, so no keyed operation designates it before the build (F63).
-            Utxo funding = Designation.pick(payer.baseAddress(), System.currentTimeMillis() + PICK_CLAIM_MS,
-                    () -> largestAdaOnly(payer.baseAddress(), spent));
+            Utxo funding = Designation.pick(payer.baseAddress(), PICK_CLAIM_MS, () -> largestAdaOnly(payer.baseAddress(), spent));
             if (funding != null) tx.collectFrom(java.util.List.of(funding));
         }
         Transaction unsigned;
+        Designation.Claimed built;
         try {
             var ctx = Designation.builder(rt.backend(), null).compose(tx)
                     .feePayer(payer.baseAddress())
@@ -500,23 +579,34 @@ final class TxRunner {
             }
             if (rt.evaluator() != null) ctx = ctx.withTxEvaluator(rt.evaluator());
             var finalCtx = ctx;
-            // Built and claimed under the payer's lock; the claim lasts until the transaction's TTL, as the wallet may
-            // sign and submit it any time before (F63).
-            var built = Designation.build(payer.baseAddress(), null, finalCtx::build);
+            // Built and claimed under the payer's lock (F63).
+            built = Designation.build(payer.baseAddress(), null, finalCtx::build);
             unsigned = built.tx();
-            long ttl = unsigned.getBody().getTtl();
-            built.claim().releaseAt(ttl > 0 ? safeMs(rt.chainTime(), ttl) + 10_000 : System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }
-        rt.built(what, unsigned, true);
-        verify(unsigned, expected, what);
-        for (ExpectedState e : extraExpected) verify(unsigned, e, what);
-        verifyPayouts(unsigned, payouts, what);
-        verifySends(unsigned, sends, what);
-        // Every key whose UTxO the transaction spends (or takes as collateral) must sign too (review r3).
-        for (byte[] owner : inputOwners(unsigned)) needed.putIfAbsent(HexUtil.encodeHexString(owner), owner);
-        return new PreparedTx(rt, unsigned, new java.util.ArrayList<>(needed.values()), window, what);
+        boolean returned = false;
+        try {
+            rt.built(what, unsigned, true);
+            verify(unsigned, expected, what);
+            for (ExpectedState e : extraExpected) verify(unsigned, e, what);
+            verifyPayouts(unsigned, payouts, what);
+            verifySends(unsigned, sends, what);
+            // Every key whose UTxO the transaction spends (or takes as collateral) must sign too (review r3).
+            for (byte[] owner : inputOwners(unsigned)) needed.putIfAbsent(HexUtil.encodeHexString(owner), owner);
+            var prepared = new PreparedTx(rt, unsigned, new java.util.ArrayList<>(needed.values()), window, what);
+            returned = true;
+            return prepared;
+        } finally {
+            // Returned: the wallet may sign and submit it until its TTL, so its inputs stay claimed until then.
+            // Not returned (a check or a lookup failed): nothing can be submitted, so the claim ends now (F71).
+            if (returned) {
+                long ttl = unsigned.getBody().getTtl();
+                built.claim().releaseAt(ttl > 0 ? safeMs(rt.chainTime(), ttl) + 10_000 : System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
+            } else {
+                built.claim().release();
+            }
+        }
     }
 
     /**
@@ -566,7 +656,7 @@ final class TxRunner {
                 for (Utxo u : r.getValue()) {
                     if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null) continue;
                     if (spent.contains(u.getTxHash() + "#" + u.getOutputIndex())) continue;
-                    if (Designation.isDesignated(Designation.ref(u))) continue;   // another operation's (ADR-0016 D7)
+                    if (!Designation.pickable(u)) continue;   // another operation's (ADR-0016 D7, F72)
                     BigInteger q = lovelace(u);
                     if (q.compareTo(BigInteger.valueOf(3_000_000)) < 0) continue;
                     if (best == null || q.compareTo(lovelace(best)) > 0) best = u;

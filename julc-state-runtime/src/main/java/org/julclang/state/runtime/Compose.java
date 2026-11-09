@@ -103,6 +103,14 @@ public final class Compose {
     }
 
     private Object attempt(boolean prepare, Designation.Designated designated) {
+        // Explicit picks (seeds, funding) of every pass are claimed in this scope, released once the composition was
+        // built and claimed its inputs, or failed (ADR-0016 F71).
+        try (var picks = Designation.scope()) {
+            return attemptInScope(prepare, designated);
+        }
+    }
+
+    private Object attemptInScope(boolean prepare, Designation.Designated designated) {
         // Pass 1: every call's own window. A receiver placed before its depositors sees no deposits yet and may refuse:
         // the pass then runs again with the deposits the first try found (ADR-0011 D3).
         var probe = new TxRunner.Capture();
@@ -136,7 +144,6 @@ public final class Compose {
         cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
         if (designated != null) TxRunner.collect(cap.tx, designated.utxo(), null);
         run(cap);
-        if (designated != null) designated.noteInputs(cap.scriptInputs, cap.readInputs);
         if (!sharedSigners) {
             for (var e : cap.signerCalls.entrySet()) {
                 if (e.getValue().size() > 1) {

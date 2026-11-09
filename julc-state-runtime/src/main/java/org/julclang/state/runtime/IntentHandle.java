@@ -92,6 +92,14 @@ public final class IntentHandle<S> {
      */
     public static <S> IntentHandle<S> create(StateInstance<S> parent, IntentCodec<S> codec, Account owner, Object call,
                                              BigInteger received, BigInteger deposit, Instant deadline) {
+        // The seed is picked and claimed in this scope, released once the intent was built (or failed; ADR-0016 F71).
+        try (var picks = Designation.scope()) {
+            return createInScope(parent, codec, owner, call, received, deposit, deadline);
+        }
+    }
+
+    private static <S> IntentHandle<S> createInScope(StateInstance<S> parent, IntentCodec<S> codec, Account owner, Object call,
+                                                     BigInteger received, BigInteger deposit, Instant deadline) {
         var contract = parent.contract();
         var rt = contract.runtime;
         String what = contract.spec.name() + " intent";

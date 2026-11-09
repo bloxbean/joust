@@ -56,14 +56,12 @@ final class KeyedObjects {
         if (!lazy) refuseWallet(payer, what);
         Designated d = lazy ? null : Designation.reserve(rt, payer, what, Set.of());
         // True once the outcome is known for certain (landed, or no handed-out attempt can land): only then is the
-        // designated input released at once. Every other exit, an Error included, keeps it until the attempts' windows
-        // have passed (F62, R-E1, R-E9).
+        // designated input released at once; otherwise it stays reserved until the attempts' windows have passed.
         boolean definite = false;
         try {
             int retries = 0;
             while (true) {
-                RuntimeException failure;
-                boolean again = false;
+                Throwable thrown;
                 try {
                     if (d != null && retries > 0) requireUnspent(rt, d, what);
                     T result = attempt.apply(d);
@@ -74,48 +72,36 @@ final class KeyedObjects {
                     refuseWallet(payer, what);
                     d = Designation.reserve(rt, payer, what, n.avoid);
                     continue;
-                } catch (PendingTransactionException p) {
-                    if (d == null || p.designatedInput() != null) throw p;
-                    var e = new PendingTransactionException(p.getMessage(), d.attemptHashes(), d.ref());
-                    e.initCause(p);
-                    throw e;
-                } catch (SubmitException e) {
-                    if (d == null) {   // no keyed call took part (a plain composition): as before
-                        definite = true;
-                        throw e;
-                    }
-                    again = switch (e.kind) {
-                        case REJECTED, TRANSIENT -> true;
-                        case SCRIPT, BUILD -> inputsMoved(rt, d);
-                    };
-                    failure = e;
-                } catch (RuntimeException e) {
-                    failure = e;
+                } catch (Throwable t) {
+                    thrown = t;
                 }
-                if (again && retries < rt.maxRetries()) {
-                    // The back-off is guarded too: an interrupt or a failing log here ends the series through settle.
-                    try {
+                // Everything after the attempt (classifying, logging, the back-off, settling) runs in this one guard.
+                // Its only outcomes: a retry, or an end that is either definite (no attempt handed out, or settle's
+                // checks passed) or pending with the operation's record. Anything unexpected after a hand-out ends
+                // pending, with the original failure kept (F69, F62).
+                Throwable end;
+                try {
+                    Next next = next(rt, d, what, thrown, retries);
+                    if (next.retry) {
                         retries++;
-                        log(rt, what + ": attempt " + retries + " refused (" + failure.getMessage() + "); rebuilding with the"
-                                + " same designated input " + d.ref());
-                        Thread.sleep(2000);   // let the provider's index catch up with whatever won (a neighbour's relink)
                         continue;
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        var interrupted = new JoustException(what + ": interrupted before rebuilding", ie);
-                        interrupted.addSuppressed(failure);
-                        failure = interrupted;
-                    } catch (RuntimeException e) {
-                        e.addSuppressed(failure);
-                        failure = e;
                     }
-                } else if (again) {
-                    failure = new ContentionException(what + ": refused " + (retries + 1) + " times", failure,
-                            d.attemptHashes(), d.ref());
+                    end = next.end;
+                } catch (Throwable unexpected) {
+                    if (d == null || d.attempts().isEmpty()) {
+                        unexpected.addSuppressed(thrown);
+                        end = unexpected;
+                    } else {
+                        var p = new PendingTransactionException(what + ": " + TxRunner.rootMessage(unexpected) + " after an"
+                                + " attempt was handed out, so it may have landed", d.attemptHashes(), d.ref());
+                        p.initCause(thrown);
+                        p.addSuppressed(unexpected);
+                        end = p;
+                    }
                 }
-                RuntimeException end = settle(rt, d, what, failure);
-                definite = !(end instanceof PendingTransactionException);
-                throw end;
+                definite = !(end instanceof PendingTransactionException) && (d == null || d.attempts().isEmpty()
+                        || end instanceof Settled);
+                throw rethrow(end instanceof Settled settled ? settled.failure : end);
             }
         } finally {
             if (d != null) {
@@ -123,6 +109,70 @@ final class KeyedObjects {
                 else d.releaseAt(lingerUntil(rt, d));
             }
         }
+    }
+
+    /** What follows an attempt that threw: another attempt, or the series' end. */
+    private record Next(boolean retry, Throwable end) {}
+
+    /** A failure settle confirmed definite (the windows passed, the designated input unspent). */
+    private static final class Settled extends RuntimeException {
+        final RuntimeException failure;
+
+        Settled(RuntimeException failure) {
+            super(null, null, false, false);
+            this.failure = failure;
+        }
+    }
+
+    private static Next next(StateRuntime rt, Designated d, String what, Throwable thrown, int retries) {
+        if (thrown instanceof PendingTransactionException p) {
+            if (d == null || p.designatedInput() != null) return new Next(false, p);
+            var e = new PendingTransactionException(p.getMessage(), d.attemptHashes(), d.ref());
+            e.initCause(p);
+            return new Next(false, e);
+        }
+        if (d == null) return new Next(false, thrown);   // no keyed call took part (a plain composition): as before
+        RuntimeException failure;
+        if (thrown instanceof SubmitException e) {
+            boolean again = switch (e.kind) {
+                case REJECTED, TRANSIENT -> true;
+                case SCRIPT, BUILD -> inputsMoved(rt, d);
+            };
+            if (again && retries < rt.maxRetries()) {
+                log(rt, what + ": attempt " + (retries + 1) + " refused (" + e.getMessage() + "); rebuilding with the same"
+                        + " designated input " + d.ref());
+                try {
+                    Thread.sleep(2000);   // let the provider's index catch up with whatever won (a neighbour's relink)
+                    return new Next(true, null);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    var interrupted = new JoustException(what + ": interrupted before rebuilding", ie);
+                    interrupted.addSuppressed(e);
+                    failure = interrupted;
+                }
+            } else if (again) {
+                failure = new ContentionException(what + ": refused " + (retries + 1) + " times", e, d.attemptHashes(), d.ref());
+            } else {
+                failure = e;
+            }
+        } else if (thrown instanceof RuntimeException e) {
+            failure = e;
+        } else {
+            // An Error: after a hand-out it ends pending (it is the cause); before any, it propagates as it is.
+            if (d.attempts().isEmpty()) return new Next(false, thrown);
+            var p = new PendingTransactionException(what + ": " + thrown + " after an attempt was handed out, so it may have"
+                    + " landed", d.attemptHashes(), d.ref());
+            p.initCause(thrown);
+            return new Next(false, p);
+        }
+        RuntimeException end = settle(rt, d, what, failure);
+        if (end instanceof PendingTransactionException) return new Next(false, end);
+        return new Next(false, d.attempts().isEmpty() ? end : new Settled(end));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException rethrow(Throwable t) throws E {
+        throw (E) t;
     }
 
     /** The runtime's log, which must not turn a pending outcome into another failure (F62). */
@@ -174,7 +224,7 @@ final class KeyedObjects {
     private static RuntimeException settleHandedOut(StateRuntime rt, Designated d, String what, RuntimeException failure) {
         ChainTime time = rt.chainTime();
         // The provider must have passed the end of every attempt's window, by the settlement depth (R-E7).
-        long last = d.lastToSlot() + rt.settlementSlots();
+        long last = Math.addExact(d.lastToSlot(), rt.settlementSlots());   // overflow: settle fails closed (pending; F75)
         log(rt, what + ": " + failure.getMessage() + "; an attempt was handed out, so waiting for the provider to pass slot "
                 + last + " (the end of its window and the settlement depth) before reporting a failure (ADR-0016 D7)");
         long deadline = Math.max(System.currentTimeMillis(), TxRunner.safeMs(time, last)) + rt.confirmTimeout().toMillis();
@@ -207,8 +257,12 @@ final class KeyedObjects {
     static long lingerUntil(StateRuntime rt, Designated d) {
         long last = d.lastToSlot();
         if (last == Long.MIN_VALUE) return System.currentTimeMillis();
-        long ms = TxRunner.safeMs(rt.chainTime(), last + rt.settlementSlots());
-        return Math.max(ms, System.currentTimeMillis()) + 10_000;
+        try {
+            long ms = rt.chainTime().slotToPosixMs(Math.addExact(last, rt.settlementSlots()));
+            return Math.addExact(Math.max(ms, System.currentTimeMillis()), 10_000);
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;   // fails closed: reserved for good rather than released early (F75)
+        }
     }
 
     /**
@@ -218,14 +272,16 @@ final class KeyedObjects {
      */
     static boolean inputsMoved(StateRuntime rt, Designated d) {
         for (Utxo u : d.dependencies()) {
-            String unit = null;
-            for (var a : u.getAmount()) {
-                if (!a.getUnit().equals("lovelace") && a.getQuantity().compareTo(BigInteger.ONE) == 0) {
-                    unit = a.getUnit();
-                    break;
-                }
-            }
             try {
+                if (u == null || u.getTxHash() == null || u.getAddress() == null || u.getAmount() == null) return true;
+                String unit = null;
+                for (var a : u.getAmount()) {
+                    if (a != null && a.getUnit() != null && !a.getUnit().equals("lovelace") && a.getQuantity() != null
+                            && a.getQuantity().compareTo(BigInteger.ONE) == 0) {
+                        unit = a.getUnit();
+                        break;
+                    }
+                }
                 boolean found = false;
                 if (unit != null) {
                     var r = rt.backend().getUtxoService().getUtxos(u.getAddress(), unit, 10, 1);
@@ -245,7 +301,7 @@ final class KeyedObjects {
                 }
                 if (!found) return true;
             } catch (Exception e) {
-                return true;
+                return true;   // unreadable: counts as moved (a rebuild is still guarded by the designated input)
             }
         }
         return false;

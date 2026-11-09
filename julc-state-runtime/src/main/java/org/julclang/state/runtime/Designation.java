@@ -221,6 +221,72 @@ final class Designation {
         return LOCKS.computeIfAbsent(address, a -> new Object());
     }
 
+    /** The payer address whose lock this thread holds, if any. */
+    private static final ThreadLocal<String> HELD = new ThreadLocal<>();
+
+    /**
+     * Runs {@code body} under {@code address}'s lock. Reentrant for the same address; a request for another payer's
+     * lock while this thread holds one (an evaluator or callback building for a second payer) is refused before it
+     * could block, so two payers' builds can never wait on each other (F73).
+     */
+    static <T> T locked(String address, Supplier<T> body) {
+        String held = HELD.get();
+        if (held != null && !held.equals(address)) {
+            throw new JoustException("a transaction for " + address + " was requested while this thread builds one for "
+                    + held + "; nested builds for another payer are refused (they could deadlock; ADR-0016 D7)");
+        }
+        synchronized (lock(address)) {
+            if (held != null) return body.get();
+            HELD.set(address);
+            try {
+                return body.get();
+            } finally {
+                HELD.remove();
+            }
+        }
+    }
+
+    /** {@code ref} is held by a keyed operation other than {@code own} (its handed-out attempts' inputs; F72). */
+    static boolean heldByAnotherOperation(String ref, Designated own) {
+        purge();
+        for (Claim c : CLAIMS) {
+            if (c.owner instanceof Designated d && d != own && c.refs.contains(ref)) return true;
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------------------ explicit picks (F63, F71, F72)
+
+    /** The picks made on this thread inside the outermost open scope. */
+    private static final ThreadLocal<List<Claim>> SCOPE = new ThreadLocal<>();
+
+    /**
+     * A scope for explicit picks: the outermost scope on a thread (an entry point such as a deployment, or a whole
+     * composition) owns every pick made inside it and releases them when it closes, after the transaction spending them
+     * was built and claimed its own inputs, or when nothing was built. Inner scopes are no-ops.
+     */
+    static final class Scope implements AutoCloseable {
+        private final boolean outer;
+
+        private Scope(boolean outer) {
+            this.outer = outer;
+        }
+
+        @Override
+        public void close() {
+            if (!outer) return;
+            List<Claim> picks = SCOPE.get();
+            SCOPE.remove();
+            if (picks != null) picks.forEach(Claim::release);
+        }
+    }
+
+    static Scope scope() {
+        if (SCOPE.get() != null) return new Scope(false);
+        SCOPE.set(new ArrayList<>());
+        return new Scope(true);
+    }
+
     /**
      * Reserves an ordinary (lovelace-only, no datum, no reference script) UTxO of {@code payer} of at least 5 ADA that
      * no other operation of this JVM holds and no unresolved transaction of it spends, and that is not in
@@ -231,7 +297,7 @@ final class Designation {
         purge();
         // Read and chosen under the address's lock (F63): no build of that address can spend and release a candidate
         // between the read and the designation.
-        synchronized (lock(address)) {
+        Designated chosen = locked(address, () -> {
             var candidates = new ArrayList<Utxo>();
             try {
                 for (int page = 1; page <= 20; page++) {
@@ -256,7 +322,9 @@ final class Designation {
                 if (avoid.contains(ref) || isClaimed(ref)) continue;
                 if (DESIGNATED.add(ref)) return new Designated(u, address);
             }
-        }
+            return null;
+        });
+        if (chosen != null) return chosen;
         throw new JoustException(what + ": the payer has no ordinary UTxO of at least 5 ADA free to designate (ADR-0016 D7:"
                 + " each concurrent keyed operation of a wallet needs its own)");
     }
@@ -358,7 +426,7 @@ final class Designation {
      * input another keyed operation designated since it was picked (a seed, a funding input) is refused (F63).
      */
     static Claimed build(String address, Designated own, Supplier<Transaction> build) {
-        synchronized (lock(address)) {
+        return locked(address, () -> {
             Transaction t = build.get();
             var claim = new Claim(own);
             for (var in : t.getBody().getInputs()) claim.refs.add(ref(in));
@@ -369,28 +437,44 @@ final class Designation {
                     throw new SubmitException(SubmitException.Kind.TRANSIENT, "input " + r + " was designated by a keyed"
                             + " operation after it was picked; rebuild");
                 }
+                // A keyed attempt never spends what another keyed operation's handed-out attempts hold, even as an
+                // explicit input (F72); plain transactions keep their pre-M2 selection.
+                if (own != null && heldByAnotherOperation(r, own)) {
+                    throw new SubmitException(SubmitException.Kind.TRANSIENT, "input " + r + " is held by another keyed"
+                            + " operation's attempt; rebuild");
+                }
             }
             CLAIMS.add(claim);
             return new Claimed(t, claim);
-        }
+        });
     }
 
     /**
-     * Picks a UTxO of {@code address} explicitly (a seed, a funding input) under its lock, and claims it until
-     * {@code untilMs}: no keyed operation designates it before the transaction that spends it is built (and claims it
-     * itself). Null when {@code pick} finds none.
+     * Picks a UTxO of {@code address} explicitly (a seed, a funding input) under its lock, and claims it for the open
+     * {@link #scope()}: no keyed operation designates it before the transaction that spends it is built (and claims it
+     * itself); the scope releases it then, or when nothing was built (F71). Outside a scope (a caller that opened none)
+     * the claim lasts {@code fallbackMs}. Null when {@code pick} finds none. {@code pick} must skip designated inputs
+     * and those another keyed operation holds ({@link #pickable}).
      */
-    static Utxo pick(String address, long untilMs, Supplier<Utxo> pick) {
-        synchronized (lock(address)) {
+    static Utxo pick(String address, long fallbackMs, Supplier<Utxo> pick) {
+        return locked(address, () -> {
             Utxo u = pick.get();
             if (u != null) {
                 var claim = new Claim(null);
                 claim.refs.add(ref(u));
-                claim.until = untilMs;
+                List<Claim> scope = SCOPE.get();
+                if (scope != null) scope.add(claim);
+                else claim.until = System.currentTimeMillis() + fallbackMs;
                 CLAIMS.add(claim);
             }
             return u;
-        }
+        });
+    }
+
+    /** An explicit pick may take {@code u}: not designated, and not held by a keyed operation's attempt (F72). */
+    static boolean pickable(Utxo u) {
+        String ref = ref(u);
+        return !isDesignated(ref) && !heldByAnotherOperation(ref, null);
     }
 
     /** For tests: nothing designated or claimed. */

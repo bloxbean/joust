@@ -107,6 +107,23 @@ class KeyedSubmissionTest {
     }
 
     @Test
+    void aRelayStillRunningWhenItsAttemptStopsWaiting_isCancelled() throws Exception {
+        // F70: unanswered relay calls are cancelled (interrupted); the outcome stays unknown.
+        var interrupted = new java.util.concurrent.CountDownLatch(1);
+        Relay hanging = cbor -> {
+            try {
+                Thread.sleep(60_000);
+            } catch (InterruptedException e) {
+                interrupted.countDown();
+            }
+            return Relay.Outcome.accepted();
+        };
+        assertThrows(PendingTransactionException.class, () -> TxRunner.deliver(List.of(hanging), CBOR, "h", "test",
+                java.time.Duration.ofMillis(200)));
+        assertTrue(interrupted.await(5, java.util.concurrent.TimeUnit.SECONDS), "the hanging relay was cancelled");
+    }
+
+    @Test
     void theBackendRelayClassifiesHttpAnswers() {
         // R-C10: a 4xx with the node's reason is a rejection; a gateway's 5xx, 408 and 429 are unknown.
         assertEquals(Relay.Answer.ACCEPTED, Relay.classify(Result.success("ok")).answer());

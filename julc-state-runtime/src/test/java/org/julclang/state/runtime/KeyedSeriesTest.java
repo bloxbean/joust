@@ -425,19 +425,28 @@ class KeyedSeriesTest {
     }
 
     @Test
-    void anErrorAfterAnAttemptWasHandedOut_keepsTheInputReserved() {
-        // R-E9: an Error is not converted, but the input is not released while the attempt may land.
+    void anErrorAfterAnAttemptWasHandedOut_pendingWithTheErrorAsCause_andTheInputReserved() {
+        // R-E9, F69: after a hand-out, anything unexpected ends pending (the Error is its cause), and the input stays.
         var chain = new Chain();
         var payer = new Account(Networks.testnet());
         var u = utxo(payer.baseAddress(), 30_000_000);
         chain.wallet.add(u);
         String h = hash();
         long open = System.currentTimeMillis() / 1000 + 600;
-        assertThrows(StackOverflowError.class, () -> series(chain, 3, payer, d -> {
+        var e = assertThrows(PendingTransactionException.class, () -> series(chain, 3, payer, d -> {
             d.handedOut(h, open);
             throw new StackOverflowError("test");
         }));
+        assertInstanceOf(StackOverflowError.class, e.getCause());
+        assertEquals(List.of(h), e.attempts());
         assertTrue(Designation.isDesignated(Designation.ref(u)));
+        // Before any hand-out, an Error propagates as it is.
+        var chain2 = new Chain();
+        var payer2 = new Account(Networks.testnet());
+        chain2.wallet.add(utxo(payer2.baseAddress(), 30_000_000));
+        assertThrows(StackOverflowError.class, () -> series(chain2, 3, payer2, d -> {
+            throw new StackOverflowError("test");
+        }));
     }
 
     @Test
@@ -508,7 +517,7 @@ class KeyedSeriesTest {
         var rest = utxo(a, 20_000_000);
         chain.wallet.addAll(List.of(seed, rest));
         var rt = chain.runtime(3);
-        Utxo picked = Designation.pick(a, System.currentTimeMillis() + 60_000, () -> seed);
+        Utxo picked = Designation.pick(a, 60_000, () -> seed);
         assertSame(seed, picked);
         var d = Designation.reserve(rt, payer, "test", Set.of());
         try {
@@ -523,26 +532,149 @@ class KeyedSeriesTest {
     }
 
     @Test
-    void aBuildFailureAfterOnlyAReferenceMoved_isContentionAndRebuilt() {
-        // F68: the object is unchanged; the instance (or an @Reads instance) it read moved.
+    void aBuildFailureAfterOnlyAReferenceMoved_isContentionAndRebuilt_throughTheTransactionsOwnRecord() {
+        // F68 (and its round-3 residual): the dependencies are what the transaction itself spent and read, whichever
+        // call added them (a keyed object's input, an ordinary shared read, a Call's @Reads), recorded by the Tx the
+        // runtime hands out (TxRunner.newTx), and noted by TxRunner.submit for a designated attempt. Here the build
+        // fails (this scripted provider cannot build) after only the oracle reference moved: contention, rebuilt.
         var chain = new Chain();
         var payer = new Account(Networks.testnet());
         chain.wallet.add(utxo(payer.baseAddress(), 30_000_000));
         var node = utxo("addr_test1script", 2_000_000, new Amount("cd".repeat(28) + "4b03", BigInteger.ONE));
+        var instance = utxo("addr_test1instance", 2_000_000, new Amount("ab".repeat(28) + "05", BigInteger.ONE));
         String oracleUnit = "ef".repeat(28) + "01";
         var oracle = utxo("addr_test1oracle", 2_000_000, new Amount(oracleUnit, BigInteger.ONE));
-        chain.script.addAll(List.of(node, oracle));
+        chain.script.addAll(List.of(node, instance, oracle));
+        var rt = chain.runtime(3);
         var attempts = new AtomicInteger();
-        String out = series(chain, 3, payer, d -> {
-            if (attempts.incrementAndGet() == 1) {
-                d.noteInputs(List.of(node), List.of(oracle));
-                chain.spend(oracle);
-                chain.script.add(utxo("addr_test1oracle", 2_000_000, new Amount(oracleUnit, BigInteger.ONE)));
-                throw new SubmitException(SubmitException.Kind.BUILD, "test: evaluation refused a spent reference input");
-            }
-            return "landed";
+        String out = KeyedObjects.series(rt, payer, "test", false, d -> {
+            if (attempts.incrementAndGet() == 2) return "landed";
+            var tx = TxRunner.newTx();
+            TxRunner.collect(tx, d.utxo(), null);
+            TxRunner.collect(tx, node, com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData.of(0));
+            tx.readFrom(instance);   // an ordinary shared read
+            Call<Object> call = Call.action("act", payer).run((o, ctx) -> Transition.of(o)).redeemer(ctx -> 0)
+                    .referenceInputs(oracle).build();
+            call.applyReads(tx);     // a call's @Reads
+            chain.spend(oracle);     // only the oracle moves
+            chain.script.add(utxo("addr_test1oracle", 2_000_000, new Amount(oracleUnit, BigInteger.ONE)));
+            var runner = new TxRunner(rt);
+            runner.designated = d;
+            return runner.submit(tx, payer, null, new byte[0][], null, List.of(), null, "test");
         });
         assertEquals("landed", out);
-        assertEquals(2, attempts.get());
+        assertEquals(2, attempts.get(), "the BUILD failure was judged contention through the recorded reference");
+    }
+
+    @Test
+    void aReferenceWithoutAmountsAfterAScriptRejection_endsPendingNotWithAnEscape() {
+        // F69: unreadable reference metadata counts as moved, inside the guard; the attempt had landed: pending.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        chain.wallet.add(utxo(payer.baseAddress(), 30_000_000));
+        var bare = new Utxo();
+        bare.setTxHash(hash());
+        bare.setOutputIndex(0);
+        bare.setAddress("addr_test1oracle");   // no amounts
+        String h = hash();
+        var e = assertThrows(PendingTransactionException.class, () -> series(chain, 3, payer, d -> {
+            d.handedOut(h, 990);
+            d.noteInputs(List.of(), List.of(bare));
+            chain.spend(d.utxo());   // the attempt landed
+            throw new SubmitException(SubmitException.Kind.SCRIPT, "test: PlutusFailure");
+        }));
+        assertEquals(List.of(h), e.attempts());
+    }
+
+    @Test
+    void anythingUnexpectedWhileClassifyingAfterAHandOut_endsPending() {
+        // F69: the guard has no other exit.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        chain.wallet.add(utxo(payer.baseAddress(), 30_000_000));
+        String h = hash();
+        long open = System.currentTimeMillis() / 1000 + 600;
+        var e = assertThrows(PendingTransactionException.class, () -> series(chain, 3, payer, d -> {
+            d.handedOut(h, open);
+            throw new SubmitException(SubmitException.Kind.REJECTED, "x") {
+                @Override
+                public String getMessage() {
+                    throw new IllegalStateException("test: a message that cannot be read");
+                }
+            };
+        }));
+        assertEquals(List.of(h), e.attempts());
+        assertTrue(Designation.isDesignated(e.designatedInput()));
+    }
+
+    @Test
+    void anUntimedAttemptsWindowStartsAtTheCurrentSlot_notAStaleTip() {
+        // F74: the tip block is 40 slots behind the current slot.
+        long now = System.currentTimeMillis() / 1000;
+        ChainTime stale = new ChainTime() {
+            public long slotToPosixMs(long slot) { return Math.multiplyExact(slot, 1000); }
+            public long posixMsToSlotFloor(long ms) { return Math.floorDiv(ms, 1000); }
+            public long slotLengthMs() { return 1000; }
+            public long tipSlot() { return now - 40; }
+        };
+        var w = TxRunner.untimedWindow(stale, 20_000);
+        assertTrue(w.fromSlot() >= now, "from the current slot, not the tip");
+        assertEquals(w.fromSlot() + 20, w.toSlot());
+        assertTrue(stale.currentSlot() < w.toSlot(), "still open when it is handed out");
+    }
+
+    @Test
+    void aNestedBuildForAnotherPayerIsRefusedBeforeItCouldBlock() {
+        // F73: two payers' builds never wait on each other.
+        var a = new Account(Networks.testnet()).baseAddress();
+        var b = new Account(Networks.testnet()).baseAddress();
+        var u = utxo(a, 30_000_000);
+        var v = utxo(b, 30_000_000);
+        var outer = Designation.build(a, null, () -> {
+            var same = Designation.build(a, null, () -> spending(u));   // the same payer: reentrant
+            same.claim().release();
+            var e = assertThrows(JoustException.class, () -> Designation.build(b, null, () -> spending(v)));
+            assertTrue(e.getMessage().contains("nested builds for another payer"), e.getMessage());
+            return spending(u);
+        });
+        outer.claim().release();
+        var after = Designation.build(b, null, () -> spending(v));   // afterwards, b's own build works
+        after.claim().release();
+    }
+
+    @Test
+    void picksBelongToTheirScope_andSkipInputsAnotherOperationHolds() {
+        // F71, F72.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        String a = payer.baseAddress();
+        var held = utxo(a, 40_000_000);
+        var seed = utxo(a, 20_000_000);
+        chain.wallet.addAll(List.of(held, seed));
+        var rt = chain.runtime(3);
+        var other = Designation.reserve(rt, payer, "test", Set.of());
+        assertEquals(Designation.ref(held), other.ref());
+        var fee = utxo(a, 10_000_000);
+        other.hold(List.of(Designation.ref(fee)));
+        try {
+            assertFalse(Designation.pickable(fee), "another operation's held input is not picked");
+            try (var scope = Designation.scope()) {
+                try (var inner = Designation.scope()) {
+                    Designation.pick(a, 60_000, () -> seed);
+                }
+                assertTrue(Designation.isClaimed(Designation.ref(seed)), "an inner scope does not release");
+            }
+            assertFalse(Designation.isClaimed(Designation.ref(seed)), "the outer scope releases its picks");
+            // A keyed attempt never spends another operation's held input, even explicitly.
+            var mine = Designation.reserve(rt, payer, "test", Set.of());
+            try {
+                var e = assertThrows(SubmitException.class, () -> Designation.build(a, mine, () -> spending(mine.utxo(), fee)));
+                assertTrue(e.getMessage().contains("held by another keyed operation"), e.getMessage());
+            } finally {
+                mine.release();
+            }
+        } finally {
+            other.release();
+        }
     }
 }
