@@ -37,5 +37,8 @@ export async function network(config, name = config.network) {
   }
   if (!clock) throw new Error(`network ${name}: give its clock { zeroSlot, zeroTimeMs, slotLengthMs } in joust.config.json`);
   const projectId = n.projectIdEnv ? process.env[n.projectIdEnv] : n.projectId;
+  if (n.projectIdEnv && !projectId) {
+    throw new Error(`network ${name} reads its chain API's project id from ${n.projectIdEnv}: set it (export ${n.projectIdEnv}=...)`);
+  }
   return { ...n, name, clock, projectId };
 }
