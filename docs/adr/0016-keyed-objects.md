@@ -1575,28 +1575,38 @@ unchanged; the deviations below are the conservative readings chosen where the t
   - *While any attempt can still land, every attempt spends the record's designated input.* "Can still land" is
     judged by the page's own clock: the deployment's pinned `slotConfig` (validated as the verifier validates it; an
     invalid clock or a non-finite slot means "can still land", F87), less a skew margin of at least the 120 slots the
-    verifier tolerates between the chain API's tip and the page's clock (R-F8), and never later than that tip (the
+    verifier tolerates between the chain API's tip and the page's clock (R-F8; the page's own `maxTipSkewSlots` when it
+    sets one, F91), and never later than that tip (the
     earlier of the two, which can only delay the judgement). The chain API's answers about the tip or the input's
     spentness never move the designated input. The page assumes its own clock is within that margin of true time.
   - *Only once every attempt's window has passed by that clock (plus two slots) may the record end:* as "failed" only
     when a wallet view read under the lock and the chain API both still show the designated input; otherwise as "it
-    may have landed: check before calling again" (R-F7). Either way the call that ends a record reports it and starts
-    nothing: the next call is the new operation. Without a valid slot clock a record never expires; only the user's
-    explicit abandon (`opts.abandon`, `abandonKeyed`) ends it.
+    may have landed: check" (R-F7). Either way the call that ends a record reports it and starts nothing. "Failed"
+    deletes the record: nothing of it can land, and the next call is the new operation. "May have landed" leaves a
+    *tombstone* that refuses every later keyed call of the wallet until the application acknowledges it
+    (`acknowledgeKeyed`, `abandonKeyed`, `opts.abandon`): an application that retries blindly on any error cannot
+    start a new operation behind the user's back (F90). Without a valid slot clock a record never expires (an attempt
+    without a known deadline, `validTo` null, likewise; R-F14); only the user's explicit abandon ends it.
   - *An attempt is recorded before the wallet is asked to sign, and a signing error never removes it:* an error does
     not prove no signature escaped. Keeping it is always safe (retries spend the same input); it only delays expiry.
   - *A confirmation through `awaitTx` ends the record.* If the chain API lied about it, the attempt may still land
     later; a later call is a new operation the application asked for after being told the first succeeded, so two
     landings are two operations, not one applied twice. (A retry the application makes after a *failure* is still
     bound to the record.)
-  - *One lock per network* serialises every keyed call's whole lifecycle (record, prepare, cooldown waits, review,
-    signing, submission): Web Locks across a browser's tabs, an in-process mutex otherwise; stores refuse a stale
-    revision (a record written before revisions existed, never released, counts as revision 0; F89). It is per network,
-    not per wallet, because a wallet's record is matched by any overlap of its key hashes, which two views of one wallet
-    need not share in full; and it is held across cooldown waits, so no other call acts on the record in between (R-F9:
-    the cost is that one page's keyed calls queue behind each other). A keyed call made while another call of the same
-    page is in review is refused at once, and `abandonKeyed` from a review is recorded for the reviewing call to honour,
-    so a review cannot deadlock on its own lock (F88).
+  - *One keyed call in flight per network, never queued* (round 3: F90, F92). A keyed call that starts while another
+    is in flight on the network, in the page or in another tab of its origin (Web Locks, `ifAvailable`), is refused at
+    once (`KeyedCallInProgress`). So every call starts after the previous one's outcome was delivered: a retry cannot
+    be bound, while it waits, to an operation that ends before it runs (a queued retry could otherwise find the record
+    gone and designate a new input), and a review cannot wait for a call queued behind its own (round 2's queueing lock
+    and review guard are replaced by this rule). The call holds its slot through its whole lifecycle (record, prepare,
+    cooldown waits, review, signing, submission). It is per network, not per wallet, because a wallet's record is
+    matched by any overlap of its key hashes, which two views of one wallet need not share in full (R-F9: the cost is
+    that one page runs one keyed call at a time). Stores refuse a stale revision (a record written before revisions
+    existed, never released, counts as revision 0; F89).
+  - *Abandon.* Outside a call, `abandonKeyed` deletes the wallet's record or tombstone. During the review of that
+    wallet's own call it is recorded for the reviewing call, which then deletes its record under its revision, signed
+    attempts included, with the warning that an earlier signature may still land, whether the review callback returns
+    or throws (F93, R-F13); for another wallet, or while a call is not in review, it is refused at once.
   One record per wallet (its key hashes) and network, so any keyed call of that wallet is a retry of the pending
   operation until it ends. Retries are the application's calls; only the cooldown wait is automatic.
 - *Synthetic tamper transactions.* The registry has no payable removal and no beneficiary-paying action, DevKit cannot
@@ -1714,4 +1724,17 @@ and after the fix.
 | F80 (leftover) | A non-numeric tip skipped the tip check | Refused | `S/src/keyed.js` |
 | F85 (leftover) | The I5 loop accepted any verifier reason | Each tampering must be refused for its own reason (a table of ten) | `examples.test.js` |
 | R-G8 (leftover) | `recover` ran with the caller as its only guardian | Deferred: a second guardian's co-signature needs a two-key signing path in the JVM test; the page side of co-signers is ADR-0009's | — |
+
+**Round 3.** Re-reviews of `dcc3a86..dfbedb5`: Codex (F90–F94) and the page reviewer (R-F11–R-F15). One P1 (F90).
+Each repro was run before and after the fix.
+
+| ID | Finding | What changed | Where |
+|---|---|---|---|
+| F90 (P1) | A retry queued behind another found the record ended by that one ("may have landed") and, the record gone, designated a new input: Codex's probe signed a second attempt on `a3` | Keyed calls are never queued: a call while another is in flight on the network (page, or another tab through Web Locks `ifAvailable`) is refused at once; a "may have landed" end leaves a tombstone that refuses later calls until acknowledged. The probe's second retry is refused; blind retries afterwards are refused; no second designated input | `S/src/retries.js` (`exclusiveKeyed`), `S/src/client.js`; `keyed-retries.test.js` (expiry and `awaitTx` variants) |
+| F92 | A call queued while the first was preparing deadlocked the first's review that awaited it | The same rule: the second call is refused at once, the review continues | `keyed-retries.test.js` (prepare, second call, review) |
+| F93, R-F13 | An abandon during the review of a retry left the record (it deleted only records without attempts), and applied to whichever review was active on the network (`abandon-review.mjs`: record kept, `a0`, 1 attempt) | The reviewing call deletes its record under its revision, signed attempts included, with the warning; callbacks that return and that throw; another wallet's abandon is refused. After: record gone | `S/src/client.js`; `keyed-retries.test.js` |
+| F94, R-F11 | Round 2's byte-equal rule refused honest relinks next to nodes in encodings CCL normalises (non-minimal integers, chunked short bytes, tag 102: `encoded-any.mjs`, six cases refused) | The engine re-encodes every relinked datum canonically (`KeyedType.relinked`, Java), and the page requires the canonical encoding. After: accepted; a relink keeping the input's bytes is refused | `R/KeyedType.java`, `S/src/keyed.js`; `keyed.test.js` (four encodings) |
+| R-F12 | Without transaction CBOR, the chain API's datum bytes set the relink allowance (`padded-provider.mjs 3000 nocbor`: accepted, 10 ADA) | Allowances and the growth bound from canonical bytes only. After: refused with and without CBOR | `S/src/keyed.js` |
+| F91, R-F15 | Settlement ignored a page's own `maxTipSkewSlots` | One set of effective limits for verification and settlement | `S/src/client.js`; `keyed-retries.test.js` (300 slots through the client; 100 ms slots directly) |
+| R-F14 | `validTo: null` counted as slot 0 (`settle-null.mjs`: "may have landed") | Unknown deadline, pending | `S/src/retries.js` |
 

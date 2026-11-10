@@ -156,7 +156,7 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   keyed call kinds (`keyedInit`/`keyedAction`/`keyedRemove`/`keyedRetire`); `verifyPrepared` hands them to
   `verifyKeyed` (js/state-client/src/keyed.js). A wallet's keyed call is prepared only with `Compose.designate(ref)`
   (the page's designated input, recorded in `retries.js` before the first attempt; IndexedDB in browsers) and never
-  composed. An engine cannot wait for a cooldown: it refuses with "prepare again at slot N" and the client waits. A
+  composed; a page never queues keyed calls (a second one in flight is refused). An engine cannot wait for a cooldown: it refuses with "prepare again at slot N" and the client waits. A
   link window may start ahead (within maxStartSlots): submit at its start. DevKit's Yaci Store serves no transaction
   CBOR, so pages there bind keyed inputs by Ctx or the balance equation. `js/state-client/test/fixtures/
   registry.description.json` is a copy of the generated description (`RegistryDescriptionTest` fails when stale).
