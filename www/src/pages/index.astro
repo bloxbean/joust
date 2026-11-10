@@ -4,7 +4,7 @@ import { Code } from 'astro:components';
 import '../styles/landing.css';
 import { SITE } from '../../site.config.mjs';
 import { JAVA, JAVA_CLIENT, JSC, JS, GRADLE, NPM } from '../components/landing/samples.mjs';
-import mark from '../assets/joust-mark.svg?raw';
+import mark from '../assets/joust-emblem.svg?raw';
 import overviewSvg from '../assets/diagrams/joust-overview.svg';
 import sameMethodSvg from '../assets/diagrams/same-method.svg';
 import kindsSvg from '../assets/diagrams/state-kinds.svg';
@@ -39,12 +39,14 @@ const ecosystem = [
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>JOUST: state contracts for Cardano, in Java</title>
+  <title>JOUST: State Contract Simplified</title>
   <meta name="description" content={SITE.description} />
   <link rel="canonical" href={SITE.url + '/'} />
-  <meta property="og:title" content="JOUST: state contracts for Cardano, in Java" />
+  <meta property="og:title" content="JOUST: State Contract Simplified" />
   <meta property="og:description" content={SITE.description} />
   <meta property="og:type" content="website" />
+  <meta property="og:image" content={SITE.url + '/joust-knight.png'} />
+  <meta property="og:image:alt" content="JOUST — State Contract Simplified" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -71,7 +73,8 @@ const ecosystem = [
       <div class="glow glow-a"></div><div class="glow glow-b"></div>
       <div class="wrap hero-grid">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="dot"></span> Java &middot; cardano-client-lib &middot; Plutus V3 &middot; Pre-release</p>
+          <img class="hero-logo" src="/joust-knight.svg" width="200" height="200" alt="JOUST — State Contract Simplified" />
+          <p class="eyebrow"><span class="dot"></span> Java &middot; cardano-client-lib &middot; Plutus V3 &middot; Experimental</p>
           <h1>State contracts for Cardano, <span class="grad">in Java.</span></h1>
           <p class="lead">
             Write a state record and the methods that change it. JOUST compiles the same Java method into the
@@ -167,7 +170,7 @@ const ecosystem = [
             <a class="card path" href="/languages/jsc/"><h3>.jsc, when you want it</h3><p>A compact contract syntax that lowers to the same Java contract at build time.</p></a>
           </div>
         </div>
-        <p class="note">JOUST is pre-release: Maven snapshots are published. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
+        <p class="note">JOUST is experimental, a research and learning project: not for production. Release candidates (<code>0.1.0-pre1-rc2</code>) are in the BloxBean release repository; nothing is on Maven Central yet. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
       </div>
     </section>
 
@@ -192,6 +195,7 @@ const ecosystem = [
               <a class="btn btn-ghost" href="/start/quick-start-npm/">Quick start: JavaScript &amp; TypeScript</a>
               <a class="link-arrow" href="/apps/pages/">How pages work &rarr;</a>
             </div>
+            <p class="note">The npm packages are not released yet: until they are, the quick start installs them from a local registry.</p>
           </div>
         </div>
         <figure class="diagram"><img src={browserSvg.src} width={browserSvg.width} height={browserSvg.height} alt="A JOUST page from the browser to the chain" loading="lazy" /></figure>
@@ -229,7 +233,7 @@ const ecosystem = [
 
   <footer class="footer">
     <div class="wrap footer-inner">
-      <div class="brand small"><span class="brand-mark" set:html={mark} /><span>JOUST</span><em>Java On UPLC STate</em></div>
+      <div class="brand small"><span class="brand-mark" set:html={mark} /><span>JOUST</span><em>{SITE.tagline}</em></div>
       <nav>
         <a href="/start/why-joust/">Docs</a>
         <a href="/reference/examples/">Examples</a>

@@ -1,4 +1,4 @@
-/* The JOUST landing page: a light theme, indigo shields and amber lances; code windows stay dark for contrast. */
+/* The JOUST landing page: a light theme (the Knight logo in its original navy and cyan); code windows stay dark for contrast. */
 :root {
   --bg: #fbfbfe;
   --bg-2: #f3f4fb;
@@ -56,6 +56,7 @@ h1, h2, h3, h4 { margin: 0; letter-spacing: -0.02em; line-height: 1.15; }
   background: radial-gradient(ellipse at 15% 0%, rgba(79, 76, 224, 0.10), transparent 55%), radial-gradient(ellipse at 90% 30%, rgba(245, 158, 11, 0.10), transparent 50%); }
 .glow { display: none; }
 .hero-grid { position: relative; display: grid; grid-template-columns: 1fr 1.05fr; gap: 52px; align-items: center; }
+.hero-logo { display: block; width: 200px; height: auto; margin: 0 0 20px -14px; }
 .eyebrow { display: inline-flex; align-items: center; gap: 10px; font-size: 0.82rem; font-weight: 600; letter-spacing: 0.03em; color: var(--muted);
   border: 1px solid var(--line-2); border-radius: 999px; padding: 6px 14px; margin: 0 0 24px; background: var(--panel); }
 .eyebrow.amber { color: var(--amber); border-color: #f2c47c; background: var(--amber-soft); }

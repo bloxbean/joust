@@ -13,7 +13,8 @@ export default defineConfig({
     starlight({
       title: 'JOUST',
       description: SITE.description,
-      logo: { src: './src/assets/joust-mark.svg', replacesTitle: false },
+      // The Knight emblem: navy on the light theme, #eef2fd on the dark one (docs/assets/logo/ in the repository).
+      logo: { light: './src/assets/joust-emblem.svg', dark: './src/assets/joust-emblem-on-dark.svg', replacesTitle: false },
       favicon: '/favicon.svg',
       social: [{ icon: 'github', label: 'GitHub', href: SITE.repo }],
       editLink: { baseUrl: `${SITE.repo}/edit/main/www/` },
