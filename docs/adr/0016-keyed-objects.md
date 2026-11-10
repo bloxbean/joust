@@ -5,7 +5,9 @@
 **Builds on:** ADR-0001 (A: I1–I14), ADR-0003 (owned objects: I18–I21), ADR-0007 (reserved token kinds: I27), ADR-0009
 (invariants, quorums), ADR-0012 (several owned types: I42, I43), ADR-0011 (composition), ADR-0013 (page verifier),
 ADR-0015 (npm parity).
-**Stack:** #1–#32, #36, then this. Design only: no code changes.
+**Stack:** #1–#32, #36, then this (PR #37).
+**Implementation:** M1–M3 are implemented in PR #37 (see the implementation notes and reviews after §10); M4, keyed
+types in asset-aware contracts, is a follow-up ADR.
 **Risk:** high. Anyone may spend a *neighbour's* UTxO to relink it. A mistake here moves other users' funds, breaks
 uniqueness, or makes keys impossible to insert or remove for good.
 
