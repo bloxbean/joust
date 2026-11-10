@@ -1,0 +1,38 @@
+package org.julclang.state.runtime;
+
+import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.BytesPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.ListPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
+import com.bloxbean.cardano.client.util.HexUtil;
+import org.junit.jupiter.api.Test;
+
+import java.math.BigInteger;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * ADR-0016 M3 review (F94, R-F11): a relink is written canonically, whatever encoding the node's writer chose; the Data
+ * is unchanged apart from next and linkedAt.
+ */
+class KeyedRelinkTest {
+
+    @Test
+    void aRelinkOfADefiniteListNodeIsCanonical() throws Exception {
+        // A value record whose list another writer encoded with a definite length.
+        var definite = new ListPlutusData(new java.util.ArrayList<>(List.of(BytesPlutusData.of(new byte[]{1}))), false);
+        var value = KeyedType.constr(0, List.of(BytesPlutusData.of(new byte[]{0x61}), definite));
+        var node = (ConstrPlutusData) PlutusData.deserialize(KeyedType.constr(4, List.of(BytesPlutusData.of(new byte[32]),
+                BytesPlutusData.of(new byte[0]), BigIntPlutusData.of(0), value)).serializeToBytes());
+        assertTrue(HexUtil.encodeHexString(node.serializeToBytes()).contains("81"), "the input keeps its definite list");
+        var relinked = KeyedType.relinked(node, new byte[]{0x62}, BigInteger.valueOf(1_800_000_000_000L));
+        String hex = HexUtil.encodeHexString(relinked.serializeToBytes());
+        // Canonical: the list indefinite (9f ... ff), as for freshly built data.
+        var fresh = KeyedType.constr(4, List.of(BytesPlutusData.of(new byte[32]), BytesPlutusData.of(new byte[]{0x62}),
+                BigIntPlutusData.of(1_800_000_000_000L), KeyedType.constr(0, List.of(BytesPlutusData.of(new byte[]{0x61}),
+                        ListPlutusData.of(BytesPlutusData.of(new byte[]{1}))))));
+        assertEquals(HexUtil.encodeHexString(fresh.serializeToBytes()), hex);
+    }
+}
