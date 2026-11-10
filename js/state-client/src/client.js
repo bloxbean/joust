@@ -13,7 +13,7 @@ import { txHash as hashOf, poolKeyHash } from './ledger.js';
 import { Data, decodeData, dataHex } from './pdata.js';
 import { bytesToHex } from './hex.js';
 import { verifyKeyed, isKeyedCall, keyedTypeOf, keyIdOf, listDatum, compareKeys } from './keyed.js';
-import { defaultRetryStore, pendingOf, newRecord, settle, PendingKeyedOperation } from './retries.js';
+import { defaultRetryStore, pendingOf, newRecord, settle, withKeyedLock, PendingKeyedOperation } from './retries.js';
 import { DEFAULT_LIMITS } from './verify.js';
 
 export class VerificationError extends Error {
@@ -341,6 +341,8 @@ JoustContract.prototype.runKeyed = async function runKeyed(api, call, opts = {})
   for (const a of call.meta.args) if (!(a.name in (call.args ?? {}))) throw new Error(`${call.meta.name}: missing argument ${a.name}`);
   if (call.meta.payable === false && call.pay?.lovelace && BigInt(call.pay.lovelace) !== 0n) throw new Error(`${call.meta.name} is not payable`);
   if (call.governor) throw new Error(`${call.meta.name}: a governor on a keyed call is not supported by the page yet`);
+  // F84: the page cannot recompute a keyed step yet; a page that asked for recomputation is told so, not skipped.
+  if (this.portable) throw new Error(`${call.meta.name}: recomputing a keyed call in the page (portable) is not supported yet; it is refused rather than skipped`);
   const args = {};
   for (const a of call.meta.args) args[a.name] = this.codec.decode(a.schema, this.codec.encode(a.schema, call.args[a.name], a.name));
   call = { ...call, args };
@@ -351,33 +353,43 @@ JoustContract.prototype.runKeyed = async function runKeyed(api, call, opts = {})
   if (co.apis.length && !signedByOthers(call.meta)) throw new Error(`${call.meta.name} takes no co-signers`);
   const store = this.retryStore ?? (this.retryStore = defaultRetryStore());
   const limits = { ...DEFAULT_LIMITS, ...this.limits };
+  // The whole lifecycle under one lock per network: across calls of this page and across its tabs (F79, R-F3).
+  return withKeyedLock(networkId, () => this.runKeyedLocked(api, call, opts, { wallet, co, store, limits, networkId }));
+};
 
-  // The operation's record: an unsettled one makes this call a retry of its operation.
+/** {@link #runKeyed}'s body, holding the network's keyed-operation lock. */
+JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call, opts, { wallet, co, store, limits, networkId }) {
+  const { CSL } = this;
+  // The operation's record (the page's form of D7, retries.js): an unsettled one makes this call a retry of it.
   let rec = await pendingOf(store, wallet, networkId);
+  let reuse = null;
   if (rec && opts.abandon === true) {
-    await store.delete(rec.id);   // the user's explicit choice: a new operation (an earlier attempt may still land)
+    await store.delete(rec.id, rec.rev);   // the user's explicit choice: a new operation (an earlier attempt may still land)
     rec = null;
   }
   if (rec) {
-    const s = await settle(rec, this.chain);
+    const s = await settle(rec, this.chain, { clock: this.deployment.slotConfig, wallet });
     if (s.settled) {
-      await store.delete(rec.id);
-      if (s.reason === 'the designated input is spent') {
-        throw new Error(`the previous keyed operation of this wallet (${rec.what?.method ?? 'a keyed call'}) is settled: its`
-          + ` designated input ${rec.designated} is spent, so one of its attempts (${rec.attempts.map((a) => a.txHash).join(', ')})`
-          + ' may have landed; check before calling again (a new call is a new operation)');
+      await store.delete(rec.id, rec.rev);
+      if (s.outcome === 'may have landed') {
+        throw new Error(`the previous keyed operation of this wallet (${rec.what?.method ?? 'a keyed call'}) has ended: every`
+          + ` attempt's window has passed and its designated input ${rec.designated} is gone, so one of its attempts`
+          + ` (${rec.attempts.map((a) => a.txHash).join(', ')}) may have landed; check before calling again (a new call is a new operation)`);
       }
+      // Failed (or nothing was signed): a new operation, on the same input where the wallet still has it.
+      if (wallet.utxos.has(rec.designated)) reuse = { ref: rec.designated, address: wallet.utxos.get(rec.designated).address };
       rec = null;
     }
   }
   if (!rec) {
-    const d = designatedFor(wallet);
+    const d = reuse ?? designatedFor(wallet);
     if (!d) throw new Error('the wallet has no ordinary (ADA-only) UTxO of at least 5 ADA to designate for a keyed call (ADR-0016 D7)');
     rec = newRecord(wallet, networkId, d, { contract: this.name, method: call.meta.name, instance: call.instance ?? null, key: call.key ?? null });
     await store.put(rec);
   }
+  // A record no attempt was handed out for may go: nothing of it can land.
   const forget = async () => {
-    if (!rec.attempts.length) await store.delete(rec.id);
+    if (!rec.attempts.length) await store.delete(rec.id, rec.rev);
   };
 
   let prepared;
@@ -428,8 +440,9 @@ JoustContract.prototype.runKeyed = async function runKeyed(api, call, opts = {})
       throw e;
     }
   }
-  // Recorded before the wallet signs: from here this attempt may land.
-  rec.attempts.push({ txHash, validFrom: report.plan.validFrom ?? null, validTo: report.plan.validTo ?? null });
+  // Recorded before the wallet is asked to sign, and never removed on a signing error (F82): an error does not prove
+  // that no signature escaped, and keeping the attempt only delays the record's expiry (retries spend the same input).
+  rec = { ...rec, rev: rec.rev + 1, attempts: [...rec.attempts, { txHash, validFrom: report.plan.validFrom ?? null, validTo: report.plan.validTo ?? null }] };
   await store.put(rec);
   let signed;
   try {
@@ -438,11 +451,7 @@ JoustContract.prototype.runKeyed = async function runKeyed(api, call, opts = {})
     signed = assemble(CSL, prepared.cbor, ...witnesses);
     if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
   } catch (e) {
-    // Not signed (refused, or a witness the page cannot use): this attempt cannot land.
-    rec.attempts.pop();
-    if (rec.attempts.length) await store.put(rec);
-    else await store.delete(rec.id);
-    throw e;
+    throw new PendingKeyedOperation(rec, e);
   }
   try {
     // A link window may start a little ahead (at most the page's start limit): submitted once it has started.
@@ -453,7 +462,8 @@ JoustContract.prototype.runKeyed = async function runKeyed(api, call, opts = {})
   } catch (e) {
     throw new PendingKeyedOperation(rec, e);   // the record stays: a retry must spend the same input
   }
-  await store.delete(rec.id);
+  // Confirmed: the operation happened; a later call is a new operation the application asked for (ADR M3 notes).
+  await store.delete(rec.id, rec.rev);
   return { txHash: signed.txHash, report, ...(call.kind === 'keyedInit' ? { key: report.created } : {}) };
 };
 
@@ -461,9 +471,11 @@ JoustContract.prototype.runKeyed = async function runKeyed(api, call, opts = {})
 JoustContract.prototype.abandonKeyed = async function abandonKeyed(api) {
   const wallet = await walletView(this.CSL, api);
   const store = this.retryStore ?? (this.retryStore = defaultRetryStore());
-  const rec = await pendingOf(store, wallet, this.deployment.networkId);
-  if (rec) await store.delete(rec.id);
-  return rec;
+  return withKeyedLock(this.deployment.networkId, async () => {
+    const rec = await pendingOf(store, wallet, this.deployment.networkId);
+    if (rec) await store.delete(rec.id, rec.rev);
+    return rec;
+  });
 };
 
 /**
