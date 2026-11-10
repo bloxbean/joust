@@ -10,6 +10,11 @@ pluginManagement {
             url = uri("https://repo.bloxbean.org/maven/snapshots")
             mavenContent { snapshotsOnly() }
         }
+        // BloxBean Maven repository: releases and release candidates, such as JuLC 0.1.0-pre21-rc1.
+        maven {
+            url = uri("https://repo.bloxbean.org/maven/releases")
+            mavenContent { releasesOnly() }
+        }
         gradlePluginPortal()
     }
 }
