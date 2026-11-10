@@ -79,6 +79,7 @@ export function joustRuntime(o) {
     }
     return null;
   };
+  const keyedDesc = (d) => (d?.['x-joust']?.keyed ?? []).some((k) => typeof k === 'object');
   const usesMaps = (d) => Object.values(d?.definitions ?? {}).some((def) => (def.anyOf ?? [])
     .some((alt) => (alt.fields ?? []).some((f) => f.$ref?.endsWith('/org.julclang.state.api.MerkleMap'))));
   // Each request carries its deployment's pinned reference scripts: the engine reads them by reference instead of
@@ -197,6 +198,8 @@ export function joustRuntime(o) {
         .some((a) => a.returns?.sends || a.returns?.deposits || a.policies?.receives)) {
         d.outputVerifier = await ensureVerifier('joust:outputVerifier', wallet, payer);
       }
+      // A keyed contract's page binds its calls' windows to the slot clock (ADR-0016 F80): the deployment pins it.
+      if (keyedDesc(desc) && o.clock) d.slotConfig = { ...o.clock };
       deployments[d.contract] = d;
       return d;
     },
@@ -213,7 +216,8 @@ export function joustRuntime(o) {
     options(contract, extra = {}) {
       const d = deploymentOf(contract);
       if (!d) throw new Error(`no deployment of ${contract}: run joust deploy (or pass deployments)`);
-      return { service, chain, deployment: d, ...extra };
+      const keyedClock = !d.slotConfig && o.clock && keyedDesc(descriptionOf(d.contract));
+      return { service, chain, deployment: keyedClock ? { ...d, slotConfig: { ...o.clock } } : d, ...extra };
     },
   };
 }

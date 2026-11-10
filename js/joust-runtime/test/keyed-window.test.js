@@ -101,8 +101,53 @@ test('a cooling anchor\'s insert under 100 ms slots: the engine waits, then buil
     assert.ok(to - S <= 900, `${what}: the end within the page's 900 slots`);
     assert.ok((to - from) * slotLengthMs <= kt.linkWindowMs, `${what}: the window at most W`);
     assert.ok(clock.zeroTimeMs + from * slotLengthMs >= ready, `${what}: the start after the cooldown`);
-    const v = await verifyKeyed({ description, deployment, txHex: r.cbor, call, wallet, chain: chainOf(x.snapshot, S) });
+    // The page's own clock is this one (R-F5): pinned in the deployment, and "now" is the snapshot's tip.
+    const realNow = Date.now;
+    Date.now = () => clock.zeroTimeMs + S * slotLengthMs + 1;
+    let v;
+    try {
+      v = await verifyKeyed({ description, deployment: { ...deployment, slotConfig: clock }, txHex: r.cbor, call, wallet, chain: chainOf(x.snapshot, S) });
+    } finally {
+      Date.now = realNow;
+    }
     assert.deepEqual(v.problems, [], `${what}: ${v.problems.join('; ')}`);
     console.log(`[window] ${what}: [${from}, ${to}) at tip ${S}: ${(to - from) * slotLengthMs / 1000} s, starting ${(from - S) * slotLengthMs / 1000} s ahead; the page accepts it`);
   }
+});
+
+test('every recorded registry transaction passes the page with the recorded clock pinned (linkedAt == upper, page-clock limits)', { skip }, async () => {
+  const dir = join(FIXTURES, 'registry');
+  let n = 0;
+  for (const f of readdirSync(dir).sort()) {
+    const x = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+    const description = JSON.parse(contractsOf(x)[0].description);
+    const xj = description['x-joust'];
+    const meta = [...xj.actions, ...xj.creations].find((a) => a.name === x.call.method);
+    const S = Number(x.snapshot.tip.slot);
+    const chain = chainOf(x.snapshot, S);
+    const pinned = await chain.utxo(x.call.referenceScripts[0]);
+    const deployment = { policy: pinned.referenceScriptHash, address: pinned.address, networkId: 0, referenceScripts: x.call.referenceScripts,
+      slotConfig: x.clock };
+    const wallet = { addresses: [x.call.address], keyHashes: [paymentKeyHashOf(x.call.address)], networkId: 0,
+      utxos: new Map(x.call.walletUtxos.map((u) => [`${u.txHash}#${u.index}`, { address: u.address, value: new Map(u.value.map((a) => [a.unit, BigInt(a.quantity)])) }])) };
+    const args = {};
+    for (const a of meta.args) {
+      const v = x.call.args[a.name];
+      args[a.name] = typeof v === 'string' && /^-?\d+$/.test(v) && /integer/.test(JSON.stringify(a.schema)) ? BigInt(v) : v;
+    }
+    const call = { kind: x.call.kind, meta, args, pay: { lovelace: BigInt(x.call.pay?.lovelace ?? 0) }, instance: x.call.instance,
+      key: x.call.object ?? undefined, designated: x.call.designated };
+    const realNow = Date.now;
+    Date.now = () => Number(x.clock.zeroTimeMs) + S * Number(x.clock.slotLengthMs) + 500;
+    let v;
+    try {
+      v = await verifyKeyed({ description, deployment, txHex: x.cbor, call, wallet, chain });
+    } finally {
+      Date.now = realNow;
+    }
+    assert.deepEqual(v.problems, [], `${f}: ${v.problems.join('; ')}`);
+    n++;
+  }
+  console.log(`[window] ${n} recorded registry transactions accepted by the page with the clock pinned`);
+  assert.equal(n, 22);
 });

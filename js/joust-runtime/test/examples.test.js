@@ -11,7 +11,7 @@ import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devkitSweep, devWallet, JoustContract, runComposed, ogmiosProvider } from '../src/index.js';
-import { memoryRetryStore, PendingKeyedOperation } from '@julclang/state-client';
+import { memoryRetryStore, PendingKeyedOperation, VerificationError, planOf } from '@julclang/state-client';
 import { walletView, verifyRegistration, approvalsData, dataHex } from '@julclang/state-client';
 import { build } from '../../joust/src/build.js';
 import { tamperings } from '../../../examples/dapp/frontend/src/tamper.js';
@@ -697,36 +697,79 @@ test('Registry: keyed objects (ADR-0016 M3): heads, inserts, keyed actions, a re
   await name.call(ann, 'withdraw', { amount: ADA });
   assert.equal((await name.read()).value.stake, 6n * ADA);
 
-  // I5: every tampering of an engine-built keyed action is refused before the wallet is asked.
+  // I5: every tampering of an engine-built keyed action is refused by the page's verifier before the wallet is asked.
+  // The hostile service describes its tampered transaction with a matching plan (F85), so the plan check plays no part.
   let refused = 0;
   for (let i = 0, total = 1; i < total; i++) {
+    let what = '';
     const evil = { ...rt.service, async prepare(req) {
       const p = await rt.service.prepare(req);
       const all = Object.entries(tamperings(CSL, p.cbor, [ann.address]));
       total = all.length;
-      return { ...p, cbor: all[i][1] };
+      what = all[i][0];
+      return { ...p, cbor: all[i][1], plan: planOf(all[i][1]) };
     } };
     const k = new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: evil, chain: rt.chain });
     let asked = false;
     const watched = { ...ann, signTx: (...x) => { asked = true; return ann.signTx(...x); } };
-    await assert.rejects(k.at(inst.id).keyed('Entry').object(NAME).call(watched, 'upgrade', { tier: 3n }, { lovelace: ADA }), undefined, `tampering ${i}`);
+    await assert.rejects(k.at(inst.id).keyed('Entry').object(NAME).call(watched, 'upgrade', { tier: 3n }, { lovelace: ADA }),
+      (e) => e instanceof VerificationError && !e.problems.some((x) => /plan does not describe/.test(x)), `tampering ${i} (${what})`);
     assert.equal(asked, false, `tampering ${i} reached the wallet`);
     refused++;
   }
-  console.log(`I5: ${refused} tamperings of an engine-built keyed action refused before signing`);
+  console.log(`I5: ${refused} tamperings of an engine-built keyed action refused by the verifier before signing`);
+  // The plan check on its own: a tampered transaction with the honest plan is refused for the plan.
+  {
+    const stale = { ...rt.service, async prepare(req) {
+      const p = await rt.service.prepare(req);
+      return { ...p, cbor: tamperings(CSL, p.cbor, [ann.address])['an extra output to an attacker'] ?? p.cbor };
+    } };
+    const k = new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: stale, chain: rt.chain });
+    await assert.rejects(k.at(inst.id).keyed('Entry').object(NAME).call(ann, 'upgrade', { tier: 3n }, { lovelace: ADA }), /plan does not describe/);
+  }
 
   // A second name after the first: its anchor is cooling down, so the engine names the slot to prepare again at and
   // the page waits (D7 step 5); the window then starts within the page's limits.
   const t0 = Date.now();
-  // D11 on a real insert: a service whose transaction does not spend the operation's designated input, and one that
-  // skims the relinked anchor, are refused before the wallet is asked.
+  // D11 on a real insert, by the page's rules (R-F5): the engine prepares with the page's designated input; a hostile
+  // service then skims the relinked anchor into the wallet's change, or spends another input than the designated one.
+  const anchorUnit = (await entries.find(NAME)) && entries.unit(NAME);
+  const skim = (cbor) => {
+    const tx = CSL.Transaction.from_hex(cbor);
+    const b = tx.body();
+    const outs = CSL.TransactionOutputs.new();
+    for (let i = 0; i < b.outputs().len(); i++) {
+      const o = b.outputs().get(i);
+      const v = o.amount();
+      const coin = BigInt(v.coin().to_str());
+      const holds = v.multiasset()?.get_asset(CSL.ScriptHash.from_hex(anchorUnit.slice(0, 56)), CSL.AssetName.new(Buffer.from(anchorUnit.slice(56), 'hex')))?.to_str() === '1';
+      const isChange = o.address().to_bech32() === bob.address && !o.has_plutus_data();
+      if (holds) v.set_coin(CSL.BigNum.from_str(String(coin - ADA)));
+      else if (isChange) v.set_coin(CSL.BigNum.from_str(String(coin + ADA)));
+      const n = CSL.TransactionOutput.new(o.address(), v);
+      if (o.has_plutus_data()) n.set_plutus_data(o.plutus_data());
+      outs.add(n);
+    }
+    const nb = CSL.TransactionBody.new_tx_body(b.inputs(), outs, b.fee());
+    if (b.ttl_bignum()) nb.set_ttl(b.ttl_bignum());
+    if (b.validity_start_interval_bignum()) nb.set_validity_start_interval_bignum(b.validity_start_interval_bignum());
+    if (b.collateral()) nb.set_collateral(b.collateral());
+    if (b.collateral_return()) nb.set_collateral_return(b.collateral_return());
+    if (b.total_collateral()) nb.set_total_collateral(b.total_collateral());
+    if (b.required_signers()) nb.set_required_signers(b.required_signers());
+    if (b.reference_inputs()) nb.set_reference_inputs(b.reference_inputs());
+    if (b.script_data_hash()) nb.set_script_data_hash(b.script_data_hash());
+    if (b.network_id()) nb.set_network_id(b.network_id());
+    if (b.mint()) nb.set_mint(b.mint());
+    return CSL.Transaction.new(nb, tx.witness_set(), tx.auxiliary_data()).to_hex();
+  };
   const watchedBob = (flag) => ({ ...bob, signTx: (...x) => { flag.asked = true; return bob.signTx(...x); } });
-  for (const [what, tamper, re] of [
-    ['another input than the designated one', (req) => ({ ...req, designated: null }), /designated/],
+  for (const [what, evilPrepare, re] of [
+    ['a skimmed relink', async (req) => { const p = await rt.service.prepare(req); const c = skim(p.cbor); return { ...p, cbor: c, plan: planOf(c) }; }, /relinked anchor skims/],
   ]) {
     const flag = { asked: false };
-    const evil = { ...rt.service, prepare: (req) => rt.service.prepare(tamper(req)) };
-    const k = new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: evil, chain: rt.chain });
+    const k = new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: { ...rt.service, prepare: evilPrepare },
+      chain: rt.chain });
     await assert.rejects(k.at(inst.id).keyed('Entry').insert(watchedBob(flag), 'claim', { name: OTHER, tier: 0n, guardians: [bob.keyHash], needed: 1n }),
       re, what);
     assert.equal(flag.asked, false, `${what}: the wallet was asked`);
@@ -736,25 +779,33 @@ test('Registry: keyed objects (ADR-0016 M3): heads, inserts, keyed actions, a re
   assert.equal(other.key, OTHER);
   assert.deepEqual((await entries.keys()).map((e) => e.key), [NAME, OTHER]);
 
-  // Retries (D11): a wallet that says "rejected" while the transaction lands. The page then holds the operation's
-  // record (designated input); the retry finds the input spent, reports the operation settled, and signs nothing.
+  // Retries (D11, the page's form of D7): a wallet that says "rejected" while it withholds the signed attempt. The
+  // page keeps the operation's record (its designated input) until every attempt's window has passed by its own clock.
+  await devkitTopUp(ann.address, 50, ADMIN, { CSL, chain: rt.chain });
   const store = memoryRetryStore();
-  const page = () => new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: rt.service, chain: rt.chain,
+  let withheld = null;
+  const lying = { ...ann, submitTx: async (cbor) => { withheld = cbor; throw new Error('rejected (a lying relay)'); } };
+  const page = (service = rt.service) => new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service, chain: rt.chain,
     retryStore: store });
-  const lying = { ...ann, submitTx: async (cbor) => { await ann.submitTx(cbor); throw new Error('rejected (a lying relay)'); } };
   await assert.rejects(page().at(inst.id).keyed('Ballot').object(ann.keyHash).call(lying, 'change', { choice: 1n }), PendingKeyedOperation);
   const [rec] = await store.all();
   assert.equal(rec.attempts.length, 1);
-  // After a reload (a new page over the same store), a hostile service's retry that ignores the input is refused.
-  const ignoring = { ...rt.service, prepare: (req) => rt.service.prepare({ ...req, designated: null }) };
-  const reloaded = new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: ignoring, chain: rt.chain, retryStore: store });
+  // After a reload (a new page over the same store), a hostile service prepares the retry on another wallet input: the
+  // page refuses it before the wallet is asked (the service is reached).
+  const another = (await rt.chain.utxosAt(ann.address)).find((u) => u.ref !== rec.designated && u.value.size === 1 && u.value.get('lovelace') >= 5n * ADA);
+  assert.ok(another, 'a second ordinary input of the wallet');
+  let reached = false;
+  const elsewhere = { ...rt.service, prepare: (req) => { reached = true; return rt.service.prepare({ ...req, designated: another.ref }); } };
   let asked = false;
   const watchedAnn = { ...ann, signTx: (...x) => { asked = true; return ann.signTx(...x); } };
-  for (let i = 0; i < 30 && (await rt.chain.utxosAt(rec.address)).some((u) => u.ref === rec.designated); i++) await sleep(1000);
-  await assert.rejects(reloaded.at(inst.id).keyed('Ballot').object(ann.keyHash).call(watchedAnn, 'change', { choice: 2n }), /settled/);
-  assert.equal(asked, false);
-  assert.equal((await ballots.find(ann.keyHash)).value.choice, 1n, 'the first attempt landed, once');
+  await assert.rejects(page(elsewhere).at(inst.id).keyed('Ballot').object(ann.keyHash).call(watchedAnn, 'change', { choice: 2n }),
+    /does not spend the operation's designated input/);
+  assert.ok(reached && !asked, 'the hostile service was reached, the wallet was not asked');
+  // An honest retry spends the designated input and lands; the withheld first attempt then can never land.
+  await page().at(inst.id).keyed('Ballot').object(ann.keyHash).call(ann, 'change', { choice: 1n });
+  assert.equal((await ballots.find(ann.keyHash)).value.choice, 1n);
   assert.deepEqual(await store.all(), []);
+  await assert.rejects(rt.chain.submit(withheld), 'the withheld first attempt cannot land: its designated input is spent');
 
   // The two-input forgery on a removal: a chain API that reports the node low and the predecessor high is refused (the
   // node's value is bound by its Ctx; DevKit's Yaci Store serves no transaction CBOR).

@@ -298,3 +298,27 @@ test('R-F4: an insert\'s and a creation\'s Ctx balance is 0', async () => {
   refused(await check(w, cr, (s) => { s.mintRedeemer = mintR(w, 'CreateInstance', { seed: TxOutRef(ref('a1')), ctx: w.ctx(0n, 1n) }); return s; }),
     /Ctx balance is 1, not 0/, 'a creation with a balance');
 });
+
+test('R-F5: chain.verifiedOutput reads an input\'s value from its producing transaction, and refuses a forged one', async () => {
+  const { chainOf: chainView } = await import('../src/chain.js');
+  const { txHash } = await import('../src/ledger.js');
+  const w = world();
+  const scn = insertScn(w);
+  const cbor = build(w, structuredClone(scn.spec), scn.truth);
+  const forged = build(w, (() => { const s = structuredClone(scn.spec); s.outputs[0].lovelace += 1n; return s; })(), scn.truth);
+  const h = txHash(cbor);
+  const honest = await chainView({ txCbor: async () => cbor }).verifiedOutput(h + '#0');
+  assert.equal(honest.address, SA);
+  assert.equal(honest.value.get('lovelace'), scn.spec.outputs[0].lovelace);
+  assert.equal(honest.value.get(w.unit(w.entry, 'aa')), 1n);
+  assert.ok(honest.size > 100 && honest.inlineDatum);
+  await assert.rejects(chainView({ txCbor: async () => forged }).verifiedOutput(h + '#0'), /served another transaction/);
+});
+
+test('F83: joust-gen refuses a keyed call named like a generated wrapper member', async () => {
+  const { generate } = await import('../src/codegen.js');
+  assert.ok(generate(DESCRIPTION).js.includes('class RegistryEntryObject'));
+  const d = structuredClone(DESCRIPTION);
+  d['x-joust'].actions.find((a) => a.name === 'upgrade').name = 'read';
+  assert.throws(() => generate(d), /keyed call read clashes with the generated object's read/);
+});
