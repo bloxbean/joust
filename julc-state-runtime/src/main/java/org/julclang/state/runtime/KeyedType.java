@@ -110,7 +110,8 @@ public record KeyedType<R>(String name, int headTag, int keyIndex, int maxKeyByt
 
     /**
      * {@code d} with {@code next} and {@code linkedAt} replaced (relinked, D4b), in the ledger's canonical encoding: every
-     * copied field is re-encoded (non-empty lists indefinite), whatever encoding the node's writer chose. The Data is the
+     * copied field is re-encoded (non-empty lists indefinite), whatever encoding the node's writer chose, except that a
+     * map is written in canonical key order with one entry per key ({@link #requireRelinkable} refuses those). The Data is the
      * same (the validator compares decoded fields), and a page then needs to accept only the canonical bytes, from which it
      * computes the relink's allowance (ADR-0016 M3 review: F94, R-F11, R-F12).
      */
@@ -123,17 +124,45 @@ public record KeyedType<R>(String name, int headTag, int keyIndex, int maxKeyByt
     }
 
     /**
-     * Refuses to relink a list node whose datum holds a Plutus map with a repeated key (ADR-0016 M3 review, R-F17):
-     * cardano-client-lib keeps one entry per key when it decodes a map, so a relink would write different Data, which
-     * the page and the validator refuse. Such a node cannot be an anchor or a predecessor through this runtime.
+     * Refuses to relink a list node when the relink would change its Data beyond {@code next} and {@code linkedAt}
+     * (ADR-0016 M3 review, R-F17, F99): cardano-client-lib keeps one entry per key when it decodes a Plutus map and writes
+     * map entries in canonical key order, so a datum holding a map with a repeated key, or with its keys in another
+     * order, would be relinked to different Data, which the page and the validator refuse. Checked by relinking the
+     * datum as the runtime does and comparing every other field with the original, decoded by JuLC (which keeps each
+     * entry in order). Such a node cannot be an anchor or a predecessor through this runtime.
      */
     static void requireRelinkable(String inlineDatumHex, String what) {
         if (inlineDatumHex == null) return;
-        if (duplicateMapKeys(org.julclang.core.cbor.PlutusDataCborDecoder.decode(
-                com.bloxbean.cardano.client.util.HexUtil.decodeHexString(inlineDatumHex)))) {
-            throw new org.julclang.state.api.RequireException(what + ": the neighbouring node's datum holds a Plutus map with a"
-                    + " repeated key; relinking it would change its Data, so it cannot be relinked here (ADR-0016 M3, R-F17)");
+        byte[] bytes = com.bloxbean.cardano.client.util.HexUtil.decodeHexString(inlineDatumHex);
+        var original = org.julclang.core.cbor.PlutusDataCborDecoder.decode(bytes);
+        String reason = null;
+        if (duplicateMapKeys(original)) {
+            reason = "holds a Plutus map with a repeated key";
+        } else {
+            try {
+                var rewritten = org.julclang.core.cbor.PlutusDataCborDecoder.decode(
+                        relinked((ConstrPlutusData) PlutusData.deserialize(bytes), new byte[0], BigInteger.ZERO).serializeToBytes());
+                if (!sameApartFromLink(original, rewritten)) reason = "holds a Plutus map whose keys are not in canonical order";
+            } catch (Exception e) {
+                reason = "cannot be re-encoded (" + e.getMessage() + ")";
+            }
         }
+        if (reason != null) {
+            throw new org.julclang.state.api.RequireException(what + ": the neighbouring node's datum " + reason + "; relinking"
+                    + " it would change its Data, so it cannot be relinked here (ADR-0016 M3, R-F17, F99)");
+        }
+    }
+
+    /** Both constructors alike in tag and every field but {@code next} (1) and {@code linkedAt} (2), compared as encoded by JuLC. */
+    private static boolean sameApartFromLink(org.julclang.core.PlutusData a, org.julclang.core.PlutusData b) {
+        if (!(a instanceof org.julclang.core.PlutusData.ConstrData x) || !(b instanceof org.julclang.core.PlutusData.ConstrData y)) return false;
+        if (x.tag() != y.tag() || x.fields().size() != y.fields().size()) return false;
+        for (int i = 0; i < x.fields().size(); i++) {
+            if (i == 1 || i == 2) continue;
+            if (!java.util.Arrays.equals(org.julclang.core.cbor.PlutusDataCborEncoder.encode(x.fields().get(i)),
+                    org.julclang.core.cbor.PlutusDataCborEncoder.encode(y.fields().get(i)))) return false;
+        }
+        return true;
     }
 
     private static boolean duplicateMapKeys(org.julclang.core.PlutusData d) {

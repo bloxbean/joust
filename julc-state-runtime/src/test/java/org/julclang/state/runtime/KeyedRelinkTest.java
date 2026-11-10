@@ -45,4 +45,19 @@ class KeyedRelinkTest {
         assertTrue(e.getMessage().contains("repeated key"), e.getMessage());
         assertDoesNotThrow(() -> KeyedType.requireRelinkable("d87a9f5820" + "00".repeat(32) + "4000d8799fa2010203" + "03ffff", "insert"));
     }
+
+    /** F99: unique map keys out of canonical order would be reordered by the relink: refused; canonical order relinks. */
+    @Test
+    void aNodeWithAMapOutOfCanonicalOrderIsNotRelinked() {
+        String pre = "d87a9f5820" + "00".repeat(32) + "4000d8799f";
+        // Refused: {3: 4, 1: 2} (reversed); {h'0101': 1, h'02': 2} (canonical order is shorter key first); nested in a list.
+        for (String m : java.util.List.of("a203040102", "a2420101014102" + "02", "9fa203040102ff")) {
+            var e = assertThrows(org.julclang.state.api.RequireException.class, () -> KeyedType.requireRelinkable(pre + m + "ffff", "remove"), m);
+            assertTrue(e.getMessage().contains("not in canonical order"), e.getMessage());
+        }
+        // Accepted: sorted unique keys, length first; an empty map; a definite list around a sorted map.
+        for (String m : java.util.List.of("a201020304", "a2410202420101" + "01", "a0", "81a201020304")) {
+            assertDoesNotThrow(() -> KeyedType.requireRelinkable(pre + m + "ffff", "remove"), m);
+        }
+    }
 }
