@@ -150,6 +150,8 @@ export declare class JoustKeyedObject {
 }
 /** A record store for keyed operations' designated inputs (ADR-0016 D11); IndexedDB in a browser. */
 export interface RetryStore {
+  /** The storage it reads and writes: stores share a scope exactly when they share records (default: the store itself). */
+  scope?: unknown;
   all(): Promise<unknown[]>;
   put(record: unknown): Promise<void>;
   delete(id: string): Promise<void>;

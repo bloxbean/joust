@@ -13,7 +13,7 @@ import { txHash as hashOf, poolKeyHash } from './ledger.js';
 import { Data, decodeData, dataHex } from './pdata.js';
 import { bytesToHex } from './hex.js';
 import { verifyKeyed, isKeyedCall, keyedTypeOf, keyIdOf, listDatum, compareKeys, KEYED_LIMITS } from './keyed.js';
-import { defaultRetryStore, pendingOf, newRecord, settle, exclusiveKeyed, inFlight, KeyedCallInProgress, PendingKeyedOperation, revOf } from './retries.js';
+import { defaultRetryStore, scopeOf, pendingOf, newRecord, settle, exclusiveKeyed, inFlight, KeyedCallInProgress, PendingKeyedOperation, revOf } from './retries.js';
 import { DEFAULT_LIMITS } from './verify.js';
 
 export class VerificationError extends Error {
@@ -512,8 +512,8 @@ JoustContract.prototype.abandonKeyed = function abandonKeyed(api) {
 
 /**
  * Removes the wallet's record: any (abandon), or only a tombstone (acknowledge; R-F16). The slot is checked
- * synchronously at entry, before the wallet's reads (F95): during the review of this wallet's own call, through the
- * same store and record (F97), an abandon is recorded for that call to honour; any other call in flight refuses this.
+ * synchronously at entry, before the wallet's reads (F95): during the review of this wallet's own call, through a
+ * store over the same storage (scope) holding its record (F97, F98), an abandon is recorded for that call to honour; any other call in flight refuses this.
  */
 JoustContract.prototype.endKeyed = function endKeyed(api, { acknowledgeOnly }) {
   const networkId = this.deployment.networkId;
@@ -525,8 +525,10 @@ JoustContract.prototype.endKeyed = function endKeyed(api, { acknowledgeOnly }) {
       const busy = () => new KeyedCallInProgress(`${what}: another keyed call is in progress on this page; call again when it has finished`);
       if (acknowledgeOnly || !flight.inReview) throw busy();
       const wallet = await walletView(this.CSL, api);
-      // Still the same call, in review, of this wallet, and its record in this client's store (F95, F97).
+      // Still the same call, in review, of this wallet, with its record in this client's storage: the same scope (a
+      // seeded copy of the records is not; F98) and the same record (F95, F97).
       if (inFlight.get(networkId) !== flight || !flight.inReview || !flight.keys.some((k) => wallet.keyHashes.includes(k))) throw busy();
+      if (scopeOf(store) !== flight.scope) throw busy();
       const rec = (await store.all()).find((r) => r.id === flight.record) ?? null;
       if (!rec || inFlight.get(networkId) !== flight || !flight.inReview) throw busy();
       flight.abandon = true;

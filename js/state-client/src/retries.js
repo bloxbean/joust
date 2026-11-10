@@ -26,11 +26,19 @@ export const revOf = (r) => (Number.isInteger(r?.rev) ? r.rev : 0);
 /** A record's revision must be the stored one's next (or 1 for a new record): otherwise another writer moved first. */
 export class RecordConflict extends Error {}
 
+/**
+ * The storage a store reads and writes (F98): two stores share a scope exactly when a write through one is a write
+ * through the other. Each memory store has its own (a seeded copy is a different storage); IndexedDB stores over the
+ * same database share one. A store without a `scope` is its own scope.
+ */
+export const scopeOf = (store) => store?.scope ?? store;
+
 /** A store of records in memory (Node, tests; a new store is a fresh page without IndexedDB), optionally seeded. */
 export function memoryRetryStore(initial = []) {
   let records = initial.map((r) => ({ ...r, attempts: r.attempts.map((a) => ({ ...a })) }));
   const copy = (r) => ({ ...r, attempts: r.attempts.map((a) => ({ ...a })) });
   return {
+    scope: Object.freeze({ kind: 'memory' }),   // this store's own: no other store writes these records
     async all() {
       return records.map(copy);
     },
@@ -72,6 +80,8 @@ export function indexedDbRetryStore(name = 'joust') {
     }
   };
   return {
+    // Every wrapper over this database's object store reads and writes the same records (the page's origin is implied).
+    scope: `indexeddb:${name}/keyed`,
     all: () => run('readonly', (s, done) => { const q = s.getAll(); q.onsuccess = () => done(q.result ?? []); }),
     put: (record) => run('readwrite', (s, done, fail) => {
       const q = s.get(record.id);
@@ -101,7 +111,7 @@ export function defaultRetryStore() {
 /** Thrown at once when a keyed call starts while another is in flight on the network, in this page or another tab. */
 export class KeyedCallInProgress extends Error {}
 
-/** The keyed call in flight on each network in this page: { keys, record, inReview, abandon } (F90, F92, F93). */
+/** The keyed call in flight on each network in this page: { keys, scope, record, inReview, abandon } (F90, F92, F93, F98). */
 export const inFlight = new Map();
 
 /**
@@ -111,14 +121,14 @@ export const inFlight = new Map();
  * delivered, so a retry can never be bound, while it waits, to an operation that ends before it runs, and a review can
  * never wait for a call queued behind its own.
  */
-export function exclusiveKeyed(networkId, scope, what, f) {
+export function exclusiveKeyed(networkId, store, what, f) {
   const name = `joust.keyed:${networkId}`;
   // Reserved synchronously, before any await of the caller or of this function (F95): a call made while another is in
   // flight, even one still reading its wallet, is refused at once.
   if (inFlight.has(networkId)) {
     return Promise.reject(new KeyedCallInProgress(`${what}: another keyed call is in progress on this page; call again when it has finished`));
   }
-  const flight = { keys: [], store: scope, record: null, inReview: false, abandon: false };
+  const flight = { keys: [], scope: scopeOf(store), record: null, inReview: false, abandon: false };
   inFlight.set(networkId, flight);
   const run = async () => {
     try {

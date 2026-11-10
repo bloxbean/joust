@@ -401,3 +401,43 @@ test('F97: an abandon during review applies only through the reviewing call\'s s
   assert.equal((await r.store.all())[0].attempts.length, 2, 'A went on: its record kept, a second attempt');
   assert.equal((await storeB.all()).length, 1, 'B\'s record untouched');
 });
+
+test('F98: an abandon during review applies only through the same storage, not a copy holding the same record', async () => {
+  // A seeded store holds a copy of A's records (identical ids): it is another storage, so its abandon is refused.
+  const r = rig();
+  await assert.rejects(r.call(r.page()), PendingKeyedOperation);                                  // A's signed record
+  const copy = memoryRetryStore(await r.store.all());
+  let outcome;
+  const a = r.page(r.service, { onReview: async () => {
+    outcome = await r.page(r.service, { retryStore: copy }).abandonKeyed(r.api).then(() => 'abandoned', (e) => e.constructor.name);
+  } });
+  await assert.rejects(r.call(a), PendingKeyedOperation);
+  assert.equal(outcome, 'KeyedCallInProgress', 'the copy\'s abandon is refused');
+  assert.equal((await r.store.all())[0].attempts.length, 2, 'A went on: its record kept, a second attempt');
+  assert.equal((await copy.all())[0].attempts.length, 1, 'the copy untouched');
+  assert.equal(r.state.signed, 2);
+
+  // Two wrappers over one persisted store (as two indexedDbRetryStore('joust') are) share a scope: the abandon applies.
+  const shared = memoryRetryStore();
+  const wrap = () => ({ scope: 'indexeddb:test/keyed', all: () => shared.all(), put: (x) => shared.put(x), delete: (i, v) => shared.delete(i, v) });
+  const r2 = rig();
+  await assert.rejects(r2.call(r2.page(r2.service, { retryStore: wrap() })), PendingKeyedOperation);
+  let got;
+  const b = r2.page(r2.service, { retryStore: wrap(), onReview: async () => {
+    got = await r2.page(r2.service, { retryStore: wrap() }).abandonKeyed(r2.api);
+  } });
+  await assert.rejects(r2.call(b), /abandoned during review; an earlier signed attempt .* may still land/);
+  assert.ok(got, 'the other wrapper\'s abandon applied');
+  assert.deepEqual(await shared.all(), [], 'the record deleted');
+  assert.equal(r2.state.signed, 1, 'nothing more signed');
+});
+
+test('F98: store scopes: each memory store its own, IndexedDB stores by database', async () => {
+  const { memoryRetryStore: mem, indexedDbRetryStore: idb } = await import('../src/index.js');
+  const { scopeOf } = await import('../src/retries.js');
+  assert.notEqual(scopeOf(mem()), scopeOf(mem()));
+  assert.equal(scopeOf(idb('joust')), scopeOf(idb('joust')));
+  assert.notEqual(scopeOf(idb('joust')), scopeOf(idb('other')));
+  const custom = { all: async () => [], put: async () => {}, delete: async () => {} };
+  assert.equal(scopeOf(custom), custom, 'a store without a scope is its own');
+});
