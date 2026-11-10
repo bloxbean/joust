@@ -11,8 +11,8 @@ import { blake2b } from '@noble/hashes/blake2.js';
 import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import { bytesToHex, hexToBytes, utf8 } from './hex.js';
-import { parseTx } from './ledger.js';
-import { decodeData, dataHex, canonicalHex } from './pdata.js';
+import { parseTx, pageOutputSize } from './ledger.js';
+import { decodeData, dataHex, canonicalHex, withoutRaw } from './pdata.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, envelopeChecks, isWalletEnterprise, paymentKeyHashOf,
 } from './verify.js';
@@ -179,13 +179,17 @@ export async function verifyKeyed(o) {
   const coins = coinsPerUtxoByte(pp);
   if (coins === null) problems.push('the chain API gives no coinsPerUTxOByte');
   else if (coins > limits.maxCoinsPerUtxoByte) problems.push(`a coinsPerUTxOByte of ${coins}, above the page's limit of ${limits.maxCoinsPerUtxoByte}`);
-  const minOf = (out) => (coins === null ? 0n : ledgerMin(out.size, coins));
+  // Ledger minimums from the output the page itself would write for this address, value and datum (F86, R-F10): the
+  // bytes a service served (its datum's, or the tag-24 wrapper's, or the output's own encoding) never set an allowance.
+  const minOf = (out, datumHex = out.datum ? canonicalHex(out.datum) : null) => (coins === null || !datumHex ? 0n
+    : ledgerMin(pageOutputSize(out.address, out.value, datumHex), coins));
   const capped = (a) => (a > limits.maxTopUp ? limits.maxTopUp : a);
 
   // The page's own clock (F80): without it a provider could make a far-future window look current, and linkedAt could
   // not be checked against the upper bound. The chain API's tip must agree with it.
   const pageSlot = pageSlotOf(deployment);
   if (pageSlot === null) problems.push('a keyed call needs the deployment\'s slot clock (slotConfig), so the page can bind its window to time');
+  else if (!Number.isFinite(Number(chain.tip))) problems.push(`the chain API's tip (${chain.tip}) is not a slot`);
   else if (Math.abs(Number(chain.tip) - pageSlot) > limits.maxTipSkewSlots) {
     problems.push(`the chain API's tip (${chain.tip}) is not the page's own slot (${pageSlot}) within ${limits.maxTipSkewSlots} slots`);
   }
@@ -362,6 +366,7 @@ export async function verifyKeyed(o) {
   /** D4b: X continued with only next and linkedAt replaced, lovelace not lower, no other asset, no reference script. */
   const relinked = (x, next) => ({
     unit: x.unit,
+    relink: true,   // its datum's encoding is checked in check() (R-F6)
     role: x.datum.kind === 'head' ? 'the relinked head' : 'the relinked anchor',
     check: (out) => {
       const p = [];
@@ -369,8 +374,15 @@ export async function verifyKeyed(o) {
       if (out.hasScriptRef || out.datumHash) p.push('has a reference script or a datum hash');
       const d = out.datum;
       const xd = decodeData(x.out.inlineDatum);
+      let expectedHex = null;
       if (!d || d.constr !== xd.constr || d.fields.length !== xd.fields.length) p.push('is not its datum relinked');
       else {
+        // The bytes the page expects (R-F1, R-F6): the input datum relinked, its instance, next and linkedAt in the
+        // ledger's own encoding and every further field byte for byte as the input carried it (another writer may
+        // have used definite-length lists there; the engine's relink keeps them).
+        expectedHex = dataHex({ constr: xd.constr, fields: [withoutRaw(xd.fields[0]), withoutRaw(d.fields[1]), withoutRaw(d.fields[2]),
+          ...xd.fields.slice(3)] });
+        if (bytesToHex(d.raw) !== expectedHex) p.push('has an inline datum that is not its input\'s relinked in the canonical encoding');
         if (!dataEqual(d.fields[0], xd.fields[0])) p.push('changes its instance');
         if (hexOf(d.fields[1]) !== next) p.push(`links to ${hexOf(d.fields[1])}, not ${next}`);
         if (typeof d.fields[2]?.int !== 'bigint' || !linkedAtOk(d.fields[2].int)) p.push('has a linkedAt other than the upper bound');
@@ -380,7 +392,8 @@ export async function verifyKeyed(o) {
       const inL = x.value.get('lovelace') ?? 0n;
       const outL = out.value.get('lovelace') ?? 0n;
       const top = outL - inL;
-      const allow = capped(minOf(out) > inL ? minOf(out) - inL : 0n);
+      const need = expectedHex ? minOf(out, expectedHex) : 0n;
+      const allow = capped(need > inL ? need - inL : 0n);
       if (top < 0n) p.push(`skims ${-top} lovelace`);
       else if (top > allow) p.push(`is topped up by ${top} lovelace, above the ${allow} its ledger minimum needs`);
       // Its size may grow only by the longer next, linkedAt's width and the lovelace's (R-F1): with an authenticated
@@ -617,8 +630,13 @@ export async function verifyKeyed(o) {
     }
     // Every datum the page checks is in the ledger's own encoding (R-F1): its size, and so any allowance computed from
     // it, is then the page's, not the service's choice (padding such as empty bytestring chunks is refused).
-    if (out.datum && bytesToHex(out.datum.raw) !== canonicalHex(out.datum)) {
+    if (!e.relink && out.datum && bytesToHex(out.datum.raw) !== canonicalHex(out.datum)) {
       problems.push(`${e.role} has an inline datum that is not in the canonical encoding`);
+    }
+    // ...and the output around it is the one the page would write (F86, R-F10): no padding in the tag-24 wrapper, the
+    // value or the output's own encoding.
+    if (out.datum && out.size !== pageOutputSize(out.address, out.value, bytesToHex(out.datum.raw))) {
+      problems.push(`${e.role} is not encoded as the page would write it (${out.size} bytes served)`);
     }
     for (const p of e.check(out)) problems.push(`${e.role} ${p}`);
   }

@@ -238,7 +238,7 @@ test('R-F1: a datum padded to raise an allowance is refused (relink, head, retir
   const ins = insertScn(w);
   const anchorDatum = ins.spec.outputs[0].datum;
   refused(await verifyHex(w, ins, padded(build(w, structuredClone(ins.spec), ins.truth), anchorDatum), { params: { ...PARAMS, coins_per_utxo_size: '20000' } }),
-    /relinked anchor has an inline datum that is not in the canonical encoding/, 'a padded relink');
+    /relinked anchor has an inline datum that is not its input's relinked in the canonical encoding/, 'a padded relink');
   const cr = createScn(w);
   refused(await verifyHex(w, cr, padded(build(w, structuredClone(cr.spec), cr.truth), cr.spec.outputs[1].datum)),
     /head has an inline datum that is not in the canonical encoding/, 'a padded head');
@@ -321,4 +321,61 @@ test('F83: joust-gen refuses a keyed call named like a generated wrapper member'
   const d = structuredClone(DESCRIPTION);
   d['x-joust'].actions.find((a) => a.name === 'upgrade').name = 'read';
   assert.throws(() => generate(d), /keyed call read clashes with the generated object's read/);
+});
+
+/** {@code txHex} with {@code datum}'s tag-24 wrapper padded: an indefinite bytestring of empty chunks around it. */
+function paddedWrapper(txHex, datum, n = 1500) {
+  const d = dataHex(datum);
+  const hdr = (k) => (k < 24 ? (0x40 + k).toString(16) : k < 256 ? '58' + k.toString(16).padStart(2, '0') : '59' + k.toString(16).padStart(4, '0'));
+  const before = 'd818' + hdr(d.length / 2) + d;
+  assert.equal(txHex.split(before).length, 2, 'the datum once in the transaction');
+  return txHex.replace(before, 'd818' + '5f' + '40'.repeat(n) + hdr(d.length / 2) + d + 'ff');
+}
+
+test('F86, R-F10: a padded tag-24 wrapper raises no allowance (anchor with and without CBOR, head, retire)', async () => {
+  const w = world();
+  // An anchor topped up as if its padded size counted, at the honest parameters.
+  const ins = insertScn(w);
+  const txAnchor = paddedWrapper(build(w, (() => { const s = structuredClone(ins.spec); s.outputs[0].lovelace += 4_000_000n; return s; })(), ins.truth),
+    ins.spec.outputs[0].datum);
+  for (const noCbor of [false, true]) {
+    const r = await verifyHex(w, ins, txAnchor, { noCbor });
+    refused(r, /relinked anchor is not encoded as the page would write it/, `a padded anchor wrapper (${noCbor ? 'no CBOR' : 'CBOR'})`);
+    refused(r, /relinked anchor is topped up by 4000000 lovelace, above the 0/, 'its top-up counts only the page\'s own encoding');
+  }
+  // A head funded at its padded size.
+  const cr = createScn(w);
+  const padHead = paddedWrapper(build(w, structuredClone(cr.spec), cr.truth), cr.spec.outputs[1].datum);
+  refused(await verifyHex(w, cr, padHead), /head is not encoded as the page would write it/, 'a padded head wrapper');
+  // A retire topped up for its padded size at a raised coinsPerUTxOByte.
+  const rt = retireScn(w, { keep: w.minAda + 3_000_000n, paid: 100n * ADA - w.minAda - 3_000_000n });
+  const padRetire = paddedWrapper(build(w, structuredClone(rt.spec), rt.truth), rt.spec.outputs[0].datum);
+  const r = await verifyHex(w, rt, padRetire, { params: { ...PARAMS, coins_per_utxo_size: '19000' } });
+  refused(r, /retired node is not encoded as the page would write it/, 'a padded retired node wrapper');
+  refused(r, /retired node is topped up by 3000000/, 'its top-up counts only the page\'s own encoding');
+});
+
+/** {@code d} with every list and constructor's fields as definite-length CBOR arrays (another writer's encoding). */
+function definite(d) {
+  const { decodeData } = PD;
+  const h = (major, n) => (n < 24 ? [(major << 5) | n] : n < 256 ? [(major << 5) | 24, n] : [(major << 5) | 25, n >> 8, n & 0xff]);
+  const enc = (x) => {
+    if ('constr' in x) return [0xd8, 121 + x.constr, ...h(4, x.fields.length), ...x.fields.flatMap(enc)];
+    if ('list' in x) return [...h(4, x.list.length), ...x.list.flatMap(enc)];
+    return [...Buffer.from(dataHex(x), 'hex')];
+  };
+  return decodeData(Buffer.from(enc(d)).toString('hex'));
+}
+const PD = await import('../src/pdata.js');
+
+test('R-F6: a relink next to a node another writer encoded with definite lists is accepted; its value bytes are kept', async () => {
+  const w = world();
+  const scn = insertScn(w);
+  const v = definite(w.value('aa'));
+  assert.notEqual(dataHex(v), PD.canonicalHex(v), 'a non-canonical encoding of the same Data');
+  scn.truth.get(scn.A).datum = w.node(w.entry, '', w.L0, v);
+  accepted(await check(w, scn, (s) => { s.outputs[0].datum = w.node(w.entry, 'bbbb', w.upper, v); return s; }), 'the engine relink, value bytes kept');
+  accepted(await check(w, scn, (s) => { s.outputs[0].datum = w.node(w.entry, 'bbbb', w.upper, v); return s; }, { noCbor: true }), 'the same, without CBOR');
+  refused(await check(w, scn, (s) => { s.outputs[0].datum = w.node(w.entry, 'bbbb', w.upper, w.value('aa')); return s; }),
+    /not its input's relinked/, 'a relink that re-encodes the value');
 });
