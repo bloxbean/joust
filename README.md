@@ -1,6 +1,6 @@
 # JOUST: JuLC State Contracts
 
-*JOUST = **J**ava **O**n **U**PLC **ST**ate, pronounced "jowst".*
+*JOUST = **pronounced "jowst".*
 
 > **Status: Options A–E and G work end to end, and F is a working spike; nothing is published yet.** The example contracts are generated,
 > attack-tested and run on Yaci DevKit:
