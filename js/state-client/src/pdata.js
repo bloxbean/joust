@@ -206,15 +206,6 @@ export const dataHex = (d) => bytesToHex(encodeData(d));
  * bytes with it, so a service cannot pad an output (and so the allowances computed from its size) with an encoding of
  * its choice.
  */
-/** {@code d} as fresh nodes, its original bytes dropped (they are re-encoded in the ledger's own way). */
-export function withoutRaw(d) {
-  if ('constr' in d) return { constr: d.constr, fields: d.fields.map(withoutRaw) };
-  if ('int' in d) return { int: d.int };
-  if ('bytes' in d) return { bytes: d.bytes };
-  if ('list' in d) return { list: d.list.map(withoutRaw) };
-  return { map: d.map.map(([k, v]) => [withoutRaw(k), withoutRaw(v)]) };
-}
-
 export function canonicalHex(d) {
   const out = [];
   write(out, d, false);
