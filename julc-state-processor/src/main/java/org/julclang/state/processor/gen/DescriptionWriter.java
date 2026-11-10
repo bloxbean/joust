@@ -39,6 +39,8 @@ public final class DescriptionWriter {
     private final TypeElement contract;
     private final ProcessingEnvironment env;
     private final Map<String, Object> definitions = new LinkedHashMap<>();
+    /** The Lifecycle constructors' indexes by title (keyed destroys name their {@code Remove_T}; ADR-0016 D11). */
+    private final Map<String, Integer> lifecycleIndex = new LinkedHashMap<>();
 
     private DescriptionWriter(ContractIR c, TypeElement contract, ProcessingEnvironment env) {
         this.c = c;
@@ -81,16 +83,17 @@ public final class DescriptionWriter {
         var createFields = new ArrayList<Object>(List.of(field("seed", txOutRef())));
         createFields.addAll(redeemerFields(c.init()));
         lifecycle.add(constructor("CreateInstance", li, createFields));
-        // A keyed contract's creation also mints the list heads (ADR-0016 D3): no client can make it until M2/M3.
-        if (!c.hasKeyed()) creations.add(creation(c.init(), "init", li));
+        // A keyed contract's creation also mints the list heads (ADR-0016 D3), described by x-joust.keyed (D11).
+        creations.add(creation(c.init(), "init", li));
         li++;
         lifecycle.add(constructor("BurnInstance", li++, List.of()));
         for (var t : c.ownedInits()) {
             if (t.keyed()) {
-                // ADR-0016 D4: an insert names its anchor. Keyed calls are described from M3 (D11); the schema is complete.
+                // ADR-0016 D4, D11: an insert names its instance and its anchor.
                 var fs = new ArrayList<Object>(List.of(field("instance", bytes()), field("anchor", txOutRef())));
                 fs.addAll(redeemerFields(t));
-                lifecycle.add(constructor(t.variant(), li++, fs));
+                lifecycle.add(constructor(t.variant(), li, fs));
+                creations.add(creation(t, "keyedInit", li++));
                 continue;
             }
             var fs = new ArrayList<Object>(List.of(field("seed", txOutRef()), field("instance", bytes())));
@@ -138,13 +141,17 @@ public final class DescriptionWriter {
         }
         String lifecycleKey = c.packageName() + "." + V + ".Lifecycle";
         definitions.put(lifecycleKey, map("title", "Lifecycle", "anyOf", lifecycle));
+        for (Object o : lifecycle) {
+            @SuppressWarnings("unchecked") var m = (Map<String, Object>) o;
+            lifecycleIndex.put((String) m.get("title"), (Integer) m.get("index"));
+        }
 
         // ---- the state, and the owned objects' Holding datums
         String stateKey = keyOf(stateMirror());
         schemaOf(stateMirror());
         var owned = new ArrayList<Object>();
         for (var o : c.owned()) {
-            if (o.isKeyed()) continue;   // ADR-0016: keyed types are described from M3 (D11)
+            if (o.isKeyed()) continue;   // ADR-0016: keyed types are described in x-joust.keyed (D11)
             TypeMirror m = ownedMirror(o.simple());
             String valueKey = keyOf(m);
             schemaOf(m);
@@ -155,13 +162,80 @@ public final class DescriptionWriter {
                     Character.toLowerCase(o.simple().charAt(0)) + o.simple().substring(1), "holding", ref(holdingKey),
                     "tag", o.tag(), "multi", c.sealedHolding()));
         }
+        // Keyed types (ADR-0016 D11): each list's three datums, its key and bounds, and its structural redeemers.
+        var keyed = new ArrayList<Object>();
+        var keyedDatums = new ArrayList<Object>();
+        for (var o : c.keyedTypes()) {
+            var k = o.keyed();
+            TypeMirror m = ownedMirror(o.simple());
+            String valueKey = keyOf(m);
+            schemaOf(m);
+            String T = o.simple();
+            String head = c.packageName() + "." + V + ".Head_" + T;
+            String node = c.packageName() + "." + V + ".Keyed_" + T;
+            String retired = c.packageName() + "." + V + ".Retired_" + T;
+            definitions.put(head, map("title", "Head_" + T, "anyOf", List.of(constructor("Head_" + T, k.headTag(),
+                    List.of(field("instance", bytes()), field("next", bytes()), field("linkedAt", integer()))))));
+            definitions.put(node, map("title", "Keyed_" + T, "anyOf", List.of(constructor("Keyed_" + T, k.nodeTag(),
+                    List.of(field("instance", bytes()), field("next", bytes()), field("linkedAt", integer()),
+                            field("value", ref(valueKey)))))));
+            definitions.put(retired, map("title", "Retired_" + T, "anyOf", List.of(constructor("Retired_" + T, k.retiredTag(),
+                    List.of(field("instance", bytes()), field("next", bytes()), field("linkedAt", integer()),
+                            field("key", bytes()))))));
+            keyedDatums.add(ref(head));
+            keyedDatums.add(ref(node));
+            keyedDatums.add(ref(retired));
+            var inserts = new ArrayList<String>();
+            for (var t : c.ownedInits()) if (t.keyed() && t.ownedType().equals(o.type())) inserts.add(t.method());
+            var actions = new ArrayList<String>();
+            var removes = new ArrayList<String>();
+            var retires = new ArrayList<String>();
+            for (var t : c.ownedSpendTransitions()) {
+                if (!t.keyed() || !t.ownedType().equals(o.type())) continue;
+                if (t.kind() == TransitionIR.Kind.OWNED_ACTION) actions.add(t.method());
+                else if (t.retire()) retires.add(t.method());
+                else removes.add(t.method());
+            }
+            var e = new LinkedHashMap<String, Object>();
+            e.put("type", valueKey);
+            e.put("simple", T);
+            e.put("lookup", Character.toLowerCase(T.charAt(0)) + T.substring(1));
+            e.put("key", k.keyField());
+            e.put("keyIndex", k.keyIndex());
+            e.put("maxKeyBytes", k.maxKeyBytes());
+            e.put("signedKey", k.signedKey());
+            e.put("linkCooldownMs", k.cooldownMs());
+            e.put("linkWindowMs", k.windowMs());
+            e.put("typeId", hex(k.typeId()));
+            e.put("head", ref(head));
+            e.put("headTag", k.headTag());
+            e.put("node", ref(node));
+            e.put("nodeTag", k.nodeTag());
+            e.put("retired", ref(retired));
+            e.put("retiredTag", k.retiredTag());
+            e.put("link", map("purpose", "spend", "constructor", "Link", "index", spend.size()));
+            e.put("remove", removes.isEmpty() ? null
+                    : map("purpose", "mint", "constructor", "Remove_" + T, "index", lifecycleIndex.get("Remove_" + T)));
+            e.put("inserts", inserts);
+            e.put("actions", actions);
+            e.put("removes", removes);
+            e.put("retires", retires);
+            keyed.add(e);
+        }
 
         var validators = new ArrayList<Object>();
         validators.add(map("title", V + ".mint", "redeemer", map("title", "redeemer", "schema", ref(lifecycleKey))));
         if (!calls.isEmpty()) {
             // The spend validator's datums: the state, and each owned type's Holding (told apart by token kind).
             Object datum = ref(stateKey);
-            if (!owned.isEmpty()) {
+            if (c.hasKeyed()) {
+                // ADR-0016 D2: plain owned types' Holding_<T> (0x4f tokens) and each keyed list's datums (0x4b tokens).
+                var alts = new ArrayList<Object>(List.of(ref(stateKey)));
+                for (var o : c.owned()) if (!o.isKeyed()) alts.add(ref(c.packageName() + "." + V + "." + o.holding()));
+                alts.addAll(keyedDatums);
+                datum = map("title", "Datum", "description", "The state (instance tokens), an owned object's Holding (0x4f"
+                        + " tokens), or a keyed list's head, node or retired node (0x4b tokens)", "anyOf", alts);
+            } else if (!owned.isEmpty()) {
                 var alts = new ArrayList<Object>(List.of(ref(stateKey)));
                 for (var o : c.owned()) if (!o.isKeyed()) alts.add(ref(c.packageName() + "." + V + "." + o.holding()));
                 datum = map("title", "Datum", "description", "The state (instance tokens) or an owned object's Holding (0x4f tokens)",
@@ -174,7 +248,7 @@ public final class DescriptionWriter {
 
         // ---- x-joust: the contract's model
         var actions = new ArrayList<Object>();
-        for (int i = 0; i < spend.size(); i++) if (!spend.get(i).keyed()) actions.add(action(spend.get(i), i));
+        for (int i = 0; i < spend.size(); i++) actions.add(action(spend.get(i), i));
         var views = new ArrayList<Object>();
         for (var v : c.views()) views.add(view(v));
         var xj = new LinkedHashMap<String, Object>();
@@ -195,10 +269,7 @@ public final class DescriptionWriter {
         xj.put("maxDatumBytes", c.maxDatumBytes());
         xj.put("assetAware", c.assetAware());
         xj.put("owned", owned);
-        if (c.hasKeyed()) {
-            // ADR-0016 M1: keyed types exist but their calls are not described yet (D11, M3); JS clients do not list them.
-            xj.put("keyed", c.keyedTypes().stream().map(o -> o.simple()).toList());
-        }
+        if (c.hasKeyed()) xj.put("keyed", keyed);   // ADR-0016 D11
         xj.put("creations", creations);
         xj.put("actions", actions);
         xj.put("views", views);
@@ -223,10 +294,12 @@ public final class DescriptionWriter {
             for (var pr : c.purposes()) purposes.add(purpose(pr));
             xj.put("purposes", purposes);
         }
-        xj.put("tokens", map(
+        var tokens = map(
                 "instance", "blake2b_256(seed txId ++ I2OSP(seed index, 2)), 32 bytes",
                 "object", "0x4f ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes",
-                "intent", "0x49 ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes"));
+                "intent", "0x49 ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes");
+        if (c.hasKeyed()) tokens.put("keyed", "0x4b ++ blake2b_224(instance ++ typeId ++ key), 29 bytes; a list head's key is empty");
+        xj.put("tokens", tokens);
         xj.put("encoding", map("canonicalMaps", true,
                 "note", "inline datums are canonical CBOR: map keys sorted (SortedMaps); records are constructor 0",
                 "json", map(
@@ -256,9 +329,10 @@ public final class DescriptionWriter {
         m.put("payable", t.payable());
         m.put("takesAssets", ValidatorGenerator.takesAssets(t));
         if (t.owned()) m.put("owned", keyOf(ownedMirror(c.ownedOf(t).simple())));
+        if (t.keyed()) m.put("keyed", c.ownedOf(t).simple());
         m.put("needsService", (t.owned() ? c.ownedOf(t).hasMaps() : c.hasMaps()) || !t.reads().isEmpty() || t.resultSends()
                 || t.resultMint() || t.takesParams());
-        var fields = new ArrayList<String>(List.of("seed"));
+        var fields = new ArrayList<String>(kind.equals("keyedInit") ? List.of("instance", "anchor") : List.of("seed"));
         if (kind.equals("ownedInit")) fields.add("instance");
         fields.addAll(redeemerFieldNames(t));
         m.put("recipe", recipe(t, fields, null));
@@ -340,6 +414,8 @@ public final class DescriptionWriter {
             case OWNED_DESTROY -> "ownedDestroy";
             default -> t.kind().name();
         });
+        // ADR-0016 D11: a keyed type's calls are their own kinds (a removal burns with Remove_T; a retire burns nothing).
+        if (t.keyed()) m.put("kind", t.kind() == TransitionIR.Kind.OWNED_ACTION ? "keyedAction" : t.retire() ? "keyedRetire" : "keyedRemove");
         m.put("redeemer", map("purpose", "spend", "constructor", t.variant(), "index", index));
         m.put("fields", redeemerFieldNames(t));
         m.put("args", args(t));
@@ -347,6 +423,7 @@ public final class DescriptionWriter {
         m.put("payable", t.payable());
         m.put("takesAssets", ValidatorGenerator.takesAssets(t));
         if (t.owned()) m.put("owned", keyOf(ownedMirror(c.ownedOf(t).simple())));
+        if (t.keyed()) m.put("keyed", c.ownedOf(t).simple());
         m.put("policies", map(
                 "signedBy", t.signedBy(),
                 "validAfter", t.validAfter(),
@@ -373,7 +450,12 @@ public final class DescriptionWriter {
         m.put("needsService", maps || t.batched() || !t.reads().isEmpty() || t.moves() || t.resultDeposits() || t.receives()
                 || t.resultSends() || t.resultMint() || t.takesParams());
         boolean destroys = t.kind() == TransitionIR.Kind.DESTROY || t.kind() == TransitionIR.Kind.OWNED_DESTROY;
-        m.put("recipe", recipe(t, redeemerFieldNames(t), destroys ? map("constructor", "BurnInstance", "index", 1) : null));
+        Map<String, Object> burn = destroys ? map("constructor", "BurnInstance", "index", 1) : null;
+        if (t.keyed()) {
+            String remove = "Remove_" + c.ownedOf(t).simple();
+            burn = destroys && !t.retire() ? map("constructor", remove, "index", lifecycleIndex.get(remove)) : null;
+        }
+        m.put("recipe", recipe(t, redeemerFieldNames(t), burn));
         return m;
     }
 
@@ -663,6 +745,7 @@ public final class DescriptionWriter {
     // ------------------------------------------------------------------ schema builders
 
     private static Map<String, Object> integer() { return map("dataType", "integer"); }
+    private static String hex(byte[] b) { return java.util.HexFormat.of().formatHex(b); }
     private static Map<String, Object> bytes() { return map("dataType", "bytes"); }
     private static Map<String, Object> data() { return map("title", "Data", "description", "Any Plutus data."); }
     private static Map<String, Object> bool() {

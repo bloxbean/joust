@@ -1,0 +1,1531 @@
+{
+  "preamble": {
+    "title": "org.julclang.state.examples.registry.Registry",
+    "description": "JOUST contract Registry (ADR-0013 D3)",
+    "version": "0.0.0",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "joust"
+    }
+  },
+  "validators": [
+    {
+      "title": "RegistryValidator.mint",
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Lifecycle"
+        }
+      }
+    },
+    {
+      "title": "RegistryValidator.spend",
+      "datum": {
+        "title": "datum",
+        "schema": {
+          "title": "Datum",
+          "description": "The state (instance tokens), an owned object's Holding (0x4f tokens), or a keyed list's head, node or retired node (0x4b tokens)",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/org.julclang.state.examples.registry.Registry.State"
+            },
+            {
+              "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Head_Ballot"
+            },
+            {
+              "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Keyed_Ballot"
+            },
+            {
+              "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Retired_Ballot"
+            },
+            {
+              "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Head_Entry"
+            },
+            {
+              "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Keyed_Entry"
+            },
+            {
+              "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Retired_Entry"
+            }
+          ]
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Calls"
+        }
+      }
+    }
+  ],
+  "x-joust": {
+    "version": 2,
+    "contract": "Registry",
+    "package": "org.julclang.state.examples.registry",
+    "validator": "RegistryValidator",
+    "client": "RegistryClient",
+    "state": {
+      "$ref": "#/definitions/org.julclang.state.examples.registry.Registry.State"
+    },
+    "stakeSelf": false,
+    "minAda": 3300000,
+    "maxDatumBytes": 384,
+    "assetAware": false,
+    "owned": [],
+    "keyed": [
+      {
+        "type": "org.julclang.state.examples.registry.Registry.Ballot",
+        "simple": "Ballot",
+        "lookup": "ballot",
+        "key": "voter",
+        "keyIndex": 0,
+        "maxKeyBytes": 28,
+        "signedKey": true,
+        "linkCooldownMs": 60000,
+        "linkWindowMs": 120000,
+        "typeId": "0642616c6c6f74",
+        "head": {
+          "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Head_Ballot"
+        },
+        "headTag": 0,
+        "node": {
+          "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Keyed_Ballot"
+        },
+        "nodeTag": 1,
+        "retired": {
+          "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Retired_Ballot"
+        },
+        "retiredTag": 2,
+        "link": {
+          "purpose": "spend",
+          "constructor": "Link",
+          "index": 8
+        },
+        "remove": null,
+        "inserts": [
+          "cast"
+        ],
+        "actions": [
+          "change"
+        ],
+        "removes": [],
+        "retires": [
+          "leave"
+        ]
+      },
+      {
+        "type": "org.julclang.state.examples.registry.Registry.Entry",
+        "simple": "Entry",
+        "lookup": "entry",
+        "key": "name",
+        "keyIndex": 0,
+        "maxKeyBytes": 64,
+        "signedKey": false,
+        "linkCooldownMs": 60000,
+        "linkWindowMs": 120000,
+        "typeId": "05456e747279",
+        "head": {
+          "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Head_Entry"
+        },
+        "headTag": 3,
+        "node": {
+          "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Keyed_Entry"
+        },
+        "nodeTag": 4,
+        "retired": {
+          "$ref": "#/definitions/org.julclang.state.examples.registry.RegistryValidator.Retired_Entry"
+        },
+        "retiredTag": 5,
+        "link": {
+          "purpose": "spend",
+          "constructor": "Link",
+          "index": 8
+        },
+        "remove": {
+          "purpose": "mint",
+          "constructor": "Remove_Entry",
+          "index": 5
+        },
+        "inserts": [
+          "claim",
+          "grant"
+        ],
+        "actions": [
+          "upgrade",
+          "withdraw",
+          "recover"
+        ],
+        "removes": [
+          "release"
+        ],
+        "retires": [
+          "retire"
+        ]
+      }
+    ],
+    "creations": [
+      {
+        "name": "init",
+        "kind": "init",
+        "redeemer": {
+          "purpose": "mint",
+          "constructor": "CreateInstance",
+          "index": 0
+        },
+        "args": [],
+        "ctx": true,
+        "payable": false,
+        "takesAssets": false,
+        "needsService": false,
+        "recipe": {
+          "transition": "init",
+          "redeemerFields": [
+            "seed",
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.State",
+          "shared": false,
+          "signers": [],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "cast",
+        "kind": "keyedInit",
+        "redeemer": {
+          "purpose": "mint",
+          "constructor": "Insert_cast",
+          "index": 2
+        },
+        "args": [
+          {
+            "name": "voter",
+            "type": "byte[]",
+            "schema": {
+              "dataType": "bytes"
+            }
+          },
+          {
+            "name": "choice",
+            "type": "BigInteger",
+            "schema": {
+              "dataType": "integer"
+            }
+          }
+        ],
+        "ctx": true,
+        "payable": false,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Ballot",
+        "keyed": "Ballot",
+        "needsService": false,
+        "recipe": {
+          "transition": "cast",
+          "redeemerFields": [
+            "instance",
+            "anchor",
+            "voter",
+            "choice",
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.Ballot",
+          "shared": true,
+          "signers": [],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "voter",
+            "choice"
+          ],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "claim",
+        "kind": "keyedInit",
+        "redeemer": {
+          "purpose": "mint",
+          "constructor": "Insert_claim",
+          "index": 3
+        },
+        "args": [
+          {
+            "name": "name",
+            "type": "byte[]",
+            "schema": {
+              "dataType": "bytes"
+            }
+          },
+          {
+            "name": "tier",
+            "type": "BigInteger",
+            "schema": {
+              "dataType": "integer"
+            }
+          },
+          {
+            "name": "guardians",
+            "type": "JulcList<byte[]>",
+            "schema": {
+              "dataType": "list",
+              "items": {
+                "dataType": "bytes"
+              }
+            }
+          },
+          {
+            "name": "needed",
+            "type": "BigInteger",
+            "schema": {
+              "dataType": "integer"
+            }
+          }
+        ],
+        "ctx": true,
+        "payable": true,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Entry",
+        "keyed": "Entry",
+        "needsService": false,
+        "recipe": {
+          "transition": "claim",
+          "redeemerFields": [
+            "instance",
+            "anchor",
+            "name",
+            "tier",
+            "guardians",
+            "needed",
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.Entry",
+          "shared": false,
+          "signers": [],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "name",
+            "tier",
+            "guardians",
+            "needed"
+          ],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "grant",
+        "kind": "keyedInit",
+        "redeemer": {
+          "purpose": "mint",
+          "constructor": "Insert_grant",
+          "index": 4
+        },
+        "args": [
+          {
+            "name": "name",
+            "type": "byte[]",
+            "schema": {
+              "dataType": "bytes"
+            }
+          },
+          {
+            "name": "owner",
+            "type": "byte[]",
+            "schema": {
+              "dataType": "bytes"
+            }
+          }
+        ],
+        "ctx": true,
+        "payable": false,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Entry",
+        "keyed": "Entry",
+        "needsService": false,
+        "recipe": {
+          "transition": "grant",
+          "redeemerFields": [
+            "instance",
+            "anchor",
+            "name",
+            "owner",
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.Entry",
+          "shared": true,
+          "signers": [],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "name",
+            "owner"
+          ],
+          "stepEvents": false
+        }
+      }
+    ],
+    "actions": [
+      {
+        "name": "setOpen",
+        "kind": "action",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "SetOpen",
+          "index": 0
+        },
+        "fields": [
+          "open"
+        ],
+        "args": [
+          {
+            "name": "open",
+            "type": "boolean",
+            "schema": {
+              "title": "Bool",
+              "anyOf": [
+                {
+                  "title": "False",
+                  "dataType": "constructor",
+                  "index": 0,
+                  "fields": []
+                },
+                {
+                  "title": "True",
+                  "dataType": "constructor",
+                  "index": 1,
+                  "fields": []
+                }
+              ]
+            }
+          }
+        ],
+        "ctx": false,
+        "payable": false,
+        "takesAssets": false,
+        "policies": {
+          "signedBy": [
+            "admin"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": true,
+          "payouts": false,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "setOpen",
+          "redeemerFields": [
+            "open"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.State",
+          "shared": false,
+          "signers": [
+            {
+              "field": "admin",
+              "index": 0
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "open"
+          ],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "change",
+        "kind": "keyedAction",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Change",
+          "index": 1
+        },
+        "fields": [
+          "choice"
+        ],
+        "args": [
+          {
+            "name": "choice",
+            "type": "BigInteger",
+            "schema": {
+              "dataType": "integer"
+            }
+          }
+        ],
+        "ctx": false,
+        "payable": false,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Ballot",
+        "keyed": "Ballot",
+        "policies": {
+          "signedBy": [
+            "voter"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": true,
+          "payouts": false,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "change",
+          "redeemerFields": [
+            "choice"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.Ballot",
+          "shared": false,
+          "signers": [
+            {
+              "field": "voter",
+              "index": 0
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "choice"
+          ],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "upgrade",
+        "kind": "keyedAction",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Upgrade",
+          "index": 2
+        },
+        "fields": [
+          "tier",
+          "ctx"
+        ],
+        "args": [
+          {
+            "name": "tier",
+            "type": "BigInteger",
+            "schema": {
+              "dataType": "integer"
+            }
+          }
+        ],
+        "ctx": true,
+        "payable": true,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Entry",
+        "keyed": "Entry",
+        "policies": {
+          "signedBy": [
+            "owner"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": true,
+          "payouts": false,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "upgrade",
+          "redeemerFields": [
+            "tier",
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.Entry",
+          "shared": false,
+          "signers": [
+            {
+              "field": "owner",
+              "index": 1
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "tier"
+          ],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "withdraw",
+        "kind": "keyedAction",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Withdraw",
+          "index": 3
+        },
+        "fields": [
+          "amount",
+          "ctx"
+        ],
+        "args": [
+          {
+            "name": "amount",
+            "type": "BigInteger",
+            "schema": {
+              "dataType": "integer"
+            }
+          }
+        ],
+        "ctx": true,
+        "payable": false,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Entry",
+        "keyed": "Entry",
+        "policies": {
+          "signedBy": [
+            "owner"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": true,
+          "payouts": true,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "withdraw",
+          "redeemerFields": [
+            "amount",
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.Entry",
+          "shared": false,
+          "signers": [
+            {
+              "field": "owner",
+              "index": 1
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "amount"
+          ],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "recover",
+        "kind": "keyedAction",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Recover",
+          "index": 4
+        },
+        "fields": [
+          "newOwner"
+        ],
+        "args": [
+          {
+            "name": "newOwner",
+            "type": "byte[]",
+            "schema": {
+              "dataType": "bytes"
+            }
+          }
+        ],
+        "ctx": false,
+        "payable": false,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Entry",
+        "keyed": "Entry",
+        "policies": {
+          "signedBy": [],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": {
+            "keys": "guardians",
+            "threshold": "needed"
+          },
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": true,
+          "payouts": false,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "recover",
+          "redeemerFields": [
+            "newOwner"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.Entry",
+          "shared": false,
+          "signers": [],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "newOwner"
+          ],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "leave",
+        "kind": "keyedRetire",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Leave",
+          "index": 5
+        },
+        "fields": [
+          "ctx"
+        ],
+        "args": [],
+        "ctx": true,
+        "payable": false,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Ballot",
+        "keyed": "Ballot",
+        "policies": {
+          "signedBy": [
+            "voter"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": false,
+          "payouts": true,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "leave",
+          "redeemerFields": [
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.Ballot",
+          "shared": false,
+          "signers": [
+            {
+              "field": "voter",
+              "index": 0
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "release",
+        "kind": "keyedRemove",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Release",
+          "index": 6
+        },
+        "fields": [
+          "ctx"
+        ],
+        "args": [],
+        "ctx": true,
+        "payable": false,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Entry",
+        "keyed": "Entry",
+        "policies": {
+          "signedBy": [
+            "owner"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": false,
+          "payouts": true,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "release",
+          "redeemerFields": [
+            "ctx"
+          ],
+          "burn": {
+            "constructor": "Remove_Entry",
+            "index": 5
+          },
+          "target": "org.julclang.state.examples.registry.Registry.Entry",
+          "shared": false,
+          "signers": [
+            {
+              "field": "owner",
+              "index": 1
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "retire",
+        "kind": "keyedRetire",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Retire",
+          "index": 7
+        },
+        "fields": [
+          "ctx"
+        ],
+        "args": [],
+        "ctx": true,
+        "payable": false,
+        "takesAssets": false,
+        "owned": "org.julclang.state.examples.registry.Registry.Entry",
+        "keyed": "Entry",
+        "policies": {
+          "signedBy": [
+            "owner"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": false,
+          "payouts": true,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "retire",
+          "redeemerFields": [
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.registry.Registry.Entry",
+          "shared": false,
+          "signers": [
+            {
+              "field": "owner",
+              "index": 1
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [],
+          "stepEvents": false
+        }
+      }
+    ],
+    "views": [],
+    "tokens": {
+      "instance": "blake2b_256(seed txId ++ I2OSP(seed index, 2)), 32 bytes",
+      "object": "0x4f ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes",
+      "intent": "0x49 ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes",
+      "keyed": "0x4b ++ blake2b_224(instance ++ typeId ++ key), 29 bytes; a list head's key is empty"
+    },
+    "encoding": {
+      "canonicalMaps": true,
+      "note": "inline datums are canonical CBOR: map keys sorted (SortedMaps); records are constructor 0",
+      "json": {
+        "integer": "a decimal string (or a safe JavaScript integer)",
+        "bytes": "lowercase hex",
+        "constructor": "an object by field title; a sum type adds \"$variant\" (its constructor title)",
+        "Bool": "true or false",
+        "Optional": "null for None, else the value",
+        "list": "an array",
+        "map": "an array of [key, value] pairs, in canonical key order",
+        "Data": "hex CBOR of any Plutus data"
+      }
+    }
+  },
+  "definitions": {
+    "org.julclang.state.api.Ctx": {
+      "title": "Ctx",
+      "anyOf": [
+        {
+          "title": "Ctx",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "caller",
+              "dataType": "bytes"
+            },
+            {
+              "title": "received",
+              "dataType": "integer"
+            },
+            {
+              "title": "balance",
+              "dataType": "integer"
+            },
+            {
+              "title": "validFrom",
+              "dataType": "integer"
+            },
+            {
+              "title": "validTo",
+              "dataType": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.RegistryValidator.Calls": {
+      "title": "Calls",
+      "anyOf": [
+        {
+          "title": "SetOpen",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "open",
+              "anyOf": [
+                {
+                  "title": "False",
+                  "dataType": "constructor",
+                  "index": 0,
+                  "fields": []
+                },
+                {
+                  "title": "True",
+                  "dataType": "constructor",
+                  "index": 1,
+                  "fields": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Change",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": [
+            {
+              "title": "choice",
+              "dataType": "integer"
+            }
+          ]
+        },
+        {
+          "title": "Upgrade",
+          "dataType": "constructor",
+          "index": 2,
+          "fields": [
+            {
+              "title": "tier",
+              "dataType": "integer"
+            },
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "Withdraw",
+          "dataType": "constructor",
+          "index": 3,
+          "fields": [
+            {
+              "title": "amount",
+              "dataType": "integer"
+            },
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "Recover",
+          "dataType": "constructor",
+          "index": 4,
+          "fields": [
+            {
+              "title": "newOwner",
+              "dataType": "bytes"
+            }
+          ]
+        },
+        {
+          "title": "Leave",
+          "dataType": "constructor",
+          "index": 5,
+          "fields": [
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "Release",
+          "dataType": "constructor",
+          "index": 6,
+          "fields": [
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "Retire",
+          "dataType": "constructor",
+          "index": 7,
+          "fields": [
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "Link",
+          "dataType": "constructor",
+          "index": 8,
+          "fields": []
+        }
+      ]
+    },
+    "org.julclang.ledger.TxOutRef": {
+      "title": "TxOutRef",
+      "anyOf": [
+        {
+          "title": "TxOutRef",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "txId",
+              "dataType": "bytes"
+            },
+            {
+              "title": "index",
+              "dataType": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.RegistryValidator.Lifecycle": {
+      "title": "Lifecycle",
+      "anyOf": [
+        {
+          "title": "CreateInstance",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "seed",
+              "$ref": "#/definitions/org.julclang.ledger.TxOutRef"
+            },
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "BurnInstance",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        },
+        {
+          "title": "Insert_cast",
+          "dataType": "constructor",
+          "index": 2,
+          "fields": [
+            {
+              "title": "instance",
+              "dataType": "bytes"
+            },
+            {
+              "title": "anchor",
+              "$ref": "#/definitions/org.julclang.ledger.TxOutRef"
+            },
+            {
+              "title": "voter",
+              "dataType": "bytes"
+            },
+            {
+              "title": "choice",
+              "dataType": "integer"
+            },
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "Insert_claim",
+          "dataType": "constructor",
+          "index": 3,
+          "fields": [
+            {
+              "title": "instance",
+              "dataType": "bytes"
+            },
+            {
+              "title": "anchor",
+              "$ref": "#/definitions/org.julclang.ledger.TxOutRef"
+            },
+            {
+              "title": "name",
+              "dataType": "bytes"
+            },
+            {
+              "title": "tier",
+              "dataType": "integer"
+            },
+            {
+              "title": "guardians",
+              "dataType": "list",
+              "items": {
+                "dataType": "bytes"
+              }
+            },
+            {
+              "title": "needed",
+              "dataType": "integer"
+            },
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "Insert_grant",
+          "dataType": "constructor",
+          "index": 4,
+          "fields": [
+            {
+              "title": "instance",
+              "dataType": "bytes"
+            },
+            {
+              "title": "anchor",
+              "$ref": "#/definitions/org.julclang.ledger.TxOutRef"
+            },
+            {
+              "title": "name",
+              "dataType": "bytes"
+            },
+            {
+              "title": "owner",
+              "dataType": "bytes"
+            },
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "Remove_Entry",
+          "dataType": "constructor",
+          "index": 5,
+          "fields": [
+            {
+              "title": "anchor",
+              "$ref": "#/definitions/org.julclang.ledger.TxOutRef"
+            },
+            {
+              "title": "removed",
+              "$ref": "#/definitions/org.julclang.ledger.TxOutRef"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.Registry.State": {
+      "title": "State",
+      "anyOf": [
+        {
+          "title": "State",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "admin",
+              "dataType": "bytes"
+            },
+            {
+              "title": "open",
+              "anyOf": [
+                {
+                  "title": "False",
+                  "dataType": "constructor",
+                  "index": 0,
+                  "fields": []
+                },
+                {
+                  "title": "True",
+                  "dataType": "constructor",
+                  "index": 1,
+                  "fields": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.Registry.Ballot": {
+      "title": "Ballot",
+      "anyOf": [
+        {
+          "title": "Ballot",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "voter",
+              "dataType": "bytes"
+            },
+            {
+              "title": "choice",
+              "dataType": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.RegistryValidator.Head_Ballot": {
+      "title": "Head_Ballot",
+      "anyOf": [
+        {
+          "title": "Head_Ballot",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "instance",
+              "dataType": "bytes"
+            },
+            {
+              "title": "next",
+              "dataType": "bytes"
+            },
+            {
+              "title": "linkedAt",
+              "dataType": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.RegistryValidator.Keyed_Ballot": {
+      "title": "Keyed_Ballot",
+      "anyOf": [
+        {
+          "title": "Keyed_Ballot",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": [
+            {
+              "title": "instance",
+              "dataType": "bytes"
+            },
+            {
+              "title": "next",
+              "dataType": "bytes"
+            },
+            {
+              "title": "linkedAt",
+              "dataType": "integer"
+            },
+            {
+              "title": "value",
+              "$ref": "#/definitions/org.julclang.state.examples.registry.Registry.Ballot"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.RegistryValidator.Retired_Ballot": {
+      "title": "Retired_Ballot",
+      "anyOf": [
+        {
+          "title": "Retired_Ballot",
+          "dataType": "constructor",
+          "index": 2,
+          "fields": [
+            {
+              "title": "instance",
+              "dataType": "bytes"
+            },
+            {
+              "title": "next",
+              "dataType": "bytes"
+            },
+            {
+              "title": "linkedAt",
+              "dataType": "integer"
+            },
+            {
+              "title": "key",
+              "dataType": "bytes"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.Registry.Entry": {
+      "title": "Entry",
+      "anyOf": [
+        {
+          "title": "Entry",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "name",
+              "dataType": "bytes"
+            },
+            {
+              "title": "owner",
+              "dataType": "bytes"
+            },
+            {
+              "title": "stake",
+              "dataType": "integer"
+            },
+            {
+              "title": "tier",
+              "dataType": "integer"
+            },
+            {
+              "title": "guardians",
+              "dataType": "list",
+              "items": {
+                "dataType": "bytes"
+              }
+            },
+            {
+              "title": "needed",
+              "dataType": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.RegistryValidator.Head_Entry": {
+      "title": "Head_Entry",
+      "anyOf": [
+        {
+          "title": "Head_Entry",
+          "dataType": "constructor",
+          "index": 3,
+          "fields": [
+            {
+              "title": "instance",
+              "dataType": "bytes"
+            },
+            {
+              "title": "next",
+              "dataType": "bytes"
+            },
+            {
+              "title": "linkedAt",
+              "dataType": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.RegistryValidator.Keyed_Entry": {
+      "title": "Keyed_Entry",
+      "anyOf": [
+        {
+          "title": "Keyed_Entry",
+          "dataType": "constructor",
+          "index": 4,
+          "fields": [
+            {
+              "title": "instance",
+              "dataType": "bytes"
+            },
+            {
+              "title": "next",
+              "dataType": "bytes"
+            },
+            {
+              "title": "linkedAt",
+              "dataType": "integer"
+            },
+            {
+              "title": "value",
+              "$ref": "#/definitions/org.julclang.state.examples.registry.Registry.Entry"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.registry.RegistryValidator.Retired_Entry": {
+      "title": "Retired_Entry",
+      "anyOf": [
+        {
+          "title": "Retired_Entry",
+          "dataType": "constructor",
+          "index": 5,
+          "fields": [
+            {
+              "title": "instance",
+              "dataType": "bytes"
+            },
+            {
+              "title": "next",
+              "dataType": "bytes"
+            },
+            {
+              "title": "linkedAt",
+              "dataType": "integer"
+            },
+            {
+              "title": "key",
+              "dataType": "bytes"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -66,7 +66,6 @@ public final class PortableGenerator {
         var all = new ArrayList<TransitionIR>(c.spendTransitions());
         all.addAll(c.ownedSpendTransitions());
         var cases = new ArrayList<String[]>();
-        if (c.hasKeyed()) skipped.add(c.init().method() + " (keyed contract: the creation mints list heads, ADR-0016 M2)");
         for (TransitionIR t : all) {
             String reason = unsupported(t);
             if (reason != null) {
@@ -143,7 +142,6 @@ public final class PortableGenerator {
     }
 
     private static String unsupported(TransitionIR t) {
-        if (t.keyed()) return "keyed objects (ADR-0016 M3)";
         if (t.takesParams()) return "params";
         if (!t.reads().isEmpty()) return "foreign reads";
         if (t.hasFunds() || ValidatorGenerator.takesAssets(t)) return "native assets";

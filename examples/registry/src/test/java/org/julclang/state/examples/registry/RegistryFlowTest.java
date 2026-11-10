@@ -2,14 +2,10 @@ package org.julclang.state.examples.registry;
 
 import org.junit.jupiter.api.Test;
 
-import java.io.InputStream;
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
 
 import static org.julclang.state.examples.registry.RegistryWorld.PARTIES;
 import static org.julclang.state.examples.registry.RegistryWorld.ada;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Every keyed operation of the registry, accepted on the ledger model, with I47 checked after each. */
 class RegistryFlowTest {
@@ -31,19 +27,5 @@ class RegistryFlowTest {
         System.out.println("[flow] release: " + w.accept(w.release(inst, new byte[]{0x61, 0x62})));
         System.out.println("[flow] retire: " + w.accept(w.retire(inst, RegistryWorld.Kind.ENTRY, new byte[]{0x61}, BigInteger.ZERO)));
         System.out.println("[flow] leave: " + w.accept(w.retire(inst, RegistryWorld.Kind.BALLOT, alice, BigInteger.ZERO)));
-    }
-
-    /** The description omits keyed calls until M3 (ADR-0016 §7); the Java client has them since M2. */
-    @Test
-    void theDescriptionOmitsKeyedCallsForNow() throws Exception {
-        String json;
-        try (InputStream in = getClass().getClassLoader().getResourceAsStream(
-                "META-INF/joust/org.julclang.state.examples.registry.Registry.json")) {
-            json = new String(in.readAllBytes(), StandardCharsets.UTF_8).replaceAll("\\s", "");
-        }
-        assertTrue(json.contains("\"keyed\""), "the description names the keyed types");
-        assertFalse(json.contains("\"name\":\"cast\""), "no keyed creation is described yet");
-        assertFalse(json.contains("\"name\":\"upgrade\""), "no keyed action is described yet");
-        assertTrue(json.contains("\"name\":\"setOpen\""), "the instance's own calls are described");
     }
 }
