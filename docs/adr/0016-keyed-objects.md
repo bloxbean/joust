@@ -1573,21 +1573,30 @@ unchanged; the deviations below are the conservative readings chosen where the t
 - *The page's form of D7 (rewritten after the review of M3: F78, R-F2, F79, R-F3, F82).* D7's guarantee is that at
   most one attempt of an operation lands, whatever relays or providers claim. In a page it reads:
   - *While any attempt can still land, every attempt spends the record's designated input.* "Can still land" is
-    judged by the page's own clock: the deployment's pinned `slotConfig`, less a 30-second skew margin, and never later
-    than the chain API's tip (the earlier of the two, which can only delay the judgement). The chain API's answers
-    about the tip or the input's spentness never move the designated input.
-  - *Only once every attempt's window has passed by that clock (plus two slots) may the record end:* as "it may have
-    landed: check before calling again" (reported once) when the input is gone, as "failed" when it is still there (the
-    next call is a new operation, designating the same input while the wallet has it). Without a slot clock a record
-    never expires; only the user's explicit abandon (`opts.abandon`, `abandonKeyed`) ends it.
+    judged by the page's own clock: the deployment's pinned `slotConfig` (validated as the verifier validates it; an
+    invalid clock or a non-finite slot means "can still land", F87), less a skew margin of at least the 120 slots the
+    verifier tolerates between the chain API's tip and the page's clock (R-F8), and never later than that tip (the
+    earlier of the two, which can only delay the judgement). The chain API's answers about the tip or the input's
+    spentness never move the designated input. The page assumes its own clock is within that margin of true time.
+  - *Only once every attempt's window has passed by that clock (plus two slots) may the record end:* as "failed" only
+    when a wallet view read under the lock and the chain API both still show the designated input; otherwise as "it
+    may have landed: check before calling again" (R-F7). Either way the call that ends a record reports it and starts
+    nothing: the next call is the new operation. Without a valid slot clock a record never expires; only the user's
+    explicit abandon (`opts.abandon`, `abandonKeyed`) ends it.
   - *An attempt is recorded before the wallet is asked to sign, and a signing error never removes it:* an error does
     not prove no signature escaped. Keeping it is always safe (retries spend the same input); it only delays expiry.
   - *A confirmation through `awaitTx` ends the record.* If the chain API lied about it, the attempt may still land
     later; a later call is a new operation the application asked for after being told the first succeeded, so two
     landings are two operations, not one applied twice. (A retry the application makes after a *failure* is still
     bound to the record.)
-  - *One lock per network* serialises every keyed call's whole lifecycle (record, prepare, review, signing,
-    submission): Web Locks across a browser's tabs, an in-process mutex otherwise; stores refuse a stale revision.
+  - *One lock per network* serialises every keyed call's whole lifecycle (record, prepare, cooldown waits, review,
+    signing, submission): Web Locks across a browser's tabs, an in-process mutex otherwise; stores refuse a stale
+    revision (a record written before revisions existed, never released, counts as revision 0; F89). It is per network,
+    not per wallet, because a wallet's record is matched by any overlap of its key hashes, which two views of one wallet
+    need not share in full; and it is held across cooldown waits, so no other call acts on the record in between (R-F9:
+    the cost is that one page's keyed calls queue behind each other). A keyed call made while another call of the same
+    page is in review is refused at once, and `abandonKeyed` from a review is recorded for the reviewing call to honour,
+    so a review cannot deadlock on its own lock (F88).
   One record per wallet (its key hashes) and network, so any keyed call of that wallet is a retry of the pending
   operation until it ends. Retries are the application's calls; only the cooldown wait is automatic.
 - *Synthetic tamper transactions.* The registry has no payable removal and no beneficiary-paying action, DevKit cannot
@@ -1687,3 +1696,22 @@ skip), the baseline (123 files) is byte-identical, `EngineFixturesTest` replays 
 (the engine's request handling changed only in refusals), `fixtures/m0` is unchanged, and the JS suites pass:
 `js/state-client` 29, `js/joust-runtime` 26 (one skipped, a Blockfrost preview key) and `js/joust` 4 (the template page
 in Chromium included).
+
+**Round 2.** Re-reviews of `bb20acd..dcc3a86`: Codex (F86–F89; 14 earlier findings resolved, 8 partly) and the page
+reviewer (R-F6–R-F10). One P1 (R-F7), and R-F1's remainder outside the datum (F86, R-F10). Each repro was run before
+and after the fix.
+
+| ID | Finding | What changed | Where |
+|---|---|---|---|
+| R-F7 (P1) | After the windows, "failed" was decided by the wallet or the chain API (either), from a wallet view taken before the lock, and the same call then started a new operation: one call applied twice on one lie (`settle-lie2.mjs failed`: two signed attempts, `a0` then `a1`) | "Failed" needs a wallet view read under the lock and the chain API both; otherwise "may have landed". The call that ends a record reports it and starts nothing. After: one signed attempt | `S/src/retries.js`, `S/src/client.js`; `keyed-retries.test.js` |
+| F86, R-F10 | Padding the inline datum's tag-24 wrapper (outside the canonical Data) still raised the allowances: a 4.9 ADA anchor gift without CBOR, a 7.8 ADA head, a 4.6 ADA retire top-up (`padded-wrapper.mjs`: accepted, `topUpA` 10 ADA) | Every ledger minimum comes from the output the page itself would write (address, canonical value, `[1, #6.24(datum)]`), and every checked output must be encoded that way. The page's encoding matches all 31 datum-bearing recorded outputs. After: refused, with and without CBOR | `S/src/ledger.js` (`pageOutputSize`), `S/src/keyed.js`; `keyed.test.js` |
+| R-F6 | The canonical-datum rule refused honest engine relinks next to a node another writer encoded with definite-length lists (`definite-anchor.mjs`, `definite-any.mjs`: refused), so anyone could block page inserts and removals there | A relink's datum must be its input's with instance, next and linkedAt canonical and every further field byte for byte as the input carried it (the engine keeps those bytes; no Java change). After: accepted; a relink that re-encodes the value is refused | `S/src/keyed.js`, `S/src/pdata.js` (`withoutRaw`); `keyed.test.js` |
+| R-F8 | A 30 s margin under a 120-slot tip tolerance: a fast page clock with a matching lying tip ended a live record (`settle-lie2.mjs skew`: `a0` then `a3`) | The margin is at least the tolerance; the assumption on the page's clock stated above. After: one signed attempt | `S/src/retries.js`; `keyed-retries.test.js` |
+| F87 | A malformed `slotConfig` made settlement's comparisons NaN and deleted a live record | One validator for the verifier and settlement; an invalid clock or a non-finite slot is pending, decided before anything is deleted | `S/src/retries.js`; `keyed-retries.test.js` (missing `zeroTimeMs`, a bad field, none) |
+| F88 | `abandonKeyed` (or another keyed call) from `onReview` deadlocked on the call's own lock | A call made during another call's review is refused at once (`KeyedCallInReview`); an abandon during review is recorded for the reviewing call, which ends without signing | `S/src/retries.js`, `S/src/client.js`; `keyed-retries.test.js` |
+| F89 | Records without a revision could not be retried | They count as revision 0 (no version without revisions was ever released or pushed, so no such records exist; no migration) | `S/src/retries.js`; `keyed-retries.test.js` |
+| R-F9 (P3) | The lock is per network and held through long waits | Kept, documented above with the reason; abandon from a review no longer waits for it | ADR |
+| F80 (leftover) | A non-numeric tip skipped the tip check | Refused | `S/src/keyed.js` |
+| F85 (leftover) | The I5 loop accepted any verifier reason | Each tampering must be refused for its own reason (a table of ten) | `examples.test.js` |
+| R-G8 (leftover) | `recover` ran with the caller as its only guardian | Deferred: a second guardian's co-signature needs a two-key signing path in the JVM test; the page side of co-signers is ADR-0009's | — |
+
