@@ -54,7 +54,10 @@ export function joustRuntime(o) {
       for (const r of d.referenceScripts ?? []) want.push(['output', r]);
       want.push(['script', d.policy]);
       if (c.instance) want.push(['assetUtxos', `${d.address}|${d.policy}${c.instance}`]);
-      if (c.object) want.push(['assetUtxos', `${d.address}|${d.policy}${c.object}`]);
+      // An insert or a removal lists the state address (D7: its neighbour is found by key); a keyed call's object is a
+      // key, looked up by its unit by the engine.
+      if (c.kind === 'keyedInit' || c.kind === 'keyedRemove') want.push(['utxos', d.address]);
+      else if (c.object && !String(c.kind).startsWith('keyed')) want.push(['assetUtxos', `${d.address}|${d.policy}${c.object}`]);
     }
     const seen = new Set();
     await Promise.all(want.filter(([k, key]) => !seen.has(k + key) && seen.add(k + key))
@@ -64,7 +67,7 @@ export function joustRuntime(o) {
   // The instance and object tokens a call touches: their chain history rebuilds a missing map (ADR-0015 §13.12 M4).
   const unitsOf = (call) => (call.calls ?? [call]).flatMap((c) => {
     const d = deploymentOf(c.contract);
-    return d ? [c.instance, c.object].filter(Boolean).map((id) => d.policy + id) : [];
+    return d ? [c.instance, String(c.kind).startsWith('keyed') ? null : c.object].filter(Boolean).map((id) => d.policy + id) : [];
   });
   const engine = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs,
     prefetch: o.prefetch === false ? undefined : prefetch, mapStore: o.mapStore, mapMirror: o.mapMirror, unitsOf, record: o.record,

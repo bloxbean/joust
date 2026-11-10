@@ -11,6 +11,7 @@ import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { joustRuntime, devkitClock, devkitTopUp, devkitMint, devkitSweep, devWallet, JoustContract, runComposed, ogmiosProvider } from '../src/index.js';
+import { memoryRetryStore, PendingKeyedOperation } from '@julclang/state-client';
 import { walletView, verifyRegistration, approvalsData, dataHex } from '@julclang/state-client';
 import { build } from '../../joust/src/build.js';
 import { tamperings } from '../../../examples/dapp/frontend/src/tamper.js';
@@ -669,4 +670,112 @@ test('Upgrade: v1 migrates into v2 in one transaction (a creation inside a compo
   assert.equal((await nv.read()).lovelace, funds, 'the funds moved');
   await nv.call(admin, 'increment', {});
   assert.equal((await nv.state()).count, 3n);
+});
+
+test('Registry: keyed objects (ADR-0016 M3): heads, inserts, keyed actions, a removal, retires; D11 refusals and retries', { skip, timeout: 1_800_000 }, async () => {
+  const { rt, wallets, contract } = await setup(['registry']);
+  const [admin, ann, bob] = await wallets(3, 400);
+  const reg = await contract('Registry', admin);
+  // The instance with its two heads (D3), prepared by the engine and verified by the page (D11).
+  const created = await reg.deploy(admin, {});
+  const inst = reg.at(created.instance);
+  assert.ok(created.report.keyed.deposits > 0n, 'the heads were funded');
+  const entries = inst.keyed('Entry');
+  const ballots = inst.keyed('Ballot');
+  assert.deepEqual(await entries.keys(), []);
+  // A ballot (signedKey) and a keyed action on it.
+  const cast = await ballots.insert(ann, 'cast', { voter: ann.keyHash, choice: 3n });
+  assert.equal(cast.key, ann.keyHash);
+  await ballots.object(ann.keyHash).call(ann, 'change', { choice: 7n });
+  assert.equal((await ballots.find(ann.keyHash)).value.choice, 7n);
+  // A name (payable), a payable keyed action, a withdrawal paid to the owner.
+  const NAME = '6e616d65';
+  const OTHER = '6f74686572';
+  await entries.insert(ann, 'claim', { name: NAME, tier: 1n, guardians: [ann.keyHash], needed: 1n }, { lovelace: 5n * ADA });
+  const name = entries.object(NAME);
+  await name.call(ann, 'upgrade', { tier: 2n }, { lovelace: 2n * ADA });
+  await name.call(ann, 'withdraw', { amount: ADA });
+  assert.equal((await name.read()).value.stake, 6n * ADA);
+
+  // I5: every tampering of an engine-built keyed action is refused before the wallet is asked.
+  let refused = 0;
+  for (let i = 0, total = 1; i < total; i++) {
+    const evil = { ...rt.service, async prepare(req) {
+      const p = await rt.service.prepare(req);
+      const all = Object.entries(tamperings(CSL, p.cbor, [ann.address]));
+      total = all.length;
+      return { ...p, cbor: all[i][1] };
+    } };
+    const k = new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: evil, chain: rt.chain });
+    let asked = false;
+    const watched = { ...ann, signTx: (...x) => { asked = true; return ann.signTx(...x); } };
+    await assert.rejects(k.at(inst.id).keyed('Entry').object(NAME).call(watched, 'upgrade', { tier: 3n }, { lovelace: ADA }), undefined, `tampering ${i}`);
+    assert.equal(asked, false, `tampering ${i} reached the wallet`);
+    refused++;
+  }
+  console.log(`I5: ${refused} tamperings of an engine-built keyed action refused before signing`);
+
+  // A second name after the first: its anchor is cooling down, so the engine names the slot to prepare again at and
+  // the page waits (D7 step 5); the window then starts within the page's limits.
+  const t0 = Date.now();
+  // D11 on a real insert: a service whose transaction does not spend the operation's designated input, and one that
+  // skims the relinked anchor, are refused before the wallet is asked.
+  const watchedBob = (flag) => ({ ...bob, signTx: (...x) => { flag.asked = true; return bob.signTx(...x); } });
+  for (const [what, tamper, re] of [
+    ['another input than the designated one', (req) => ({ ...req, designated: null }), /designated/],
+  ]) {
+    const flag = { asked: false };
+    const evil = { ...rt.service, prepare: (req) => rt.service.prepare(tamper(req)) };
+    const k = new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: evil, chain: rt.chain });
+    await assert.rejects(k.at(inst.id).keyed('Entry').insert(watchedBob(flag), 'claim', { name: OTHER, tier: 0n, guardians: [bob.keyHash], needed: 1n }),
+      re, what);
+    assert.equal(flag.asked, false, `${what}: the wallet was asked`);
+  }
+  const other = await entries.insert(bob, 'claim', { name: OTHER, tier: 0n, guardians: [bob.keyHash], needed: 1n });
+  console.log(`[registry] an insert after a fresh node waited for its cooldown: ${Math.round((Date.now() - t0) / 1000)} s`);
+  assert.equal(other.key, OTHER);
+  assert.deepEqual((await entries.keys()).map((e) => e.key), [NAME, OTHER]);
+
+  // Retries (D11): a wallet that says "rejected" while the transaction lands. The page then holds the operation's
+  // record (designated input); the retry finds the input spent, reports the operation settled, and signs nothing.
+  const store = memoryRetryStore();
+  const page = () => new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: rt.service, chain: rt.chain,
+    retryStore: store });
+  const lying = { ...ann, submitTx: async (cbor) => { await ann.submitTx(cbor); throw new Error('rejected (a lying relay)'); } };
+  await assert.rejects(page().at(inst.id).keyed('Ballot').object(ann.keyHash).call(lying, 'change', { choice: 1n }), PendingKeyedOperation);
+  const [rec] = await store.all();
+  assert.equal(rec.attempts.length, 1);
+  // After a reload (a new page over the same store), a hostile service's retry that ignores the input is refused.
+  const ignoring = { ...rt.service, prepare: (req) => rt.service.prepare({ ...req, designated: null }) };
+  const reloaded = new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: ignoring, chain: rt.chain, retryStore: store });
+  let asked = false;
+  const watchedAnn = { ...ann, signTx: (...x) => { asked = true; return ann.signTx(...x); } };
+  for (let i = 0; i < 30 && (await rt.chain.utxosAt(rec.address)).some((u) => u.ref === rec.designated); i++) await sleep(1000);
+  await assert.rejects(reloaded.at(inst.id).keyed('Ballot').object(ann.keyHash).call(watchedAnn, 'change', { choice: 2n }), /settled/);
+  assert.equal(asked, false);
+  assert.equal((await ballots.find(ann.keyHash)).value.choice, 1n, 'the first attempt landed, once');
+  assert.deepEqual(await store.all(), []);
+
+  // The two-input forgery on a removal: a chain API that reports the node low and the predecessor high is refused (the
+  // node's value is bound by its Ctx; DevKit's Yaci Store serves no transaction CBOR).
+  const nameRef = (await entries.find(NAME)).ref;
+  const otherRef = (await entries.find(OTHER)).ref;
+  const liar = { ...rt.chain, verifiedOutput: undefined, async utxo(r) {
+    const u = await rt.chain.utxo(r);
+    if (!u) return u;
+    const shift = r === otherRef ? -ADA : r === nameRef ? ADA : 0n;
+    return { ...u, value: new Map([...u.value, ['lovelace', u.value.get('lovelace') + shift]]) };
+  } };
+  const forged = new JoustContract({ CSL, description: reg.description, deployment: reg.deployment, service: rt.service, chain: liar });
+  await assert.rejects(forged.at(inst.id).keyed('Entry').object(OTHER).call(bob, 'release', {}), /disagrees with the call's Ctx/);
+  // The removal itself: the predecessor (NAME) is relinked past OTHER.
+  await entries.object(OTHER).call(bob, 'release', {});
+  assert.equal(await entries.exists(OTHER), false, 'the key is free again');
+  // Retires: the name and the ballot keep their keys for good.
+  await name.call(ann, 'retire', {});
+  await ballots.object(ann.keyHash).call(ann, 'leave', {});
+  assert.deepEqual((await entries.keys()).map((e) => [e.key, e.retired]), [[NAME, true]]);
+  assert.equal((await ballots.find(ann.keyHash)).retired, true);
+  // A composition with a keyed call is refused by the page.
+  await assert.rejects(rt.compose(ann, [{ contract: reg, method: 'change', instance: inst.id, args: { choice: 1n } }]), /keyed/);
 });
