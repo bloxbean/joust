@@ -64,11 +64,25 @@ public final class Prepare {
         b.mapStore(nodes);
         // A page's absolute window limits (ADR-0016 D7, D11): keyed calls keep their link windows within them. Only keyed
         // calls read them; the request may give the page's own ({@code pageLimits: [maxStartSlots, maxValiditySlots]}).
+        JsonNode pl;
         try {
-            JsonNode pl = JSON.readTree(r.call()).path("pageLimits");
-            b.pageLimits(pl.isArray() ? pl.get(0).asLong() : 60, pl.isArray() ? pl.get(1).asLong() : 900);
+            pl = JSON.readTree(r.call()).path("pageLimits");
         } catch (Exception e) {
             throw new IllegalArgumentException("the call request is not JSON", e);
+        }
+        if (pl.isMissingNode() || pl.isNull()) {
+            b.pageLimits(60, 900);
+        } else {
+            // R-G4: two integers, a start limit of at least 0 and a validity limit of at least 1 slot.
+            if (!pl.isArray() || pl.size() != 2 || !pl.get(0).canConvertToLong() || !pl.get(1).canConvertToLong()
+                    || !pl.get(0).isIntegralNumber() || !pl.get(1).isIntegralNumber()) {
+                throw new IllegalArgumentException("pageLimits must be [maxStartSlots, maxValiditySlots], two integers");
+            }
+            long start = pl.get(0).asLong();
+            long validity = pl.get(1).asLong();
+            if (start < 0) throw new IllegalArgumentException("pageLimits: maxStartSlots " + start + " is negative");
+            if (validity < 1) throw new IllegalArgumentException("pageLimits: maxValiditySlots " + validity + " is below 1");
+            b.pageLimits(start, validity);
         }
         if (r.mapNodes() == null || r.mapNodes().isEmpty()) {
             b.mapProver(new org.julclang.state.runtime.snapshot.SuppliedProver(r.mapProofs()));

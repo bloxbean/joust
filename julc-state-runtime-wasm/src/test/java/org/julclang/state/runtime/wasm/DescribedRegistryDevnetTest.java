@@ -138,6 +138,14 @@ class DescribedRegistryDevnetTest {
         // The instance and its two heads (D3), prepared for the admin's wallet: its seed is the designated input.
         var adminWallet = WalletAccount.of(admin.baseAddress(), Networks.testnet());
         String[] made = new String[1];
+        // R-G1: a keyed contract's creation is a keyed call for a wallet: refused without a designated input, and composed.
+        var c1 = assertThrows(JoustException.class, () -> Compose.of(rt, adminWallet)
+                .add(() -> registry.call(rt, adminWallet, "init", "init", null, null, none, BigInteger.ZERO)).prepare());
+        assertTrue(c1.getMessage().contains("designated input"), c1.getMessage());
+        var c2 = assertThrows(JoustException.class, () -> Compose.of(rt, adminWallet).designate(designate(rt, admin))
+                .add(() -> registry.call(rt, adminWallet, "init", "init", null, null, none, BigInteger.ZERO))
+                .add(() -> registry.call(rt, adminWallet, "init", "init", null, null, none, BigInteger.ZERO)).prepare());
+        assertTrue(c2.getMessage().contains("on its own"), c2.getMessage());
         run(rt, admin, () -> made[0] = registry.call(rt, adminWallet, "init", "init", null, null, none, BigInteger.ZERO));
         String inst = made[0];
         assertNotNull(inst);
@@ -171,6 +179,12 @@ class DescribedRegistryDevnetTest {
         run(rt, ann, () -> registry.call(rt, annWallet, "keyedInit", "claim", inst, null, claim2, BigInteger.ZERO));
         // The remove relinks "name" (its predecessor) after its cooldown: run waits for the slot the engine names.
         run(rt, ann, () -> registry.call(rt, annWallet, "keyedRemove", "release", inst, "6f74686572", none, BigInteger.ZERO));
+        // R-G8: the admin's @Shared insert (grant), and the guardians' @Quorum keyed action (recover; the caller counts).
+        var grant = JSON.readTree("{\"name\":\"67\",\"owner\":\"" + annKey + "\"}");
+        run(rt, admin, () -> registry.call(rt, adminWallet, "keyedInit", "grant", inst, null, grant, BigInteger.ZERO));
+        var recover = JSON.readTree("{\"newOwner\":\"" + annKey + "\"}");
+        run(rt, ann, () -> registry.call(rt, annWallet, "keyedAction", "recover", inst, "6e616d65", recover, BigInteger.ZERO, null, null,
+                null, List.of()));
         run(rt, ann, () -> registry.call(rt, annWallet, "keyedRetire", "retire", inst, "6e616d65", none, BigInteger.ZERO));
         run(rt, ann, () -> registry.call(rt, annWallet, "keyedRetire", "leave", inst, annKey, none, BigInteger.ZERO));
         System.out.println("[M3] Registry: every keyed call kind prepared for a wallet through the described dispatcher"

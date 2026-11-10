@@ -321,6 +321,7 @@ public final class StateContractHandle<S> {
     }
 
     private DeployResult<S> deployInScope(Deploy<S> d) {
+        if (spec.hasKeyed() && TxRunner.capture() != null) TxRunner.capture().keyedCreation = true;   // R-G1
         Account caller = d.caller();
         byte[] callerPkh = Keys.pkh(caller);
         // Publish reference scripts first: doing so spends the caller's UTxOs, so the seed is picked afterwards.

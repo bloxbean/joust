@@ -67,6 +67,14 @@ public final class Compose {
         return this;
     }
 
+    /** {@link #designate} is for {@link #prepare()} only: a submitting or nested composition designates its own (R-G2). */
+    private void refuseDesignatedOutsidePrepare(String what) {
+        if (designatedRef != null) {
+            throw new JoustException("composition: designate(...) applies to prepare() only, not to " + what
+                    + " (the runtime designates its own input; ADR-0016 D7)");
+        }
+    }
+
     /** Builds, checks, submits and confirms the one transaction; returns its hash. */
     public String submit() {
         return (String) finish(false);
@@ -87,6 +95,7 @@ public final class Compose {
         if (prepare && outer != null) throw new JoustException("prepare() cannot be nested in another composition");
         if (prepare && !(payer instanceof WalletAccount)) throw new JoustException("prepare(): the payer must be a WalletAccount");
         if (outer != null) {
+            refuseDesignatedOutsidePrepare("a nested composition");
             // Nested in another composition: the calls join the outer transaction, which submits them all (or none).
             String saved = outer.group;
             if (sharedSigners && saved == null) outer.group = "composed calls #" + System.identityHashCode(this);
@@ -108,6 +117,7 @@ public final class Compose {
             return null;
         }
         if (prepare) return attempt(true, designatedRef == null ? null : Designation.given(runtime, payer, designatedRef));
+        refuseDesignatedOutsidePrepare("submit()");
         // ADR-0016 D7: a composition with a keyed call designates one ordinary input of the payer after its first pass,
         // spends it in every attempt, and rebuilds the whole composition under the same rules as a single keyed call
         // (KeyedObjects.series). A composition without keyed calls runs once, as before.
@@ -137,7 +147,7 @@ public final class Compose {
             failed = runTolerant(again);
             probe = again;
         }
-        if (probe.keyed) {
+        if (probe.keyed || (prepare && probe.keyedCreation)) {
             if (prepare) {
                 // ADR-0016 D11: the page designates the input (designate), records it, and signs only attempts spending it.
                 if (designated == null) {

@@ -72,6 +72,11 @@ final class TxRunner {
         final java.util.Map<String, Integer> stateOutputs = new java.util.HashMap<>();
         /** A keyed call took part (ADR-0016 D7): the composition designates an input and may rebuild after a rejection. */
         boolean keyed;
+        /**
+         * A keyed contract's creation took part (its heads, ADR-0016 D3): for a wallet's prepare it is a keyed call too
+         * (D11, R-G1); the JVM's own compositions keep M2's rules.
+         */
+        boolean keyedCreation;
         /** Units whose call is {@code @Receives}: the only valid deposit targets (ADR-0011 D3). */
         final java.util.Set<String> receivers = new java.util.HashSet<>();
 

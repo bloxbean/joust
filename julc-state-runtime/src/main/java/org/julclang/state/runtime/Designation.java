@@ -303,10 +303,17 @@ final class Designation {
      */
     static Designated given(StateRuntime rt, Account payer, String ref) {
         String address = payer.baseAddress();
+        boolean complete = false;
         try {
             for (int page = 1; page <= 20; page++) {
                 var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
-                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                if (!r.isSuccessful()) {
+                    throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref + ": " + r.getResponse());
+                }
+                if (r.getValue() == null || r.getValue().isEmpty()) {
+                    complete = true;
+                    break;
+                }
                 for (Utxo u : r.getValue()) {
                     if (!ref(u).equals(ref)) continue;
                     if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
@@ -314,14 +321,25 @@ final class Designation {
                         throw new JoustException("the designated input " + ref + " is not an ordinary (lovelace-only) UTxO of the"
                                 + " payer (ADR-0016 D11)");
                     }
+                    // As reserve's floor: it also gives the change a payout to the payer needs (the funding pick it replaces).
+                    if (u.getAmount().get(0).getQuantity().compareTo(BigInteger.valueOf(5_000_000)) < 0) {
+                        throw new JoustException("the designated input " + ref + " holds less than 5 ADA (ADR-0016 D11, R-G3)");
+                    }
                     return new Designated(u, address, true);
                 }
-                if (r.getValue().size() < 100) break;
+                if (r.getValue().size() < 100) {
+                    complete = true;
+                    break;
+                }
             }
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {
             throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref, e);
+        }
+        if (!complete) {
+            throw new JoustException("the payer " + address + " has more UTxOs than the 2,000 read; the designated input " + ref
+                    + " was not among them (R-G3)");
         }
         throw new JoustException("the designated input " + ref + " is not an unspent UTxO of the payer " + address
                 + " (spent: an earlier attempt of the operation may have landed; ADR-0016 D11)");
