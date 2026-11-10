@@ -134,6 +134,10 @@ class DescribedRegistryDevnetTest {
         var annWallet = WalletAccount.of(ann.baseAddress(), Networks.testnet());
         String annKey = HexUtil.encodeHexString(annWallet.paymentKeyHash());
         var none = JSON.createObjectNode();
+        // Wallet calls only use the reference script: a key-holding account publishes it first (ADR-0013; a fresh
+        // DevKit has none). Idempotent: one an earlier run published is found and kept. The registry needs no verifier
+        // (no MerkleMaps, no sends or deposits).
+        assertNotNull(registry.handle(rt).ensureReferenceScript(admin));
 
         // The instance and its two heads (D3), prepared for the admin's wallet: its seed is the designated input.
         var adminWallet = WalletAccount.of(admin.baseAddress(), Networks.testnet());
