@@ -111,22 +111,30 @@ export const inFlight = new Map();
  * delivered, so a retry can never be bound, while it waits, to an operation that ends before it runs, and a review can
  * never wait for a call queued behind its own.
  */
-export async function exclusiveKeyed(networkId, keys, what, f) {
+export function exclusiveKeyed(networkId, scope, what, f) {
   const name = `joust.keyed:${networkId}`;
-  if (inFlight.has(networkId)) throw new KeyedCallInProgress(`${what}: another keyed call is in progress on this page; call again when it has finished`);
-  const flight = { keys: [...keys], record: null, inReview: false, abandon: false };
-  inFlight.set(networkId, flight);
-  try {
-    if (globalThis.navigator?.locks?.request) {
-      return await globalThis.navigator.locks.request(name, { mode: 'exclusive', ifAvailable: true }, (lock) => {
-        if (!lock) throw new KeyedCallInProgress(`${what}: another keyed call is in progress in another tab; call again when it has finished`);
-        return f(flight);
-      });
-    }
-    return await f(flight);
-  } finally {
-    if (inFlight.get(networkId) === flight) inFlight.delete(networkId);
+  // Reserved synchronously, before any await of the caller or of this function (F95): a call made while another is in
+  // flight, even one still reading its wallet, is refused at once.
+  if (inFlight.has(networkId)) {
+    return Promise.reject(new KeyedCallInProgress(`${what}: another keyed call is in progress on this page; call again when it has finished`));
   }
+  const flight = { keys: [], store: scope, record: null, inReview: false, abandon: false };
+  inFlight.set(networkId, flight);
+  const run = async () => {
+    try {
+      if (globalThis.navigator?.locks?.request) {
+        // The cross-tab lock before anything else, the wallet's reads included (F95).
+        return await globalThis.navigator.locks.request(name, { mode: 'exclusive', ifAvailable: true }, (lock) => {
+          if (!lock) throw new KeyedCallInProgress(`${what}: another keyed call is in progress in another tab; call again when it has finished`);
+          return f(flight);
+        });
+      }
+      return await f(flight);
+    } finally {
+      if (inFlight.get(networkId) === flight) inFlight.delete(networkId);
+    }
+  };
+  return run();
 }
 
 /** The unsettled record of {@code wallet} on {@code networkId}, if any (one per wallet: its keys overlap). */

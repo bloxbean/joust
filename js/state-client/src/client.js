@@ -346,18 +346,20 @@ JoustContract.prototype.runKeyed = async function runKeyed(api, call, opts = {})
   const args = {};
   for (const a of call.meta.args) args[a.name] = this.codec.decode(a.schema, this.codec.encode(a.schema, call.args[a.name], a.name));
   call = { ...call, args };
-  const wallet = await walletView(CSL, api);
   const networkId = this.deployment.networkId;
-  if (wallet.networkId !== networkId) throw new Error('the wallet is on another network');
-  const co = await cosignersOf(CSL, call.cosigners, wallet, networkId);
-  if (co.apis.length && !signedByOthers(call.meta)) throw new Error(`${call.meta.name} takes no co-signers`);
   const store = this.retryStore ?? (this.retryStore = defaultRetryStore());
   // One set of effective limits for verification and settlement (F91, R-F15).
   const limits = { ...DEFAULT_LIMITS, ...KEYED_LIMITS, ...this.limits };
-  // The only keyed call in flight on the network (never queued; F90, F92): the whole lifecycle, in this page and across
-  // its tabs (F79, R-F3).
-  return exclusiveKeyed(networkId, wallet.keyHashes, call.meta.name,
-    (flight) => this.runKeyedLocked(api, call, opts, { co, store, limits, networkId, flight }));
+  // The only keyed call in flight on the network (never queued; F90, F92), reserved here, synchronously, before the
+  // first await (the wallet's reads, the co-signers'; F95): the whole lifecycle, in this page and across its tabs.
+  return exclusiveKeyed(networkId, store, call.meta.name, async (flight) => {
+    const wallet = await walletView(CSL, api);
+    if (wallet.networkId !== networkId) throw new Error('the wallet is on another network');
+    flight.keys = [...wallet.keyHashes];
+    const co = await cosignersOf(CSL, call.cosigners, wallet, networkId);
+    if (co.apis.length && !signedByOthers(call.meta)) throw new Error(`${call.meta.name} takes no co-signers`);
+    return this.runKeyedLocked(api, call, opts, { co, store, limits, networkId, flight });
+  });
 };
 
 /** {@link #runKeyed}'s body, holding the network's keyed-operation lock. */
@@ -453,10 +455,12 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
     // In review: an abandonKeyed of this wallet from the review is recorded here, and honoured whether the callback
     // then returns or throws: the record is deleted under its revision, signed attempts included (F93, R-F13).
     flight.inReview = true;
-    let failure = null;
+    let threw = false;
+    let failure;
     try {
       await this.onReview({ contract: this.name, call, report, txHash });
     } catch (e) {
+      threw = true;   // whatever was thrown, a falsy value included (F96)
       failure = e;
     } finally {
       flight.inReview = false;
@@ -466,7 +470,7 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
       throw new Error(`${call.meta.name}: abandoned during review` + (rec.attempts.length
         ? `; an earlier signed attempt (${rec.attempts.map((a) => a.txHash).join(', ')}) may still land` : ''));
     }
-    if (failure) {
+    if (threw) {
       await forget();
       throw failure;
     }
@@ -502,23 +506,43 @@ JoustContract.prototype.runKeyedLocked = async function runKeyedLocked(api, call
  * Abandons the wallet's unsettled keyed operation (the user's explicit choice; an earlier attempt may still land), or
  * acknowledges one that has ended and may have landed (its tombstone). Returns the record it removed, or null.
  */
-JoustContract.prototype.abandonKeyed = async function abandonKeyed(api) {
-  const wallet = await walletView(this.CSL, api);
-  const store = this.retryStore ?? (this.retryStore = defaultRetryStore());
+JoustContract.prototype.abandonKeyed = function abandonKeyed(api) {
+  return this.endKeyed(api, { acknowledgeOnly: false });
+};
+
+/**
+ * Removes the wallet's record: any (abandon), or only a tombstone (acknowledge; R-F16). The slot is checked
+ * synchronously at entry, before the wallet's reads (F95): during the review of this wallet's own call, through the
+ * same store and record (F97), an abandon is recorded for that call to honour; any other call in flight refuses this.
+ */
+JoustContract.prototype.endKeyed = function endKeyed(api, { acknowledgeOnly }) {
   const networkId = this.deployment.networkId;
-  // Called from the review of this wallet's own keyed call (F88, F93): recorded for that call to honour (it deletes the
-  // record it holds); any other call in flight makes this refused at once, never queued.
+  const store = this.retryStore ?? (this.retryStore = defaultRetryStore());
+  const what = acknowledgeOnly ? 'acknowledgeKeyed' : 'abandonKeyed';
   const flight = inFlight.get(networkId);
   if (flight) {
-    if (!flight.inReview || !flight.keys.some((k) => wallet.keyHashes.includes(k))) {
-      throw new KeyedCallInProgress('abandonKeyed: another keyed call is in progress on this page; call again when it has finished');
-    }
-    flight.abandon = true;
-    return (await store.all()).find((r) => r.id === flight.record) ?? null;
+    return (async () => {
+      const busy = () => new KeyedCallInProgress(`${what}: another keyed call is in progress on this page; call again when it has finished`);
+      if (acknowledgeOnly || !flight.inReview) throw busy();
+      const wallet = await walletView(this.CSL, api);
+      // Still the same call, in review, of this wallet, and its record in this client's store (F95, F97).
+      if (inFlight.get(networkId) !== flight || !flight.inReview || !flight.keys.some((k) => wallet.keyHashes.includes(k))) throw busy();
+      const rec = (await store.all()).find((r) => r.id === flight.record) ?? null;
+      if (!rec || inFlight.get(networkId) !== flight || !flight.inReview) throw busy();
+      flight.abandon = true;
+      return rec;
+    })();
   }
-  return exclusiveKeyed(networkId, wallet.keyHashes, 'abandonKeyed', async () => {
+  return exclusiveKeyed(networkId, store, what, async (own) => {
+    const wallet = await walletView(this.CSL, api);
+    own.keys = [...wallet.keyHashes];
     const rec = await pendingOf(store, wallet, networkId);
-    if (rec) await store.delete(rec.id, revOf(rec));
+    if (!rec) return null;
+    if (acknowledgeOnly && !rec.ended) {
+      throw new Error('acknowledgeKeyed: the wallet\'s keyed operation is still pending (it may still land); retry it, or'
+        + ' abandonKeyed to drop it explicitly');
+    }
+    await store.delete(rec.id, revOf(rec));
     return rec;
   });
 };
@@ -928,7 +952,10 @@ export class JoustObject {
   }
 }
 
-/** Acknowledges the wallet's ended keyed operation that may have landed (its tombstone), as abandonKeyed does. */
+/**
+ * Acknowledges the wallet's ended keyed operation that may have landed (its tombstone); refuses while it is still
+ * pending (R-F16): abandonKeyed is the explicit way to drop a live operation.
+ */
 JoustContract.prototype.acknowledgeKeyed = function acknowledgeKeyed(api) {
-  return this.abandonKeyed(api);
+  return this.endKeyed(api, { acknowledgeOnly: true });
 };

@@ -329,3 +329,75 @@ test('F79, R-F3: stale revisions are refused; a record without a revision (F89) 
   assert.equal(now.attempts.length, 3, 'the legacy record took a third attempt');
   assert.equal(now.rev, 1);
 });
+
+test('F95: the slot is reserved at entry, before the wallet\'s reads: a call whose wallet read is held while another confirms is refused', async () => {
+  const r = rig();
+  r.state.submit = async (cbor) => hashOf(cbor);
+  const confirm = barrier();
+  r.chain.awaitTx = async () => { await confirm.wait(); return true; };
+  const a = r.call(r.page());
+  await confirm.at;
+  // B's wallet read is held; B is refused at once all the same (it never reached its wallet).
+  const held = barrier();
+  const slowApi = { ...r.api, getNetworkId: async () => { await held.wait(); return 0; } };
+  const b = r.page().at(I).keyed('Entry').object('aa').call(slowApi, 'upgrade', { tier: 2n }, { lovelace: 10n * ADA });
+  await assert.rejects(b, KeyedCallInProgress);
+  confirm.release();
+  await a;
+  held.release();
+  assert.equal(r.state.signed, 1, 'no second signature');
+  // abandon and acknowledge check the slot at entry too.
+  const r2 = rig();
+  const c2 = barrier();
+  r2.chain.awaitTx = async () => { await c2.wait(); return true; };
+  r2.state.submit = async (cbor) => hashOf(cbor);
+  const a2 = r2.call(r2.page());
+  await c2.at;
+  await assert.rejects(r2.page().abandonKeyed(r2.api), KeyedCallInProgress);
+  await assert.rejects(r2.page().acknowledgeKeyed(r2.api), KeyedCallInProgress);
+  c2.release();
+  await a2;
+});
+
+test('R-F16: acknowledgeKeyed clears only a tombstone; a live operation is dropped only by abandonKeyed', async () => {
+  const r = rig();
+  await assert.rejects(r.call(r.page()), PendingKeyedOperation);
+  await assert.rejects(r.page().acknowledgeKeyed(r.api), /still pending .* abandonKeyed/);
+  assert.equal((await r.store.all()).length, 1, 'the live record stays');
+  const [rec] = await r.store.all();
+  await r.store.put({ ...rec, rev: rec.rev + 1, ended: 'may have landed' });
+  assert.equal((await r.page().acknowledgeKeyed(r.api)).ended, 'may have landed');
+  assert.deepEqual(await r.store.all(), []);
+  const r2 = rig();
+  await assert.rejects(r2.call(r2.page()), PendingKeyedOperation);
+  assert.ok(await r2.page().abandonKeyed(r2.api));
+  assert.deepEqual(await r2.store.all(), []);
+});
+
+test('F96: a falsy rejection from onReview is a refusal: nothing signed, fresh or retried', async () => {
+  for (const value of [null, undefined, false, 0, '']) {
+    const r = rig();
+    await assert.rejects(r.call(r.page(r.service, { onReview: async () => { throw value; } })), (e) => e === value, `fresh ${String(value)}`);
+    assert.equal(r.state.signed, 0);
+    assert.deepEqual(await r.store.all(), []);
+    await assert.rejects(r.call(r.page()), PendingKeyedOperation);
+    await assert.rejects(r.call(r.page(r.service, { onReview: async () => { throw value; } })), (e) => e === value, `retry ${String(value)}`);
+    assert.equal(r.state.signed, 1, 'the retry was not signed');
+    assert.equal((await r.store.all())[0].attempts.length, 1, 'its record unchanged');
+  }
+});
+
+test('F97: an abandon during review applies only through the reviewing call\'s store and record', async () => {
+  const r = rig();
+  const storeB = memoryRetryStore();
+  await assert.rejects(r.call(r.page()), PendingKeyedOperation);                                  // A's record
+  await assert.rejects(r.call(r.page(r.service, { retryStore: storeB })), PendingKeyedOperation);   // B's, in another store
+  let outcome;
+  const a = r.page(r.service, { onReview: async () => {
+    outcome = await r.page(r.service, { retryStore: storeB }).abandonKeyed(r.api).then(() => 'abandoned', (e) => e.constructor.name);
+  } });
+  await assert.rejects(r.call(a), PendingKeyedOperation);
+  assert.equal(outcome, 'KeyedCallInProgress', 'another store\'s abandon is refused');
+  assert.equal((await r.store.all())[0].attempts.length, 2, 'A went on: its record kept, a second attempt');
+  assert.equal((await storeB.all()).length, 1, 'B\'s record untouched');
+});
