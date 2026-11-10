@@ -14,6 +14,7 @@
     "node": ">=22"
   },
   "license": "MIT",
+  "homepage": "https://github.com/bloxbean/joust/tree/main/js/create-joust",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bloxbean/joust.git",
