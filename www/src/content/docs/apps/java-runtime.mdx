@@ -152,7 +152,7 @@ instance has been destroyed (or never existed), reads throw `InstanceNotFoundExc
 | `RequireException` (`julc-state-api`) | A rule failed on the JVM: your `Require.that`, a signer or time annotation, a payout rule. Nothing was submitted | Show `getMessage()` to the user |
 | `ContentionException` | The state kept moving; gave up after `maxRetries` | Retry later, or use [batched intents](/contracts/batched-intents/) for hot state |
 | `SubmitException` | The builder failed or the node rejected the transaction; nothing was accepted | Inspect the message; safe to rebuild |
-| `PendingTransactionException` | Submitted, but not seen on chain in time. It may still land | Check `txHash()` before trying again |
+| `PendingTransactionException` | Submitted, but not seen on chain in time. It may still land | Check `txHash()` before trying again; for a keyed call, look up every hash in `attempts()` |
 | `InstanceNotFoundException` | No UTxO holds the instance's token | The instance was destroyed, or the id is wrong |
 
 All but `RequireException` extend `JoustException`.
@@ -201,6 +201,11 @@ Owned objects and intents have their own handles (`OwnedObject`, `IntentHandle`,
 clients expose as typed methods, for example `BankClient.open(...)` returning an `AccountObject`, and
 `PoolClient.donateIntent(...)`, `batch(...)`, `pendingIntents()`. See [Owned objects](/contracts/owned-objects/) and
 [Batched intents](/contracts/batched-intents/).
+
+Keyed objects (ADR-0016, on `main` and coming with the next release) use `KeyedList` and `KeyedObject`: the generated
+client offers, for example, `RegistryClient.claim(...)` returning an `EntryObject`, `entry(key)`, `entryExists(key)`
+and `entryKeys()`. Every keyed operation spends one designated wallet input in all its attempts, so a retry can never
+land twice. See [Keyed objects](/contracts/keyed-objects/#calling-keyed-objects-from-java).
 
 ## Several calls in one transaction: Compose
 

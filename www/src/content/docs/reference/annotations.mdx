@@ -33,10 +33,10 @@ All annotations have `CLASS` retention: they exist for the annotation processor 
 | [`@ValidBefore`](#validbefore) | method | `value` | Time |
 | [`@Payable`](#payable) | method | none | Funds |
 | [`@Receives`](#receives) | method | none | Funds |
-| [`@Owned`](#owned) | record | none | Owned objects |
+| [`@Owned`](#owned) | record | `key`, `maxKeyBytes`, `signedKey`, `linkCooldownMs`, `linkWindowMs` (keyed types) | Owned objects |
 | [`@OwnedInit`](#ownedinit) | method | none | Owned objects |
 | [`@OwnedAction`](#ownedaction) | method | none | Owned objects |
-| [`@OwnedDestroy`](#owneddestroy) | method | none | Owned objects |
+| [`@OwnedDestroy`](#owneddestroy) | method | `retire` (keyed types) | Owned objects |
 | [`@Shared`](#shared) | parameter | none | Owned objects |
 | [`@Into`](#into) | parameter | none | Owned objects |
 | [`@Admits`](#admits) | method | `value` | Owned objects |
@@ -403,7 +403,8 @@ never contend. Guide: [Owned objects](/contracts/owned-objects/). Tutorial:
 
 Marks a record of the contract as an owned type. Each object is its own UTxO, touched only by owned methods.
 
-**Target:** a record nested in the contract. **Elements:** none. **Source:**
+**Target:** a record nested in the contract. **Elements:** none for a plain owned type; the keyed elements below
+make it a keyed type. **Source:**
 [`Owned.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Owned.java)
 
 - A contract may have several owned types since ADR-0012 D1 (the Javadoc's "at most one" predates it); each gets its
@@ -417,6 +418,26 @@ Marks a record of the contract as an owned type. Each object is its own UTxO, to
 ```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java"
 @Owned
 public record Account(byte[] owner, BigInteger balance) {}
+```
+
+**Keyed types** (ADR-0016; on `main`, not in `0.1.0-pre1-rc2`, coming with the next release). Naming a `byte[]`
+component as `key` makes the type keyed: at most one object per key and instance, in a sorted on-chain list. Guide:
+[Keyed objects](/contracts/keyed-objects/).
+
+| Element | Default | Meaning |
+|---|---|---|
+| `key` | `""` | The `byte[]` component that keys the object; empty for a plain owned type |
+| `maxKeyBytes` | 32 | Longest key: 1 to 64 bytes |
+| `signedKey` | `false` | The key is a 28-byte key hash that must sign the insert |
+| `linkCooldownMs` | 60,000 | Least time between two relinks of a node: 0 (written explicitly) or 60,000 to 3,600,000 |
+| `linkWindowMs` | -1, meaning `min(120,000, maxValidityMs)` | Widest validity window of a relink: 20,000 to `min(900,000, maxValidityMs)` |
+
+A keyed type needs an `@OwnedDestroy(retire = true)` signed with `@SignedBy`, and every keyed `@OwnedAction` must carry
+`@SignedBy`, `@Quorum` or `@AuthorizedBy`. Setting a keyed element on a type without `key` is an error.
+
+```java title="examples/registry/src/main/java/org/julclang/state/examples/registry/Registry.java"
+@Owned(key = "voter", maxKeyBytes = 28, signedKey = true)
+public record Ballot(byte[] voter, BigInteger choice) {}
 ```
 
 ### @OwnedInit
@@ -453,13 +474,24 @@ Ends an owned object: `public static JulcList<Payout> name(R object, [@Shared S 
 token; the payouts must allocate everything it holds. The processor warns if the object has MerkleMaps (they are
 discarded).
 
-**Target:** method. **Elements:** none. **Source:**
+**Target:** method. **Elements:** `retire` (default `false`). **Source:**
 [`OwnedDestroy.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/OwnedDestroy.java)
 
 ```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java"
 @OwnedDestroy
 @SignedBy("owner")
 public static JulcList<Payout> close(Account a, Ctx ctx) {
+```
+
+On a [keyed type](/contracts/keyed-objects/), a plain `@OwnedDestroy` *removes* the object and frees its key, and
+`@OwnedDestroy(retire = true)` *retires* it: the object stays as a retired node with its deposit and its key, taken for
+good, and the payouts allocate exactly `ctx.balance()` (everything but the deposit). A retiring exit cannot take
+`@Shared`, `@Reads`, `@Payable`, `@Quorum`, `@AuthorizedBy`, `@ValidAfter` or `@ValidBefore`.
+
+```java title="examples/registry/src/main/java/org/julclang/state/examples/registry/Registry.java"
+@OwnedDestroy(retire = true)
+@SignedBy("owner")
+public static JulcList<Payout> retire(Entry e, Ctx ctx) {
 ```
 
 ### @Shared

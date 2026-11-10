@@ -44,6 +44,9 @@ Contracts with owned objects also get, per owned type, a creation method returni
 `lovelace()`, `fullValue()` and the owned actions), an accessor by id (`account(String objectId)`) and a
 `<TYPE>_CODEC`. Contracts with `@Batched` actions also get `INTENTS` (an `IntentCodec<S>`), `<action>Intent(...)`
 methods returning `IntentHandle<S>`, `batch(Account, int)`, `pendingIntents()` and `intent(String)`.
+Contracts with keyed types (ADR-0016) get, per keyed type `T`, `<t>List()`, `<t>(byte[] key)`, `<t>Exists(byte[] key)`,
+`<t>Keys()`, one insert method per `@OwnedInit`, a `<T>Object` wrapper and a `<T>_TYPE` constant: see
+[Keyed objects](#keyed-objects).
 
 ## StateRuntime
 
@@ -81,6 +84,11 @@ methods returning `IntentHandle<S>`, `batch(Account, int)`, `pendingIntents()` a
 | `mapStore(NodeStore)` | RocksDB | Node store for MerkleMap mirrors |
 | `mapStorePath(String)` | `joust.mapStore` system property, else `./.joust/mpf` | Directory of the default RocksDB store. The property value `memory` keeps it in memory (tests) |
 | `mapProver(MerkleSupport.Prover)` | a trie over `mapStore` | Map proofs from elsewhere (the runtime engine's caller supplies them) |
+| `relays(List<Relay>)` | the backend alone | Keyed calls only: every attempt goes to each relay; any acceptance or unknown answer dominates rejections |
+| `relayTimeout(Duration)` | 60 seconds | Keyed calls only: how long an attempt waits for each relay before its answer counts as unknown |
+| `settlementSlots(long)` | 2 | Keyed calls only: slots past the last attempt's window before a series may end in a definite failure (at most 100,000) |
+| `topUpAllowance(long lovelace)` | 10 ADA | Keyed calls only: the most an operation adds to an output to reach the ledger minimum |
+| `pageLimits(long maxStartSlots, long maxValiditySlots)` | none | Keeps keyed calls' windows within a page's limits (the verifier's defaults are 60 and 900 slots) |
 | `build()` | | The `StateRuntime` |
 
 `StateRuntime.BuiltTx` is `record BuiltTx(String what, Transaction tx, boolean prepared)`: what the transaction is
@@ -212,6 +220,7 @@ state as `PlutusData` (ADR-0015 D4). `layout()` locates the state's MerkleMaps.
 | `allowSharedSigners()` | `Compose` | Lets one key's signature count for several calls (refused by default) |
 | `submit()` | `String` | Builds, checks, submits and confirms; returns the hash |
 | `prepare()` | `PreparedTx` | Builds for a wallet to sign; the payer and every caller must be `WalletAccount`s |
+| `designate(String ref)` | `Compose` | For `prepare()` only: the wallet input (`txhash#index`) a page designated for a keyed call ([Keyed objects](#keyed-objects)) |
 
 Refused before submitting: one UTxO spent by two calls; two calls minting under one policy; validity windows that do
 not overlap; a key signing for more than one call (without `allowSharedSigners()`); a deposit into an instance whose
@@ -265,8 +274,8 @@ a call proves `@AuthorizedBy` (ADR-0009 D3).
 | `org.julclang.state.api.RequireException` | `RuntimeException` | A contract rule failed on the JVM; nothing was submitted |
 | `JoustException` | `RuntimeException` | Base class of the runtime's failures |
 | `SubmitException` | `JoustException` | The builder failed or the node rejected the transaction; nothing was accepted |
-| `ContentionException` | `JoustException` | The state kept moving; gave up after `maxRetries` |
-| `PendingTransactionException` | `JoustException` | Submitted but not seen on chain in time; `txHash()` gives the hash. Do not resubmit blindly |
+| `ContentionException` | `JoustException` | The state kept moving; gave up after `maxRetries`. For a keyed operation, `attempts()` and `designatedInput()` name what was tried |
+| `PendingTransactionException` | `JoustException` | Submitted but not seen on chain in time; `txHash()` gives the hash. Do not resubmit blindly. For a keyed operation, `attempts()` lists every attempt handed out and `designatedInput()` the input they all spend |
 | `InstanceNotFoundException` | `JoustException` | No UTxO holds the instance's thread token |
 
 ## Helpers
@@ -290,6 +299,24 @@ a call proves `@AuthorizedBy` (ADR-0009 D3).
 
 `Batcher.BatchResult<S>(String txHash, S state, List<String> applied, Map<String, String> skipped)`: `txHash` is null
 when nothing could be applied; `skipped` gives each skipped intent's reason.
+
+## Keyed objects
+
+ADR-0016; on `main`, not in `0.1.0-pre1-rc2` (it comes with the next release). Guide:
+[Keyed objects](/contracts/keyed-objects/).
+
+| Class | Key members | Description |
+|---|---|---|
+| `KeyedList<S, R>` | `KeyedList(StateInstance<S>, KeyedType<R>)`, `type()`, `instance()`, `unit(byte[] key)`, `find(byte[] key)` (`Optional`), `get(byte[] key)`, `exists(byte[] key)`, `keys()`, `insert(Insert<R>)` | One keyed type's list in one instance. `find` and `get` validate the node; "not found" means the provider returned nothing. `keys()` walks from the head and reports a broken walk as an inconsistent snapshot. `insert` is refused on the JVM if the key is taken |
+| `KeyedList.Entry` | `record Entry(byte[] key, boolean retired)`, `keyHex()` | One key of a walk |
+| `KeyedList.Insert<R>` | record, filled in by generated clients | An insert: the method's name, caller, payment, and how to run the method and build its redeemer |
+| `KeyedObject<S, R>` | `key()`, `keyHex()`, `unit()`, `list()`, `utxo()`, `value()`, `retired()`, `lovelace()`, `call(Call<R>)`, `remove(Call<R>)`, `retire(Call<R>)`, `RUNTIME_BURN` | One keyed object, live or retired. `remove` burns the token and relinks the predecessor; `retire` needs no neighbour |
+| `KeyedType<R>` | record: `name()`, `headTag()`, `keyIndex()`, `maxKeyBytes()`, `signedKey()`, `cooldownMs()`, ...; `typeId()`, `keyId(byte[] instance, byte[] key)`, `keyOf(R)`, `MAX_ARGUMENT_BYTES` (4,096) | A keyed type's tags, key, bounds, cooldown and window (the generated `<T>_TYPE`) |
+| `Relay` | `Outcome submit(byte[] cbor)`; `static of(BackendService)`, `static classify(Result)`; `Answer` (`ACCEPTED`, `REJECTED`, `UNKNOWN`), `Outcome` | Where a keyed operation's attempts are sent (`StateRuntime.Builder.relays`) |
+
+Every keyed operation designates one ordinary (ADA-only, at least 5 ADA) UTxO of the payer and spends it in every
+attempt, so at most one attempt can land. A composition with a keyed call does the same; `Compose.designate(ref)`
+names the input a page chose before `prepare()`, which refuses a keyed call without one or composed with other calls.
 
 ## MerkleMaps (advanced)
 

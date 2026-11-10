@@ -200,7 +200,7 @@ Node apps call them through generated JavaScript clients, with a CIP-30 browser 
 
 ## Beyond one state UTxO
 
-![The five kinds of state: inline, MerkleMaps, owned objects, batched intents, native assets](../../../assets/diagrams/state-kinds.svg)
+![Six kinds of state: inline, MerkleMaps, owned objects, batched intents, native assets, keyed objects](../../../assets/diagrams/state-kinds.svg)
 
 A single state UTxO can be updated about once per block, and holds only what fits in one datum. JOUST makes the way
 state maps onto UTxOs an explicit choice, so you can pick the one your contract needs:
@@ -213,6 +213,10 @@ Unbounded maps (token balances, registries) in a 32-byte root, with proofs check
 <Card title="Owned objects" icon="seti:folder">
 One UTxO per user object beside shared state, so users never contend with each other.
 [Owned objects](/contracts/owned-objects/)
+</Card>
+<Card title="Keyed objects" icon="seti:folder">
+One UTxO per key, at most one per key: ballots, names, positions, updated in parallel. On `main`, coming with the next
+release. [Keyed objects](/contracts/keyed-objects/)
 </Card>
 <Card title="Batched intents" icon="list-format">
 Users lock requests in parallel; a permissionless batcher applies many in one transaction.

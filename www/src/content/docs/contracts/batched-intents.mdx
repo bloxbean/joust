@@ -19,6 +19,7 @@ one transaction. The action's code is the same method you would call directly (A
 |---|---|
 | Many users change one shared value at the same time | `@Batched` (this page) |
 | Each user changes only their own state | [Owned objects](/contracts/owned-objects/): no batcher, one transaction per call |
+| Each key may exist at most once (names, ballots) | [Keyed objects](/contracts/keyed-objects/) (on `main`, next release) |
 | Few writers (an admin, a publisher) | A plain `@Action` |
 
 The cost is latency: every operation takes two transactions (lock, then batch), and something must run the batcher.

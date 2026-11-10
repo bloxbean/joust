@@ -46,6 +46,7 @@ Features on `main` after `0.1.0-pre1-rc2` come with the next release candidate.
 | K | Composition (`Compose`), `@Reads`, deposits (`@Receives`), migration (`@MigrateTo`/`@Migrate`) | 0011 | `oracle`, `fees`, `upgrade` |
 | L | Several owned types, MerkleMaps in objects, moves between instances (`@Into`/`@Admits`) | 0012 | `guild` |
 | M | CIP-30 wallets (`WalletAccount`, `Compose.prepare()`), contract descriptions, the JavaScript client, the prepare service, a browser dApp | 0013 | `wallet`, `dapp` |
+| Keyed objects | `@Owned(key = ...)`: at most one object per key, in a sorted on-chain list; Java client, engine and page verifier. **On `main` (PR #37), not in `0.1.0-pre1-rc2`: comes with the next release** | 0016 | `registry` |
 
 See [Examples](/reference/examples/) for what each example shows and how to run it.
 
@@ -85,6 +86,9 @@ prepared in the page's worker, verified by the page and signed by a browser wall
 - **Mirrors over Ogmios alone** cannot be rebuilt from the chain: Ogmios serves no history, so it needs Kupo or an
   indexer beside it (ADR-0015 §13.12).
 - **DevKit pays no rewards within a test** (rewards take epochs), so staking flows on DevKit collect a zero balance.
+- **Keyed objects** (ADR-0016) are refused in contracts with native assets, MerkleMaps, `@Batched` actions or
+  migration (keyed types in asset-aware contracts are ADR-0016's M4, a follow-up), and a page runs keyed calls one at
+  a time and never in a composition. See [Keyed objects](/contracts/keyed-objects/#rules-and-limits).
 
 ## What is next
 

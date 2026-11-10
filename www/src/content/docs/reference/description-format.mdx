@@ -279,6 +279,7 @@ the right arity (`isBool` and `isOptional` in `js/state-client/src/data.js`).
 | `maxDatumBytes` | number | The largest state datum the contract accepts (`@StateContract(maxDatumBytes)`) |
 | `assetAware` | boolean | Whether the contract handles native assets (`Funds`, sends, mints) |
 | `owned` | array | The `@Owned` types (below) |
+| `keyed` | array | The keyed types (below). Only in contracts with keyed types (ADR-0016; on `main`, coming with the next release) |
 | `creations` | array | `@Init`, `@OwnedInit` and `@Migrate` methods (below) |
 | `actions` | array | `@Action`, `@Destroy`, `@OwnedAction` and `@OwnedDestroy` methods, in `Calls` order (below) |
 | `views` | array | `@View` methods (below) |
@@ -299,6 +300,25 @@ One entry per `@Owned` record:
 | `holding` | A `$ref` to its `Holding` datum |
 | `tag` | The `Holding` constructor's index, which tells the types apart on chain |
 | `multi` | Whether the contract has several owned types (`Holding_<Type>` datums) |
+
+### keyed
+
+One entry per keyed type ([Keyed objects](/contracts/keyed-objects/); ADR-0016 D11):
+
+| Key | Meaning |
+|---|---|
+| `type`, `simple`, `lookup` | As for `owned`: the value record's definition key, its simple name (`Entry`), the client's accessor (`entry`) |
+| `key`, `keyIndex` | The key component's name and index in the record |
+| `maxKeyBytes`, `signedKey`, `linkCooldownMs`, `linkWindowMs` | The `@Owned` elements |
+| `typeId` | The type id that, with the instance and the key, makes a node's token name |
+| `head`, `node`, `retired` | The list datums (`Head_T`, `Keyed_T`, `Retired_T`) |
+| `headTag`, `nodeTag`, `retiredTag` | Their constructor tags |
+| `link`, `remove` | The `Link` spend redeemer and the `Remove_T` burn redeemer |
+| `inserts`, `actions`, `removes`, `retires` | The type's keyed calls, by name |
+
+A keyed call's `kind` is `keyedInit` (in `creations`), or `keyedAction`, `keyedRemove` or `keyedRetire` (in `actions`),
+and it carries `keyed`, the type's simple name. `tokens.keyed` describes the token names:
+`0x4b ++ blake2b_224(instance ++ typeId ++ key)`, 29 bytes, a list head's key being empty.
 
 ### creations
 

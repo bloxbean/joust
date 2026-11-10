@@ -15,6 +15,11 @@ that covers it in depth.
 ADA is Cardano's currency. **Lovelace** is its smallest unit: 1 ADA = 1,000,000 lovelace. Contract code counts in
 lovelace (`BigInteger`). **tADA** is test ADA on a test network (preview, Yaci DevKit), with no value.
 
+### Anchor
+
+In a [keyed object](#keyed-object) list, the node an insert goes after: the greatest key below the new one (the list's
+head at least). The insert spends it and relinks it to the new key. See [Keyed objects](/contracts/keyed-objects/).
+
 ### Attack suite
 
 `Attacks` in `julc-state-testkit`: for every transaction a test accepts, it applies every applicable mutation (a
@@ -97,6 +102,12 @@ The JSON document the processor writes for each contract (`META-INF/joust/<packa
 `x-joust`, version 2. Clients encode calls, decode state and verify transactions from it. See
 [Contract description](/reference/description-format/).
 
+### Designated input
+
+One ordinary (ADA-only) UTxO of the wallet that every attempt of a keyed operation spends, first attempt and retries
+alike, so at most one attempt can ever land. A page records it in IndexedDB, so a retry after a reload must spend it
+too. See [Keyed objects in JavaScript](/apps/keyed-objects-js/#retries-that-survive-a-reload).
+
 ### Double satisfaction
 
 An attack where one output is counted as paying two obligations in the same transaction. JOUST tags payouts with the
@@ -154,6 +165,12 @@ JOUST's compact contract language, lowered to a Java `@StateContract` at build t
 
 The Java to UPLC compiler JOUST builds on (julc.dev). It compiles the generated validator, and the transition programs,
 from a subset of Java. See [Java](/languages/java/).
+
+### Keyed object
+
+An [owned object](#owned-object) with a key (`@Owned(key = "...")`): at most one per key and instance, each its own
+UTxO with a 29-byte token starting `0x4B`, kept in a sorted on-chain list whose neighbours prove uniqueness (ADR-0016;
+on `main`, coming with the next release). See [Keyed objects](/contracts/keyed-objects/).
 
 ### MapVerifier
 
@@ -245,6 +262,12 @@ contract reads its script by reference; the first deploy of a contract type publ
 
 `Require.that(cond, "msg")`: the contract's way to refuse a call. On the JVM it throws `RequireException` with the
 message; on chain it traces the message and fails. See [Require and errors](/contracts/require-and-errors/).
+
+### Retire
+
+A keyed object's exit that needs no neighbour (`@OwnedDestroy(retire = true)`): the owner takes everything but the
+deposit, and the object stays in the list as a retired node, so its key is taken for good. See
+[Keyed objects](/contracts/keyed-objects/).
 
 ### Root
 

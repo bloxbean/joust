@@ -1,0 +1,370 @@
+---
+title: Keyed objects
+description: At most one object per key, each in its own UTxO, kept in a sorted on-chain list. @Owned(key = ...), inserts, removes, retires, cooldowns, the Java client.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="New on main, not in a release yet">
+Keyed objects are on `main` since PR #37 ([ADR-0016](https://github.com/bloxbean/joust/blob/main/docs/adr/0016-keyed-objects.md)).
+They are not in the published `0.1.0-pre1-rc2`; they come with the next release. Until then, build JOUST from a
+checkout of `main` to use them.
+</Aside>
+
+A *keyed object* is an [owned object](/contracts/owned-objects/) with a key: one ballot per voter, one name in a
+registry, one position per account. Like any owned object it is its own UTxO, so updates to different keys never
+wait for each other. Unlike a plain owned object, the chain guarantees that an instance holds **at most one object per
+key**, and anyone can find an object by its key without knowing who created it.
+
+Use a keyed type when uniqueness by key matters and the objects are updated independently. Use a
+[MerkleMap](/contracts/merklemaps/) when the entries are small and you want them in the instance's own state (every
+write then goes through the one instance UTxO), and a plain owned type when nothing needs to be unique.
+
+## Why plain owned objects cannot be unique
+
+A plain owned object is named by the seed UTxO it was created from (`0x4F` followed by a hash of the seed). A minting
+policy cannot see tokens minted in earlier transactions, so no validator can tell whether an object already exists
+for a given key. Minting a token whose name is derived from the key does not help either: a second transaction could
+mint the same name again.
+
+Keyed objects solve this with a **sorted linked list on chain** (ADR-0016 §1, the linked-list pattern):
+
+- Each object is a node: its own UTxO holding one token, whose datum has the object's value and the **next key** in
+  the list.
+- Each keyed type of an instance has a **head**, an empty-key node created with the instance itself.
+- To insert key `k`, a transaction spends the node just before it (the *anchor*) and checks that
+  `anchor.key < k < anchor.next`. It then relinks the anchor to `k` and creates the new node pointing at the anchor's
+  old `next`.
+
+Two objects with one key would need two places in a strictly increasing list, so the neighbours prove uniqueness. The
+minting policy checks every insert and every removal, and the list stays well formed whatever a transaction builder
+tries (ADR-0016 I47; `ListIntegrityTest` checks it with random operations and mutated transactions).
+
+| | Plain owned object | Keyed object |
+|---|---|---|
+| Unique per key | No | Yes, per instance and type |
+| Find it by | Its object id (from the seed) | Its key |
+| Token name | `0x4F` + `blake2b_224(seed)` | `0x4B` + `blake2b_224(instance ‖ typeId ‖ key)` (29 bytes) |
+| Creation spends | A seed UTxO of the creator | The predecessor in the list (the anchor) |
+| Updates | Only the object's UTxO | Only the object's UTxO |
+| Leaves by | `@OwnedDestroy`: burns the token | Removing (frees the key) or retiring (keeps it) |
+
+## A registry: one ballot per voter, unique names
+
+The [`registry`](/reference/examples/#registry) example has two keyed types. `Ballot` allows one ballot per voter,
+ever. `Entry` is a name registry: a name can be released (and claimed again) or retired (kept for good), and guardians
+can recover it.
+
+```java title="examples/registry/src/main/java/org/julclang/state/examples/registry/Registry.java"
+@StateContract(maxDatumBytes = 384)
+public class Registry {
+
+    public record State(byte[] admin, boolean open) {}
+
+    /** One ballot per voter, ever (only a retiring exit). */
+    @Owned(key = "voter", maxKeyBytes = 28, signedKey = true)
+    public record Ballot(byte[] voter, BigInteger choice) {}
+
+    @Owned(key = "name", maxKeyBytes = 64)
+    public record Entry(byte[] name, byte[] owner, BigInteger stake, BigInteger tier, JulcList<byte[]> guardians,
+                        BigInteger needed) {}
+
+    public record Withdrawal(Entry state, JulcList<Payout> payouts) {}
+
+    @Init
+    public static State init(Ctx ctx) {
+        return new State(ctx.caller(), true);
+    }
+
+    // ---- ballots
+
+    @OwnedInit
+    public static Ballot cast(@Shared State s, byte[] voter, BigInteger choice, Ctx ctx) {
+        Require.that(s.open(), "voting is closed");
+        Require.that(choice.signum() >= 0 && choice.compareTo(BigInteger.TEN) < 0, "choose 0 to 9");
+        return new Ballot(voter, choice);
+    }
+
+    @OwnedAction
+    @SignedBy("voter")
+    public static Ballot change(Ballot b, BigInteger choice) {
+        Require.that(choice.signum() >= 0 && choice.compareTo(BigInteger.TEN) < 0, "choose 0 to 9");
+        return new Ballot(b.voter(), choice);
+    }
+
+    /** The voter leaves with everything but the deposit; the ballot stays retired, so the voter can never vote again. */
+    @OwnedDestroy(retire = true)
+    @SignedBy("voter")
+    public static JulcList<Payout> leave(Ballot b, Ctx ctx) {
+        return ctx.balance().signum() > 0 ? Payouts.of(b.voter(), ctx.balance()) : Payouts.none();
+    }
+
+    // ---- names
+
+    /** Claims a free name for the caller, staking what the call pays. */
+    @OwnedInit
+    @Payable
+    public static Entry claim(byte[] name, BigInteger tier, JulcList<byte[]> guardians, BigInteger needed, Ctx ctx) {
+        return new Entry(name, ctx.caller(), ctx.received(), tier, guardians, needed);
+    }
+
+    /** Guardians hand the entry to a new owner (the old owner can still retire or release first). */
+    @OwnedAction
+    @Quorum(keys = "guardians", threshold = "needed")
+    public static Entry recover(Entry e, byte[] newOwner) {
+        return new Entry(e.name(), newOwner, e.stake(), e.tier(), e.guardians(), e.needed());
+    }
+
+    /** Releases the name: the entry is removed from the list and the name can be claimed again. */
+    @OwnedDestroy
+    @SignedBy("owner")
+    public static JulcList<Payout> release(Entry e, Ctx ctx) {
+        return Payouts.of(e.owner(), ctx.balance());
+    }
+
+    /** Retires the name: the owner leaves with the stake, the name stays taken for good. */
+    @OwnedDestroy(retire = true)
+    @SignedBy("owner")
+    public static JulcList<Payout> retire(Entry e, Ctx ctx) {
+        return ctx.balance().signum() > 0 ? Payouts.of(e.owner(), ctx.balance()) : Payouts.none();
+    }
+
+    @Invariant
+    public static boolean tierInRange(Entry e) {
+        return e.tier().signum() >= 0 && e.tier().compareTo(BigInteger.valueOf(3)) <= 0;
+    }
+}
+```
+
+The full file also has the admin's `setOpen`, an admin-only `grant`, and the owner's `upgrade` and `withdraw`.
+Everything you already know from owned objects applies: `@OwnedInit` creates, `@OwnedAction` updates,
+`@OwnedDestroy` ends, `@Shared` reads the instance's state by reference, `@Invariant` is checked on every result.
+
+## Declaring a keyed type
+
+Name a `byte[]` component of an `@Owned` record as its key:
+
+| Element of `@Owned` | Default | Meaning |
+|---|---|---|
+| `key` | `""` (not keyed) | The `byte[]` component that keys the object. It never changes for the object's life |
+| `maxKeyBytes` | 32 | The longest key, 1 to 64 bytes |
+| `signedKey` | `false` | The key is a 28-byte key hash that must sign the insert (needs `maxKeyBytes` of at least 28) |
+| `linkCooldownMs` | 60,000 | The least time between two relinks of a node: 0 (written explicitly), or 60,000 to 3,600,000 |
+| `linkWindowMs` | `min(120,000, maxValidityMs)` | The widest validity window of a transaction that relinks a node: 20,000 to `min(900,000, maxValidityMs)` |
+
+`@OwnedDestroy(retire = true)` marks a retiring exit. The source is
+[`Owned.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Owned.java)
+and [`OwnedDestroy.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/OwnedDestroy.java).
+
+## The four kinds of call
+
+**Insert** (`@OwnedInit`). The runtime finds the key's predecessor, the anchor, and builds one transaction that spends
+the anchor, relinks it to the new key and mints the new node's token. The policy checks the anchor's place
+(`anchor.key < key < anchor.next`), the key's length, the anchor's cooldown, that exactly one token is minted, and the
+new node: at the state address, its datum the method's result, its value exactly `minAda` plus what the call paid.
+With `signedKey`, the key must be a signer of the transaction. Every insert variant is its own redeemer
+(`Insert_<method>`), so a type may have several initializers, as `Entry` has `claim` and `grant`.
+
+**Keyed action** (`@OwnedAction`). Spends only the object's UTxO, as a plain owned action does. The validator also
+checks that the node keeps its token, its instance, its key and its place in the list (`next` and the time of its last
+relink). Every keyed action must be authorized: `@SignedBy`, `@Quorum` or `@AuthorizedBy`.
+
+**Remove** (`@OwnedDestroy`). Frees the key. The transaction spends the node and its predecessor, burns the node's
+token and relinks the predecessor past it. The method must pay out everything the node holds, deposit included, as a
+plain owned destroy does. A removing exit is optional.
+
+**Retire** (`@OwnedDestroy(retire = true)`). Leaves without touching any neighbour. The node stays in the list as a
+retired node, holding its token and its deposit (`minAda`), so the key stays taken for good. The method sees
+`ctx.balance()` as everything but the deposit, and its payouts must total exactly that. A retired node takes no more
+calls; it can still be an anchor for inserts next to it.
+
+Every keyed type needs a retiring exit, because it is the one exit nobody else can block (see
+[Cooldown and window](#cooldown-and-window)). A type whose only exits retire gives "once ever" uniqueness, as `Ballot`
+does: a voter who leaves can never vote again.
+
+<Aside type="note" title="What the retire may carry">
+The retiring exit must carry `@SignedBy` (unsigned, anyone could retire anyone's object, and its key, for good), and
+nothing a third party controls: `@Shared`, `@Reads`, `@Payable`, `@Quorum`, `@AuthorizedBy`, `@ValidAfter` and
+`@ValidBefore` are errors on it.
+</Aside>
+
+## Calling keyed objects from Java
+
+The processor generates, per keyed type, a list accessor, a lookup by key, one insert method per `@OwnedInit`, and an
+object class with the keyed actions, removes and retires. Adapted from the registry's DevKit test,
+[`RegistrySmokeDevnetTest`](https://github.com/bloxbean/joust/blob/main/examples/registry/src/test/java/org/julclang/state/examples/registry/devnet/RegistrySmokeDevnetTest.java)
+(comments added, assertions shortened):
+
+```java
+var reg = RegistryClient.deploy(runtime, admin);                     // the instance and both list heads
+var ballot = reg.cast(ann, Keys.pkh(ann), BigInteger.TWO);           // insert a Ballot keyed by Ann's key hash
+var b = reg.claim(ann, new byte[]{0x62}, BigInteger.ONE, JulcList.<byte[]>empty().prepend(Keys.pkh(ann)),
+        BigInteger.ONE, ADA.multiply(BigInteger.valueOf(5)));         // insert an Entry, paying 5 ADA of stake
+assertTrue(reg.entryExists(new byte[]{0x62}));
+b.upgrade(ann, BigInteger.TWO, ADA);                                 // a keyed action
+b.withdraw(ann, ADA.multiply(BigInteger.TWO));
+b.release(ann);                                                      // remove: the name is free again
+assertFalse(reg.entryExists(new byte[]{0x62}));
+ballot.leave(ann);                                                   // retire: the ballot stays, retired
+assertTrue(reg.ballot(Keys.pkh(ann)).retired());
+```
+
+| Generated member (for `Entry`) | What it does |
+|---|---|
+| `claim(Account, args... [, payLovelace])`, `grant(...)` | Inserts with that `@OwnedInit`; returns an `EntryObject`. Refused on the JVM if the key is taken |
+| `entry(byte[] key)` | The object of a key, live or retired. Fails when the provider returned nothing |
+| `entryExists(byte[] key)` | The key is taken, live or retired |
+| `entryKeys()` | Every key in list order (`KeyedList.Entry`: `key()`, `retired()`, `keyHex()`), walked from the head |
+| `entryList()` | The underlying `KeyedList`: `find`, `get`, `exists`, `keys`, `unit`, `insert` |
+| `EntryObject` | `key()`, `value()`, `retired()`, `lovelace()`, `object()`, and one method per keyed action, remove and retire |
+
+A lookup by key computes the token name and asks the provider for the UTxO holding it: one query on Yaci Store and
+Blockfrost. Every answer is validated (policy, address, datum, instance, key). "Not found" means the provider returned
+nothing, not that the key is provably free. An insert or a remove lists the whole state address to find the
+neighbour, so its cost grows with the number of UTxOs there.
+
+A keyed contract's `deploy` mints the instance token and one head per keyed type in the same transaction. The heads
+live as long as the contract: a contract with owned objects cannot be destroyed, and a keyed one cannot be migrated,
+so a keyed registry is permanent.
+
+### The designated input and retries
+
+A keyed call can be rejected for ordinary reasons: another insert took the gap first, or the neighbour moved. The
+runtime then builds the call again. Building again is dangerous when an earlier attempt might still land: a relay
+that said "rejected" could be wrong, and two different attempts could both be included.
+
+So before the first attempt of a keyed operation, the runtime **designates one ordinary UTxO of the wallet** (the
+largest ADA-only UTxO of at least 5 ADA) and spends it in **every** attempt of that operation. Any two attempts then
+share an input, and at most one of them can ever land, whatever relays or providers claim. In plain words:
+
+- Each attempt is a different transaction, but they all spend the same coin of yours, so only one can be included.
+- The runtime never replaces that coin while the operation runs, even when it looks spent: an earlier attempt may
+  have landed.
+- When it cannot tell (a timeout, an unknown answer), it stops and throws `PendingTransactionException`, naming every
+  attempt (`attempts()`) and the designated input (`designatedInput()`). Look the attempts up: if one landed, the
+  operation happened; if none did once their windows have passed and the input is unspent, a new call is safe.
+- After a definite rejection it rebuilds everything (the window, the method's result, the anchor) up to `maxRetries`
+  times, then throws `ContentionException`.
+
+The wallet needs an ADA-only UTxO of at least 5 ADA free for each keyed operation running at once. Designations are
+per JVM: two processes sharing one wallet should use separate UTxOs or separate wallets.
+
+`StateRuntime.Builder` has options for keyed calls: `relays(List<Relay>)` sends every attempt to several submit
+endpoints (`Relay.of(backend)` wraps a CCL backend), `relayTimeout` (60 s), `settlementSlots` (2),
+`topUpAllowance` (10 ADA), and `pageLimits(maxStartSlots, maxValiditySlots)`. See the
+[Java runtime API](/reference/java-runtime-api/#keyed-objects).
+
+### In a composition
+
+Inserts, removes, retires and keyed actions can run inside [`Compose`](/contracts/reads-and-composition/) with other
+calls. The runtime refuses, before building, two structural operations (inserts or removes) of one contract in one
+transaction, a structural operation beside another mint of the same policy, and a call on an input that the insert or
+remove already spends. A composition with a keyed call designates one input and retries as a whole.
+
+## Cooldown and window
+
+An insert or a remove spends a neighbour, so someone could keep your node busy: insert a throwaway key next to it,
+remove it, insert again, every block. Two rules on every relink (ADR-0016 D9) stop this:
+
+- **Window.** A transaction that relinks a node has a finite validity window of at most `linkWindowMs` (`W`). The node
+  records the window's upper bound as `linkedAt`.
+- **Cooldown.** The next relink of that node must start at least `linkCooldownMs` (`C`) after `linkedAt`.
+
+So between two relinks of a node, its owner has at least `C` in which only their own calls touch it. With the
+defaults (`C` = 60 s, `W` = 120 s) an honest call that finds a fresh relink waits at most `W + C`, about three
+minutes. The runtime does this for you: it moves the window's start to the end of the cooldown and submits then.
+
+Throughput follows from it: each gap between two keys takes at most one insert or remove per `C` plus the window.
+An empty registry has one gap, so a launch fills slowly at first (about one insert per 80 s with `C` = 60 s and a
+20 s window); capacity grows with the number of keys. Keys that grow monotonically (sequence numbers, timestamps)
+always insert at the tail and contend there: key by a hash of the value instead. `linkCooldownMs = 0` removes the
+cooldown, and the processor warns: the retiring exit is then no longer guaranteed against churn.
+
+## What the validator checks
+
+| Invariant | Rule |
+|---|---|
+| I44 | Keyed and head tokens are 29 bytes, `0x4B` + a hash of instance, type and key; the name is reserved |
+| I45 | One head per instance and keyed type, minted only with the instance; heads never burn |
+| I46 | A keyed token is minted only by an insert, alone under the policy, after a `Link`-spent anchor in the right place |
+| I47 | List integrity: from the head, keys strictly increase, and the list holds exactly the type's tokens, each once |
+| I48 | A node is relinked only by the insert or remove that names it; only `next` and `linkedAt` change, and its lovelace never goes down |
+| I49 | A keyed token burns only by a remove, which relinks the predecessor past it |
+| I50 | A keyed action keeps the node's token, instance, key, `next` and `linkedAt` |
+| I51 | A node's token name matches its datum's instance and key |
+| I52 | Token kinds decide arms: keyed tokens take only keyed arms, plain owned and instance tokens never take them |
+| I53 | With `signedKey`, the key signed the insert |
+| I54 | Cooldown and window, on every relink |
+| I55 | A retire keeps the token and the deposit, and pays out exactly the rest |
+
+The full list, with the proof that every transaction keeps the list sorted, is ADR-0016 §3 and §3.1. The registry's
+attack suite (`RegistryAttacksTest`) requires each attack to be refused by a script, not by the ledger's first phase.
+
+## Rules and limits
+
+The processor refuses:
+
+- keyed types in a contract that handles native assets (any `Funds`, sends, mints, accepted assets, deposits or a
+  `@Withdraw` handler), and keyed types in contracts with MerkleMaps, `@Batched` actions or migration;
+- `@Into` moves of keyed objects;
+- a keyed type without a retiring `@OwnedDestroy(retire = true)` signed by `@SignedBy` and without `@Shared`;
+- a keyed `@OwnedAction` without `@SignedBy`, `@Quorum` or `@AuthorizedBy`;
+- `maxDatumBytes` above 2048 in a contract with keyed types, more than 16 keyed types, two keyed types with one simple
+  name, and contract names that clash with generated ones (`Link`, `Remove_*`, `Insert_*`, `anchor`, `removed`).
+
+It warns when a keyed `@OwnedInit` does not bind the key to the caller (neither `signedKey` nor every return being
+`new T(...)` with the key argument `ctx.caller()`): anyone could then take a name someone else wants first. The
+registry's `claim` and `grant` warn, by design: a free name goes to whoever claims it.
+
+Other limits:
+
+- **Script size.** The registry's validator is 14,717 bytes, close to the 15,000-byte limit for a reference script.
+  About 11 minimal keyed types fit in one contract today, not 16. Traces (`-Pjoust.traces`) push the registry over.
+- **Arguments.** The runtime refuses initializer and `@Init` arguments over 4,096 serialised bytes in a keyed
+  contract.
+- **Locked deposits.** Heads and retired nodes keep their deposits for good, and retired nodes accumulate: the state
+  address grows with every key ever retired, and so does the listing behind each insert and remove.
+- **Maps in a keyed value.** A value holding a Plutus map must keep its keys unique and in canonical order, or relinks
+  next to it are refused.
+- **Pages.** A page runs keyed calls one at a time and never in a composition; see
+  [Keyed objects in JavaScript](/apps/keyed-objects-js/).
+- **`.jsc`.** `.jsc` has no owned objects, so no keyed types; write keyed contracts in Java.
+
+## Costs
+
+Measured on the ledger model with every script of the transaction summed, at the size caps (64-byte keys, datums at
+their limit). Limits per transaction: 10,000M CPU and 14M memory on mainnet.
+
+| Transaction | CPU | Memory |
+|---|---|---|
+| Insert (policy and the anchor's `Link`) | 387.1M | 1,212,522 |
+| Remove (policy, the predecessor's `Link`, the node's destroy) | 426.2M | 1,405,297 |
+| Retire | 190.8M | 655,308 |
+| Keyed action (`upgrade`) | 229.2M | 712,127 |
+| Instance creation with two heads | 382.7M | 1,230,285 |
+
+Source: ADR-0016, "Implementation notes (M1)". On Yaci DevKit, an insert with both datums at 2,048 bytes and 4,096
+bytes of arguments makes a 9,142-byte transaction, under the 16,384-byte limit.
+
+## Testing
+
+`examples/registry` tests keyed contracts at every level: the JVM, the harness with its ledger model (`Ledger` in
+`julc-state-testkit`), the attack suite, the list-integrity test with mutated transactions, and DevKit tests for
+concurrency, contested gaps, hostile neighbours, cooldowns, compositions and submission across relays. Run them with
+`./gradlew :examples:registry:test` (the DevKit tests skip themselves without DevKit). See [Testing](/contracts/testing/).
+
+## Reference
+
+- [ADR-0016: Keyed objects](https://github.com/bloxbean/joust/blob/main/docs/adr/0016-keyed-objects.md): the threat
+  model, decisions D1 to D11, the invariants, and the implementation notes of M1 to M3.
+- [Annotations: `@Owned`](/reference/annotations/#owned) and [`@OwnedDestroy`](/reference/annotations/#owneddestroy).
+- [`examples/registry`](https://github.com/bloxbean/joust/tree/main/examples/registry).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Keyed objects in JavaScript" href="/apps/keyed-objects-js/" description="Keyed calls from a page: what the page checks and how retries survive a reload." />
+  <LinkCard title="Owned objects" href="/contracts/owned-objects/" description="The plain owned objects keyed types build on." />
+  <LinkCard title="Security model" href="/contracts/security-model/" description="The invariants every generated validator enforces." />
+  <LinkCard title="Examples: registry" href="/reference/examples/#registry" description="The registry example and how to run its tests." />
+</CardGrid>

@@ -43,13 +43,14 @@ The datum stays about 100 bytes however many holders there are (ADR-0002 D8).
 
 ## When to use a MerkleMap
 
-JOUST gives you three ways to keep many entries. Pick by size and by who writes.
+JOUST gives you several ways to keep many entries. Pick by size and by who writes.
 
 | You need | Use | Why |
 |---|---|---|
 | A small map, read whole on every call | `JulcMap` in the state, kept sorted with `SortedMaps` | Cheapest per call, but the datum caps it: the crowdfund example fits 27 backers in 1 KB |
 | An unbounded map, written by one call at a time | `MerkleMap` (this page) | Constant datum size; each call proves only the keys it touches |
 | Per-user state that users change in parallel | [Owned objects](/contracts/owned-objects/) | One UTxO per user, so users never contend |
+| Entries unique by key, each updated on its own (names, ballots) | [Keyed objects](/contracts/keyed-objects/) (on `main`, next release) | One UTxO per key in a sorted on-chain list: uniqueness without writing the instance, no mirror |
 | Many writers to one hot total | [Batched intents](/contracts/batched-intents/) | Users lock requests; a batcher applies them together |
 
 A MerkleMap does not remove contention: every write still spends the instance's one UTxO, so writes to one instance

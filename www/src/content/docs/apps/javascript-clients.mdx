@@ -107,6 +107,7 @@ await counter.at(instance).call(wallet, 'increment', { by: 3n });
 | `instance.create(wallet, name, args?, pay?)` | an `@OwnedInit` creation | `{ txHash, report, object }` |
 | `instance.object(id)` | an owned object (`JoustObject`) | |
 | `object.call(wallet, name, args?, pay?)` | an owned action or destroy | `{ txHash, report }` |
+| `instance.keyed(type)` | a keyed type's list (`JoustKeyedList`): `insert`, `find`, `exists`, `keys`, `object(key).call(...)`; see [Keyed objects in JavaScript](/apps/keyed-objects-js/) (on `main`, next release) | |
 | `instance.intent(wallet, name, args?, pay?, opts?)` | locks an intent for a `@Batched` action; `opts.deadline` in ms (default 30 minutes) | `{ txHash, report, created, intent }` |
 | `instance.cancelIntent(wallet, intentId)` | withdraws the wallet's pending intent | `{ txHash, report, created }` |
 | `instance.batch(wallet, opts?)` | as a batcher, applies up to `opts.max` (8) intents | `{ txHash, report, applied, skipped }` |

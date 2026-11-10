@@ -377,6 +377,9 @@ That last one is why `Armory` is a second contract. If yours grows past about 14
 - **`@Shared` couples objects to instance writes.** An owned call reads the instance as of its reference input; if the
   instance changes first, the call fails and the runtime retries. Keep shared writes rare and gated.
 - **Ownership is a field.** Transferring an object means an owned action that changes its owner field.
+- **Objects are not unique by any field.** Two users can create objects with the same name or owner. When at most one
+  object per key matters (one ballot per voter, unique names), use [keyed objects](/contracts/keyed-objects/) (on
+  `main`, coming with the next release).
 - **Gating creation** is your method's job: check the `@Shared` state with `Require`, as `open` checks `paused`.
 
 ## Reference
@@ -391,5 +394,6 @@ That last one is why `Armory` is a second contract. If yours grows past about 14
   <LinkCard title="Tutorial: a bank with owned accounts" href="/tutorials/bank-owned-objects/" description="Run the bank on DevKit and call it from Java and a page." />
   <LinkCard title="Reads and composition" href="/contracts/reads-and-composition/" description="Compose, which moves run inside." />
   <LinkCard title="Batched intents" href="/contracts/batched-intents/" description="For hot shared state that many users write." />
+  <LinkCard title="Keyed objects" href="/contracts/keyed-objects/" description="Owned objects unique per key, in a sorted on-chain list." />
   <LinkCard title="Native assets, mints and sends" href="/contracts/assets-mints-sends/" description="Objects that hold tokens, such as market listings." />
 </CardGrid>

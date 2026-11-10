@@ -26,6 +26,7 @@ const kinds = [
   { n: '03', t: 'Owned objects', href: '/contracts/owned-objects/' },
   { n: '04', t: 'Batched intents', href: '/contracts/batched-intents/' },
   { n: '05', t: 'Native assets', href: '/contracts/assets-mints-sends/' },
+  { n: '06', t: 'Keyed objects (next release)', href: '/contracts/keyed-objects/' },
 ];
 const ecosystem = [
   { t: 'JuLC', d: 'The Java to UPLC compiler', href: 'https://julc.dev' },
@@ -145,9 +146,9 @@ const ecosystem = [
 
     <section class="section">
       <div class="wrap">
-        <h2>Five kinds of state</h2>
-        <p class="sub">Start with one UTxO. Grow into maps, per-user objects, batching and assets as your app does, with the same programming model.</p>
-        <figure class="diagram"><img src={kindsSvg.src} width={kindsSvg.width} height={kindsSvg.height} alt="The five kinds of state: inline, MerkleMaps, owned objects, batched intents, native assets" loading="lazy" /></figure>
+        <h2>Six kinds of state</h2>
+        <p class="sub">Start with one UTxO. Grow into maps, per-user objects, batching, assets and keyed objects as your app does, with the same programming model.</p>
+        <figure class="diagram"><img src={kindsSvg.src} width={kindsSvg.width} height={kindsSvg.height} alt="Six kinds of state: inline, MerkleMaps, owned objects, batched intents, native assets, keyed objects" loading="lazy" /></figure>
         <div class="kind-links">
           {kinds.map((k) => (<a href={k.href}><span>{k.n}</span>{k.t}</a>))}
         </div>

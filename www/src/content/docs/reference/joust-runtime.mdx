@@ -182,6 +182,11 @@ See [MerkleMap mirrors](/apps/map-mirrors/).
 | `fetchNeed` | `await fetchNeed(source, snapshot, kind, key)` | fetches one engine need (`tip`, `protocolParams`, `utxos`, `assetUtxos`, `output`, `script`) into a snapshot |
 | `utxoJson` | `utxoJson(utxo)` | a provider's UTxO in Blockfrost's JSON, the snapshot's format |
 
+A keyed insert or remove ([keyed objects](/apps/keyed-objects-js/), on `main` and coming with the next release) needs
+the whole listing of the contract's state address, so the runtime fetches it before asking the engine. For a
+keyed contract, `ensureDeployment` and `rt.options(...)` also pin the slot clock in the deployment (`slotConfig`),
+which the page verifier requires for keyed calls.
+
 ## DevKit helpers
 
 For Yaci DevKit: its admin API defaults to `http://localhost:10000`.

@@ -1,0 +1,159 @@
+---
+title: Keyed objects in JavaScript
+description: Call keyed objects from Node and pages - JoustKeyedList and JoustKeyedObject, keyed calls through the engine, what the page checks, and retries that survive a reload.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="New on main, not in a release yet">
+Keyed objects are on `main` since PR #37 ([ADR-0016](https://github.com/bloxbean/joust/blob/main/docs/adr/0016-keyed-objects.md)).
+They are not in the published `0.1.0-pre1-rc2`; they come with the next release.
+</Aside>
+
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
+[Keyed objects](/contracts/keyed-objects/) are owned objects with a unique key, kept in a sorted on-chain list. From
+JavaScript you insert, look up, update, remove and retire them as you call any other contract: the runtime engine
+prepares the transaction, the page verifies it, and the wallet signs. Two things are different, and this page is about
+them: what the page checks before the wallet is asked, and how a retry can never make two transactions land.
+
+## Calls
+
+`instance.keyed(type)` gives a keyed type's list, by the type's simple name. From the registry's flow on DevKit (the
+JavaScript twin of the Java example):
+
+```js title="js/joust-runtime/test/examples.test.js"
+const created = await reg.deploy(admin, {});
+const inst = reg.at(created.instance);
+const entries = inst.keyed('Entry');
+const ballots = inst.keyed('Ballot');
+assert.deepEqual(await entries.keys(), []);
+// A ballot (signedKey) and a keyed action on it.
+const cast = await ballots.insert(ann, 'cast', { voter: ann.keyHash, choice: 3n });
+assert.equal(cast.key, ann.keyHash);
+await ballots.object(ann.keyHash).call(ann, 'change', { choice: 7n });
+assert.equal((await ballots.find(ann.keyHash)).value.choice, 7n);
+// A name (payable), a payable keyed action, a withdrawal paid to the owner.
+const NAME = '6e616d65';
+await entries.insert(ann, 'claim', { name: NAME, tier: 1n, guardians: [ann.keyHash], needed: 1n }, { lovelace: 5n * ADA });
+const name = entries.object(NAME);
+await name.call(ann, 'upgrade', { tier: 2n }, { lovelace: 2n * ADA });
+await name.call(ann, 'withdraw', { amount: ADA });
+```
+
+`reg` is a `JoustContract` and `ann` a CIP-30 wallet. Keys are hex strings.
+
+| `JoustKeyedList` member | Resolves to |
+|---|---|
+| `find(key)` | `{ ref, key, retired, value, lovelace }`, or `null` when the chain API returned nothing |
+| `exists(key)` | whether the key is taken, live or retired |
+| `keys()` | `[{ key, retired, value }]` in list order, walked from the head |
+| `insert(wallet, method, args?, pay?, opts?)` | `{ txHash, report, key }`: an `@OwnedInit` of that type |
+| `object(key)` | a `JoustKeyedObject` |
+| `unit(key)` | the key's token unit (policy and name, hex) |
+
+| `JoustKeyedObject` member | Resolves to |
+|---|---|
+| `key` | the key (hex) |
+| `read()` | `{ ref, key, retired, value, lovelace }`, or `null` |
+| `call(wallet, name, args?, pay?, opts?)` | `{ txHash, report }`: a keyed action, a remove or a retire. `opts`: `{ cosigners, abandon }` |
+
+Every node the list returns is validated against the description: its token, address, datum, instance and key. A
+walk that finds a missing link or keys out of order is reported as an inconsistent answer from the chain API: such a
+list cannot exist on chain.
+
+**Generated clients.** `joust-gen` and `joust build` generate keyed members too. For the registry, the instance class
+gets `cast(wallet, args, opts?)`, `claim(wallet, args, pay?, opts?)` and `grant(...)` (each resolving to
+`{ txHash, report, key, object }`), `ballot(key)` and `entry(key)`, `ballotExists(key)`, `entryKeys()` and so on, and
+`RegistryEntryObject` has `read()` and one method per keyed action, remove and retire.
+
+## Who prepares keyed calls
+
+The **runtime engine** prepares keyed calls, in Node (`engineService`, `rt.service`) or in a page's worker
+(`engineWorker`): see [Pages](/apps/pages/). For an insert or a remove it lists the contract's state address to find
+the neighbour; `@julclang/joust-runtime` fetches that listing up front. The Java prepare service
+(`julc-state-server`) refuses keyed calls.
+
+When the neighbour is cooling down ([Cooldown and window](/contracts/keyed-objects/#cooldown-and-window)) and the
+call's window would start further ahead than the page allows, the engine answers "prepare again at slot N". The
+client waits for that slot and prepares again, so a call can take a minute or more. A window that starts a little
+ahead is submitted when it starts.
+
+## What the page checks
+
+A keyed call goes through `verifyKeyed`, beside the checks every call gets
+([Verification](/apps/javascript-clients/#verification)). It reads the contract's description, never the service's
+word. Among its rules (ADR-0016 D11):
+
+- **The anchor.** The node an insert or a remove relinks must be spent with `Link`, named by the mint redeemer, and
+  carry the token its datum implies. Its output must be the same node with only `next` and `linkedAt` changed, at the
+  same address, with no reference script.
+- **The new key.** For an insert, the page reads the key from the new node's datum and checks that the minted token is
+  that key's.
+- **Heads** are accepted only when a keyed contract's instance is created, each funded with exactly its deposit.
+- **Funds.** Every script input's value is authenticated: read from the transaction that produced it, whose body must
+  hash to the input's id (or, when the chain API serves no transaction CBOR, bound through the call's `Ctx`). Top-ups
+  of an anchor or a retired node are allowed only up to what a raised ledger minimum requires, at most 10 ADA each,
+  and count against the wallet's net outflow. So a hostile service cannot hide a gift to a neighbour or pay a third
+  party.
+- **Time.** The deployment must pin the network's slot clock (`slotConfig`), and the chain API's tip must agree with
+  the page's clock within 120 slots. The page then checks each relink's window, `linkedAt` and the neighbour's cooldown.
+  `joust deploy` and `rt.options(...)` pin the clock for keyed contracts.
+- **One keyed call per transaction.** A composition containing a keyed call is refused (`verifyComposed`,
+  `runComposed`).
+
+The page also refuses, for now, a keyed call with an `@AuthorizedBy` governor, and keyed calls on a client configured
+with `portable` (the page cannot recompute a keyed step yet, and says so rather than skip it).
+
+## Retries that survive a reload
+
+A keyed call can be rejected because someone else took the gap or moved the neighbour, and a wallet or a relay can
+answer "rejected" for a transaction that still lands. If the page simply prepared a new transaction, both could land.
+The page prevents it the way the Java runtime does: with a **designated input**.
+
+1. Before the first attempt of an operation, the client picks one ordinary input of the wallet (the largest ADA-only
+   UTxO of at least 5 ADA at its funding address) and **records** it in a retry store, before the wallet is asked to
+   sign.
+2. Every attempt of that operation, first and retries, must spend that input. The page refuses to ask the wallet to
+   sign one that does not, so two attempts can never both land.
+3. The record is kept in IndexedDB in a browser (`defaultRetryStore()`; memory in Node), one per wallet and network.
+   After a reload, a keyed call of that wallet is still a retry of the recorded operation and must spend the same
+   input.
+4. The record ends when the call is confirmed, or once every attempt's window has passed by the page's own clock.
+   If the wallet and the chain API then still show the designated input, nothing landed: the call fails and the next
+   call starts a new operation. Otherwise one attempt *may have landed*: the record stays as a tombstone, and every
+   further keyed call of the wallet is refused until the application has checked and calls
+   `contract.acknowledgeKeyed(wallet)`.
+
+While an attempt may still land, a failing call throws `PendingKeyedOperation`; its `record` names the designated
+input and the attempts (`{ txHash, validTo }`). Retry the same call, or let the user abandon the operation explicitly
+with `contract.abandonKeyed(wallet)` or `opts.abandon: true` (an earlier attempt may then still land).
+
+A page runs **one keyed call at a time per network**, across its tabs (Web Locks). A keyed call that starts while
+another is in flight is refused at once with `KeyedCallInProgress`; calls are never queued.
+
+| Option or export | What it is |
+|---|---|
+| `retryStore` (a `JoustContract` option) | Where records are kept: `indexedDbRetryStore(name?)`, `memoryRetryStore()`, or your own `{ all, put, delete }` |
+| `defaultRetryStore()` | IndexedDB in a browser, memory elsewhere |
+| `abandonKeyed(wallet)` | Drops the wallet's record or tombstone: the user's explicit choice |
+| `acknowledgeKeyed(wallet)` | Drops only a tombstone ("may have landed"), never a live operation |
+| `PendingKeyedOperation` | Thrown while an attempt may still land; `record.designated`, `record.attempts` |
+| `KeyedCallInProgress` | Thrown when another keyed call is in flight on the network |
+| `designatedFor(walletView)` | The input the client would designate (for display) |
+
+<Aside type="tip">
+Keep an ADA-only UTxO of at least 5 ADA in the wallet for keyed calls: without one, the call is refused before
+anything is prepared.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Keyed objects" href="/contracts/keyed-objects/" description="The contract side: declaring keyed types, inserts, removes, retires and limits." />
+  <LinkCard title="JavaScript clients" href="/apps/javascript-clients/" description="JoustContract, the verifier and prepare services." />
+  <LinkCard title="Pages" href="/apps/pages/" description="The engine in a worker, Vite and static builds." />
+  <LinkCard title="@julclang/state-client" href="/reference/state-client/" description="The package reference." />
+</CardGrid>

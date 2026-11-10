@@ -53,6 +53,7 @@ instead ([Quick start: npm & JavaScript](/start/quick-start-npm/)).
 | [crowdfund](#crowdfund) | An inline `JulcMap`, refunds | 0001 | [Escrow and crowdfunding](/tutorials/escrow-crowdfund/) |
 | [token](#token) | MerkleMap balances | 0002 | [Token balances in a MerkleMap](/tutorials/token-merklemap/) |
 | [bank](#bank) | Owned objects | 0003 | [Bank: owned objects](/tutorials/bank-owned-objects/) |
+| [registry](#registry) | Keyed objects (on `main`, next release) | 0016 | [Keyed objects](/contracts/keyed-objects/) |
 | [pool](#pool) | Batched intents | 0004 | [Pool: batched intents](/tutorials/pool-batched-intents/) |
 | [dsl](#dsl) | `.jsc` contracts | 0005 | [.jsc](/languages/jsc/) |
 | [rollup](#rollup) | Optimistic L2 spike | 0006 | [Architecture decisions](/project/architecture-decisions/#adr-0006-option-f-optimistic-l2-spike) |
@@ -148,6 +149,23 @@ escape hatch every owned type needs.
   `@SignedBy("admin")`
 - **Run:** `./gradlew :examples:bank:run`
 - **Read:** [Bank: owned objects](/tutorials/bank-owned-objects/), [Owned objects](/contracts/owned-objects/)
+
+### registry
+
+[`examples/registry`](https://github.com/bloxbean/joust/tree/main/examples/registry) · `Registry.java`
+
+Keyed objects (ADR-0016): on `main` since PR #37, not in `0.1.0-pre1-rc2`; they come with the next release. Two keyed
+types in sorted on-chain lists. `Ballot` is keyed by the voter's key hash (`signedKey`) and only retires, so each voter
+votes once, ever. `Entry` is a name registry: `claim` (payable) and the admin's `grant` insert a name, `upgrade`,
+`withdraw` and the guardians' `recover` update it, `release` removes it (the name is free again) and `retire` keeps it
+taken for good. The tests cover the attack suite, list integrity under mutated transactions, and DevKit runs of
+concurrency, contested gaps, cooldowns, compositions and submission across relays; the JavaScript flow is in
+`js/joust-runtime/test/examples.test.js`.
+
+- **Annotations:** `@Owned(key = ..., maxKeyBytes = ..., signedKey = ...)`, `@OwnedInit`, `@OwnedAction`,
+  `@OwnedDestroy`, `@OwnedDestroy(retire = true)`, `@Shared`, `@Quorum`, `@Invariant`
+- **Run:** `./gradlew :examples:registry:test`
+- **Read:** [Keyed objects](/contracts/keyed-objects/), [Keyed objects in JavaScript](/apps/keyed-objects-js/)
 
 ### pool
 
@@ -403,6 +421,9 @@ before the optimisations.
 | Market | 11,325 B | offer (NFT in) | MINT | 159.1M | 497k |
 | | | buy (payout, NFT send, royalty send) | SPEND + MINT + VERIFIER | 345.7M + 24.0M + 35.3M | 1,127k + 100k + 145k |
 | | | cancel | SPEND + MINT + VERIFIER | 191.0M + 24.0M + 21.2M | 634k + 100k + 86k |
+
+The registry's validator is 14,717 bytes; its whole-transaction budgets are on the
+[Keyed objects](/contracts/keyed-objects/#costs) page (ADR-0016, M1 notes).
 
 All contracts read their script by reference (ADR-0002 D9); the first deploy of a contract type publishes it.
 ADR-0008 cut the generated checks' cost by 30-60 % in plain contracts and the scripts by about 2.4 KB, so the

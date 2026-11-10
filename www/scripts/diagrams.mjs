@@ -209,9 +209,9 @@ function lifecycle() {
   return svg(980, 450, "An instance's life on chain: create, actions, destroy", b);
 }
 
-// 4. The five kinds of state.
+// 4. The six kinds of state.
 function stateKinds() {
-  let b = heading(28, 40, 'Five kinds of state', 'Start with one UTxO; grow into maps, objects, batching and assets with the same model');
+  let b = heading(28, 40, 'Six kinds of state', 'Start with one UTxO; grow into maps, objects, batching, assets and keys with the same model');
   const panel = (x, y, w, h, n, title, sub) =>
     `  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="14" fill="${C.white}" stroke="${C.line}" stroke-width="1.5"/>
   <text x="${x + 18}" y="${y + 28}" font-size="12" font-weight="700" fill="${C.amber}" font-family="${MONO}">${n}</text>
@@ -246,7 +246,8 @@ function stateKinds() {
   b += label(X[2] + 80, Y1 + 160, 'shared state,', { size: 11.5 });
   b += label(X[2] + 80, Y1 + 176, 'read by reference', { size: 11.5 });
 
-  // 04 Batched intents
+  // 04 Batched intents (drawn at x = 160, shifted to the first column)
+  b += `  <g transform="translate(${X[0] - 160} 0)">\n`;
   b += panel(160, Y2, W, H, '04', 'Batched intents', 'Users lock intents; a batcher applies them');
   [0, 1, 2].forEach((i) => {
     b += `  <rect x="${180}" y="${Y2 + 70 + i * 50}" width="96" height="38" rx="9" fill="${C.amberSoft}" stroke="${C.amberLine}"/>
@@ -255,15 +256,38 @@ function stateKinds() {
   });
   b += utxo(322, Y2 + 104, 122, { title: 'Pool', lines: ['tickets: 41'] }).svg;
   b += label(383, Y2 + 200, 'one batch transaction', { size: 11.5, color: C.amber });
+  b += `  </g>\n`;
 
-  // 05 Native assets
+  // 05 Native assets (drawn at x = 500, shifted to the second column)
+  b += `  <g transform="translate(${X[1] - 500} 0)">\n`;
   b += panel(500, Y2, W, H, '05', 'Native assets', 'Hold tokens, mint your own, send them anywhere');
   b += utxo(520, Y2 + 72, 150, { title: 'Dex', lines: ['ADA: 2,000', 'HOSKY: 9.1M'], tone: 'indigo' }).svg;
   b += `  <rect x="694" y="${Y2 + 76}" width="88" height="30" rx="15" fill="${C.amberSoft}" stroke="${C.amberLine}"/><text x="738" y="${Y2 + 96}" text-anchor="middle" font-size="12" font-weight="600" fill="${C.amber}">LP tokens</text>\n`;
   b += arrow([[670, Y2 + 92], [690, Y2 + 92]], { label: 'mint', at: [680, Y2 + 70] , color: 'amber'});
   b += `  <rect x="694" y="${Y2 + 150}" width="88" height="30" rx="15" fill="${C.greenSoft}" stroke="${C.greenLine}"/><text x="738" y="${Y2 + 170}" text-anchor="middle" font-size="12" font-weight="600" fill="${C.green}">any address</text>\n`;
   b += arrow([[620, Y2 + 150], [620, Y2 + 165], [690, Y2 + 165]], { label: 'send', at: [652, Y2 + 186] });
-  return svg(980, 612, 'The five kinds of state JOUST supports', b);
+  b += `  </g>\n`;
+
+  // 06 Keyed objects (ADR-0016): a sorted on-chain list; an insert relinks its predecessor.
+  b += panel(X[2], Y2, W, H, '06', 'Keyed objects', 'At most one object per key, in a sorted list');
+  const node = (x, y, text, tone = 'white', dashed = false) => {
+    const [fill, stroke, ink] = TONES[tone];
+    return `  <rect x="${x}" y="${y}" width="72" height="38" rx="9" fill="${fill}" stroke="${stroke}" stroke-width="1.5"${dashed ? ' stroke-dasharray="5 4"' : ''}/>
+  <text x="${x + 36}" y="${y + 24}" text-anchor="middle" font-size="12" font-weight="600" fill="${ink}" font-family="${MONO}">${esc(text)}</text>\n`;
+  };
+  const kx = [X[2] + 16, X[2] + 114, X[2] + 212], ky = Y2 + 76;
+  b += node(kx[0], ky, 'head', 'slate');
+  b += node(kx[1], ky, 'ann', 'green');
+  b += node(kx[2], ky, 'eve', 'green');
+  b += arrow([[kx[0] + 72, ky + 19], [kx[1] - 4, ky + 19]]);
+  b += arrow([[kx[1] + 72, ky + 19], [kx[2] - 4, ky + 19]]);
+  b += node(X[2] + 163, Y2 + 160, 'bob', 'green', true);
+  b += arrow([[kx[1] + 36, ky + 38], [X[2] + 180, Y2 + 156]], { color: 'amber' });
+  b += arrow([[X[2] + 218, Y2 + 160], [kx[2] + 36, ky + 42]], { color: 'amber' });
+  b += label(X[2] + 72, Y2 + 182, 'insert after', { size: 11.5, color: C.amber });
+  b += label(X[2] + 72, Y2 + 198, 'its neighbour', { size: 11.5, color: C.amber });
+  b += label(X[2] + W / 2, Y2 + 228, 'one UTxO per key; the neighbours prove it is unique', { size: 11.5, color: C.green });
+  return svg(980, 612, 'The six kinds of state JOUST supports', b);
 }
 
 // 5. The npm path in a browser (experimental).

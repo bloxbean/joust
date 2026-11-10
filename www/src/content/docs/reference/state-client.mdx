@@ -36,9 +36,11 @@ Functions that once took cardano-serialization-lib (`CSL`) as their first argume
 
 | Export | Signature | Description |
 |---|---|---|
-| `JoustContract` | `new JoustContract({ description, deployment, service, chain, onReview?, limits?, requirePlan? })` | a contract: builds calls from its description, verifies, reviews, signs, submits |
+| `JoustContract` | `new JoustContract({ description, deployment, service, chain, onReview?, limits?, requirePlan?, retryStore? })` | a contract: builds calls from its description, verifies, reviews, signs, submits |
 | `JoustInstance` | `contract.at(id)` | one instance of a contract |
 | `JoustObject` | `instance.object(id)` | one owned object of an instance |
+| `JoustKeyedList` | `instance.keyed(type)` | one keyed type's list in an instance (ADR-0016) |
+| `JoustKeyedObject` | `list.object(key)` | one keyed object, live or retired |
 | `VerificationError` | `class extends Error { problems: string[]; report }` | thrown when a prepared transaction is refused |
 | `httpService` | `httpService(baseUrl, { fetchImpl? })` | a prepare service over HTTP: `prepare(request)` posts to `<base>/prepare`, `view(request)` to `<base>/view` |
 
@@ -56,6 +58,8 @@ Functions that once took cardano-serialization-lib (`CSL`) as their first argume
 | `meta` | `meta(name, kinds)` | the description's entry for a call |
 | `run` | `run(wallet, call)` | prepares, verifies, reviews, signs, submits one call (what the methods above use) |
 | `codec` | property | `codec(description)` |
+| `abandonKeyed` | `abandonKeyed(wallet)` | drops the wallet's unsettled keyed operation or its tombstone (the user's choice); the record removed, or `null` |
+| `acknowledgeKeyed` | `acknowledgeKeyed(wallet)` | drops only a "may have landed" tombstone |
 
 ### `JoustInstance`
 
@@ -72,6 +76,7 @@ Functions that once took cardano-serialization-lib (`CSL`) as their first argume
 | `cancelIntent` | `cancelIntent(wallet, intentId)` | `{ txHash, report, created }` |
 | `batch` | `batch(wallet, { max = 8 } = {})` | `{ txHash, report, created, applied, skipped }` |
 | `pendingIntents` | `pendingIntents()` | `[{ intent, ref, owner, deadline, received, call, lovelace }]` |
+| `keyed` | `keyed(type)` | a `JoustKeyedList` for the keyed type's simple name |
 
 ### `JoustObject`
 
@@ -80,6 +85,37 @@ Functions that once took cardano-serialization-lib (`CSL`) as their first argume
 | `id` | property | the object id (hex) |
 | `call` | `call(wallet, name, args = {}, pay = {})` | `{ txHash, report }` |
 | `read` | `read()` | `{ ref, type, value, lovelace }` or `null` |
+
+### Keyed objects
+
+ADR-0016; on `main`, not in `0.1.0-pre1-rc2` (it comes with the next release). Guide:
+[Keyed objects in JavaScript](/apps/keyed-objects-js/).
+
+| `JoustKeyedList` member | Signature | Resolves to |
+|---|---|---|
+| `unit` | `unit(key)` | the key's token unit (hex) |
+| `find` | `find(key)` | `{ ref, key, retired, value, lovelace }` or `null` |
+| `exists` | `exists(key)` | `true` when the key is taken, live or retired |
+| `keys` | `keys()` | `[{ key, retired, value }]`, walked from the head |
+| `insert` | `insert(wallet, method, args = {}, pay = {}, { abandon? } = {})` | `{ txHash, report, key }` |
+| `object` | `object(key)` | a `JoustKeyedObject` |
+
+| `JoustKeyedObject` member | Signature | Resolves to |
+|---|---|---|
+| `key` | property | the key (hex) |
+| `call` | `call(wallet, name, args = {}, pay = {}, { cosigners?, abandon? } = {})` | `{ txHash, report }`: a keyed action, remove or retire |
+| `read` | `read()` | `{ ref, key, retired, value, lovelace }` or `null` |
+
+| Export | Signature | Description |
+|---|---|---|
+| `verifyKeyed` | `await verifyKeyed({ description, deployment, txHex, call, wallet, chain, limits? })` | the keyed rules (anchor, relink, heads, authenticated values, allowances, time) |
+| `isKeyedCall`, `KEYED_KINDS` | `isKeyedCall(description, call)` | whether a call is verified by the keyed rules (`keyedInit`, `keyedAction`, `keyedRemove`, `keyedRetire`, or a keyed contract's creation) |
+| `typeIdOf`, `keyIdOf` | `typeIdOf(simpleName)`, `keyIdOf(instance, typeId, key)` | a type's id and a key's token name (hex) |
+| `compareKeys` | `compareKeys(a, b)` | the on-chain key order: unsigned bytes, a proper prefix first |
+| `memoryRetryStore`, `indexedDbRetryStore`, `defaultRetryStore` | `indexedDbRetryStore(name?)` | where designated inputs are recorded (`{ all, put, delete }`) |
+| `PendingKeyedOperation` | `class extends Error { record }` | an attempt of the wallet's keyed operation may still land: retry it or abandon it |
+| `KeyedCallInProgress` | `class extends Error` | another keyed call is in flight on the network |
+| `designatedFor` | `designatedFor(walletView)` | the input a keyed call would designate: the largest ADA-only UTxO of at least 5 ADA, or `null` |
 
 ## Chain
 
@@ -134,7 +170,7 @@ Each verifier returns `{ problems: string[], report }`; no problems means the wa
 
 | Export | Signature | Verifies |
 |---|---|---|
-| `verifyPrepared` | `await verifyPrepared({ description, deployment, txHex, call, wallet, chain, limits? })` | a creation, action, destroy or owned call |
+| `verifyPrepared` | `await verifyPrepared({ description, deployment, txHex, call, wallet, chain, limits? })` | a creation, action, destroy or owned call (keyed calls go on to `verifyKeyed`) |
 | `verifyComposed` | `await verifyComposed({ steps, txHex, wallet, chain, limits? })` | several calls in one transaction; `steps`: `[{ description, deployment, call }]` |
 | `verifyIntent` | `await verifyIntent({ description, deployment, txHex, call, wallet, chain, limits? })` | an intent lock (ADR-0004) |
 | `verifyCancel` | same | an intent's cancellation |
