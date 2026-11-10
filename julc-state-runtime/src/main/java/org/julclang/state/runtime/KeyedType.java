@@ -108,12 +108,40 @@ public record KeyedType<R>(String name, int headTag, int keyIndex, int maxKeyByt
                 BytesPlutusData.of(key)));
     }
 
-    /** {@code d} with {@code next} and {@code linkedAt} replaced (relinked, D4b). */
+    /**
+     * {@code d} with {@code next} and {@code linkedAt} replaced (relinked, D4b), in the ledger's canonical encoding: every
+     * copied field is re-encoded (non-empty lists indefinite), whatever encoding the node's writer chose. The Data is the
+     * same (the validator compares decoded fields), and a page then needs to accept only the canonical bytes, from which it
+     * computes the relink's allowance (ADR-0016 M3 review: F94, R-F11, R-F12).
+     */
     static PlutusData relinked(ConstrPlutusData d, byte[] next, BigInteger linkedAt) {
-        var fields = new java.util.ArrayList<>(d.getData().getPlutusDataList());
+        var fields = new java.util.ArrayList<PlutusData>();
+        for (PlutusData f : d.getData().getPlutusDataList()) fields.add(canonical(f));
         fields.set(1, BytesPlutusData.of(next));
         fields.set(2, BigIntPlutusData.of(linkedAt));
         return constr((int) d.getAlternative(), fields);
+    }
+
+    /** {@code d} rebuilt so that it encodes canonically: lists (and constructor fields) indefinite, maps definite. */
+    static PlutusData canonical(PlutusData d) {
+        if (d instanceof ConstrPlutusData c) {
+            var fs = new java.util.ArrayList<PlutusData>();
+            for (PlutusData f : c.getData().getPlutusDataList()) fs.add(canonical(f));
+            return constr((int) c.getAlternative(), fs);
+        }
+        if (d instanceof ListPlutusData l) {
+            var items = new java.util.ArrayList<PlutusData>();
+            for (PlutusData x : l.getPlutusDataList()) items.add(canonical(x));
+            return new ListPlutusData(items, true);
+        }
+        if (d instanceof com.bloxbean.cardano.client.plutus.spec.MapPlutusData m) {
+            var out = new java.util.LinkedHashMap<PlutusData, PlutusData>();
+            for (var e : m.getMap().entrySet()) out.put(canonical(e.getKey()), canonical(e.getValue()));
+            return com.bloxbean.cardano.client.plutus.spec.MapPlutusData.builder().map(out).build();
+        }
+        if (d instanceof BytesPlutusData b) return BytesPlutusData.of(b.getValue());
+        if (d instanceof BigIntPlutusData i) return BigIntPlutusData.of(i.getValue());
+        return d;
     }
 
     static PlutusData constr(int tag, List<PlutusData> fields) {

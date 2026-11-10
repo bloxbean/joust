@@ -238,7 +238,7 @@ test('R-F1: a datum padded to raise an allowance is refused (relink, head, retir
   const ins = insertScn(w);
   const anchorDatum = ins.spec.outputs[0].datum;
   refused(await verifyHex(w, ins, padded(build(w, structuredClone(ins.spec), ins.truth), anchorDatum), { params: { ...PARAMS, coins_per_utxo_size: '20000' } }),
-    /relinked anchor has an inline datum that is not its input's relinked in the canonical encoding/, 'a padded relink');
+    /relinked anchor has an inline datum that is not in the canonical encoding/, 'a padded relink');
   const cr = createScn(w);
   refused(await verifyHex(w, cr, padded(build(w, structuredClone(cr.spec), cr.truth), cr.spec.outputs[1].datum)),
     /head has an inline datum that is not in the canonical encoding/, 'a padded head');
@@ -355,27 +355,41 @@ test('F86, R-F10: a padded tag-24 wrapper raises no allowance (anchor with and w
   refused(r, /retired node is topped up by 3000000/, 'its top-up counts only the page\'s own encoding');
 });
 
-/** {@code d} with every list and constructor's fields as definite-length CBOR arrays (another writer's encoding). */
-function definite(d) {
+/**
+ * {@code d} in another writer's encoding of the same Data: definite-length lists, non-minimal integers, chunked short
+ * byte strings, or the general constructor form (tag 102).
+ */
+function reencode(d, mode) {
   const { decodeData } = PD;
   const h = (major, n) => (n < 24 ? [(major << 5) | n] : n < 256 ? [(major << 5) | 24, n] : [(major << 5) | 25, n >> 8, n & 0xff]);
   const enc = (x) => {
-    if ('constr' in x) return [0xd8, 121 + x.constr, ...h(4, x.fields.length), ...x.fields.flatMap(enc)];
-    if ('list' in x) return [...h(4, x.list.length), ...x.list.flatMap(enc)];
+    if ('constr' in x) {
+      const fields = mode === 'definite' ? [...h(4, x.fields.length), ...x.fields.flatMap(enc), ] : [0x9f, ...x.fields.flatMap(enc), 0xff];
+      if (!x.fields.length) fields.splice(0, fields.length, 0x80);
+      return mode === 'tag102' ? [0xd8, 0x66, 0x82, ...h(0, x.constr), ...fields] : [0xd8, 121 + x.constr, ...fields];
+    }
+    if ('list' in x) return mode === 'definite' || !x.list.length ? [...h(4, x.list.length), ...x.list.flatMap(enc)] : [0x9f, ...x.list.flatMap(enc), 0xff];
+    if ('int' in x && mode === 'nonmin' && x.int >= 0n && x.int < 256n) return [0x19, 0, Number(x.int)];
+    if ('bytes' in x && mode === 'chunked' && x.bytes.length > 0 && x.bytes.length <= 64) return [0x5f, ...h(2, x.bytes.length), ...x.bytes, 0xff];
     return [...Buffer.from(dataHex(x), 'hex')];
   };
   return decodeData(Buffer.from(enc(d)).toString('hex'));
 }
 const PD = await import('../src/pdata.js');
 
-test('R-F6: a relink next to a node another writer encoded with definite lists is accepted; its value bytes are kept', async () => {
-  const w = world();
-  const scn = insertScn(w);
-  const v = definite(w.value('aa'));
-  assert.notEqual(dataHex(v), PD.canonicalHex(v), 'a non-canonical encoding of the same Data');
-  scn.truth.get(scn.A).datum = w.node(w.entry, '', w.L0, v);
-  accepted(await check(w, scn, (s) => { s.outputs[0].datum = w.node(w.entry, 'bbbb', w.upper, v); return s; }), 'the engine relink, value bytes kept');
-  accepted(await check(w, scn, (s) => { s.outputs[0].datum = w.node(w.entry, 'bbbb', w.upper, v); return s; }, { noCbor: true }), 'the same, without CBOR');
-  refused(await check(w, scn, (s) => { s.outputs[0].datum = w.node(w.entry, 'bbbb', w.upper, w.value('aa')); return s; }),
-    /not its input's relinked/, 'a relink that re-encodes the value');
+test('R-F6, R-F11, F94: next to a node in another writer\'s encoding, the engine\'s canonical relink is accepted; a non-canonical one is not', async () => {
+  for (const mode of ['definite', 'nonmin', 'chunked', 'tag102']) {
+    const w = world();
+    const scn = insertScn(w);
+    const v = reencode(w.value('aa'), mode);
+    assert.ok(PD.dataEqual(v, w.value('aa')), `${mode}: the same Data`);
+    assert.notEqual(dataHex(v), PD.canonicalHex(v), `${mode}: a non-canonical encoding`);
+    scn.truth.get(scn.A).datum = w.node(w.entry, '', w.L0, v);
+    // The engine relinks canonically (KeyedType.relinked): the honest transaction.
+    accepted(await check(w, scn), `${mode}: the canonical relink`);
+    accepted(await check(w, scn, undefined, { noCbor: true }), `${mode}: the same, without CBOR`);
+    // A relink that keeps the input's bytes is not canonical: refused, and its size sets no allowance.
+    refused(await check(w, scn, (s) => { s.outputs[0].datum = w.node(w.entry, 'bbbb', w.upper, v); return s; }),
+      /relinked anchor has an inline datum that is not in the canonical encoding/, `${mode}: the input's bytes kept`);
+  }
 });

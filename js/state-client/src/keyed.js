@@ -12,7 +12,7 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import { bytesToHex, hexToBytes, utf8 } from './hex.js';
 import { parseTx, pageOutputSize } from './ledger.js';
-import { decodeData, dataHex, canonicalHex, withoutRaw } from './pdata.js';
+import { decodeData, dataHex, canonicalHex } from './pdata.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, envelopeChecks, isWalletEnterprise, paymentKeyHashOf,
 } from './verify.js';
@@ -366,7 +366,6 @@ export async function verifyKeyed(o) {
   /** D4b: X continued with only next and linkedAt replaced, lovelace not lower, no other asset, no reference script. */
   const relinked = (x, next) => ({
     unit: x.unit,
-    relink: true,   // its datum's encoding is checked in check() (R-F6)
     role: x.datum.kind === 'head' ? 'the relinked head' : 'the relinked anchor',
     check: (out) => {
       const p = [];
@@ -374,15 +373,8 @@ export async function verifyKeyed(o) {
       if (out.hasScriptRef || out.datumHash) p.push('has a reference script or a datum hash');
       const d = out.datum;
       const xd = decodeData(x.out.inlineDatum);
-      let expectedHex = null;
       if (!d || d.constr !== xd.constr || d.fields.length !== xd.fields.length) p.push('is not its datum relinked');
       else {
-        // The bytes the page expects (R-F1, R-F6): the input datum relinked, its instance, next and linkedAt in the
-        // ledger's own encoding and every further field byte for byte as the input carried it (another writer may
-        // have used definite-length lists there; the engine's relink keeps them).
-        expectedHex = dataHex({ constr: xd.constr, fields: [withoutRaw(xd.fields[0]), withoutRaw(d.fields[1]), withoutRaw(d.fields[2]),
-          ...xd.fields.slice(3)] });
-        if (bytesToHex(d.raw) !== expectedHex) p.push('has an inline datum that is not its input\'s relinked in the canonical encoding');
         if (!dataEqual(d.fields[0], xd.fields[0])) p.push('changes its instance');
         if (hexOf(d.fields[1]) !== next) p.push(`links to ${hexOf(d.fields[1])}, not ${next}`);
         if (typeof d.fields[2]?.int !== 'bigint' || !linkedAtOk(d.fields[2].int)) p.push('has a linkedAt other than the upper bound');
@@ -392,15 +384,19 @@ export async function verifyKeyed(o) {
       const inL = x.value.get('lovelace') ?? 0n;
       const outL = out.value.get('lovelace') ?? 0n;
       const top = outL - inL;
-      const need = expectedHex ? minOf(out, expectedHex) : 0n;
+      // From the canonical encoding only (R-F12): the input's bytes, as the chain API served them, set nothing. The engine
+      // writes every relink canonically (KeyedType.relinked), whatever encoding the node's writer chose (F94, R-F11).
+      const need = d ? minOf(out) : 0n;
       const allow = capped(need > inL ? need - inL : 0n);
       if (top < 0n) p.push(`skims ${-top} lovelace`);
       else if (top > allow) p.push(`is topped up by ${top} lovelace, above the ${allow} its ledger minimum needs`);
-      // Its size may grow only by the longer next, linkedAt's width and the lovelace's (R-F1): with an authenticated
-      // input, a relink cannot be made larger to raise its own allowance.
-      if (x.out.size !== undefined && d) {
+      // Its size may grow only by the longer next, linkedAt's width and the lovelace's over its input's, both in the
+      // canonical encoding (R-F1): a relink cannot be made larger to raise its own allowance.
+      if (d) {
+        const inSize = pageOutputSize(x.out.address, x.value, canonicalHex(xd));
+        const outSize = pageOutputSize(out.address, out.value, canonicalHex(d));
         const grow = Math.max(0, (next ?? '').length / 2 - (hexOf(xd.fields[1]) ?? '').length / 2) + 9 + 8;
-        if (out.size > x.out.size + grow) p.push(`is ${out.size} bytes, more than its input's ${x.out.size} and ${grow} for the relink`);
+        if (outSize > inSize + grow) p.push(`is ${outSize} bytes, more than its input's ${inSize} and ${grow} for the relink`);
       }
       report.keyed.topUpA = top;
       p.push(...linkWindowProblems(x));
@@ -630,7 +626,7 @@ export async function verifyKeyed(o) {
     }
     // Every datum the page checks is in the ledger's own encoding (R-F1): its size, and so any allowance computed from
     // it, is then the page's, not the service's choice (padding such as empty bytestring chunks is refused).
-    if (!e.relink && out.datum && bytesToHex(out.datum.raw) !== canonicalHex(out.datum)) {
+    if (out.datum && bytesToHex(out.datum.raw) !== canonicalHex(out.datum)) {
       problems.push(`${e.role} has an inline datum that is not in the canonical encoding`);
     }
     // ...and the output around it is the one the page would write (F86, R-F10): no padding in the tag-24 wrapper, the
