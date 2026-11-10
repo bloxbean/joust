@@ -119,10 +119,24 @@ export function build(w, spec, utxos) {
   return CSL.Transaction.new(body, ws, undefined).to_hex();
 }
 
+/** An output's encoded size, as CSL writes it (the producing transaction's bytes, in the authenticated view). */
+export function outputSize(u) {
+  const v = CSL.Value.new(CSL.BigNum.from_str(String(u.value.get('lovelace'))));
+  const units = [...u.value].filter(([k]) => k !== 'lovelace');
+  if (units.length) {
+    const ma = CSL.MultiAsset.new();
+    for (const [k, q] of units) ma.set_asset(CSL.ScriptHash.from_hex(k.slice(0, 56)), CSL.AssetName.new(hexToBytes(k.slice(56))), CSL.BigNum.from_str(String(q)));
+    v.set_multiasset(ma);
+  }
+  const o = CSL.TransactionOutput.new(CSL.Address.from_bech32(u.address), v);
+  if (u.datum) o.set_plutus_data(CSL.PlutusData.from_hex(dataHex(u.datum)));
+  return o.to_bytes().length;
+}
+
 /** The chain the page reads: authenticated outputs (verifiedOutput) unless {@code noCbor}; utxo() may lie. */
 export function chainOf(truth, { noCbor = false, lies = new Map(), params = PARAMS } = {}) {
   const view = (r, u) => u && { address: u.address, value: new Map(u.value), inlineDatum: u.datum ? dataHex(u.datum) : null,
-    referenceScriptHash: u.referenceScriptHash ?? null, size: 120 };
+    referenceScriptHash: u.referenceScriptHash ?? null, size: outputSize(u) };
   return {
     tip: TIP,
     params,

@@ -12,7 +12,7 @@ import { codec as makeCodec, dataEqual } from './data.js';
 import { instanceIdOf } from './tokens.js';
 import { bytesToHex, hexToBytes, utf8 } from './hex.js';
 import { parseTx } from './ledger.js';
-import { decodeData, dataHex } from './pdata.js';
+import { decodeData, dataHex, canonicalHex } from './pdata.js';
 import {
   DEFAULT_LIMITS, ledgerOrder, redeemerDefs, add, envelopeChecks, isWalletEnterprise, paymentKeyHashOf,
 } from './verify.js';
@@ -23,6 +23,9 @@ export const KEYED_KINDS = new Set(['keyedInit', 'keyedAction', 'keyedRemove', '
 /** The page's further limits for keyed calls: protocol parameters bounded like the fee (an absolute cap). */
 export const KEYED_LIMITS = {
   maxCoinsPerUtxoByte: 20_000n,   // mainnet: 4,310; a provider may claim at most this when the page computes a minimum
+  maxTopUp: 10_000_000n,          // the most any one allowance (a relink's or a retire's top-up, a head's deposit above
+                                  // minAda) may be, whatever the sizes and parameters say (R-F1; the JVM's topUpAllowance)
+  maxTipSkewSlots: 120,           // the chain API's tip may differ from the page's own clock by at most this (F80)
 };
 
 /** A call the page must verify with the keyed rules: a keyed kind, or a keyed contract's instance creation (heads). */
@@ -97,11 +100,30 @@ function coinsPerUtxoByte(pp) {
   return v === undefined || v === null ? null : BigInt(v);
 }
 
+/** The deployment's slot clock, validated: { zeroSlot, zeroTimeMs, slotLengthMs } as bigints, or null. */
+export function slotClockOf(deployment) {
+  const sc = deployment?.slotConfig;
+  if (!sc) return null;
+  try {
+    const c = { zeroSlot: BigInt(sc.zeroSlot), zeroTimeMs: BigInt(sc.zeroTimeMs), slotLengthMs: BigInt(sc.slotLengthMs) };
+    return c.zeroSlot >= 0n && c.zeroTimeMs >= 0n && c.slotLengthMs > 0n ? c : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The slot's POSIX time (ms), by the deployment's slot clock, or null without one. */
 function slotToMs(deployment, slot) {
-  const sc = deployment.slotConfig;
+  const sc = slotClockOf(deployment);
   if (!sc || slot === null) return null;
-  return BigInt(sc.zeroTimeMs) + (BigInt(slot) - BigInt(sc.zeroSlot)) * BigInt(sc.slotLengthMs);
+  return sc.zeroTimeMs + (BigInt(slot) - sc.zeroSlot) * sc.slotLengthMs;
+}
+
+/** The page's own current slot, by the deployment's slot clock (never the chain API's), or null without one. */
+export function pageSlotOf(deployment, nowMs = Date.now()) {
+  const sc = slotClockOf(deployment);
+  if (!sc) return null;
+  return Number(sc.zeroSlot + (BigInt(Math.floor(nowMs)) - sc.zeroTimeMs) / sc.slotLengthMs);
 }
 
 const TIME_LOW = 1n << 32n;
@@ -158,6 +180,15 @@ export async function verifyKeyed(o) {
   if (coins === null) problems.push('the chain API gives no coinsPerUTxOByte');
   else if (coins > limits.maxCoinsPerUtxoByte) problems.push(`a coinsPerUTxOByte of ${coins}, above the page's limit of ${limits.maxCoinsPerUtxoByte}`);
   const minOf = (out) => (coins === null ? 0n : ledgerMin(out.size, coins));
+  const capped = (a) => (a > limits.maxTopUp ? limits.maxTopUp : a);
+
+  // The page's own clock (F80): without it a provider could make a far-future window look current, and linkedAt could
+  // not be checked against the upper bound. The chain API's tip must agree with it.
+  const pageSlot = pageSlotOf(deployment);
+  if (pageSlot === null) problems.push('a keyed call needs the deployment\'s slot clock (slotConfig), so the page can bind its window to time');
+  else if (Math.abs(Number(chain.tip) - pageSlot) > limits.maxTipSkewSlots) {
+    problems.push(`the chain API's tip (${chain.tip}) is not the page's own slot (${pageSlot}) within ${limits.maxTipSkewSlots} slots`);
+  }
 
   // Nothing beyond the call: no certificates, votes, proposals, donations, withdrawals or auxiliary data.
   if (!tx.isValid) problems.push('is_valid is false (the collateral would be taken)');
@@ -281,6 +312,8 @@ export async function verifyKeyed(o) {
       } else if (f.title === 'ctx') {
         ctx = decoded.ctx;
         if (!wallet.keyHashes.includes(ctx.caller)) problems.push('the call\'s caller is not this wallet');
+        // D11: an insert or a creation binds no existing input: its Ctx balance is 0 (R-F4).
+        if ((kind === 'keyedInit' || creation) && ctx.balance !== 0n) problems.push(`the call's Ctx balance is ${ctx.balance}, not 0`);
         if (ctx.received !== pay) problems.push(`the call receives ${ctx.received} lovelace, not the ${pay} the page pays`);
       } else if (f.title === 'instance' && kind === 'keyedInit') {
         if (decoded.instance !== call.instance) problems.push('the insert names another instance');
@@ -309,7 +342,22 @@ export async function verifyKeyed(o) {
   let anchor = null;                 // the relinked list UTxO (insert: the anchor; removal: the predecessor)
   let newKey = null;
   const upperMs = slotToMs(deployment, tx.ttl === null ? null : Number(tx.ttl));
-  const linkedAtOk = (n) => (upperMs !== null ? n === upperMs : n >= TIME_LOW && n < TIME_HIGH);
+  const lowerMs = slotToMs(deployment, tx.validFrom === null ? null : Number(tx.validFrom));
+  const linkedAtOk = (n) => upperMs !== null && n === upperMs && n >= TIME_LOW && n < TIME_HIGH;
+  /**
+   * D9, I54 for a structural operation's relinked node (F81): finite bounds, a window at most W, an upper bound in the
+   * time domain, and, when C > 0, a start at or after the relinked node's linkedAt + C.
+   */
+  const linkWindowProblems = (x) => {
+    const p = [];
+    if (lowerMs === null || upperMs === null) return ['has no finite validity window the page can bind to time'];
+    if (upperMs - lowerMs > BigInt(kt.linkWindowMs)) p.push(`a window of ${upperMs - lowerMs} ms, wider than linkWindowMs ${kt.linkWindowMs}`);
+    if (upperMs < TIME_LOW || upperMs >= TIME_HIGH) p.push('an upper bound outside the time domain');
+    if (BigInt(kt.linkCooldownMs) > 0n && lowerMs < x.datum.linkedAt + BigInt(kt.linkCooldownMs)) {
+      p.push(`a window starting before the end of its cooldown (linkedAt ${x.datum.linkedAt} + ${kt.linkCooldownMs} ms)`);
+    }
+    return p;
+  };
 
   /** D4b: X continued with only next and linkedAt replaced, lovelace not lower, no other asset, no reference script. */
   const relinked = (x, next) => ({
@@ -332,10 +380,17 @@ export async function verifyKeyed(o) {
       const inL = x.value.get('lovelace') ?? 0n;
       const outL = out.value.get('lovelace') ?? 0n;
       const top = outL - inL;
-      const allow = minOf(out) > inL ? minOf(out) - inL : 0n;
+      const allow = capped(minOf(out) > inL ? minOf(out) - inL : 0n);
       if (top < 0n) p.push(`skims ${-top} lovelace`);
       else if (top > allow) p.push(`is topped up by ${top} lovelace, above the ${allow} its ledger minimum needs`);
+      // Its size may grow only by the longer next, linkedAt's width and the lovelace's (R-F1): with an authenticated
+      // input, a relink cannot be made larger to raise its own allowance.
+      if (x.out.size !== undefined && d) {
+        const grow = Math.max(0, (next ?? '').length / 2 - (hexOf(xd.fields[1]) ?? '').length / 2) + 9 + 8;
+        if (out.size > x.out.size + grow) p.push(`is ${out.size} bytes, more than its input's ${x.out.size} and ${grow} for the relink`);
+      }
       report.keyed.topUpA = top;
+      p.push(...linkWindowProblems(x));
       return p;
     },
   });
@@ -389,6 +444,7 @@ export async function verifyKeyed(o) {
           const deposit = minOf(out) > minAda ? minOf(out) : minAda;
           const l = out.value.get('lovelace') ?? 0n;
           if (l !== deposit) p.push(`holds ${l} lovelace, not its deposit of ${deposit}`);
+          if (deposit - minAda > limits.maxTopUp) p.push(`needs a deposit of ${deposit}, more than the page's cap above minAda`);
           report.keyed.deposits += l;
           return p;
         } });
@@ -500,7 +556,7 @@ export async function verifyKeyed(o) {
               // D10: minAda plus the owner's top-up, at most the retired output's ledger minimum above minAda.
               const l = out.value.get('lovelace') ?? 0n;
               const top = l - minAda;
-              const allow = minOf(out) > minAda ? minOf(out) - minAda : 0n;
+              const allow = capped(minOf(out) > minAda ? minOf(out) - minAda : 0n);
               if (top < 0n) p.push(`holds ${l} lovelace, below the minimum ADA`);
               else if (top > allow) p.push(`is topped up by ${top} lovelace, above the ${allow} its ledger minimum needs`);
               report.keyed.topUpR = top;
@@ -558,6 +614,11 @@ export async function verifyKeyed(o) {
     if (!out) {
       problems.push(`no output holds ${e.role}'s token`);
       continue;
+    }
+    // Every datum the page checks is in the ledger's own encoding (R-F1): its size, and so any allowance computed from
+    // it, is then the page's, not the service's choice (padding such as empty bytestring chunks is refused).
+    if (out.datum && bytesToHex(out.datum.raw) !== canonicalHex(out.datum)) {
+      problems.push(`${e.role} has an inline datum that is not in the canonical encoding`);
     }
     for (const p of e.check(out)) problems.push(`${e.role} ${p}`);
   }

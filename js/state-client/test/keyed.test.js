@@ -4,10 +4,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { keyIdOf, typeIdOf, compareKeys } from '../src/keyed.js';
+import { keyIdOf, typeIdOf, compareKeys, verifyKeyed } from '../src/keyed.js';
+import { dataHex } from '../src/pdata.js';
 import { verifyComposed } from '../src/compose.js';
 import {
-  DESCRIPTION, ADA, PARAMS, WK, I, SA, THIRD, ref, scriptAddr, world, build, chainOf, deployment, check, spendR, mintR, TxOutRef,
+  DESCRIPTION, ADA, PARAMS, WK, I, SA, THIRD, TIP, ZERO_TIME, ref, scriptAddr, world, build, chainOf, deployment, check, spendR, mintR, TxOutRef,
   insertScn, actionScn, retireScn, removeScn, createScn,
 } from './keyed-world.js';
 
@@ -209,4 +210,91 @@ test('a composition containing a keyed call is refused', async () => {
   const r = await verifyComposed({ txHex, steps: [{ description: DESCRIPTION, deployment, call: scn.call }], wallet: scn.wallet,
     chain: chainOf(scn.truth) });
   refused(r, /keyed call is verified on its own/, 'a keyed call in a composition');
+});
+
+// ------------------------------------------------------------------------------------- review of M3 (R-F1, F80, F81)
+
+/** {@code txHex} with {@code datum}'s inline bytes padded: its instance as an indefinite bytestring of empty chunks. */
+function padded(txHex, datum, n = 2000) {
+  const hex = dataHex(datum);
+  const tag24 = (h) => {
+    const len = h.length / 2;
+    const head = len < 24 ? (0x40 + len).toString(16) : len < 256 ? '58' + len.toString(16).padStart(2, '0') : '59' + len.toString(16).padStart(4, '0');
+    return 'd818' + head + h;
+  };
+  const inst = hex.match(/5820([0-9a-f]{64})/)[1];
+  const p = hex.replace('5820' + inst, '5f' + '40'.repeat(n) + '5820' + inst + 'ff');
+  assert.equal(txHex.split(tag24(hex)).length, 2, 'the datum once in the transaction');
+  return txHex.replace(tag24(hex), tag24(p));
+}
+
+async function verifyHex(w, scn, txHex, chainOpts = {}, extra = {}) {
+  return verifyKeyed({ description: w.description, deployment: extra.deployment ?? deployment, txHex, call: scn.call, wallet: scn.wallet,
+    chain: { ...chainOf(scn.truth, chainOpts), ...(extra.chain ?? {}) } });
+}
+
+test('R-F1: a datum padded to raise an allowance is refused (relink, head, retire); allowances are capped', async () => {
+  const w = world();
+  const ins = insertScn(w);
+  const anchorDatum = ins.spec.outputs[0].datum;
+  refused(await verifyHex(w, ins, padded(build(w, structuredClone(ins.spec), ins.truth), anchorDatum), { params: { ...PARAMS, coins_per_utxo_size: '20000' } }),
+    /relinked anchor has an inline datum that is not in the canonical encoding/, 'a padded relink');
+  const cr = createScn(w);
+  refused(await verifyHex(w, cr, padded(build(w, structuredClone(cr.spec), cr.truth), cr.spec.outputs[1].datum)),
+    /head has an inline datum that is not in the canonical encoding/, 'a padded head');
+  const rt = retireScn(w);
+  refused(await verifyHex(w, rt, padded(build(w, structuredClone(rt.spec), rt.truth), rt.spec.outputs[0].datum)),
+    /retired node has an inline datum that is not in the canonical encoding/, 'a padded retired node');
+  // The cap: at the page's highest coinsPerUTxOByte a large honest anchor's allowance is still at most 10 ADA.
+  const big = insertScn(w);
+  const r = await check(w, big, (s) => { s.outputs[0].lovelace += 20n * ADA; return s; }, { params: { ...PARAMS, coins_per_utxo_size: '20000' } });
+  refused(r, /above the/, 'a top-up above the cap');
+});
+
+test('F80: a keyed call needs the page\'s slot clock, and the chain API\'s tip must agree with it', async () => {
+  const w = world();
+  const scn = insertScn(w);
+  const txHex = build(w, structuredClone(scn.spec), scn.truth);
+  refused(await verifyHex(w, scn, txHex, {}, { deployment: { ...deployment, slotConfig: undefined } }), /needs the deployment's slot clock/, 'no clock');
+  refused(await verifyHex(w, scn, txHex, {}, { deployment: { ...deployment, slotConfig: { zeroSlot: 0, zeroTimeMs: 'x', slotLengthMs: 1000 } } }),
+    /needs the deployment's slot clock/, 'a malformed clock');
+  refused(await verifyHex(w, scn, txHex, {}, { chain: { tip: TIP + 100_000 } }), /tip .* is not the page's own slot/, 'a lying future tip');
+  // linkedAt off by a second is refused (it always runs now).
+  refused(await check(w, scn, (s) => { s.outputs[1].datum = w.node(w.entry, '', w.upper + 1000n, w.value('bbbb', 2n * ADA)); return s; }),
+    /linkedAt other than the upper bound/, 'a node linkedAt off by a second');
+});
+
+test('F81: the page checks a structural operation\'s cooldown and its window against W', async () => {
+  const w = world();
+  // The anchor was relinked at the transaction's own upper bound: still cooling down.
+  const cooling = insertScn(w);
+  const A = cooling.A;
+  cooling.truth.get(A).datum = w.node(w.entry, '', w.upper, w.value('aa'));
+  refused(await check(w, cooling, (s) => { s.outputs[0].datum = w.node(w.entry, 'bbbb', w.upper, w.value('aa')); return s; }),
+    /before the end of its cooldown/, 'an insert during the anchor\'s cooldown');
+  // A window wider than W (120 s): 200 slots.
+  const wide = insertScn(w);
+  const upper = BigInt(ZERO_TIME) + BigInt(TIP + 200) * 1000n;
+  refused(await check(w, wide, (s) => {
+    s.ttl = TIP + 200;
+    s.outputs[0].datum = w.node(w.entry, 'bbbb', upper, w.value('aa'));
+    s.outputs[1].datum = w.node(w.entry, '', upper, w.value('bbbb', 2n * ADA));
+    return s;
+  }), /wider than linkWindowMs/, 'a window wider than W');
+  // The removal's predecessor: the same rule.
+  const rm = removeScn(w);
+  rm.truth.get(rm.P).datum = w.head(w.entry, 'aa', w.upper);
+  refused(await check(w, rm), /before the end of its cooldown/, 'a removal during the predecessor\'s cooldown');
+});
+
+test('R-F4: an insert\'s and a creation\'s Ctx balance is 0', async () => {
+  const w = world();
+  const ins = insertScn(w);
+  refused(await check(w, ins, (s) => {
+    s.mintRedeemer = mintR(w, 'Insert_claim', { instance: I, anchor: TxOutRef(ins.A), name: 'bbbb', tier: 1n, guardians: [WK], needed: 1n, ctx: w.ctx(2n * ADA, 5n) });
+    return s;
+  }), /Ctx balance is 5, not 0/, 'an insert with a balance');
+  const cr = createScn(w);
+  refused(await check(w, cr, (s) => { s.mintRedeemer = mintR(w, 'CreateInstance', { seed: TxOutRef(ref('a1')), ctx: w.ctx(0n, 1n) }); return s; }),
+    /Ctx balance is 1, not 0/, 'a creation with a balance');
 });
