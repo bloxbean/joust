@@ -122,6 +122,35 @@ public record KeyedType<R>(String name, int headTag, int keyIndex, int maxKeyByt
         return constr((int) d.getAlternative(), fields);
     }
 
+    /**
+     * Refuses to relink a list node whose datum holds a Plutus map with a repeated key (ADR-0016 M3 review, R-F17):
+     * cardano-client-lib keeps one entry per key when it decodes a map, so a relink would write different Data, which
+     * the page and the validator refuse. Such a node cannot be an anchor or a predecessor through this runtime.
+     */
+    static void requireRelinkable(String inlineDatumHex, String what) {
+        if (inlineDatumHex == null) return;
+        if (duplicateMapKeys(org.julclang.core.cbor.PlutusDataCborDecoder.decode(
+                com.bloxbean.cardano.client.util.HexUtil.decodeHexString(inlineDatumHex)))) {
+            throw new org.julclang.state.api.RequireException(what + ": the neighbouring node's datum holds a Plutus map with a"
+                    + " repeated key; relinking it would change its Data, so it cannot be relinked here (ADR-0016 M3, R-F17)");
+        }
+    }
+
+    private static boolean duplicateMapKeys(org.julclang.core.PlutusData d) {
+        if (d instanceof org.julclang.core.PlutusData.ConstrData c) {
+            for (var f : c.fields()) if (duplicateMapKeys(f)) return true;
+        } else if (d instanceof org.julclang.core.PlutusData.ListData l) {
+            for (var x : l.items()) if (duplicateMapKeys(x)) return true;
+        } else if (d instanceof org.julclang.core.PlutusData.MapData m) {
+            var seen = new java.util.HashSet<String>();
+            for (var e : m.entries()) {
+                if (!seen.add(java.util.HexFormat.of().formatHex(org.julclang.core.cbor.PlutusDataCborEncoder.encode(e.key())))) return true;
+                if (duplicateMapKeys(e.key()) || duplicateMapKeys(e.value())) return true;
+            }
+        }
+        return false;
+    }
+
     /** {@code d} rebuilt so that it encodes canonically: lists (and constructor fields) indefinite, maps definite. */
     static PlutusData canonical(PlutusData d) {
         if (d instanceof ConstrPlutusData c) {

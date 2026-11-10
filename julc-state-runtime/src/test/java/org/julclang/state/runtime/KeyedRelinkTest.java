@@ -35,4 +35,14 @@ class KeyedRelinkTest {
                         ListPlutusData.of(BytesPlutusData.of(new byte[]{1}))))));
         assertEquals(HexUtil.encodeHexString(fresh.serializeToBytes()), hex);
     }
+
+    /** R-F17: a node whose datum repeats a map key is refused before a relink could change its Data. */
+    @Test
+    void aNodeWithARepeatedMapKeyIsNotRelinked() {
+        // Keyed_T(instance, next, linkedAt, Value{ map { 1: 2, 1: 3 } }) as another writer may encode it.
+        String repeated = "d87a9f5820" + "00".repeat(32) + "4000d8799fa2010201" + "03ffff";
+        var e = assertThrows(org.julclang.state.api.RequireException.class, () -> KeyedType.requireRelinkable(repeated, "insert"));
+        assertTrue(e.getMessage().contains("repeated key"), e.getMessage());
+        assertDoesNotThrow(() -> KeyedType.requireRelinkable("d87a9f5820" + "00".repeat(32) + "4000d8799fa2010203" + "03ffff", "insert"));
+    }
 }

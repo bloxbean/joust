@@ -328,6 +328,7 @@ public final class KeyedList<S, R> {
         TxRunner.mint(tx, c.policyId, List.of(new Asset("0x" + HexUtil.encodeHexString(id), BigInteger.ONE)), redeemer);
         // The relinked anchor: next := key, linkedAt := upper; topped up to the ledger minimum if needed (D4b).
         String anchorUnit = unit(anchor.node().key());
+        KeyedType.requireRelinkable(anchor.utxo().getInlineDatum(), what);
         PlutusData relinked = KeyedType.relinked(anchor.node().datum(), key, w.toMs());
         BigInteger anchorLovelace = KeyedObjects.topUp(rt, anchor.lovelace(), c.minUtxoFor(c.address, relinked,
                 List.of(Amount.lovelace(anchor.lovelace()), new Amount(anchorUnit, BigInteger.ONE))), what, "the relinked anchor");

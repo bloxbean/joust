@@ -250,6 +250,7 @@ public final class KeyedObject<S, R> {
                 TxRunner.mint(tx, contract.policyId, List.of(new Asset("0x" + HexUtil.encodeHexString(type.keyId(inst, key)),
                         BigInteger.ONE.negate())), PlutusDataAdapter.convert(type.remove().apply(prev.ref(), own.ref())));
                 String prevUnit = list.unit(prev.node().key());
+                KeyedType.requireRelinkable(prev.utxo().getInlineDatum(), what);
                 PlutusData relinked = KeyedType.relinked(prev.node().datum(), own.node().next(), window.toMs());
                 BigInteger prevLovelace = KeyedObjects.topUp(rt, prev.lovelace(), contract.minUtxoFor(contract.address, relinked,
                         List.of(Amount.lovelace(prev.lovelace()), new Amount(prevUnit, BigInteger.ONE))), what, "the relinked predecessor");
