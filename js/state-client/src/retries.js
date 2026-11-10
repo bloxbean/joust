@@ -16,14 +16,19 @@
 // Every read-modify-write of a wallet's record happens under one lock per network (Web Locks across tabs in a browser,
 // an in-process mutex otherwise), with a revision check in the store (F79, R-F3).
 
+import { slotClockOf, KEYED_LIMITS } from './keyed.js';
+
 const KEY = 'joust.keyed.pending';
+
+/** A record's revision; records written before revisions existed (never released) count as revision 0 (F89). */
+export const revOf = (r) => (Number.isInteger(r?.rev) ? r.rev : 0);
 
 /** A record's revision must be the stored one's next (or 1 for a new record): otherwise another writer moved first. */
 export class RecordConflict extends Error {}
 
-/** A store of records in memory (Node, tests; a new store is a fresh page without IndexedDB). */
-export function memoryRetryStore() {
-  let records = [];
+/** A store of records in memory (Node, tests; a new store is a fresh page without IndexedDB), optionally seeded. */
+export function memoryRetryStore(initial = []) {
+  let records = initial.map((r) => ({ ...r, attempts: r.attempts.map((a) => ({ ...a })) }));
   const copy = (r) => ({ ...r, attempts: r.attempts.map((a) => ({ ...a })) });
   return {
     async all() {
@@ -31,12 +36,12 @@ export function memoryRetryStore() {
     },
     async put(record) {
       const old = records.find((r) => r.id === record.id);
-      if ((old ? old.rev + 1 : 1) !== record.rev) throw new RecordConflict(`record ${record.id}: revision ${record.rev} after ${old?.rev ?? 'none'}`);
+      if ((old ? revOf(old) + 1 : 1) !== record.rev) throw new RecordConflict(`record ${record.id}: revision ${record.rev} after ${old ? revOf(old) : 'none'}`);
       records = [...records.filter((r) => r.id !== record.id), copy(record)];
     },
     async delete(id, rev) {
       const old = records.find((r) => r.id === id);
-      if (old && rev !== undefined && old.rev !== rev) throw new RecordConflict(`record ${id}: deleting revision ${rev}, stored ${old.rev}`);
+      if (old && rev !== undefined && revOf(old) !== rev) throw new RecordConflict(`record ${id}: deleting revision ${rev}, stored ${revOf(old)}`);
       records = records.filter((r) => r.id !== id);
     },
   };
@@ -72,7 +77,7 @@ export function indexedDbRetryStore(name = 'joust') {
       const q = s.get(record.id);
       q.onsuccess = () => {
         const old = q.result;
-        if ((old ? old.rev + 1 : 1) !== record.rev) return fail(new RecordConflict(`record ${record.id}: revision ${record.rev} after ${old?.rev ?? 'none'}`));
+        if ((old ? revOf(old) + 1 : 1) !== record.rev) return fail(new RecordConflict(`record ${record.id}: revision ${record.rev} after ${old ? revOf(old) : 'none'}`));
         s.put(record);
         done();
       };
@@ -80,7 +85,7 @@ export function indexedDbRetryStore(name = 'joust') {
     delete: (id, rev) => run('readwrite', (s, done, fail) => {
       const q = s.get(id);
       q.onsuccess = () => {
-        if (q.result && rev !== undefined && q.result.rev !== rev) return fail(new RecordConflict(`record ${id}: deleting revision ${rev}`));
+        if (q.result && rev !== undefined && revOf(q.result) !== rev) return fail(new RecordConflict(`record ${id}: deleting revision ${rev}`));
         s.delete(id);
         done();
       };
@@ -133,49 +138,59 @@ export function newRecord(wallet, networkId, designated, what) {
   };
 }
 
-/** The margin for the page's own clock: it may run this far ahead of the chain (ms). */
+/**
+ * The margin for the page's own clock: it may run this far ahead of the chain (ms). It is at least what verifyKeyed
+ * accepts between the chain API's tip and the page's clock (R-F8), so a fast clock that a matching lying tip makes look
+ * right cannot end a record early: a page clock more than this margin off is outside the page's trust assumptions.
+ */
 export const CLOCK_SKEW_MS = 30_000;
 
 /**
- * Whether {@code record}'s operation is settled (the page's form of D7, above). {@code clock} is the deployment's
- * slot configuration (the page's own clock); {@code wallet} the wallet's view (its UTxOs count as unspent too).
- * Returns { settled, outcome: 'pending' | 'failed' | 'may have landed' | 'nothing signed', reason }.
+ * Whether {@code record}'s operation is settled (the page's form of D7, above). {@code clock} is the deployment's slot
+ * configuration (the page's own clock), validated as verifyKeyed validates it: an invalid clock, or any slot that is
+ * not finite, keeps the record pending (F87). {@code wallet} is a wallet view read under the lock. The operation
+ * "failed" only when both the wallet and the chain API still show the designated input; otherwise it "may have landed"
+ * (R-F7). Returns { settled, outcome: 'pending' | 'failed' | 'may have landed' | 'nothing signed', reason }.
  */
-export async function settle(record, chain, { clock, wallet, nowMs = Date.now(), settlementSlots = 2, skewMs = CLOCK_SKEW_MS } = {}) {
+export async function settle(record, chain, { clock, wallet, nowMs = Date.now(), settlementSlots = 2, skewMs, maxTipSkewSlots = KEYED_LIMITS.maxTipSkewSlots } = {}) {
   if (!record.attempts.length) return { settled: true, outcome: 'nothing signed', reason: 'no attempt was handed to the wallet' };
-  const lasts = record.attempts.map((a) => (a.validTo === null || a.validTo === undefined ? Infinity : Number(a.validTo)));
+  const pending = (reason) => ({ settled: false, outcome: 'pending', reason });
+  const lasts = record.attempts.map((a) => Number(a.validTo));
+  if (lasts.some((x) => !Number.isFinite(x))) return pending('an attempt without a deadline never expires');
   const last = Math.max(...lasts);
-  let slot = null;
-  try {
-    if (clock && Number(clock.slotLengthMs) > 0) {
-      slot = Number(clock.zeroSlot) + Math.floor((nowMs - skewMs - Number(clock.zeroTimeMs)) / Number(clock.slotLengthMs));
-    }
-  } catch {
-    slot = null;
-  }
-  if (slot === null || !Number.isFinite(last)) {
-    return { settled: false, outcome: 'pending', reason: 'without the page\'s slot clock (or an attempt without a deadline) the record never expires' };
-  }
-  let tip = Infinity;
+  const c = slotClockOf({ slotConfig: clock });
+  if (!c || !Number.isFinite(nowMs)) return pending('without a valid slot clock the record never expires');
+  const margin = BigInt(Math.max(skewMs ?? CLOCK_SKEW_MS, maxTipSkewSlots * Number(c.slotLengthMs)));
+  const slotBig = c.zeroSlot + (BigInt(Math.floor(nowMs)) - margin - c.zeroTimeMs) / c.slotLengthMs;
+  const slot = Number(slotBig);
+  if (!Number.isFinite(slot)) return pending('the page\'s clock gives no finite slot');
+  let tip;
   try {
     tip = Number(await chain.tip());
   } catch {
-    tip = Infinity;   // the page's clock alone; the chain API's tip may only delay expiry
+    tip = slot;   // the page's clock alone; the chain API's tip may only delay expiry
   }
-  const now = Math.min(slot, Number.isFinite(tip) ? tip : slot);
+  const now = Number.isFinite(tip) ? Math.min(slot, tip) : slot;
   if (now <= last + settlementSlots) {
-    return { settled: false, outcome: 'pending', reason: `attempts ${record.attempts.map((a) => a.txHash).join(', ')} may still land (until slot ${last})` };
+    return pending(`attempts ${record.attempts.map((a) => a.txHash).join(', ')} may still land (until slot ${last})`);
   }
-  let unspent = !!wallet?.utxos?.has(record.designated);
+  let inWallet = !!wallet?.utxos?.has(record.designated);
+  let atProvider = false;
   try {
-    unspent = unspent || (await chain.utxosAt(record.address)).some((u) => u.ref === record.designated);
+    atProvider = (await chain.utxosAt(record.address)).some((u) => u.ref === record.designated);
   } catch {
-    // unknown: report it as possibly landed, the cautious answer
+    atProvider = false;   // unknown: the cautious answer
   }
-  return unspent
-    ? { settled: true, outcome: 'failed', reason: 'every attempt\'s window has passed with the designated input unspent' }
-    : { settled: true, outcome: 'may have landed', reason: 'every attempt\'s window has passed and the designated input is gone' };
+  return inWallet && atProvider
+    ? { settled: true, outcome: 'failed', reason: 'every attempt\'s window has passed, and the wallet and the chain API both still show the designated input' }
+    : { settled: true, outcome: 'may have landed', reason: 'every attempt\'s window has passed and the designated input is gone (by the wallet or the chain API)' };
 }
+
+/** Thrown when a keyed call would wait for the network's lock held by a call of this page that is in review (F88). */
+export class KeyedCallInReview extends Error {}
+
+/** Calls of this page in review, by network: an abandon during review is recorded here, not queued behind the lock. */
+export const reviewing = new Map();
 
 /** Thrown while a keyed operation of the wallet may still land: retry the same call, or abandon it explicitly. */
 export class PendingKeyedOperation extends Error {
