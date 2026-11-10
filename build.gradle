@@ -97,7 +97,13 @@ subprojects {
     }
 
     tasks.withType(Test).configureEach {
-        useJUnitPlatform()
+        useJUnitPlatform {
+            // CI splits the build (.github/workflows/build.yml): -PnoDevnet runs every test but the DevKit ones
+            // (@Tag("devnet")), -PdevnetOnly runs only those. Without either, everything runs and DevKit tests skip
+            // themselves when DevKit is not reachable.
+            if (rootProject.hasProperty('noDevnet')) excludeTags 'devnet'
+            if (rootProject.hasProperty('devnetOnly')) includeTags 'devnet'
+        }
         jvmArgs '--enable-native-access=ALL-UNNAMED'
         maxHeapSize = '1g'
         // MerkleMap mirrors in memory for tests (ADR-0015 §13.12 M3: applications default to RocksDB).
