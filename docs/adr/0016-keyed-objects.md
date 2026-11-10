@@ -1609,8 +1609,9 @@ unchanged; the deviations below are the conservative readings chosen where the t
   - *Abandon and acknowledge.* Both check the slot at entry, as a call does (F95). Outside a call, `abandonKeyed`
     deletes the wallet's record or tombstone (the explicit way to drop a live operation), and `acknowledgeKeyed`
     deletes only a tombstone, refusing a live operation (R-F16). During the review of that wallet's own call, an
-    `abandonKeyed` made through a client whose store holds the reviewing call's record (checked before anything is
-    marked; F97) is recorded for that call, which then deletes its record under its revision, signed attempts
+    `abandonKeyed` made through a client whose store is over the same storage as the reviewing call's (its scope: each
+    memory store is its own, a seeded copy included; IndexedDB stores over one database share one) and holds that
+    call's record (both checked before anything is marked; F97, F98) is recorded for that call, which then deletes its record under its revision, signed attempts
     included, with the warning that an earlier signature may still land, whether the review callback returns or
     throws (F93, R-F13). Any rejection from the review, a falsy one included, refuses the call (F96). Anything else
     while a call is in flight is refused at once.
@@ -1626,9 +1627,13 @@ unchanged; the deviations below are the conservative readings chosen where the t
   longer `next`, `linkedAt`'s and the lovelace's widths over its authenticated input, and each allowance is capped at
   10 ADA (`maxTopUp`, as the JVM's `topUpAllowance`).
 - *Relinks re-encode the node's datum canonically* (round 3, F94): a node may be written in any encoding of its Data,
-  except one whose value holds a Plutus map with a repeated key. cardano-client-lib keeps one entry per key, so a
-  relink would change the Data; the runtime refuses to relink such a node (R-F17), which blocks inserts and removals
-  next to it. Contracts whose keyed values hold maps must keep their keys unique; a lint is a follow-up.
+  except one whose value holds a Plutus map that cardano-client-lib would change: a repeated key (it keeps one entry
+  per key; R-F17) or keys out of canonical order (it writes maps in canonical key order: shorter encoded key first,
+  then bytewise; F99). A relink would then change the Data, which the page and the validator refuse. Before building,
+  the runtime relinks the datum as it would and compares every other field with the original (decoded keeping each
+  entry in order), and refuses with a clear message instead of a failed script evaluation. Such a node blocks inserts
+  and removals next to it. Contracts whose keyed values hold maps must keep their keys unique and in canonical order;
+  a lint, or a relink that keeps the entries as written (cardano-client-lib), is a follow-up.
 - *Without transaction CBOR* (DevKit's Yaci Store), a service that lies in `Ctx` together with the provider is not
   detected by the page: the node's value is then bound to the lie, the validator refuses the transaction on chain
   (collateral at risk, bounded by `maxCollateral`), and nothing moves. This is D11's binding rule as written.
@@ -1753,6 +1758,14 @@ Each repro was run before and after the fix.
 | F95 (P1) | The slot was taken only after the wallet's reads: a call invoked while another was confirming, its wallet read slow, found the slot free and the record gone, and started a new operation (Codex's probe: `a0` then `a3`, two signatures) | The slot is reserved synchronously at the call's entry, before any await, and the cross-tab lock before the wallet's reads; abandon and acknowledge check it at entry too. After: the late call is refused at once, one signature | `S/src/retries.js` (`exclusiveKeyed`), `S/src/client.js`; `keyed-retries.test.js` |
 | R-F16 | `acknowledgeKeyed` also deleted a live record (`acknowledge-live.mjs`: two signed attempts, `a0` then `a1`) | It removes only a tombstone and refuses a live operation; `abandonKeyed` drops one explicitly. After: refused, the record kept | `S/src/client.js`; `keyed-retries.test.js` |
 | F96 | A falsy rejection from `onReview` (`null`, `undefined`, `false`, `0`, `''`) counted as approval and was signed | Any rejection refuses the call and is rethrown | `S/src/client.js`; `keyed-retries.test.js` (each value, fresh and retried) |
-| F97 | An abandon during review matched the wallet, not the store: another client's abandon cancelled the reviewing call's operation and left its own | The requesting client's store must hold the reviewing call's record, checked before anything is marked | `S/src/client.js`; `keyed-retries.test.js` (two stores, one wallet) |
-| R-F17 (P3) | A node whose value holds a Plutus map with a repeated key cannot be relinked through cardano-client-lib (it keeps one entry per key, so the Data would change) | The runtime refuses to relink such a node, with a clear message (checked with JuLC's decoder, which keeps every entry). "Whatever encoding the node's writer chose" excludes repeated map keys; a contract lint against maps in keyed values is a follow-up | `R/KeyedType.java` (`requireRelinkable`), `R/KeyedList.java`, `R/KeyedObject.java`; `KeyedRelinkTest` |
+| F97 | An abandon during review matched the wallet, not the store: another client's abandon cancelled the reviewing call's operation and left its own | The requesting client's store must hold the reviewing call's record, checked before anything is marked (by record id; round 5 adds the storage scope, F98) | `S/src/client.js`; `keyed-retries.test.js` (two stores, one wallet) |
+| R-F17 (P3) | A node whose value holds a Plutus map with a repeated key cannot be relinked through cardano-client-lib (it keeps one entry per key, so the Data would change) | The runtime refuses to relink such a node, with a clear message (checked with JuLC's decoder, which keeps every entry). "Whatever encoding the node's writer chose" excludes repeated map keys (and, round 5, keys out of canonical order: F99); a contract lint against maps in keyed values is a follow-up | `R/KeyedType.java` (`requireRelinkable`), `R/KeyedList.java`, `R/KeyedObject.java`; `KeyedRelinkTest` |
+
+**Round 5.** Codex's re-review of `b9f712f..874bd41` (F98, F99): F95, F96 and R-F16 fixed; F97 and R-F17 partly. Each
+repro was run before and after the fix, and the new tests fail on the round-4 code.
+
+| ID | Finding | What changed | Where |
+|---|---|---|---|
+| F98 (P2, F97's rest) | An abandon during review applied through any store holding a record with the reviewing call's id: a client over a seeded copy of the records (`memoryRetryStore(await A.all())`) cancelled A's signed operation and kept its own copy (Codex: `A remaining: 0 B remaining: 1`) | Each store has a scope (every memory store its own; IndexedDB stores by database, so wrappers over one database share one; a store without one is its own). The flight records its store's scope; an abandon applies only through a store of that scope holding the record. After: the copy's abandon is refused and A goes on; through a second wrapper over the same storage it applies | `S/src/retries.js` (`scopeOf`), `S/src/client.js`; `keyed-retries.test.js` (a seeded copy; two wrappers over one store; scopes) |
+| F99 (P3, R-F17's rest) | A neighbour whose map keys are unique but out of canonical order could not be relinked: cardano-client-lib writes maps in canonical key order, so the relink changed the Data and the build failed in script evaluation (`f99-repro/map-order.mjs` on the recorded removal `020-release`: reversed keys `Script evaluation failed for Mint[0]`) | The runtime's guard relinks the datum as it would and compares every field but `next` and `linkedAt` with the original (JuLC's decoder keeps each entry in order), refusing a repeated key or an order change with a clear message before building. Keeping the order would need cardano-client-lib to write maps as given; documented with the repeated-key limit. After: reversed refused with the message, duplicates as before, sorted keys built | `R/KeyedType.java` (`requireRelinkable`); `KeyedRelinkTest` (reversed, length-first and nested maps refused; sorted, empty and nested sorted accepted) |
 
