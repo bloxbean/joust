@@ -697,6 +697,19 @@ test('Registry: keyed objects (ADR-0016 M3): heads, inserts, keyed actions, a re
   await name.call(ann, 'withdraw', { amount: ADA });
   assert.equal((await name.read()).value.stake, 6n * ADA);
 
+  // Each tampering's own reason (F85): the verifier rule that refuses it.
+  const EXPECTED = {
+    'an extra output to an attacker': /others receive|loses/,
+    'the collateral return to an attacker': /collateral return goes elsewhere/,
+    'another call': /redeemer/,
+    'a stake delegation certificate': /certificates/,
+    'is_valid = false': /is_valid/,
+    'an extra required signer': /required signer/,
+    'a validity interval of days': /validity interval/,
+    'phishing metadata': /auxiliary data/,
+    'a foreign mint': /mint/,
+    'an inflated fee': /fee|balance|loses/,
+  };
   // I5: every tampering of an engine-built keyed action is refused by the page's verifier before the wallet is asked.
   // The hostile service describes its tampered transaction with a matching plan (F85), so the plan check plays no part.
   let refused = 0;
@@ -713,7 +726,8 @@ test('Registry: keyed objects (ADR-0016 M3): heads, inserts, keyed actions, a re
     let asked = false;
     const watched = { ...ann, signTx: (...x) => { asked = true; return ann.signTx(...x); } };
     await assert.rejects(k.at(inst.id).keyed('Entry').object(NAME).call(watched, 'upgrade', { tier: 3n }, { lovelace: ADA }),
-      (e) => e instanceof VerificationError && !e.problems.some((x) => /plan does not describe/.test(x)), `tampering ${i} (${what})`);
+      (e) => e instanceof VerificationError && !e.problems.some((x) => /plan does not describe/.test(x))
+        && (!EXPECTED[what] || e.problems.some((x) => EXPECTED[what].test(x))), `tampering ${i} (${what})`);
     assert.equal(asked, false, `tampering ${i} reached the wallet`);
     refused++;
   }
