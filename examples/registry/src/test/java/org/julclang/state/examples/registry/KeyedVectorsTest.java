@@ -84,4 +84,30 @@ class KeyedVectorsTest {
         System.out.println("[vectors] " + checked + " ordered pairs agree on chain (the registry validator)");
         assertEquals(10, checked);
     }
+
+    /** R-G6: the other comparison of D4a.2, {@code key < A.next}, on the same pairs (the head as the anchor). */
+    @Test
+    void theNextComparisonAgreesOnChain() throws Exception {
+        byte[] alice = PARTIES.get(0);
+        int checked = 0;
+        for (JsonNode o : vectors().get("order")) {
+            String lo = o.get(0).asText(), hi = o.get(1).asText();
+            if (o.get(2).asInt() != -1 || lo.isEmpty()) continue;
+            // head -> hi: lo goes after the head (lo < head.next = hi), accepted.
+            var w = new RegistryWorld();
+            byte[] inst = w.createInstance();
+            w.accept(w.claim(inst, alice, HEX.parseHex(hi), ada(2)));
+            w.anchoredAt(inst, RegistryWorld.Kind.ENTRY, new byte[0]);
+            w.accept(w.claim(inst, alice, HEX.parseHex(lo), ada(2)));
+            // head -> lo: hi cannot go after the head (hi < head.next = lo fails), refused by the policy.
+            var v = new RegistryWorld();
+            byte[] inst2 = v.createInstance();
+            v.accept(v.claim(inst2, alice, HEX.parseHex(lo), ada(2)));
+            v.anchoredAt(inst2, RegistryWorld.Kind.ENTRY, new byte[0]);
+            var b = v.claim(inst2, alice, HEX.parseHex(hi), ada(2));
+            v.rejectBy(b, b.tx, hi + " after the head, before " + lo, v.mintLabel());
+            checked++;
+        }
+        assertEquals(9, checked);
+    }
 }

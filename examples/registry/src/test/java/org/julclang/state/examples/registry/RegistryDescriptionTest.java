@@ -98,6 +98,45 @@ class RegistryDescriptionTest {
     }
 
     /**
+     * R-G7: each described constructor's fields, in order, are the validator's record components (list datums, inserts,
+     * the removal, Link): a wrong order or arity would fail here, not only on DevKit.
+     */
+    @Test
+    void describedConstructorsHaveTheValidatorsFields() throws Exception {
+        JsonNode defs = description().get("definitions");
+        String v = "org.julclang.state.examples.registry.RegistryValidator.";
+        int checked = 0;
+        var names = new java.util.TreeMap<String, Class<?>>();
+        for (var c : RegistryValidator.Holding.class.getPermittedSubclasses()) names.put(v + c.getSimpleName(), c);
+        for (var e : names.entrySet()) {
+            JsonNode alt = defs.get(e.getKey()).get("anyOf").get(0);
+            assertFields(e.getValue(), alt);
+            checked++;
+        }
+        for (String list : List.of("Lifecycle", "Calls")) {
+            Class<?> sealed = list.equals("Lifecycle") ? RegistryValidator.Lifecycle.class : RegistryValidator.Calls.class;
+            for (JsonNode alt : defs.get(v + list).get("anyOf")) {
+                for (Class<?> c : sealed.getPermittedSubclasses()) {
+                    if (c.getSimpleName().equals(alt.get("title").asText())) {
+                        assertFields(c, alt);
+                        checked++;
+                    }
+                }
+            }
+        }
+        assertTrue(checked >= 6 + 6 + 9, "every list datum, every Lifecycle and Calls constructor: " + checked);
+    }
+
+    static void assertFields(Class<?> record, JsonNode alt) {
+        var want = new ArrayList<String>();
+        for (var rc : record.getRecordComponents()) want.add(rc.getName());
+        var got = new ArrayList<String>();
+        alt.get("fields").forEach(f -> got.add(f.get("title").asText()));
+        assertEquals(want, got, record.getSimpleName());
+        assertEquals(indexIn(record.getInterfaces()[0], record.getSimpleName()), alt.get("index").asInt(), record.getSimpleName());
+    }
+
+    /**
      * The page verifier's unit tests (js/state-client/test/keyed.test.js) run on a copy of this description: it must be
      * the generated one (regenerate the copy with the command in the message).
      */
