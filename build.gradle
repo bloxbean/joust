@@ -85,6 +85,11 @@ subprojects {
             url "https://repo.bloxbean.org/maven/snapshots"
             mavenContent { snapshotsOnly() }
         }
+        // BloxBean Maven repository: releases and release candidates of BloxBean projects (release-ops docs/12).
+        maven {
+            url "https://repo.bloxbean.org/maven/releases"
+            mavenContent { releasesOnly() }
+        }
     }
 
     java {

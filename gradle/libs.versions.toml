@@ -1,7 +1,7 @@
 [versions]
-# JuLC main at 71b3a735 (includes bloxbean/julc#311 and #313), published to the BloxBean snapshot repository
-# (https://repo.bloxbean.org/maven/snapshots; bloxbean/julc Actions run 42607888567).
-julc = "0.1.0-pre21-71b3a73-SNAPSHOT"
+# JuLC 0.1.0-pre21-rc1 (tag v0.1.0-pre21-rc1, main at 5483ecbc; includes bloxbean/julc#311 and #313), published to
+# the BloxBean release repository (https://repo.bloxbean.org/maven/releases; bloxbean/julc Actions run 42731736289).
+julc = "0.1.0-pre21-rc1"
 cardano-client-lib = "0.8.0-pre7"
 junit = "5.11.4"
 bouncycastle = "1.83"

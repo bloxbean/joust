@@ -3,9 +3,11 @@
 #   devkit.sh start   start a new devnet with Yaci Store in the background (log: $RUNNER_TEMP/yaci-devkit.log)
 #   devkit.sh wait    wait until it is ready; if it is not, restart it once and wait again
 #   devkit.sh monitor log the node's and Yaci Store's block heights every 15 s (in the background, until the job ends)
-# Ready means the admin API answers and Yaci Store follows the chain: its latest block height advances. Once in
-# three CI runs Yaci Store stayed at an early height after DevKit's bootstrap while the node went on producing
-# blocks ("Yaci Store did not reach chain tip within 60s. Proceeding anyway"): every test's top-up then timed out.
+# Ready means the admin API answers and Yaci Store follows the chain: its latest block height advances and is within
+# a few blocks of the node's (Ogmios). Once in three CI runs Yaci Store stayed at an early height after DevKit's
+# bootstrap while the node went on producing blocks ("Yaci Store did not reach chain tip within 60s. Proceeding
+# anyway"): every test's top-up then timed out. Advancing alone is not enough: in bloxbean/joust#37 Yaci Store moved
+# from 10 to 11 once, passed, and stayed at 11 while the node reached 200.
 set -euo pipefail
 
 LOG="${RUNNER_TEMP:-/tmp}/yaci-devkit.log"
@@ -27,14 +29,16 @@ node_height() {
     http://localhost:1337 | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"])' 2>/dev/null || echo -1
 }
 
-# Up to $1 seconds: the admin API answers, and Yaci Store's height advances over 10 s (~10 blocks at 1 s).
+# Up to $1 seconds: the admin API answers, Yaci Store's height advances over 10 s (~10 blocks at 1 s), and it is at
+# most MAX_LAG blocks behind the node.
+MAX_LAG=5
 ready_within() {
-  local deadline=$((SECONDS + $1)) h1 h2
+  local deadline=$((SECONDS + $1)) h1 h2 n
   while ((SECONDS < deadline)); do
     if curl -sf -m 5 -o /dev/null http://localhost:10000/local-cluster/api/admin/devnet; then
-      h1=$(store_height); sleep 10; h2=$(store_height)
-      echo "Yaci Store height: $h1 -> $h2"
-      if ((h1 >= 0 && h2 > h1)); then return 0; fi
+      h1=$(store_height); sleep 10; h2=$(store_height); n=$(node_height)
+      echo "Yaci Store height: $h1 -> $h2 (node $n)"
+      if ((h1 >= 0 && h2 > h1 && n >= 0 && n - h2 <= MAX_LAG)); then return 0; fi
     else
       sleep 5
     fi

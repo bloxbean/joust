@@ -52,6 +52,8 @@ jobs:
 
       - name: Resolve version and whether to tag
         id: v
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -73,8 +75,18 @@ jobs:
             echo "::error::Version '$VERSION' is not a valid release version." >&2
             exit 1
           fi
-          # Ask the remote, not the checkout, so the answer can't be stale.
-          if existing=$(git ls-remote --exit-code --tags origin "refs/tags/v$VERSION"); then
+          # Ask the remote, not the checkout, so the answer can't be stale. Authenticated with this job's read-only token:
+          # this repository is private, so an anonymous ls-remote fails, and that must not read as "missing" (it did:
+          # tag-release run 42659247526). Exit 2 means no such tag; any other failure stops the run.
+          AUTH=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          rc=0
+          existing=$(git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+            ls-remote --exit-code --tags origin "refs/tags/v$VERSION") || rc=$?
+          if [[ $rc -ne 0 && $rc -ne 2 ]]; then
+            echo "::error::Could not ask the remote whether v$VERSION exists (git ls-remote exit $rc)." >&2
+            exit 1
+          fi
+          if [[ $rc -eq 0 ]]; then
             echo "::notice::Tag v$VERSION already exists (${existing%%[[:space:]]*}) - nothing to do."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -127,10 +139,22 @@ jobs:
         id: recheck
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          if existing=$(git ls-remote --exit-code --tags origin "refs/tags/v$VERSION"); then
+          # Ask the remote, not the checkout, so the answer can't be stale. Authenticated with this job's read-only token:
+          # this repository is private, so an anonymous ls-remote fails, and that must not read as "missing" (it did:
+          # tag-release run 42659247526). Exit 2 means no such tag; any other failure stops the run.
+          AUTH=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          rc=0
+          existing=$(git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+            ls-remote --exit-code --tags origin "refs/tags/v$VERSION") || rc=$?
+          if [[ $rc -ne 0 && $rc -ne 2 ]]; then
+            echo "::error::Could not ask the remote whether v$VERSION exists (git ls-remote exit $rc)." >&2
+            exit 1
+          fi
+          if [[ $rc -eq 0 ]]; then
             echo "::notice::Tag v$VERSION was created meanwhile (${existing%%[[:space:]]*}) - nothing to do."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
