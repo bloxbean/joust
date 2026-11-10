@@ -1595,7 +1595,10 @@ unchanged; the deviations below are the conservative readings chosen where the t
     bound to the record.)
   - *One keyed call in flight per network, never queued* (round 3: F90, F92). A keyed call that starts while another
     is in flight on the network, in the page or in another tab of its origin (Web Locks, `ifAvailable`), is refused at
-    once (`KeyedCallInProgress`). So every call starts after the previous one's outcome was delivered: a retry cannot
+    once (`KeyedCallInProgress`). The slot is reserved synchronously at the call's entry, before any await (the
+    wallet's and co-signers' reads), and the cross-tab lock is taken before those reads too (round 4, F95: a call
+    still reading its wallet could otherwise outlast another's confirmation and start a new operation). So every call
+    starts after the previous one's outcome was delivered: a retry cannot
     be bound, while it waits, to an operation that ends before it runs (a queued retry could otherwise find the record
     gone and designate a new input), and a review cannot wait for a call queued behind its own (round 2's queueing lock
     and review guard are replaced by this rule). The call holds its slot through its whole lifecycle (record, prepare,
@@ -1603,10 +1606,14 @@ unchanged; the deviations below are the conservative readings chosen where the t
     matched by any overlap of its key hashes, which two views of one wallet need not share in full (R-F9: the cost is
     that one page runs one keyed call at a time). Stores refuse a stale revision (a record written before revisions
     existed, never released, counts as revision 0; F89).
-  - *Abandon.* Outside a call, `abandonKeyed` deletes the wallet's record or tombstone. During the review of that
-    wallet's own call it is recorded for the reviewing call, which then deletes its record under its revision, signed
-    attempts included, with the warning that an earlier signature may still land, whether the review callback returns
-    or throws (F93, R-F13); for another wallet, or while a call is not in review, it is refused at once.
+  - *Abandon and acknowledge.* Both check the slot at entry, as a call does (F95). Outside a call, `abandonKeyed`
+    deletes the wallet's record or tombstone (the explicit way to drop a live operation), and `acknowledgeKeyed`
+    deletes only a tombstone, refusing a live operation (R-F16). During the review of that wallet's own call, an
+    `abandonKeyed` made through a client whose store holds the reviewing call's record (checked before anything is
+    marked; F97) is recorded for that call, which then deletes its record under its revision, signed attempts
+    included, with the warning that an earlier signature may still land, whether the review callback returns or
+    throws (F93, R-F13). Any rejection from the review, a falsy one included, refuses the call (F96). Anything else
+    while a call is in flight is refused at once.
   One record per wallet (its key hashes) and network, so any keyed call of that wallet is a retry of the pending
   operation until it ends. Retries are the application's calls; only the cooldown wait is automatic.
 - *Synthetic tamper transactions.* The registry has no payable removal and no beneficiary-paying action, DevKit cannot
@@ -1618,6 +1625,10 @@ unchanged; the deviations below are the conservative readings chosen where the t
   in the ledger's own encoding (re-encoded by the page and compared byte for byte), a relink may grow only by the
   longer `next`, `linkedAt`'s and the lovelace's widths over its authenticated input, and each allowance is capped at
   10 ADA (`maxTopUp`, as the JVM's `topUpAllowance`).
+- *Relinks re-encode the node's datum canonically* (round 3, F94): a node may be written in any encoding of its Data,
+  except one whose value holds a Plutus map with a repeated key. cardano-client-lib keeps one entry per key, so a
+  relink would change the Data; the runtime refuses to relink such a node (R-F17), which blocks inserts and removals
+  next to it. Contracts whose keyed values hold maps must keep their keys unique; a lint is a follow-up.
 - *Without transaction CBOR* (DevKit's Yaci Store), a service that lies in `Ctx` together with the provider is not
   detected by the page: the node's value is then bound to the lie, the validator refuses the transaction on chain
   (collateral at risk, bounded by `maxCollateral`), and nothing moves. This is D11's binding rule as written.
@@ -1649,21 +1660,17 @@ collided in this run (three transactions). The JS suites pass: `js/state-client`
 (25, one skipped for want of a Blockfrost preview key; 20 min, the registry's flow about 200 s of it) and `js/joust`
 (4, the template page in Chromium included; 3 min).
 
-### Open questions after M3
+### Decisions after M3 (the maintainer, 2026-11-10)
 
-For the maintainer; each is recorded, not decided.
-- **One pending keyed operation per wallet in a page.** The record is per wallet and network, so while one operation
-  may still land, every keyed call of that wallet is its retry (or needs an explicit abandon). Records per operation
-  (each with its own designated input, as the JVM does per thread) would let a page run several at once, at the cost of
-  telling the user which pending operation a call retries. *Lean:* keep one until a page needs more.
-- **"Settled because the designated input is spent" does not say which attempt landed.** Without a transaction lookup
-  every provider offers (Ogmios has none), the page reports the operation settled and asks the user to check before
-  calling again, instead of claiming success. *Lean:* look the attempts up where the provider can (Blockfrost-style
-  `/txs/{hash}`), and keep the report elsewhere.
-- **The page's cap on `coinsPerUTxOByte`** (20,000, about 4.6 times mainnet's) bounds what a lying provider can cost
-  through allowances; a governance raise beyond it would make the page refuse keyed calls until the cap is raised.
-- **`x-joust.keyed` changed shape** (M1 listed names; M3 lists objects) within description version 2. No released
-  client read it; the described dispatcher ignores the old shape. *Lean:* keep version 2.
+The four open questions recorded after M3 were decided:
+- **One pending keyed operation per wallet in a page: kept.** A per-operation identity may come later, if an
+  application needs parallel keyed calls.
+- **`coinsPerUTxOByte`: both bounds kept,** the page's configurable per-byte cap (20,000) and the 10 ADA cap on each
+  allowance.
+- **`x-joust.keyed`'s shape change: the description stays version 2.**
+- **Ending a record on confirmation (`awaitTx` success): kept.** A second-source lookup by transaction hash, where the
+  provider offers one, is a follow-up; the same follow-up would tell which attempt landed. Until then a settled
+  operation whose input is gone is reported as "may have landed: check".
 
 ### Review of M3
 
@@ -1737,4 +1744,15 @@ Each repro was run before and after the fix.
 | R-F12 | Without transaction CBOR, the chain API's datum bytes set the relink allowance (`padded-provider.mjs 3000 nocbor`: accepted, 10 ADA) | Allowances and the growth bound from canonical bytes only. After: refused with and without CBOR | `S/src/keyed.js` |
 | F91, R-F15 | Settlement ignored a page's own `maxTipSkewSlots` | One set of effective limits for verification and settlement | `S/src/client.js`; `keyed-retries.test.js` (300 slots through the client; 100 ms slots directly) |
 | R-F14 | `validTo: null` counted as slot 0 (`settle-null.mjs`: "may have landed") | Unknown deadline, pending | `S/src/retries.js` |
+
+**Round 4.** Re-reviews of `dfbedb5..b9f712f`: Codex (F95–F97; 7 earlier findings fixed, 3 partly) and the page reviewer
+(R-F16, R-F17). One P1 (F95). Each repro was run before and after the fix, and the new tests fail on the round-3 code.
+
+| ID | Finding | What changed | Where |
+|---|---|---|---|
+| F95 (P1) | The slot was taken only after the wallet's reads: a call invoked while another was confirming, its wallet read slow, found the slot free and the record gone, and started a new operation (Codex's probe: `a0` then `a3`, two signatures) | The slot is reserved synchronously at the call's entry, before any await, and the cross-tab lock before the wallet's reads; abandon and acknowledge check it at entry too. After: the late call is refused at once, one signature | `S/src/retries.js` (`exclusiveKeyed`), `S/src/client.js`; `keyed-retries.test.js` |
+| R-F16 | `acknowledgeKeyed` also deleted a live record (`acknowledge-live.mjs`: two signed attempts, `a0` then `a1`) | It removes only a tombstone and refuses a live operation; `abandonKeyed` drops one explicitly. After: refused, the record kept | `S/src/client.js`; `keyed-retries.test.js` |
+| F96 | A falsy rejection from `onReview` (`null`, `undefined`, `false`, `0`, `''`) counted as approval and was signed | Any rejection refuses the call and is rethrown | `S/src/client.js`; `keyed-retries.test.js` (each value, fresh and retried) |
+| F97 | An abandon during review matched the wallet, not the store: another client's abandon cancelled the reviewing call's operation and left its own | The requesting client's store must hold the reviewing call's record, checked before anything is marked | `S/src/client.js`; `keyed-retries.test.js` (two stores, one wallet) |
+| R-F17 (P3) | A node whose value holds a Plutus map with a repeated key cannot be relinked through cardano-client-lib (it keeps one entry per key, so the Data would change) | The runtime refuses to relink such a node, with a clear message (checked with JuLC's decoder, which keeps every entry). "Whatever encoding the node's writer chose" excludes repeated map keys; a contract lint against maps in keyed values is a follow-up | `R/KeyedType.java` (`requireRelinkable`), `R/KeyedList.java`, `R/KeyedObject.java`; `KeyedRelinkTest` |
 
