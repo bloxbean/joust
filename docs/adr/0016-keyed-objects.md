@@ -1681,3 +1681,9 @@ is fixed in the commits after `bb20acd`, unless the row says otherwise. `S/` is 
 | R-G11 | The description put `Link` before the batch redeemers | `Link` follows them, as in the validator (D1 refuses the combination anyway) | `DescriptionWriter.java` |
 
 Disputed: none. Reviewer F's R-F3 is graded P3 and Codex's F79 P1 for the same race; it is fixed as a P1.
+
+After the review's changes, `./gradlew build --continue` with DevKit up passes (47 min; 509 test cases; the same three
+skip), the baseline (123 files) is byte-identical, `EngineFixturesTest` replays all 214 engine fixtures byte for byte
+(the engine's request handling changed only in refusals), `fixtures/m0` is unchanged, and the JS suites pass:
+`js/state-client` 29, `js/joust-runtime` 26 (one skipped, a Blockfrost preview key) and `js/joust` 4 (the template page
+in Chromium included).
