@@ -256,6 +256,14 @@ public final class JoustServer {
         ServedContract c = served(text(req, "contract"));
         String kind = text(req, "kind");
         JsonNode meta = c.meta(kind, text(req, "method"));
+        // ADR-0016 D11: a keyed contract's creation (its heads) is a keyed call; this service designates no input for a
+        // page, so the engine prepares it (R-G1).
+        for (JsonNode k : c.x.path("keyed")) {
+            if (k.isObject() && kind.equals("init")) {
+                throw new Request.Bad(c.x.path("contract").asText() + " has keyed types: its creation is prepared by the engine"
+                        + " with the page's designated input (ADR-0016 D11), not by this service");
+            }
+        }
         String address = text(req, "address");
         WalletAccount wallet;
         try {

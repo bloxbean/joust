@@ -54,7 +54,10 @@ export function joustRuntime(o) {
       for (const r of d.referenceScripts ?? []) want.push(['output', r]);
       want.push(['script', d.policy]);
       if (c.instance) want.push(['assetUtxos', `${d.address}|${d.policy}${c.instance}`]);
-      if (c.object) want.push(['assetUtxos', `${d.address}|${d.policy}${c.object}`]);
+      // An insert or a removal lists the state address (D7: its neighbour is found by key); a keyed call's object is a
+      // key, looked up by its unit by the engine.
+      if (c.kind === 'keyedInit' || c.kind === 'keyedRemove') want.push(['utxos', d.address]);
+      else if (c.object && !String(c.kind).startsWith('keyed')) want.push(['assetUtxos', `${d.address}|${d.policy}${c.object}`]);
     }
     const seen = new Set();
     await Promise.all(want.filter(([k, key]) => !seen.has(k + key) && seen.add(k + key))
@@ -64,7 +67,7 @@ export function joustRuntime(o) {
   // The instance and object tokens a call touches: their chain history rebuilds a missing map (ADR-0015 §13.12 M4).
   const unitsOf = (call) => (call.calls ?? [call]).flatMap((c) => {
     const d = deploymentOf(c.contract);
-    return d ? [c.instance, c.object].filter(Boolean).map((id) => d.policy + id) : [];
+    return d ? [c.instance, String(c.kind).startsWith('keyed') ? null : c.object].filter(Boolean).map((id) => d.policy + id) : [];
   });
   const engine = engineService({ api, contracts: o.contracts, clock: o.clock, networkId: o.networkId ?? 0, ttlMs: o.ttlMs,
     prefetch: o.prefetch === false ? undefined : prefetch, mapStore: o.mapStore, mapMirror: o.mapMirror, unitsOf, record: o.record,
@@ -76,6 +79,7 @@ export function joustRuntime(o) {
     }
     return null;
   };
+  const keyedDesc = (d) => (d?.['x-joust']?.keyed ?? []).some((k) => typeof k === 'object');
   const usesMaps = (d) => Object.values(d?.definitions ?? {}).some((def) => (def.anyOf ?? [])
     .some((alt) => (alt.fields ?? []).some((f) => f.$ref?.endsWith('/org.julclang.state.api.MerkleMap'))));
   // Each request carries its deployment's pinned reference scripts: the engine reads them by reference instead of
@@ -194,6 +198,8 @@ export function joustRuntime(o) {
         .some((a) => a.returns?.sends || a.returns?.deposits || a.policies?.receives)) {
         d.outputVerifier = await ensureVerifier('joust:outputVerifier', wallet, payer);
       }
+      // A keyed contract's page binds its calls' windows to the slot clock (ADR-0016 F80): the deployment pins it.
+      if (keyedDesc(desc) && o.clock) d.slotConfig = { ...o.clock };
       deployments[d.contract] = d;
       return d;
     },
@@ -210,7 +216,8 @@ export function joustRuntime(o) {
     options(contract, extra = {}) {
       const d = deploymentOf(contract);
       if (!d) throw new Error(`no deployment of ${contract}: run joust deploy (or pass deployments)`);
-      return { service, chain, deployment: d, ...extra };
+      const keyedClock = !d.slotConfig && o.clock && keyedDesc(descriptionOf(d.contract));
+      return { service, chain, deployment: keyedClock ? { ...d, slotConfig: { ...o.clock } } : d, ...extra };
     },
   };
 }

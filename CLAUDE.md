@@ -152,6 +152,14 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). The
   toolchain reads javac's model through JuLC's scoped query `JavacFrontend.attribute(roots, pool, query)` (bloxbean/julc#313):
   use the model only inside the query, on the calling thread, and return plain values (no Element, TypeMirror or Tree).
+- ADR-0016 M3 (keyed objects in pages): descriptions carry `x-joust.keyed` (tags, typeId, bounds, Link/Remove_T) and
+  keyed call kinds (`keyedInit`/`keyedAction`/`keyedRemove`/`keyedRetire`); `verifyPrepared` hands them to
+  `verifyKeyed` (js/state-client/src/keyed.js). A wallet's keyed call is prepared only with `Compose.designate(ref)`
+  (the page's designated input, recorded in `retries.js` before the first attempt; IndexedDB in browsers) and never
+  composed; a page never queues keyed calls (a second one in flight is refused). An engine cannot wait for a cooldown: it refuses with "prepare again at slot N" and the client waits. A
+  link window may start ahead (within maxStartSlots): submit at its start. DevKit's Yaci Store serves no transaction
+  CBOR, so pages there bind keyed inputs by Ctx or the balance equation. `js/state-client/test/fixtures/
+  registry.description.json` is a copy of the generated description (`RegistryDescriptionTest` fails when stale).
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

@@ -14,6 +14,7 @@ import { bytesToHex } from './hex.js';
 import { approvalsData, rewardAddressOf } from './governors.js';
 import { parseTx, addressParts } from './ledger.js';
 import { dataHex } from './pdata.js';
+import { isKeyedCall, verifyKeyed } from './keyed.js';
 
 export const DEFAULT_LIMITS = {
   maxCollateral: 5_000_000n,     // lovelace a failing script may cost
@@ -83,6 +84,8 @@ export function redeemerDefs(c, description) {
  * @returns { problems: string[], report }
  */
 export async function verifyPrepared(o) {
+  // A keyed call, or a keyed contract's creation with its list heads: the keyed rules (ADR-0016 D11).
+  if (isKeyedCall(o.description, o.call)) return verifyKeyed(o);
   const { description, deployment, txHex, call, wallet, chain } = o;
   const limits = { ...DEFAULT_LIMITS, ...(o.limits ?? {}) };
   const c = makeCodec(description);
@@ -386,6 +389,33 @@ export async function verifyPrepared(o) {
   report.fee = fee;
   report.walletNet = net.get('lovelace') ?? 0n;
 
+  envelopeChecks({ tx, txHex, call, wallet, chain, deployment, limits, isWallet }, problems);
+
+  // Reference inputs: the pinned script's reference UTxOs, UTxOs of the pinned script (the instance, read), and the
+  // foreign instances the call reads (@Reads), as the deployment's @Params name them (ADR-0011 D2).
+  const foreign = (call.meta.recipe?.reads ?? []).map((rd) => {
+    const fi = deployment.params?.[rd.params];
+    return fi ? fi.policy + fi.instance : null;
+  }).filter(Boolean);
+  for (const r of tx.referenceInputs) {
+    if ((deployment.referenceScripts ?? []).includes(r)) continue;
+    if (pinnedVerifiers.some((v) => (v.referenceScripts ?? []).includes(r))) continue;
+    const u = await chain.utxo(r);
+    const ok = u && (u.referenceScriptHash === policy || (atScript(u.address) && u.value.get(policy + call.instance) === 1n)
+      || foreign.some((unit) => u.value.get(unit) === 1n));
+    if (!ok) problems.push(`a reference input the page does not know: ${r}`);
+  }
+
+  return { problems, report };
+}
+
+/**
+ * The checks every single call shares (ADR-0013 D2): the fee, the collateral, the validity interval and the signers.
+ * Shared by the keyed calls' verifier (ADR-0016 D11).
+ */
+export function envelopeChecks({ tx, txHex, call, wallet, chain, deployment, limits, isWallet }, problems) {
+  const rds = tx.redeemers;
+  const fee = tx.fee;
   // The fee: at most what the protocol asks for this size and these budgets, with a margin.
   const pp = chain.params;
   let mem = 0n, steps = 0n;
@@ -445,23 +475,6 @@ export async function verifyPrepared(o) {
     if (!wallet.keyHashes.includes(k) && !named.includes(k)) problems.push('a required signer that is not the wallet');
   }
   for (const k of named) if (!required.has(k)) problems.push('a co-signer the transaction does not require');
-
-  // Reference inputs: the pinned script's reference UTxOs, UTxOs of the pinned script (the instance, read), and the
-  // foreign instances the call reads (@Reads), as the deployment's @Params name them (ADR-0011 D2).
-  const foreign = (call.meta.recipe?.reads ?? []).map((rd) => {
-    const fi = deployment.params?.[rd.params];
-    return fi ? fi.policy + fi.instance : null;
-  }).filter(Boolean);
-  for (const r of tx.referenceInputs) {
-    if ((deployment.referenceScripts ?? []).includes(r)) continue;
-    if (pinnedVerifiers.some((v) => (v.referenceScripts ?? []).includes(r))) continue;
-    const u = await chain.utxo(r);
-    const ok = u && (u.referenceScriptHash === policy || (atScript(u.address) && u.value.get(policy + call.instance) === 1n)
-      || foreign.some((unit) => u.value.get(unit) === 1n));
-    if (!ok) problems.push(`a reference input the page does not know: ${r}`);
-  }
-
-  return { problems, report };
 }
 
 /**

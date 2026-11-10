@@ -140,6 +140,13 @@ public final class OwnedObject<S, R> {
 
     /** Creates an object under {@code parent} (the instance is read through a reference input). */
     public static <S, R> OwnedObject<S, R> create(StateInstance<S> parent, Create<R> spec, Codec<R> codec) {
+        // The seed is picked and claimed in this scope, released once the creation was built (or failed; ADR-0016 F71).
+        try (var picks = Designation.scope()) {
+            return createInScope(parent, spec, codec);
+        }
+    }
+
+    private static <S, R> OwnedObject<S, R> createInScope(StateInstance<S> parent, Create<R> spec, Codec<R> codec) {
         var contract = parent.contract();
         var rt = contract.runtime;
         String what = contract.spec.name() + "." + spec.name();

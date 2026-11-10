@@ -1,0 +1,30 @@
+description = 'JOUST example: registry (keyed objects in a sorted on-chain list, ADR-0016)'
+
+dependencies {
+    implementation project(':julc-state-runtime')
+
+    annotationProcessor project(':julc-state-processor')
+    annotationProcessor libs.julc.annotation.processor
+    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+
+    testImplementation project(':julc-state-testkit')
+    testImplementation project(':examples:devkit')   // the keyed runtime on Yaci DevKit (ADR-0016 M2)
+    testImplementation project(':examples:fees')     // an asset-aware partner in compositions with inserts (ADR-0016 M2)
+    // The widest test contract (ADR-0016 M1 size gate) is compiled from the test sources.
+    testAnnotationProcessor project(':julc-state-processor')
+    testAnnotationProcessor libs.julc.annotation.processor
+    testAnnotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+}
+
+// ADR-0016 M3 (R-G5): the registry's portable steps (keyed actions and retires) are generated and tested.
+tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.portable=true'] }
+
+// -Pjoust.traces: each failing validator check traces its name (debugging only; larger scripts, over the size limit).
+if (project.hasProperty('joust.traces')) {
+    tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.traces=true'] }
+}
+
+// The I47 test's parameters (ListIntegrityTest): -Djoust.i47.steps=..., -Djoust.i47.mutants=..., -Djoust.i47.seed=...
+tasks.withType(Test).configureEach {
+    System.properties.findAll { it.key.toString().startsWith('joust.i47.') }.each { k, v -> systemProperty k.toString(), v }
+}

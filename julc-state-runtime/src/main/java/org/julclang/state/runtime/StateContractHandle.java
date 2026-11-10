@@ -151,6 +151,26 @@ public final class StateContractHandle<S> {
                         runtime.network()).toBech32()
                 : AddressProvider.getEntAddress(script, runtime.network()).toBech32();
         this.rewardAddress = AddressProvider.getRewardAddress(script, runtime.network()).toBech32();
+        if (spec.hasKeyed()) checkWindows();
+    }
+
+    /**
+     * ADR-0016 D1/D7: refuses a keyed type whose link window {@code W} is shorter than two slots of this network, and
+     * warns when it is longer than a page's window limit in this network's slots.
+     */
+    private void checkWindows() {
+        long slot = runtime.chainTime().slotLengthMs();
+        long[] page = runtime.pageLimits();
+        for (KeyedType<?> k : spec.keyed()) {
+            if (k.windowMs() < 2 * slot) {
+                throw new JoustException(spec.name() + "." + k.name() + ": linkWindowMs " + k.windowMs() + " is shorter than two "
+                        + slot + " ms slots of this network; no relink could fit it (ADR-0016 D1)");
+            }
+            if (page != null && k.windowMs() > page[1] * slot) {
+                runtime.log("warning: " + spec.name() + "." + k.name() + ": linkWindowMs " + k.windowMs() + " exceeds the page's"
+                        + " limit of " + page[1] + " slots (" + page[1] * slot + " ms); pages will use shorter windows (ADR-0016 D7)");
+            }
+        }
     }
 
     /** The applied script of {@code spec} for {@code params} (null: none); refuses one too large to publish by reference. */
@@ -250,12 +270,12 @@ public final class StateContractHandle<S> {
                 .payToAddress(address, List.of(Amount.lovelace(referenceScriptDeposit())), script)
                 .from(payerAddress);
         try {
-            var built = new com.bloxbean.cardano.client.quicktx.QuickTxBuilder(runtime.backend()).compose(tx)
+            var ctx = Designation.builder(runtime.backend(), null).compose(tx)
                     .feePayer(payerAddress)
-                    .additionalSignersCount(1)
-                    .build();
-            runtime.built("publish the " + spec.name() + " reference script", built, true);
-            return built;
+                    .additionalSignersCount(1);
+            // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
+            var claimed = Designation.build(payerAddress, null, ctx::build);
+            return TxRunner.exportPrepared(runtime, "publish the " + spec.name() + " reference script", claimed);
         } catch (Exception e) {
             throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
                     + e.getMessage(), e);
@@ -294,6 +314,14 @@ public final class StateContractHandle<S> {
 
     /** Creates a new instance: consumes a seed UTxO of the caller, mints the thread token, locks the initial state. */
     public DeployResult<S> deploy(Deploy<S> d) {
+        // The seed is picked and claimed in this scope, released once the deployment was built (or failed; F71).
+        try (var picks = Designation.scope()) {
+            return deployInScope(d);
+        }
+    }
+
+    private DeployResult<S> deployInScope(Deploy<S> d) {
+        if (spec.hasKeyed() && TxRunner.capture() != null) TxRunner.capture().keyedCreation = true;   // R-G1
         Account caller = d.caller();
         byte[] callerPkh = Keys.pkh(caller);
         // Publish reference scripts first: doing so spends the caller's UTxOs, so the seed is picked afterwards.
@@ -328,15 +356,23 @@ public final class StateContractHandle<S> {
                 BigInteger.valueOf(seed.getOutputIndex()));
         PlutusData redeemer = PlutusDataAdapter.convert(d.redeemer().make(seedRef, ctx));
         BigInteger lovelace = BigInteger.valueOf(spec.minAda()).add(d.received());
+        if (spec.hasKeyed()) checkInitArguments(redeemer, d.usesCtx());
 
         var tx = TxRunner.collect(TxRunner.newTx(), seed, null)
                 .readFrom(ref);
-        TxRunner.mint(tx, policyId, List.of(new Asset("0x" + instanceId, BigInteger.ONE)), redeemer);
+        var minted = new java.util.ArrayList<Asset>(List.of(new Asset("0x" + instanceId, BigInteger.ONE)));
+        var heads = spec.hasKeyed() ? headOutputs(instanceId, minted) : java.util.List.<TxRunner.ExpectedState>of();
+        TxRunner.mint(tx, policyId, minted, redeemer);
         tx.payToContract(address, List.of(Amount.lovelace(lovelace), new Amount(instance.unit(), BigInteger.ONE)), datum);
+        for (var h : heads) {
+            tx.payToContract(address, List.of(Amount.lovelace(h.lovelace()), new Amount(h.unit(), BigInteger.ONE)), h.datum());
+        }
         if (maps) runtime.mapVerifier().attach(tx, claims, caller);
 
         var expected = new TxRunner.ExpectedState(instance.unit(), lovelace, datum);
-        String txHash = new TxRunner(runtime).submit(tx, caller, window, d.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],
+        var runner = new TxRunner(runtime);
+        runner.extraExpected = heads;
+        String txHash = runner.submit(tx, caller, window, d.usesCtx() ? new byte[][]{callerPkh} : new byte[0][],
                 expected, List.of(), maps ? new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script,
                         runtime.mapVerifier().script()} : new com.bloxbean.cardano.client.plutus.spec.PlutusScript[]{script},
                 "deploy " + spec.name());
@@ -417,21 +453,65 @@ public final class StateContractHandle<S> {
     /** Result of {@link #deploy}. */
     public record DeployResult<S>(StateInstance<S> instance, String txHash, S state) {}
 
+    /**
+     * ADR-0016 D3: one head per keyed type, minted with the instance, at the state address with
+     * {@code Head_T(instance, "", 0)}, funded with {@code max(minAda, ledgerMin(head))}. Adds the head tokens to
+     * {@code minted} and returns each head output.
+     */
+    private java.util.List<TxRunner.ExpectedState> headOutputs(String instanceId, java.util.List<Asset> minted) {
+        var out = new java.util.ArrayList<TxRunner.ExpectedState>();
+        byte[] instance = HexUtil.decodeHexString(instanceId);
+        for (KeyedType<?> k : spec.keyed()) {
+            String hid = HexUtil.encodeHexString(k.keyId(instance, new byte[0]));
+            minted.add(new Asset("0x" + hid, BigInteger.ONE));
+            PlutusData head = k.head(instance, new byte[0], BigInteger.ZERO);
+            String unit = policyId + hid;
+            BigInteger lovelace = KeyedObjects.topUp(runtime, BigInteger.valueOf(spec.minAda()),
+                    minUtxoFor(address, head, List.of(Amount.lovelace(BigInteger.valueOf(spec.minAda())), new Amount(unit, BigInteger.ONE))),
+                    "deploy " + spec.name(), "the " + k.name() + " head");
+            out.add(new TxRunner.ExpectedState(unit, lovelace, head));
+        }
+        return out;
+    }
+
+    /** ADR-0016 D4c: a keyed contract's {@code @Init} arguments are at most 4,096 serialised bytes. */
+    private void checkInitArguments(PlutusData redeemer, boolean usesCtx) {
+        var fields = ((com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData) redeemer).getData().getPlutusDataList();
+        int size = KeyedObjects.argumentBytes(fields.subList(1, fields.size() - (usesCtx ? 1 : 0)));
+        if (size > KeyedType.MAX_ARGUMENT_BYTES) {
+            throw new RequireException("deploy " + spec.name() + ": the @Init arguments take " + size + " serialised bytes; a contract"
+                    + " with keyed types allows at most " + KeyedType.MAX_ARGUMENT_BYTES + " (ADR-0016 D4c)");
+        }
+    }
+
     Utxo pickSeedFor(Account caller) {
         return pickSeed(caller);
     }
 
+    /**
+     * A seed of {@code caller}: picked and claimed under the caller's lock, so no keyed operation designates it before
+     * the transaction spending it is built (F63, R-E4).
+     */
     private Utxo pickSeed(Account caller) {
+        return Designation.pick(caller.baseAddress(), TxRunner.PICK_CLAIM_MS, () -> seedOf(caller));
+    }
+
+    private Utxo seedOf(Account caller) {
         try {
             var r = runtime.backend().getUtxoService().getUtxos(caller.baseAddress(), 50, 1);
             if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) {
                 throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
             }
-            // Prefer a pure-ADA UTxO; any UTxO works.
-            return r.getValue().stream()
+            // Prefer a pure-ADA UTxO; any UTxO works, but never a keyed operation's designated input (ADR-0016 D7).
+            var own = TxRunner.currentOperation();
+            // A wallet's prepared creation in a keyed contract: the page's designated input is the seed (ADR-0016 D11).
+            if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
+            var free = r.getValue().stream().filter(u -> Designation.pickable(u, own)).toList();
+            if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
+            return free.stream()
                     .filter(u -> u.getAmount().size() == 1)
                     .findFirst()
-                    .orElse(r.getValue().get(0));
+                    .orElse(free.get(0));
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {

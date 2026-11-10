@@ -46,6 +46,16 @@ see `providers.js`).
 Calls that need data only the service computes are not generated, because a page cannot verify them: MerkleMap
 claims, foreign reads, batches, moves and deposits.
 
+## Keyed objects (ADR-0016)
+
+A contract with keyed types (one UTxO per key, in a sorted on-chain list) has keyed calls: `instance.keyed('Entry')`
+gives the list (`find(key)`, `exists(key)`, `keys()`, `insert(wallet, method, args, pay)`), and `.object(key)` its
+objects (`call(wallet, name, args, pay, opts)` for keyed actions, removals and retires). The page verifies each keyed
+call on its own with `verifyKeyed` (never in a composition). Before an operation's first attempt it designates one
+wallet input and records it (`retryStore`; IndexedDB in a browser), and signs only attempts that spend it: a call while
+the wallet's record is unsettled is a retry of that operation, until it settles or `opts.abandon` (or
+`abandonKeyed(wallet)`) starts a new one. A call whose neighbour is cooling down waits for the slot the engine names.
+
 ## Plans and Wasm (ADR-0013 D4, experimental)
 
 - **Plans.** `/prepare` returns the transaction's plan (`TxPlan`). The client derives its own with `planOf` and

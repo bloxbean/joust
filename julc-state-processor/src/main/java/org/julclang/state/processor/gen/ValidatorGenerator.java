@@ -64,6 +64,7 @@ public final class ValidatorGenerator {
                 "org.julclang.state.api.Ctx", "org.julclang.state.api.Payout", "org.julclang.state.api.Payouts"));
         if (c.hasOwned() || c.hasBatched()) imports.add("org.julclang.stdlib.lib.CryptoLib");
         if (c.hasBatched() || !c.moves().isEmpty()) imports.add("org.julclang.ledger.ScriptPurpose");
+        if (c.hasKeyed()) imports.addAll(List.of("org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId"));
         if (c.assetAware()) {
             imports.addAll(List.of("org.julclang.core.types.JulcValue", "org.julclang.state.api.Funds",
                     "org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId", "org.julclang.state.api.DepositClaim"));
@@ -119,6 +120,10 @@ public final class ValidatorGenerator {
             w.line("/** Script hash of the JOUST map verifier (ADR-0002 D9), which checks every MerkleMap claim. */");
             w.line("static final byte[] MAP_VERIFIER = " + MapVerifierInfo.hashLiteral() + ";");
         }
+        for (var o : c.keyedTypes()) {
+            w.line("/** typeId of keyed type " + o.simple() + ": I2OSP(len(name), 1) ++ utf8(name) (ADR-0016 D2). */");
+            w.line("static final byte[] TYPE_" + o.simple() + " = " + byteLiteral(o.keyed().typeId()) + ";");
+        }
         if (c.hasSends()) {
             w.line("/** Script hash of the JOUST output verifier (ADR-0007 D5), which carries the output-claim registry. */");
             w.line("static final byte[] OUTPUT_VERIFIER = " + MapVerifierInfo.hashLiteral("OutputVerifier") + ";");
@@ -127,18 +132,25 @@ public final class ValidatorGenerator {
 
         // ---- redeemers
         w.line("// ---- redeemers ---------------------------------------------------------------------------");
-        var lifecycle = new ArrayList<String>(List.of("CreateInstance", "BurnInstance"));
-        c.ownedInits().forEach(t -> lifecycle.add(t.variant()));
-        if (c.hasBatched()) lifecycle.add("CreateIntent");
-        if (c.hasMints()) lifecycle.add("ByAction");
-        if (c.migrate() != null) lifecycle.add("Adopt");
+        var lifecycle = lifecycleNames();
         w.line("public sealed interface Lifecycle permits " + String.join(", ", lifecycle) + " {}");
         w.line("public record CreateInstance(" + join(prepend(List.of("TxOutRef seed"),
                 fields(c.init()))) + ") implements Lifecycle {}");
         w.line("public record BurnInstance() implements Lifecycle {}");
         for (var t : c.ownedInits()) {
+            if (t.keyed()) {
+                w.line("/** Inserts a " + c.ownedOf(t).simple() + " after the anchor, spent with Link (ADR-0016 D4). */");
+                w.line("public record " + t.variant() + "(" + join(prepend(List.of("byte[] instance", "TxOutRef anchor"), fields(t)))
+                        + ") implements Lifecycle {}");
+                continue;
+            }
             w.line("public record " + t.variant() + "(" + join(prepend(List.of("TxOutRef seed", "byte[] instance"), fields(t)))
                     + ") implements Lifecycle {}");
+        }
+        for (var o : c.keyedTypes()) {
+            if (c.removals(o).isEmpty()) continue;
+            w.line("/** Removes node {@code removed}; its predecessor {@code anchor}, spent with Link, is relinked (ADR-0016 D5). */");
+            w.line("public record Remove_" + o.simple() + "(TxOutRef anchor, TxOutRef removed) implements Lifecycle {}");
         }
         var spend = new ArrayList<TransitionIR>(c.spendTransitions());
         spend.addAll(c.ownedSpendTransitions());
@@ -146,11 +158,16 @@ public final class ValidatorGenerator {
         // Constructor tags of the batch redeemers: their index in the permits list (ADR-0004 D3).
         long batchTag = callNames.size();
         if (c.hasBatched()) callNames.addAll(List.of("Batch", "InBatch", "CancelIntent"));
+        if (c.hasKeyed()) callNames.add("Link");
         if (!callNames.isEmpty()) {
             w.line("public sealed interface Calls permits " + String.join(", ", callNames) + " {}");
             for (var t : spend) {
                 w.line("public record " + t.variant() + "(" + join(fields(t)) + ") implements Calls {}");
             }
+        }
+        if (c.hasKeyed()) {
+            w.line("/** A keyed neighbour spent by a structural operation: the mint redeemer names it as the anchor (ADR-0016 I48). */");
+            w.line("public record Link() implements Calls {}");
         }
         if (c.hasBatched()) {
             w.line("/** Applies every intent of this instance in the transaction, in ledger input order (ADR-0004 D3). */");
@@ -190,14 +207,28 @@ public final class ValidatorGenerator {
             w.line("public record RefTag(TxOutRef ref) {}");
         }
         purposeRedeemers();
-        if (c.hasOwned() && !c.multiOwned()) {
+        if (c.hasOwned() && !c.sealedHolding()) {
             w.line("/** An owned object's datum: its instance and its value (ADR-0003 D2). */");
             w.line("public record Holding(byte[] instance, " + c.owned().get(0).type() + " value) {}");
         } else if (c.hasOwned()) {
             w.line("/** An owned object's datum: one variant per owned type, told apart by constructor tag (ADR-0012 D1). */");
-            w.line("public sealed interface Holding permits " + String.join(", ",
-                    c.owned().stream().map(ContractIR.OwnedIR::holding).toList()) + " {}");
+            var holdings = new ArrayList<String>();
             for (var o : c.owned()) {
+                if (o.isKeyed()) holdings.addAll(List.of("Head_" + o.simple(), o.holding(), "Retired_" + o.simple()));
+                else holdings.add(o.holding());
+            }
+            w.line("public sealed interface Holding permits " + String.join(", ", holdings) + " {}");
+            for (var o : c.owned()) {
+                if (o.isKeyed()) {
+                    String T = o.simple();
+                    w.line("/** The list head of " + T + " (key \"\"), and its live and retired nodes (ADR-0016 D2). */");
+                    w.line("public record Head_" + T + "(byte[] instance, byte[] next, BigInteger linkedAt) implements Holding {}");
+                    w.line("public record " + o.holding() + "(byte[] instance, byte[] next, BigInteger linkedAt, " + o.type()
+                            + " value) implements Holding {}");
+                    w.line("public record Retired_" + T + "(byte[] instance, byte[] next, BigInteger linkedAt, byte[] key)"
+                            + " implements Holding {}");
+                    continue;
+                }
                 w.line("public record " + o.holding() + "(byte[] instance, " + o.type() + " value) implements Holding {}");
             }
         }
@@ -216,6 +247,9 @@ public final class ValidatorGenerator {
         for (var t : c.ownedInits()) {
             w.line("case " + t.variant() + " o -> create" + t.variant() + "(o, tx, policy);");
         }
+        for (var o : c.keyedTypes()) {
+            if (!c.removals(o).isEmpty()) w.line("case Remove_" + o.simple() + " o -> remove_" + o.simple() + "(o, tx, policy);");
+        }
         if (c.hasBatched()) w.line("case CreateIntent ci -> createIntent(ci, tx, policy);");
         if (c.hasMints()) w.line("case ByAction b -> byAction(b, tx, policy);");
         if (c.migrate() != null) w.line("case Adopt a -> adopt(a, tx, policy);");
@@ -232,6 +266,9 @@ public final class ValidatorGenerator {
         if (c.migrate() != null) adoptMethod();
 
         for (var t : c.ownedInits()) createObject(t);
+        for (var o : c.keyedTypes()) {
+            if (!c.removals(o).isEmpty()) removeMethod(o);
+        }
 
         // ---- SPEND
         spendSection(spend, callNames, batchTag);
@@ -248,13 +285,25 @@ public final class ValidatorGenerator {
         declareParams();
         w.line("byte[] id = ValuesLib.uniqueTokenName(cr.seed());");
         w.line("boolean seedSpent = seedConsumed(tx.inputs(), cr.seed());");
-        w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
+        if (c.hasKeyed()) {
+            w.line("// I1/I45: the policy mints exactly the instance token and one head per keyed type, each once.");
+            w.line("boolean mintOk = onesMinted(tx.mint(), policy) == " + (1 + c.keyedTypes().size())
+                    + "L && ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.ONE) == 0;");
+        } else {
+            w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
+        }
         w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
         w.line("boolean shapeOk = isStateAddress(out.address(), policy) && out.referenceScript().isEmpty();");
         if (init.hasCtx()) {
             w.line("boolean ctxOk = ctxValid(tx, cr.ctx(), BigInteger.ZERO, " + init.payable() + ");");
         } else {
             w.line("boolean ctxOk = true;");
+        }
+        var heads = new ArrayList<String>();
+        for (var o : c.keyedTypes()) {
+            String v = "head_" + o.simple();
+            w.line("boolean " + v + " = headCreated(tx, policy, id, TYPE_" + o.simple() + ", " + o.keyed().headTag() + "L);");
+            heads.add(v);
         }
         if (c.hasMaps()) {
             w.line(S + " made = " + X + "." + init.method() + "(" + args("cr", init) + ");");
@@ -273,6 +322,7 @@ public final class ValidatorGenerator {
         paramsQuorumChecks(extra);
         var all = new ArrayList<String>(List.of("seedSpent", "mintOk", "shapeOk", "ctxOk", "datumOk", "valueOk"));
         all.addAll(extra);
+        all.addAll(heads);
         w.line("return " + conj(all, "create") + ";");
         w.close("}").blank();
     }
@@ -292,10 +342,15 @@ public final class ValidatorGenerator {
             w.line("BigInteger inLovelace = ValuesLib.lovelaceOf(ownOut.value());");
             w.open("return switch (redeemer) {");
             for (var t : spend) {
-                if (t.owned()) {
+                if (t.owned() && t.keyed()) {
                     var o = c.ownedOf(t);
-                    w.line("// I21: owned redeemers only for object tokens" + (c.multiOwned() ? "; I42: only on a " + o.simple() : "") + ".");
-                    String tagOk = c.multiOwned() ? " && Builtins.constrTag(OutputLib.getInlineDatum(ownOut)) == " + o.tag() + "L" : "";
+                    w.line("// I52: keyed redeemers only for 0x4B tokens, on a live " + o.simple() + " node (I42).");
+                    w.line("case " + t.variant() + " r -> isNode(id, ownOut, " + o.tag() + "L) && on" + t.variant() + "(r, ("
+                            + o.holding() + ") (Object) OutputLib.getInlineDatum(ownOut), tx, own, policy, id, inLovelace);");
+                } else if (t.owned()) {
+                    var o = c.ownedOf(t);
+                    w.line("// I21: owned redeemers only for object tokens" + (c.sealedHolding() ? "; I42: only on a " + o.simple() : "") + ".");
+                    String tagOk = c.sealedHolding() ? " && Builtins.constrTag(OutputLib.getInlineDatum(ownOut)) == " + o.tag() + "L" : "";
                     w.line("case " + t.variant() + " r -> isObjectToken(id)" + tagOk + " && on" + t.variant() + "(r, ("
                             + o.holding() + ") (Object) OutputLib.getInlineDatum(ownOut), tx, own, policy, id, inLovelace);");
                 } else {
@@ -311,6 +366,10 @@ public final class ValidatorGenerator {
                 w.line("case CancelIntent r -> isIntentToken(id) && cancelIntent((Intent) (Object) OutputLib.getInlineDatum(ownOut),"
                         + " tx, policy, id);");
             }
+            if (c.hasKeyed()) {
+                w.line("// I48/I52: a head, node or retired node (0x4B) relinked by a structural operation naming it.");
+                w.line("case Link r -> isKeyToken(id) && onLink(tx, own, policy, OutputLib.getInlineDatum(ownOut));");
+            }
             w.close("};");
             w.close("}").blank();
             for (var t : spend) {
@@ -318,6 +377,7 @@ public final class ValidatorGenerator {
                 else transition(t);
             }
             if (c.hasBatched()) batch(batchTag);
+            if (c.hasKeyed()) linkMethod();
         }
     }
 
@@ -352,11 +412,13 @@ public final class ValidatorGenerator {
             checks.add(v);
         }
         if (t.hasCtx()) {
-            String balance = t.destroys() ? "inLovelace" : "inLovelace.subtract(MIN_ADA)";
+            // A retiring destroy sees everything but the deposit, which stays in the retired node (ADR-0016 I55).
+            String balance = t.destroys() && !t.retire() ? "inLovelace" : "inLovelace.subtract(MIN_ADA)";
             w.line("boolean ctxOk = ctxValid(tx, r.ctx(), " + balance + ", " + t.payable() + ");");
             checks.add("ctxOk");
         }
         authChecks(t, checks);
+        var keyedType = t.keyed() ? c.ownedOf(t) : null;
         String stateArg = "current";
         if (t.shared()) {
             w.line("// I20: the instance state, read through a reference input of exactly this object's instance.");
@@ -375,6 +437,12 @@ public final class ValidatorGenerator {
         java.util.function.UnaryOperator<String> datum = owned
                 ? v -> "(PlutusData) (Object) new " + H + "(" + instanceExpr + ", " + v + ")"
                 : v -> "(PlutusData) (Object) " + v;
+        if (keyedType != null) {
+            keyedTransition(t, keyedType, call, checks);
+            w.line("return " + conj(checks, t.variant()) + ";");
+            w.close("}").blank();
+            return;
+        }
         switch (t.returns()) {
             case STATE -> {
                 w.line(S + " next = " + committed(t, call) + ";");
@@ -593,6 +661,10 @@ public final class ValidatorGenerator {
 
     /** MINT for an {@code @OwnedInit}: one object under an existing instance (I18). */
     private void createObject(TransitionIR t) {
+        if (t.keyed()) {
+            insertObject(t);
+            return;
+        }
         if (c.assetAware()) {
             createObjectAssets(t);
             return;
@@ -1486,7 +1558,8 @@ public final class ValidatorGenerator {
         w.line("/** Reserved token kinds: 32 bytes (instance), 29 bytes with 0x4F (object) or 0x49 (intent) (I27). */");
         w.open("static boolean isReserved(byte[] n) {");
         w.line("long len = ByteStringLib.length(n);");
-        w.line("return len == 32 || (len == 29 && (ByteStringLib.at(n, 0L) == 79L || ByteStringLib.at(n, 0L) == 73L));");
+        w.line("return len == 32 || (len == 29 && (ByteStringLib.at(n, 0L) == 79L || ByteStringLib.at(n, 0L) == 73L"
+                + (c.hasKeyed() ? " || ByteStringLib.at(n, 0L) == 75L" : "") + "));");
         w.close("}").blank();
 
         w.line("/** The single reserved token (quantity 1) under this policy in a state UTxO; user tokens are ignored (I27). */");
@@ -1915,6 +1988,7 @@ public final class ValidatorGenerator {
         w.line("return ByteStringLib.length(id) == 32;");
         w.close("}").blank();
         if (c.hasOwned()) ownedHelpers();
+        if (c.hasKeyed()) keyedHelpers();
         moveHelpers();
         if (c.assetAware()) assetHelpers();
         if (c.assetAware()) depositHelpers();
@@ -1972,7 +2046,9 @@ public final class ValidatorGenerator {
         w.open("while (!Builtins.nullList(rest)) {");
         w.line("PlutusData pair = Builtins.headList(rest);");
         w.open("if (Builtins.unIData(Builtins.sndPair(pair)).compareTo(BigInteger.valueOf(-1)) != 0"
-                + (c.assetAware() ? " || !isReserved(Builtins.unBData(Builtins.fstPair(pair)))" : "") + ") {");
+                + (c.assetAware() ? " || !isReserved(Builtins.unBData(Builtins.fstPair(pair)))" : "")
+                // ADR-0016 I49: a keyed token never burns here; only Remove_T burns it, relinking its predecessor.
+                + (c.hasKeyed() ? " || isKeyToken(Builtins.unBData(Builtins.fstPair(pair)))" : "") + ") {");
         w.line("ok = false;");
         w.close("}");
         w.line("rest = Builtins.tailList(rest);");
@@ -2160,6 +2236,503 @@ public final class ValidatorGenerator {
         w.line("case OutputDatum.OutputDatumHash h -> false;");
         w.close("};");
         w.close("}");
+    }
+
+    // ------------------------------------------------------------------ ADR-0016: keyed objects
+
+    /** The mint redeemer's constructors, in permits order (their constructor tags). */
+    private List<String> lifecycleNames() {
+        var lifecycle = new ArrayList<String>(List.of("CreateInstance", "BurnInstance"));
+        c.ownedInits().forEach(t -> lifecycle.add(t.variant()));
+        for (var o : c.keyedTypes()) {
+            if (!c.removals(o).isEmpty()) lifecycle.add("Remove_" + o.simple());
+        }
+        if (c.hasBatched()) lifecycle.add("CreateIntent");
+        if (c.hasMints()) lifecycle.add("ByAction");
+        if (c.migrate() != null) lifecycle.add("Adopt");
+        return lifecycle;
+    }
+
+    /** The constructor tag of mint redeemer {@code name}. */
+    private long lifecycleTag(String name) {
+        int i = lifecycleNames().indexOf(name);
+        if (i < 0) throw new IllegalStateException("no mint redeemer " + name);
+        return i;
+    }
+
+    /** The constructor tag of the Link spend redeemer: after every action and destroy (keyed contracts have no batches). */
+    private long linkTag() {
+        return c.spendTransitions().size() + c.ownedSpendTransitions().size();
+    }
+
+    /** {@code node, keyIndex} of a keyed type, as the arguments of {@code keyOf} (its head's tag is node - 1, its retired node's node + 1). */
+    private static String keyArgs(ContractIR.OwnedIR o) {
+        return o.keyed().nodeTag() + "L, " + o.keyed().keyIndex() + "L";
+    }
+
+    /** {@code C} and {@code W} of a keyed type, as the arguments of {@code linkUpper}. */
+    private static String linkArgs(ContractIR.OwnedIR o) {
+        return "BigInteger.valueOf(" + o.keyed().cooldownMs() + "L), BigInteger.valueOf(" + o.keyed().windowMs() + "L)";
+    }
+
+    static String byteLiteral(byte[] b) {
+        var sb = new StringBuilder("new byte[]{");
+        for (int i = 0; i < b.length; i++) sb.append(i == 0 ? "" : ", ").append(b[i]);
+        return sb.append('}').toString();
+    }
+
+    /** A keyed node's owned action or destroy, after the checks it shares with plain owned methods (ADR-0016 D5, D6, D10). */
+    private void keyedTransition(TransitionIR t, ContractIR.OwnedIR o, String call, List<String> checks) {
+        var k = o.keyed();
+        String S = o.type();
+        String node = "TYPE_" + o.simple() + ", (PlutusData) (Object) held, " + k.keyIndex() + "L";
+        switch (t.returns()) {
+            case STATE, RESULT -> {
+                String lovelace = "inLovelace.add(" + received("r", t) + ")";
+                if (t.returns() == TransitionIR.Returns.RESULT) {
+                    w.line(t.resultType() + " result = " + call + ";");
+                    w.line("JulcList<Payout> payouts = " + (t.resultPayouts() ? "result.payouts()" : "JulcList.empty()") + ";");
+                    w.line(S + " next = result.state();");
+                    lovelace = lovelace + ".subtract(Payouts.total(payouts))";
+                } else {
+                    w.line(S + " next = " + call + ";");
+                }
+                w.line("// I50/I51: the node's own token continues with its instance, next, linkedAt and key; the envelope fits.");
+                w.line("boolean continues = keyedContinues(tx, own, policy, id, " + node + ", (PlutusData) (Object) next, "
+                        + k.maxKeyBytes() + "L, " + lovelace + ");");
+                checks.add("continues");
+                if (t.returns() == TransitionIR.Returns.RESULT) {
+                    w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
+                    checks.add("paid");
+                }
+                outputChecks(t.ownedType(), "next", checks);
+                eventsCheck(t, checks);
+            }
+            case PAYOUTS, SETTLE -> {
+                if (t.returns() == TransitionIR.Returns.SETTLE) {
+                    w.line(t.resultType() + " result = " + call + ";");
+                    w.line("JulcList<Payout> payouts = " + (t.resultPayouts() ? "result.payouts()" : "JulcList.empty()") + ";");
+                } else {
+                    w.line("JulcList<Payout> payouts = " + call + ";");
+                }
+                if (t.retire()) {
+                    w.line("// I55: everything but the deposit is paid out; the node stays, retired, with its token and deposit.");
+                    w.line("boolean allocated = Payouts.total(payouts).compareTo(inLovelace.subtract(MIN_ADA)) == 0;");
+                    w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
+                    w.line("boolean continues = retires(tx, own, policy, id, " + node + ");");
+                    checks.add("allocated");
+                    checks.add("paid");
+                    checks.add("continues");
+                } else {
+                    w.line("// The node ends: everything it holds, deposit included, is allocated (I8).");
+                    w.line("boolean bound = keyBound(id, " + node + ");");
+                    w.line("boolean allocated = Payouts.total(payouts).compareTo(inLovelace.add(" + received("r", t) + ")) == 0;");
+                    w.line("boolean burned = ValuesLib.assetOf(tx.mint(), policy, id).compareTo(BigInteger.valueOf(-1)) == 0;");
+                    w.line("boolean paid = payoutsPaid(tx.outputs(), own, payouts);");
+                    w.line("// I49: only Remove_" + o.simple() + " naming this input burns it; the policy relinks its predecessor.");
+                    w.line("boolean viaRemove = removedBy(tx, policy, " + lifecycleTag("Remove_" + o.simple()) + "L, own.outRef());");
+                    checks.add("bound");
+                    checks.add("allocated");
+                    checks.add("burned");
+                    checks.add("paid");
+                    checks.add("viaRemove");
+                }
+                eventsCheck(t, checks);
+            }
+        }
+    }
+
+    /** MINT Insert_<m>: a new keyed object after its anchor, which is spent with Link (ADR-0016 D4a, I46). */
+    private void insertObject(TransitionIR t) {
+        var o = c.ownedOf(t);
+        var k = o.keyed();
+        String X = c.name();
+        String R = o.type();
+        String T = o.simple();
+        w.line("/** MINT " + t.variant() + ": a " + T + " inserted after the anchor, which is relinked (ADR-0016 D4a, I46). */");
+        w.open("static boolean create" + t.variant() + "(" + t.variant() + " o, TxInfo tx, byte[] policy) {");
+        declareParams();
+        var checks = new ArrayList<String>();
+        if (t.shared()) {
+            w.line("// The instance's state, read through a reference input of exactly this instance (I20).");
+            w.line(c.stateType() + " shared = sharedState(tx, policy, o.instance());");
+        }
+        if (t.hasCtx()) {
+            w.line("boolean ctxOk = ctxValid(tx, o.ctx(), BigInteger.ZERO, " + t.payable() + ");");
+            checks.add("ctxOk");
+        }
+        String call = t.shared() ? X + "." + t.method() + "(" + args("o", t, "shared") + ")"
+                : X + "." + t.method() + "(" + args("o", t) + ")";
+        w.line(R + " value = " + call + ";");
+        w.line("// D4a 1-6: the anchor, the key's place, the cooldown, the exact mint, the relink and the new node.");
+        w.line("boolean insertOk = inserted(tx, policy, o.anchor(), o.instance(), TYPE_" + T + ", " + k.nodeTag() + "L, "
+                + k.keyIndex() + "L, " + k.maxKeyBytes() + "L, " + linkArgs(o) + ", (PlutusData) (Object) value,");
+        w.line("        MIN_ADA.add(" + received("o", t) + "));");
+        checks.add(0, "insertOk");
+        if (k.signedKey()) {
+            w.line("// I53: the key is a 28-byte key hash that signed the insert.");
+            w.line("byte[] key = value." + k.keyField() + "();");
+            w.line("boolean keySigned = ByteStringLib.length(key) == 28 && ContextsLib.signedBy(tx, key);");
+            checks.add("keySigned");
+        }
+        outputChecks(t.ownedType(), "value", checks);
+        w.line("return " + conj(checks, "create" + t.variant()) + ";");
+        w.close("}").blank();
+    }
+
+    /** MINT Remove_T: burns node {@code removed} and relinks its predecessor {@code anchor} past it (ADR-0016 D5, I49). */
+    private void removeMethod(ContractIR.OwnedIR o) {
+        String T = o.simple();
+        w.line("/** MINT Remove_" + T + ": burns node {@code removed} and relinks its predecessor {@code anchor} past it (ADR-0016 D5, I49). */");
+        w.open("static boolean remove_" + T + "(Remove_" + T + " o, TxInfo tx, byte[] policy) {");
+        w.line("boolean distinct = !Builtins.equalsData((PlutusData) (Object) o.anchor(), (PlutusData) (Object) o.removed());");
+        w.line("TxOut prev = keyedInput(tx.inputs(), o.anchor());");
+        w.line("TxOut gone = keyedInput(tx.inputs(), o.removed());");
+        w.line("PlutusData pd = OutputLib.getInlineDatum(prev);");
+        w.line("PlutusData nd = OutputLib.getInlineDatum(gone);");
+        w.line("// N is a live node (never a head or a retired node) of this type, bound to its token (I51).");
+        w.line("byte[] instance = Builtins.unBData(fieldAt(nd, 0L));");
+        w.line("byte[] removedKey = keyOf(nd, " + keyArgs(o) + ");");
+        w.line("byte[] removedTok = keyId(instance, TYPE_" + T + ", removedKey);");
+        w.line("boolean removedOk = Builtins.constrTag(nd) == " + o.keyed().nodeTag() + "L && isStateAddress(gone.address(), policy)");
+        w.line("        && ByteStringLib.equals(instanceIdOf(gone.value(), policy), removedTok);");
+        w.line("// P: a head, node or retired node of the same instance and type, spent with Link (I48, I51), right before N.");
+        w.line("byte[] prevKey = keyOf(pd, " + keyArgs(o) + ");");
+        w.line("byte[] prevTok = neighbour(tx, policy, o.anchor(), prev, pd, instance, TYPE_" + T + ", prevKey);");
+        w.line("boolean adjacent = ByteStringLib.equals(Builtins.unBData(fieldAt(pd, 1L)), removedKey);");
+        w.line("BigInteger upper = linkUpper(tx.validRange(), pd, " + linkArgs(o) + ");");
+        w.line("// The mint is exactly N's burn; P skips N; no output keeps N's token.");
+        w.line("boolean burnOk = mintsExactly(tx.mint(), policy, removedTok, -1L);");
+        w.line("boolean relinkOk = relinked(tx, policy, prev, pd, prevTok, Builtins.unBData(fieldAt(nd, 1L)), upper);");
+        w.line("boolean burned = noOutputWith(tx.outputs(), policy, removedTok);");
+        w.line("return " + conj(List.of("distinct", "removedOk", "adjacent", "burnOk", "relinkOk", "burned"), "remove_" + T) + ";");
+        w.close("}").blank();
+    }
+
+    /** SPEND Link: the policy's redeemer is a structural operation of this node's type naming it as the anchor (I48). */
+    private void linkMethod() {
+        w.line("/**");
+        w.line(" * SPEND Link (I48): the policy's mint redeemer is an Insert_* or Remove_T of this node's own type naming this input");
+        w.line(" * as its anchor. Every other check runs once, in the policy; one mint redeemer per policy means one Link per policy.");
+        w.line(" */");
+        w.open("static boolean onLink(TxInfo tx, TxInInfo own, byte[] policy, PlutusData d) {");
+        w.line("long tag = Builtins.constrTag(d);");
+        w.line("PlutusData rd = tx.redeemers().get(new ScriptPurpose.Minting(new PolicyId(policy)));");
+        w.line("long op = Builtins.constrTag(rd);");
+        w.line("PlutusData self = (PlutusData) (Object) own.outRef();");
+        var arms = new ArrayList<String>();
+        for (var o : c.keyedTypes()) {
+            var k = o.keyed();
+            String own = "(tag == " + k.headTag() + "L || tag == " + k.nodeTag() + "L || tag == " + k.retiredTag() + "L)";
+            var ops = new ArrayList<String>();
+            var inserts = c.ownedInits().stream().filter(t -> t.ownedType().equals(o.type()))
+                    .map(t -> "op == " + lifecycleTag(t.variant()) + "L").toList();
+            if (!inserts.isEmpty()) {   // the reader refuses a keyed type without an initializer; never emit "()"
+                ops.add("((" + String.join(" || ", inserts) + ") && Builtins.equalsData(fieldAt(rd, 1L), self))");
+            }
+            if (inserts.isEmpty() && c.removals(o).isEmpty()) ops.add("false");
+            if (!c.removals(o).isEmpty()) {
+                ops.add("(op == " + lifecycleTag("Remove_" + o.simple()) + "L && Builtins.equalsData(fieldAt(rd, 0L), self))");
+            }
+            arms.add("(" + own + " && (" + String.join(" || ", ops) + "))");
+        }
+        w.line("return " + String.join("\n        || ", arms) + ";");
+        w.close("}").blank();
+    }
+
+    private void keyedHelpers() {
+        w.line("// ---- keyed objects (ADR-0016) -------------------------------------------------------------");
+        w.line("/** A keyed token (heads included): 0x4B ++ blake2b_224(instance ++ typeId ++ key), 29 bytes (I44). */");
+        w.open("static byte[] keyId(byte[] instance, byte[] typeId, byte[] key) {");
+        w.line("return ByteStringLib.cons(75L, CryptoLib.blake2b_224(ByteStringLib.append(instance, ByteStringLib.append(typeId, key))));");
+        w.close("}").blank();
+        w.open("static boolean isKeyToken(byte[] id) {");
+        w.line("return ByteStringLib.length(id) == 29 && ByteStringLib.at(id, 0L) == 75L;");
+        w.close("}").blank();
+
+        w.line("/** Field {@code i} of a constructor. */");
+        w.open("static PlutusData fieldAt(PlutusData d, long i) {");
+        w.line("PlutusData fs = Builtins.constrFields(d);");
+        w.line("long k = 0;");
+        w.open("while (k < i) {");
+        w.line("fs = Builtins.tailList(fs);");
+        w.line("k = k + 1;");
+        w.close("}");
+        w.line("return Builtins.headList(fs);");
+        w.close("}").blank();
+
+        w.line("/**");
+        w.line(" * key(X) (ADR-0016 D2) of a datum of the type whose node tag is {@code node}: \"\" for its head (node - 1), value.<key>");
+        w.line(" * for a node, the kept key for a retired node (node + 1); fails for any other constructor.");
+        w.line(" */");
+        w.open("static byte[] keyOf(PlutusData d, long node, long keyIndex) {");
+        w.line("long tag = Builtins.constrTag(d);");
+        w.open("if (tag == node - 1) {");
+        w.line("return ByteStringLib.empty();");
+        w.close("} else {");
+        w.indent();
+        w.open("if (tag == node) {");
+        w.line("return Builtins.unBData(fieldAt(fieldAt(d, 3L), keyIndex));");
+        w.close("} else {");
+        w.indent();
+        w.open("if (tag == node + 1) {");
+        w.line("return Builtins.unBData(fieldAt(d, 3L));");
+        w.close("} else {");
+        w.indent();
+        w.line("Builtins.error();");
+        w.line("return ByteStringLib.empty();");
+        w.close("}");
+        w.close("}");
+        w.close("}");
+        w.close("}").blank();
+
+        w.line("/** The output spent at {@code ref}; fails if no input spends it. */");
+        w.open("static TxOut keyedInput(JulcList<TxInInfo> inputs, TxOutRef ref) {");
+        w.line("TxOut hit = inputs.head().resolved();");
+        w.line("boolean found = false;");
+        w.open("for (var in : inputs) {");
+        w.open("if (Builtins.equalsData(in.outRef(), ref)) {");
+        w.line("hit = in.resolved();");
+        w.line("found = true;");
+        w.close("}");
+        w.close("}");
+        w.open("if (!found) {");
+        w.line("Builtins.error();");
+        w.line("return hit;");
+        w.close("} else {");
+        w.indent();
+        w.line("return hit;");
+        w.close("}");
+        w.close("}").blank();
+
+        w.line("/**");
+        w.line(" * A structural operation's neighbour (D4a.1, D5): input {@code ref}, at the state address, spent with Link (I48),");
+        w.line(" * under {@code instance}, holding exactly one token of this policy, keyId(instance, typeId, key) (I51). Returns it.");
+        w.line(" */");
+        w.open("static byte[] neighbour(TxInfo tx, byte[] policy, TxOutRef ref, TxOut x, PlutusData xd, byte[] instance, byte[] typeId,"
+                + " byte[] key) {");
+        w.line("byte[] tok = instanceIdOf(x.value(), policy);");
+        w.line("PlutusData rd = tx.redeemers().get(new ScriptPurpose.Spending(ref));");
+        w.line("boolean ok = isStateAddress(x.address(), policy) && Builtins.constrTag(rd) == " + linkTag() + "L");
+        w.line("        && ByteStringLib.equals(Builtins.unBData(fieldAt(xd, 0L)), instance) && ByteStringLib.equals(tok, keyId(instance, typeId, key));");
+        w.open("if (!ok) {");
+        w.line("Builtins.error();");
+        w.line("return tok;");
+        w.close("} else {");
+        w.indent();
+        w.line("return tok;");
+        w.close("}");
+        w.close("}").blank();
+
+        w.line("/** A new key's place (I46): before < key, key < after unless after is \"\" (the end), 1 <= |key| <= max. */");
+        w.open("static boolean placed(byte[] before, byte[] key, byte[] after, long max) {");
+        w.line("long n = ByteStringLib.length(key);");
+        w.line("return n >= 1 && n <= max && ByteStringLib.lessThan(before, key)");
+        w.line("        && (ByteStringLib.length(after) == 0 || ByteStringLib.lessThan(key, after));");
+        w.close("}").blank();
+
+        w.open("static BigInteger noTime() {");
+        w.line("Builtins.error();");
+        w.line("return BigInteger.ZERO;");
+        w.close("}").blank();
+        w.line("/** A linkedAt placeholder of the widest encoding, 2^63: 9 CBOR bytes, as every time in [2^32, 2^64) (D2). */");
+        w.open("static BigInteger timePlaceholder() {");
+        w.line("return BigInteger.valueOf(4294967296L).multiply(BigInteger.valueOf(2147483648L));");
+        w.close("}").blank();
+        w.line("/**");
+        w.line(" * I54: finite bounds [lower, upper) with upper - lower <= window and upper in [2^32, 2^64); with a cooldown, also");
+        w.line(" * lower >= the node's linkedAt + cooldown. Returns upper, the relinked node's new linkedAt; fails otherwise.");
+        w.line(" */");
+        w.open("static BigInteger linkUpper(Interval range, PlutusData xd, BigInteger cooldown, BigInteger window) {");
+        w.open("BigInteger lower = switch (range.from().boundType()) {");
+        w.line("case IntervalBoundType.Finite f -> f.time();");
+        w.line("case IntervalBoundType.NegInf n -> noTime();");
+        w.line("case IntervalBoundType.PosInf p -> noTime();");
+        w.close("};");
+        w.open("BigInteger upper = switch (range.to().boundType()) {");
+        w.line("case IntervalBoundType.Finite f -> f.time();");
+        w.line("case IntervalBoundType.NegInf n -> noTime();");
+        w.line("case IntervalBoundType.PosInf p -> noTime();");
+        w.close("};");
+        w.line("BigInteger low = BigInteger.valueOf(4294967296L);");
+        w.line("boolean closedOpen = range.from().isInclusive() && !range.to().isInclusive();");
+        w.line("boolean inDomain = upper.compareTo(low) >= 0 && upper.compareTo(low.multiply(low)) < 0;");
+        w.line("boolean narrow = upper.subtract(lower).compareTo(window) <= 0;");
+        w.line("boolean cooled = cooldown.compareTo(BigInteger.ZERO) == 0");
+        w.line("        || lower.compareTo(Builtins.unIData(fieldAt(xd, 2L)).add(cooldown)) >= 0;");
+        w.open("if (!(closedOpen && inDomain && narrow && cooled)) {");
+        w.line("Builtins.error();");
+        w.line("return upper;");
+        w.close("} else {");
+        w.indent();
+        w.line("return upper;");
+        w.close("}");
+        w.close("}").blank();
+
+        w.line("/**");
+        w.line(" * relinked(X, next := n) (I48): exactly one output holds X's token, at X's address, without a reference script, with");
+        w.line(" * X's datum but next := n and linkedAt := upper, at least X's lovelace and nothing else but the token.");
+        w.line(" */");
+        w.open("static boolean relinked(TxInfo tx, byte[] policy, TxOut x, PlutusData xd, byte[] tok, byte[] next, BigInteger upper) {");
+        w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, tok);");
+        w.line("PlutusData fs = Builtins.constrFields(xd);");
+        w.line("PlutusData rest = Builtins.tailList(Builtins.tailList(Builtins.tailList(fs)));");
+        w.line("PlutusData expected = Builtins.constrData(Builtins.constrTag(xd), Builtins.mkCons(Builtins.headList(fs),");
+        w.line("        Builtins.mkCons(Builtins.bData(next), Builtins.mkCons(Builtins.iData(upper), rest))));");
+        w.line("BigInteger lovelace = ValuesLib.lovelaceOf(out.value());");
+        w.line("boolean sameAddress = Builtins.equalsData(out.address(), x.address());");
+        w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), expected);");
+        w.line("boolean noRefScript = out.referenceScript().isEmpty();");
+        w.line("boolean valueOk = lovelace.compareTo(ValuesLib.lovelaceOf(x.value())) >= 0 && exactValue(out.value(), policy, tok, lovelace);");
+        w.line("return sameAddress && datumOk && noRefScript && valueOk;");
+        w.close("}").blank();
+
+        w.line("/** Keyed_T(instance, next, linkedAt, value) (or any keyed constructor {@code tag} of four fields), as data. */");
+        w.open("static PlutusData keyedDatum(long tag, byte[] instance, byte[] next, BigInteger linkedAt, PlutusData value) {");
+        w.line("return Builtins.constrData(tag, Builtins.mkCons(Builtins.bData(instance), Builtins.mkCons(Builtins.bData(next),");
+        w.line("        Builtins.mkCons(Builtins.iData(linkedAt), Builtins.mkCons(value, Builtins.mkNilData())))));");
+        w.close("}").blank();
+
+        w.line("/**");
+        w.line(" * D4a 1-6: inserting {@code value} (constructor tag {@code node}) after the anchor {@code ref}: the anchor is spent");
+        w.line(" * with Link and bound to its token (I48, I51); key(A) < key < A.next, 1 <= |key| <= maxKey (I46); the cooldown and");
+        w.line(" * window (I54); the mint is exactly the new token; the anchor is relinked to the key; exactly one output holds the");
+        w.line(" * new token, at the state address, without a reference script, with Keyed_T(instance, A.next, upper, value) whose");
+        w.line(" * envelope fits (I13 amended), and exactly {@code lovelace} plus the token.");
+        w.line(" */");
+        w.open("static boolean inserted(TxInfo tx, byte[] policy, TxOutRef ref, byte[] instance, byte[] typeId, long node, long keyIndex,");
+        w.line("        long maxKey, BigInteger cooldown, BigInteger window, PlutusData value, BigInteger lovelace) {");
+        w.line("TxOut anchor = keyedInput(tx.inputs(), ref);");
+        w.line("PlutusData ad = OutputLib.getInlineDatum(anchor);");
+        w.line("byte[] anchorKey = keyOf(ad, node, keyIndex);");
+        w.line("byte[] anchorTok = neighbour(tx, policy, ref, anchor, ad, instance, typeId, anchorKey);");
+        w.line("BigInteger upper = linkUpper(tx.validRange(), ad, cooldown, window);");
+        w.line("byte[] key = Builtins.unBData(fieldAt(value, keyIndex));");
+        w.line("byte[] after = Builtins.unBData(fieldAt(ad, 1L));");
+        w.line("boolean placeOk = placed(anchorKey, key, after, maxKey);");
+        w.line("byte[] id = keyId(instance, typeId, key);");
+        w.line("boolean mintOk = mintsExactlyOne(tx.mint(), policy, id);");
+        w.line("boolean relinkOk = relinked(tx, policy, anchor, ad, anchorTok, key, upper);");
+        w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
+        w.line("boolean shapeOk = isStateAddress(out.address(), policy) && out.referenceScript().isEmpty();");
+        w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), keyedDatum(node, instance, after, upper, value))");
+        w.line("        && datumFits(keyedDatum(node, instance, ByteStringLib.zeros(maxKey), timePlaceholder(), value));");
+        w.line("boolean valueOk = exactValue(out.value(), policy, id, lovelace);");
+        w.line("return " + conj(List.of("placeOk", "mintOk", "relinkOk", "shapeOk", "datumOk", "valueOk"), "inserted") + ";");
+        w.close("}").blank();
+
+        w.line("/** I51: {@code id} is the token of keyed datum {@code held}: keyId(instance, typeId, value.<key>). */");
+        w.open("static boolean keyBound(byte[] id, byte[] typeId, PlutusData held, long keyIndex) {");
+        w.line("return ByteStringLib.equals(id, keyId(Builtins.unBData(fieldAt(held, 0L)), typeId,"
+                + " Builtins.unBData(fieldAt(fieldAt(held, 3L), keyIndex))));");
+        w.close("}").blank();
+
+        w.line("/** I52/I42: a keyed token on a datum of constructor {@code tag} (a live node of one type). */");
+        w.open("static boolean isNode(byte[] id, TxOut o, long tag) {");
+        w.line("return isKeyToken(id) && Builtins.constrTag(OutputLib.getInlineDatum(o)) == tag;");
+        w.close("}").blank();
+
+        w.line("/**");
+        w.line(" * I50/I51: a keyed action. The token is the node's own; the unique output holding it is at the same address, without");
+        w.line(" * a reference script, with exactly {@code lovelace} and the token, and the node's datum with only the value replaced");
+        w.line(" * by {@code next}, which keeps the key; its envelope fits (I13 amended).");
+        w.line(" */");
+        w.open("static boolean keyedContinues(TxInfo tx, TxInInfo own, byte[] policy, byte[] id, byte[] typeId, PlutusData held,"
+                + " long keyIndex,");
+        w.line("        PlutusData next, long maxKey, BigInteger lovelace) {");
+        w.line("byte[] instance = Builtins.unBData(fieldAt(held, 0L));");
+        w.line("long tag = Builtins.constrTag(held);");
+        w.line("boolean keyKept = Builtins.equalsData(fieldAt(next, keyIndex), fieldAt(fieldAt(held, 3L), keyIndex));");
+        w.line("PlutusData datum = keyedDatum(tag, instance, Builtins.unBData(fieldAt(held, 1L)), Builtins.unIData(fieldAt(held, 2L)), next);");
+        w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
+        w.line("boolean sameAddress = Builtins.equalsData(out.address(), own.resolved().address());");
+        w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), datum);");
+        w.line("boolean noRefScript = out.referenceScript().isEmpty();");
+        w.line("boolean fits = datumFits(keyedDatum(tag, instance, ByteStringLib.zeros(maxKey), timePlaceholder(), next));");
+        w.line("boolean valueOk = lovelace.compareTo(MIN_ADA) >= 0 && exactValue(out.value(), policy, id, lovelace);");
+        w.line("return " + conj(List.of("keyBound(id, typeId, held, keyIndex)", "keyKept", "sameAddress", "datumOk", "noRefScript",
+                "fits", "valueOk"), "keyedContinues") + ";");
+        w.close("}").blank();
+
+        w.line("/**");
+        w.line(" * I55: the node's own token continues retired: same address, inline Retired_T(instance, next, linkedAt, key), no");
+        w.line(" * reference script, at least the deposit and nothing but the token.");
+        w.line(" */");
+        w.open("static boolean retires(TxInfo tx, TxInInfo own, byte[] policy, byte[] id, byte[] typeId, PlutusData held, long keyIndex) {");
+        w.line("PlutusData fs = Builtins.constrFields(held);");
+        w.line("PlutusData retired = Builtins.constrData(Builtins.constrTag(held) + 1, Builtins.mkCons(Builtins.headList(fs),");
+        w.line("        Builtins.mkCons(fieldAt(held, 1L), Builtins.mkCons(fieldAt(held, 2L), Builtins.mkCons(fieldAt(fieldAt(held, 3L),"
+                + " keyIndex), Builtins.mkNilData())))));");
+        w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, id);");
+        w.line("BigInteger lovelace = ValuesLib.lovelaceOf(out.value());");
+        w.line("boolean sameAddress = Builtins.equalsData(out.address(), own.resolved().address());");
+        w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), retired);");
+        w.line("boolean noRefScript = out.referenceScript().isEmpty();");
+        w.line("boolean valueOk = lovelace.compareTo(MIN_ADA) >= 0 && exactValue(out.value(), policy, id, lovelace);");
+        w.line("return " + conj(List.of("keyBound(id, typeId, held, keyIndex)", "sameAddress", "datumOk", "noRefScript", "valueOk"),
+                "retires") + ";");
+        w.close("}").blank();
+
+        w.line("/** I49: the policy's mint redeemer is constructor {@code tag} (a Remove_T) whose field 1 ({@code removed}) is {@code self}. */");
+        w.open("static boolean removedBy(TxInfo tx, byte[] policy, long tag, TxOutRef self) {");
+        w.line("PlutusData rd = tx.redeemers().get(new ScriptPurpose.Minting(new PolicyId(policy)));");
+        w.line("return Builtins.constrTag(rd) == tag && Builtins.equalsData(fieldAt(rd, 1L), (PlutusData) (Object) self);");
+        w.close("}").blank();
+
+        w.line("/** Under this policy the transaction mints exactly (id, qty) and nothing else. */");
+        w.open("static boolean mintsExactly(Value mint, byte[] policy, byte[] id, long qty) {");
+        w.line("PlutusData expected = Builtins.mapData(Builtins.mkCons(Builtins.mkPairData(Builtins.bData(id), Builtins.iData(qty)),"
+                + " Builtins.mkNilPairData()));");
+        w.line("return Builtins.equalsData(ledgerTokensOf(mint, policy), expected);");
+        w.close("}").blank();
+
+        w.line("/** No output holds {@code id} of this policy. */");
+        w.open("static boolean noOutputWith(JulcList<TxOut> outputs, byte[] policy, byte[] id) {");
+        w.line("boolean none = true;");
+        w.open("for (var o : outputs) {");
+        w.open("if (ValuesLib.assetOf(o.value(), policy, id).compareTo(BigInteger.ZERO) != 0) {");
+        w.line("none = false;");
+        w.close("}");
+        w.close("}");
+        w.line("return none;");
+        w.close("}").blank();
+
+        w.line("/** The number of token names this policy mints, each exactly once; fails on any other quantity (I45). */");
+        w.open("static long onesMinted(Value mint, byte[] policy) {");
+        w.line("PlutusData rest = Builtins.unMapData(ledgerTokensOf(mint, policy));");
+        w.line("long n = 0;");
+        w.line("boolean ok = true;");
+        w.open("while (!Builtins.nullList(rest)) {");
+        w.line("PlutusData pair = Builtins.headList(rest);");
+        w.line("ok = ok && Builtins.unIData(Builtins.sndPair(pair)).compareTo(BigInteger.ONE) == 0;");
+        w.line("n = n + 1;");
+        w.line("rest = Builtins.tailList(rest);");
+        w.close("}");
+        w.open("if (!ok) {");
+        w.line("Builtins.error();");
+        w.line("return n;");
+        w.close("} else {");
+        w.indent();
+        w.line("return n;");
+        w.close("}");
+        w.close("}").blank();
+
+        w.line("/**");
+        w.line(" * D3/I45: exactly one output holds the head of a keyed type of {@code instance}, minted once: at the state address,");
+        w.line(" * no reference script, inline datum Head_T(instance, \"\", 0), at least the deposit and nothing but the token.");
+        w.line(" */");
+        w.open("static boolean headCreated(TxInfo tx, byte[] policy, byte[] instance, byte[] typeId, long tag) {");
+        w.line("byte[] hid = keyId(instance, typeId, ByteStringLib.empty());");
+        w.line("TxOut out = uniqueOutputWith(tx.outputs(), policy, hid);");
+        w.line("BigInteger lovelace = ValuesLib.lovelaceOf(out.value());");
+        w.line("PlutusData head = Builtins.constrData(tag, Builtins.mkCons(Builtins.bData(instance), Builtins.mkCons("
+                + "Builtins.bData(ByteStringLib.empty()), Builtins.mkCons(Builtins.iData(0L), Builtins.mkNilData()))));");
+        w.line("boolean minted = ValuesLib.assetOf(tx.mint(), policy, hid).compareTo(BigInteger.ONE) == 0;");
+        w.line("boolean shapeOk = isStateAddress(out.address(), policy) && out.referenceScript().isEmpty();");
+        w.line("boolean datumOk = Builtins.equalsData(OutputLib.getInlineDatum(out), head);");
+        w.line("boolean valueOk = lovelace.compareTo(MIN_ADA) >= 0 && exactValue(out.value(), policy, hid, lovelace);");
+        w.line("return minted && shapeOk && datumOk && valueOk;");
+        w.close("}").blank();
     }
 
     // ------------------------------------------------------------------ text helpers

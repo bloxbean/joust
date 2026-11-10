@@ -154,17 +154,17 @@ function pushBytes(out, b) {
   out.push(0xff);
 }
 
-function pushList(out, items) {
+function pushList(out, items, keepRaw = true) {
   if (!items.length) { out.push(0x80); return; }
   out.push(0x9f);
-  for (const x of items) write(out, x);
+  for (const x of items) write(out, x, keepRaw);
   out.push(0xff);
 }
 
 const MAX64 = (1n << 64n) - 1n;
 
-function write(out, d) {
-  if (d.raw) { for (const x of d.raw) out.push(x); return; }
+function write(out, d, keepRaw = true) {
+  if (keepRaw && d.raw) { for (const x of d.raw) out.push(x); return; }
   if ('constr' in d) {
     const i = d.constr;
     if (i < 7) out.push(...headBytes(6, 121 + i));
@@ -172,7 +172,7 @@ function write(out, d) {
     else {
       out.push(...headBytes(6, 102), 0x82, ...headBytes(0, i));
     }
-    pushList(out, d.fields);
+    pushList(out, d.fields, keepRaw);
   } else if ('int' in d) {
     const n = d.int;
     if (n >= 0n && n <= MAX64) out.push(...headBytes(0, n));
@@ -185,10 +185,10 @@ function write(out, d) {
       pushBytes(out, Uint8Array.from(b));
     }
   } else if ('bytes' in d) pushBytes(out, d.bytes);
-  else if ('list' in d) pushList(out, d.list);
+  else if ('list' in d) pushList(out, d.list, keepRaw);
   else if ('map' in d) {
     out.push(...headBytes(5, d.map.length));
-    for (const [k, v] of d.map) { write(out, k); write(out, v); }
+    for (const [k, v] of d.map) { write(out, k, keepRaw); write(out, v, keepRaw); }
   } else throw new CborError('not Plutus data');
 }
 
@@ -200,6 +200,17 @@ export function encodeData(d) {
 }
 
 export const dataHex = (d) => bytesToHex(encodeData(d));
+
+/**
+ * The ledger's own encoding of {@code d}, ignoring any original bytes (ADR-0016 R-F1): a page compares a served datum's
+ * bytes with it, so a service cannot pad an output (and so the allowances computed from its size) with an encoding of
+ * its choice.
+ */
+export function canonicalHex(d) {
+  const out = [];
+  write(out, d, false);
+  return bytesToHex(Uint8Array.from(out));
+}
 
 // ---------------------------------------------------------------------------------------------------- equality
 

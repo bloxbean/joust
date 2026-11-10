@@ -27,7 +27,7 @@ class ToolchainParityTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"counter", "bank", "vault", "escrow", "crowdfund", "dsl", "guild", "token", "treasury", "market", "fees",
-            "pool", "rollup", "dex", "staking", "oracle", "upgrade", "locker"})
+            "pool", "rollup", "dex", "staking", "oracle", "upgrade", "locker", "registry"})
     void sameOutputsAsGradle(String example) throws Exception {
         Path module = EXAMPLES.resolve(example);
         Map<String, String> files = new LinkedHashMap<>();

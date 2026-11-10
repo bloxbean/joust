@@ -40,6 +40,8 @@ import java.util.List;
  *                    redeemer field but read from the object's input (ADR-0012 r4)
  * @param resultDeposits the result record has a {@code deposits} component (ADR-0011 D3)
  * @param receives    {@code @Receives}: the continuing output takes deposits (ADR-0011 D3)
+ * @param keyed       an owned method of a keyed type (ADR-0016)
+ * @param retire      {@code @OwnedDestroy(retire = true)}: a keyed type's retiring exit (ADR-0016 D10)
  */
 public record TransitionIR(Kind kind,
                            String method,
@@ -73,7 +75,9 @@ public record TransitionIR(Kind kind,
                            String admitsType,
                            String arriving,
                            boolean resultDeposits,
-                           boolean receives) {
+                           boolean receives,
+                           boolean keyed,
+                           boolean retire) {
 
     /** A {@code @Reads(path)} parameter: its foreign record type and field count, for the shape check. */
     public record ReadIR(String name, String path, String type, int fields) {}
@@ -95,7 +99,15 @@ public record TransitionIR(Kind kind,
         return new TransitionIR(kind, method, variant, newParams, hasCtx, payable, returns, resultType, signedBy, validAfter,
                 validBefore, shared, batched, batchOnly, hasFunds, resultPayouts, resultSends, resultMint, resultAccepted,
                 takesParams, quorumKeys, quorumThreshold, authorizedBy, resultEvents, eventsType, reads, migrateTo, ownedType,
-                into, type, arrivingName, resultDeposits, receives);
+                into, type, arrivingName, resultDeposits, receives, keyed, retire);
+    }
+
+    /** This transition with its variant (redeemer constructor name) and keyed-ness set (ADR-0016: {@code Insert_<m>}). */
+    public TransitionIR asKeyed(String newVariant) {
+        return new TransitionIR(kind, method, newVariant, params, hasCtx, payable, returns, resultType, signedBy, validAfter,
+                validBefore, shared, batched, batchOnly, hasFunds, resultPayouts, resultSends, resultMint, resultAccepted,
+                takesParams, quorumKeys, quorumThreshold, authorizedBy, resultEvents, eventsType, reads, migrateTo, ownedType,
+                into, admitsType, arriving, resultDeposits, receives, true, retire);
     }
 
     /** Moves its object to another instance ({@code @Into}, ADR-0012 D3). */

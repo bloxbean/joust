@@ -26,7 +26,7 @@ tasks.named('test') {
             ':examples:dsl:classes', ':examples:guild:classes', ':examples:token:classes', ':examples:treasury:classes',
             ':examples:market:classes', ':examples:fees:classes', ':examples:crowdfund:classes', ':examples:pool:classes',
             ':examples:rollup:classes', ':examples:dex:classes', ':examples:staking:classes', ':examples:oracle:classes',
-            ':examples:upgrade:classes', ':examples:locker:classes'
+            ':examples:upgrade:classes', ':examples:locker:classes', ':examples:registry:classes'
 }
 
 tasks.register('i1Dump', JavaExec) {

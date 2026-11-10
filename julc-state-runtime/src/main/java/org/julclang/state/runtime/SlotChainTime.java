@@ -36,7 +36,8 @@ public final class SlotChainTime implements ChainTime {
 
     @Override
     public long slotToPosixMs(long slot) {
-        return zeroTimeMs + (slot - zeroSlot) * slotLengthMs;
+        // Exact: an absurd slot throws instead of wrapping into a time in the past (R-E2).
+        return Math.addExact(zeroTimeMs, Math.multiplyExact(Math.subtractExact(slot, zeroSlot), slotLengthMs));
     }
 
     @Override

@@ -32,6 +32,11 @@ public final class StateRuntime {
     private final MerkleSupport.Prover mapProver;
     private final Consumer<BuiltTx> onBuilt;
     private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts;
+    private final java.util.List<Relay> relays;
+    private final long[] pageLimits;
+    private final long topUpAllowance;
+    private final Duration relayTimeout;
+    private final long settlementSlots;
 
     /** A transaction the runtime built: what it is for, and the transaction (signed when submitted, unsigned when prepared). */
     public record BuiltTx(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {}
@@ -51,6 +56,11 @@ public final class StateRuntime {
         this.mapProver = b.mapProver;
         this.onBuilt = b.onBuilt;
         this.referenceScripts = Map.copyOf(b.referenceScripts);
+        this.relays = b.relays.isEmpty() ? java.util.List.of(Relay.of(b.backend)) : java.util.List.copyOf(b.relays);
+        this.pageLimits = b.pageLimits;
+        this.topUpAllowance = b.topUpAllowance;
+        this.relayTimeout = b.relayTimeout;
+        this.settlementSlots = b.settlementSlots;
         org.julclang.stdlib.Builtins.setCryptoProvider(new CclCryptoProvider());   // contract code may hash (ADR-0002)
     }
 
@@ -66,6 +76,29 @@ public final class StateRuntime {
     public long ttlMs() { return ttlMs; }
     public int maxRetries() { return maxRetries; }
     public Duration confirmTimeout() { return confirmTimeout; }
+    /**
+     * Where a keyed operation's attempts go (default: the backend's submit endpoint; ADR-0016 D7). Every other
+     * transaction goes to the backend alone, as before: only an operation with a designated input may rebuild after an
+     * untrusted relay's answer.
+     */
+    public java.util.List<Relay> relays() { return relays; }
+    /**
+     * The most lovelace a keyed operation adds to an output to reach the ledger minimum computed from the provider's
+     * protocol parameters (a relinked anchor or predecessor, a retired node, a padded payout, a head; ADR-0016 §2, R-C8).
+     */
+    public long topUpAllowance() { return topUpAllowance; }
+    /** How long a keyed attempt waits for each relay's answer; no answer by then is an unknown delivery (ADR-0016 D7). */
+    public Duration relayTimeout() { return relayTimeout; }
+    /**
+     * How many slots past the end of a keyed operation's last attempt window the provider's tip must be before the
+     * runtime reports a definite failure, or releases a pending operation's designated input (ADR-0016 D7).
+     */
+    public long settlementSlots() { return settlementSlots; }
+    /**
+     * A page's absolute window limits, in slots after the tip ({@code {maxStartSlots, maxValiditySlots}}), or null: keyed
+     * calls then keep their windows within them (ADR-0016 D7 steps 1 and 5).
+     */
+    public long[] pageLimits() { return pageLimits == null ? null : pageLimits.clone(); }
     void log(String message) { log.accept(message); }
     /** Reports a built transaction to the observer, if any (fixtures, diagnostics; ADR-0015 M0). */
     void built(String what, com.bloxbean.cardano.client.transaction.spec.Transaction tx, boolean prepared) {
@@ -149,11 +182,20 @@ public final class StateRuntime {
         private MerkleSupport.Prover mapProver;
         private Consumer<BuiltTx> onBuilt;
         private final Map<String, com.bloxbean.cardano.client.api.model.Utxo> referenceScripts = new HashMap<>();
+        private final java.util.List<Relay> relays = new java.util.ArrayList<>();
+        private long[] pageLimits;
+        private long topUpAllowance = 10_000_000L;
+        private Duration relayTimeout = Duration.ofSeconds(60);
+        private long settlementSlots = 2;
 
         private Builder(BackendService backend) {
             this.backend = backend;
         }
 
+        /**
+         * The script evaluator for building. It runs while the payer's builds are serialised (ADR-0016 D7: selection and
+         * designation of one address do not interleave), so it must not wait for another build of the same payer.
+         */
         public Builder evaluator(TransactionEvaluator evaluator) { this.evaluator = evaluator; return this; }
         public Builder network(Network network) { this.network = network; return this; }
         public Builder chainTime(ChainTime chainTime) { this.chainTime = chainTime; return this; }
@@ -189,6 +231,60 @@ public final class StateRuntime {
             if (utxo != null && utxo.getReferenceScriptHash() != null) referenceScripts.put(utxo.getReferenceScriptHash().toLowerCase(), utxo);
             return this;
         }
+
+        /**
+         * Sends every attempt of a keyed operation to these relays instead of the backend alone (ADR-0016 D7): the same
+         * bytes to each; any acceptance or unknown delivery (a relay that throws included) dominates rejections. Relays
+         * are untrusted, so they are used only where a designated input keeps two attempts from both landing; every
+         * other transaction (calls that are not keyed, deployments, reference scripts) goes to the backend alone.
+         */
+        public Builder relays(java.util.List<Relay> relays) {
+            this.relays.clear();
+            this.relays.addAll(relays);
+            return this;
+        }
+
+        /**
+         * Keeps keyed calls' windows within a page's absolute limits, in slots after the tip (ADR-0013's verifier:
+         * {@code maxStartSlots} 60 and {@code maxValiditySlots} 900 by default, for one-second slots; ADR-0016 D7).
+         */
+        public Builder pageLimits(long maxStartSlots, long maxValiditySlots) {
+            this.pageLimits = new long[]{maxStartSlots, maxValiditySlots};
+            return this;
+        }
+
+        /**
+         * The most lovelace a keyed operation adds to an output to reach the ledger minimum the provider's parameters
+         * give (default 10 ADA, about the honest worst case); above it the call is refused (ADR-0016 §2).
+         */
+        public Builder topUpAllowance(long lovelace) {
+            if (lovelace < 0) throw new IllegalArgumentException("topUpAllowance must not be negative");
+            this.topUpAllowance = lovelace;
+            return this;
+        }
+
+        /** How long a keyed attempt waits for each relay (default 60 s); after that its answer is unknown (R-E8). */
+        public Builder relayTimeout(Duration timeout) {
+            if (timeout.isNegative() || timeout.isZero()) throw new IllegalArgumentException("relayTimeout must be positive");
+            this.relayTimeout = timeout;
+            return this;
+        }
+
+        /**
+         * How many slots past the end of a keyed operation's last attempt window the provider's tip must be before a
+         * definite failure (default 2). Raise it on networks where a short chain switch could still include an attempt
+         * (R-E7).
+         */
+        public Builder settlementSlots(long slots) {
+            if (slots < 0 || slots > MAX_SETTLEMENT_SLOTS) {
+                throw new IllegalArgumentException("settlementSlots must be 0 to " + MAX_SETTLEMENT_SLOTS);
+            }
+            this.settlementSlots = slots;
+            return this;
+        }
+
+        /** The deepest settlement allowed (F75): about a day of one-second slots. */
+        public static final long MAX_SETTLEMENT_SLOTS = 100_000;
 
         public StateRuntime build() {
             return new StateRuntime(this);

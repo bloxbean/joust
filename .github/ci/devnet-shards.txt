@@ -4,3 +4,4 @@
 :julc-state-runtime-wasm:test :examples:escrow:test :examples:wallet:test :examples:dex:test :examples:oracle:test :examples:fees:test
 :examples:dapp:test :examples:guild:test :examples:dsl:test :examples:token:test :examples:treasury:test :examples:pool:test :examples:counter:test
 :examples:rollup:test :examples:crowdfund:test :examples:vault:test :examples:market:test :examples:locker:test :examples:bank:test :examples:staking:test :examples:upgrade:test
+:examples:registry:test
