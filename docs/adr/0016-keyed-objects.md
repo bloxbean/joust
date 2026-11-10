@@ -1309,15 +1309,23 @@ its recorded hash. Since the review, the baseline also holds every existing exam
 selection path every transaction now takes (`Designation`), and pass. For transactions that are not keyed, submission
 is the pre-M2 code (one backend submit; a serialisation failure is pending, as before), and selection with nothing
 designated returns the provider's own lists. The second review (E) confirmed all 27 non-keyed generated clients and all
-52 generated sources of the 21 non-registry examples byte-identical from `35e0841` to `4bac87d`. Behaviour is not
-identical in every respect, though: see "Selection around designated inputs" below for what changes for plain
-transactions while a keyed operation of the same wallet runs.
+52 generated sources of the 21 non-registry examples byte-identical from `35e0841` to `4bac87d`. What is unchanged
+for transactions that are not keyed is their *bytes* (generated code, and transactions built with nothing designated),
+and their submission. Their *runtime behaviour* is not identical (Codex round 3): every build now takes its payer's lock
+and claims its inputs; preparations and publication preparations claim theirs; explicit seed and funding picks are
+claimed for their scope; a build is refused if an explicit input was designated meanwhile; a nested build for another
+payer on one thread is refused; `SlotChainTime.slotToPosixMs` throws on overflow instead of wrapping; an interrupt
+while waiting for inclusion is now pending; and the `Tx` the runtime builds into records its inputs (it builds the
+same transaction). See "Selection around designated inputs" below for what changes while a keyed operation of the
+same wallet runs.
 
 **After the review of M2 (how the runtime now reads D7).** These refine D7 without changing a decision; the table below
 maps them to the findings.
 - *Which transactions use relays.* Only attempts of an operation with a designated input (a keyed call, a composition
   with one). Relays are called in parallel, each given `relayTimeout` (default 60 s); no answer by then is an unknown
-  delivery (R-E8). A rejection counts as one whether or not it gives a reason (F67). Every other transaction (calls that are not keyed, deployments, reference scripts, wallet submissions)
+  delivery (R-E8). At most 64 relay calls run at once in the JVM; an unanswered one is cancelled (interrupted) when its
+  attempt stops waiting, still an unknown delivery, and one that ignores interrupts keeps its thread until it returns; a
+  relay that cannot start because every thread is busy is unknown too (F70). A rejection counts as one whether or not it gives a reason (F67). Every other transaction (calls that are not keyed, deployments, reference scripts, wallet submissions)
   goes to the backend alone, through the pre-M2 code: ADR-0001 D14's trust in the backend is unchanged for them.
 - *How a series ends.* A series rebuilds, under its designated input, after a rejection or a transient refusal; after a
   build failure or a phase-2 script failure only if an input the attempt spent, or a reference input it read (the
@@ -1325,10 +1333,15 @@ maps them to the findings.
   the series goes through one rule (the first version missed the back-off, a failing log and `Error`s; F62, R-E1,
   R-E9): it ends in a failure (`ContentionException`, or a rebuild's own error such as "key already taken") only after
   the provider's tip has passed the end of every handed-out attempt's window by `settlementSlots` (default 2; R-E7) and
-  the designated input is still unspent. Otherwise it is pending; an `Error` propagates, but the input stays reserved.
+  the designated input is still unspent. Otherwise it is pending. Structurally (Codex round 3, F69): everything after an
+  attempt (classifying it, logging, the back-off, settling) runs in one guard whose only outcomes are another attempt,
+  a definite failure that `settle` confirmed (or one before any hand-out), or `PendingTransactionException` with the
+  operation's record; anything unexpected there after a hand-out, an `Error` included, ends pending with the original
+  failure as its cause. Unreadable reference metadata counts as moved.
   Every attempt with a designated input has a finite window: a link window, the call's own, or, for a call that uses
   no time, the runtime's TTL (the first version built those with no validity bound at all, so they could never be
-  settled; F65, R-E2). So the wait is at most that window: on DevKit the 20-second TTL.
+  settled; F65, R-E2), starting at the current slot (F74). So the wait is at most that window: on DevKit the 20-second
+  TTL. The settlement depth is bounded (at most 100,000 slots), and its arithmetic fails closed (pending, reserved; F75).
 - *Pending, and resuming after it.* `PendingTransactionException` names every handed-out attempt (`attempts()`, the
   last also as `txHash()`) and the designated input (`designatedInput()`). The input, and every input the handed-out
   attempts spend, stay reserved in this JVM until the attempts' windows (and the settlement depth) have passed. A caller resumes by looking the attempts up: if one landed, the operation happened;
@@ -1342,9 +1355,15 @@ maps them to the findings.
   or funding input from its pick (under the address's lock) until its build claims it; a built transaction's inputs
   until it is resolved; a keyed attempt's inputs, once handed out, until its series ends, even after a relay said
   "rejected" (the operation's own rebuilds may reuse them, no one else's; F64); a prepared (wallet) transaction's until
-  its TTL, a publication without a validity bound for 10 minutes. Claims are identities, so two claims of the same
-  inputs are released separately (F66). `reserve` reads its candidates under the address's lock. What the first
-  version overclaimed (F63, R-E4, R-E5), and what holds now:
+  its TTL once it is returned (a preparation that fails releases them; F71), a publication without a validity bound for
+  10 minutes. Picks belong to the outermost scope on the thread (a deployment, an owned creation, an intent, a
+  preparation, a whole composition), which releases them once the transaction was built and claimed its own inputs, or
+  when nothing was built (F71). Picks skip inputs another keyed operation holds, and a keyed attempt's build refuses an
+  explicit input another keyed operation holds (F72). Claims are identities, so two claims of the same inputs are
+  released separately (F66). `reserve` reads its candidates under the address's lock. A thread that holds one payer's
+  lock cannot take another's: a nested build for a second payer (an evaluator or callback building) is refused before
+  it could block, so two payers' builds never wait on each other (F73). What the first version overclaimed (F63, R-E4,
+  R-E5), and what holds now:
   - Plain transactions do not skip claimed inputs (a wallet with one UTxO still serves two plain calls one after the
     other). So a plain call of the same wallet can spend the fee or collateral input of a keyed attempt waiting for its
     window, which then fails and is rebuilt (liveness only; R-E5a).
@@ -1355,6 +1374,12 @@ maps them to the findings.
     another build of the same payer would deadlock.
   - Inputs that application code collects explicitly from a wallet are not claimed before the build; if a keyed
     operation designated one meanwhile, the build is refused.
+  - **A limit: transactions without a validity bound.** A reference-script or verifier publication (built by
+    `submitPlain` or prepared for a wallet) has no TTL, and adding one would change those transactions' bytes. Its
+    claims end after a fixed 10 minutes, which is bookkeeping, not evidence: a publication withheld or pending for longer
+    can still land, and could then spend an input a keyed operation designated after the claim ended (that operation
+    would then end pending: liveness, not a double landing). Publish reference scripts and verifiers before keyed
+    traffic, as the runtime already does on first use, or keep such wallets apart.
   - "Pre-M2 selection" therefore holds for plain transactions only while none of the wallet's UTxOs is designated or
     claimed by a keyed attempt. With nothing designated, builds are byte-identical to the pre-M2 ones.
 - *Windows.* A keyed attempt waits for its window's start on the current slot (the machine's clock and the network's
@@ -1445,9 +1470,29 @@ operation while the first may still land.
 | R-E5b | A designated sole UTxO blocks plain calls during the operation and its linger | Documented ("Selection around designated inputs") | — |
 | R-E6 | One lock per payer across `buildAndSign` serialises that payer's builds and holds across provider reads | Documented (same place). Narrowing the lock to selection and claim would need an optimistic rebuild of plain transactions, which risks their byte-identity; not done | — |
 
+**Round 3.** Codex re-reviewed `4bac87d..32813d0`: no P0; F69 (P1), F70–F74 (P2), F75 (P3), and residual scenarios
+for F63, F64 and F68. The fixes aim at the class of bug, not the instance.
+
+| ID | Finding | What changed | Where |
+|---|---|---|---|
+| F69 | Classifying a failure (`inputsMoved` reading a reference without amounts) ran inside the catch and could escape settlement after a hand-out | `series` is one guard: after `attempt.apply`, classification, logging, the back-off and `settle` run in `next(...)`; its only outcomes are a retry, a definite failure (no hand-out, or `settle` confirmed), or Pending with the record; anything unexpected after a hand-out (an `Error` included) ends Pending with the original failure as cause. `inputsMoved` treats null or unreadable metadata as moved, inside its guard | `R/KeyedObjects.java`; `KeyedSeriesTest` (a reference without amounts after a SCRIPT rejection; a failure while classifying; an `Error` after a hand-out) |
+| F68 (residual) | Ordinary calls' reference inputs in a keyed composition were not registered | Structural: the `Tx` every call builds into (`TxRunner.newTx`, a composition's shared one) records the script inputs it spends and the references it reads, whichever call added them; `TxRunner.submit` notes them for a designated attempt. The per-call noting is gone | `R/TxRunner.java` (`RecordingTx`); `KeyedSeriesTest.aBuildFailureAfterOnlyAReferenceMoved_isContentionAndRebuilt_throughTheTransactionsOwnRecord` (an ordinary shared read and a `Call`'s reads, through `submit`) |
+| F74 | The synthesized untimed window started at the tip block's slot | It starts at the current slot (the clock `awaitWindow` checks), with checked arithmetic; designated attempts only | `R/TxRunner.java` (`untimedWindow`); `KeyedSeriesTest` (a tip 40 slots stale) |
+| F73 | Locked preparations could deadlock across two payers through an evaluator | A thread holding one payer's lock that asks for another's is refused before it could block (`Designation.locked`); same-payer reentry still works | `R/Designation.java`; `KeyedSeriesTest.aNestedBuildForAnotherPayerIsRefusedBeforeItCouldBlock` |
+| F70 | Relay deadlines left unbounded worker threads running | A bounded pool (64 threads); unanswered calls are cancelled when the attempt stops waiting (still unknown); a relay that cannot start is unknown. A relay ignoring interrupts holds its thread until it returns (documented) | `R/TxRunner.java`; `KeyedSubmissionTest` |
+| F71, F63 (residual) | Picks returned no handle; failed preparations kept their claims | Picks belong to the outermost scope on the thread (deployment, owned creation, intent, preparation, composition) and are released when it closes, after the build claimed its own inputs; a preparation releases its claim when it fails and keeps it until its TTL only when it returns a prepared transaction; reference-script and verifier preparations likewise | `R/Designation.java` (`scope`, `pick`), `R/TxRunner.java`, `R/StateContractHandle.java`, `R/OwnedObject.java`, `R/IntentHandle.java`, `R/VerifierHandle.java`, `R/Compose.java`; `KeyedSeriesTest` |
+| F72 | Explicit inputs bypassed the exclusion of another keyed operation's claims | Picks skip inputs another keyed operation holds; a keyed attempt's build refuses an explicit input held by another keyed operation (plain builds keep their pre-M2 rule) | `R/Designation.java` (`pickable`, `build`); `KeyedSeriesTest` |
+| (round-3 build) | The first full build after F72's fix failed three DevKit tests (two inserts into one gap, the contested gap, a remove against an updated predecessor): a handed-out attempt held *all* its inputs, script inputs included, so another operation's build of the same anchor or predecessor was refused locally ("held by another keyed operation") instead of contending on chain | Only wallet inputs are claimed: the script inputs a transaction spends (recorded by its `Tx`) are left out of every claim, so contention for a shared list node stays the ledger's, as D7 intends. The three tests pass again | `R/Designation.java` (`build`), `R/TxRunner.java`; `KeyedSeriesTest.scriptInputsAreNeverClaimed_soConcurrentOperationsStillContendForAnAnchorOnChain` |
+| F75 | `settlementSlots` overflow could fake a definite failure | Bounded to 100,000 in the builder; settlement and the linger use checked arithmetic and fail closed | `R/StateRuntime.java`, `R/KeyedObjects.java` |
+| F63, F64 (residual) | Unbounded publications' claims expire after 10 minutes though the transaction can still land | Documented as a limit ("Selection around designated inputs"): a TTL would change those transactions' bytes. Liveness only | — |
+| (Codex §3) | "No non-keyed behaviour changed" was too broad | The compatibility paragraph now separates bytes (unchanged) from behaviour (locks, claims, refusals, checked slot arithmetic, recording `Tx`) | above |
+
 After the first round's changes, a full `./gradlew build --continue` with Yaci DevKit up passed (43 min; the three
 tests that need a browser or a Web Image skip, as before), the compatibility baseline (123 files) was byte-identical, and
 `fixtures/m0` unchanged. After round 2, the first full build (45 min) failed only `ContestedGapDevnetTest`, whose
 round-1 assertion was wrong (above); with it corrected, `./gradlew build --continue` with DevKit up passes (26 min: the
 test tasks whose inputs had not changed since the first run were up to date, the registry's ran in full), the baseline
-(123 files) is byte-identical, and `fixtures/m0` is unchanged.
+(123 files) is byte-identical, and `fixtures/m0` is unchanged. After round 3, the first full build (40 min) failed three registry DevKit tests (the claims of
+script inputs, fixed above); after that fix, `./gradlew build --continue` with DevKit up passes (44 min; the API and DSL
+test tasks, unchanged, were up to date; the same three tests skip), the baseline (123 files) is byte-identical,
+`ReplayTest` and `DescribedReplayTest` rebuild the recorded transactions byte for byte, and `fixtures/m0` is unchanged.
