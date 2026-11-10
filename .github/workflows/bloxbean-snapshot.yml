@@ -1,5 +1,5 @@
 # From bloxbean/release-ops templates/workflows/bloxbean-snapshot.yml (docs/12-bloxbean-maven-repository.md).
-# JOUST resolves JuLC from this same repository (a published JuLC snapshot), so the Gradle consumer check runs.
+# JOUST resolves JuLC from the BloxBean Maven repository (gradle/libs.versions.toml), so the Gradle consumer check runs.
 name: Publish snapshot to the BloxBean Maven repository
 
 # Publishes the commit's Maven publications to the BloxBean Maven repository on Cloudflare R2, which consumers
