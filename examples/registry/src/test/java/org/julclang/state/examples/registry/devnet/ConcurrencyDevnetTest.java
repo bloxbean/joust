@@ -66,8 +66,11 @@ class ConcurrencyDevnetTest {
         assertEquals(List.of("61", "62", "63", "66", "68", "6e", "70"), keys(reg));
         assertEquals(4, rig.built("Registry.claim").size() - start, "four gaps, four transactions: none refused (R-D13.2)");
 
-        // Two threads into one gap (c..f), both anchored at c, just inserted: they race at its cooldown's end; the loser
-        // is rejected (its anchor was spent), rebuilds against the winner's node, and lands after that one's cooldown.
+        // Two threads into one gap (c..f), both anchored at c, just inserted. Usually they race at its cooldown's end: the
+        // loser is rejected (its anchor was spent), rebuilds against the winner's node, and lands after that one's
+        // cooldown (3 transactions). But the collision is timing-dependent: a thread that reads the list after the other
+        // has landed anchors on the new node and builds once (2 transactions, nothing refused). Both outcomes are correct;
+        // the retry itself is shown deterministically by ContestedGapDevnetTest and HostilityDevnetTest's remove.
         int before = rig.built("Registry.claim").size();
         long t1 = System.currentTimeMillis();
         var d = CompletableFuture.runAsync(() -> reg.claim(wallet, new byte[]{0x64}, BigInteger.ONE, g, BigInteger.ONE, ADA.multiply(BigInteger.TWO)));
@@ -75,8 +78,9 @@ class ConcurrencyDevnetTest {
         CompletableFuture.allOf(d, e).join();
         int built = rig.built("Registry.claim").size() - before;
         System.out.println("[concurrency] two threads into one gap: " + (System.currentTimeMillis() - t1) / 1000 + " s, " + built
-                + " transactions built");
-        assertTrue(built >= 3, "one of the two retried");
+                + " transactions built (" + (built >= 3 ? "they collided; the loser was rebuilt" : "no collision: the second read the"
+                + " list after the first landed") + ")");
+        assertTrue(built >= 2, "each insert built at least once");
         assertEquals(List.of("61", "62", "63", "64", "65", "66", "68", "6e", "70"), keys(reg));
     }
 }
