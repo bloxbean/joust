@@ -34,6 +34,7 @@
     "@emurgo/cardano-serialization-lib-nodejs": "15.0.3"
   },
   "license": "MIT",
+  "homepage": "https://github.com/bloxbean/joust/tree/main/js/state-client",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bloxbean/joust.git",
