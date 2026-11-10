@@ -1,75 +1,30 @@
-# JOUST: JuLC State Contracts
+# JOUST
 
-*JOUST = **pronounced "jowst".*
+**State Contract Simplified**
 
-> **Status: Options A–E and G work end to end, and F is a working spike; nothing is published yet.** The example contracts are generated,
-> attack-tested and run on Yaci DevKit:
-> - A: single-UTxO state machines;
-> - B: MerkleMap state with a shared proof verifier;
-> - C: owned objects beside shared state;
-> - D: batched intents for hot shared state;
-> - E: `.jsc`, a Solidity-like surface syntax that lowers to a Java `@StateContract`;
-> - F (spike): an optimistic L2 whose one-step fraud proofs re-run the same Java step function on-chain;
-> - G: native assets: contracts hold tokens, mint their own (LP tokens, NFTs) and send to any address with any datum
->   (a DEX and an NFT marketplace);
-> - H: lower fees: cheaper generated checks and smaller scripts;
-> - I: deploy parameters, M-of-N quorums, script callers (withdraw-zero governors), invariants and authenticated events
->   (a multisig treasury);
-> - J: every script purpose: staked state, reward withdrawals, certificates, DRep votes, guardrails (a staked vault);
-> - K: composition: several contracts' calls in one transaction (`Compose`), typed reads of another contract
->   (`@Reads`, an oracle), version migration (`@MigrateTo`/`@Migrate`), and deposits into another contract's instance
->   (`@Receives`, a fee pot);
-> - L: owned objects v2: several owned types per contract, MerkleMaps inside objects, and objects moving between
->   instances with the destination's consent (`@Into`/`@Admits`; a game guild);
-> - M (phase 1): browser wallets: transactions prepared for a CIP-30 wallet address (`WalletAccount`,
->   `Compose.prepare()`), verified by the page and signed by the wallet.
-> - M (phases 2 and 3): JavaScript pages. The processor describes each contract (CIP-57 plus `x-joust`).
->   `@julclang/state-client` (`js/state-client`) encodes calls, verifies prepared transactions and generates typed
->   clients. `julc-state-server` prepares transactions over HTTP. `examples/dapp` is a browser dApp on DevKit.
+[![release](https://img.shields.io/maven-metadata/v?metadataUrl=https%3A%2F%2Frepo.bloxbean.org%2Fmaven%2Freleases%2Forg%2Fjulclang%2Fjulc-state-runtime%2Fmaven-metadata.xml&label=release)](#getting-started)
 
-## Development snapshots
+*JOUST is pronounced "jowst".*
 
-[![snapshot](https://img.shields.io/maven-metadata/v?metadataUrl=https%3A%2F%2Frepo.bloxbean.org%2Fmaven%2Fsnapshots%2Forg%2Fjulclang%2Fjulc-state-runtime%2Fmaven-metadata.xml&strategy=latestProperty&label=snapshot)](https://github.com/bloxbean/joust/releases/tag/snapshot)
+> [!WARNING]
+> **Status: Experimental — Research & Learning Project**
+>
+> JOUST is an experimental project created mainly for research and exploration of state-oriented smart contracts on Cardano.
+>
+> **Please do not use this in production.** Expect rough edges, incomplete features, and potential bugs.
 
-Development snapshots are in the BloxBean Maven repository, one version per commit (`0.1.0-pre1-<sha7>-SNAPSHOT`). The
-newest version is on the [Development snapshot](https://github.com/bloxbean/joust/releases/tag/snapshot) page.
+JOUST lets you write a Cardano smart contract as **state plus actions**, the way you would write an account-based
+contract, instead of UTxOs, datums and redeemers. You write a state record and pure static `@Init`, `@Action` and
+`@View` methods. The JOUST annotation processor generates an on-chain validator, compiled by
+[JuLC](https://github.com/bloxbean/julc), and a typed off-chain client on
+[cardano-client-lib](https://github.com/bloxbean/cardano-client-lib). The same Java method runs on both sides: the
+client runs it on the JVM to compute the next state and build the transaction, and the validator re-runs it on-chain
+and checks that the new datum is its result. The validator also enforces the invariants of
+[ADR-0001](docs/adr/0001-option-a-single-utxo-state-machine.md) §4: a one-shot thread token per instance, an exact
+datum and value, a verified `Ctx` (caller, received, balance, validity bounds), payouts tagged against double
+satisfaction, and a burn on destroy.
 
-```gradle
-repositories {
-    mavenCentral()
-    maven {          // JOUST and JuLC snapshots
-
-        url = uri('https://repo.bloxbean.org/maven/snapshots')
-        mavenContent { snapshotsOnly() }
-    }
-}
-dependencies {
-    implementation "org.julclang:julc-state-runtime:$joustVersion"
-    annotationProcessor "org.julclang:julc-state-processor:$joustVersion"
-    annotationProcessor "org.julclang:julc-state-api:$joustVersion:onchain"   // on-chain sources for JuLC
-    annotationProcessor "org.julclang:julc-annotation-processor:$julcVersion"
-    testImplementation "org.julclang:julc-state-testkit:$joustVersion"
-}
-```
-
-JOUST needs JuLC `main` at 80490306 or later (bloxbean/julc#311 and #313): `julcVersion` is the `julc` entry of
-`gradle/libs.versions.toml` (`0.1.0-pre21-71b3a73-SNAPSHOT`), a JuLC snapshot in the same repository. A project that
-applies JuLC's Gradle plugin (`org.julclang.julc`) also needs that repository in `pluginManagement`. Publishing is
-described in [docs/release-ops.md](docs/release-ops.md).
-
-JOUST lets Java developers write Cardano smart contracts as **state plus actions**, the way they would write an
-account-based contract, instead of UTxOs, datums and redeemers. You write a state record and pure static methods.
-The JOUST annotation processor generates:
-
-- **`<Name>Validator`:** a JuLC `@MultiValidator` (MINT + SPEND). It re-runs your method on-chain and enforces the
-  invariants of [ADR-0001](docs/adr/0001-option-a-single-utxo-state-machine.md) §4:
-  - a one-shot thread token per instance, on one shared script per contract type;
-  - an exact datum and exact value;
-  - a verified `Ctx` (caller, received, balance, validity bounds);
-  - payouts tagged against double satisfaction;
-  - a burn on destroy.
-- **`<Name>Client`:** a typed off-chain client on cardano-client-lib. It runs the same method on the JVM first, so a
-  failing `Require` costs nothing, then builds, checks, submits and confirms the transaction.
+## Example
 
 ```java
 @StateContract(maxDatumBytes = 128)
@@ -84,10 +39,14 @@ public class Vault {
     }
 
     @Action @Payable
-    public static State deposit(State s, Ctx ctx) { ... }
+    public static State deposit(State s, Ctx ctx) {
+        Require.that(ctx.received().compareTo(BigInteger.ZERO) > 0, "deposit must be positive");
+        return new State(s.owner(), s.unlockAt(), s.total().add(ctx.received()));
+    }
 
     @Action @OnlyOwner @ValidAfter("unlockAt")
     public static Result withdraw(State s, BigInteger amount, Ctx ctx) {
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
         Require.that(amount.compareTo(s.total()) <= 0, "insufficient funds");
         return new Result(new State(s.owner(), s.unlockAt(), s.total().subtract(amount)), Payouts.of(s.owner(), amount));
     }
@@ -99,71 +58,131 @@ public class Vault {
 }
 ```
 
+The processor generates `VaultValidator` (a JuLC `@MultiValidator`, MINT + SPEND) and `VaultClient`:
+
 ```java
 var vault = VaultClient.deploy(runtime, alice, unlockAt, tenAda);   // mints the thread token, locks 10 ADA
 vault.deposit(bob, fiveAda);
-vault.withdraw(alice, threeAda);                                    // RequireException before unlockAt, nothing submitted
-vault.close(alice);                                                 // burns the token, pays everything out
+vault.withdraw(alice, threeAda);    // before unlockAt: RequireException on the JVM, nothing submitted
+vault.close(alice);                 // burns the token, pays everything out
 ```
+
+The full contract and app are in [examples/vault](examples/vault/src/main/java/org/julclang/state/examples/vault).
+
+## Getting started
+
+JOUST is pre-release. Release candidates (`0.1.0-pre1-rcN`) go to the BloxBean release repository,
+`https://repo.bloxbean.org/maven/releases` (the badge above shows the newest). Nothing is on Maven Central yet.
+Publishing is described in [docs/release-ops.md](docs/release-ops.md).
+
+### Java (Gradle)
+
+JDK 25. The repositories are the ones JOUST's own build uses:
+
+```groovy
+repositories {
+    mavenCentral()
+    maven {          // BloxBean releases and release candidates: JOUST, JuLC
+        url = uri('https://repo.bloxbean.org/maven/releases')
+        mavenContent { releasesOnly() }
+    }
+    maven {          // BloxBean development snapshots
+        url = uri('https://repo.bloxbean.org/maven/snapshots')
+        mavenContent { snapshotsOnly() }
+    }
+}
+dependencies {
+    implementation "org.julclang:julc-state-runtime:$joustVersion"
+    annotationProcessor "org.julclang:julc-state-processor:$joustVersion"
+    annotationProcessor "org.julclang:julc-state-api:$joustVersion:onchain"   // on-chain sources for JuLC
+    annotationProcessor "org.julclang:julc-annotation-processor:$julcVersion"
+    testImplementation "org.julclang:julc-state-testkit:$joustVersion"
+}
+```
+
+`julcVersion` is the `julc` entry of [gradle/libs.versions.toml](gradle/libs.versions.toml) for the JOUST version you
+use (`0.1.0-pre21-rc1` on `main`). A project that also applies JuLC's Gradle plugin (`org.julclang.julc`) needs the
+same two repositories in `pluginManagement`, as in [settings.gradle](settings.gradle).
+
+### JavaScript (npm, experimental)
+
+For JavaScript and TypeScript developers, JOUST builds, deploys and calls contracts with Node.js 22+ and npm only, no
+JDK or GraalVM ([ADR-0015](docs/adr/0015-option-n-javascript-developer-experience.md)):
+
+```sh
+npm create joust@latest my-app
+```
+
+This works once the npm packages are released; they are not yet. See
+[js/create-joust](js/create-joust/README.md) for what the project contains and the scripts it runs.
 
 ## Modules
 
 | Module | What it is |
 |---|---|
-| `julc-state-api` | Annotations, `Ctx`, `Payout`/`Payouts`, `Require`, `Clock`, `SortedMaps`. JuLC-compilable and JVM-runnable; its sources ship to JuLC as library sources (the `onchainSources` configuration) |
-| `julc-state-processor` | The annotation processor: contract reader (shape rules), State IR, validator and client generators, numeric-divergence lint |
-| `julc-state-runtime` | The off-chain runtime for generated clients: locate, run, build (QuickTx), verify, submit, confirm, retry on contention |
-| `julc-state-server` | The prepare service for JavaScript pages: serves generated clients over HTTP (`/api/prepare`, `/api/view`), with rate limits and a CORS allow-list (ADR-0013 D2) |
-| `js/state-client` | `@julclang/state-client`: the JavaScript client. It encodes calls from a contract's description, verifies prepared transactions before a CIP-30 wallet signs them, and generates typed clients (`joust-gen`) |
-| `julc-state-testkit` | `StateHarness` evaluates the compiled validator against runtime-shaped transactions; `Attacks` runs the attack suite (ADR-0001 D16) |
-| `examples/{counter,vault,escrow,crowdfund}` | Example contracts with JVM tests, harness and attack-suite tests, and Yaci DevKit integration tests ([budgets](examples/README.md)) |
-| `examples/devkit` | Yaci DevKit connection helper for the examples |
+| `julc-state-api` | Annotations, `Ctx`, `Payout`/`Payouts`, `Require`, `Clock`, `SortedMaps`. JuLC-compilable and JVM-runnable; its sources ship to JuLC as library sources (the `onchain` jar) |
+| `julc-state-processor` | The annotation processor: `@StateContract` → `<Name>Validator` (JuLC) and `<Name>Client`, contract descriptions (CIP-57 plus `x-joust`), and a lint that rejects fixed-width numbers in contract code |
+| `julc-state-runtime` | The off-chain runtime for generated clients: locate, run, build, evaluate, submit, confirm, retry on contention; `Compose` for several calls in one transaction |
+| `julc-state-testkit` | `StateHarness` evaluates the compiled validator against runtime-shaped transactions; `Attacks` runs the attack suite |
+| `julc-state-verifier` | The generic withdraw-zero map verifier that checks every MerkleMap claim of a transaction ([ADR-0002](docs/adr/0002-option-b-merkle-state-maps.md)) |
+| `julc-state-dsl` | `.jsc`, a state-contract syntax that lowers to a Java `@StateContract` ([ADR-0005](docs/adr/0005-option-e-jsc-dsl.md)) |
+| `julc-state-server` | The prepare service: prepares wallet transactions for JavaScript pages over HTTP ([ADR-0013](docs/adr/0013-option-m-wallets-and-js.md)) |
+| `julc-state-toolchain` | Compiles `.java` and `.jsc` contracts without Gradle or a JDK; built as a Wasm engine (GraalVM Web Image, experimental) for `@julclang/joust`. Not published to Maven |
+| `julc-state-runtime-wasm` | The runtime engine: prepares contract calls in a GraalVM Web Image (experimental) for `@julclang/joust-runtime`. Not published to Maven |
+| `js/state-client` | `@julclang/state-client`: encodes calls from a contract's description, verifies prepared transactions before a CIP-30 wallet signs them, and generates typed clients (`joust-gen`) |
+| `js/joust` | `@julclang/joust`: the `joust` CLI (build, deploy, dev, serve) and the Vite plugin |
+| `js/joust-runtime` | `@julclang/joust-runtime`: calls contracts from JavaScript with no JVM, through the Wasm runtime engine and a chain provider (Blockfrost, Yaci Store, Ogmios) |
+| `js/create-joust` | `create-joust`: `npm create joust` scaffolds a contract, a page and a test |
+| `examples/*` | Example contracts with JVM, on-chain harness, attack-suite and Yaci DevKit tests: `counter`, `vault`, `escrow`, `crowdfund`, `token`, `bank`, `pool`, `dsl`, `rollup`, `dex`, `market`, `treasury`, `staking`, `oracle`, `upgrade`, `guild`, `fees`, `locker`, `wallet`, `dapp`; `devkit` is the DevKit helper. See [examples/README.md](examples/README.md) for what each exercises, and script sizes and budgets |
+
+The JavaScript packages and the Wasm engines are experimental.
 
 ## Build
 
-- JDK 25. Versions live in `gradle/libs.versions.toml`.
-- CCL is `0.8.0-pre7`. JuLC is a snapshot of JuLC `main` (with [julc#311](https://github.com/bloxbean/julc/pull/311)
-  and [julc#313](https://github.com/bloxbean/julc/pull/313)), `0.1.0-pre21-71b3a73-SNAPSHOT`, resolved from the
-  BloxBean snapshot repository (`https://repo.bloxbean.org/maven/snapshots`), plugin included.
-- `./gradlew build` runs everything. Tests tagged `devnet` run only when Yaci DevKit answers on `localhost:8080`
-  (Store) and `:10000` (admin); otherwise they are skipped.
-- `./gradlew :examples:vault:run` (likewise `counter`, `escrow`, `crowdfund`) runs an example against Yaci DevKit.
+- JDK 25. Versions are in [gradle/libs.versions.toml](gradle/libs.versions.toml): JuLC `0.1.0-pre21-rc1` and
+  cardano-client-lib `0.8.0-pre7`, from Maven Central and the BloxBean repositories.
+- `./gradlew build` builds and tests everything. Tests tagged `devnet` need
+  [Yaci DevKit](https://github.com/bloxbean/yaci-devkit) with Yaci Store on `localhost:8080` and its admin API on
+  `:10000`; they skip themselves when DevKit is not reachable.
+- CI splits the tests: `-PnoDevnet` runs all but the `devnet` tests, and `-PdevnetOnly` runs only those.
+- `./gradlew :examples:vault:run` runs an example app against Yaci DevKit (likewise `counter`, `escrow`, `crowdfund`,
+  `token`, `bank`, `pool`, `dex`, `market`, `treasury`, `staking`, `oracle`, `upgrade` and `dapp`).
+- Inside this build, a module uses JOUST through project dependencies (see any example's `build.gradle`):
 
-## Using JOUST in a module
-
-```groovy
-dependencies {
-    implementation project(':julc-state-runtime')
-    annotationProcessor project(':julc-state-processor')
-    annotationProcessor libs.julc.annotation.processor
-    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
-}
-```
+  ```groovy
+  dependencies {
+      implementation project(':julc-state-runtime')
+      annotationProcessor project(':julc-state-processor')
+      annotationProcessor libs.julc.annotation.processor
+      annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+  }
+  ```
 
 ## Design
 
-- [ADR-0001](docs/adr/0001-option-a-single-utxo-state-machine.md): Option A. It covers:
-  - the design and the invariants;
-  - three independent reviews and how they were resolved;
-  - what the implementation taught us.
-- [ADR-0002](docs/adr/0002-option-b-merkle-state-maps.md): Option B, MerkleMap state verified by a shared withdraw-zero
-  script.
-- [ADR-0003](docs/adr/0003-option-c-owned-objects.md): Option C, `@Owned` objects with `@Shared` reads.
+- [Research](docs/research/state-oriented-contracts-research.md): the options and prior art.
+- [Annotation catalogue](docs/research/annotation-catalog.md): every annotation, planned and shipped.
+- [ADR-0001](docs/adr/0001-option-a-single-utxo-state-machine.md): Option A, single-UTxO state machines and their
+  invariants.
+- [ADR-0002](docs/adr/0002-option-b-merkle-state-maps.md): Option B, MerkleMap state checked by a shared withdraw-zero
+  verifier.
+- [ADR-0003](docs/adr/0003-option-c-owned-objects.md): Option C, `@Owned` objects beside `@Shared` state.
 - [ADR-0004](docs/adr/0004-option-d-batched-intents.md): Option D, `@Batched` intents and a permissionless batcher.
-- [ADR-0005](docs/adr/0005-option-e-jsc-dsl.md): Option E, the `.jsc` syntax lowered to Java (SSA, one helper per
-  `if` arm, checker rules).
-- [ADR-0006](docs/adr/0006-option-f-optimistic-l2.md): Option F spike, checkpoints, a challenge window and one-step
-  fraud proofs, with what is not built.
-- [ADR-0007](docs/adr/0007-option-g-assets-and-outputs.md): Option G, native assets in state, user-token minting
-  (`ByAction`) and general outputs (`Send`) with a shared output-claim registry.
+- [ADR-0005](docs/adr/0005-option-e-jsc-dsl.md): Option E, the `.jsc` syntax lowered to Java.
+- [ADR-0006](docs/adr/0006-option-f-optimistic-l2.md): Option F (spike), an optimistic L2 with one-step fraud proofs.
+- [ADR-0007](docs/adr/0007-option-g-assets-and-outputs.md): Option G, native assets, token minting and general
+  outputs.
 - [ADR-0008](docs/adr/0008-option-h-fees-and-size.md): Option H, cheaper invariant checks and smaller scripts.
 - [ADR-0009](docs/adr/0009-option-i-params-auth-invariants-events.md): Option I, `@Params`, `@Quorum`,
   `@AuthorizedBy`, `@Invariant` and events.
-- [ADR-0010](docs/adr/0010-option-j-script-purposes-and-staking.md): Option J, `@Withdraw`, `@Certify`, `@Votes`,
-  `@Propose` and `stakeSelf`.
-- [ADR-0011](docs/adr/0011-option-k-composition.md): Option K, `Compose`, `@Reads`, migration.
+- [ADR-0010](docs/adr/0010-option-j-script-purposes-and-staking.md): Option J, every script purpose and staked state.
+- [ADR-0011](docs/adr/0011-option-k-composition.md): Option K, `Compose`, `@Reads`, migration and deposits.
 - [ADR-0012](docs/adr/0012-option-l-owned-objects-v2.md): Option L, several owned types, owned MerkleMaps, moves.
 - [ADR-0013](docs/adr/0013-option-m-wallets-and-js.md): Option M, CIP-30 wallets and JavaScript clients.
 - [ADR-0014](docs/adr/0014-maps-v2.md): namespaced map claims, MerkleMaps with native assets.
-- [Research](docs/research/state-oriented-contracts-research.md): options A–F and prior art.
-- [Annotation catalogue](docs/research/annotation-catalog.md): everything planned, and what ships when.
+- [ADR-0015](docs/adr/0015-option-n-javascript-developer-experience.md): Option N, JOUST for JavaScript developers:
+  an npm toolchain and runtime on Wasm engines.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
