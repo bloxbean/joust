@@ -1520,3 +1520,104 @@ test tasks whose inputs had not changed since the first run were up to date, the
 script inputs, fixed above); after that fix, `./gradlew build --continue` with DevKit up passes (44 min; the API and DSL
 test tasks, unchanged, were up to date; the same three tests skip), the baseline (123 files) is byte-identical,
 `ReplayTest` and `DescribedReplayTest` rebuild the recorded transactions byte for byte, and `fixtures/m0` is unchanged.
+
+## Implementation notes (M3)
+
+What M3 built, how each exit criterion is shown, and where the code differs from the text above. The decisions are
+unchanged; the deviations below are the conservative readings chosen where the text left a choice.
+
+**Built.**
+- *Description (D11):* `x-joust.keyed` describes each keyed type: its value record, key field and index, `maxKeyBytes`,
+  `signedKey`, `linkCooldownMs`, `linkWindowMs`, `typeId`, the `Head_T`/`Keyed_T`/`Retired_T` tags and datum
+  definitions, the `Link` and `Remove_T` redeemers, and the type's inserts, keyed actions, removes and retires. Each
+  keyed call is described with its kind (`keyedInit`, `keyedAction`, `keyedRemove`, `keyedRetire`), its redeemer and a
+  recipe (an insert's redeemer fields start with `instance`, `anchor`; a removal's burn is `Remove_T`); the keyed
+  contract's creation is listed again (M1 had left it out). The spend validator's datum names every list datum.
+  `x-joust.tokens` gains `keyed`. Portable steps include keyed methods. `RegistryDescriptionTest` checks the tags,
+  `typeId`s and redeemer indexes against the generated validator's permits and the Java client.
+- *Runtime (Java):* `KeyedType` takes Data values (a described contract: no record class, no reflection);
+  `ContractSpec.described(…, keyed)`; `DescribedContract` runs every keyed kind and the creation with heads.
+  `Compose.designate(ref).prepare()` prepares a keyed call for a wallet: the built transaction must spend the page's
+  designated input (checked after the build), and a creation's seed is that input. `prepare()` refuses a keyed call
+  without a designated input, and one composed with any other call (D11). A link window that would start beyond the
+  page's start limit is refused with `prepare again at slot N` (an engine cannot wait; D7 step 5).
+- *Engine:* the request's `designated` and `pageLimits` (default 60 and 900 slots) reach the runtime; only keyed calls
+  read them.
+- *Page (js/state-client):* `verifyKeyed` (keyed.js), reached through `verifyPrepared` for every keyed call and a keyed
+  contract's creation; `retries.js` records each operation's designated input (IndexedDB in a browser, memory in
+  Node; one record per wallet and network); `JoustContract.runKeyed` designates (the largest lovelace-only UTxO of at
+  least 5 ADA at the funding address), records before the wallet signs, prepares again when the engine names a slot,
+  submits a window at its start, and keeps the record while an attempt may land (`PendingKeyedOperation`).
+  `JoustKeyedList` (`find`, `exists`, `keys` walked from the head with I51 validation, `insert`) and `JoustKeyedObject`;
+  `joust-gen` generates keyed members; `verifyComposed`/`runComposed` refuse keyed calls; `parseTx` gives each output's
+  encoded size and `verifiedOutput` its value.
+- *joust-runtime:* keyed calls prefetch the state address listing.
+
+**Exit criteria.**
+
+| Criterion | Test | Evidence |
+|---|---|---|
+| The registry flows through npm on DevKit | `js/joust-runtime/test/examples.test.js` "Registry" | Built by the toolchain engine (`joust build`), every call prepared by the Wasm engine and verified by the page: the creation with both heads, a ballot (`signedKey`) and its change, a payable claim, a payable upgrade, a withdrawal, a second claim after a fresh node (the engine named the slot; the page waited 32 s and prepared again), a removal relinking its predecessor after its cooldown, two retires, lookups and the head walk; a page composition with a keyed call refused. The toolchain builds the registry byte-identical to Gradle (`ToolchainParityTest`). `DescribedRegistryDevnetTest` runs every kind through the JVM's wallet path |
+| The D11 tamper tests are refused by the page | `js/state-client/test/keyed.test.js` (transactions built with CSL; with and without transaction CBOR), `examples.test.js` (engine-built, DevKit) | Refused: a substituted anchor; a skimmed, re-addressed, reference-scripted or re-timed relink; an extra `Link` input; a head minted by an insert; an excessive head deposit; heads of differing constructor widths (tags 0 and 7) each funded at the other's amount; an anchor top-up above `allowA`; the remove-with-gift; a retire top-up above `allowR`; the two-input forgery (with CBOR by the authenticated values, without by `Ctx`; on DevKit by `Ctx`); a wrong `Ctx` offset (action, retire, removal; with and without CBOR); payable actions and removals with an extra third-party output; an insert paying a third party; a creation whose payment is claimed twice; compositions containing a keyed call; a retry not spending the first attempt's designated input, also after a reload (`keyed-retries.test.js`; on DevKit, a wallet that says "rejected" while its attempt lands leaves a record, and the retry after a reload, through a service that drops the designated input, is refused as settled without asking the wallet: the call applied once); I5's ten generic tamperings of an engine-built keyed action. Accepted: an insert with and without CBOR; after a raised `coinsPerUTxOByte`, an insert with an anchor top-up, a creation with heads above `minAda`, and a retire with the owner's top-up and a third-party beneficiary (100 ADA in, deposit 4, minimum 5, 96 out); a payable keyed action paying a beneficiary from the payment and its funds (100 + 10 → 90, 20); a payable removal paying `in + received`; a keyed action and a retire with and without CBOR |
+| Recorded fixtures replay | `fixtures/m3/registry` (recorded with `JOUST_RECORD`), `EngineFixturesTest` | 22 engine-prepared registry calls (the creation, inserts, keyed actions including I5's honest preparations, removals, retires), each prepared again on the JVM from its request and snapshot, byte for byte, beside the 192 earlier ones; existing fixtures unchanged. `fixtures/m0` gains nothing: the registry's JVM DevKit tests (M2) were not re-recorded, since their concurrency and relay tests do not replay as single calls |
+| Ordering vectors agree across Java, JS and on-chain | `fixtures/keyed/order-vectors.json`; `KeyedVectorsTest` (registry), `keyed.test.js` | 22 ordered pairs (`7f`/`80`, `ab`/`ab00`, `00`/`0000`, the empty key, …) and 7 keyIds: the Java runtime's key ids and listing order, the JS client's, and the registry validator on the ledger model (an insert after a smaller key accepted, after a larger one refused by the policy; 10 pairs) |
+| (From M2) wallets prepare keyed calls with a designated input | `DescribedRegistryDevnetTest`, `ComposeDevnetTest.prepareRefusesKeyedCallsWithoutADesignatedInput` | Every kind, the creation included, prepared for a `WalletAccount`, spending the designated input; refused without one, and in a composition |
+| (From M2) a future start at the maximum `W`, and 100 ms slots, within the page's limits, end to end | `js/joust-runtime/test/keyed-window.test.js`, `examples.test.js` | The recorded cooling insert prepared again by the Wasm engine under a 100 ms clock: 30 s before the cooldown ends the engine names the slot to prepare again at (tip + 300 − 60); 5 s before, it builds a window starting 50 slots ahead, cut to the page's 900 slots (85 s, below `W`), which the page accepts; under one-second slots the window is `W`-bounded. On DevKit the cooled insert started within the start limit and landed |
+
+**Deviations and decisions.**
+- *A keyed contract's creation is designated too.* D11 names keyed calls; a creation with heads is verified with them,
+  and the page records a designated input for it as well (the seed is that input), so a retried creation cannot make
+  two instances. Conservative; nothing in the ADR forbids it.
+- *Settlement in the page.* A record is settled when its designated input is spent (an attempt landed, or something
+  else spent it), or when the chain's tip has passed every attempt's window by two slots with the input unspent. The
+  first case is reported once ("check before calling again"), not silently turned into a new operation: a retry after
+  a lying "rejected" must not apply the call twice. A new operation while a record is unsettled needs `opts.abandon`
+  (or `abandonKeyed`). One record per wallet (its key hashes) and network, so any keyed call of that wallet is a retry
+  of the pending operation until then. Retries are the application's calls; only the cooldown wait is automatic.
+- *Synthetic tamper transactions.* The registry has no payable removal and no beneficiary-paying action, DevKit cannot
+  raise `coinsPerUTxOByte`, and its heads share a constructor width. Those cases run on transactions built with CSL
+  against variants of the registry's description (a payable `release`, `minAda` 4 ADA, head tags 7–9): the page reads
+  only the description, so the rules are the same; the validator's side of each case is M1's attack suite.
+- *The page's absolute cap on `coinsPerUTxOByte`* is 20,000 (`KEYED_LIMITS`; mainnet 4,310). Allowances are computed
+  from each output's own encoded size, as the ledger does.
+- *Without transaction CBOR* (DevKit's Yaci Store), a service that lies in `Ctx` together with the provider is not
+  detected by the page: the node's value is then bound to the lie, the validator refuses the transaction on chain
+  (collateral at risk, bounded by `maxCollateral`), and nothing moves. This is D11's binding rule as written.
+- *`linkedAt == upper`* is checked by the page only when the deployment gives the slot clock (`slotConfig`); otherwise
+  only the time domain. The validator always checks it.
+- *Not covered by the page yet* (refused): `@AuthorizedBy` on keyed calls (also refused by the described dispatcher),
+  and the experimental Wasm recompute of keyed steps (portable steps exist; the page does not run them for keyed
+  calls). The JVM prepare service (`julc-state-server`) does not serve keyed calls: the engine does (D11, "without the
+  service").
+- *Wallet preparation and fees.* With a designated input, `prepare()` skips its extra funding pick (the designated input
+  gives the change output; picking the largest UTxO again could pick it twice).
+
+**Measurements.** Scripts are unchanged from M2 (the registry 14,717 bytes). The npm DevKit flow takes about 200 s
+(one insert waits 32 s for a cooldown, the removal waits for its predecessor's). The fixtures of inserts and removals
+are about 450 KB each: their snapshots hold the listing of the registry's state address, about 620 UTxOs left by every
+DevKit run of the registry's tests (D7's documented O(UTxOs at the state address)); keyed actions and retires look up
+their node by unit only (3.1 MB in all). The registry's description is 38,665
+bytes. The engines built for M3 (GraalVM 25.3.4.1 Web Image): runtime 20,736,226 bytes of Wasm, toolchain 30,388,004.
+
+**Builds.** With Yaci DevKit up, `./gradlew build --continue` passes (51 min; 502 test cases; the three that need a
+browser, the dApp's built page or a Web Image skip, as before), the baseline (123 files) is byte-identical,
+`fixtures/m0` is unchanged and `fixtures/m3` gains only the registry group. `ConcurrencyDevnetTest`'s two threads
+collided in this run (three transactions). The JS suites pass: `js/state-client` (20 tests, 1 s), `js/joust-runtime`
+(25, one skipped for want of a Blockfrost preview key; 20 min, the registry's flow about 200 s of it) and `js/joust`
+(4, the template page in Chromium included; 3 min).
+
+### Open questions after M3
+
+For the maintainer; each is recorded, not decided.
+- **One pending keyed operation per wallet in a page.** The record is per wallet and network, so while one operation
+  may still land, every keyed call of that wallet is its retry (or needs an explicit abandon). Records per operation
+  (each with its own designated input, as the JVM does per thread) would let a page run several at once, at the cost of
+  telling the user which pending operation a call retries. *Lean:* keep one until a page needs more.
+- **"Settled because the designated input is spent" does not say which attempt landed.** Without a transaction lookup
+  every provider offers (Ogmios has none), the page reports the operation settled and asks the user to check before
+  calling again, instead of claiming success. *Lean:* look the attempts up where the provider can (Blockfrost-style
+  `/txs/{hash}`), and keep the report elsewhere.
+- **The page's cap on `coinsPerUTxOByte`** (20,000, about 4.6 times mainnet's) bounds what a lying provider can cost
+  through allowances; a governance raise beyond it would make the page refuse keyed calls until the cap is raised.
+- **`x-joust.keyed` changed shape** (M1 listed names; M3 lists objects) within description version 2. No released
+  client read it; the described dispatcher ignores the old shape. *Lean:* keep version 2.
