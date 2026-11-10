@@ -1337,7 +1337,10 @@ maps them to the findings.
   attempt (classifying it, logging, the back-off, settling) runs in one guard whose only outcomes are another attempt,
   a definite failure that `settle` confirmed (or one before any hand-out), or `PendingTransactionException` with the
   operation's record; anything unexpected there after a hand-out, an `Error` included, ends pending with the original
-  failure as its cause. Unreadable reference metadata counts as moved.
+  failure as its cause. Unreadable reference metadata counts as moved. The guard's own rescue uses a diagnostic that
+  never throws, and the series' cleanup fails closed: a clock that cannot convert keeps the input reserved rather than
+  replacing the outcome (round 4). The guarantee is about the runtime's own code: extension points (a `ChainTime`, a
+  `Relay`, an evaluator, an `onBuilt` observer) are assumed to return or throw, not to block forever.
   Every attempt with a designated input has a finite window: a link window, the call's own, or, for a call that uses
   no time, the runtime's TTL (the first version built those with no validity bound at all, so they could never be
   settled; F65, R-E2), starting at the current slot (F74). So the wait is at most that window: on DevKit the 20-second
@@ -1380,6 +1383,17 @@ maps them to the findings.
     can still land, and could then spend an input a keyed operation designated after the claim ended (that operation
     would then end pending: liveness, not a double landing). Publish reference scripts and verifiers before keyed
     traffic, as the runtime already does on first use, or keep such wallets apart.
+
+**Accepted limits (the round-4 review).** None lets two attempts of one series land; each costs liveness or resources.
+- *Relays that ignore interrupts.* A cancelled relay call that ignores its interrupt keeps its pool thread until it
+  returns; with 64 such calls running, further relays cannot start and their deliveries count as unknown (pending).
+- *Waits across threads under a payer's lock.* The per-thread rule refuses a second payer's lock on the same thread; it
+  cannot see an evaluator or callback that hands a build to another thread and waits for it. Such a wait can deadlock;
+  evaluators and callbacks must not wait for other builds.
+- *Observers are diagnostic.* `onBuilt` sees every built and prepared transaction before the runtime decides whether to
+  return it. A transaction an observer keeps, signs or submits is not tracked: if the runtime then releases its claims
+  (nothing was returned), a keyed operation may designate an input it spends.
+- *Unbounded publications.* Their claims end after 10 minutes (above).
   - "Pre-M2 selection" therefore holds for plain transactions only while none of the wallet's UTxOs is designated or
     claimed by a keyed attempt. With nothing designated, builds are byte-identical to the pre-M2 ones.
 - *Windows.* A keyed attempt waits for its window's start on the current slot (the machine's clock and the network's
@@ -1486,6 +1500,16 @@ for F63, F64 and F68. The fixes aim at the class of bug, not the instance.
 | F75 | `settlementSlots` overflow could fake a definite failure | Bounded to 100,000 in the builder; settlement and the linger use checked arithmetic and fail closed | `R/StateRuntime.java`, `R/KeyedObjects.java` |
 | F63, F64 (residual) | Unbounded publications' claims expire after 10 minutes though the transaction can still land | Documented as a limit ("Selection around designated inputs"): a TTL would change those transactions' bytes. Liveness only | — |
 | (Codex §3) | "No non-keyed behaviour changed" was too broad | The compatibility paragraph now separates bytes (unchanged) from behaviour (locks, claims, refusals, checked slot arithmetic, recording `Tx`) | above |
+
+**Round 4.** Codex re-reviewed `32813d0..370f050`: no P0 or P1; F76 and F77 (P2); F69 qualified for extension
+points; the limits above accepted once documented.
+
+| ID | Finding | What changed | Where |
+|---|---|---|---|
+| F76 | An explicit pick treated every keyed operation's held inputs as foreign, so a keyed composition's rebuild could not pick the seed its own earlier attempt used | Picks carry the current operation (a keyed composition's capture knows it); its own held inputs stay pickable, other operations' do not, and designated inputs never are. The pick's temporary claim stays its own, apart from the operation's | `R/Designation.java` (`pickable`), `R/TxRunner.java` (`currentOperation`), `R/Compose.java`, `R/StateContractHandle.java`; `KeyedSeriesTest.anOperationsRebuildMayRepickTheSeedItsEarlierAttemptHolds` (only the designation and the seed exist) |
+| F77 | A publication preparation whose observer threw an `Error` left its claim forever | The whole post-build lifecycle is in one `finally` (`TxRunner.exportPrepared`): returned, claimed for the fixed bound; anything thrown, released | `R/TxRunner.java`, `R/StateContractHandle.java`, `R/VerifierHandle.java`; `KeyedSeriesTest.aPublicationWhoseObserverThrowsAnError_releasesItsClaim` |
+| F69 (qualified) | The guard's rescue formatted an arbitrary exception, and the cleanup converted slots with a clock that may throw | A never-throwing diagnostic; cleanup that fails closed (the reservation kept) without replacing Pending; the guarantee stated for the runtime's own code, with extension points assumed to return or throw | `R/KeyedObjects.java`; `KeyedSeriesTest` (a throwing clock while lingering; an exception whose accessors throw) |
+| (section 4) | Limits to accept | Documented above ("Accepted limits") | — |
 
 After the first round's changes, a full `./gradlew build --continue` with Yaci DevKit up passed (43 min; the three
 tests that need a browser or a Web Image skip, as before), the compatibility baseline (123 files) was byte-identical, and
