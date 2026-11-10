@@ -9,8 +9,7 @@
 > [!WARNING]
 > **Status: Experimental — Research & Learning Project**
 >
-> JOUST is generated using AI, with human-assisted design, testing, and verification.
-> It is an experimental project created mainly for research and exploration of state-oriented smart contracts on Cardano.
+> JOUST is an experimental project created mainly for research and exploration of state-oriented smart contracts on Cardano.
 >
 > **Please do not use this in production.** Expect rough edges, incomplete features, and potential bugs.
 
