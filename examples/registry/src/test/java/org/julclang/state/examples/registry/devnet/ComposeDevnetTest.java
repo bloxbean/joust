@@ -149,9 +149,12 @@ class ComposeDevnetTest {
         assertEquals(ADA.divide(BigInteger.TWO), pot.state().collected(), "5% of 10 ADA, deposited and counted");
     }
 
-    /** R-C7, R-D4: a wallet cannot keep one designated input across re-preparations yet: prepare() refuses keyed calls. */
+    /**
+     * R-C7, R-D4, ADR-0016 D11: prepare() refuses a keyed call without the designated input its page records (since M3,
+     * a wallet's keyed call is prepared with Compose.designate; julc-state-runtime-wasm's DescribedRegistryDevnetTest).
+     */
     @Test
-    void prepareRefusesKeyedCallsUntilM3() {
+    void prepareRefusesKeyedCallsWithoutADesignatedInput() {
         var rig = M2Kit.rig();
         var ann = M2Kit.wallet(2, 200);
         var stamps = StampsClient.deploy(rig.runtime(), ann);
@@ -160,7 +163,7 @@ class ComposeDevnetTest {
                 .add(() -> stamps.stamp(wallet, new byte[]{0x41}))
                 .prepare());
         System.out.println("[compose] prepare() with a keyed call: " + e.getMessage());
-        assertTrue(e.getMessage().contains("ADR-0016 M3"), e.getMessage());
+        assertTrue(e.getMessage().contains("designated input"), e.getMessage());
         // A standalone keyed call with a WalletAccount fails closed before anything is designated (R-C21).
         var standalone = assertThrows(JoustException.class, () -> stamps.stamp(wallet, new byte[]{0x42}));
         assertTrue(standalone.getMessage().contains("WalletAccount"), standalone.getMessage());

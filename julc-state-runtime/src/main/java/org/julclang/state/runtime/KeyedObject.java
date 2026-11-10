@@ -175,6 +175,9 @@ public final class KeyedObject<S, R> {
                 var p = KeyedObjects.plan(time, tip, Long.MIN_VALUE, prev.node().linkedAt(), type.cooldownMs(), type.windowMs(),
                         spec.maxValidityMs(), rt.ttlMs(), rt.pageLimits());
                 p = KeyedObjects.withTimeRules(time, p, notBefore, notAfter, what);
+                if (rt.pageLimits() != null && cap != null && cap.walletOnly && p.prepareAt() > tip) {
+                    throw KeyedObjects.notYet(what, p.prepareAt());   // a wallet's prepare cannot wait (D11)
+                }
                 if (rt.pageLimits() != null && cap == null && p.prepareAt() > tip) {
                     // D7 step 5: prepare only once the start is within the page's limit; then everything is read again.
                     TxRunner.sleep((p.prepareAt() - tip) * time.slotLengthMs());

@@ -503,6 +503,8 @@ public final class StateContractHandle<S> {
             }
             // Prefer a pure-ADA UTxO; any UTxO works, but never a keyed operation's designated input (ADR-0016 D7).
             var own = TxRunner.currentOperation();
+            // A wallet's prepared creation in a keyed contract: the page's designated input is the seed (ADR-0016 D11).
+            if (own != null && own.given() && own.address().equals(caller.baseAddress())) return own.utxo();
             var free = r.getValue().stream().filter(u -> Designation.pickable(u, own)).toList();
             if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
             return free.stream()

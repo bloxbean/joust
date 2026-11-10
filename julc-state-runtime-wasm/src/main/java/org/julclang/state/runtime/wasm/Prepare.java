@@ -62,6 +62,14 @@ public final class Prepare {
     static StateRuntime.Builder maps(StateRuntime.Builder b, Request r,
                                      org.julclang.state.runtime.snapshot.SnapshotNodeStore nodes) {
         b.mapStore(nodes);
+        // A page's absolute window limits (ADR-0016 D7, D11): keyed calls keep their link windows within them. Only keyed
+        // calls read them; the request may give the page's own ({@code pageLimits: [maxStartSlots, maxValiditySlots]}).
+        try {
+            JsonNode pl = JSON.readTree(r.call()).path("pageLimits");
+            b.pageLimits(pl.isArray() ? pl.get(0).asLong() : 60, pl.isArray() ? pl.get(1).asLong() : 900);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("the call request is not JSON", e);
+        }
         if (r.mapNodes() == null || r.mapNodes().isEmpty()) {
             b.mapProver(new org.julclang.state.runtime.snapshot.SuppliedProver(r.mapProofs()));
         }
@@ -207,7 +215,8 @@ public final class Prepare {
             String[] made = new String[1];
             DescribedContract target = dc;
             var cosigners = cosigners(call, network);
-            PreparedTx p = Compose.of(rt, wallet).add(() -> made[0] = target.call(rt, wallet, call.path("kind").asText(),
+            // ADR-0016 D11: a keyed call spends the wallet input the page designated for its operation.
+            PreparedTx p = Compose.of(rt, wallet).designate(call.path("designated").asText(null)).add(() -> made[0] = target.call(rt, wallet, call.path("kind").asText(),
                     call.path("method").asText(), call.path("instance").asText(null), call.path("object").asText(null),
                     call.path("args"), pay, call.get("params"), call.path("pay").get("assets"), call.path("into").asText(null),
                     cosigners, governorOf(call, network))).prepare();
@@ -331,7 +340,7 @@ public final class Prepare {
             var nodes = new org.julclang.state.runtime.snapshot.SnapshotNodeStore(r.mapNodes());
             var rt = runtime(r, call, backend, nodes);
             var wallet = WalletAccount.of(call.path("address").asText(), network);
-            var compose = Compose.of(rt, wallet).allowSharedSigners();
+            var compose = Compose.of(rt, wallet).allowSharedSigners().designate(call.path("designated").asText(null));
             var made = new java.util.ArrayList<String>();
             for (JsonNode c : call.get("calls")) {
                 DescribedContract dc = contract(r, c.path("contract").asText());

@@ -90,11 +90,20 @@ final class Designation {
          */
         private List<Utxo> dependencies = List.of();
         private boolean released;
+        /** Given by a wallet's page for a prepared transaction (ADR-0016 D11), not reserved in this JVM. */
+        private final boolean given;
 
         Designated(Utxo utxo, String address) {
+            this(utxo, address, false);
+        }
+
+        Designated(Utxo utxo, String address, boolean given) {
             this.utxo = utxo;
             this.address = address;
+            this.given = given;
         }
+
+        boolean given() { return given; }
 
         Utxo utxo() { return utxo; }
 
@@ -285,6 +294,37 @@ final class Designation {
         if (SCOPE.get() != null) return new Scope(false);
         SCOPE.set(new ArrayList<>());
         return new Scope(true);
+    }
+
+    /**
+     * The input a wallet's page designated for a prepared keyed call (ADR-0016 D11): {@code ref} must be an ordinary
+     * (lovelace-only, no datum, no reference script) UTxO of {@code payer}, as the provider (the wallet's own UTxOs, in an
+     * engine) lists it. Nothing is reserved in this JVM: the page holds the record, and the transaction is only prepared.
+     */
+    static Designated given(StateRuntime rt, Account payer, String ref) {
+        String address = payer.baseAddress();
+        try {
+            for (int page = 1; page <= 20; page++) {
+                var r = rt.backend().getUtxoService().getUtxos(address, 100, page);
+                if (!r.isSuccessful() || r.getValue() == null || r.getValue().isEmpty()) break;
+                for (Utxo u : r.getValue()) {
+                    if (!ref(u).equals(ref)) continue;
+                    if (u.getAmount().size() != 1 || !"lovelace".equals(u.getAmount().get(0).getUnit())
+                            || u.getInlineDatum() != null || u.getDataHash() != null || u.getReferenceScriptHash() != null) {
+                        throw new JoustException("the designated input " + ref + " is not an ordinary (lovelace-only) UTxO of the"
+                                + " payer (ADR-0016 D11)");
+                    }
+                    return new Designated(u, address, true);
+                }
+                if (r.getValue().size() < 100) break;
+            }
+        } catch (JoustException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new JoustException("cannot read the payer's UTxOs for the designated input " + ref, e);
+        }
+        throw new JoustException("the designated input " + ref + " is not an unspent UTxO of the payer " + address
+                + " (spent: an earlier attempt of the operation may have landed; ADR-0016 D11)");
     }
 
     /**

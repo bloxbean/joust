@@ -33,6 +33,7 @@ public final class Compose {
     private final Account payer;
     private final List<Runnable> calls = new ArrayList<>();
     private boolean sharedSigners;
+    private String designatedRef;
 
     private Compose(StateRuntime runtime, Account payer) {
         this.runtime = runtime;
@@ -52,6 +53,17 @@ public final class Compose {
     /** Allows one key's signature to count for several calls (refused by default; ADR-0011 r2). */
     public Compose allowSharedSigners() {
         this.sharedSigners = true;
+        return this;
+    }
+
+    /**
+     * The payer's UTxO ({@code txhash#index}) a prepared transaction with a keyed call must spend (ADR-0016 D11): the
+     * page designates it before the first attempt of an operation and signs a retry only when it spends the same input,
+     * so at most one attempt of the operation can land. Required by {@link #prepare()} when a call is keyed.
+     */
+    public Compose designate(String ref) {
+        if (ref != null && !ref.matches("[0-9a-f]{64}#[0-9]+")) throw new IllegalArgumentException("a designated input is txhash#index");
+        this.designatedRef = ref;
         return this;
     }
 
@@ -95,7 +107,7 @@ public final class Compose {
             if (first != null) throw first;
             return null;
         }
-        if (prepare) return attempt(true, null);
+        if (prepare) return attempt(true, designatedRef == null ? null : Designation.given(runtime, payer, designatedRef));
         // ADR-0016 D7: a composition with a keyed call designates one ordinary input of the payer after its first pass,
         // spends it in every attempt, and rebuilds the whole composition under the same rules as a single keyed call
         // (KeyedObjects.series). A composition without keyed calls runs once, as before.
@@ -127,12 +139,19 @@ public final class Compose {
         }
         if (probe.keyed) {
             if (prepare) {
-                // A wallet's transaction cannot designate an input across re-preparations yet (R-C7, R-D4).
-                throw new JoustException("prepare(): the composition has a keyed call (ADR-0016); wallets prepare keyed"
-                        + " calls from ADR-0016 M3");
+                // ADR-0016 D11: the page designates the input (designate), records it, and signs only attempts spending it.
+                if (designated == null) {
+                    throw new JoustException("prepare(): a keyed call (ADR-0016) needs the wallet's designated input:"
+                            + " Compose.designate(txhash#index) (D11)");
+                }
+                if (calls.size() > 1) {
+                    // D11: the page verifies a keyed call on its own; composed accounting is a follow-up (§10).
+                    throw new JoustException("prepare(): a keyed call (ADR-0016) is prepared for a wallet on its own, not in a"
+                            + " composition (D11)");
+                }
             }
             // Designated before anything else is decided: a refusal of this first pass is then retried like any other.
-            if (designated == null) throw new KeyedObjects.NeedsDesignated(probe.inputs);
+            else if (designated == null) throw new KeyedObjects.NeedsDesignated(probe.inputs);
         }
         if (failed != null) throw failed;
         Window window = probe.windows.isEmpty() ? null : Window.intersect(runtime, probe.windows);
@@ -145,8 +164,11 @@ public final class Compose {
         cap.walletOnly = prepare;
         cap.forced = window;
         cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
-        if (designated != null) TxRunner.collect(cap.tx, designated.utxo(), null);
+        // A page's designated input (ADR-0016 D11) may be a call's own input (a creation's seed): spent once, after the calls.
+        boolean late = designated != null && designated.given();
+        if (designated != null && !late) TxRunner.collect(cap.tx, designated.utxo(), null);
         run(cap);
+        if (late && !cap.inputs.contains(designated.ref())) TxRunner.collect(cap.tx, designated.utxo(), null);
         if (!sharedSigners) {
             for (var e : cap.signerCalls.entrySet()) {
                 if (e.getValue().size() > 1) {

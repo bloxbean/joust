@@ -76,4 +76,13 @@ public record ContractSpec<S>(String name, Class<?> validatorClass, Class<S> sta
         return new ContractSpec<>(name, null, org.julclang.core.PlutusData.class, minAda, maxDatumBytes, maxValidityMs,
                 stakeSelf, scriptCborHex, java.util.List.copyOf(mapFields));
     }
+
+    /** As above, with its keyed types (ADR-0016 M3): their values are Plutus data too. */
+    public static ContractSpec<org.julclang.core.PlutusData> described(String name, String scriptCborHex, long minAda,
+                                                                       int maxDatumBytes, long maxValidityMs, boolean stakeSelf,
+                                                                       java.util.List<Integer> mapFields,
+                                                                       java.util.List<KeyedType<?>> keyed) {
+        return new ContractSpec<>(name, null, org.julclang.core.PlutusData.class, minAda, maxDatumBytes, maxValidityMs,
+                stakeSelf, scriptCborHex, java.util.List.copyOf(mapFields), java.util.List.copyOf(keyed));
+    }
 }

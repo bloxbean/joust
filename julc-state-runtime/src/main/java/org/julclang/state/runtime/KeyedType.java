@@ -25,7 +25,8 @@ import java.util.function.BiFunction;
  * @param signedKey     the key is a key hash that must sign the insert (I53)
  * @param cooldownMs    {@code C}, least time between relinks of a node (D9; 0: none)
  * @param windowMs      {@code W}, widest validity window of a relink (D9)
- * @param valueClass    the record
+ * @param valueClass    the record; {@code org.julclang.core.PlutusData} for a contract known by its description (its
+ *                      values are Data, ADR-0015 D4; ADR-0016 M3)
  * @param link          the {@code Link} spend redeemer
  * @param remove        builds {@code Remove_T(anchor, removed)}; null if the type has no removing destroy
  * @param <R>           the record type
@@ -65,8 +66,20 @@ public record KeyedType<R>(String name, int headTag, int keyIndex, int maxKeyByt
         return id;
     }
 
+    /** Values are Plutus data (a described contract, ADR-0015 D4): no record class, no reflection. */
+    boolean described() {
+        return valueClass == org.julclang.core.PlutusData.class;
+    }
+
     /** The key of a record (its component at {@link #keyIndex}). */
     public byte[] keyOf(R value) {
+        if (described()) {
+            if (!(value instanceof org.julclang.core.PlutusData.ConstrData c) || c.fields().size() <= keyIndex
+                    || !(c.fields().get(keyIndex) instanceof org.julclang.core.PlutusData.BytesData b)) {
+                throw new JoustException("a " + name + " value without a byte-string key at field " + keyIndex);
+            }
+            return b.value();
+        }
         try {
             return (byte[]) valueClass.getRecordComponents()[keyIndex].getAccessor().invoke(value);
         } catch (ReflectiveOperationException e) {
@@ -82,7 +95,12 @@ public record KeyedType<R>(String name, int headTag, int keyIndex, int maxKeyByt
 
     PlutusData node(byte[] instance, byte[] next, BigInteger linkedAt, R value) {
         return constr(nodeTag(), List.of(BytesPlutusData.of(instance), BytesPlutusData.of(next), BigIntPlutusData.of(linkedAt),
-                PlutusDataAdapter.convert(value)));
+                valueData(value)));
+    }
+
+    /** A value as Plutus data (cardano-client-lib's). */
+    PlutusData valueData(R value) {
+        return described() ? PlutusDataAdapter.toClientLib((org.julclang.core.PlutusData) value) : PlutusDataAdapter.convert(value);
     }
 
     PlutusData retired(byte[] instance, byte[] next, BigInteger linkedAt, byte[] key) {
@@ -122,7 +140,8 @@ public record KeyedType<R>(String name, int headTag, int keyIndex, int maxKeyByt
             }
             var v = (ConstrPlutusData) fs.get(3);
             byte[] key = ((BytesPlutusData) v.getData().getPlutusDataList().get(keyIndex)).getValue();
-            R value = PlutusDataAdapter.convert(v, valueClass);
+            @SuppressWarnings("unchecked")
+            R value = described() ? (R) PlutusDataAdapter.fromClientLib(v) : PlutusDataAdapter.convert(v, valueClass);
             return new Node<>(Node.Kind.LIVE, instance, next, linkedAt, key, value, c);
         } catch (RuntimeException e) {
             return null;   // the right tag, but not this type's shape: not one of ours

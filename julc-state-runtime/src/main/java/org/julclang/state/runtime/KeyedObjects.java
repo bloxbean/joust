@@ -207,11 +207,14 @@ final class KeyedObjects {
         }
     }
 
-    /** A WalletAccount cannot sign here; it fails closed, and wallets prepare keyed calls only from M3 (R-C21). */
+    /**
+     * A WalletAccount cannot sign here; it fails closed (R-C21). A wallet's keyed call is prepared instead
+     * ({@code Compose.designate(...).prepare()}): its page designates the input and signs (ADR-0016 D11).
+     */
     private static void refuseWallet(Account payer, String what) {
         if (payer instanceof WalletAccount) {
-            throw new JoustException(what + ": a keyed operation needs a key-holding payer here: a WalletAccount fails closed,"
-                    + " and wallets prepare keyed calls from ADR-0016 M3");
+            throw new JoustException(what + ": a keyed operation needs a key-holding payer here: a WalletAccount fails closed;"
+                    + " prepare it for the wallet with Compose.designate(input).prepare() (ADR-0016 D11)");
         }
     }
 
@@ -372,6 +375,16 @@ final class KeyedObjects {
             if (to <= from) throw new JoustException("the page's window limits leave no room for a link window");
         }
         return new LinkPlan(from, to, prepareAt);
+    }
+
+    /**
+     * A wallet's keyed call whose link window must start beyond the page's start limit (the anchor or predecessor is
+     * cooling down; ADR-0016 D7 step 5): an engine cannot wait, so it refuses with the slot from which to prepare again.
+     * The JavaScript client reads it ("prepare again at slot N"), waits, and prepares again.
+     */
+    static SubmitException notYet(String what, long prepareAt) {
+        return new SubmitException(SubmitException.Kind.TRANSIENT, what + ": not yet: the link window starts beyond the page's"
+                + " start limit (a cooldown, ADR-0016 D9); prepare again at slot " + prepareAt);
     }
 
     /** A call's time rule, resolved for the current state: the POSIX ms in {@code field}. */

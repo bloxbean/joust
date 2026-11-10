@@ -579,7 +579,9 @@ final class TxRunner {
         for (byte[] sg : requiredSigners) needed.put(HexUtil.encodeHexString(sg), sg);
         // A payout to the payer's own address can be the only output at it, and the balancer would then take the fee
         // out of it. Spending one of the payer's UTxOs gives it a change output to pay the fee from (restorePayouts).
-        if (payouts.stream().anyMatch(p -> p.address().equals(payer.baseAddress()))) {
+        // A keyed call's designated input (ADR-0016 D11) is one of the payer's ordinary UTxOs, spent already: it gives the
+        // change output (and picking another largest UTxO could pick it twice).
+        if (designated == null && payouts.stream().anyMatch(p -> p.address().equals(payer.baseAddress()))) {
             // Picked and claimed under the payer's lock, so no keyed operation designates it before the build (F63).
             Utxo funding = Designation.pick(payer.baseAddress(), PICK_CLAIM_MS, () -> largestAdaOnly(payer.baseAddress(), spent));
             if (funding != null) tx.collectFrom(java.util.List.of(funding));
@@ -610,6 +612,8 @@ final class TxRunner {
             // Built and claimed under the payer's lock (F63).
             built = Designation.build(payer.baseAddress(), null, finalCtx::build);
             unsigned = built.tx();
+            // ADR-0016 D11: a keyed call prepared for a wallet spends the page's designated input.
+            if (designated != null) requireSpends(unsigned, designated.ref(), what);
         } catch (Exception e) {
             throw new SubmitException(what + ": could not build the transaction: " + rootMessage(e), e);
         }

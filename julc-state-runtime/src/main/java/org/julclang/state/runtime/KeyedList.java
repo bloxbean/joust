@@ -283,6 +283,9 @@ public final class KeyedList<S, R> {
                         + "; the composition's calls' windows cannot fit a Link window (ADR-0016 D7)");
             }
             long[] page = rt.pageLimits();
+            if (page != null && cap != null && cap.walletOnly && cap.forced == null && w.fromSlot() > tip + page[0]) {
+                throw KeyedObjects.notYet(what, w.fromSlot() - page[0]);   // a wallet's prepare cannot wait (D11)
+            }
             if (page != null && cap == null && w.fromSlot() > tip + page[0]) {
                 // D7 step 5: prepare only once the start is within the page's limit.
                 TxRunner.sleep(Math.max(500, (w.fromSlot() - tip - page[0]) * time.slotLengthMs()));
