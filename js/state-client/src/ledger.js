@@ -53,6 +53,8 @@ export function parseTx(hex) {
       datum: inline ? decodeData(inline.toCbor()) : null,
       datumHash: datum?.asDataHash?.() ?? null,
       hasScriptRef: !!o.scriptReference,
+      // Its encoded size, as the transaction carries it: the ledger's minimum is (160 + size) x coinsPerUTxOByte.
+      size: ser.toCbor().length / 2,
     };
   };
   const outs = tx.body().outputs();

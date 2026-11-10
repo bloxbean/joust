@@ -139,6 +139,28 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
     js(`  ${id(o.lookup)}(objectId) { return new ${O}(this.i.object(objectId)); }`);
     ts.push(`  ${id(o.lookup)}(objectId: Hex): ${O};`);
   }
+  // Keyed types (ADR-0016 D11): inserts, lookup by key, the list's keys.
+  const keyedTypes = (x.keyed ?? []).filter((k) => typeof k === 'object');
+  for (const k of keyedTypes) {
+    const K = `${C}${id(k.simple)}Object`;
+    for (const cr of x.creations.filter((c) => c.kind === 'keyedInit' && c.keyed === k.simple)) {
+      js(doc(cr));
+      js(`  async ${id(cr.name)}(wallet, args = {}${cr.payable ? ', pay = {}' : ''}, opts = {}) {`);
+      js(`    const r = await this.i.keyed(${JSON.stringify(k.simple)}).insert(wallet, ${JSON.stringify(cr.name)}, args, ${cr.payable ? 'pay' : '{}'}, opts);`);
+      js(`    return { ...r, object: new ${K}(this.i.keyed(${JSON.stringify(k.simple)}).object(r.key)) };`);
+      js(`  }`);
+      ts.push(`  ${id(cr.name)}(wallet: Cip30Api, args${cr.args.length || cr.payable ? '' : '?'}: ${argsType(cr)}${payParam(cr)}, opts?: { abandon?: boolean }): Promise<CallResult & { key: Hex; object: ${K} }>;`);
+    }
+    js(`  /** The ${k.simple} of a key (hex), live or retired (ADR-0016). */`);
+    js(`  ${id(k.lookup)}(key) { return new ${K}(this.i.keyed(${JSON.stringify(k.simple)}).object(key)); }`);
+    js(`  /** Whether a ${k.simple} key is taken (live or retired); "not found" is what the chain API returned. */`);
+    js(`  ${id(k.lookup)}Exists(key) { return this.i.keyed(${JSON.stringify(k.simple)}).exists(key); }`);
+    js(`  /** Every ${k.simple} key, in list order (walked from the head). */`);
+    js(`  ${id(k.lookup)}Keys() { return this.i.keyed(${JSON.stringify(k.simple)}).keys(); }`);
+    ts.push(`  ${id(k.lookup)}(key: Hex): ${K};`);
+    ts.push(`  ${id(k.lookup)}Exists(key: Hex): Promise<boolean>;`);
+    ts.push(`  ${id(k.lookup)}Keys(): Promise<Array<{ key: Hex; retired: boolean; value: unknown }>>;`);
+  }
   if (x.owned.length) {
     js(`  /** Every owned object of this instance on chain. */`);
     js(`  objects() { return this.i.objects(); }`);
@@ -163,6 +185,26 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
       js(doc(a));
       js(`  ${id(a.name)}(wallet, args = {}${a.payable ? ', pay = {}' : ''}) { return this.o.call(wallet, ${JSON.stringify(a.name)}, args${a.payable ? ', pay' : ''}); }`);
       ts.push(`  ${id(a.name)}(wallet: Cip30Api, args${a.args.length || a.payable ? '' : '?'}: ${argsType(a)}${payParam(a)}): Promise<CallResult>;`);
+    }
+    js(`}`);
+    js();
+    ts.push(`}`);
+  }
+  // ---- keyed objects (ADR-0016)
+  for (const k of keyedTypes) {
+    const K = `${C}${id(k.simple)}Object`;
+    const valueT = tsType({ $ref: '#/definitions/' + k.type.replace(/~/g, '~0').replace(/\//g, '~1') }, defs, names, false);
+    js(`export class ${K} {`);
+    js(`  constructor(o) { this.o = o; this.key = o.key; }`);
+    js(`  /** The object from the chain: { ref, key, retired, value, lovelace }, or null. */`);
+    js(`  read() { return this.o.read(); }`);
+    ts.push(`export declare class ${K} {`);
+    ts.push(`  readonly key: Hex;`);
+    ts.push(`  read(): Promise<{ ref: string; key: Hex; retired: boolean; value: ${valueT} | null; lovelace: bigint } | null>;`);
+    for (const a of x.actions.filter((a) => ['keyedAction', 'keyedRemove', 'keyedRetire'].includes(a.kind) && a.keyed === k.simple)) {
+      js(doc(a));
+      js(`  ${id(a.name)}(wallet, args = {}${a.payable ? ', pay = {}' : ''}, opts = {}) { return this.o.call(wallet, ${JSON.stringify(a.name)}, args, ${a.payable ? 'pay' : '{}'}, opts); }`);
+      ts.push(`  ${id(a.name)}(wallet: Cip30Api, args${a.args.length || a.payable ? '' : '?'}: ${argsType(a)}${payParam(a)}, opts?: { cosigners?: Cip30Api[]; abandon?: boolean }): Promise<CallResult>;`);
     }
     js(`}`);
     js();

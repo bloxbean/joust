@@ -12,6 +12,9 @@ import { verifyRegistration, rewardAddressOf } from './governors.js';
 import { txHash as hashOf, poolKeyHash } from './ledger.js';
 import { Data, decodeData, dataHex } from './pdata.js';
 import { bytesToHex } from './hex.js';
+import { verifyKeyed, isKeyedCall, keyedTypeOf, keyIdOf, listDatum, compareKeys } from './keyed.js';
+import { defaultRetryStore, pendingOf, newRecord, settle, PendingKeyedOperation } from './retries.js';
+import { DEFAULT_LIMITS } from './verify.js';
 
 export class VerificationError extends Error {
   constructor(problems, report) {
@@ -242,6 +245,8 @@ export class JoustContract {
   /** Prepares, verifies, reviews, signs, submits and confirms one call. */
   async run(api, call) {
     const { CSL } = this;
+    // A keyed call, or a keyed contract's creation (ADR-0016 D11): its own verifier and the designated-input record.
+    if (isKeyedCall(this.description, call)) return this.runKeyed(api, call, call.opts ?? {});
     for (const a of call.meta.args) if (!(a.name in (call.args ?? {}))) throw new Error(`${call.meta.name}: missing argument ${a.name}`);
     if (call.meta.payable === false && call.pay?.lovelace && BigInt(call.pay.lovelace) !== 0n) throw new Error(`${call.meta.name} is not payable`);
     // Arguments in canonical form (maps in key order), as the page will compare them in the redeemer.
@@ -297,6 +302,169 @@ export class JoustContract {
     return { txHash: signed.txHash, report };
   }
 }
+
+/** Waits until the chain's tip reaches {@code slot} (at most {@code maxMs}). */
+async function untilSlot(chain, slot, maxMs = 15 * 60_000) {
+  const until = Date.now() + maxMs;
+  while (await chain.tip() < slot) {
+    if (Date.now() > until) throw new Error(`the chain did not reach slot ${slot}`);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+/**
+ * The wallet input a keyed operation designates (ADR-0016 D7, D11): an ordinary (lovelace-only, no datum) UTxO of at
+ * least 5 ADA at the address the engine builds from (the funding address), the largest.
+ */
+export function designatedFor(wallet) {
+  const address = fundingAddress(wallet);
+  let best = null;
+  for (const [ref, u] of wallet.utxos) {
+    if (u.address !== address || u.value.size !== 1 || u.datumHash || u.inlineDatum) continue;
+    const l = u.value.get('lovelace') ?? 0n;
+    if (l < 5_000_000n) continue;
+    if (!best || l > best.lovelace) best = { ref, address, lovelace: l };
+  }
+  return best;
+}
+
+/**
+ * ADR-0016 D11: a keyed call (insert, keyed action, removal, retire) or a keyed contract's creation. Before the first
+ * attempt of an operation the page designates a wallet input and records it (retryStore: IndexedDB in a browser, so it
+ * survives a reload); it signs only transactions that spend it, so at most one attempt of the operation can land. A
+ * call while the wallet's record is unsettled is a retry of that operation (it must spend the same input), unless the
+ * user abandons it ({@code opts.abandon}, or {@link JoustContract#abandonKeyed}). A link window that must start later
+ * (a cooldown) is prepared again when the engine says it may be; a window starting ahead is submitted at its start.
+ */
+JoustContract.prototype.runKeyed = async function runKeyed(api, call, opts = {}) {
+  const { CSL } = this;
+  for (const a of call.meta.args) if (!(a.name in (call.args ?? {}))) throw new Error(`${call.meta.name}: missing argument ${a.name}`);
+  if (call.meta.payable === false && call.pay?.lovelace && BigInt(call.pay.lovelace) !== 0n) throw new Error(`${call.meta.name} is not payable`);
+  if (call.governor) throw new Error(`${call.meta.name}: a governor on a keyed call is not supported by the page yet`);
+  const args = {};
+  for (const a of call.meta.args) args[a.name] = this.codec.decode(a.schema, this.codec.encode(a.schema, call.args[a.name], a.name));
+  call = { ...call, args };
+  const wallet = await walletView(CSL, api);
+  const networkId = this.deployment.networkId;
+  if (wallet.networkId !== networkId) throw new Error('the wallet is on another network');
+  const co = await cosignersOf(CSL, call.cosigners, wallet, networkId);
+  if (co.apis.length && !signedByOthers(call.meta)) throw new Error(`${call.meta.name} takes no co-signers`);
+  const store = this.retryStore ?? (this.retryStore = defaultRetryStore());
+  const limits = { ...DEFAULT_LIMITS, ...this.limits };
+
+  // The operation's record: an unsettled one makes this call a retry of its operation.
+  let rec = await pendingOf(store, wallet, networkId);
+  if (rec && opts.abandon === true) {
+    await store.delete(rec.id);   // the user's explicit choice: a new operation (an earlier attempt may still land)
+    rec = null;
+  }
+  if (rec) {
+    const s = await settle(rec, this.chain);
+    if (s.settled) {
+      await store.delete(rec.id);
+      if (s.reason === 'the designated input is spent') {
+        throw new Error(`the previous keyed operation of this wallet (${rec.what?.method ?? 'a keyed call'}) is settled: its`
+          + ` designated input ${rec.designated} is spent, so one of its attempts (${rec.attempts.map((a) => a.txHash).join(', ')})`
+          + ' may have landed; check before calling again (a new call is a new operation)');
+      }
+      rec = null;
+    }
+  }
+  if (!rec) {
+    const d = designatedFor(wallet);
+    if (!d) throw new Error('the wallet has no ordinary (ADA-only) UTxO of at least 5 ADA to designate for a keyed call (ADR-0016 D7)');
+    rec = newRecord(wallet, networkId, d, { contract: this.name, method: call.meta.name, instance: call.instance ?? null, key: call.key ?? null });
+    await store.put(rec);
+  }
+  const forget = async () => {
+    if (!rec.attempts.length) await store.delete(rec.id);
+  };
+
+  let prepared;
+  let report;
+  try {
+    for (let i = 0; ; i++) {
+      try {
+        prepared = await this.service.prepare({
+          contract: this.description.preamble.title, kind: call.kind, method: call.meta.name,
+          instance: call.instance ?? null, object: call.key ?? null, args: toJson(call.args ?? {}),
+          pay: toJson({ lovelace: call.pay?.lovelace ?? 0n, assets: [] }), ...fromWallet(wallet),
+          designated: rec.designated, pageLimits: [limits.maxStartSlots, limits.maxValiditySlots],
+          ...(co.keys.length ? { cosigners: co.keys } : {}),
+        });
+        break;
+      } catch (e) {
+        // A link window that starts beyond the page's start limit (a cooldown; ADR-0016 D7 step 5): wait, prepare again.
+        const m = /prepare again at slot (\d+)/.exec(e.message ?? '');
+        if (!m || i >= 16) throw e;
+        await untilSlot(this.chain, Number(m[1]));
+      }
+    }
+    const [tip, params] = await Promise.all([this.chain.tip(), this.chain.params()]);
+    const v = await verifyKeyed({
+      description: this.description, deployment: this.deployment, txHex: prepared.cbor,
+      call: { ...call, designated: rec.designated, cosignerKeys: co.keys }, wallet, limits: this.limits,
+      chain: { tip, params, utxo: (r) => this.chain.utxo(r), verifiedOutput: this.chain.verifiedOutput ? (r) => this.chain.verifiedOutput(r) : undefined },
+    });
+    report = v.report;
+    report.plan = planOf(CSL, prepared.cbor);
+    if (prepared.plan) {
+      const d = planDifference(prepared.plan, report.plan);
+      if (d) v.problems.push('the service\'s plan does not describe its transaction: ' + d);
+    } else if (this.requirePlan !== false) {
+      v.problems.push('the service sent no plan (a JOUST service always does; pass requirePlan: false for another backend)');
+    }
+    if (v.problems.length) throw new VerificationError(v.problems, report);
+  } catch (e) {
+    await forget();
+    throw e;
+  }
+  const txHash = hashOf(prepared.cbor);
+  if (this.onReview) {
+    try {
+      await this.onReview({ contract: this.name, call, report, txHash });
+    } catch (e) {
+      await forget();
+      throw e;
+    }
+  }
+  // Recorded before the wallet signs: from here this attempt may land.
+  rec.attempts.push({ txHash, validFrom: report.plan.validFrom ?? null, validTo: report.plan.validTo ?? null });
+  await store.put(rec);
+  let signed;
+  try {
+    const witnesses = [await api.signTx(prepared.cbor, true)];
+    for (const c of co.apis) witnesses.push(await c.signTx(prepared.cbor, true));
+    signed = assemble(CSL, prepared.cbor, ...witnesses);
+    if (signed.txHash !== txHash) throw new Error('the signed transaction has another hash');
+  } catch (e) {
+    // Not signed (refused, or a witness the page cannot use): this attempt cannot land.
+    rec.attempts.pop();
+    if (rec.attempts.length) await store.put(rec);
+    else await store.delete(rec.id);
+    throw e;
+  }
+  try {
+    // A link window may start a little ahead (at most the page's start limit): submitted once it has started.
+    if (report.plan.validFrom) await untilSlot(this.chain, Number(report.plan.validFrom));
+    const submitted = await api.submitTx(signed.cbor);
+    if (submitted && submitted !== signed.txHash) throw new Error('the wallet submitted another transaction');
+    await this.chain.awaitTx(signed.txHash);
+  } catch (e) {
+    throw new PendingKeyedOperation(rec, e);   // the record stays: a retry must spend the same input
+  }
+  await store.delete(rec.id);
+  return { txHash: signed.txHash, report, ...(call.kind === 'keyedInit' ? { key: report.created } : {}) };
+};
+
+/** Abandons the wallet's unsettled keyed operation (the user's explicit choice; an earlier attempt may still land). */
+JoustContract.prototype.abandonKeyed = async function abandonKeyed(api) {
+  const wallet = await walletView(this.CSL, api);
+  const store = this.retryStore ?? (this.retryStore = defaultRetryStore());
+  const rec = await pendingOf(store, wallet, this.deployment.networkId);
+  if (rec) await store.delete(rec.id);
+  return rec;
+};
 
 /**
  * EXPERIMENTAL (ADR-0013 D4): recomputes the call's next state in the page with the contract's own Java method, compiled
@@ -546,6 +714,130 @@ export class JoustInstance {
 
   kindOf(name, kinds) {
     return this.contract.meta(name, kinds).kind;
+  }
+
+  /** The list of keyed type {@code type} (its simple name) in this instance (ADR-0016). */
+  keyed(type) {
+    return new JoustKeyedList(this, type);
+  }
+}
+
+/**
+ * The list of one keyed type in one instance (ADR-0016 D7): lookup by key, the walk from the head, inserts. Every
+ * result the chain API gives is validated (address, token, constructor, instance, the key's binding: I51); "not found"
+ * means the API returned nothing, never proven absence.
+ */
+export class JoustKeyedList {
+  constructor(instance, type) {
+    this.instance = instance;
+    this.contract = instance.contract;
+    this.type = keyedTypeOf(this.contract.x, type);
+  }
+
+  /** The unit of {@code key}'s token (hex key; "" is the head). */
+  unit(key) {
+    return this.contract.deployment.policy + keyIdOf(this.instance.id, this.type.typeId, key);
+  }
+
+  /** {@code u} validated as a UTxO of this list, decoded; or null. */
+  validate(u) {
+    const k = this.contract;
+    if (u.address !== k.deployment.address || !u.inlineDatum) return null;
+    let d;
+    try {
+      d = listDatum(this.type, decodeData(u.inlineDatum));
+    } catch (e) {
+      return null;
+    }
+    if (!d || d.instance !== this.instance.id) return null;
+    const unit = this.unit(d.key);
+    const units = [...u.value.keys()].filter((x) => x !== 'lovelace');
+    if (units.length !== 1 || units[0] !== unit || u.value.get(unit) !== 1n) return null;
+    let value = null;
+    if (d.kind === 'node') {
+      try {
+        value = k.codec.decode({ $ref: '#/definitions/' + this.type.type }, d.value);
+      } catch (e) {
+        return null;
+      }
+    }
+    return { ref: u.ref, key: d.key, kind: d.kind, retired: d.kind === 'retired', next: d.next, linkedAt: d.linkedAt, value,
+      lovelace: u.value.get('lovelace') };
+  }
+
+  /** The object of {@code key} (hex): { ref, key, retired, value, lovelace, ... }, or null when the API returned nothing. */
+  async find(key) {
+    const len = key.length / 2;
+    if (!/^([0-9a-f]{2})+$/.test(key) || len > this.type.maxKeyBytes) throw new Error(`${this.type.simple}: a key is 1 to ${this.type.maxKeyBytes} bytes (hex)`);
+    const u = await this.contract.chain.findUnit(this.contract.deployment.address, this.unit(key));
+    const v = u ? this.validate(u) : null;
+    return v && v.key === key && v.kind !== 'head' ? v : null;
+  }
+
+  /** The key is taken (live or retired). */
+  async exists(key) {
+    return (await this.find(key)) !== null;
+  }
+
+  /**
+   * Every key in list order, walking from the head: [{ key, retired }]. A missing link, a key that does not increase,
+   * a key held twice or a node off the walk is an inconsistent snapshot (I47 forbids them on chain).
+   */
+  async keys() {
+    const all = new Map();
+    for (const u of await this.contract.chain.utxosAt(this.contract.deployment.address)) {
+      const v = this.validate(u);
+      if (!v) continue;
+      if (all.has(v.key)) throw new Error(`${this.type.simple}: inconsistent snapshot, key ${v.key} held twice`);
+      all.set(v.key, v);
+    }
+    if (!all.has('')) throw new Error(`${this.type.simple}: the list head of this instance is missing`);
+    const out = [];
+    let at = '';
+    while (all.get(at).next !== '') {
+      const next = all.get(at).next;
+      const n = all.get(next);
+      if (!n) throw new Error(`${this.type.simple}: inconsistent snapshot, the walk misses ${next}`);
+      if (compareKeys(next, at) <= 0) throw new Error(`${this.type.simple}: inconsistent snapshot, keys do not increase`);
+      out.push({ key: n.key, retired: n.retired, value: n.value });
+      at = next;
+    }
+    if (out.length + 1 !== all.size) throw new Error(`${this.type.simple}: inconsistent snapshot, ${all.size - out.length - 1} nodes off the walk`);
+    return out;
+  }
+
+  /** Inserts with the @OwnedInit {@code method}; returns { txHash, key, report }. */
+  insert(api, method, args = {}, pay = {}, opts = {}) {
+    const k = this.contract;
+    const meta = k.meta(method, ['keyedInit']);
+    if (meta.keyed !== this.type.simple) throw new Error(`${method} creates a ${meta.keyed}, not a ${this.type.simple}`);
+    return k.run(api, { kind: 'keyedInit', meta, args, pay, instance: this.instance.id, opts });
+  }
+
+  /** The object of {@code key} (hex). */
+  object(key) {
+    return new JoustKeyedObject(this, key);
+  }
+}
+
+/** One keyed object: its keyed actions, removing exit and retiring exit (ADR-0016 D6, D5, D10). */
+export class JoustKeyedObject {
+  constructor(list, key) {
+    this.list = list;
+    this.key = key;
+  }
+
+  /** A keyed action, removal or retire. {@code opts.cosigners}: a @Quorum call's co-signers; {@code opts.abandon}. */
+  call(api, name, args = {}, pay = {}, opts = {}) {
+    const k = this.list.contract;
+    const meta = k.meta(name, ['keyedAction', 'keyedRemove', 'keyedRetire']);
+    if (meta.keyed !== this.list.type.simple) throw new Error(`${name} is a ${meta.keyed} call, not a ${this.list.type.simple} one`);
+    return k.run(api, { kind: meta.kind, meta, args, pay, instance: this.list.instance.id, key: this.key, cosigners: opts.cosigners, opts });
+  }
+
+  /** The object, from the chain: { ref, key, retired, value, lovelace }, or null. */
+  read() {
+    return this.list.find(this.key);
   }
 }
 

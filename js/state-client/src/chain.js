@@ -41,7 +41,9 @@ export function chainOf(provider) {
       if (txHash(cbor) !== hash) throw new Error(`the chain provider served another transaction for ${hash}`);
       const o = parseTx(cbor).outputs[Number(index)];
       if (!o) return null;
-      return { address: o.address, inlineDatum: o.datum ? dataHex(o.datum) : null };
+      // The value too (ADR-0016 D11): a provider cannot then misstate how the inputs' sum splits between them.
+      return { address: o.address, inlineDatum: o.datum ? dataHex(o.datum) : null, value: o.value, hasScriptRef: o.hasScriptRef,
+        datumHash: o.datumHash, size: o.size };
     },
 
     /** Unspent outputs at an address: [{ ref, address, value, inlineDatum }]. */

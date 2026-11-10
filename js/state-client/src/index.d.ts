@@ -100,6 +100,8 @@ export interface JoustOptions {
   chain: Chain;
   limits?: Partial<typeof DEFAULT_LIMITS>;
   onReview?: (review: Review) => Promise<void>;
+  /** Where keyed operations' designated inputs are recorded (ADR-0016 D11); IndexedDB in a browser, else memory. */
+  retryStore?: RetryStore;
 }
 
 export interface CallResult {
@@ -116,6 +118,8 @@ export declare class JoustContract {
   constructor(o: JoustOptions & { description: unknown });
   deploy(wallet: Cip30Api, args?: object, pay?: Pay): Promise<CallResult & { instance: Hex }>;
   at(instance: Hex): JoustInstance;
+  /** Abandons the wallet's unsettled keyed operation (the user's explicit choice; an earlier attempt may still land). */
+  abandonKeyed(wallet: Cip30Api): Promise<unknown>;
 }
 export declare class JoustInstance {
   readonly id: Hex;
@@ -125,7 +129,40 @@ export declare class JoustInstance {
   create(wallet: Cip30Api, name: string, args?: object, pay?: Pay): Promise<CallResult & { object: Hex }>;
   object(objectId: Hex): JoustObject;
   objects(): Promise<Array<{ id: Hex; type: string; value: unknown; lovelace: bigint }>>;
+  /** The list of a keyed type (ADR-0016), by its simple name. */
+  keyed(type: string): JoustKeyedList;
 }
+/** One keyed type's list in one instance (ADR-0016): lookup by key, the walk from the head, inserts. */
+export declare class JoustKeyedList {
+  unit(key: Hex): string;
+  find(key: Hex): Promise<{ ref: string; key: Hex; retired: boolean; value: unknown; lovelace: bigint } | null>;
+  exists(key: Hex): Promise<boolean>;
+  keys(): Promise<Array<{ key: Hex; retired: boolean; value: unknown }>>;
+  insert(wallet: Cip30Api, method: string, args?: object, pay?: Pay, opts?: { abandon?: boolean }): Promise<CallResult & { key: Hex }>;
+  object(key: Hex): JoustKeyedObject;
+}
+export declare class JoustKeyedObject {
+  readonly key: Hex;
+  call(wallet: Cip30Api, name: string, args?: object, pay?: Pay, opts?: { cosigners?: Cip30Api[]; abandon?: boolean }): Promise<CallResult>;
+  read(): Promise<{ ref: string; key: Hex; retired: boolean; value: unknown; lovelace: bigint } | null>;
+}
+/** A record store for keyed operations' designated inputs (ADR-0016 D11); IndexedDB in a browser. */
+export interface RetryStore {
+  all(): Promise<unknown[]>;
+  put(record: unknown): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+export declare function memoryRetryStore(): RetryStore;
+export declare function indexedDbRetryStore(name?: string): RetryStore;
+export declare function defaultRetryStore(): RetryStore;
+/** Thrown while a keyed operation of the wallet may still land: retry the same call, or abandon it explicitly. */
+export declare class PendingKeyedOperation extends Error {
+  readonly record: { designated: string; attempts: Array<{ txHash: string; validTo: number | null }> };
+}
+export declare function verifyKeyed(o: unknown): Promise<{ problems: string[]; report: Report }>;
+export declare function keyIdOf(instance: Hex, typeId: Hex, key: Hex): Hex;
+export declare function typeIdOf(simple: string): Hex;
+export declare function compareKeys(a: Hex, b: Hex): number;
 export declare class JoustObject {
   readonly id: Hex;
   call(wallet: Cip30Api, name: string, args?: object, pay?: Pay): Promise<CallResult>;

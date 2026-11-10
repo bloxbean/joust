@@ -10,6 +10,7 @@ import {
   paymentKeyHashOf, isWalletEnterprise, decodeNext,
 } from './verify.js';
 import { parseTx, txHash as hashOf } from './ledger.js';
+import { KEYED_KINDS } from './keyed.js';
 
 /**
  * @param o.steps  [{ description, deployment, call: { kind, meta, args, pay, instance, object } }] in composition order
@@ -44,7 +45,8 @@ export async function verifyComposed(o) {
     };
   });
   for (const k of calls) {
-    if (!SPEND_KINDS.has(k.call.kind) && !k.creation) problems.push(`${k.call.meta.name}: only spending calls and adoptions can be composed here`);
+    if (KEYED_KINDS.has(k.call.kind)) problems.push(`${k.call.meta.name}: a keyed call is verified on its own, never in a composition (ADR-0016 D11)`);
+    else if (!SPEND_KINDS.has(k.call.kind) && !k.creation) problems.push(`${k.call.meta.name}: only spending calls and adoptions can be composed here`);
     // In a composition, deposits and @Receives are verifiable: their claims go through the pinned output verifier
     // (checked on chain), and the receiving call is part of the same transaction.
     const meta = k.call.meta;
@@ -410,6 +412,10 @@ export async function runComposed({ CSL, service, chain, api, steps, limits, onR
   const { fromWallet, cosignersOf, signedByOthers } = await import('./client.js');
   const prepared = steps.map((s) => {
     const k = s.contract;
+    // ADR-0016 D11: a page verifies a keyed call on its own; composed accounting is a follow-up.
+    if ([...k.x.actions, ...k.x.creations].some((a) => a.name === s.method && KEYED_KINDS.has(a.kind))) {
+      throw new Error(`${s.method} is a keyed call: a page does not compose keyed calls (ADR-0016 D11)`);
+    }
     const meta = k.meta(s.method, ['action', 'destroy', 'ownedAction', 'ownedDestroy', 'migrate']);
     const args = {};
     for (const a of meta.args) {
