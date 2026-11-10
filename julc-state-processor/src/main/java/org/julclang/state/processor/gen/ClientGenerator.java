@@ -285,8 +285,12 @@ public final class ClientGenerator {
         return List.of(lookup, lookup + "List", lookup + "Exists", lookup + "Keys");
     }
 
-    /** Members of a keyed type's generated handle ({@code <Type>Object}). */
-    public static final List<String> KEYED_HANDLE_MEMBERS = List.of("key", "value", "retired", "lovelace", "object");
+    /**
+     * Members of a keyed type's generated handles: the Java {@code <Type>Object}, and the JavaScript wrapper joust-gen
+     * generates from the description ({@code read}, its {@code o} field, {@code constructor}; F83).
+     */
+    public static final List<String> KEYED_HANDLE_MEMBERS = List.of("key", "value", "retired", "lovelace", "object", "read", "o",
+            "constructor");
 
     /** The keyed types' runtime descriptions (ADR-0016), declared before SPEC, which lists them. */
     private void keyedTypes() {

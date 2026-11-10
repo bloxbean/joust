@@ -67,13 +67,15 @@ public final class DescriptionWriter {
         for (int i = 0; i < spend.size(); i++) {
             calls.add(constructor(spend.get(i).variant(), i, redeemerFields(spend.get(i))));
         }
-        if (c.hasKeyed()) calls.add(constructor("Link", spend.size(), List.of()));   // ADR-0016 I48
         if (c.hasBatched()) {
             int b = spend.size();
             calls.add(constructor("Batch", b, List.of(field("validFrom", integer()), field("validTo", integer()))));
             calls.add(constructor("InBatch", b + 1, List.of()));
             calls.add(constructor("CancelIntent", b + 2, List.of()));
         }
+        // ADR-0016 I48: Link follows the batch redeemers, as in the validator's Calls (R-G11; D1 refuses both together).
+        int linkIndex = spend.size() + (c.hasBatched() ? 3 : 0);
+        if (c.hasKeyed()) calls.add(constructor("Link", linkIndex, List.of()));
         String callsKey = c.packageName() + "." + V + ".Calls";
         if (!calls.isEmpty()) definitions.put(callsKey, map("title", "Calls", "anyOf", calls));
 
@@ -213,7 +215,7 @@ public final class DescriptionWriter {
             e.put("nodeTag", k.nodeTag());
             e.put("retired", ref(retired));
             e.put("retiredTag", k.retiredTag());
-            e.put("link", map("purpose", "spend", "constructor", "Link", "index", spend.size()));
+            e.put("link", map("purpose", "spend", "constructor", "Link", "index", linkIndex));
             e.put("remove", removes.isEmpty() ? null
                     : map("purpose", "mint", "constructor", "Remove_" + T, "index", lifecycleIndex.get("Remove_" + T)));
             e.put("inserts", inserts);

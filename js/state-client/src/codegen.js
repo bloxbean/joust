@@ -141,6 +141,23 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
   }
   // Keyed types (ADR-0016 D11): inserts, lookup by key, the list's keys.
   const keyedTypes = (x.keyed ?? []).filter((k) => typeof k === 'object');
+  // A generated member never hides another (F83): the keyed wrappers' own members are reserved.
+  const KEYED_OBJECT_MEMBERS = new Set(['constructor', 'o', 'key', 'read']);
+  const instanceMembers = new Set(['constructor', 'i', 'id', 'read', 'state', 'objects',
+    ...x.actions.filter((a) => a.kind === 'action' || a.kind === 'destroy').map((a) => id(a.name))]);
+  for (const k of keyedTypes) {
+    for (const m of [id(k.lookup), id(k.lookup) + 'Exists', id(k.lookup) + 'Keys']) {
+      if (instanceMembers.has(m)) throw new Error(`${x.contract}: the generated member ${m} of keyed type ${k.simple} clashes with another member`);
+      instanceMembers.add(m);
+    }
+  }
+  for (const cr of x.creations.filter((c) => c.kind === 'keyedInit')) {
+    if (instanceMembers.has(id(cr.name))) throw new Error(`${x.contract}: keyed insert ${cr.name} clashes with a generated member of the instance`);
+    instanceMembers.add(id(cr.name));
+  }
+  for (const a of x.actions.filter((a) => ['keyedAction', 'keyedRemove', 'keyedRetire'].includes(a.kind))) {
+    if (KEYED_OBJECT_MEMBERS.has(id(a.name))) throw new Error(`${x.contract}: keyed call ${a.name} clashes with the generated object's ${id(a.name)}`);
+  }
   for (const k of keyedTypes) {
     const K = `${C}${id(k.simple)}Object`;
     for (const cr of x.creations.filter((c) => c.kind === 'keyedInit' && c.keyed === k.simple)) {

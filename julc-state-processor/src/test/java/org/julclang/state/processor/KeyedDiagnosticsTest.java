@@ -338,7 +338,7 @@ class KeyedDiagnosticsTest {
             error(compile(keyed("@View public static BigInteger " + v + "(S s) { return BigInteger.ONE; }")),
                     "view " + v + " clashes with a member the generated client has for keyed type K");
         }
-        for (String m : new String[]{"value", "key", "retired", "lovelace", "object"}) {
+        for (String m : new String[]{"value", "key", "retired", "lovelace", "object", "read", "o"}) {   // read, o: the JS wrapper (F83)
             error(compile(keyed("@OwnedAction @SignedBy(\"owner\") public static K " + m + "(K k) { return k; }")),
                     "clashes with a member of the generated KObject handle");
         }

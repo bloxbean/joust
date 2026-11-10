@@ -16,6 +16,9 @@ dependencies {
     testAnnotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
 }
 
+// ADR-0016 M3 (R-G5): the registry's portable steps (keyed actions and retires) are generated and tested.
+tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.portable=true'] }
+
 // -Pjoust.traces: each failing validator check traces its name (debugging only; larger scripts, over the size limit).
 if (project.hasProperty('joust.traces')) {
     tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.traces=true'] }
