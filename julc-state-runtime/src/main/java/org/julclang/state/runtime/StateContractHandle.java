@@ -275,17 +275,7 @@ public final class StateContractHandle<S> {
                     .additionalSignersCount(1);
             // Claimed for a while: a wallet signs and submits it later, and it has no validity bound (F63).
             var claimed = Designation.build(payerAddress, null, ctx::build);
-            var built = claimed.tx();
-            try {
-                runtime.built("publish the " + spec.name() + " reference script", built, true);
-            } catch (RuntimeException e) {
-                claimed.claim().release();   // nothing returned: nothing to submit (F71)
-                throw e;
-            }
-            // Returned for a wallet to sign; it has no validity bound, so its claim lasts a fixed time (a bookkeeping
-            // bound, not proof it cannot land: see ADR-0016's limits).
-            claimed.claim().releaseAt(System.currentTimeMillis() + TxRunner.UNBOUNDED_CLAIM_MS);
-            return built;
+            return TxRunner.exportPrepared(runtime, "publish the " + spec.name() + " reference script", claimed);
         } catch (Exception e) {
             throw new SubmitException("publish the " + spec.name() + " reference script: could not build the transaction: "
                     + e.getMessage(), e);
@@ -512,7 +502,8 @@ public final class StateContractHandle<S> {
                 throw new JoustException("deploy: the caller's address has no UTxO to use as seed");
             }
             // Prefer a pure-ADA UTxO; any UTxO works, but never a keyed operation's designated input (ADR-0016 D7).
-            var free = r.getValue().stream().filter(Designation::pickable).toList();
+            var own = TxRunner.currentOperation();
+            var free = r.getValue().stream().filter(u -> Designation.pickable(u, own)).toList();
             if (free.isEmpty()) throw new JoustException("deploy: every UTxO of the caller is designated by a keyed operation");
             return free.stream()
                     .filter(u -> u.getAmount().size() == 1)

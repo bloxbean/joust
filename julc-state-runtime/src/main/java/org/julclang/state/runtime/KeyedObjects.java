@@ -89,13 +89,14 @@ final class KeyedObjects {
                     end = next.end;
                 } catch (Throwable unexpected) {
                     if (d == null || d.attempts().isEmpty()) {
-                        unexpected.addSuppressed(thrown);
+                        if (unexpected != thrown) unexpected.addSuppressed(thrown);
                         end = unexpected;
                     } else {
-                        var p = new PendingTransactionException(what + ": " + TxRunner.rootMessage(unexpected) + " after an"
-                                + " attempt was handed out, so it may have landed", d.attemptHashes(), d.ref());
+                        // The rescue itself must not fail: its diagnostic never throws (section 4 of the round-4 review).
+                        var p = new PendingTransactionException(what + ": " + describe(unexpected) + " after an attempt was"
+                                + " handed out, so it may have landed", d.attemptHashes(), d.ref());
                         p.initCause(thrown);
-                        p.addSuppressed(unexpected);
+                        if (unexpected != thrown) p.addSuppressed(unexpected);
                         end = p;
                     }
                 }
@@ -106,8 +107,30 @@ final class KeyedObjects {
         } finally {
             if (d != null) {
                 if (definite || d.attempts().isEmpty()) d.release();
-                else d.releaseAt(lingerUntil(rt, d));
+                else d.releaseAt(lingerUntilOrForever(rt, d));
             }
+        }
+    }
+
+    /**
+     * {@link #lingerUntil}, failing closed: a clock that cannot convert (a custom {@link ChainTime} that throws) keeps the
+     * input reserved rather than replacing the series' outcome with its own exception.
+     */
+    private static long lingerUntilOrForever(StateRuntime rt, Designated d) {
+        try {
+            return lingerUntil(rt, d);
+        } catch (Throwable t) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    /** A failure's class and message, never throwing (an exception whose accessors throw is still described). */
+    static String describe(Throwable t) {
+        String name = t == null ? "null" : t.getClass().getName();
+        try {
+            return TxRunner.rootMessage(t);
+        } catch (Throwable ignored) {
+            return name;
         }
     }
 

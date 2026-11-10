@@ -480,10 +480,15 @@ final class Designation {
         });
     }
 
-    /** An explicit pick may take {@code u}: not designated, and not held by a keyed operation's attempt (F72). */
-    static boolean pickable(Utxo u) {
+    /**
+     * An explicit pick for operation {@code own} (null outside a keyed operation) may take {@code u}: not designated,
+     * and not held by another keyed operation's attempt (F72). The operation's own held inputs stay pickable, so its
+     * rebuild can pick the seed its earlier attempt used (F76). (The pick's temporary claim is the pick's own, apart
+     * from the operation's.)
+     */
+    static boolean pickable(Utxo u, Designated own) {
         String ref = ref(u);
-        return !isDesignated(ref) && !heldByAnotherOperation(ref, null);
+        return !isDesignated(ref) && !heldByAnotherOperation(ref, own);
     }
 
     /** For tests: nothing designated or claimed. */

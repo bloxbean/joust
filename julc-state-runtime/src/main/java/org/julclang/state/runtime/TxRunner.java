@@ -60,6 +60,8 @@ final class TxRunner {
         final java.util.List<org.julclang.state.api.mpf.MapClaim> mapClaims = new java.util.ArrayList<>();
         /** A nested composition that allows shared signers: its calls count as one for the signer check. */
         String group;
+        /** The keyed operation this composition's attempt belongs to, once designated (its picks may reuse its inputs). */
+        Designation.Designated designated;
         /** Building for wallets ({@code Compose.prepare}): no key held here may take part (ADR-0013 D2). */
         boolean walletOnly;
         /** Deposits into other instances made by the calls (ADR-0011 D3), resolved to claims when submitting. */
@@ -122,6 +124,12 @@ final class TxRunner {
 
     static Capture capture() {
         return CAPTURE.get();
+    }
+
+    /** The keyed operation the calls on this thread are building for (a keyed composition's), or null (F76). */
+    static Designation.Designated currentOperation() {
+        Capture c = CAPTURE.get();
+        return c == null ? null : c.designated;
     }
 
     /** The transaction a call builds into: a fresh one, or the composition's shared one. */
@@ -314,6 +322,24 @@ final class TxRunner {
      * keeps its inputs claimed: it could land at any time, so this is a bound on the bookkeeping, not on the chain.
      */
     static final long UNBOUNDED_CLAIM_MS = 600_000L;
+
+    /**
+     * Hands a prepared transaction without a validity bound (a reference-script or verifier publication) to the caller:
+     * observers see it first ({@code onBuilt}: diagnostic only, what they keep is not tracked). Returned, its inputs
+     * stay claimed for {@link #UNBOUNDED_CLAIM_MS} (a bookkeeping bound, not proof it cannot land); not returned (anything
+     * thrown, an {@code Error} included), nothing escaped and the claim ends at once (F71, F77).
+     */
+    static Transaction exportPrepared(StateRuntime rt, String what, Designation.Claimed claimed) {
+        boolean returned = false;
+        try {
+            rt.built(what, claimed.tx(), true);
+            returned = true;
+            return claimed.tx();
+        } finally {
+            if (returned) claimed.claim().releaseAt(System.currentTimeMillis() + UNBOUNDED_CLAIM_MS);
+            else claimed.claim().release();
+        }
+    }
 
     /** How long an explicit pick (a seed, a funding input) stays claimed before the build that spends it claims it. */
     static final long PICK_CLAIM_MS = 120_000L;
@@ -658,7 +684,7 @@ final class TxRunner {
                 for (Utxo u : r.getValue()) {
                     if (u.getReferenceScriptHash() != null || u.getInlineDatum() != null || u.getDataHash() != null) continue;
                     if (spent.contains(u.getTxHash() + "#" + u.getOutputIndex())) continue;
-                    if (!Designation.pickable(u)) continue;   // another operation's (ADR-0016 D7, F72)
+                    if (!Designation.pickable(u, currentOperation())) continue;   // another operation's (ADR-0016 D7, F72)
                     BigInteger q = lovelace(u);
                     if (q.compareTo(BigInteger.valueOf(3_000_000)) < 0) continue;
                     if (best == null || q.compareTo(lovelace(best)) > 0) best = u;

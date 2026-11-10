@@ -657,7 +657,7 @@ class KeyedSeriesTest {
         var fee = utxo(a, 10_000_000);
         other.hold(List.of(Designation.ref(fee)));
         try {
-            assertFalse(Designation.pickable(fee), "another operation's held input is not picked");
+            assertFalse(Designation.pickable(fee, null), "another operation's held input is not picked");
             try (var scope = Designation.scope()) {
                 try (var inner = Designation.scope()) {
                     Designation.pick(a, 60_000, () -> seed);
@@ -703,5 +703,101 @@ class KeyedSeriesTest {
             first.release();
             second.release();
         }
+    }
+
+    @Test
+    void anOperationsRebuildMayRepickTheSeedItsEarlierAttemptHolds() {
+        // F76: after a rejection, a keyed composition's probe must be able to pick the seed its handed-out attempt used
+        // (its own held input), while another operation may not; only the designation and that seed exist.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        String a = payer.baseAddress();
+        var designation = utxo(a, 40_000_000);
+        var seed = utxo(a, 20_000_000);
+        chain.wallet.addAll(List.of(designation, seed));
+        var rt = chain.runtime(3);
+        var d = Designation.reserve(rt, payer, "test", Set.of());
+        assertEquals(Designation.ref(designation), d.ref());
+        d.hold(List.of(Designation.ref(seed)));   // the first attempt was handed out, then "rejected"
+        var cap = new TxRunner.Capture();
+        cap.designated = d;                       // the composition's rebuild
+        TxRunner.CAPTURE.set(cap);
+        try (var scope = Designation.scope()) {
+            var own = TxRunner.currentOperation();
+            assertSame(d, own);
+            Utxo picked = Designation.pick(a, 60_000, () -> List.of(designation, seed).stream()
+                    .filter(u -> Designation.pickable(u, own)).findFirst().orElse(null));
+            assertSame(seed, picked, "its own held seed is pickable again; the designation never is");
+        } finally {
+            TxRunner.CAPTURE.remove();
+        }
+        var other = new Designation.Designated(utxo(a, 30_000_000), a);
+        assertFalse(Designation.pickable(seed, other), "another operation may not pick it");
+        assertFalse(Designation.pickable(seed, null), "nor may a plain pick");
+        d.release();
+    }
+
+    @Test
+    void aPublicationWhoseObserverThrowsAnError_releasesItsClaim() {
+        // F77: nothing escaped, so nothing stays claimed, whatever the observer threw.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        String a = payer.baseAddress();
+        var u = utxo(a, 30_000_000);
+        var rt = StateRuntime.builder(chain.backend()).chainTime(chain.time()).network(Networks.testnet())
+                .onBuilt(b -> { throw new AssertionError("test: an observer's assertion"); }).build();
+        var claimed = Designation.build(a, null, () -> spending(u));
+        assertThrows(AssertionError.class, () -> TxRunner.exportPrepared(rt, "publish", claimed));
+        assertFalse(Designation.isClaimed(Designation.ref(u)), "released");
+        // Returned: claimed for the fixed bound.
+        var ok = StateRuntime.builder(chain.backend()).chainTime(chain.time()).network(Networks.testnet()).build();
+        var again = Designation.build(a, null, () -> spending(u));
+        assertNotNull(TxRunner.exportPrepared(ok, "publish", again));
+        assertTrue(Designation.isClaimed(Designation.ref(u)));
+        again.claim().release();
+    }
+
+    @Test
+    void aClockThatThrowsWhileLingering_keepsPendingAndTheReservation() {
+        // Round 4, section 4: cleanup fails closed without replacing the series' outcome.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        var u = utxo(payer.baseAddress(), 30_000_000);
+        chain.wallet.add(u);
+        var good = chain.time();
+        ChainTime throwing = new ChainTime() {
+            public long slotToPosixMs(long slot) { throw new IllegalStateException("test: a clock that cannot convert"); }
+            public long posixMsToSlotFloor(long ms) { return good.posixMsToSlotFloor(ms); }
+            public long slotLengthMs() { return 1000; }
+            public long tipSlot() { return good.tipSlot(); }
+        };
+        var rt = StateRuntime.builder(chain.backend()).chainTime(throwing).network(Networks.testnet()).maxRetries(0).build();
+        String h = hash();
+        var e = assertThrows(PendingTransactionException.class, () -> KeyedObjects.series(rt, payer, "test", false, d -> {
+            d.handedOut(h, 5_000);
+            throw new PendingTransactionException(h, "test: submission outcome unknown");
+        }));
+        assertEquals(List.of(h), e.attempts());
+        assertTrue(Designation.isDesignated(Designation.ref(u)), "kept reserved, not released early");
+    }
+
+    @Test
+    void anExceptionWhoseAccessorsThrow_stillEndsPendingAfterAHandOut() {
+        // Round 4, section 4: the rescue's own diagnostic never throws.
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        chain.wallet.add(utxo(payer.baseAddress(), 30_000_000));
+        String h = hash();
+        long open = System.currentTimeMillis() / 1000 + 600;
+        class Hostile extends RuntimeException {
+            @Override public String getMessage() { throw new IllegalStateException("no message"); }
+            @Override public synchronized Throwable getCause() { throw new IllegalStateException("no cause"); }
+            @Override public String toString() { throw new IllegalStateException("no string"); }
+        }
+        var e = assertThrows(PendingTransactionException.class, () -> series(chain, 3, payer, d -> {
+            d.handedOut(h, open);
+            throw new Hostile();
+        }));
+        assertEquals(List.of(h), e.attempts());
     }
 }

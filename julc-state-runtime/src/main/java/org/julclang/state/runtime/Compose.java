@@ -114,10 +114,12 @@ public final class Compose {
         // Pass 1: every call's own window. A receiver placed before its depositors sees no deposits yet and may refuse:
         // the pass then runs again with the deposits the first try found (ADR-0011 D3).
         var probe = new TxRunner.Capture();
+        probe.designated = designated;
         probe.walletOnly = prepare;
         RuntimeException failed = runTolerant(probe);
         if (failed != null && !probe.deposits.isEmpty()) {
             var again = new TxRunner.Capture();
+            again.designated = designated;
             again.walletOnly = prepare;
             again.known = List.copyOf(probe.deposits);
             failed = runTolerant(again);
@@ -139,6 +141,7 @@ public final class Compose {
         }
         // Pass 2: every call in the common window, into one transaction.
         var cap = new TxRunner.Capture();
+        cap.designated = designated;
         cap.walletOnly = prepare;
         cap.forced = window;
         cap.known = List.copyOf(probe.deposits);   // receivers see the deposits the first pass found (ADR-0011 D3)
