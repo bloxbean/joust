@@ -48,6 +48,8 @@ public final class DescribedContract {
     private final SchemaCodec codec;
     private final ContractSpec<PlutusData> spec;
     private final TransitionFn fn;
+    /** Keyed types by simple name (ADR-0016; from x-joust.keyed, D11): their values are Data. */
+    private final java.util.Map<String, org.julclang.state.runtime.KeyedType<PlutusData>> keyed = new java.util.LinkedHashMap<>();
 
     public DescribedContract(JsonNode description, String scriptCborHex, TransitionFn fn) {
         this.description = description;
@@ -55,9 +57,26 @@ public final class DescribedContract {
         if (x == null || x.path("version").asInt() < 2) throw new IllegalArgumentException("a JOUST description of version 2 is needed (with call recipes)");
         this.name = description.path("preamble").path("title").asText();
         this.codec = new SchemaCodec(description);
-        this.spec = ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
-                x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
-                mapFields(refKey(x.get("state"))));
+        for (JsonNode k : x.path("keyed")) {
+            if (!k.isObject()) continue;   // a description before ADR-0016 M3 names keyed types only
+            int link = k.path("link").path("index").asInt();
+            JsonNode remove = k.path("remove");
+            java.util.function.BiFunction<TxOutRef, TxOutRef, Object> removeRedeemer = remove.isObject()
+                    ? (anchor, removed) -> new PlutusData.ConstrData(remove.path("index").asInt(),
+                            List.of(anchor.toPlutusData(), removed.toPlutusData()))
+                    : null;
+            keyed.put(k.path("simple").asText(), new org.julclang.state.runtime.KeyedType<>(k.path("simple").asText(),
+                    k.path("headTag").asInt(), k.path("keyIndex").asInt(), k.path("maxKeyBytes").asInt(),
+                    k.path("signedKey").asBoolean(), k.path("linkCooldownMs").asLong(), k.path("linkWindowMs").asLong(),
+                    PlutusData.class, new PlutusData.ConstrData(link, List.of()), removeRedeemer));
+        }
+        this.spec = keyed.isEmpty()
+                ? ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
+                        x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
+                        mapFields(refKey(x.get("state"))))
+                : ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
+                        x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
+                        mapFields(refKey(x.get("state"))), List.copyOf(keyed.values()));
         this.fn = fn;
     }
 
@@ -93,7 +112,8 @@ public final class DescribedContract {
 
     /** The x-joust entry of a creation or action called {@code method} of {@code kind}. */
     public JsonNode meta(String kind, String method) {
-        String list = kind.equals("init") || kind.equals("ownedInit") || kind.equals("migrate") ? "creations" : "actions";
+        String list = kind.equals("init") || kind.equals("ownedInit") || kind.equals("migrate") || kind.equals("keyedInit")
+                ? "creations" : "actions";
         for (JsonNode m : x.get(list)) {
             if (m.get("name").asText().equals(method) && m.get("kind").asText().equals(kind)) return m;
         }
@@ -160,7 +180,12 @@ public final class DescribedContract {
         }
         boolean assetAware = x.path("assetAware").asBoolean();
         boolean signedByOthers = meta.path("policies").path("quorum").isObject() || !meta.path("policies").path("authorizedBy").isEmpty();
-        if (signedByOthers && !kind.equals("action") && !kind.equals("destroy")) {
+        boolean keyedKind = kind.startsWith("keyed");
+        if (keyedKind && !meta.path("policies").path("authorizedBy").isEmpty()) {
+            throw new IllegalArgumentException(method + ": @AuthorizedBy on a keyed call: not supported by the described"
+                    + " dispatcher yet (ADR-0016 M3)");
+        }
+        if (signedByOthers && !kind.equals("action") && !kind.equals("destroy") && !kind.equals("keyedAction")) {
             throw new IllegalArgumentException(method + ": @Quorum and @AuthorizedBy on " + kind + " calls: not supported yet (ADR-0015 M3)");
         }
         if (!signedByOthers && !cosigners.isEmpty()) throw new IllegalArgumentException(method + " takes no co-signers");
@@ -347,8 +372,60 @@ public final class DescribedContract {
                 obj.call(b.build());
                 return null;
             }
+            case "keyedInit" -> {
+                // ADR-0016 D4: an insert after its predecessor (the anchor), found from the listing by the new key.
+                StateInstance<PlutusData> at = handle.at(requireInstance(instance));
+                var type = keyedType(meta.path("keyed").asText());
+                boolean shared = recipe.path("shared").asBoolean();
+                var insert = new org.julclang.state.runtime.KeyedList.Insert<PlutusData>(method, caller, lovelace, usesCtx, shared,
+                        (sh, ctx) -> next(fn.apply(transition, NONE, shared ? (PlutusData) sh : NONE, argsWith.apply(null),
+                                ctxData(ctx, usesCtx)), method),
+                        (inst, anchor, ctx) -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), anchor, inst));
+                return new org.julclang.state.runtime.KeyedList<>(at, type).insert(insert).keyHex();
+            }
+            case "keyedAction", "keyedRemove", "keyedRetire" -> {
+                // ADR-0016 D6, D5, D10: a keyed object by its key (hex, the call's object).
+                StateInstance<PlutusData> at = handle.at(requireInstance(instance));
+                var type = keyedType(meta.path("keyed").asText());
+                if (object == null || !object.matches("([0-9a-f]{2})+") || object.length() / 2 > type.maxKeyBytes()) {
+                    throw new IllegalArgumentException(method + ": a keyed call needs its key (1 to " + type.maxKeyBytes()
+                            + " bytes, hex)");
+                }
+                var obj = new org.julclang.state.runtime.KeyedList<>(at, type).get(HexFormat.of().parseHex(object));
+                var b = kind.equals("keyedAction")
+                        ? Call.<PlutusData>action(method, caller)
+                        : Call.<PlutusData>destroy(method, caller, org.julclang.state.runtime.KeyedObject.RUNTIME_BURN);
+                rules(b, recipe);
+                if (!cosigners.isEmpty()) b.cosigners(cosigners.toArray(new Account[0]));
+                if (meta.path("policies").path("quorum").isObject()) b.cosigners(caller);   // the caller counts (ADR-0009 D2)
+                b.usesCtx(usesCtx).received(lovelace);
+                if (hasField(fields, "events")) {
+                    b.redeemerWith((ctx, t) -> redeemer(alternative, fields, withEvents(byName, t), ctxData(ctx, usesCtx), null, null, offeredData));
+                } else {
+                    b.redeemer(ctx -> redeemer(alternative, fields, byName, ctxData(ctx, usesCtx), null, null, offeredData));
+                }
+                var none = MerkleSupport.dataLayout(List.of());
+                if (recipe.path("shared").asBoolean()) {
+                    b.runShared((o, sh, ctx) -> transition(discover(transition, none, o, (PlutusData) sh, argsWith.apply(null), ctxData(ctx, usesCtx))));
+                } else {
+                    b.run((o, ctx) -> transition(discover(transition, none, o, NONE, argsWith.apply(null), ctxData(ctx, usesCtx))));
+                }
+                switch (kind) {
+                    case "keyedAction" -> obj.call(b.build());
+                    case "keyedRemove" -> obj.remove(b.build());
+                    default -> obj.retire(b.build());
+                }
+                return object;
+            }
             default -> throw new IllegalArgumentException("unknown kind " + kind);
         }
+    }
+
+    /** The keyed type {@code simple} (ADR-0016), as x-joust.keyed describes it. */
+    private org.julclang.state.runtime.KeyedType<PlutusData> keyedType(String simple) {
+        var t = keyed.get(simple);
+        if (t == null) throw new IllegalArgumentException(name + " has no keyed type " + simple);
+        return t;
     }
 
     private static String requireInstance(String instance) {
@@ -395,6 +472,7 @@ public final class DescribedContract {
             String n = f.asText();
             switch (n) {
                 case "seed" -> out.add(seed.toPlutusData());
+                case "anchor" -> out.add(seed.toPlutusData());   // an insert's anchor (ADR-0016 D4), passed as the seed
                 case "instance" -> out.add(PlutusData.bytes(instance));
                 case "ctx" -> out.add(ctx);
                 case "assetsIn" -> {

@@ -53,6 +53,8 @@ export function parseTx(hex) {
       datum: inline ? decodeData(inline.toCbor()) : null,
       datumHash: datum?.asDataHash?.() ?? null,
       hasScriptRef: !!o.scriptReference,
+      // Its encoded size, as the transaction carries it: the ledger's minimum is (160 + size) x coinsPerUTxOByte.
+      size: ser.toCbor().length / 2,
     };
   };
   const outs = tx.body().outputs();
@@ -199,6 +201,28 @@ const coreValue = (value) => {
   for (const [unit, q] of value) if (unit !== 'lovelace') assets.set(Cardano.AssetId(unit), BigInt(q));
   return { coins: BigInt(value.get('lovelace') ?? 0n), ...(assets.size ? { assets } : {}) };
 };
+
+const cborHead = (major, n) => {
+  const m = major << 5;
+  if (n < 24) return [m | n];
+  if (n < 0x100) return [m | 24, n];
+  if (n < 0x10000) return [m | 25, n >> 8, n & 0xff];
+  return [m | 26, (n >>> 24) & 0xff, (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+};
+
+/**
+ * The encoded size of the output the page itself would write for {@code address}, {@code value} and an inline datum
+ * whose canonical CBOR is {@code datumHex} (ADR-0016 R-F1, F86, R-F10): a post-Alonzo map { 0: address, 1: value,
+ * 2: [1, #6.24(datum)] }, as the ledger's and cardano-client-lib's encoders write it. A page computes ledger minimums
+ * from it, never from the bytes a service served.
+ */
+export function pageOutputSize(address, value, datumHex) {
+  const addr = Cardano.Address.fromBech32(address).toBytes().length / 2;
+  const val = valueCbor(value).length / 2;
+  const datum = datumHex.length / 2;
+  const datumOption = 1 + 1 + 2 + cborHead(2, datum).length + datum;   // [1, 24(bytes)]
+  return 1 + (1 + cborHead(2, addr).length + addr) + (1 + val) + (1 + datumOption);
+}
 
 /** A value (Map unit -> bigint) as CBOR hex, as CIP-30's getBalance returns it. */
 export function valueCbor(value) {

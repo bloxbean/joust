@@ -26,7 +26,7 @@ class ProcessorDiagnosticsTest {
             import org.julclang.stdlib.annotation.OnchainLibrary;
             """;
 
-    record Result(boolean success, List<String> errors, List<String> warnings) {
+    record Result(boolean success, List<String> errors, List<String> warnings, java.io.File out) {
         boolean hasError(String fragment) {
             return errors.stream().anyMatch(e -> e.contains(fragment));
         }
@@ -51,7 +51,7 @@ class ProcessorDiagnosticsTest {
                 .map(d -> d.getMessage(null)).collect(Collectors.toList());
         var warnings = diags.getDiagnostics().stream().filter(d -> d.getKind() == Diagnostic.Kind.WARNING
                 || d.getKind() == Diagnostic.Kind.MANDATORY_WARNING).map(d -> d.getMessage(null)).collect(Collectors.toList());
-        return new Result(ok, errors, warnings);
+        return new Result(ok, errors, warnings, out);
     }
 
     static final String GOOD = """

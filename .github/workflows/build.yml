@@ -1,8 +1,12 @@
 name: Build
 
-# Builds and tests every module and example. The DevKit tests run against a Yaci DevKit started on the runner
-# (they skip themselves when it is not reachable). bloxbean-snapshot.yml publishes only commits whose push run of
-# this workflow passed.
+# Builds and tests every module and example, in parallel jobs:
+#   build   compile, unit, harness and attack-suite tests, the JavaScript client's tests and the dApp page; no DevKit
+#           (-PnoDevnet excludes the tests tagged devnet).
+#   devnet  the DevKit tests (@Tag("devnet")), sharded by .github/ci/devnet-shards.txt: each shard runs on its own runner
+#           against its own Yaci DevKit, so shards share neither a devnet nor its faucet.
+#   plan    checks that every module with DevKit tests is in exactly one shard, and hands the shards to devnet.
+# bloxbean-snapshot.yml publishes only commits whose push run of this workflow passed: every job must pass.
 
 on:
   push:
@@ -14,9 +18,44 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.shards.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # A module whose DevKit tests are in no shard would silently stop running them in CI.
+      - name: Read the shards and check they cover every DevKit test module
+        id: shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import json, os, re, subprocess
+          lines = [l.split() for l in open('.github/ci/devnet-shards.txt') if l.strip() and not l.startswith('#')]
+          tasks = [t for line in lines for t in line]
+          dupes = sorted({t for t in tasks if tasks.count(t) > 1})
+          files = subprocess.run(['git', 'grep', '-l', '@Tag("devnet")', '--', '*.java'],
+                                 capture_output=True, text=True, check=True).stdout.split()
+          modules = sorted({':' + re.sub(r'/src/.*', '', f).replace('/', ':') + ':test' for f in files})
+          missing = sorted(set(modules) - set(tasks))
+          extra = sorted(set(tasks) - set(modules))
+          if dupes or missing or extra:
+              print(f"::error::devnet-shards.txt: in several shards {dupes}; in no shard {missing}; no DevKit tests {extra}")
+              raise SystemExit(1)
+          shards = [{'index': i + 1, 'tasks': ' '.join(line)} for i, line in enumerate(lines)]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('shards=' + json.dumps(shards) + '\n')
+          print(f"{len(modules)} DevKit test modules in {len(shards)} shards")
+          EOF
+
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,16 +75,6 @@ jobs:
         with:
           node-version: '22'
 
-      # Devnet + Yaci Store (localhost:8080), admin API on localhost:10000.
-      - name: Start Yaci DevKit
-        run: |
-          npm install -g @bloxbean/yaci-devkit
-          nohup yaci-devkit up --enable-yaci-store > "$RUNNER_TEMP/yaci-devkit.log" 2>&1 &
-
-      # JuLC's ADR-071 is not published yet: build it from source into mavenLocal (see the script).
-      - name: Build JuLC
-        run: bash .github/ci/build-julc.sh
-
       # The wallet example's page proof of concept (examples/wallet/js) needs its Node dependencies.
       - name: Install the wallet page's Node dependencies
         working-directory: examples/wallet/js
@@ -62,8 +91,11 @@ jobs:
         working-directory: examples/dapp/frontend
         run: npm ci
 
-      - name: Compile
-        run: ./gradlew assemble testClasses --stacktrace
+      # The dApp page uses JOUST's Vite plugin from source (js/joust/src/vite.js). js/joust's package.json also names
+      # this repository's npm packages, which only a local registry serves (ADR-0015 M2), so install just the plugin's
+      # two dependencies beside it (js/node_modules); nothing is saved or tracked.
+      - name: Install the Vite plugin's Node dependencies
+        run: npm install --no-save --no-package-lock --prefix js vite-plugin-node-polyfills@0.28.0 @rollup/plugin-inject@5.0.5
 
       # The dApp's typed clients come from the contracts' descriptions; then the page must build.
       - name: Generate the dApp's clients and build its page
@@ -71,22 +103,8 @@ jobs:
           ./gradlew :examples:dapp:jsClients --stacktrace
           (cd examples/dapp/frontend && npm run build)
 
-      - name: Wait for Yaci DevKit
-        run: |
-          for _ in $(seq 1 60); do
-            if curl -sf -o /dev/null http://localhost:8080/api/v1/blocks/latest \
-                && curl -sf -o /dev/null http://localhost:10000/local-cluster/api/admin/devnet; then
-              echo "Yaci DevKit is up"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Yaci DevKit did not start within 5 minutes"
-          tail -n 200 "$RUNNER_TEMP/yaci-devkit.log"
-          exit 1
-
-      - name: Build and test
-        run: ./gradlew build --stacktrace
+      - name: Build and test (no DevKit)
+        run: ./gradlew build -PnoDevnet --stacktrace
 
       - name: Verify the publication scope
         run: ./gradlew verifyMavenReleasePublicationScope -PskipSigning=true --stacktrace
@@ -95,12 +113,106 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports
+          name: test-reports-build
+          path: '**/build/reports/tests/test'
+
+  devnet:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    name: devnet (${{ matrix.shard.index }})
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Devnet + Yaci Store (localhost:8080), admin API on localhost:10000 (.github/ci/devkit.sh).
+      # Started first: it boots while the rest installs and compiles.
+      - name: Start Yaci DevKit
+        run: |
+          npm install -g @bloxbean/yaci-devkit@0.12.0
+          .github/ci/devkit.sh start
+
+      # The DevKit tests of the wallet page, the dApp and the Wasm runtime drive Node.
+      - name: Install the Node dependencies the DevKit tests use
+        run: |
+          (cd examples/wallet/js && npm ci)
+          (cd js/state-client && npm ci)
+          (cd examples/dapp/frontend && npm ci)
+          npm install --no-save --no-package-lock --prefix js vite-plugin-node-polyfills@0.28.0 @rollup/plugin-inject@5.0.5
+
+      - name: Compile
+        env:
+          TASKS: ${{ matrix.shard.tasks }}
+        run: ./gradlew ${TASKS//:test/:testClasses} --stacktrace
+
+      # DappDevnetTest skips itself without the generated clients and the dependencies of the page it serves.
+      - name: Generate the dApp's clients and build its page
+        if: contains(matrix.shard.tasks, ':examples:dapp:test')
+        run: |
+          ./gradlew :examples:dapp:jsClients --stacktrace
+          (cd examples/dapp/frontend && npm run build)
+
+      # Restarts DevKit once if Yaci Store does not follow the chain.
+      - name: Wait for Yaci DevKit
+        run: |
+          .github/ci/devkit.sh wait
+          .github/ci/devkit.sh monitor
+
+      - name: DevKit tests
+        env:
+          TASKS: ${{ matrix.shard.tasks }}
+        run: ./gradlew $TASKS -PdevnetOnly --continue --stacktrace
+
+      # Per-module test time (to rebalance .github/ci/devnet-shards.txt) and every skipped test: DevKit tests skip
+      # themselves when a prerequisite is missing, which would otherwise pass silently.
+      - name: Summarize the DevKit tests
+        if: always()
+        run: |
+          python3 - <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
+          import glob, re, xml.etree.ElementTree as ET
+          times, skipped = {}, []
+          for f in glob.glob('**/build/test-results/test/*.xml', recursive=True):
+              module = ':' + re.sub(r'/build/.*', '', f).replace('/', ':') + ':test'
+              for c in ET.parse(f).getroot().iter('testcase'):
+                  times[module] = times.get(module, 0) + float(c.get('time') or 0)
+                  if c.find('skipped') is not None:
+                      skipped.append(f"{c.get('classname')}.{c.get('name')}")
+          print(f"### devnet (${{ matrix.shard.index }}): {round(sum(times.values()))} s in tests, {len(skipped)} skipped")
+          for m, t in sorted(times.items(), key=lambda x: -x[1]): print(f"- `{m}` {round(t)} s")
+          for t in skipped: print(f"- skipped: {t}")
+          EOF
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-devnet-${{ matrix.shard.index }}
           path: '**/build/reports/tests/test'
 
       - name: Upload the Yaci DevKit log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: yaci-devkit-log
-          path: ${{ runner.temp }}/yaci-devkit.log
+          name: yaci-devkit-log-${{ matrix.shard.index }}
+          path: |
+            ${{ runner.temp }}/yaci-devkit.log
+            ${{ runner.temp }}/yaci-devkit-heights.log

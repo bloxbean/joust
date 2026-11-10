@@ -100,6 +100,31 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
   ts.push(`}`);
 
   // ---- an instance
+  // Every member the instance class gets, reserved before any is emitted: a later definition of a class member silently
+  // replaces an earlier one, so any two of the same name are refused, whichever comes first (F83, F100).
+  const keyedTypes = (x.keyed ?? []).filter((k) => typeof k === 'object');
+  const instanceMembers = new Map();
+  const reserve = (name, what) => {
+    const other = instanceMembers.get(name);
+    if (other) throw new Error(`joust-gen: ${x.contract}: ${what} and ${other} both give the generated instance member ${name}; rename one`);
+    instanceMembers.set(name, what);
+  };
+  for (const m of ['constructor', 'i', 'id', 'read', 'state']) reserve(m, `the generated instance's ${m}`);
+  for (const a of x.actions.filter((a) => a.kind === 'action' || a.kind === 'destroy')) reserve(id(a.name), `call ${a.name}`);
+  for (const o of x.owned) {
+    for (const cr of x.creations.filter((c) => c.kind === 'ownedInit' && c.owned === o.type && usable(c))) reserve(id(cr.name), `owned creation ${cr.name}`);
+    reserve(id(o.lookup), `the lookup of owned type ${o.simple}`);
+  }
+  if (x.owned.length) reserve('objects', 'the generated instance\'s objects');
+  for (const k of keyedTypes) {
+    for (const m of [id(k.lookup), id(k.lookup) + 'Exists', id(k.lookup) + 'Keys']) reserve(m, `keyed type ${k.simple}'s ${m}`);
+  }
+  for (const cr of x.creations.filter((c) => c.kind === 'keyedInit')) reserve(id(cr.name), `keyed insert ${cr.name}`);
+  // A keyed wrapper's own members are never hidden either (F83).
+  const KEYED_OBJECT_MEMBERS = new Set(['constructor', 'o', 'key', 'read']);
+  for (const a of x.actions.filter((a) => ['keyedAction', 'keyedRemove', 'keyedRetire'].includes(a.kind))) {
+    if (KEYED_OBJECT_MEMBERS.has(id(a.name))) throw new Error(`${x.contract}: keyed call ${a.name} clashes with the generated object's ${id(a.name)}`);
+  }
   js(`export class ${C}Instance {`);
   js(`  constructor(i) { this.i = i; this.id = i.id; }`);
   js(`  /** The state from the chain: { ref, state, lovelace }, or null once destroyed. */`);
@@ -139,6 +164,27 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
     js(`  ${id(o.lookup)}(objectId) { return new ${O}(this.i.object(objectId)); }`);
     ts.push(`  ${id(o.lookup)}(objectId: Hex): ${O};`);
   }
+  // Keyed types (ADR-0016 D11): inserts, lookup by key, the list's keys (their names reserved above).
+  for (const k of keyedTypes) {
+    const K = `${C}${id(k.simple)}Object`;
+    for (const cr of x.creations.filter((c) => c.kind === 'keyedInit' && c.keyed === k.simple)) {
+      js(doc(cr));
+      js(`  async ${id(cr.name)}(wallet, args = {}${cr.payable ? ', pay = {}' : ''}, opts = {}) {`);
+      js(`    const r = await this.i.keyed(${JSON.stringify(k.simple)}).insert(wallet, ${JSON.stringify(cr.name)}, args, ${cr.payable ? 'pay' : '{}'}, opts);`);
+      js(`    return { ...r, object: new ${K}(this.i.keyed(${JSON.stringify(k.simple)}).object(r.key)) };`);
+      js(`  }`);
+      ts.push(`  ${id(cr.name)}(wallet: Cip30Api, args${cr.args.length || cr.payable ? '' : '?'}: ${argsType(cr)}${payParam(cr)}, opts?: { abandon?: boolean }): Promise<CallResult & { key: Hex; object: ${K} }>;`);
+    }
+    js(`  /** The ${k.simple} of a key (hex), live or retired (ADR-0016). */`);
+    js(`  ${id(k.lookup)}(key) { return new ${K}(this.i.keyed(${JSON.stringify(k.simple)}).object(key)); }`);
+    js(`  /** Whether a ${k.simple} key is taken (live or retired); "not found" is what the chain API returned. */`);
+    js(`  ${id(k.lookup)}Exists(key) { return this.i.keyed(${JSON.stringify(k.simple)}).exists(key); }`);
+    js(`  /** Every ${k.simple} key, in list order (walked from the head). */`);
+    js(`  ${id(k.lookup)}Keys() { return this.i.keyed(${JSON.stringify(k.simple)}).keys(); }`);
+    ts.push(`  ${id(k.lookup)}(key: Hex): ${K};`);
+    ts.push(`  ${id(k.lookup)}Exists(key: Hex): Promise<boolean>;`);
+    ts.push(`  ${id(k.lookup)}Keys(): Promise<Array<{ key: Hex; retired: boolean; value: unknown }>>;`);
+  }
   if (x.owned.length) {
     js(`  /** Every owned object of this instance on chain. */`);
     js(`  objects() { return this.i.objects(); }`);
@@ -163,6 +209,26 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
       js(doc(a));
       js(`  ${id(a.name)}(wallet, args = {}${a.payable ? ', pay = {}' : ''}) { return this.o.call(wallet, ${JSON.stringify(a.name)}, args${a.payable ? ', pay' : ''}); }`);
       ts.push(`  ${id(a.name)}(wallet: Cip30Api, args${a.args.length || a.payable ? '' : '?'}: ${argsType(a)}${payParam(a)}): Promise<CallResult>;`);
+    }
+    js(`}`);
+    js();
+    ts.push(`}`);
+  }
+  // ---- keyed objects (ADR-0016)
+  for (const k of keyedTypes) {
+    const K = `${C}${id(k.simple)}Object`;
+    const valueT = tsType({ $ref: '#/definitions/' + k.type.replace(/~/g, '~0').replace(/\//g, '~1') }, defs, names, false);
+    js(`export class ${K} {`);
+    js(`  constructor(o) { this.o = o; this.key = o.key; }`);
+    js(`  /** The object from the chain: { ref, key, retired, value, lovelace }, or null. */`);
+    js(`  read() { return this.o.read(); }`);
+    ts.push(`export declare class ${K} {`);
+    ts.push(`  readonly key: Hex;`);
+    ts.push(`  read(): Promise<{ ref: string; key: Hex; retired: boolean; value: ${valueT} | null; lovelace: bigint } | null>;`);
+    for (const a of x.actions.filter((a) => ['keyedAction', 'keyedRemove', 'keyedRetire'].includes(a.kind) && a.keyed === k.simple)) {
+      js(doc(a));
+      js(`  ${id(a.name)}(wallet, args = {}${a.payable ? ', pay = {}' : ''}, opts = {}) { return this.o.call(wallet, ${JSON.stringify(a.name)}, args, ${a.payable ? 'pay' : '{}'}, opts); }`);
+      ts.push(`  ${id(a.name)}(wallet: Cip30Api, args${a.args.length || a.payable ? '' : '?'}: ${argsType(a)}${payParam(a)}, opts?: { cosigners?: Cip30Api[]; abandon?: boolean }): Promise<CallResult>;`);
     }
     js(`}`);
     js();

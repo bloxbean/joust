@@ -40,12 +40,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 
 ## Build / test
 - JDK 25. `./gradlew build`.
-- Build JuLC locally with `bash .github/ci/build-julc.sh` (as CI does): a fresh shallow clone, so the commit hash
-  JuLC appends to its version has the same length as in CI (a worktree build may append a longer one).
-- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is **JuLC main, built locally** (no published
-  snapshot has #311/#313 yet): `.github/ci/build-julc.sh` clones the pinned commit (`JULC_REF`) and runs
-  `./gradlew publishToMavenLocal`; JuLC's build appends the commit to its version (`0.1.0-pre21-71b3a73-SNAPSHOT`),
-  which must equal `julc` in the catalog. JuLC changes JOUST needs: a JuLC PR labelled `joust`.
+- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is a **published snapshot of JuLC main**
+  (`0.1.0-pre21-71b3a73-SNAPSHOT`, with #311/#313), resolved from the BloxBean snapshot repository
+  (`https://repo.bloxbean.org/maven/snapshots`; `settings.gradle` lists it for the `org.julclang.julc` plugin too). To
+  move to a newer JuLC, pin the version JuLC's "Publish snapshot" workflow printed. JuLC changes JOUST needs: a JuLC PR
+  labelled `joust`.
 - A consumer of JOUST needs on its processor path: `julc-state-processor`, `julc-annotation-processor`, and
   `project(path: ':julc-state-api', configuration: 'onchainSources')` (a *directory*, not the jar; see gotchas).
 - `-PuseLocalJulc[=path]` adds `../julc` as a composite build. Not tested yet.
@@ -153,6 +152,14 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). The
   toolchain reads javac's model through JuLC's scoped query `JavacFrontend.attribute(roots, pool, query)` (bloxbean/julc#313):
   use the model only inside the query, on the calling thread, and return plain values (no Element, TypeMirror or Tree).
+- ADR-0016 M3 (keyed objects in pages): descriptions carry `x-joust.keyed` (tags, typeId, bounds, Link/Remove_T) and
+  keyed call kinds (`keyedInit`/`keyedAction`/`keyedRemove`/`keyedRetire`); `verifyPrepared` hands them to
+  `verifyKeyed` (js/state-client/src/keyed.js). A wallet's keyed call is prepared only with `Compose.designate(ref)`
+  (the page's designated input, recorded in `retries.js` before the first attempt; IndexedDB in browsers) and never
+  composed; a page never queues keyed calls (a second one in flight is refused). An engine cannot wait for a cooldown: it refuses with "prepare again at slot N" and the client waits. A
+  link window may start ahead (within maxStartSlots): submit at its start. DevKit's Yaci Store serves no transaction
+  CBOR, so pages there bind keyed inputs by Ctx or the balance equation. `js/state-client/test/fixtures/
+  registry.description.json` is a copy of the generated description (`RegistryDescriptionTest` fails when stale).
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

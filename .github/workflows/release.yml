@@ -1,0 +1,447 @@
+# From the release-ops standard (templates/workflows/release.yml), following JuLC's release.yml, adapted for JOUST
+# while the repository is private: a v* tag, pushed by hand for now (release-ops' tag-release.yml comes later), runs
+# the release. Promoting the staged Central deployment is a human step in the Central Portal for now; release-ops'
+# approval-gated publish-central.yml will automate it later.
+name: Release (Maven artifacts and npm)
+
+# A v* tag builds and signs every module once and publishes the Maven artifacts where gradle.properties says
+# (release-ops docs/12-bloxbean-maven-repository.md):
+#   maven_central_publish  uploads a USER_MANAGED Central Portal deployment. It stops there: nothing is on Maven
+#                          Central until a human publishes the deployment in the Central Portal.
+#   bloxbean_repo_publish  publishes to https://repo.bloxbean.org/maven/releases, public and permanent at once.
+# With both on, both receive the same signed files: one Gradle run builds the staged repository and the Central
+# bundle, which are checked byte for byte, and the Central upload reuses that bundle. The BloxBean repository goes
+# first, so a Central failure (e.g. its quota) leaves the release there.
+#
+# Then the npm job publishes JOUST's four npm packages through npm trusted publishing (GitHub OIDC, no npm token; as
+# cardano-client-bindings, mesmo, yaci-devkit and yano), or only checks them (`npm publish --dry-run`) while
+# npm_publish is false in gradle.properties.
+#
+# To release: set `version` in gradle.properties to the release (no -SNAPSHOT) and pin released dependencies, merge,
+# then push the tag v<version> from that commit.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions: {}
+
+# Never cancel a run that may already have uploaded a deployment or published a package.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  maven:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    # The signing subkey, Central Portal token and bucket credentials are secrets of this environment, which accepts
+    # v* tags.
+    environment: release-staging
+    permissions:
+      contents: read
+    # Seeding, staging and uploading to the BloxBean repository is a read-modify-write of each artifact's version
+    # list, so releases of different tags run one at a time. A pending run has uploaded nothing; if GitHub cancels it
+    # because a third release queued behind it, run it again.
+    concurrency:
+      group: bloxbean-maven-releases
+      cancel-in-progress: false
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_final: ${{ steps.version.outputs.is_final }}
+      npm_publish: ${{ steps.version.outputs.npm_publish }}
+    env:
+      GROUP_PATH: org/julclang
+      BUCKET: ${{ vars.R2_BUCKET }}
+      REPOSITORY_PREFIX: maven/releases
+      PUBLIC_REPOSITORY_URL: https://repo.bloxbean.org/maven/releases
+      # What the Gradle consumer check resolves, and which of this build's jars it must get (as bloxbean-snapshot.yml).
+      CONSUMER_DEPENDENCIES: org.julclang:julc-state-runtime org.julclang:julc-state-processor org.julclang:julc-state-testkit org.julclang:julc-state-dsl
+      CONSUMER_REQUIRED: julc-state-api julc-state-runtime julc-state-processor julc-state-testkit julc-state-verifier julc-state-dsl
+      # Absolute, because the stagingRepository hook resolves it against each project's own directory.
+      STAGING_DIR: ${{ github.workspace }}/build/bloxbean-maven
+      AWS_ENDPOINT_URL: ${{ vars.R2_ENDPOINT }}
+      AWS_DEFAULT_REGION: auto
+      # AWS CLI 2.23+ sends request checksums R2 does not accept by default; send them only when an API needs one.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Validate tag and read release flags
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROPS=$(./gradlew -q properties)
+          VERSION=$(awk '/^version:/ { print $2; exit }' <<< "$PROPS")
+          if [[ "${GITHUB_REF_NAME}" != "v${VERSION}" ]]; then
+            echo "::error::Git tag ${GITHUB_REF_NAME} does not match Gradle version ${VERSION}" >&2
+            exit 1
+          fi
+          if [[ "$VERSION" == *SNAPSHOT* ]]; then
+            echo "::error::Release tags require a non-SNAPSHOT version. Got: $VERSION" >&2
+            exit 1
+          fi
+          IS_FINAL=false
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            IS_FINAL=true
+          fi
+          # Where the artifacts go must be stated, not defaulted: a missing line is an error.
+          MAVEN_CENTRAL_PUBLISH=$(awk '/^maven_central_publish:/ { print $2; exit }' <<< "$PROPS")
+          BLOXBEAN_REPO_PUBLISH=$(awk '/^bloxbean_repo_publish:/ { print $2; exit }' <<< "$PROPS")
+          NPM_PUBLISH=$(awk '/^npm_publish:/ { print $2; exit }' <<< "$PROPS")
+          ALLOW_SNAPSHOTS=$(awk '/^allow_snapshot_dependencies:/ { print $2; exit }' <<< "$PROPS")
+          for flag in "maven_central_publish=$MAVEN_CENTRAL_PUBLISH" "bloxbean_repo_publish=$BLOXBEAN_REPO_PUBLISH" \
+              "npm_publish=$NPM_PUBLISH" "allow_snapshot_dependencies=$ALLOW_SNAPSHOTS"; do
+            if [[ "${flag#*=}" != true && "${flag#*=}" != false ]]; then
+              echo "::error::gradle.properties must set ${flag%%=*} to true or false." >&2
+              exit 1
+            fi
+          done
+          # A snapshot dependency is for rehearsals only, which publish nothing: Central refuses the deployment (it validates
+          # dependencies), and a BloxBean or npm release naming a snapshot breaks once the snapshot is pruned.
+          if [[ "$ALLOW_SNAPSHOTS" == true && ( "$MAVEN_CENTRAL_PUBLISH" == true || "$BLOXBEAN_REPO_PUBLISH" == true \
+              || "$NPM_PUBLISH" == true ) ]]; then
+            echo "::error::allow_snapshot_dependencies=true is for rehearsals: set maven_central_publish," \
+              "bloxbean_repo_publish and npm_publish to false (or pin JuLC releases and set it to false)." >&2
+            exit 1
+          fi
+          # The BloxBean repository's bucket and endpoint are variables (vars.R2_BUCKET, vars.R2_ENDPOINT), from this
+          # environment or the organization; organization variables reach only the repositories they are shared with.
+          if [[ "$BLOXBEAN_REPO_PUBLISH" == true && ( -z "$BUCKET" || -z "$AWS_ENDPOINT_URL" ) ]]; then
+            echo "::error::bloxbean_repo_publish=true needs the variables R2_BUCKET and R2_ENDPOINT (empty here): add them" \
+              "to the release-staging environment, or share the organization's with this repository." >&2
+            exit 1
+          fi
+          {
+            echo "version=$VERSION"
+            echo "is_final=$IS_FINAL"
+            echo "maven_central_publish=$MAVEN_CENTRAL_PUBLISH"
+            echo "bloxbean_repo_publish=$BLOXBEAN_REPO_PUBLISH"
+            echo "npm_publish=$NPM_PUBLISH"
+            echo "allow_snapshot_dependencies=$ALLOW_SNAPSHOTS"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION (final: $IS_FINAL), Maven Central: $MAVEN_CENTRAL_PUBLISH," \
+            "BloxBean repository: $BLOXBEAN_REPO_PUBLISH, npm: $NPM_PUBLISH, snapshot dependencies allowed: $ALLOW_SNAPSHOTS"
+
+      # A release that names a snapshot cannot be resolved for long: snapshots are pruned (JuLC keeps 20 commit
+      # versions or 60 days), and Central hosts none. allow_snapshot_dependencies=true (rehearsals only, with every
+      # publish flag false: the flag step enforces it) turns the refusal into a warning.
+      - name: Refuse snapshot dependencies
+        env:
+          ALLOW_SNAPSHOTS: ${{ steps.version.outputs.allow_snapshot_dependencies }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -nE '^[a-zA-Z0-9-]+ *= *"[^"]*SNAPSHOT"' gradle/libs.versions.toml; then
+            if [[ "$ALLOW_SNAPSHOTS" == true ]]; then
+              echo "::warning::gradle/libs.versions.toml pins a SNAPSHOT (above), allowed by allow_snapshot_dependencies=true." \
+                "This release's POMs name it: do not publish it beyond a rehearsal."
+            else
+              echo "::error::gradle/libs.versions.toml pins a SNAPSHOT (above). Release it first, then pin the release." >&2
+              exit 1
+            fi
+          fi
+
+      # Tests tagged devnet skip themselves: no Yaci DevKit runs here (build.yml runs them on every PR).
+      - name: Build with Gradle
+        run: ./gradlew clean build verifyMavenReleasePublicationScope --stacktrace
+
+      # Learns the artifactIds this build owns; unsigned, its staged files are discarded.
+      - name: Discover the Maven publications
+        id: discover
+        if: steps.version.outputs.bloxbean_repo_publish == 'true'
+        run: bash .github/scripts/bloxbean-maven.sh discover -PskipSigning=true
+
+      - name: Seed metadata from the BloxBean repository
+        if: steps.version.outputs.bloxbean_repo_publish == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ARTIFACTS: ${{ steps.discover.outputs.artifacts }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash .github/scripts/bloxbean-maven.sh seed
+
+      # The one step that signs, with the subkey passed to Gradle in memory (see configureReleaseSigning in
+      # build.gradle): nothing is written to disk and nothing appears on the command line. One Gradle run builds both
+      # destinations' files: the staged repository and the Central bundle.
+      - name: Stage and sign the Maven publications
+        env:
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY_ASC }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+        run: >-
+          ./gradlew publishAllPublicationsToStagingRepository nmcpZipAggregation
+          -PstagingRepository="$STAGING_DIR" --stacktrace
+
+      # Also proves the two destinations get the same release: every file of the Central bundle must be
+      # byte-identical to the staged one, and every staged artifact and signature must be in the bundle. A version
+      # the BloxBean repository already has is refused: a release is never replaced.
+      - name: Verify the staged repository and the Central bundle
+        if: steps.version.outputs.bloxbean_repo_publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARTIFACTS: ${{ steps.discover.outputs.artifacts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # one argument per artifactId
+          python3 .github/scripts/verify-maven-staging.py --central-bundle build/nmcp/zip/aggregation.zip \
+            "$STAGING_DIR" "$RUNNER_TEMP/maven-seed" "$GROUP_PATH" "$VERSION" $ARTIFACTS
+
+      # Only what Central needs, which counts against the namespace's file limit (shared with JuLC): each jar, POM
+      # and Gradle module file (.module, which release-ops' verify-maven-staging.py requires) with its .asc signature
+      # and its MD5 and SHA-1. No maven-metadata.xml (Central writes its own), no checksums of signatures, no
+      # SHA-256/512 (gradle.properties).
+      - name: Check the Central bundle holds only what Central requires
+        if: steps.version.outputs.maven_central_publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - build/nmcp/zip/aggregation.zip <<'EOF'
+          import sys, zipfile
+          names = [n for n in zipfile.ZipFile(sys.argv[1]).namelist() if not n.endswith('/')]
+          artifacts = [n for n in names if n.endswith(('.jar', '.pom', '.module'))]
+          wanted = set(artifacts) | {a + s for a in artifacts for s in ('.asc', '.md5', '.sha1')}
+          extra, missing = sorted(set(names) - wanted), sorted(wanted - set(names))
+          if extra or missing:
+              print(f"::error::bundle mismatch: unexpected {extra[:10]} ... missing {missing[:10]}")
+              sys.exit(1)
+          print(f"{len(names)} files: {len(artifacts)} artifacts, each with .asc, .md5 and .sha1")
+          EOF
+
+      # Once the BloxBean repository has this version, a re-run of the tag is refused. If the Central upload then
+      # fails, this exact bundle is how Central still gets the same bytes: upload it in the Central Portal.
+      - name: Keep the Central bundle
+        if: steps.version.outputs.maven_central_publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: central-bundle-${{ steps.version.outputs.version }}
+          path: build/nmcp/zip/aggregation.zip
+          retention-days: 90
+          if-no-files-found: error
+
+      # Both uploads come before any public check, so a flaky check can never keep the release off Central.
+      - name: Upload to the BloxBean repository
+        id: bloxbean
+        if: steps.version.outputs.bloxbean_repo_publish == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash .github/scripts/bloxbean-maven.sh upload
+
+      # Uploads a USER_MANAGED deployment and waits for Sonatype validation. It stops there: nothing is on Maven
+      # Central until a human publishes it. `-x nmcpZipAggregation` uploads the bundle built and checked above.
+      - name: Upload deployment to Maven Central staging
+        id: upload
+        if: steps.version.outputs.maven_central_publish == 'true'
+        env:
+          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No --warn: it lowers Gradle below LIFECYCLE, where nmcp reports the deployment id.
+          ./gradlew publishAggregationToCentralPortal -x nmcpZipAggregation --stacktrace 2>&1 | tee upload.log
+          id=$(grep -oE "deployment bundle '[0-9a-f-]{36}'" upload.log | head -1 | grep -oE '[0-9a-f-]{36}' || true)
+          if [[ -z "$id" ]]; then
+            echo "::error::Upload succeeded but no deployment id was found in the log." >&2
+            exit 1
+          fi
+          echo "deployment-id=$id" >> "$GITHUB_OUTPUT"
+
+      # The BloxBean copy is checked even when the Central upload failed: then it is the release's only copy.
+      - name: Verify the BloxBean repository
+        if: ${{ !cancelled() && steps.bloxbean.outcome == 'success' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARTIFACTS: ${{ steps.discover.outputs.artifacts }}
+        run: bash .github/scripts/bloxbean-maven.sh verify-public
+
+      - name: Resolve from the BloxBean repository with a Gradle consumer
+        if: ${{ !cancelled() && steps.bloxbean.outcome == 'success' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARTIFACTS: ${{ steps.discover.outputs.artifacts }}
+        run: bash .github/scripts/bloxbean-maven.sh consume
+
+      # Reports what actually happened, including on failure, so a partly published release is never mistaken for a
+      # complete one.
+      - name: Record the release
+        if: ${{ !cancelled() && steps.version.outcome == 'success' }}
+        env:
+          DEPLOYMENT_ID: ${{ steps.upload.outputs.deployment-id }}
+          VERSION: ${{ steps.version.outputs.version }}
+          MAVEN_CENTRAL_PUBLISH: ${{ steps.version.outputs.maven_central_publish }}
+          BLOXBEAN_REPO_PUBLISH: ${{ steps.version.outputs.bloxbean_repo_publish }}
+          BLOXBEAN_OUTCOME: ${{ steps.bloxbean.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Maven artifacts of \`joust:$VERSION\`"
+            echo
+            if [[ "$BLOXBEAN_REPO_PUBLISH" != true ]]; then
+              echo "BloxBean repository: not published (bloxbean_repo_publish=false)."
+            elif [[ "$BLOXBEAN_OUTCOME" == success ]]; then
+              echo "**BloxBean repository: published** at $PUBLIC_REPOSITORY_URL (public and permanent)."
+            else
+              echo "**BloxBean repository: NOT published** - the upload failed or did not run."
+            fi
+            echo
+            if [[ "$MAVEN_CENTRAL_PUBLISH" != true ]]; then
+              echo "Maven Central: not published (maven_central_publish=false)."
+            elif [[ -n "$DEPLOYMENT_ID" ]]; then
+              echo "**Maven Central: deployment \`$DEPLOYMENT_ID\` staged - NOT published.** It passed"
+              echo "validation and is waiting for a human. Publish it in the Central Portal:"
+              echo "https://central.sonatype.com/publishing/deployments"
+            else
+              echo "**Maven Central: NOT staged** - the upload failed or did not run."
+              if [[ "$BLOXBEAN_OUTCOME" == success ]]; then
+                echo "The BloxBean repository has this version, so re-running the tag is refused. To put the"
+                echo "same bytes on Central, upload this run's \`central-bundle-$VERSION\` artifact at"
+                echo "https://central.sonatype.com/publishing (release-ops docs/12)."
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  npm:
+    needs: maven
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # Trusted publishing: npm exchanges the GitHub OIDC token for publish credentials, so there is no npm token secret.
+    # Each package's trusted publisher on npmjs.com names this repository, this workflow file (release.yml:
+    # the publish commands must stay in THIS file, which npm validates) and this environment. Requires npm >= 11.5.1
+    # and Node >= 22.14.
+    environment: release-staging
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.maven.outputs.version }}
+      IS_FINAL: ${{ needs.maven.outputs.is_final }}
+      NPM_PUBLISH: ${{ needs.maven.outputs.npm_publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The engines are GraalVM Web Images (ADR-0015): Oracle GraalVM 25 with Web Image (--tool:svm-wasm), and Binaryen.
+      - name: Set up GraalVM 25
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Web Image and install Binaryen
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d "$GRAALVM_HOME/lib/svm/tools/svm-wasm" ]]; then
+            echo "::error::This GraalVM has no Web Image (lib/svm/tools/svm-wasm); the engines cannot be built." >&2
+            exit 1
+          fi
+          sudo apt-get update -q && sudo apt-get install -y -q binaryen
+          wasm-opt --version
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Build the engines
+        run: >-
+          ./gradlew :julc-state-runtime-wasm:runtimeWasm :julc-state-toolchain:toolchainWasm
+          -PgraalvmHome="$GRAALVM_HOME" --stacktrace
+
+      # The four packages at the release version, depending on each other at that version; the template too. The
+      # local-registry publishConfig (development, js/publish-local.sh) is dropped.
+      - name: Prepare the packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p js/joust-runtime/engine js/joust/engine
+          cp julc-state-runtime-wasm/build/wasm/{joust-runtime.js,joust-runtime.js.wasm,package.json} js/joust-runtime/engine/
+          cp julc-state-toolchain/build/wasm/{joust-toolchain.js,joust-toolchain.js.wasm,package.json} js/joust/engine/
+          node - <<'EOF'
+          const fs = require('fs');
+          const version = process.env.VERSION;
+          const files = ['state-client', 'joust-runtime', 'joust', 'create-joust'].map((p) => `js/${p}/package.json`);
+          files.push('js/create-joust/template/package.json');
+          for (const f of files) {
+            const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
+            if (!f.includes('/template/')) { pkg.version = version; delete pkg.publishConfig; }
+            for (const deps of [pkg.dependencies, pkg.devDependencies, pkg.peerDependencies]) {
+              for (const name of Object.keys(deps ?? {})) if (name.startsWith('@julclang/')) deps[name] = version;
+            }
+            fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + '\n');
+            console.log(`${f}: ${pkg.name}@${pkg.version ?? '(template)'}`);
+          }
+          EOF
+
+      # In dependency order. Beta and rc versions get their own dist-tag; before 1.0, -preN versions go to `latest`
+      # (below). Provenance attestations need a public repository: added once JOUST's repository is public.
+      - name: Publish the packages
+        env:
+          REPO_PRIVATE: ${{ github.event.repository.private }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG=latest
+          # Before 1.0, a -preN version is published as `latest` (as mesmo): npm made each package's first version, the
+          # trusted-publishing placeholder, `latest` whatever --tag said, and `npm install`/`npm create joust` resolve only
+          # `latest`. A semver range never matches a prerelease either. At 1.0.0, change the -pre arm back to preview
+          # so a later 1.1.0-pre1 cannot displace the stable release on `latest`.
+          case "$VERSION" in
+            *-preview*|*-pre*|*-alpha*) TAG=latest ;;
+            *-beta*)                    TAG=beta ;;
+            *-rc*)                      TAG=next ;;
+          esac
+          ARGS=(--access public --tag "$TAG" --ignore-scripts)
+          if [[ "$REPO_PRIVATE" != true ]]; then ARGS+=(--provenance); fi
+          if [[ "$NPM_PUBLISH" != true ]]; then ARGS+=(--dry-run); fi
+          for p in state-client joust-runtime joust create-joust; do
+            # Leading ./ : npm would read a bare path as a github:owner/repo shorthand.
+            npm publish "./js/$p" "${ARGS[@]}"
+          done
+
+      - name: Record the npm release
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## JOUST \`$VERSION\`: npm packages"
+            echo
+            if [[ "$NPM_PUBLISH" == true ]]; then
+              echo "Published @julclang/state-client, @julclang/joust-runtime, @julclang/joust and create-joust" \
+                "\`$VERSION\` through npm trusted publishing, if the step above succeeded."
+            else
+              echo "Checked only (npm_publish=false in gradle.properties): \`npm publish --dry-run\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

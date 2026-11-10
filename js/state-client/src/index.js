@@ -5,7 +5,10 @@ export { verifyPrepared, DEFAULT_LIMITS, valueMap, ledgerOrder, refOf, redeemerD
 export { blockfrostChain, chainOf } from './chain.js';
 export { blockfrostProvider, ogmiosProvider, ogmiosParams, plutusScriptHash } from './providers.js';
 export { walletView, assemble, paymentKeyHash } from './wallet.js';
-export { JoustContract, JoustInstance, JoustObject, VerificationError, httpService } from './client.js';
+export { JoustContract, JoustInstance, JoustObject, JoustKeyedList, JoustKeyedObject, VerificationError, httpService, designatedFor } from './client.js';
+export { verifyKeyed, isKeyedCall, KEYED_KINDS, typeIdOf, keyIdOf, compareKeys, listDatum, ledgerMin, keyedTypeOf } from './keyed.js';
+export { paymentKeyHashOf } from './verify.js';
+export { memoryRetryStore, indexedDbRetryStore, defaultRetryStore, pendingOf, settle, PendingKeyedOperation, KeyedCallInProgress } from './retries.js';
 export { instanceIdOf, objectIdOf } from './tokens.js';
 export { planOf, planDifference } from './plan.js';
 export { hexToBytes, bytesToHex } from './hex.js';

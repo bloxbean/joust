@@ -37,7 +37,13 @@
   "engines": {
     "node": ">=22"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "homepage": "https://github.com/bloxbean/joust/tree/main/js/joust-runtime",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bloxbean/joust.git",
+    "directory": "js/joust-runtime"
+  },
   "publishConfig": {
     "registry": "http://127.0.0.1:4873/"
   },

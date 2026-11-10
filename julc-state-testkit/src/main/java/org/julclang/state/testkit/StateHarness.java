@@ -118,6 +118,8 @@ public final class StateHarness<S> {
     }
 
     public ContractSpec<S> spec() { return spec; }
+    /** The applied validator, as evaluated (for {@link Ledger#register}). */
+    public Program program() { return program; }
     public byte[] policy() { return policy.clone(); }
     public long minAda() { return spec.minAda(); }
 

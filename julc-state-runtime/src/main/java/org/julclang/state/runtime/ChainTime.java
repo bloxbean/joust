@@ -15,6 +15,14 @@ public interface ChainTime {
     /** Length of one slot in ms. */
     long slotLengthMs();
 
-    /** The current tip slot. */
+    /** The slot of the latest block the provider has seen (slots may pass without a block). */
     long tipSlot();
+
+    /**
+     * The current slot by this machine's clock and the network's slot configuration, whether or not a block was made
+     * in it: what a transaction's validity window is checked against (ADR-0016 D7 step 5).
+     */
+    default long currentSlot() {
+        return posixMsToSlotFloor(System.currentTimeMillis());
+    }
 }

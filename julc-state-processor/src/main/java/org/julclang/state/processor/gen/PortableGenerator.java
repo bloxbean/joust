@@ -96,6 +96,16 @@ public final class PortableGenerator {
         w.line("private " + X + "Portable() {").line("}").blank();
         w.line("/** The portable methods. */");
         w.line("public static final String[] METHODS = {" + String.join(", ", cases.stream().map(k -> "\"" + k[0] + "\"").toList()) + "};").blank();
+        if (c.hasKeyed()) {
+            // ADR-0016 D10 (R-G5): a retire's step gives its payouts and "ends", but the node continues as Retired_T, its key kept.
+            var retires = new ArrayList<String>();
+            for (TransitionIR t : all) if (t.keyed() && t.retire() && cases.stream().anyMatch(k -> k[0].equals(t.method()))) retires.add(t.method());
+            w.line("/**");
+            w.line(" * The keyed retires (ADR-0016 D10): their step's next is None, but the node is not removed: it continues as");
+            w.line(" * Retired_T(instance, next, linkedAt, key), its key taken for good. A removing destroy's None is a removal.");
+            w.line(" */");
+            w.line("public static final String[] RETIRES = {" + String.join(", ", retires.stream().map(m -> "\"" + m + "\"").toList()) + "};").blank();
+        }
         w.line("/**");
         w.line(" * Runs {@code method}: CBOR in (the target's value, the instance state for @Shared reads or empty, the arguments");
         w.line(" * as a list, the Ctx or empty), CBOR out: Constr 0 [Constr 0 [next] | Constr 1 [], payouts].");

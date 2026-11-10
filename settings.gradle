@@ -5,6 +5,16 @@ pluginManagement {
             url = uri("https://central.sonatype.com/repository/maven-snapshots")
             content { snapshotsOnly() }
         }
+        // BloxBean Maven repository: JuLC's Gradle plugin (org.julclang.julc) and other BloxBean snapshots.
+        maven {
+            url = uri("https://repo.bloxbean.org/maven/snapshots")
+            mavenContent { snapshotsOnly() }
+        }
+        // BloxBean Maven repository: releases and release candidates, such as JuLC 0.1.0-pre21-rc1.
+        maven {
+            url = uri("https://repo.bloxbean.org/maven/releases")
+            mavenContent { releasesOnly() }
+        }
         gradlePluginPortal()
     }
 }
@@ -37,6 +47,7 @@ include 'examples:staking'
 include 'examples:oracle'
 include 'examples:upgrade'
 include 'examples:guild'
+include 'examples:registry'
 include 'examples:fees'
 include 'examples:locker'
 include 'examples:wallet'

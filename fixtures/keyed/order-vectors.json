@@ -1,0 +1,159 @@
+{
+ "note": "ADR-0016 D2: the list order (unsigned lexicographic, a proper prefix first: sign of compare(a, b)) and keyIds (0x4b ++ blake2b_224(instance ++ typeId ++ key)); checked by the JS client (keyed.test.js), the Java runtime and the registry validator (KeyedVectorsTest)",
+ "order": [
+  [
+   "7f",
+   "80",
+   -1
+  ],
+  [
+   "80",
+   "7f",
+   1
+  ],
+  [
+   "ab",
+   "ab00",
+   -1
+  ],
+  [
+   "ab00",
+   "ab",
+   1
+  ],
+  [
+   "",
+   "00",
+   -1
+  ],
+  [
+   "00",
+   "",
+   1
+  ],
+  [
+   "00",
+   "0000",
+   -1
+  ],
+  [
+   "0000",
+   "00",
+   1
+  ],
+  [
+   "0000",
+   "01",
+   -1
+  ],
+  [
+   "01",
+   "0000",
+   1
+  ],
+  [
+   "ff",
+   "ff00",
+   -1
+  ],
+  [
+   "ff00",
+   "ff",
+   1
+  ],
+  [
+   "01",
+   "ff",
+   -1
+  ],
+  [
+   "ff",
+   "01",
+   1
+  ],
+  [
+   "6e616d65",
+   "6e616d6573",
+   -1
+  ],
+  [
+   "6e616d6573",
+   "6e616d65",
+   1
+  ],
+  [
+   "80",
+   "8000",
+   -1
+  ],
+  [
+   "8000",
+   "80",
+   1
+  ],
+  [
+   "7fff",
+   "80",
+   -1
+  ],
+  [
+   "80",
+   "7fff",
+   1
+  ],
+  [
+   "ab",
+   "ab",
+   0
+  ],
+  [
+   "",
+   "",
+   0
+  ]
+ ],
+ "keyIds": [
+  {
+   "type": "Entry",
+   "instance": "abababababababababababababababababababababababababababababababab",
+   "key": "",
+   "keyId": "4b8ed92c405f3362f6c6bb3e1c83e6cb1c5122934ef0e12fe8830b904a"
+  },
+  {
+   "type": "Entry",
+   "instance": "abababababababababababababababababababababababababababababababab",
+   "key": "61",
+   "keyId": "4baf17221254905bb317fbb5497225b4c30c35b0bf634863fb62c43843"
+  },
+  {
+   "type": "Entry",
+   "instance": "abababababababababababababababababababababababababababababababab",
+   "key": "6e616d65",
+   "keyId": "4b858e78908fc9a2c7aaee9f689cb7c6ecf4de6099094f6a7a20886263"
+  },
+  {
+   "type": "Entry",
+   "instance": "0000000000000000000000000000000000000000000000000000000000000001",
+   "key": "61",
+   "keyId": "4b88d9b3450351a79a1cec9782f23e2fe40f23f7663770eed3c707d1fe"
+  },
+  {
+   "type": "Ballot",
+   "instance": "abababababababababababababababababababababababababababababababab",
+   "key": "",
+   "keyId": "4bbb6c7be9a220fc7b8a190252fa70bd4b4b0b1967da9d5e86c1a63d49"
+  },
+  {
+   "type": "Ballot",
+   "instance": "abababababababababababababababababababababababababababababababab",
+   "key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+   "keyId": "4b6328582b62d0c86d988bfe4b4306b7812c2173c954d1d0edca32646d"
+  },
+  {
+   "type": "Entry",
+   "instance": "abababababababababababababababababababababababababababababababab",
+   "key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "keyId": "4b890175f32f2a4c5e0334694511186d946b8faa0f6ceecbae5ee3015a"
+  }
+ ]
+}
