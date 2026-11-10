@@ -10,10 +10,10 @@ that sells credits at that price. The shop reads the oracle's state with [`@Read
 checked on chain, without spending it. Then you compose a purchase and another oracle's update into one transaction,
 and see `Compose` refuse a transaction that would spend the same instance twice.
 
-<Aside type="caution" title="Pre-release">
-JOUST is pre-release and needs a JuLC build that is not published yet: from a JOUST checkout, build it into mavenLocal
-with `bash .github/ci/build-julc.sh` (JDK 25). See [Quick start: Java](/start/quick-start-java/). You also need Yaci
-DevKit: `yaci-devkit up --enable-yaci-store`.
+<Aside type="caution" title="Experimental, pre-release">
+JOUST is experimental and pre-release (not for production). The tutorial runs in a JOUST checkout with JDK 25; release
+candidates for your own projects are in the BloxBean release repository (see [Quick start: Java](/start/quick-start-java/)).
+You also need Yaci DevKit: `yaci-devkit up --enable-yaci-store`.
 </Aside>
 
 ## The two contracts

@@ -10,10 +10,10 @@ and one account per customer. Each account is an [owned object](/contracts/owned
 customers can deposit and withdraw in the same block without queueing behind each other. You will see the shared
 settings read without being spent, and an account closed while the bank is paused.
 
-<Aside type="caution" title="Pre-release">
-JOUST is pre-release and needs a JuLC build that is not published yet: from a JOUST checkout, build it into mavenLocal
-with `bash .github/ci/build-julc.sh` (JDK 25). See [Quick start: Java](/start/quick-start-java/). You also need Yaci
-DevKit: `yaci-devkit up --enable-yaci-store`.
+<Aside type="caution" title="Experimental, pre-release">
+JOUST is experimental and pre-release (not for production). The tutorial runs in a JOUST checkout with JDK 25; release
+candidates for your own projects are in the BloxBean release repository (see [Quick start: Java](/start/quick-start-java/)).
+You also need Yaci DevKit: `yaci-devkit up --enable-yaci-store`.
 </Aside>
 
 ## The contract

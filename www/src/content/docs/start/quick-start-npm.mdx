@@ -35,8 +35,9 @@ You will:
 
 <Aside type="caution" title="Pre-release: the npm packages come from a local registry">
 
-`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client` and `create-joust` are **not on npmjs.org
-yet**. Until they are, publish them to a local registry from a JOUST checkout:
+`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client` and `create-joust` are **not released yet**
+(npmjs.org holds only placeholders). Once they are, `npm create joust@latest my-app` is all you need. Until then,
+publish them to a local registry from a JOUST checkout:
 
 ```sh
 # in a JOUST checkout: builds both Wasm engines, then publishes the four packages to http://127.0.0.1:4873/
@@ -59,7 +60,8 @@ export npm_config_registry=http://127.0.0.1:4873/
 
 <Steps>
 
-1. **Create the project.** The package version is part of the command until the packages are published:
+1. **Create the project.** The package version is part of the command until the packages are released (then it is
+   `npm create joust@latest my-app`):
 
    ```sh
    npm create joust@0.1.0-pre1-snapshot my-app

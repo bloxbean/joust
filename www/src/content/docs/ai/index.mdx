@@ -91,7 +91,7 @@ the agent to run those after each change and to read the messages: they are writ
 Paste this at the start of a conversation, then describe your contract:
 
 ```text
-I am writing a Cardano smart contract with JOUST (Java On UPLC STate). A contract is a
+I am writing a Cardano smart contract with JOUST (State Contract Simplified). A contract is a
 @StateContract class: a state record plus public static @Init/@Action/@Destroy/@View methods.
 The same method runs off chain (to build the transaction) and on chain (compiled by JuLC,
 where the generated validator checks the output datum equals its result).
@@ -146,7 +146,8 @@ to most realistic.
 </Steps>
 
 <Aside type="caution">
-JOUST is pre-release: the Maven snapshots are published, the npm packages are not on npmjs.org yet. An agent that
+JOUST is experimental and pre-release: release candidates are in the BloxBean release repository, nothing is on Maven
+Central, and the npm packages are not released yet. An agent that
 "remembers" a version or a registry is guessing: take versions from the [Java quick start](/start/quick-start-java/)
 or the [npm quick start](/start/quick-start-npm/).
 </Aside>

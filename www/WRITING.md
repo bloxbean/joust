@@ -37,23 +37,30 @@ Two readers, often the same person on different days:
 
 ## Facts every page can rely on
 
-- **Status:** pre-release. Maven snapshots are published to the BloxBean snapshot repository
-  (`https://repo.bloxbean.org/maven/snapshots`, version `0.1.0-pre1-<sha7>-SNAPSHOT`). The npm packages
-  (`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are **not on npmjs.org
-  yet**: until they are, install them from a local registry (see below). Say this in an `Aside type="caution"` on any
-  page that tells the reader to install something.
-- **Java path:** JDK 25 and Gradle. JOUST needs a JuLC build that is not published yet: build it into mavenLocal
-  with `.github/ci/build-julc.sh` from a JOUST checkout (README "Development snapshots"). Dependencies: see the
-  README and any `examples/<name>/build.gradle`.
-- **npm path:** Node 22 or newer, no JDK, no GraalVM. Until the packages are published: in a JOUST checkout,
-  `bash js/publish-local.sh` publishes them to a local registry at `http://127.0.0.1:4873/` (it needs the two Wasm
-  engines built first: `./gradlew npmPublishLocal -PgraalvmHome=...` does both). Then, with
-  `npm_config_registry=http://127.0.0.1:4873/`, `npm create joust@0.1.0-pre1-snapshot my-app`.
+- **Status:** experimental and pre-release: a research and learning project, AI-generated with human-assisted design,
+  testing and verification; not for production. Say so where a page tells the reader to depend on JOUST.
+- **Java path:** JDK 25 and Gradle. Release candidates (`0.1.0-pre1-rcN`; `0.1.0-pre1-rc2` is published) are in the
+  BloxBean release repository, `https://repo.bloxbean.org/maven/releases`. Nothing is on Maven Central yet. A
+  consumer needs that repository and the BloxBean snapshot repository (`https://repo.bloxbean.org/maven/snapshots`),
+  as the README's "Getting started" snippet shows. `julcVersion` is `0.1.0-pre21-rc1` (the `julc` entry of
+  `gradle/libs.versions.toml` on `main`; a JuLC release candidate, release repository). `0.1.0-pre1-rc2` was built
+  against `0.1.0-pre21-71b3a73-SNAPSHOT` and its runtime still pulls that snapshot in (hence the snapshot repository);
+  the Java quick start's project builds and passes its tests with rc2 and either JuLC. Dependencies: see the README and any
+  `examples/<name>/build.gradle`.
+- **npm path (experimental):** Node 22 or newer, no JDK, no GraalVM. The npm packages (`@julclang/joust`,
+  `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are **not released yet** (npmjs.org holds only
+  placeholders); `npm create joust@latest my-app` works once they are. Until then, in a JOUST checkout,
+  `./gradlew npmPublishLocal -PgraalvmHome=...` builds the two Wasm engines and runs `js/publish-local.sh`, which
+  publishes the packages to a local registry at `http://127.0.0.1:4873/`; then, with
+  `npm_config_registry=http://127.0.0.1:4873/`, `npm create joust@0.1.0-pre1-snapshot my-app`. Say this in an
+  `Aside type="caution"` on any page that tells the reader to install the npm packages.
+- **Features on `main` but not released:** keyed objects (ADR-0016, PR #37) are on `main` and not in
+  `0.1.0-pre1-rc2`. Their pages carry an `Aside` saying so; drop it once a release has them.
 - **Yaci DevKit** is the local network: `yaci-devkit up --enable-yaci-store` (Yaci Store's Blockfrost-compatible API
   on `:8080`, admin API on `:10000`, Yaci Viewer explorer on `:5173`).
 - **Preview** (public testnet) through Blockfrost: `BLOCKFROST_PREVIEW_PROJECT_ID` (never in a page; `joust dev` and
   `joust serve` proxy it at `/chain`) and `JOUST_MNEMONIC` (the deployer key, for `joust deploy`).
-- **Names:** JOUST (Java On UPLC STate, "jowst"); JuLC (the Java to UPLC compiler JOUST builds on, julc.dev);
+- **Names:** JOUST ("jowst"; tagline "State Contract Simplified"); JuLC (the Java to UPLC compiler JOUST builds on, julc.dev);
   cardano-client-lib (CCL); Yaci DevKit; Yaci Store. Artifacts `org.julclang:julc-state-{api,processor,runtime,testkit}`;
   packages `org.julclang.state.*`.
 

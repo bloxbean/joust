@@ -13,10 +13,10 @@ balances from the map's mirror in a Web Worker.
 You need [Yaci DevKit](/apps/networks-and-providers/) running: `yaci-devkit up --enable-yaci-store` (Yaci Store's API
 on `:8080`, the admin API on `:10000`).
 
-<Aside type="caution" title="Pre-release">
-JOUST is pre-release. The Java path needs a JuLC build that is not published yet; the npm packages are not on
-npmjs.org yet and install from a local registry. Both are covered in the steps below and in the quick starts
-([Java](/start/quick-start-java/), [npm](/start/quick-start-npm/)).
+<Aside type="caution" title="Experimental, pre-release">
+JOUST is experimental and pre-release (not for production). The Java part runs in a JOUST checkout with JDK 25; the
+npm packages are not released yet and install from a local registry. Both are covered in the steps below and in the
+quick starts ([Java](/start/quick-start-java/), [npm](/start/quick-start-npm/)).
 </Aside>
 
 ## The contract
@@ -92,10 +92,9 @@ Three things to notice:
 
 <Steps>
 
-1. **Build JuLC and check the example compiles.** From a JOUST checkout, with JDK 25:
+1. **Check the example compiles.** From a JOUST checkout, with JDK 25:
 
    ```sh
-   bash .github/ci/build-julc.sh     # JuLC into mavenLocal (not published yet)
    ./gradlew :examples:token:compileJava
    ```
 

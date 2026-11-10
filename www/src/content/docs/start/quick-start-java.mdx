@@ -1,6 +1,6 @@
 ---
 title: "Quick start: Java & Gradle"
-description: Build JuLC, run the counter example, then set up your own Gradle project with JOUST, write a contract, test it and run it on Yaci DevKit.
+description: Run the counter example, then set up your own Gradle project with JOUST, write a contract, test it and run it on Yaci DevKit.
 ---
 
 import { Aside, FileTree, LinkCard, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -11,19 +11,18 @@ everything work), then you set up a project of your own.
 
 If you would rather use Node and no JDK, see [Quick start: npm & JavaScript](/start/quick-start-npm/).
 
-<Aside type="caution" title="Pre-release: nothing is on Maven Central yet">
+<Aside type="caution" title="Experimental, pre-release: nothing is on Maven Central yet">
 
-JOUST snapshots are published to the BloxBean snapshot repository
-(`https://repo.bloxbean.org/maven/snapshots`, versions `0.1.0-pre1-<sha7>-SNAPSHOT`), and they need a build of JuLC
-that is not published anywhere: you build it into your local Maven repository (`~/.m2`) first, with a script in the
-JOUST repository. The steps below do this.
+JOUST is a research and learning project: do not use it in production. Release candidates (`0.1.0-pre1-rcN`;
+`0.1.0-pre1-rc2` today) are in the BloxBean release repository, `https://repo.bloxbean.org/maven/releases`, with the
+JuLC they need. Part 2 shows the Gradle setup.
 
 </Aside>
 
 ## Prerequisites
 
 - **JDK 25.** The build uses a Java toolchain of version 25.
-- **Git and Bash,** to fetch and build JuLC.
+- **Git,** to clone JOUST for the example in Part 1.
 - **Yaci DevKit,** the local Cardano network, for the last step. Start it with Yaci Store (its Blockfrost-compatible
   API) enabled:
 
@@ -40,18 +39,15 @@ You do not need Gradle installed: the JOUST checkout has a wrapper (Gradle 9.2),
 
 <Steps>
 
-1. **Get JOUST and build JuLC into mavenLocal.**
+1. **Get JOUST.**
 
    ```sh
    git clone https://github.com/bloxbean/joust.git
    cd joust
-   bash .github/ci/build-julc.sh
    ```
 
-   `build-julc.sh` fetches JuLC at the commit this JOUST checkout pins, builds it (the JuLC build
-   appends the commit to its version), publishes it to `~/.m2`, and checks that the result is exactly the `julc`
-   version in `gradle/libs.versions.toml`. It prints, for example,
-   `JuLC 0.1.0-pre21-71b3a73-SNAPSHOT is in /Users/you/.m2/repository`.
+   The build resolves JuLC (the `julc` entry of `gradle/libs.versions.toml`, `0.1.0-pre21-rc1` on `main`) and
+   cardano-client-lib from Maven Central and the BloxBean repositories; nothing needs to be built first.
 
 2. **Run the counter's tests.**
 
@@ -102,46 +98,29 @@ See [Examples](/reference/examples/).
 ### Choose where JOUST comes from
 
 <Tabs>
-<TabItem label="Snapshot repository">
+<TabItem label="BloxBean release repository">
 
-Pick a snapshot version from the
-[Development snapshot](https://github.com/bloxbean/joust/releases/tag/snapshot) page, for example
-`0.1.0-pre1-<sha7>-SNAPSHOT`. The JuLC it needs is the one pinned at that commit, so build JuLC from the same
-commit:
-
-```sh
-cd joust
-git checkout <sha7>
-bash .github/ci/build-julc.sh
-grep '^julc ' gradle/libs.versions.toml     # the JuLC version to put in your build
-```
+Release candidates are published to `https://repo.bloxbean.org/maven/releases`: `0.1.0-pre1-rc2` today (the
+[release badge](https://github.com/bloxbean/joust#readme) in the README shows the newest). Use that version below.
+Nothing is on Maven Central yet.
 
 </TabItem>
 <TabItem label="Your checkout, via mavenLocal">
 
-Publish the library modules of your checkout to `~/.m2` (after `build-julc.sh`):
+To try what is on `main` but not released yet, publish the library modules of your checkout to `~/.m2`:
 
 ```sh
 cd joust
 ./gradlew publishToMavenLocal
-git rev-parse --short=7 HEAD                 # your version is 0.1.0-pre1-<this>-SNAPSHOT
-grep '^julc ' gradle/libs.versions.toml     # and this is the JuLC version
+grep '^version' gradle.properties            # the JOUST version you just published
+grep '^julc ' gradle/libs.versions.toml     # and the JuLC version it needs
 ```
 
 This publishes `julc-state-api` (with its `onchain` jar), `-processor`, `-runtime`, `-testkit`, `-verifier`, `-dsl`
-and `-server`.
+and `-server`. Add `mavenLocal()` to the repositories below.
 
 </TabItem>
 </Tabs>
-
-<Aside type="note">
-
-Inside the JOUST repository, modules depend on each other through Gradle projects, and CI builds them that way. A
-project outside the repository that resolves the published artifacts follows the README's "Development snapshots"
-setup below, but that path is not exercised in CI yet (the snapshot workflow skips its consumer check while JuLC is
-built from source). If something does not resolve, the in-repository examples are the reference.
-
-</Aside>
 
 ### Create the project
 
@@ -167,11 +146,16 @@ rootProject.name = 'my-counter'
 ```
 
 ```properties title="gradle.properties"
-joustVersion=0.1.0-pre1-<sha7>-SNAPSHOT
-julcVersion=0.1.0-pre21-71b3a73-SNAPSHOT
+joustVersion=0.1.0-pre1-rc2
+julcVersion=0.1.0-pre21-rc1
 ```
 
-Set `julcVersion` to the `julc` entry of `gradle/libs.versions.toml` at the JOUST commit you use.
+`julcVersion` is JuLC's processor, the one that compiles your validator: the `julc` entry of
+[`gradle/libs.versions.toml`](https://github.com/bloxbean/joust/blob/main/gradle/libs.versions.toml)
+(`0.1.0-pre21-rc1` on `main`, from the BloxBean release repository). `0.1.0-pre1-rc2` was built against the JuLC
+snapshot before it (`0.1.0-pre21-71b3a73-SNAPSHOT`), and its runtime still brings that snapshot's libraries in, which
+is why the build below lists the snapshot repository too. The project on this page builds and passes its tests with
+`0.1.0-pre1-rc2` and either JuLC version.
 
 ```groovy title="build.gradle"
 plugins {
@@ -184,8 +168,11 @@ java {
 
 repositories {
     mavenCentral()
-    mavenLocal()     // JuLC, built by build-julc.sh (and JOUST, if you published your checkout)
-    maven {
+    maven {          // BloxBean releases and release candidates: JOUST, JuLC
+        url = uri('https://repo.bloxbean.org/maven/releases')
+        mavenContent { releasesOnly() }
+    }
+    maven {          // BloxBean development snapshots
         url = uri('https://repo.bloxbean.org/maven/snapshots')
         mavenContent { snapshotsOnly() }
     }
@@ -496,7 +483,7 @@ public class CounterMain {
 
 | Symptom | Cause and fix |
 |---|---|
-| `Could not find org.julclang:julc-...:0.1.0-pre21-...-SNAPSHOT` | JuLC is not in `~/.m2`, or not the version your JOUST needs. Run `build-julc.sh` at the matching JOUST commit and use the `julc` version it prints |
+| `Could not find org.julclang:julc-...` | A repository is missing, or `julcVersion` is not the one your JOUST needs. Add both BloxBean repositories (releases and snapshots) and use the `julc` entry of `gradle/libs.versions.toml` for your JOUST version |
 | JuLC errors such as "cannot resolve" `Ctx` or `Require` | The `onchain` bundle is missing from the annotation processor path, or a long-lived daemon holds a stale jar: check the dependency, then `./gradlew --stop` |
 | `'int' in a @StateContract ... Use BigInteger` | `SubsetLint`: contract code computes in `BigInteger` only. See [Java](/languages/java/) |
 | `PastHorizon` from the node | The validity window reaches beyond what the network can convert to time. Keep `ttl` short on DevKit (20 s in the examples) |

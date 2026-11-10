@@ -32,13 +32,14 @@ annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSour
 
 ### Gradle cannot resolve the `julc` artifacts
 
-**Cause.** JOUST builds against JuLC `main` (with bloxbean/julc#311 and #313), which no published JuLC snapshot has
-yet. Its version in `gradle/libs.versions.toml` (`0.1.0-pre21-<commit>-SNAPSHOT`) exists only in your local Maven
-repository once you build it.
+**Cause.** JuLC and JOUST are not on Maven Central yet. JuLC's release candidates (`0.1.0-pre21-rc1`, the `julc`
+entry of `gradle/libs.versions.toml` on `main`) and JOUST's are in the BloxBean release repository; JOUST
+`0.1.0-pre1-rc2` also pulls the JuLC snapshot it was built against (`0.1.0-pre21-71b3a73-SNAPSHOT`) from the BloxBean
+snapshot repository.
 
-**Fix.** From a JOUST checkout, run `bash .github/ci/build-julc.sh`. It clones JuLC at the pinned commit and publishes
-it to `mavenLocal` with the exact version the catalog names. Keep `mavenLocal()` among your repositories. See
-[Quick start: Java & Gradle](/start/quick-start-java/).
+**Fix.** List both BloxBean repositories, `https://repo.bloxbean.org/maven/releases` and
+`https://repo.bloxbean.org/maven/snapshots`, beside `mavenCentral()` (and in `pluginManagement` too if you apply
+JuLC's Gradle plugin). See [Quick start: Java & Gradle](/start/quick-start-java/).
 
 ### "'...' in a @StateContract: JuLC treats it as an unbounded integer on-chain while the JVM wraps or rounds it ... Use BigInteger"
 

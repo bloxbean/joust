@@ -70,12 +70,17 @@ const { instance } = await counter.deploy(wallet, {});   // the wallet signs
 await instance.increment(wallet, { by: 1n });            // verified by the page first
 await instance.increment(wallet, { by: 0n });            // refused: "increment must be positive"`;
 
-export const NPM = `npm create joust my-app
+export const NPM = `npm create joust@latest my-app   # once the npm packages are released
 cd my-app && npm install
 npm run build      # contracts/ -> validator, description, typed client (no JDK)
 npm run dev        # deploys to Yaci DevKit, serves the page`;
 
-export const GRADLE = `dependencies {
+export const GRADLE = `repositories {
+    mavenCentral()
+    maven { url = uri('https://repo.bloxbean.org/maven/releases') }    // JOUST, JuLC
+    maven { url = uri('https://repo.bloxbean.org/maven/snapshots') }   // development snapshots
+}
+dependencies {
     implementation      "org.julclang:julc-state-runtime:$joustVersion"
     annotationProcessor "org.julclang:julc-state-processor:$joustVersion"
     annotationProcessor "org.julclang:julc-state-api:$joustVersion:onchain"

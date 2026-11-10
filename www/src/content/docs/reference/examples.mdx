@@ -24,7 +24,7 @@ it usually comes from here. Use this page to find the example closest to what yo
 
 ## Running an example
 
-From a JOUST checkout (JDK 25, and JuLC built into mavenLocal with `bash .github/ci/build-julc.sh`):
+From a JOUST checkout (JDK 25; the build resolves JuLC and cardano-client-lib from Maven Central and the BloxBean repositories):
 
 ```sh
 ./gradlew :examples:token:test                   # JVM, harness and attack-suite tests; DevKit tests if it is up
@@ -33,14 +33,14 @@ yaci-devkit up --enable-yaci-store               # optional: the local network (
 ./gradlew :examples:token:test -PjoustFixtures   # re-record the ADR-0015 fixtures (DevKit must be up)
 ```
 
-`./gradlew build` runs every example. The `run` task has an app for `counter`, `vault`, `escrow`, `crowdfund`,
-`token` and `bank` (`<Name>App`), and for `dapp` (a web server); the other examples run their flows in their DevKit
-tests.
+`./gradlew build` runs every example. The `run` task has an app (`<Name>App`) for `counter`, `vault`, `escrow`,
+`crowdfund`, `token`, `bank`, `pool`, `dex`, `market`, `treasury`, `staking`, `oracle` and `upgrade`, and a web
+server for `dapp`; the other examples run their flows in their DevKit tests.
 
-<Aside type="caution" title="Pre-release">
-JOUST is not published yet. The examples build from a checkout: see [Quick start: Java & Gradle](/start/quick-start-java/)
-for the JuLC build they need. To try a contract without a JDK, start from the npm template instead
-([Quick start: npm & JavaScript](/start/quick-start-npm/)).
+<Aside type="caution" title="Experimental, pre-release">
+JOUST is a research and learning project, not for production. The examples build from a checkout, with JDK 25 (see
+[Quick start: Java & Gradle](/start/quick-start-java/)). To try a contract without a JDK, start from the npm template
+instead ([Quick start: npm & JavaScript](/start/quick-start-npm/)).
 </Aside>
 
 ## At a glance

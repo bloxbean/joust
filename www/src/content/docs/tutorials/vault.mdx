@@ -12,11 +12,11 @@ and only after an unlock time; the owner closes it and takes everything back.
 You will learn how a contract receives money (`@Payable`), pays it out (payouts in a `Result`), restricts a method to
 one key (`@OnlyOwner`) and to a time (`@ValidAfter`), and returns its deposit when it ends (`@Destroy`).
 
-<Aside type="caution" title="Pre-release">
+<Aside type="caution" title="Experimental, pre-release">
 
-JOUST is pre-release. The Java path needs JDK 25 and a JuLC build that is not published yet: from a JOUST checkout,
-run `bash .github/ci/build-julc.sh` once to build it into your local Maven repository (see the
-[Java quick start](/start/quick-start-java/)). Maven snapshots are in the BloxBean snapshot repository.
+JOUST is experimental and pre-release (not for production). The Java path needs JDK 25. Release candidates are in the
+BloxBean release repository, `https://repo.bloxbean.org/maven/releases` (see the
+[Java quick start](/start/quick-start-java/)); nothing is on Maven Central yet.
 
 </Aside>
 

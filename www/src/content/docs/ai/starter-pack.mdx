@@ -15,7 +15,7 @@ This pack is written for machine ingestion. For people, start at [How JOUST work
 
 ## 1. What JOUST is
 
-- JOUST (Java On UPLC STate, said "jowst") is a framework for Cardano smart contracts. A contract is a **state record
+- JOUST ("State Contract Simplified", said "jowst") is a framework for Cardano smart contracts. A contract is a **state record
   plus pure static methods**: `@Init` creates an instance, `@Action` returns the next state, `@Destroy` ends an
   instance and returns payouts, `@View` reads.
 - The **same method runs twice**. Off chain (on the JVM, or the Wasm engine in Node or a browser worker) it computes
@@ -34,9 +34,11 @@ This pack is written for machine ingestion. For people, start at [How JOUST work
 - Two languages for contracts: **Java** (a `@StateContract` class) and **.jsc** (a compact contract language lowered to
   a Java `@StateContract` at build time). Clients: Java (`XClient`) or JavaScript (`X.js`, plus `X.d.ts`).
 - Built on JuLC (Java to UPLC compiler, julc.dev) and cardano-client-lib `0.8.0-pre7`. Plutus V3.
-- Status: pre-release. Maven snapshots `0.1.0-pre1-<sha7>-SNAPSHOT` are in `https://repo.bloxbean.org/maven/snapshots`.
-  The npm packages (`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are not on
-  npmjs.org yet; they install from a local registry (`bash js/publish-local.sh` in a JOUST checkout).
+- Status: experimental, pre-release, not for production. JOUST release candidates (`0.1.0-pre1-rc2`) and JuLC
+  (`0.1.0-pre21-rc1`) are in `https://repo.bloxbean.org/maven/releases`; nothing is on Maven Central. The npm
+  packages (`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are not released
+  yet (npmjs.org has placeholders only); they install from a local registry (`bash js/publish-local.sh` in a JOUST
+  checkout). Keyed objects (`@Owned(key = ...)`, ADR-0016) are on `main`, not in `0.1.0-pre1-rc2`.
 
 ## 2. Project structures
 
@@ -54,12 +56,16 @@ my-app/
 ```groovy title="build.gradle"
 repositories {
     mavenCentral()
-    mavenLocal()     // JuLC main, built by .github/ci/build-julc.sh until a published snapshot has it
-    maven {
+    maven {          // BloxBean releases and release candidates: JOUST, JuLC
+        url = uri('https://repo.bloxbean.org/maven/releases')
+        mavenContent { releasesOnly() }
+    }
+    maven {          // BloxBean development snapshots
         url = uri('https://repo.bloxbean.org/maven/snapshots')
         mavenContent { snapshotsOnly() }
     }
 }
+// gradle.properties: joustVersion=0.1.0-pre1-rc2, julcVersion=0.1.0-pre21-rc1
 dependencies {
     implementation "org.julclang:julc-state-runtime:$joustVersion"
     annotationProcessor "org.julclang:julc-state-processor:$joustVersion"

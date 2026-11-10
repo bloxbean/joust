@@ -5,7 +5,7 @@ description: The work a Cardano contract normally needs, what JOUST does instead
 
 import { Aside, Card, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
 
-JOUST (Java On UPLC STate, pronounced "jowst") lets you write a Cardano smart contract as a **state record plus pure
+JOUST (State Contract Simplified, pronounced "jowst") lets you write a Cardano smart contract as a **state record plus pure
 static methods**, much as you would write an account-based contract. From that one class it generates the on-chain
 validator and a typed off-chain client. The same Java method runs in both places: on your machine to build the
 transaction, and on chain to check it.
@@ -241,13 +241,15 @@ the examples stay far below the limits (see [Fees and script size](/contracts/fe
 
 ## Status
 
-<Aside type="caution" title="Pre-release">
+<Aside type="caution" title="Experimental: a research and learning project">
 
-JOUST is not released. Maven snapshots are published to the BloxBean snapshot repository
-(`https://repo.bloxbean.org/maven/snapshots`, versions `0.1.0-pre1-<sha7>-SNAPSHOT`), and they need a JuLC build
-that is not published yet: you build it into your local Maven repository first. The npm packages
-(`@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are not on npmjs.org yet;
-you install them from a local registry. Both quick starts walk through this.
+JOUST is an experimental project created mainly for research and exploration of state-oriented smart contracts on
+Cardano. It is AI-generated, with human-assisted design, testing and verification. **Do not use it in production.**
+
+It is pre-release. Release candidates (`0.1.0-pre1-rc2` today) are in the BloxBean release repository,
+`https://repo.bloxbean.org/maven/releases`; nothing is on Maven Central yet. The npm packages (`@julclang/joust`,
+`@julclang/joust-runtime`, `@julclang/state-client`, `create-joust`) are not released yet: until they are, you
+install them from a local registry. Both quick starts walk through this.
 
 </Aside>
 
