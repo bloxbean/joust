@@ -244,7 +244,9 @@ final class TxRunner {
             }
             var finalCtx = ctx;
             // Selected and claimed under the payer's lock: no keyed operation designates these inputs meanwhile (D7).
-            built = Designation.build(caller.baseAddress(), designated, finalCtx::buildAndSign);
+            var scriptInputs = new java.util.HashSet<String>();
+            if (tx instanceof RecordingTx r) for (Utxo u : r.spent) scriptInputs.add(Designation.ref(u));
+            built = Designation.build(caller.baseAddress(), designated, scriptInputs, finalCtx::buildAndSign);
         } catch (SubmitException e) {
             throw e;
         } catch (Exception e) {

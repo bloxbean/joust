@@ -677,4 +677,31 @@ class KeyedSeriesTest {
             other.release();
         }
     }
+
+    @Test
+    void scriptInputsAreNeverClaimed_soConcurrentOperationsStillContendForAnAnchorOnChain() {
+        // Round 3's full build: holding a handed-out attempt's script inputs (an anchor, a predecessor) made another
+        // operation's build of the same anchor be refused locally. Only wallet inputs are claimed; contention for a
+        // shared script UTxO stays the ledger's (D7).
+        var chain = new Chain();
+        var payer = new Account(Networks.testnet());
+        String a = payer.baseAddress();
+        chain.wallet.addAll(List.of(utxo(a, 40_000_000), utxo(a, 30_000_000)));
+        var rt = chain.runtime(3);
+        var anchor = utxo("addr_test1script", 2_000_000, new Amount("cd".repeat(28) + "4b09", BigInteger.ONE));
+        var first = Designation.reserve(rt, payer, "test", Set.of());
+        var second = Designation.reserve(rt, payer, "test", Set.of());
+        try {
+            var one = Designation.build(a, first, Set.of(Designation.ref(anchor)), () -> spending(first.utxo(), anchor));
+            first.hold(one.claim().refs);
+            one.claim().release();
+            assertFalse(Designation.isClaimed(Designation.ref(anchor)), "the anchor is not claimed");
+            var two = assertDoesNotThrow(() -> Designation.build(a, second, Set.of(Designation.ref(anchor)),
+                    () -> spending(second.utxo(), anchor)));
+            two.claim().release();
+        } finally {
+            first.release();
+            second.release();
+        }
+    }
 }

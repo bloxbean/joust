@@ -426,10 +426,19 @@ final class Designation {
      * input another keyed operation designated since it was picked (a seed, a funding input) is refused (F63).
      */
     static Claimed build(String address, Designated own, Supplier<Transaction> build) {
+        return build(address, own, Set.of(), build);
+    }
+
+    /**
+     * As {@link #build(String, Designated, Supplier)}; {@code scriptInputs} (the script UTxOs the transaction spends: list
+     * nodes, instances) are not claimed. Contention for them is the ledger's business: a keyed operation must not keep
+     * another from spending a shared anchor, only from taking its wallet inputs (fees, collateral, its designated input).
+     */
+    static Claimed build(String address, Designated own, Set<String> scriptInputs, Supplier<Transaction> build) {
         return locked(address, () -> {
             Transaction t = build.get();
             var claim = new Claim(own);
-            for (var in : t.getBody().getInputs()) claim.refs.add(ref(in));
+            for (var in : t.getBody().getInputs()) if (!scriptInputs.contains(ref(in))) claim.refs.add(ref(in));
             if (t.getBody().getCollateral() != null) for (var in : t.getBody().getCollateral()) claim.refs.add(ref(in));
             String ownRef = own == null ? null : own.ref();
             for (String r : claim.refs) {
