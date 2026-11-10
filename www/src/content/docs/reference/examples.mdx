@@ -33,9 +33,9 @@ yaci-devkit up --enable-yaci-store               # optional: the local network (
 ./gradlew :examples:token:test -PjoustFixtures   # re-record the ADR-0015 fixtures (DevKit must be up)
 ```
 
-`./gradlew build` runs every example. The `run` task has an app (`<Name>App`) for `counter`, `vault`, `escrow`,
-`crowdfund`, `token`, `bank`, `pool`, `dex`, `market`, `treasury`, `staking`, `oracle` and `upgrade`, and a web
-server for `dapp`; the other examples run their flows in their DevKit tests.
+`./gradlew build` runs every example. The `run` task has an app for `counter`, `vault`, `escrow`, `crowdfund`,
+`token` and `bank` (`<Name>App`), and for `dapp` (a web server); the other examples run their flows in their DevKit
+tests.
 
 <Aside type="caution" title="Experimental, pre-release">
 JOUST is a research and learning project, not for production. The examples build from a checkout, with JDK 25 (see
