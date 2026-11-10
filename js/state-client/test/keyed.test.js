@@ -393,3 +393,65 @@ test('R-F6, R-F11, F94: next to a node in another writer\'s encoding, the engine
       /relinked anchor has an inline datum that is not in the canonical encoding/, `${mode}: the input's bytes kept`);
   }
 });
+
+/** The registry's description with a plain owned type Ticket (lookup {@code lookup}) and its creation {@code name}. */
+function mixed(name, lookup = 'ticket') {
+  const d = structuredClone(DESCRIPTION);
+  const x = d['x-joust'];
+  const entry = x.keyed.find((k) => k.simple === 'Entry');
+  const type = x.package + '.Registry.Ticket';
+  d.definitions[type] = structuredClone(d.definitions[entry.type]);
+  x.owned.push({ type, simple: 'Ticket', lookup, holding: entry.node, tag: 9, multi: false });
+  x.creations.push({ name, kind: 'ownedInit', redeemer: { purpose: 'mint', constructor: 'Open', index: 9 }, args: [], ctx: true,
+    payable: false, takesAssets: false, owned: type, needsService: false, recipe: { transition: name, redeemerFields: ['seed', 'instance', 'ctx'] } });
+  return d;
+}
+
+test('F100: joust-gen refuses any two instance members of one name, plain owned and keyed alike, whichever is emitted first', async () => {
+  const { generate } = await import('../src/codegen.js');
+  // A plain owned creation named like a keyed accessor (emitted before it).
+  assert.throws(() => generate(mixed('entryExists')), /joust-gen: Registry: keyed type Entry's entryExists and owned creation entryExists both give the generated instance member entryExists/);
+  assert.throws(() => generate(mixed('entryKeys')), /owned creation entryKeys/);
+  // A plain owned creation and a plain owned lookup named like a keyed insert (emitted after them).
+  assert.throws(() => generate(mixed('claim')), /keyed insert claim and owned creation claim both give the generated instance member claim/);
+  assert.throws(() => generate(mixed('issue', 'grant')), /keyed insert grant and the lookup of owned type Ticket both give the generated instance member grant/);
+  // A plain owned lookup named like a keyed lookup, and a plain owned creation named like a call.
+  assert.throws(() => generate(mixed('issue', 'entry')), /keyed type Entry's entry and the lookup of owned type Ticket/);
+  assert.throws(() => generate(mixed('setOpen')), /owned creation setOpen and call setOpen/);
+});
+
+test('F100: a mixed plain/keyed client dispatches each member to its own operation', async () => {
+  const { generate } = await import('../src/codegen.js');
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const dir = mkdtempSync(join(tmpdir(), 'joust-gen-'));
+  writeFileSync(join(dir, 'stub.js'), 'export class JoustContract {}\n');
+  const { js } = generate(mixed('issue'), { importFrom: pathToFileURL(join(dir, 'stub.js')).href });
+  writeFileSync(join(dir, 'Registry.js'), js);
+  const { RegistryInstance } = await import(pathToFileURL(join(dir, 'Registry.js')).href);
+  const calls = [];
+  const keyed = (t) => ({
+    exists: async (k) => { calls.push(['exists', t, k]); return true; },
+    keys: async () => { calls.push(['keys', t]); return []; },
+    insert: async (w, n, args) => { calls.push(['insert', t, n]); return { key: 'aa' }; },
+    object: (k) => ({ key: k }),
+  });
+  const i = {
+    id: 'ff',
+    create: async (w, n) => { calls.push(['create', n]); return { object: '00' }; },
+    object: (o) => { calls.push(['object', o]); return { id: o }; },
+    keyed,
+    call: async (w, n) => { calls.push(['call', n]); return {}; },
+  };
+  const inst = new RegistryInstance(i);
+  await inst.issue('W', {});
+  assert.equal(await inst.entryExists('aa'), true);
+  await inst.entryKeys();
+  await inst.claim('W', {});
+  inst.ticket('01');
+  await inst.setOpen('W', {});
+  assert.deepEqual(calls, [['create', 'issue'], ['object', '00'], ['exists', 'Entry', 'aa'], ['keys', 'Entry'], ['insert', 'Entry', 'claim'],
+    ['object', '01'], ['call', 'setOpen']]);
+});

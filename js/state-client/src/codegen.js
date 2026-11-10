@@ -100,6 +100,31 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
   ts.push(`}`);
 
   // ---- an instance
+  // Every member the instance class gets, reserved before any is emitted: a later definition of a class member silently
+  // replaces an earlier one, so any two of the same name are refused, whichever comes first (F83, F100).
+  const keyedTypes = (x.keyed ?? []).filter((k) => typeof k === 'object');
+  const instanceMembers = new Map();
+  const reserve = (name, what) => {
+    const other = instanceMembers.get(name);
+    if (other) throw new Error(`joust-gen: ${x.contract}: ${what} and ${other} both give the generated instance member ${name}; rename one`);
+    instanceMembers.set(name, what);
+  };
+  for (const m of ['constructor', 'i', 'id', 'read', 'state']) reserve(m, `the generated instance's ${m}`);
+  for (const a of x.actions.filter((a) => a.kind === 'action' || a.kind === 'destroy')) reserve(id(a.name), `call ${a.name}`);
+  for (const o of x.owned) {
+    for (const cr of x.creations.filter((c) => c.kind === 'ownedInit' && c.owned === o.type && usable(c))) reserve(id(cr.name), `owned creation ${cr.name}`);
+    reserve(id(o.lookup), `the lookup of owned type ${o.simple}`);
+  }
+  if (x.owned.length) reserve('objects', 'the generated instance\'s objects');
+  for (const k of keyedTypes) {
+    for (const m of [id(k.lookup), id(k.lookup) + 'Exists', id(k.lookup) + 'Keys']) reserve(m, `keyed type ${k.simple}'s ${m}`);
+  }
+  for (const cr of x.creations.filter((c) => c.kind === 'keyedInit')) reserve(id(cr.name), `keyed insert ${cr.name}`);
+  // A keyed wrapper's own members are never hidden either (F83).
+  const KEYED_OBJECT_MEMBERS = new Set(['constructor', 'o', 'key', 'read']);
+  for (const a of x.actions.filter((a) => ['keyedAction', 'keyedRemove', 'keyedRetire'].includes(a.kind))) {
+    if (KEYED_OBJECT_MEMBERS.has(id(a.name))) throw new Error(`${x.contract}: keyed call ${a.name} clashes with the generated object's ${id(a.name)}`);
+  }
   js(`export class ${C}Instance {`);
   js(`  constructor(i) { this.i = i; this.id = i.id; }`);
   js(`  /** The state from the chain: { ref, state, lovelace }, or null once destroyed. */`);
@@ -139,25 +164,7 @@ export function generate(description, { importFrom = '@julclang/state-client' } 
     js(`  ${id(o.lookup)}(objectId) { return new ${O}(this.i.object(objectId)); }`);
     ts.push(`  ${id(o.lookup)}(objectId: Hex): ${O};`);
   }
-  // Keyed types (ADR-0016 D11): inserts, lookup by key, the list's keys.
-  const keyedTypes = (x.keyed ?? []).filter((k) => typeof k === 'object');
-  // A generated member never hides another (F83): the keyed wrappers' own members are reserved.
-  const KEYED_OBJECT_MEMBERS = new Set(['constructor', 'o', 'key', 'read']);
-  const instanceMembers = new Set(['constructor', 'i', 'id', 'read', 'state', 'objects',
-    ...x.actions.filter((a) => a.kind === 'action' || a.kind === 'destroy').map((a) => id(a.name))]);
-  for (const k of keyedTypes) {
-    for (const m of [id(k.lookup), id(k.lookup) + 'Exists', id(k.lookup) + 'Keys']) {
-      if (instanceMembers.has(m)) throw new Error(`${x.contract}: the generated member ${m} of keyed type ${k.simple} clashes with another member`);
-      instanceMembers.add(m);
-    }
-  }
-  for (const cr of x.creations.filter((c) => c.kind === 'keyedInit')) {
-    if (instanceMembers.has(id(cr.name))) throw new Error(`${x.contract}: keyed insert ${cr.name} clashes with a generated member of the instance`);
-    instanceMembers.add(id(cr.name));
-  }
-  for (const a of x.actions.filter((a) => ['keyedAction', 'keyedRemove', 'keyedRetire'].includes(a.kind))) {
-    if (KEYED_OBJECT_MEMBERS.has(id(a.name))) throw new Error(`${x.contract}: keyed call ${a.name} clashes with the generated object's ${id(a.name)}`);
-  }
+  // Keyed types (ADR-0016 D11): inserts, lookup by key, the list's keys (their names reserved above).
   for (const k of keyedTypes) {
     const K = `${C}${id(k.simple)}Object`;
     for (const cr of x.creations.filter((c) => c.kind === 'keyedInit' && c.keyed === k.simple)) {
