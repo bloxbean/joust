@@ -98,22 +98,35 @@ export function defaultRetryStore() {
   return globalThis.indexedDB ? indexedDbRetryStore() : memoryRetryStore();
 }
 
-const tails = new Map();
+/** Thrown at once when a keyed call starts while another is in flight on the network, in this page or another tab. */
+export class KeyedCallInProgress extends Error {}
+
+/** The keyed call in flight on each network in this page: { keys, record, inReview, abandon } (F90, F92, F93). */
+export const inFlight = new Map();
 
 /**
- * Runs {@code f} holding the keyed-operation lock of {@code networkId}: Web Locks (every tab of the origin) where the
- * page has them, else an in-process mutex. A wallet's whole keyed call (record, prepare, review, sign, submit) runs
- * under it, so two calls or tabs never act on one record at once (F79, R-F3).
+ * Runs {@code f(flight)} as the only keyed call in flight on {@code networkId}; never queues (M3 review, F90, F92). A call
+ * that starts while another is in flight, in this page or (Web Locks, ifAvailable) in another tab of the origin, is
+ * refused at once with {@link KeyedCallInProgress}: every call then starts after the previous one's outcome was
+ * delivered, so a retry can never be bound, while it waits, to an operation that ends before it runs, and a review can
+ * never wait for a call queued behind its own.
  */
-export function withKeyedLock(networkId, f) {
+export async function exclusiveKeyed(networkId, keys, what, f) {
   const name = `joust.keyed:${networkId}`;
-  if (globalThis.navigator?.locks?.request) return globalThis.navigator.locks.request(name, { mode: 'exclusive' }, f);
-  const prev = tails.get(name) ?? Promise.resolve();
-  const run = prev.catch(() => {}).then(f);
-  const tail = run.catch(() => {});
-  tails.set(name, tail);
-  tail.then(() => { if (tails.get(name) === tail) tails.delete(name); });
-  return run;
+  if (inFlight.has(networkId)) throw new KeyedCallInProgress(`${what}: another keyed call is in progress on this page; call again when it has finished`);
+  const flight = { keys: [...keys], record: null, inReview: false, abandon: false };
+  inFlight.set(networkId, flight);
+  try {
+    if (globalThis.navigator?.locks?.request) {
+      return await globalThis.navigator.locks.request(name, { mode: 'exclusive', ifAvailable: true }, (lock) => {
+        if (!lock) throw new KeyedCallInProgress(`${what}: another keyed call is in progress in another tab; call again when it has finished`);
+        return f(flight);
+      });
+    }
+    return await f(flight);
+  } finally {
+    if (inFlight.get(networkId) === flight) inFlight.delete(networkId);
+  }
 }
 
 /** The unsettled record of {@code wallet} on {@code networkId}, if any (one per wallet: its keys overlap). */
@@ -155,7 +168,8 @@ export const CLOCK_SKEW_MS = 30_000;
 export async function settle(record, chain, { clock, wallet, nowMs = Date.now(), settlementSlots = 2, skewMs, maxTipSkewSlots = KEYED_LIMITS.maxTipSkewSlots } = {}) {
   if (!record.attempts.length) return { settled: true, outcome: 'nothing signed', reason: 'no attempt was handed to the wallet' };
   const pending = (reason) => ({ settled: false, outcome: 'pending', reason });
-  const lasts = record.attempts.map((a) => Number(a.validTo));
+  // An attempt without a known deadline (null or undefined, R-F14) never expires.
+  const lasts = record.attempts.map((a) => (a.validTo === null || a.validTo === undefined ? NaN : Number(a.validTo)));
   if (lasts.some((x) => !Number.isFinite(x))) return pending('an attempt without a deadline never expires');
   const last = Math.max(...lasts);
   const c = slotClockOf({ slotConfig: clock });
@@ -185,12 +199,6 @@ export async function settle(record, chain, { clock, wallet, nowMs = Date.now(),
     ? { settled: true, outcome: 'failed', reason: 'every attempt\'s window has passed, and the wallet and the chain API both still show the designated input' }
     : { settled: true, outcome: 'may have landed', reason: 'every attempt\'s window has passed and the designated input is gone (by the wallet or the chain API)' };
 }
-
-/** Thrown when a keyed call would wait for the network's lock held by a call of this page that is in review (F88). */
-export class KeyedCallInReview extends Error {}
-
-/** Calls of this page in review, by network: an abandon during review is recorded here, not queued behind the lock. */
-export const reviewing = new Map();
 
 /** Thrown while a keyed operation of the wallet may still land: retry the same call, or abandon it explicitly. */
 export class PendingKeyedOperation extends Error {

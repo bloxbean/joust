@@ -120,6 +120,8 @@ export declare class JoustContract {
   at(instance: Hex): JoustInstance;
   /** Abandons the wallet's unsettled keyed operation (the user's explicit choice; an earlier attempt may still land). */
   abandonKeyed(wallet: Cip30Api): Promise<unknown>;
+  /** Acknowledges the wallet's ended keyed operation that may have landed (its tombstone). */
+  acknowledgeKeyed(wallet: Cip30Api): Promise<unknown>;
 }
 export declare class JoustInstance {
   readonly id: Hex;
@@ -159,6 +161,8 @@ export declare function defaultRetryStore(): RetryStore;
 export declare class PendingKeyedOperation extends Error {
   readonly record: { designated: string; attempts: Array<{ txHash: string; validTo: number | null }> };
 }
+/** Thrown at once when a keyed call starts while another is in flight on the network (calls are never queued). */
+export declare class KeyedCallInProgress extends Error {}
 export declare function verifyKeyed(o: unknown): Promise<{ problems: string[]; report: Report }>;
 export declare function keyIdOf(instance: Hex, typeId: Hex, key: Hex): Hex;
 export declare function typeIdOf(simple: string): Hex;

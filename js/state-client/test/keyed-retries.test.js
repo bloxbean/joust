@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import { JoustContract, memoryRetryStore, PendingKeyedOperation, planOf, txHash as hashOf } from '../src/index.js';
+import { JoustContract, memoryRetryStore, PendingKeyedOperation, KeyedCallInProgress, settle, planOf, txHash as hashOf } from '../src/index.js';
 import { dataHex } from '../src/pdata.js';
 import { world, build, actionScn, DESCRIPTION, ADA, PARAMS, I, ref, deployment as DEPLOYMENT, TIP } from './keyed-world.js';
 
@@ -205,47 +205,123 @@ test('F87: an invalid slot clock keeps a record pending (it never expires) and n
   }
 });
 
-test('F88: an abandon from the review, or a nested keyed call, does not deadlock; the lock is free afterwards', async () => {
-  const r = rig();
-  let k;
-  k = r.page(r.service, { onReview: async () => { await k.abandonKeyed(r.api); } });
-  const run = r.call(k);
-  const outcome = await Promise.race([run.then(() => 'done', (e) => e.message), new Promise((res) => setTimeout(() => res('hung'), 3000))]);
-  assert.match(outcome, /abandoned during review/);
-  assert.deepEqual(await r.store.all(), [], 'nothing signed, nothing recorded');
-  assert.equal(r.state.signed, 0);
-  let nested;
-  const k2 = r.page(r.service, { onReview: async () => { nested = await r.call(r.page()).then(() => 'done', (e) => e.constructor.name + ': ' + e.message); } });
-  await assert.rejects(r.call(k2), PendingKeyedOperation);
-  assert.match(nested, /KeyedCallInReview/);
-  await assert.rejects(r.call(r.page()), PendingKeyedOperation);   // the lock was released
-});
-
-test('F79, R-F3: two calls on one store take turns around signing; stale revisions refused; a record without a revision (F89) is retried', async () => {
-  const r = rig();
+const barrier = () => {
   let release;
-  const signing = new Promise((resolve) => { release = resolve; });
-  let entered;
-  const inSigning = new Promise((resolve) => { entered = resolve; });
-  const realSign = r.api.signTx;
-  r.api.signTx = async (cbor) => { if (r.state.signed === 0) { entered(); await signing; } return realSign(cbor); };
-  const first = r.call(r.page());
-  await inSigning;
+  let reached;
+  const gate = new Promise((r) => { release = r; });
+  const at = new Promise((r) => { reached = r; });
+  return { release, at, wait: async () => { reached(); await gate; } };
+};
+
+test('F90: a keyed call is never queued: a second call while one is in flight is refused at once (settlement and confirmation)', async () => {
+  // A retry is held while it ends the record (its settlement reads the tip); a second retry is refused, not queued.
+  const r = rig();
+  await assert.rejects(r.call(r.page()), PendingKeyedOperation);
+  const [rec] = await r.store.all();
+  r.state.spent.add(ref('a0'));
   r.state.extra.set(ref('a3'), { address: r.address, value: new Map([['lovelace', 900n * ADA]]) });
   r.truth.set(ref('a3'), { address: r.address, value: new Map([['lovelace', 900n * ADA]]) });
-  const second = r.call(r.page());
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(r.state.prepared.length, 1, 'the second has not prepared while the first holds the lock');
-  release();
-  await assert.rejects(first, PendingKeyedOperation);
-  await assert.rejects(second, PendingKeyedOperation);
+  const last = rec.attempts[0].validTo;
+  r.state.tip = last + 130;
+  await later((last + 130 - TIP) * 1000, async () => {
+    const b = barrier();
+    const tip = r.chain.tip;
+    r.chain.tip = async () => { await b.wait(); return tip(); };
+    const a = r.call(r.page());
+    await b.at;
+    await assert.rejects(r.call(r.page()), KeyedCallInProgress, 'the second retry is refused while the first is in flight');
+    b.release();
+    r.chain.tip = tip;
+    await assert.rejects(a, /may have landed; check, then acknowledge/);
+    // A blind retry after that outcome is refused by the tombstone until the application acknowledges it.
+    await assert.rejects(r.call(r.page()), /may have landed; check, then acknowledge/);
+    assert.ok(r.state.prepared.every((p) => p.designated === ref('a0')), 'no second designated input');
+    const ack = await r.page().acknowledgeKeyed(r.api);
+    assert.equal(ack.ended, 'may have landed');
+    assert.deepEqual(await r.store.all(), []);
+  });
+  // Confirmation: while a call waits for awaitTx, another is refused at once (it is not queued behind the success).
+  const r2 = rig();
+  const b2 = barrier();
+  r2.state.submit = async (cbor) => hashOf(cbor);
+  r2.chain.awaitTx = async () => { await b2.wait(); return true; };
+  const first = r2.call(r2.page());
+  await b2.at;
+  await assert.rejects(r2.call(r2.page()), KeyedCallInProgress);
+  b2.release();
+  await first;
+  assert.deepEqual(await r2.store.all(), []);
+  assert.equal(r2.state.signed, 1);
+});
+
+test('F92: a review awaiting a call made while the first was preparing does not deadlock (that call was refused)', async () => {
+  const r = rig();
+  const b = barrier();
+  const prepare = r.service.prepare;
+  let second;
+  const svc = { prepare: async (req) => { if (!second) await b.wait(); return prepare(req); } };
+  const a = r.call(r.page(svc, { onReview: async () => { await second.catch(() => {}); } }));
+  await b.at;
+  second = r.call(r.page());
+  await assert.rejects(second, KeyedCallInProgress);
+  b.release();
+  const outcome = await Promise.race([a.then(() => 'done', (e) => e.constructor.name), new Promise((res) => setTimeout(() => res('hung'), 3000))]);
+  assert.equal(outcome, 'PendingKeyedOperation');
+  await assert.rejects(r.call(r.page()), PendingKeyedOperation);   // free afterwards: a retry runs
+});
+
+test('F93, R-F13: abandon during review deletes the reviewing call\'s record (signed attempts included), whether the callback returns or throws', async () => {
+  for (const throws of [false, true]) {
+    const r = rig();
+    await assert.rejects(r.call(r.page()), PendingKeyedOperation);
+    const [rec] = await r.store.all();
+    let k;
+    let got;
+    k = r.page(r.service, { onReview: async () => { got = await k.abandonKeyed(r.api); if (throws) throw new Error('cancelled'); } });
+    await assert.rejects(r.call(k), /abandoned during review; an earlier signed attempt .* may still land/);
+    assert.equal(got.id, rec.id);
+    assert.deepEqual(await r.store.all(), [], `deleted (callback ${throws ? 'throws' : 'returns'})`);
+    assert.equal(r.state.signed, 1, 'nothing more signed');
+  }
+  // A nested keyed call from the review is refused at once; the lock is free afterwards.
+  const r = rig();
+  let nested;
+  const k2 = r.page(r.service, { onReview: async () => { nested = await r.call(r.page()).then(() => 'done', (e) => e.constructor.name); } });
+  await assert.rejects(r.call(k2), PendingKeyedOperation);
+  assert.equal(nested, 'KeyedCallInProgress');
+  await assert.rejects(r.call(r.page()), PendingKeyedOperation);
+});
+
+test('F91, R-F15: settlement uses the page\'s own tip tolerance and slot length', async () => {
+  const r = rig();
+  await assert.rejects(r.call(r.page()), PendingKeyedOperation);
+  const [rec] = await r.store.all();
+  const last = rec.attempts[0].validTo;
+  // A page tolerating 300 slots; its clock 200 s fast, the tip lying to match; the real chain at last - 15.
+  r.state.tip = last - 15 + 200;
+  const k = r.page(r.service, { limits: { maxTipSkewSlots: 300 } });
+  // (The test world's fixed transaction is backdated by then and refused; what matters is the record and the input.)
+  await later((last - 15 + 200 - TIP) * 1000, () => assert.rejects(r.call(k)));
+  assert.equal((await r.store.all())[0].id, rec.id, 'still the same operation');
+  assert.equal(r.state.prepared.at(-1).designated, ref('a0'), 'a retry of it');
+  // Directly: 100 ms slots, the margin follows them (300 slots = 30 s), and a deadline of null is unknown (R-F14).
+  const clock = { zeroSlot: 0, zeroTimeMs: Date.now() - 1_000_000, slotLengthMs: 100 };
+  const now = 10_000;
+  const chain = { tip: async () => now, utxosAt: async () => [] };
+  const one = (validTo) => ({ designated: 'aa#0', address: 'x', attempts: [{ txHash: 'h', validTo }] });
+  assert.equal((await settle(one(now - 400 + 300 - 3), chain, { clock, maxTipSkewSlots: 300 })).outcome, 'pending');
+  assert.equal((await settle(one(null), chain, { clock })).outcome, 'pending');
+});
+
+test('F79, R-F3: stale revisions are refused; a record without a revision (F89) is retried', async () => {
+  const r = rig();
+  await assert.rejects(r.call(r.page()), PendingKeyedOperation);
+  await assert.rejects(r.call(r.page()), PendingKeyedOperation);
   const all = await r.store.all();
   assert.equal(all.length, 1, 'one record');
   assert.equal(all[0].attempts.length, 2, 'both attempts recorded, none lost');
-  assert.ok(r.state.prepared.every((p) => p.designated === ref('a0')), 'the second retried the first\'s operation with its input');
   await assert.rejects(r.store.put({ ...all[0], rev: all[0].rev }), /revision/);
   await assert.rejects(r.store.delete(all[0].id, all[0].rev - 1), /revision/);
-  // A record written before revisions existed (never released, F89): it counts as revision 0, and is retried.
   const { rev: _rev, ...legacy } = all[0];
   const old = memoryRetryStore([legacy]);
   await assert.rejects(r.call(r.page(r.service, { retryStore: old })), PendingKeyedOperation);
