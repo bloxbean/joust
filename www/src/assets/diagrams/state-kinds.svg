@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 612" width="980" height="612" role="img" aria-label="The six kinds of state JOUST supports" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>The six kinds of state JOUST supports</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#3a3f5c"/></marker>
+    <marker id="arrow-indigo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#4f4ce0"/></marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#c46a06"/></marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b1d3a" flood-opacity="0.08"/></filter>
+  </defs>
+  <rect width="980" height="612" rx="18" fill="#f7f8fc"/>
+  <text x="28" y="40" font-size="17" font-weight="800" fill="#151729">Six kinds of state</text>
+  <text x="28" y="60" font-size="12.5" fill="#5b6074">Start with one UTxO; grow into maps, objects, batching, assets and keys with the same model</text>
+  <rect x="20" y="72" width="300" height="250" rx="14" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/>
+  <text x="38" y="100" font-size="12" font-weight="700" fill="#c46a06" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">01</text>
+  <text x="64" y="100" font-size="15" font-weight="800" fill="#151729">Inline state</text>
+  <text x="38" y="120" font-size="12" fill="#5b6074">The record is the UTxO's inline datum</text>
+  <g filter="url(#shadow)"><rect x="70" y="152" width="200" height="104" rx="12" fill="#ffffff" stroke="#b9b8f6" stroke-width="1.5"/></g>
+  <circle cx="92" cy="174" r="9" fill="#eceeff" stroke="#4f4ce0" stroke-width="1.5"/>
+  <text x="108" y="179" font-size="13.5" font-weight="700" fill="#151729">Counter</text>
+  <text x="86" y="202" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">count: 7</text>
+  <text x="86" y="219" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">owner: alice</text>
+  <rect x="84" y="230" width="102" height="20" rx="10" fill="#fff4e2" stroke="#f2c47c"/>
+  <text x="93" y="244" font-size="11" font-weight="600" fill="#c46a06" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">thread token</text>
+  <rect x="340" y="72" width="300" height="250" rx="14" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/>
+  <text x="358" y="100" font-size="12" font-weight="700" fill="#c46a06" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">02</text>
+  <text x="384" y="100" font-size="15" font-weight="800" fill="#151729">MerkleMaps</text>
+  <text x="358" y="120" font-size="12" fill="#5b6074">Any number of keys behind a 32-byte root</text>
+  <g filter="url(#shadow)"><rect x="358" y="144" width="150" height="78" rx="12" fill="#ffffff" stroke="#b9b8f6" stroke-width="1.5"/></g>
+  <circle cx="380" cy="166" r="9" fill="#eceeff" stroke="#4f4ce0" stroke-width="1.5"/>
+  <text x="396" y="171" font-size="13.5" font-weight="700" fill="#151729">Token</text>
+  <text x="374" y="194" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">supply: 900</text>
+  <text x="374" y="211" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">root: 9f3a…</text>
+  <g stroke="#b9b8f6" stroke-width="1.5" fill="#eceeff">
+    <line x1="562" y1="164" x2="536" y2="204"/><line x1="562" y1="164" x2="588" y2="204"/>
+    <line x1="536" y1="204" x2="518" y2="244"/><line x1="536" y1="204" x2="552" y2="244"/>
+    <line x1="588" y1="204" x2="604" y2="244"/>
+    <circle cx="562" cy="164" r="8"/><circle cx="536" cy="204" r="7"/><circle cx="588" cy="204" r="7"/>
+    <circle cx="518" cy="244" r="6"/><circle cx="552" cy="244" r="6"/><circle cx="604" cy="244" r="6"/></g>
+  <polyline points="508,187 550,166" fill="none" stroke="#4f4ce0" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-indigo)"/>
+  <text x="562" y="272" text-anchor="middle" font-size="11.5" font-weight="600" fill="#5b6074">mirror, off chain</text>
+  <text x="490" y="300" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4f4ce0">each call proves its keys; checked on chain</text>
+  <rect x="660" y="72" width="300" height="250" rx="14" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/>
+  <text x="678" y="100" font-size="12" font-weight="700" fill="#c46a06" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">03</text>
+  <text x="704" y="100" font-size="15" font-weight="800" fill="#151729">Owned objects</text>
+  <text x="678" y="120" font-size="12" fill="#5b6074">One UTxO per user object: users act in parallel</text>
+  <g filter="url(#shadow)"><rect x="680" y="142" width="120" height="61" rx="12" fill="#ffffff" stroke="#b9b8f6" stroke-width="1.5"/></g>
+  <circle cx="702" cy="164" r="9" fill="#eceeff" stroke="#4f4ce0" stroke-width="1.5"/>
+  <text x="718" y="169" font-size="13.5" font-weight="700" fill="#151729">Bank</text>
+  <text x="696" y="192" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">paused: no</text>
+  <g filter="url(#shadow)"><rect x="818" y="132" width="124" height="87" rx="12" fill="#ffffff" stroke="#9fd9c0" stroke-width="1.5"/></g>
+  <circle cx="840" cy="154" r="9" fill="#e6f6ef" stroke="#0f7a55" stroke-width="1.5"/>
+  <text x="856" y="159" font-size="13.5" font-weight="700" fill="#151729">Alice's</text>
+  <text x="834" y="182" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">balance: 40</text>
+  <rect x="832" y="193" width="60" height="20" rx="10" fill="#fff4e2" stroke="#f2c47c"/>
+  <text x="841" y="207" font-size="11" font-weight="600" fill="#c46a06" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">object</text>
+  <g filter="url(#shadow)"><rect x="818" y="228" width="124" height="87" rx="12" fill="#ffffff" stroke="#9fd9c0" stroke-width="1.5"/></g>
+  <circle cx="840" cy="250" r="9" fill="#e6f6ef" stroke="#0f7a55" stroke-width="1.5"/>
+  <text x="856" y="255" font-size="13.5" font-weight="700" fill="#151729">Bob's</text>
+  <text x="834" y="278" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">balance: 12</text>
+  <rect x="832" y="289" width="60" height="20" rx="10" fill="#fff4e2" stroke="#f2c47c"/>
+  <text x="841" y="303" font-size="11" font-weight="600" fill="#c46a06" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">object</text>
+  <text x="740" y="232" text-anchor="middle" font-size="11.5" font-weight="600" fill="#5b6074">shared state,</text>
+  <text x="740" y="248" text-anchor="middle" font-size="11.5" font-weight="600" fill="#5b6074">read by reference</text>
+  <g transform="translate(-140 0)">
+  <rect x="160" y="340" width="300" height="250" rx="14" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/>
+  <text x="178" y="368" font-size="12" font-weight="700" fill="#c46a06" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">04</text>
+  <text x="204" y="368" font-size="15" font-weight="800" fill="#151729">Batched intents</text>
+  <text x="178" y="388" font-size="12" fill="#5b6074">Users lock intents; a batcher applies them</text>
+  <rect x="180" y="410" width="96" height="38" rx="9" fill="#fff4e2" stroke="#f2c47c"/>
+  <text x="228" y="434" text-anchor="middle" font-size="12" font-weight="600" fill="#c46a06">intent 1</text>
+  <polyline points="276,429 318,480" fill="none" stroke="#c46a06" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <rect x="180" y="460" width="96" height="38" rx="9" fill="#fff4e2" stroke="#f2c47c"/>
+  <text x="228" y="484" text-anchor="middle" font-size="12" font-weight="600" fill="#c46a06">intent 2</text>
+  <polyline points="276,479 318,480" fill="none" stroke="#c46a06" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <rect x="180" y="510" width="96" height="38" rx="9" fill="#fff4e2" stroke="#f2c47c"/>
+  <text x="228" y="534" text-anchor="middle" font-size="12" font-weight="600" fill="#c46a06">intent 3</text>
+  <polyline points="276,529 318,480" fill="none" stroke="#c46a06" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <g filter="url(#shadow)"><rect x="322" y="444" width="122" height="61" rx="12" fill="#ffffff" stroke="#b9b8f6" stroke-width="1.5"/></g>
+  <circle cx="344" cy="466" r="9" fill="#eceeff" stroke="#4f4ce0" stroke-width="1.5"/>
+  <text x="360" y="471" font-size="13.5" font-weight="700" fill="#151729">Pool</text>
+  <text x="338" y="494" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">tickets: 41</text>
+  <text x="383" y="540" text-anchor="middle" font-size="11.5" font-weight="600" fill="#c46a06">one batch transaction</text>
+  </g>
+  <g transform="translate(-160 0)">
+  <rect x="500" y="340" width="300" height="250" rx="14" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/>
+  <text x="518" y="368" font-size="12" font-weight="700" fill="#c46a06" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">05</text>
+  <text x="544" y="368" font-size="15" font-weight="800" fill="#151729">Native assets</text>
+  <text x="518" y="388" font-size="12" fill="#5b6074">Hold tokens, mint your own, send them anywhere</text>
+  <g filter="url(#shadow)"><rect x="520" y="412" width="150" height="78" rx="12" fill="#ffffff" stroke="#b9b8f6" stroke-width="1.5"/></g>
+  <circle cx="542" cy="434" r="9" fill="#eceeff" stroke="#4f4ce0" stroke-width="1.5"/>
+  <text x="558" y="439" font-size="13.5" font-weight="700" fill="#151729">Dex</text>
+  <text x="536" y="462" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">ADA: 2,000</text>
+  <text x="536" y="479" font-size="12" fill="#5b6074" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">HOSKY: 9.1M</text>
+  <rect x="694" y="416" width="88" height="30" rx="15" fill="#fff4e2" stroke="#f2c47c"/><text x="738" y="436" text-anchor="middle" font-size="12" font-weight="600" fill="#c46a06">LP tokens</text>
+  <polyline points="670,432 690,432" fill="none" stroke="#c46a06" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <rect x="660.4" y="398" width="39.2" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="680" y="413" text-anchor="middle" font-size="11.5" font-weight="600" fill="#c46a06">mint</text>
+  <rect x="694" y="490" width="88" height="30" rx="15" fill="#e6f6ef" stroke="#9fd9c0"/><text x="738" y="510" text-anchor="middle" font-size="12" font-weight="600" fill="#0f7a55">any address</text>
+  <polyline points="620,490 620,505 690,505" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="632.4" y="514" width="39.2" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="652" y="529" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">send</text>
+  </g>
+  <rect x="660" y="340" width="300" height="250" rx="14" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/>
+  <text x="678" y="368" font-size="12" font-weight="700" fill="#c46a06" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">06</text>
+  <text x="704" y="368" font-size="15" font-weight="800" fill="#151729">Keyed objects</text>
+  <text x="678" y="388" font-size="12" fill="#5b6074">At most one object per key, in a sorted list</text>
+  <rect x="676" y="416" width="72" height="38" rx="9" fill="#eef0f6" stroke="#c3c7da" stroke-width="1.5"/>
+  <text x="712" y="440" text-anchor="middle" font-size="12" font-weight="600" fill="#3a3f5c" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">head</text>
+  <rect x="774" y="416" width="72" height="38" rx="9" fill="#e6f6ef" stroke="#9fd9c0" stroke-width="1.5"/>
+  <text x="810" y="440" text-anchor="middle" font-size="12" font-weight="600" fill="#0f7a55" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">ann</text>
+  <rect x="872" y="416" width="72" height="38" rx="9" fill="#e6f6ef" stroke="#9fd9c0" stroke-width="1.5"/>
+  <text x="908" y="440" text-anchor="middle" font-size="12" font-weight="600" fill="#0f7a55" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">eve</text>
+  <polyline points="748,435 770,435" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <polyline points="846,435 868,435" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="823" y="500" width="72" height="38" rx="9" fill="#e6f6ef" stroke="#9fd9c0" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="859" y="524" text-anchor="middle" font-size="12" font-weight="600" fill="#0f7a55" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace">bob</text>
+  <polyline points="810,454 840,496" fill="none" stroke="#c46a06" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <polyline points="878,500 908,458" fill="none" stroke="#c46a06" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+  <text x="732" y="522" text-anchor="middle" font-size="11.5" font-weight="600" fill="#c46a06">insert after</text>
+  <text x="732" y="538" text-anchor="middle" font-size="11.5" font-weight="600" fill="#c46a06">its neighbour</text>
+  <text x="810" y="568" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f7a55">one UTxO per key; the neighbours prove it is unique</text>
+
+</svg>

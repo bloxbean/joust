@@ -1,0 +1,197 @@
+---
+title: "Pool: batched intents"
+description: Run a community pool where donations and rising-price ticket sales arrive as intents and a permissionless batcher applies them in one transaction.
+---
+
+import { Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+In this tutorial you run `examples/pool`: anyone donates to a pool, and anyone buys a ticket whose price rises by a
+step with every sale. Both write the same shared state, so if users called the pool directly they would collide on its
+one UTxO. Instead they lock [intents](/contracts/batched-intents/) concurrently, and a batcher applies them together.
+You will lock six intents at once, cancel one, watch the batch skip an expired one, and see the order-dependent price
+protected by a bound.
+
+<Aside type="caution" title="Experimental, pre-release">
+JOUST is experimental and pre-release (not for production). The tutorial runs in a JOUST checkout with JDK 25; release
+candidates for your own projects are in the BloxBean release repository (see [Quick start: Java](/start/quick-start-java/)).
+You also need Yaci DevKit: `yaci-devkit up --enable-yaci-store`.
+</Aside>
+
+## The contract
+
+```java title="examples/pool/src/main/java/org/julclang/state/examples/pool/Pool.java"
+@StateContract(maxDatumBytes = 192)
+public class Pool {
+
+    public record State(byte[] admin, BigInteger donated, BigInteger sold, BigInteger price, BigInteger step) {}
+
+    public record Sale(State state, JulcList<Payout> payouts) {}
+
+    @Init
+    public static State init(BigInteger price, BigInteger step, Ctx ctx) {
+        Require.that(price.compareTo(BigInteger.ZERO) > 0 && step.compareTo(BigInteger.ZERO) >= 0, "bad pricing");
+        return new State(ctx.caller(), BigInteger.ZERO, BigInteger.ZERO, price, step);
+    }
+
+    @Action
+    @Batched
+    @Payable
+    public static State donate(State s, Ctx ctx) {
+        Require.that(ctx.received().compareTo(BigInteger.valueOf(1_000_000)) >= 0, "donate at least 1 ADA");
+        return new State(s.admin(), s.donated().add(ctx.received()), s.sold(), s.price(), s.step());
+    }
+
+    @Action
+    @Batched(only = true)
+    @Payable
+    public static Sale buy(State s, BigInteger maxPrice, Ctx ctx) {
+        Require.that(s.price().compareTo(maxPrice) <= 0, "price above the buyer's bound");
+        Require.that(ctx.received().compareTo(s.price()) >= 0, "pays less than the price");
+        BigInteger change = ctx.received().subtract(s.price());
+        State next = new State(s.admin(), s.donated(), s.sold().add(BigInteger.ONE), s.price().add(s.step()), s.step());
+        if (change.compareTo(BigInteger.ZERO) > 0) {
+            return new Sale(next, Payouts.of(ctx.caller(), change));
+        }
+        return new Sale(next, Payouts.none());
+    }
+
+    @Action
+    @SignedBy("admin")
+    public static Sale withdraw(State s, BigInteger amount, Ctx ctx) {
+        Require.that(amount.compareTo(BigInteger.ZERO) > 0 && amount.compareTo(ctx.balance()) <= 0, "bad amount");
+        return new Sale(s, Payouts.of(s.admin(), amount));
+    }
+}
+```
+
+- `donate` is `@Batched`: it runs as an intent, or as a direct call.
+- `buy` is `@Batched(only = true)`: intents only, so nobody can spend the pool with a direct buy and invalidate the
+  batch being built.
+- `buy` depends on order: each ticket costs more than the last. The buyer can't know the price when the batch runs, so
+  they pay a ceiling, bound it with `maxPrice`, and get the change back as a payout.
+- Inside a batch, `ctx.caller()` is the intent's owner and `ctx.received()` its payment. `withdraw` is the admin's
+  ordinary direct call.
+
+## Run it
+
+<Steps>
+
+1. **Run the harness tests.**
+
+   ```sh
+   ./gradlew :examples:pool:test --tests '*PoolTest'
+   ```
+
+   [`PoolTest`](https://github.com/bloxbean/joust/blob/main/examples/pool/src/test/java/org/julclang/state/examples/pool/PoolTest.java)
+   builds a batch of three (a donation and two buys), checks that the on-chain fold gives the same state as the JVM
+   fold (5 ADA donated, 2 sold, price 12 ADA), and runs the attack suite on it. Then come the attacks specific to
+   batches: a step's change paid to someone else, a direct redeemer on the instance, an intent left out, one past its
+   deadline, a cancel composed with the batch, a refund to another stake key, an intent of another instance riding
+   along, wrong redeemer kinds, an empty batch. `buyIsIntentOnly` checks that no direct `Buy` redeemer even exists.
+   `batchCost_growsWithTheNumberOfIntents` prints the cost of batches of 1, 5, 10 and 15 donations.
+
+   *What this taught:* the batch is the same method folded on chain, and every way to cheat an intent's owner is a
+   rejected transaction.
+
+2. **Run the DevKit flow.**
+
+   ```sh
+   ./gradlew :examples:pool:test --tests '*PoolDevnetTest'
+   ```
+
+   [`PoolDevnetTest`](https://github.com/bloxbean/joust/blob/main/examples/pool/src/test/java/org/julclang/state/examples/pool/PoolDevnetTest.java)
+   deploys a pool at 10 ADA a ticket, rising by 1 ADA, then has six users lock intents at the same time:
+
+   ```java title="examples/pool/src/test/java/org/julclang/state/examples/pool/PoolDevnetTest.java"
+   var pool = PoolClient.deploy(runtime, admin, ada(10), ada(1));
+   Instant later = Instant.now().plus(Duration.ofMinutes(30));
+
+   // Six users lock intents at the same time: each spends only their own UTxOs, so nobody contends.
+   futures.add(CompletableFuture.supplyAsync(() -> switch (k) {
+       case 0, 1 -> pool.donateIntent(u, ada(5 + k), later);
+       // Buyers accept up to 20 ADA and pay 20: the change comes back as a payout.
+       case 2, 3, 4 -> pool.buyIntent(u, ada(20), ada(20), later);
+       // Expires before any batch window could end (the batch window is about 20 s).
+       default -> pool.donateIntent(u, ada(3), Instant.now().plus(Duration.ofSeconds(5)));
+   }));
+   ```
+
+   All six land: each intent spends only its owner's UTxOs. `pool.pendingIntents()` lists six.
+
+   *What this taught:* locking an intent never touches the pool's UTxO, so users never contend.
+
+3. **Cancel one.**
+
+   ```java
+   intents.get(1).cancel(users.get(1));
+   assertFalse(intents.get(1).isPending());
+   ```
+
+   Only the owner can cancel: the cancel burns the intent token and returns everything it held.
+
+4. **Batch.** Any account can be the batcher:
+
+   ```java
+   var result = pool.batch(batcher, 8);
+   System.out.println("[pool batch] " + result.txHash() + " applied " + result.applied().size() + " skipped " + result.skipped());
+   ```
+
+   The batch applies four intents (one donation of 5 ADA, three buys) and skips the one whose deadline passed, with
+   the reason in `skipped`. The pool ends at `donated` 5 ADA, `sold` 3 and `price` 13 ADA: the tickets cost 10, 11 and
+   12 in ledger order, and each buyer got their change back in an output tagged with their own intent.
+
+   *What this taught:* the batcher picks which intents to include and when, but each intent's bound (`maxPrice`) and
+   deadline still hold.
+
+5. **Clean up.** The expired intent stays pending until its owner takes it back, and the admin's direct call still
+   works:
+
+   ```java
+   assertTrue(intents.get(5).isPending());
+   intents.get(5).cancel(users.get(5));
+   var w = pool.withdraw(admin, ada(5));
+   ```
+
+</Steps>
+
+## The same flow in JavaScript
+
+```js title="js/joust-runtime/test/examples.test.js (Pool)"
+const pool = await contract('Pool', admin);
+const p = pool.at((await pool.deploy(admin, { price: 10n * ADA, step: ADA })).instance);
+const d0 = (await p.intent(u0, 'donate', {}, { lovelace: 5n * ADA })).intent;
+const d1 = (await p.intent(u1, 'donate', {}, { lovelace: 6n * ADA })).intent;
+// buy is batch-only (@Batched(only = true)): the buyer pays 20 and accepts up to 20; the change is paid out.
+await p.intent(u2, 'buy', { maxPrice: 20n * ADA }, { lovelace: 20n * ADA });
+await p.intent(u3, 'buy', { maxPrice: 20n * ADA }, { lovelace: 20n * ADA });
+await assert.rejects(async () => p.call(u2, 'buy', { maxPrice: 1n }, { lovelace: ADA }), /no action/);   // batch-only
+await assert.rejects(p.cancelIntent(u0, d1));                  // only its owner withdraws it
+await p.cancelIntent(u1, d1);
+const b = await p.batch(batcher);
+assert.equal(b.applied.length, 3, 'a donation and two buys');
+const s = await p.state();                                     // donated 5 ADA, sold 2, price 12 ADA
+```
+
+The test also tampers with every engine-built intent lock and batch, and checks that each is refused before the
+wallet is asked to sign. With a generated client (`npm run build` in a JOUST project), `instance.donate(wallet, {}, pay)`
+locks an intent, and `pool.contract.at(id)` gives `pendingIntents`, `cancelIntent` and `batch`.
+
+## What you built
+
+- A shared total and an order-dependent price that many users write at once, without contention.
+- Users protected against the batcher's choices by their own bounds and deadlines.
+- A batch that anyone can run, paying only the fee.
+
+<Aside type="note" title="Limits to remember">
+About 8 intents fit in one batch (memory bound); the batcher halves the batch when it cannot build one. Batched
+actions cannot yet be combined with MerkleMaps or native assets. See [Batched intents](/contracts/batched-intents/#limits).
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Batched intents" href="/contracts/batched-intents/" description="The rules, the checks and the ordering caveats." />
+  <LinkCard title="DEX: native assets and LP tokens" href="/tutorials/dex-assets/" description="An AMM whose reserves are what its UTxO holds." />
+  <LinkCard title="Time" href="/contracts/time/" description="Clock checks inside batched actions." />
+  <LinkCard title=".jsc" href="/languages/jsc/" description="Jar.jsc's batched tip, in the contract language." />
+</CardGrid>

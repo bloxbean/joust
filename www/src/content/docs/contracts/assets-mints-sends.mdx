@@ -1,0 +1,321 @@
+---
+title: Native assets, mints and sends
+description: Hold native tokens in contract state, mint and burn your own tokens, and send outputs to any address with any datum, with every output counted once.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+By default a JOUST state UTxO holds lovelace and its own thread token, and an action pays lovelace to key hashes. That
+covers counters and vaults, but not a DEX that holds a token reserve, a marketplace that holds the NFT it sells, or a
+treasury that pays a royalty script with a datum. This page covers the four pieces that make those possible
+(ADR-0007):
+
+- **`Funds`**: the native assets a method sees (received, held) and the contract's own policy id;
+- **`accepted`**: exactly which assets a method takes in;
+- **`mint`**: user tokens minted or burned by the contract's own policy;
+- **`Send`**: an output to any address, key or script, with any datum and any value.
+
+A *native asset* (or token) on Cardano is identified by a *policy id* (the hash of the script that controls minting)
+and a token name; a *value* is lovelace plus any number of these. See the [glossary](/reference/glossary/).
+
+## A constant-product AMM
+
+The `dex` example is one ADA/token pool. Its reserves are what its UTxO holds, so state and funds can never drift
+apart: lovelace above the deposit (`ctx.balance()`) and the token (`funds.held()`).
+
+```java title="examples/dex/src/main/java/org/julclang/state/examples/dex/Dex.java"
+@StateContract(maxDatumBytes = 256, assetSlots = 2)
+public class Dex {
+
+    public record Pool(byte[] admin, byte[] tokenPolicy, byte[] tokenName, byte[] lpName, BigInteger lpSupply) {}
+
+    public record Moved(Pool state, JulcList<Payout> payouts, JulcList<Send> sends, Value mint, Value accepted) {}
+
+    /** Opens an empty pool for {@code (tokenPolicy, tokenName)}; its LP token is named after the pool id. */
+    @Init
+    public static Pool open(byte[] tokenPolicy, byte[] tokenName, Ctx ctx, Funds funds) {
+        Require.that(tokenPolicy.length == 28, "token policy must be 28 bytes");
+        return new Pool(ctx.caller(), tokenPolicy, tokenName, CryptoLib.blake2b_224(funds.self()), BigInteger.ZERO);
+    }
+
+    /** Adds {@code ctx.received()} lovelace and {@code tokenIn} tokens; mints LP tokens to the caller. */
+    @Action @Payable
+    public static Moved addLiquidity(Pool p, BigInteger tokenIn, Ctx ctx, Funds funds) {
+        BigInteger adaIn = ctx.received();
+        Require.that(adaIn.signum() > 0 && tokenIn.signum() > 0, "add both ADA and tokens");
+        BigInteger reserveAda = ctx.balance();
+        BigInteger reserveToken = Assets.quantity(funds.held(), p.tokenPolicy(), p.tokenName());
+        BigInteger minted = p.lpSupply().signum() == 0 ? adaIn
+                : adaIn.multiply(p.lpSupply()).divide(reserveAda).min(tokenIn.multiply(p.lpSupply()).divide(reserveToken));
+        Require.that(minted.signum() > 0, "deposit too small");
+        Value lp = Assets.of(funds.policy(), p.lpName(), minted);
+        Pool next = new Pool(p.admin(), p.tokenPolicy(), p.tokenName(), p.lpName(), p.lpSupply().add(minted));
+        return new Moved(next, Payouts.none(), Sends.of(wallet(ctx.caller()), lp, new OutputDatum.NoOutputDatum()), lp,
+                Assets.of(p.tokenPolicy(), p.tokenName(), tokenIn));
+    }
+
+    /** The enterprise address of a key: never the caller's fee-paying base address (ADR-0007 D6). */
+    static Address wallet(byte[] key) {
+        return new Address(new Credential.PubKeyCredential(new PubKeyHash(key)), Optional.empty());
+    }
+}
+```
+
+`addLiquidity` takes ADA and tokens in (`accepted`), mints LP tokens under the contract's own policy (`mint`), and
+sends them to the provider (`sends`), all in one result record. The [DEX tutorial](/tutorials/dex-assets/) walks
+through the whole contract.
+
+## `Funds`
+
+Declare `Funds` as the last parameter, after `Ctx` if there is one. The client fills it in; the validator checks
+every field.
+
+| Field | What it holds |
+|---|---|
+| `policy` | This contract's policy id (its script hash). Name your own tokens with it |
+| `self` | The token name of what the method acts on: the instance id, or the object id in an owned method |
+| `received` | Native assets the caller adds in this call. No lovelace entry (that is `ctx.received()`); positive amounts; empty unless the method is `@Payable` |
+| `held` | Native assets the UTxO holds before the call, without lovelace and without its own thread token; empty when creating |
+| `deposits` | Deposits from other contracts in this transaction, for a `@Receives` action only (see [Deposits](/contracts/deposits/)) |
+
+Only `received` travels in the redeemer. The validator computes `policy`, `self` and `held` from the transaction.
+
+## The result record
+
+A method that does more than return the state returns a record whose components are recognised by name and type:
+
+| Component | Type | Meaning |
+|---|---|---|
+| `state` | the state or owned record | The next state. Required for actions and inits; forbidden for destroys |
+| `payouts` | `JulcList<Payout>` | Lovelace to key hashes, tagged with this input (cheapest) |
+| `sends` | `JulcList<Send>` | Outputs to any address with any datum and value |
+| `mint` | `Value` | User tokens this contract's policy mints (positive) or burns (negative) |
+| `accepted` | `Value` | Exactly the native assets this call takes in |
+
+`deposits` and `events` are covered in [Deposits](/contracts/deposits/) and
+[Params, invariants and events](/contracts/params-invariants-events/). A destroy may still return a bare
+`JulcList<Payout>`. `@Init` and `@OwnedInit` may take `Funds` and return `accepted`, but cannot mint, send or pay out.
+
+## `Assets`: values in contract code
+
+`Value` arithmetic goes through
+[`Assets`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Assets.java).
+It has the same API on the JVM and on chain: the JVM body works on maps, the on-chain body
+(`julc-state-api/src/onchain/java`) uses the Plutus V3 native value builtins. Every value it returns is canonical (sorted,
+no zero quantities), as the ledger requires.
+
+| Method | Returns |
+|---|---|
+| `Assets.none()` | The empty value |
+| `Assets.of(policy, name, quantity)` | `quantity` of one asset (empty if zero) |
+| `Assets.lovelace(quantity)` | Lovelace as a value |
+| `Assets.add(a, b)`, `Assets.subtract(a, b)` | Entry-wise sum or difference (negative entries stay) |
+| `Assets.quantity(v, policy, name)` | One asset's quantity, zero if absent |
+| `Assets.lovelaceOf(v)` | The lovelace in `v` |
+| `Assets.withoutLovelace(v)` | `v` without its lovelace |
+| `Assets.isEmpty(v)` | Whether `v` holds nothing |
+| `Assets.covers(a, b)` | Whether `a` holds at least `b` of every entry (both non-negative) |
+
+The JVM also has `Assets.check(v, what)`, which the runtime and the harness run on every value a method returns, so a
+JVM test never passes on a value the chain would reject.
+
+## `accepted`: no unwanted tokens
+
+A `@Payable` method with `Funds` must return `accepted`, and the validator requires `funds.received == accepted`
+exactly. This stops a caller pushing junk tokens into your UTxO, which could make it unspendable through its min-ADA or
+the size of its value. A method that takes anything says so by returning `funds.received()`.
+
+```java title="examples/market/src/main/java/org/julclang/state/examples/market/Market.java"
+/** Offers one NFT at {@code price}: the listing takes the NFT in. */
+@OwnedInit @Payable
+public static Listed offer(@Shared Config c, byte[] nftPolicy, byte[] nftName, BigInteger price, Ctx ctx, Funds funds) {
+    Require.that(!c.paused(), "the market is paused");
+    Require.that(price.compareTo(BigInteger.valueOf(2_000_000)) >= 0, "price below 2 ADA");
+    Require.that(ctx.received().signum() == 0, "a listing takes the NFT, not ADA");
+    return new Listed(new Listing(ctx.caller(), nftPolicy, nftName, price), Assets.of(nftPolicy, nftName, BigInteger.ONE));
+}
+```
+
+`@Payable` governs both `ctx.received()` and `funds.received()`: without it, both must be zero.
+
+## `mint`: tokens of your own policy
+
+The contract's policy mints its lifecycle tokens (instances, objects, intents) and can also mint **user tokens**. The
+token name decides which is which:
+
+- **reserved:** 32 bytes (an instance), or 29 bytes starting with `0x4F` (an object) or `0x49` (an intent);
+- **user:** any other name, 0 to 31 bytes.
+
+Return `mint` from an action: positive amounts mint, negative burn. The dex burns LP tokens on the way out:
+
+```java title="examples/dex/src/main/java/org/julclang/state/examples/dex/Dex.java"
+/** Burns {@code lp} LP tokens; pays the provider its share of both reserves. */
+@Action @Payable
+public static Moved removeLiquidity(Pool p, BigInteger lp, Ctx ctx, Funds funds) {
+    Require.that(lp.signum() > 0 && lp.compareTo(p.lpSupply()) <= 0, "bad LP amount");
+    BigInteger adaOut = ctx.balance().multiply(lp).divide(p.lpSupply());
+    BigInteger tokenOut = Assets.quantity(funds.held(), p.tokenPolicy(), p.tokenName()).multiply(lp).divide(p.lpSupply());
+    Value lpTokens = Assets.of(funds.policy(), p.lpName(), lp);
+    Pool next = new Pool(p.admin(), p.tokenPolicy(), p.tokenName(), p.lpName(), p.lpSupply().subtract(lp));
+    return new Moved(next, Payouts.of(ctx.caller(), adaOut),
+            Sends.of(wallet(ctx.caller()), Assets.of(p.tokenPolicy(), p.tokenName(), tokenOut), new OutputDatum.NoOutputDatum()),
+            Assets.subtract(Assets.none(), lpTokens), lpTokens);
+}
+```
+
+The caller sends the LP tokens in (`accepted = lpTokens`) and the method burns them (`mint = −lpTokens`).
+
+**How minting is checked.** The transaction's mint redeemer for the policy is `ByAction(by)`, naming the state input
+whose method mints. The minting policy checks that the input at `by` sits at the state address, holds a reserved token
+and is spent with a method that can mint. That method's validator checks the mint redeemer names its own input, that
+every declared entry has a user-kind name under the own policy and a non-zero amount, and that the whole mint under the
+policy equals the declared mint exactly (I28). One transition per transaction owns the policy's mint. A method whose
+`mint` is empty needs no mint redeemer, and requires that nothing is minted under the policy.
+
+Name per-instance tokens after the instance, as the dex does with `blake2b_224(funds.self())`: one name per pool, so
+one pool's LP tokens can never redeem another's reserves.
+
+## `Send`: outputs to anyone
+
+`Send(Address to, Value value, OutputDatum datum)` asks for an output at any address, key or script, with any datum
+(none, a hash or inline) and at least `value`. Build lists with `Sends.none()`, `Sends.of(to, value, datum)` and
+`Sends.add(sends, to, value, datum)`, and datums with `Datum.inline(data)` or `Datum.none()`. `Payout` stays the cheap
+form for lovelace to a key.
+
+The `market`'s `buy` pays the seller with a payout, delivers the NFT with a send, and pays a royalty to a script
+address with an inline datum:
+
+```java title="examples/market/src/main/java/org/julclang/state/examples/market/Market.java"
+JulcList<Send> nft = Sends.of(wallet(ctx.caller()), funds.held(), new OutputDatum.NoOutputDatum());
+JulcList<Send> sends = royalty.signum() > 0
+        ? Sends.add(nft, c.royaltyVault(), Assets.lovelace(royalty), Datum.inline(royalty(l)))
+        : nft;
+
+/** The royalty datum, {@code Royalty(nftPolicy, nftName, price)} as data (built so it also runs on the JVM). */
+public static PlutusData royalty(Listing l) {
+    return Builtins.constrData(0, Builtins.mkCons(Builtins.bData(l.nftPolicy()), Builtins.mkCons(Builtins.bData(l.nftName()),
+            Builtins.mkCons(Builtins.iData(l.price()), Builtins.mkNilData()))));
+}
+```
+
+<Aside type="caution" title="Build datums with Builtins, not casts">
+`(PlutusData) (Object) record` works on chain but throws on the JVM. Build a datum with `Builtins.constrData`,
+`bData`, `iData` and `mkCons`, which run on both: a record `R(a, b)` is
+`constrData(0, mkCons(a, mkCons(b, mkNilData())))`.
+</Aside>
+
+### The output verifier
+
+A send cannot be tagged with the sender's input, because its datum belongs to the recipient. Without a tag, one output
+could satisfy two obligations: two instances owing Bob 10 ADA with the same datum would both accept a single 10 ADA
+output (*double satisfaction*). So sends are claimed in a transaction-wide registry, kept by a shared withdraw-zero
+script,
+[`OutputVerifier`](https://github.com/bloxbean/joust/blob/main/julc-state-verifier/src/main/java/org/julclang/state/verifier/OutputVerifier.java)
+in `julc-state-verifier` (ADR-0007 D5):
+
+- **The verifier** runs as a withdrawal; its redeemer lists `OutputClaim(output, by)` with output indices strictly
+  increasing and in range. So each output is claimed at most once.
+- **Each transition with sends** reads the registry from the transaction's redeemers, takes its own claims (those with
+  `by` equal to its input), and requires exactly one claim per send, in order.
+- **A claimed output must** sit at `send.to`, carry exactly `send.datum`, have no reference script and hold at least
+  `send.value`. It may **not** sit at the payment credential of any input the transaction spends, so a continuing
+  output (of this or any script) never passes as a send. And its inline datum may not equal any input's reference or
+  `IntentRefund` of one, so it can never also count as a JOUST payout or refund.
+
+The runtime publishes and registers the verifier once per network, adds the withdrawal with the claims, and re-checks
+every send after balancing.
+
+## What the validator checks: the exact value
+
+A contract is *asset-aware* if any method takes `Funds` or returns `sends` or `mint`. Every transition of an
+asset-aware contract checks, over full multi-asset values (I26):
+
+```
+out.value == in.value + lovelace(ctx.received) + accepted + mint − Σ payouts − Σ sends.value
+```
+
+For a creation, the input is the deposit plus the minted thread token. For a destroy there is no output: everything
+except the burned token must be allocated. Contracts that are not asset-aware keep the cheaper lovelace-only check.
+
+| Invariant | Meaning (ADR-0007 §3) |
+|---|---|
+| I26 | The state output's value is exactly the input plus what was received and minted, less what was paid and sent; a destroy allocates everything |
+| I27 | Only reserved-kind names are lifecycle tokens; lifecycle redeemers never mint or burn user tokens |
+| I28 | User tokens are minted or burned only through `ByAction(by)`, by the transition at `by`, exactly as declared |
+| I29 | Every send has its own claim in the output registry; each output is claimed at most once |
+| I30 | A claimed output is never at a spent input's payment credential and never carries a JOUST payout or refund tag |
+| I31 | `funds.received` equals `accepted`; no reserved-kind token of the own policy is received, sent or minted |
+
+## Calling asset-aware methods
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/dex/src/test/java/org/julclang/state/examples/dex/DexDevnetTest.java"
+var dex = DexClient.deploy(runtime, admin, policy, name);
+Value tokens = Assets.of(policy, name, BigInteger.valueOf(100_000));
+// args..., then the lovelace paid, then the native assets offered (funds.received)
+dex.addLiquidity(lp, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), tokens);
+dex.swapAdaForToken(trader, expect, ADA.multiply(BigInteger.TEN), Assets.none());
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="js/joust-runtime/test/examples.test.js (Dex)"
+const d = dex.at((await dex.deploy(admin, { tokenPolicy: policy, tokenName: name })).instance);
+// pay: lovelace, and assets as [[policy, [[name, quantity]]]]
+await d.call(lp, 'addLiquidity', { tokenIn: 100_000n }, { lovelace: 100n * ADA, assets: [[policy, [[name, 100_000n]]]] });
+await d.call(trader, 'swapAdaForToken', { minOut: expect }, { lovelace: 10n * ADA });
+```
+
+</TabItem>
+</Tabs>
+
+## Rules and limits
+
+- `Funds` is the last parameter. `@Payable` with `Funds` requires `accepted` in the result; `accepted` without
+  `@Payable` and `Funds` is an error.
+- `@StateContract(assetSlots)` (default 4 for asset-aware contracts, 0 otherwise; 0 to 64) sizes the min-ADA deposit
+  for the assets a state UTxO may hold, about 80 bytes each. Set it to what you expect: the dex uses 2.
+- One minting transition per transaction per policy, and no user minting at init.
+- An asset-aware contract cannot have `@Batched` actions: intents carry only lovelace.
+- The 32-byte CIP-68 shape (label plus a 28-byte hash) is a reserved name under your own policy; such tokens need their
+  own minting policy.
+- Asset-aware contracts pay for full-value accounting, and a transaction with sends runs the output verifier too. The
+  dex validator is 12,008 bytes plus the 703-byte output verifier, shared (examples/README.md).
+
+## Pitfalls
+
+<Aside type="caution" title="Send to the enterprise address, not the fee payer's">
+The runtime's transaction builder (QuickTx, from cardano-client-lib) may take the fee from an output at the fee
+payer's address. A send there could be eaten by the fee, so the runtime refuses it before submitting with an error that says
+so. Send to the recipient's enterprise address (payment key, no stake part), as the examples' `wallet(key)` helpers
+do. Payouts go to enterprise addresses already.
+</Aside>
+
+- **Do not take a `Value` method argument.** JuLC decodes a redeemer field typed `Value` as a constructor, and it
+  fails. Take quantities as `BigInteger` and names as `byte[]` (as the dex does), or `PlutusData` if you must. Values a
+  method builds (`Send.value`, `mint`) are fine.
+- **A `Value` cannot be a loop accumulator** in JuLC. Use recursion.
+- **Datums must be canonical.** cardano-client-lib writes inline datums in canonical CBOR, map keys sorted. A datum or
+  memo with a map must already be in key order (`SortedMaps`), or the on-chain equality fails.
+- **A send with no datum to a script address locks its funds.** The runtime warns.
+- **Off-chain code of your own:** a QuickTx `ScriptTx` balances only lovelace from the fee payer. The JOUST runtime
+  collects the UTxOs holding the offered assets for you; code that builds its own transactions must do the same.
+- **Debugging a refusal:** build with `-Pjoust.traces` (`-Ajoust.traces=true`) so every failing check traces its
+  name.
+
+## Reference
+
+- [State API: `Assets`, `Funds`, `Send`, `Sends`, `Datum`](/reference/state-api/)
+- ADR-0007: [Architecture decisions](/project/architecture-decisions/)
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Tutorial: a DEX with LP tokens" href="/tutorials/dex-assets/" description="The dex and market examples end to end." />
+  <LinkCard title="Deposits" href="/contracts/deposits/" description="Pay into another contract's instance in the same transaction." />
+  <LinkCard title="Ctx, funds and payouts" href="/contracts/ctx-and-funds/" description="Lovelace, balances and payouts." />
+  <LinkCard title="Security model" href="/contracts/security-model/" description="How the invariants fit together." />
+</CardGrid>

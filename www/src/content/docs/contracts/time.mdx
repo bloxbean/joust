@@ -1,0 +1,230 @@
+---
+title: Time
+description: Deadlines and time locks on Cardano with validity intervals, Ctx.validFrom/validTo, Clock.after/before, @ValidAfter/@ValidBefore, TTLs and maxValidityMs.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A script on Cardano cannot ask "what time is it now?". It sees the transaction's **validity interval**: the range of
+time in which the transaction may be included in a block. The ledger refuses the transaction outside that range, so a
+contract can reason about time by reasoning about the interval. This page shows how JOUST exposes it, the two safe
+ways to write a deadline, and the limits that come with it.
+
+## The validity interval
+
+Every JOUST call that needs time runs in a window `[validFrom, validTo)`, in POSIX milliseconds: inclusive at the
+start, exclusive at the end (the Conway ledger's rule). The client chooses the window when it builds the
+transaction:
+
+- it starts at the current chain tip;
+- it lasts `min(TTL, maxValidityMs)`;
+- it is chosen in **slots** first, and the milliseconds are derived from the network's slot configuration, so the JVM
+  run and the on-chain run see identical numbers.
+
+Your method sees the window through [`Ctx`](/contracts/ctx-and-funds/):
+
+| Field | Meaning | Verified on chain |
+|---|---|---|
+| `ctx.validFrom()` | Start of the window (POSIX ms, inclusive) | Equal to the transaction's lower bound, which must be finite |
+| `ctx.validTo()` | End of the window (POSIX ms, exclusive) | Equal to the transaction's upper bound, which must be finite |
+| | | `validTo − validFrom ≤ @StateContract(maxValidityMs)` (default one hour) |
+
+Because the window contains the moment of inclusion, the real time is somewhere in `[validFrom, validTo)`. You do not
+know where.
+
+## Deadlines with `Clock`
+
+`Clock` turns that into the two questions you can answer safely, true for **every** moment the transaction could be
+valid:
+
+| Method | True when | Use for |
+|---|---|---|
+| `Clock.after(ctx, t)` | `ctx.validFrom() ≥ t`: the call happens at or after `t` | "not before": unlocks, refunds after a deadline |
+| `Clock.before(ctx, t)` | `ctx.validTo() ≤ t`: the call happens strictly before `t` | "not after": contributions before a deadline, a deadline in the future at creation |
+
+```java title="examples/crowdfund/src/main/java/org/julclang/state/examples/crowdfund/Crowdfund.java"
+@Init
+public static State launch(BigInteger goal, BigInteger deadline, BigInteger minContribution, Ctx ctx) {
+    Require.that(goal.compareTo(BigInteger.ZERO) > 0, "goal must be positive");
+    Require.that(minContribution.compareTo(BigInteger.valueOf(2_000_000)) >= 0, "minimum contribution is at least 2 ADA");
+    Require.that(Clock.before(ctx, deadline), "deadline must be in the future");
+    JulcMap<byte[], BigInteger> none = JulcMap.empty();
+    return new State(ctx.caller(), goal, deadline, minContribution, BigInteger.ZERO, none);
+}
+
+/** The goal was missed: a backer takes their contribution back. */
+@Action
+public static Result refund(State s, Ctx ctx) {
+    Require.that(Clock.after(ctx, s.deadline()), "the campaign is still running");
+    …
+}
+```
+
+`Clock` works anywhere: in combination with other conditions, on any value (a state field, an argument, a computed
+time). The escrow lets the seller or the arbiter refund at any time, and anyone once the deadline has passed:
+
+```java title="examples/escrow/src/main/java/org/julclang/state/examples/escrow/Escrow.java"
+boolean party = ByteStringLib.equals(ctx.caller(), s.seller()) || ByteStringLib.equals(ctx.caller(), s.arbiter());
+Require.that(party || Clock.after(ctx, s.deadline()), "only the seller or the arbiter can refund before the deadline");
+```
+
+<Aside type="caution" title="Don't compare validFrom and validTo yourself the other way round">
+
+`ctx.validTo() > t` does **not** mean "after `t`": part of the window may still be before `t`. And
+`!Clock.before(ctx, t)` does not mean "after `t`" either. Use `Clock.after` for "after" and `Clock.before` for
+"before", and nothing else, unless you have worked out the interval yourself.
+
+</Aside>
+
+## `@ValidAfter` and `@ValidBefore`
+
+When the time is a state field, an annotation says it without code. `@ValidAfter("field")` requires the window to
+start at or after the `BigInteger` time in that field of the current state; `@ValidBefore("field")` requires it to
+end at or before it.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/vault/src/main/java/org/julclang/state/examples/vault/Vault.java"
+/** The owner takes funds out once the vault is unlocked. */
+@Action
+@OnlyOwner
+@ValidAfter("unlockAt")
+public static Result withdraw(State s, BigInteger amount, Ctx ctx) {
+    Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+    Require.that(amount.compareTo(s.total()) <= 0, "insufficient funds");
+    return new Result(new State(s.owner(), s.unlockAt(), s.total().subtract(amount)), Payouts.of(s.owner(), amount));
+}
+```
+
+</TabItem>
+<TabItem label=".jsc">
+
+```jsc
+// Modifiers name a state field (an Int): after <field>, before <field>.
+action withdraw(amount: Int) only owner after unlockAt {
+    require amount > 0 "amount must be positive"
+    require amount <= total "insufficient funds"
+    total -= amount
+    pay amount to owner
+}
+
+// Functions take any Int: after(t), before(t). validFrom and validTo are the window's bounds.
+action contribute() payable {
+    require before(deadline) "the campaign has ended"
+    total += received
+}
+```
+
+`after(t)` and `before(t)` hold for the whole window, so `.jsc` allows them only as requirements: in a `require`, or
+joined with `&&`. Not negated, not in `||`, not as an `if` condition. Write a rule like the escrow's refund in Java.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js
+// Nothing to pass: the engine picks the window, as the Java runtime does.
+await vault.at(id).withdraw(ownerWallet, { amount: 3_000_000n });
+// Too early: the promise rejects with "...too early, the time in 'unlockAt' has not been reached".
+```
+
+</TabItem>
+</Tabs>
+
+The annotation and `Clock` check the same thing on chain. The differences:
+
+| | `@ValidAfter` / `@ValidBefore` | `Clock.after` / `Clock.before` |
+|---|---|---|
+| Time comes from | a `BigInteger` field of the current state | any expression |
+| Needs `Ctx` | no | yes |
+| Combines with other conditions | no (always required) | yes |
+| On `@Init` | not allowed (no current state) | allowed |
+| On `@Batched` | not allowed | allowed |
+| Client behaviour | picks a window that satisfies it, or refuses with a clear message | runs your method; a failed `Require` refuses the call |
+
+The client's handling is the practical reason to prefer the annotation for state-field deadlines. With
+`@ValidBefore("deadline")` it **shortens** the window so that it ends no later than the deadline, and refuses with
+`too late, the deadline in 'deadline' has passed` only when no window fits. With `@ValidAfter("unlockAt")` it refuses
+with `too early, the time in 'unlockAt' has not been reached`. `Clock.before` in a method body gets the default window,
+which may run past the deadline and make the call fail (see below).
+
+### What the validator checks
+
+For `@ValidAfter(f)`: the lower bound is finite and at least `current.f`. For `@ValidBefore(f)`: the upper bound is
+finite and at most `current.f`; the upper bound is exclusive, so the call happens strictly before `f`. An unbounded
+side never passes. The generated code pattern-matches the bound type itself rather than calling
+`IntervalLib.finiteLowerBound`, for the reason below.
+
+<Aside type="danger" title="IntervalLib returns -1 for an infinite bound">
+
+If you read the validity range yourself (in a hand-written JuLC validator, such as a governor), note that JuLC's
+`IntervalLib.finiteLowerBound` and `IntervalLib.finiteUpperBound` return `-1` for an infinite bound and ignore whether
+the bound is inclusive. A check like `finiteLowerBound(range) >= deadline` then fails safe, but
+`finiteUpperBound(range) <= deadline` **passes** for a transaction with no upper bound. Pattern-match
+`IntervalBoundType.Finite` first. In JOUST contract code, use `Ctx` and `Clock`, which never have this problem.
+
+</Aside>
+
+## TTL, `maxValidityMs` and the trust radius
+
+Two settings decide how wide the window is:
+
+- **The TTL** is the runtime's: how long a built transaction stays valid. The Java `StateRuntime` defaults to 10
+  minutes (`StateRuntime.builder(backend).ttl(Duration)` changes it); the examples' DevKit runtime uses 20 seconds.
+  Pages built with `@julclang/joust` use `dev.ttlMs` from `joust.config.json`, by default 20 seconds on a DevKit and
+  3 minutes on other networks; the npm runtime takes a `ttlMs` option.
+- **`maxValidityMs`** is the contract's: the widest window it accepts from a call that reads `Ctx` (default one hour,
+  at least one minute). The client uses `min(TTL, maxValidityMs)`.
+
+`maxValidityMs` bounds the **trust radius of time**. `validFrom` can be up to `maxValidityMs` in the past at the
+moment the transaction lands, and `validTo` up to that far in the future. A contract that stores "now" inherits that
+skew. The oracle example records `ctx.validFrom()` as the time of a price, and the shop that reads it checks the age
+the same way:
+
+```java title="examples/oracle/src/main/java/org/julclang/state/examples/oracle/Shop.java"
+Require.that(ctx.validFrom().subtract(price.updatedAt()).compareTo(cfg.maxAgeMs()) <= 0, "stale price");
+```
+
+If your contract accrues by time (interest, vesting), lower `maxValidityMs` to what the business can tolerate.
+
+## Short horizons and near deadlines
+
+Two practical limits follow from the window:
+
+1. **The ledger's horizon.** The ledger converts a validity bound to time only within its stability window. On Yaci
+   DevKit that is a few minutes, and a 10-minute TTL fails with `PastHorizon`. Keep the TTL short on DevKit (the
+   examples and the page defaults use 20 seconds).
+2. **`Clock.before` needs the whole window before the deadline.** With a 10-minute TTL, a call 5 minutes before the
+   deadline fails `Clock.before(ctx, deadline)` even though "now" is before it. Use a TTL shorter than the shortest
+   deadline gap you care about, or put the deadline in a state field and use `@ValidBefore`, which shortens the
+   window for you.
+
+`Clock.after` and `@ValidAfter` depend on the window's start, which is the chain tip's slot: a call made just after the
+deadline is refused until the tip has passed it. The examples wait a couple of seconds past a deadline before calling.
+
+## Pitfalls
+
+- **Using `ctx.validTo()` as "now"** for something that must not be early, or `validFrom` for something that must not
+  be late. Pick the bound that is safe for the rule.
+- **Deadlines in seconds.** All times are POSIX **milliseconds**, as `BigInteger`. `System.currentTimeMillis()` in
+  Java, `Date.now()` in JavaScript.
+- **A long TTL on DevKit.** `PastHorizon`, or refusals near deadlines. 20 seconds works.
+- **Time annotations on `@Init`.** Not allowed: there is no current state. Use `Clock` in the body.
+
+## Reference
+
+- [State API](/reference/state-api/): `Clock`, `Ctx`; [Annotations](/reference/annotations/): `@ValidAfter`, `@ValidBefore`
+- Sources: [`Clock.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Clock.java),
+  [`Ctx.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Ctx.java),
+  [`Window.java`](https://github.com/bloxbean/joust/blob/main/julc-state-runtime/src/main/java/org/julclang/state/runtime/Window.java) (how the client picks the window)
+- ADR-0001: D3 (`Ctx` time fields), I11, F9 (`IntervalLib`), §10 (trust radius), §15 F15 and F18 (horizon, near deadlines)
+- [Networks and chain providers](/apps/networks-and-providers/) for TTLs per network
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Vault tutorial" href="/tutorials/vault/" description="A time-locked withdraw with @ValidAfter." />
+<LinkCard title="Escrow and crowdfunding" href="/tutorials/escrow-crowdfund/" description="Deadlines with Clock.after and Clock.before." />
+<LinkCard title="Require and errors" href="/contracts/require-and-errors/" description="How refusals reach you, and debugging." />
+<LinkCard title="Reads and composition" href="/contracts/reads-and-composition/" description="Fresh oracle reads and composed windows." />
+</CardGrid>

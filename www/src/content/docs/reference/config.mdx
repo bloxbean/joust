@@ -1,0 +1,131 @@
+---
+title: joust.config.json
+description: Every key of a JOUST project's joust.config.json, with its default, which command reads it, and how networks merge over the built-in ones.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
+`joust.config.json`, at the project's root, tells the `joust` CLI and the Vite plugin where the contracts are, where
+the build goes, which networks to use and how to deploy. Every key is optional: a missing file means the defaults.
+The source of truth is [`js/joust/src/config.js`](https://github.com/bloxbean/joust/blob/main/js/joust/src/config.js);
+this page lists every key the package reads.
+
+The template's config:
+
+```json title="joust.config.json"
+{
+  "contracts": "contracts",
+  "out": "build/joust",
+  "network": "devkit",
+  "networks": {
+    "devkit": { "chain": "http://localhost:8080/api/v1", "admin": "http://localhost:10000", "networkId": 0 }
+  }
+}
+```
+
+## Top-level keys
+
+| Key | Default | Read by | Meaning |
+|---|---|---|---|
+| `contracts` | `"contracts"` | `build`, `dev` | the folder of `.java` and `.jsc` sources (`dev` watches it) |
+| `out` | `"build/joust"` | every command, the Vite plugin | the build folder: `contracts.json`, clients, deployments |
+| `network` | `"devkit"` | every command, the Vite plugin | the default network; `--network` overrides it |
+| `networks` | `devkit`, `preview` | every command, the Vite plugin | the networks, by name (below) |
+| `params` | none | `deploy`, `dev` | `@Params` values per contract, by full title or simple name: `{ "<contract>": { ... } }` in the description's JSON form |
+| `dev.port` | `5178` | `dev`, `serve` | the port to serve on; `--port` overrides it |
+| `dev.ttlMs` | 20 000 on a DevKit, 180 000 elsewhere | `dev`, the Vite plugin | the TTL of transactions prepared for pages (the page worker, `joust dev`'s prepare service) |
+| `page` | `"page"` if it exists, else `"."` | `dev` | the page folder `joust dev` serves (with Vite when it holds `index.html` and the project has `vite`) |
+
+`joust build`'s `--src` and `--out` flags override `contracts` and `out` for one run.
+
+## Networks
+
+Each entry of `networks` describes one chain:
+
+| Key | Default | Read by | Meaning |
+|---|---|---|---|
+| `chain` | (required) | every command | a Blockfrost-style chain API: Blockfrost, or Yaci Store's `/api/v1`. `dev` and `serve` probe it and proxy it at `/chain` |
+| `networkId` | none (runtimes then use `0`) | every command, the Vite plugin | `0` for test networks, `1` for mainnet; give it always |
+| `admin` | none | every command | a Yaci DevKit admin API. Marks the network as a DevKit: its clock is read from it, `deploy` may use a local key topped up from its faucet, `/dev/topup` is served, and page TTLs are short |
+| `clock` | from `admin` | every command, the Vite plugin | `{ "zeroSlot", "zeroTimeMs", "slotLengthMs" }`; required when there is no `admin` |
+| `projectIdEnv` | none | every command | the environment variable holding the chain API's project id (sent as the `project_id` header); a command stops if it is not set |
+| `projectId` | none | every command | the project id itself, when `projectIdEnv` is not given. Avoid it: the config file is easy to commit |
+| `explorer` | none | `dev`, the Vite plugin | a block explorer's transaction page, `{tx}` standing for the hash; pages link their transactions there |
+| `pageChain` | `"/chain"` | the Vite plugin | the chain API a **built** page calls: a URL a browser may use directly. Without it, the page uses `/chain` on its own origin |
+| `start` | none | `dev`, `serve` | a shell command that starts the network when its APIs do not answer (for example `"yaci-devkit up --enable-yaci-store"`); they wait up to three minutes |
+| `provider` | Blockfrost-style | `deploy` | `"ogmios"` makes `joust deploy` read the chain through Ogmios |
+| `ogmios` | `"http://localhost:1337"` | `deploy` | Ogmios' URL, with `"provider": "ogmios"` |
+
+<Aside type="note" title="Ogmios is for deploy only">
+`provider` and `ogmios` change only how `joust deploy` reads the chain. `joust dev` and `joust serve` always attach to
+the network's `chain` and proxy it at `/chain`, and their runtimes read it. In your own code, pass
+`ogmiosProvider(url)` to `joustRuntime({ provider })`.
+</Aside>
+
+## Built-in networks
+
+```js title="js/joust/src/config.js"
+export const DEFAULTS = {
+  contracts: 'contracts',
+  out: 'build/joust',
+  network: 'devkit',
+  networks: {
+    // Yaci DevKit: Yaci Store's Blockfrost-compatible API, and the admin API (slot clock, faucet).
+    devkit: { chain: 'http://localhost:8080/api/v1', admin: 'http://localhost:10000', networkId: 0,
+      explorer: 'http://localhost:5173/transactions/{tx}' },   // DevKit's Yaci Viewer
+    // Cardano preview through Blockfrost (its project id from the environment, never the config). Clock from preview's
+    // genesis: system start 1666656000, one-second slots from slot 0 (checked against the tip, 2026-11-08).
+    preview: {
+      chain: 'https://cardano-preview.blockfrost.io/api/v0', projectIdEnv: 'BLOCKFROST_PREVIEW_PROJECT_ID', networkId: 0,
+      clock: { zeroSlot: 0, zeroTimeMs: 1666656000000, slotLengthMs: 1000 },
+      explorer: 'https://preview.cardanoscan.io/transaction/{tx}',
+    },
+  },
+};
+```
+
+## The merge rule
+
+`loadConfig` merges in two levels:
+
+1. **Top level:** the project's keys replace the defaults' (`{ ...DEFAULTS, ...config }`). Keys the defaults do not
+   have, such as `params`, `dev` and `page`, are taken as they are.
+2. **Networks:** each network in the project's `networks` is merged **over the built-in network of the same name**,
+   key by key (`{ ...builtIn, ...yours }`). Networks you do not mention stay as built in; a new name is taken as it is.
+
+So this config keeps all of DevKit's built-in keys, adds `start`, and leaves `preview` untouched:
+
+```json title="joust.config.json"
+{
+  "networks": {
+    "devkit": { "start": "yaci-devkit up --enable-yaci-store" }
+  }
+}
+```
+
+The merge is shallow within a network: giving `clock` replaces the whole clock object.
+
+## Resolving a network
+
+When a command uses a network, `network(config, name)`:
+
+1. fails with `no network <name> in joust.config.json` if it is not defined;
+2. takes its `clock`, or reads it from its `admin` API, or fails with
+   `network <name>: give its clock { zeroSlot, zeroTimeMs, slotLengthMs } in joust.config.json`;
+3. reads the project id from the variable `projectIdEnv` names (failing if it is unset), else takes `projectId`.
+
+`joust dev` and `joust serve` first check that the chain API answers (`/blocks/latest`) and, for a DevKit, that the
+admin API does, running `start` if they do not.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Networks and chain providers" href="/apps/networks-and-providers/" description="Networks, providers, the /chain proxy, clocks and TTLs." />
+  <LinkCard title="@julclang/joust (CLI, Vite)" href="/reference/joust-cli/" description="The commands that read this file." />
+  <LinkCard title="Deploy to preview" href="/tutorials/deploy-preview/" description="The built-in preview network in use." />
+  <LinkCard title="The joust CLI and projects" href="/apps/cli-and-projects/" description="The project layout around this file." />
+</CardGrid>

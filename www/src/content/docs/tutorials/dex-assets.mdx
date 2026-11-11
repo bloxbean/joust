@@ -1,0 +1,246 @@
+---
+title: "DEX: native assets and LP tokens"
+description: Run a constant-product AMM that holds a token reserve, mints and burns LP tokens and swaps with slippage bounds; then a look at an NFT marketplace.
+---
+
+import { Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+In this tutorial you run `examples/dex`: a constant-product automated market maker (AMM) for one ADA/token pair. The
+pool holds both reserves in its UTxO, mints LP (liquidity provider) tokens under the contract's own policy, and swaps
+both ways with a 0.3% fee and a minimum-output bound. Every piece of
+[native assets, mints and sends](/contracts/assets-mints-sends/) appears: `Funds`, `accepted`, `mint` and `Send`. At
+the end you look at `examples/market`, an NFT marketplace whose listings are owned objects holding their NFT.
+
+<Aside type="caution" title="Experimental, pre-release">
+JOUST is experimental and pre-release (not for production). The tutorial runs in a JOUST checkout with JDK 25; release
+candidates for your own projects are in the BloxBean release repository (see [Quick start: Java](/start/quick-start-java/)).
+You also need Yaci DevKit: `yaci-devkit up --enable-yaci-store`.
+</Aside>
+
+## The contract
+
+<Steps>
+
+1. **The state and the reserves.**
+
+   ```java title="examples/dex/src/main/java/org/julclang/state/examples/dex/Dex.java"
+   @StateContract(maxDatumBytes = 256, assetSlots = 2)
+   public class Dex {
+
+       public record Pool(byte[] admin, byte[] tokenPolicy, byte[] tokenName, byte[] lpName, BigInteger lpSupply) {}
+
+       public record Moved(Pool state, JulcList<Payout> payouts, JulcList<Send> sends, Value mint, Value accepted) {}
+       public record Closed(JulcList<Payout> payouts, JulcList<Send> sends) {}
+   ```
+
+   The state does not store the reserves. They are what the UTxO holds: `ctx.balance()` is the lovelace above the
+   deposit, and `funds.held()` the native assets (without the thread token). State and funds cannot drift apart.
+   `assetSlots = 2` sizes the deposit for the two assets the UTxO may hold.
+
+   *What this taught:* let the value be the source of truth for amounts; keep only what the value cannot say in the
+   state.
+
+2. **Opening a pool.**
+
+   ```java
+   /** Opens an empty pool for {@code (tokenPolicy, tokenName)}; its LP token is named after the pool id. */
+   @Init
+   public static Pool open(byte[] tokenPolicy, byte[] tokenName, Ctx ctx, Funds funds) {
+       Require.that(tokenPolicy.length == 28, "token policy must be 28 bytes");
+       return new Pool(ctx.caller(), tokenPolicy, tokenName, CryptoLib.blake2b_224(funds.self()), BigInteger.ZERO);
+   }
+   ```
+
+   `funds.self()` is the new instance's id. Naming the LP token `blake2b_224(self)` (28 bytes: a user-kind name, not
+   a reserved one) gives each pool its own LP token, so one pool's LP tokens can never redeem another's reserves.
+
+3. **Adding liquidity: accept, mint, send.**
+
+   ```java
+   @Action @Payable
+   public static Moved addLiquidity(Pool p, BigInteger tokenIn, Ctx ctx, Funds funds) {
+       BigInteger adaIn = ctx.received();
+       Require.that(adaIn.signum() > 0 && tokenIn.signum() > 0, "add both ADA and tokens");
+       BigInteger reserveAda = ctx.balance();
+       BigInteger reserveToken = Assets.quantity(funds.held(), p.tokenPolicy(), p.tokenName());
+       BigInteger minted = p.lpSupply().signum() == 0 ? adaIn
+               : adaIn.multiply(p.lpSupply()).divide(reserveAda).min(tokenIn.multiply(p.lpSupply()).divide(reserveToken));
+       Require.that(minted.signum() > 0, "deposit too small");
+       Value lp = Assets.of(funds.policy(), p.lpName(), minted);
+       Pool next = new Pool(p.admin(), p.tokenPolicy(), p.tokenName(), p.lpName(), p.lpSupply().add(minted));
+       return new Moved(next, Payouts.none(), Sends.of(wallet(ctx.caller()), lp, new OutputDatum.NoOutputDatum()), lp,
+               Assets.of(p.tokenPolicy(), p.tokenName(), tokenIn));
+   }
+   ```
+
+   The result says exactly what happens to value: `accepted` is the `tokenIn` tokens the provider puts in (the
+   validator requires it to equal what was offered, so nobody can slip junk tokens in), `mint` is the new LP tokens,
+   and `sends` delivers them to the provider's enterprise address. The validator checks the state output's value is
+   exactly the input plus the ADA and tokens received, plus the mint, minus the send.
+
+4. **Swaps with slippage bounds.**
+
+   ```java
+   /** Swaps {@code ctx.received()} lovelace for at least {@code minOut} tokens. */
+   @Action @Payable
+   public static Moved swapAdaForToken(Pool p, BigInteger minOut, Ctx ctx, Funds funds) {
+       BigInteger out = amountOut(ctx.received(), ctx.balance(), Assets.quantity(funds.held(), p.tokenPolicy(), p.tokenName()));
+       Require.that(out.signum() > 0 && out.compareTo(minOut) >= 0, "slippage: output below minOut");
+       return new Moved(p, Payouts.none(),
+               Sends.of(wallet(ctx.caller()), Assets.of(p.tokenPolicy(), p.tokenName(), out), new OutputDatum.NoOutputDatum()),
+               Assets.none(), Assets.none());
+   }
+
+   /** Output of a swap of {@code in} into reserves {@code (reserveIn, reserveOut)}, after the 0.3 % fee. */
+   public static BigInteger amountOut(BigInteger in, BigInteger reserveIn, BigInteger reserveOut) {
+       BigInteger inWithFee = in.multiply(BigInteger.valueOf(997));
+       return reserveOut.multiply(inWithFee).divide(reserveIn.multiply(BigInteger.valueOf(1000)).add(inWithFee));
+   }
+   ```
+
+   `amountOut` is plain static Java: the off-chain client calls it to quote a swap, and the validator runs the same
+   code. The swap state is unchanged (the reserves are the value), and `minOut` protects the trader if another swap
+   lands first. `swapTokenForAda` is the mirror image: it accepts tokens and pays ADA with a `Payout`.
+
+5. **Removing liquidity: burn.** `removeLiquidity` accepts the LP tokens (`accepted = lpTokens`) and burns them
+   (`mint = Assets.subtract(Assets.none(), lpTokens)`), paying out the provider's share of both reserves. `close`
+   requires `lpSupply` zero and sends any leftover token dust to the admin.
+
+   *What this taught:* minting is a negative or positive `Value` in the result; the policy only lets the transition
+   that declared it mint, exactly that much.
+
+</Steps>
+
+## Run it
+
+<Steps>
+
+1. **Harness tests.**
+
+   ```sh
+   ./gradlew :examples:dex:test --tests '*DexTest'
+   ```
+
+   `DexTest` opens a pool, adds the first liquidity (LP minted to the provider), swaps both ways and removes liquidity
+   (LP burned), each through the compiled validator, the mint policy and the output verifier, with the attack suite:
+   a foreign token added to the state output, a send short by one unit, a send's claim missing or duplicated, one LP
+   token too many minted, a `ByAction` naming another input.
+
+2. **The DevKit flow.**
+
+   ```sh
+   ./gradlew :examples:dex:test --tests '*DexDevnetTest'
+   ```
+
+   ```java title="examples/dex/src/test/java/org/julclang/state/examples/dex/DexDevnetTest.java"
+   byte[] name = "HOSKY".getBytes(StandardCharsets.UTF_8);
+   byte[] policy = HexUtil.decodeHexString(DevKit.mintToken(lp, "HOSKY", 1_000_000));
+
+   var dex = DexClient.deploy(runtime, admin, policy, name);
+   Value tokens = Assets.of(policy, name, BigInteger.valueOf(100_000));
+   dex.addLiquidity(lp, BigInteger.valueOf(100_000), ADA.multiply(BigInteger.valueOf(100)), tokens);
+
+   // ADA -> token, with slippage protection.
+   BigInteger expect = Dex.amountOut(ADA.multiply(BigInteger.TEN), ADA.multiply(BigInteger.valueOf(100)),
+           BigInteger.valueOf(100_000));
+   assertThrows(RequireException.class, () -> dex.swapAdaForToken(trader, expect.add(BigInteger.ONE),
+           ADA.multiply(BigInteger.TEN), Assets.none()), "minOut above the quote");
+   dex.swapAdaForToken(trader, expect, ADA.multiply(BigInteger.TEN), Assets.none());
+   ```
+
+   The test mints a token on DevKit, opens a pool, and adds 100 ADA and 100,000 HOSKY: the provider receives 100,000,000
+   LP tokens (the first deposit mints its lovelace). A 10 ADA swap quotes 9,066 HOSKY; asking for one more is refused
+   on the JVM before anything is submitted; asking for the quote succeeds. The trader then sells half back, the
+   provider removes all liquidity (every LP token burned), and the admin closes the empty pool.
+
+   In the Java client an asset-aware method takes its arguments, then the lovelace paid, then the native assets
+   offered (`funds.received`).
+
+   *What this taught:* the quote and the check are one function; the bound is what makes a swap safe to sign.
+
+3. **From JavaScript.** The npm runtime runs the same flow in Node:
+
+   ```js title="js/joust-runtime/test/examples.test.js (Dex)"
+   const { policy } = await devkitMint(CSL, rt.chain, lp, 'HOSKY', 1_000_000n);
+   const name = Buffer.from('HOSKY').toString('hex');
+   const dex = await contract('Dex', admin);
+   const d = dex.at((await dex.deploy(admin, { tokenPolicy: policy, tokenName: name })).instance);
+   await d.call(lp, 'addLiquidity', { tokenIn: 100_000n }, { lovelace: 100n * ADA, assets: [[policy, [[name, 100_000n]]]] });
+   const pool = await d.state();
+   const lpUnit = dex.deployment.policy + pool.lpName;
+
+   // ADA -> token, with slippage protection: amountOut(in, reserveIn, reserveOut) with the 0.3% fee.
+   const amountOut = (i, rIn, rOut) => (i * 997n * rOut) / (rIn * 1000n + i * 997n);
+   const expect = amountOut(10n * ADA, 100n * ADA, 100_000n);
+   await assert.rejects(d.call(trader, 'swapAdaForToken', { minOut: expect + 1n }, { lovelace: 10n * ADA }));
+   await d.call(trader, 'swapAdaForToken', { minOut: expect }, { lovelace: 10n * ADA });
+
+   // The provider takes its liquidity out: LP burned.
+   const all = (await d.state()).lpSupply;
+   await d.call(lp, 'removeLiquidity', { lp: all }, { lovelace: 0n, assets: [[dex.deployment.policy, [[pool.lpName, all]]]] });
+   ```
+
+   A payment with assets is `{ lovelace, assets: [[policy, [[name, quantity]]]] }`, all hex and `bigint`.
+
+</Steps>
+
+## A look at the marketplace
+
+`examples/market` combines assets with [owned objects](/contracts/owned-objects/). Each listing is an owned object
+that holds the NFT it sells, so listings never contend:
+
+```java title="examples/market/src/main/java/org/julclang/state/examples/market/Market.java"
+@StateContract(maxDatumBytes = 384, assetSlots = 1)
+public class Market {
+
+    public record Config(byte[] admin, BigInteger feeBps, Address royaltyVault, BigInteger royaltyBps, boolean paused) {}
+
+    @Owned
+    public record Listing(byte[] seller, byte[] nftPolicy, byte[] nftName, BigInteger price) {}
+
+    /** Buys a listing: pays exactly its price, receives the NFT. */
+    @OwnedDestroy @Payable
+    public static Sold buy(Listing l, @Shared Config c, Ctx ctx, Funds funds) {
+        Require.that(!c.paused(), "the market is paused");
+        Require.that(ctx.received().compareTo(l.price()) == 0, "pay exactly the price");
+        Require.that(!ByteStringLib.equals(ctx.caller(), l.seller()), "the seller cannot buy their own listing");
+        BigInteger fee = l.price().multiply(c.feeBps()).divide(BigInteger.valueOf(10_000));
+        BigInteger royalty = l.price().multiply(c.royaltyBps()).divide(BigInteger.valueOf(10_000));
+        // The seller gets the price less fee and royalty, plus the listing's deposit (ctx.balance()).
+        JulcList<Payout> payouts = Payouts.of(l.seller(), l.price().subtract(fee).subtract(royalty).add(ctx.balance()));
+        JulcList<Payout> withFee = fee.signum() > 0 ? Payouts.add(payouts, c.admin(), fee) : payouts;
+        JulcList<Send> nft = Sends.of(wallet(ctx.caller()), funds.held(), new OutputDatum.NoOutputDatum());
+        JulcList<Send> sends = royalty.signum() > 0
+                ? Sends.add(nft, c.royaltyVault(), Assets.lovelace(royalty),
+                        Datum.inline(royalty(l)))
+                : nft;
+        return new Sold(withFee, sends, Assets.none());
+    }
+}
+```
+
+- `offer` is a `@Payable` `@OwnedInit` that accepts exactly one NFT (`accepted`): a junk token alongside is refused
+  (`offer_withAJunkTokenAlongside_rejected`).
+- `buy` is a `@Payable` owned destroy: the buyer pays the price, the seller is paid with a payout, the NFT goes to the
+  buyer with a send, and the royalty goes to a script address with an inline `Royalty` datum. A royalty output that
+  is really a spent script's continuing output is refused (`royaltyClaimedByASpentVaultContinuation_rejected`).
+- `cancel` reads no market state, so the seller can always take the NFT back, even from a paused market.
+- `relist` moves a listing, NFT included, into another market, which admits it with `@Admits enlist`.
+
+Run it with `./gradlew :examples:market:test`. On DevKit the seller receives 92.5% of a 100 ADA price plus the
+listing's deposit, the buyer gets the NFT, and 5% goes to the royalty script.
+
+## What you built
+
+- A pool whose reserves are its value, with LP tokens minted and burned by its own policy.
+- Swaps that the trader bounds, quoted with the same function the validator runs.
+- A marketplace where each listing holds its NFT and every output counts for exactly one obligation.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Native assets, mints and sends" href="/contracts/assets-mints-sends/" description="The full rules and what the output verifier checks." />
+  <LinkCard title="Owned objects" href="/contracts/owned-objects/" description="Listings, moves and escape hatches." />
+  <LinkCard title="Oracle and composition" href="/tutorials/oracle-composition/" description="Read another contract's state and compose calls." />
+  <LinkCard title="Fees and script size" href="/contracts/fees-and-size/" description="What asset-aware contracts cost." />
+</CardGrid>

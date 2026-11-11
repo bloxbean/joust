@@ -1,0 +1,246 @@
+---
+title: Reads and composition
+description: Read another contract's state with @Reads, and put several contracts' calls in one atomic transaction with Compose, from Java and JavaScript.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Contracts work together. A shop prices its goods from an oracle; a market pays into a fee pot; a counter migrates to
+its next version. On Cardano this happens at the transaction level: one transaction spends several scripts' UTxOs,
+and each script checks its own part. JOUST gives you two tools for it (ADR-0011):
+
+- **`@Reads`**: a method parameter that reads another JOUST contract's state, through a reference input, checked on
+  chain;
+- **`Compose`**: one transaction built from several ordinary client calls, all or nothing.
+
+A *reference input* is a UTxO a transaction reads without spending it: its datum is visible to the scripts, and its
+own validator does not run.
+
+## `@Reads`: another contract's state
+
+The `oracle` example has a price feed and a shop that sells at the feed's price:
+
+```java title="examples/oracle/src/main/java/org/julclang/state/examples/oracle/Oracle.java"
+/** A price feed (ADR-0011): the publisher posts a price with the time it was set (the call's validity start). */
+@StateContract
+public class Oracle {
+
+    public record State(byte[] publisher, BigInteger price, BigInteger updatedAt) {}
+
+    @Action @SignedBy("publisher")
+    public static State post(State s, BigInteger price, Ctx ctx) {
+        Require.that(price.signum() > 0, "price must be positive");
+        return new State(s.publisher(), price, ctx.validFrom());
+    }
+}
+```
+
+```java title="examples/oracle/src/main/java/org/julclang/state/examples/oracle/Shop.java"
+@StateContract
+public class Shop {
+
+    @Params
+    public record Config(ForeignInstance oracle, BigInteger maxAgeMs) {}
+
+    public record State(byte[] owner, BigInteger sold) {}
+
+    /** Buys {@code qty} credits, paying {@code qty * price} at a price no older than {@code maxAgeMs}. */
+    @Action @Payable
+    public static State buy(State s, Config cfg, @Reads("params.oracle") Oracle.State price, BigInteger qty, Ctx ctx) {
+        Require.that(qty.signum() > 0, "buy at least one credit");
+        Require.that(ctx.validFrom().subtract(price.updatedAt()).compareTo(cfg.maxAgeMs()) <= 0, "stale price");
+        Require.that(ctx.received().compareTo(qty.multiply(price.price())) == 0, "pay exactly qty * price");
+        return new State(s.owner(), s.sold().add(qty));
+    }
+}
+```
+
+### The rules
+
+- **The source is pinned in params.** `@Reads("params.x")` names a `ForeignInstance(byte[] policy, byte[] instance)`
+  field of the contract's `@Params` record. Params are applied to the script at deploy, so the trusted contract and
+  instance are fixed then. A state field could be changed by an action; a param cannot. See
+  [Params, invariants and events](/contracts/params-invariants-events/).
+- **The parameter's type is the other contract's state record**, here `Oracle.State`.
+- **Placement:** the `@Params` record parameter comes right after the state, and `@Reads` parameters right after it.
+- **Not yet:** `@Reads` in a creation, in a move or an `@Admits` action, or in a `@Batched` action; and foreign state
+  holding MerkleMaps (a reference input has no proof path for map reads).
+
+### What the validator checks
+
+For each `@Reads` parameter, the reference input must:
+- hold exactly one token of `policy`, named `instance`, which is 32 bytes (an instance, not an object or intent);
+- sit at an address whose payment credential is the script `policy`;
+- carry an inline datum, decoded as the foreign state after a shape check (constructor 0 and the record's number of
+  fields), which refuses another version's layout.
+
+This is invariant I39. The runtime finds the reference input and adds it for you: the call looks like any other.
+
+<Aside type="caution" title="Freshness is your rule">
+A reference input's validator does not run, so an old oracle state stays readable. Give the source state a timestamp
+and check it, as `Shop.buy` checks `updatedAt` against `ctx.validFrom()` and `maxAgeMs`. See [Time](/contracts/time/).
+</Aside>
+
+### Deploying a reader
+
+The reader's params name the source's policy and instance, so deploy the source first:
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/oracle/src/test/java/org/julclang/state/examples/oracle/OracleDevnetTest.java"
+var oracle = OracleClient.deploy(runtime, publisher, BigInteger.valueOf(3_000_000));
+var cfg = new Shop.Config(new ForeignInstance(HexUtil.decodeHexString(oracle.instance().contract().policyId()),
+        HexUtil.decodeHexString(oracle.instanceId())), BigInteger.valueOf(600_000));
+var shop = ShopClient.deploy(runtime, cfg, shopOwner);
+
+shop.buy(buyer, BigInteger.TWO, BigInteger.valueOf(6_000_000));   // reads the oracle by reference
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="js/joust-runtime/test/examples.test.js (Oracle and Shop)"
+const oracle = await contract('Oracle', publisher);
+const o = oracle.at((await oracle.deploy(publisher, { price: 3_000_000n })).instance);
+// The shop's script carries its oracle (@Params); buy reads the oracle's state as a reference input (@Reads).
+const shop = await contract('Shop', shopOwner, { oracle: { policy: oracle.deployment.policy, instance: o.id }, maxAgeMs: 600_000n });
+const sh = shop.at((await shop.deploy(shopOwner, {})).instance);
+await sh.call(buyer, 'buy', { qty: 2n }, { lovelace: 6_000_000n });
+```
+
+`contract(name, payer, params)` is the test's helper around `rt.ensureDeployment(title, wallet, params)`. With
+`joust deploy`, params go in `joust.config.json` under `"params"`; see [joust.config.json](/reference/config/).
+
+</TabItem>
+</Tabs>
+
+If the source contract later migrates to a new version, a reader whose params pin it must migrate too.
+
+## `Compose`: several calls, one transaction
+
+`Compose` runs ordinary client calls inside one composition and submits them as one transaction: every call's checks
+pass, or nothing happens. On chain nothing changes: each validator checks only its own transition, so composing adds
+no new trust.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/oracle/src/test/java/org/julclang/state/examples/oracle/OracleDevnetTest.java"
+// A second oracle posts while the shop sells: one transaction.
+String tx = Compose.of(runtime, buyer)
+        .add(() -> shop.buy(buyer, BigInteger.ONE, BigInteger.valueOf(3_000_000)))
+        .add(() -> oracle2.post(publisher2, BigInteger.valueOf(5_000_000)))
+        .submit();
+```
+
+| Method | What it does |
+|---|---|
+| `Compose.of(runtime, payer)` | Starts a composition; `payer` pays the fee |
+| `add(Runnable call)` | Adds any client call: an action, a destroy, a deploy, an owned call |
+| `allowSharedSigners()` | Lets one key's signature count for several calls (refused by default) |
+| `submit()` | Builds, checks, submits and confirms; returns the transaction hash |
+| `prepare()` | Builds and checks it for a wallet to sign, without signing ([Wallets](/apps/wallets/)) |
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="js/joust-runtime/test/examples.test.js (Fees)"
+await rt.compose(buyer, [
+  { contract: stall, method: 'sell', instance: stallId, args: { price: 10n * ADA }, pay: { lovelace: 10n * ADA } },
+  { contract: pot, method: 'collect', instance: potId, args: {} },
+]);
+```
+
+Each step is `{ contract, method, args, pay, instance, object, into, cosigners }`, where `contract` is a
+`JoustContract` (a generated client's `.contract`). `rt.compose(wallet, steps)` is the runtime's shortcut for
+`runComposed({ service, chain, api, steps })`: the engine prepares the transaction, the page verifies each call and the
+whole, and one wallet signature covers it. See [JavaScript clients](/apps/javascript-clients/).
+
+</TabItem>
+</Tabs>
+
+### How it builds the transaction
+
+The calls run in *capture mode*: instead of submitting, each client call writes its inputs, outputs, redeemers and
+signers into one shared transaction.
+
+1. **Windows first.** A first pass learns every call's validity window. The second pass runs every call in their
+   intersection, so each method's `Ctx` equals the final bounds. A call whose result depends on time is never reused
+   with another window.
+2. **Shared verifiers.** Each verifier withdrawal (map, output) appears once, with every call's claims merged, and the
+   output registry is rebuilt from the final output order.
+3. **Checks after balancing.** Every state output, payout and send is verified after balancing, before submission.
+
+**Refused before building:**
+- the same UTxO spent by two calls (for example two calls on one instance);
+- two calls minting under one policy (the ledger allows one mint redeemer per policy);
+- an empty common window;
+- a key that signs for more than one call, unless you call `allowSharedSigners()`.
+
+<Aside type="note" title="Why shared signers are opt-in">
+A signature on a transaction counts for every `@SignedBy` and `@Quorum` check in it. If Ann signs for her own call,
+her signature also satisfies a second call's `@SignedBy("ann")`. That is how the ledger works, so `Compose` asks you
+to say you mean it.
+</Aside>
+
+A composition can be nested: a call that composes internally (such as an owned move's `<move>Admitted`) joins the
+outer transaction. Owned-object moves and [deposits](/contracts/deposits/) run only inside a composition.
+
+## Migration is a composition
+
+Moving an instance to a new contract version is two calls in one transaction: the old version's `@Destroy
+@MigrateTo(...)` and the new version's `@Migrate` creation. Each side names the other, and the funds move only into
+the named successor (I41).
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/upgrade (CounterV1 to CounterV2)"
+var adopted = new CounterV2Client[1];
+String tx = Compose.of(runtime, admin)
+        .add(() -> v1.upgrade(admin))
+        .add(() -> adopted[0] = CounterV2Client.adopt(runtime, cfg, admin, v1.instance()))
+        .submit();
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="js/joust-runtime/test/examples.test.js (Upgrade)"
+const steps = [
+  { contract: v1, method: 'upgrade', instance: old.id },
+  { contract: v2, method: 'adopt', instance: old.id },
+];
+const r = await rt.compose(admin, steps);
+const adopted = r.report.calls[1].created;    // the new instance's id
+```
+
+</TabItem>
+</Tabs>
+
+Migration is not supported yet for contracts with MerkleMaps, owned objects or native assets.
+[Upgrades and migration](/contracts/upgrades/) covers the design.
+
+## Limits
+
+- **One transaction's limits apply:** 16 KB of transaction, and the CPU and memory budget (10,000M CPU, 14M memory on
+  mainnet). Each contract adds its reference script's size fee and its execution.
+- **One mint per policy per transaction,** so two calls that both mint under one contract cannot compose.
+- **Foreign validators** that ignore JOUST's payout tags and output registry can still be double-satisfied by a JOUST
+  output. `Compose` with them needs care (ADR-0007 D5).
+
+## Reference
+
+- [Java runtime API: `Compose`](/reference/java-runtime-api/), [@julclang/joust-runtime](/reference/joust-runtime/),
+  [Annotations: `@Reads`](/reference/annotations/)
+- ADR-0011: [Architecture decisions](/project/architecture-decisions/)
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Tutorial: oracle and composition" href="/tutorials/oracle-composition/" description="The oracle and shop end to end." />
+  <LinkCard title="Deposits" href="/contracts/deposits/" description="Pay into another contract's instance in a composed transaction." />
+  <LinkCard title="Upgrades and migration" href="/contracts/upgrades/" description="@MigrateTo and @Migrate in full." />
+  <LinkCard title="Wallets" href="/apps/wallets/" description="Compose.prepare() and CIP-30 signing." />
+</CardGrid>

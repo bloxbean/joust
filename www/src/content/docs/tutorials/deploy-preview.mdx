@@ -1,0 +1,239 @@
+---
+title: Deploy to preview
+description: Take the Counter dApp from Yaci DevKit to Cardano's preview testnet, run it with Eternl or Lace, and ship the page as static files.
+---
+
+import { Aside, Steps, LinkCard, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
+Yaci DevKit is private and fast, but browser wallets cannot join it. **Preview** is a public Cardano testnet: its ADA
+(tADA) is free from a faucet, and Eternl, Lace and other CIP-30 wallets work there. In this tutorial you deploy the
+template's Counter on preview, use it with a real wallet, then build the page as static files you can host anywhere.
+
+You need the app from the [Counter dApp tutorial](/tutorials/counter-dapp/) or the
+[npm quick start](/start/quick-start-npm/), built with `npm run build`.
+
+<Aside type="caution" title="Pre-release: the npm packages come from a local registry">
+The npm packages are not on npmjs.org yet. Install them from a local registry, as the
+[npm quick start](/start/quick-start-npm/#prerequisites) shows (`npm_config_registry=http://127.0.0.1:4873/`).
+</Aside>
+
+## What changes on preview
+
+`preview` is a built-in network: you do not need to add it to `joust.config.json`. Its definition, from
+[`js/joust/src/config.js`](https://github.com/bloxbean/joust/blob/main/js/joust/src/config.js):
+
+```js title="js/joust/src/config.js"
+preview: {
+  chain: 'https://cardano-preview.blockfrost.io/api/v0', projectIdEnv: 'BLOCKFROST_PREVIEW_PROJECT_ID', networkId: 0,
+  clock: { zeroSlot: 0, zeroTimeMs: 1666656000000, slotLengthMs: 1000 },
+  explorer: 'https://preview.cardanoscan.io/transaction/{tx}',
+},
+```
+
+| | DevKit | preview |
+|---|---|---|
+| Chain API | Yaci Store, `http://localhost:8080/api/v1` | Blockfrost, with your project id |
+| Slot clock | read from DevKit's admin API | preview's genesis: slot 0 at 1666656000 s, one-second slots |
+| Deployer key | made by `joust deploy`, funded from the faucet | yours, from `JOUST_MNEMONIC` |
+| Page wallets | the in-page DevKit key | Eternl, Lace, any CIP-30 wallet |
+| Transaction TTL (pages) | 20 s | 180 s |
+| Explorer links | Yaci Viewer | Cardanoscan (preview) |
+
+## 1. Credentials
+
+<Steps>
+
+1. **A Blockfrost project for preview.** Create one at [blockfrost.io](https://blockfrost.io) and export its id:
+
+   ```sh
+   export BLOCKFROST_PREVIEW_PROJECT_ID=preview...
+   ```
+
+   JOUST reads it from the environment only, never from `joust.config.json`. `joust dev` and `joust serve` keep it in
+   the server and proxy the chain API to the page at `/chain`, so it never reaches a browser.
+
+2. **A funded deployer key.** `joust deploy` pays for publishing the reference script with the key in
+   `JOUST_MNEMONIC`, a BIP39 mnemonic:
+
+   ```sh
+   export JOUST_MNEMONIC="word1 word2 ... word24"
+   ```
+
+   It pays from the mnemonic's first base address (payment key `m/1852'/1815'/0'/0/0`, as cardano-client-lib derives
+   it). Print that address, then send it tADA from the Cardano testnet faucet:
+
+   ```sh
+   node --input-type=module -e "
+   import { deriveAccount } from '@julclang/joust-runtime';
+   console.log(deriveAccount(process.env.JOUST_MNEMONIC, 0, 0).address);"
+   ```
+
+   The deployment locks ADA in the reference-script output (its minimum ADA grows with the script's size), plus the
+   fee.
+
+</Steps>
+
+<Aside type="danger" title="Keep deployer keys apart">
+Use a key made for preview, holding test ADA only. Never put a mainnet mnemonic in `JOUST_MNEMONIC`, in a shell
+history or in a CI log.
+</Aside>
+
+## 2. Deploy
+
+```sh
+npm run build
+npm run deploy:preview      # joust deploy --network preview
+```
+
+For each contract, `joust deploy` asks the runtime engine for its deployment. If the reference script is not on chain
+yet, it has the engine build the publishing transaction, checks that it pays only the contract's address (with the
+script) and the deployer, signs it with `JOUST_MNEMONIC`'s key and submits it. Then it writes
+`build/joust/deployments.preview.json`: the contract's policy (its script hash), address and reference script, the
+network id, the chain URL and the clock.
+
+```txt
+app.Counter: addr_test1w... (reference script 9a3c...#0)
+wrote .../build/joust/deployments.preview.json
+```
+
+Running it again publishes nothing: the script is found at the contract's address. A changed contract has another
+script hash, so it is published as a new deployment.
+
+<Aside type="note">
+`joust deploy` stops with `set JOUST_MNEMONIC to deploy on preview` when the key is missing, and with
+`network preview reads its chain API's project id from BLOCKFROST_PREVIEW_PROJECT_ID: set it` when the project id is.
+</Aside>
+
+## 3. Run the page with a browser wallet
+
+```sh
+npm run dev:preview         # joust dev --network preview
+```
+
+`joust dev` attaches to Blockfrost, builds, deploys (a no-op when nothing changed) and serves the page at
+http://127.0.0.1:5178, with the chain at `/chain`.
+
+<Steps>
+
+1. Install Eternl or Lace, and switch it to the **preview** network. Fund its address from the faucet.
+
+2. Reload the page. The wallet appears in the list (the page watches for extensions that inject late). Choose it and
+   press **Connect**, then approve in the wallet. The connector checks that the wallet is on a test network, and the
+   page checks its network id against the deployment's.
+
+3. **Create a counter.** The page prepares the transaction in its worker, from the UTxOs your wallet reports, verifies
+   it and shows the review dialog. Press **Sign in the wallet**: the wallet shows its own prompt, signs, and submits.
+
+4. Press **+1**, then **Close**. Each transaction hash links to Cardanoscan's preview explorer.
+
+</Steps>
+
+### What a call costs on preview
+
+ADR-0015 §13.11 records a maintainer's run of this page on preview with a browser wallet. The fees were:
+
+| Call | Fee |
+|---|---|
+| Create a counter | 303,656 lovelace |
+| `increment(1)` | 292,146 lovelace |
+| Close | 309,674 lovelace |
+
+So a Counter call costs about 0.29 tADA in fees. Each fee is the protocol's fixed part (by size), the reference-script
+fee (by the size of the script the transaction references; 29% of an increment's fee, issue #34) and the script's
+execution budget. The fees also overpay by one vkey witness, 4,563 lovelace (issue #33). Creating a counter also
+locks its minimum ADA in the counter's UTxO, which `close` pays back to the owner.
+
+## 4. Build the page as static files
+
+`joust dev` serves a page that reads its network from the dev server. For hosting, build it instead:
+
+```sh
+npm run build:page:preview  # vite build --mode preview
+npm run serve:preview       # joust serve --network preview
+```
+
+`vite build --mode preview` selects the `preview` network (Vite's mode names it). The Vite plugin then inlines into
+the page:
+
+- the network, its id, clock, TTL and explorer;
+- `deployments.preview.json` and `contracts.json` (run `deploy:preview` first: the build reads no chain);
+- the runtime engine's sha384 hashes.
+
+It copies the engine's two files into `dist/joust/engine-<id>/`. `joust serve` then serves `dist/` as plain static
+files, plus the chain proxy at `/chain`. It builds, deploys and bundles nothing. Open http://127.0.0.1:5178 and repeat
+the wallet run: it behaves exactly as under `joust dev`.
+
+## 5. Host it
+
+`dist/` can go on any static host. The page needs one thing the host must give it: a chain API.
+
+<Tabs>
+<TabItem label="A /chain proxy (default)">
+
+By default a built page reads the chain at `/chain` on its own origin. Put a proxy there that forwards to Blockfrost
+and adds the project id, as `joust serve` does
+([`js/joust/src/routes.js`](https://github.com/bloxbean/joust/blob/main/js/joust/src/routes.js)):
+
+| The page sends | The proxy forwards |
+|---|---|
+| `GET /chain/<path>?<query>` | `GET https://cardano-preview.blockfrost.io/api/v0/<path>?<query>` with the header `project_id: <your id>` |
+| `POST /chain/tx/submit` (body: CBOR, `content-type: application/cbor`) | the same `POST` to `.../tx/submit`, body and content type unchanged, with `project_id` |
+
+Return the upstream status, content type and body unchanged. `joust serve` also keeps Blockfrost's load-balancer
+affinity cookie (`__cflb`) for every upstream request, so its reads all reach one Blockfrost backend: worth doing in
+your own proxy too, since Blockfrost's backends can be a moment apart.
+
+</TabItem>
+<TabItem label="A public chain API (pageChain)">
+
+If you have a Blockfrost-compatible API that a browser may call directly (it needs no secret), name it as the
+network's `pageChain` and build again:
+
+```json title="joust.config.json"
+{
+  "networks": {
+    "preview": { "pageChain": "https://chain.example.org/api/v0" }
+  }
+}
+```
+
+The network is merged over the built-in `preview`, so only `pageChain` changes. The page then needs no proxy.
+
+</TabItem>
+</Tabs>
+
+The page and its worker resolve the chain URL and the engine's URL against the page's address, not the worker's
+script. The default `/chain` is therefore at the root of the page's origin. To host the page under a sub-path, set
+Vite's `base`: the plugin builds the engine's URL from it.
+
+### Integrity of the engine
+
+The page's own code pins the engine's sha384 hashes. Its worker fetches the engine's script with
+`fetch(url, { integrity })`, and adds the Wasm module's hash to the one request that loads it. A browser then refuses
+an engine whose bytes differ, wherever it is served from. A tampered copy fails to start, and the page logs that the
+engine does not match its integrity hash. You can put the 20 MB engine on a CDN without trusting the CDN.
+
+And whatever builds a transaction, the page verifies it before the wallet signs. Neither the host, the CDN, the engine
+nor the chain API can make the wallet sign something other than the call the page shows.
+
+## What you learned
+
+- `preview` is built in: a Blockfrost project id and a funded deployer key are all it needs.
+- `joust deploy --network preview` publishes reference scripts once and writes `deployments.preview.json`, which
+  pages pin.
+- The same page runs with Eternl or Lace: the client only needs the CIP-30 API.
+- A built page is static files for one network. It needs a chain API: a `/chain` proxy that keeps the project id
+  secret, or a `pageChain`. The engine is checked by its hashes wherever it is served.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Networks and chain providers" href="/apps/networks-and-providers/" description="Custom networks, providers, clocks and TTLs." />
+  <LinkCard title="Pages: worker, Vite, static builds" href="/apps/pages/" description="The engine worker, the Vite plugin and SRI in depth." />
+  <LinkCard title="Wallets" href="/apps/wallets/" description="CIP-30 wallets, the review step and the dev wallet." />
+  <LinkCard title="joust.config.json" href="/reference/config/" description="Every key of a project's config." />
+</CardGrid>

@@ -1,0 +1,220 @@
+---
+title: "@julclang/joust-runtime"
+description: API reference of @julclang/joust-runtime - joustRuntime and its options, engineService, the page worker and engineWorker, mirrors, snapshots and DevKit helpers.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
+`@julclang/joust-runtime` calls JOUST contracts from JavaScript with no JVM. It holds the **runtime engine**: JOUST's
+off-chain runtime compiled to Wasm (a GraalVM Web Image), a pure function of a call request and a snapshot of the
+chain, with no I/O and no keys. The JavaScript layer fetches what the engine asks for from a chain provider, keeps
+MerkleMap mirrors, and hands the result to `@julclang/state-client`, which verifies it before a wallet signs. Source:
+[`js/joust-runtime/src`](https://github.com/bloxbean/joust/tree/main/js/joust-runtime/src).
+
+<Aside type="caution" title="Pre-release: from a local registry">
+Version `0.1.0-pre1-snapshot`, not on npmjs.org yet: install it from a local registry, as the
+[npm quick start](/start/quick-start-npm/#prerequisites) shows. Node 22 or newer; on Node 22 the package enables Wasm
+exception references itself (`--experimental-wasm-exnref`), so you pass no flag.
+</Aside>
+
+| Entry point | Contents |
+|---|---|
+| `@julclang/joust-runtime` | `joustRuntime`, `engineService`, mirrors, snapshots, DevKit helpers, and re-exports from `@julclang/state-client` |
+| `@julclang/joust-runtime/worker` | imported in a module worker, serves the runtime there |
+| `@julclang/joust-runtime/page` | `engineWorker`: a prepare service backed by that worker (no dependencies) |
+| `@julclang/joust-runtime/load` | `loadImage(jsFile)`: loads a JOUST engine image in Node |
+
+In a browser build, two internal modules switch to their browser twins through `package.json` `imports` with the
+`browser` condition: `#engine` (fetches and evaluates the engine with SRI) and `#file-map-store` (throws: no file
+system).
+
+## `joustRuntime(options)`
+
+```js
+import { joustRuntime } from '@julclang/joust-runtime';
+
+const rt = joustRuntime({ chainUrl, contracts, clock, networkId: 0, deployments, ttlMs: 20_000 });
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `provider` | `blockfrostProvider(chainUrl, { projectId, fetchImpl })` | a chain provider; backs both the engine's reads and `rt.chain` |
+| `chainUrl` | | instead of a provider: a Blockfrost-style API (Blockfrost, Yaci Store's `http://localhost:8080/api/v1`) |
+| `projectId` | | Blockfrost's project id, for `chainUrl` |
+| `fetchImpl` | `fetch` | the `fetch` for `chainUrl` |
+| `contracts` | (required) | `build/joust/contracts.json` |
+| `validators` | `[]` | `build/joust/validators.json`: plain JuLC validators, such as governors |
+| `clock` | (required) | `{ zeroSlot, zeroTimeMs, slotLengthMs }` |
+| `networkId` | `0` | `0` (test networks) or `1` (mainnet) |
+| `deployments` | `{}` | `{ [contract]: deployment }`, as `joust deploy` writes them |
+| `ttlMs` | `120_000` | how long a prepared transaction stays valid |
+| `mapMirror` | a new `mapMirror({ provider })` | MerkleMap mirrors |
+| `mapStore` | | instead of mirrors: the earlier node store (`memoryMapStore`, `fileMapStore`) |
+| `engine` | this package's `engine/` | where the engine is: `{ dir }` in Node, `{ url, integrity }` in a browser |
+| `prefetch` | on | `false` turns off fetching the up-front needs (tip, parameters, wallet, reference scripts, the target UTxO) before the first engine run |
+| `record` | | `(fixture) => void`: each prepared call as a replayable fixture (ADR-0015 I3) |
+| `CSL` | | ignored (earlier versions read transactions with it) |
+
+Contracts built by an incompatible toolchain are refused when the runtime is made: a description version other than
+2, or another major version (another minor while the major is 0) than the runtime's.
+
+### The runtime
+
+| Member | Signature | Description |
+|---|---|---|
+| `provider`, `api` | | the chain provider |
+| `chain` | | `chainOf(provider)`: the chain view a client verifies with |
+| `service` | | the engine as a prepare service; adds each call's deployment `params` and every pinned reference script to the request; also `deployment`, `publish`, `governor`, `mirror`, `rounds` (as `engineService`) |
+| `deployments` | | the deployments by contract title; `ensureDeployment` adds to it |
+| `options` | `options(contract, extra = {})` | `{ service, chain, deployment, ...extra }` for a generated client; `contract` is the title or the simple name |
+| `ensureDeployment` | `await ensureDeployment(contract, wallet, params?)` | the deployment, publishing the reference script first if needed (checked before signing), and JOUST's map or output verifier when the contract needs one |
+| `ensureGovernor` | `await ensureGovernor(name, params, wallet)` | `{ name, script, hash, rewardAddress }`: a plain validator from `validators` with its parameters applied (by name or in order), its stake credential registered once (checked by `verifyRegistration` before signing) |
+| `compose` | `compose(wallet, steps, extra = {})` | several calls in one transaction (`runComposed`); `steps`: `[{ contract, method, args, pay?, instance, object?, into?, cosigners? }]`, `extra`: `{ onReview?, limits? }` |
+
+`wallet` is a CIP-30 API object. A governor is used as `opts.governor = { governor, signers }` on the call it approves.
+
+## `engineService(options)`
+
+The engine as a prepare service, without the deployment handling `joustRuntime` adds. `joustRuntime` builds one.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `api` | (required) | a chain provider, or `blockfrostApi(url)`'s raw API |
+| `contracts` | (required) | `contracts.json` |
+| `clock` | (required) | the slot clock |
+| `networkId` | `0` | |
+| `ttlMs` | `120_000` | TTL of prepared transactions |
+| `maxRounds` | `64` | chain reads (one per engine run) before giving up |
+| `mapMirror` | `mapMirror({ provider: api })` | MerkleMap mirrors |
+| `unitsOf` | | `(call) => units`: the tokens a call touches, whose history rebuilds a map |
+| `mapStore` | | the earlier node store, instead of mirrors |
+| `prefetch` | | `async (call, snapshot) => void`: fills the up-front needs |
+| `record` | | fixtures, as above |
+| `engine` | | where the engine is |
+
+| Member | Signature | Resolves to |
+|---|---|---|
+| `prepare` | `prepare(request)` | `{ cbor, txHash, validTo, signers, plan }`, plus `instance` (init), `object` (ownedInit), `created` (intents, batches, compositions) |
+| `deployment` | `deployment(contract, address, params?)` | `{ contract, policy, address, networkId, referenceScripts }` |
+| `publish` | `publish(contract, address, params?)` | the unsigned transaction publishing the reference script, or `null` if published |
+| `governor` | `governor(kind, script, params, address)` | `deployment`: `{ script, hash, rewardAddress }`; `register`: the unsigned registration |
+| `mirror` | property | the `mapMirror`, or `null` with a `mapStore` |
+| `rounds` | property | how many engine runs each prepare took |
+
+Set `JOUST_DEBUG_NEEDS=1` to log each chain read the engine asks for.
+
+## The page worker
+
+### `@julclang/joust-runtime/worker`
+
+Importing it in a module worker makes the worker serve the runtime:
+
+```js title="page/engine.worker.js"
+import '@julclang/joust-runtime/worker';
+```
+
+It announces `{ joust: 'listening' }` once it takes messages, then answers `{ id, op, args }` messages with
+`{ id, ok: true, value }` or `{ id, ok: false, error }`. Its operations are what `engineWorker` calls: `init`,
+`prepare`, `mapValue` and `deployments`.
+
+### `engineWorker(worker, options)`
+
+From `@julclang/joust-runtime/page`:
+
+```js
+import { engineWorker } from '@julclang/joust-runtime/page';
+
+const service = engineWorker(new Worker(new URL('./engine.worker.js', import.meta.url), { type: 'module' }), options);
+```
+
+| Option | Meaning |
+|---|---|
+| `engine` | `{ url, integrity: { script, wasm } }`: where `joust-runtime.js` is served, its `.wasm` beside it, and their sha384 SRI hashes; a plain URL loads unchecked |
+| `contracts` | `contracts.json` |
+| `validators` | `validators.json` (optional) |
+| `chain` | a Blockfrost-style chain API, absolute or relative to the page |
+| `projectId` | a project id, only for a chain API that needs one and may see it |
+| `clock`, `networkId`, `ttlMs` | as for `joustRuntime` |
+| `deployments` | `{ [contract]: deployment }` |
+| `mirrorCache` | the IndexedDB database for mirrors (default `"joust-mirrors"`); `false`: in memory |
+
+`virtual:joust/network` from `@julclang/joust/vite` has every one of these fields.
+
+| Member | Signature | Description |
+|---|---|---|
+| `ready` | promise | resolves once the engine has loaded |
+| `prepare` | `prepare(request)` | as a prepare service |
+| `mapValue` | `mapValue(root, key, units = [])` | a MerkleMap value (hex), or `null` when absent; rebuilds an unknown root from the history of `units` |
+| `deployments` | `deployments(d)` | new deployments for the calls that follow |
+| `terminate` | `terminate()` | stops the worker; pending and later calls reject |
+
+See [Pages](/apps/pages/).
+
+### `loadEngine(o)`
+
+`loadEngine({ dir })` in Node, `loadEngine({ url, integrity })` in a browser: the engine's API, loaded once per process
+or worker. `joustRuntime` calls it; you rarely need it.
+
+## MerkleMap mirrors
+
+| Export | Signature | Description |
+|---|---|---|
+| `mapMirror` | `mapMirror({ provider?, cache? } = {})` | mirrors over Aiken's MPF: `get(root, key)`, `known(root)`, `answer(need, units)`, `stage(txHex)`, `sync(unit)`, `states` |
+| `levelMirrorCache` | `await levelMirrorCache(location)` | a persistent cache over `level`: LevelDB in Node (a directory), IndexedDB in browsers (a name); `close()` |
+| `claimsOf` | `claimsOf(data)` | the map claims in a map-verifier redeemer (Plutus data), or `null` |
+| `EMPTY_ROOT` | constant | the empty map's root: 32 zero bytes, hex |
+| `memoryMapStore` | `memoryMapStore(initial = {})` | the earlier node store, in memory |
+| `fileMapStore` | `fileMapStore(file)` | the earlier node store, in a JSON file (Node only) |
+
+See [MerkleMap mirrors](/apps/map-mirrors/).
+
+## Snapshots and providers
+
+| Export | Signature | Description |
+|---|---|---|
+| `blockfrostApi` | `blockfrostApi(baseUrl, { projectId?, fetchImpl? })` | raw reads `{ base, get(path, { allow404 }), provider }` (kept for earlier callers) |
+| `asProvider` | `asProvider(source)` | a provider for a provider or a `blockfrostApi` |
+| `emptySnapshot` | `emptySnapshot()` | `{ utxos, assetUtxos, outputs, absent, scripts }` |
+| `fetchNeed` | `await fetchNeed(source, snapshot, kind, key)` | fetches one engine need (`tip`, `protocolParams`, `utxos`, `assetUtxos`, `output`, `script`) into a snapshot |
+| `utxoJson` | `utxoJson(utxo)` | a provider's UTxO in Blockfrost's JSON, the snapshot's format |
+
+A keyed insert or remove ([keyed objects](/apps/keyed-objects-js/), on `main` and coming with the next release) needs
+the whole listing of the contract's state address, so the runtime fetches it before asking the engine. For a
+keyed contract, `ensureDeployment` and `rt.options(...)` also pin the slot clock in the deployment (`slotConfig`),
+which the page verifier requires for keyed calls.
+
+## DevKit helpers
+
+For Yaci DevKit: its admin API defaults to `http://localhost:10000`.
+
+| Export | Signature | Description |
+|---|---|---|
+| `devkitClock` | `await devkitClock(adminUrl?, { fetchImpl? })` | the DevKit's slot clock |
+| `devkitTopUp` | `await devkitTopUp(address, ada, adminUrl?, { chain?, fetchImpl? })` | funds an address from the faucet; with `chain`, from the default mnemonic's genesis accounts when the faucet is dry |
+| `devkitMint` | `await devkitMint(chain, wallet, name, quantity)` | mints a test token under a single-key native script of the wallet's key; `{ policy, unit }` |
+| `devkitSweep` | `await devkitSweep(chain, wallet)` | moves what contracts sent to the wallet key's enterprise address to its base address; the hash, or `null` |
+| `devWallet`, `deriveAccount`, `DEVKIT_MNEMONIC` | | re-exported from `@julclang/state-client/devwallet` |
+
+## Re-exports from `@julclang/state-client`
+
+`JoustContract`, `VerificationError`, `blockfrostChain`, `chainOf`, `blockfrostProvider`, `ogmiosProvider`, `toJson`,
+`runComposed`, `verifyComposed`. See [`@julclang/state-client`](/reference/state-client/).
+
+## `@julclang/joust-runtime/load`
+
+`loadImage(jsFile)` loads a JOUST engine image (a GraalVM Web Image on julc-wasm) in Node, serialising loads across
+every engine in the process, since images announce themselves through one global callback (`onJulcReady`). The
+toolchain in `@julclang/joust` loads through it too.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="JavaScript clients" href="/apps/javascript-clients/" description="Using the runtime with generated clients." />
+  <LinkCard title="Pages: worker, Vite, static builds" href="/apps/pages/" description="The engine in a page's worker." />
+  <LinkCard title="MerkleMap mirrors" href="/apps/map-mirrors/" description="Proofs, caches and rebuilding from the chain." />
+  <LinkCard title="@julclang/joust (CLI, Vite)" href="/reference/joust-cli/" description="The CLI and the Vite plugin." />
+</CardGrid>

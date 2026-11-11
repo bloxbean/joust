@@ -1,0 +1,746 @@
+---
+title: "Annotations"
+description: "Every JOUST annotation in julc-state-api, with its target, elements and defaults, what the processor checks and what the validator enforces."
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This page lists every annotation in `julc-state-api` (package `org.julclang.state.api`), grouped by what it is for.
+For each one you get its target, its elements with their types and defaults, the method shape the processor accepts,
+what the generated validator checks on chain, and a line from a real example. The source of each annotation is in
+[`julc-state-api/src/main/java/org/julclang/state/api/`](https://github.com/bloxbean/joust/tree/main/julc-state-api/src/main/java/org/julclang/state/api);
+the rules quoted below come from the processor's
+[`ContractReader`](https://github.com/bloxbean/joust/blob/main/julc-state-processor/src/main/java/org/julclang/state/processor/ContractReader.java),
+which reports each one as a compile error.
+
+All annotations have `CLASS` retention: they exist for the annotation processor and are not read at run time.
+
+## At a glance
+
+| Annotation | Target | Elements | Group |
+|---|---|---|---|
+| [`@StateContract`](#statecontract) | class | `minAda`, `maxDatumBytes`, `maxValidityMs`, `assetSlots`, `stakeSelf` | Contract |
+| [`@Params`](#params) | record | none | Contract |
+| [`@Init`](#init) | method | none | Lifecycle |
+| [`@Action`](#action) | method | none | Lifecycle |
+| [`@Destroy`](#destroy) | method | none | Lifecycle |
+| [`@View`](#view) | method | none | Lifecycle |
+| [`@SignedBy`](#signedby) | method | `value` | Authorization |
+| [`@OnlyOwner`](#onlyowner) | method | none | Authorization |
+| [`@Quorum`](#quorum) | method | `keys`, `threshold` | Authorization |
+| [`@AuthorizedBy`](#authorizedby) | method | `value` | Authorization |
+| [`@ValidAfter`](#validafter) | method | `value` | Time |
+| [`@ValidBefore`](#validbefore) | method | `value` | Time |
+| [`@Payable`](#payable) | method | none | Funds |
+| [`@Receives`](#receives) | method | none | Funds |
+| [`@Owned`](#owned) | record | `key`, `maxKeyBytes`, `signedKey`, `linkCooldownMs`, `linkWindowMs` (keyed types) | Owned objects |
+| [`@OwnedInit`](#ownedinit) | method | none | Owned objects |
+| [`@OwnedAction`](#ownedaction) | method | none | Owned objects |
+| [`@OwnedDestroy`](#owneddestroy) | method | `retire` (keyed types) | Owned objects |
+| [`@Shared`](#shared) | parameter | none | Owned objects |
+| [`@Into`](#into) | parameter | none | Owned objects |
+| [`@Admits`](#admits) | method | `value` | Owned objects |
+| [`@Batched`](#batched) | method | `only` | Batching |
+| [`@Reads`](#reads) | parameter | `value` | Composition and reads |
+| [`@Withdraw`](#withdraw) | method | none | Purposes and governance |
+| [`@Certify`](#certify) | method | none | Purposes and governance |
+| [`@Votes`](#votes) | method | none | Purposes and governance |
+| [`@Propose`](#propose) | method | none | Purposes and governance |
+| [`@MigrateTo`](#migrateto) | method | `value` | Upgrades |
+| [`@Migrate`](#migrate) | method | `from` | Upgrades |
+| [`@Invariant`](#invariant) | method | none | Invariants |
+
+<Aside>
+Events are not an annotation. A method emits them by returning a result record with an `events` component
+(see [Result records](#result-records)). Several names in the
+[annotation catalogue](https://github.com/bloxbean/joust/blob/main/docs/research/annotation-catalog.md) (`@State`,
+`@Param`, `@Event`, `@Upgradeable`, `@Calls`, `@Storage`, `@Anonymous`, `@MultiSig`) are proposals that did not ship
+under those names; they are not in `julc-state-api`. The `@Param` you may see on a plain JuLC validator (such as
+`examples/treasury/.../Guardian.java`) is JuLC's own annotation, not JOUST's.
+</Aside>
+
+## Method kinds and parameter order
+
+Every contract method carries exactly one kind annotation: `@Init`, `@Action`, `@Destroy`, `@View`, `@OwnedInit`,
+`@OwnedAction`, `@OwnedDestroy`, `@Migrate`, `@Invariant` or one purpose handler (`@Withdraw`, `@Certify`, `@Votes`,
+`@Propose`). Policy annotations (`@Payable`, `@SignedBy`, `@OnlyOwner`, `@ValidAfter`, `@ValidBefore`, `@Batched`,
+`@Quorum`, `@AuthorizedBy`, `@Admits`, `@Receives`) need a kind annotation on the same method.
+
+The processor enforces these rules on every kind:
+
+- Contract methods are `public static`, not generic, and have unique names (no overloading).
+- A method name cannot be a member of the generated client: `deploy`, `at`, `contract`, `state`, `instance`,
+  `instanceId`, `lovelace`, `fullValue`, `SPEC`, `params`, `policyIdFor`, `checkedState`, `checkedObject` (and, for
+  `@Batched` contracts, `INTENTS`, `batch`, `pendingIntents`, `intent`).
+- Parameter names `callerAccount`, `payLovelace`, `payAssets`, `runtime`, `params`, `authorization`, `cosigners`,
+  `ctx` and `maps` are reserved; `@Init` also reserves `seed` and `instance`.
+- A `MerkleMap` or `MapEntry` can only be a component of the state (or owned) record, never an argument.
+
+Parameters come in this order (each part optional unless the kind requires it):
+
+```java
+name(State s | Owned o,            // not in creations
+     @Shared State shared,          // owned methods only
+     @Into State destination,       // a move (@OwnedAction) only
+     Config cfg,                    // the @Params record
+     @Reads("params.x") Other.State x, ...,
+     args...,
+     Ctx ctx,                       // last, or last before Funds
+     Funds funds)                   // always last
+```
+
+## Contract
+
+### @StateContract
+
+Marks a class as a JOUST state contract. The processor generates `<Name>Validator` (a JuLC `@MultiValidator`) and
+`<Name>Client` in the same package. JuLC treats it exactly like its own `@OnchainLibrary` (a fixed alias,
+bloxbean/julc#311), so JuLC compiles the class for on-chain use without a second annotation.
+
+**Target:** a public top-level class. **Source:**
+[`StateContract.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/StateContract.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `minAda` | `long` | `0` | Lovelace locked in the state UTxO as its min-ADA deposit, on top of the contract's funds. `0` derives it (below). An explicit value below the derived one is a compile error |
+| `maxDatumBytes` | `int` | `512` | Largest serialised state the validator accepts; a transition that grows the datum past it is rejected, so no call can push the UTxO beyond what `minAda` covers. Must be 16 to 8192 |
+| `maxValidityMs` | `long` | `3_600_000` | Widest validity interval (`validTo - validFrom`, POSIX ms) a call that reads `Ctx` may use. At least 60000 |
+| `assetSlots` | `int` | `-1` | Native assets a state or object UTxO is expected to hold, for the deposit (about 80 bytes each). `-1` means 4 for contracts that handle native assets, 0 otherwise. Must end up 0 to 64 |
+| `stakeSelf` | `boolean` | `false` | Stake the state UTxOs to this script (base addresses). Requires a `@Withdraw` and a `@Certify` handler |
+
+The derived deposit is `4310 * (160 + 200 + maxDatumBytes + 80 * assetSlots)` lovelace, rounded up to 0.1 ADA
+(`stakeSelf` counts as one more slot, for the longer base address). With the defaults that is 3.8 ADA.
+
+The processor also requires exactly one `@Init`, and warns when a contract without owned objects has no `@Destroy`
+(its deposit would be locked forever).
+
+```java title="examples/dex/src/main/java/org/julclang/state/examples/dex/Dex.java"
+@StateContract(maxDatumBytes = 256, assetSlots = 2)
+public class Dex {
+```
+
+Guides: [State and lifecycle](/contracts/state-and-lifecycle/), [Fees and script size](/contracts/fees-and-size/).
+
+### @Params
+
+Marks the record of a contract's deploy-time parameters (ADR-0009 D1). They are applied to the script (JuLC partial
+application), so each parameter set has its own policy id and address. A method receives them by declaring a
+parameter of this type right after the state (or after `@Shared`; first in `@Init`).
+
+**Target:** a record nested in the contract. **Elements:** none. **Source:**
+[`Params.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Params.java)
+
+Rules: at most one `@Params` record per contract; it cannot hold MerkleMaps. Other annotations name its fields as
+`"params.field"` (`@Quorum`, `@AuthorizedBy`, `@Reads`, `@Migrate`, `@MigrateTo`). Purpose handlers take it as their
+first parameter.
+
+```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Treasury.java"
+@Params
+public record Config(Credential guardian, BigInteger maxPayout) {}
+```
+
+Guide: [Params, invariants and events](/contracts/params-invariants-events/).
+
+## Lifecycle
+
+### @Init
+
+The constructor: `public static S init(args... [, Ctx])`. Exactly one per contract. Deploying an instance mints its
+one-shot thread token and the validator checks the initial datum equals this method's result.
+
+**Target:** method. **Elements:** none. **Source:**
+[`Init.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Init.java)
+
+- Returns the state record, or a result record with `state` and optionally `accepted` (an init cannot pay out, send,
+  mint or deposit, and cannot emit events yet).
+- Takes the `@Params` record first if the contract has one.
+- `@SignedBy`, `@OnlyOwner`, `@ValidAfter`, `@ValidBefore`, `@Quorum` and `@AuthorizedBy` are rejected: they check the
+  current state, which a creation does not have. Use `Ctx` and `Require.that` in the body.
+
+```java title="examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java"
+@Init
+public static State init(Ctx ctx) {
+    return new State(BigInteger.ZERO, ctx.caller());
+}
+```
+
+### @Action
+
+A state transition: `public static S name(S state, args... [, Ctx])`, or a result record with a `state` component and
+any of `payouts`, `sends`, `deposits`, `mint`, `accepted`, `events`.
+
+**Target:** method. **Elements:** none. **Source:**
+[`Action.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Action.java)
+
+The validator re-runs the method and requires exactly one continuing output with the thread token at the same address,
+an inline datum equal to the result, and an exact value: what the UTxO held, plus what the call receives, minus what
+it pays out. An action without `Ctx` needs no signature and is cheaper.
+
+```java title="examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java"
+@Action
+public static State increment(State s, BigInteger by) {
+```
+
+### @Destroy
+
+Ends the instance: `public static JulcList<Payout> name(S state, args..., Ctx)`, or a result record with any of
+`payouts`, `sends`, `deposits`, `mint`, `accepted` and no `state`. The thread token is burned and the payouts must
+allocate the contract's whole balance (`ctx.balance()`, deposit included).
+
+**Target:** method. **Elements:** none. **Source:**
+[`Destroy.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Destroy.java)
+
+- Needs a `Ctx` parameter.
+- A contract with `@Owned` objects cannot have a `@Destroy` (objects that read `@Shared` state would be locked).
+- With MerkleMaps, the processor warns that a destroy discards the maps' contents: check `MerkleMaps.isEmpty(...)`.
+
+```java title="examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java"
+@Destroy
+@OnlyOwner
+public static JulcList<Payout> close(State s, Ctx ctx) {
+    return Payouts.of(s.owner(), ctx.balance());
+}
+```
+
+### @View
+
+A read-only query, `public static T name(S state, args...)`. Runs off chain only: no transaction, no validator code.
+
+**Target:** method. **Elements:** none. **Source:**
+[`View.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/View.java)
+
+The first parameter must be the state; the method must return a value and cannot take `Ctx`.
+
+```java title="examples/token/src/main/java/org/julclang/state/examples/token/Token.java"
+@View
+public static BigInteger balanceOf(State s, byte[] holder) {
+```
+
+Guide: [State and lifecycle](/contracts/state-and-lifecycle/).
+
+### Result records
+
+A method that does more than change state returns a record whose component names say what each part is. The processor
+accepts only these names:
+
+| Component | Type | Allowed in | Meaning |
+|---|---|---|---|
+| `state` | the state (or owned) record | actions, creations (required in actions); never in destroys | The next state |
+| `payouts` | `JulcList<Payout>` | actions, destroys | Lovelace to key hashes |
+| `sends` | `JulcList<Send>` | actions, destroys | Outputs to any address with any datum, claimed in the output registry (ADR-0007) |
+| `deposits` | `JulcList<Deposit>` | actions, destroys | Payments into another JOUST instance's `@Receives` action (ADR-0011 D3) |
+| `mint` | `Value` | actions, destroys | Tokens minted (positive) or burned (negative) under the contract's own policy |
+| `accepted` | `Value` | `@Payable` methods with `Funds` | Exactly the native assets the call takes in (required there) |
+| `events` | `JulcList` of event records | not creations, not `@Batched` | Authenticated events, carried in the redeemer and checked equal (ADR-0009 D5) |
+
+A destroy's record needs at least one of `payouts`, `sends`, `mint`, `deposits`.
+
+```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Treasury.java"
+public record Spent(State state, JulcList<Payout> payouts, JulcList<Event> events) {}
+```
+
+## Authorization
+
+### @SignedBy
+
+The transaction must be signed by the key hash (`byte[]`) held in the named field of the current state (for owned
+methods, of the owned record).
+
+**Target:** method. **Source:**
+[`SignedBy.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/SignedBy.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `value` | `String` | required | Name of a `byte[]` component of the state record |
+
+Not allowed on `@Init` or `@Batched` actions. The processor warns when an owned method has no `@SignedBy` (anyone could
+call it on anyone's object).
+
+```java title="examples/token/src/main/java/org/julclang/state/examples/token/Token.java"
+@Action
+@SignedBy("admin")
+public static State mint(State s, byte[] to, BigInteger amount) {
+```
+
+### @OnlyOwner
+
+Shorthand for `@SignedBy("owner")`: the state needs a `byte[] owner` component.
+
+**Target:** method. **Elements:** none. **Source:**
+[`OnlyOwner.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/OnlyOwner.java)
+
+```java title="examples/vault/src/main/java/org/julclang/state/examples/vault/Vault.java"
+@Action @OnlyOwner @ValidAfter("unlockAt")
+```
+
+### @Quorum
+
+M-of-N signatures (ADR-0009 D2): at least `threshold` (and at least one) of the transaction's signatories are among
+`keys`.
+
+**Target:** method. **Source:**
+[`Quorum.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Quorum.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `keys` | `String` | required | A `JulcList<byte[]>` field of key hashes: of the state, the owned record, or `"params.x"` |
+| `threshold` | `String` | required | A `BigInteger` field: of the state, the owned record, or `"params.x"` |
+
+The generated check also requires distinct, strictly ascending 28-byte keys. Not allowed in creations or on `@Batched`
+actions. Purpose handlers must name `params.*` fields.
+
+```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Treasury.java"
+@Action @Quorum(keys = "council", threshold = "quorum")
+public static Spent pay(State s, Config cfg, byte[] to, BigInteger amount, Ctx ctx) {
+```
+
+### @AuthorizedBy
+
+The method needs the approval of a credential (ADR-0009 D3), named by a `Credential` field of the state, the owned
+record, or the `@Params` record (`"params.field"`). A key credential must sign. A script credential must run in the
+transaction for a zero withdrawal (the withdraw-zero pattern) and approves by its own rules; a JOUST-aware governor
+lists its approvals in an [`Approvals`](/reference/state-api/#approvals-and-approval) redeemer.
+
+**Target:** method. **Source:**
+[`AuthorizedBy.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/AuthorizedBy.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `value` | `String` | required | A `Credential` field: `"field"` or `"params.field"` |
+
+Not allowed in creations or on `@Batched` actions.
+
+```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Treasury.java"
+@Action @AuthorizedBy("params.guardian")
+public static Changed freeze(State s, boolean frozen) {
+```
+
+Guide: [Authorization](/contracts/authorization/). Tutorial: [Multisig treasury](/tutorials/multisig-treasury/).
+
+## Time
+
+### @ValidAfter
+
+The transaction's validity interval must start at or after the time (POSIX ms) held in the named `BigInteger` field
+of the current state. The client sets the interval for you.
+
+**Target:** method. **Source:**
+[`ValidAfter.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/ValidAfter.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `value` | `String` | required | Name of a `BigInteger` component of the state record |
+
+```java title="examples/vault/src/main/java/org/julclang/state/examples/vault/Vault.java"
+@Destroy @OnlyOwner @ValidAfter("unlockAt")
+```
+
+### @ValidBefore
+
+The transaction's validity interval must end at or before the time held in the named `BigInteger` field of the
+current state.
+
+**Target:** method. **Source:**
+[`ValidBefore.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/ValidBefore.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `value` | `String` | required | Name of a `BigInteger` component of the state record |
+
+```java
+@Action @ValidBefore("deadline")
+```
+
+Both are rejected on `@Init` (no current state) and on `@Batched` actions (the batcher picks the interval). In those,
+check time in the body with [`Clock`](/reference/state-api/#clock). Guide: [Time](/contracts/time/).
+
+## Funds
+
+### @Payable
+
+The `@Init` or `@Action` (or owned creation or action) may receive lovelace: `ctx.received() > 0`. Without it,
+`received` must be zero. With a `Funds` parameter it may also take native assets, and must then return a result record
+with `accepted`, exactly the native assets it takes.
+
+**Target:** method. **Elements:** none. **Source:**
+[`Payable.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Payable.java)
+
+Needs a `Ctx` parameter.
+
+```java title="examples/staking/src/main/java/org/julclang/state/examples/staking/StakedVault.java"
+@Action @Payable
+public static State deposit(State s, Ctx ctx) {
+```
+
+Guide: [Ctx, funds and payouts](/contracts/ctx-and-funds/).
+
+### @Receives
+
+An action that takes deposits from other JOUST contracts in the same transaction (ADR-0011 D3). Its value equation
+adds every deposit claimed on its continuing output, and the method sees them in `funds.deposits()`. An action without
+it takes no deposits: its exact value check fails if anyone adds value to its output.
+
+**Target:** method. **Elements:** none. **Source:**
+[`Receives.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Receives.java)
+
+Rules: only on an `@Action` or `@OwnedAction`; needs a `Funds` parameter; cannot be `@Batched`.
+
+```java title="examples/fees/src/main/java/org/julclang/state/examples/fees/Pot.java"
+@Receives
+public static State collect(State s, Ctx ctx, Funds funds) {
+    BigInteger got = Deposits.lovelace(funds.deposits());
+```
+
+Guide: [Deposits](/contracts/deposits/).
+
+## Owned objects
+
+Owned objects (ADR-0003, ADR-0012) are records that live in their own UTxOs under an instance, so different objects
+never contend. Guide: [Owned objects](/contracts/owned-objects/). Tutorial:
+[Bank: owned objects](/tutorials/bank-owned-objects/).
+
+### @Owned
+
+Marks a record of the contract as an owned type. Each object is its own UTxO, touched only by owned methods.
+
+**Target:** a record nested in the contract. **Elements:** none for a plain owned type; the keyed elements below
+make it a keyed type. **Source:**
+[`Owned.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Owned.java)
+
+- A contract may have several owned types since ADR-0012 D1 (the Javadoc's "at most one" predates it); each gets its
+  own datum variant `Holding_<Type>`, a single type keeps `Holding`.
+- Each owned type needs at least one `@OwnedInit`, and an `@OwnedDestroy` without `@Shared` (an escape hatch that works
+  whatever the instance state).
+- MerkleMaps may be direct components of an owned record (ADR-0012 D2), but not of the instance state of a contract
+  with owned objects.
+- A contract with owned objects cannot `@Destroy` its instance.
+
+```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java"
+@Owned
+public record Account(byte[] owner, BigInteger balance) {}
+```
+
+**Keyed types** (ADR-0016; on `main`, not in `0.1.0-pre1-rc2`, coming with the next release). Naming a `byte[]`
+component as `key` makes the type keyed: at most one object per key and instance, in a sorted on-chain list. Guide:
+[Keyed objects](/contracts/keyed-objects/).
+
+| Element | Default | Meaning |
+|---|---|---|
+| `key` | `""` | The `byte[]` component that keys the object; empty for a plain owned type |
+| `maxKeyBytes` | 32 | Longest key: 1 to 64 bytes |
+| `signedKey` | `false` | The key is a 28-byte key hash that must sign the insert |
+| `linkCooldownMs` | 60,000 | Least time between two relinks of a node: 0 (written explicitly) or 60,000 to 3,600,000 |
+| `linkWindowMs` | -1, meaning `min(120,000, maxValidityMs)` | Widest validity window of a relink: 20,000 to `min(900,000, maxValidityMs)` |
+
+A keyed type needs an `@OwnedDestroy(retire = true)` signed with `@SignedBy`, and every keyed `@OwnedAction` must carry
+`@SignedBy`, `@Quorum` or `@AuthorizedBy`. Setting a keyed element on a type without `key` is an error.
+
+```java title="examples/registry/src/main/java/org/julclang/state/examples/registry/Registry.java"
+@Owned(key = "voter", maxKeyBytes = 28, signedKey = true)
+public record Ballot(byte[] voter, BigInteger choice) {}
+```
+
+### @OwnedInit
+
+Creates an owned object: `public static R name([@Shared S shared,] args... [, Ctx])`. The object belongs to the
+instance it is created under. Returns the owned record (or a record with a `state` of it).
+
+**Target:** method. **Elements:** none. **Source:**
+[`OwnedInit.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/OwnedInit.java)
+
+```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java"
+@OwnedInit
+@Payable
+public static Account open(@Shared State bank, Ctx ctx) {
+```
+
+### @OwnedAction
+
+Changes one owned object: `public static R name(R object, [@Shared S shared,] args... [, Ctx])`, or a result record
+with `state` (the owned record) and effects. Spends only the object's UTxO.
+
+**Target:** method. **Elements:** none. **Source:**
+[`OwnedAction.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/OwnedAction.java)
+
+```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java"
+@OwnedAction
+@SignedBy("owner")
+public static Withdrawal withdraw(Account a, @Shared State bank, BigInteger amount, Ctx ctx) {
+```
+
+### @OwnedDestroy
+
+Ends an owned object: `public static JulcList<Payout> name(R object, [@Shared S shared,] args..., Ctx)`. Burns its
+token; the payouts must allocate everything it holds. The processor warns if the object has MerkleMaps (they are
+discarded).
+
+**Target:** method. **Elements:** `retire` (default `false`). **Source:**
+[`OwnedDestroy.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/OwnedDestroy.java)
+
+```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java"
+@OwnedDestroy
+@SignedBy("owner")
+public static JulcList<Payout> close(Account a, Ctx ctx) {
+```
+
+On a [keyed type](/contracts/keyed-objects/), a plain `@OwnedDestroy` *removes* the object and frees its key, and
+`@OwnedDestroy(retire = true)` *retires* it: the object stays as a retired node with its deposit and its key, taken for
+good, and the payouts allocate exactly `ctx.balance()` (everything but the deposit). A retiring exit cannot take
+`@Shared`, `@Reads`, `@Payable`, `@Quorum`, `@AuthorizedBy`, `@ValidAfter` or `@ValidBefore`.
+
+```java title="examples/registry/src/main/java/org/julclang/state/examples/registry/Registry.java"
+@OwnedDestroy(retire = true)
+@SignedBy("owner")
+public static JulcList<Payout> retire(Entry e, Ctx ctx) {
+```
+
+### @Shared
+
+Gives an owned method the instance's state, read-only, through a reference input: the instance is not spent, so it
+causes no contention (ADR-0003 D1).
+
+**Target:** parameter. **Elements:** none. **Source:**
+[`Shared.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Shared.java)
+
+Rules: only on owned methods; the parameter's type must be the state record; it comes right after the owned record (first
+in an `@OwnedInit`).
+
+```java title="examples/bank/src/main/java/org/julclang/state/examples/bank/Bank.java"
+public static Account open(@Shared State bank, Ctx ctx) {
+```
+
+### @Into
+
+Marks the destination of a move (ADR-0012 D3): an `@OwnedAction` parameter of the state type, after the `@Shared`
+source if any. The object moves to that instance, which is spent in the same transaction by an `@Admits` action naming
+the object. The method gets the destination's state as it was before. The redeemer carries the destination's id, and
+both validators check each other's redeemer (I43).
+
+**Target:** parameter. **Elements:** none. **Source:**
+[`Into.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Into.java)
+
+Rules: only on `@OwnedAction`; a move returns the owned record (or a record with its `state`); it cannot take `@Reads`;
+an `@Into` move needs an `@Admits` action for its type. Moves run only inside `Compose`.
+
+```java title="examples/guild/src/main/java/org/julclang/state/examples/guild/Guild.java"
+@OwnedAction
+@SignedBy("owner")
+public static Hero transfer(Hero h, @Shared State source, @Into State destination, Ctx ctx) {
+```
+
+### @Admits
+
+An `@Action` through which an instance admits an object moving in from another instance of the same contract
+(ADR-0012 D3). Its first argument after the state (and the params) is the object's id (`byte[]`). The validator
+requires that object to be spent in the same transaction with a move naming this instance; the method decides whether
+to admit it and may update the instance's state.
+
+**Target:** method. **Source:**
+[`Admits.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Admits.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `value` | `String` | `""` | The owned record it admits (`"Hero"`). Required when more than one owned type has moves |
+
+Rules: only on an instance `@Action`; cannot be `@Batched` or take `@Reads`; the contract needs an `@Owned` record and
+an `@Into` move.
+
+```java title="examples/guild/src/main/java/org/julclang/state/examples/guild/Guild.java"
+@Admits("Hero")
+public static State admit(State s, byte[] heroId, Hero hero, Ctx ctx) {
+```
+
+## Batching
+
+### @Batched
+
+The `@Action` may also run as an intent (ADR-0004): a user locks a request in their own UTxO, and a batcher applies
+many requests to the instance in one transaction, so concurrent writers do not contend.
+
+**Target:** method. **Source:**
+[`Batched.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Batched.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `only` | `boolean` | `false` | Only as an intent: no direct call, so nobody can invalidate pending batches by spending the instance directly |
+
+In a batch, `ctx.caller()` is the intent's owner, `ctx.received()` the amount the intent carries, `ctx.balance()` the
+balance at that point of the fold, and `validFrom`/`validTo` the batch transaction's bounds. An intent runs against
+whatever state the batch finds: take a bound (a minimum out, a maximum price) as an argument and check it.
+
+Rules: only on `@Action`; needs `Ctx`; cannot use `@SignedBy`, `@OnlyOwner`, `@ValidAfter`, `@ValidBefore`, `@Quorum`,
+`@AuthorizedBy`, events, the `@Params` record, `@Reads`, `Funds`, sends, mints or deposits. A contract with `@Batched`
+actions cannot also have MerkleMap state, native assets or `@Invariant`s yet.
+
+```java title="examples/pool/src/main/java/org/julclang/state/examples/pool/Pool.java"
+@Action
+@Batched(only = true)
+@Payable
+public static Sale buy(State s, BigInteger maxPrice, Ctx ctx) {
+```
+
+Guide: [Batched intents](/contracts/batched-intents/). Tutorial: [Pool: batched intents](/tutorials/pool-batched-intents/).
+
+## Composition and reads
+
+### @Reads
+
+A method parameter that reads another JOUST contract's instance state through a reference input (ADR-0011 D2). The
+validator checks the token kind, the single token, the script address and the inline datum's shape before decoding.
+
+**Target:** parameter. **Source:**
+[`Reads.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Reads.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `value` | `String` | required | `"params.x"`, naming a [`ForeignInstance`](/reference/state-api/#foreigninstance) component of the `@Params` record |
+
+Rules: the parameter's type is the other contract's state record; `@Reads` parameters come right after the `@Params`
+record; the read state cannot hold MerkleMaps; not supported in creations, moves or `@Admits` actions yet. Freshness is
+the reading contract's job (check a timestamp in the read state).
+
+```java title="examples/oracle/src/main/java/org/julclang/state/examples/oracle/Shop.java"
+public static State buy(State s, Config cfg, @Reads("params.oracle") Oracle.State price, BigInteger qty, Ctx ctx) {
+```
+
+Guide: [Reads and composition](/contracts/reads-and-composition/). Tutorial:
+[Oracle and composition](/tutorials/oracle-composition/).
+
+## Purposes and governance
+
+Purpose handlers (ADR-0010 D1) answer the ledger's other script purposes for the contract's own credential. They are
+`public static`, take the `@Params` record first, are governed by `@Quorum` or `@AuthorizedBy` over `params.*` fields
+(except `@Propose`), and cannot carry a lifecycle annotation. At most one handler per purpose. Contracts with `@Votes`
+or `@Propose` handlers need `-Ajulc.blueprint=false` (a CIP-57 vocabulary gap in JuLC).
+
+Guide: [Staking and governance](/contracts/staking-and-governance/). Tutorial:
+[Staked vault and governance](/tutorials/staked-vault/).
+
+### @Withdraw
+
+Handles withdrawals of the contract's staking rewards: `(Params cfg, BigInteger amount, args..., [Ctx])` returning
+`JulcList<Send>` totalling exactly `amount`, claimed in the output registry.
+
+**Target:** method. **Elements:** none. **Source:**
+[`Withdraw.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Withdraw.java)
+
+```java title="examples/staking/src/main/java/org/julclang/state/examples/staking/StakedVault.java"
+@Withdraw @Quorum(keys = "params.council", threshold = "params.quorum")
+public static JulcList<Send> collect(Config cfg, BigInteger amount) {
+```
+
+### @Certify
+
+Decides which certificates of the contract's credential are allowed: `(Params cfg, TxCert cert)` returning `boolean`.
+Unregistration, committee and pool certificates are refused before it runs. Use the [`Certs`](/reference/state-api/#certs)
+helpers for exact checks.
+
+**Target:** method. **Elements:** none. **Source:**
+[`Certify.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Certify.java)
+
+```java title="examples/staking/src/main/java/org/julclang/state/examples/staking/StakedVault.java"
+@Certify @Quorum(keys = "params.council", threshold = "params.quorum")
+public static boolean certificate(Config cfg, TxCert cert) {
+```
+
+### @Votes
+
+Decides the contract's votes as a DRep or committee member: `(Params cfg, Voter voter, GovernanceActionId action, Vote
+vote)` returning `boolean`, called for every vote it casts.
+
+**Target:** method. **Elements:** none. **Source:**
+[`Votes.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Votes.java)
+
+```java title="examples/staking/src/main/java/org/julclang/state/examples/staking/StakedVault.java"
+@Votes @Quorum(keys = "params.council", threshold = "params.quorum")
+public static boolean vote(Config cfg, Voter voter, GovernanceActionId action, Vote vote) {
+```
+
+### @Propose
+
+A constitution guardrail: `(Params cfg, ProposalProcedure p)` returning `boolean`. The ledger runs it for
+parameter-change and treasury-withdrawal proposals once a constitution names this script.
+
+**Target:** method. **Elements:** none. **Source:**
+[`Propose.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Propose.java)
+
+```java title="examples/staking/src/main/java/org/julclang/state/examples/staking/StakedVault.java"
+@Propose
+public static boolean proposal(Config cfg, ProposalProcedure p) {
+```
+
+## Upgrades
+
+Version migration (ADR-0011 D4) moves an instance's state and funds from one contract to its successor in one composed
+transaction. Neither annotation is supported yet with MerkleMaps, owned objects or native assets. Guide:
+[Upgrades and migration](/contracts/upgrades/). Tutorial: [Upgrading a contract](/tutorials/upgrades/).
+
+### @MigrateTo
+
+On a `@Destroy`: the instance migrates to its successor. The validator requires that the successor mints the instance
+id `blake2b_256(own input)`, and that its output holds at least everything this instance holds, less the payouts.
+
+**Target:** method (an instance `@Destroy`). **Source:**
+[`MigrateTo.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/MigrateTo.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `value` | `String` | required | A `byte[]` field holding the successor's policy: a state field an admin sets, or `"params.x"` |
+
+```java title="examples/upgrade/src/main/java/org/julclang/state/examples/upgrade/CounterV1.java"
+@Destroy @SignedBy("admin") @MigrateTo("successor")
+public static JulcList<Payout> upgrade(State s, Ctx ctx) {
+```
+
+### @Migrate
+
+A creation that adopts an instance of the previous contract version: `(Params cfg, Old.State old, args..., [Ctx])`
+returning the new state. The seed is the old state UTxO, whose token must be burned in the same transaction; the new
+instance holds exactly the old lovelace and the new token.
+
+**Target:** method. **Source:**
+[`Migrate.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Migrate.java)
+
+| Element | Type | Default | Meaning |
+|---|---|---|---|
+| `from` | `String` | required | `"params.x"`, a `byte[]` field of the `@Params` record holding the previous policy |
+
+Rules: at most one `@Migrate` per contract; it is its own kind of creation (no other kind annotation); the parameter
+after the params must be the previous contract's state record.
+
+```java title="examples/upgrade/src/main/java/org/julclang/state/examples/upgrade/CounterV2.java"
+@Migrate(from = "params.previous")
+public static State adopt(Config cfg, CounterV1.State old) {
+```
+
+## Invariants
+
+### @Invariant
+
+A rule every state must keep (ADR-0009 D4): a static method taking the state (or an owned record), optionally the
+`@Params` record, and returning `boolean`. The validator checks it on every state it accepts as an output (creation
+and every action); the runtime checks it before submitting.
+
+**Target:** method. **Elements:** none. **Source:**
+[`Invariant.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Invariant.java)
+
+Rules: `static`, returns `boolean`, cannot combine with a lifecycle annotation; cannot read state (or an owned record)
+with MerkleMaps; a contract with `@Batched` actions cannot have invariants yet.
+
+```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Treasury.java"
+@Invariant
+public static boolean reachable(State s) {
+    return s.quorum().signum() > 0 && s.quorum().compareTo(BigInteger.valueOf(s.council().size())) <= 0;
+}
+```
+
+Guide: [Params, invariants and events](/contracts/params-invariants-events/).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="State API" description="Ctx, Funds, Payouts, Sends, Assets, MerkleMaps and the other classes" href="/reference/state-api/" />
+  <LinkCard title="State and lifecycle" description="How @Init, @Action, @Destroy and @View fit together" href="/contracts/state-and-lifecycle/" />
+  <LinkCard title="Security model" description="The invariants every generated validator enforces" href="/contracts/security-model/" />
+  <LinkCard title="Examples" description="Every example contract and the annotations it uses" href="/reference/examples/" />
+</CardGrid>

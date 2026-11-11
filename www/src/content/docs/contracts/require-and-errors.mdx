@@ -1,0 +1,246 @@
+---
+title: Require and errors
+description: Write contract rules with Require.that, see how a refusal reaches Java and JavaScript callers, and debug a transaction that fails on chain.
+---
+
+import { Tabs, TabItem, Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Contract rules are written as `Require.that(condition, "message")`. The same line refuses the call on the JVM (with
+the message, before anything is built or signed) and fails the script on chain. This page shows how to write rules,
+where each kind of failure surfaces, and how to find out why a transaction was rejected.
+
+## `Require.that`
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/vault/src/main/java/org/julclang/state/examples/vault/Vault.java"
+@Action
+@OnlyOwner
+@ValidAfter("unlockAt")
+public static Result withdraw(State s, BigInteger amount, Ctx ctx) {
+    Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+    Require.that(amount.compareTo(s.total()) <= 0, "insufficient funds");
+    return new Result(new State(s.owner(), s.unlockAt(), s.total().subtract(amount)), Payouts.of(s.owner(), amount));
+}
+```
+
+</TabItem>
+<TabItem label=".jsc">
+
+```jsc
+action withdraw(amount: Int) only owner after unlockAt {
+    require amount > 0 "amount must be positive"
+    require amount <= total "insufficient funds"
+    total -= amount
+    pay amount to owner
+}
+```
+
+`require <condition> "<message>"` lowers to `Require.that`. The message is required.
+
+</TabItem>
+</Tabs>
+
+`Require` has two implementations that fail on exactly the same inputs (a test asserts it):
+
+| Where | What `Require.that(false, msg)` does |
+|---|---|
+| JVM (`julc-state-api/src/main/java`) | throws `RequireException(msg)` |
+| On chain (`julc-state-api/src/onchain/java`, bundled for JuLC) | traces `msg`, then fails the script |
+
+This is the one place where the JVM and on-chain sources of the state API differ, and it is four lines. JuLC rejects
+`throw` in contract code, so `Require.that` is how a contract fails. `Builtins.error()` also works, but carries no
+message.
+
+### Writing good rules
+
+- **One rule, one message.** The message is what the user sees. Say what is wrong in the user's terms:
+  `"deposit must be positive"`, `"the campaign has ended"`.
+- **Check before you compute.** A `JulcMap.get` on a missing key aborts on chain with no message; guard it with
+  `Require.that(m.containsKey(k), "nothing to refund")` first, as crowdfund's `refund` does.
+- **Keep messages short.** Each message is stored in the compiled script, and every transaction pays 15 lovelace per
+  byte of the script it references. ADR-0008 measured 100 to 300 bytes of messages per contract and chose to keep
+  them, for the failure reasons they give.
+- **Don't validate what the validator already guarantees.** `Ctx` fields, the payment amount, payout tags, the
+  signer of `@SignedBy` are all checked by generated code.
+
+## Where a refusal surfaces
+
+A JOUST call fails at the first of these that refuses it. Most failures happen on your machine, before anything is
+signed.
+
+<Steps>
+
+1. **The client's policy checks.** Before running your method, the client checks the annotations against the
+   current state: `@SignedBy`/`@OnlyOwner`, `@ValidAfter`/`@ValidBefore` (choosing a window). Messages name the
+   contract, the method and the field:
+
+   ```text
+   Vault.withdraw: must be called by the key in 'owner'
+   Vault.withdraw: too early, the time in 'unlockAt' has not been reached
+   <Contract>.<method>: too late, the deadline in '<field>' has passed
+   ```
+
+2. **Your method, on the JVM.** The client runs the method with the real state and `Ctx`. A failing `Require.that`
+   throws `RequireException` with your message, unchanged:
+
+   ```text
+   only the buyer or the arbiter can release
+   ```
+
+3. **The runtime's checks on the result.** The next state's size and map order, the `@Invariant`s, payouts within the
+   funds, a destroy paying everything:
+
+   ```text
+   invariant reachable                       (an @Invariant failed: "invariant <method name>")
+   Vault.withdraw: payouts exceed the contract's funds
+   Counter.close: a destroy must pay out everything the instance holds (…)
+   ```
+
+4. **Building and evaluating the transaction.** The runtime balances the transaction and evaluates every script in it
+   with JuLC's evaluator, as the node will. A script that fails here fails the call with a `SubmitException`
+   (`…: could not build the transaction: …`). Nothing was submitted.
+
+5. **The node.** The node validates the transaction again. A rejection raises
+   `SubmitException("…: the node rejected the transaction: …")` with the node's answer.
+
+</Steps>
+
+Steps 1 to 3 throw `RequireException` (from `org.julclang.state.api`). Steps 4 and 5 throw subclasses of the runtime's
+`JoustException` (from `org.julclang.state.runtime`):
+
+| Exception | Meaning |
+|---|---|
+| `RequireException` | A contract rule failed on the JVM. Nothing was built or submitted |
+| `SubmitException` | The transaction could not be built (a script failed evaluation) or the node definitely rejected it |
+| `ContentionException` | Another transaction kept moving the state UTxO; the runtime re-ran the method against each new state and gave up |
+| `PendingTransactionException` | The outcome is unknown (a timeout, an unclear submit answer). `txHash()` names the transaction; nothing is resubmitted |
+| `InstanceNotFoundException` | No state UTxO holds the instance's token (wrong id, or destroyed) |
+
+When the node rejects a call because the state moved (another call landed first), the runtime reads the new state,
+re-runs your method and tries again. It never resubmits a transaction the node accepted.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/vault/src/main/java/org/julclang/state/examples/vault/VaultApp.java"
+try {
+    vault.withdraw(alice, ADA);
+} catch (RequireException e) {
+    System.out.println("withdraw before unlock rejected off-chain: " + e.getMessage());
+}
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js
+// The engine runs the same Java method; a refusal rejects the promise with the same message.
+await assert.rejects(instance.increment(wallet, { by: 0n }), /increment must be positive/);
+
+// In a page: a VerificationError means the page's own verifier refused the prepared transaction,
+// and the wallet was never asked to sign.
+try {
+  await instance.increment(api, { by: 1n });
+} catch (e) {
+  if (e instanceof VerificationError) show(e.problems);   // what the verifier found
+  else show(e.message);                                    // a contract rule, or a chain error
+}
+```
+
+</TabItem>
+</Tabs>
+
+## On chain: traces
+
+When a script fails on chain (or in the runtime's evaluation), the node's error carries the script's **trace**. A
+failing `Require.that` traces its message, so you see the reason.
+
+The generated checks around your method (value, datum, `Ctx`, payouts) are boolean conjunctions and trace nothing by
+default: a failure says only that the script failed. To find which check failed, compile with the processor option
+`-Ajoust.traces=true`. Each failing check then traces where it is and its name, for example
+`Withdraw: after_unlockAt` or `Withdraw: paid` (the redeemer variant, then the check). It makes the scripts larger and changes their hashes: use it for debugging only.
+
+Some examples wire it to a Gradle property:
+
+```groovy title="examples/treasury/build.gradle"
+// -Pjoust.traces: each failing validator check traces its name (debugging only; larger scripts).
+if (project.hasProperty('joust.traces')) {
+    tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.traces=true'] }
+}
+```
+
+```sh
+./gradlew :examples:treasury:test -Pjoust.traces
+```
+
+Add the same block to your own `build.gradle`. The `joust` CLI has no switch for it yet.
+
+## Debugging a failed transaction
+
+Work from the cheapest evidence to the most expensive.
+
+<Steps>
+
+1. **Read the exception type and message.** A `RequireException` is a rule (yours, or an annotation's), with the
+   reason. Fix the input, the caller, or the time. You are done.
+
+2. **A `SubmitException` saying "could not build the transaction".** The JVM run passed but a script refused the
+   transaction in evaluation. Usually a generated check: rebuild with `-Ajoust.traces=true` and call again to see its
+   name. Common causes:
+   - a state map out of canonical order (the runtime normally catches this first; see
+     [State and lifecycle](/contracts/state-and-lifecycle/));
+   - a validity window the ledger cannot convert (`PastHorizon`): the TTL is too long for the network
+     ([Time](/contracts/time/));
+   - code that behaves differently on the JVM and on chain (`==` on `byte[]`, a fixed-width number the lint missed).
+
+3. **Reproduce it in the harness.** `StateHarness` (from `julc-state-testkit`) builds the same transaction shape the
+   runtime submits and evaluates the compiled validator. Its verdict prints each script's result, budget and traces:
+
+   ```java title="examples/vault/src/test/java/org/julclang/state/examples/vault/VaultTest.java"
+   final StateHarness<Vault.State> h = StateHarness.of(VaultClient.SPEC);
+
+   var live = h.live(new Vault.State(OWNER, LATER, ADA.multiply(BigInteger.TEN)), ADA.multiply(BigInteger.TEN));
+   Ctx ctx = h.ctx(OWNER, BigInteger.ZERO, ADA.multiply(BigInteger.TEN));
+   var r = Vault.withdraw(live.state(), ADA, ctx);
+   h.assertRejected(h.act(live, new VaultValidator.Withdraw(ADA, ctx), r.state(), r.payouts(), OWNER, ctx), "@ValidAfter");
+   ```
+
+   See [Testing](/contracts/testing/).
+
+4. **Keep the transaction.** Run with the system property `-Djoust.dumpTx=<dir>`, and the runtime writes each signed
+   transaction it submits to `<dir>/<txHash>.cbor` (hex). In this repository's Gradle build, `-Pjoust.dumpTx=<dir>`
+   passes it to the tests. Inspect it with any CBOR or transaction decoder.
+
+5. **Let the node evaluate.** As a last resort, `-Djoust.debug.nodeEvaluates=true` skips the local script-cost
+   evaluation, so the node evaluates the transaction and reports the full script context it saw. It is a diagnostic
+   only: never use it for normal runs.
+
+</Steps>
+
+<Aside type="tip">
+
+A transaction whose scripts pass but which the node still rejects is usually about value or time, not your rules:
+an output below the ledger's minimum, an expired window, inputs already spent. The node's message names the ledger
+rule (`ValueNotConservedUTxO`, `OutsideValidityIntervalUTxO`, …).
+
+</Aside>
+
+## Reference
+
+- [State API](/reference/state-api/): `Require`, `RequireException`; [Java runtime API](/reference/java-runtime-api/): the exceptions
+- [Troubleshooting](/reference/troubleshooting/)
+- Sources: [`Require.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Require.java) (JVM),
+  [`Require.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/onchain/java/org/julclang/state/api/Require.java) (on chain),
+  [`StateInstance.java`](https://github.com/bloxbean/joust/blob/main/julc-state-runtime/src/main/java/org/julclang/state/runtime/StateInstance.java) (the call sequence)
+- ADR-0001 D7 (`Require`), D14 (runtime errors and retries); ADR-0007 §7 (`joust.traces`); ADR-0008 §2 (messages kept)
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Testing" href="/contracts/testing/" description="JVM tests, the harness and the attack suite." />
+<LinkCard title="Security model" href="/contracts/security-model/" description="What the generated checks enforce." />
+<LinkCard title="Time" href="/contracts/time/" description="Windows, TTLs and PastHorizon." />
+<LinkCard title="Troubleshooting" href="/reference/troubleshooting/" description="Common errors and their fixes." />
+</CardGrid>

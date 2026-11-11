@@ -1,0 +1,460 @@
+---
+title: A counter dApp in the browser
+description: Build the template's Counter dApp end to end, from the Java contract to a page that prepares, checks and signs its own transactions.
+---
+
+import { Aside, Steps, LinkCard, CardGrid, FileTree } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Experimental">
+The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
+</Aside>
+
+In this tutorial you build the Counter dApp that `npm create joust` gives you, and read every file that makes it work.
+At the end you have a page, served on Yaci DevKit, that creates counters, increments them and closes them, with each
+transaction prepared in the page itself, checked by the page and signed by a wallet.
+
+You will learn:
+
+- how one Java method becomes both a validator and the code that builds the transaction;
+- what the generated client (`Counter.js`, `Counter.d.ts`) contains;
+- how the page runs the runtime engine in a Web Worker and gets its network from `virtual:joust/network`;
+- how the page connects CIP-30 wallets, and shows each call for review before signing;
+- what the page verifier checks, and why a bad call never reaches the wallet.
+
+<Aside type="caution" title="Pre-release: the npm packages come from a local registry">
+The npm packages are not on npmjs.org yet. Publish them to a local registry first, as the
+[npm quick start](/start/quick-start-npm/#prerequisites) shows, and set `npm_config_registry=http://127.0.0.1:4873/`.
+</Aside>
+
+## Set up
+
+<Steps>
+
+1. Start Yaci DevKit with Yaci Store:
+
+   ```sh
+   yaci-devkit up --enable-yaci-store
+   ```
+
+2. Create the app and install it:
+
+   ```sh
+   npm create joust@0.1.0-pre1-snapshot counter-dapp
+   cd counter-dapp
+   npm install
+   ```
+
+3. Start the dev server. It builds and deploys the contract first:
+
+   ```sh
+   npm run dev
+   ```
+
+   Leave it running; the page is at http://127.0.0.1:5178. The rest of this tutorial explains what you are looking
+   at.
+
+</Steps>
+
+## 1. The contract
+
+```java title="contracts/app/Counter.java"
+@StateContract(maxDatumBytes = 128)
+public class Counter {
+
+    /** The state, stored as the inline datum of the state UTxO. */
+    public record State(BigInteger count, byte[] owner) {}
+
+    /** The deployer becomes the owner. */
+    @Init
+    public static State init(Ctx ctx) {
+        return new State(BigInteger.ZERO, ctx.caller());
+    }
+
+    /** Anyone can increment by a positive amount (no Ctx: no signature needed, cheaper). */
+    @Action
+    public static State increment(State s, BigInteger by) {
+        Require.that(by.compareTo(BigInteger.ZERO) > 0, "increment must be positive");
+        return new State(s.count().add(by), s.owner());
+    }
+
+    /** Only the owner can reset. */
+    @Action
+    @OnlyOwner
+    public static State reset(State s) {
+        return new State(BigInteger.ZERO, s.owner());
+    }
+
+    /** Only the owner can close the counter; the deposit goes back to them. */
+    @Destroy
+    @OnlyOwner
+    public static JulcList<Payout> close(State s, Ctx ctx) {
+        return Payouts.of(s.owner(), ctx.balance());
+    }
+
+    /** Read-only view (off-chain, no transaction). */
+    @View
+    public static BigInteger count(State s) {
+        return s.count();
+    }
+}
+```
+
+Each counter lives in one UTxO at the contract's address. The UTxO holds a **thread token** that names the instance,
+and its **datum** (the data attached to the UTxO) is the `State` record. Calling an action spends that UTxO with a
+**redeemer** (the call and its arguments) and creates the next one. (These terms are in the
+[glossary](/reference/glossary/).)
+
+- `@Init` creates an instance; `ctx.caller()` is the key that signed the transaction, so the creator owns it.
+- `increment` takes no `Ctx`, so it needs no signature: anyone can call it. `Require.that` refuses a non-positive
+  amount, on chain and off.
+- `@OnlyOwner` makes the validator require the `owner` field's key to sign.
+- `@Destroy` ends the instance: its thread token is burned and `close` says where its value goes.
+
+The contract chapters cover all of this in depth: [State and lifecycle](/contracts/state-and-lifecycle/),
+[Authorization](/contracts/authorization/), [Require and errors](/contracts/require-and-errors/).
+
+## 2. What `joust build` writes
+
+`joust dev` ran `joust build` first. Its output, in `build/joust/`:
+
+<FileTree>
+
+- build/joust/
+  - Counter.json the description: CIP-57 schemas plus JOUST's `x-joust` section
+  - Counter.plutus the compiled validator, CBOR hex
+  - Counter.js the client, with the description inlined
+  - Counter.d.ts its types
+  - contracts.json description, script and transition programs, for the runtime engine
+  - joust.lock.json the toolchain version and each contract's script hash
+  - deployments.devkit.json written by joust deploy
+
+</FileTree>
+
+The **description** is the contract's interface: its state, every call and its redeemer, its arguments' schemas, and
+the policies the validator enforces. Both the runtime engine and the page work from it. See the
+[description format](/reference/description-format/).
+
+The generated client wraps `JoustContract` from `@julclang/state-client`, with the description pinned in the module:
+
+```js title="build/joust/Counter.js (abridged)"
+// GENERATED by joust-gen from app.Counter. Do not edit.
+// The description is pinned here: the page verifies every prepared transaction against it (ADR-0013 D2).
+import { JoustContract } from '@julclang/state-client';
+
+export const description = {"preamble":{"title":"app.Counter", /* ... */ }};
+
+export class Counter {
+  /** @param o { deployment, service, chain, limits?, onReview? } */
+  constructor(o) { this.contract = new JoustContract({ ...o, description }); }
+  /** init Counter.init. */
+  async deploy(wallet, args = {}) {
+    const r = await this.contract.deploy(wallet, args);
+    return { ...r, instance: this.at(r.instance) };
+  }
+  /** An instance by its id (the thread token's name, hex). */
+  at(instanceId) { return new CounterInstance(this.contract.at(instanceId)); }
+}
+
+export class CounterInstance {
+  constructor(i) { this.i = i; this.id = i.id; }
+  read() { return this.i.read(); }
+  state() { return this.i.state(); }
+  /** action Counter.increment. */
+  increment(wallet, args = {}) { return this.i.call(wallet, "increment", args); }
+  /** action Counter.reset; signed by owner. */
+  reset(wallet, args = {}) { return this.i.call(wallet, "reset", args); }
+  /** destroy Counter.close; signed by owner. */
+  close(wallet, args = {}) { return this.i.call(wallet, "close", args); }
+}
+```
+
+And its types, from the same description:
+
+```ts title="build/joust/Counter.d.ts (abridged)"
+export type CounterState = { "count": bigint; "owner": Hex };
+export type CounterStateIn = { "count": Int; "owner": Hex };
+
+export declare class Counter {
+  constructor(o: JoustOptions);
+  readonly contract: JoustContract;
+  deploy(wallet: Cip30Api, args: Record<string, never>): Promise<CallResult & { instance: CounterInstance }>;
+  at(instanceId: Hex): CounterInstance;
+}
+export declare class CounterInstance {
+  readonly id: Hex;
+  read(): Promise<{ ref: string; state: CounterState; lovelace: bigint } | null>;
+  state(): Promise<CounterState | null>;
+  increment(wallet: Cip30Api, args: { "by": Int }): Promise<CallResult>;
+  reset(wallet: Cip30Api, args?: Record<string, never>): Promise<CallResult>;
+  close(wallet: Cip30Api, args?: Record<string, never>): Promise<CallResult>;
+}
+```
+
+Integers come back as `bigint`; you may pass them as `bigint`, a safe `number` or a decimal string (`Int`). Bytes
+are lowercase hex. [TypeScript](/languages/typescript/) explains the mapping.
+
+## 3. The engine in a worker
+
+The page prepares its own transactions. The runtime engine (Wasm, about 20 MB) runs in a module worker, which is two
+lines:
+
+```js title="page/engine.worker.js"
+// The runtime engine, in a worker: the page prepares its own transactions with it (see main.js).
+import '@julclang/joust-runtime/worker';
+```
+
+`page/main.js` starts it and wraps it as a **prepare service**, the object a client asks for transactions:
+
+```js title="page/main.js"
+import { blockfrostChain, walletView, VerificationError, toJson } from '@julclang/state-client';
+import { engineWorker } from '@julclang/joust-runtime/page';
+import { Wallet, NetworkType } from '@cardano-foundation/cardano-connect-with-wallet-core';
+import { Counter } from '../build/joust/Counter.js';
+// The network, deployments, contracts and engine: from joust dev while developing, inlined in a build.
+import net from 'virtual:joust/network';
+
+const $ = (id) => document.getElementById(id);
+const chain = blockfrostChain(new URL(net.chain, location.href).href);
+const deployment = net.deployments['app.Counter'];
+const service = engineWorker(new Worker(new URL('./engine.worker.js', import.meta.url), { type: 'module' }), {
+  engine: net.engine, chain: net.chain, clock: net.clock, networkId: net.networkId, ttlMs: net.ttlMs,
+  deployments: net.deployments, contracts: net.contracts, validators: net.validators,
+});
+const counter = new Counter({ service, chain, deployment, onReview: review });
+```
+
+- **`virtual:joust/network`** comes from the Vite plugin, `@julclang/joust/vite`. Under `joust dev` it fetches
+  `/joust/network.json` and the contracts when the page loads, so a redeploy after a save is picked up on reload. In
+  `vite build` it is inlined for one network. Its `chain` is `/chain`: the dev server's proxy, so a Blockfrost
+  project id never reaches the page.
+- **`chain`** is the page's own view of the chain. The verifier reads from it, independently of the engine.
+- **`engineWorker`** sends the engine's URL, its integrity hashes and the network to the worker, and returns a
+  service with `prepare(request)`. `service.ready` resolves once the engine has loaded.
+- **`new Counter({ service, chain, deployment, onReview })`**: the deployment (policy, address, reference scripts) is
+  pinned; the service builds; the page checks.
+
+The page logs how long the engine took to load:
+
+```js title="page/main.js"
+const started = performance.now();
+const entry = log('Loading the runtime engine (in a worker)…');
+service.ready.then(() => entry.ok(`Runtime engine ready in ${((performance.now() - started) / 1000).toFixed(1)} s: this page prepares its own transactions`),
+  (e) => entry.bad(`The runtime engine did not load: ${reason(e)}`));
+```
+
+[Pages](/apps/pages/) covers the worker, the plugin and static builds in depth.
+
+## 4. Connecting a wallet
+
+A dApp talks to browser wallets through **CIP-30**, the standard API that wallet extensions (Eternl, Lace, and
+others) inject as `window.cardano.<name>`. The page lists them, and on DevKit adds an in-page key, since browser
+wallets cannot join a private devnet:
+
+```js title="page/main.js"
+function walletChoices() {
+  const sel = $('wallet-choice');
+  const current = sel.value;
+  const injected = Object.entries(window.cardano ?? {}).filter(([, w]) => w && typeof w.enable === 'function');
+  sel.replaceChildren(...injected.map(([key, w]) => el('option', { value: `cip30:${key}` }, w.name ?? key)),
+    ...(net.network === 'devkit' ? [el('option', { value: 'dev' }, 'DevKit key (in this page)')] : []));
+  // ...
+}
+```
+
+Connecting uses the Cardano Foundation's connector to enable the extension with a network check, or makes the
+in-page key:
+
+```js title="page/main.js"
+if (choice === 'dev') {
+  const { devWallet } = await import('@julclang/state-client/devwallet');
+  const { generateMnemonic } = await import('@scure/bip39');
+  const { wordlist } = await import('@scure/bip39/wordlists/english');
+  const mnemonic = localStorage.getItem('joust.devkitKey') ?? generateMnemonic(wordlist, 256);
+  localStorage.setItem('joust.devkitKey', mnemonic);
+  app.api = devWallet({ chain, mnemonic, networkId: net.networkId });
+} else {
+  const key = choice.slice('cip30:'.length);
+  await new Promise((resolve, reject) => {
+    Wallet.connect(key, net.networkId === 1 ? NetworkType.MAINNET : NetworkType.TESTNET, resolve, reject).catch(reject);
+  });
+  app.api = await window.cardano[key].enable();
+}
+app.view = await walletView(app.api);
+if (app.view.networkId !== net.networkId) throw new Error(`the wallet is on network ${app.view.networkId}; this app is on ${net.network}`);
+```
+
+Either way, `app.api` is a CIP-30 API object. Everything after this line works the same with the DevKit key or with
+Eternl. Extensions inject themselves after load, some late, so the page also listens:
+
+```js title="page/main.js"
+Wallet.addEventListener('installedWalletExtensions', walletChoices);
+Wallet.startInjectWalletListener();
+```
+
+The **Top up** button posts the wallet's address to the dev server's `/dev/topup`, which funds it from DevKit's
+faucet. See [Wallets](/apps/wallets/).
+
+## 5. Calling the contract
+
+Each button calls the generated client with the wallet's CIP-30 API:
+
+```js title="page/main.js"
+$('create').addEventListener('click', () => act('create', async () => {
+  const r = await counter.deploy(app.api, {});
+  remember(r.instance.id);
+  return r;
+}));
+
+// per counter, in renderCounters():
+const inst = counter.at(id);
+const r = await inst.read();                 // { ref, state: { count, owner }, lovelace } or null
+el('button', { onclick: () => act('increment(1)', () => inst.increment(app.api, { by: 1n })) }, '+1');
+el('button', { onclick: () => act('increment(0)', () => inst.increment(app.api, { by: 0n })) }, '+0');
+el('button', { disabled: !mine, onclick: () => act('reset', () => inst.reset(app.api)) }, 'Reset');
+el('button', { disabled: !mine, onclick: () => act('close', () => inst.close(app.api)) }, 'Close');
+```
+
+One call such as `inst.increment(app.api, { by: 1n })` does all of this:
+
+<Steps>
+
+1. Encodes the arguments with the description's schemas, and reads the wallet: its addresses, keys and the UTxOs it
+   reports.
+2. Asks the service (the worker) to **prepare** the transaction. The engine fetches what it needs from the chain,
+   runs `increment` as a compiled transition program to get the next state, and builds the unsigned transaction from
+   the wallet's own UTxOs.
+3. **Verifies** the transaction in the page, against the pinned description and deployment, the wallet and the chain.
+4. Calls `onReview`, which shows the review dialog.
+5. Asks the wallet to sign (`signTx(cbor, true)`), adds the witness to the original bytes, checks the hash, and
+   submits through the wallet.
+6. Waits until the chain shows the transaction, and returns `{ txHash, report }`.
+
+</Steps>
+
+`act` wraps each call, logs the outcome and links the transaction to the network's explorer:
+
+```js title="page/main.js"
+async function act(label, fn) {
+  const entry = log(`${label}…`);
+  try {
+    const r = await fn();
+    entry.ok(`${label}: on chain, tx `, txLink(r.txHash));
+    await refresh();
+  } catch (e) {
+    if (e instanceof VerificationError) entry.bad(`${label}: refused by this page's verifier; the wallet was not asked to sign`, e.problems);
+    else entry.bad(`${label}: ${reason(e)}`);
+  }
+}
+
+const txLink = (hash) => (net.explorer
+  ? el('a', { href: net.explorer.replace('{tx}', hash), target: '_blank', rel: 'noopener' }, short(hash))
+  : short(hash));
+```
+
+`net.explorer` is the network's `explorer` from `joust.config.json`, with `{tx}` standing for the hash. DevKit's
+default is Yaci Viewer, `http://localhost:5173/transactions/{tx}`.
+
+## 6. The review dialog
+
+`onReview` receives `{ contract, call, report, txHash }` after the transaction has passed verification and before the
+wallet is asked. Resolve to go on; throw to cancel. The template shows what the page checked:
+
+```js title="page/main.js"
+function review({ contract, call, report }) {
+  const args = Object.keys(call.args ?? {}).length ? JSON.stringify(toJson(call.args)) : '';
+  $('review-body').replaceChildren(
+    el('h3', {}, `${contract}.${call.meta.name}(${args})`),
+    el('ul', {},
+      el('li', {}, `The redeemer is exactly this call, on the pinned script ${short(deployment.policy)}`),
+      el('li', {}, report.walletNet > 0n ? `Your wallet pays ${ada(report.walletNet)} in all (fee ${ada(report.fee)})`
+        : `Your wallet receives ${ada(-report.walletNet)} net of the ${ada(report.fee)} fee`),
+      el('li', {}, report.next ? `The next state: ${JSON.stringify(toJson(report.next))}` : 'The counter ends; its deposit comes back to you'),
+      el('li', {}, 'No other spends, mints, certificates, withdrawals or signers; it expires within minutes')),
+  );
+  const dlg = $('review');
+  dlg.returnValue = '';
+  dlg.showModal();
+  return new Promise((resolve, reject) => dlg.addEventListener('close',
+    () => (dlg.returnValue === 'sign' ? resolve() : reject(new Error('cancelled before signing'))), { once: true }));
+}
+```
+
+`report.walletNet` is what the wallet loses in lovelace, fee included (negative when it gains, as when `close` pays
+the deposit back). `report.next` is the next state, decoded from the new datum.
+
+## 7. What the page verifier checks
+
+Neither the engine nor the chain API is trusted. Before `onReview` runs, `verifyPrepared` (in
+[`js/state-client/src/verify.js`](https://github.com/bloxbean/joust/blob/main/js/state-client/src/verify.js))
+checks the transaction against what the page knows itself. For a Counter call that means:
+
+| Check | Refused when |
+|---|---|
+| Inputs | anything but the wallet's own UTxOs and this counter's UTxO is spent |
+| Redeemer | it is not exactly the call the page asked for, with the page's arguments, on the counter's input |
+| Script | the counter's UTxO is not at the pinned address, or a reference input is not a pinned one |
+| Continuation | there is not exactly one new counter UTxO with the token, an inline datum that decodes as `State` |
+| Mint | an action mints anything; `close` burns anything but its own token; a creation mints more than its new token |
+| Wallet's loss | the wallet loses more than it pays, plus the fee (plus the new UTxO's minimum ADA for a creation) |
+| Others | an output gives anyone else more than the script releases |
+| Extras | certificates, withdrawals, votes, metadata, other required signers, another network |
+| Fee | above what the protocol asks for this size and budget (times 1.2, plus 0.5 ADA), or above 3 ADA |
+| Collateral | not the wallet's, not returned to the wallet, or more than 5 ADA at risk |
+| Validity | it ends more than 900 slots (15 minutes) from now, or starts later than 60 slots from now |
+| Plan | the engine's plan of the transaction differs from the one the page derives from the bytes |
+
+What the page does not check, the validator does: that the next state is what `increment` computes, that `close`
+pays the owner, and that the script's value is conserved. Together, the wallet risks nothing beyond the call it was
+shown. A refusal throws `VerificationError`, whose `problems` the page lists; the wallet is never opened.
+
+## 8. The `+0` refusal
+
+Press **+0** on a counter. The activity log marks `increment(0)` as failed, with the contract's own message:
+`increment must be positive`.
+
+This refusal does not come from the page verifier. When the engine prepares the call, it runs `increment` itself,
+compiled from the same Java method, and `Require.that` fails with the contract's own message. No transaction is built,
+so no wallet is asked. The validator would refuse the same call on chain for the same reason; JOUST finds it before
+anything is signed or paid.
+
+The Node test checks the same thing:
+
+```js title="test/counter.test.js"
+await assert.rejects(instance.increment(wallet, { by: 0n }), /increment must be positive/);
+```
+
+## 9. Try it
+
+With `npm run dev` running, open http://127.0.0.1:5178 and:
+
+<Steps>
+
+1. Choose **DevKit key (in this page)**, **Connect**, then **Top up 1000 ADA**.
+2. **Create a counter** and review it: your wallet pays the fee and the counter's deposit.
+3. Press **+1** twice. The count shows 2; each review shows the next state.
+4. Press **+0**: refused before signing.
+5. **Reset**, then **Close**. Close's review shows your wallet receiving the deposit back, net of the fee.
+6. Change `increment` in `Counter.java` (for example, also refuse amounts over 100) and save. The dev server
+   rebuilds and redeploys a new script; reload the page and the new rule holds. Counters made by the old script stay
+   with it.
+
+</Steps>
+
+## What you learned
+
+- A JOUST contract is a state record and pure methods. `joust build` turns it into a validator, a description and a
+  typed client, and `joust deploy` publishes the validator as a reference script.
+- The page prepares transactions in a Web Worker with the runtime engine, which runs the contract's own methods. A
+  contract refusal surfaces there, before any wallet is involved.
+- The page verifies every transaction against the pinned description and deployment before `onReview` and the wallet
+  see it. The validator enforces the rest on chain.
+- CIP-30 wallets and the DevKit key are interchangeable: the client only needs the CIP-30 API.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Deploy to preview" href="/tutorials/deploy-preview/" description="Run this page on a public testnet with Eternl or Lace." />
+  <LinkCard title="JavaScript clients" href="/apps/javascript-clients/" description="The client API, services and the verifier in full." />
+  <LinkCard title="Pages: worker, Vite, static builds" href="/apps/pages/" description="How the page loads the engine, and how to ship it." />
+  <LinkCard title="Vault: deposits, time and payouts" href="/tutorials/vault/" description="The next contract: payable calls, time and payouts." />
+</CardGrid>

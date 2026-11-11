@@ -1,0 +1,344 @@
+---
+title: Testing
+description: Test a contract at every level - its methods as plain Java, the compiled validator with StateHarness, the attack suite, DevKit end-to-end tests, and the JavaScript and page tests.
+---
+
+import { Aside, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
+
+A JOUST contract is one class, but it runs in three places: your methods on the JVM, the compiled validator on
+chain, and the client building real transactions. Each example in the repository tests all three, at increasing
+cost:
+
+| Level | Tool | Needs | Catches |
+|---|---|---|---|
+| Plain Java | JUnit | Nothing | Wrong business logic, `Require` messages |
+| On-chain harness | `StateHarness` (`julc-state-testkit`) | The build's compiled validator | What the validator accepts and rejects; script budgets |
+| Attack suite | `Attacks` | An accepted harness transaction | Every mutation the invariants forbid must be rejected |
+| End to end | The generated client on Yaci DevKit | DevKit running | Building, balancing, submitting, confirming, contention |
+| JavaScript | `node --test`, Playwright | DevKit, built JS packages | JS clients, the runtime engine, the page verifier, pages in a browser |
+
+Add the test kit to your build (it brings JUnit 5 with it):
+
+```groovy
+testImplementation "org.julclang:julc-state-testkit:$joustVersion"   // in the JOUST build: project(':julc-state-testkit')
+```
+
+## Plain Java: test the methods
+
+Your methods are pure static functions, so test them directly. `StateHarness.ctx(caller, received, balance)` makes
+a `Ctx` with a fixed validity window, `[StateHarness.T0, T0 + WINDOW_MS)`:
+
+```java title="examples/counter/.../CounterTest.java"
+static final byte[] ALICE = StateHarness.fill(28, 0x11);    // a 28-byte key hash
+
+final StateHarness<Counter.State> h = StateHarness.of(CounterClient.SPEC);
+
+@Test
+void incrementResetClose() {
+    var s0 = Counter.init(h.ctx(ALICE, BigInteger.ZERO, BigInteger.ZERO));
+    var s1 = Counter.increment(s0, BigInteger.valueOf(5));
+    var s2 = Counter.increment(s1, BigInteger.TWO);
+    assertEquals(BigInteger.valueOf(7), Counter.count(s2));
+    assertEquals(BigInteger.ZERO, Counter.reset(s2).count());
+}
+
+@Test
+void rulesFailOnTheJvmWithTheirMessage() {
+    var s = Counter.init(h.ctx(ALICE, BigInteger.ZERO, BigInteger.ZERO));
+    var e = assertThrows(RequireException.class, () -> Counter.increment(s, BigInteger.ZERO));
+    assertEquals("increment must be positive", e.getMessage());
+}
+```
+
+This is where most of your tests belong: they are fast, and they exercise exactly the code the validator runs.
+
+## The compiled validator: StateHarness
+
+`StateHarness` evaluates the generated validator **as compiled by your build** (loaded from
+`META-INF/plutus/<Name>Validator.plutus.json`) in JuLC's VM, against transactions shaped like the ones the runtime
+submits. A transaction is accepted when every script it triggers accepts: SPEND for each state input, MINT if it
+mints or burns under the policy, and the shared verifiers when the contract uses them.
+
+The pattern: compute the next state on the JVM (as the client would), build the matching transaction, and assert:
+
+```java title="examples/counter/.../CounterTest.java"
+@Test
+void increment_byAnyone() {
+    var live = h.live(new Counter.State(BigInteger.valueOf(3), ALICE), BigInteger.ZERO);
+    var next = Counter.increment(live.state(), BigInteger.TEN);          // the client computes this on the JVM
+    var tx = h.act(live, new CounterValidator.Increment(BigInteger.TEN), next, null, null);
+    System.out.println("[increment] " + h.assertAccepted(tx));
+    System.out.println("  attacks rejected: " + Attacks.assertAllRejected(h, tx));
+}
+
+@Test
+void increment_wrongResult_rejected() {
+    var live = h.live(new Counter.State(BigInteger.valueOf(3), ALICE), BigInteger.ZERO);
+    var cheat = new Counter.State(BigInteger.valueOf(999), ALICE);
+    h.assertRejected(h.act(live, new CounterValidator.Increment(BigInteger.TEN), cheat, null, null), "wrong next state");
+}
+
+@Test
+void increment_hugeNumberCannotOutgrowTheDatum() {
+    var live = h.live(new Counter.State(BigInteger.valueOf(3), ALICE), BigInteger.ZERO);
+    var by = BigInteger.TEN.pow(400);    // ~170 bytes, over maxDatumBytes = 128
+    var next = Counter.increment(live.state(), by);
+    h.assertRejected(h.act(live, new CounterValidator.Increment(by), next, null, null), "datum over maxDatumBytes");
+}
+```
+
+The redeemers are the generated validator's records: `<Name>Validator.CreateInstance`, `BurnInstance`, and one per
+action or destroy (`Increment`, `Reset`, `Close`), with `Ctx` as their last field when the method declares it.
+
+### Creating, acting, destroying
+
+| Method | Builds | Notes |
+|---|---|---|
+| `StateHarness.of(SPEC [, params])` | A harness for a contract (and its params) | `SPEC` is the generated client's |
+| `ctx(caller, received, balance)` | A `Ctx` over `[T0, T0 + WINDOW_MS)` | `T0` is 1,800,000,000,000 ms, `WINDOW_MS` 120,000 |
+| `seed()` | The seed `TxOutRef` a create spends | Pass it to `CreateInstance` |
+| `live(state, funds)` | An instance on chain: `Live(ref, state, lovelace)` | `lovelace` = min-ADA + `funds` |
+| `create(createRedeemer, initial, ctx)` | A deploy: consumes the seed, mints the token, locks `initial` | |
+| `act(live, redeemer, next, payouts, signer, ctx)` | An action: spends, continues with `next`, pays out | `signer`: the key that signs, or null; `ctx`: the method's `Ctx`, or null. There is a form without `payouts` |
+| `destroy(live, redeemer, burnRedeemer, payouts, signer, ctx)` | A destroy: spends, burns, pays out | |
+| `evaluate(tx)` | A `Verdict`: one result per script, with CPU and memory | `accepted()` |
+| `assertAccepted(tx)` | Fails with every script's result unless all accept | Returns the `Verdict`; print it for budgets |
+| `assertRejected(tx, what)` | Fails if every script accepts | `what` names the rule, for the failure message |
+| `fill(len, byte)` | A test bytestring | `fill(28, 0x11)` for a key hash |
+
+The harness also builds transactions for owned objects (`liveObject`, `createObject`, `actObject`,
+`destroyObject`), native assets (`held`, `funds`, `createWith`, `stepWith`), intents and batches (`liveIntent`,
+`createIntent`, `cancelIntent`, `batch`), and the staking purposes (`withdrawTx`, `evaluateWithdraw`,
+`evaluateCertify`, `evaluateVote`, `evaluatePropose`). The examples show each: `bank`, `dex`, `pool`, `staking`.
+
+### Time, signers and payouts
+
+Pick deadlines relative to `T0` so the harness window is before or after them, and pass the payouts your method
+returned:
+
+```java title="examples/vault/.../VaultTest.java"
+static final BigInteger UNLOCK = StateHarness.T0.subtract(BigInteger.valueOf(60_000));   // already unlocked
+static final BigInteger LATER = StateHarness.T0.add(BigInteger.valueOf(3_600_000));      // still locked
+
+@Test
+void withdraw_afterUnlock() {
+    var live = h.live(new Vault.State(OWNER, UNLOCK, ADA.multiply(BigInteger.TEN)), ADA.multiply(BigInteger.TEN));
+    Ctx ctx = h.ctx(OWNER, BigInteger.ZERO, ADA.multiply(BigInteger.TEN));
+    var r = Vault.withdraw(live.state(), ADA.multiply(BigInteger.valueOf(3)), ctx);
+    var tx = h.act(live, new VaultValidator.Withdraw(ADA.multiply(BigInteger.valueOf(3)), ctx), r.state(), r.payouts(), OWNER, ctx);
+    System.out.println("[withdraw] " + h.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(h, tx));
+}
+
+@Test
+void withdraw_beforeUnlock_rejectedOnChain() {
+    var live = h.live(new Vault.State(OWNER, LATER, ADA.multiply(BigInteger.TEN)), ADA.multiply(BigInteger.TEN));
+    Ctx ctx = h.ctx(OWNER, BigInteger.ZERO, ADA.multiply(BigInteger.TEN));
+    var r = Vault.withdraw(live.state(), ADA, ctx);
+    h.assertRejected(h.act(live, new VaultValidator.Withdraw(ADA, ctx), r.state(), r.payouts(), OWNER, ctx), "@ValidAfter");
+}
+```
+
+`Ctx` must tell the truth, as the client's does: `balance` is the lovelace above the deposit in an action and
+everything in a destroy (`live.lovelace()`), and `received` must match what the transaction adds. The vault tests
+also check that a lying `Ctx` is rejected:
+
+```java title="examples/vault/.../VaultTest.java"
+Ctx claimed = h.ctx(BOB, ADA.multiply(BigInteger.TEN), ADA);       // says 10 ADA, the output only gets 1
+Ctx actual = h.ctx(BOB, ADA, ADA);
+var tx = h.act(live, new VaultValidator.Deposit(claimed), Vault.deposit(live.state(), claimed), BOB, actual);
+h.assertRejected(tx, "ctx.received must match the value added");
+```
+
+## The attack suite
+
+`Attacks.assertAllRejected(h, tx)` takes a transaction the harness accepts, applies every mutation the invariants of
+[ADR-0001 §4](https://github.com/bloxbean/joust/blob/main/docs/adr/0001-option-a-single-utxo-state-machine.md) (and
+of the later ADRs) forbid that applies to it, and fails listing any mutation the validator accepted. It returns how
+many it tried. Call it on every accepted transaction in your tests.
+
+A mutation applies only where it makes sense: removing a signer only if the call needed one, range attacks only if
+the transaction has a validity range, payout attacks only if it pays out. What it tries includes:
+
+| Invariant | Mutations |
+|---|---|
+| I1, I9 | Seed not consumed; two thread tokens minted; an extra token under the policy |
+| I2, I4 | Datum replaced; datum hash instead of inline datum; state output dropped |
+| I3 | Token dust added; one lovelace skimmed; one lovelace added |
+| I4, I12 | Thread token sent to a key address; stake credential on the state address; reference script on the state output |
+| I5, I11 | Required signer missing |
+| I6, I11 | Upper or lower bound unbounded; range shifted by 1 ms; range wider than `maxValidityMs` |
+| I7 | A payout untagged, tagged with another input, under-paid by one lovelace, paid to someone else, or to a script with the same hash |
+| I8 | Destroy without burning the token |
+| I10 | A junk UTxO (no thread token) spent as the state |
+| ADR-0007 | Native tokens skimmed; sends under-filled, redirected, re-tagged or unclaimed; user mints off by one |
+
+Double satisfaction across two instances needs two transactions, so it is its own helper:
+
+```java title="examples/counter/.../CounterTest.java"
+var txA = h.destroy(a, new CounterValidator.Close(ctx), new CounterValidator.BurnInstance(),
+        Counter.close(a.state(), ctx), ALICE, ctx);
+var txB = h.destroy(b, new CounterValidator.Close(ctx), new CounterValidator.BurnInstance(),
+        Counter.close(b.state(), ctx), ALICE, ctx);
+h.assertRejected(Attacks.sharedPayouts(txA, txB), "one payout output satisfying two instances");
+```
+
+The attack suite tests the **generated** checks. Your own rules (who may call, what amounts are allowed) are yours
+to test with `assertRejected`, as the examples above do.
+
+## The description
+
+JavaScript clients encode calls from the contract's description. One line checks that the description matches the
+generated validator, constructor by constructor:
+
+```java title="examples/counter/.../DescriptionTest.java"
+@Test
+void descriptionsMatchTheValidators() {
+    Descriptions.assertMatches(Counter.class, CounterValidator.class);
+}
+```
+
+## End to end on Yaci DevKit
+
+The last level runs the generated client against a live local network. The examples tag these tests `devnet` and
+skip them when DevKit is not reachable, so `./gradlew build` works anywhere:
+
+```java title="examples/counter/.../CounterDevnetTest.java"
+@Tag("devnet")
+class CounterDevnetTest {
+
+    @BeforeAll
+    static void devkit() {
+        assumeTrue(DevKit.isReachable(), "Yaci DevKit not reachable");
+    }
+
+    @Test
+    void lifecycle() {
+        var runtime = DevKit.runtime();
+        var alice = DevKit.fundedAccount(500);
+        var bob = DevKit.fundedAccount(500);
+
+        var counter = CounterClient.deploy(runtime, alice);
+        assertEquals(BigInteger.ZERO, counter.count());
+        assertArrayEquals(Keys.pkh(alice), counter.state().owner());
+        assertEquals(BigInteger.valueOf(CounterClient.SPEC.minAda()), counter.lovelace());
+
+        counter.increment(bob, BigInteger.valueOf(5));
+        counter.increment(alice, BigInteger.TWO);
+        assertEquals(BigInteger.valueOf(7), counter.count());
+
+        // Rejected on the JVM before anything is submitted.
+        assertThrows(RequireException.class, () -> counter.increment(bob, BigInteger.ZERO));
+        assertThrows(RequireException.class, () -> counter.reset(bob));
+
+        // Reconnect by id from a fresh client.
+        var again = CounterClient.at(runtime, counter.instanceId());
+        again.reset(alice);
+        assertEquals(BigInteger.ZERO, counter.count());
+
+        var closed = counter.close(alice);
+        assertEquals(1, closed.payouts().size());
+        assertThrows(InstanceNotFoundException.class, counter::state);
+    }
+}
+```
+
+```sh
+yaci-devkit up --enable-yaci-store
+./gradlew :examples:counter:test       # runs the devnet test too, now that DevKit answers
+```
+
+`DevKit` (in `examples/devkit`) builds a runtime for DevKit and funds fresh accounts from its faucet; the
+[quick start](/start/quick-start-java/#run-it-on-devkit) shows a trimmed copy for your own project. Use fresh
+accounts per test, keep the TTL short (DevKit's time horizon is minutes), and expect each call to take a few seconds.
+
+The JOUST build adds two switches for these tests:
+
+| Property | Effect |
+|---|---|
+| `-PjoustFixtures` | Records every transaction the examples' tests build, with the chain reads behind it, into `fixtures/m0/<example>` (the oracle the JavaScript runtime is checked against; ADR-0015 M0). DevKit must be running |
+| `-Pjoust.dumpTx=<dir>` | Writes each submitted transaction's CBOR to `<dir>` |
+
+## When a test fails
+
+- **`assertAccepted` fails:** the message lists each script, `ok` or `REJECTED`, with its CPU and memory, the
+  traces and the error. `Require` messages appear in the traces.
+- **Which generated check failed?** Build with the processor option `-Ajoust.traces=true`: every failing check then
+  traces its name (larger scripts; for debugging only). For example:
+
+  ```groovy
+  tasks.named('compileJava', JavaCompile) {
+      options.compilerArgs += ['-Ajoust.traces=true']
+  }
+  ```
+
+- **`-Pjoust.failedTerm`** (JOUST build) adds the failing UPLC term to the harness output.
+- **The JVM accepts, the validator rejects** (or the reverse) on the same input: that is a divergence between the two
+  runs. Look for `byte[]` compared with `.equals`, or arithmetic outside `BigInteger`; see [Java](/languages/java/).
+
+## JavaScript tests
+
+The npm side is tested with Node's built-in runner, `node --test`, against DevKit.
+
+<Tabs>
+<TabItem label="Your npm project">
+
+A project made by `create-joust` has `test/counter.test.js`. Build and deploy first, then run it:
+
+```sh
+npm run build
+npm run deploy
+npm test          # node --test test/*.test.js
+```
+
+```js title="test/counter.test.js"
+const counter = new Counter(rt.options('app.Counter'));
+const { instance } = await counter.deploy(wallet, {});
+await instance.increment(wallet, { by: 5n });
+await instance.increment(wallet, { by: 2n });
+assert.equal((await instance.state()).count, 7n);
+await assert.rejects(instance.increment(wallet, { by: 0n }), /increment must be positive/);
+await instance.close(wallet);
+assert.equal(await instance.state(), null);
+```
+
+</TabItem>
+<TabItem label="JOUST's own packages">
+
+```sh
+(cd js/state-client && npm install && npm test)      # codec and verifier; CI runs these
+(cd js/joust-runtime && npm install && npm test)     # the runtime engine on DevKit, Blockfrost and Ogmios providers
+(cd js/joust && npm install && npm test)             # joust dev/serve, and the template's page in Chromium
+```
+
+`js/joust-runtime/test/devkit.test.js` runs Counter and Bank from Node with no JVM, and checks that every
+tampered variant of an engine-built transaction is refused before the wallet is asked to sign.
+
+</TabItem>
+</Tabs>
+
+### Pages in a browser
+
+Node tests cannot catch a page that fails to load. `js/joust/test/page.test.js` drives the template's page in
+Chromium with Playwright, on DevKit: it connects the in-page DevKit key, tops it up, creates a counter, increments
+it, sees the contract refuse `+0`, and closes it, with every transaction prepared in the page's worker and verified
+before signing. It also runs the built page as static files (with its engine checked against the hashes pinned in
+the page) and a MerkleMap contract whose mirror survives a reload. The tests skip themselves when DevKit is not
+reachable. If Playwright has no browser yet, install Chromium with `npx playwright install chromium`.
+
+The dApp example runs its page flows from Gradle: `DappDevnetTest` drives `examples/dapp/frontend/e2e/run.mjs` in
+Node on DevKit, including a malicious prepare service whose every transaction the page must refuse.
+
+<Aside type="tip">
+
+A good test file for a new contract has, for each method: a JVM test of the happy path and of each `Require`; a
+harness test that is accepted and runs `Attacks.assertAllRejected`; a harness test per rule the validator must
+enforce (`assertRejected`); and one DevKit test of the whole lifecycle.
+
+</Aside>
+
+## Next steps
+
+<LinkCard title="Security model" description="What each invariant protects, and what is left to you." href="/contracts/security-model/" />
+<LinkCard title="Require and errors" description="How rules fail on the JVM and on chain." href="/contracts/require-and-errors/" />
+<LinkCard title="Fees and script size" description="Read budgets from the harness and keep scripts small." href="/contracts/fees-and-size/" />
+<LinkCard title="JavaScript clients" description="The JS client, verifier and runtime engine." href="/apps/javascript-clients/" />

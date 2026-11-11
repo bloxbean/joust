@@ -1,0 +1,249 @@
+---
+// The JOUST landing page: Java (with cardano-client-lib) first; the npm path in its own, experimental, section.
+import { Code } from 'astro:components';
+import '../styles/landing.css';
+import { SITE } from '../../site.config.mjs';
+import { JAVA, JAVA_CLIENT, JSC, JS, GRADLE, NPM } from '../components/landing/samples.mjs';
+import mark from '../assets/joust-emblem.svg?raw';
+import overviewSvg from '../assets/diagrams/joust-overview.svg';
+import sameMethodSvg from '../assets/diagrams/same-method.svg';
+import kindsSvg from '../assets/diagrams/state-kinds.svg';
+import lifecycleSvg from '../assets/diagrams/lifecycle.svg';
+import browserSvg from '../assets/diagrams/browser-path.svg';
+
+const theme = 'github-dark-default';
+const why = [
+  { t: 'No datums, redeemers or UTxO plumbing', d: 'Write a state record and the methods that change it. JOUST generates the validator, the minting policy for instance tokens, the redeemers and the transaction building.' },
+  { t: 'One method, never out of sync', d: 'The method that computes the next state on the JVM is the method the validator re-runs on chain. The client and the contract cannot disagree.' },
+  { t: 'Safe by construction', d: 'Every generated validator enforces a one-shot thread token, the exact datum and value, a verified caller and validity window, and tagged payouts. Each example is attack-tested.' },
+  { t: 'Plain Java, plain Gradle', d: 'A JOUST contract is an annotated Java class. The annotation processor runs inside javac; JuLC compiles the on-chain part to Plutus V3.' },
+  { t: 'Typed clients on cardano-client-lib', d: 'Each contract gets a generated Java client: deploy, call, read views. A failing rule is caught on the JVM before anything is built or paid for.' },
+  { t: 'All of Cardano', d: 'Native assets and minting, MerkleMap state, owned objects, batched intents, composition, staking, DRep votes and upgrades: as annotations, not hand-written scripts.' },
+];
+const kinds = [
+  { n: '01', t: 'Inline state', href: '/contracts/state-and-lifecycle/' },
+  { n: '02', t: 'MerkleMaps', href: '/contracts/merklemaps/' },
+  { n: '03', t: 'Owned objects', href: '/contracts/owned-objects/' },
+  { n: '04', t: 'Batched intents', href: '/contracts/batched-intents/' },
+  { n: '05', t: 'Native assets', href: '/contracts/assets-mints-sends/' },
+  { n: '06', t: 'Keyed objects (next release)', href: '/contracts/keyed-objects/' },
+];
+const ecosystem = [
+  { t: 'JuLC', d: 'The Java to UPLC compiler', href: 'https://julc.dev' },
+  { t: 'cardano-client-lib', d: 'Transaction building on the JVM', href: 'https://github.com/bloxbean/cardano-client-lib' },
+  { t: 'Yaci DevKit', d: 'A local Cardano network in seconds', href: 'https://github.com/bloxbean/yaci-devkit' },
+  { t: 'Yaci Store', d: 'Blockfrost-compatible chain API', href: 'https://github.com/bloxbean/yaci-store' },
+];
+---
+
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JOUST: State Contract Simplified</title>
+  <meta name="description" content={SITE.description} />
+  <link rel="canonical" href={SITE.url + '/'} />
+  <meta property="og:title" content="JOUST: State Contract Simplified" />
+  <meta property="og:description" content={SITE.description} />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content={SITE.url + '/joust-knight.png'} />
+  <meta property="og:image:alt" content="JOUST — State Contract Simplified" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="/" aria-label="JOUST home"><span class="brand-mark" set:html={mark} /><span>JOUST</span></a>
+      <nav class="nav-links">
+        <a href="/start/why-joust/">Docs</a>
+        <a href="/tutorials/vault/">Tutorials</a>
+        <a href="/reference/annotations/">Reference</a>
+        <a href="/ai/">AI</a>
+        <a href={SITE.repo} rel="noopener">GitHub</a>
+      </nav>
+      <a class="btn btn-small" href="/start/quick-start-java/">Get started</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="glow glow-a"></div><div class="glow glow-b"></div>
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <img class="hero-logo" src="/joust-knight.svg" width="200" height="200" alt="JOUST — State Contract Simplified" />
+          <p class="eyebrow"><span class="dot"></span> Java &middot; cardano-client-lib &middot; Plutus V3 &middot; Experimental</p>
+          <h1>State contracts for Cardano, <span class="grad">in Java.</span></h1>
+          <p class="lead">
+            Write a state record and the methods that change it. JOUST compiles the same Java method into the
+            on-chain validator and into a typed client on cardano-client-lib, so your contract and the code that
+            calls it can never disagree.
+          </p>
+          <div class="ctas">
+            <a class="btn" href="/start/quick-start-java/">Start with Java</a>
+            <a class="btn btn-ghost" href="/start/first-contract/">Your first contract</a>
+            <a class="link-arrow" href="/start/why-joust/">Why JOUST &rarr;</a>
+          </div>
+          <div class="terminal" aria-label="Run the counter example">
+            <span class="prompt">$</span> ./gradlew :examples:counter:run<span class="caret"></span>
+          </div>
+        </div>
+        <div class="hero-code">
+          <div class="window">
+            <div class="window-bar">
+              <span></span><span></span><span></span>
+              <div class="tabs" role="tablist">
+                <input type="radio" name="hero-tab" id="t-java" checked /><label for="t-java">Counter.java</label>
+                <input type="radio" name="hero-tab" id="t-client" /><label for="t-client">CounterApp.java</label>
+                <input type="radio" name="hero-tab" id="t-jsc" /><label for="t-jsc">Counter.jsc</label>
+              </div>
+            </div>
+            <div class="panes">
+              <div class="pane p-java"><Code code={JAVA} lang="java" theme={theme} /></div>
+              <div class="pane p-client"><Code code={JAVA_CLIENT} lang="java" theme={theme} /></div>
+              <div class="pane p-jsc"><Code code={JSC} lang="kotlin" theme={theme} /></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section band">
+      <div class="wrap">
+        <h2 class="center">One method. Two places.</h2>
+        <p class="sub center">The idea JOUST is built on: the rule you write is the rule the chain enforces.</p>
+        <figure class="diagram"><img src={sameMethodSvg.src} width={sameMethodSvg.width} height={sameMethodSvg.height} alt="One method, run twice: on the JVM to build the transaction, on chain in the validator to enforce it" loading="lazy" /></figure>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Why JOUST</h2>
+        <p class="sub">Cardano's model is safe and parallel. Writing for it by hand is slow and easy to get wrong. JOUST keeps the model and removes the plumbing.</p>
+        <div class="grid3">
+          {why.map((w) => (
+            <article class="card">
+              <h3>{w.t}</h3>
+              <p>{w.d}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="wrap">
+        <h2>What JOUST generates</h2>
+        <p class="sub">From one annotated class, during your Gradle build: an on-chain validator compiled by JuLC, a typed Java client on cardano-client-lib, and a description for other languages.</p>
+        <figure class="diagram"><img src={overviewSvg.src} width={overviewSvg.width} height={overviewSvg.height} alt="What JOUST generates from one contract: the validator, the Java client and a description" loading="lazy" /></figure>
+        <figure class="diagram"><img src={lifecycleSvg.src} width={lifecycleSvg.width} height={lifecycleSvg.height} alt="An instance's life on chain: create, actions, destroy, tied together by a thread token" loading="lazy" /></figure>
+        <p class="center"><a class="link-arrow" href="/start/how-it-works/">How JOUST works &rarr;</a></p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Six kinds of state</h2>
+        <p class="sub">Start with one UTxO. Grow into maps, per-user objects, batching, assets and keyed objects as your app does, with the same programming model.</p>
+        <figure class="diagram"><img src={kindsSvg.src} width={kindsSvg.width} height={kindsSvg.height} alt="Six kinds of state: inline, MerkleMaps, owned objects, batched intents, native assets, keyed objects" loading="lazy" /></figure>
+        <div class="kind-links">
+          {kinds.map((k) => (<a href={k.href}><span>{k.n}</span>{k.t}</a>))}
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="wrap">
+        <h2>Get started</h2>
+        <p class="sub">Java 25 and Gradle. Run against Yaci DevKit locally, then deploy to the preview testnet.</p>
+        <div class="grid2 start-grid">
+          <div class="start">
+            <div class="start-head"><h3>Add JOUST to a Gradle build</h3><span class="pill">JDK 25</span></div>
+            <Code code={GRADLE} lang="groovy" theme={theme} />
+            <a class="link-arrow" href="/start/quick-start-java/">Quick start: Java &rarr;</a>
+          </div>
+          <div class="start-list">
+            <a class="card path" href="/start/first-contract/"><h3>Your first contract</h3><p>The Counter, step by step: state, actions, owner checks, views, destroy.</p></a>
+            <a class="card path" href="/tutorials/vault/"><h3>Tutorials</h3><p>Vaults, escrows, tokens in MerkleMaps, banks, pools, a DEX, a multisig treasury and more.</p></a>
+            <a class="card path" href="/languages/jsc/"><h3>.jsc, when you want it</h3><p>A compact contract syntax that lowers to the same Java contract at build time.</p></a>
+          </div>
+        </div>
+        <p class="note">JOUST is experimental, a research and learning project: not for production. Release candidates (<code>0.1.0-pre1-rc2</code>) are in the BloxBean release repository; nothing is on Maven Central yet. <a href="/project/status-and-roadmap/">Status and roadmap</a>.</p>
+      </div>
+    </section>
+
+    <section class="section experimental">
+      <div class="wrap">
+        <p class="eyebrow amber"><span class="dot amber"></span> Experimental</p>
+        <h2>JavaScript and the browser, with npm</h2>
+        <p class="sub">The same contracts from Node and from web pages, with no JDK: JOUST's toolchain and runtime run as WebAssembly built with GraalVM Web Image. Both are experimental. Java is the supported path.</p>
+        <div class="split">
+          <div class="exp-code">
+            <Code code={JS} lang="js" theme={theme} />
+            <Code code={NPM} lang="sh" theme={theme} />
+          </div>
+          <div>
+            <ul class="checks">
+              <li><strong>Pages build their own transactions.</strong> The runtime engine runs in a Web Worker; no server prepares anything.</li>
+              <li><strong>Verified before signing.</strong> The page checks every transaction against the contract's pinned description before a CIP-30 wallet signs.</li>
+              <li><strong>Pinned engine.</strong> Static builds pin the engine's hashes (SRI): a browser refuses an engine whose bytes differ.</li>
+              <li><strong>Maps in the browser.</strong> MerkleMap state is mirrored in IndexedDB and rebuilt from the chain when missing.</li>
+            </ul>
+            <div class="ctas">
+              <a class="btn btn-ghost" href="/start/quick-start-npm/">Quick start: JavaScript &amp; TypeScript</a>
+              <a class="link-arrow" href="/apps/pages/">How pages work &rarr;</a>
+            </div>
+            <p class="note">The npm packages are not released yet: until they are, the quick start installs them from a local registry.</p>
+          </div>
+        </div>
+        <figure class="diagram"><img src={browserSvg.src} width={browserSvg.width} height={browserSvg.height} alt="A JOUST page from the browser to the chain" loading="lazy" /></figure>
+      </div>
+    </section>
+
+    <section class="section alt ai">
+      <div class="wrap ai-grid">
+        <div>
+          <p class="eyebrow"><span class="dot"></span> AI-ready</p>
+          <h2>Docs your AI agent can read</h2>
+          <p class="sub left">Point your coding agent at JOUST's machine-readable docs and it writes contracts that follow the rules: the Java subset, the annotations, the patterns and the pitfalls.</p>
+          <a class="btn btn-ghost" href="/ai/">Using JOUST with AI</a>
+        </div>
+        <div class="ai-links">
+          <a href="/ai/starter-pack/"><strong>AI starter pack</strong><span>The one file to ingest before writing JOUST code</span></a>
+          <a href="/llms.txt"><strong>llms.txt</strong><span>A curated index of every page</span></a>
+          <a href="/llms-full.txt"><strong>llms-full.txt</strong><span>All the docs in one markdown file</span></a>
+          <a href="/ai/catalog.json"><strong>catalog.json</strong><span>Every annotation and example, machine-readable</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Built on the BloxBean stack</h2>
+        <div class="eco">
+          {ecosystem.map((e) => (
+            <a class="eco-item" href={e.href} rel="noopener"><strong>{e.t}</strong><span>{e.d}</span></a>
+          ))}
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div class="brand small"><span class="brand-mark" set:html={mark} /><span>JOUST</span><em>{SITE.tagline}</em></div>
+      <nav>
+        <a href="/start/why-joust/">Docs</a>
+        <a href="/reference/examples/">Examples</a>
+        <a href="/project/architecture-decisions/">Architecture decisions</a>
+        <a href="/llms.txt">llms.txt</a>
+        <a href={SITE.repo} rel="noopener">GitHub</a>
+      </nav>
+      <p class="muted">A BloxBean project. Built with JuLC, cardano-client-lib and Yaci DevKit.</p>
+    </div>
+  </footer>
+</body>
+</html>

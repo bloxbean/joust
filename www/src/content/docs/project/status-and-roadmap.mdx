@@ -1,0 +1,156 @@
+---
+title: Status and roadmap
+description: What JOUST does today, what is experimental, what comes next, what is published and how releases are made.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Status: experimental, a research and learning project">
+
+JOUST is an experimental project created mainly for research and exploration of state-oriented smart contracts on
+Cardano. It is AI-generated, with human-assisted design, testing and verification. **Do not use it in production.**
+Expect rough edges, incomplete features and bugs.
+
+</Aside>
+
+JOUST is **pre-release**. Every feature on this page is implemented, tested at three levels (the method on the JVM,
+the compiled validator in a harness with the attack suite, and end to end on Yaci DevKit) and recorded in an
+[architecture decision](/project/architecture-decisions/). Nothing has a stable release yet: APIs can still change.
+
+## What is published
+
+| Where | What |
+|---|---|
+| BloxBean release repository, `https://repo.bloxbean.org/maven/releases` | JOUST `0.1.0-pre1-rc2`: `julc-state-api` (with its `onchain` jar), `-dsl`, `-processor`, `-runtime`, `-server`, `-testkit` and `-verifier`; and JuLC `0.1.0-pre21-rc1`, which `main` uses. See [Quick start: Java & Gradle](/start/quick-start-java/) |
+| Maven Central | Nothing yet |
+| npmjs.org | Only placeholders for `@julclang/joust`, `@julclang/joust-runtime`, `@julclang/state-client` and `create-joust`. `npm create joust@latest` works once they are released; until then they install from a local registry (see [Quick start: JavaScript & TypeScript](/start/quick-start-npm/)) |
+
+Features on `main` after `0.1.0-pre1-rc2` come with the next release candidate.
+
+## What works today
+
+### Contracts
+
+| Option | What it gives you | ADR | Example |
+|---|---|---|---|
+| A | Single-UTxO state machines: `@Init`, `@Action`, `@View`, `@Destroy`, `@Payable`, `@SignedBy`/`@OnlyOwner`, `@ValidAfter`/`@ValidBefore`, payouts | 0001 | `counter`, `vault`, `escrow`, `crowdfund` |
+| B | `MerkleMap` state: unbounded maps in a 32-byte root, proofs checked by the shared `MapVerifier` | 0002, 0014 | `token`, `locker` |
+| C | `@Owned` objects beside shared state: contention-free per-user UTxOs | 0003 | `bank` |
+| D | `@Batched` intents and a permissionless batcher for hot shared state | 0004 | `pool` |
+| E | `.jsc`, a compact contract language lowered to a Java `@StateContract` | 0005 | `dsl` |
+| F | Optimistic L2 **spike**: checkpoints, a challenge window, one-step fraud proofs | 0006 | `rollup` |
+| G | Native assets in state, minting under the contract's policy, general outputs (`Send`) | 0007 | `dex`, `market` |
+| H | Cheaper generated checks and smaller scripts | 0008 | all |
+| I | `@Params`, `@Quorum`, `@AuthorizedBy` (keys and script governors), `@Invariant`, authenticated events | 0009 | `treasury` |
+| J | Every script purpose: `@Withdraw`, `@Certify`, `@Votes`, `@Propose`, `stakeSelf` | 0010 | `staking` |
+| K | Composition (`Compose`), `@Reads`, deposits (`@Receives`), migration (`@MigrateTo`/`@Migrate`) | 0011 | `oracle`, `fees`, `upgrade` |
+| L | Several owned types, MerkleMaps in objects, moves between instances (`@Into`/`@Admits`) | 0012 | `guild` |
+| M | CIP-30 wallets (`WalletAccount`, `Compose.prepare()`), contract descriptions, the JavaScript client, the prepare service, a browser dApp | 0013 | `wallet`, `dapp` |
+| Keyed objects | `@Owned(key = ...)`: at most one object per key, in a sorted on-chain list; Java client, engine and page verifier. **On `main` (PR #37), not in `0.1.0-pre1-rc2`: comes with the next release** | 0016 | `registry` |
+
+See [Examples](/reference/examples/) for what each example shows and how to run it.
+
+### JavaScript and npm (ADR-0015)
+
+ADR-0015 ships JOUST to JavaScript developers as two prebuilt Wasm engines inside npm packages: a toolchain that
+compiles `.jsc` and `.java` contracts in Node, and a runtime that prepares transactions in Node and in the browser.
+Its milestones M0 to M4 are implemented; their evidence is recorded in ADR-0015 §13.
+
+| Milestone | What it delivered |
+|---|---|
+| M0 | The runtime builds QuickTx `Tx` (never `ScriptTx`), and fixtures recorded on DevKit (`fixtures/m0`) became the oracle for everything after |
+| S0 to S2b (gates) | The runtime in a Web Image; the toolchain engine compiling Counter, Bank and `.jsc` in Node; transition programs evaluated in the engine; read discovery for MerkleMaps |
+| M1 | Description v2 with call recipes; one description-driven runtime core shared by the JVM and the engine; deterministic replay from a call request and a snapshot |
+| M2 | The packages `@julclang/joust-runtime`, `@julclang/joust` and `create-joust`, beside `@julclang/state-client`; publishing to a local registry; the no-Java acceptance run |
+| M3 | Feature parity through npm: every example's DevKit flow passes through the npm path, byte-identical to the JVM on the recorded fixtures (`fixtures/m3`) |
+| M4 | `joust deploy` (preview through Blockfrost), `joust dev`, `joust serve`, the Vite plugin (`@julclang/joust/vite`), the engine in a page worker with SRI, pluggable chain providers (Blockfrost and Yaci Store, Ogmios), cardano-js-sdk instead of CSL, the Cardano Foundation's wallet connector, and MerkleMap mirrors |
+
+M4's exit was a counter dApp on the preview testnet, made with `npm create joust` from the local registry,
+prepared in the page's worker, verified by the page and signed by a browser wallet (ADR-0015 §13.11).
+
+### Experimental
+
+- **Option F** is a spike, not a product. ADR-0006 §3 lists what is not built: data availability at scale, deposits
+  and exits, large states, liveness and censorship resistance, and generating the L2 program from a contract.
+- **ADR-0013 phase 4** (a contract's Java compiled per contract with GraalVM Web Image, `-Ajoust.portable=true`)
+  stays experimental. ADR-0015's engines replace it as the way to run contracts off chain.
+
+## Known limits
+
+- **Not through npm yet:** `@Votes` and `@Propose` calls (the JVM client has no calls for them either);
+  `@Init`/`@OwnedInit` inside compositions; quorum and governors on owned objects; batches over maps or assets
+  (ADR-0015 §13.8). No example needs them.
+- **Batches** are memory-bound at about 8 intents (ADR-0004 §6).
+- **Script size:** a transaction is at most 16 KB, so a script must stay well below it. Heavy contracts (three owned
+  types with moves and maps) have exceeded it. See [Fees and script size](/contracts/fees-and-size/).
+- **Mirrors over Ogmios alone** cannot be rebuilt from the chain: Ogmios serves no history, so it needs Kupo or an
+  indexer beside it (ADR-0015 §13.12).
+- **DevKit pays no rewards within a test** (rewards take epochs), so staking flows on DevKit collect a zero balance.
+- **Keyed objects** (ADR-0016) are refused in contracts with native assets, MerkleMaps, `@Batched` actions or
+  migration (keyed types in asset-aware contracts are ADR-0016's M4, a follow-up), and a page runs keyed calls one at
+  a time and never in a composition. See [Keyed objects](/contracts/keyed-objects/#rules-and-limits).
+
+## What is next
+
+### M5: the release pipeline
+
+M5 is the last milestone of ADR-0015: GraalVM images in CI, npm tarballs with provenance, and publishing to
+npmjs.org. The pipeline is in place: the release workflow (below) builds the two Wasm engines in CI and publishes the
+four packages through npm trusted publishing. npm publishing is still switched off (`npm_publish=false` in
+`gradle.properties`, so a release runs `npm publish --dry-run`), and provenance waits for the repository to be public.
+Until the packages are released, the local registry stands in, and they behave exactly as if published (ADR-0015 D9).
+
+### Follow-ups found on preview
+
+The maintainer's preview run with a real wallet (ADR-0015 §13.11) found two fee follow-ups:
+
+- **Issue #33:** the fee overpays by one vkey witness (4,563 lovelace per call in that run).
+- **Issue #34:** the reference-script fee was 29 % of a call's fee. Script size is now the largest part of a simple
+  call's cost (ADR-0008).
+
+### Upstream
+
+- **JuLC.** JOUST needs `@StateContract` as a fixed alias of `@OnchainLibrary` with a robust library-source scan
+  (bloxbean/julc#311), and the scoped attribution query the npm toolchain uses (bloxbean/julc#313). Both are in the
+  JuLC release candidate `0.1.0-pre21-rc1`, which `main` uses (`gradle/libs.versions.toml`), from the BloxBean
+  release repository. JuLC's CIP-57 blueprint still lacks vocabulary for vote and propose handlers (hence
+  `-Ajulc.blueprint=false`).
+- **cardano-client-lib.** ADR-0001 §12 and ADR-0015 list: an option to keep an inline datum's map order instead of
+  always writing canonical CBOR; documenting that QuickTx takes the fee from an output at the fee payer's address;
+  duplicate keys in `MapPlutusData`; and keeping required signers in a stable order.
+
+### Later
+
+ADR-0015 §11 names work outside its scope: editor support (a `.jsc` language server), making `.jsc` the default
+language for JavaScript developers, and a Kotlin front end (queued). ADR-0015 Q2 keeps open an export of a built call
+as a CCL TxPlan, and JOUST as a QuickTx extension once CCL's prerequisites are met.
+
+## How JOUST is published
+
+The process is in [`docs/release-ops.md`](https://github.com/bloxbean/joust/blob/main/docs/release-ops.md).
+
+| Piece | What it does |
+|---|---|
+| [`.github/workflows/build.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/build.yml) | CI on pushes to `main` and `release/**` and on pull requests: `./gradlew build -PnoDevnet` (JVM and harness tests, the JavaScript client's tests), the DevKit tests in shards (`-PdevnetOnly`) on Yaci DevKit, and the publication scope check |
+| [`.github/workflows/tag-release.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/tag-release.yml) | Runs when `version` in `gradle.properties` changes on `main` or `release/**`: after a release owner approves, it tags `v<version>` |
+| [`.github/workflows/release.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/release.yml) | Runs on a `v*` tag: builds and signs the Maven artifacts once, publishes them to `https://repo.bloxbean.org/maven/releases`, stages a Maven Central deployment that a maintainer publishes by hand, and builds the Wasm engines and publishes the npm packages (or only checks them, with `npm_publish=false`) |
+| [`.github/workflows/bloxbean-snapshot.yml`](https://github.com/bloxbean/joust/blob/main/.github/workflows/bloxbean-snapshot.yml) | Manual. Publishes a development snapshot of a commit whose `build.yml` run passed to `https://repo.bloxbean.org/maven/snapshots` (versions `0.1.0-pre1-<sha7>-SNAPSHOT`) |
+
+The published Maven modules are `julc-state-api` (with its `onchain` jar, the on-chain sources for a consumer's
+annotation processor path), `julc-state-dsl`, `julc-state-processor`, `julc-state-runtime`, `julc-state-server`,
+`julc-state-testkit` and `julc-state-verifier`. The toolchain and the runtime engine ship only inside the npm
+packages.
+
+Before a release, the npm packages can be tried from a local registry: `./gradlew npmPublishLocal -PgraalvmHome=...`
+builds both engines and runs `js/publish-local.sh` (version `0.1.0-pre1-snapshot`), and
+`./gradlew npmAcceptance -PgraalvmHome=...` runs the npm-only developer flow on DevKit in a shell where no Java can be
+found.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Architecture decisions" href="/project/architecture-decisions/" description="The full argument behind every feature on this page." />
+  <LinkCard title="Examples" href="/reference/examples/" description="One tested example per feature, with script sizes and budgets." />
+  <LinkCard title="Quick start: npm & JavaScript" href="/start/quick-start-npm/" />
+  <LinkCard title="Quick start: Java & Gradle" href="/start/quick-start-java/" />
+</CardGrid>

@@ -1,0 +1,335 @@
+---
+title: Escrow and crowdfunding
+description: Two contracts with several parties - an escrow with two ways to end and a deadline refund, and a crowdfund with a canonical map of backers, refunds and a size cap.
+---
+
+import { Tabs, TabItem, Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Two contracts from the examples, each adding something the [vault](/tutorials/vault/) did not have:
+
+- [`examples/escrow`](https://github.com/bloxbean/joust/tree/main/examples/escrow): three parties, **two ways to
+  end** (two `@Destroy` methods), and a rule that mixes identity and time.
+- [`examples/crowdfund`](https://github.com/bloxbean/joust/tree/main/examples/crowdfund): many backers in a
+  **`JulcMap` in the state**, kept in canonical order with `SortedMaps`, refunds paid to the caller, and a capacity
+  bounded by `maxDatumBytes`.
+
+<Aside type="caution" title="Experimental, pre-release">
+
+JOUST is experimental and pre-release (not for production). The Java path needs JDK 25; release candidates are in the
+BloxBean release repository (see the [Java quick start](/start/quick-start-java/)). Start Yaci DevKit
+with `yaci-devkit up --enable-yaci-store` before the run steps.
+
+</Aside>
+
+## Part 1: escrow
+
+A buyer locks the price. The buyer (or an arbiter) releases it to the seller once the goods arrive; the seller (or
+the arbiter) can refund the buyer at any time, and anyone can once the deadline has passed. Either way the instance
+ends and everything it holds goes to the winner.
+
+<Steps>
+
+1. **The state and the opening.** The buyer deploys and funds the escrow in one step:
+
+   ```java title="examples/escrow/src/main/java/org/julclang/state/examples/escrow/Escrow.java"
+   @StateContract(maxDatumBytes = 192)
+   public class Escrow {
+
+       public record State(byte[] buyer, byte[] seller, byte[] arbiter, BigInteger amount, BigInteger deadline) {}
+
+       /** The buyer deposits the price. */
+       @Init
+       @Payable
+       public static State open(byte[] seller, byte[] arbiter, BigInteger deadline, Ctx ctx) {
+           Require.that(ctx.received().compareTo(BigInteger.ZERO) > 0, "the escrow must be funded");
+           Require.that(Clock.before(ctx, deadline), "deadline must be in the future");
+           return new State(ctx.caller(), seller, arbiter, ctx.received(), deadline);
+       }
+   ```
+
+   `seller` and `arbiter` are arguments, payment key hashes. The buyer is whoever signs the deploy.
+
+   **What this taught:** a payable `@Init` creates and funds an instance in one transaction.
+
+2. **Release: two `@Destroy` methods.** A contract may have several ways to end. `release` pays the seller:
+
+   ```java
+   /** Buyer or arbiter: the seller delivered, pay them. */
+   @Destroy
+   public static JulcList<Payout> release(State s, Ctx ctx) {
+       boolean allowed = ByteStringLib.equals(ctx.caller(), s.buyer()) || ByteStringLib.equals(ctx.caller(), s.arbiter());
+       Require.that(allowed, "only the buyer or the arbiter can release");
+       return Payouts.of(s.seller(), ctx.balance());
+   }
+   ```
+
+   "Buyer or arbiter" is a choice between two keys, so it is written in the body with `ctx.caller()` (verified by a
+   signature) and `ByteStringLib.equals` (never `==` on `byte[]`).
+
+   **What this taught:** use `Ctx` and `Require` for authorisation an annotation cannot express.
+
+3. **Refund: identity or time.**
+
+   ```java
+   /** Seller or arbiter at any time, anyone after the deadline: give the buyer their money back. */
+   @Destroy
+   public static JulcList<Payout> refund(State s, Ctx ctx) {
+       boolean party = ByteStringLib.equals(ctx.caller(), s.seller()) || ByteStringLib.equals(ctx.caller(), s.arbiter());
+       Require.that(party || Clock.after(ctx, s.deadline()), "only the seller or the arbiter can refund before the deadline");
+       return Payouts.of(s.buyer(), ctx.balance());
+   }
+   ```
+
+   `Clock.after(ctx, t)` holds only if the whole transaction happens at or after `t`. After the deadline the buyer,
+   or anyone, can get the money back, so funds can never be stuck if the seller and arbiter disappear.
+
+   **What this taught:** `Clock` composes with other conditions; give every contract a way out.
+
+   <Aside type="note">
+
+   `.jsc` allows `after(t)` and `before(t)` only as requirements, not inside `||`, so this refund must be written in
+   Java. A simpler escrow (buyer releases; refunds only after the deadline) fits in `.jsc`:
+
+   ```jsc
+   destroy release() only buyer {
+       pay balance to seller
+   }
+
+   destroy refund() open {
+       require after(deadline) "refunds open at the deadline"
+       pay balance to buyer
+   }
+   ```
+
+   `open` says anyone may call a method that pays out; the body's `require` is then its only guard.
+
+   </Aside>
+
+4. **Run it.**
+
+   ```sh
+   ./gradlew :examples:escrow:run
+   ```
+
+   ```java title="examples/escrow/src/main/java/org/julclang/state/examples/escrow/EscrowApp.java"
+   var deal = EscrowClient.deploy(runtime, buyer, Keys.pkh(seller), Keys.pkh(arbiter), deadline, price);
+   System.out.println("escrow " + deal.instanceId() + " holds " + deal.lovelace() + " lovelace");
+
+   try {
+       deal.release(seller);   // the seller can't pay themselves
+   } catch (RequireException e) {
+       System.out.println("seller release rejected off-chain: " + e.getMessage());
+   }
+   var r = deal.release(buyer);
+   System.out.println("buyer released: seller received " + r.payouts().get(0).lovelace() + " lovelace in " + r.txHash());
+   ```
+
+   The output (ids and hashes differ):
+
+   ```text
+   escrow 8f2d…41c7 holds 27400000 lovelace
+   seller release rejected off-chain: only the buyer or the arbiter can release
+   buyer released: seller received 27400000 lovelace in 3b9e…d012
+   ```
+
+   The escrow holds the 25 ADA price plus its 2.4 ADA deposit, and the release pays all of it to the seller: a
+   destroy must allocate everything.
+
+</Steps>
+
+## Part 2: crowdfund
+
+Backers contribute before a deadline. After it, if the goal was reached the creator claims everything; if not, each
+backer takes their contribution back, and the creator closes the empty campaign.
+
+<Steps>
+
+1. **A map in the state.**
+
+   ```java title="examples/crowdfund/src/main/java/org/julclang/state/examples/crowdfund/Crowdfund.java"
+   @StateContract(maxDatumBytes = 1024)
+   public class Crowdfund {
+
+       public record State(byte[] creator, BigInteger goal, BigInteger deadline, BigInteger minContribution,
+                           BigInteger raised, JulcMap<byte[], BigInteger> backers) {}
+
+       public record Result(State state, JulcList<Payout> payouts) {}
+
+       @Init
+       public static State launch(BigInteger goal, BigInteger deadline, BigInteger minContribution, Ctx ctx) {
+           Require.that(goal.compareTo(BigInteger.ZERO) > 0, "goal must be positive");
+           Require.that(minContribution.compareTo(BigInteger.valueOf(2_000_000)) >= 0, "minimum contribution is at least 2 ADA");
+           Require.that(Clock.before(ctx, deadline), "deadline must be in the future");
+           JulcMap<byte[], BigInteger> none = JulcMap.empty();
+           return new State(ctx.caller(), goal, deadline, minContribution, BigInteger.ZERO, none);
+       }
+   ```
+
+   `backers` maps each backer's key hash to what they put in. The whole map lives in the datum, so its size is
+   bounded by `maxDatumBytes = 1024` (which sets a 6 ADA deposit).
+
+   **What this taught:** collections can live in the state, and their size has a price.
+
+2. **Contribute, keeping the map canonical.**
+
+   ```java
+   @Action
+   @Payable
+   public static State contribute(State s, Ctx ctx) {
+       Require.that(Clock.before(ctx, s.deadline()), "the campaign has ended");
+       Require.that(ctx.received().compareTo(s.minContribution()) >= 0, "below the minimum contribution");
+       BigInteger before = SortedMaps.getOr(s.backers(), ctx.caller(), BigInteger.ZERO);
+       JulcMap<byte[], BigInteger> backers = SortedMaps.put(s.backers(), ctx.caller(), before.add(ctx.received()));
+       return new State(s.creator(), s.goal(), s.deadline(), s.minContribution(), s.raised().add(ctx.received()), backers);
+   }
+   ```
+
+   Why `SortedMaps` and not `JulcMap.insert`? `insert` prepends, so the map's order depends on who contributed when.
+   But cardano-client-lib writes inline datums in canonical CBOR, which sorts map keys. A map out of canonical order
+   would be written differently from the state the validator recomputes, and the call would fail on chain. (It did, on
+   DevKit, whenever backers arrived out of key order; that is how JOUST found the problem.) `SortedMaps.put` keeps the
+   keys in canonical order on the JVM and on chain alike, and the runtime refuses a non-canonical state before it
+   submits anything.
+
+   **What this taught:** state maps must be canonical; `SortedMaps` does it for `byte[]`-keyed amounts.
+
+3. **Refund the caller.**
+
+   ```java
+   /** The goal was missed: a backer takes their contribution back. */
+   @Action
+   public static Result refund(State s, Ctx ctx) {
+       Require.that(Clock.after(ctx, s.deadline()), "the campaign is still running");
+       Require.that(s.raised().compareTo(s.goal()) < 0, "the goal was reached: no refunds");
+       Require.that(s.backers().containsKey(ctx.caller()), "nothing to refund");
+       BigInteger amount = s.backers().get(ctx.caller());
+       State next = new State(s.creator(), s.goal(), s.deadline(), s.minContribution(), s.raised().subtract(amount),
+               SortedMaps.remove(s.backers(), ctx.caller()));
+       return new Result(next, Payouts.of(ctx.caller(), amount));
+   }
+   ```
+
+   The payout goes to `ctx.caller()`, the verified signer, so a backer can only refund themselves. `containsKey` comes
+   before `get`, because `get` on a missing key aborts on chain without a message.
+
+   **What this taught:** an action can pay the caller; check map membership before reading.
+
+4. **Claim or close: `@SignedBy("creator")`.**
+
+   ```java
+   /** The goal was reached: the creator takes everything. */
+   @Destroy
+   @SignedBy("creator")
+   public static JulcList<Payout> claim(State s, Ctx ctx) {
+       Require.that(Clock.after(ctx, s.deadline()), "the campaign is still running");
+       Require.that(s.raised().compareTo(s.goal()) >= 0, "the goal was not reached");
+       return Payouts.of(s.creator(), ctx.balance());
+   }
+
+   /** The goal was missed and every backer has been refunded: the creator closes the campaign. */
+   @Destroy
+   @SignedBy("creator")
+   public static JulcList<Payout> close(State s, Ctx ctx) {
+       Require.that(Clock.after(ctx, s.deadline()), "the campaign is still running");
+       Require.that(s.backers().isEmpty(), "backers still have funds in the campaign");
+       return Payouts.of(s.creator(), ctx.balance());
+   }
+   ```
+
+   `@SignedBy("creator")` names the state field whose key must sign. Two destroys again: one when the goal was met,
+   one after a failed campaign is emptied.
+
+   **What this taught:** `@SignedBy` works with any `byte[]` field, not only `owner`.
+
+5. **Capacity.** Each backer adds an entry to the datum. With `maxDatumBytes = 1024`, the harness test fills the
+   campaign with 2 ADA contributions until the next one would not fit: 27 backers. Two choices keep this safe:
+
+   - the minimum contribution (at least 2 ADA) makes filling the campaign expensive;
+   - refunds, claims and closes only shrink the state, so they never fail on size. The test checks a refund at
+     capacity (286.6M CPU, 559k memory, well within limits).
+
+   A contract that needs many more entries should use a [MerkleMap](/contracts/merklemaps/).
+
+   **What this taught:** bound growth with `maxDatumBytes`, add an economic floor, and keep the shrinking paths open.
+
+6. **Run it.** The app runs a campaign that misses its goal:
+
+   ```sh
+   ./gradlew :examples:crowdfund:run
+   ```
+
+   ```java title="examples/crowdfund/src/main/java/org/julclang/state/examples/crowdfund/CrowdfundApp.java"
+   long deadline = System.currentTimeMillis() + 60_000;
+   var campaign = CrowdfundClient.deploy(runtime, creator, ADA.multiply(BigInteger.valueOf(100)),
+           BigInteger.valueOf(deadline), ADA.multiply(BigInteger.TWO));
+   System.out.println("campaign " + campaign.instanceId() + " launched; goal 100 ADA");
+
+   campaign.contribute(ann, ADA.multiply(BigInteger.TEN));
+   campaign.contribute(ben, ADA.multiply(BigInteger.valueOf(5)));
+   campaign.contribute(ann, ADA.multiply(BigInteger.valueOf(3)));
+   System.out.println("raised " + campaign.raised() + "; ann " + campaign.contributionOf(Keys.pkh(ann)));
+
+   while (System.currentTimeMillis() < deadline + 2_000) Thread.sleep(1_000);
+   campaign.refund(ann);
+   campaign.refund(ben);
+   System.out.println("goal missed: both backers refunded; raised now " + campaign.raised());
+   campaign.close(creator);
+   System.out.println("creator closed the campaign");
+   ```
+
+   ```text
+   campaign 1a7c…e930 launched; goal 100 ADA
+   raised 18000000; ann 13000000
+   goal missed: both backers refunded; raised now 0
+   creator closed the campaign
+   ```
+
+   Ann's two contributions were added under one key; after the deadline each backer got their own amount back, and
+   the creator closed the empty campaign and took back the 6 ADA deposit.
+
+</Steps>
+
+## From JavaScript
+
+The generated JavaScript clients make the same calls from a page or Node, with CIP-30 wallets:
+
+```js
+const campaign = new Crowdfund({ service, chain, deployment });
+const { instance } = await campaign.deploy(creatorWallet,
+  { goal: 100_000_000n, deadline: BigInt(Date.now() + 60_000), minContribution: 2_000_000n });
+await instance.contribute(annWallet, {}, { lovelace: 10_000_000n });
+// After the deadline:
+await instance.refund(annWallet, {});
+await instance.close(creatorWallet, {});
+```
+
+See [JavaScript clients](/apps/javascript-clients/).
+
+## Test them
+
+```sh
+./gradlew :examples:escrow:test :examples:crowdfund:test
+```
+
+Each example's harness test evaluates the compiled validator for its paths and runs the attack suite on each accepted
+transaction. `EscrowTest` also checks the refusals: a release by the seller, and a refund by a stranger before the
+deadline (accepted after it). `CrowdfundTest` checks that contributions keep the map canonical, that a refund pays the
+caller, and the capacity case above. The `…DevnetTest` classes run the clients end to end when DevKit is up, and are
+skipped otherwise.
+
+## What you learned
+
+- A contract can have several `@Destroy` methods, each with its own rules.
+- `Ctx.caller` with `ByteStringLib.equals` expresses "one of these parties"; `@SignedBy("field")` expresses "this one".
+- `Clock.after` and `Clock.before` turn deadlines into rules that hold for the whole transaction.
+- A `JulcMap` in the state must stay in canonical key order: `SortedMaps`.
+- `maxDatumBytes` caps growth; design the shrinking paths so they always work.
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Token balances in a MerkleMap" href="/tutorials/token-merklemap/" description="An unbounded map with a 32-byte root." />
+<LinkCard title="Multisig treasury" href="/tutorials/multisig-treasury/" description="Quorums, governor scripts, invariants, events." />
+<LinkCard title="State and lifecycle" href="/contracts/state-and-lifecycle/" description="Maps, lists and size limits in detail." />
+<LinkCard title="Authorization" href="/contracts/authorization/" description="Every way to restrict a caller." />
+</CardGrid>

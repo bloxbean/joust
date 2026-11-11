@@ -1,0 +1,197 @@
+---
+title: Deposits
+description: Pay value into another JOUST contract's instance in the same transaction, with @Receives on the receiving side and the output registry keeping both honest.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A *deposit* moves value from one JOUST contract's call into another contract's instance, in the same transaction: a
+market stall sends 5% of each sale into a fee pot, a vault forwards interest into a treasury. A
+[`Send`](/contracts/assets-mints-sends/) cannot do this, because a send may never land on a spent script's continuing
+output (invariant I30), and the receiving instance is exactly that. Deposits are the safe path (ADR-0011 D3).
+
+Both sides take part:
+- **the depositor** returns `deposits`, and its validator subtracts them from its own value;
+- **the receiver** declares an action `@Receives`, sees the deposits in `funds.deposits()`, and decides what to credit.
+
+The two calls run in one [composed](/contracts/reads-and-composition/) transaction.
+
+## The `fees` example
+
+A `Stall` sells for a price and deposits a fee into a `Pot` instance fixed in its params:
+
+```java title="examples/fees/src/main/java/org/julclang/state/examples/fees/Stall.java"
+@StateContract
+public class Stall {
+
+    @Params
+    public record Config(ForeignInstance pot, BigInteger feeBps) {}
+
+    public record State(byte[] owner, BigInteger sales) {}
+
+    public record Sale(State state, JulcList<Deposit> deposits) {}
+
+    /** Sells for {@code price} lovelace: the stall keeps the price less the fee, the pot gets the fee. */
+    @Action
+    @Payable
+    public static Sale sell(State s, Config cfg, BigInteger price, Ctx ctx) {
+        Require.that(ctx.received().compareTo(price) == 0 && price.compareTo(BigInteger.valueOf(2_000_000)) >= 0,
+                "pay exactly the price, at least 2 ADA");
+        BigInteger fee = price.multiply(cfg.feeBps()).divide(BigInteger.valueOf(10_000));
+        Require.that(fee.compareTo(BigInteger.ONE) >= 0, "the fee rounds to zero");
+        return new Sale(new State(s.owner(), s.sales().add(price.subtract(fee))),
+                Deposits.of(cfg.pot(), Assets.lovelace(fee), Builtins.bData(ctx.caller())));
+    }
+}
+```
+
+```java title="examples/fees/src/main/java/org/julclang/state/examples/fees/Pot.java"
+@StateContract
+public class Pot {
+
+    public record State(byte[] owner, BigInteger collected, BigInteger deposits) {}
+
+    /** Takes in every deposit made to this pot in the transaction; anyone may call it, but only with deposits. */
+    @Action
+    @Receives
+    public static State collect(State s, Ctx ctx, Funds funds) {
+        BigInteger got = Deposits.lovelace(funds.deposits());
+        Require.that(got.signum() > 0, "nothing deposited");
+        return new State(s.owner(), s.collected().add(got),
+                s.deposits().add(BigInteger.valueOf(funds.deposits().size())));
+    }
+
+    /** Hands the pot to a new owner. Not @Receives: a deposit claimed on its output makes it fail (I40). */
+    @Action
+    @SignedBy("owner")
+    public static State handOver(State s, byte[] newOwner) {
+        return new State(newOwner, s.collected(), s.deposits());
+    }
+}
+```
+
+## The API
+
+| Type or method | Meaning |
+|---|---|
+| `Deposit(policy, instance, value, memo)` | A payment of `value` into instance `instance` of contract `policy`. `memo` is any data the receiver may read: a beneficiary, an order id |
+| `Deposits.none()` | No deposits |
+| `Deposits.of(target, value, memo)` | One deposit into a `ForeignInstance` |
+| `Deposits.add(deposits, target, value, memo)` | One more |
+| `deposits` result component | `JulcList<Deposit>`, returned by the depositor's method |
+| `@Receives` | On an `@Action` or `@OwnedAction` that takes deposits. Needs a `Funds` parameter; cannot be `@Batched` |
+| `funds.deposits()` | `JulcList<DepositClaim>`: the deposits claimed on this call's continuing output, in registry order |
+| `DepositClaim(output, by, value, memo)` | One deposit: the output index it lands on, the input that made it, its value and memo |
+| `Deposits.lovelace(claims)` | The total lovelace of a receiver's deposits |
+
+## Calling it
+
+A deposit needs its receiver in the same transaction, so a lone `sell` is refused before anything is built.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/fees/src/test/java/org/julclang/state/examples/fees/FeesDevnetTest.java"
+var pot = PotClient.deploy(runtime, owner);
+var config = new Stall.Config(new ForeignInstance(HexUtil.decodeHexString(PotClient.contract(runtime).policyId()),
+        HexUtil.decodeHexString(pot.instanceId())), BigInteger.valueOf(500));
+var stall = StallClient.deploy(runtime, config, owner);
+
+// A deposit needs its receiver in the same transaction.
+assertThrows(JoustException.class, () -> stall.sell(buyer, ADA.multiply(BigInteger.TEN), ADA.multiply(BigInteger.TEN)));
+
+Compose.of(runtime, buyer).allowSharedSigners()
+        .add(() -> stall.sell(buyer, ADA.multiply(BigInteger.TEN), ADA.multiply(BigInteger.TEN)))
+        .add(() -> pot.collect(buyer))
+        .submit();
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="js/joust-runtime/test/examples.test.js (Fees)"
+const pot = await contract('Pot', owner);
+const potId = (await pot.deploy(owner, {})).instance;
+const stall = await contract('Stall', owner, { pot: { policy: pot.deployment.policy, instance: potId }, feeBps: 500n });
+const stallId = (await stall.deploy(owner, {})).instance;
+
+await rt.compose(buyer, [
+  { contract: stall, method: 'sell', instance: stallId, args: { price: 10n * ADA }, pay: { lovelace: 10n * ADA } },
+  { contract: pot, method: 'collect', instance: potId, args: {} },
+]);
+```
+
+</TabItem>
+</Tabs>
+
+The receiver may come first or last in the composition. The runtime runs the calls in two passes: in the first, a
+receiver sees the deposits made so far, and if one placed before its depositors refuses, the pass is rerun with the
+deposits found; in the second, every receiver sees every deposit.
+
+## What the validators check
+
+Deposit claims sit in the same output registry as sends, kept by the shared
+[output verifier](/contracts/assets-mints-sends/#the-output-verifier), in their own list.
+
+**The output verifier** requires each deposit claim's value to be canonical, non-empty, strictly positive and free of
+reserved-kind token names under any policy; each `by` to be an input of the transaction; output indices in range and
+non-decreasing (several claims may name one output).
+
+**The depositor's validator:**
+- subtracts the deposits in its value equation, like sends;
+- requires each deposit to target a distinct instance with a 32-byte id, whose token an input holds, so the
+  receiver's validator runs;
+- requires one claim by its own input on the target's unique continuing output, with the same value and memo;
+- requires the number of claims naming its input to equal its number of deposits, so no claim can be attributed to it
+  falsely.
+
+**The receiver's validator:**
+- adds every claim on its continuing output to its value equation, each counted once:
+  `out = in + received + accepted + Σ deposits + mint − payouts − sends`;
+- gives the method exactly that list as `funds.deposits()`.
+
+**Every other continuing transition** of a contract with `@Receives` refuses a deposit claim on its output. That is
+why `Pot.handOver` fails if anyone tries to deposit through it.
+
+| Invariant | Meaning |
+|---|---|
+| I40 | A deposit is counted only by its receiver, which runs in the same transaction and counts each claimed deposit exactly once in its value equation |
+
+## Rules
+
+<Aside type="caution" title="The target must be a @Receives contract, fixed in params">
+A depositor checks that the target is spent and that its claim exists; it cannot check what the target's validator
+does. A contract generated before deposits existed, a plain contract or a foreign script could take the value without
+counting it. So choose the target when you write the depositor, and fix it in `@Params` (a `ForeignInstance`), never in
+an argument a caller supplies.
+</Aside>
+
+- A contract may not deposit into itself.
+- **`by` is not authenticated** beyond naming an input of the transaction. A receiver that credits by depositor must
+  check the input at `by` itself. A memo is whatever the depositor's method wrote: trust it as far as you trust the
+  depositor contract.
+- **Memos must be canonical.** A memo with a map built out of key order would be reordered by serialisation and fail
+  the depositor's check; the runtime refuses it. Keep maps sorted (`SortedMaps`).
+- **Reserved names cannot be deposited,** under any policy: an NFT named by a 32-byte hash cannot be a deposit. Send it
+  instead.
+- `@Receives` needs `Funds` and goes on an action or owned action, never a creation or destroy.
+
+## Cost
+
+From ADR-0011 §7, for one sale: the stall 280.7M CPU and 895k memory, the pot 209.6M and 669k, the output verifier
+41.7M and 135k. Pot is 8.6 KB and Stall 9.4 KB.
+
+## Reference
+
+- [State API: `Deposit`, `Deposits`, `DepositClaim`, `Funds`](/reference/state-api/),
+  [Annotations: `@Receives`](/reference/annotations/)
+- ADR-0011 D3 and §7: [Architecture decisions](/project/architecture-decisions/)
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Reads and composition" href="/contracts/reads-and-composition/" description="Compose, which deposits run inside." />
+  <LinkCard title="Native assets, mints and sends" href="/contracts/assets-mints-sends/" description="Sends, the output registry and Funds." />
+  <LinkCard title="Params, invariants and events" href="/contracts/params-invariants-events/" description="@Params, where the deposit target lives." />
+  <LinkCard title="Security model" href="/contracts/security-model/" description="Why every output counts for at most one obligation." />
+</CardGrid>

@@ -1,0 +1,496 @@
+---
+title: Contract description
+description: The JSON description JOUST writes for every contract (CIP-57 plus x-joust, version 2), key by key, with its type mapping and JSON conventions.
+---
+
+import { Aside, LinkCard, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Every `@StateContract` (and every `.jsc` contract) gets a **description**: one JSON document that tells a client
+everything it needs to encode calls, decode state and verify a prepared transaction, without the Java classes. The
+JavaScript client, the typed clients `joust-gen` writes, the runtime engine, the prepare service and the JVM's
+described dispatcher all read it.
+
+The description is a [CIP-57](/reference/glossary/#cip-57) blueprint (`preamble`, `validators`, `definitions`) with
+one extra key, `x-joust`, that describes the contract's model: its creations, actions, views, owned types, policies,
+intents and purposes. This page documents every key, as `DescriptionWriter` writes it
+([`julc-state-processor/.../gen/DescriptionWriter.java`](https://github.com/bloxbean/joust/blob/main/julc-state-processor/src/main/java/org/julclang/state/processor/gen/DescriptionWriter.java)).
+
+## Where it is written
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+The annotation processor writes the description as a class-output resource:
+
+```text
+META-INF/joust/<package>.<Contract>.json
+```
+
+In a Gradle module it lands in `build/classes/java/main/META-INF/joust/` and ships inside the jar. For example,
+`examples/counter` produces `META-INF/joust/org.julclang.state.examples.counter.Counter.json`.
+
+</TabItem>
+<TabItem label=".jsc">
+
+A `.jsc` contract is lowered to a Java `@StateContract` first, so it gets the same description from the processor
+(Gradle) or from the toolchain (npm). `examples/dsl` writes descriptions for `Jar`, `Points` and `Guards`.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+`joust build` (from `@julclang/joust`) compiles `contracts/**/*.java` and `*.jsc` into `build/joust/`:
+
+| File | What it holds |
+|---|---|
+| `<Contract>.json` | The description (CIP-57 plus `x-joust` version 2) |
+| `<Contract>.plutus` | The compiled validator, CBOR hex |
+| `<Contract>.js`, `<Contract>.d.ts` | The typed client (`joust-gen`), with the description inlined |
+| `contracts.json` | What the runtime loads: `[{ description, script, transitions, built: { joust } }]` |
+| `joust.lock.json` | The versions that built it, including `descriptionVersion: 2` |
+
+</TabItem>
+</Tabs>
+
+The Gradle build and the npm toolchain run the same generators, so they produce the same description byte for byte
+(`ToolchainParityTest` checks it). See [The joust CLI and projects](/apps/cli-and-projects/).
+
+<Aside>
+Deployment facts (the applied policy, the script address, the reference-script UTxOs, the network) are **not** in
+the description. `joust deploy` writes them separately, to `build/joust/deployments.<network>.json`. A description is
+the same on every network.
+</Aside>
+
+## A real description
+
+This is the description of `examples/counter`'s `Counter`, a state of `count` and `owner` with an `increment` anyone
+may call, a `reset` and a `close` for the owner, and a `count` view. The file has about 430 lines; the parts below are
+taken from it unchanged, with repeated entries left out.
+
+```java title="examples/counter/src/main/java/org/julclang/state/examples/counter/Counter.java"
+@StateContract(maxDatumBytes = 128)
+public class Counter {
+    public record State(BigInteger count, byte[] owner) {}
+
+    @Init public static State init(Ctx ctx) { ... }
+    @Action public static State increment(State s, BigInteger by) { ... }
+    @Action @OnlyOwner public static State reset(State s) { ... }
+    @Destroy @OnlyOwner public static JulcList<Payout> close(State s, Ctx ctx) { ... }
+    @View public static BigInteger count(State s) { ... }
+}
+```
+
+The CIP-57 part: the mint validator takes the `Lifecycle` redeemer, the spend validator takes the state as its datum
+and the `Calls` redeemer.
+
+```json title="build/classes/java/main/META-INF/joust/org.julclang.state.examples.counter.Counter.json (preamble, validators)"
+{
+  "preamble": {
+    "title": "org.julclang.state.examples.counter.Counter",
+    "description": "JOUST contract Counter (ADR-0013 D3)",
+    "version": "0.0.0",
+    "plutusVersion": "v3",
+    "compiler": { "name": "joust" }
+  },
+  "validators": [
+    {
+      "title": "CounterValidator.mint",
+      "redeemer": { "title": "redeemer",
+        "schema": { "$ref": "#/definitions/org.julclang.state.examples.counter.CounterValidator.Lifecycle" } }
+    },
+    {
+      "title": "CounterValidator.spend",
+      "datum": { "title": "datum",
+        "schema": { "$ref": "#/definitions/org.julclang.state.examples.counter.Counter.State" } },
+      "redeemer": { "title": "redeemer",
+        "schema": { "$ref": "#/definitions/org.julclang.state.examples.counter.CounterValidator.Calls" } }
+    }
+  ]
+}
+```
+
+The model: `x-joust` with the `reset` action (an `@OnlyOwner` action, so `signedBy` names the state's `owner` field,
+at index 1 of `State`).
+
+```json title="x-joust (creations and two actions left out)"
+{
+  "version": 2,
+  "contract": "Counter",
+  "package": "org.julclang.state.examples.counter",
+  "validator": "CounterValidator",
+  "client": "CounterClient",
+  "state": { "$ref": "#/definitions/org.julclang.state.examples.counter.Counter.State" },
+  "stakeSelf": false,
+  "minAda": 2200000,
+  "maxDatumBytes": 128,
+  "assetAware": false,
+  "owned": [],
+  "actions": [
+    {
+      "name": "reset",
+      "kind": "action",
+      "redeemer": { "purpose": "spend", "constructor": "Reset", "index": 1 },
+      "fields": [],
+      "args": [],
+      "ctx": false,
+      "payable": false,
+      "takesAssets": false,
+      "policies": {
+        "signedBy": ["owner"], "validAfter": [], "validBefore": [], "quorum": null, "authorizedBy": [],
+        "shared": false, "into": false, "admits": null, "receives": false, "batched": false, "migrateTo": null
+      },
+      "returns": {
+        "state": true, "payouts": false, "sends": false, "mint": false,
+        "accepted": false, "events": false, "deposits": false
+      },
+      "needsService": false,
+      "recipe": {
+        "transition": "reset",
+        "redeemerFields": [],
+        "target": "org.julclang.state.examples.counter.Counter.State",
+        "shared": false,
+        "signers": [{ "field": "owner", "index": 1 }],
+        "validAfter": [],
+        "validBefore": [],
+        "params": false,
+        "reads": [],
+        "transitionArgs": [],
+        "stepEvents": false
+      }
+    }
+  ],
+  "views": [
+    { "name": "count", "returns": { "dataType": "integer" }, "args": [] }
+  ]
+}
+```
+
+The types: every record, sealed interface and generated redeemer, keyed by its fully qualified Java name.
+
+```json title="definitions (Ctx, TxOutRef and Lifecycle left out)"
+{
+  "org.julclang.state.examples.counter.CounterValidator.Calls": {
+    "title": "Calls",
+    "anyOf": [
+      { "title": "Increment", "dataType": "constructor", "index": 0,
+        "fields": [{ "title": "by", "dataType": "integer" }] },
+      { "title": "Reset", "dataType": "constructor", "index": 1, "fields": [] },
+      { "title": "Close", "dataType": "constructor", "index": 2,
+        "fields": [{ "title": "ctx", "$ref": "#/definitions/org.julclang.state.api.Ctx" }] }
+    ]
+  },
+  "org.julclang.state.examples.counter.Counter.State": {
+    "title": "State",
+    "anyOf": [
+      { "title": "State", "dataType": "constructor", "index": 0,
+        "fields": [{ "title": "count", "dataType": "integer" }, { "title": "owner", "dataType": "bytes" }] }
+    ]
+  }
+}
+```
+
+## Top level
+
+| Key | What it is |
+|---|---|
+| `preamble` | CIP-57's preamble: `title` (`<package>.<Contract>`), `description` (`"JOUST contract <Name> (ADR-0013 D3)"`), `version` (`"0.0.0"`), `plutusVersion` (`"v3"`), `compiler` (`{ "name": "joust" }`) |
+| `validators` | The generated validator's two purposes (below). No compiled code: the script is a separate output (`<Contract>.plutus`, or JuLC's `META-INF/plutus/` blueprint) |
+| `x-joust` | The contract's model (below) |
+| `definitions` | Every schema the document refers to, keyed by fully qualified Java name |
+
+### validators
+
+| Entry | Present | Datum | Redeemer |
+|---|---|---|---|
+| `<Validator>.mint` | Always | None | `<package>.<Validator>.Lifecycle` |
+| `<Validator>.spend` | When the contract has any spend call | The state; with `@Owned` types, a `Datum` schema whose `anyOf` is the state followed by each owned type's `Holding` | `<package>.<Validator>.Calls` |
+
+The spend validator tells the state and an owned object's `Holding` apart by token kind (32-byte instance tokens,
+29-byte `0x4F` object tokens), so the datum's `anyOf` is not tagged further.
+
+### definitions
+
+Keys are fully qualified Java names: the state (`org.julclang.state.examples.counter.Counter.State`), owned records,
+the `@Params` record, records the arguments use, `org.julclang.state.api.Ctx`, `org.julclang.ledger.TxOutRef`, and the
+redeemers the processor generates:
+
+| Key | Present | Constructors |
+|---|---|---|
+| `<package>.<Validator>.Calls` | When there are spend calls | One per action and destroy, then one per owned action and owned destroy, in the generated validator's `permits` order. With `@Batched` actions, three more: `Batch(validFrom, validTo)`, `InBatch`, `CancelIntent` |
+| `<package>.<Validator>.Lifecycle` | Always | `CreateInstance(seed, ...)` at 0, `BurnInstance` at 1, then one per `@OwnedInit` (`seed`, `instance`, ...), `CreateIntent(seed, intent)` with `@Batched`, `ByAction(by)` when the contract mints, `Adopt(seed, ...)` with `@Migrate` |
+| `<package>.<Validator>.<Holding>` | Per `@Owned` type | `Holding(instance, value)`: the owning instance id and the owned record. With one owned type the name is `Holding`; with several, `Holding_<Type>` (ADR-0012), each at its own tag |
+| `<package>.<Validator>.Intent` | With `@Batched` | `Intent(instance, owner, refund, deadline, received, call)` |
+| `<package>.<Validator>.IntentCall` | With `@Batched` | One per batched action, its arguments as fields |
+| `<package>.<Validator>.IntentRefund` | With `@Batched` | `IntentRefund(intent)`: the tag on an intent's refund output |
+
+A `$ref` is `#/definitions/<key>`, with `~` written `~0` and `/` written `~1` (JSON Pointer).
+
+### Redeemer field order
+
+Each `Calls` and `Lifecycle` constructor lays out its fields as the validator generator does:
+
+1. `seed` (a `TxOutRef`), for creations: the input whose spending makes the token name unique;
+2. `instance` (bytes), for an `@OwnedInit`: the instance that will own the object;
+3. `into` (bytes), for an `@Into` move: the destination instance;
+4. the method's own arguments, in declaration order;
+5. `ctx` (`Ctx`), when the method takes `Ctx`;
+6. `assetsIn` (`Value`), when the call takes native assets in;
+7. `events`, when the method's result carries events.
+
+## Type mapping
+
+The schemas follow JuLC's encodings: records are constructor 0, sealed variants their `permits` position, `Bool`
+False/True 0/1, `Optional` Some/None 0/1.
+
+| Java type | Schema |
+|---|---|
+| `boolean`, `Boolean` | `Bool`: `anyOf` `False` (constructor 0) and `True` (constructor 1), no fields |
+| `BigInteger` (also `int`, `long`, `short`, `byte`, `Long`, `Integer`) | `{ "dataType": "integer" }` |
+| `byte[]`, `String` | `{ "dataType": "bytes" }` |
+| `PubKeyHash`, `ScriptHash`, `ValidatorHash`, `PolicyId`, `TokenName`, `DatumHash`, `TxId` (`org.julclang.ledger`) | `{ "dataType": "bytes" }` |
+| A `@NewType` record with one component | Its component's schema |
+| `PlutusData` | `Data`: any Plutus data |
+| `Value` | `Value`: a map from policy (bytes) to a map from token name (bytes) to quantity (integer) |
+| `JulcList<T>` | `{ "dataType": "list", "items": T }` |
+| `JulcMap<K, V>` | `{ "dataType": "map", "keys": K, "values": V }` |
+| `Optional<T>` | `Optional`: `anyOf` `Some` (constructor 0, field `value`) and `None` (constructor 1) |
+| A record | A `$ref` to its definition: one constructor, index 0 (or its position in a sealed parent's `permits`) |
+| A sealed interface | A `$ref` to its definition: one constructor per permitted record, in `permits` order |
+| Anything else | `Data` |
+
+<Aside type="caution">
+A field's title replaces the schema's own title, so a `Bool` or `Optional` field is not titled `Bool` or `Optional`.
+Clients recognise them **by shape**: two constructors named `False`/`True` (or `Some`/`None`) at indices 0 and 1, with
+the right arity (`isBool` and `isOptional` in `js/state-client/src/data.js`).
+</Aside>
+
+## x-joust
+
+| Key | Type | Meaning |
+|---|---|---|
+| `version` | number | The description format: `2` (ADR-0015 D4). Version 2 adds the call `recipe`s and keeps every version 1 field |
+| `contract` | string | The contract's simple name (`Counter`) |
+| `package` | string | Its Java package |
+| `validator` | string | The generated validator's simple name (`CounterValidator`) |
+| `client` | string | The generated Java client's simple name (`CounterClient`) |
+| `state` | `$ref` | The state record |
+| `params` | `$ref` | The `@Params` record. Only when the contract has one |
+| `stakeSelf` | boolean | `@StateContract(stakeSelf = true)`: state UTxOs are staked to the contract's own script |
+| `minAda` | number | Lovelace kept in each state UTxO (`@StateContract(minAda)`) |
+| `maxDatumBytes` | number | The largest state datum the contract accepts (`@StateContract(maxDatumBytes)`) |
+| `assetAware` | boolean | Whether the contract handles native assets (`Funds`, sends, mints) |
+| `owned` | array | The `@Owned` types (below) |
+| `keyed` | array | The keyed types (below). Only in contracts with keyed types (ADR-0016; on `main`, coming with the next release) |
+| `creations` | array | `@Init`, `@OwnedInit` and `@Migrate` methods (below) |
+| `actions` | array | `@Action`, `@Destroy`, `@OwnedAction` and `@OwnedDestroy` methods, in `Calls` order (below) |
+| `views` | array | `@View` methods (below) |
+| `intents` | object | The `@Batched` actions as intents (below). Only when the contract has any |
+| `purposes` | array | The `@Withdraw`, `@Certify`, `@Votes` and `@Propose` handlers (below). Only when the contract has any |
+| `tokens` | object | How token names are derived (below) |
+| `encoding` | object | The JSON conventions (below) |
+
+### owned
+
+One entry per `@Owned` record:
+
+| Key | Meaning |
+|---|---|
+| `type` | The record's definition key (`org.julclang.state.examples.bank.Bank.Account`) |
+| `simple` | Its simple name (`Account`) |
+| `lookup` | The name of the generated client's accessor for an object of this type (`account`) |
+| `holding` | A `$ref` to its `Holding` datum |
+| `tag` | The `Holding` constructor's index, which tells the types apart on chain |
+| `multi` | Whether the contract has several owned types (`Holding_<Type>` datums) |
+
+### keyed
+
+One entry per keyed type ([Keyed objects](/contracts/keyed-objects/); ADR-0016 D11):
+
+| Key | Meaning |
+|---|---|
+| `type`, `simple`, `lookup` | As for `owned`: the value record's definition key, its simple name (`Entry`), the client's accessor (`entry`) |
+| `key`, `keyIndex` | The key component's name and index in the record |
+| `maxKeyBytes`, `signedKey`, `linkCooldownMs`, `linkWindowMs` | The `@Owned` elements |
+| `typeId` | The type id that, with the instance and the key, makes a node's token name |
+| `head`, `node`, `retired` | The list datums (`Head_T`, `Keyed_T`, `Retired_T`) |
+| `headTag`, `nodeTag`, `retiredTag` | Their constructor tags |
+| `link`, `remove` | The `Link` spend redeemer and the `Remove_T` burn redeemer |
+| `inserts`, `actions`, `removes`, `retires` | The type's keyed calls, by name |
+
+A keyed call's `kind` is `keyedInit` (in `creations`), or `keyedAction`, `keyedRemove` or `keyedRetire` (in `actions`),
+and it carries `keyed`, the type's simple name. `tokens.keyed` describes the token names:
+`0x4b ++ blake2b_224(instance ++ typeId ++ key)`, 29 bytes, a list head's key being empty.
+
+### creations
+
+| Key | Meaning |
+|---|---|
+| `name` | The method's name |
+| `kind` | `init`, `ownedInit` or `migrate` |
+| `redeemer` | `{ purpose: "mint", constructor, index }`: `CreateInstance` for `init`, `Adopt` for `migrate`, the owned variant for `ownedInit` |
+| `args` | The arguments the caller supplies: `[{ name, type, schema }]` (`type` is the Java type's name). The state, params, reads, `Ctx` and `Funds` are not arguments |
+| `ctx` | Whether the method takes `Ctx` |
+| `payable` | `@Payable`: the call pays lovelace in |
+| `takesAssets` | Whether the call pays native assets in (`assetsIn`) |
+| `owned` | For `ownedInit`: the owned type's definition key |
+| `needsService` | See [needsService](#needsservice) |
+| `recipe` | The call recipe (below) |
+
+### actions
+
+| Key | Meaning |
+|---|---|
+| `name` | The method's name |
+| `kind` | `action`, `destroy`, `ownedAction` or `ownedDestroy` |
+| `redeemer` | `{ purpose: "spend", constructor, index }`: its `Calls` constructor |
+| `fields` | The redeemer's field names, in order |
+| `args`, `ctx`, `payable`, `takesAssets`, `owned` | As for creations |
+| `policies` | What the validator checks besides the method (below) |
+| `returns` | What the method's result carries (below) |
+| `needsService` | See [needsService](#needsservice) |
+| `recipe` | The call recipe (below) |
+
+`policies`:
+
+| Key | Type | From |
+|---|---|---|
+| `signedBy` | field names | `@SignedBy` and `@OnlyOwner` (`["owner"]`) |
+| `validAfter`, `validBefore` | field names | `@ValidAfter`, `@ValidBefore` |
+| `quorum` | `{ keys, threshold }` or `null` | `@Quorum` (for example `{ "keys": "params.council", "threshold": "params.quorum" }`) |
+| `authorizedBy` | array | `@AuthorizedBy` |
+| `shared` | boolean | An owned method that reads `@Shared` state |
+| `into` | boolean | An `@Into` move |
+| `admits` | type or `null` | `@Admits`: the owned type it admits |
+| `receives` | boolean | `@Receives`: the action takes deposits |
+| `batched` | boolean | `@Batched` |
+| `migrateTo` | string or `null` | `@MigrateTo`: the state or params field that names the successor |
+
+`returns` (all booleans): `state` (the action continues the instance), `payouts`, `sends`, `mint`, `accepted`,
+`events`, `deposits`.
+
+### The call recipe
+
+`recipe` is version 2's addition (ADR-0015 D4): everything the generated Java client's `Call.Builder` encodes, as
+data, so a runtime with no contract classes can build the call.
+
+| Key | Meaning |
+|---|---|
+| `transition` | The method the call runs (by name: its transition program, or the JVM method) |
+| `redeemerFields` | The redeemer's fields in order: `seed`, `instance`, argument names, `ctx`, ... |
+| `burn` | For a destroy: the mint redeemer that burns the token (`{ "constructor": "BurnInstance", "index": 1 }`) |
+| `target` | The record the call acts on: the state, or the owned value |
+| `shared` | Whether the transition also takes the `@Shared` state |
+| `signers`, `validAfter`, `validBefore` | `[{ field, index }]`: the target's fields that hold the signer keys and time bounds, with their component index |
+| `params` | Whether the transition takes the `@Params` record |
+| `reads` | `@Reads`: `[{ name, params, index, type }]`, the params field naming the foreign instance and its index |
+| `transitionArgs` | The transition's arguments in order. Besides argument names: `$params`, `$read:<name>`, `$funds`, `$into`, `$admitted` |
+| `admits` | With `@Admits`: the admitted type |
+| `stepEvents` | Whether the contract's steps carry events |
+
+### views
+
+| Key | Meaning |
+|---|---|
+| `name` | The method's name |
+| `returns` | The result's schema |
+| `args` | Every parameter after the state: `[{ name, schema }]` |
+
+### intents
+
+Present when the contract has `@Batched` actions (ADR-0004): users lock intents, and a batcher applies them.
+
+| Key | Meaning |
+|---|---|
+| `datum` | A `$ref` to `Intent`, the intent UTxO's datum |
+| `calls` | One per batched action: `{ name, call: { constructor, index }, only, args, payable, recipe }`. `only` marks a batch-only action |
+| `refund` | A `$ref` to `IntentRefund`, the refund output's tag |
+| `deposit` | Lovelace locked with each intent beyond what it pays, refunded with it: `2000000` |
+| `batch`, `inBatch`, `cancel` | The `Calls` constructors `Batch`, `InBatch`, `CancelIntent`, with their indices |
+| `create`, `burn` | The `Lifecycle` constructors `CreateIntent` and `BurnInstance`, with their indices |
+
+### purposes
+
+Present when the contract has script-purpose handlers (ADR-0010). One entry per handler:
+
+| Key | Meaning |
+|---|---|
+| `name` | The method's name |
+| `purpose` | `withdraw`, `certify`, `vote` or `propose` |
+| `args`, `ctx` | As for actions |
+| `policies` | `{ quorum, authorizedBy }` |
+| `redeemer` | `@Withdraw`: `{ purpose: "withdraw", constructor: "Rewards", index: 0, marker: 74, fields }` (`marker`, `amount`, the arguments, `ctx`). The others: `{ purpose, constructor: "Unit", index: 0 }`, with `publish` for `@Certify` |
+| `recipe` | `@Withdraw` only: `{ transition, transitionArgs: ["$params", "$amount", ...] }` |
+| `returns` | `@Withdraw` only: `{ "sends": true }` |
+
+`@Certify`, `@Votes` and `@Propose` decide on chain only; their redeemers carry nothing.
+
+### tokens
+
+How the token names a client must derive are made (`seed` is the input the creation spends):
+
+| Key | Rule |
+|---|---|
+| `instance` | `blake2b_256(seed txId ++ I2OSP(seed index, 2))`, 32 bytes |
+| `object` | `0x4f ++ blake2b_224(seed txId ++ I2OSP(seed index, 2))`, 29 bytes |
+| `intent` | `0x49 ++ blake2b_224(seed txId ++ I2OSP(seed index, 2))`, 29 bytes |
+
+`@julclang/state-client` implements them as `instanceIdOf`, `objectIdOf` and `intentIdOf`.
+
+### encoding
+
+`canonicalMaps: true`, and a note: inline datums are canonical CBOR, with map keys sorted (keep state maps ordered
+with `SortedMaps`; see [Troubleshooting](/reference/troubleshooting/)). `encoding.json` states the JSON conventions
+every client uses:
+
+| Schema | JSON value |
+|---|---|
+| integer | A decimal string, or a safe JavaScript integer. `@julclang/state-client` also accepts a `bigint`, and decodes to `bigint` |
+| bytes | Lowercase hex |
+| constructor | An object by field title. A sum type adds `"$variant"`, its constructor title |
+| Bool | `true` or `false` |
+| Optional | `null` for None, else the value |
+| list | An array |
+| map | An array of `[key, value]` pairs, in canonical key order |
+| Data | Hex CBOR of any Plutus data |
+
+So an `increment` call's arguments are `{ "by": "5" }`, and a value of a sealed type is written
+`{ "$variant": "Deposit", "amount": "10" }`.
+
+### needsService
+
+`needsService` marks a call a JavaScript client cannot compute from the description and the chain alone. For an
+action it is true when any of these hold: the target has MerkleMaps, the action is `@Batched`, it has `@Reads`, it is
+a move, it makes or receives deposits, it sends or mints, or it takes `@Params`. For a creation: MerkleMaps, reads,
+sends, mints or params.
+
+<Aside>
+ADR-0013 left calls with `needsService` out of generated clients, since a page could neither prepare nor verify them.
+Since ADR-0015 M4 the runtime engine prepares them (in a page's worker or a service) and the page verifier covers
+each of them, so `joust-gen` generates every call. The flag remains in the description as information.
+</Aside>
+
+## Who reads it
+
+| Reader | What it does with the description |
+|---|---|
+| `@julclang/state-client`: `codec(description)` | Turns JSON values into Plutus data and back, by schema |
+| `@julclang/state-client`: `verifyPrepared`, `verifyComposed`, `verifyIntent`, `verifyPurpose` | The [page verifier](/reference/glossary/#page-verifier): checks a prepared transaction makes exactly the described call before the wallet signs |
+| `@julclang/state-client`: `JoustContract` | Runs calls described by `x-joust` against a prepare service |
+| `joust-gen` (`@julclang/state-client`) | Writes `<Contract>.js` and `<Contract>.d.ts`, with the description inlined so the page pins it: `joust-gen <description.json>... --out <dir> [--import <module>]` |
+| `@julclang/joust-runtime` | Loads `contracts.json` into the runtime engine. Refuses any description whose `x-joust.version` is not 2, and a build by an incompatible toolchain |
+| `julc-state-runtime` (`described` package) | `SchemaCodec` and `DescribedContract`: the description-driven dispatcher the engine and the service share. Refuses a description before version 2 |
+| `julc-state-server` | Serves `GET /api/description?contract=...`; decodes `/api/prepare` arguments by the JSON conventions |
+| `julc-state-testkit` | `Descriptions.assertMatches(Contract.class, ContractValidator.class)` checks a description against the generated validator: constructor order, indices and fields, the state, the owned values and the `Holding` tags |
+
+<Aside type="tip">
+A page must never take a description from a service at run time. The typed client inlines it (and the Vite plugin
+inlines `contracts.json` into a build), so a malicious service cannot change what the page verifies against.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="JavaScript clients" href="/apps/javascript-clients/" description="Calling a contract from its generated client." />
+<LinkCard title="@julclang/state-client" href="/reference/state-client/" description="codec, the verifiers and JoustContract." />
+<LinkCard title="The joust CLI and projects" href="/apps/cli-and-projects/" description="joust build, deploy and the build outputs." />
+<LinkCard title="Annotations" href="/reference/annotations/" description="The annotations behind each policy and kind." />
+</CardGrid>

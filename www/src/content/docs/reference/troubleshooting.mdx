@@ -1,0 +1,387 @@
+---
+title: Troubleshooting
+description: Symptoms you may meet building, calling and serving JOUST contracts, with the cause and the fix for each, from the build to the browser.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Each entry gives a **symptom** (often the exact message), its **cause** and the **fix**. Messages in quotes are copied
+from the JOUST sources; `...` stands for the part that varies. The entries are grouped by where the problem shows up:
+the build, the contract's logic, transactions, JavaScript pages, and Yaci DevKit.
+
+<Aside type="tip">
+Two habits catch most problems early. Run the contract's methods as plain Java (or through the harness) before you
+touch a network, and read the whole message: JOUST's errors name the call, the rule and usually the fix.
+</Aside>
+
+## Build and compiler
+
+### "Undefined variable: OutputLib" (or any julc-stdlib class)
+
+**Cause.** JuLC compiles the generated validator from source, and finds library sources by scanning the annotation
+processor path. A rebuilt **jar** of `julc-state-api` on that path, in a long-lived Gradle daemon, can make the scan
+silently find nothing (a stale `JarFile` cache, an `IOException` swallowed). JuLC then misses julc-stdlib's sources
+too, so the first stdlib class the validator uses is "undefined" (ADR-0001 F16).
+
+**Fix.** Stop the daemon with `./gradlew --stop` and build again. Inside the JOUST repository, put the
+`onchainSources` **directory** artifact on the processor path, not the jar:
+
+```groovy
+annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
+```
+
+### Gradle cannot resolve the `julc` artifacts
+
+**Cause.** JuLC and JOUST are not on Maven Central yet. JuLC's release candidates (`0.1.0-pre21-rc1`, the `julc`
+entry of `gradle/libs.versions.toml` on `main`) and JOUST's are in the BloxBean release repository; JOUST
+`0.1.0-pre1-rc2` also pulls the JuLC snapshot it was built against (`0.1.0-pre21-71b3a73-SNAPSHOT`) from the BloxBean
+snapshot repository.
+
+**Fix.** List both BloxBean repositories, `https://repo.bloxbean.org/maven/releases` and
+`https://repo.bloxbean.org/maven/snapshots`, beside `mavenCentral()` (and in `pluginManagement` too if you apply
+JuLC's Gradle plugin). See [Quick start: Java & Gradle](/start/quick-start-java/).
+
+### "'...' in a @StateContract: JuLC treats it as an unbounded integer on-chain while the JVM wraps or rounds it ... Use BigInteger"
+
+Also: "fixed-width arithmetic (...) in a @StateContract: the JVM wraps, on-chain does not. Use BigInteger", and
+"'x' is int in a @StateContract (inferred or declared); fixed-width numbers diverge between the JVM and on-chain".
+
+**Cause.** `SubsetLint` rejects `int`, `long`, `short`, `char`, `float`, `double` and the narrowing calls (`intValue()`,
+`longValueExact()`, ...) in contract code. The same method runs on the JVM and on chain; on the JVM these types wrap
+or round, on chain integers are unbounded, so the two runs could compute different states.
+
+**Fix.** Use `BigInteger` everywhere in contract code, including `var` locals whose inferred type is a fixed-width
+number.
+
+### "constructing MerkleMap in a @StateContract" or "MerkleMap.reads() in a @StateContract"
+
+**Cause.** A `MerkleMap` is built by the runtime with the reads it proved. A hand-made one carries reads nobody proved,
+and its internals (`reads()`, `writes()`, `root()`) differ between the JVM run and the on-chain run.
+
+**Fix.** Start a map with `MerkleMaps.empty()` and use the `MerkleMaps` helpers only. Keep `MerkleMap` as a top-level
+state component. See [MerkleMaps](/contracts/merklemaps/).
+
+### The processor rejects the contract's shape
+
+The processor checks the contract before generating anything. The common messages:
+
+| Message | Fix |
+|---|---|
+| "@StateContract must be on a top-level class" / "@StateContract class must be public" | Make the contract a public top-level class |
+| "contract methods must be public static" | Every annotated method is `public static` |
+| "contract method names must be unique (no overloading): ..." | Rename the overload |
+| "a @StateContract needs exactly one @Init method, found ..." | Keep one `@Init` |
+| "@Init must return the state record" | Return the state (or a result record holding it) |
+| "@StateContract(maxDatumBytes) must be between 16 and 8192" | Pick a size in range |
+| "@StateContract(maxValidityMs) must be at least 60000 (one minute)" | Raise `maxValidityMs` |
+| "@Batched actions and MerkleMap state cannot be combined yet ..." | Not supported yet: choose one of the two |
+| "@Owned objects and MerkleMap state cannot be combined yet: a @Shared read has no proof path" | Put the maps inside the owned objects (ADR-0012), or drop one |
+| "an @Into move needs an @Admits action: the destination must consent (ADR-0012 D3)" | Add the `@Admits` action on the destination |
+
+See [Annotations](/reference/annotations/) for each annotation's rules.
+
+### JuLC refuses code that is valid Java
+
+**Cause.** Contract code is compiled by JuLC, which accepts a subset of Java. Outside the subset:
+- `throw` (use `Require.that(cond, "msg")`);
+- generic records, and classes other than records and sealed interfaces;
+- reassigned locals (only loop accumulators may change);
+- `Function.apply`;
+- an accessor on a call's result (`f(x).field()`): give the result a typed local first;
+- static calls through anything but an imported simple class name.
+
+**Fix.** Rewrite in the subset. See [Java](/languages/java/) and [Require and errors](/contracts/require-and-errors/).
+
+### A contract with `@Votes` or `@Propose` fails to compile its blueprint
+
+**Cause.** JuLC's pinned CIP-57 revision has no vocabulary for the VOTE and PROPOSE purposes yet.
+
+**Fix.** Compile without a blueprint, as `examples/staking/build.gradle` does:
+
+```groovy
+tasks.named('compileJava') { options.compilerArgs += ['-Ajulc.blueprint=false'] }
+```
+
+### A validator fails on chain and you cannot tell which check
+
+**Fix.** Compile with the processor option `-Ajoust.traces=true`: each failing generated check then traces its name.
+The scripts grow, so use it only while debugging. `examples/staking` wires it to `-Pjoust.traces`.
+
+### "...: the applied script is ... bytes; a reference script must fit a 16 KB transaction (ADR-0009 r2)"
+
+**Cause.** Contracts read their script by reference, and the transaction that publishes it is limited to 16 KB. Many
+owned types, moves, MerkleMaps and native assets in one contract add up (ADR-0012 measured 16.7 KB for three owned
+types with moves and maps).
+
+**Fix.** Split the contract, or drop features it does not need. See [Fees and script size](/contracts/fees-and-size/)
+and the sizes in [Examples](/reference/examples/).
+
+## Contract logic
+
+### A call passes on the JVM and fails on chain (or the reverse) when comparing keys
+
+**Cause.** `byte[]` compared with `==` or `.equals`. On chain it compares bytes; on the JVM it compares references, so
+two equal keys are "different". The lint does not catch this yet.
+
+**Fix.** Always compare byte strings with `ByteStringLib.equals(a, b)`.
+
+### "...: the new ... state contains a map whose keys are not in canonical order ... Keep state maps ordered with org.julclang.state.api.SortedMaps"
+
+**Cause.** cardano-client-lib writes inline datums as canonical CBOR, with map keys sorted. The validator recomputes
+the state with JuLC's ordered maps. If the state's map is not already in canonical order, the datum written differs
+from the one the validator computes, and the call would fail on chain; the runtime refuses it first.
+
+**Fix.** Build and update state maps with `SortedMaps`. A deposit memo has the same rule ("a deposit memo contains a
+map whose keys are not in canonical order").
+
+### A map update leaves the old entry behind
+
+**Cause.** `JulcMap.insert` prepends: a key inserted twice is there twice. `getOrDefault` is not available on chain.
+
+**Fix.** Update with `delete(k).insert(k, v)`, or use the `SortedMaps` helpers.
+
+### A deadline check fails although the deadline is still ahead
+
+**Cause.** `Clock.before(ctx, t)` holds only if the **whole** validity window ends by `t` (`ctx.validTo() <= t`). With
+a 10-minute window, a deadline 5 minutes away is not "before".
+
+**Fix.** Leave the deadline more room than the window, or shorten the window (`StateRuntime.Builder.ttl`).
+`Clock.after` uses the window's start. See [Time](/contracts/time/).
+
+### A time bound reads -1
+
+**Cause.** JuLC's `IntervalLib.finite*Bound` returns -1 for an infinite bound.
+
+**Fix.** Check that the bound is `Finite` before comparing. In a `@StateContract`, read time through `Ctx` and `Clock`
+instead: the generated validator checks that `validFrom` and `validTo` equal the transaction's finite bounds.
+
+### A `ClassCastException` building a datum on the JVM
+
+**Cause.** `(PlutusData) (Object) record` works on chain (a record is Data) but throws on the JVM.
+
+**Fix.** Build datums with `Builtins.constrData`, `bData` and `iData`.
+
+### A `Value` redeemer field decodes wrongly
+
+**Cause.** Redeemer fields typed `Value` mis-decode in JuLC.
+
+**Fix.** Type the field `PlutusData`. A native `Value` also cannot be a JuLC loop accumulator: use recursion.
+
+### "...: a destroy must pay out everything the instance holds (...)"
+
+**Cause.** A `@Destroy` ends the instance, so its payouts (and sends) must account for all it holds:
+`ctx.balance()` in a destroy is everything in the state UTxO, deposit included.
+
+**Fix.** Pay out `ctx.balance()` in full, as `Counter.close` does with `Payouts.of(s.owner(), ctx.balance())`.
+
+## Transactions and the chain
+
+### A call is refused with the contract's own message ("insufficient balance")
+
+This is the intended behaviour. The client runs the method off chain first, so a failing `Require` costs nothing and
+nothing is submitted:
+- in Java, the generated client throws `RequireException` with the message;
+- in JavaScript, the engine's refusal carries the contract's `Require` message (read from the traces), and the page
+  shows it before the wallet is asked to sign.
+
+**Fix.** Change the call (for example, transfer no more than the balance).
+
+### "...: the state kept moving" (`ContentionException`)
+
+**Cause.** Several callers spent the same instance at once. The runtime rebuilds a call the node rejected because
+the state moved, up to `maxRetries` times (default 3), then gives up.
+
+**Fix.** Retry later, or design for parallel use: per-user [owned objects](/contracts/owned-objects/) or
+[batched intents](/contracts/batched-intents/).
+
+### "...: submission outcome unknown (...)" or "...: not seen on chain within ..." (`PendingTransactionException`)
+
+**Cause.** The transaction was sent but its fate is not known (a timeout, a lost answer), or it has not appeared
+within `confirmTimeout`.
+
+**Fix.** Look the transaction hash up before you retry: it may still land. Do not sign a second transaction for the
+same call blindly. "included, but the new state is not visible yet" means the indexer is behind: read again shortly.
+
+### "... instance ... not found at ..." (`InstanceNotFoundException`)
+
+**Cause.** No UTxO at the contract's address holds the instance's token: a wrong instance id, another network or
+deployment, or the instance was destroyed.
+
+**Fix.** Check the instance id (32 bytes of hex) and the deployment you load.
+
+### "...: a send to the caller's own base address would pay the fee out of it; send to its enterprise address instead (ADR-0007 r2)"
+
+**Cause.** QuickTx takes the fee from an output at the fee payer's address. A payout or send to that address could
+pay the fee out of the recipient's funds.
+
+**Fix.** Send to the caller's enterprise address. The runtime does this for payouts itself.
+
+### "composition: the calls' validity windows do not overlap"
+
+**Cause.** A `Compose` puts several calls in one transaction, so they need one validity window.
+
+**Fix.** Align the calls' time rules. See [Reads and composition](/contracts/reads-and-composition/).
+
+### "no MerkleMap store: add cardano-client-merkle-patricia-forestry-rocksdb, or give the runtime one (StateRuntime.Builder.mapStore), or set -Djoust.mapStore=memory for tests"
+
+**Cause.** A contract with MerkleMaps needs a node store for its mirror. The JVM default is RocksDB (`./.joust/mpf`),
+loaded by name.
+
+**Fix.** Add the RocksDB dependency, give the builder a store, or use `-Djoust.mapStore=memory` in tests (the JOUST
+build sets it for every Gradle test).
+
+### Blockfrost answers 403 or 400 with BadInputsUTxO
+
+- `.../blocks/latest: 403 ...` (any path, status 403): the request reached Blockfrost without a project id. A page
+  should read the chain through `/chain`, the proxy `joust dev` and `joust serve` run, which adds the id; never put the
+  id in a page. For the CLI, set it in the environment (below).
+- "network preview reads its chain API's project id from BLOCKFROST_PREVIEW_PROJECT_ID: set it (export
+  BLOCKFROST_PREVIEW_PROJECT_ID=...)": export the variable before `joust deploy --network preview` or
+  `joust dev --network preview`.
+- `submit failed: 400 ... BadInputsUTxO`: Blockfrost's submit node can be a block behind its index. The provider
+  already resubmits the same signed transaction a few times; if it still fails, the inputs really were spent.
+
+See [Networks and chain providers](/apps/networks-and-providers/).
+
+## JavaScript and pages
+
+### A page fails at load: "Cannot read properties of undefined (reading 'from')"
+
+**Cause.** cardano-js-sdk's crypto dependencies (`pbkdf2`, `safe-buffer`, `readable-stream`) expect Node's `buffer`,
+`events`, `util`, `stream` and `process`. Without them the page fails as it loads. Node tests do not catch this.
+
+**Fix.** Add the JOUST Vite plugin. It aliases those modules to browser versions, injects `Buffer` and `process`, and
+sets `es2022` for top-level await:
+
+```js title="vite.config.js"
+import { joust } from '@julclang/joust/vite';
+export default { plugins: [joust()] };
+```
+
+See [Pages](/apps/pages/).
+
+### MerkleMap proofs fail in a page that sets up its own polyfills
+
+**Cause.** Aiken's MPF (the mirror's trie) checks `instanceof Buffer` against the global `Buffer`.
+vite-plugin-node-polyfills' shim bundles its own copy of `buffer`, so its global and an imported `node:buffer` are
+different classes.
+
+**Fix.** Use `@julclang/joust/vite`, which injects one `Buffer` class (its shim re-exports `buffer`), instead of
+configuring the polyfills yourself.
+
+### The page reloads under `joust dev` when the engine worker starts
+
+**Cause.** Vite found the worker's own dependencies only when the worker ran, bundled them again and reloaded the
+page.
+
+**Fix.** The plugin scans `**/*.html` and `**/*.worker.{js,mjs,ts}` up front: name your worker file `*.worker.js` (or
+set `optimizeDeps.entries`). `JOUST_VITE_LOG=info` shows Vite's messages from `joust dev` (dependency bundling,
+reloads).
+
+### A build fails with `vite-plugin-top-level-await`
+
+**Cause.** That plugin's swc transform breaks the runtime packages.
+
+**Fix.** Do not use it. Target `es2022`, which supports top-level await (the JOUST plugin sets it).
+
+### "the engine at ... did not load (or does not match its integrity hash)"
+
+Also: "the engine's Wasm at ... did not load, or does not match its integrity hash".
+
+**Cause.** The page pins the engine's sha384 hashes (SRI) and the browser refuses an engine whose bytes differ. The
+files were changed, truncated, or come from another build.
+
+**Fix.** Serve the build's `joust/engine-<id>/` files unchanged, from the same build as the page. Rebuild if in doubt.
+
+### "the prepared transaction was refused: ..." (`VerificationError`)
+
+**Cause.** The page verifier found that the prepared transaction does something other than the call asked for: an
+extra input, another redeemer, an output the wallet would pay, an unbalanced transaction, a window too long.
+
+**Fix.** Do not sign it. If you run the service yourself, check that it serves the same build and deployment the page
+pins. A service you do not control may be malicious: the verifier exists for that case.
+
+### "...: description version ...; this runtime reads version 2 (rebuild with joust build)"
+
+Also: "...: built by JOUST ...; this runtime is ... (rebuild with a matching @julclang/joust)".
+
+**Cause.** The contracts were built by another toolchain version. The runtime requires description version 2 and the
+same major version (the same minor while the major is 0).
+
+**Fix.** Install matching `@julclang/joust` and `@julclang/joust-runtime` versions and run `joust build` again. See
+[Contract description](/reference/description-format/).
+
+### "the MerkleMap mirror has no node ...: this app did not build that map's history"
+
+**Cause.** The engine asked the mirror for a map node it does not hold: the mirror's store was lost, or this app never
+saw the map's history.
+
+**Fix.** Keep the mirror's store between runs (a page keeps it in IndexedDB, the JVM in `./.joust/mpf`). A mirror can
+rebuild a map from the chain's history, checking every claim against its root. See
+[MerkleMap mirrors](/apps/map-mirrors/).
+
+### "not enough lovelace for the outputs, the change and the fee"
+
+**Cause.** The paying wallet cannot cover the call.
+
+**Fix.** Fund the wallet. On DevKit, `joust dev` serves a faucet at `/dev/topup`, and the template page has a "Top up"
+button for its in-page key.
+
+### Imports go missing in the JOUST repository's JS packages
+
+**Cause.** Installing in one package of `js/` can prune another's linked dependencies.
+
+**Fix.** Re-run `npm install` in `js/state-client` (or the package whose imports went missing). For the
+`examples/wallet` Node demo, run `npm install` in `examples/wallet/js` first.
+
+## Yaci DevKit
+
+### "Yaci DevKit is not reachable (chain ..., admin ...). Start it with Yaci Store enabled"
+
+**Cause.** `joust dev` and the DevKit tests need Yaci Store's API on `:8080` and the admin API on `:10000`.
+
+**Fix.** Start it with `yaci-devkit up --enable-yaci-store`, or give the network a `start` command in
+`joust.config.json`. Gradle tests tagged `devnet` are skipped while DevKit is down.
+
+### PastHorizon
+
+**Cause.** The ledger converts validity bounds to time only within its stability window. That is about 36 hours on
+mainnet but only minutes on a local devnet, so a 10-minute TTL (the runtime's default) is past the horizon.
+
+**Fix.** Keep the TTL short on DevKit:
+- Java: `StateRuntime.Builder.ttl(Duration.ofSeconds(20))`, as `examples/devkit`'s `DevKit` helper does;
+- pages: the runtime uses 20 seconds on a DevKit network (one with an admin API) and 180 seconds elsewhere; set
+  `dev.ttlMs` in `joust.config.json` to change it.
+
+### "DevKit: the faucet is dry and no genesis account can pay ... lovelace"
+
+**Cause.** The DevKit faucet ran dry, and the fallback, the genesis accounts of the default mnemonic (20 base
+addresses with 10,000 ADA each), cannot pay either.
+
+**Fix.** The top-up helpers (`DevKit.topUp` in Java, `devkitTopUp` in JavaScript) already fall back to the genesis
+accounts. If both are empty, start a fresh DevKit chain.
+
+### Registering a stake credential fails with "already registered"
+
+**Cause.** Yaci Store cannot tell whether a stake credential is registered: it answers alike for registered and
+unknown ones. So the registration is attempted, and the ledger refuses it the second time.
+
+**Fix.** Nothing, if you use the runtime: it treats the ledger's "already registered" refusal
+(`StakeKeyRegistered`, `StakeKeyAlreadyRegistered`) as success. Do the same in your own code. Blockfrost reports the
+status, so there the registration is skipped.
+
+### Staking rewards are zero in a test
+
+**Cause.** DevKit pays rewards only across epochs, and a test runs within one.
+
+**Fix.** Expect a zero balance when a staking flow collects within a test. See
+[Staking and governance](/contracts/staking-and-governance/).
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Testing" href="/contracts/testing/" description="Catch problems with JVM tests, the harness and the attack suite." />
+<LinkCard title="Security model" href="/contracts/security-model/" description="What the generated validator checks, and why." />
+<LinkCard title="Networks and chain providers" href="/apps/networks-and-providers/" description="DevKit, preview, Blockfrost and Ogmios." />
+<LinkCard title="Glossary" href="/reference/glossary/" description="The Cardano and JOUST terms used here." />
+</CardGrid>

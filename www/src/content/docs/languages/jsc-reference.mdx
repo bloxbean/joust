@@ -1,0 +1,402 @@
+---
+title: ".jsc reference"
+description: "The complete .jsc language: lexical rules, keywords, types, members, modifiers, statements, expressions, built-ins, lowering and every checker error."
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This page is the complete definition of `.jsc` (version 1), taken from the parser, checker and lowering in
+`julc-state-dsl` ([`Lexer.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/Lexer.java),
+[`Parser.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/Parser.java),
+[`Lowering.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/Lowering.java))
+and [ADR-0005](https://github.com/bloxbean/joust/blob/main/docs/adr/0005-option-e-jsc-dsl.md). For a guided
+introduction, read the [.jsc guide](/languages/jsc/) first.
+
+## Grammar at a glance
+
+```text
+file        = "package" name { "." name } [";"]
+              "contract" Ident [ "(" option { "," option } ")" ] "{" { member } "}"
+option      = ( "minAda" | "maxDatumBytes" | "maxValidityMs" ) "=" Int
+member      = "state" Ident ":" type [";"]
+            | "init" params { modifier } block
+            | ( "action" | "destroy" ) Ident params { modifier } block
+            | "view" Ident params ":" type "=" expr [";"]
+params      = "(" [ Ident ":" type { "," Ident ":" type } ] ")"
+type        = "Int" | "Bool" | "Bytes" | "Key" | "Map" "<" "Key" "," "Int" ">"
+modifier    = "payable" | "open" | "batched" [ "only" ] | ( "only" | "after" | "before" ) Ident
+block       = "{" { stmt [";"] } "}"
+stmt        = "let" Ident "=" expr
+            | "require" expr String
+            | "pay" expr "to" expr
+            | "if" expr block [ "else" ( "if" ... | block ) ]
+            | "delete" Ident "[" expr "]"
+            | [ "this" "." ] Ident ( "=" | "+=" | "-=" ) expr
+            | Ident "[" expr "]" ( "=" | "+=" | "-=" ) expr
+expr        = binary operators by precedence, then unary "!" | "-", then primary
+primary     = Int [ "ada" ] | Hex | "true" | "false" | "this" "." Ident
+            | Ident "(" [ expr { "," expr } ] ")" | Ident "[" expr "]" | Ident | "(" expr ")"
+```
+
+A file holds exactly one contract (`one contract per file`). Members can come in any order; state fields keep their
+order in the state record.
+
+## Lexical rules
+
+| Element | Rule |
+|---|---|
+| Whitespace | Spaces, tabs and newlines separate tokens; newlines are not significant |
+| Comments | `//` to the end of the line. There are no block comments |
+| Identifiers | A letter or `_`, then letters, digits or `_`. Case-sensitive |
+| Integers | Decimal digits; `_` may separate groups (`1_000_000`). No sign: `-5` is unary minus applied to `5` |
+| `ada` suffix | `5 ada` is `5000000` (multiplied by 1,000,000). Only directly after an integer literal |
+| Bytes | `#` then hex digits (`#cafe`), an even number of them; upper case is accepted and lower-cased. `#` with 56 digits (28 bytes) is a `Key`, any other length is `Bytes` |
+| Strings | `"..."` on one line, no escapes. Used only as `require` messages |
+| Separators | `;` is optional after a statement, a state field, a view and the package line |
+| Symbols | `+= -= == != <= >= && \|\| { } ( ) [ ] , : ; = < > + - * / % ! .` |
+
+## Keywords
+
+These words are reserved by the parser: they cannot name a contract, field, parameter, method or `let`. (Package
+segments may still be keywords, as in `org.example.state`.)
+
+| Keyword | Role |
+|---|---|
+| `package` | Starts the file: the Java package of the generated class |
+| `contract` | Declares the contract and its name |
+| `state` | Declares a state field |
+| `init` | The constructor: creates an instance |
+| `action` | A state transition |
+| `destroy` | Ends the instance and pays out |
+| `view` | A read-only query, a single expression |
+| `let` | An immutable local |
+| `require` | A check with a message |
+| `pay` | Adds a payout (with the contextual word `to`) |
+| `if`, `else` | Branches |
+| `delete` | Removes a map entry |
+| `this` | `this.f`: the state field `f` |
+| `true`, `false` | `Bool` literals |
+| `payable`, `only`, `after`, `before`, `batched`, `open` | Modifiers. `after` and `before` are also functions (`after(t)`) |
+| `ada` | The lovelace suffix of an integer literal |
+| `Int`, `Bool`, `Bytes`, `Key`, `Map` | Types |
+
+`to` is not a keyword: it is recognised only after the amount in `pay amount to key`, so a parameter may be called
+`to` (`pay n to to` is valid, if unusual).
+
+## Contract options
+
+`contract Name(option = value, ...)`. Values are integer literals. Each becomes the `@StateContract` element of the
+same name ([Annotations](/reference/annotations/)).
+
+| Option | Java element | Default | Meaning |
+|---|---|---|---|
+| `minAda` | `long minAda()` | `0` (derived: `4310 * (160 + 200 + maxDatumBytes)`, rounded up to 0.1 ADA) | Lovelace locked as the state UTxO's min-ADA deposit. A value below the derived one is a compile error |
+| `maxDatumBytes` | `int maxDatumBytes()` | `512` | Largest serialised state the validator accepts |
+| `maxValidityMs` | `long maxValidityMs()` | `3600000` | Widest validity interval (`validTo - validFrom`, POSIX ms) for a call that reads `Ctx` |
+
+Any other name is an error: `unknown option 'x' (minAda, maxDatumBytes, maxValidityMs)`.
+
+## Types
+
+| `.jsc` | Java | Values | Where allowed |
+|---|---|---|---|
+| `Int` | `BigInteger` | Arbitrary-precision integers | Fields, parameters, lets, view results |
+| `Bool` | `boolean` | `true`, `false` | Fields, parameters, lets, view results |
+| `Bytes` | `byte[]` | Byte strings | Fields, parameters, lets, view results |
+| `Key` | `byte[]` | A 28-byte key hash | Fields, parameters, lets, view results |
+| `Map<Key, Int>` | `MerkleMap` | Keys to non-negative `Int`s; absent reads as 0 | **State fields only** |
+
+Assignability: every type accepts itself, and `Bytes` also accepts a `Key`. `Key` does not accept `Bytes`. `==` and
+`!=` accept `Bytes` and `Key` in either order. Any other map type is an error: `v1 maps are Map<Key, Int>`.
+
+Every `Key` parameter of an `init`, `action` or `destroy` gets a generated first check,
+`Require.that(ByteStringLib.length(p) == 28, "File.jsc:L: p must be a 28-byte key hash")`.
+
+## Members
+
+| Member | Syntax | Generated Java | Rules |
+|---|---|---|---|
+| State field | `state name: Type` | A component of `public record State(...)`, in order | At least one; names unique |
+| Init | `init(params) modifiers { body }` | `@Init public static State init(params[, Ctx ctx])` | Exactly one; no name; cannot pay |
+| Action | `action name(params) modifiers { body }` | `@Action public static State name(State s__, params[, Ctx ctx])`, or `Outcome` when the body pays | |
+| Destroy | `destroy name(params) modifiers { body }` | `@Destroy public static JulcList<Payout> name(State s__, params, Ctx ctx)` | Cannot assign state; cannot be `payable`; must pay out the whole balance |
+| View | `view name(params): Type = expr` | `@View public static T name(State s__, params)` | Cannot return a `Map`; cannot read `caller`, `received`, `balance`, `validFrom`, `validTo` or time |
+
+Method names are unique across the contract (no overloading). When any method pays, the class also gets
+`public record Outcome(State state, JulcList<Payout> payouts) {}`.
+
+**When a method takes `Ctx ctx`:** always for a `destroy`; when it is `payable` or `batched`; when its body mentions
+`caller`, `received`, `balance`, `validFrom`, `validTo`, `after(...)` or `before(...)`.
+
+**Init defaults:** `Int` fields start at `0`, `Bool` at `false`, `Map` at `MerkleMaps.empty()`. `Bytes` and `Key`
+fields have no default and must be assigned on every path.
+
+## Modifiers
+
+Written after the parameter list, in any order, each at most once.
+
+| Modifier | Annotation | Allowed on | Field type | Rules |
+|---|---|---|---|---|
+| `payable` | `@Payable` | `init`, `action` | | Not on a `destroy` |
+| `only f` | `@SignedBy("f")` | `action`, `destroy` | `Key` | Not on `init`; not with `batched`; not with `open` |
+| `after f` | `@ValidAfter("f")` | `action`, `destroy` | `Int` | Not on `init`; not with `batched` |
+| `before f` | `@ValidBefore("f")` | `action`, `destroy` | `Int` | Not on `init`; not with `batched` |
+| `batched` | `@Batched` | `action` | | Not in a contract with a `Map` field |
+| `batched only` | `@Batched(only = true)` | `action` | | Intent-only. `batched only owner` parses as `batched` plus `only owner` |
+| `open` | (none) | `action`, `destroy` | | Says that anyone may call a method that pays out; contradicts `only` |
+
+**Audience rule:** an `action` or `destroy` that pays (any `destroy`, or any method with a `pay`) must have
+`only <key field>` or `open`.
+
+## Statements
+
+| Statement | Meaning | Lowering | Rules |
+|---|---|---|---|
+| `let x = e` | Binds an immutable local, visible to the end of its block | `T x__1 = e;` | Must be used; not a `Map`; name not already a let, parameter or field |
+| `f = e` | Assigns a state field | A fresh local `f__k` | Types must match; not in a `destroy` |
+| `f += e`, `f -= e` | Adds to / subtracts from an `Int` field | `f.add(e)`, `f.subtract(e)` | `Int` field and value; the field must have a value |
+| `this.f = e` (also `+=`, `-=`) | Assigns field `f` when a parameter has its name | As above | |
+| `m[k] = v`, `m[k] += v`, `m[k] -= v` | Writes a map entry | `MerkleMaps.putInt`, or `MerkleMaps.remove` when the new value is 0 | `k` is a `Key`, `v` an `Int`; the new value must be ≥ 0 (checked at run time) |
+| `delete m[k]` | Removes a map entry | `MerkleMaps.remove(m, k)` | `k` is a `Key` |
+| `require cond "msg"` | Fails the call unless `cond` holds | `Require.that(cond, "msg")` | `cond` is a `Bool`; the message is required |
+| `pay amount to key` | Adds a payout of `amount` lovelace | `Payouts.add(payouts, key, amount)` | `amount` is an `Int` ≥ 0 (checked at run time; 0 is skipped), `key` a `Key`; not in `init` |
+| `if c { ... } else { ... }` | Branches; `else if` chains | One static helper per arm (`m__ifK_then`, `m__ifK_else`) and a record `IfArmK` of the fields it assigns | `c` is a `Bool`; only the taken arm runs |
+
+Assignments, map writes and `delete` are state writes: a `destroy` cannot contain them. Parameters, lets and
+built-ins are read-only. There are no loops and no `return`.
+
+## Expressions
+
+### Operators and precedence
+
+Lowest precedence first. Binary operators are left-associative; comparisons do not chain (`a < b < c` is an error).
+
+| Level | Operators | Operands | Result | Java |
+|---|---|---|---|---|
+| 1 | `\|\|` | `Bool` | `Bool` | `a \|\| b` (short-circuit: the right side runs only when the left is false) |
+| 2 | `&&` | `Bool` | `Bool` | `a && b` (short-circuit) |
+| 3 | `==` `!=` | Same type (`Bytes` and `Key` mix) | `Bool` | `Int`: `compareTo(...) == 0`; `Bool`: `==`; `Bytes`/`Key`: `ByteStringLib.equals`. Not on maps |
+| 4 | `<` `<=` `>` `>=` | `Int` | `Bool` | `a.compareTo(b) < 0`, ... |
+| 5 | `+` `-` | `Int` | `Int` | `add`, `subtract` |
+| 6 | `*` `/` `%` | `Int` | `Int` | `multiply`, `divide` (truncates toward zero, `QuotientInteger` on chain), `remainder` (sign of the dividend, `RemainderInteger` on chain) |
+| 7 | unary `!`, unary `-` | `Bool`, `Int` | same | `!(a)`, `a.negate()` |
+
+Division by zero fails on both sides. Parentheses group as usual.
+
+### Primary expressions
+
+| Form | Type | Java |
+|---|---|---|
+| `42`, `1_000`, `2 ada` | `Int` | `BigInteger.valueOf(...)`; a literal must fit in 63 bits |
+| `true`, `false` | `Bool` | `true`, `false` |
+| `#cafe` | `Bytes` (`Key` when 28 bytes) | `new byte[]{...}` |
+| `name` | The let's, parameter's or field's type, or a built-in's | See the resolution order below |
+| `this.f` | The field's type | The field's current value |
+| `m[k]` | `Int` | `MerkleMaps.getInt(m, k, BigInteger.ZERO)` |
+| `fn(args)` | See functions | |
+| `(e)` | The type of `e` | |
+
+**Name resolution:** a bare name is a `let`, else a parameter, else a state field, else a built-in, else an error
+(`unknown name 'x'`). A field read before it has a value is an error; a `Map` field must be indexed (`m[k]`), not
+read whole.
+
+### Built-in values
+
+| Name | Type | Java | Meaning |
+|---|---|---|---|
+| `caller` | `Key` | `ctx.caller()` | The verified signer of the call (in a batch: the intent's owner) |
+| `received` | `Int` | `ctx.received()` | Lovelace the call adds (in a batch: what the intent carries) |
+| `balance` | `Int` | `ctx.balance()` | Lovelace the instance holds, min-ADA deposit included (in a batch: at that point of the fold) |
+| `validFrom` | `Int` | `ctx.validFrom()` | Lower bound of the transaction's validity interval (POSIX ms) |
+| `validTo` | `Int` | `ctx.validTo()` | Upper bound of the validity interval (POSIX ms) |
+
+### Functions
+
+| Function | Arguments | Result | Java | Rules |
+|---|---|---|---|---|
+| `min(a, b)` | `Int`, `Int` | `Int` | `(a.compareTo(b) <= 0 ? a : b)` | |
+| `max(a, b)` | `Int`, `Int` | `Int` | `(a.compareTo(b) >= 0 ? a : b)` | |
+| `has(m, k)` | Map field, `Key` | `Bool` | `MerkleMaps.contains(m, k)` | The first argument is a bare map field name |
+| `isEmpty(m)` | Map field | `Bool` | `MerkleMaps.isEmpty(m)` | The first argument is a bare map field name |
+| `after(t)` | `Int` | `Bool` | `Clock.after(ctx, t)` | Only as a requirement: at the top of a `require` or a conjunct under `&&` |
+| `before(t)` | `Int` | `Bool` | `Clock.before(ctx, t)` | Only as a requirement, as `after` |
+
+`after(t)` holds when the whole validity window is after `t`, so `!after(t)` does not mean "before `t`". That is why
+it cannot be negated, used under `||`, or used as an `if` condition.
+
+## Reserved names
+
+A contract, state field, method, parameter or `let` name cannot:
+
+- contain `__` (generated locals use it);
+- be a built-in (`caller`, `received`, `balance`, `validFrom`, `validTo`) or a function (`min`, `max`, `has`,
+  `isEmpty`, `after`, `before`);
+- be a `.jsc` keyword;
+- be a Java keyword or literal (`abstract`, `assert`, `boolean`, `break`, `byte`, `case`, `catch`, `char`, `class`,
+  `const`, `continue`, `default`, `do`, `double`, `else`, `enum`, `extends`, `final`, `finally`, `float`, `for`,
+  `goto`, `if`, `implements`, `import`, `instanceof`, `int`, `interface`, `long`, `native`, `new`, `package`,
+  `private`, `protected`, `public`, `return`, `short`, `static`, `strictfp`, `super`, `switch`, `synchronized`,
+  `this`, `throw`, `throws`, `transient`, `try`, `void`, `volatile`, `while`, `var`, `record`, `yield`, `sealed`,
+  `permits`, `null`, `true`, `false`);
+- be a name the lowering or the generated client uses: `ctx`, `State`, `Outcome`, `deploy`, `at`, `contract`,
+  `state`, `instance`, `instanceId`, `lovelace`, `SPEC`, `callerAccount`, `payLovelace`, `runtime`, `INTENTS`,
+  `batch`, `pendingIntents`, `intent`, `maps`, `seed`.
+
+A contract also cannot be named `State`, `Outcome` or anything starting with `IfArm`. Names cannot be redeclared or
+shadowed: a `let` cannot reuse the name of another let, a parameter or a state field. A parameter may share a state
+field's name; then the bare name is the parameter and `this.f` is the field.
+
+## What the lowering generates
+
+| `.jsc` | Generated Java |
+|---|---|
+| The file | `package p; ... @StateContract(options) public class Name { ... }` at `p/Name.java`, with the header comment `GENERATED from File.jsc by julc-state-dsl (ADR-0005). Do not edit: change the .jsc file.` |
+| Each method and statement | A `// File.jsc:line` comment above it |
+| Current state | The parameter `State s__`; fields read as `s__.f()` |
+| An assignment | A fresh local (`total__1`, `total__2`, ...) |
+| An `if` | `boolean cond__k = ...;` then `cond ? m__ifK_then(...) : m__ifK_else(...)`; each helper takes every value live at the `if` (parameters, lets as `x__in`, fields as `f__in`, `payouts__in`, `ctx`) |
+| An arm that assigns nothing | Returns `true`; the call is wrapped in `Require.that(..., "File.jsc:L: unreachable")`, so its checks run |
+| An arm that assigns | `record IfArmK(...)` of the assigned fields (and `payouts`); the call site reads them back |
+| A `pay` | `Payouts.add` on a threaded `JulcList<Payout>`, starting from `Payouts.none()` |
+| A map write | `MerkleMaps.getInt` / `putInt` / `remove`, with a non-negative check |
+
+The runtime checks the lowering adds, with their messages:
+
+| Check | Message |
+|---|---|
+| A `Key` parameter is 28 bytes | `File.jsc:L: p must be a 28-byte key hash` |
+| A map entry stays ≥ 0 | `File.jsc:L: m entries cannot go negative` |
+| A payout is ≥ 0 | `File.jsc:L: a payout cannot be negative` |
+
+## Errors and warnings
+
+The lowering reports errors as `file:line:col: error: message` (Gradle's `generateJsc` prints them and fails) before
+any Java is written. The checker applies the processor's rules (modifier legality, field types, views without
+`Ctx`) itself, so you see them at `.jsc` positions. Anything the processor or JuLC still reports is in the generated
+Java, where the `// File.jsc:line` comment above the statement points back to your source.
+
+### Lexical
+
+| Message | Cause |
+|---|---|
+| `hex bytes need an even number of digits` | `#abc` |
+| `escapes are not supported in strings` | A `\` inside a string |
+| `unterminated string` | A string not closed on its line |
+| `unexpected character 'c'` | A character that starts no token (`@`, `$`, ...) |
+
+### Syntax
+
+| Message | Cause |
+|---|---|
+| `expected 'x' but found 'y'` | A required symbol or keyword is missing (`expected ':'`, `expected '{'`, `expected 'to'`, ...) |
+| `expected <what> but found 'y'` | A name was expected (the contract name, a state field name, a method name, a view name, a parameter name, a name, a statement, a map field, a state field, an option, a state field after 'only') and a keyword or symbol came instead |
+| `expected a package name but found 'y'` | A bad package segment |
+| `unknown option 'x' (minAda, maxDatumBytes, maxValidityMs)` | An unsupported contract option |
+| `option values are integers` | `maxDatumBytes = true`, ... |
+| `expected state, init, action, destroy or view but found 'y'` | Anything else inside the contract body |
+| `one contract per file` | Tokens after the contract's closing `}` |
+| `unknown type 'T' (Int, Bool, Bytes, Key, Map<Key, Int>)` | An unknown type name |
+| `v1 maps are Map<Key, Int>` | Any other map type |
+| `require needs a message string after the condition` | `require cond` without a message |
+| `expected '=', '+=' or '-=' but found 'y'` | A statement that is not a valid assignment |
+| `comparisons do not chain; use && between them` | `a < b < c`, `a == b == c` |
+| `unexpected 'x' in an expression` | A keyword or symbol where an expression must start |
+
+### Declarations and names
+
+| Message | Cause |
+|---|---|
+| `a contract cannot be named X` | `State`, `Outcome`, or a name starting with `IfArm` |
+| `<what> names cannot contain '__' (reserved for generated locals)` | A name with `__` |
+| `'x' is reserved and cannot be a <what> name` | A Java keyword or a generated-client name |
+| `'x' is built in and cannot be a <what> name` | A built-in or function name |
+| `duplicate state field 'f'` | Two fields with one name |
+| `a contract needs at least one state field` | No `state` lines |
+| `a contract needs exactly one init, found N` | No `init`, or several |
+| `duplicate method name 'm' (no overloading)` | Two methods with one name |
+| `duplicate parameter 'p'` | Two parameters with one name |
+| `a Map can only be a state field` | A `Map` parameter |
+| `another .jsc file already generates a/b/Name.java` | Two files declaring the same package and contract |
+
+### Modifiers
+
+| Message | Cause |
+|---|---|
+| `duplicate modifier 'm'` | A modifier written twice |
+| `a destroy cannot be payable` | `destroy ... payable` |
+| `only an action can be batched` | `batched` on `init` or `destroy` |
+| `batched actions and Map state cannot be combined yet (ADR-0004 D1)` | `batched` in a contract with a `Map` field |
+| `'only' checks the current state, which init does not have` | `only`, `after` or `before` on `init` |
+| `a batched action cannot use 'only': the batcher signs the batch; check caller or time in the body` | `only`, `after` or `before` with `batched` |
+| `'only f' names no state field` | The field does not exist |
+| `'only f' needs a Key field, but it is Int` | `only` on a non-`Key` field, or `after`/`before` on a non-`Int` field |
+| `'open' and 'only' contradict each other` | Both written |
+| `action m pays out but anyone can call it: add 'only <key field>', or 'open' if that is intended (the body's requires are then the only guard)` | A paying action or any destroy without `only` or `open` |
+
+### Statements
+
+| Message | Cause |
+|---|---|
+| `'x' is already defined; choose another name` | A `let` reusing a let, parameter or field name |
+| `a Map cannot be bound to a let; index it instead` | `let m2 = m` |
+| `'x' is never used: a let is not a check; use require` | An unused `let` |
+| `a destroy ends the instance: it cannot assign state` | An assignment, map write or `delete` in a `destroy` |
+| `parameters are read-only` (`; write this.f to assign the state field` when a field has the name) | Assigning a parameter |
+| `'x' is a let: lets are immutable` | Assigning a `let` |
+| `'x' is built in and read-only` | Assigning `caller`, `balance`, ... |
+| `no state field 'f'` | Assigning, or reading `this.f` of, an unknown field |
+| `a Map is changed through its entries: m[key] = value, or delete m[key]` | Assigning a map whole |
+| `'+=' needs an Int field` | `+=` or `-=` on a non-`Int` field |
+| `'f' is not assigned yet` | `+=` on a field without a value |
+| `'m' is not a Map state field` | Indexing or deleting from a non-map name |
+| `init cannot pay out: the instance starts with everything it receives` | `pay` in `init` |
+| `state field 'f' (Key) must be assigned in init on every path` | A `Bytes` or `Key` field left unassigned by `init` |
+| `state field 'f' must be assigned before this if or in both of its arms` | An `if` arm leaves a field it assigns without a value on the other path |
+
+### Expressions and types
+
+| Message | Cause |
+|---|---|
+| `expected T but this is U` | A type mismatch (`U` is `payouts` for the payout list) |
+| `cannot compare T with U` | `==` or `!=` between unrelated types |
+| `Maps cannot be compared` | `==` on maps |
+| `unknown name 'x'` | A name that is not a let, parameter, field or built-in |
+| `state field 'f' is not assigned yet` | Reading a `Bytes`/`Key` field in `init` before assigning it |
+| `index a Map: m[key]` | Using a map field as a value |
+| `unknown function 'f' (min, max, has, isEmpty, after, before)` | A call to anything else |
+| `f takes N argument(s)` | Wrong arity |
+| `has needs a Map state field` / `isEmpty needs a Map state field` | The first argument is not a bare map field name |
+| `after(t) holds for the whole validity window, so it is allowed only as a requirement (require after(t) ..., or with &&): not negated, in \|\|, or in an if` | `after`/`before` used outside a requirement |
+| `integer literal too large` | A literal that does not fit in 63 bits |
+| `a view cannot return a Map; return one of its values` | `view v(): Map<Key, Int>` |
+| `a view runs off-chain without a transaction: it cannot read caller, received, balance or time` | A view reading `Ctx` |
+
+### Warnings
+
+| Warning | Meaning |
+|---|---|
+| `File.jsc:L: warning: destroy m never reads balance: it must pay out all of it (deposit included), or every call is rejected` | A destroy that does not pay out `balance` cannot succeed |
+
+<Aside type="note">
+With the npm toolchain (`joust build`), a lowering error is reported against the `.jsc` file with the message above,
+without the line and column, and warnings are not printed. The Gradle task prints both with their positions.
+</Aside>
+
+## Running the lowering
+
+| Entry point | Use |
+|---|---|
+| `org.julclang.state.dsl.JscMain <srcDir> <outDir>` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first). Prints `jsc: lowered N file(s) into outDir`; exits 1 on any error, 2 on bad usage. Gradle's `generateJsc` task runs it |
+| `JscMain.lower(String source, String fileName)` | Returns the Java source for one file |
+| `JscMain.lowerWithWarnings(String source, String fileName)` | Returns `Lowered(String java, List<String> warnings)` |
+| `JscException` | The error type: `line`, `col`, and `format(file)` giving `file:line:col: error: message` |
+| `Toolchain.build(files, options)` (`julc-state-toolchain`) | Lowers `.jsc` entries, then compiles everything as Gradle does; used by `joust build` |
+
+## Next steps
+
+<CardGrid>
+<LinkCard title=".jsc guide" description="A guided tour with Jar, Points and Guards." href="/languages/jsc/" />
+<LinkCard title="Annotations" description="The annotations .jsc modifiers lower to." href="/reference/annotations/" />
+<LinkCard title="State API" description="MerkleMaps, Payouts, Clock and Require, used by the generated Java." href="/reference/state-api/" />
+<LinkCard title="The joust CLI and projects" description="Building .jsc with npm only." href="/apps/cli-and-projects/" />
+</CardGrid>

@@ -1,0 +1,260 @@
+---
+title: Batched intents
+description: Let many users write one hot shared state without contention. @Batched actions run as intents that a permissionless batcher applies together.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Some state is hot and shared: a donation total, a ticket price that rises with each sale, an AMM's reserves. Every
+call spends the instance's one UTxO, so when many users call at once, all but one fail and retry. Owned objects do not
+help, because the total itself is shared.
+
+`@Batched` solves this the way Cardano DEXes do. A user locks an *intent* (a request, with its payment) in a UTxO of
+their own, which contends with nobody. Anyone can then run a *batcher* that applies many intents to the instance in
+one transaction. The action's code is the same method you would call directly (ADR-0004).
+
+## When to use it
+
+| Situation | Use |
+|---|---|
+| Many users change one shared value at the same time | `@Batched` (this page) |
+| Each user changes only their own state | [Owned objects](/contracts/owned-objects/): no batcher, one transaction per call |
+| Each key may exist at most once (names, ballots) | [Keyed objects](/contracts/keyed-objects/) (on `main`, next release) |
+| Few writers (an admin, a publisher) | A plain `@Action` |
+
+The cost is latency: every operation takes two transactions (lock, then batch), and something must run the batcher.
+
+## Declaring batched actions
+
+```java title="examples/pool/src/main/java/org/julclang/state/examples/pool/Pool.java"
+@StateContract(maxDatumBytes = 192)
+public class Pool {
+
+    public record State(byte[] admin, BigInteger donated, BigInteger sold, BigInteger price, BigInteger step) {}
+
+    public record Sale(State state, JulcList<Payout> payouts) {}
+
+    @Action
+    @Batched
+    @Payable
+    public static State donate(State s, Ctx ctx) {
+        Require.that(ctx.received().compareTo(BigInteger.valueOf(1_000_000)) >= 0, "donate at least 1 ADA");
+        return new State(s.admin(), s.donated().add(ctx.received()), s.sold(), s.price(), s.step());
+    }
+
+    /**
+     * Buys one ticket at the current price, if it is at most {@code maxPrice}; the change goes back to the buyer. Only as
+     * an intent ({@code only = true}): nobody can spend the pool with a direct buy and so invalidate pending batches.
+     */
+    @Action
+    @Batched(only = true)
+    @Payable
+    public static Sale buy(State s, BigInteger maxPrice, Ctx ctx) {
+        Require.that(s.price().compareTo(maxPrice) <= 0, "price above the buyer's bound");
+        Require.that(ctx.received().compareTo(s.price()) >= 0, "pays less than the price");
+        BigInteger change = ctx.received().subtract(s.price());
+        State next = new State(s.admin(), s.donated(), s.sold().add(BigInteger.ONE), s.price().add(s.step()), s.step());
+        if (change.compareTo(BigInteger.ZERO) > 0) {
+            return new Sale(next, Payouts.of(ctx.caller(), change));
+        }
+        return new Sale(next, Payouts.none());
+    }
+}
+```
+
+- `@Batched` lets the action run as an intent **and** as a direct call.
+- `@Batched(only = true)` drops the direct call. Nobody can then spend the instance with that action directly, which
+  would invalidate the batches being built against it. Use it for actions users race on.
+
+In `.jsc` the modifier is `batched` (and `batched only` for intent-only):
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java
+@Action
+@Batched
+@Payable
+public static State donate(State s, Ctx ctx) {
+    Require.that(ctx.received().compareTo(BigInteger.valueOf(1_000_000)) >= 0, "donate at least 1 ADA");
+    return new State(s.admin(), s.donated().add(ctx.received()), s.sold(), s.price(), s.step());
+}
+```
+
+</TabItem>
+<TabItem label=".jsc">
+
+```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Jar.jsc"
+action tip() payable batched {
+    require received >= 1 ada "tip at least 1 ADA"
+    total += received
+    tips += 1
+}
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="js/joust-runtime/test/examples.test.js (Pool)"
+const p = pool.at((await pool.deploy(admin, { price: 10n * ADA, step: ADA })).instance);
+const d0 = (await p.intent(u0, 'donate', {}, { lovelace: 5n * ADA })).intent;
+await p.intent(u2, 'buy', { maxPrice: 20n * ADA }, { lovelace: 20n * ADA });
+```
+
+In a generated client, a batched action's method (`instance.donate(wallet, {}, pay)`) locks an intent.
+
+</TabItem>
+</Tabs>
+
+### What `Ctx` means inside a batch
+
+A batched action needs a `Ctx` parameter. In a batch:
+
+| Field | Value |
+|---|---|
+| `ctx.caller()` | The intent's owner, who signed when creating it |
+| `ctx.received()` | The lovelace the intent carries for the action |
+| `ctx.balance()` | The contract's balance at that point of the fold |
+| `ctx.validFrom()`, `ctx.validTo()` | The batch transaction's bounds |
+
+Because the batcher, not the user, signs the batch, a batched action cannot use `@SignedBy`, `@OnlyOwner`,
+`@ValidAfter` or `@ValidBefore`. Authorise with `ctx.caller()` in the body, and check time with
+[`Clock`](/contracts/time/).
+
+## The flow
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/pool/src/test/java/org/julclang/state/examples/pool/PoolDevnetTest.java"
+var pool = PoolClient.deploy(runtime, admin, ada(10), ada(1));
+Instant later = Instant.now().plus(Duration.ofMinutes(30));
+
+// Users lock intents: each spends only their own UTxOs, so nobody contends.
+IntentHandle<Pool.State> d0 = pool.donateIntent(u0, ada(5), later);
+IntentHandle<Pool.State> d1 = pool.donateIntent(u1, ada(6), later);
+pool.buyIntent(u2, ada(20), ada(20), later);    // accepts a price up to 20 ADA, pays 20
+
+d1.cancel(u1);                                  // one user changes their mind
+
+var result = pool.batch(batcher, 8);            // anyone can batch
+System.out.println(result.applied().size() + " applied, skipped " + result.skipped());
+```
+
+`pool.pendingIntents()` lists what is waiting; `pool.intent(id)` reconnects to one. An `IntentHandle` has
+`isPending()`, `data()` and `cancel(owner)`.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js title="js/joust-runtime/test/examples.test.js (Pool)"
+const d1 = (await p.intent(u1, 'donate', {}, { lovelace: 6n * ADA })).intent;
+await p.intent(u3, 'buy', { maxPrice: 20n * ADA }, { lovelace: 20n * ADA });
+assert.equal((await p.pendingIntents()).length, 4);
+await p.cancelIntent(u1, d1);                   // only its owner withdraws it
+const b = await p.batch(batcher);               // up to 8 intents; pays only the fee
+console.log(b.applied, b.skipped);
+```
+
+`intent(wallet, name, args, pay, { deadline })` takes the deadline in milliseconds (default: 30 minutes from now).
+With a generated client, these methods are on `pool.contract.at(id)`.
+
+</TabItem>
+</Tabs>
+
+### Intents
+
+An intent is a UTxO at the contract's address holding:
+- **The intent token** `(policy, 0x49 ‖ blake2b_224(seedTxId ‖ I2OSP(seedIndex, 2)))`: 29 bytes starting with `0x49`.
+  Instance tokens are 32 bytes and object tokens start with `0x4F`, so no kind can pass for another.
+- **An inline datum** `Intent(instance, owner, refund, deadline, received, call)`: the instance it targets, the owner,
+  the full refund address, the deadline, the payment for the action and the action's arguments.
+- **At least `received + 2 ADA`.** The surplus pays for the refund output and comes back to the owner.
+
+Creating an intent does not reference the instance: the instance moves with every batch, and a reference would make
+intent creation contend again. An intent for an instance that does not exist can never be batched; its owner cancels
+it.
+
+### The batch
+
+The batcher's transaction spends the instance with a `Batch(validFrom, validTo)` redeemer and the intents with
+`InBatch`. The validator walks the transaction's inputs in ledger order (by transaction id, then index) and, for every
+intent of this instance:
+
+1. builds `Ctx(owner, received, balance, validFrom, validTo)`;
+2. runs your method on the current state, on chain;
+3. updates the balance (`+ received − payouts`), which must never go negative;
+4. requires `validTo ≤ deadline`;
+5. requires the intent spent with `InBatch` and its token burned;
+6. requires the **refund** (`L − received`) at exactly the intent's refund address, tagged `IntentRefund(ref)`;
+7. requires each **payout** tagged with that intent's own input, so two steps can never share one output.
+
+At least one intent must be applied. The continuing output holds the final state and exactly the final balance plus
+the deposit, with all the usual single-UTxO checks.
+
+### Cancel and expiry
+
+- **Cancel:** the owner signs a `CancelIntent`, the token is burned and the funds go back. Only the owner can cancel.
+- **Expiry:** an intent past its deadline can no longer be batched. The batcher skips it and reports it in
+  `skipped`; its owner cancels it to get the funds back.
+
+### The batcher
+
+Batching is permissionless: any account can run `batch`. The runtime's batcher:
+1. scans the contract's address for `0x49` tokens of this instance;
+2. opens a validity window first, then drops intents whose deadline falls before its end;
+3. folds the intents on the JVM with the validator's exact rules, skipping (and reporting) any whose action throws or
+   that would make the balance negative;
+4. builds the transaction (refunds and payouts topped up to the ledger minimum), checks it after balancing, submits;
+5. if the transaction cannot be built, for example because it is over budget, retries with half as many intents.
+
+The batcher pays the fee and signs nothing on the owners' behalf. There is no batcher fee yet.
+
+| Invariant | Meaning (ADR-0004 D4) |
+|---|---|
+| I22 | An intent token is minted only with its owner's signature, under a 32-byte instance id, with `received ≥ 0` (0 unless payable) and at least `received + 2 ADA` |
+| I23 | An intent is consumed only by its owner's cancel or by a batch of its own instance |
+| I24 | A batch applies, in ledger order, every intent of its instance among the inputs; refunds go to the exact refund address, payouts are tagged per intent, the balance never goes negative |
+| I25 | Every applied intent's token is burned, and the instance continues exactly |
+
+## Limits
+
+- **About 8 intents per batch.** The cost grows a little faster than linearly, and memory runs out first:
+
+  | Batch | CPU | Memory |
+  |---|---|---|
+  | 1 intent (all scripts) | 0.46 B | 1.6 M |
+  | 5 | 1.9 B | 6.2 M |
+  | 10 | 5.0 B | 15.5 M |
+
+  With a 14 to 16.5 M memory limit per transaction, about 8 donations fit (`Batcher.DEFAULT_MAX = 8`). The JS
+  `batch` also defaults to 8.
+- **Not combined yet** (compile errors): MerkleMap state; native assets (`Funds`, sends, mint); `@Params` or `@Reads`
+  in the batched action; `@Quorum`, `@AuthorizedBy` or events; `@Invariant`.
+- **Two transactions per operation.**
+
+## Ordering, MEV and standing authorisations
+
+<Aside type="caution" title="An intent runs against whatever state the batch finds">
+The batcher chooses which intents to include and, through the validity range, when they run. It cannot reorder the
+intents it includes, but anyone can grind transaction ids to place their own. So an order-sensitive action must take
+a bound as an argument and check it: `buy(maxPrice)` refuses if the price has risen above what the buyer accepts.
+</Aside>
+
+- An intent authorises its action until its deadline, against any future state. Keep deadlines short, and gate
+  anything admin-like on more than `ctx.caller()`.
+- Anyone can deploy another instance of the same contract. Clients pin the instance id, and intents name it.
+
+## Reference
+
+- [Annotations: `@Batched`](/reference/annotations/), [Java runtime API](/reference/java-runtime-api/)
+- ADR-0004: [Architecture decisions](/project/architecture-decisions/)
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Tutorial: pool with batched intents" href="/tutorials/pool-batched-intents/" description="Lock intents, cancel one, batch the rest on DevKit." />
+  <LinkCard title="Owned objects" href="/contracts/owned-objects/" description="Contention-free per-user state." />
+  <LinkCard title="Time" href="/contracts/time/" description="Clock checks, which batched actions use instead of @ValidAfter." />
+  <LinkCard title=".jsc" href="/languages/jsc/" description="The batched modifier in the contract language." />
+</CardGrid>

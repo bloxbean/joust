@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="378 47 570 836" role="img">
+<title>JOUST</title>
+<!-- The JOUST Knight emblem for dark backgrounds (docs/assets/logo/joust-knight-emblem-on-dark.svg): navy recoloured #eef2fd. -->
+<g id="emblem" aria-label="Knight and J"><path fill="#eef2fd" d="M688 400 H873 V649 C873 788 765 873 646 873 H610 C462 873 388 801 388 654 H548 V672 C548 714 574 740 613 740 C657 740 688 708 688 655 Z"/><path fill="#eef2fd" fill-rule="evenodd" d="M583 57 L728 127 C834 179 898 276 938 406 L488 575 C554 495 616 423 657 353 L526 381 L463 447 L389 417 V360 L495 235 L506 200 L595 140 Z M610 212 L530 245 L510 277 L581 257 Z"/><path fill="#00fdfe" d="M691 234 L938 406 C812 475 640 515 488 575 C582 507 715 450 823 396 Z"/></g>
+</svg>

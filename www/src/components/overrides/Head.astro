@@ -1,0 +1,13 @@
+---
+// Starlight's head, plus the fonts the site uses and an Open Graph image (the Knight logo).
+import { SITE } from '../../../site.config.mjs';
+const { head } = Astro.locals.starlightRoute;
+---
+
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt" />
+<meta property="og:image" content={SITE.url + '/joust-knight.png'} />
+<meta property="og:image:alt" content="JOUST — State Contract Simplified" />

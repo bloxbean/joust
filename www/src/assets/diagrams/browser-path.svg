@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 530" width="980" height="530" role="img" aria-label="A JOUST page from the browser to the chain (npm path, experimental)" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>A JOUST page from the browser to the chain (npm path, experimental)</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#3a3f5c"/></marker>
+    <marker id="arrow-indigo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#4f4ce0"/></marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#c46a06"/></marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b1d3a" flood-opacity="0.08"/></filter>
+  </defs>
+  <rect width="980" height="530" rx="18" fill="#f7f8fc"/>
+  <text x="28" y="40" font-size="17" font-weight="800" fill="#151729">A JOUST page, from the browser to the chain</text>
+  <text x="28" y="60" font-size="12.5" fill="#5b6074">The npm path (experimental): the engine is WebAssembly built with GraalVM Web Image</text>
+  <rect x="24" y="76" width="636" height="430" rx="16" fill="none" stroke="#b9b8f6" stroke-width="1.6" stroke-dasharray="7 5"/>
+  <text x="44" y="100" font-size="12.5" font-weight="800" fill="#4f4ce0">BROWSER</text>
+  <g filter="url(#shadow)"><rect x="52" y="120" width="250" height="112" rx="12" fill="#eceeff" stroke="#b9b8f6" stroke-width="1.5"/></g>
+  <text x="177" y="146" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">Your page</text>
+  <text x="177" y="165" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4f4ce0">[JS + generated client]</text>
+  <text x="177" y="190" text-anchor="middle" font-size="12.5" fill="#5b6074">counter.at(id).increment(wallet,</text>
+  <text x="177" y="207" text-anchor="middle" font-size="12.5" fill="#5b6074">args)</text>
+  <g filter="url(#shadow)"><rect x="380" y="120" width="250" height="112" rx="12" fill="#eef0f6" stroke="#c3c7da" stroke-width="1.5"/></g>
+  <text x="505" y="146" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">Engine worker</text>
+  <text x="505" y="165" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">[Wasm: JOUST runtime, UPLC VM]</text>
+  <text x="505" y="190" text-anchor="middle" font-size="12.5" fill="#5b6074">Runs the method, builds the</text>
+  <text x="505" y="207" text-anchor="middle" font-size="12.5" fill="#5b6074">transaction from the chain</text>
+  <g filter="url(#shadow)"><rect x="52" y="300" width="250" height="112" rx="12" fill="#e6f6ef" stroke="#9fd9c0" stroke-width="1.5"/></g>
+  <text x="177" y="326" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">Page verifier</text>
+  <text x="177" y="345" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f7a55">[@julclang/state-client]</text>
+  <text x="177" y="370" text-anchor="middle" font-size="12.5" fill="#5b6074">Checks the call, script, balance</text>
+  <text x="177" y="387" text-anchor="middle" font-size="12.5" fill="#5b6074">and risk against the pinned</text>
+  <text x="177" y="404" text-anchor="middle" font-size="12.5" fill="#5b6074">contract</text>
+  <g filter="url(#shadow)"><rect x="380" y="300" width="250" height="112" rx="12" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/></g>
+  <text x="505" y="326" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">CIP-30 wallet</text>
+  <text x="505" y="345" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">[Eternl, Lace, ...]</text>
+  <text x="505" y="370" text-anchor="middle" font-size="12.5" fill="#5b6074">Signs only what the page verified</text>
+  <path d="M430 448 v34 a50 12 0 0 0 100 0 v-34" fill="#eceeff" stroke="#b9b8f6" stroke-width="1.5"/><ellipse cx="480" cy="448" rx="50" ry="12" fill="#ffffff" stroke="#b9b8f6" stroke-width="1.5"/>
+  <text x="480" y="481" text-anchor="middle" font-size="11.5" font-weight="700" fill="#4f4ce0">IndexedDB</text>
+  <text x="540" y="466" font-size="11.5" fill="#5b6074">the worker's</text>
+  <text x="540" y="482" font-size="11.5" fill="#5b6074">map mirrors</text>
+  <polyline points="302,160 376,160" fill="none" stroke="#4f4ce0" stroke-width="1.6" marker-end="url(#arrow-indigo)"/>
+  <rect x="291.05" y="126" width="95.89999999999999" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="339" y="141" text-anchor="middle" font-size="11.5" font-weight="600" fill="#4f4ce0">prepare(call)</text>
+  <polyline points="376,200 302,200" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="297.35" y="210" width="83.3" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="339" y="225" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">unsigned tx</text>
+  <polyline points="177,232 177,296" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="182.25" y="254" width="45.5" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="205" y="269" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">check</text>
+  <polyline points="302,356 376,356" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="291.05" y="322" width="95.89999999999999" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="339" y="337" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">sign if valid</text>
+  <g filter="url(#shadow)"><rect x="720" y="120" width="236" height="112" rx="12" fill="#ffffff" stroke="#d4d7ef" stroke-width="1.5"/></g>
+  <text x="838" y="146" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">Static host</text>
+  <text x="838" y="165" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">[dist/ from vite build]</text>
+  <text x="838" y="190" text-anchor="middle" font-size="12.5" fill="#5b6074">The page and the engine, pinned</text>
+  <text x="838" y="207" text-anchor="middle" font-size="12.5" fill="#5b6074">by SRI hashes</text>
+  <g filter="url(#shadow)"><rect x="720" y="270" width="236" height="92" rx="12" fill="#eef0f6" stroke="#c3c7da" stroke-width="1.5"/></g>
+  <text x="838" y="296" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">Chain API</text>
+  <text x="838" y="315" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">[Blockfrost, Yaci Store]</text>
+  <text x="838" y="340" text-anchor="middle" font-size="12.5" fill="#5b6074">At /chain: keys stay server-side</text>
+  <g filter="url(#shadow)"><rect x="720" y="410" width="236" height="92" rx="12" fill="#fff4e2" stroke="#f2c47c" stroke-width="1.5"/></g>
+  <text x="838" y="436" text-anchor="middle" font-size="15" font-weight="700" fill="#151729">Cardano</text>
+  <text x="838" y="455" text-anchor="middle" font-size="11.5" font-weight="600" fill="#c46a06">[validator re-runs the method]</text>
+  <text x="838" y="480" text-anchor="middle" font-size="12.5" fill="#5b6074">The final check, on chain</text>
+  <polyline points="716,176 634,176" fill="none" stroke="#3a3f5c" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <rect x="653.25" y="142" width="45.5" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="676" y="157" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">loads</text>
+  <polyline points="630,210 680,210 680,316 716,316" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="638.35" y="250" width="83.3" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="680" y="265" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">chain reads</text>
+  <polyline points="630,380 690,380 690,456 716,456" fill="none" stroke="#3a3f5c" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <rect x="664.1" y="408" width="51.8" height="23" rx="6" fill="#f7f8fc" stroke="#d4d7ef"/>
+  <text x="690" y="423" text-anchor="middle" font-size="11.5" font-weight="600" fill="#3a3f5c">submit</text>
+
+</svg>

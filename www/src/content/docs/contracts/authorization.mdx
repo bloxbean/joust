@@ -1,0 +1,322 @@
+---
+title: Authorization
+description: Decide who may call each method with Ctx.caller, @SignedBy and @OnlyOwner, M-of-N @Quorum, and @AuthorizedBy keys or withdraw-zero governor scripts.
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+By default anyone can call any method. Authorisation is how you restrict that: to one key stored in the state, to a
+quorum of a council, or to another script's decision. Each form is a check the generated validator runs on chain,
+against the **current** state, before your method's result is accepted. The client runs the same check first and
+refuses a call that would fail.
+
+## The options at a glance
+
+| You need | Use | Checked against |
+|---|---|---|
+| The caller's identity inside your logic | `Ctx` and `ctx.caller()` | The transaction is signed by `caller` |
+| One key stored in the state | `@SignedBy("field")` | A `byte[]` field of the current state |
+| The key in a field named `owner` | `@OnlyOwner` | Same as `@SignedBy("owner")` |
+| M of N keys | `@Quorum(keys = "…", threshold = "…")` | A `JulcList<byte[]>` and a `BigInteger` field |
+| A key or a script (a DAO, a governor) | `@AuthorizedBy("field")` | A `Credential` field of the state or the params |
+
+## Caller identity: `Ctx.caller`
+
+A method that declares [`Ctx`](/contracts/ctx-and-funds/) receives `ctx.caller()`, the payment key hash of the party
+calling. The validator checks that the transaction is signed by that key, so the value is authenticated: it is
+JOUST's `msg.sender`.
+
+Use it when the rule is more than "this one field":
+
+```java title="examples/escrow/src/main/java/org/julclang/state/examples/escrow/Escrow.java"
+/** Seller or arbiter at any time, anyone after the deadline: give the buyer their money back. */
+@Destroy
+public static JulcList<Payout> refund(State s, Ctx ctx) {
+    boolean party = ByteStringLib.equals(ctx.caller(), s.seller()) || ByteStringLib.equals(ctx.caller(), s.arbiter());
+    Require.that(party || Clock.after(ctx, s.deadline()), "only the seller or the arbiter can refund before the deadline");
+    return Payouts.of(s.buyer(), ctx.balance());
+}
+```
+
+and to record who did something (`new State(ctx.caller(), …)` in an `@Init` makes the deployer the owner).
+
+<Aside type="caution">
+
+Compare keys with `ByteStringLib.equals(a, b)`. On the JVM, `a == b` and `a.equals(b)` compare array references and
+are almost always false; on chain they compare bytes. Shared code must give the same answer on both sides.
+
+</Aside>
+
+## `@SignedBy` and `@OnlyOwner`
+
+`@SignedBy("field")` requires the transaction to be signed by the key hash held in the named `byte[]` field of the
+**current** state. `@OnlyOwner` is shorthand for `@SignedBy("owner")`.
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/crowdfund/src/main/java/org/julclang/state/examples/crowdfund/Crowdfund.java"
+/** The goal was reached: the creator takes everything. */
+@Destroy
+@SignedBy("creator")
+public static JulcList<Payout> claim(State s, Ctx ctx) {
+    Require.that(Clock.after(ctx, s.deadline()), "the campaign is still running");
+    Require.that(s.raised().compareTo(s.goal()) >= 0, "the goal was not reached");
+    return Payouts.of(s.creator(), ctx.balance());
+}
+```
+
+</TabItem>
+<TabItem label=".jsc">
+
+```jsc
+destroy claim() only creator {
+    require after(deadline) "the campaign is still running"
+    require raised >= goal "the goal was not reached"
+    pay balance to creator
+}
+```
+
+`only <field>` lowers to `@SignedBy("<field>")` and needs a `Key` field. A `.jsc` action or destroy that pays out must
+say who may call it: `only <field>`, or `open` if anyone may (the body's `require`s are then the only guard).
+Otherwise it does not compile.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js
+// Nothing extra: the caller's wallet signs. A wallet whose key is not the creator's is refused
+// before it is asked to sign.
+await campaign.at(id).claim(creatorWallet, {});
+```
+
+</TabItem>
+</Tabs>
+
+Rules and behaviour:
+
+- The field must be a `byte[]` component of the state record. It is read from the current state, not the method's
+  result, so an action cannot authorise itself by changing the field.
+- The method does not need `Ctx`. The counter's `reset` has none: `@OnlyOwner` alone makes the client add the
+  owner's key as a required signer.
+- It cannot go on an `@Init` (there is no current state yet): use `Ctx` and `Require.that` in the body.
+- It cannot go on a `@Batched` action: the batcher, not the intent's owner, signs a batch.
+- The Java client checks the caller first and throws
+  `RequireException("Vault.withdraw: must be called by the key in 'owner'")`.
+
+On chain the generated check is one line, `ContextsLib.signedBy(tx, current.owner())`.
+
+## `@Quorum`: M-of-N signatures
+
+`@Quorum(keys = "council", threshold = "quorum")` requires at least `threshold` of the transaction's signers to be
+among `keys`. Both name fields: `keys` a `JulcList<byte[]>` of key hashes, `threshold` a `BigInteger`, in the state,
+in the owned record, or in the `@Params` record (`"params.x"`).
+
+```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Treasury.java"
+public record State(JulcList<byte[]> council, BigInteger quorum, boolean frozen) {}
+
+/** Pays {@code amount} to {@code to}; needs a quorum of the council. */
+@Action @Quorum(keys = "council", threshold = "quorum")
+public static Spent pay(State s, Config cfg, byte[] to, BigInteger amount, Ctx ctx) {
+    Require.that(!s.frozen(), "the treasury is frozen");
+    Require.that(amount.signum() > 0 && amount.compareTo(cfg.maxPayout()) <= 0, "amount out of range");
+    Require.that(amount.compareTo(ctx.balance()) <= 0, "not enough funds");
+    JulcList<Event> none = JulcList.empty();
+    return new Spent(s, Payouts.of(to, amount), none.prepend(new Paid(to, amount)));
+}
+
+/** Replaces the council; needs a quorum of the current one. The new council must keep a reachable quorum. */
+@Action @Quorum(keys = "council", threshold = "quorum")
+public static Changed rotate(State s, JulcList<byte[]> council, BigInteger quorum) { … }
+```
+
+What the validator checks:
+
+- **The count.** The transaction's signatories that appear in `keys` number at least `threshold`, and `threshold`
+  is at least 1. The ledger's signatory set has no repeats. The cost grows with signatories × keys.
+- **The current state.** The check reads the input state, never the method's result. `rotate(council = [attacker],
+  quorum = 1)` cannot authorise itself.
+- **Every output keeps a reachable quorum.** On every state the validator accepts as an output (creation and every
+  action), and on the params at creation, it checks that the keys are **strictly ascending** (so distinct), each 28
+  bytes, and `1 ≤ threshold ≤ number of keys`. No rotation can lock the contract.
+
+So **sort the keys** before you deploy or rotate. The treasury's DevKit test sorts the members by key hash first:
+
+```java title="examples/treasury/src/test/java/org/julclang/state/examples/treasury/TreasuryDevnetTest.java"
+Account[] members = {DevKit.fundedAccount(300), DevKit.fundedAccount(300), DevKit.fundedAccount(300)};
+Arrays.sort(members, Comparator.comparing(a -> HexUtil.encodeHexString(Keys.pkh(a))));
+JulcList<byte[]> council = JulcList.empty();
+for (int i = members.length - 1; i >= 0; i--) council = council.prepend(Keys.pkh(members[i]));
+```
+
+### Co-signers
+
+The caller's signature counts toward the quorum. The other members sign the same transaction as co-signers:
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java
+// The generated client takes the co-signers as trailing Accounts.
+var paid = t.pay(a, Keys.pkh(bob), ADA.multiply(BigInteger.TEN), b);   // a calls, b co-signs: 2 of 3
+t.close(a, Keys.pkh(a), b);
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js
+// A @Quorum call takes { cosigners: [...] }: each co-signer's wallet signs the same transaction.
+await treasury.at(id).pay(walletA, { to: bobKeyHash, amount: 10_000_000n }, { cosigners: [walletB] });
+```
+
+</TabItem>
+</Tabs>
+
+A method may combine `@Quorum` with `@SignedBy`, and `ctx.caller()` may be one of the keys. When several calls are
+composed into one transaction, a signature counts for every call that requires it; `Compose` refuses that unless
+you call `allowSharedSigners()` (see [Reads and composition](/contracts/reads-and-composition/)).
+
+## `@AuthorizedBy`: a key or a script
+
+`@AuthorizedBy("field")` needs the approval of a **credential** held in a `Credential` field of the state, the owned
+record, or the params (`"params.guardian"`). A credential is either a key or a script, and the check differs:
+
+- **Key credential:** the key signed the transaction.
+- **Script credential `h`:** script `h` ran in the transaction, for a **withdrawal** from its reward account. This is
+  the withdraw-zero pattern: withdrawing zero lovelace from a script's reward account makes the ledger run that
+  script, so the transaction proves the script approved it. The validator requires:
+  - `h` is in the transaction's withdrawals (native scripts count too);
+  - `h` is not this contract's own script, nor JOUST's map verifier or output verifier, which approve any withdrawal;
+  - if `h` has a Rewarding redeemer (every Plutus script does), it is an `Approvals` list containing
+    `Approval(policy, target, action)`: this contract's policy id, this instance's (or object's) token name, and this
+    method's redeemer tag.
+
+```java title="julc-state-api/src/main/java/org/julclang/state/api/Approval.java"
+public record Approval(byte[] policy, byte[] target, BigInteger action) {}
+public record Approvals(JulcList<Approval> approvals) {}
+```
+
+The binding means one approval never authorises another instance, another action or another contract. The action
+tag is the method's constructor index in the generated `Calls` redeemer: the actions first, then the destroys (then
+any owned methods), each in declaration order. The treasury's `fund`, `pay`, `rotate`, `freeze` and `close` are 0 to 4,
+so `freeze` is 3. The contract
+[description](/reference/description-format/) lists each method's index.
+
+```java title="examples/treasury/.../Treasury.java"
+@Params
+public record Config(Credential guardian, BigInteger maxPayout) {}
+
+/** The guardian freezes or unfreezes the treasury. */
+@Action @AuthorizedBy("params.guardian")
+public static Changed freeze(State s, boolean frozen) {
+    JulcList<Event> none = JulcList.empty();
+    return new Changed(new State(s.council(), s.quorum(), frozen), none.prepend(new Frozen(frozen)));
+}
+```
+
+### Writing a governor
+
+A governor is a plain JuLC withdraw validator. The example's `Guardian` approves whatever its redeemer lists when its
+owner signs, and refuses any purpose other than Rewarding:
+
+```java title="examples/treasury/src/main/java/org/julclang/state/examples/treasury/Guardian.java"
+@WithdrawValidator
+public class Guardian {
+
+    @Param static byte[] owner;
+
+    @Entrypoint
+    public static boolean validate(PlutusData redeemer, ScriptContext ctx) {
+        boolean rewarding = ctx.scriptInfo() instanceof ScriptInfo.RewardingScript;
+        return rewarding && ContextsLib.signedBy(ctx.txInfo(), owner);
+    }
+}
+```
+
+A governor's obligations:
+
+- list only the approvals its own rules grant (votes, another contract's state, a signature);
+- refuse certificates (the Certifying purpose), so nobody can deregister its stake credential and block every
+  `@AuthorizedBy` call;
+- have its stake credential **registered** once, so withdrawals from it are possible.
+
+### Calling with a governor
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```java title="examples/treasury/.../TreasuryDevnetTest.java"
+var guardian = JulcScriptLoader.load(Guardian.class, new BytesPlutusData(Keys.pkh(owner)));
+String reward = DevKit.registerScriptStake(guardian, owner);   // the example's helper: register once
+
+byte[] policy = HexUtil.decodeHexString(t.instance().contract().policyId());
+byte[] id = HexUtil.decodeHexString(t.instanceId());
+JulcList<Approval> approvals = JulcList.<Approval>empty().prepend(new Approval(policy, id, BigInteger.valueOf(3)));
+var frozen = t.freeze(owner, true, Authorization.script(reward, guardian, new Approvals(approvals), owner));
+```
+
+For a key credential, pass `Authorization.key(account)`.
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```js
+// A key credential: the key's wallet co-signs (or calls).
+await treasury.at(id).freeze(walletA, { frozen: true }, { cosigners: [guardianWallet] });
+
+// A script credential: a governor built by `joust build`, registered once (see @julclang/joust-runtime).
+await treasury.at(id).freeze(walletA, { frozen: true }, { governor: { governor, signers: [ownerWallet] } });
+```
+
+</TabItem>
+</Tabs>
+
+<Aside type="note">
+
+`@Quorum` and `@AuthorizedBy` read the current state, so neither can go on an `@Init` or `@Migrate` creation. Neither
+can go on a `@Batched` action: an intent's owner is the caller. `.jsc` has no form of either yet; write those
+contracts in Java.
+
+</Aside>
+
+## Which to use when
+
+- **One fixed party** (an owner, an admin, a creator): `@SignedBy("field")` or `@OnlyOwner`. Cheapest, and the
+  client checks it before anything is built.
+- **A choice among parties, or a rule that mixes identity and time** (escrow's "seller or arbiter, or anyone after
+  the deadline"): `Ctx` and `Require.that` with `ByteStringLib.equals`.
+- **A committee**: `@Quorum`. Keep the council in the state if it must change (with a quorum-guarded `rotate`), or
+  in `@Params` if it is fixed for the deployment.
+- **Another contract's or a DAO's decision**: `@AuthorizedBy` with a script credential, kept in `@Params` so the
+  governor is fixed by the script hash and cannot be swapped by an action.
+- **Anyone**: no annotation. The method's `Require`s are then the only guard, so make sure they are enough,
+  especially for anything that pays out.
+
+## Pitfalls
+
+- **Unsorted council keys.** `@Quorum` rejects any state whose keys are not strictly ascending, at creation too.
+- **An admin field changed by an unguarded action.** `@SignedBy` protects the method it is on, not the field. Guard
+  every action that writes the field.
+- **A governor that accepts anything.** `@AuthorizedBy` trusts the script's rules completely. Bind its approvals to
+  real conditions, and pin it in `@Params`.
+- **Forgetting to register the governor's stake credential.** Without registration the zero withdrawal is invalid,
+  and no `@AuthorizedBy` call can succeed.
+
+## Reference
+
+- [Annotations](/reference/annotations/): `@SignedBy`, `@OnlyOwner`, `@Quorum`, `@AuthorizedBy`
+- Sources: [`SignedBy.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/SignedBy.java),
+  [`Quorum.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/Quorum.java),
+  [`AuthorizedBy.java`](https://github.com/bloxbean/joust/blob/main/julc-state-api/src/main/java/org/julclang/state/api/AuthorizedBy.java),
+  [`examples/treasury`](https://github.com/bloxbean/joust/tree/main/examples/treasury)
+- ADR-0001 D3 and I11 (`@SignedBy`); [ADR-0009](https://github.com/bloxbean/joust/blob/main/docs/adr/0009-option-i-params-auth-invariants-events.md) D2 (`@Quorum`, I32) and D3 (`@AuthorizedBy`, I33)
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Multisig treasury tutorial" href="/tutorials/multisig-treasury/" description="@Quorum, a guardian script, invariants and events." />
+<LinkCard title="Params, invariants and events" href="/contracts/params-invariants-events/" description="Fix a governor at deploy time." />
+<LinkCard title="Time" href="/contracts/time/" description="Combine who with when." />
+<LinkCard title="Security model" href="/contracts/security-model/" description="Everything the validator enforces." />
+</CardGrid>

@@ -1,0 +1,286 @@
+---
+title: "Vault: deposits, time and payouts"
+description: Build and run a time-locked savings vault on Yaci DevKit, with payable deposits, an owner-only withdraw after a deadline, payouts and close.
+---
+
+import { Tabs, TabItem, Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+In this tutorial you walk through [`examples/vault`](https://github.com/bloxbean/joust/tree/main/examples/vault), a
+time-locked savings vault, and run it on a local Cardano network. Anyone can deposit; only the owner can withdraw,
+and only after an unlock time; the owner closes it and takes everything back.
+
+You will learn how a contract receives money (`@Payable`), pays it out (payouts in a `Result`), restricts a method to
+one key (`@OnlyOwner`) and to a time (`@ValidAfter`), and returns its deposit when it ends (`@Destroy`).
+
+<Aside type="caution" title="Experimental, pre-release">
+
+JOUST is experimental and pre-release (not for production). The Java path needs JDK 25. Release candidates are in the
+BloxBean release repository, `https://repo.bloxbean.org/maven/releases` (see the
+[Java quick start](/start/quick-start-java/)); nothing is on Maven Central yet.
+
+</Aside>
+
+## Before you start
+
+- A JOUST checkout, with JuLC built as above, and `./gradlew build` passing.
+- [Yaci DevKit](/apps/networks-and-providers/) running with Yaci Store:
+
+  ```sh
+  yaci-devkit up --enable-yaci-store
+  ```
+
+  This gives a local network with Yaci Store's Blockfrost-compatible API on `localhost:8080`, an admin API on
+  `:10000`, and the Yaci Viewer explorer on `:5173`.
+
+## Build it
+
+<Steps>
+
+1. **The state.** A vault stores who owns it, when it unlocks, and how much it holds:
+
+   ```java title="examples/vault/src/main/java/org/julclang/state/examples/vault/Vault.java"
+   @StateContract(maxDatumBytes = 128)
+   public class Vault {
+
+       public record State(byte[] owner, BigInteger unlockAt, BigInteger total) {}
+
+       /** An action that pays out returns the next state and its payouts. */
+       public record Result(State state, JulcList<Payout> payouts) {}
+   ```
+
+   `owner` is a payment key hash (28 bytes), `unlockAt` a POSIX time in milliseconds. `maxDatumBytes = 128` is plenty
+   for three fields, and keeps the deposit each vault locks at 2.2 ADA. `Result` is how an action returns payouts
+   along with the next state: JuLC has no generic records, so you declare the record and JOUST recognises it by its
+   component names.
+
+   **What this taught:** the state is a plain record, stored as the UTxO's datum; its size bound sets the deposit.
+
+2. **Open the vault, with a first deposit.**
+
+   ```java
+   /** Opens a vault, optionally with a first deposit; the deployer owns it. */
+   @Init
+   @Payable
+   public static State open(BigInteger unlockAt, Ctx ctx) {
+       Require.that(Clock.before(ctx, unlockAt), "unlockAt must be in the future");
+       return new State(ctx.caller(), unlockAt, ctx.received());
+   }
+   ```
+
+   `@Payable` lets the caller add lovelace; `ctx.received()` is how much. `ctx.caller()` is the deployer's key hash,
+   verified on chain by a signature check, so the deployer becomes the owner. `Clock.before(ctx, unlockAt)` holds only
+   if the whole transaction happens strictly before `unlockAt`.
+
+   **What this taught:** `Ctx` gives authenticated facts about the transaction: who, how much, when.
+
+3. **Let anyone deposit.**
+
+   ```java
+   /** Anyone can add funds. */
+   @Action
+   @Payable
+   public static State deposit(State s, Ctx ctx) {
+       Require.that(ctx.received().compareTo(BigInteger.ZERO) > 0, "deposit must be positive");
+       return new State(s.owner(), s.unlockAt(), s.total().add(ctx.received()));
+   }
+   ```
+
+   No signer annotation, so any account can call it. The generated validator requires the vault's new UTxO to hold
+   exactly the old lovelace plus `received`, so `total` always matches the money actually held.
+
+   **What this taught:** an action returns the next state; the validator enforces exact value accounting around it.
+
+4. **Withdraw: owner only, after the unlock time, with a payout.**
+
+   ```java
+   /** The owner takes funds out once the vault is unlocked. */
+   @Action
+   @OnlyOwner
+   @ValidAfter("unlockAt")
+   public static Result withdraw(State s, BigInteger amount, Ctx ctx) {
+       Require.that(amount.compareTo(BigInteger.ZERO) > 0, "amount must be positive");
+       Require.that(amount.compareTo(s.total()) <= 0, "insufficient funds");
+       return new Result(new State(s.owner(), s.unlockAt(), s.total().subtract(amount)), Payouts.of(s.owner(), amount));
+   }
+   ```
+
+   - `@OnlyOwner` means `@SignedBy("owner")`: the transaction must be signed by the key in the current state's
+     `owner` field.
+   - `@ValidAfter("unlockAt")` requires the transaction's validity interval to start at or after `unlockAt`.
+   - The method returns the payout instead of building an output. The validator checks that an output pays `amount`
+     to the owner's key, **tagged** with this vault's input (so no other contract in the same transaction can count
+     the same output), and that the vault keeps exactly the rest.
+
+   **What this taught:** policies are annotations checked against the current state; money leaves only as payouts
+   the validator verifies.
+
+5. **Close: return everything.**
+
+   ```java
+   /** The owner closes an unlocked vault and takes everything, deposit included. */
+   @Destroy
+   @OnlyOwner
+   @ValidAfter("unlockAt")
+   public static JulcList<Payout> close(State s, Ctx ctx) {
+       return Payouts.of(s.owner(), ctx.balance());
+   }
+
+   @View
+   public static BigInteger total(State s) {
+       return s.total();
+   }
+   ```
+
+   In a destroy, `ctx.balance()` is everything the UTxO holds, the 2.2 ADA deposit included. The validator requires
+   the payouts to add up to exactly that, and the thread token to be burned. The `@View` methods become client
+   getters that read the chain without a transaction.
+
+   **What this taught:** a destroy ends the instance and must allocate all of its funds.
+
+</Steps>
+
+The same contract in `.jsc`, which lowers to equivalent Java (the init is always named `init` there):
+
+```jsc title="Vault.jsc"
+package org.example.vault
+
+contract Vault(maxDatumBytes = 128) {
+    state owner: Key
+    state unlockAt: Int
+    state total: Int
+
+    init(unlockAt: Int) payable {
+        require before(unlockAt) "unlockAt must be in the future"
+        owner = caller
+        this.unlockAt = unlockAt
+        total = received
+    }
+
+    action deposit() payable {
+        require received > 0 "deposit must be positive"
+        total += received
+    }
+
+    action withdraw(amount: Int) only owner after unlockAt {
+        require amount > 0 "amount must be positive"
+        require amount <= total "insufficient funds"
+        total -= amount
+        pay amount to owner
+    }
+
+    destroy close() only owner after unlockAt {
+        pay balance to owner
+    }
+
+    view held(): Int = total
+}
+```
+
+## Run it
+
+<Steps>
+
+1. **Read the app.** The processor generated `VaultValidator` and `VaultClient`. The app drives the client:
+
+   <Tabs syncKey="lang">
+   <TabItem label="Java">
+
+   ```java title="examples/vault/src/main/java/org/julclang/state/examples/vault/VaultApp.java"
+   var runtime = DevKit.runtime();
+   var alice = DevKit.fundedAccount(500);
+   var bob = DevKit.fundedAccount(500);
+
+   long unlockAt = System.currentTimeMillis() + 45_000;
+   var vault = VaultClient.deploy(runtime, alice, BigInteger.valueOf(unlockAt), ADA.multiply(BigInteger.TEN));
+   System.out.println("vault " + vault.instanceId() + ": total " + vault.total() + ", unlocks in 45 s");
+
+   vault.deposit(bob, ADA.multiply(BigInteger.valueOf(5)));
+   System.out.println("bob deposited 5 ADA -> total " + vault.total());
+
+   try {
+       vault.withdraw(alice, ADA);
+   } catch (RequireException e) {
+       System.out.println("withdraw before unlock rejected off-chain: " + e.getMessage());
+   }
+   while (System.currentTimeMillis() < unlockAt + 2_000) Thread.sleep(1_000);
+
+   vault.withdraw(alice, ADA.multiply(BigInteger.valueOf(3)));
+   System.out.println("alice withdrew 3 ADA -> total " + vault.total());
+
+   var closed = vault.close(alice);
+   System.out.println("closed: paid " + closed.payouts().get(0).lovelace() + " lovelace to alice");
+   ```
+
+   `DevKit` is the examples' helper module: a runtime for the local network (with a 20-second TTL) and funded test
+   accounts.
+
+   </TabItem>
+   <TabItem label="JavaScript">
+
+   ```js
+   // The same flow with the generated JavaScript client (see Building apps for service, chain, deployment).
+   import { Vault } from '../build/joust/Vault.js';
+
+   const vault = new Vault({ service, chain, deployment });
+   const { instance } = await vault.deploy(alice, { unlockAt: BigInt(Date.now() + 45_000) }, { lovelace: 10_000_000n });
+   await instance.deposit(bob, {}, { lovelace: 5_000_000n });
+   await instance.withdraw(alice, { amount: 1_000_000n }).catch((e) => console.log(e.message));   // too early
+   // … after the unlock time:
+   await instance.withdraw(alice, { amount: 3_000_000n });
+   await instance.close(alice);
+   ```
+
+   </TabItem>
+   </Tabs>
+
+2. **Run it against DevKit.**
+
+   ```sh
+   ./gradlew :examples:vault:run
+   ```
+
+   The first run also publishes the vault's script as a reference script (lines prefixed `[joust]` come from the
+   runtime). The app's own output looks like this (your instance id differs):
+
+   ```text
+   vault 5c0e…9a1f: total 10000000, unlocks in 45 s
+   bob deposited 5 ADA -> total 15000000
+   withdraw before unlock rejected off-chain: Vault.withdraw: too early, the time in 'unlockAt' has not been reached
+   alice withdrew 3 ADA -> total 12000000
+   closed: paid 14200000 lovelace to alice
+   ```
+
+   The early withdraw never reached the chain: the client checked `@ValidAfter` against the state and refused. The
+   close paid 14.2 ADA: the remaining 12 ADA plus the 2.2 ADA deposit.
+
+3. **Look at it on chain.** Open Yaci Viewer at `http://localhost:5173` and find the transactions: the deploy mints
+   one token, each action spends and recreates the vault's UTxO, the withdraw and the close each add a tagged payout
+   output, and the close burns the token.
+
+4. **Run the tests.**
+
+   ```sh
+   ./gradlew :examples:vault:test
+   ```
+
+   `VaultTest` evaluates the compiled validator against transactions shaped like the runtime's, runs the attack suite
+   on each accepted one, and checks the refusals: a withdraw before the unlock time (`@ValidAfter`), by a stranger
+   (`@OnlyOwner`), a deposit claiming more than it sent. `VaultDevnetTest` runs the client end to end when DevKit is
+   up, and is skipped otherwise.
+
+</Steps>
+
+## What you built
+
+A contract that holds funds safely with about 40 lines of logic. You wrote no transaction-building code and no
+validator: the generated validator enforces the exact value of every step, the owner's signature, the unlock time,
+tagged payouts and a full payout on close; the client refuses bad calls before they are signed.
+
+## Next steps
+
+<CardGrid>
+<LinkCard title="Escrow and crowdfunding" href="/tutorials/escrow-crowdfund/" description="Several parties, two ways to end, a map in the state." />
+<LinkCard title="Ctx, funds and payouts" href="/contracts/ctx-and-funds/" description="The full rules for money in and out." />
+<LinkCard title="Time" href="/contracts/time/" description="Windows, Clock and the annotations." />
+<LinkCard title="Testing" href="/contracts/testing/" description="The harness and the attack suite." />
+</CardGrid>
