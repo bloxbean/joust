@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo/joust-knight-on-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo/joust-knight.svg">
+    <img alt="JOUST — State Contract Simplified" src="docs/assets/logo/joust-knight.svg" width="240">
+  </picture>
+</p>
+
 # JOUST
 
 **State Contract Simplified**
