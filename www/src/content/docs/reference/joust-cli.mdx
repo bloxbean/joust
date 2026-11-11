@@ -172,8 +172,10 @@ own `@julclang/joust`. So `joust build` does the same, whichever binary `PATH` f
 The walk up to a project does not enter directories owned by another user (a planted `package.json` in `/tmp` is
 ignored); list directories you trust, such as a container bind mount, in `JOUST_SAFE_DIRS` (`:`-separated). Both CLIs
 apply this rule, as git's `safe.directory` does: in a container or CI job that runs as another user than the one owning
-the checkout (for example root over a mounted workspace), set `JOUST_SAFE_DIRS` to the checkout's directory, or run as
-its owner; otherwise `joust build` reports that it found no project.
+the checkout (for example root over a mounted workspace), run as its owner, or set `JOUST_SAFE_DIRS`. Its entries are
+absolute paths and trust those exact directories, not their subdirectories: `JOUST_SAFE_DIRS=/workspace` works for
+`joust build` run in `/workspace`; run from `/workspace/contracts`, list that directory too. Otherwise `joust build`
+reports that it found no project.
 
 To check a downloaded archive before using it: `shasum -a 256 -c joust-<version>-SHA256SUMS.txt --ignore-missing`, then
 `gh attestation verify joust-<version>-<platform>.zip -R bloxbean/joust`; on macOS, `xattr -d com.apple.quarantine joust`

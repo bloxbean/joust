@@ -27,7 +27,8 @@ says which one ran, and in an npm project which `@julclang/joust` the project us
 
 The project walk does not enter directories owned by another user; list any you trust in `JOUST_SAFE_DIRS`. In a
 container or CI job running as another user than the checkout's owner (root over a mounted workspace, say), set
-`JOUST_SAFE_DIRS=<checkout>` or run as the owner.
+`JOUST_SAFE_DIRS=<checkout>` (absolute; it trusts that exact directory, so list any subdirectory you run `joust` from
+too), or run as the owner.
 
 ## Install
 
