@@ -1,6 +1,6 @@
 # ADR-0017: One `joust new` for Java and npm — a native `joust` CLI and a JOUST Gradle plugin
 
-**Status:** Proposed (r5)
+**Status:** Proposed (r5; approved by review at `5fcc793`; implemented in PR #55)
 **Date:** 2026-11-11
 **Builds on:** ADR-0015 D9 (the npm `joust` CLI and `create-joust`), PR #53 (`create-joust --template node|web
 --lang jsc|java`, open), ADR-0005 (`.jsc`), the release-ops workflows (`release.yml`, `build.yml`).
@@ -460,7 +460,7 @@ settings for an admin.
 |---|---|---|---|
 | I1 | In an npm project the native CLI runs no project command with its own implementation: it delegates or fails with a message | D4, D9 | unit test (no package: message, nothing else); CI 5 |
 | I2 | Delegation passes the arguments unchanged, inherits the standard streams, runs at the npm project root, and returns the delegate's exit code | D4 | unit test with a stub package whose bin records argv, cwd and stdin, writes both streams and exits 7, invoked from the root and a subdirectory; CI 5 with the native binary |
-| I3 | The native CLI executes only absolute paths it resolved itself: `node`/`npm` from absolute `PATH` entries (empty and relative entries skipped, and its children get that `PATH`), the resolved package's `bin.joust` (its real path inside the package), `<build root>/gradlew`, `java -version` for D3's check, `npm pack` (which fetches and runs no package script) and the extracted `create-joust` bin under that `node`; it starts no shell and never runs a program through a shebang or `npm exec` | D3, D4 | unit tests (command lines and environments built for each case; `PATH` with `.` and empty entries; a bin symlinked out of its package) |
+| I3 | The native CLI executes only absolute paths it resolved itself: `node`/`npm` from absolute `PATH` entries (empty and relative entries skipped, and its children get that `PATH`), the resolved package's `bin.joust` (its real path inside the package) under that `node`, `<build root>/gradlew` (which runs under its own `#!/bin/sh`, as when the user types it), `java -version` for D3's check, and `npm pack` (when `npm` links to npm's `npm-cli.js`, that file under the resolved `node`); the extracted `create-joust` bin runs under the resolved `node`, never through its shebang; the CLI builds no shell command strings and never uses `npm exec` or npm's script runner | D3, D4 | unit tests (command lines and environments built for each case; `PATH` with `.` and empty entries; a bin symlinked out of its package) |
 | I4 | Informational commands (D9), in both CLIs, never execute project code or hand over; every manifest read is bounded, non-blocking and validated | D4, D5, D9 | unit tests (native) and `js/joust` tests (npm): a stub bin that fails the test if run, for `--version`, `help`, `deploy --help`, `-v`; a FIFO and a 1 MiB file as the detection `package.json` and as the resolved one; an escape sequence as `version`; CI 5 with the native binary |
 | I5 | Detection is deterministic: the nearest marker wins; npm beats Gradle in one directory; the walk stops at a directory not owned by the user (unless in `JOUST_SAFE_DIRS`) and at the root, and says so when that hides a marker | D4 | unit tests over directory layouts, including nested npm-in-Gradle, Gradle subprojects, hoisted `node_modules`, and a foreign-owned ancestor (the owner supplied by the test's `Sys`) |
 | I6 | Version alignment: CLI version X (effective) writes `id 'org.julclang.joust' version 'X'` and runs `create-joust@X`; plugin X adds JOUST X and the JuLC and CCL versions of build X; a snapshot CLI uses the snapshots repository and needs `--create-joust` for npm templates | D1, D3 | unit test (templates, release and `-<sha>-SNAPSHOT` versions); plugin test (resolved versions) |
@@ -632,3 +632,34 @@ settings for an admin.
   - a test keeps `create-joust` free of dependencies and bare imports (F26, S27); the Windows walk's guarantee is stated for
     projects under the profile (F28, S28); the version shown by `joust version` uses a display pattern that admits
     development versions (F29).
+- **r5 notes** (2026-11-12, after acceptance by review; no decision changed): I3 reworded (Codex C24, PR #55 IS7): the
+  Gradle wrapper runs under its own shebang, `npm pack` runs npm's `npm-cli.js` under the resolved `node` when `npm`
+  links to it, and `create-joust` never through its shebang.
+
+## Implementation notes (PR #55)
+
+Implemented in PR #55 (stacked on PR #53), reviewed in four rounds by the design & correctness, security & release and
+Codex reviewers, approved by all three (final heads `58ea443`, `90e7e7f`, `71cc005`).
+
+- **M1, the plugin** (`julc-state-gradle-plugin`): as D1. Versions are written at build time into
+  `META-INF/joust/gradle-plugin.properties` (effective `project.version`, `libs.versions.julc`,
+  `libs.versions.cardano.client.lib`). The root build skips `mavenJava` for it; the staged plugin POM lists no
+  dependencies; `verifyMavenReleasePublicationScope` counts 8 projects and `discover` the marker on top. I7 part 1 is a
+  ProjectBuilder test of every addition plus TestKit (a toolchain set to 21 after `plugins {}` is refused; the
+  configuration cache is stored, then reused); building generated projects is I7 parts 2 and 3 (CI and `cli-consumer`).
+- **M2, the CLI** (`julc-state-cli`): picocli for `new` only (the dispatcher keeps project arguments untouched).
+  Hardening found in review, all within D3/D4: ownership is compared by **uid** (`/proc/self`, else a probe file; an
+  unknown uid fails closed), `JOUST_SAFE_DIRS` by real path and exact directory; neither CLI inspects `/`; manifest
+  reads are bounded in size and time and must still be the file checked (same file key) after the read; JSON numbers
+  follow RFC 8259; `--joust-repository` takes only `file:` URLs of plain path characters, and every value written into a
+  Gradle string is escaped; tarballs have a 4 MiB budget on the decompressed stream; package segments are
+  `[A-Za-z_][A-Za-z0-9_]*`, not keywords or `_`. On Ctrl-C both CLIs wait for the delegate and return its status.
+- **The npm CLI** (D5): also refuses a project command where no trusted project is found, in a Gradle build, and in an
+  npm project without its `@julclang/joust` installed (D9's "No project" and D4's "never a stand-in", applied to it).
+- **M3, CI**: `build.yml` `cli` runs `.github/scripts/joust-cli-e2e.sh` (D8 steps 3–5 with all three controls);
+  `release-flags-test.sh` and `homebrew-formula-test.sh` (13 ordering vectors and the job's decision run as a `set -e`
+  script) run in `build`. First CI run of the implementation: all 8 jobs green.
+- **M4, release**: as D6, D7, D10; the formula step and the push step are separate so the script never sees the token,
+  and the new jobs' actions are pinned by commit SHA. `homebrew_publish=false`.
+- **Open follow-ups (P3)**: a nested-invocation test of the npm hand-over guard; descriptor-level non-blocking manifest
+  reads (accepted as hardening); the Windows build (D2).
