@@ -116,6 +116,68 @@ jobs:
           name: test-reports-build
           path: '**/build/reports/tests/test'
 
+
+  # The npm packages' Wasm engines (ADR-0015), built as release.yml's npm job builds them, so a toolchain problem shows
+  # on the PR and not after a release tag (v0.1.0-pre1-rc6 failed there). No secrets: GITHUB_TOKEN only raises
+  # setup-graalvm's API rate limit.
+  engines:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up GraalVM 25
+        uses: graalvm/setup-graalvm@f70bc8032f90a104502824a54bcb94b6f01715bc # v1.6.8
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Web Image needs a recent Binaryen (WasmGC heap types): Ubuntu 24.04's apt package (108) can't assemble its
+      # output ("unknown heaptype kind"; v0.1.0-pre1-rc6). Binaryen 132 from its GitHub release, as JuLC, pinned by
+      # SHA-256 (the release's own .sha256 asset). Keep the version and hash the same in build.yml and release.yml.
+      - name: Install Binaryen
+        shell: bash
+        env:
+          BINARYEN_VERSION: '132'
+          BINARYEN_SHA256: 195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572
+        run: |
+          set -euo pipefail
+          f="binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$f" \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/$f"
+          echo "${BINARYEN_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Check Web Image and Binaryen
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d "$GRAALVM_HOME/lib/svm/tools/svm-wasm" ]]; then
+            echo "::error::This GraalVM has no Web Image (lib/svm/tools/svm-wasm); the engines cannot be built." >&2
+            exit 1
+          fi
+          command -v wasm-as
+          wasm-as --version
+
+      - name: Build the engines
+        run: >-
+          ./gradlew :julc-state-runtime-wasm:runtimeWasm :julc-state-toolchain:toolchainWasm
+          -PgraalvmHome="$GRAALVM_HOME" --stacktrace
+
+      - name: Pack the packages with their engines
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p js/joust-runtime/engine js/joust/engine
+          cp julc-state-runtime-wasm/build/wasm/{joust-runtime.js,joust-runtime.js.wasm,package.json} js/joust-runtime/engine/
+          cp julc-state-toolchain/build/wasm/{joust-toolchain.js,joust-toolchain.js.wasm,package.json} js/joust/engine/
+          ls -l js/joust-runtime/engine js/joust/engine
+          for p in state-client joust-runtime joust create-joust; do (cd "js/$p" && npm pack --dry-run --ignore-scripts); done
+
   devnet:
     needs: plan
     runs-on: ubuntu-24.04
