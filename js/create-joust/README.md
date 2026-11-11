@@ -1,67 +1,79 @@
 # create-joust
 
-Creates a [JOUST](https://github.com/bloxbean/joust) app: a Cardano state contract written in Java, built, deployed
-and called with npm only. No JDK or GraalVM: the compiler and the runtime run as Wasm engines.
+Creates a [JOUST](https://github.com/bloxbean/joust) app: a Cardano state contract written in JOUST's `.jsc` language
+or in Java, built, deployed and called with npm only. No JDK or GraalVM: the compiler and the runtime run as Wasm engines.
 
 ## Usage
 
 ```sh
-npm create joust@latest my-app
+npm create joust@latest my-app                                      # a Node script and a .jsc contract
+npm create joust@latest my-app -- --lang java                       # the contract in Java
+npm create joust@latest my-app -- --template web                    # a browser page with wallets
+npm create joust@latest my-app -- --template web --lang java
 ```
 
-The only argument is the directory to create (default: `joust-app`). It must be new or empty. There are no other
-options. The new project's `package.json` takes its `name` from the directory.
+| Option | Values | Default |
+|---|---|---|
+| `[dir]` | the directory to create, new or empty; the new `package.json` takes its `name` from it | `joust-app` |
+| `--template`, `-t` | `node`: a Node script (`index.js`) that deploys and calls the contract<br>`web`: a browser page with CIP-30 wallets | `node` |
+| `--lang`, `-l` | `jsc`: the contract in JOUST's `.jsc` language (`contracts/app/Counter.jsc`)<br>`java`: the contract in Java (`contracts/app/Counter.java`) | `jsc` |
+
+With `npm create`, options go after `--`. Both languages give the same contract: `joust build` generates the same
+description and the same JavaScript client from either, so `index.js`, the page and the test are the same too.
 
 ## What you get
 
 ```
-my-app/
-├── contracts/app/Counter.java   a counter: anyone increments it, its owner resets or closes it
-├── page/                        a browser page for the counter (index.html, main.js, engine.worker.js)
-├── test/counter.test.js         create, increment and close a counter on a local Yaci DevKit (node --test)
+my-app/                          --template node (the default)
+├── contracts/app/Counter.jsc    a counter: anyone increments it, its owner resets or closes it (Counter.java with --lang java)
+├── index.js                     deploys a counter on a local Yaci DevKit and calls it, through the generated client
+├── test/counter.test.js         the same calls as a test (node --test)
 ├── joust.config.json            the contracts directory, the build output (build/joust) and the networks
-├── vite.config.js               the page's Vite config, with @julclang/joust/vite
 ├── package.json                 the scripts below; depends on @julclang/joust, @julclang/joust-runtime, @julclang/state-client
-├── README.md                    the app's own guide
+├── README.md                    the app's own guide: what joust build generates and how index.js uses it
 └── .gitignore
 ```
 
 `joust build` compiles `contracts/` into `build/joust/`: the validator, the contract's description and a typed
-JavaScript client (`Counter.js`). The page and the test both call the contract through that client. The page prepares
-its own transactions with the runtime engine in a Web Worker. It checks each one against the contract's description
-and the chain before the wallet signs it.
+JavaScript client (`Counter.js`, with `Counter.d.ts`). `index.js` imports that client, makes a DevKit wallet funded by
+the faucet, and creates, increments and closes a counter. Each call runs the contract's code in the runtime engine
+(Wasm) to compute the next state; on chain, the validator runs the same code again to check it.
+
+`--template web` replaces `index.js` with a page (`page/index.html`, `main.js`, `engine.worker.js`) and a Vite config
+(`vite.config.js`, with `@julclang/joust/vite`). The page prepares its own transactions with the runtime engine in a Web
+Worker, and checks each one against the contract's description and the chain before the wallet signs it.
 
 ## Prerequisites
 
 - Node.js 22 or later.
 - No JDK, JRE or GraalVM.
-- To deploy and test locally: [Yaci DevKit](https://github.com/bloxbean/yaci-devkit) with Yaci Store
+- To deploy and run locally: [Yaci DevKit](https://github.com/bloxbean/yaci-devkit) with Yaci Store
   (`yaci-devkit up --enable-yaci-store`, Yaci Store on `:8080`, admin API on `:10000`). This is the default network
   in `joust.config.json`.
-- For the preview network: a Blockfrost project id in `BLOCKFROST_PREVIEW_PROJECT_ID`, and a funded preview mnemonic
-  in `JOUST_MNEMONIC` that pays the deployment.
+- For the preview network (`--template web`): a Blockfrost project id in `BLOCKFROST_PREVIEW_PROJECT_ID`, and a funded
+  preview mnemonic in `JOUST_MNEMONIC` that pays the deployment.
 
 ## Next steps
 
 ```sh
 cd my-app
 npm install
-npm run build       # contracts/ -> build/joust/
-npm run deploy      # publishes the reference script (needs a DevKit: yaci-devkit up --enable-yaci-store)
+npm start           # node template: build, deploy and run index.js on the DevKit
 npm test            # creates a counter and calls it, on the DevKit
-npm run dev         # builds, deploys and serves the page at http://127.0.0.1:5178; redeploys on save
 ```
 
-| Script | What it runs |
-|---|---|
-| `npm run build` | `joust build` |
-| `npm run deploy` / `deploy:preview` | `joust deploy` (on DevKit / preview) |
-| `npm run dev` / `dev:preview` | `joust dev`: build, deploy, serve the page, rebuild on save |
-| `npm run build:page` / `build:page:preview` | `vite build`: the page as static files in `dist/` |
-| `npm run serve` / `serve:preview` | `joust serve`: serves `dist/`, with the chain API at `/chain` |
-| `npm test` | `node --test test/*.test.js` |
+| Script | Template | What it runs |
+|---|---|---|
+| `npm start` | node | `joust build && joust deploy && node index.js` |
+| `npm run build` | both | `joust build` |
+| `npm run deploy` | both | `joust deploy` (on DevKit); `deploy:preview` in the web template |
+| `npm test` | both | `node --test test/*.test.js` |
+| `npm run dev` / `dev:preview` | web | `joust dev`: build, deploy, serve the page at http://127.0.0.1:5178, rebuild on save |
+| `npm run build:page` / `build:page:preview` | web | `vite build`: the page as static files in `dist/` |
+| `npm run serve` / `serve:preview` | web | `joust serve`: serves `dist/`, with the chain API at `/chain` |
 
-The generated project's `README.md` covers static hosting, the preview network and browser wallets.
+The generated project's `README.md` covers the rest: for the web template, static hosting, the preview network and
+browser wallets.
 
 ## Links
 

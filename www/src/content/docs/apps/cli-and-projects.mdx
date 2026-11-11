@@ -20,21 +20,24 @@ during development and after a build. It needs Node 22 or newer and nothing else
 
 ## A project
 
-`npm create joust <dir>` makes one from its template:
+`npm create joust <dir>` makes one from its template. By default the contract is `.jsc` and a Node script calls it;
+`-- --lang java` writes it in Java, and `-- --template web` writes a page instead of the script
+([create-joust](/reference/joust-cli/#create-joust)):
 
 <FileTree>
 
 - contracts/ your contracts: .java and .jsc files, in package folders
   - app/
-    - Counter.java
-- page/ the page (optional): index.html, main.js, engine.worker.js
+    - Counter.jsc
+- index.js the Node script (node template)
+- page/ the page (web template): index.html, main.js, engine.worker.js
 - test/ Node tests (node --test)
 - build/
   - joust/ everything joust build and joust deploy write
 - dist/ the built page (vite build)
 - .joust/ local state: the DevKit deployer key
 - joust.config.json
-- vite.config.js
+- vite.config.js the page's Vite config (web template)
 - package.json
 
 </FileTree>
@@ -222,8 +225,8 @@ Prints the package's version, the one recorded in `contracts.json` and `joust.lo
 
 ## The template's scripts
 
-The template's `package.json` maps npm scripts onto these commands; the [npm quick start](/start/quick-start-npm/#the-project)
-lists them. Use `npx joust ...` for anything the scripts do not cover, such as `npx joust deploy --network mynet`.
+The template's `package.json` maps npm scripts onto these commands; the npm quick start lists them for the
+[node](/start/quick-start-npm/#the-project) and [web](/start/quick-start-npm/#a-browser-page) templates. Use `npx joust ...` for anything the scripts do not cover, such as `npx joust deploy --network mynet`.
 
 ## Next steps
 

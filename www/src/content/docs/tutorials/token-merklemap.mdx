@@ -175,12 +175,12 @@ transaction; the page verifies it before the key signs. The worker also keeps th
    `http://127.0.0.1:4873/`):
 
    ```sh
-   npm_config_registry=http://127.0.0.1:4873/ npm create joust@0.1.0-pre1-snapshot token-app
+   npm_config_registry=http://127.0.0.1:4873/ npm create joust@0.1.0-pre1-snapshot token-app -- --template web --lang java
    cd token-app
    npm_config_registry=http://127.0.0.1:4873/ npm install
    ```
 
-   The template holds a Counter contract, a page and a test.
+   The web template in Java holds a Counter contract (`Counter.java`), a page and a test.
 
 2. **Swap in the token.** Delete `contracts/app/Counter.java` and `test/counter.test.js`. Copy
    `examples/token/src/main/java/org/julclang/state/examples/token/Token.java` to `contracts/app/Token.java` and change

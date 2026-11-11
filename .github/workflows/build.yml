@@ -87,6 +87,11 @@ jobs:
           npm ci
           npm test
 
+      # npm create joust: what each template and contract language writes, and the command line.
+      - name: Test create-joust
+        working-directory: js/create-joust
+        run: npm test
+
       - name: Install the dApp page's Node dependencies
         working-directory: examples/dapp/frontend
         run: npm ci
@@ -146,6 +151,11 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       # Web Image needs a recent Binaryen (WasmGC heap types): Ubuntu 24.04's apt package (108) can't assemble its
       # output ("unknown heaptype kind"; v0.1.0-pre1-rc6). Binaryen 132 from its GitHub release, as JuLC, pinned by
       # SHA-256 (the release's own .sha256 asset). Keep the version and hash the same in build.yml and release.yml.
@@ -188,6 +198,20 @@ jobs:
           cp julc-state-toolchain/build/wasm/{joust-toolchain.js,joust-toolchain.js.wasm,package.json} js/joust/engine/
           ls -l js/joust-runtime/engine js/joust/engine
           for p in state-client joust-runtime joust create-joust; do (cd "js/$p" && npm pack --dry-run --ignore-scripts); done
+
+      # Every create-joust template, built by the toolchain engine just built: the .jsc and Java counters must give the
+      # same description and client. This repository's packages are linked beside js/joust (no registry).
+      - name: Build the create-joust templates with the engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd js/state-client && npm ci)
+          mkdir -p js/node_modules/@julclang
+          ln -s ../../state-client js/node_modules/@julclang/state-client
+          ln -s ../../joust-runtime js/node_modules/@julclang/joust-runtime
+          cd js/create-joust
+          node --test test/*.test.js 2>&1 | tee "$RUNNER_TEMP/create-joust.tap"
+          if grep -q '# SKIP' "$RUNNER_TEMP/create-joust.tap"; then echo "::error::the template build was skipped"; exit 1; fi
 
   devnet:
     needs: plan

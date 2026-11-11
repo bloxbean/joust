@@ -1,6 +1,7 @@
 # A JOUST app
 
-A Cardano state contract written in Java (`contracts/`), built and used with npm only: no JDK or GraalVM.
+A Cardano state contract written in {{language}} (`contracts/app/{{contract}}`), built and used with npm only: no JDK
+or GraalVM.
 
 ```sh
 npm install

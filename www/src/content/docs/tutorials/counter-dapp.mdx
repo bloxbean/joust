@@ -39,10 +39,13 @@ The npm packages are not on npmjs.org yet. Publish them to a local registry firs
 2. Create the app and install it:
 
    ```sh
-   npm create joust@0.1.0-pre1-snapshot counter-dapp
+   npm create joust@0.1.0-pre1-snapshot counter-dapp -- --template web --lang java
    cd counter-dapp
    npm install
    ```
+
+   `--template web` makes the page version of the app; `--lang java` writes the contract in Java, as this tutorial
+   reads it (the default is `.jsc`, with the same generated client).
 
 3. Start the dev server. It builds and deploys the contract first:
 

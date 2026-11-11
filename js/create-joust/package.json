@@ -1,14 +1,16 @@
 {
   "name": "create-joust",
   "version": "0.1.0-pre1-snapshot",
-  "description": "Creates a JOUST app: a Cardano state contract in Java, built and used with npm only (npm create joust)",
+  "description": "Creates a JOUST app: a Cardano state contract in JOUST's contract language (.jsc) or Java, built and used with npm only (npm create joust)",
   "type": "module",
   "bin": {
     "create-joust": "bin/create-joust.js"
   },
   "files": [
     "bin",
-    "template"
+    "src",
+    "template",
+    "variants"
   ],
   "engines": {
     "node": ">=22"
@@ -22,5 +24,8 @@
   },
   "publishConfig": {
     "registry": "http://127.0.0.1:4873/"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
   }
 }

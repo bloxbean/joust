@@ -89,17 +89,19 @@ for the Wasm engine); `-Ajulc.blueprint=false` is required for contracts with `@
 ### 2.2 npm (Node 22+, no JDK)
 
 `npm create joust@0.1.0-pre1-snapshot my-app` (with `npm_config_registry=http://127.0.0.1:4873/` while the packages are
-unpublished) produces:
+unpublished) produces, by default (`--template node --lang jsc`):
 
 ```text
 my-app/
-├── contracts/app/Counter.java   # contracts: .java or .jsc, any package
+├── contracts/app/Counter.jsc    # contracts: .jsc or .java, any package (--lang java: Counter.java)
+├── index.js                     # a Node script: deploys a counter on DevKit and calls it via build/joust/Counter.js
 ├── joust.config.json            # contracts dir, out dir, default network, networks
-├── package.json                 # scripts: build, deploy, dev, build:page, serve, test
-├── page/index.html, main.js, engine.worker.js   # the browser page; the engine runs in a Web Worker
-├── test/counter.test.js         # node --test, against Yaci DevKit
-└── vite.config.js
+├── package.json                 # scripts: start (build + deploy + node index.js), build, deploy, test
+└── test/counter.test.js         # node --test, against Yaci DevKit
 ```
+
+`-- --template web` replaces `index.js` with a page: `page/index.html, main.js, engine.worker.js` (the engine runs in a
+Web Worker) and `vite.config.js`, with the scripts `dev`, `build:page` and `serve` (and `:preview` variants).
 
 ```json title="joust.config.json"
 {

@@ -1,6 +1,6 @@
 ---
 title: "Quick start: JavaScript & TypeScript"
-description: (Experimental) Create a JOUST app with npm only, build and deploy its Counter contract on Yaci DevKit, and use it from a test and a browser page.
+description: (Experimental) Create a JOUST app with npm only, build and deploy its Counter contract on Yaci DevKit, and call it from a Node script, a test and a browser page.
 ---
 
 import { Aside, Steps, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/components';
@@ -9,16 +9,16 @@ import { Aside, Steps, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/c
 The npm path runs JOUST's toolchain and runtime as WebAssembly built with GraalVM Web Image, which is itself experimental. Java with Gradle and cardano-client-lib is the supported, first-class path: see [Quick start: Java](/start/quick-start-java/).
 </Aside>
 
-This page takes you from an empty folder to a Cardano contract you can call from a test and from a browser page, with
-Node and npm only: no JDK, no Gradle, no GraalVM. The contract is written in Java, but `joust build` compiles it with a
-toolchain engine that runs as WebAssembly in Node.
+This page takes you from an empty folder to a Cardano contract you can call from Node and from a browser page, with
+Node and npm only: no JDK, no Gradle, no GraalVM. The contract is written in JOUST's [.jsc](/languages/jsc/) language
+(or in Java), and `joust build` compiles it with a toolchain engine that runs as WebAssembly in Node.
 
 You will:
 
-- create a project with `npm create joust`;
-- build its `Counter` contract into a validator and a typed JavaScript client;
-- deploy it on a local network (Yaci DevKit) and call it from a test;
-- open the page, connect a wallet and call the contract from the browser.
+- create a project with `npm create joust`: a `Counter` contract and a short Node script that calls it;
+- build the contract into a validator and a typed JavaScript client;
+- deploy it on a local network (Yaci DevKit) and call it from the script and from a test;
+- then create the browser version, connect a wallet and call the contract from a page.
 
 ## Prerequisites
 
@@ -69,7 +69,51 @@ export npm_config_registry=http://127.0.0.1:4873/
    npm install
    ```
 
-   `create-joust` copies its template and names the package after the folder. It refuses a folder that is not empty.
+   `create-joust` writes a `Counter` contract in `.jsc` (`contracts/app/Counter.jsc`) and a Node script that calls it
+   (`index.js`), and names the package after the folder. It refuses a folder that is not empty. Two options change
+   what it writes (after `--`, as `npm create` passes them on):
+
+   | Option | Values |
+   |---|---|
+   | `--lang` | `jsc` (the default) or `java`: the same counter in Java, `contracts/app/Counter.java` |
+   | `--template` | `node` (the default): `index.js`; `web`: a browser page instead ([below](#a-browser-page)) |
+
+   ```sh
+   npm create joust@0.1.0-pre1-snapshot my-app -- --lang java
+   ```
+
+   The contract is the same in both languages:
+
+   ```jsc title="contracts/app/Counter.jsc"
+   package app
+
+   contract Counter(maxDatumBytes = 128) {
+       state count: Int
+       state owner: Key
+
+       init() {
+           owner = caller
+       }
+
+       action increment(by: Int) {
+           require by > 0 "increment must be positive"
+           count += by
+       }
+
+       action reset() only owner {
+           count = 0
+       }
+
+       destroy close() only owner {
+           pay balance to owner
+       }
+
+       view count(): Int = count
+   }
+   ```
+
+   `joust build` generates the same description and the same JavaScript client from `Counter.jsc` as from
+   `Counter.java`, so nothing else in the project depends on the language.
 
 2. **Build the contract.**
 
@@ -80,11 +124,11 @@ export npm_config_registry=http://127.0.0.1:4873/
    `joust build` compiles every `.java` and `.jsc` file under `contracts/` into `build/joust/`:
 
    ```txt
-   app.Counter: 5624 bytes, hash 572399fa2a90a0452c3b29da48af6b90905ac8cfb503e1af803c942c, 4 transitions
-   built 1 contract(s) into build/joust in 1201 ms
+   app.Counter: 5714 bytes, hash 596c9f4316a2dc3b3c45e054b3abaccc067163af5b89651b711886d6, 4 transitions
+   built 1 contract(s) into build/joust in 1164 ms
    ```
 
-   The size and hash depend on the contract and on the toolchain's version. The four transitions are the contract's
+   The size and hash depend on the contract, its language and the toolchain's version. The four transitions are the contract's
    four methods (`init`, `increment`, `reset`, `close`), compiled so the runtime engine can run them off chain.
 
 3. **Deploy it on DevKit.**
@@ -117,15 +161,57 @@ export npm_config_registry=http://127.0.0.1:4873/
    }
    ```
 
-4. **Run the test.**
+4. **Run the script.**
+
+   ```sh
+   node index.js
+   ```
+
+   ```txt
+   wallet      addr_test1qzsnkv3kupara60hylhrxc26ga5dn42mhc92ehmmzjzayjmdsj2justfnutk5my5a7xcdem62trnx0968tflw2mgswssjma7mj
+   created     50c92ecfef4443fb9010be5e06d6a4ac24f2943a5a0f0a49ae16d239bb3247d6 tx 3c81eceba21fc5624fb0632c6268c220cba9758771e50a64b5cdb30c439560f4
+   increment 5 tx bf03fd41a39d3298e6dcd5550ee2422b30477738af255552bd02dc71bb6b5670
+   increment 2 tx 132896a73abd88de4f3791c821ff2ee3529132f8239ebd890af12dcde5009272
+   count       7n
+   refused     increment must be positive
+   closed      tx 9421540ed8a497c54734d29dcd0700246f5c653296d6da4fde9ab52b02ca9081
+   state       null
+   ```
+
+   `npm start` runs steps 2 to 4 in one go. `index.js` is the whole app:
+
+   ```js title="index.js (abridged)"
+   import { joustRuntime, devWallet, devkitTopUp } from '@julclang/joust-runtime';
+   import { Counter } from './build/joust/Counter.js';   // generated by `joust build`
+
+   const rt = joustRuntime({
+     chainUrl: deployed.chain, networkId: deployed.networkId, clock: deployed.clock, ttlMs: 20_000,
+     contracts: read('build/joust/contracts.json'), deployments: deployed.contracts,
+   });
+   // A throwaway wallet, funded with 100 ADA by the DevKit's faucet.
+   const wallet = devWallet({ chain: rt.chain, mnemonic: generateMnemonic(wordlist, 256) });
+   await devkitTopUp(wallet.address, 100, config.networks.devkit.admin, { chain: rt.chain });
+
+   const counter = new Counter(rt.options('app.Counter'));
+   const { instance } = await counter.deploy(wallet, {});        // init: a new counter, owned by this wallet
+   await instance.increment(wallet, { by: 5n });                 // anyone may call it
+   console.log((await instance.state()).count);                  // read from the chain
+   await instance.increment(wallet, { by: 0n });                 // throws: increment must be positive
+   await instance.close(wallet);                                 // owner only; the deposit goes back to the owner
+   ```
+
+   Each call runs the contract's own code in the runtime engine to compute the next state, builds the transaction,
+   signs it with the wallet's key and submits it. On chain, the validator runs the same code again and checks the
+   result. `counter.deploy()` creates a counter (the contract's `init`); `joust deploy` published the contract.
+
+5. **Run the test.**
 
    ```sh
    npm test
    ```
 
-   `test/counter.test.js` makes a fresh DevKit wallet, funds it from the faucet, creates a counter, increments it by 5
-   and by 2, checks that the count is 7, checks that the contract refuses an increment of 0, and closes the counter.
-   Each call is prepared by the runtime engine in Node, verified, signed by the test's key and submitted.
+   `test/counter.test.js` makes the same calls with `node:test` and checks each result: the count is 7, an increment
+   of 0 is refused, and the counter is gone after `close`.
 
 </Steps>
 
@@ -135,11 +221,8 @@ export npm_config_registry=http://127.0.0.1:4873/
 
 - contracts/
   - app/
-    - Counter.java the contract: a state record and pure static methods
-- page/
-  - index.html the Counter page
-  - main.js the page's code: wallet, review dialog, calls
-  - engine.worker.js the runtime engine, in a Web Worker
+    - Counter.jsc the contract (Counter.java with --lang java)
+- index.js the app: deploys a counter and calls it
 - test/
   - counter.test.js a Node test on DevKit
 - build/ written by joust build and joust deploy
@@ -152,14 +235,50 @@ export npm_config_registry=http://127.0.0.1:4873/
     - deployments.devkit.json what joust deploy published
     - joust.lock.json the versions that built it
 - joust.config.json contracts, output and networks
+- package.json
+
+</FileTree>
+
+In `.jsc`, a contract is its state fields and its `init`, `action`, `destroy` and `view` declarations; `joust build`
+lowers it to a Java contract and compiles that ([.jsc](/languages/jsc/)). In Java, it is a `State` record and static
+methods marked `@Init`, `@Action`, `@Destroy` and `@View`, in the subset JuLC compiles
+([Your first contract](/start/first-contract/)). `package.json` holds these scripts:
+
+| Script | Runs | What it does |
+|---|---|---|
+| `npm start` | `joust build && joust deploy && node index.js` | build, deploy (once per script) and run the app |
+| `npm run build` | `joust build` | compile `contracts/` into `build/joust/` |
+| `npm run deploy` | `joust deploy` | publish the reference scripts on the config's network (DevKit) |
+| `npm test` | `node --test test/*.test.js` | the Node tests |
+
+## A browser page
+
+`--template web` makes the same project with a page instead of `index.js`:
+
+```sh
+npm create joust@0.1.0-pre1-snapshot my-web-app -- --template web
+cd my-web-app
+npm install
+```
+
+<FileTree>
+
+- contracts/
+  - app/
+    - Counter.jsc the same contract
+- page/
+  - index.html the Counter page
+  - main.js the page's code: wallet, review dialog, calls
+  - engine.worker.js the runtime engine, in a Web Worker
+- test/
+  - counter.test.js a Node test on DevKit
+- joust.config.json
 - vite.config.js the page's Vite config, with @julclang/joust/vite
 - package.json
 
 </FileTree>
 
-The contract is ordinary Java in the subset JuLC compiles: a `State` record and static methods marked `@Init`,
-`@Action`, `@Destroy` and `@View`. The [Counter dApp tutorial](/tutorials/counter-dapp/) walks through it and every
-other file here. `package.json` holds these scripts:
+The [Counter dApp tutorial](/tutorials/counter-dapp/) walks through every file. Its `package.json` has these scripts:
 
 | Script | Runs | What it does |
 |---|---|---|
@@ -174,14 +293,14 @@ other file here. `package.json` holds these scripts:
 | `npm run serve` | `joust serve` | serve `dist/` with the chain API at `/chain` |
 | `npm run serve:preview` | `joust serve --network preview` | the same on preview |
 
-## Open the page
+### Open the page
 
 ```sh
 npm run dev
 ```
 
 `joust dev` attaches to DevKit, builds and deploys, then serves the page at **http://127.0.0.1:5178**. It keeps
-watching `contracts/`: save `Counter.java` and it rebuilds and redeploys.
+watching `contracts/`: save `Counter.jsc` and it rebuilds and redeploys.
 
 <Steps>
 
@@ -204,7 +323,7 @@ watching `contracts/`: save `Counter.java` and it rebuilds and redeploys.
 
 Each transaction hash in the log links to Yaci Viewer, DevKit's explorer.
 
-## Build the page as static files
+### Build the page as static files
 
 ```sh
 npm run build:page   # vite build -> dist/
@@ -221,7 +340,7 @@ DevKit's slot clock changes when DevKit restarts. After a restart, run `npm run 
 again.
 </Aside>
 
-## Use TypeScript
+### Use TypeScript
 
 The page can be TypeScript. Vite compiles `.ts` files (it does not type-check them), so renaming is enough to run:
 
@@ -244,7 +363,7 @@ Declare them in `page/joust-env.d.ts`, add a `tsconfig.json`, and type-check wit
 [TypeScript page](/languages/typescript/#typing-a-page) has both declarations and a typed `main.ts`, checked with
 `strict` on. The template's `main.js` is plain JavaScript: under `strict` it needs parameter types before `tsc` passes.
 
-## Try it on preview with Eternl or Lace
+### Try it on preview with Eternl or Lace
 
 Preview is a public Cardano testnet, so real browser wallets work there. You need a Blockfrost project id for
 preview and a funded preview key to pay the deployment:
@@ -260,10 +379,10 @@ Switch Eternl or Lace to preview, reload the page, choose it in the wallet list 
 
 ## What you just used
 
-- **The toolchain engine** (in `@julclang/joust`) compiled Java to a Cardano validator, a description and a typed
-  client, in Node.
-- **The runtime engine** (in `@julclang/joust-runtime`) prepared each transaction from the chain, in Node for the test
-  and in a Web Worker for the page. It holds no keys.
+- **The toolchain engine** (in `@julclang/joust`) compiled `.jsc` or Java to a Cardano validator, a description and a
+  typed client, in Node.
+- **The runtime engine** (in `@julclang/joust-runtime`) prepared each transaction from the chain, in Node for the
+  script and the test, and in a Web Worker for the page. It holds no keys.
 - **The page verifier** (in `@julclang/state-client`) checked every prepared transaction against the contract's
   description and the chain before the wallet was asked to sign.
 - **The validator** re-ran each method on chain and checked that the new state is what the method computes.
