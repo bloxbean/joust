@@ -363,15 +363,42 @@ jobs:
         with:
           persist-credentials: false
 
-      # The engines are GraalVM Web Images (ADR-0015): Oracle GraalVM 25 with Web Image (--tool:svm-wasm), and Binaryen.
-      - name: Set up GraalVM 25
+      # The engines are GraalVM Web Images (ADR-0015). Web Image ships with the GraalVM 25.3 release line (as JuLC's
+      # native-image workflows); `java-version: '25'` resolves the older 25.0 line, whose image builder puts javac's
+      # resource bundles into the image heap and fails (v0.1.0-pre1-rc6). setup-graalvm exports GRAALVM_HOME, which the
+      # build reads (-PgraalvmHome); Gradle itself runs on Temurin 25, as the other jobs.
+      - name: Set up GraalVM 25.3 (Web Image)
         uses: graalvm/setup-graalvm@f70bc8032f90a104502824a54bcb94b6f01715bc # v1.6.8
         with:
-          java-version: '25'
+          version: '25.3'
           distribution: 'graalvm'
+          set-java-home: 'false'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check Web Image and install Binaryen
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      # Web Image needs a recent Binaryen (WasmGC heap types): Ubuntu 24.04's apt package (108) can't assemble its
+      # output ("unknown heaptype kind"; v0.1.0-pre1-rc6). Binaryen 132 from its GitHub release, as JuLC, pinned by
+      # SHA-256 (the release's own .sha256 asset). Keep the version and hash the same in build.yml and release.yml.
+      - name: Install Binaryen
+        shell: bash
+        env:
+          BINARYEN_VERSION: '132'
+          BINARYEN_SHA256: 195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572
+        run: |
+          set -euo pipefail
+          f="binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$f" \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/$f"
+          echo "${BINARYEN_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Check Web Image and Binaryen
         shell: bash
         run: |
           set -euo pipefail
@@ -379,8 +406,8 @@ jobs:
             echo "::error::This GraalVM has no Web Image (lib/svm/tools/svm-wasm); the engines cannot be built." >&2
             exit 1
           fi
-          sudo apt-get update -q && sudo apt-get install -y -q binaryen
-          wasm-opt --version
+          command -v wasm-as
+          wasm-as --version
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
