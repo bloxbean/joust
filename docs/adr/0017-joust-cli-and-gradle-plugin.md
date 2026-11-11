@@ -1,6 +1,6 @@
 # ADR-0017: One `joust new` for Java and npm — a native `joust` CLI and a JOUST Gradle plugin
 
-**Status:** Proposed (r3)
+**Status:** Proposed (r4)
 **Date:** 2026-11-11
 **Builds on:** ADR-0015 D9 (the npm `joust` CLI and `create-joust`), PR #53 (`create-joust --template node|web
 --lang jsc|java`, open), ADR-0005 (`.jsc`), the release-ops workflows (`release.yml`, `build.yml`).
@@ -55,6 +55,7 @@ Facts this design relies on:
 | F11 | The repository's Gradle wrapper is 9.2.0, without `distributionSha256Sum` | `gradle/wrapper/gradle-wrapper.properties` |
 | F12 | A development build's version is commit-qualified (`X-SNAPSHOT` → `X-<sha7>-SNAPSHOT`, root `build.gradle` lines 13–20); no npm package is published for snapshots; npm's development version is `0.1.0-pre1-snapshot` | root `build.gradle`; `bloxbean-snapshot.yml` lines 5–8; `js/joust/package.json` |
 | F13 | `npm exec` (behind `npm create`) uses a local project dependency of the same name and version if one exists, and honours the `.npmrc` of its local prefix. The local prefix is the nearest directory, from the working directory **upwards**, with a `package.json` or `node_modules`; an empty directory does not stop the walk. A planted `.npmrc` redirected `npm create joust@0.1.0-pre1-rc7` to a registry of the directory's choosing, also from an empty child directory; a `package.json` in the child (or `--prefix`) restored the default | npm docs, `npm exec` ("Package names with a specifier will only be considered a match if they have the exact same name and version as the local dependency"); npm v11.6.0 `workspaces/config/lib/index.js:653–705`; PR #54 reviews S3, S16, F17 (npm 10.9.0 probes) |
+| F17 | `npm exec` runs a package's bin through npm's script runner, which puts the package's bins and then `node_modules/.bin` of **every ancestor** of the working directory, up to the root, in front of `PATH`. A bin with `#!/usr/bin/env node` then runs whichever `node` comes first, so a planted `/tmp/node_modules/.bin/node` is chosen. A local prefix (`package.json`, `--prefix`) does not stop that walk. `--prefix` also moves the global config to `<prefix>/etc/npmrc`, hiding the user's global mirror | npm v11.6.0 `workspaces/libnpmexec/lib/run-script.js:57–66`, `@npmcli/run-script/lib/set-path.js:15–29`, `workspaces/config/lib/index.js:685–689`; PR #54 reviews C19, S21 (npm 10.9.0 probe) |
 | F16 | JOUST's versions are `X.Y.Z-preN-rcM`, `X.Y.Z-preN`, `X.Y.Z`. Under SemVer §11 `pre1-rc10` is one alphanumeric identifier compared as ASCII, so SemVer orders `pre1-rc10` below `pre1-rc9` and `pre1` below `pre1-rc8` | `gradle.properties`; `release.yml` lines 460–467; semver.org §11; PR #54 reviews S18, C13 |
 | F14 | JOUST's rulesets (`V_tagrule`, `protected-branches`, `release-branch-creation`) are disabled today, and the environments have branch policies but no required reviewers | `gh api repos/bloxbean/joust/rulesets`, `…/environments` |
 | F15 | The JOUST processor's jars are class-file version 69 (Java 25) | PR #54 review F7 (probe on a published `julc-state-processor`) |
@@ -175,27 +176,38 @@ The Gradle project:
   `PATH` / `JAVA_HOME` and prints how to get JDK 25 if it is missing or older, after writing the project.
 - the contract is the counter of the Java quick start and of `npm create joust`, so the descriptions agree (I8).
 
-**npm templates, isolated** (I12). The CLI does not run `npm create` in the working directory, and an empty
-directory is not enough either: npm walks up from it to the nearest `package.json` or `node_modules` and reads that
-directory's `.npmrc` (F13), and on Linux the temporary directory is under the world-writable `/tmp`. The CLI:
-1. resolves `npm` and `node` from absolute `PATH` entries (I3), and gives the child a `PATH` of absolute entries only;
-2. creates a new directory under the system temporary directory, owned by the user, mode 0700, and writes into it a
-   `package.json` (`{"name": "joust-new", "private": true}`), which makes it npm's local prefix: npm stops there;
-3. runs, with that directory as the working directory, `--prefix` set to it, and the destination as an absolute path:
-   `npm exec --yes --prefix <tmp> --package=create-joust@<V> -- create-joust <abs-dir> --template <t> --lang <l>`, where
-   `<V>` is the CLI's own version. The CLI starts no shell; npm runs the package's bin as `npm exec` always does;
-4. removes the temporary directory.
+**npm templates, isolated** (I12). The CLI does not run `npm create` or `npm exec`: npm would choose the registry
+from a project's or an ancestor's `.npmrc` (F13), and would run the initializer through its script runner, which puts
+every ancestor's `node_modules/.bin` in front of `PATH`, so a planted `node` could become the interpreter (F17). The
+CLI uses npm only to **fetch** the package, and runs it itself:
+1. resolves `npm` and `node` from absolute `PATH` entries (I3), and gives its children a `PATH` of absolute entries
+   only;
+2. creates a private directory, mode 0700, under `$TMPDIR` if that is an absolute directory, else Java's temporary
+   directory, and writes into it a `package.json` (`{"name": "joust-new", "private": true}`). That file makes the
+   directory npm's local prefix: npm's walk for a project `.npmrc` stops there (no `--prefix`, which would hide the
+   user's global config, F17);
+3. runs, in that directory, `npm pack --json create-joust@<V>` (`<V>` is the CLI's own version). For a registry spec
+   `npm pack` fetches the published tarball, checks it against the registry's integrity, writes it there, and runs no
+   package script;
+4. extracts the tarball in Java into the private directory: regular files and directories only, every path relative
+   and inside `package/`, at most 1 MiB in total, else refused;
+5. runs `<absolute node> <private dir>/package/bin/create-joust.js <abs-dir> --template <t> --lang <l>` with the
+   working directory set to the private directory. The CLI chose the interpreter; nothing is resolved through `PATH`
+   or a shebang. `create-joust` has no dependencies and imports only Node built-ins and its own files;
+6. removes the private directory.
 
-The configuration npm then reads is the user's own: the user and global `.npmrc` and `npm_config_*` variables of the
-user's environment. A project's `.npmrc`, a `.npmrc` in an ancestor of the temporary directory, and a local
-`create-joust` of the same name and version are never consulted. A **snapshot** CLI has no matching `create-joust`
-(F12): it refuses `-t node|web` unless given `--create-joust <spec>`, a hidden option for development and CI whose
-value must be an exact version (`create-joust@<version>` from the registry) or an absolute path to an existing `.tgz`;
-anything else is refused.
+The npm configuration that applies is the user's own (user and global `.npmrc`, the user's `npm_config_*`); a
+project's or an ancestor's `.npmrc`, a local `create-joust` and any `node_modules/.bin` are never consulted. A
+**snapshot** CLI has no matching `create-joust` (F12): it refuses `-t node|web` unless given `--create-joust <spec>`,
+a hidden option for development and CI whose value must be `create-joust@<exact version>` (fetched as above) or an
+absolute path to an existing `.tgz` (extracted directly, without npm); anything else is refused.
 
-Another hidden option, `--joust-repository <url>`, exists for CI only (D8): it makes the given repository the
-exclusive source of JOUST's own modules (`org.julclang.joust`, `org.julclang:julc-state-*`), so a test build resolves
-this commit's plugin and artifacts and cannot fall back to published ones.
+Another hidden option, `--joust-repository <file: URL>`, exists for CI only (D8). It takes only a `file:` URL (a
+local repository; anything else is refused, so a release binary cannot be told to write a remote source into a
+project). In `pluginManagement` it **replaces** the BloxBean source, and in the dependencies it is the exclusive source
+of JOUST's own modules (`org.julclang:julc-state-*`), next to the ordinary BloxBean repository for JuLC; the two
+exclusive declarations never overlap. So a test build resolves this commit's plugin and artifacts and cannot fall back
+to published ones.
 
 The npm templates are not copied into the native CLI: `create-joust` stays their only implementation, so they cannot
 drift. `npm create joust` itself does not get a `gradle` template (Q3): its usage text points Java users to
@@ -248,11 +260,14 @@ This is the pattern of Angular's global `ng` (it hands over to the project's loc
    `help`, `--help`, `-h` (as the first argument, or anywhere before `--`, so `joust deploy --help`), and no
    arguments, print its usage; none of them hands over or runs a project command (I4). Today `joust deploy --help`
    deploys: that is fixed.
-2. `joust new …` runs `create-joust` with the same flags (`-t`, `-l`; `-t gradle` and `-p` explain that Gradle projects
-   come from the native CLI: `brew install bloxbean/tap/joust` or the release archive), isolated as in D3.
+2. `joust new …` runs nothing: it prints the command that does it, `npm create joust <dir> -- --template <t> --lang
+   <l>` (the npm way, which the user runs knowingly), and for `-t gradle` or `-p`, that Gradle projects come from the
+   native CLI (`brew install bloxbean/tap/joust` or the release archive). r3's npm-side scaffolding is withdrawn: it
+   would have needed D3's isolation in JavaScript too, for no gain over `npm create joust`.
 3. Unknown commands and `test` print a message that names this CLI as the npm one; `test` says `npm test`.
 4. **Project commands run at the project root:** it detects the npm project as D4 does (same markers, bounded reads,
-   ownership rule where Node reports a `uid`; on Windows, where it does not, the rule does not apply) and changes its
+   ownership rule where Node reports a `uid`; on Windows, where it does not, the walk stops at the user's profile
+   directory, `os.homedir()`, so a planted `C:\\package.json` is never reached) and changes its
    working directory to the root before loading `joust.config.json`, whether or not it hands over below, so a direct
    `npx joust build` from a subdirectory behaves as the native CLI and `npm run build`.
 5. **Hands project commands over to the project's copy:** when the resolved `@julclang/joust` (D4.2) is not this
@@ -290,27 +305,34 @@ test stops the release before anything is published. The `cli` matrix:
   `create-joust` (`--create-joust`) writes the npm project.
 - Uploads one artifact per platform under an exact name.
 
-**Production acceptance (C17).** A job `cli-consumer` (needs `maven`, `npm` and `cli`; only when D10 allows CLI
+**Production acceptance (C17).** A job `cli-consumer` (needs `maven`, `npm` and `cli`; runs only when D10 allows CLI
 assets) takes the Linux x86_64 binary of this run, runs `joust new` (java and jsc) with the **unmodified** templates,
 and builds both from the public repositories. It proves that the plugin and artifacts this release just published
 resolve as a user's project resolves them, before any CLI asset is attached. Read-only token, no secrets, no cache.
 
-`github-release` then also needs `cli` and `cli-consumer`. It runs no repository code (no checkout). It downloads the
-three artifacts by exact name, and when D10 allows CLI assets:
-- for each archive: if the release already has an asset of that name, it downloads it and requires its SHA-256 to
-  equal this run's artifact (a re-run of failed jobs reuses the run's artifacts, so they match); a different digest
-  fails the job with a message (the published asset came from another build: a maintainer deletes it to republish).
-  An archive not yet published is uploaded. Assets are never replaced;
-- writes `joust-<v>-SHA256SUMS.txt` from the published assets (uploaded once, never replaced, by the same rule) and
-  exposes the hashes as job outputs;
-- attests build provenance for **every** final archive, on every run (`actions/attest-build-provenance`;
-  `id-token: write` and `attestations: write` in this job only). An attestation binds a digest, so attesting the same
-  digest again is harmless, and a run that failed after uploading leaves no archive without provenance once a re-run
-  succeeds (I15). The Homebrew job needs this job to succeed.
+**The GitHub release and its CLI assets are separate jobs** (C20, S24):
+- `github-release` keeps its place and condition (needs `maven` and `npm`, `github_release=true`): it creates the
+  release, with notes that say whether CLI archives follow. A CLI or consumer failure never costs the version its
+  GitHub release.
+- `cli-assets` (needs `github-release`, `cli` and `cli-consumer`; runs only when D10 allows CLI assets, and only if all
+  three succeeded) runs no repository code (no checkout). It downloads the three artifacts by exact name, and:
+  - for each archive: if the release already has an asset of that name, it downloads it and requires its SHA-256 to
+    equal this run's artifact (a re-run of failed jobs reuses the run's artifacts, so they match); a different digest
+    fails the job with a message (the published asset came from another build: a maintainer deletes it to
+    republish). An archive not yet published is uploaded. Assets are never replaced;
+  - writes `joust-<v>-SHA256SUMS.txt` from the published assets (uploaded once, by the same rule) and exposes the
+    hashes as job outputs;
+  - attests build provenance for **every** final archive, on every run (`actions/attest-build-provenance`;
+    `id-token: write` and `attestations: write` in this job only). An attestation binds a digest, so attesting the
+    same digest again is harmless, and a run that failed after uploading leaves no archive without provenance once a
+    re-run succeeds (I15).
+
+  If `cli-consumer` fails, the release stays without CLI archives; re-running the failed jobs after a fix attaches
+  them. The Homebrew job needs `cli-assets`.
 
 ### D7. Homebrew: `bloxbean/tap/joust`
 
-A job `homebrew` after `github-release` updates `Formula/joust.rb` in `bloxbean/homebrew-tap` (macOS arm64, Linux
+A job `homebrew` after `cli-assets` updates `Formula/joust.rb` in `bloxbean/homebrew-tap` (macOS arm64, Linux
 x86_64 and arm64):
 
 - **Credential (S1):** an environment secret `JOUST_HOMEBREW_TAP_TOKEN` of `release-staging`: a fine-grained personal
@@ -319,8 +341,8 @@ x86_64 and arm64):
   `HOMEBREW_TAP_TOKEN` is not used, and an organization admin removes `bloxbean/joust` from its selected
   repositories (F9). `permissions: {}`; the tap is checked out with `persist-credentials: false`; the token is given
   only to the push step.
-- **Inputs:** the version (checked against a strict pattern, `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`, before it is
-  written into Ruby) and the hashes from `github-release`'s outputs. It downloads the archives from the published
+- **Inputs:** the version, checked against JOUST's version grammar (below) before it is written into Ruby, and the
+  hashes from `cli-assets`' outputs. It downloads the archives from the published
   release and fails if any hash differs.
 - **Formula script:** `.github/scripts/homebrew-formula.sh`, under CODEOWNERS (`.github/scripts/`). The job checks out
   this repository at the tag's commit, only `.github/scripts`, with `persist-credentials: false`, and runs that script
@@ -334,9 +356,12 @@ x86_64 and arm64):
   3. when one suffix is a proper prefix of the other, the **shorter is later**: `pre1` is the release of `pre1-rcN`,
      and a version with no suffix is the release of all its pre-releases.
 
+  The grammar, shared by the input check and the ordering: `^[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+[0-9]+)*$` (so `pre1-rc7`,
+  `pre1-dev1`, `alpha2`); anything else fails the job. When the tap has no `Formula/joust.rb` yet, the job writes it.
+
   Test vectors, ascending: `0.1.0-pre1-rc7` < `0.1.0-pre1-rc9` < `0.1.0-pre1-rc10` < `0.1.0-pre1` < `0.1.0-pre2-rc1` <
   `0.1.0-pre2` < `0.1.0-pre10` < `0.1.0` < `0.1.1-pre1-rc1` < `0.1.1` < `0.2.0`. An unknown shape (another suffix
-  grammar) fails the job, rather than guessing. A lower version is skipped with a notice. A push rejected as
+  grammar) fails the job, rather than guessing. `0.1.0-pre1-dev1` sorts before `0.1.0-pre1-rc1` (prefixes compare as text). A lower version is skipped with a notice. A push rejected as
   non-fast-forward (another repository's formula update) is retried after a fetch and re-apply, up to three times.
 - **Formula test:** `joust --version` contains the version.
 - **Gate:** D10.
@@ -356,12 +381,14 @@ x86_64 and arm64):
      that the resolved JOUST jars are this build's (their SHA-256 equal the staged files); compares the two
      descriptions (I8);
   4. **npm isolation** (I12), on the production path (`create-joust@<exact published version>` from the registry,
-     through `--create-joust`), with hostile files in both places npm looks: the working directory (a `.npmrc` with
-     `registry=http://127.0.0.1:9/`, a `package.json`, and a `node_modules/create-joust` of that version whose bin
-     writes a marker file) and an ancestor of the temporary directory (`TMPDIR` pointed at a directory with the same
-     `.npmrc` and `package.json`). The project must be written and the marker must not exist. A control run of the
-     same `npm exec` without D3's step 2 must fail against the hostile registry, so the test proves the isolation, not
-     the network;
+     through `--create-joust`), with hostile files in both places npm or Node could look: the working directory and an
+     ancestor of the private directory (`TMPDIR` pointed at a hostile directory). Each holds a `.npmrc` with
+     `registry=http://127.0.0.1:9/`, a `package.json`, a `node_modules/create-joust` of that version whose bin writes
+     a marker file, and an executable `node_modules/.bin/node` that writes a marker file. The project must be written,
+     the CLI's private directory must have been under the hostile `TMPDIR` (the test reads where it was), and no marker
+     may exist. **Controls** (each must fail in the expected way, so the test proves the isolation): `npm pack` of the
+     same spec from an empty directory under the hostile `TMPDIR`, without the private `package.json`, must fail with a
+     connection error naming `127.0.0.1:9`; and `npm exec` of the same spec there must run the planted `node`;
   5. writes an npm project with this commit's `create-joust` tarball, links this repository's packages into it (as
      `create.test.js`), and checks that the native `joust build` delegates (from the root and from a subdirectory,
      I2), builds, and that its description equals the Gradle ones (I8); that `joust --version`, `joust help` and
@@ -396,7 +423,9 @@ the npm CLI (D5.1):
 | `deploy`, `dev`, `serve` | delegated | explains these are npm commands; `./gradlew run` for the demo; exit 2 | explains, exit 2 |
 | other | delegated | lists `build`, `test`, `run`; exit 2 | explains, exit 2 |
 
-Arguments after a Gradle command are passed to `gradlew` unchanged (`joust build --info`).
+Arguments after a Gradle command are passed to `gradlew` unchanged (`joust build --info`). `<cmd> --help` for a
+command the native CLI does not know prints, in an npm project, that the project's CLI may have it: `npx joust <cmd>
+--help`.
 
 ### D10. Release flags
 
@@ -434,10 +463,11 @@ settings for an admin.
 | I9 | `joust new` writes nothing unless every check of D3 passes | D3 | unit tests |
 | I10 | Release: CLI binaries are built with a read-only token, no secrets or caches, SHA-pinned actions, before anything is published; archives are attached once and never replaced; the formula's hashes are the published assets'; the tap token is an environment secret seen only by the push step; the tap job runs only `.github/scripts/homebrew-formula.sh`; flags follow D10 | D6, D7, D10 | `actionlint` and `check-workflows.sh` (syntax, pins, permissions); **workflow review** (job order, token exposure, what each job runs); formula script test in CI; D10 combinations tested by a script test |
 | I11 | Each CLI answers a command it does not support with a message that names which `joust` it is and what to use instead, and a non-zero exit | D5, D9 | unit tests (native); `js/joust` test |
-| I12 | `joust new -t node|web` runs npm with a private temporary directory as its local prefix (its own `package.json`, `--prefix`), an absolute destination and a sanitized `PATH`; no `.npmrc` or `create-joust` from the working directory, the temporary directory's ancestors or a project is used | D3, D5 | unit test (command line, cwd, files written); CI 4 (hostile working directory and hostile `TMPDIR` ancestor, production registry spec, and a control run that must fail) |
+| I12 | `joust new -t node|web` uses npm only to fetch (`npm pack` in a private directory that is its own local prefix) and runs the extracted `create-joust` with the absolute `node` it resolved; no `.npmrc`, `create-joust` or `node` from the working directory, the private directory's ancestors or a project is used; the tarball's paths stay inside it | D3 | unit tests (command lines, cwd, files written, hostile tarballs: `..`, absolute paths, links, oversize); CI 4 (hostile working directory and `TMPDIR` ancestor with `.npmrc`, `create-joust` and `node_modules/.bin/node`, the production registry spec, two controls) |
 | I13 | The npm CLI runs project commands at the project root; when the resolved `@julclang/joust` is another copy it hands over once; the guard is scoped to one hand-over and never inherited by programs it starts | D5 | `js/joust` tests: two linked copies; from a subdirectory; a pre-existing `JOUST_DEFERRED`; a nested `joust` in another project started by the target |
 | I14 | The Homebrew formula's version never decreases in JOUST's version order; concurrent tap edits are retried, not lost | D7 | formula script tests: D7's vectors (rc9 → rc10, rc → pre, pre → final, older-after-newer), an unknown shape, a stale clone |
-| I15 | Every CLI archive on a release has a provenance attestation of its exact digest and equals the archive this run built; a re-run never replaces an asset and leaves none unattested | D6 | workflow review; `github-release`'s own checks (digest comparison, attestation of all final archives) |
+| I16 | `github-release` does not depend on the CLI: a release is created whenever `github_release=true` and Maven and npm succeeded; CLI assets and Homebrew follow only after `cli-consumer` | D6 | workflow review; a dependency/condition check of the job graph in CI (D10's script test) |
+| I15 | Every CLI archive on a release has a provenance attestation of its exact digest and equals the archive this run built; a re-run never replaces an asset and leaves none unattested | D6 | workflow review; `cli-assets`' own checks (digest comparison, attestation of all final archives) |
 
 ## 5. Alternatives considered
 
@@ -571,3 +601,17 @@ settings for an admin.
   - D10 and §2: the required reviewer is on `release`, checked by release-ops' `verify-repo-settings.sh` (S17);
   - §2: how users verify an archive before removing quarantine (S14); I10 marks what only workflow review covers
     (S20).
+- **r4** (2026-11-11; responds to the reviews of `50a48d8`: design F22–F25, security S21–S25, Codex C1/C19/C20):
+  - D3's npm path rewritten: npm only fetches (`npm pack` in a private local prefix, no `--prefix`), the CLI extracts
+    the tarball and runs `create-joust` with the absolute `node` it resolved, so npm's ancestor-bin `PATH` (F17) can't
+    choose the interpreter (C19, P1); the user's global config is kept (S21); the private directory honours `$TMPDIR`
+    and CI asserts where it was (S22, F22); CI 4 plants `node_modules/.bin/node` too and has two controls that must
+    fail in the expected way (C1);
+  - D5.2: the npm CLI's `new` prints the `npm create joust` command and runs nothing (withdraws r3's npm-side
+    scaffolding); D5.4: on Windows the walk stops at the user's profile (S23);
+  - `--joust-repository` takes only `file:` URLs and replaces, rather than joins, the exclusive plugin source (S25,
+    F23);
+  - D6: `github-release` no longer waits for the CLI; new `cli-assets` job carries the archives, sums and attestations;
+    new I16 (C20, S24);
+  - D7: the version grammar as a regex, shared by the input check and the order; a missing formula is written (F25);
+  - D9: `<cmd> --help` for a command only the project's CLI knows points to `npx joust <cmd> --help` (F24).
