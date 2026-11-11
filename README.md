@@ -141,7 +141,7 @@ This works once the npm packages are released; they are not yet. See
 | `js/joust` | `@julclang/joust`: the `joust` CLI (build, deploy, dev, serve) and the Vite plugin |
 | `js/joust-runtime` | `@julclang/joust-runtime`: calls contracts from JavaScript with no JVM, through the Wasm runtime engine and a chain provider (Blockfrost, Yaci Store, Ogmios) |
 | `js/create-joust` | `create-joust`: `npm create joust` scaffolds a contract, a page and a test |
-| `examples/*` | Example contracts with JVM, on-chain harness, attack-suite and Yaci DevKit tests: `counter`, `vault`, `escrow`, `crowdfund`, `token`, `bank`, `pool`, `dsl`, `rollup`, `dex`, `market`, `treasury`, `staking`, `oracle`, `upgrade`, `guild`, `fees`, `locker`, `wallet`, `dapp`; `devkit` is the DevKit helper. See [examples/README.md](examples/README.md) for what each exercises, and script sizes and budgets |
+| `examples/*` | Example contracts with JVM, on-chain harness, attack-suite and Yaci DevKit tests: `counter`, `vault`, `escrow`, `crowdfund`, `token`, `bank`, `pool`, `dsl`, `rollup`, `dex`, `market`, `treasury`, `staking`, `oracle`, `upgrade`, `guild`, `fees`, `locker`, `registry`, `wallet`, `dapp`; `devkit` is the DevKit helper. See [examples/README.md](examples/README.md) for what each exercises, and script sizes and budgets |
 
 The JavaScript packages and the Wasm engines are experimental.
 
@@ -154,7 +154,7 @@ The JavaScript packages and the Wasm engines are experimental.
   `:10000`; they skip themselves when DevKit is not reachable.
 - CI splits the tests: `-PnoDevnet` runs all but the `devnet` tests, and `-PdevnetOnly` runs only those.
 - `./gradlew :examples:vault:run` runs an example app against Yaci DevKit (likewise `counter`, `escrow`, `crowdfund`,
-  `token`, `bank`, `pool`, `dex`, `market`, `treasury`, `staking`, `oracle`, `upgrade` and `dapp`).
+  `token`, `bank` and `dapp`). The other examples run through their tests.
 - Inside this build, a module uses JOUST through project dependencies (see any example's `build.gradle`):
 
   ```groovy
@@ -190,6 +190,8 @@ The JavaScript packages and the Wasm engines are experimental.
 - [ADR-0014](docs/adr/0014-maps-v2.md): namespaced map claims, MerkleMaps with native assets.
 - [ADR-0015](docs/adr/0015-option-n-javascript-developer-experience.md): Option N, JOUST for JavaScript developers:
   an npm toolchain and runtime on Wasm engines.
+- [ADR-0016](docs/adr/0016-keyed-objects.md): keyed objects, one UTxO per key, unique per instance, in a sorted on-chain
+  list.
 
 ## License
 

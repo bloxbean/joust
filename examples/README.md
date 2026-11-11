@@ -2,7 +2,8 @@
 
 Each example contains:
 - the contract, the only file a developer writes;
-- an app (`./gradlew :examples:<name>:run`) against Yaci DevKit;
+- for `counter`, `vault`, `escrow`, `crowdfund`, `token`, `bank` and `dapp`, an app (`./gradlew :examples:<name>:run`)
+  against Yaci DevKit;
 - tests at three levels:
   - **JVM:** the contract's methods as plain Java;
   - **On-chain harness:** the validator as compiled by the build, evaluated against transactions shaped like the
@@ -25,6 +26,7 @@ Each example contains:
 | `guild` | **Option L (ADR-0012).** `Guild` has two owned types, `Hero` and `Item`. Each owned method runs only on its own type's datum, and each type has its own invariants. A hero moves to another guild with `@Into`, which that guild admits with `@Admits` in the same transaction (`transferAdmitted`). `Armory` holds `Vault` objects, each with a MerkleMap inventory |
 | `fees` | **ADR-0011 D3.** A `Stall` deposits a 5% fee from each sale into a `Pot` instance fixed in its params. `Pot.collect` takes the deposit in with `@Receives` in the same composed transaction. The output registry carries the deposit claim, and both validators check their side |
 | `locker` | **ADR-0014.** MerkleMaps with native assets. `Locker` holds a native token for many users, with their balances in a MerkleMap. `Safes` has owned safes, each holding tokens and a MerkleMap written at creation |
+| `registry` | **ADR-0016.** Keyed objects: one UTxO per key, unique per instance, in a sorted on-chain list. `Ballot` is one ballot per voter, ever (`signedKey`: the voter signs the insert; the only exit `retire`s it, so the key stays taken). `Entry` is a name registry: `claim` (`@Payable`) or `grant` a name, `upgrade`, `withdraw`, `recover` by the guardians' `@Quorum`, then `release` (frees the name) or `retire` it. DevKit tests cover duplicate keys, concurrent inserts, the Link cooldown, a hostile predecessor and composition; the Wasm engine replays its recorded transactions (`fixtures/m3/registry`). A keyed registry is permanent: no `@Destroy`, no migration |
 | `wallet` | **ADR-0013.** Wallet-signed transactions. A counter and a bank are used from an address-only `WalletAccount`: `Compose.prepare()`, a CIP-30-style witness set, `PreparedTx.submit`. `js/page.mjs` (Node, CSL) plays the page: it verifies the prepared transaction, refuses malicious variants, signs and submits. Run `npm install` in `examples/wallet/js` first |
 | `dapp` | **ADR-0013, phases 2 and 3.** A browser dApp on DevKit (`./gradlew :examples:dapp:run`, then http://localhost:8095). It uses typed JS clients generated from the Counter and Bank descriptions (`joust-gen`), the prepare service (`julc-state-server`), a page that verifies every transaction and shows what it checked before a CIP-30 wallet signs, and a "malicious service" switch. `DappDevnetTest` runs the flows in Node. See [its README](dapp/README.md) |
 | `token` | **Option B (ADR-0002).** An account-model token whose balances live in a `MerkleMap` (an unbounded map in a 32-byte root). MPF proofs are checked by the shared map verifier (withdraw-zero). The script is read by reference |

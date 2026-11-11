@@ -1,7 +1,3 @@
-plugins {
-    id 'application'
-}
-
 description = 'JOUST example: dex (constant-product AMM with LP tokens, ADR-0007)'
 
 dependencies {
@@ -13,14 +9,6 @@ dependencies {
     annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
 
     testImplementation project(':julc-state-testkit')
-}
-
-application {
-    mainClass = 'org.julclang.state.examples.dex.DexApp'
-}
-
-tasks.named('run', JavaExec) {
-    jvmArgs '--enable-native-access=ALL-UNNAMED'
 }
 
 // -Pjoust.traces: each failing validator check traces its name (debugging only; larger scripts).

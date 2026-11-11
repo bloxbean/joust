@@ -1,7 +1,3 @@
-plugins {
-    id 'application'
-}
-
 description = 'JOUST example: pool (batched intents, ADR-0004)'
 
 dependencies {
@@ -15,10 +11,3 @@ dependencies {
     testImplementation project(':julc-state-testkit')
 }
 
-application {
-    mainClass = 'org.julclang.state.examples.pool.PoolApp'
-}
-
-tasks.named('run', JavaExec) {
-    jvmArgs '--enable-native-access=ALL-UNNAMED'
-}

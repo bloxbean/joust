@@ -1,7 +1,3 @@
-plugins {
-    id 'application'
-}
-
 description = 'JOUST example: upgrade (counter v1 migrates to v2 in one transaction; ADR-0011)'
 
 dependencies {
@@ -15,10 +11,3 @@ dependencies {
     testImplementation project(':julc-state-testkit')
 }
 
-application {
-    mainClass = 'org.julclang.state.examples.upgrade.UpgradeApp'
-}
-
-tasks.named('run', JavaExec) {
-    jvmArgs '--enable-native-access=ALL-UNNAMED'
-}

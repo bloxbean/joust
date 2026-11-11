@@ -1,11 +1,10 @@
 # ADR-0016: Keyed objects — one UTxO per key, unique per instance, in a sorted on-chain list
 
-**Status:** Proposed (r8)
+**Status:** Accepted (r8), accepted by the maintainer on 2026-11-11. M1–M3 implemented and merged (PR #37, `f73ea02`)
 **Date:** 2026-11-09
 **Builds on:** ADR-0001 (A: I1–I14), ADR-0003 (owned objects: I18–I21), ADR-0007 (reserved token kinds: I27), ADR-0009
 (invariants, quorums), ADR-0012 (several owned types: I42, I43), ADR-0011 (composition), ADR-0013 (page verifier),
 ADR-0015 (npm parity).
-**Stack:** #1–#32, #36, then this (PR #37).
 **Implementation:** M1–M3 are implemented in PR #37 (see the implementation notes and reviews after §10); M4, keyed
 types in asset-aware contracts, is a follow-up ADR.
 **Risk:** high. Anyone may spend a *neighbour's* UTxO to relink it. A mistake here moves other users' funds, breaks
@@ -1013,6 +1012,7 @@ input, so only one lands.
     settled, and survives reloads (D11, M3).
   - **Fallback grounding:** D F24, S F25 → the `verify.js:114–131` refusals cited; `verifiedOutput` hashes the body as
     served (D11).
+- Accepted (2026-11-11): the maintainer accepted r8 after M1–M3 merged with #37; the text is unchanged.
 
 ## Implementation notes (M1)
 

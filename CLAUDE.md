@@ -32,7 +32,7 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   through JuLC's embedded javac and the shared `JoustGenerators`; `toolchainWasm` builds the Web Image (`joust.build`
   in Node), and `toolchainWasmTest` checks it against the Gradle outputs.
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
-- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees,locker,wallet,dapp}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
+- `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees,locker,registry,wallet,dapp}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
   DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D
   (ADR-0004, batched intents, pool) E (ADR-0005, `.jsc`, dsl) and the F spike (ADR-0006, optimistic L2, rollup) run on Yaci DevKit.
 - Stacked PRs: #1 A, #2 JuLC ADR-071 adoption, #3 B, #4 C, #5 D, #6 E, #7 F (spike), #8 G (assets, ADR-0007), #9 H (fees, ADR-0008), #10 I (params/quorum/auth/invariants/events, ADR-0009), #11 J (purposes/staking, ADR-0010), #12 K (composition, ADR-0011), #13 L (owned objects v2, ADR-0012), #14 deposits (ADR-0011 D3), #15 ADR-0013 (design), #16 maps v2 (ADR-0014), #17 M phase 1 (wallets), #18 snapshot publishing, #20 M phases 2+3 (descriptions, JS client, service, dApp), #21 M phase 4 (plan, portable transitions, Wasm; experimental). JuLC changes: worktree `../julc-joust`, PR label
@@ -40,11 +40,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 
 ## Build / test
 - JDK 25. `./gradlew build`.
-- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is a **published snapshot of JuLC main**
-  (`0.1.0-pre21-71b3a73-SNAPSHOT`, with #311/#313), resolved from the BloxBean snapshot repository
-  (`https://repo.bloxbean.org/maven/snapshots`; `settings.gradle` lists it for the `org.julclang.julc` plugin too). To
-  move to a newer JuLC, pin the version JuLC's "Publish snapshot" workflow printed. JuLC changes JOUST needs: a JuLC PR
-  labelled `joust`.
+- Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is the release **`0.1.0-pre21-rc1`** (with
+  #311/#313), resolved from the BloxBean release repository (`https://repo.bloxbean.org/maven/releases`; not on Maven
+  Central). `settings.gradle` lists the BloxBean repositories for the `org.julclang.julc` plugin too. A release refuses
+  SNAPSHOT pins unless `allow_snapshot_dependencies` (rehearsals only), so pin JuLC releases.
+  JuLC changes JOUST needs: a JuLC PR labelled `joust`.
 - A consumer of JOUST needs on its processor path: `julc-state-processor`, `julc-annotation-processor`, and
   `project(path: ':julc-state-api', configuration: 'onchainSources')` (a *directory*, not the jar; see gotchas).
 - `-PuseLocalJulc[=path]` adds `../julc` as a composite build. Not tested yet.
@@ -75,7 +75,8 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - Library sources: JuLC follows imports and `Class.member` references only; same-package *type* references need an
   explicit import in bundled sources. Accessors on call results (`f(x).field()`) need a typed local first. Library
   static fields must be literals (use `byte[]` literals for constants).
-- Token kinds by name: instance 32 bytes; owned object 29 bytes `0x4F…`; intent 29 bytes `0x49…`. Every spend arm
+- Token kinds by name: instance 32 bytes; owned object 29 bytes `0x4F…`; intent 29 bytes `0x49…`; keyed object
+  29 bytes `0x4B‖blake2b_224(instance‖tag‖key)` (ADR-0016; `0x4B` is reserved only in keyed contracts). Every spend arm
   checks the kind first. A batch is memory-bound at about 8 intents (ADR-0004 §6).
 - Max tx size is 16 KB: scripts must stay well below (reference scripts; heavy logic in shared withdraw-zero scripts).
 - `MerkleMap`/`MapEntry` only as top-level state components; never construct them or read `.reads()/.writes()/.root()`.
