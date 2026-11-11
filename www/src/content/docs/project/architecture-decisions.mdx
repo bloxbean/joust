@@ -40,7 +40,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0013](#adr-0013-option-m-browser-wallets-and-javascript-clients) | Option M: CIP-30 wallets, JavaScript clients | Accepted (r2); phases 1 to 3 implemented, phase 4 experimental | [Wallets](/apps/wallets/) |
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
-| [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Proposed (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
+| [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
 
 ## The base
 
@@ -230,7 +230,7 @@ Covered in: [Owned objects](/contracts/owned-objects/).
 ### ADR-0016: Keyed objects
 
 [`0016-keyed-objects.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0016-keyed-objects.md)
-· Proposed (r8); milestones M1 to M3 implemented and merged to `main` in PR #37, not yet in a release; M4 (keyed types
+· Accepted (r8); milestones M1 to M3 implemented and merged to `main` in PR #37, not yet in a release; M4 (keyed types
 in asset-aware contracts) is a follow-up ADR
 
 Owned objects cannot be unique by a key: a minting policy cannot see earlier mints. ADR-0016 makes an `@Owned` record
