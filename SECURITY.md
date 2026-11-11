@@ -34,8 +34,11 @@ Security-relevant issues include:
 - **Divergence between the JVM and on-chain**: the same contract method computing a different result on the JVM
   than in its compiled script, where that lets a transaction through or locks funds.
 - **Serialization**: datum, redeemer or transaction encodings that produce invalid or ambiguous on-chain data.
-- **Supply chain**: the published Maven artifacts, the npm packages and their Wasm engines, and the release
-  workflows.
+- **Supply chain**: the published Maven artifacts (including the Gradle plugin `org.julclang.joust`), the npm
+  packages and their Wasm engines, the native `joust` binaries and their Homebrew formula, and the release workflows.
+- **The `joust` command lines** (ADR-0017): running project code that the user did not ask for (for example from
+  `joust --version` or `joust deploy --help`), a project or a shared directory choosing what `joust new` downloads or
+  runs, or the native CLI running a project command with its own implementation instead of the project's.
 
 Out of scope:
 

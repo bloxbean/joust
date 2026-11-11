@@ -95,7 +95,78 @@ See [Examples](/reference/examples/).
 
 ## Part 2: your own project
 
-### Choose where JOUST comes from
+### Create it with `joust new`
+
+<Aside type="note" title="From the next release">
+The native `joust` and the Gradle plugin `org.julclang.joust` ([ADR-0017](/project/architecture-decisions/)) ship
+from the release after `0.1.0-pre1-rc7`. Until then, set the project up by hand, as the sections after this one show.
+</Aside>
+
+<Steps>
+
+1. **Install `joust`.**
+
+   ```sh
+   brew install bloxbean/tap/joust
+   ```
+
+   Or unpack the archive for your platform (macOS arm64, Linux x86_64 or arm64) from the
+   [releases](https://github.com/bloxbean/joust/releases) and put `joust` on your `PATH`.
+
+2. **Create the project.**
+
+   ```sh
+   joust new my-counter              # Counter.java; -l jsc for a .jsc contract, -p org.example for your package
+   cd my-counter
+   ```
+
+3. **Build, test and run.**
+
+   ```sh
+   ./gradlew build                   # or: joust build
+   ./gradlew run                     # the counter on DevKit (or: joust run)
+   ```
+
+</Steps>
+
+`joust new` writes the files of the sections below, with the Gradle wrapper, and a `build.gradle` that is only this:
+
+```groovy title="build.gradle"
+plugins {
+    id 'application'
+    id 'org.julclang.joust' version '<version>'    // upgrading JOUST is this version
+}
+
+repositories {
+    mavenCentral()
+    maven {     // BloxBean: JOUST and JuLC releases
+        url = uri('https://repo.bloxbean.org/maven/releases')
+        mavenContent { releasesOnly() }
+    }
+}
+
+application {
+    mainClass = 'app.CounterMain'
+}
+```
+
+The plugin does what the hand-written `build.gradle` below spells out:
+
+| It adds | At |
+|---|---|
+| `julc-state-runtime`, and `cardano-client-backend-blockfrost` for DevKit (`joust { blockfrost = false }` leaves it out) | `implementation` |
+| `julc-state-processor`, `julc-annotation-processor`, `julc-state-api:<v>:onchain` | the annotation processor path |
+| `julc-state-testkit`, `junit-platform-launcher` | the tests |
+| UTF-8 and `-parameters`; native access and in-memory map mirrors for tests; native access for `run` | compile, test and run tasks |
+| `generateJsc`, when `src/main/jsc` exists: `.jsc` contracts lowered to Java before compiling | the build |
+
+Every version comes from the JOUST release the plugin belongs to, so the JuLC and cardano-client-lib versions always
+match. It needs a Java 25 toolchain (the default; a lower one is refused with a message).
+
+The same command writes npm projects: `joust new my-app -t node` gives what `npm create joust` gives. In a project, the
+native `joust` and the npm one answer the same commands; see [the native `joust`](/reference/joust-cli/#the-native-joust).
+
+### Or set it up by hand: choose where JOUST comes from
 
 <Tabs>
 <TabItem label="BloxBean release repository">
@@ -122,7 +193,7 @@ and `-server`. Add `mavenLocal()` to the repositories below.
 </TabItem>
 </Tabs>
 
-### Create the project
+### The build files by hand
 
 <FileTree>
 
