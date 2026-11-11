@@ -1,13 +1,11 @@
-# From the release-ops standard (templates/workflows/release.yml), following JuLC's release.yml, adapted for JOUST
-# while the repository is private: a v* tag, pushed by hand for now (release-ops' tag-release.yml comes later), runs
-# the release. Promoting the staged Central deployment is a human step in the Central Portal for now; release-ops'
-# approval-gated publish-central.yml will automate it later.
+# From the release-ops standard (templates/workflows/release.yml), following JuLC's release.yml, plus JOUST's npm job.
 name: Release (Maven artifacts and npm)
 
-# A v* tag builds and signs every module once and publishes the Maven artifacts where gradle.properties says
+# A v* tag, created by tag-release.yml after a code-owner-approved version bump merges and a release owner approves,
+# builds and signs every module once and publishes the Maven artifacts where gradle.properties says
 # (release-ops docs/12-bloxbean-maven-repository.md):
 #   maven_central_publish  uploads a USER_MANAGED Central Portal deployment. It stops there: nothing is on Maven
-#                          Central until a human publishes the deployment in the Central Portal.
+#                          Central until a human publishes the deployment, via publish-central.yml or the portal.
 #   bloxbean_repo_publish  publishes to https://repo.bloxbean.org/maven/releases, public and permanent at once.
 # With both on, both receive the same signed files: one Gradle run builds the staged repository and the Central
 # bundle, which are checked byte for byte, and the Central upload reuses that bundle. The BloxBean repository goes
@@ -17,8 +15,14 @@ name: Release (Maven artifacts and npm)
 # cardano-client-bindings, mesmo, yaci-devkit and yano), or only checks them (`npm publish --dry-run`) while
 # npm_publish is false in gradle.properties.
 #
-# To release: set `version` in gradle.properties to the release (no -SNAPSHOT) and pin released dependencies, merge,
-# then push the tag v<version> from that commit.
+# The GitHub release is a separate job, gated by github_release in gradle.properties. It is the only job with a write
+# token, and it never sees the release secrets.
+#
+# No Gradle cache (gradle/actions/setup-gradle) in these jobs: they hold the release secrets and the npm OIDC token, and
+# a cache restored from another run could change what runs next to them (release-ops docs/03 §1).
+#
+# To release: set `version` in gradle.properties to the release (no -SNAPSHOT) and pin released dependencies, then
+# merge; tag-release.yml creates the tag v<version> after a release owner approves.
 
 on:
   push:
@@ -51,6 +55,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       is_final: ${{ steps.version.outputs.is_final }}
       npm_publish: ${{ steps.version.outputs.npm_publish }}
+      github_release: ${{ steps.version.outputs.github_release }}
     env:
       GROUP_PATH: org/julclang
       BUCKET: ${{ vars.R2_BUCKET }}
@@ -76,9 +81,6 @@ jobs:
         with:
           java-version: '25'
           distribution: 'temurin'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -129,16 +131,22 @@ jobs:
               "to the release-staging environment, or share the organization's with this repository." >&2
             exit 1
           fi
+          # A GitHub release is deletable, unlike a Central version, but it still notifies watchers and
+          # advertises the tag as a real release. Gating it lets a tag rehearse the whole pipeline and
+          # stage Maven Central only.
+          GITHUB_RELEASE=$(awk '/^github_release:/ { print $2; exit }' <<< "$PROPS")
           {
             echo "version=$VERSION"
             echo "is_final=$IS_FINAL"
+            echo "github_release=${GITHUB_RELEASE:-false}"
             echo "maven_central_publish=$MAVEN_CENTRAL_PUBLISH"
             echo "bloxbean_repo_publish=$BLOXBEAN_REPO_PUBLISH"
             echo "npm_publish=$NPM_PUBLISH"
             echo "allow_snapshot_dependencies=$ALLOW_SNAPSHOTS"
           } >> "$GITHUB_OUTPUT"
           echo "Version $VERSION (final: $IS_FINAL), Maven Central: $MAVEN_CENTRAL_PUBLISH," \
-            "BloxBean repository: $BLOXBEAN_REPO_PUBLISH, npm: $NPM_PUBLISH, snapshot dependencies allowed: $ALLOW_SNAPSHOTS"
+            "BloxBean repository: $BLOXBEAN_REPO_PUBLISH, npm: $NPM_PUBLISH, snapshot dependencies allowed: $ALLOW_SNAPSHOTS," \
+            "GitHub release: ${GITHUB_RELEASE:-false}"
 
       # A release that names a snapshot cannot be resolved for long: snapshots are pruned (JuLC keeps 20 commit
       # versions or 60 days), and Central hosts none. allow_snapshot_dependencies=true (rehearsals only, with every
@@ -292,6 +300,7 @@ jobs:
           MAVEN_CENTRAL_PUBLISH: ${{ steps.version.outputs.maven_central_publish }}
           BLOXBEAN_REPO_PUBLISH: ${{ steps.version.outputs.bloxbean_repo_publish }}
           BLOXBEAN_OUTCOME: ${{ steps.bloxbean.outcome }}
+          GITHUB_RELEASE: ${{ steps.version.outputs.github_release }}
         shell: bash
         run: |
           set -euo pipefail
@@ -310,14 +319,25 @@ jobs:
               echo "Maven Central: not published (maven_central_publish=false)."
             elif [[ -n "$DEPLOYMENT_ID" ]]; then
               echo "**Maven Central: deployment \`$DEPLOYMENT_ID\` staged - NOT published.** It passed"
-              echo "validation and is waiting for a human. Publish it in the Central Portal:"
-              echo "https://central.sonatype.com/publishing/deployments"
+              echo "validation and is waiting for a human. Publish it through the approval-gated workflow:"
+              echo "https://github.com/$GITHUB_REPOSITORY/actions/workflows/publish-central.yml"
+              echo
+              echo "Or from the portal: https://central.sonatype.com/publishing/deployments"
             else
               echo "**Maven Central: NOT staged** - the upload failed or did not run."
               if [[ "$BLOXBEAN_OUTCOME" == success ]]; then
                 echo "The BloxBean repository has this version, so re-running the tag is refused. To put the"
                 echo "same bytes on Central, upload this run's \`central-bundle-$VERSION\` artifact at"
                 echo "https://central.sonatype.com/publishing (release-ops docs/12)."
+              fi
+            fi
+            echo
+            if [[ "$GITHUB_RELEASE" == "true" ]]; then
+              echo "The GitHub release job runs after the npm job (github_release = true)."
+            else
+              echo "No GitHub release for this tag (github_release = false)."
+              if [[ "$BLOXBEAN_REPO_PUBLISH" != true ]]; then
+                echo "If this was a rehearsal, drop any Central deployment in the portal."
               fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -345,7 +365,7 @@ jobs:
 
       # The engines are GraalVM Web Images (ADR-0015): Oracle GraalVM 25 with Web Image (--tool:svm-wasm), and Binaryen.
       - name: Set up GraalVM 25
-        uses: graalvm/setup-graalvm@v1
+        uses: graalvm/setup-graalvm@f70bc8032f90a104502824a54bcb94b6f01715bc # v1.6.8
         with:
           java-version: '25'
           distribution: 'graalvm'
@@ -361,9 +381,6 @@ jobs:
           fi
           sudo apt-get update -q && sudo apt-get install -y -q binaryen
           wasm-opt --version
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -405,7 +422,7 @@ jobs:
           EOF
 
       # In dependency order. Beta and rc versions get their own dist-tag; before 1.0, -preN versions go to `latest`
-      # (below). Provenance attestations need a public repository: added once JOUST's repository is public.
+      # (below). Provenance attestations need a public repository: added automatically once the repository is public.
       - name: Publish the packages
         env:
           REPO_PRIVATE: ${{ github.event.repository.private }}
@@ -445,3 +462,24 @@ jobs:
               echo "Checked only (npm_publish=false in gradle.properties): \`npm publish --dry-run\`."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    needs: [maven, npm]
+    # Gated by github_release in gradle.properties. Runs only after the Maven artifacts and the npm packages are out,
+    # and on failure can be re-run on its own without touching Central, the BloxBean repository or npm. No release
+    # assets: the artifacts are in the Maven repositories and on npm.
+    if: needs.maven.outputs.github_release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # Creates the release for the tag. Do not pre-create a draft release for the tag: the action publishes an
+      # existing draft.
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          name: ${{ needs.maven.outputs.version }}
+          prerelease: ${{ needs.maven.outputs.is_final != 'true' }}
+          # Latest is decided by semantic version and date, so a maintenance release (e.g. 0.7.3 after
+          # 0.8.0) does not take the Latest badge.
+          make_latest: legacy

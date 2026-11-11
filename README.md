@@ -194,3 +194,8 @@ The JavaScript packages and the Wasm engines are experimental.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security vulnerabilities privately, as described in
+[SECURITY.md](SECURITY.md), never in a public issue.

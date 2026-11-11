@@ -36,9 +36,10 @@ ext.configureReleaseSigning = { Project candidate ->
 }
 
 // Central Portal publishing through the native publisher API (nmcp), as JuLC (release-ops docs/02). `USER_MANAGED`
-// uploads the deployment and stops at VALIDATED: nothing reaches Maven Central until a human publishes it in the
-// Central Portal. The release workflow (.github/workflows/release.yml) passes the portal token as
-// MAVEN_USERNAME/MAVEN_PASSWORD. Do not set `publishingTimeout` here: nmcp rejects it under USER_MANAGED.
+// uploads the deployment and stops at VALIDATED: nothing reaches Maven Central until a human publishes it, from the
+// Central Portal or through the approval-gated .github/workflows/publish-central.yml. The release workflows pass the
+// portal token as MAVEN_USERNAME/MAVEN_PASSWORD. Do not set `publishingTimeout` here: nmcp rejects it under
+// USER_MANAGED.
 nmcpAggregation {
     centralPortal {
         username = System.getenv('MAVEN_USERNAME')
@@ -49,7 +50,7 @@ nmcpAggregation {
     }
 }
 
-// The modules published to the BloxBean Maven repository; examples are never published.
+// The modules published to Maven Central and the BloxBean Maven repository; examples are never published.
 def publishedModules = ['julc-state-api', 'julc-state-processor', 'julc-state-runtime', 'julc-state-testkit',
                         'julc-state-verifier', 'julc-state-dsl', 'julc-state-server']
 
@@ -209,8 +210,8 @@ allprojects { candidate ->
     }
 }
 
-// The publication scope (release-ops docs/12, `discover`): the projects that publish must be exactly the published
-// modules, each with a POM name and description. JOUST is not on Maven Central yet, so this is the scope of the
+// The publication scope (release-ops docs/02 §3, docs/12 `discover`): the projects that publish must be exactly the
+// published modules, each with a POM name and description. It is the scope of both the Central deployment and the
 // BloxBean repository; the line it logs is what .github/scripts/bloxbean-maven.sh counts.
 // The Central deployment: every published module, in one aggregated bundle.
 dependencies {
@@ -244,6 +245,18 @@ tasks.register('verifyMavenReleasePublicationScope') {
         }
         logger.lifecycle("Central deployment scope: ${expected.size()} projects")
     }
+}
+
+// The scope check must gate the work itself, not the lifecycle alias. `publishAggregationToCentralPortal`
+// is an alias whose dependencies are unordered relative to each other, so hanging the check off it lets
+// the upload run first. Attaching it to the zip -- which every portal task depends on -- puts the check
+// ahead of both the bundle and the network calls.
+tasks.matching {
+    it.name in ['nmcpZipAggregation',
+                'nmcpPublishAggregationToCentralPortal',
+                'nmcpPublishAggregationToCentralPortalSnapshots']
+}.configureEach {
+    dependsOn 'verifyMavenReleasePublicationScope'
 }
 
 
