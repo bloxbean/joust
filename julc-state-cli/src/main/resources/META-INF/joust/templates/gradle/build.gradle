@@ -1,0 +1,15 @@
+plugins {
+    id 'application'
+    // JOUST @@version@@: the JOUST and JuLC processors, the on-chain sources, .jsc, test settings (ADR-0017).
+    // Upgrading JOUST is this version.
+    id 'org.julclang.joust' version '@@version@@'
+}
+
+repositories {
+    mavenCentral()
+@@repositories@@
+}
+
+application {
+    mainClass = '@@package@@.CounterMain'    // ./gradlew run: the counter on Yaci DevKit
+}

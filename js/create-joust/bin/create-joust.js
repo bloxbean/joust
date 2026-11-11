@@ -10,7 +10,9 @@ const USAGE = `Usage: npm create joust@latest [dir] -- [--template node|web] [--
   --template   node: a Node script that deploys and calls the contract (default)
                web:  a browser page with wallets, served by joust dev
   --lang       jsc:  the contract in JOUST's .jsc language, contracts/app/Counter.jsc (default)
-               java: the contract in Java, contracts/app/Counter.java`;
+               java: the contract in Java, contracts/app/Counter.java
+
+A Java/Gradle project instead: the native joust, joust new <dir> (brew install bloxbean/tap/joust).`;
 
 let args;
 try {

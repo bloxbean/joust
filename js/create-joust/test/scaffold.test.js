@@ -135,3 +135,23 @@ test('each template builds; .jsc and Java give the same description and client',
     assert.equal(jsc.types, java.types, 'the types');
   }
 });
+
+// ADR-0017 D3: the native joust runs this package's bin with its own node, outside any project. A dependency or a bare
+// import would be resolved through the node_modules of whatever directories lie above it, so there must be none.
+test('no dependencies, and only node: and relative imports', async () => {
+  const { readdirSync } = await import('node:fs');
+  const pkg = json(fileURLToPath(new URL('..', import.meta.url)), 'package.json');
+  for (const k of ['dependencies', 'optionalDependencies', 'peerDependencies', 'bundleDependencies']) {
+    assert.ok(!pkg[k] || Object.keys(pkg[k]).length === 0, k);
+  }
+  for (const d of ['bin', 'src']) {
+    const dir = fileURLToPath(new URL(`../${d}/`, import.meta.url));
+    for (const f of readdirSync(dir, { recursive: true }).filter((f) => f.endsWith('.js'))) {
+      const src = readFileSync(join(dir, f), 'utf8');
+      for (const m of src.matchAll(/(?:^|\n)\s*import\s[^'"]*['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]/g)) {
+        const spec = m[1] ?? m[2] ?? m[3];
+        assert.ok(spec.startsWith('node:') || spec.startsWith('./') || spec.startsWith('../'), `${d}/${f}: ${spec}`);
+      }
+    }
+  }
+});
