@@ -346,4 +346,17 @@ class JoustMainTest {
         assertThat(s.outText()).contains("npx joust frobnicate --help");
         assertThat(s.runs).isEmpty();
     }
+
+    @Test
+    void anUnknownUidTrustsNoOwnedDirectory() throws IOException {
+        Path foreign = npmProject("shared3", "0.1.0-pre1-rc7");
+        Path mine = Files.createDirectories(foreign.resolve("mine"));
+        FakeSys s = sys(mine);
+        s.user = "";                                       // the uid could not be read
+        s.owners = p -> Optional.of(p.startsWith(mine) ? "501" : "1001");
+        assertThat(run(s, "build")).isEqualTo(JoustMain.USAGE);
+        assertThat(s.runs).isEmpty();
+        assertThat(s.errText()).contains("uid cannot be read");
+        assertThat(Locator.isRoot(Path.of("/"))).isTrue();
+    }
 }

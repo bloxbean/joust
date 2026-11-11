@@ -35,10 +35,10 @@ final class Scaffold {
             "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void", "volatile",
             "while", "true", "false", "null", "var", "yield", "record", "sealed", "permits", "non-sealed", "when",
             "module", "open", "exports", "requires", "uses", "provides", "to", "with", "opens", "transitive");
-    /** A package segment Java and .jsc both accept: a letter, then letters, digits or '_' (no '$', no lone '_'). */
-    static final Pattern IDENT = Pattern.compile("[A-Za-z][A-Za-z0-9_]*");
+    /** A package segment Java and .jsc both accept: letters, digits and '_', not starting with a digit; no '$'. */
+    static final Pattern IDENT = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
     /** A local repository for CI: a file: URL with a plain path, nothing Groovy could read as code (PR #55 IS1). */
-    static final Pattern REPOSITORY = Pattern.compile("file:/[A-Za-z0-9._~+/-]+");
+    static final Pattern REPOSITORY = Pattern.compile("file:(/|///)[A-Za-z0-9._~+-][A-Za-z0-9._~+/-]*");   // no host (IS9)
     static final Pattern EXACT_VERSION = Pattern.compile("create-joust@" + Locator.VERSION.pattern());
 
     /** What the user asked for, before any check. */
@@ -105,7 +105,7 @@ final class Scaffold {
 
     static void checkPackage(String pkg) throws Refused {
         for (String seg : pkg.split("\\.", -1)) {
-            if (!IDENT.matcher(seg).matches() || KEYWORDS.contains(seg)) {
+            if (!IDENT.matcher(seg).matches() || KEYWORDS.contains(seg) || seg.equals("_")) {   // '_' is reserved
                 throw new Refused("'" + pkg + "' is not a Java package name (segments are identifiers, not keywords)");
             }
         }

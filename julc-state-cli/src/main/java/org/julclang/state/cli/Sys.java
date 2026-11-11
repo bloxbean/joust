@@ -117,20 +117,26 @@ interface Sys {
 
             private String uid;
 
-            /** Our uid: the owner of a file we just created. */
+            /**
+             * Our uid: the owner of /proc/self (Linux, nothing written), else of a file we just create, else of our
+             * home directory; empty only when none can be read (PR #55 IS8, IF8: {@link Locator#trusted} then fails
+             * closed on POSIX).
+             */
             @Override
             public synchronized String user() {
                 if (uid == null) {
-                    try {
+                    uid = owner(Path.of("/proc/self")).orElse("");
+                    if (uid.isEmpty()) try {
                         Path probe = Files.createTempFile("joust-uid-", "");
                         try {
                             uid = owner(probe).orElse("");
                         } finally {
                             Files.deleteIfExists(probe);
                         }
-                    } catch (IOException e) {
-                        uid = "";
+                    } catch (IOException | SecurityException e) {
+                        // try the others
                     }
+                    if (uid.isEmpty()) uid = owner(Path.of(System.getProperty("user.home", "/"))).orElse("");
                 }
                 return uid;
             }

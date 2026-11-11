@@ -34,7 +34,9 @@ final class Json {
     @SuppressWarnings("unchecked")
     static Optional<Map<String, Object>> readSmall(Path file) {
         try {
-            if (!Files.isRegularFile(file) || Files.size(file) > MAX_BYTES) return Optional.empty();
+            java.nio.file.attribute.BasicFileAttributes before =
+                    Files.readAttributes(file, java.nio.file.attribute.BasicFileAttributes.class);
+            if (!before.isRegularFile() || before.size() > MAX_BYTES) return Optional.empty();
             java.util.concurrent.FutureTask<byte[]> read = new java.util.concurrent.FutureTask<>(() -> {
                 try (InputStream in = Files.newInputStream(file)) {
                     return in.readNBytes(MAX_BYTES + 1);
@@ -52,6 +54,13 @@ final class Json {
                 return Optional.empty();
             }
             if (bytes.length > MAX_BYTES) return Optional.empty();
+            // Still the regular file checked above (a swap during the read changes the file's identity).
+            java.nio.file.attribute.BasicFileAttributes after =
+                    Files.readAttributes(file, java.nio.file.attribute.BasicFileAttributes.class);
+            if (!after.isRegularFile() || !java.util.Objects.equals(before.fileKey(), after.fileKey())
+                    || after.size() != bytes.length) {
+                return Optional.empty();
+            }
             Object v = parse(new String(bytes, StandardCharsets.UTF_8));
             return v instanceof Map<?, ?> m ? Optional.of((Map<String, Object>) m) : Optional.empty();
         } catch (IOException | IllegalArgumentException e) {

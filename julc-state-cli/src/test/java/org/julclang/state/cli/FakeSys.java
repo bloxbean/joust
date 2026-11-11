@@ -71,9 +71,11 @@ final class FakeSys implements Sys {
         return owners.apply(dir);
     }
 
+    String user = "me";
+
     @Override
     public String user() {
-        return "me";
+        return user;
     }
 
     @Override

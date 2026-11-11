@@ -65,8 +65,9 @@ final class Locator {
                 // not resolvable: compared as written only
             }
         }
-        if (sys.user().isEmpty()) return true;       // a platform without uids (not POSIX)
-        return sys.owner(dir).map(o -> o.equals(sys.user())).orElse(true);
+        Optional<String> owner = sys.owner(dir);
+        if (owner.isEmpty()) return true;              // a platform that reports no owner (not POSIX)
+        return owner.get().equals(sys.user());         // our uid unknown: "" matches nothing, so it fails closed (IS8)
     }
 
     /** The walk never inspects the filesystem root itself (PR #55 IC5): a project lives in a directory below it. */

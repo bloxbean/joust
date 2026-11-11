@@ -110,8 +110,9 @@ class ScaffoldTest {
                 new String[]{"new", "a", "--joust-repository", "https://evil.example/repo"},
                 new String[]{"new", "a", "--joust-repository", "file:/x'+({->println('INJECTED')}())+'"},
                 new String[]{"new", "a", "--joust-repository", "file:/x') } } maven { url = uri('https://evil"},
+                new String[]{"new", "a", "--joust-repository", "file://host/share/repo"},
                 new String[]{"new", "a", "-p", "_"}, new String[]{"new", "a", "-p", "a$b"},
-                new String[]{"new", "a", "-l", "jsc", "-p", "app.$demo"}, new String[]{"new", "a", "-p", "_x"},
+                new String[]{"new", "a", "-l", "jsc", "-p", "app.$demo"}, new String[]{"new", "a", "-p", "org._"},
                 new String[]{"new", "a", "-t", "node", "--create-joust", "create-joust@latest"},
                 new String[]{"new", "a", "-t", "node", "--create-joust", "relative.tgz"},
                 new String[]{"new", "a", "--create-joust", "create-joust@1.0.0"},
@@ -147,7 +148,8 @@ class ScaffoldTest {
                 System.arraycopy(name, 0, h, 0, name.length);
                 put(h, 100, String.format("%07o", 0644));
                 put(h, 124, String.format("%011o", data.length));
-                h[156] = (byte) (e.getValue() == null ? '5' : e.getValue().startsWith("L:") ? '2' : '0');
+                h[156] = (byte) (e.getValue() == null ? '5' : e.getValue().startsWith("L:") ? '2'
+                        : e.getKey().startsWith("PAXG") ? 'g' : '0');
                 if (e.getValue() != null && e.getValue().startsWith("L:")) put(h, 157, e.getValue().substring(2));
                 put(h, 257, "ustar");
                 gz.write(h);
@@ -330,5 +332,29 @@ class ScaffoldTest {
         Path node = bin.resolve("node");
         assertThat(Scaffold.packCommand(node, npm, "create-joust@1.0.0")).containsExactly(node.toString(),
                 cli.toRealPath().toString(), "pack", "--workspaces=false", "--loglevel=warn", "create-joust@1.0.0");
+    }
+
+    @Test
+    void metadataAloneCannotExceedTheStreamBudget() throws IOException {
+        Path bin = tools();
+        var entries = new java.util.LinkedHashMap<String, String>();
+        for (int i = 0; i < 65; i++) entries.put("PAXG" + i, "x".repeat(64 * 1024));   // 65 global pax records, 4.2 MB
+        entries.putAll(goodPackage());
+        Path tgzFile = Files.write(tmp.resolve("pax.tgz"), tgz(entries));
+        FakeSys s = sys();
+        s.env.put("PATH", bin.toString());
+        assertThat(run(s, RELEASE, "new", "p", "-t", "node", "--create-joust", tgzFile.toString())).isEqualTo(JoustMain.USAGE);
+        assertThat(s.errText()).contains("decompresses to more than");
+        assertThat(s.runs).isEmpty();
+    }
+
+    @Test
+    void underscorePrefixedSegmentsAreJavaAndJsc() throws IOException {
+        for (String l : List.of("java", "jsc")) {
+            FakeSys s = sys();
+            assertThat(run(s, RELEASE, "new", "u-" + l, "-l", l, "-p", "org._internal")).as(l).isZero();
+        }
+        assertThat(Files.readString(tmp.resolve("u-jsc/src/main/jsc/org/_internal/Counter.jsc")))
+                .startsWith("package org._internal\n");
     }
 }

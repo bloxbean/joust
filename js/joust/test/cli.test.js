@@ -106,6 +106,18 @@ test('without the project\'s package, or in a Gradle build, the npm joust refuse
   assert.match(r.stderr, /is a Gradle build; this is the npm joust/);
 });
 
+test('no trusted project: project commands are refused, never run on the working directory', () => {
+  const bare = mkdtempSync(join(tmpdir(), 'joust-cli-'));
+  mkdirSync(join(bare, 'contracts'));
+  for (const cwd of [bare, '/']) {
+    const r = run(cwd, ['build']);
+    assert.equal(r.status, 2, `${cwd}: ${r.stderr}`);
+    assert.match(r.stderr, /needs a JOUST project, and none was found/);
+  }
+  assert.ok(!existsSync(join(bare, 'build')));
+  assert.equal(run(bare, ['--version']).status, 0);   // informational commands still work anywhere
+});
+
 test('this copy as the project\'s own runs the command itself', () => {
   const root = join(mkdtempSync(join(tmpdir(), 'joust-cli-')), 'own');
   mkdirSync(join(root, 'node_modules', '@julclang'), { recursive: true });
@@ -132,8 +144,11 @@ test('unsupported commands and options name the npm joust', () => {
   const opt = run(root, ['--nope']);
   assert.equal(opt.status, 2);
   assert.match(opt.stderr, /unknown option --nope \(this is the npm joust/);
-  const bare = mkdtempSync(join(tmpdir(), 'joust-cli-'));
-  const r = run(bare, ['frobnicate']);
+  const own = join(mkdtempSync(join(tmpdir(), 'joust-cli-')), 'own2');
+  mkdirSync(join(own, 'node_modules', '@julclang'), { recursive: true });
+  writeFileSync(join(own, 'joust.config.json'), '{}');
+  symlinkSync(fileURLToPath(new URL('..', import.meta.url)), join(own, 'node_modules', '@julclang', 'joust'));
+  const r = run(own, ['frobnicate']);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /unknown command 'frobnicate' \(this is the npm joust/);
 });

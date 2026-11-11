@@ -67,7 +67,15 @@ function newCommand(rest) {
 
 async function project() {
   const p = locate();
-  if (p?.kind === 'gradle') {
+  if (!p) {
+    // No trusted project from here (none, the filesystem root, or one in a directory another user owns): never act on
+    // the working directory with this copy (ADR-0017 D9; PR #55 IC10).
+    console.error(`joust: '${cmd}' needs a JOUST project, and none was found from ${process.cwd()} (a joust.config.json,`
+      + ' or a package.json depending on @julclang/joust, in a directory you own; JOUST_SAFE_DIRS lists others).'
+      + ' Create one with npm create joust.');
+    return 2;
+  }
+  if (p.kind === 'gradle') {
     console.error(`joust: ${p.root} is a Gradle build; this is the npm joust. Use ./gradlew (or the native joust:`
       + ' brew install bloxbean/tap/joust).');
     return 2;

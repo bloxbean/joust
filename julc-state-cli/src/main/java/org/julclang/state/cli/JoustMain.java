@@ -217,8 +217,11 @@ public final class JoustMain {
             case NONE -> {
                 sys.err().println("joust: '" + args.get(0) + "' needs a project, and none was found from " + sys.cwd()
                         + ". Create one with joust new <dir>.");
-                p.ignored().ifPresent(d -> sys.err().println("joust: did not look in " + d + " or above: it belongs to"
-                        + " another user. To trust it, add it to JOUST_SAFE_DIRS."));
+                p.ignored().ifPresent(d -> sys.err().println(sys.user().isEmpty()
+                        ? "joust: did not look in " + d + " or above: this user's uid cannot be read, so no directory"
+                                + " is trusted. Add the project's directories to JOUST_SAFE_DIRS."
+                        : "joust: did not look in " + d + " or above: it belongs to another user. To trust it, add it"
+                                + " to JOUST_SAFE_DIRS."));
                 yield USAGE;
             }
         };
