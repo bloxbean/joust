@@ -17,6 +17,44 @@ final class Tarball {
 
     static final long MAX_BYTES = 1 << 20;
     static final int MAX_ENTRIES = 1000;
+    /** The whole decompressed stream: contents, headers, pax records and padding (PR #55 IC1). */
+    static final long STREAM_BYTES = 4L << 20;
+
+    /** {@code in}, failing once more than {@code limit} bytes have been read from it. */
+    static InputStream budget(InputStream in, long limit) {
+        return new java.io.FilterInputStream(in) {
+            long read;
+
+            private int count(int n) throws IOException {
+                if (n > 0 && (read += n) > limit) throw new IOException("tarball decompresses to more than " + limit + " bytes");
+                return n;
+            }
+
+            @Override
+            public int read() throws IOException {
+                int b = super.read();
+                if (b >= 0) count(1);
+                return b;
+            }
+
+            @Override
+            public int read(byte[] buf, int off, int len) throws IOException {
+                return count(super.read(buf, off, len));
+            }
+
+            @Override
+            public long skip(long n) throws IOException {
+                byte[] sink = new byte[8192];
+                long done = 0;
+                while (done < n) {
+                    int r = read(sink, 0, (int) Math.min(sink.length, n - done));
+                    if (r < 0) break;
+                    done += r;
+                }
+                return done;
+            }
+        };
+    }
 
     static final class Bad extends Exception {
         Bad(String message) {
@@ -27,13 +65,24 @@ final class Tarball {
     private Tarball() {
     }
 
-    /** Extracts {@code tgz} into the new directory {@code into}; returns {@code into}. */
+    /** Extracts {@code tgz} into the new directory {@code into}; returns {@code into}. Any read error refuses it. */
     static Path extract(Path tgz, Path into) throws IOException, Bad {
+        try {
+            return extractUnchecked(tgz, into);
+        } catch (java.io.EOFException | java.util.zip.ZipException e) {
+            throw new Bad("tarball is truncated or not gzip: " + e.getMessage());
+        } catch (IOException e) {
+            if (e.getMessage() != null && e.getMessage().startsWith("tarball")) throw new Bad(e.getMessage());
+            throw e;
+        }
+    }
+
+    private static Path extractUnchecked(Path tgz, Path into) throws IOException, Bad {
         Files.createDirectories(into);
         Path root = into.toRealPath();
         long total = 0;
         int entries = 0;
-        try (InputStream in = new GZIPInputStream(Files.newInputStream(tgz))) {
+        try (InputStream in = budget(new GZIPInputStream(Files.newInputStream(tgz)), STREAM_BYTES)) {
             byte[] header = new byte[512];
             String paxPath = null;
             while (true) {
@@ -52,7 +101,13 @@ final class Tarball {
                 }
                 String name = paxPath != null ? paxPath : name(header);
                 paxPath = null;
-                Path rel = Path.of(name).normalize();
+                if (name.indexOf('\0') >= 0) throw new Bad("tarball entry with a NUL in its name");
+                Path rel;
+                try {
+                    rel = Path.of(name).normalize();
+                } catch (java.nio.file.InvalidPathException e) {
+                    throw new Bad("tarball entry with an invalid name");
+                }
                 if (name.isEmpty() || rel.isAbsolute() || rel.startsWith("..") || !rel.startsWith("package")) {
                     throw new Bad("tarball entry outside package/: " + name);
                 }
@@ -60,6 +115,7 @@ final class Tarball {
                 if (!target.startsWith(root)) throw new Bad("tarball entry outside package/: " + name);
                 switch (type) {
                     case '0', '\0' -> {
+                        if (size > MAX_BYTES) throw new Bad("tarball larger than " + MAX_BYTES + " bytes");
                         total += size;
                         if (total > MAX_BYTES) throw new Bad("tarball larger than " + MAX_BYTES + " bytes");
                         Files.createDirectories(target.getParent());
@@ -67,8 +123,8 @@ final class Tarball {
                         in.skipNBytes(padded - size);
                     }
                     case '5' -> {
+                        if (size != 0) throw new Bad("tarball directory entry with content: " + name);
                         Files.createDirectories(target);
-                        in.skipNBytes(padded);
                     }
                     default -> throw new Bad("tarball entry of type '" + type + "' is not allowed: " + name);
                 }

@@ -71,6 +71,41 @@ test('a hand-over guard for another bin is ignored; one for this bin that resolv
   assert.ok(!existsSync(second.record));
 });
 
+test('a project command runs at the project root: its joust.config.json is the one read', () => {
+  const root = join(mkdtempSync(join(tmpdir(), 'joust-cli-')), 'rooted');
+  mkdirSync(join(root, 'node_modules', '@julclang'), { recursive: true });
+  mkdirSync(join(root, 'contracts', 'app'), { recursive: true });
+  writeFileSync(join(root, 'joust.config.json'), '{ not json');   // read only if the CLI moved to the root
+  symlinkSync(fileURLToPath(new URL('..', import.meta.url)), join(root, 'node_modules', '@julclang', 'joust'));
+  const r = run(join(root, 'contracts', 'app'), ['frobnicate']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /^joust: .*JSON/);
+});
+
+test('a guard naming this copy, where the project resolves to this copy, runs normally', () => {
+  const root = join(mkdtempSync(join(tmpdir(), 'joust-cli-')), 'self');
+  mkdirSync(join(root, 'node_modules', '@julclang'), { recursive: true });
+  writeFileSync(join(root, 'joust.config.json'), '{}');
+  symlinkSync(fileURLToPath(new URL('..', import.meta.url)), join(root, 'node_modules', '@julclang', 'joust'));
+  const r = run(root, ['test'], { JOUST_DEFERRED: SELF });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /run npm test/);
+});
+
+test('without the project\'s package, or in a Gradle build, the npm joust refuses rather than acting', () => {
+  const bare = join(mkdtempSync(join(tmpdir(), 'joust-cli-')), 'bare');
+  mkdirSync(bare);
+  writeFileSync(join(bare, 'package.json'), JSON.stringify({ dependencies: { '@julclang/joust': '1.0.0' } }));
+  let r = run(bare, ['build']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /without @julclang\/joust installed; run npm install first/);
+  const gradle = mkdtempSync(join(tmpdir(), 'joust-cli-'));
+  writeFileSync(join(gradle, 'settings.gradle'), '');
+  r = run(gradle, ['build']);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /is a Gradle build; this is the npm joust/);
+});
+
 test('this copy as the project\'s own runs the command itself', () => {
   const root = join(mkdtempSync(join(tmpdir(), 'joust-cli-')), 'own');
   mkdirSync(join(root, 'node_modules', '@julclang'), { recursive: true });
@@ -131,8 +166,7 @@ test('the package is resolved through ancestors (workspaces) and its bin must st
   assert.equal(resolveJoust(evil.root), undefined);
 });
 
-test('a directory owned by someone else is not entered unless trusted', { skip: typeof process.getuid !== 'function' }, () => {
-  // The root directory is owned by root: a marker there is never used by a non-root user.
-  if (process.getuid() === 0) return;
+test('the filesystem root is never a project, for any user', () => {
   assert.equal(locate('/'), undefined);
+  assert.equal(resolveJoust('/'), undefined);
 });

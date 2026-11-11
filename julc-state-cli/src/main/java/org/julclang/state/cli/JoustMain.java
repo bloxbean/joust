@@ -57,7 +57,16 @@ public final class JoustMain {
         List<String> args = Arrays.asList(argv);
         if (args.isEmpty()) return help(Optional.empty());
         String cmd = args.get(0);
-        if (wantsHelp(args)) return help(cmd.startsWith("-") || cmd.equals("help") ? helpTopic(args) : Optional.of(cmd));
+        if (wantsHelp(args)) {
+            Optional<String> topic = cmd.startsWith("-") || cmd.equals("help") ? helpTopic(args) : Optional.of(cmd);
+            int code = help(topic);
+            if (topic.isPresent() && !COMMANDS.containsKey(topic.get()) && locator.locate().kind() == Locator.Kind.NPM) {
+                sys.out().println();
+                sys.out().println("'" + topic.get() + "' may be a command of this project's own @julclang/joust: npx joust "
+                        + topic.get() + " --help");
+            }
+            return code;
+        }
         switch (cmd) {
             case "version", "--version", "-V", "-v":
                 return version();

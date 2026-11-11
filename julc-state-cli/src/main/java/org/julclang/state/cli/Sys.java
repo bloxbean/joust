@@ -27,10 +27,10 @@ interface Sys {
 
     PrintStream err();
 
-    /** The owner of {@code dir}, if the file system knows it. */
+    /** The owner of {@code dir} (its POSIX uid), if the file system knows it. */
     Optional<String> owner(Path dir);
 
-    /** This process's user name. */
+    /** This process's uid, as {@link #owner} reports it; empty where the platform has none. */
     String user();
 
     /** Runs {@code command} in {@code dir} with {@code env} as its whole environment, the console inherited; its exit code. */
@@ -62,6 +62,27 @@ interface Sys {
         return String.join(File.pathSeparator, keep);
     }
 
+    /** Ignores SIGINT in this process (where the platform lets us); returns the previous handler. */
+    @SuppressWarnings("removal")
+    static Object ignoreInterrupt() {
+        try {
+            return sun.misc.Signal.handle(new sun.misc.Signal("INT"), sig -> { });
+        } catch (RuntimeException | LinkageError e) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("removal")
+    static void restoreInterrupt(Object previous) {
+        if (previous instanceof sun.misc.SignalHandler h) {
+            try {
+                sun.misc.Signal.handle(new sun.misc.Signal("INT"), h);
+            } catch (RuntimeException | LinkageError ignored) {
+                // nothing to restore
+            }
+        }
+    }
+
     static Sys system() {
         return new Sys() {
             @Override
@@ -84,18 +105,34 @@ interface Sys {
                 return System.err;
             }
 
+            // By uid, not by name: in a container the uid may have no passwd entry (PR #55 IS5).
             @Override
             public Optional<String> owner(Path dir) {
                 try {
-                    return Optional.of(Files.getOwner(dir).getName());
-                } catch (IOException | UnsupportedOperationException | SecurityException e) {
+                    return Optional.of(String.valueOf(Files.getAttribute(dir, "unix:uid")));
+                } catch (IOException | UnsupportedOperationException | IllegalArgumentException | SecurityException e) {
                     return Optional.empty();
                 }
             }
 
+            private String uid;
+
+            /** Our uid: the owner of a file we just created. */
             @Override
-            public String user() {
-                return System.getProperty("user.name");
+            public synchronized String user() {
+                if (uid == null) {
+                    try {
+                        Path probe = Files.createTempFile("joust-uid-", "");
+                        try {
+                            uid = owner(probe).orElse("");
+                        } finally {
+                            Files.deleteIfExists(probe);
+                        }
+                    } catch (IOException e) {
+                        uid = "";
+                    }
+                }
+                return uid;
             }
 
             @Override
@@ -105,12 +142,19 @@ interface Sys {
                 pb.environment().putAll(env);
                 try {
                     Process p = pb.start();
-                    while (true) {
-                        try {
-                            return p.waitFor();
-                        } catch (InterruptedException e) {
-                            // Ctrl-C reaches the child too (same process group): wait for it to finish.
+                    // Ctrl-C reaches the child too (same process group): let it decide, and wait for it, so its exit
+                    // status (128 + n when a signal ended it) is ours (PR #55 IF6).
+                    Object previous = ignoreInterrupt();
+                    try {
+                        while (true) {
+                            try {
+                                return p.waitFor();
+                            } catch (InterruptedException e) {
+                                // keep waiting
+                            }
                         }
+                    } finally {
+                        restoreInterrupt(previous);
                     }
                 } catch (IOException e) {
                     err().println("joust: cannot run " + command.get(0) + ": " + e.getMessage());

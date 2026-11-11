@@ -108,6 +108,10 @@ class ScaffoldTest {
                 new String[]{"new", "a", "-p", "class"}, new String[]{"new", "a", "-p", "a..b"},
                 new String[]{"new", "a", "-t", "node", "-p", "x"},
                 new String[]{"new", "a", "--joust-repository", "https://evil.example/repo"},
+                new String[]{"new", "a", "--joust-repository", "file:/x'+({->println('INJECTED')}())+'"},
+                new String[]{"new", "a", "--joust-repository", "file:/x') } } maven { url = uri('https://evil"},
+                new String[]{"new", "a", "-p", "_"}, new String[]{"new", "a", "-p", "a$b"},
+                new String[]{"new", "a", "-l", "jsc", "-p", "app.$demo"}, new String[]{"new", "a", "-p", "_x"},
                 new String[]{"new", "a", "-t", "node", "--create-joust", "create-joust@latest"},
                 new String[]{"new", "a", "-t", "node", "--create-joust", "relative.tgz"},
                 new String[]{"new", "a", "--create-joust", "create-joust@1.0.0"},
@@ -273,5 +277,58 @@ class ScaffoldTest {
     void theVersionComesFromTheBuild() {
         assertThat(Versions.load().cli()).isEqualTo(System.getProperty("joust.version"));
         assertThat(Set.of(Scaffold.TEMPLATES.toArray())).containsExactlyInAnyOrder("gradle", "node", "web");
+    }
+
+    @Test
+    void groovyStringsAreEscaped() {
+        assertThat(Scaffold.groovy("a'b\\c")).isEqualTo("a\\'b\\\\c");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> Scaffold.groovy("a\nb"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void tarballBudgets() throws IOException {
+        Path bin = tools();
+        // a directory entry with content, and pax records that add up beyond the stream budget, are refused
+        var dirWithContent = new java.util.LinkedHashMap<>(goodPackage());
+        dirWithContent.put("package/pad/", null);
+        byte[] t = tgz(dirWithContent);
+        // patch the size field of the directory entry (the third header) to a non-zero value
+        var raw = new java.io.ByteArrayOutputStream();
+        try (var in = new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(t))) {
+            in.transferTo(raw);
+        }
+        byte[] tar = raw.toByteArray();
+        int dirHeader = 512 * 4;   // package.json header + 1 data block, js header + 1 data block
+        System.arraycopy(String.format("%011o", 512).getBytes(java.nio.charset.StandardCharsets.US_ASCII), 0, tar,
+                dirHeader + 124, 11);
+        Path bad = tmp.resolve("dir.tgz");
+        try (var out = new java.util.zip.GZIPOutputStream(Files.newOutputStream(bad))) {
+            out.write(tar);
+        }
+        FakeSys s = sys();
+        s.env.put("PATH", bin.toString());
+        assertThat(run(s, RELEASE, "new", "n", "-t", "node", "--create-joust", bad.toString())).isEqualTo(JoustMain.USAGE);
+        assertThat(s.errText()).contains("directory entry with content");
+
+        var many = new java.util.LinkedHashMap<>(goodPackage());
+        for (int i = 0; i < 9; i++) many.put("package/f" + i, "a".repeat(600_000));   // 5.4 MB, each file under 1 MiB
+        Path big = Files.write(tmp.resolve("many.tgz"), tgz(many));
+        FakeSys m = sys();
+        m.env.put("PATH", bin.toString());
+        assertThat(run(m, RELEASE, "new", "m", "-t", "node", "--create-joust", big.toString())).isEqualTo(JoustMain.USAGE);
+        assertThat(m.errText()).contains("tarball");
+        assertThat(m.runs).isEmpty();
+    }
+
+    @Test
+    void npmsJavaScriptEntryPointRunsUnderTheResolvedNode() throws IOException {
+        Path lib = Files.createDirectories(tmp.resolve("lib/node_modules/npm/bin"));
+        Path cli = Files.writeString(lib.resolve("npm-cli.js"), "#!/usr/bin/env node\n");
+        Path bin = Files.createDirectories(tmp.resolve("bin2"));
+        Path npm = Files.createSymbolicLink(bin.resolve("npm"), cli);
+        Path node = bin.resolve("node");
+        assertThat(Scaffold.packCommand(node, npm, "create-joust@1.0.0")).containsExactly(node.toString(),
+                cli.toRealPath().toString(), "pack", "--workspaces=false", "--loglevel=warn", "create-joust@1.0.0");
     }
 }

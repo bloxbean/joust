@@ -41,6 +41,28 @@ if command -v ruby >/dev/null; then
 else
   echo "ruby not found: syntax check skipped" >&2
 fi
+printf 'class Joust < Formula\nend\n' > "$tmp/noversion.rb"
+if "$f" current "$tmp/noversion.rb" 2>/dev/null; then fail "current accepted a formula without a version"; fi
+# The workflow's decision, as the homebrew job runs it (a top-level script under set -e, as a workflow step is): an
+# unknown current version must stop it.
+cat > "$tmp/decide.sh" <<'SH'
+set -euo pipefail
+f=$1; formula=$2; version=$3
+current=$(bash "$f" current "$formula")
+if [[ -n "$current" ]]; then
+  cmp=$(bash "$f" compare "$version" "$current")
+  if [[ "$cmp" == -1 ]]; then echo skip; exit 0; fi
+fi
+echo write
+SH
+decide() { bash "$tmp/decide.sh" "$f" "$@"; }
+"$f" write 0.2.0-beta1 "$a" "$b" "$c" "$tmp/newer.rb"
+[[ "$(decide "$tmp/newer.rb" 0.1.0-pre1-rc8)" == skip ]] || fail "an older release must not replace a newer formula"
+[[ "$(decide "$tmp/none.rb" 0.1.0-pre1-rc8)" == write ]] || fail "a missing formula is written"
+[[ "$(decide "$tmp/newer.rb" 0.2.0)" == write ]] || fail "a newer release replaces the formula"
+sed -i.bak 's/version "0.2.0-beta1"/version "0.2.0-beta"/' "$tmp/newer.rb"
+if decide "$tmp/newer.rb" 0.1.0-pre1-rc8 >/dev/null 2>&1; then fail "an unknown current version did not stop the job"; fi
+if decide "$tmp/noversion.rb" 0.1.0-pre1-rc8 >/dev/null 2>&1; then fail "a formula without a version did not stop the job"; fi
 if "$f" write 0.1.0-pre1-rc8 nothex "$b" "$c" "$tmp/x.rb" 2>/dev/null; then fail "write accepted a bad hash"; fi
 if "$f" write '0.1.0"' "$a" "$b" "$c" "$tmp/x.rb" 2>/dev/null; then fail "write accepted a bad version"; fi
 echo "homebrew-formula.sh: all checks passed (${#vectors[@]} ordering vectors)"

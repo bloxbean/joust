@@ -61,12 +61,13 @@ export function trusted(dir, env = process.env) {
   }
 }
 
+// Never the filesystem root itself (PR #55 IC5): a project lives in a directory below it.
 function* upwards(start, env) {
   const stop = typeof process.getuid === 'function' ? undefined : resolve(homedir());
-  for (let d = resolve(start); ; d = dirname(d)) {
+  for (let d = resolve(start); dirname(d) !== d; d = dirname(d)) {
     if (!trusted(d, env)) return;
     yield d;
-    if (d === stop || dirname(d) === d) return;
+    if (d === stop) return;
   }
 }
 

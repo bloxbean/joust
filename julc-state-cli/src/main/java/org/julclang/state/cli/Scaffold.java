@@ -35,7 +35,10 @@ final class Scaffold {
             "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void", "volatile",
             "while", "true", "false", "null", "var", "yield", "record", "sealed", "permits", "non-sealed", "when",
             "module", "open", "exports", "requires", "uses", "provides", "to", "with", "opens", "transitive");
-    static final Pattern IDENT = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*");
+    /** A package segment Java and .jsc both accept: a letter, then letters, digits or '_' (no '$', no lone '_'). */
+    static final Pattern IDENT = Pattern.compile("[A-Za-z][A-Za-z0-9_]*");
+    /** A local repository for CI: a file: URL with a plain path, nothing Groovy could read as code (PR #55 IS1). */
+    static final Pattern REPOSITORY = Pattern.compile("file:/[A-Za-z0-9._~+/-]+");
     static final Pattern EXACT_VERSION = Pattern.compile("create-joust@" + Locator.VERSION.pattern());
 
     /** What the user asked for, before any check. */
@@ -72,8 +75,9 @@ final class Scaffold {
         if (!gradle && r.joustRepository() != null) throw new Refused("--joust-repository is for -t gradle only");
         if (gradle) checkPackage(pkg(r));
         if (r.createJoust() != null) checkCreateJoust(r.createJoust());
-        if (r.joustRepository() != null && !r.joustRepository().matches("file:/\\S+")) {
-            throw new Refused("--joust-repository takes a file: URL (a local repository; for CI)");
+        if (r.joustRepository() != null && !REPOSITORY.matcher(r.joustRepository()).matches()) {
+            throw new Refused("--joust-repository takes a file: URL of a local directory, made of letters, digits and"
+                    + " . _ ~ + - / only (for CI)");
         }
         Path target = sys.cwd().resolve(r.dir()).normalize();
         if (Files.exists(target)) {
@@ -130,7 +134,7 @@ final class Scaffold {
         boolean jsc = lang(r).equals("jsc");
         String contract = (jsc ? "src/main/jsc/" : "src/main/java/") + path + "/Counter." + (jsc ? "jsc" : "java");
         Map<String, String> vars = new LinkedHashMap<>();
-        vars.put("name", projectName(target));
+        vars.put("name", groovy(projectName(target)));
         vars.put("version", versions.cli());
         vars.put("package", pkg);
         vars.put("path", path);
@@ -168,7 +172,7 @@ final class Scaffold {
             if (versions.snapshot()) repos.add(SNAPSHOTS);
         }
         List<String> lines = new ArrayList<>();
-        for (String url : repos) lines.add("                maven { url = uri('" + url + "') }");
+        for (String url : repos) lines.add("                maven { url = uri('" + groovy(url) + "') }");
         return "        exclusiveContent {\n"
                 + "            forRepositories(\n" + String.join(",\n", lines) + "\n            )\n"
                 + "            filter {\n"
@@ -182,7 +186,7 @@ final class Scaffold {
         if (r.joustRepository() != null) {
             // CI only (ADR-0017 D8): this build's JOUST modules, and nothing else, come from the staged repository.
             b.append("    exclusiveContent {\n")
-                    .append("        forRepository { maven { url = uri('").append(r.joustRepository()).append("') } }\n")
+                    .append("        forRepository { maven { url = uri('").append(groovy(r.joustRepository())).append("') } }\n")
                     .append("        filter {\n")
                     .append("            includeGroup 'org.julclang.joust'\n")
                     .append("            includeModuleByRegex 'org\\\\.julclang', 'julc-state-.*'\n")
@@ -203,6 +207,12 @@ final class Scaffold {
     }
 
     static final Pattern VAR = Pattern.compile("@@([a-zA-Z]+)@@");
+
+    /** {@code s} inside a single-quoted Groovy string: backslashes and quotes escaped, and no line breaks. */
+    static String groovy(String s) {
+        if (s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0) throw new IllegalArgumentException("line break in " + s);
+        return s.replace("\\", "\\\\").replace("'", "\\'");
+    }
 
     private static byte[] text(String template, Map<String, String> vars) {
         String s = new String(resource("templates/gradle/" + template), StandardCharsets.UTF_8);
@@ -253,10 +263,30 @@ final class Scaffold {
         return Optional.of("create-joust@" + versions.cli());
     }
 
-    /** D3 step 3: npm only fetches the published tarball into the private directory (no scripts run). */
-    static List<String> packCommand(Path npm, String spec) {
-        // --workspaces=false: an ancestor package.json whose workspaces include tmp must not become the prefix (C21).
-        return List.of(npm.toString(), "pack", "--workspaces=false", "--loglevel=warn", spec);
+    /**
+     * D3 step 3: npm only fetches the published tarball into the private directory (no scripts run). When {@code npm}
+     * is a link to npm's JavaScript entry point (as installed by Node's packages and Homebrew), the CLI runs that file
+     * with its own {@code node}, so no shebang chooses the interpreter (PR #55 IS7); otherwise it runs {@code npm}.
+     * {@code --workspaces=false}: an ancestor package.json whose workspaces include tmp must not become the prefix.
+     */
+    static List<String> packCommand(Path node, Path npm, String spec) {
+        List<String> args = List.of("pack", "--workspaces=false", "--loglevel=warn", spec);
+        List<String> cmd = new ArrayList<>();
+        Path js = null;
+        try {
+            Path real = npm.toRealPath();
+            if (real.getFileName().toString().endsWith(".js")) js = real;
+        } catch (IOException ignored) {
+            // run npm itself
+        }
+        if (js != null) {
+            cmd.add(node.toString());
+            cmd.add(js.toString());
+        } else {
+            cmd.add(npm.toString());
+        }
+        cmd.addAll(args);
+        return cmd;
     }
 
     /** D3 step 5: the extracted initializer, run by the {@code node} the CLI resolved (never via PATH or a shebang). */
@@ -288,7 +318,7 @@ final class Scaffold {
             Files.writeString(tmp.resolve("package.json"), "{\"name\": \"joust-new\", \"private\": true}\n");
             Path tgz;
             if (spec.startsWith("create-joust@")) {
-                int code = sys.run(packCommand(npm, spec), tmp, childEnv(sys.env()));
+                int code = sys.run(packCommand(node, npm, spec), tmp, childEnv(sys.env()));
                 if (code != 0) {
                     sys.err().println("joust new: npm pack " + spec + " failed (" + code + ")");
                     return code;

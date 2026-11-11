@@ -45,19 +45,38 @@ final class Locator {
     Locator(Sys sys) {
         this.sys = sys;
         for (String d : sys.env().getOrDefault("JOUST_SAFE_DIRS", "").split(File.pathSeparator)) {
-            if (!d.isBlank() && Path.of(d).isAbsolute()) safe.add(Path.of(d).normalize());
+            if (d.isBlank() || !Path.of(d).isAbsolute()) continue;
+            safe.add(Path.of(d).normalize());
+            try {
+                safe.add(Path.of(d).toRealPath());       // /tmp/x and /private/tmp/x alike (macOS)
+            } catch (IOException ignored) {
+                // a listed directory that does not exist trusts nothing
+            }
         }
     }
 
     /** Whether the walk may look at {@code dir}: the user owns it, or listed it in {@code JOUST_SAFE_DIRS}. */
     boolean trusted(Path dir) {
         if (safe.contains(dir.normalize())) return true;
+        if (!safe.isEmpty()) {
+            try {
+                if (safe.contains(dir.toRealPath())) return true;
+            } catch (IOException ignored) {
+                // not resolvable: compared as written only
+            }
+        }
+        if (sys.user().isEmpty()) return true;       // a platform without uids (not POSIX)
         return sys.owner(dir).map(o -> o.equals(sys.user())).orElse(true);
+    }
+
+    /** The walk never inspects the filesystem root itself (PR #55 IC5): a project lives in a directory below it. */
+    static boolean isRoot(Path d) {
+        return d.getParent() == null;
     }
 
     Project locate() {
         Path dir = sys.cwd().normalize();
-        for (Path d = dir; d != null; d = d.getParent()) {
+        for (Path d = dir; d != null && !isRoot(d); d = d.getParent()) {
             if (!trusted(d)) return new Project(Kind.NONE, null, markerAtOrAbove(d) ? Optional.of(d) : Optional.empty());
             if (isNpmRoot(d)) return new Project(Kind.NPM, d, Optional.empty());
             if (isGradle(d)) return new Project(Kind.GRADLE, d, Optional.empty());
@@ -65,9 +84,12 @@ final class Locator {
         return new Project(Kind.NONE, null, Optional.empty());
     }
 
-    private boolean markerAtOrAbove(Path d) {
-        for (Path p = d; p != null; p = p.getParent()) {
-            if (isNpmRoot(p) || isGradle(p)) return true;
+    /** Whether a marker file exists at or above an untrusted directory: names only, nothing is read (PR #55 IF4). */
+    private static boolean markerAtOrAbove(Path d) {
+        for (Path p = d; p != null && !isRoot(p); p = p.getParent()) {
+            if (Files.exists(p.resolve("joust.config.json")) || Files.exists(p.resolve("package.json")) || isGradle(p)) {
+                return true;
+            }
         }
         return false;
     }
@@ -98,7 +120,7 @@ final class Locator {
 
     /** The Gradle build root above a build file's directory: the nearest trusted directory with a settings file. */
     Path gradleBuildRoot(Path buildDir) {
-        for (Path d = buildDir; d != null && trusted(d); d = d.getParent()) {
+        for (Path d = buildDir; d != null && !isRoot(d) && trusted(d); d = d.getParent()) {
             if (hasSettings(d)) return d;
         }
         return buildDir;
@@ -110,7 +132,7 @@ final class Locator {
      * {@code npm link}). Its {@code bin.joust} must stay inside the package.
      */
     Optional<Npm> resolveNpm(Path root) {
-        for (Path d = root; d != null && trusted(d); d = d.getParent()) {
+        for (Path d = root; d != null && !isRoot(d) && trusted(d); d = d.getParent()) {
             Path pkgDir = d.resolve("node_modules").resolve("@julclang").resolve("joust");
             Optional<Map<String, Object>> pkg = Json.readSmall(pkgDir.resolve("package.json"));
             if (pkg.isEmpty()) continue;

@@ -293,4 +293,57 @@ class JoustMainTest {
                         + "\",\"input\":\"stdin text\",\"deferred\":null}");
         assertThat(Files.readString(s.realErr.toPath())).isEqualTo("to stderr\n");
     }
+
+    @Test
+    void malformedOrNumericManifestFieldsAreNotMarkersOrBins() throws IOException {
+        Path d = Files.createDirectories(tmp.resolve("num"));
+        Files.writeString(d.resolve("package.json"), "{\"dependencies\": {\"@julclang/joust\": +}}");
+        Files.writeString(d.resolve("settings.gradle"), "");
+        exe(d.resolve("gradlew"));
+        FakeSys s = sys(d);
+        run(s, "build");
+        assertThat(s.runs.get(0).command().get(0)).endsWith("gradlew");   // Gradle, not npm: the JSON is malformed
+
+        Path root = npmProject("numbin", "0.1.0-pre1-rc7");
+        Files.writeString(root.resolve("node_modules/@julclang/joust/package.json"), "{\"bin\": {\"joust\": 0}}");
+        Files.writeString(root.resolve("node_modules/@julclang/joust/0"), "x");
+        FakeSys n = sys(root);
+        assertThat(run(n, "build")).isEqualTo(1);
+        assertThat(n.runs).isEmpty();
+        assertThat(Json.parse("[1, -2.5e3, 0]")).isEqualTo(List.of(new java.math.BigDecimal("1"),
+                new java.math.BigDecimal("-2.5e3"), new java.math.BigDecimal("0")));
+        for (String bad : List.of("+1", "01", "1.", ".5", "1e", "--1")) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> Json.parse(bad)).as(bad)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
+    void theFilesystemRootIsNeverAProject() {
+        FakeSys s = sys(Path.of("/"));
+        assertThat(new Locator(s).locate().kind()).isEqualTo(Locator.Kind.NONE);
+        assertThat(Locator.isRoot(Path.of("/"))).isTrue();
+    }
+
+    @Test
+    void uidsAndSafeDirsByRealPath() throws IOException {
+        Path foreign = npmProject("shared2", "0.1.0-pre1-rc7");
+        Path mine = Files.createDirectories(foreign.resolve("mine"));
+        FakeSys t = sys(mine);
+        t.owners = p -> Optional.of(p.startsWith(mine) ? "me" : "1001");
+        Path link = Files.createSymbolicLink(tmp.resolve("alias"), foreign);
+        t.env.put("JOUST_SAFE_DIRS", link.toString());           // listed through a symlink: still trusted
+        run(t, "build");
+        assertThat(t.runs).hasSize(1);
+        assertThat(Sys.system().user()).matches("[0-9]*");        // a uid (empty where there is none)
+    }
+
+    @Test
+    void helpForAProjectOnlyCommandPointsToTheProjectsCli() throws IOException {
+        Path root = npmProject("hint", "0.1.0-pre1-rc7");
+        FakeSys s = sys(root);
+        assertThat(run(s, "frobnicate", "--help")).isZero();
+        assertThat(s.outText()).contains("npx joust frobnicate --help");
+        assertThat(s.runs).isEmpty();
+    }
 }

@@ -26,14 +26,30 @@ final class Json {
         this.s = s;
     }
 
-    /** The JSON object in {@code file}, if it is a regular file (not a FIFO or device) of at most 64 KiB that parses. */
+    /**
+     * The JSON object in {@code file}, if it is a regular file (not a FIFO or device) of at most 64 KiB that parses.
+     * Java cannot open without blocking, so the open and read run on a virtual thread for at most two seconds: a FIFO
+     * swapped in after the checks counts as absent instead of hanging the CLI (PR #55 IC2).
+     */
     @SuppressWarnings("unchecked")
     static Optional<Map<String, Object>> readSmall(Path file) {
         try {
             if (!Files.isRegularFile(file) || Files.size(file) > MAX_BYTES) return Optional.empty();
+            java.util.concurrent.FutureTask<byte[]> read = new java.util.concurrent.FutureTask<>(() -> {
+                try (InputStream in = Files.newInputStream(file)) {
+                    return in.readNBytes(MAX_BYTES + 1);
+                }
+            });
+            Thread.ofVirtual().start(read);
             byte[] bytes;
-            try (InputStream in = Files.newInputStream(file)) {
-                bytes = in.readNBytes(MAX_BYTES + 1);
+            try {
+                bytes = read.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException e) {
+                read.cancel(true);
+                return Optional.empty();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return Optional.empty();
             }
             if (bytes.length > MAX_BYTES) return Optional.empty();
             Object v = parse(new String(bytes, StandardCharsets.UTF_8));
@@ -144,11 +160,16 @@ final class Json {
         }
     }
 
+    static final java.util.regex.Pattern NUMBER =
+            java.util.regex.Pattern.compile("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?");
+
+    /** A JSON number (RFC 8259 grammar), as a {@link java.math.BigDecimal}: never a string. */
     private Object number() {
         int start = i;
         while (i < s.length() && "+-0123456789.eE".indexOf(s.charAt(i)) >= 0) i++;
-        if (start == i) throw error("unexpected character");
-        return s.substring(start, i);
+        String n = s.substring(start, i);
+        if (!NUMBER.matcher(n).matches()) throw error("not a number: " + n);
+        return new java.math.BigDecimal(n);
     }
 
     private Object literal(String word, Object v) {

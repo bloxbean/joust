@@ -43,10 +43,12 @@ print(cmp(sys.argv[1], sys.argv[2]))
 PY
 }
 
-current() {
-  local f=$1
-  [[ -f "$f" ]] || { echo ""; return 0; }
-  sed -nE 's/^[[:space:]]*version "([^"]*)"[[:space:]]*$/\1/p' "$f" | head -n 1
+current() {   # "" only when the formula does not exist; a formula without a readable version is an error
+  local f=$1 v
+  [[ -e "$f" ]] || { echo ""; return 0; }
+  v=$(sed -nE 's/^[[:space:]]*version "([^"]*)"[[:space:]]*$/\1/p' "$f" | head -n 1)
+  [[ -n "$v" ]] || { echo "no version in $f" >&2; return 2; }
+  echo "$v"
 }
 
 write() {

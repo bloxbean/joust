@@ -12,6 +12,7 @@
 // commands run at the npm project's root, and by the project's own @julclang/joust: a global or other copy hands over.
 import { spawnSync } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
+import { constants } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { locate, resolveJoust } from '../src/project.js';
 
@@ -66,17 +67,31 @@ function newCommand(rest) {
 
 async function project() {
   const p = locate();
+  if (p?.kind === 'gradle') {
+    console.error(`joust: ${p.root} is a Gradle build; this is the npm joust. Use ./gradlew (or the native joust:`
+      + ' brew install bloxbean/tap/joust).');
+    return 2;
+  }
   if (p?.kind === 'npm') {
     const own = resolveJoust(p.root);
-    if (own && own.bin !== SELF) {
+    if (!own) {
+      // The project chooses the implementation (ADR-0017 D4): never this copy in its place (PR #55 IC3).
+      console.error(`joust: ${p.root} is an npm project without @julclang/joust installed; run npm install first`
+        + ` (then joust ${cmd}, or npm run <script>)`);
+      return 1;
+    }
+    if (own.bin !== SELF) {
       if (handedOver) {
         console.error(`joust: handed over to ${SELF}, but ${p.root} resolves to ${own.bin}; not handing over again`);
         return 1;
       }
+      // Ctrl-C reaches the child too: this process waits for it and returns its status (128 + n for a signal).
+      process.on('SIGINT', () => {});
       const r = spawnSync(process.execPath, [own.bin, ...args], {
         cwd: p.root, stdio: 'inherit', env: { ...process.env, JOUST_DEFERRED: own.bin },
       });
-      return r.status ?? 1;
+      if (r.status !== null) return r.status;
+      return r.signal ? 128 + (constants.signals[r.signal] ?? 0) : 1;
     }
     process.chdir(p.root);   // as npm run: joust.config.json and contracts/ are the root's
   }
