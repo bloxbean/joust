@@ -1,6 +1,6 @@
 ---
 title: Architecture decisions
-description: Every JOUST architecture decision record (ADR-0001 to ADR-0016), with its status, the decision in one paragraph and the guide that covers it.
+description: Every JOUST architecture decision record (ADR-0001 to ADR-0017), with its status, the decision in one paragraph and the guide that covers it.
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
@@ -291,6 +291,22 @@ fixtures (M0), the packages and local registry (M2), feature parity through npm 
 
 Covered in: [The joust CLI and projects](/apps/cli-and-projects/), [Pages](/apps/pages/),
 [Networks and chain providers](/apps/networks-and-providers/), [MerkleMap mirrors](/apps/map-mirrors/).
+
+### ADR-0017: One `joust new` for Java and npm
+
+[`0017-joust-cli-and-gradle-plugin.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0017-joust-cli-and-gradle-plugin.md)
+· Proposed (r5, approved by review); implemented, not yet in a release
+
+Creating a JOUST app is one command, `joust new`, for a Java/Gradle project or (through `create-joust`) an npm one. A
+**Gradle plugin**, `org.julclang.joust`, does what every project's `build.gradle` used to spell out (the processors, the
+on-chain sources, `.jsc`, test settings) at one version. A **native `joust`** (GraalVM 25.3) shares its name and
+commands with the npm CLI: `new`, `version` and `help` are its own, and every other command in an npm project goes to
+**the project's own** `@julclang/joust`, so the two can never disagree. npm templates are fetched with `npm pack` and run
+by the CLI's own `node`, isolated from the directory's npm configuration. Release archives with provenance, and a
+Homebrew formula gated on repository settings.
+
+Covered in: [Quick start: Java & Gradle](/start/quick-start-java/#create-it-with-joust-new),
+[the native `joust`](/reference/joust-cli/#the-native-joust).
 
 ## Research behind the ADRs
 

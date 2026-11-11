@@ -15,8 +15,9 @@ through [SECURITY.md](SECURITY.md) instead, never a public issue.
 - **Node.js 22+** for the JavaScript packages under `js/` and the dApp example.
 - **Optional:** [Yaci DevKit](https://github.com/bloxbean/yaci-devkit) for the end-to-end tests, with Yaci Store on
   `localhost:8080` and the admin API on `:10000`. Tests tagged `devnet` skip themselves when it isn't running.
-- **Optional:** Oracle GraalVM 25 with Web Image, and Binaryen, to rebuild the Wasm engines
-  (`-PgraalvmHome=<path>`). Not needed for anything else.
+- **Optional:** Oracle GraalVM 25.3 with Web Image, and Binaryen, to rebuild the Wasm engines
+  (`-PgraalvmHome=<path>`), and to build the native `joust` (`GRAALVM_HOME=<path> ./gradlew
+  :julc-state-cli:nativeCompile`). Not needed for anything else.
 
 ## Build and test
 

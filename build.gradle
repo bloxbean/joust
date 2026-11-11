@@ -52,7 +52,7 @@ nmcpAggregation {
 
 // The modules published to Maven Central and the BloxBean Maven repository; examples are never published.
 def publishedModules = ['julc-state-api', 'julc-state-processor', 'julc-state-runtime', 'julc-state-testkit',
-                        'julc-state-verifier', 'julc-state-dsl', 'julc-state-server']
+                        'julc-state-verifier', 'julc-state-dsl', 'julc-state-server', 'julc-state-gradle-plugin']
 
 subprojects {
     apply plugin: 'java-library'
@@ -156,8 +156,10 @@ configure(subprojects.findAll { it.name in publishedModules }) { candidate ->
     // Gradle module metadata (.module) stays: release-ops' verify-maven-staging.py (shared, kept identical across
     // repositories) requires it for every jar module, in the snapshot and release workflows alike.
 
+    // java-gradle-plugin publishes its own pluginMaven and plugin-marker publications (ADR-0017 D1; as JuLC): the
+    // plugin module decorates those, and gets no mavenJava publication, which would overwrite pluginMaven.
     afterEvaluate {
-        publishing {
+        if (!candidate.plugins.hasPlugin('java-gradle-plugin')) publishing {
             publications {
                 mavenJava(MavenPublication) {
                     from components.java

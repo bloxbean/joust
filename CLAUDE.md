@@ -31,6 +31,15 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - `julc-state-toolchain`: ADR-0015's toolchain. `Toolchain.build(files)` compiles `.java`/`.jsc` without Gradle,
   through JuLC's embedded javac and the shared `JoustGenerators`; `toolchainWasm` builds the Web Image (`joust.build`
   in Node), and `toolchainWasmTest` checks it against the Gradle outputs.
+- `julc-state-gradle-plugin` (`org.julclang.joust`, ADR-0017 D1): a consumer project's whole JOUST setup at one version
+  (versions baked from this build: effective `project.version`, JuLC, CCL). Published via `java-gradle-plugin`'s
+  `pluginMaven` + marker (the root skips `mavenJava` for it); no dependencies beyond the Gradle API.
+- `julc-state-cli` (the native `joust`, ADR-0017): `joust new` (Gradle templates in `src/main/resources/META-INF/joust/
+  templates`, npm ones via `npm pack create-joust@<v>` + Java tar extraction + the CLI's own `node`), and hand-over of
+  project commands to the npm project's own `@julclang/joust` or the Gradle build's wrapper. Native image:
+  `GRAALVM_HOME=<graalvm 25.3> ./gradlew :julc-state-cli:nativeCompile`; end to end:
+  `.github/scripts/joust-cli-e2e.sh`. The npm side of the shared vocabulary is `js/joust/bin/joust.js` +
+  `js/joust/src/project.js`.
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
 - `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees,locker,registry,wallet,dapp}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
   DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D

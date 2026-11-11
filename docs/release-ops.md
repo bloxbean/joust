@@ -34,9 +34,11 @@ version bump and an approval. Never push a `v*` tag by hand.
 
 ## What JOUST publishes
 
-**Maven** (`org.julclang`, `publishedModules` in `build.gradle`): seven modules, each with a jar, sources, javadoc,
+**Maven** (`org.julclang`, `publishedModules` in `build.gradle`): eight modules, each with a jar, sources, javadoc,
 POM and Gradle module file, all signed. `julc-state-api` adds its `onchain` jar (the on-chain sources for consumers'
-annotation processor path).
+annotation processor path). `julc-state-gradle-plugin` is published by `java-gradle-plugin` (its `pluginMaven`
+publication, not `mavenJava`) together with the plugin marker `org.julclang.joust:org.julclang.joust.gradle.plugin`,
+which `bloxbean-maven.sh discover` counts on top of the projects (ADR-0017 D1).
 
 | Module | |
 |---|---|
@@ -47,8 +49,9 @@ annotation processor path).
 | `julc-state-verifier` | the MerkleMap verifier |
 | `julc-state-dsl` | the `.jsc` DSL |
 | `julc-state-server` | the prepare service |
+| `julc-state-gradle-plugin` | the Gradle plugin `org.julclang.joust` (+ its plugin marker) |
 
-The examples, `julc-state-toolchain` and `julc-state-runtime-wasm` are built but never published to Maven;
+The examples, `julc-state-toolchain`, `julc-state-runtime-wasm` and `julc-state-cli` are built but never published to Maven;
 `verifyMavenReleasePublicationScope` (run by CI and gating `nmcpZipAggregation` and the portal uploads) fails if the
 modules that publish differ from that list.
 
@@ -63,6 +66,21 @@ engines (ADR-0015) with Oracle GraalVM 25 (Web Image, `--tool:svm-wasm`) and Bin
 `:julc-state-runtime-wasm:runtimeWasm` (into `@julclang/joust-runtime`) and `:julc-state-toolchain:toolchainWasm`
 (into `@julclang/joust`).
 
+**The native `joust`** (ADR-0017 D6, D7): `julc-state-cli` built with GraalVM 25.3 for macOS arm64, Linux x86_64 and
+Linux arm64, as release archives on the GitHub release, with `joust-<v>-SHA256SUMS.txt` and a build-provenance
+attestation per archive; and `Formula/joust.rb` in `bloxbean/homebrew-tap`. The jobs of `release.yml`:
+
+| Job | Runs | What it does |
+|---|---|---|
+| `cli` | first, before `maven` | builds and smoke-tests the binary on each platform; a failure stops the release before anything is published |
+| `cli-consumer` | after `maven` and `npm`, when CLI assets are allowed | `joust new` (java, jsc) with the unmodified templates, built from the public repositories |
+| `cli-assets` | after `github-release` and `cli-consumer` | attaches the archives (never replacing one: an existing asset must equal this run's build) and the sums; attests every archive |
+| `homebrew` | after `cli-assets`, with `homebrew_publish` | writes the formula with `.github/scripts/homebrew-formula.sh` and pushes it (environment `release-staging`, secret `JOUST_HOMEBREW_TAP_TOKEN`); never moves the formula to an earlier version |
+
+A failing `cli-consumer` leaves the GitHub release without CLI archives; re-running the failed jobs attaches them when the
+failure was transient (a repository not yet serving the files). Users can check an archive with `shasum -a 256 -c
+joust-<v>-SHA256SUMS.txt` and `gh attestation verify joust-<v>-<platform>.zip -R bloxbean/joust`.
+
 ## Release flags (`gradle.properties`)
 
 Each must be `true` or `false`; `release.yml` refuses a missing or misspelled flag before it builds anything.
@@ -72,7 +90,8 @@ Each must be `true` or `false`; `release.yml` refuses a missing or misspelled fl
 | `maven_central_publish` | stage a `USER_MANAGED` Central deployment; a release owner publishes it (`publish-central.yml` or the Central Portal) |
 | `bloxbean_repo_publish` | publish to `https://repo.bloxbean.org/maven/releases`, public and permanent at once |
 | `npm_publish` | publish the npm packages; `false` runs `npm publish --dry-run` only |
-| `github_release` | create the GitHub release (pre-release for versions with a suffix); `false` for rehearsals |
+| `github_release` | create the GitHub release (pre-release for versions with a suffix); `false` for rehearsals. The native `joust` archives are attached only when `bloxbean_repo_publish` and `npm_publish` are `true` too (its `joust new` needs both) |
+| `homebrew_publish` | update `Formula/joust.rb` in `bloxbean/homebrew-tap`; needs `github_release`, `bloxbean_repo_publish` and `npm_publish`. **Keep `false`** until an admin has: added the `release-staging` secret `JOUST_HOMEBREW_TAP_TOKEN` (a fine-grained token, `contents: write` on the tap only); removed joust from the organization secrets `HOMEBREW_TAP_TOKEN` and `NPM_TOKEN`; activated the `V_tagrule` and `protected-branches` rulesets; and required a reviewer on the `release` environment (ADR-0017 D10; release-ops' `verify-repo-settings.sh` checks the settings) |
 | `allow_snapshot_dependencies` | let a release depend on a SNAPSHOT pin in `gradle/libs.versions.toml`, with a warning. **Rehearsals only:** with it `true`, every publish flag above must be `false` (Central refuses snapshot dependencies, and a release naming a snapshot breaks once the snapshot is pruned) |
 
 `v0.1.0-pre1-rc3` and `-rc4` failed at "Validate tag and read release flags" because `allow_snapshot_dependencies`
@@ -87,7 +106,8 @@ the JuLC version it names is on Central too.
 ## Rehearsal
 
 As release-ops `docs/07-releasing.md` §2, with JOUST's flags: a PR with a fresh `-devN` version,
-`maven_central_publish=false`, `bloxbean_repo_publish=false`, `npm_publish=false`, `github_release=false`. It builds,
+`maven_central_publish=false`, `bloxbean_repo_publish=false`, `npm_publish=false`, `github_release=false`,
+`homebrew_publish=false`. It builds the native `joust` on every platform,
 stages, signs and verifies the bundle, builds the engines and runs `npm publish --dry-run`, and publishes nothing.
 (With `maven_central_publish=true` it stages a Central deployment: check it is validated, then drop it in the portal.
 `bloxbean_repo_publish=true` would make the `-devN` version public and permanent.)
@@ -132,7 +152,13 @@ owner's approval in `release`; release-ops `docs/12` §5).
   and `verifyMavenReleasePublicationScope`;
 - `devnet`: the DevKit tests (`@Tag("devnet")`), sharded by `.github/ci/devnet-shards.txt`, each shard on its own runner
   with its own Yaci DevKit (`.github/ci/devkit.sh`);
-- `plan`: checks every module with DevKit tests is in exactly one shard.
+- `plan`: checks every module with DevKit tests is in exactly one shard;
+- `engines`: the npm packages' Wasm engines (GraalVM 25.3 Web Image) and the `create-joust` templates built with them;
+- `cli`: the native `joust` (GraalVM 25.3 native image) and `.github/scripts/joust-cli-e2e.sh` on it: generated Gradle
+  projects built from this commit's staged modules and plugin only, `joust new -t node` isolated from hostile npm
+  configuration, and an npm project built through the native `joust` with this commit's engines (ADR-0017 D8). The
+  `build` job also runs the npm `joust` command-line tests, `homebrew-formula-test.sh`, `release-flags-test.sh` and the
+  Gradle wrapper validation.
 
 `release.yml` does not run the DevKit tests (they skip themselves without DevKit): check that `build.yml` passed on the
 version bump's commit before approving its tag.

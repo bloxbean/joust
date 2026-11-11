@@ -1,0 +1,63 @@
+plugins {
+    id 'application'
+    id 'org.graalvm.buildtools.native' version '1.1.18'
+}
+
+description = 'joust: the native JOUST command line (ADR-0017 D2): joust new, and the hand-over to a project\'s own build'
+
+application {
+    mainClass = 'org.julclang.state.cli.JoustMain'
+    applicationName = 'joust'
+}
+
+dependencies {
+    implementation 'info.picocli:picocli:4.7.7'
+    annotationProcessor 'info.picocli:picocli-codegen:4.7.7'
+}
+
+tasks.named('compileJava', JavaCompile) {
+    options.compilerArgs += ["-Aproject=${project.group}/${project.name}"]
+}
+
+// The CLI's effective version (commit-qualified for snapshots), and the Gradle wrapper the generated projects get: the
+// one this repository builds with, so a template never names a Gradle the build has not run (ADR-0017 D3).
+def generated = layout.buildDirectory.dir('generated/joust-cli')
+def cliResources = tasks.register('cliResources') {
+    def values = [version: project.version.toString()]
+    def wrapper = rootProject.files('gradlew', 'gradle/wrapper/gradle-wrapper.jar',
+            'gradle/wrapper/gradle-wrapper.properties')
+    inputs.properties(values)
+    inputs.files(wrapper)
+    outputs.dir(generated)
+    doLast {
+        def base = generated.get().dir('META-INF/joust').asFile
+        project.delete(base)
+        new File(base, 'templates/wrapper').mkdirs()
+        new File(base, 'cli.properties').text = values.collect { k, v -> "$k=$v" }.join('\n') + '\n'
+        def props = rootProject.file('gradle/wrapper/gradle-wrapper.properties').text
+        if (!props.contains('distributionSha256Sum=')) {
+            throw new GradleException('gradle/wrapper/gradle-wrapper.properties needs a distributionSha256Sum: generated projects pin their Gradle')
+        }
+        wrapper.each { f -> project.copy { from f; into new File(base, 'templates/wrapper') } }
+    }
+}
+sourceSets.main.resources.srcDir(files(generated).builtBy(cliResources))
+
+tasks.named('test', Test) {
+    systemProperty 'joust.version', project.version.toString()
+}
+
+graalvmNative {
+    // GraalVM 25.3 (as the engines job, ADR-0017 D2): GRAALVM_HOME, or -PgraalvmHome as for the Wasm engines.
+    toolchainDetection = false
+    binaries {
+        main {
+            imageName = 'joust'
+            sharedLibrary = false
+            mainClass = application.mainClass.get()
+            buildArgs.addAll(['--no-fallback', '-H:+ReportExceptionStackTraces',
+                              '-H:IncludeResources=META-INF/joust/.*'])
+        }
+    }
+    metadataRepository { enabled = false }
+}

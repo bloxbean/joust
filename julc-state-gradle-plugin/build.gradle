@@ -1,0 +1,77 @@
+plugins {
+    id 'java-gradle-plugin'
+}
+
+description = 'JOUST Gradle plugin (org.julclang.joust): the processor path, .jsc, compile and test settings (ADR-0017 D1)'
+
+// Gradle 9's daemon runs on Java 17+; the projects the plugin configures compile with the 25 toolchain.
+tasks.named('compileJava', JavaCompile) {
+    options.release = 17
+}
+
+dependencies {
+    testImplementation gradleTestKit()
+}
+
+tasks.named('test', Test) {
+    systemProperty 'joust.version', project.version.toString()
+}
+
+gradlePlugin {
+    plugins {
+        joust {
+            id = 'org.julclang.joust'
+            implementationClass = 'org.julclang.state.gradle.JoustPlugin'
+            displayName = 'JOUST'
+            description = 'Configures a JOUST project: the JOUST and JuLC processors, the on-chain sources, .jsc, tests'
+        }
+    }
+}
+
+// The versions the plugin adds: this build's effective version (commit-qualified for snapshots) and the JuLC and
+// cardano-client-lib versions it was built with (ADR-0017 D1, I6).
+def versionsDir = layout.buildDirectory.dir('generated/joust-versions')
+def joustVersions = tasks.register('joustVersions') {
+    def values = [joust: project.version.toString(),
+                  julc : libs.versions.julc.get(),
+                  ccl  : libs.versions.cardano.client.lib.get()]
+    inputs.properties(values)
+    outputs.dir(versionsDir)
+    doLast {
+        def f = versionsDir.get().file('META-INF/joust/gradle-plugin.properties').asFile
+        f.parentFile.mkdirs()
+        f.text = values.collect { k, v -> "$k=$v" }.join('\n') + '\n'
+    }
+}
+sourceSets.main.resources.srcDir(files(versionsDir).builtBy(joustVersions))
+
+// Every publication java-gradle-plugin creates (the plugin jar and the plugin marker) carries the POM metadata the
+// publication scope check and Central require; the root build gives other modules a mavenJava publication instead.
+afterEvaluate {
+    publishing {
+        publications.withType(MavenPublication).configureEach {
+            pom {
+                name = project.name
+                description = project.description
+                url = 'https://github.com/bloxbean/joust'
+                licenses {
+                    license {
+                        name = 'The MIT License'
+                        url = 'https://opensource.org/licenses/mit-license.php'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'satran004'
+                        name = 'Satya'
+                    }
+                }
+                scm {
+                    connection = 'scm:git:git://github.com/bloxbean/joust.git'
+                    developerConnection = 'scm:git:ssh://git@github.com/bloxbean/joust.git'
+                    url = 'https://github.com/bloxbean/joust'
+                }
+            }
+        }
+    }
+}

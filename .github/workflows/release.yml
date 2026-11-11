@@ -15,8 +15,14 @@ name: Release (Maven artifacts and npm)
 # cardano-client-bindings, mesmo, yaci-devkit and yano), or only checks them (`npm publish --dry-run`) while
 # npm_publish is false in gradle.properties.
 #
-# The GitHub release is a separate job, gated by github_release in gradle.properties. It is the only job with a write
-# token, and it never sees the release secrets.
+# The GitHub release is a separate job, gated by github_release in gradle.properties, and never sees the release secrets.
+#
+# The native joust (ADR-0017 D6, D7, D10): the `cli` job builds it for macOS arm64 and Linux x86_64/arm64 and
+# smoke-tests it before anything is published (maven needs it). After Maven and npm, `cli-consumer` builds the unmodified
+# `joust new` templates against what was just published; `cli-assets` attaches the archives (never replacing one), their
+# sums and provenance attestations to the GitHub release; `homebrew` updates bloxbean/homebrew-tap's Formula/joust.rb,
+# gated by homebrew_publish. CLI archives go out only with github_release, bloxbean_repo_publish and npm_publish all
+# true (.github/scripts/release-flags.sh).
 #
 # No Gradle cache (gradle/actions/setup-gradle) in these jobs: they hold the release secrets and the npm OIDC token, and
 # a cache restored from another run could change what runs next to them (release-ops docs/03 §1).
@@ -37,7 +43,113 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ADR-0017 D6: the native joust, built and smoke-tested on each platform before anything is published. GraalVM 25.3
+  # through the same pinned action as the engines; Gradle on Temurin 25. Read-only token, no secrets, no Gradle cache.
+  cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            label: macos-aarch64
+          - os: ubuntu-22.04
+            label: linux-x86_64
+          - os: ubuntu-22.04-arm
+            label: linux-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    name: cli (${{ matrix.label }})
+    permissions:
+      contents: read
+    env:
+      LABEL: ${{ matrix.label }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up GraalVM 25.3
+        uses: graalvm/setup-graalvm@f70bc8032f90a104502824a54bcb94b6f01715bc # v1.6.8
+        with:
+          version: '25.3'
+          distribution: 'graalvm'
+          set-java-home: 'false'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Validate the tag and the release flags
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          PROPS=$(./gradlew -q properties)
+          VERSION=$(awk '/^version:/ { print $2; exit }' <<< "$PROPS")
+          if [[ "${GITHUB_REF_NAME}" != "v${VERSION}" ]]; then
+            echo "::error::Git tag ${GITHUB_REF_NAME} does not match Gradle version ${VERSION}" >&2
+            exit 1
+          fi
+          flag() { awk -v k="^$1:" '$0 ~ k { print $2; exit }' <<< "$PROPS"; }
+          bash .github/scripts/release-flags.sh "$(flag github_release)" "$(flag bloxbean_repo_publish)" \
+            "$(flag npm_publish)" "$(flag homebrew_publish)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build the native joust
+        run: ./gradlew :julc-state-cli:nativeCompile -PskipSigning --no-daemon --stacktrace
+
+      # D6: the version; joust new for gradle (java and jsc) with the plugin version; joust new -t node with this tag's
+      # create-joust (a local tarball: the npm package is published later, by the npm job).
+      - name: Smoke-test the binary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          B="$PWD/julc-state-cli/build/native/nativeCompile/joust"
+          test "$("$B" --version)" == "joust ${VERSION} (native)"
+          cd "$RUNNER_TEMP"
+          "$B" new g-java
+          "$B" new g-jsc -l jsc -p org.example.counter
+          grep -q "id 'org.julclang.joust' version '${VERSION}'" g-java/build.gradle
+          test -f g-java/src/main/java/app/Counter.java
+          test -f g-jsc/src/main/jsc/org/example/counter/Counter.jsc
+          test -x g-java/gradlew
+          tgz="$RUNNER_TEMP/$(cd "$GITHUB_WORKSPACE/js/create-joust" && npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          "$B" new n-app -t node --create-joust "$tgz"
+          test -f n-app/index.js
+          test -f n-app/contracts/app/Counter.jsc
+
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="joust-${VERSION}-${LABEL}"
+          mkdir -p "$staging"
+          cp julc-state-cli/build/native/nativeCompile/joust julc-state-cli/README.md LICENSE "$staging/"
+          zip -r "joust-${VERSION}-${LABEL}.zip" "$staging"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli-${{ matrix.label }}
+          path: joust-${{ steps.version.outputs.version }}-${{ matrix.label }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
   maven:
+    needs: cli
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     # The signing subkey, Central Portal token and bucket credentials are secrets of this environment, which accepts
@@ -56,6 +168,8 @@ jobs:
       is_final: ${{ steps.version.outputs.is_final }}
       npm_publish: ${{ steps.version.outputs.npm_publish }}
       github_release: ${{ steps.version.outputs.github_release }}
+      cli_assets: ${{ steps.version.outputs.cli_assets }}
+      homebrew_publish: ${{ steps.version.outputs.homebrew }}
     env:
       GROUP_PATH: org/julclang
       BUCKET: ${{ vars.R2_BUCKET }}
@@ -135,6 +249,10 @@ jobs:
           # advertises the tag as a real release. Gating it lets a tag rehearse the whole pipeline and
           # stage Maven Central only.
           GITHUB_RELEASE=$(awk '/^github_release:/ { print $2; exit }' <<< "$PROPS")
+          # ADR-0017 D10: what happens to the native joust (CLI archives, the Homebrew formula), checked here too.
+          HOMEBREW_PUBLISH=$(awk '/^homebrew_publish:/ { print $2; exit }' <<< "$PROPS")
+          bash .github/scripts/release-flags.sh "${GITHUB_RELEASE:-}" "$BLOXBEAN_REPO_PUBLISH" "$NPM_PUBLISH" \
+            "${HOMEBREW_PUBLISH:-}" >> "$GITHUB_OUTPUT"
           {
             echo "version=$VERSION"
             echo "is_final=$IS_FINAL"
@@ -506,7 +624,239 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           name: ${{ needs.maven.outputs.version }}
+          body: >-
+            ${{ needs.maven.outputs.cli_assets == 'true'
+              && 'The native joust (macOS arm64, Linux x86_64 and arm64) is attached by the cli-assets job once the published artifacts have been checked with a generated project.'
+              || 'No native joust archives for this release: they need github_release, bloxbean_repo_publish and npm_publish all true (ADR-0017 D10).' }}
           prerelease: ${{ needs.maven.outputs.is_final != 'true' }}
           # Latest is decided by semantic version and date, so a maintenance release (e.g. 0.7.3 after
           # 0.8.0) does not take the Latest badge.
           make_latest: legacy
+
+  # ADR-0017 D6: the unmodified `joust new` templates, built against what this release just published (BloxBean
+  # repository, Maven Central, npm), before any CLI archive is attached. Read-only token, no secrets, no cache.
+  cli-consumer:
+    needs: [maven, npm, cli]
+    if: needs.maven.outputs.cli_assets == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions: {}
+    env:
+      VERSION: ${{ needs.maven.outputs.version }}
+    steps:
+      - name: Set up JDK 25
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - name: Download the Linux binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli-linux-x86_64
+          path: ${{ runner.temp }}/cli
+
+      # A repository may take a moment to serve new files: up to three attempts, a minute apart.
+      - name: Build the generated projects from the public repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          unzip -q "cli/joust-${VERSION}-linux-x86_64.zip"
+          B="$RUNNER_TEMP/joust-${VERSION}-linux-x86_64/joust"
+          "$B" new g-java
+          "$B" new g-jsc -l jsc
+          for p in g-java g-jsc; do
+            for attempt in 1 2 3; do
+              if (cd "$p" && GRADLE_USER_HOME="$RUNNER_TEMP/gradle-home" ./gradlew build --refresh-dependencies \
+                  --no-daemon --stacktrace); then
+                break
+              fi
+              if [[ $attempt == 3 ]]; then
+                echo "::error::$p does not build from the public repositories" >&2
+                exit 1
+              fi
+              sleep 60
+            done
+          done
+          cmp g-java/build/classes/java/main/META-INF/joust/app.Counter.json \
+            g-jsc/build/classes/java/main/META-INF/joust/app.Counter.json
+
+  # ADR-0017 D6: the archives on the GitHub release, never replaced; SHA256SUMS from the published assets; a provenance
+  # attestation for every final archive on every run. Runs no repository code (no checkout).
+  cli-assets:
+    needs: [maven, github-release, cli, cli-consumer]
+    if: needs.maven.outputs.cli_assets == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      sha-macos-aarch64: ${{ steps.publish.outputs.sha-macos-aarch64 }}
+      sha-linux-x86_64: ${{ steps.publish.outputs.sha-linux-x86_64 }}
+      sha-linux-arm64: ${{ steps.publish.outputs.sha-linux-arm64 }}
+    env:
+      VERSION: ${{ needs.maven.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download the macos-aarch64 archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli-macos-aarch64
+          path: dist
+      - name: Download the linux-x86_64 archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli-linux-x86_64
+          path: dist
+      - name: Download the linux-arm64 archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli-linux-arm64
+          path: dist
+
+      - name: Attach the archives and their sums
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          labels=(macos-aarch64 linux-x86_64 linux-arm64)
+          existing=$(gh release view "$tag" --json assets --jq '.assets[].name')
+          mkdir -p published
+          for l in "${labels[@]}"; do
+            f="joust-${VERSION}-${l}.zip"
+            test -f "dist/$f"
+            if grep -qxF "$f" <<< "$existing"; then
+              gh release download "$tag" --pattern "$f" --dir published
+              if ! cmp -s "dist/$f" "published/$f"; then
+                echo "::error::$f on the release differs from this run's build. Assets are never replaced: delete it" \
+                  "from the release to publish this build's." >&2
+                exit 1
+              fi
+            else
+              gh release upload "$tag" "dist/$f"
+              gh release download "$tag" --pattern "$f" --dir published
+            fi
+            echo "sha-${l}=$(sha256sum "published/$f" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          done
+          sums="joust-${VERSION}-SHA256SUMS.txt"
+          (cd published && sha256sum joust-*.zip) > "$sums"
+          cat "$sums"
+          if grep -qxF "$sums" <<< "$existing"; then
+            gh release download "$tag" --pattern "$sums" --dir old
+            cmp "$sums" "old/$sums"
+          else
+            gh release upload "$tag" "$sums"
+          fi
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: published/joust-*.zip
+
+  # ADR-0017 D7: Formula/joust.rb in bloxbean/homebrew-tap, gated by homebrew_publish. The token is an environment
+  # secret of release-staging (JOUST_HOMEBREW_TAP_TOKEN: a fine-grained token with contents: write on the tap only),
+  # given to the push step alone. The job runs only .github/scripts/homebrew-formula.sh from this repository.
+  homebrew:
+    needs: [maven, cli-assets]
+    if: needs.maven.outputs.homebrew_publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release-staging
+    permissions: {}
+    concurrency:
+      group: homebrew-tap-joust
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ needs.maven.outputs.version }}
+      SHA_MACOS_AARCH64: ${{ needs.cli-assets.outputs.sha-macos-aarch64 }}
+      SHA_LINUX_X86_64: ${{ needs.cli-assets.outputs.sha-linux-x86_64 }}
+      SHA_LINUX_ARM64: ${{ needs.cli-assets.outputs.sha-linux-arm64 }}
+    steps:
+      - name: Check out the formula script
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: joust
+          persist-credentials: false
+
+      - name: Check out the tap
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: bloxbean/homebrew-tap
+          path: tap
+          persist-credentials: false
+
+      - name: Check the published archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash joust/.github/scripts/homebrew-formula.sh check "$VERSION"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}"
+          for pair in "macos-aarch64 $SHA_MACOS_AARCH64" "linux-x86_64 $SHA_LINUX_X86_64" "linux-arm64 $SHA_LINUX_ARM64"; do
+            set -- $pair
+            curl -sSfL -o "$RUNNER_TEMP/$1.zip" "$base/joust-${VERSION}-$1.zip"
+            echo "$2  $RUNNER_TEMP/$1.zip" | sha256sum -c -
+          done
+
+      # No token here: the script runs in a step that cannot see it (PR #55 IS2).
+      - name: Write the formula
+        id: formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=joust/.github/scripts/homebrew-formula.sh
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # A separate assignment, so a version the script cannot read stops the job (set -e; PR #55 IS3).
+          current=$(bash "../$f" current Formula/joust.rb)
+          if [[ -n "$current" ]]; then
+            cmp=$(bash "../$f" compare "$VERSION" "$current")
+            if [[ "$cmp" == -1 ]]; then
+              echo "::notice::The tap has joust $current, later than $VERSION: the formula stays."
+              echo "push=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          bash "../$f" write "$VERSION" "$SHA_MACOS_AARCH64" "$SHA_LINUX_X86_64" "$SHA_LINUX_ARM64" Formula/joust.rb
+          git add Formula/joust.rb
+          if git diff --cached --quiet; then
+            echo "Formula/joust.rb is already at $VERSION."
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -q -m "joust ${VERSION}"
+          echo "push=true" >> "$GITHUB_OUTPUT"
+
+      # Only git runs with the token. A push rejected because another formula moved main is rebased (this commit
+      # touches Formula/joust.rb alone, which only this serialized job writes) and retried.
+      - name: Push the formula
+        if: steps.formula.outputs.push == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.JOUST_HOMEBREW_TAP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$TAP_TOKEN" ]]; then
+            echo "::error::homebrew_publish=true needs the release-staging secret JOUST_HOMEBREW_TAP_TOKEN (ADR-0017 D10)." >&2
+            exit 1
+          fi
+          cd tap
+          for attempt in 1 2 3; do
+            if git push -q "https://x-access-token:${TAP_TOKEN}@github.com/bloxbean/homebrew-tap.git" HEAD:main; then
+              echo "Pushed joust ${VERSION} to bloxbean/homebrew-tap."
+              exit 0
+            fi
+            echo "::warning::Push rejected (attempt $attempt); rebasing on the tap's main and trying again."
+            sleep $((attempt * 5))
+            git fetch -q origin main
+            git rebase -q origin/main
+          done
+          echo "::error::Could not push Formula/joust.rb after three attempts." >&2
+          exit 1
