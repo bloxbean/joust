@@ -149,6 +149,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   One Buffer class in pages: the plugin injects `Buffer` from `@julclang/joust/src/shims/buffer.js` (the polyfill
   plugin's shim bundles a copy; MPF checks instanceof). Worker files are scanned up front (`*.worker.js`), else Vite
   reloads the page when a worker starts; `JOUST_VITE_LOG=info` shows why.
+- `create-joust`: `--template node|web` (default node: `index.js` calls the contract) and `--lang jsc|java` (default
+  jsc). `template/` is the web app with `Counter.java` (what `page.test.js`, `dev.test.js` and `release.yml`'s version
+  rewrite read); `src/scaffold.js` overlays `variants/node` and `variants/jsc` and prunes `package.json`. Both counters
+  must give the same description and client (`js/create-joust/test`, built by CI's engines job).
 - ADR-0015 S1: read record components through `Records.components(type)` (javac does not complete class-file records
   in `getRecordComponents()`). The toolchain lowers `.jsc` with the bare file name (the lowering embeds it). The
   toolchain reads javac's model through JuLC's scoped query `JavacFrontend.attribute(roots, pool, query)` (bloxbean/julc#313):

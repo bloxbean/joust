@@ -149,13 +149,21 @@ above).
 ## `create-joust`
 
 ```sh
-npm create joust@0.1.0-pre1-snapshot [dir]
+npm create joust@0.1.0-pre1-snapshot [dir] -- [--template node|web] [--lang jsc|java]
 ```
 
-Copies the template into `dir` (default `joust-app`), which must be empty or absent, renames `gitignore` to
-`.gitignore` and names the package after the folder. The template: a `Counter` contract, `joust.config.json` for
-DevKit, a page (`page/`) with the Cardano Foundation's connect button and an in-page DevKit key, `vite.config.js`, a
-DevKit test, and the npm scripts listed in the [npm quick start](/start/quick-start-npm/#the-project).
+Writes a new project into `dir` (default `joust-app`), which must be empty or absent, and names the package after the
+folder. Every project has a `Counter` contract, `joust.config.json` for DevKit, a DevKit test
+(`test/counter.test.js`) and `.gitignore`.
+
+| Option | Values |
+|---|---|
+| `--template`, `-t` | `node` (default): `index.js`, a Node script that deploys and calls the contract; scripts `start`, `build`, `deploy`, `test`. `web`: a page (`page/`) with the Cardano Foundation's connect button and an in-page DevKit key, and `vite.config.js`; the scripts listed under [A browser page](/start/quick-start-npm/#a-browser-page) |
+| `--lang`, `-l` | `jsc` (default): `contracts/app/Counter.jsc`. `java`: `contracts/app/Counter.java`. Both give the same description and client |
+| `--help`, `-h` | the usage |
+
+Options go after `--` with `npm create` (npm passes them on); `npx create-joust my-app --lang java` takes them
+directly.
 
 ## Functions
 
