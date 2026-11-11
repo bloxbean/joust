@@ -62,6 +62,31 @@ interface Sys {
         return String.join(File.pathSeparator, keep);
     }
 
+    /** Creates a file whose owner is this process (the uid probe). */
+    interface Probe {
+        Path create() throws IOException;
+    }
+
+    /**
+     * This process's uid: the owner of /proc/self (Linux, nothing written), else of a file it creates; "" when neither
+     * can be read. Never a guess from another source such as the home directory, whose owner may be someone else
+     * (PR #55 IC9, IS10, IF9): "" makes {@link Locator#trusted} refuse every owned directory (fails closed).
+     */
+    static String resolveUid(java.util.function.Function<Path, Optional<String>> owner, Probe probe) {
+        String uid = owner.apply(Path.of("/proc/self")).orElse("");
+        if (!uid.isEmpty()) return uid;
+        try {
+            Path p = probe.create();
+            try {
+                return owner.apply(p).orElse("");
+            } finally {
+                Files.deleteIfExists(p);
+            }
+        } catch (IOException | SecurityException e) {
+            return "";
+        }
+    }
+
     /** Ignores SIGINT in this process (where the platform lets us); returns the previous handler. */
     @SuppressWarnings("removal")
     static Object ignoreInterrupt() {
@@ -118,26 +143,13 @@ interface Sys {
             private String uid;
 
             /**
-             * Our uid: the owner of /proc/self (Linux, nothing written), else of a file we just create, else of our
-             * home directory; empty only when none can be read (PR #55 IS8, IF8: {@link Locator#trusted} then fails
-             * closed on POSIX).
+             * Our uid: the owner of /proc/self (Linux, nothing written), else of a file we just create; empty when
+             * neither can be read, and {@link Locator#trusted} then fails closed on POSIX (PR #55 IS8, IF8). Not the
+             * home directory's owner: HOME may belong to another account (sudo) (IS10).
              */
             @Override
             public synchronized String user() {
-                if (uid == null) {
-                    uid = owner(Path.of("/proc/self")).orElse("");
-                    if (uid.isEmpty()) try {
-                        Path probe = Files.createTempFile("joust-uid-", "");
-                        try {
-                            uid = owner(probe).orElse("");
-                        } finally {
-                            Files.deleteIfExists(probe);
-                        }
-                    } catch (IOException | SecurityException e) {
-                        // try the others
-                    }
-                    if (uid.isEmpty()) uid = owner(Path.of(System.getProperty("user.home", "/"))).orElse("");
-                }
+                if (uid == null) uid = resolveUid(this::owner, () -> Files.createTempFile("joust-uid-", ""));
                 return uid;
             }
 

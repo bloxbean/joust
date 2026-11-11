@@ -25,7 +25,9 @@ The npm package `@julclang/joust` installs a command called `joust` too. Both be
 Install the native `joust` globally (Homebrew or this archive) and `@julclang/joust` per project. `joust --version`
 says which one ran, and in an npm project which `@julclang/joust` the project uses.
 
-The project walk does not enter directories owned by another user; list any you trust in `JOUST_SAFE_DIRS`.
+The project walk does not enter directories owned by another user; list any you trust in `JOUST_SAFE_DIRS`. In a
+container or CI job running as another user than the checkout's owner (root over a mounted workspace, say), set
+`JOUST_SAFE_DIRS=<checkout>` or run as the owner.
 
 ## Install
 

@@ -359,4 +359,20 @@ class JoustMainTest {
         assertThat(s.errText()).contains("uid cannot be read");
         assertThat(Locator.isRoot(Path.of("/"))).isTrue();
     }
+
+    @Test
+    void theUidIsTheProcesssOwnOrUnknownNeverTheHomeDirectorysOwner() throws IOException {
+        Path home = Files.createDirectories(tmp.resolve("home"));
+        Path made = Files.createFile(tmp.resolve("probe"));
+        // /proc/self unreadable, the probe fails, the home directory belongs to 502: unknown, not "502"
+        assertThat(Sys.resolveUid(p -> p.equals(home) ? Optional.of("502") : Optional.empty(),
+                () -> { throw new IOException("read-only tmp"); })).isEmpty();
+        // the probe works: its owner
+        assertThat(Sys.resolveUid(p -> p.equals(made) ? Optional.of("501") : Optional.empty(), () -> made))
+                .isEqualTo("501");
+        assertThat(made).doesNotExist();
+        // /proc/self first, nothing created
+        assertThat(Sys.resolveUid(p -> p.toString().equals("/proc/self") ? Optional.of("1000") : Optional.empty(),
+                () -> { throw new AssertionError("no probe needed"); })).isEqualTo("1000");
+    }
 }
