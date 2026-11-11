@@ -1,6 +1,6 @@
 # ADR-0017: One `joust new` for Java and npm — a native `joust` CLI and a JOUST Gradle plugin
 
-**Status:** Proposed (r4)
+**Status:** Proposed (r5)
 **Date:** 2026-11-11
 **Builds on:** ADR-0015 D9 (the npm `joust` CLI and `create-joust`), PR #53 (`create-joust --template node|web
 --lang jsc|java`, open), ADR-0005 (`.jsc`), the release-ops workflows (`release.yml`, `build.yml`).
@@ -54,7 +54,7 @@ Facts this design relies on:
 | F10 | The published modules are `publishedModules` in the root `build.gradle`; each gets a `mavenJava` publication (lines 159–187), and `verifyMavenReleasePublicationScope` rejects any publication without a POM name or description. `java-gradle-plugin` adds its own `pluginMaven` and marker publications. JuLC skips `mavenJava` for its plugin and decorates every plugin publication | root `build.gradle`; `julc/build.gradle:203–235`; `julc/julc-gradle-plugin/build.gradle:30–55`; `.github/scripts/bloxbean-maven.sh` `discover` (plugin markers counted on top) |
 | F11 | The repository's Gradle wrapper is 9.2.0, without `distributionSha256Sum` | `gradle/wrapper/gradle-wrapper.properties` |
 | F12 | A development build's version is commit-qualified (`X-SNAPSHOT` → `X-<sha7>-SNAPSHOT`, root `build.gradle` lines 13–20); no npm package is published for snapshots; npm's development version is `0.1.0-pre1-snapshot` | root `build.gradle`; `bloxbean-snapshot.yml` lines 5–8; `js/joust/package.json` |
-| F13 | `npm exec` (behind `npm create`) uses a local project dependency of the same name and version if one exists, and honours the `.npmrc` of its local prefix. The local prefix is the nearest directory, from the working directory **upwards**, with a `package.json` or `node_modules`; an empty directory does not stop the walk. A planted `.npmrc` redirected `npm create joust@0.1.0-pre1-rc7` to a registry of the directory's choosing, also from an empty child directory; a `package.json` in the child (or `--prefix`) restored the default | npm docs, `npm exec` ("Package names with a specifier will only be considered a match if they have the exact same name and version as the local dependency"); npm v11.6.0 `workspaces/config/lib/index.js:653–705`; PR #54 reviews S3, S16, F17 (npm 10.9.0 probes) |
+| F13 | `npm exec` (behind `npm create`) uses a local project dependency of the same name and version if one exists, and honours the `.npmrc` of its local prefix. The local prefix is the nearest directory, from the working directory **upwards**, with a `package.json` or `node_modules`; an empty directory does not stop the walk. A planted `.npmrc` redirected `npm create joust@0.1.0-pre1-rc7` to a registry of the directory's choosing, also from an empty child directory; a `package.json` in the child (or `--prefix`) restored the default. A `package.json` does not end the walk on its own: npm keeps going up to find a workspace root, and an ancestor whose `workspaces` include the directory becomes the prefix, with its `.npmrc`; `--workspaces=false` stops that (probed with npm 10.9.0: an ancestor `{"workspaces":["*"]}` with a hostile `.npmrc` applies without the flag, and the default registry with it) | npm docs, `npm exec` ("Package names with a specifier will only be considered a match if they have the exact same name and version as the local dependency"); npm v11.6.0 `workspaces/config/lib/index.js:653–743`; PR #54 reviews S3, S16, F17 (npm 10.9.0 probes) |
 | F17 | `npm exec` runs a package's bin through npm's script runner, which puts the package's bins and then `node_modules/.bin` of **every ancestor** of the working directory, up to the root, in front of `PATH`. A bin with `#!/usr/bin/env node` then runs whichever `node` comes first, so a planted `/tmp/node_modules/.bin/node` is chosen. A local prefix (`package.json`, `--prefix`) does not stop that walk. `--prefix` also moves the global config to `<prefix>/etc/npmrc`, hiding the user's global mirror | npm v11.6.0 `workspaces/libnpmexec/lib/run-script.js:57–66`, `@npmcli/run-script/lib/set-path.js:15–29`, `workspaces/config/lib/index.js:685–689`; PR #54 reviews C19, S21 (npm 10.9.0 probe) |
 | F16 | JOUST's versions are `X.Y.Z-preN-rcM`, `X.Y.Z-preN`, `X.Y.Z`. Under SemVer §11 `pre1-rc10` is one alphanumeric identifier compared as ASCII, so SemVer orders `pre1-rc10` below `pre1-rc9` and `pre1` below `pre1-rc8` | `gradle.properties`; `release.yml` lines 460–467; semver.org §11; PR #54 reviews S18, C13 |
 | F14 | JOUST's rulesets (`V_tagrule`, `protected-branches`, `release-branch-creation`) are disabled today, and the environments have branch policies but no required reviewers | `gh api repos/bloxbean/joust/rulesets`, `…/environments` |
@@ -161,7 +161,7 @@ use `npm create joust` or WSL. A Windows build is a follow-up with its own desig
 | `-t` | Contract (`-l`) | What it writes | How |
 |---|---|---|---|
 | `gradle` (**default**) | `java` (**default**) or `jsc` | `settings.gradle`, `build.gradle`, `gradle.properties`, the Gradle wrapper (`gradlew`, `gradle/wrapper/*`, 9.2.0, with `distributionSha256Sum`), `.gitignore` (`build/`, `.gradle/`, `.joust/`), `README.md`, `src/main/java/<pkg>/Counter.java` or `src/main/jsc/<pkg>/Counter.jsc` (its `package` line set to `<pkg>`), `CounterMain.java` and `Devnet.java` (run on DevKit), `src/test/java/<pkg>/CounterTest.java` | from templates embedded in the binary |
-| `node`, `web` | `jsc` (default) or `java` | what `npm create joust` writes (PR #53) | `npm exec`, isolated (below); needs Node 22+ and says so if `npm` is missing |
+| `node`, `web` | `jsc` (default) or `java` | what `npm create joust` writes (PR #53) | `create-joust` fetched with `npm pack` and run by the CLI's `node`, isolated (below); needs Node 22+ and says so if `npm` or `node` is missing |
 
 The Gradle project:
 - `build.gradle`: `plugins { id 'application'; id 'org.julclang.joust' version '<v>' }`, the repositories (Maven
@@ -184,16 +184,17 @@ CLI uses npm only to **fetch** the package, and runs it itself:
    only;
 2. creates a private directory, mode 0700, under `$TMPDIR` if that is an absolute directory, else Java's temporary
    directory, and writes into it a `package.json` (`{"name": "joust-new", "private": true}`). That file makes the
-   directory npm's local prefix: npm's walk for a project `.npmrc` stops there (no `--prefix`, which would hide the
-   user's global config, F17);
-3. runs, in that directory, `npm pack --json create-joust@<V>` (`<V>` is the CLI's own version). For a registry spec
+   directory npm's local prefix, and `--workspaces=false` (step 3) keeps an ancestor workspace from taking it over, so
+   npm's walk for a project `.npmrc` ends there (no `--prefix`, which would hide the user's global config, F17);
+3. runs, in that directory, `npm pack --workspaces=false create-joust@<V>` (`<V>` is the CLI's own version). For a registry spec
    `npm pack` fetches the published tarball, checks it against the registry's integrity, writes it there, and runs no
    package script;
 4. extracts the tarball in Java into the private directory: regular files and directories only, every path relative
    and inside `package/`, at most 1 MiB in total, else refused;
 5. runs `<absolute node> <private dir>/package/bin/create-joust.js <abs-dir> --template <t> --lang <l>` with the
    working directory set to the private directory. The CLI chose the interpreter; nothing is resolved through `PATH`
-   or a shebang. `create-joust` has no dependencies and imports only Node built-ins and its own files;
+   or a shebang. `create-joust` has no dependencies and imports only Node built-ins and its own files (a test in
+   `js/create-joust` keeps it so: a bare import would be resolved through ancestor `node_modules`);
 6. removes the private directory.
 
 The npm configuration that applies is the user's own (user and global `.npmrc`, the user's `npm_config_*`); a
@@ -267,7 +268,8 @@ This is the pattern of Angular's global `ng` (it hands over to the project's loc
 3. Unknown commands and `test` print a message that names this CLI as the npm one; `test` says `npm test`.
 4. **Project commands run at the project root:** it detects the npm project as D4 does (same markers, bounded reads,
    ownership rule where Node reports a `uid`; on Windows, where it does not, the walk stops at the user's profile
-   directory, `os.homedir()`, so a planted `C:\\package.json` is never reached) and changes its
+   directory, `os.homedir()`, so a project under the profile never reaches a planted `C:\\package.json`; a project
+   elsewhere, such as `D:\\work`, is walked up to its drive root, which the docs say) and changes its
    working directory to the root before loading `joust.config.json`, whether or not it hands over below, so a direct
    `npx joust build` from a subdirectory behaves as the native CLI and `npm run build`.
 5. **Hands project commands over to the project's copy:** when the resolved `@julclang/joust` (D4.2) is not this
@@ -312,8 +314,9 @@ resolve as a user's project resolves them, before any CLI asset is attached. Rea
 
 **The GitHub release and its CLI assets are separate jobs** (C20, S24):
 - `github-release` keeps its place and condition (needs `maven` and `npm`, `github_release=true`): it creates the
-  release, with notes that say whether CLI archives follow. A CLI or consumer failure never costs the version its
-  GitHub release.
+  release, with notes that say whether CLI archives follow. A `cli-consumer` or `cli-assets` failure never costs
+  the version its GitHub release. A failing `cli` build does: it is the preflight gate before anything is published
+  (`maven` needs `cli`), so nothing is released at all.
 - `cli-assets` (needs `github-release`, `cli` and `cli-consumer`; runs only when D10 allows CLI assets, and only if all
   three succeeded) runs no repository code (no checkout). It downloads the three artifacts by exact name, and:
   - for each archive: if the release already has an asset of that name, it downloads it and requires its SHA-256 to
@@ -327,8 +330,9 @@ resolve as a user's project resolves them, before any CLI asset is attached. Rea
     same digest again is harmless, and a run that failed after uploading leaves no archive without provenance once a
     re-run succeeds (I15).
 
-  If `cli-consumer` fails, the release stays without CLI archives; re-running the failed jobs after a fix attaches
-  them. The Homebrew job needs `cli-assets`.
+  If `cli-consumer` fails, the release stays without CLI archives. Re-running the failed jobs attaches them when the
+  failure was transient (a repository not yet serving the files); a deterministic failure needs a new version, since
+  published artifacts are never changed. The Homebrew job needs `cli-assets`.
 
 ### D7. Homebrew: `bloxbean/tap/joust`
 
@@ -383,12 +387,14 @@ x86_64 and arm64):
   4. **npm isolation** (I12), on the production path (`create-joust@<exact published version>` from the registry,
      through `--create-joust`), with hostile files in both places npm or Node could look: the working directory and an
      ancestor of the private directory (`TMPDIR` pointed at a hostile directory). Each holds a `.npmrc` with
-     `registry=http://127.0.0.1:9/`, a `package.json`, a `node_modules/create-joust` of that version whose bin writes
+     `registry=http://127.0.0.1:9/`, a `package.json` whose `workspaces` (`["*"]`) include the private directory, a `node_modules/create-joust` of that version whose bin writes
      a marker file, and an executable `node_modules/.bin/node` that writes a marker file. The project must be written,
      the CLI's private directory must have been under the hostile `TMPDIR` (the test reads where it was), and no marker
      may exist. **Controls** (each must fail in the expected way, so the test proves the isolation): `npm pack` of the
      same spec from an empty directory under the hostile `TMPDIR`, without the private `package.json`, must fail with a
-     connection error naming `127.0.0.1:9`; and `npm exec` of the same spec there must run the planted `node`;
+     connection error naming `127.0.0.1:9`; `npm pack` without `--workspaces=false`, from a private directory (with its
+     `package.json`) under the hostile workspace ancestor, must fail the same way; and `npm exec` of the same spec there
+     must run the planted `node`;
   5. writes an npm project with this commit's `create-joust` tarball, links this repository's packages into it (as
      `create.test.js`), and checks that the native `joust build` delegates (from the root and from a subdirectory,
      I2), builds, and that its description equals the Gradle ones (I8); that `joust --version`, `joust help` and
@@ -410,7 +416,7 @@ the npm CLI (D5.1):
 | Command | Native CLI | npm CLI (after D5) |
 |---|---|---|
 | `new …` | D3 | D5.2 |
-| `version`, `--version`, `-V`, `-v` | `joust <v> (native)`; in an npm project also `project: @julclang/joust <v> (npm)`, read per D4.2 (64 KiB, regular file, printed only if it matches the version pattern, else `unknown`) | `joust <v> (npm)` |
+| `version`, `--version`, `-V`, `-v` | `joust <v> (native)`; in an npm project also `project: @julclang/joust <v> (npm)`, read per D4.2 (64 KiB, regular file, printed only if it matches the display pattern `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`, which also admits development versions such as `0.1.0-pre1-snapshot`; else `unknown`) | `joust <v> (npm)` |
 | `help`, `--help`, `-h`, `help <cmd>`, `<cmd> --help`, `<cmd> -h`, no arguments | native usage (or the command's line of the shared vocabulary); in an npm project adds that other commands go to the project's `@julclang/joust` | npm usage, naming itself |
 
 **Project commands:**
@@ -454,7 +460,7 @@ settings for an admin.
 |---|---|---|---|
 | I1 | In an npm project the native CLI runs no project command with its own implementation: it delegates or fails with a message | D4, D9 | unit test (no package: message, nothing else); CI 5 |
 | I2 | Delegation passes the arguments unchanged, inherits the standard streams, runs at the npm project root, and returns the delegate's exit code | D4 | unit test with a stub package whose bin records argv, cwd and stdin, writes both streams and exits 7, invoked from the root and a subdirectory; CI 5 with the native binary |
-| I3 | The native CLI executes only absolute paths it resolved itself: `node`/`npm` from absolute `PATH` entries (empty and relative entries skipped, and its children get that `PATH`), the resolved package's `bin.joust` (its real path inside the package), `<build root>/gradlew`, and `java -version` for D3's check; it starts no shell itself (npm's own `npm exec` runs the bin as npm does); it installs nothing except D3's isolated `npm exec` | D3, D4 | unit tests (command lines and environments built for each case; `PATH` with `.` and empty entries; a bin symlinked out of its package) |
+| I3 | The native CLI executes only absolute paths it resolved itself: `node`/`npm` from absolute `PATH` entries (empty and relative entries skipped, and its children get that `PATH`), the resolved package's `bin.joust` (its real path inside the package), `<build root>/gradlew`, `java -version` for D3's check, `npm pack` (which fetches and runs no package script) and the extracted `create-joust` bin under that `node`; it starts no shell and never runs a program through a shebang or `npm exec` | D3, D4 | unit tests (command lines and environments built for each case; `PATH` with `.` and empty entries; a bin symlinked out of its package) |
 | I4 | Informational commands (D9), in both CLIs, never execute project code or hand over; every manifest read is bounded, non-blocking and validated | D4, D5, D9 | unit tests (native) and `js/joust` tests (npm): a stub bin that fails the test if run, for `--version`, `help`, `deploy --help`, `-v`; a FIFO and a 1 MiB file as the detection `package.json` and as the resolved one; an escape sequence as `version`; CI 5 with the native binary |
 | I5 | Detection is deterministic: the nearest marker wins; npm beats Gradle in one directory; the walk stops at a directory not owned by the user (unless in `JOUST_SAFE_DIRS`) and at the root, and says so when that hides a marker | D4 | unit tests over directory layouts, including nested npm-in-Gradle, Gradle subprojects, hoisted `node_modules`, and a foreign-owned ancestor (the owner supplied by the test's `Sys`) |
 | I6 | Version alignment: CLI version X (effective) writes `id 'org.julclang.joust' version 'X'` and runs `create-joust@X`; plugin X adds JOUST X and the JuLC and CCL versions of build X; a snapshot CLI uses the snapshots repository and needs `--create-joust` for npm templates | D1, D3 | unit test (templates, release and `-<sha>-SNAPSHOT` versions); plugin test (resolved versions) |
@@ -463,10 +469,10 @@ settings for an admin.
 | I9 | `joust new` writes nothing unless every check of D3 passes | D3 | unit tests |
 | I10 | Release: CLI binaries are built with a read-only token, no secrets or caches, SHA-pinned actions, before anything is published; archives are attached once and never replaced; the formula's hashes are the published assets'; the tap token is an environment secret seen only by the push step; the tap job runs only `.github/scripts/homebrew-formula.sh`; flags follow D10 | D6, D7, D10 | `actionlint` and `check-workflows.sh` (syntax, pins, permissions); **workflow review** (job order, token exposure, what each job runs); formula script test in CI; D10 combinations tested by a script test |
 | I11 | Each CLI answers a command it does not support with a message that names which `joust` it is and what to use instead, and a non-zero exit | D5, D9 | unit tests (native); `js/joust` test |
-| I12 | `joust new -t node|web` uses npm only to fetch (`npm pack` in a private directory that is its own local prefix) and runs the extracted `create-joust` with the absolute `node` it resolved; no `.npmrc`, `create-joust` or `node` from the working directory, the private directory's ancestors or a project is used; the tarball's paths stay inside it | D3 | unit tests (command lines, cwd, files written, hostile tarballs: `..`, absolute paths, links, oversize); CI 4 (hostile working directory and `TMPDIR` ancestor with `.npmrc`, `create-joust` and `node_modules/.bin/node`, the production registry spec, two controls) |
+| I12 | `joust new -t node|web` uses npm only to fetch (`npm pack` in a private directory that is its own local prefix) and runs the extracted `create-joust` with the absolute `node` it resolved; no `.npmrc`, `create-joust` or `node` from the working directory, the private directory's ancestors or a project is used; the tarball's paths stay inside it | D3 | unit tests (command lines, cwd, files written, hostile tarballs: `..`, absolute paths, links, oversize); CI 4 (hostile working directory and `TMPDIR` ancestor with `.npmrc`, a workspace `package.json`, `create-joust` and `node_modules/.bin/node`, the production registry spec, two controls) |
 | I13 | The npm CLI runs project commands at the project root; when the resolved `@julclang/joust` is another copy it hands over once; the guard is scoped to one hand-over and never inherited by programs it starts | D5 | `js/joust` tests: two linked copies; from a subdirectory; a pre-existing `JOUST_DEFERRED`; a nested `joust` in another project started by the target |
 | I14 | The Homebrew formula's version never decreases in JOUST's version order; concurrent tap edits are retried, not lost | D7 | formula script tests: D7's vectors (rc9 → rc10, rc → pre, pre → final, older-after-newer), an unknown shape, a stale clone |
-| I16 | `github-release` does not depend on the CLI: a release is created whenever `github_release=true` and Maven and npm succeeded; CLI assets and Homebrew follow only after `cli-consumer` | D6 | workflow review; a dependency/condition check of the job graph in CI (D10's script test) |
+| I16 | `github-release` does not depend on `cli-consumer` or `cli-assets`: a release is created whenever `github_release=true` and Maven and npm succeeded (which needs the `cli` preflight build); CLI assets and Homebrew follow only after `cli-consumer` | D6 | workflow review; a dependency/condition check of the job graph in CI (D10's script test) |
 | I15 | Every CLI archive on a release has a provenance attestation of its exact digest and equals the archive this run built; a re-run never replaces an asset and leaves none unattested | D6 | workflow review; `cli-assets`' own checks (digest comparison, attestation of all final archives) |
 
 ## 5. Alternatives considered
@@ -534,7 +540,7 @@ settings for an admin.
 2. **Q2. Gradle Plugin Portal.** Lean: not now; the plugin resolves from the BloxBean repository (and Central once
    published) through `pluginManagement`.
 3. **Q3. `npm create joust -- --template gradle`.** Lean: not now; revisit if Node users ask for Java projects.
-4. **Q4. Offline npm templates in the native CLI.** Lean: no; revisit with a parity test if `npm exec` from the
+4. **Q4. Offline npm templates in the native CLI.** Lean: no; revisit with a parity test if `npm pack` from the
    registry proves a problem.
 5. **Q5. Windows.** Resolved in r2: not in v1 (D2).
 6. **Q6. macOS x86_64.** Lean: not built (as JuLC).
@@ -615,3 +621,14 @@ settings for an admin.
     new I16 (C20, S24);
   - D7: the version grammar as a regex, shared by the input check and the order; a missing formula is written (F25);
   - D9: `<cmd> --help` for a command only the project's CLI knows points to `npx joust <cmd> --help` (F24).
+- **r5** (2026-11-11; responds to the reviews of `ed996d0`: design F26–F29, security S26–S28, Codex C21–C23):
+  - `npm pack --workspaces=false`: an ancestor workspace can no longer take over the private prefix; F13 corrected
+    (a `package.json` alone does not end npm's walk); CI 4's hostile ancestors are workspace roots (C21, S26, P1;
+    probed with npm 10.9.0); a third control in CI 4: `npm pack` without the flag, from the private directory under the
+    hostile workspace ancestor, must fail against `127.0.0.1:9`;
+  - D6 and I16 narrowed: the release is independent of `cli-consumer` and `cli-assets`; the `cli` build stays the
+    preflight gate; a re-run fixes only transient consumer failures (C22, F27);
+  - the D3 table, I3 and Q4 describe `npm pack` and the CLI-run `create-joust`, not `npm exec` (C23, S28);
+  - a test keeps `create-joust` free of dependencies and bare imports (F26, S27); the Windows walk's guarantee is stated for
+    projects under the profile (F28, S28); the version shown by `joust version` uses a display pattern that admits
+    development versions (F29).
