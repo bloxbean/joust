@@ -157,3 +157,11 @@ variables, Actions settings, rulesets) are configured with release-ops `docs/10-
 `scripts/verify-repo-settings.sh bloxbean/joust`. `release-staging` holds the seven release secrets plus the BloxBean
 repository's `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` secrets and `R2_BUCKET` / `R2_ENDPOINT` variables
 (release-ops `docs/05-secrets.md` §8). Only maintainers change them; they are not in this repository.
+
+**Code owners.** For now the code owner of the release paths in [.github/CODEOWNERS](../.github/CODEOWNERS)
+(workflows, `gradle.properties`, `gradle/libs.versions.toml`, the root Gradle files and the wrapper) is `@satran004`
+alone, instead of the standard's org team `bloxbean/release-owners`; switch it back to the team when JOUST has more
+maintainers. A code owner can't approve their own pull request, so their own PRs to these paths merge through the
+`protected-branches` ruleset's organization-admin bypass. The `release` and `github-pages` environments keep the team as
+reviewers: with "prevent self-review", a one-person reviewer list deadlocks every run that person starts (release-ops
+`docs/04-github-settings.md` §2).

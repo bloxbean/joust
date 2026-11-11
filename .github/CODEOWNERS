@@ -4,24 +4,29 @@
 # paths decide what runs, with the release credentials, when it does.
 #
 # There is intentionally no catch-all `*` rule: all other paths stay unowned and do NOT require these
-# reviewers. CODEOWNERS is last-match-wins, so keep the patterns below non-overlapping. Release owners are
-# managed as the org team bloxbean/release-owners, which is also the reviewer of the `release` and
-# `github-pages` environments. The team must stay visible and keep write access to this repository.
+# reviewers. CODEOWNERS is last-match-wins, so keep the patterns below non-overlapping.
+#
+# For now the code owner is @satran004 alone. The release-ops standard names the org team
+# @bloxbean/release-owners, which stays the reviewer of the `release` and `github-pages` environments; switch
+# every line below back to the team when JOUST has more maintainers. A code owner can't approve their own pull
+# request, so while there is a single owner, their own PRs to these paths merge through the `protected-branches`
+# ruleset's organization-admin bypass (pull_request mode).
 
 # This file, so the protection can't be removed without a release owner.
-/.github/CODEOWNERS      @bloxbean/release-owners
+/.github/CODEOWNERS      @satran004
 
 # Every workflow runs with the repository's secrets once it is on a protected branch.
-/.github/workflows/      @bloxbean/release-owners
-/.github/scripts/        @bloxbean/release-owners
+/.github/workflows/      @satran004
+/.github/scripts/        @satran004
 
 # Version bump -> automatic tag and release.
-/gradle.properties       @bloxbean/release-owners
+/gradle.properties       @satran004
 
-# Build logic evaluated by the credentialed release job: publication scope, signing, nmcp, and the
-# Gradle distribution that runs it.
-/build.gradle            @bloxbean/release-owners
-/settings.gradle         @bloxbean/release-owners
-/gradle/wrapper/         @bloxbean/release-owners
-/gradlew                 @bloxbean/release-owners
-/gradlew.bat             @bloxbean/release-owners
+# Build logic evaluated by the credentialed release job: publication scope, signing, nmcp, the dependency
+# versions it resolves (gradle/libs.versions.toml), and the Gradle distribution that runs it.
+/build.gradle            @satran004
+/settings.gradle         @satran004
+/gradle/libs.versions.toml @satran004
+/gradle/wrapper/         @satran004
+/gradlew                 @satran004
+/gradlew.bat             @satran004
