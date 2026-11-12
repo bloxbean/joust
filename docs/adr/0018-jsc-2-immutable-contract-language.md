@@ -586,9 +586,12 @@ beside it covers highlighters that need one (Shiki). A language server is later 
 ### D15. Correctness: a written semantics and an independent interpreter
 
 - **A written semantics.** `docs/reference/jsc-2-semantics.md`: evaluation order, laziness, integer operations and their
-  sign rules, equality per type, the encoding rules, effect accumulation, the checked-input rules, time values. Each
-  rule has hand-written vectors.
-- **A reference interpreter**: a direct evaluator of the checked AST, written independently of the lowering, in
+  sign rules, equality per type, effect accumulation, the checked-input rules, refusal classes and implementation
+  limits, time values. Encodings are D5's and the ABI manifest's (D12, J17), not the semantics'. Each rule has vectors
+  in the interpreter's tests (`js/jsc-interpreter/test`): hand-written ones, and, for Ed25519 and the hashes, answers
+  recorded from the ledger's libsodium (r10).
+- **A reference interpreter**: a direct evaluator of the checked IR (r10: the checker's typed program, below), written
+  independently of the lowering, in
   JavaScript, with structural byte equality (JS `==` on `Uint8Array` is by reference too). It implements every `std/*`
   binding (bytes, math, value, address, the bound hashes and Ed25519 with the builtin failure rules) and the
   processor's semantics the language exposes (zero-payout skip, net mint, canonical maps and values).
@@ -604,8 +607,11 @@ beside it covers highlighters that need one (Shiki). A language server is later 
   hand-written vectors and the hand-stated outcomes of the differential tests guard against it.
 - **M0's Java interpreter stays a leg** (r10; M0 review F17). From M1b the differential tests have five legs: both
   interpreters, the JVM, the transition program and the validator. A disagreement between the two interpreters points
-  at an interpreter, not at the lowering, and the Java one costs nothing to keep. It is not the oracle D15 names: the
-  JavaScript one is.
+  at an interpreter, not at the lowering, and the Java one costs nothing to keep. **No leg is the oracle**: all legs
+  must agree, the harness compares each with the others (the Java interpreter's outcome is only where the comparison
+  starts), and a disagreement is settled by the written semantics, not by any leg. The two interpreters must also
+  agree on each refusal's class (which rule refused), and an interpreter that cannot finish a call gives no answer, a
+  failure of that leg, never a refusal: the chain accepts any call within its budget.
 
 ### D16. Compatibility and migration
 
@@ -718,7 +724,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 |---|---|---|---|
 | J1 | `.jsc` 2 output is Java `@StateContract` and `@OnchainLibrary` classes that the unmodified JOUST processor and JuLC accept, and all of it passes `SubsetLint`'s rules; nothing else is emitted | D1, D9, D10 | every build; lint on generated libraries and helpers |
 | J2 | No `.jsc` name is rebound; generated Java has no reassigned locals, no loops and no mutable accumulators | D3, D7 | checker; a scan of generated Java |
-| J3 | **Four ways agree** for every construct of the milestone: the reference interpreter (from M1b both, JavaScript and M0's Java one: five legs, D15), the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
+| J3 | **All legs agree** (four to M1a, five from M1b) for every construct of the milestone: the reference interpreters (JavaScript, and M0's Java one: D15), the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
 | J4 | Effects appear in each kind's result in source order (loops: list order), only from taken branches; mint and accepted are net sums | D4 | differential tests; on-chain fixtures |
 | J5 | Every diagnostic on either build path names a `.jsc` file, line and column, and a stable code | D12 | tests with errors from each layer (checker, processor, JuLC) |
 | J6 | No time value (including one read from another contract; a value's shape never is one) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities, `BigMap` int values, and send, accept and deposit values, including inside called `fn`s; accepted by `std` functions only where the binding row declares the parameter total and of window-independent cost, never by `java:` imports; only under an outermost `max(0, …)` in pay amounts); time values reaching amounts or state warn. Influence through transaction-level rules (balance, minimum per output) is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
@@ -790,7 +796,7 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 | # | Scope | Entry gate | Exit criteria |
 |---|---|---|---|
 | M0 | Spike: version line, `const`, spread updates, shadowing rule, `fn` with direct recursion and the after-lowering recursion check (nested folds), a `fold`/`find`/`contains` helper and both `filter` lowerings, `Option` as `Optional` end to end (datum, redeemer, portable codec, JS; `Some(None)` rejected), one generated equality helper over a record with bytes, one checked input, one `std/crypto` and one `std/bytes` binding with domains, the binding test via javac attribution, positions on the npm path, the time dataflow pass | ADR accepted | builds on both paths; four-way agreement (J3) on hand vectors; size, budget and check-cost numbers recorded; javac attribution of library sources works inside the Web Image toolchain |
-| M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; four-way differential tests and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten |
+| M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; five-way differential tests (four-way to M1a) and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten |
 | M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); interpreter and four-way tests extended (D15); attack suites and mutation-rejection tests green |
 | M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green |
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12; a `.jsc` library called from Java and a Java library from `.jsc`; the template's tests run offline |
@@ -975,6 +981,9 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   ABI), refuses a reached schema the description lacks, and does not write Java whose manifest is refused.
 - **r9** (2026-11-13, M1a review round r4 on #63: Codex C8; security S12): D5 refuses recursive types through any
   container, not only direct ones; D3 refuses every control character but TAB and the line ends; J10 covers it.
-- **r10** (2026-11-13, M1b): D15 says the interpreter evaluates the checker's IR, exported as versioned JSON beside
-  the generated Java (M1a review F11), and that M0's Java interpreter stays a leg (M0 review F17); J3 counts both
-  interpreters.
+- **r10** (2026-11-13, M1b, with its review round r2: design F8, security S1, S4): D15 says the interpreter evaluates
+  the checker's IR, exported as versioned JSON beside the generated Java (M1a review F11), not "the checked AST"; that
+  M0's Java interpreter stays a leg (M0 review F17); that no leg is the oracle (a disagreement is settled by the
+  semantics); that the interpreters agree on refusal classes and that an implementation limit is no answer; and that
+  the semantics leaves encodings to D5 and D12, with vectors hand-written or recorded from the ledger's libsodium. J3 is
+  "all legs agree" (five from M1b), and the M1 exit row names five-way tests.
