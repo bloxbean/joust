@@ -121,8 +121,8 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `vite-plugin-top-level-await` (swc breaks); target es2022. DevKit's default-mnemonic accounts may be empty: top up.
   The engines' Wasm uses GraalVM Web Image (`/Users/satya/work/java/graalvm-25.3.4.1+1.1`); no TeaVM.
 - Phase 4's `-Ajoust.portable` (`<Name>Portable`, the dApp's `:wasm` image and its "+1 (no service)" demo) is retired
-  (ADR-0020 §12.3): the engine runs the transition programs. `@julclang/state-client`'s `portable` option is deprecated
-  (one warning, ignored; removed in a later release). Web Image exports: a Java
+  (ADR-0020 §12.3): the engine runs the transition programs. `@julclang/state-client` refuses a client given `portable`
+  (fails closed; `null`/`undefined` pass). Web Image exports: a Java
   `Function` passed into a `@JS` snippet (julc-wasm's pattern); `@JS.Export` methods need reflection metadata and
   `JSString` params. Output is a classic script (a `{"type":"commonjs"}` package.json beside it for Node).
   DevKit's time horizon: page-built txs use the runtime TTL (`ttlSlots` in the deployment), else PastHorizon.

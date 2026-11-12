@@ -1,6 +1,6 @@
 # ADR-0020: UPLC transition programs as the off-chain meaning on every path — a spike (answers ADR-0015 Q6)
 
-**Status:** Proposed (r11: `-Ajoust.portable` retired, §12.3; r10: review round 3 fixes; r9: §12 revised after the implementation's review; r8: §11.4's answer taken as the outcome and its "adopt now" items implemented, §12; r7: spike
+**Status:** Proposed (r12: §12.3 after PR #65's review; r11: `-Ajoust.portable` retired, §12.3; r10: review round 3 fixes; r9: §12 revised after the implementation's review; r8: §11.4's answer taken as the outcome and its "adopt now" items implemented, §12; r7: spike
 implemented and reported, §11; design approved by review at `04ea067`), **spike**: design plus a proof of concept to
 measure. The answer to ADR-0015 Q6 stays a proposal until this ADR is accepted; §12's items change the engine's
 behaviour (a bundle without a program manifest is refused) and are listed there.
@@ -653,7 +653,7 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
 | The ABI check before every evaluation (S15) | yes | `TransitionInputs`, wrapped around every `DescribedContract`'s transitions | `TransitionInputsTest`, `GeneratedVectorsTest` |
 | Program manifests and the recompile check | yes (format 2) | `Toolchain`/`Manifests` (written), `ProgramManifest` (format, check), `UplcTransitions.verified` (the only way to programs), `joust build` | `ProgramManifestTest`, `ManifestsTest`, `FixtureContractsTest`, `EngineFixturesTest` |
 | Thread-safe `UplcTransitions` | yes (the spike's `cb19dbb`; `Prepare`'s cache concurrent) | `UplcTransitions`, `Prepare` | `ConcurrencyTest` |
-| Retire `-Ajoust.portable` | yes (r11), by removal (§12.3) | the processor, the examples' builds, `examples/dapp`, `@julclang/state-client` (`portable` deprecated) | `ReplayDifferentialTest`, `GeneratedVectorsTest`, `EngineFixturesTest`; `portable.test.js` |
+| Retire `-Ajoust.portable` | yes (r11), by removal (§12.3) | the processor, the examples' builds, `examples/dapp`, `@julclang/state-client` (`portable` refused) | `ReplayDifferentialTest`, `GeneratedVectorsTest` (with the edge vectors), `EngineFixturesTest`; `portable.test.js`; the dApp e2e's expected failure at submission |
 
 ### 12.1 Where the adopted design differs from the spike's
 
@@ -736,15 +736,27 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
     `JoustWasm`, `serverless.js`, `e2e/parity.mjs`, `WasmParityTest` and `DappDevnetTest`'s Wasm leg. The page still
     verifies every transaction against its description and the chain before the wallet signs, and the malicious
     service demo is unchanged. Pages that compute calls without a service use the engine (`@julclang/joust-runtime`).
+  - *What the page no longer checks before signing (r12, S3).* The recomputation checked, beyond what the verifier
+    checks: the exact next state, which the validator binds too (a changed next state is now signed and rejected at
+    submission, with no collateral taken because `is_valid` is checked; the dApp's e2e keeps that case as an expected
+    failure at submission, S2); the **exact amount paid to each payee**, where the validator binds only a lower bound
+    per payee; and **no payout tagged with the target to anyone the contract does not pay**. The last two (rows of §2's table) now
+    rest only on the verifier's bound on the wallet's net outflow. The follow-up is C7, a step-independent outflow
+    bound (§11.3).
   - *Coverage:* `WasmParityTest` compared the portable Java in Wasm with the JVM; the engine's programs are compared
     with the JVM by `ReplayDifferentialTest` (the dApp's 34 Counter and Bank calls and every `fixtures/m3` group) and
-    `GeneratedVectorsTest` (Counter). ADR-0016's R-G5 (`RegistryPortableTest`) tested portable steps, which no longer
+    `GeneratedVectorsTest` (Counter, Vault, and since r12 `WasmParityTest`'s edge vectors: 100-byte owners as chunked
+    byte strings, integers past 64 bits, Bank's `@Shared` `withdraw` with each refusal message, `setPaused`,
+    `setLimit`: 51 vectors, programs and JVM agreeing). ADR-0016's R-G5 (`RegistryPortableTest`) tested portable steps, which no longer
     exist; the registry's keyed steps (`change`, `leave`, `retire`, ...) are in `fixtures/m3/registry`, replayed by
     `ReplayDifferentialTest` (programs, JVM and both compared) and `EngineFixturesTest`. No replacement test was needed.
-  - *`@julclang/state-client`'s `portable` option* (published API): still accepted, one `console.warn`, ignored;
-    `JoustContract.recompute` and F84's keyed refusal are gone. Removal comes in a later release.
+  - *`@julclang/state-client`'s `portable` option* (published API) fails closed (r12, S1): a client given one (anything
+    but `null` or `undefined`) is refused at construction ("the portable option was removed; the page verifier still
+    checks every transaction; remove the option"), so a page that asked for the check never silently goes without it.
+    `JoustContract.recompute` and F84's keyed-only refusal are gone.
   - *The `.jsc` 2 branches* (ADR-0018) still turn the option on in `examples/dsl`; that goes in that stack.
-  No reachability metadata was specific to portable (the dApp image's entry point carried its own exports).
+  No reachability metadata was specific to portable (the dApp image's entry point carried its own exports). The dApp
+  server's `POST /chain/utils/txs/evaluate` route, used only by the serverless demo, is removed (r12).
 - C5 (a per-request bound in the prepare service), caps from protocol parameters, C7 (a step-independent outflow
   bound) and C4 (locations inside library code): unchanged, as §11.3 left them.
 
@@ -841,3 +853,8 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
   the option and its build settings, the dApp's Wasm image, in-page recomputation and serverless demo, `WasmParityTest`
   and `RegistryPortableTest` are removed; the engine's comparison tests cover what they checked; `@julclang/state-client`
   keeps `portable` as a deprecated, ignored option. Status stays Proposed.
+- **r12** (2026-11-13, PR #65's review: security S1–S3, design F1–F3): the `portable` option fails closed (refused at
+  construction, S1/F2); §12.3 names what the page no longer checks before signing (exact per-payee amounts, no tagged
+  payout to a non-payee) and points to C7 (S3); the dApp's e2e keeps a changed next state as an expected failure at
+  submission (S2); `GeneratedVectorsTest` carries `WasmParityTest`'s edge vectors (F1); the dApp server's evaluate route
+  is removed (F3). Status stays Proposed.
