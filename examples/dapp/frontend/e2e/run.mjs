@@ -3,7 +3,7 @@
 //   SERVICE (the dApp server), STORE (Yaci Store API), DEPLOYMENT (JSON), MNEMONIC and ADDRESS (the wallet).
 
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import { blockfrostChain, httpService, VerificationError } from '@julclang/state-client';
+import { blockfrostChain, httpService, VerificationError, planOf } from '@julclang/state-client';
 import { devWallet } from '@julclang/state-client/devwallet';
 import { Counter } from '../src/generated/Counter.js';
 import { Bank } from '../src/generated/Bank.js';
@@ -75,6 +75,53 @@ for (const what of Object.keys(tamperings(CSL, (await service.prepare({
   const e = await refuses(`malicious service: ${what}`, () => new Counter(opts('Counter', evil)).at(c.id).increment(wallet, { by: 1n }));
   if (!(e instanceof VerificationError)) fail(`${what}: not refused by the verifier but by ${e.message}`);
   if (signed !== before) fail(`${what}: the wallet was asked to sign`);
+}
+
+// ---- EXPECTED FAILURE AT SUBMISSION (ADR-0020 §12.3): a service that changes the next state (count 999) with a
+// consistent plan. The page no longer recomputes the step, so the transaction passes its checks and is signed; the
+// validator rejects it when it is submitted (is_valid is true, so no collateral is taken): nothing changes on chain.
+{
+  const changesNext = {
+    ...service,
+    prepare: async (req) => {
+      const p = await service.prepare(req);
+      const tx = CSL.Transaction.from_hex(p.cbor);
+      const b = CSL.TransactionBody.from_bytes(tx.body().to_bytes());
+      const outs = CSL.TransactionOutputs.new();
+      for (let i = 0; i < b.outputs().len(); i++) {
+        const o = b.outputs().get(i);
+        if (o.has_plutus_data() && o.address().to_bech32() === deployment.contracts.Counter.address) {
+          const f = o.plutus_data().as_constr_plutus_data().data();
+          const nf = CSL.PlutusList.new();
+          nf.add(CSL.PlutusData.new_integer(CSL.BigInt.from_str('999')));
+          nf.add(f.get(1));
+          const no = CSL.TransactionOutput.new(o.address(), o.amount());
+          no.set_plutus_data(CSL.PlutusData.new_constr_plutus_data(CSL.ConstrPlutusData.new(CSL.BigNum.from_str('0'), nf)));
+          outs.add(no);
+        } else outs.add(o);
+      }
+      const nb = CSL.TransactionBody.new_tx_body(b.inputs(), outs, b.fee());
+      for (const [get, set] of [['ttl_bignum', 'set_ttl'], ['validity_start_interval_bignum', 'set_validity_start_interval_bignum'],
+        ['collateral', 'set_collateral'], ['collateral_return', 'set_collateral_return'], ['total_collateral', 'set_total_collateral'],
+        ['required_signers', 'set_required_signers'], ['reference_inputs', 'set_reference_inputs'], ['script_data_hash', 'set_script_data_hash'],
+        ['network_id', 'set_network_id']]) if (b[get]()) nb[set](b[get]());
+      const cbor = CSL.Transaction.new(nb, tx.witness_set(), tx.auxiliary_data()).to_hex();
+      return { ...p, cbor, plan: planOf(CSL, cbor) };
+    },
+  };
+  const utxos = async () => (await chain.utxosAt(raw.address)).map((u) => u.ref).sort().join(',');
+  const walletBefore = await utxos();
+  const before = signed;
+  const e = await refuses('a service that changes the next state (expected failure at submission)',
+    () => new Counter(opts('Counter', changesNext)).at(c.id).increment(wallet, { by: 1n }));
+  if (e instanceof VerificationError) fail('a changed next state: refused by the page; this e2e expects the validator to refuse it');
+  if (!/Plutus|Script|ValidationTagMismatch|FailedUnexpectedly/i.test(e.message)) fail('a changed next state: not a script failure: ' + e.message);
+  console.log('  the ledger: ' + e.message.replace(/\\"/g, '"').split('Base64')[0].slice(0, 400));
+  if (signed !== before + 1) fail('a changed next state: the wallet did not sign it');
+  if (reviews.at(-1).report.next.count !== 999n) fail('a changed next state: the review did not show 999');
+  if ((await c.state()).count !== 3n) fail('a changed next state reached the chain');
+  if ((await utxos()) !== walletBefore) fail('a changed next state: the wallet\'s UTxOs changed (collateral taken?)');
+  ok('a changed next state: passed the page, signed, rejected at submission by the validator; the wallet\'s UTxOs unchanged');
 }
 
 await c.reset(wallet);

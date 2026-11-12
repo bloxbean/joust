@@ -32,12 +32,22 @@ Open http://localhost:8095, pick a **DevKit wallet**, **Connect** and **Top up 1
 To develop the page, run `npm run dev` in `frontend` (http://localhost:5174). It proxies `/api`, `/chain` and `/dev` to
 the server on :8095, which must be running.
 
-## Recomputation in the page
+## Recomputation in the page (retired)
 
-The page checks what it signs against the description and the chain; it does not recompute the next state itself (the
-validator enforces it on chain). The experimental Wasm build of the contracts' Java (`-Ajoust.portable`, the `:wasm`
-task) that recomputed calls in the page, and its "+1 (no service)" demo, were retired (ADR-0020 §12.3). Pages that
-prepare calls without a service use the runtime engine (`@julclang/joust-runtime`, ADR-0015).
+The page checks what it signs against the description and the chain; it does not recompute the next state itself.
+The experimental Wasm build of the contracts' Java (`-Ajoust.portable`, the `:wasm` task) that recomputed calls in the
+page, and its "+1 (no service)" demo, were retired (ADR-0020 §12.3). Pages that prepare calls without a service use
+the runtime engine (`@julclang/joust-runtime`, ADR-0015).
+
+What the page no longer checks before signing:
+
+- **The next state.** The validator binds it exactly, so a service that changes it gets a transaction the page accepts
+  and the wallet signs, and that the validator rejects at submission. `is_valid` is checked, so no collateral is
+  taken. `e2e/run.mjs` keeps this case as an **expected failure at submission** ("a changed next state"): it checks
+  that the transaction was signed, that the chain still holds the old state, and that the wallet's UTxOs are unchanged.
+- **The exact amount paid to each payee, and that no payout tagged with the target goes to anyone the contract does
+  not pay.** The validator binds only a lower bound per payee, so these rest on the verifier's bound on the wallet's
+  net outflow. The follow-up is a step-independent outflow bound (ADR-0020 C7).
 
 ## Pieces
 
