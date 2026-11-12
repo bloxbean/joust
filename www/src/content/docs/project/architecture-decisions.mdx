@@ -41,7 +41,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
-| [0018](#adr-0018-jsc-2-an-immutable-contract-language) | `.jsc` 2: an immutable contract language for JavaScript developers | Proposed (r4) | [.jsc](/languages/jsc/) |
+| [0018](#adr-0018-jsc-2-an-immutable-contract-language) | `.jsc` 2: an immutable contract language for JavaScript developers | Proposed (r5) | [.jsc](/languages/jsc/) |
 
 ## The base
 
@@ -312,7 +312,7 @@ Covered in: [Quick start: Java & Gradle](/start/quick-start-java/#create-it-with
 ### ADR-0018: `.jsc` 2, an immutable contract language
 
 [`0018-jsc-2-immutable-contract-language.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)
-· Proposed (r4)
+· Proposed (r5)
 
 `.jsc` 2 makes the language npm projects start with able to express every JOUST contract. It is **immutable**, like
 UPLC: names are bound once with `const`, blocks and `if`/`match` are expressions, and an action evaluates to the next

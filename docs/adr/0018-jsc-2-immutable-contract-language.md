@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r4)
+**Status:** Proposed (r5)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -154,7 +154,7 @@ destroy must produce at least one of pay/send/mint/deposit.
 | `send(to, value)`, `send(to, value, datum)` | `sends` | a list, in source order; `datum` is encoded by a generated encoder (D5) |
 | `mint(name, qty)`, `burn(name, qty)` | `mint` (one `Value`) | summed: `qty > 0` in each statement (else a located failure); `burn` adds `-qty`; entries whose net is 0 are removed; the net `Value` is the component |
 | `deposit(instance, value, memo)` | `deposits` | a list, in source order; `memo` encoded by a generated encoder |
-| `accept(value)` | `accepted` (one `Value`) | summed; each `value` non-negative |
+| `accept(value)` | `accepted` (one `Value`) | summed. As ADR-0007: native assets only (no lovelace), every entry strictly positive, and the sum equal to what the method takes in (`funds.received`'s native assets); `accept(Value.none())` states that a method with `Funds` takes none |
 | `emit(Ev { … })` | `events` | a list, in source order |
 
 "Source order" is order **within each kind**: the processor keeps kinds in separate components, so no order across
@@ -179,7 +179,7 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 | `Hash` | `byte[]` | a 28-byte script hash or policy id, same rules |
 | `Credential` | `Credential` | `keyCred(k)`, `scriptCred(h)`; `match` on `KeyCred { key }` / `ScriptCred { hash }`. Needed by `authorized` (ADR-0009 D3) |
 | `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`) |
-| `Value` | `Value` | `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos |
+| `Value` | `Value` | `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos |
 | `List<T>` | `JulcList<T>` | literals `[a, b]`, `[x, ...xs]`; D7 |
 | `Map<K, V>` | `JulcMap<K, V>`, canonical | an inline map in the datum. `K` is `Bytes`, `Key` or `Hash`, at most 64 bytes (F19); keys strictly ascending in canonical order, unique. `Map.empty()`. D7 |
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | a Merkle map (ADR-0002/0014), state fields only; `K` as for `Map` (F14). Rules in D7 |
@@ -269,7 +269,7 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 - **Lowering:** each fold, `for`, `find`, `contains` and `range` method becomes a generated, typed, self-recursive static
   helper (closure-converted). `map` lowers to a generated helper, by choice: one lowering for all
   element types (including those with bytes, whose equality D6 generates) and one closure-conversion scheme for every
-  collection method (`JulcList.map` itself is typed, `JulcList.java:66-67`). `any`/`all`/`filter` may lower to `JulcList`'s own methods with the
+  collection method. `any`/`all`/`filter` may lower to `JulcList`'s own methods with the
   lambda inline only for element types without bytes (F16); M0 measures both lowerings and fixes the choice. No `while` and no
   mutable accumulator, in `.jsc` or in the generated Java (J2).
 - **Off-chain depth.** On the JVM, generated recursion is Java recursion without tail calls: the runtime runs
@@ -339,17 +339,26 @@ import { concat, slice, length } from "std/bytes"
     every runtime (D8's crypto rule applies transitively, so a wrapper around keccak-256 or an unchecked Ed25519 call is
     refused); and **no construct from the catalogue of known JVM/on-chain differences** in JuLC's subset, kept in the
     reference docs and extended as JuLC documents more (its JVM/UPLC consistency programme, JuLC ADR-062/063):
-    equality and `contains`/map lookup on types containing bytes (F16), the native `JulcList.find` in any form (null
-    on the JVM, a failing field read on-chain: F17), `JulcMap.insert` duplicates (F19), reference casts, fixed-width
-    arithmetic. Each catalogue entry is a compiler intrinsic or library operation with a known divergence and gets an
-    import-refusal test and an equivalence vector. A library that fails is refused at the import with the reason.
+    equality and `contains`/map lookup on types containing bytes (F16); the native `JulcList.find` in any form (null
+    on the JVM, a failing field read on-chain: F17); the native `JulcMap.get` on a missing key, for **all** key and
+    value types (null on the JVM, a failure on-chain: `JulcMap.java:44-49`), so `get` is admitted only where presence is
+    established or through `lookup`, which returns an `Optional` on both sides; reference casts; fixed-width
+    arithmetic. Each entry is a compiler intrinsic or library operation with a known divergence and gets an
+    import-refusal test and present/absent equivalence vectors. **Separately, a boundary restriction (not a
+    divergence):** `JulcMap.insert` keeps duplicates identically on both sides (F19), so internal duplicate-keeping
+    maps are allowed inside a library, but any map crossing into `.jsc` is checked for canonical unique keys at
+    ingress (D5); tests cover both an internal computation and a non-canonical returned map. A library that fails is refused at the import with the reason.
     Certification also needs **per-function JVM-vs-UPLC vectors** (generated over each exported function's domain,
     including edges) before J3 counts the library as covered. Certification stops at the trusted base: the pinned JuLC
     stdlib through D8's table, and the JOUST API with its adapters. The build report marks every library certified.
-  - **Downstream class loading.** The duplicate-class check covers the contract's own build. Every class compiled from
-    a certified library's sources carries a generated constant with its on-chain-source hash, and the runtime checks
-    it when it loads the contract's clients, refusing to run if an application's class path supplies a different class
-    of that name (an application that also depends on the library's jar).
+  - **Downstream class loading.** The duplicate-class check covers the contract's own build. For applications that
+    depend on the contract, the build records the hash of each class file compiled from a certified library's sources,
+    in a manifest generated into the contract's client code, and the runtime verifies the **bytes that define** each
+    such class and its transitive library dependencies when it loads the contract's clients: it defines them itself
+    through an isolated loader from the verified bytes, so an application jar cannot supply those names, and refuses to
+    run on a mismatch. A constant inside the class would not do: a jar could carry the right constant with a different
+    body; a test substitutes such a class (same constant, changed body) and expects refusal. This protects JVM-side computation (views, prepared steps);
+    on-chain safety never depends on it.
   - **No second variant.** A library that ships an on-chain variant different from its JVM source (as JOUST's own
     `Require` and `Assets` do, under `src/onchain/java`) is refused, except the JOUST API itself, whose variants are
     part of the trusted base and covered by its own differential tests.
@@ -429,12 +438,16 @@ the milestone that implements it, reviewed against the processor's rules, and do
   `pay(seller, startPrice - elapsedSince(start) * step)` fails once the price is negative, so a late buyer would pick an
   early window to keep it positive). The rule is per position, for any time value, whatever arithmetic produced it:
   - **refused outright:** a divisor or remainder divisor; a domain-checked library argument (D8); `take`/`drop`/
-    `range` bounds and list indices; a `mint`/`burn` quantity; a `Key`/`Hash`/map-key construction;
-  - **allowed only under an outermost clamp:** a `pay` or `accept` amount and a `BigMap<K, Int>.set` value must be
-    exactly `max(0, e)` (or `clamp(0, e, hi)`) at the top, which the checker recognises; the operation then cannot fail
-    on the sign (a `pay` of 0 is skipped, `set(k, 0)` removes the entry);
-  - **allowed freely:** arithmetic, `const`s, record and state fields, `send` values built with `Value.lovelace(max(0,
-    e))`, events.
+    `range` bounds and list indices; a `mint`/`burn` quantity; a `Key`/`Hash`/map-key construction; **any part of a
+    `deposit` value** (the deposit verifier requires a non-empty, strictly positive value, so even a clamped 0 fails:
+    `OutputVerifier.java:42-46,65-68`); a **`BigMap<K, Int>.set` value** (stored integers are encoded through
+    `integerToByteString`, limited to 8,192 bytes on both sides, so a non-negative value is still not total:
+    `MerkleMaps.java:55-58`); **any part of a `send` value** (ADR-0007 r2 requires a strictly positive send
+    value, and the ledger a minimum per output, so a clamped 0 would still fail); **any part of an `accept` value**
+    (it must equal exactly the native assets received);
+  - **allowed only under an outermost clamp:** a `pay` amount must be exactly `max(0, e)` at the top, which the
+    checker recognises; the payout then cannot fail on its sign (a `pay` of 0 is skipped);
+  - **allowed freely:** arithmetic, `const`s, record and state fields, events.
   The `std/time` helpers are sources of time values with a documented bias, not exemptions: `elapsedSince(t)` =
   `max(0, validFrom - t)` (a lower bound of the time elapsed), `elapsedSinceAtMost(t)` = `max(0, validTo - t)` (an
   upper bound), `windowStart()` / `windowEnd()` (the bounds, to store). The docs show the Dutch auction written
@@ -449,9 +462,10 @@ the milestone that implements it, reviewed against the processor's rules, and do
   **error**: such a threshold can invert the predicate. Thresholds from stored state (set by earlier calls) or other
   contracts are allowed; reading a field always reads the input state, never this call's window.
 - **What remains.** Explicit decisions on time are only `after`/`before`, and no operation fails because of a time
-  value's sign or range. A time value can still change an outcome where the amount it sets makes the transaction
-  balance or not (a clamped payout larger than the balance); the submitter's influence there is bounded by
-  `maxValidityMs`, and the bias warning names it. J6 states exactly this scope.
+  value's sign or range. A time value can still change an outcome through the transaction-level rules on the amount it
+  sets: whether the transaction balances (a clamped payout larger than the balance), and the ledger's minimum per
+  output (a clamped, positive payout below it is handled as the processor handles any small payout). The submitter's
+  influence there is bounded by `maxValidityMs`, and the bias warning names it. J6 states exactly this scope.
 - **Time values may flow into amounts and state.** Arithmetic on time values is allowed, with a warning naming the
   bias when the result reaches an effect amount or a state field. The submitter chooses the window (§2): `validFrom`
   can be up to `maxValidityMs` early, `validTo` that much late. For accrual that pays the caller, measure elapsed time
@@ -635,7 +649,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J3 | **Four ways agree** for every construct of the milestone: the reference interpreter, the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
 | J4 | Effects appear in each kind's result in source order (loops: list order), only from taken branches; mint and accepted are net sums | D4 | differential tests; on-chain fixtures |
 | J5 | Every diagnostic on either build path names a `.jsc` file, line and column, and a stable code | D12 | tests with errors from each layer (checker, processor, JuLC) |
-| J6 | No time value (including one read from another contract) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities; only under an outermost `max(0, …)` in pay/accept amounts and `BigMap` int values); time values reaching amounts or state warn. Influence through whether a transaction balances is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
+| J6 | No time value (including one read from another contract) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities, `BigMap` int values, and send, accept and deposit values; only under an outermost `max(0, …)` in pay amounts); time values reaching amounts or state warn. Influence through transaction-level rules (balance, minimum per output) is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
 | J7 | Every library call is type-checked against the exact Java signature; every `Int → long/int` conversion is checked against the row's domain on both sides; no unmappable signature is callable; JVM and UPLC agree on each binding's edge and malformed vectors | D8, D9 | the binding test; per-row differential vectors; import-refusal tests |
 | J8 | No `.jsc` equality or membership lowers to reference equality, Java `equals`, `JulcList.contains/find` or `JulcMap` lookup on a type containing bytes | D6, D7 | lowering tests; generators with distinct-allocation bytes nested in records, enums, options, lists and maps |
 | J9 | Only direct self-recursion, checked after lowering; the build report lists recursive functions | D7 | checker tests (nested folds and branches) |
@@ -858,3 +872,13 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
     C13); the budget report reports measured scenarios, not worst cases (C21, J19); the `map` helper's reason corrected
     (C22); native `find` in the certification catalogue (C15, C1); `PlutusData` ledger fields inaccessible, records vs
     sums (C6).
+- **r5** (2026-11-12, responds to the round-4 reviews of `d0e241b`): time values refused in any part of a `deposit`
+  value and as a `Value` subtrahend, allowed in send/accept values only as clamped `Value.lovelace`/`Value.asset`
+  quantities combined by `+` (security S14); the downstream check hashes the loaded bytecode against a hash the build
+  records, not a constant in the class (security S24). Also the design round-4 review: time values refused in send
+  and accept values (a clamped 0 send still fails; accept must equal what is received), the minimum-per-output case
+  named with balancing as the residue outside J6 (F19); `Value.none()`, `accept`'s exact meaning, and a neutral reason
+  for the `map` helper (F21). Also the Codex round-4 review (C15, C19 partial; C23, C24): native `JulcMap.get`
+  misses in the certification catalogue for all types (C15); time-derived `BigMap` int values refused, `clamp` dropped
+  (C19); `JulcMap.insert` duplicates reclassified as a boundary restriction, not a divergence (C23); downstream classes
+  defined by an isolated loader from verified bytes, with a substitution test (C24, S24).
