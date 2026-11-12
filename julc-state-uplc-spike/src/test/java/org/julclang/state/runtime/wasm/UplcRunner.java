@@ -31,9 +31,11 @@ final class UplcRunner implements TransitionFn, ShadowTransitions.Side {
     private static final JulcVm VM = JulcVm.create();
 
     private final Map<String, Program> programs = new HashMap<>();
+    final Map<String, String> hex;
 
     UplcRunner(Map<String, String> programHex) {
-        programHex.forEach((m, hex) -> programs.put(m, JulcScriptAdapter.toProgram(hex)));
+        this.hex = Map.copyOf(programHex);
+        programHex.forEach((m, h) -> programs.put(m, JulcScriptAdapter.toProgram(h)));
     }
 
     @Override

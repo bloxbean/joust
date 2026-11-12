@@ -50,6 +50,16 @@ public class Probe {
         return new State(m1.containsKey(k) ? BigInteger.ONE : BigInteger.ZERO, s.key());
     }
 
+    /** A budget-exhausting run for the worst-case measurement (ADR-0020 D5.7): n steps of self-recursion. */
+    @Action
+    public static State spin(State s, BigInteger n) {
+        return new State(loop(n), s.key());
+    }
+
+    static BigInteger loop(BigInteger n) {
+        return n.signum() <= 0 ? n : loop(n.subtract(BigInteger.ONE));
+    }
+
     /** A Require: the require class. */
     @Action
     public static State positive(State s, BigInteger by) {
