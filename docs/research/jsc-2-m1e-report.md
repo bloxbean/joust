@@ -38,6 +38,7 @@ and into `contracts.json`; `@julclang/joust-runtime` appends the sites to a refu
 | `Pledges` | `4b2d347a…` | `694bf21f…` | 8,454 → 8,228 (−226) |
 | `Shelf` | `46116d3b…` | `98407f75…` | 12,783 → 12,755 (−28) |
 | `Vectors` | `93dcd7b2…` | `8fe9538b…` | 7,883 → 7,823 (−60) |
+| `Branches` (new in review r1) | — | `820bcd4e…` | 6,260 |
 | `Bounds`, `StdBytes`, `StdMath` | `32046198…`, `fa6154c2…`, `002d363a…` | unchanged | 9,973, 7,385, 8,150 (no generated check) |
 
 Full hashes after: Counter2 `0b1c24bc085fb7dedf6b1b42201796c1de5cba6db407da7cdd8785cc`, Ledger
@@ -75,24 +76,28 @@ at about 250 parentheses.
   (tested with the front end on a 96 KB thread stack); `Toolchain.build` turns a `StackOverflowError` past the front
   end into a diagnostic; `joust build` reports an engine failure instead of throwing.
 
-| Case | JVM | Web Image, default Node stack |
-|---|---|---|
-| 56 nested parentheses; blocks 25; lambdas 12; match 12; value ifs 20 | ok | ok |
-| 1,000 parentheses; blocks, lambdas, match, value ifs 200 | JSC0149 | JSC0149 |
-| a 5,000-term sum; a 3,000-term `&&` | ok (675 ms, 285 ms) | ok (2.3 s, 0.9 s) |
-| 200 else-if statement branches | ok (0.4 s) | ok (1.0 s) |
-| 1,000 else-if value branches | ok (2.4 s) | ok (7.3 s) |
-| 1,000 else-if statement branches | ok (3.6 s) | not run: past the front end, see below |
-| `x / 2 / 2 …` 200 links | JSC0150 | JSC0150 |
-| a type chain 100 deep | JSC0340 | JSC0340 |
+Each Web Image case runs on a **cold** engine, the first build in a fresh Node process, as `joust build` meets it.
+"Main thread" is Node's default stack (about 1 MB). "Worker" is `joust build`'s 8 MB worker (since review r1).
 
-**JuLC's limit in the Web Image.** The front end handles any chain length, but JuLC's own PIR passes
-(`NarrowingElisionPass`, `PirHelpers.mapChildren`) recurse on the compiled term. On a 1 MB stack the Web Image compiles
-about 250 else-if statement branches in one contract (one chain of 250 builds, 300 does not; four chains of 100 do not);
-the JVM builds 1,000. The same generated Java fails alone in the Web Image and builds with `node --stack-size=3800`, so
-the limit is JuLC's, not the front end's. Lowering each statement branch to one helper (its arm inline) instead of two
-raised it from about 100 to about 250. A JuLC follow-up (iterative passes, a `joust`-labelled issue) or a larger worker
-stack in `joust build` would lift it; scripts that large approach the 16 KB limit anyway.
+| Case | JVM | Web Image, cold: main thread / worker |
+|---|---|---|
+| 56 nested parentheses; blocks 25; lambdas 12; match 12; value ifs 20 | ok | ok / ok |
+| 1,000 parentheses; blocks, lambdas, match, value ifs 200 | JSC0149 | JSC0149 / JSC0149 |
+| a 5,000-term sum; a 3,000-term `&&` | ok | ok / ok |
+| 200 else-if statement branches; a recursive chain of 9 | ok | ok / ok |
+| `x / 2 / 2 …` 200 links | JSC0150 | JSC0150 / JSC0150 |
+| a type chain 100 deep; 4 types × 60 `List` layers | JSC0340 | JSC0340 / JSC0340 |
+| 1,000 statement branches; 4 chains × 100; 300 and 1,000 value branches | ok (3.6 s, 1.2 s, 0.4 s, 2.2 s) | worker: ok (11.9 s, 4.7 s, 2.1 s, 8.6 s) |
+
+**JuLC's limit in the Web Image** (bloxbean/julc#327). The front end handles any chain length, but JuLC's own PIR
+passes (`NarrowingElisionPass`, `PirHelpers.mapChildren`) recurse on the compiled term.
+
+On Node's main thread, a **cold** engine fails at about 270–300 else-if branches (statement or value), or four chains
+of 70, some of them under 16 KB. A warm engine goes further. Round r1's first figures ("1,000 value branches") were
+measured warm and were wrong.
+
+`joust build` now runs the engine on a worker with an 8 MB stack. There, a cold engine builds 2,000 statement branches
+(83,925 B, 40 s), so the npm and Gradle outcomes agree. The engine's failure, if it still happens, is a diagnostic.
 
 ## ADR-0021 §3a
 
@@ -106,6 +111,31 @@ ADR-0021 (#66) §3a asks ADR-0018 for two M1e items, both in r12:
   tested on a default-stack Node.
 
 Items 1 (§8's gate), 5 (per-contract ABI acceptance) and 6 (D13) are not M1e's.
+
+## Review round r1 (#71)
+
+Every finding has a regression test.
+
+- **Attribution** (Codex C3, C4; security S1, S2; design F5): a trace is matched whole (equal, or after `": "`), and
+  the longest match wins. It is looked up only in the refusing contract's map: the engine names it in a composition
+  (`refusedBy`), and each map in `contracts.json` carries its script's hash. JSC0430 refuses `#word:` anywhere in an
+  author's message. The JVM, the runtime and JS share the rule's vectors
+  (`julc-state-dsl/src/test/resources/jsc2-message-matching.json`). `BuiltContract` has `messages?`.
+- **A complete map** (C5, F3): each std adapter's messages, and `MerkleMaps.putInt`'s, are recorded at the call sites.
+  `JscV2M1eR2BuildTest` checks every string constant of each example's linked validator and transition programs
+  against its map; `pow(2, -1)`'s actual trace is explained at its site.
+- **Type depth** (C2, S3): every layer counts, at declarations, state fields and written types.
+- **Recursion** (C1, F6, S5): a recursive value chain stays inline at any length (Codex's 9- and 12-branch cases).
+  A recursive call in a condition the lowering puts in a helper is JSC0601 at the call.
+- **The package** (F1): the one exception, from JuLC's sensitivity to import order (bloxbean/julc#328). It is stated in
+  D12 and J20 and asserted.
+- **Cold engine** (F2, S4): see above; `js/joust/test/cold-engine.test.js` builds 300 branches (14,925 B) and four
+  chains of 100 in a fresh process.
+- **The JVM path** (F4): the map is a resource beside the contract's classes (the plugin and `examples/dsl`).
+  `JscMessages` appends the sites to a `RequireException` the contract method raises in `StateInstance` and in init.
+- **Tests** (F7): `Branches.jsc` holds a paying statement chain, a 12-branch value chain, a recursive 9-branch chain
+  and a `pow` refusal, on four legs (48 calls). The rename edit now renames every declared name in reversed
+  alphabetical order. A package edit is asserted.
 
 ## Tests run at this head
 
