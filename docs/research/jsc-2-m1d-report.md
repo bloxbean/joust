@@ -112,6 +112,26 @@ The three reviews of r1 (`d7aa862`) and what changed; every repro and mutation i
   corrected. F7: `wordPattern`, `engines.vscode ^1.109.0`, `JscTextMateTest` (the grammar names exactly the front
   ends' words), the path noted for ADR-0021 M5a. F8: ADR-0018 r13.
 
+## Review round r3
+
+Design and security approved r2 with P3s; Codex's C2–C4 were open. What changed (each repro is a test):
+
+- **Paths and in place** (Codex C2, security S5, S6). Every default-mode target is checked before anything is written:
+  through any link on its path, resolved at its nearest existing ancestor, it may not lie in the sources or be any
+  source (Codex's `out/a -> ../src/b` alias is refused, JSC1108, on both paths; npm's directory check resolves like the
+  JVM's `within`). In place, a file with more than one hard link, under a linked directory, or whose real path is not
+  under the sources is refused (JSC1109), and the new text is renamed over the source from a temporary file.
+- **Remap** (C3): a candidate is identified by the unit its parser reads, so declarations in comments do not count.
+- **v1 artifacts** (C4): kept by the contract name the engine's parser reads (a contract on the package's line
+  included), the shared ones always; a failed copy leaves the file unreplaced.
+- **Deployments files** (S7): a parseable file of the wrong shape is unreadable (kept beside the new file, warned at
+  build); merging and the stale warning are null-safe; the new records are always written.
+- **Rebuildability** (design F9): each deployment record states `built` (the package's, the engine's JOUST and its JuLC
+  versions); ADR-0018 D14 (r13) says so, and to commit deployments files when a deployed preview script must be rebuilt.
+- **JSC9007's note** (F10): only the nearest leading `-` on or before the error.
+- **Differential coverage** (F11): 260 of 342 programs migrate (Gen1 160, Gen2 100; JSC1106 71), 26,000 calls agree,
+  1,005 actions pay out; the eight mutants are still caught.
+
 ## Not in M1d
 
 A deployments record on the Gradle path (it has none; ADR-0018 r13 D16 narrows the stale warning to npm); a language
