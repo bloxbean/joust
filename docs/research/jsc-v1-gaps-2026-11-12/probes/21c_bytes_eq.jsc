@@ -1,0 +1,10 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    state b: Bytes
+    init(b0: Bytes) { owner = caller
+      b = b0 }
+    action a(x: Bytes) { require x == b "eq"
+      n = 1 }
+}

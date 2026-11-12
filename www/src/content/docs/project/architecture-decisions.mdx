@@ -1,6 +1,6 @@
 ---
 title: Architecture decisions
-description: Every JOUST architecture decision record (ADR-0001 to ADR-0017), with its status, the decision in one paragraph and the guide that covers it.
+description: Every JOUST architecture decision record (ADR-0001 to ADR-0018), with its status, the decision in one paragraph and the guide that covers it.
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
@@ -41,6 +41,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
+| [0018](#adr-0018-jsc-2-an-immutable-contract-language) | `.jsc` 2: an immutable contract language for JavaScript developers | Proposed (r6) | [.jsc](/languages/jsc/) |
 
 ## The base
 
@@ -307,6 +308,22 @@ Homebrew formula gated on repository settings.
 
 Covered in: [Quick start: Java & Gradle](/start/quick-start-java/#create-it-with-joust-new),
 [the native `joust`](/reference/joust-cli/#the-native-joust).
+
+### ADR-0018: `.jsc` 2, an immutable contract language
+
+[`0018-jsc-2-immutable-contract-language.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)
+· Proposed (r6)
+
+`.jsc` 2 makes the language npm projects start with able to express every JOUST contract. It is **immutable**, like
+UPLC: names are bound once with `const`, blocks and `if`/`match` are expressions, and an action evaluates to the next
+state (`{ ...state, count: count + by }`). Paying, sending, minting and emitting are declarations, in source order. It
+adds typed functions (with direct recursion), records, enums, `Option`, lists with `fold`/`map`/`filter`, inline and
+Merkle maps, and every feature of the Java contract model. It calls the JuLC standard library through a curated,
+typed `std/*` library, and imports JuLC `@OnchainLibrary` code with exact Java signatures and one body on both sides.
+Equality, time, inputs and audiences are made sound by rule: generated structural equality, a dataflow rule that
+keeps time out of control flow, deep checks on every input, and an explicit audience for every paying method. It still lowers to a
+Java `@StateContract`, so nothing new is trusted on chain; an independent reference interpreter checks the lowering.
+Files start with `jsc 2`; v1 files keep compiling and `joust migrate` rewrites them.
 
 ## Research behind the ADRs
 

@@ -1,0 +1,5 @@
+package p
+contract P(params: { fee: Int }) {
+    state n: Int
+    init() { }
+}

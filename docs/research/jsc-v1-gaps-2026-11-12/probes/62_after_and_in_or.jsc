@@ -1,0 +1,9 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    state deadline: Int
+    init() { owner = caller }
+    action a() { require (caller == owner) || after(deadline) && n > 0 "x"
+      n = 1 }
+}
