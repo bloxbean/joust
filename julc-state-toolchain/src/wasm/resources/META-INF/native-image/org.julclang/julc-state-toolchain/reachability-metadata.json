@@ -11,6 +11,10 @@
     { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$RunResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
     { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$MigrateRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
     { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$Migrated", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
-    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$MigrateResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true }
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$MigrateResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$AnalyzeRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$AnalyzeResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$LangInfoRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$LangInfo", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true }
   ]
 }

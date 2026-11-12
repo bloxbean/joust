@@ -135,8 +135,16 @@ public final class JscV2 {
 
     /** Checks and lowers a {@code .jsc} 2 source to a Java {@code @StateContract}. */
     public static Lowered lower(String source, String fileName) {
+        return lower(source, fileName, null);
+    }
+
+    /**
+     * {@link #lower}, recording the language core's spans into {@code spans} when it is not null (ADR-0021 D6): the same
+     * steps, so the lowering and every error are the same with or without (L5).
+     */
+    static Lowered lower(String source, String fileName, Spans spans) {
         checkFileName(fileName);
-        Ir.Program p = Checker.check(Parser.parse(source), fileName);
+        Ir.Program p = Checker.check(Parser.parse(source, spans), fileName);
         var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList();
         JavaEmitter.Emitted e = JavaEmitter.emit(p);
         String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";

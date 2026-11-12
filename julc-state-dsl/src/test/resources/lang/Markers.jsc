@@ -1,0 +1,47 @@
+jsc 2
+package lang.markers
+
+// ADR-0021 D12: hand-written expectations for the language core's M5a spans, written without the implementation.
+//   a "name" marker (slash-star, @name KIND, star-slash): the next name declares a KIND; its name span is exactly it;
+//   an extent marker (@{KIND NAME) up to a closing one (@}): from the next token to just before the closing marker.
+// Comments between a keyword and its name are part of the test (D6).
+
+import { /*@name import*/div, /*@name import*/mod } from "std/math"
+
+/*@{type Point*/type /* a comment */ /*@name type*/Point = {
+  /*@{field x*/ /*@name field*/x: Int/*@}*/,
+  /*@{field y*/ /*@name field*/y: Int/*@}*/
+}/*@}*/
+
+/*@{enum Phase*/enum /*@name enum*/Phase {
+  /*@{variant Open*/ /*@name variant*/Open/*@}*/,
+  /*@{variant Closed*/ /*@name variant*/Closed { /*@name field*/since: Int }/*@}*/
+}/*@}*/
+
+/*@{fn twice*/fn /*@name fn*/twice(/*@{param n*/ /*@name param*/n: Int/*@}*/): Int = n * 2/*@}*/
+
+/*@{contract Markers*/contract
+  /*@name contract*/Markers {
+  /*@{state state*/ /*@name state*/state { /*@{stateField count*/ /*@name stateField*/count: Int/*@}*/, /*@name stateField*/owner: Key, /*@name stateField*/phase: Phase }/*@}*/
+
+  /*@{init init*/ /*@name init*/init() {
+    return { count: 0, owner: caller, phase: Open }
+  }/*@}*/
+
+  /*@{action bump*/action /* why */ /*@name action*/bump(/*@name param*/by: Int, /*@name param*/xs: List<Int>) {
+    /*@{const total*/const /*@name const*/total = xs.fold(0, (/*@name lambdaParam*/acc, /*@name lambdaParam*/x) => acc + x)/*@}*/
+    /*@{loopVar x*/for (const /*@name loopVar*/x of xs) {
+      require(x >= 0, "no negatives")
+    }/*@}*/
+    const ok = xs.all(/*@name lambdaParam*/v => v < 100)
+    require(ok, "too large")
+    const p = match state.phase { Closed { since: /*@name binding*/when } => when, Open => 0 }
+    return { ...state, count: count + by + total + p + div(mod(by, 7), 1) }
+  }/*@}*/
+
+  /*@{view current*/view /*@name view*/current(): Int = twice(count)/*@}*/
+
+  /*@{destroy close*/destroy /*@name destroy*/close() only owner {
+    pay(owner, balance)
+  }/*@}*/
+}/*@}*/
