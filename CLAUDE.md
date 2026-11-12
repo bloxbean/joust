@@ -174,6 +174,14 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   link window may start ahead (within maxStartSlots): submit at its start. DevKit's Yaci Store serves no transaction
   CBOR, so pages there bind keyed inputs by Ctx or the balance equation. `js/state-client/test/fixtures/
   registry.description.json` is a copy of the generated description (`RegistryDescriptionTest` fails when stale).
+- **Validators are found by simple name in JuLC** (bloxbean/julc#326): JuLC writes and `JulcScriptLoader` reads
+  `META-INF/plutus/<SimpleName>.plutus.json`, so two validators with one simple name (`…vault.VaultValidator`,
+  `…dsl.VaultValidator`) share a resource. JOUST loads scripts through `ValidatorScripts` (the copy beside the validator
+  class; refuses ambiguity); never call `JulcScriptLoader.load(Class)` for a generated validator. Don't give two
+  contracts on one class path the same simple name in a shaded jar (refused).
+- ADR-0018 M1c: the Java examples vault, escrow, crowdfund, token and pool also run against their `.jsc` 2 ports
+  (`examples/dsl`'s `copyPortTests` copies their `*Test.java`; `:examples:dsl:test` runs them). Keep those tests in their
+  package directory (the copy fails on subpackages or resources), and call the init as `<Contract>.<init>(`.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

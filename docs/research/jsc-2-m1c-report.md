@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M1c: report (ADR-0018 §8, J11)
 
-Date 2026-11-13. Branch `feat/jsc-2-m1c`, stacked on `feat/jsc-2-m1a` (r4, `dfa7025`, merged in). JuLC `v0.1.0-pre21-rc1`,
+Date 2026-11-13, review round r2. Branch `feat/jsc-2-m1c`, stacked on `feat/jsc-2-m1a` (r4, `dfa7025`, merged in). JuLC `v0.1.0-pre21-rc1`,
 cardano-client-lib `0.8.0-pre7`, JDK 25, macOS arm64. Every number below was measured at this branch's head; the test
 that prints it is named with each table.
 
@@ -16,10 +16,14 @@ protocol's per-transaction maximum at a state saturated to `maxDatumBytes`.
 | The five ports | `examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/{Vault,Escrow,Crowdfund,Token,Pool}.jsc`, each with its ABI manifest (`*.abi.json`, written by `acceptJscAbi`) | below |
 | `batched` and `batched only` (D10's row, gated by pool): `@Batched` and `@Batched(only = true)`. The processor's rules are applied at `.jsc` positions: an action only (JSC0418); no `only`, `after` or `before`, since the batcher signs a batch and sets its window (JSC0417); no BigMap state (JSC0419, D7); a paying batched action says `open` (JSC0420, D4); the intent form's names `<m>Intent` and `<M>Intent` are free (JSC0223). A modifier given twice is refused (JSC0416; before M1c, `payable payable` reached javac) | `Parser.mods`, `Checker.method`, `JavaEmitter.method` | `JscV2M1cCheckerTest` (3), the diagnostics catalogue |
 | The ABI manifest of a batched contract (D12): the batch's spend redeemers (`Batch`, `InBatch`, `CancelIntent`) after the direct ones (a `batched only` action has none), the mint's `CreateIntent`, and an `intent` root naming the intent's datum (`Intent`, its `IntentCall` with one variant per batched action, the ledger's `Address`) and its refund tag (`IntentRefund`), checked against the processor's description like the rest | `Abi.of`, `AbiCheck.compare` | `JscV2M1cCheckerTest.batched_abiManifest_statesTheIntent`; `checkJscAbi` (13 manifests) |
-| The Java examples' tests run against the ports | `examples/dsl/build.gradle`'s `portTests`: copies `examples/{vault,escrow,crowdfund,token,pool}/src/test/java/**/*Test.java` with three textual changes (the package, a `Port` suffix on each class, the init called `init`) | 55 tests: `VaultPortTest` (8), `EscrowPortTest` (5), `CrowdfundPortTest` (5), `TokenPortTest` (12), `PoolPortTest` (16), each example's description test (5) and DevKit test (5) |
-| Four-way vectors and mutation rejection for each port | `JscV2M1cFourWayTest`; `FourWay` gains batched actions (through a batch of one intent, and a direct call unless `batched only`), `mutants(…)`, and `pinned(spec)` (below) | 503 calls; 185 mutants and 470 attacks rejected |
-| The gates: size, encoding, behaviour, per-call budget, the budget gate at saturation | `JscV2M1cGateTest` | 3 tests, 53 calls measured on both implementations (24 at saturation) |
+| The Java examples' tests run against the ports | `examples/dsl/build.gradle`'s `copyPortTests` (r2: renamed; it only copies, `:examples:dsl:test` runs them): copies the `*Test.java` directly in each example's test package (`examples/<x>/src/test/java/org/julclang/state/examples/<x>/`) with three textual changes (the package, a `Port` suffix on each class, the init called `init`), and fails when an example's `src/test` holds anything else (a subpackage, a helper, resources) | 56 tests: `VaultPortTest` (8), `EscrowPortTest` (5), `CrowdfundPortTest` (5), `TokenPortTest` (12), `PoolPortTest` (16), each example's description test (5) and DevKit test (5) |
+| Four-way vectors and mutation rejection for each port | `JscV2M1cFourWayTest`; `FourWay` gains batched actions (through a batch of one intent, and a direct call unless `batched only`), `mutants(…)`, and `pinned(spec)` (below) | 515 calls (12 of them modifier refusals, stated); 185 mutants and 481 attacks rejected; every call also run on the Java example (3 stated differences) |
+| The gates: size, encoding, behaviour, per-call budget, the budget gate at saturation | `JscV2M1cGateTest` | 4 tests, 62 calls measured on both implementations (31 at saturation) |
 | A batch built from a stated plan | `StateHarness.batch(live, codec, intents, plan)` (testkit) | used by `FourWay` |
+| r2: a validator's script is the one beside its class (review S1/F1) | `julc-state-runtime` `ValidatorScripts`, used by `StateContractHandle.scriptFor`, `VerifierHandle` and `StateHarness` | `ValidatorScriptsTest` (3), `ValidatorScriptCollisionTest` (3) |
+| r2: attacks only a method's own modifiers can refuse (S2/F2) | `Attacks.modifierAttacks`, read from the description's `policies` | every example's attack suite |
+| r2: the generated client compiles (C1) | `JscV2GeneratedClientTest`: javac with the JOUST processor over each port and a batched fixture | 2 |
+| r2: the intent ABI bound to the processor's roots (C3, S4) | `AbiCheck.compare`, against `x-joust.intents` | `JscV2M1cAbiCheckTest` (12 mutations) |
 
 **Where the ports live.** Beside the other `.jsc` 2 contracts in `examples/dsl`, in its package, rather than beside
 each Java example. The `.jsc` build (`generateJsc`, `acceptJscAbi`, `checkJscAbi`), the four-way harness (bound to that
@@ -77,19 +81,25 @@ message, 0 is skipped) and byte equality through a generated helper; Escrow, the
 (`AbiCheck`), against **the Java example's** processor description. The datum, every redeemer (constructor indices,
 field names and order, the `ctx` fields, the data shapes) and, for pool, the intent datum and its `IntentCall` encode
 exactly as the Java example's. A port is therefore a drop-in for its Java example's data: an off-chain client or
-indexer written for one reads the other.
+indexer written for one reads the other. Which is also why two contracts must never share a script by name (review S1,
+below).
 
 ## Execution units (J11)
 
 `JscV2M1cGateTest.budgets`: every call runs on both implementations, as the runtime shapes it (map witnesses for
-Token, a batch of one intent for Pool's batched calls), and both are accepted. Units are the whole transaction's: every
-script it runs (spend, mint, and the map verifier where a BigMap is read or written). "@ max" rows are the budget gate,
-at the largest input state for which the call is valid (Int fields padded to many digits, Crowdfund's map filled to
-27 backers, Token's BigMap holding 1,024 holders); the third column gives the input and output datum sizes. Every
-port's call is asserted within +15% of Java's in CPU and memory, and within the per-transaction maximum (10,000,000,000
-CPU steps, 14,000,000 memory units: the pre-Plomin memory limit, the stricter one), with a warning above 80% (none).
+Token, batches for Pool's batched calls), and both are accepted. Units are the whole transaction's: every script it
+runs (spend, mint, intents, and the map verifier where a BigMap is read or written). "@ max" rows are the budget gate.
+Their state is the largest the **Java example** accepts (round r2, review C2): Int fields padded to many digits,
+Crowdfund's map filled to 27 backers, Token's BigMap holding 1,024 and 65,536 holders, Pool's batched actions as a full
+batch of `Batcher.DEFAULT_MAX` (8) intents. The port must then accept exactly that state; the gate never shrinks it for
+the port (`theSaturationGate_failsWhenThePortCannotHandleTheJavaValidMaximum` shows a port that refuses large deposits,
+and one rejected on-chain, failing it). The third column gives the stored datum sizes (canonical CBOR, BigMaps as
+their roots; r2, review F9). Every port's call is asserted within +15% of Java's in CPU and memory, and within the
+per-transaction maximum (10,000,000,000 CPU steps, 14,000,000 memory units: the pre-Plomin memory limit, the stricter
+one), with a warning above 80%; and every port's init, actions and destroys are asserted measured at saturation (from
+the `.jsc` source's methods; review F8).
 
-| Contract | Call | Datum bytes (in → out) | Java CPU | `.jsc` 2 CPU | Δ CPU | Java memory | `.jsc` 2 memory (Δ) | % of max (CPU / mem) |
+| Contract | Call | Stored datum bytes (in → out) | Java CPU | `.jsc` 2 CPU | Δ CPU | Java memory | `.jsc` 2 memory (Δ) | % of max (CPU / mem) |
 |---|---|---|---|---|---|---|---|---|
 | Vault | init (first deposit) |  | 93,152,087 | 93,152,087 | 0 (+0.0%) | 291,440 | 291,440 (+0.0%) | 0.93% / 2.08% |
 | Vault | deposit |  | 99,426,377 | 99,513,620 | 87,243 (+0.1%) | 303,109 | 303,641 (+0.2%) | 1.00% / 2.17% |
@@ -127,9 +137,12 @@ CPU steps, 14,000,000 memory units: the pre-Plomin memory limit, the stricter on
 | Token | burn |  | 329,509,067 | 330,850,182 | 1,341,115 (+0.4%) | 1,179,329 | 1,186,075 (+0.6%) | 3.31% / 8.47% |
 | Token | close |  | 172,613,655 | 174,843,158 | 2,229,503 (+1.3%) | 616,049 | 626,644 (+1.7%) | 1.75% / 4.48% |
 | Token | init (fixed size) @ max | 0 → 75 | 156,696,586 | 156,696,586 | 0 (+0.0%) | 515,582 | 515,582 (+0.0%) | 1.57% / 3.68% |
-| Token | mint (1,024 holders) @ max | 160 → 200 | 408,293,130 | 410,922,220 | 2,629,090 (+0.6%) | 1,512,756 | 1,524,343 (+0.8%) | 4.11% / 10.89% |
-| Token | transfer (1,024 holders) @ max | 160 → 239 | 689,441,368 | 700,375,945 | 10,934,577 (+1.6%) | 2,635,157 | 2,676,033 (+1.6%) | 7.00% / 19.11% |
-| Token | burn (1,024 holders) @ max | 160 → 200 | 433,690,433 | 435,031,548 | 1,341,115 (+0.3%) | 1,605,809 | 1,612,555 (+0.4%) | 4.35% / 11.52% |
+| Token | mint (1,024 holders) @ max | 160 → 160 | 408,293,130 | 410,922,220 | 2,629,090 (+0.6%) | 1,512,756 | 1,524,343 (+0.8%) | 4.11% / 10.89% |
+| Token | transfer (1,024 holders) @ max | 160 → 160 | 689,441,368 | 700,375,945 | 10,934,577 (+1.6%) | 2,635,157 | 2,676,033 (+1.6%) | 7.00% / 19.11% |
+| Token | burn (1,024 holders) @ max | 160 → 160 | 433,690,433 | 435,031,548 | 1,341,115 (+0.3%) | 1,605,809 | 1,612,555 (+0.4%) | 4.35% / 11.52% |
+| Token | mint (65,536 holders) @ max | 160 → 160 | 614,630,902 | 617,259,992 | 2,629,090 (+0.4%) | 2,328,442 | 2,340,029 (+0.5%) | 6.17% / 16.71% |
+| Token | transfer (65,536 holders) @ max | 160 → 160 | 996,825,746 | 1,007,760,323 | 10,934,577 (+1.1%) | 3,874,887 | 3,915,763 (+1.1%) | 10.08% / 27.97% |
+| Token | burn (65,536 holders) @ max | 160 → 160 | 534,737,039 | 536,078,154 | 1,341,115 (+0.3%) | 2,029,853 | 2,036,599 (+0.3%) | 5.36% / 14.55% |
 | Token | close (fixed size) @ max | 75 → 0 | 172,613,655 | 174,843,158 | 2,229,503 (+1.3%) | 616,049 | 626,644 (+1.7%) | 1.75% / 4.48% |
 | Pool | init |  | 97,438,830 | 97,438,830 | 0 (+0.0%) | 300,694 | 300,694 (+0.0%) | 0.97% / 2.15% |
 | Pool | donate (direct) |  | 105,125,988 | 105,125,988 | 0 (+0.0%) | 316,269 | 316,269 (+0.0%) | 1.05% / 2.26% |
@@ -143,14 +156,32 @@ CPU steps, 14,000,000 memory units: the pre-Plomin memory limit, the stricter on
 | Pool | donate (batch of 1) @ max | 192 → 192 | 345,196,108 | 345,196,108 | 0 (+0.0%) | 1,115,423 | 1,115,423 (+0.0%) | 3.45% / 7.97% |
 | Pool | buy (batch of 1) @ max | 156 → 190 | 386,621,269 | 388,382,239 | 1,760,970 (+0.5%) | 1,241,985 | 1,249,947 (+0.6%) | 3.88% / 8.93% |
 | Pool | withdraw @ max | 192 → 192 | 142,971,838 | 144,970,098 | 1,998,260 (+1.4%) | 435,998 | 445,161 (+2.1%) | 1.45% / 3.18% |
+| Pool | donate (batch of 8) |  | 3,257,232,409 | 3,257,232,409 | 0 (+0.0%) | 10,004,954 | 10,004,954 (+0.0%) | 32.57% / 71.46% |
+| Pool | buy (batch of 8, change) |  | 3,999,379,185 | 4,013,466,945 | 14,087,760 (+0.4%) | 12,334,922 | 12,398,618 (+0.5%) | 40.13% / 88.56% |
+| Pool | donate (batch of 8) @ max | 192 → 192 | 3,261,108,745 | 3,261,108,745 | 0 (+0.0%) | 10,005,050 | 10,005,050 (+0.0%) | 32.61% / 71.46% |
+| Pool | buy (batch of 8, change) @ max | 192 → 192 | 4,003,255,521 | 4,017,343,281 | 14,087,760 (+0.4%) | 12,335,018 | 12,398,714 (+0.5%) | 40.17% / 88.56% |
+| Pool | buy (batch of 8, exact) @ max | 192 → 192 | 3,284,932,497 | 3,292,873,337 | 7,940,840 (+0.2%) | 10,092,402 | 10,132,130 (+0.4%) | 32.93% / 72.37% |
+| Pool | donate and buy (batch of 8) @ max | 192 → 192 | 3,593,386,933 | 3,600,430,813 | 7,043,880 (+0.2%) | 11,020,450 | 11,052,298 (+0.3%) | 36.00% / 78.94% |
 | Pool | close @ max | 192 → 0 | 114,326,491 | 116,324,751 | 1,998,260 (+1.7%) | 394,824 | 403,987 (+2.3%) | 1.16% / 2.89% |
 
 **Reading the table.** Vault, Escrow, Token and Pool cost 0–3.4% more than Java: the generated payout guards (a
-negative-amount check and a skip of 0, D4), D5's key checks and the byte-equality helper. Calls whose generated code matches the
-Java line for line (the inits without key arguments, Pool's donate) cost exactly the same. **Crowdfund's `contribute` is cheaper in
-`.jsc` 2** (−11% CPU with two backers, −75% with 27): its `Map.set` lowers to a single-pass insertion helper, where the
-Java example's `SortedMaps.put` looks every key up again while it rebuilds the map (`SortedMaps.java:30-43`, quadratic).
-The largest call measured is Token's transfer among 1,024 holders at 7.0% of the CPU and 19.1% of the memory limit.
+negative-amount check and a skip of 0, D4), D5's key checks and the byte-equality helper. Calls whose generated code
+matches the Java line for line (the inits without key arguments, Pool's donate) cost exactly the same. **Crowdfund's
+`contribute` is cheaper in `.jsc` 2** (−11% CPU with two backers, −75% with 27): its `Map.set` lowers to a single-pass
+insertion helper, where the Java example's `SortedMaps.put` looks every key up again while it rebuilds the map
+(`SortedMaps.java:30-43`, quadratic; bloxbean/joust#70).
+
+- **Batches (review F3, S3).** A batch of 8 is the shape the batcher builds, and it fits at a saturated state: 8 buys
+  with change at **88.6% of the memory limit** (40.2% CPU; the 80% warning fires for it, both at a small and at a
+  saturated state), 8 exact buys at 72.4%, 8 donations at 71.5%, and 4 donations with 4 buys at 78.9%. The port is
+  within +0.5% of the Java example in each. A ninth buy does not fit (the security review measured 105.8%), so
+  `DEFAULT_MAX = 8` is the largest that fits for `buy`; the batcher already halves a batch that fails. Against the
+  current mainnet limit (16,500,000 since Plomin) the worst batch is at 75%. Not changed here: a tighter default, or a
+  per-contract maximum the batcher reads from the budget report (J19), is a maintainer decision.
+- **Token's depth (review F9).** Its cost grows with the trie's depth, not with the datum: the state stores a 32-byte
+  root whatever the map holds. An MPF trie is radix 16, so 1,024 holders give proofs about 3 levels deep and 65,536
+  about 4. The rows show the growth per level: the largest call, a transfer, goes from 19.1% to 28.0% of the memory
+  limit. A map of a million holders would add about one level more, which is still well within the limit.
 
 ## Four-way agreement and mutation rejection (J3)
 
@@ -160,13 +191,19 @@ through a batch of one intent whose outcome the test states (the interpreter's),
 proposed anyway and must be rejected; `donate` (batched, not only) is checked through a direct call too, and the two
 must agree.
 
-| Contract | Calls | Refused | Validator runs | Through a batch | Mutants rejected | Attacks rejected | What they cover |
-|---|---|---|---|---|---|---|---|
-| Vault | 37 | 16 | 35 | | 24 | 73 | `before(unlockAt)` at the window's edges (T0 + 2 min − 1, T0 + 2 min, + 1), a first deposit of 0, deposits of 0/1/5 ADA, withdrawals of −1, 0, 1, all, all + 1 |
-| Escrow | 66 | 30 | 65 | | 16 | 66 | each party releasing and refunding at six deadlines around the window (T0 − 2 … T0 + 2 min), `after` under `\|\|` (a deadline at T0 has passed, at T0 + 1 not: `Clock.after` is `validFrom >= t`), a 27-byte seller refused on every leg |
-| Crowdfund | 201 | 135 | 192 | | 59 | 104 | an empty, one- and two-backer map (keys inserted against canonical order), contributions below/at/above the minimum, before/at/after the deadline; refunds, claims and closes either side of the goal |
-| Token | 158 | 116 | 152 | | 26 | 96 | mints, transfers (to another, to self, everything: the key removed, by hand) and burns of 0, 1, 25, 100, 101 from holders and strangers; a 27- and a 29-byte recipient refused on every leg; close with and without balances; at most 3 read rounds |
-| Pool | 41 | 20 | 40 | 26 | 60 | 131 | init with negative and zero pricing; donations below/at 1 ADA (direct and as intents); buys as intents with change, exact payment and a price above the buyer's bound |
+| Contract | Calls | Refused | Validator runs | Through a batch | Modifier refusals | Mutants rejected | Attacks rejected | Differences from Java (stated) | What they cover |
+|---|---|---|---|---|---|---|---|---|---|
+| Vault | 43 | 16 | 41 | | 6 | 24 | 79 | none | `before(unlockAt)` at the window's edges (T0 + 2 min − 1, T0 + 2 min, + 1), a first deposit of 0, deposits of 0/1/5 ADA, withdrawals of −1, 0, 1, all, all + 1; withdraw and close by a stranger who signs, while locked, and with the window straddling `unlockAt` |
+| Escrow | 66 | 30 | 65 | | (none: no modifiers) | 16 | 66 | the 27-byte seller (D5) | each party releasing and refunding at six deadlines around the window (T0 − 2 … T0 + 2 min), `after` under `\|\|` (a deadline at T0 has passed, at T0 + 1 not: `Clock.after` is `validFrom >= t`), a 27-byte seller refused on every leg |
+| Crowdfund | 203 | 135 | 194 | | 2 | 59 | 106 | none | an empty, one- and two-backer map (keys inserted against canonical order), contributions below/at/above the minimum, before/at/after the deadline; refunds, claims and closes either side of the goal; claim and close by a stranger who signs |
+| Token | 160 | 116 | 154 | | 2 | 26 | 97 | the 27- and 29-byte recipients (D5) | mints, transfers (to another, to self, everything: the key removed, by hand) and burns of 0, 1, 25, 100, 101 from holders and strangers; a 27- and a 29-byte recipient refused on every leg; close with and without balances; mint (no Ctx) and close signed by a stranger; at most 3 read rounds |
+| Pool | 43 | 20 | 42 | 26 | 2 | 60 | 133 | none | init with negative and zero pricing; donations below/at 1 ADA (direct and as intents); buys as intents with change, exact payment and a price above the buyer's bound; withdraw and close by a stranger who signs |
+
+Round r2 (review F8) also runs every vector on the **Java example's** JVM method and records where the outcomes differ:
+exactly the three key-length vectors above, which D5 refuses and the Java examples accept (bloxbean/joust#69), and
+nowhere else (515 calls). Whether an action is batched is taken from the `.jsc` source's checked IR, and the generated
+validator must agree, so a lowering that dropped `batched` would fail the harness rather than be tested as a plain
+action.
 
 **Mutation rejection** (`FourWay.mutants`): for an accepted call of every method of every port, the validator rejects
 every transaction that proposes a next state one step away from the interpreter's (each component: an Int ±1, a byte
@@ -177,47 +214,80 @@ inputs and the validator accepts it, as the attack suite's "under-paid" attacks 
 underpay. The accepted transaction also passes the attack suite (`Attacks.assertAllRejected`: datum, value, token,
 address, range, signer and payout tampering).
 
-The interpreter leaves the `only`, `after` and `before` modifiers to the validator: they check the transaction, not
-the transition (the JVM method does not check them either). The vectors satisfy them; their refusals are covered by the
-ported tests (`withdraw_beforeUnlock_rejectedOnChain`, `withdraw_byStranger_rejected`, …) and the attack suite (a
-missing signer, a shifted window).
+**Modifiers (round r2, review S2, F2).** The interpreter leaves `only`, `after` and `before` to the validator: they
+check the transaction, not the transition, and the JVM method does not check them either. Round r1 gave them only
+vectors that satisfied them, and claimed the ported tests and the attack suite covered their refusals; the security
+review showed that a lowering that dropped them passed at five of the ten sites. Now:
+- every modifier site of every port has vectors that break it, with their outcome stated (`FourWay.modifierRefused`):
+  the interpreter, the JVM and the transition program accept and agree, and the validator must refuse. For `only f` the
+  stranger who signs is also `ctx.caller`, so the generated caller-signed check holds and only `@SignedBy` can refuse.
+  For `after f` the window is wholly before `f`, or straddles it. Vault's `close` before the unlock time is among them.
+- the attack suite (`Attacks`) reads each method's modifiers from the description and adds the same per accepted
+  transaction, for every example: "a stranger signs as the caller (only f)", and windows ending before, starting at or
+  straddling the bound. The old "required signer missing" attack leaves `ctx.caller` as it was, so for a method with a
+  Ctx the caller check refused it whatever `only f` lowered to.
+- ADR-0018 r11 (D10) records that the interpreter models the modifiers by M1b's exit.
 
 ## Found on the way
 
-- **A script is found by its validator's simple name.** JuLC's `JulcScriptLoader` (through `StateContractHandle.
-  scriptFor`) reads `META-INF/plutus/<SimpleName>.plutus.json` from the class loader, so two validators named alike in
-  different packages (`org.julclang.state.examples.vault.VaultValidator` and `…dsl.VaultValidator`) shadow each other:
-  the first on the class path serves both. The toolchain's test class path now holds both, and the first gate run
-  measured one script twice. The tests pin each harness's script to its own validator's build output
-  (`FourWay.pinned`). An application that depends on two contracts with the same simple name would run the wrong script
-  off-chain, and its policy id would be the other contract's. This needs a JuLC change (a resource path keyed by the
-  fully qualified name) or a JOUST check (the runtime compares the loaded script's hash with one the processor
-  records); it is **not fixed here** (maintainer decision below).
-- **`SortedMaps.put` is quadratic** (above). The Java examples (crowdfund, and any contract keeping an inline map)
-  would gain from the `.jsc` 2 helper's single pass; not changed here.
+- **A script was found by its validator's simple name** (fixed in round r2, review S1/F1; bloxbean/julc#326). JuLC
+  writes and `JulcScriptLoader` reads `META-INF/plutus/<SimpleName>.plutus.json` through the class loader, so two
+  validators named alike in different packages (`…vault.VaultValidator`, `…dsl.VaultValidator`) shared one resource,
+  and the first copy on the class path served both. On the toolchain's test class path, which holds every Java example
+  and its port, the runtime gave each Java example its port's script and the reverse. Since their encodings are equal,
+  their transactions succeeded under the other contract's rules. JOUST now reads a validator's script through
+  `ValidatorScripts`, used by `StateContractHandle.scriptFor`, `VerifierHandle` and `StateHarness`:
+  - it takes the copy beside the validator class (its classes directory or jar);
+  - when that cannot be read, it uses the only copy on the class path, and refuses (`JoustException`) when there are
+    more;
+  - it refuses a code source that holds two validators of that name (a shaded jar, where one script overwrote the
+    other).
 
-## Decisions for the maintainers
+  Parameters are applied as JuLC's loader applies them (asserted against it for treasury's). JuLC's fix (scripts keyed
+  by the qualified name) is bloxbean/julc#326; CLAUDE.md has the gotcha.
+- **`SortedMaps.put` is quadratic** (above; bloxbean/joust#70).
 
-1. **Same-named validators** (above): fix in JuLC (key the script resource by the fully qualified name; a JuLC PR
-   labelled `joust`), or have JOUST's runtime check the loaded script's hash against the processor's? Until then two
-   contracts with the same simple name must not share a class path; the tests pin their scripts.
-2. **`batched` that pays needs `open`** (JSC0420). D4's audience rule is applied as written: a batched action cannot
-   say `only`, so a paying one (pool's `buy`, which pays the caller's change) must say `open`. The alternative is to
-   count `batched` as an audience (any intent's owner is its caller). Kept strict here.
-3. **`batched only f`** parses as `batched` with `only f` (then refused, JSC0417), as in v1; `batched only` is
-   intent-only when `{` or another modifier follows. A different spelling (`batched(only)`, `intent only`) would avoid
-   the lookahead; D10 shows `batched [only]`, so this follows it.
-4. **The ports' boundary is stricter than the Java examples'** (D5's key checks: Escrow's seller and arbiter, Token's
-   recipients). The Java examples could adopt the same checks; they are left as they are here.
-5. **The thresholds.** "Below 14 KB" is asserted as below 14,000 bytes; the memory maximum is the pre-Plomin
-   14,000,000 units (Plomin raised it to 16,500,000). The largest port is Token at 12,150 B and the largest call 19.1%
-   of the memory limit, so neither choice is close.
-6. **`SortedMaps.put`** could take the `.jsc` 2 helper's single pass (a change to the trusted API, outside M1c).
-7. **The interpreter and modifiers.** `only`, `after` and `before` are checked by the validator only, so J3's four legs
-   do not compare them; M1b's written semantics could state them as the transaction's preconditions and the
-   interpreter check them, making their refusals four-way too.
-8. **ADR-0018:** D10's `batched [only]` row is now supported (pool passes); D4's table could say that a paying
-   batched action needs `open`. Not edited here.
+## Decisions for the maintainers (after round r2)
+
+1. **Same-named validators:** JOUST fails closed now (`ValidatorScripts`); JuLC's fix is bloxbean/julc#326. A runtime
+   check of the script's hash against one the processor records would also cover a fat jar whose merge kept the wrong
+   copy without keeping both classes; not built.
+2. **A paying `batched` action says `open`:** kept (both reviews agreed); ADR-0018 r11 D4.
+3. **`batched only f`:** kept, and the six modifier words are now reserved as field and binding names (JSC0211), so a
+   state field named `open` can no longer turn `batched only open` into an unguarded action (review F4).
+4. **The Java examples' unchecked keys:** bloxbean/joust#69 (a separate PR that re-baselines the gate).
+5. **Thresholds:** accepted by the design review; recorded in ADR-0018 r11 (§8's M1 row).
+6. **`SortedMaps.put`:** bloxbean/joust#70.
+7. **Modifiers in the interpreter:** by M1b's exit (ADR-0018 r11 D10); covered until then by stated vectors and attacks.
+8. **The ADR:** updated in this PR (r11).
+9. **New, the batch size:** 8 buys fit at 88.6% of the 14e6 memory limit and a ninth does not. Keep `DEFAULT_MAX = 8`,
+   or let the batcher size batches from the budget report (J19)?
+
+## Review round r2
+
+The three reviews of r1 (`6392c46`) and what changed; each repro is a regression test.
+
+| ID | Finding | Change | Test |
+|---|---|---|---|
+| C1 | a batched action's argument `deadline` broke the generated client | refused (JSC0216): the intent method takes its own `deadline` | `JscV2M1cCheckerTest.batched_rules`; `JscV2GeneratedClientTest` compiles each port and a batched fixture with javac and the JOUST processor (the client included), and shows the repro's client failing |
+| C2 | the saturation gate shrank the state until the port accepted | the Java example alone chooses the saturated state; the port must accept that one | `JscV2M1cGateTest.theSaturationGate_failsWhenThePortCannotHandleTheJavaValidMaximum` (Codex's mutant, and a port rejected on-chain) |
+| C3, S4 | the intent roots were compared with the schemas the manifest named | each role is bound to the description's `x-joust.intents` root, and each call variant to its constructor and index | `JscV2M1cAbiCheckTest`: 9 manifest mutations (roles swapped, a bare `TxOutRef` refund, the Ctx as datum, …) and 3 description mutations, each a difference |
+| C4 | a user type named `StakingCredential` was overwritten in a batched contract's manifest | the ledger schema names (`StakingCredential`, `PubKeyCredential`, `ScriptCredential`, `StakingHash`, `StakingPtr`) join the processor-generated names a type, enum or variant may not take (JSC0220), and `Abi.of` refuses a duplicate key | `JscV2M1cCheckerTest.batched_rules` (records and enums, five names) |
+| S1, F1 | same-named validators shared one script | `ValidatorScripts` (above); bloxbean/julc#326; CLAUDE.md | `ValidatorScriptsTest` (3), `ValidatorScriptCollisionTest` (the repro: each of the five pairs loads its own script; the Java escrow's harness accepts a 27-byte seller, the port's refuses it; params applied as JuLC applies them) |
+| S2, F2 | five modifier sites had no refusing test | stated vectors at every site, description-driven attacks, ADR r11 D10 | `JscV2M1cFourWayTest` (12 modifier refusals), every example's attack suite |
+| S3, F3 | batched actions measured as a batch of one | batches of 8 at a saturated state, on both implementations | `JscV2M1cGateTest.budgets` (5 batch rows; the 80% warning fires for 8 buys) |
+| S5, F5 | the Java examples do not check keys | bloxbean/joust#69 (not changed here) | the stated differences in `JscV2M1cFourWayTest` |
+| S6 | JSC0417/JSC0420 suggested a caller check without ADR-0004's caveat | both messages (and the catalogue) carry it | `JscV2M1cCheckerTest.batched_rules` |
+| F4 | modifier words as field names changed what a header meant; JSC0417's hint for time modifiers | the six words are reserved as field and binding names (JSC0211); the hint names `require(after(f))` / `require(before(f))` | `JscV2M1cCheckerTest.batched_rules` (each word as a field, a parameter and a const) |
+| F6 | the ADR was not updated | ADR-0018 r11: D4, D10, §8's M1 row | |
+| F7 | `portTests` copied silently partially; the count | `copyPortTests` fails on anything it does not copy, tracks the example test trees as inputs; 56 tests; CLAUDE.md | checked by hand (a subpackage test stops the build) |
+| F8 | batchedness from the generated classes; coverage by hand; refusals not compared with Java | batchedness from the source's IR (the validator must agree); every method asserted measured at saturation; every four-way vector also run on the Java example | `JscV2M1cFourWayTest`, `JscV2M1cGateTest.budgets` |
+| F9 | the in-memory datum size; 1,024 holders arbitrary | stored sizes; 65,536 holders measured beside 1,024, with the depth argument | `JscV2M1cGateTest.budgets` |
+| F10 | two stacked Javadocs | fixed | |
+
+Not fixed: `Intent.owner` stated as `bytes28` matches a description field of plain bytes (S4's second item). The
+description states no byte lengths, so the structural check cannot tell them apart; the committed manifest must still
+equal the generated one (JSC0002).
 
 ## Not in M1c
 
@@ -229,8 +299,13 @@ missing signer, a shifted window).
 
 ## Tests run at this head
 
+Round r2:
+
 | Command | Result |
 |---|---|
-| `./gradlew :julc-state-dsl:test :julc-state-toolchain:test :examples:dsl:test :examples:dsl:checkJscAbi :examples:{vault,escrow,crowdfund,token,pool}:test` (each after `cleanTest`), at the merge of r4 | BUILD SUCCESSFUL in 11 m 34 s: dsl 68 (M1c checker 3), toolchain 70 (M1c four-way 5, gate 3; M0's and M1a's four-way tests still agree with each harness's script pinned), examples/dsl 74 (the 55 ported tests, the five DevKit ones included, against a live DevKit), vault 10, escrow 7, crowdfund 7, token 14, pool 18; none failed or skipped. `checkJscAbi`: `13 ABI manifest(s) agree with the processor's descriptions`. An earlier run (before the merge) failed two DevKit tests with `topup failed` (DevKit's faucet); they passed in this run |
-| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (GraalVM 25.3.4.1; the image rebuilt from this head) | BUILD SUCCESSFUL: `ALL SAME` (scripts, descriptions, validator sources), every `.jsc` file's generated Java, source map and ABI manifest equal to Gradle's, the five ports included; S2 in Wasm 1,726/1,726; S2b 43/43 |
-| `./gradlew build --continue` | 190 tasks; every task passed but two DevKit tests in modules this branch does not change: `examples/registry`'s `UntimedKeyedPendingDevnetTest` (its TTL assertion against the chain tip) and `julc-state-runtime-wasm`'s `DescribedStakingDevnetTest` (`topup failed`, DevKit's faucet). Both passed when run again alone (`BUILD SUCCESSFUL in 1m 22s`) |
+| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL: 190 tasks (91 executed), none failed. dsl 68, toolchain 77 (M1c: four-way 5, gate 4, ABI check 1, generated client 2, script collision 3), runtime 71 (`ValidatorScriptsTest` 3), testkit 6, processor 71, runtime-wasm 3, server 5; every example's tests (with the new modifier attacks): bank 12, counter 15, crowdfund 6, dapp 35, dex 6, dsl 67, escrow 6, fees 7, guild 17, locker 7, market 10, oracle 4, pool 17, registry 58, rollup 11, staking 6, token 13, treasury 8, upgrade 3, vault 9 (DevKit tests excluded). `checkJscAbi`: `13 ABI manifest(s) agree with the processor's descriptions` |
+| `./gradlew :examples:dsl:test --tests '*DevnetPortTest' --tests '*DslDevnetTest'` (DevKit up) | BUILD SUCCESSFUL in 5 m 51 s: the five ported DevKit tests and the two `.jsc` ones passed against a live DevKit |
+| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (the image rebuilt from this head) | BUILD SUCCESSFUL: `ALL SAME` (every `.jsc` file's generated Java, source map and ABI manifest equal to Gradle's); S2 in Wasm 1,736/1,736; S2b 43/43 |
+
+Round r1 (`6392c46`): the same suites green, with two DevKit tests in modules M1c does not touch failing on DevKit's
+faucet and its tip (they passed when run again).
