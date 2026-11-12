@@ -50,7 +50,34 @@ final class Parser {
     }
 
     static File parse(String src) {
-        return new Parser(Lexer.lex(src)).file();
+        var p = new Parser(Lexer.lex(src));
+        try {
+            return p.file();
+        } catch (JscException e) {
+            throw hinted(e, p.leadingMinus);
+        }
+    }
+
+    /** Binary '-' tokens that start a line (review r2 F2, S4). */
+    private final List<Pos> leadingMinus = new ArrayList<>();
+
+    /**
+     * An error with a note when a line starting with '-' continued the expression above it: the cause is often there,
+     * not where the error is found (a block without its value, an unknown name).
+     */
+    static JscException hinted(JscException e, List<Pos> leadingMinus) {
+        Pos near = null;
+        for (Pos p : leadingMinus) if (p.line() <= e.line && (near == null || p.line() > near.line())) near = p;
+        if (near == null && !leadingMinus.isEmpty()) near = leadingMinus.get(0);
+        if (near == null) return e;
+        return new JscException(e.line, e.col, e.code, e.getMessage() + " (note: the line starting with '-' at " + near
+                + " continues the expression above it, as newlines do not end statements in .jsc; if it is meant to stand alone, end"
+                + " the line above with ';', else put the whole expression in parentheses)");
+    }
+
+    /** Whether the current token starts a line (no earlier token on its line). */
+    private boolean startsLine() {
+        return i > 0 && peek().line() > toks.get(i - 1).line();
     }
 
     /**
@@ -149,7 +176,7 @@ final class Parser {
             semis();
         }
         if (contract == null) throw peek().pos().error("JSC0119", "the file declares no contract");
-        return new File(pkg.toString(), imports, types, enums, fns, contract);
+        return new File(pkg.toString(), imports, types, enums, fns, contract, List.copyOf(leadingMinus));
     }
 
     private Import importDecl() {
@@ -614,6 +641,7 @@ final class Parser {
     private Expr additive() {
         Expr l = multiplicative();
         while (at("+") || at("-")) {
+            if (at("-") && startsLine()) leadingMinus.add(peek().pos());
             Tok t = next();
             l = new Binary(t.text(), l, multiplicative(), startOf(l));
         }
@@ -647,7 +675,7 @@ final class Parser {
                 Pos p = next().pos();
                 String n = ident("a field or method name");
                 // A property (xs.length) and a record field (r.length) are both Field: the checker decides by type (C7).
-                e = at("(") ? new MethodCall(e, n, args(), startOf(e)) : new Field(e, n, startOf(e));
+                e = at("(") && peek().line() == toks.get(i - 1).line() ? new MethodCall(e, n, args(), startOf(e)) : new Field(e, n, startOf(e));
             } else if (at("[") && peek().line() == toks.get(i - 1).line()) {
                 // m[k] on the same line (a '[' on the next line starts a new expression).
                 next();
@@ -780,7 +808,9 @@ final class Parser {
                 default -> { }
             }
             next();
-            if (at("(")) return new Call(t.text(), args(), t.pos());
+            // A '(' on a later line never continues a call, as a '[' never continues an index (review r2 F2): it starts a
+            // new expression.
+            if (at("(") && peek().line() == t.line()) return new Call(t.text(), args(), t.pos());
             if (at("{") && typeNames.contains(t.text()) && looksLikeObject()) return objLit(t.text(), t.pos());
             return new Name(t.text(), t.pos());
         }
