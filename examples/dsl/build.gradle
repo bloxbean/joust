@@ -28,6 +28,8 @@ def generateJsc = tasks.register('generateJsc', JavaExec) {
     inputs.dir(jscSrc)
     outputs.dir(jscOut)
     args jscSrc.path, jscOut.get().asFile.path
+    // ADR-0018 D12: a changed ABI manifest (Name.abi.json beside the .jsc) fails the build unless accepted.
+    systemProperty 'joust.acceptAbi', providers.gradleProperty('joust.acceptAbi').isPresent()
 }
 sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
 

@@ -46,6 +46,9 @@ class JscV2DiagnosticsTest {
             int coded = count(s, "\\.error\\(\"JSC") + count(s, "\\bwarn\\([^,]+, \"JSC");
             assertEquals(calls - count(s, "void warn\\("), coded, f + ": every error(…) and warn(…) names its code");
         }
+        // The build's own (JscMain): the ABI manifest check.
+        var main = Pattern.compile("error\\[(JSC\\d{4})\\]").matcher(Files.readString(Path.of("src/main/java/org/julclang/state/dsl/JscMain.java")));
+        while (main.find()) used.put(main.group(1), "error");
         assertTrue(used.size() > 200, "codes found: " + used.size());
         String doc = Files.readString(Path.of("../docs/reference/jsc-2-diagnostics.md"));
         var listed = new TreeMap<String, String>();

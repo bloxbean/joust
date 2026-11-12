@@ -25,7 +25,7 @@ delete process.env.JOUST_DEFERRED;
 const handedOver = deferredTo === SELF;
 
 const COMMANDS = {
-  build: 'build                       compile contracts/ (.java, .jsc) into build/joust/',
+  build: 'build [--accept-abi]        compile contracts/ (.java, .jsc) into build/joust/',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
   dev: 'dev [--network <name>] [--port <port>]   build, deploy, rebuild on save, serve the page',
   serve: 'serve [--network <name>] [--dir <dir>] [--port <port>]   serve a built page with the chain API proxied',
@@ -112,7 +112,7 @@ async function project() {
   switch (cmd) {
     case 'build': {
       const { build } = await import('../src/build.js');
-      const r = await build({ src: flag('src') ?? config.contracts, out: flag('out') ?? config.out });
+      const r = await build({ src: flag('src') ?? config.contracts, out: flag('out') ?? config.out, acceptAbi: args.includes('--accept-abi') });
       return r.ok ? 0 : 1;
     }
     case 'deploy': {

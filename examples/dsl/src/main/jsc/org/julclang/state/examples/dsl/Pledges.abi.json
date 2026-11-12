@@ -1,0 +1,31 @@
+{
+  "abi": 1,
+  "contract": "org.julclang.state.examples.dsl.Pledges",
+  "source": "Pledges.jsc",
+  "state": { "name": "State", "constr": 0, "fields": [
+      { "name": "owner", "type": "Key", "data": "bytes28" },
+      { "name": "goal", "type": "Int", "data": "int" },
+      { "name": "deadline", "type": "Int", "data": "int" },
+      { "name": "raised", "type": "Int", "data": "int" },
+      { "name": "shares", "type": "List<Share>", "data": "list<Share>" },
+      { "name": "tag", "type": "Bytes", "data": "bytes" },
+      { "name": "lastBacker", "type": "Option<Key>", "data": "option<bytes28>" }
+    ] },
+  "types": {
+    "Share": { "kind": "record", "constr": 0, "fields": [
+        { "name": "to", "type": "Key", "data": "bytes28" },
+        { "name": "bps", "type": "Int", "data": "int" }
+      ] }
+  },
+  "methods": [
+    { "name": "init", "kind": "init", "args": [{ "name": "goal", "type": "Int", "data": "int" }, { "name": "deadline", "type": "Int", "data": "int" }, { "name": "shares", "type": "List<Share>", "data": "list<Share>" }, { "name": "label", "type": "Bytes", "data": "bytes" }] },
+    { "name": "pledge", "kind": "action", "args": [] },
+    { "name": "shareOf", "kind": "view", "args": [{ "name": "who", "type": "Key", "data": "bytes28" }], "result": "int" },
+    { "name": "isShareholder", "kind": "view", "args": [{ "name": "who", "type": "Key", "data": "bytes28" }], "result": "bool" },
+    { "name": "digitsRaised", "kind": "view", "args": [], "result": "int" },
+    { "name": "reassign", "kind": "action", "args": [{ "name": "from", "type": "Share", "data": "Share" }, { "name": "to", "type": "Key", "data": "bytes28" }] },
+    { "name": "setBacker", "kind": "action", "args": [{ "name": "who", "type": "Option<Key>", "data": "option<bytes28>" }] },
+    { "name": "distribute", "kind": "destroy", "args": [] }
+  ],
+  "timeFields": []
+}

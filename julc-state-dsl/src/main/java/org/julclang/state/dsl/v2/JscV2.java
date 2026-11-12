@@ -21,8 +21,18 @@ public final class JscV2 {
         }
     }
 
-    /** Generated Java, warnings, and the functions that call themselves (reported, J9). */
-    public record Lowered(String java, List<Warning> diagnostics, Set<String> recursiveFns, String fileName) {
+    /**
+     * Generated Java, warnings, the functions that call themselves (reported, J9), the path of the Java file
+     * ({@code a/b/Name.java}), its source map (D12: JSON, generated line to {@code .jsc} line and column) and the ABI
+     * manifest (D12, J17: JSON, committed as {@code Name.abi.json}).
+     */
+    public record Lowered(String java, List<Warning> diagnostics, Set<String> recursiveFns, String fileName, String javaPath,
+                          String sourceMapJson, String abiJson) {
+        /** For each generated Java line (1-based) with a source: {@code [javaLine, jscLine, jscCol]}. */
+        public List<int[]> sourceMap() {
+            return Abi.sourceMap(java, fileName);
+        }
+
         /** The warnings, each formatted {@code file:line:col: warning: message}. */
         public List<String> warnings() {
             return diagnostics.stream().map(w -> w.format(fileName)).toList();
@@ -64,7 +74,9 @@ public final class JscV2 {
         checkFileName(fileName);
         Ir.Program p = Checker.check(Parser.parse(source), fileName);
         var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList();
-        return new Lowered(JavaEmitter.emit(p), warnings, p.recursiveFns(), fileName);
+        String java = JavaEmitter.emit(p);
+        String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";
+        return new Lowered(java, warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(java, fileName, javaPath), Abi.of(p));
     }
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */

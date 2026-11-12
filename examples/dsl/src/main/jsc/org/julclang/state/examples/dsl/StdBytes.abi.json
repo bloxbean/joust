@@ -1,0 +1,26 @@
+{
+  "abi": 1,
+  "contract": "org.julclang.state.examples.dsl.StdBytes",
+  "source": "StdBytes.jsc",
+  "state": { "name": "State", "constr": 0, "fields": [
+      { "name": "owner", "type": "Key", "data": "bytes28" },
+      { "name": "b", "type": "Bytes", "data": "bytes" },
+      { "name": "n", "type": "Int", "data": "int" },
+      { "name": "r", "type": "Int", "data": "int" },
+      { "name": "flag", "type": "Bool", "data": "bool" }
+    ] },
+  "types": {},
+  "methods": [
+    { "name": "init", "kind": "init", "args": [] },
+    { "name": "cat", "kind": "action", "args": [{ "name": "x", "type": "Bytes", "data": "bytes" }, { "name": "y", "type": "Bytes", "data": "bytes" }] },
+    { "name": "cut", "kind": "action", "args": [{ "name": "x", "type": "Bytes", "data": "bytes" }, { "name": "k", "type": "Int", "data": "int" }, { "name": "front", "type": "Bool", "data": "bool" }] },
+    { "name": "num", "kind": "action", "args": [{ "name": "x", "type": "Bytes", "data": "bytes" }] },
+    { "name": "hash", "kind": "action", "args": [{ "name": "x", "type": "Bytes", "data": "bytes" }] },
+    { "name": "sig", "kind": "action", "args": [{ "name": "key", "type": "Bytes", "data": "bytes" }, { "name": "msg", "type": "Bytes", "data": "bytes" }, { "name": "signature", "type": "Bytes", "data": "bytes" }] },
+    { "name": "logic", "kind": "action", "args": [{ "name": "pad", "type": "Bool", "data": "bool" }, { "name": "x", "type": "Bytes", "data": "bytes" }, { "name": "y", "type": "Bytes", "data": "bytes" }, { "name": "op", "type": "Int", "data": "int" }] },
+    { "name": "count", "kind": "action", "args": [{ "name": "x", "type": "Bytes", "data": "bytes" }] },
+    { "name": "bit", "kind": "action", "args": [{ "name": "x", "type": "Bytes", "data": "bytes" }, { "name": "i", "type": "Int", "data": "int" }] },
+    { "name": "move", "kind": "action", "args": [{ "name": "x", "type": "Bytes", "data": "bytes" }, { "name": "k", "type": "Int", "data": "int" }, { "name": "rot", "type": "Bool", "data": "bool" }] }
+  ],
+  "timeFields": []
+}

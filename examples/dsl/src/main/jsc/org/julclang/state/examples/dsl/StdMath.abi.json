@@ -1,0 +1,26 @@
+{
+  "abi": 1,
+  "contract": "org.julclang.state.examples.dsl.StdMath",
+  "source": "StdMath.jsc",
+  "state": { "name": "State", "constr": 0, "fields": [
+      { "name": "owner", "type": "Key", "data": "bytes28" },
+      { "name": "n", "type": "Int", "data": "int" },
+      { "name": "r", "type": "Int", "data": "int" },
+      { "name": "o", "type": "Option<Int>", "data": "option<int>" },
+      { "name": "xs", "type": "List<Int>", "data": "list<int>" },
+      { "name": "since", "type": "Int", "data": "int" },
+      { "name": "upTo", "type": "Int", "data": "int" }
+    ] },
+  "types": {},
+  "methods": [
+    { "name": "init", "kind": "init", "args": [] },
+    { "name": "floor", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "b", "type": "Int", "data": "int" }] },
+    { "name": "power", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "e", "type": "Int", "data": "int" }] },
+    { "name": "modPow", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "e", "type": "Int", "data": "int" }, { "name": "m", "type": "Int", "data": "int" }] },
+    { "name": "pick", "kind": "action", "args": [{ "name": "ys", "type": "List<Int>", "data": "list<int>" }, { "name": "i", "type": "Int", "data": "int" }, { "name": "which", "type": "Int", "data": "int" }] },
+    { "name": "slices", "kind": "action", "args": [{ "name": "ys", "type": "List<Int>", "data": "list<int>" }, { "name": "k", "type": "Int", "data": "int" }] },
+    { "name": "ranged", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "b", "type": "Int", "data": "int" }] },
+    { "name": "stamp", "kind": "action", "args": [{ "name": "t", "type": "Int", "data": "int" }] }
+  ],
+  "timeFields": ["since", "upTo"]
+}

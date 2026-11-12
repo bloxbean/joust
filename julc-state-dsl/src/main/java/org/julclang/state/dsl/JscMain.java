@@ -29,12 +29,12 @@ public final class JscMain {
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
             var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName);
             return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
-                    fileName);
+                    fileName, r.sourceMapJson(), r.abiJson());
         }
         // .jsc v1 (ADR-0005): compiled as before. Its deprecation warning arrives with M1, when the templates switch to
         // .jsc 2 and `joust migrate` exists (ADR-0018 Q5, D14, D16; review F9).
         var r = Lowering.lower(Parser.parse(source), fileName);
-        return new Lowered(r.java(), r.warnings(), fileName);
+        return new Lowered(r.java(), r.warnings(), fileName, null, null);
     }
 
     /** A located warning: line and column in the .jsc file, and its stable code ({@code .jsc} 2; null for v1) (D12). */
@@ -49,8 +49,11 @@ public final class JscMain {
         }
     }
 
-    /** Lowered Java and located warnings. */
-    public record Lowered(String java, java.util.List<Warning> diagnostics, String fileName) {
+    /**
+     * Lowered Java and located warnings; for {@code .jsc} 2 also the source map and the ABI manifest (ADR-0018 D12),
+     * null for v1.
+     */
+    public record Lowered(String java, java.util.List<Warning> diagnostics, String fileName, String sourceMapJson, String abiJson) {
         /** The warnings, each formatted {@code file:line:col: warning: message}. */
         public java.util.List<String> warnings() {
             return diagnostics.stream().map(w -> w.format(fileName)).toList();
@@ -62,6 +65,30 @@ public final class JscMain {
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) return org.julclang.state.dsl.v2.JscV2.outputPath(source);
         var c = Parser.parse(source);
         return c.pkg().replace('.', '/') + "/" + c.name() + ".java";
+    }
+
+    /**
+     * ADR-0018 D12: the ABI manifest is committed beside the {@code .jsc} file. A missing one is written (commit it); a
+     * different one fails the build, unless the change is accepted ({@code -Djoust.acceptAbi=true}; Gradle
+     * {@code -Pjoust.acceptAbi}), so a lowering change that would alter a datum or a redeemer cannot pass unnoticed.
+     */
+    static boolean checkAbi(Path committed, String abi, String name) throws IOException {
+        boolean accept = Boolean.getBoolean("joust.acceptAbi");
+        if (Files.exists(committed)) {
+            String old = Files.readString(committed);
+            if (old.equals(abi)) return true;
+            if (!accept) {
+                System.err.println(name + ":1:1: error[JSC0002]: the ABI manifest " + committed.getFileName() + " differs from the committed"
+                        + " one: a datum or redeemer encoding changed, which strands deployed instances; if the change is intended,"
+                        + " build with -Pjoust.acceptAbi (npm: joust build --accept-abi) and commit the new manifest");
+                return false;
+            }
+            System.err.println(name + ": note: the ABI manifest " + committed.getFileName() + " changed and was accepted: commit it");
+        } else {
+            System.err.println(name + ": note: wrote the ABI manifest " + committed.getFileName() + ": commit it beside the .jsc file");
+        }
+        Files.writeString(committed, abi);
+        return true;
     }
 
     public static void main(String[] args) throws IOException {
@@ -99,6 +126,13 @@ public final class JscMain {
                 written.add(target);
                 Files.createDirectories(target.getParent());
                 Files.writeString(target, java);
+                if (lowered.sourceMapJson() != null) {
+                    // ADR-0018 D12: the source map beside the generated Java (javac compiles only *.java), and the ABI
+                    // manifest beside the .jsc file, where the project commits it.
+                    Files.writeString(target.resolveSibling(target.getFileName().toString().replace(".java", ".jscmap.json")),
+                            lowered.sourceMapJson());
+                    if (!checkAbi(f.resolveSibling(target.getFileName().toString().replace(".java", ".abi.json")), lowered.abiJson(), name)) errors++;
+                }
             } catch (JscException e) {
                 System.err.println(e.format(name));
                 errors++;

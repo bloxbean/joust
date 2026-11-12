@@ -1,0 +1,26 @@
+{
+  "abi": 1,
+  "contract": "org.julclang.state.examples.dsl.Vectors",
+  "source": "Vectors.jsc",
+  "state": { "name": "State", "constr": 0, "fields": [
+      { "name": "owner", "type": "Key", "data": "bytes28" },
+      { "name": "cut", "type": "Bytes", "data": "bytes" },
+      { "name": "octet", "type": "Int", "data": "int" },
+      { "name": "size", "type": "Int", "data": "int" },
+      { "name": "q", "type": "Int", "data": "int" },
+      { "name": "r", "type": "Int", "data": "int" },
+      { "name": "flags", "type": "List<Bool>", "data": "list<bool>" },
+      { "name": "seen", "type": "Option<Bool>", "data": "option<bool>" }
+    ] },
+  "types": {},
+  "methods": [
+    { "name": "init", "kind": "init", "args": [] },
+    { "name": "cut", "kind": "action", "args": [{ "name": "b", "type": "Bytes", "data": "bytes" }, { "name": "start", "type": "Int", "data": "int" }, { "name": "n", "type": "Int", "data": "int" }] },
+    { "name": "pick", "kind": "action", "args": [{ "name": "b", "type": "Bytes", "data": "bytes" }, { "name": "i", "type": "Int", "data": "int" }] },
+    { "name": "divide", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "d", "type": "Int", "data": "int" }] },
+    { "name": "flag", "kind": "action", "args": [{ "name": "fs", "type": "List<Bool>", "data": "list<bool>" }, { "name": "f", "type": "Bool", "data": "bool" }] },
+    { "name": "give", "kind": "action", "args": [{ "name": "b", "type": "Bytes", "data": "bytes" }, { "name": "amount", "type": "Int", "data": "int" }] },
+    { "name": "close", "kind": "destroy", "args": [] }
+  ],
+  "timeFields": []
+}

@@ -10,6 +10,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | Code | Severity | Message | Raised by |
 |---|---|---|---|
 | JSC0001 | error | the file name … (none) … ' … ' … may contain only ASCII letters and digits, '.', '_' and '-', and must start with a letter or digit (it is embedded in the generated Java) | JscV2 |
+| JSC0002 | error | the ABI manifest … differs from the committed one: a datum or redeemer encoding changed, which strands deployed instances; if the change is intended, build with -Pjoust.acceptAbi (npm: joust build --accept-abi) and commit the new manifest | JscMain, joust build |
 
 ## Syntax and JavaScript habits (ADR-0018 D2, D3, D12)
 

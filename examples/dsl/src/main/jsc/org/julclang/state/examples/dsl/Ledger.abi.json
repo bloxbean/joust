@@ -1,0 +1,40 @@
+{
+  "abi": 1,
+  "contract": "org.julclang.state.examples.dsl.Ledger",
+  "source": "Ledger.jsc",
+  "state": { "name": "State", "constr": 0, "fields": [
+      { "name": "admin", "type": "Key", "data": "bytes28" },
+      { "name": "phase", "type": "Phase", "data": "Phase" },
+      { "name": "limits", "type": "Map<Key, Int>", "data": "map<bytes28, int>" },
+      { "name": "balances", "type": "BigMap<Key, Int>", "data": "merkleMap<int>" },
+      { "name": "supply", "type": "Int", "data": "int" }
+    ] },
+  "types": {
+    "Phase": {
+      "kind": "enum",
+      "variants": [
+        { "name": "Open", "constr": 0, "fields": [] },
+        { "name": "Paused", "constr": 1, "fields": [
+            { "name": "reason", "type": "Bytes", "data": "bytes" }
+          ] },
+        { "name": "Closed", "constr": 2, "fields": [
+            { "name": "day", "type": "Int", "data": "int" },
+            { "name": "by", "type": "Key", "data": "bytes28" }
+          ] }
+      ]
+    }
+  },
+  "methods": [
+    { "name": "init", "kind": "init", "args": [{ "name": "limits", "type": "Map<Key, Int>", "data": "map<bytes28, int>" }] },
+    { "name": "pause", "kind": "action", "args": [{ "name": "reason", "type": "Bytes", "data": "bytes" }] },
+    { "name": "close", "kind": "action", "args": [{ "name": "day", "type": "Int", "data": "int" }] },
+    { "name": "setLimit", "kind": "action", "args": [{ "name": "who", "type": "Key", "data": "bytes28" }, { "name": "limit", "type": "Int", "data": "int" }] },
+    { "name": "mint", "kind": "action", "args": [{ "name": "to", "type": "Key", "data": "bytes28" }, { "name": "amount", "type": "Int", "data": "int" }] },
+    { "name": "transfer", "kind": "action", "args": [{ "name": "to", "type": "Key", "data": "bytes28" }, { "name": "amount", "type": "Int", "data": "int" }] },
+    { "name": "balanceOf", "kind": "view", "args": [{ "name": "who", "type": "Key", "data": "bytes28" }], "result": "int" },
+    { "name": "limitOf", "kind": "view", "args": [{ "name": "who", "type": "Key", "data": "bytes28" }], "result": "int" },
+    { "name": "phaseCode", "kind": "view", "args": [], "result": "int" },
+    { "name": "settle", "kind": "destroy", "args": [] }
+  ],
+  "timeFields": []
+}

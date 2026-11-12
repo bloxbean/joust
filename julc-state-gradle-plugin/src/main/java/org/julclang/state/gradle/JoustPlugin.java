@@ -112,6 +112,9 @@ public class JoustPlugin implements Plugin<Project> {
             t.getInputs().dir(src).withPropertyName("jsc");
             t.getOutputs().dir(out).withPropertyName("java");
             t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), out.get().getAsFile().getAbsolutePath()));
+            // ADR-0018 D12: a .jsc 2 file's ABI manifest (Name.abi.json beside it) that changed fails the build unless
+            // accepted with -Pjoust.acceptAbi.
+            t.systemProperty("joust.acceptAbi", project.getProviders().gradleProperty("joust.acceptAbi").isPresent());
         });
         SourceSet main = project.getExtensions().getByType(JavaPluginExtension.class).getSourceSets()
                 .getByName(SourceSet.MAIN_SOURCE_SET_NAME);

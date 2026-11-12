@@ -1,0 +1,44 @@
+{
+  "abi": 1,
+  "contract": "org.julclang.state.examples.dsl.Shelf",
+  "source": "Shelf.jsc",
+  "state": { "name": "State", "constr": 0, "fields": [
+      { "name": "owner", "type": "Key", "data": "bytes28" },
+      { "name": "items", "type": "Map<Bytes, Item>", "data": "map<bytes, Item>" },
+      { "name": "notes", "type": "BigMap<Bytes, Bytes>", "data": "merkleMap<bytes>" },
+      { "name": "last", "type": "Option<Kind>", "data": "option<Kind>" }
+    ] },
+  "types": {
+    "Item": { "kind": "record", "constr": 0, "fields": [
+        { "name": "title", "type": "Bytes", "data": "bytes" },
+        { "name": "kind", "type": "Kind", "data": "Kind" },
+        { "name": "tags", "type": "List<Bytes>", "data": "list<bytes>" }
+      ] },
+    "Kind": {
+      "kind": "enum",
+      "variants": [
+        { "name": "Book", "constr": 0, "fields": [] },
+        { "name": "Disc", "constr": 1, "fields": [
+            { "name": "minutes", "type": "Int", "data": "int" }
+          ] },
+        { "name": "Other", "constr": 2, "fields": [] }
+      ]
+    }
+  },
+  "methods": [
+    { "name": "init", "kind": "init", "args": [] },
+    { "name": "put", "kind": "action", "args": [{ "name": "id", "type": "Bytes", "data": "bytes" }, { "name": "item", "type": "Item", "data": "Item" }] },
+    { "name": "remove", "kind": "action", "args": [{ "name": "id", "type": "Bytes", "data": "bytes" }] },
+    { "name": "note", "kind": "action", "args": [{ "name": "k", "type": "Bytes", "data": "bytes" }, { "name": "v", "type": "Bytes", "data": "bytes" }] },
+    { "name": "forget", "kind": "action", "args": [{ "name": "k", "type": "Bytes", "data": "bytes" }] },
+    { "name": "minutes", "kind": "view", "args": [], "result": "int" },
+    { "name": "titles", "kind": "view", "args": [{ "name": "n", "type": "Int", "data": "int" }], "result": "list<bytes>" },
+    { "name": "lastTag", "kind": "view", "args": [{ "name": "id", "type": "Bytes", "data": "bytes" }], "result": "option<bytes>" },
+    { "name": "position", "kind": "view", "args": [{ "name": "id", "type": "Bytes", "data": "bytes" }], "result": "option<int>" },
+    { "name": "squares", "kind": "view", "args": [{ "name": "n", "type": "Int", "data": "int" }], "result": "int" },
+    { "name": "evens", "kind": "view", "args": [{ "name": "n", "type": "Int", "data": "int" }], "result": "list<int>" },
+    { "name": "noteOf", "kind": "view", "args": [{ "name": "k", "type": "Bytes", "data": "bytes" }], "result": "option<bytes>" },
+    { "name": "close", "kind": "destroy", "args": [] }
+  ],
+  "timeFields": []
+}

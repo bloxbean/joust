@@ -80,8 +80,22 @@ public final class Toolchain {
     public record Validator(String name, String packageName, String purpose, String scriptCborHex, String scriptHash,
                             int scriptSizeBytes, List<Param> params) {}
 
-    /** The build's result: the contracts, the plain validators, and every diagnostic; {@code ok} when there is no error. */
-    public record Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics) {
+    /**
+     * The Java a {@code .jsc} file lowered to (ADR-0018 D12: written to {@code build/joust/generated/} by the npm CLI),
+     * with its source map and ABI manifest ({@code .jsc} 2; null for v1). {@code javaFile} is {@code a/b/Name.java}.
+     */
+    public record Generated(String jscFile, String javaFile, String java, String sourceMapJson, String abiJson) {}
+
+    /**
+     * The build's result: the contracts, the plain validators, every diagnostic ({@code ok} when there is no error), and
+     * the Java lowered from each {@code .jsc} file.
+     */
+    public record Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics,
+                         List<Generated> generated) {
+        public Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics) {
+            this(ok, contracts, validators, diagnostics, List.of());
+        }
+
         public Result(boolean ok, List<Contract> contracts, List<Diagnostic> diagnostics) {
             this(ok, contracts, List.of(), diagnostics);
         }
@@ -102,6 +116,44 @@ public final class Toolchain {
      * {@code options} are JOUST's processor options ({@code joust.traces}, ...).
      */
     public static Result build(Map<String, String> files, Map<String, String> options) {
+        var generated = new ArrayList<Generated>();
+        Result r = build(files, options, generated);
+        var diagnostics = remap(r.diagnostics(), generated);
+        return new Result(r.ok(), r.contracts(), r.validators(), diagnostics, List.copyOf(generated));
+    }
+
+    /**
+     * ADR-0018 D12: a diagnostic on Java lowered from a {@code .jsc} file (javac's, the JOUST processor's or lint's) is
+     * reported at the {@code .jsc} line and column the source map gives, with the generated location as a note; on a
+     * generated helper with no source position, at the {@code .jsc} file.
+     */
+    static List<Diagnostic> remap(List<Diagnostic> diagnostics, List<Generated> generated) {
+        var byJava = new java.util.HashMap<String, Generated>();
+        for (Generated g : generated) byJava.put("/" + g.javaFile(), g);
+        var out = new ArrayList<Diagnostic>();
+        for (Diagnostic d : diagnostics) {
+            String f = d.file() == null ? null : (d.file().startsWith("/") ? d.file() : "/" + d.file());
+            Generated g = f == null ? null : byJava.get(f);
+            if (g == null || "jsc".equals(d.source())) {
+                out.add(d);
+                continue;
+            }
+            long line = -1, col = -1;
+            if (g.sourceMapJson() != null && d.line() > 0) {
+                var m = java.util.regex.Pattern.compile("\\[" + d.line() + ", (\\d+), (\\d+)\\]").matcher(g.sourceMapJson());
+                if (m.find()) {
+                    line = Long.parseLong(m.group(1));
+                    col = Long.parseLong(m.group(2));
+                }
+            }
+            String note = " (in the Java generated from " + g.jscFile() + ": " + g.javaFile() + (d.line() > 0 ? ":" + d.line() : "")
+                    + (line < 0 && d.line() > 0 ? ", a generated helper" : "") + ")";
+            out.add(new Diagnostic(d.severity(), d.message() + note, g.jscFile(), line, col, d.source(), d.code()));
+        }
+        return out;
+    }
+
+    private static Result build(Map<String, String> files, Map<String, String> options, List<Generated> generatedOut) {
         var diagnostics = new ArrayList<Diagnostic>();
         // 1. .jsc → Java.
         var sources = new LinkedHashMap<String, String>();
@@ -113,6 +165,7 @@ public final class Toolchain {
                     String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
                     var lowered = JscMain.lowerWithWarnings(text, base);
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());
+                    generatedOut.add(new Generated(name, javaPath(lowered.java(), name), lowered.java(), lowered.sourceMapJson(), lowered.abiJson()));
                     // ADR-0018 D12: warnings reach the npm path with their line and column (F13).
                     for (var w : lowered.diagnostics()) {
                         diagnostics.add(new Diagnostic(Severity.WARNING, w.message(), name, w.line(), w.col(), "jsc", w.code()));
@@ -265,6 +318,14 @@ public final class Toolchain {
                     List.copyOf(params)));
         }
         return new Result(!hasErrors(diagnostics), contracts, validators, diagnostics);
+    }
+
+    /** {@code a/b/Name.java} for generated Java: its package and its public class. */
+    static String javaPath(String text, String fallback) {
+        var pkg = java.util.regex.Pattern.compile("(?m)^package ([\\w.]+);").matcher(text);
+        var cls = java.util.regex.Pattern.compile("(?m)^public class (\\w+)").matcher(text);
+        if (!pkg.find() || !cls.find()) return fallback.replaceAll("\\.jsc$", ".java");
+        return pkg.group(1).replace('.', '/') + "/" + cls.group(1) + ".java";
     }
 
     /** The purpose of a plain JuLC validator (its annotation), or null for any other type. */

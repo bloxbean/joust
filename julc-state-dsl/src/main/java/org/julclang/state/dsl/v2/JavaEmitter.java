@@ -39,13 +39,16 @@ final class JavaEmitter {
         }
         for (Ir.Fn f : p.fns()) body.append(fn(f));
         var records = new StringBuilder();
+        records.append("    // ").append(mark(p.state().pos())).append("\n");
         records.append("    public record State(").append(components(p.state())).append(") {}\n\n");
         for (Ir.RecordType r : p.records().values()) {
+            records.append("    // ").append(mark(r.pos())).append("\n");
             records.append("    public record ").append(r.name()).append("(").append(components(r)).append(") {}\n\n");
         }
         // An enum: a sealed interface whose permits clause lists the variants in declaration order, which is their
         // constructor tag (D5) for JuLC, the runtime's codec, the description and the portable codecs alike.
         for (Ir.EnumType e : p.enums().values()) {
+            records.append("    // ").append(mark(e.pos())).append("\n");
             records.append("    public sealed interface ").append(e.name()).append(" permits ")
                     .append(String.join(", ", e.variantNames())).append(" {}\n");
             for (Ir.RecordType v : e.variants().values()) {
@@ -57,7 +60,7 @@ final class JavaEmitter {
         if (outcome) {
             imports.add("org.julclang.core.types.JulcList");
             imports.add("org.julclang.state.api.Payout");
-            records.append("    public record Outcome(State state, JulcList<Payout> payouts) {}\n\n");
+            records.append("    // (generated)\n    public record Outcome(State state, JulcList<Payout> payouts) {}\n\n");
         }
         imports.add("java.math.BigInteger");
         imports.add("org.julclang.state.api.StateContract");
@@ -68,11 +71,13 @@ final class JavaEmitter {
         // The file name was checked to [A-Za-z0-9._-] at the boundary (JscV2.checkFileName), so it is safe in comments.
         out.append("\n/**\n * GENERATED from ").append(p.fileName())
                 .append(" by julc-state-dsl (ADR-0018, .jsc 2). Do not edit: change the .jsc file.\n */\n");
+        out.append("// ").append(mark(p.state().pos())).append("\n");
         out.append("@StateContract").append(options()).append("\n");
         out.append("public class ").append(p.name()).append(" {\n\n");
         out.append(records);
         out.append(body);
-        for (String h : helpers.values()) out.append(h);
+        // A helper with no .jsc position (equality, checks, map and list helpers) is marked as generated (source map).
+        for (String h : helpers.values()) out.append(h.startsWith("    // ") ? "" : "    // (generated)\n").append(h);
         out.append("}\n");
         return out.toString();
     }
@@ -141,6 +146,11 @@ final class JavaEmitter {
         return p.fileName() + ":" + pos.line();
     }
 
+    /** A source-map marker (D12): {@code File.jsc:line:col}, in a comment before the code it lowers. */
+    private String mark(Syntax.Pos pos) {
+        return p.fileName() + ":" + pos.line() + ":" + pos.col();
+    }
+
     // ------------------------------------------------------------------ methods and fns
 
     private String method(Ir.Method m) {
@@ -153,7 +163,7 @@ final class JavaEmitter {
         };
         imports.add("org.julclang.state.api." + ann);
         var code = new StringBuilder();
-        code.append("    // ").append(where(m.pos())).append("\n");
+        code.append("    // ").append(mark(m.pos())).append("\n");
         code.append("    @").append(ann).append("\n");
         for (Ir.Mod mod : m.mods()) {
             switch (mod.name()) {
@@ -234,7 +244,7 @@ final class JavaEmitter {
         for (Ir.Local l : f.params()) params.add(jt(l.type) + " " + l.name);
         var stmts = new StringBuilder();
         stmts(f.body().stmts(), stmts, "        ", new String[]{null});
-        return "    // " + where(f.pos()) + "\n    public static " + jt(f.ret()) + " " + f.name() + "(" + String.join(", ", params)
+        return "    // " + mark(f.pos()) + "\n    public static " + jt(f.ret()) + " " + f.name() + "(" + String.join(", ", params)
                 + ") {\n" + stmts + "        return " + ex(f.body().result()) + ";\n    }\n\n";
     }
 
@@ -447,7 +457,7 @@ final class JavaEmitter {
     /** Statements in order; {@code payouts[0]} is the current payouts list (Java), threaded through pays. */
     private void stmts(List<Ir.Stmt> ss, StringBuilder out, String ind, String[] payouts) {
         for (Ir.Stmt s : ss) {
-            out.append(ind).append("// ").append(where(s.pos())).append("\n");
+            out.append(ind).append("// ").append(mark(s.pos())).append("\n");
             switch (s) {
                 case Ir.Let l -> out.append(ind).append(jt(l.local().type)).append(" ").append(l.local().name).append(" = ")
                         .append(ex(l.value())).append(";\n");
@@ -524,7 +534,7 @@ final class JavaEmitter {
         String[] ps = {pays ? "payouts__in" : null};
         stmts(b.stmts(), body, "        ", ps);
         String params = join(capParams(f), pays ? "JulcList<Payout> payouts__in" : null);
-        addHelper(name, "    // " + where(b.pos()) + "\n    static " + (pays ? "JulcList<Payout>" : "boolean") + " " + name + "(" + params
+        addHelper(name, "    // " + mark(b.pos()) + "\n    static " + (pays ? "JulcList<Payout>" : "boolean") + " " + name + "(" + params
                 + ") {\n" + body + "        return " + (pays ? ps[0] : "true") + ";\n    }\n\n");
         return name + "(" + join(capArgs(f), pays ? payoutsIn : null) + ")";
     }
@@ -554,7 +564,7 @@ final class JavaEmitter {
         Cursor cu = cursor(f.list(), elem);
         String params = join(cu.param(), capParams(fr), pays ? "JulcList<Payout> payouts__in" : null);
         String done = pays ? "payouts__in" : "true";
-        addHelper(name, "    // " + where(f.pos()) + "\n    static " + (pays ? "JulcList<Payout>" : "boolean") + " " + name + "(" + params
+        addHelper(name, "    // " + mark(f.pos()) + "\n    static " + (pays ? "JulcList<Payout>" : "boolean") + " " + name + "(" + params
                 + ") {\n        if (" + cu.empty() + ") {\n            return " + done + ";\n        } else {\n            " + jt(elem) + " "
                 + f.var().name + " = " + cu.head() + ";\n" + body + "            return " + name + "(" + join(cu.next(), capArgs(fr),
                 pays ? ps[0] : null) + ");\n        }\n    }\n\n");
@@ -760,7 +770,7 @@ final class JavaEmitter {
         String name = owner + "__value" + (++counter);
         var body = new StringBuilder();
         stmts(b.block().stmts(), body, "        ", new String[]{null});
-        addHelper(name, "    // " + where(b.pos()) + "\n    static " + jt(b.type()) + " " + name + "(" + capParams(f) + ") {\n" + body
+        addHelper(name, "    // " + mark(b.pos()) + "\n    static " + jt(b.type()) + " " + name + "(" + capParams(f) + ") {\n" + body
                 + "        return " + ex(b.block().result()) + ";\n    }\n\n");
         return name + "(" + capArgs(f) + ")";
     }
@@ -772,7 +782,7 @@ final class JavaEmitter {
         stmts(i.then().stmts(), a, "            ", new String[]{null});
         var d = new StringBuilder();
         stmts(i.otherwise().stmts(), d, "            ", new String[]{null});
-        addHelper(name, "    // " + where(i.pos()) + "\n    static " + jt(i.type()) + " " + name + "(" + capParams(f) + ") {\n        if ("
+        addHelper(name, "    // " + mark(i.pos()) + "\n    static " + jt(i.type()) + " " + name + "(" + capParams(f) + ") {\n        if ("
                 + ex(i.cond()) + ") {\n" + a + "            return " + ex(i.then().result()) + ";\n        } else {\n" + d
                 + "            return " + ex(i.otherwise().result()) + ";\n        }\n    }\n\n");
         return name + "(" + capArgs(f) + ")";
@@ -942,7 +952,7 @@ final class JavaEmitter {
         for (Ir.Local l : a.binds()) params.add(jt(l.type) + " " + l.name);
         String result = ret != null ? ex(a.body().result()) : pays ? ps[0] : "true";
         String type = ret != null ? jt(ret) : pays ? "JulcList<Payout>" : "boolean";
-        addHelper(name, "    // " + where(a.pos()) + "\n    static " + type + " " + name + "(" + join(String.join(", ", params), capParams(f),
+        addHelper(name, "    // " + mark(a.pos()) + "\n    static " + type + " " + name + "(" + join(String.join(", ", params), capParams(f),
                 pays ? "JulcList<Payout> payouts__in" : null) + ") {\n" + body + "        return " + result + ";\n    }\n\n");
         return capArgs(f);
     }

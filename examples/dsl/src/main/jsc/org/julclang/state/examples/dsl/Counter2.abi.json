@@ -1,0 +1,18 @@
+{
+  "abi": 1,
+  "contract": "org.julclang.state.examples.dsl.Counter2",
+  "source": "Counter2.jsc",
+  "state": { "name": "State", "constr": 0, "fields": [
+      { "name": "count", "type": "Int", "data": "int" },
+      { "name": "owner", "type": "Key", "data": "bytes28" }
+    ] },
+  "types": {},
+  "methods": [
+    { "name": "init", "kind": "init", "args": [] },
+    { "name": "increment", "kind": "action", "args": [{ "name": "by", "type": "Int", "data": "int" }] },
+    { "name": "reset", "kind": "action", "args": [] },
+    { "name": "close", "kind": "destroy", "args": [] },
+    { "name": "current", "kind": "view", "args": [], "result": "int" }
+  ],
+  "timeFields": []
+}

@@ -6,9 +6,12 @@
 //   validators.json       the plain JuLC validators (governors, ...): [{ name, purpose, script, params }]
 //   <Validator>.plutus    each one's compiled script (CBOR hex; parameters not applied)
 //   joust.lock.json       the versions that built it (I7)
+//   generated/            the Java each .jsc file lowered to, with its source map (ADR-0018 D12)
+// Beside each .jsc 2 file, <Contract>.abi.json: its ABI manifest, which the project commits; a build whose manifest
+// differs fails unless the change is accepted (--accept-abi), so an encoding change cannot strand deployed instances.
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { loadToolchain } from './toolchain.js';
 
@@ -31,7 +34,8 @@ function sources(dir, keep = () => true) {
 }
 
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
-export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep } = {}) {
+export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep,
+  acceptAbi = false } = {}) {
   const files = sources(resolve(root, src), keep);
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
   const t = Date.now();
@@ -42,8 +46,31 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
     (d.severity === 'error' ? console.error : log)(`${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${where}${d.message}`);
   }
-  if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics };
   const dir = resolve(root, out);
+  // ADR-0018 D12: the generated Java and its source map, on disk as on the Gradle path (also when the build failed).
+  for (const g of r.generated ?? []) {
+    const target = join(dir, 'generated', g.javaFile);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, g.java);
+    if (g.sourceMap) writeFileSync(target.replace(/\.java$/, '.jscmap.json'), g.sourceMap);
+  }
+  if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics };
+  let abiOk = true;
+  for (const g of r.generated ?? []) {
+    if (!g.abi) continue;
+    const committed = join(resolve(root, src), dirname(g.jscFile), g.javaFile.split('/').pop().replace(/\.java$/, '.abi.json'));
+    if (existsSync(committed) && readFileSync(committed, 'utf8') === g.abi) continue;
+    if (existsSync(committed) && !acceptAbi) {
+      console.error(`error[JSC0002]: ${g.jscFile}: the ABI manifest ${relative(root, committed)} differs from the committed one: a datum or `
+        + 'redeemer encoding changed, which strands deployed instances; if the change is intended, run joust build --accept-abi and commit it');
+      abiOk = false;
+      continue;
+    }
+    const existed = existsSync(committed);
+    writeFileSync(committed, g.abi);
+    log(`${relative(root, committed)}: ${existed ? 'accepted' : 'written'}; commit it beside the .jsc file`);
+  }
+  if (!abiOk) return { ok: false, contracts: [], diagnostics: r.diagnostics };
   mkdirSync(dir, { recursive: true });
   const bundle = [];
   for (const c of r.contracts) {
