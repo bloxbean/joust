@@ -21,6 +21,11 @@ public final class JscV2 {
         return new Lowered(r.java(), r.warnings(), r.recursiveFns());
     }
 
+    /** The exact Java signature behind every {@code std} binding row (ADR-0018 D8), for the binding test. */
+    public static List<String> bindingSignatures() {
+        return Compiler.STD.values().stream().map(Compiler.Binding::javaSignature).toList();
+    }
+
     /** {@code a/b/Name.java} for the contract a source declares. */
     public static String outputPath(String source) {
         var f = Parser.parse(source);

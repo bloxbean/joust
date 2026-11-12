@@ -34,23 +34,29 @@ final class Compiler {
             "runtime", "INTENTS", "batch", "pendingIntents", "intent", "maps", "seed");
     static final Set<String> PRELUDE = Set.of("min", "max", "abs", "utf8", "asKey", "Some", "after", "before");
 
-    /** A {@code std} binding row (ADR-0018 D8): name, parameter types, result type, Java template, time-safe params. */
-    record Binding(String module, String name, List<Ty> params, Ty result, String template, boolean timeTotal) {}
+    /**
+     * A {@code std} binding row (ADR-0018 D8): name, parameter types, result type, Java template, whether a time value
+     * may be an argument, and the exact Java signature the template calls (checked by the binding test).
+     */
+    record Binding(String module, String name, List<Ty> params, Ty result, String template, boolean timeTotal,
+                   String javaSignature) {}
 
     static final Map<String, Binding> STD = new LinkedHashMap<>();
 
     static {
         // std/crypto: hashes are total and their cost depends on the input's length only.
         for (String h : List.of("sha2_256", "blake2b_256", "blake2b_224")) {
-            STD.put(h, new Binding("std/crypto", h, List.of(Ty.BYTES), Ty.BYTES, "CryptoLib." + h + "(%s)", true));
+            STD.put(h, new Binding("std/crypto", h, List.of(Ty.BYTES), Ty.BYTES, "CryptoLib." + h + "(%s)", true,
+                    "org.julclang.stdlib.lib.CryptoLib." + h + "(byte[]):byte[]"));
         }
         // std/bytes: length is total; slice and at go through the audited adapter, which checks their domain.
         STD.put("length", new Binding("std/bytes", "length", List.of(Ty.BYTES), Ty.INT,
-                "BigInteger.valueOf(ByteStringLib.length(%s))", true));
+                "BigInteger.valueOf(ByteStringLib.length(%s))", true, "org.julclang.stdlib.lib.ByteStringLib.length(byte[]):long"));
         STD.put("slice", new Binding("std/bytes", "slice", List.of(Ty.BYTES, Ty.INT, Ty.INT), Ty.BYTES,
-                "BytesAdapter.slice(%s, %s, %s)", false));
+                "BytesAdapter.slice(%s, %s, %s)", false,
+                "org.julclang.state.api.BytesAdapter.slice(byte[],java.math.BigInteger,java.math.BigInteger):byte[]"));
         STD.put("byteAt", new Binding("std/bytes", "byteAt", List.of(Ty.BYTES, Ty.INT), Ty.INT,
-                "BytesAdapter.at(%s, %s)", false));
+                "BytesAdapter.at(%s, %s)", false, "org.julclang.state.api.BytesAdapter.at(byte[],java.math.BigInteger):java.math.BigInteger"));
     }
 
     // ------------------------------------------------------------------ state

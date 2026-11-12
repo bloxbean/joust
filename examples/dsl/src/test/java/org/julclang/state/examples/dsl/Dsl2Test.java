@@ -177,6 +177,25 @@ class Dsl2Test {
     }
 
     @Test
+    void pledges_setBacker_takesAnOptionInTheRedeemer() {
+        var s = state(T0, BigInteger.ZERO);
+        assertArrayEquals(BEN, Pledges.setBacker(s, Optional.of(BEN)).lastBacker().orElseThrow());
+        assertEquals(Optional.empty(), Pledges.setBacker(s, Optional.empty()).lastBacker());
+        assertThrows(RequireException.class, () -> Pledges.setBacker(s, Optional.of(new byte[27])), "a present key must be 28 bytes");
+        var live = pl.live(s, BigInteger.ZERO);
+        for (Optional<byte[]> who : java.util.List.of(Optional.of(BEN), Optional.<byte[]>empty())) {
+            var tx = pl.act(live, new PledgesValidator.SetBacker(who), Pledges.setBacker(s, who), OWNER, null);
+            System.out.println("[pledges setBacker " + (who.isPresent() ? "Some" : "None") + "] " + pl.assertAccepted(tx)
+                    + "  attacks rejected: " + Attacks.assertAllRejected(pl, tx));
+        }
+        pl.assertRejected(pl.act(live, new PledgesValidator.SetBacker(Optional.of(BEN)), Pledges.setBacker(s, Optional.empty()), OWNER, null),
+                "Some(BEN) asked, None stored");
+        pl.assertRejected(pl.act(live, new PledgesValidator.SetBacker(Optional.of(new byte[27])),
+                new Pledges.State(OWNER, ada(10), T0, BigInteger.ZERO, shares(), s.tag(), Optional.of(new byte[27])), OWNER, null),
+                "a 27-byte key in the Option");
+    }
+
+    @Test
     void pledges_distribute_paysSharesInSourceOrder_andTheRemainder() {
         // After the deadline (T0 - 1), goal reached: 60% / 40% of the balance, the rounding remainder to the owner.
         var s = state(T0.subtract(BigInteger.ONE), ada(20));

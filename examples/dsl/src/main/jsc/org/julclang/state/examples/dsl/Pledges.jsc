@@ -51,6 +51,11 @@ contract Pledges(maxDatumBytes = 1024) {
     return { ...state, shares: moved }
   }
 
+  // The owner may set or clear the recorded backer: an Option in the redeemer (checked: a present key is 28 bytes).
+  action setBacker(who: Option<Key>) only owner {
+    return { ...state, lastBacker: who }
+  }
+
   // Goal reached after the deadline: pay every share, the rounding remainder to the owner.
   destroy distribute() only owner {
     require(after(deadline) || raised == 0, "too early")

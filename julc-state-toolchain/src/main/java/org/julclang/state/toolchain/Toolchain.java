@@ -48,7 +48,12 @@ public final class Toolchain {
     }
 
     /** A finding, from javac, JOUST (reader and lint) or JuLC. */
-    public record Diagnostic(Severity severity, String message, String file, long line, String source) {}
+    /** A build message; {@code line} and {@code col} are 1-based, or -1 when unknown. */
+    public record Diagnostic(Severity severity, String message, String file, long line, long col, String source) {
+        public Diagnostic(Severity severity, String message, String file, long line, String source) {
+            this(severity, message, file, line, -1, source);
+        }
+    }
 
     /** One compiled contract. */
     public record Contract(String name, String packageName, String validatorName, String validatorSource,
@@ -99,7 +104,12 @@ public final class Toolchain {
                 try {
                     // The bare file name, as Gradle's generateJsc passes it: the lowering embeds it.
                     String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
-                    sources.put(name.replaceAll("\\.jsc$", ".java"), JscMain.lower(text, base));
+                    var lowered = JscMain.lowerWithWarnings(text, base);
+                    sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());
+                    // ADR-0018 D12: warnings and positions reach the npm path too.
+                    for (String w : lowered.warnings()) diagnostics.add(new Diagnostic(Severity.WARNING, w, name, -1, "jsc"));
+                } catch (org.julclang.state.dsl.JscException e) {
+                    diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), name, e.line, e.col, "jsc"));
                 } catch (RuntimeException e) {
                     diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), name, -1, "jsc"));
                 }
