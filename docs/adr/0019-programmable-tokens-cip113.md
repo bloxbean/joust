@@ -1,15 +1,19 @@
 # ADR-0019: Programmable tokens (CIP-113) — issuers, holders, and contracts that are paid in them
 
-**Status:** Proposed (r1)
+**Status:** Proposed (r2)
 **Date:** 2026-11-12
-**Builds on:** ADR-0007 (assets, sends, the output registry: I26–I30), ADR-0009 (params, quorum, events), ADR-0010
-(script purposes: `@Withdraw`, staked state), ADR-0011 (composition), ADR-0013 (wallets, the page verifier), ADR-0015
-(npm toolchain, the Wasm engine, governors in `validators.json`), ADR-0016 (keyed objects; its open Q3).
+**Builds on:** ADR-0007 (assets, sends, the output registry: I26–I30), ADR-0009 (params, quorum, events, governors),
+ADR-0010 (script purposes: `@Withdraw`, staked state, stake registration), ADR-0011 (composition), ADR-0013 (wallets,
+the page verifier), ADR-0015 (npm toolchain, the Wasm engine and its snapshot backend, governors in
+`validators.json`), ADR-0016 (keyed objects; its open Q3).
+**Amends:** ADR-0015 §3 ("Only JOUST calls can be requested"): D7 lets a page request one kind of foreign intent, a
+CIP-113 `TransferAct`, under its own verifier rules.
 **Related, in review in parallel:** ADR-0018 (`.jsc` 2, PR #59). This ADR only cross-references it (§3 D3, Q8).
 **Design only:** no implementation in this PR.
 **Risk:** high. Programmable tokens are regulated assets (stablecoins, securities). A mistake here pays the wrong smart
-wallet, lets a frozen holder move tokens through a JOUST page, or leaves contract-held tokens drainable by a governance
-quorum. The CIP-113 contracts are new (v0.0.1) and can be re-pointed by their upgrade authority.
+wallet, lets a frozen holder move tokens through a JOUST page, lets a page wallet overpay, or leaves tokens drainable by
+anyone who can make a withdraw script pass. The CIP-113 contracts are new (v0.0.1) and can be re-pointed by their
+upgrade authority.
 
 ## 1. Context
 
@@ -21,220 +25,338 @@ does not use it yet, and several JOUST rules conflict with how CIP-113 holds tok
 
 Four personas, in the order this ADR serves them:
 
-| Persona | Needs |
-|---|---|
-| **Token author (issuer)** | write the token's rules, register the token, mint and burn it |
-| **Compliance operator** | freeze and unfreeze holders, seize, with an audit trail and (often) a quorum |
-| **Regular holder** | see a balance, transfer from a wallet or a page, with the wallet signing |
-| **dApp developer** | a contract that *requires* a payment in the token (a shop, a fee), and later one that *holds* it (vault, escrow, DEX) |
+| Persona | Needs | v1 surface |
+|---|---|---|
+| **Token author (issuer)** | write the token's rules, register the token and its rule scripts, mint and burn | Java (D3, D4); pages: not in v1 (Q9) |
+| **Compliance operator** | freeze and unfreeze holders, seize, with an audit trail and a quorum | Java and the `Compliance` contract (D8); pages: not in v1 (Q9) |
+| **Regular holder** | see a balance, transfer from a wallet or a page, with the wallet signing | Java and pages (D4, D7) |
+| **dApp developer** | a contract that *requires* a payment in the token (a shop, a fee), and later one that *holds* it (vault, escrow, DEX) | `ProgrammablePayout` (D5); custody: a later ADR (D9) |
 
 ### 1.1 Facts
+
+Pinned sources: CIP-0113 `README.md` at `e759a4a5`; core contracts `cardano-foundation/cip113-programmable-tokens` at
+`6b75ba32` (v0.0.1); CCL at tag `v0.8.0-pre7`, commit `9a5d6072` (the annotated tag object is `cd62e597`); JOUST at
+`main`.
 
 | # | Fact | Source |
 |---|---|---|
 | F1 | CIP-0113 status is **Proposed**. Pinned text: `CIP-0113/README.md` at commit `e759a4a5` (2026-09-29, merge of CIPs PR #444), the only commit on that file | `gh api repos/cardano-foundation/CIPs/commits?path=CIP-0113/README.md` |
 | F2 | Three layers: a **registry** (sorted linked list of `RegistryNode` UTxOs keyed by policy id, each holding a registry NFT); shared **standard** scripts (`programmableLogicBase`, PLB; `programmableLogicGlobal`, PLG; delegates `transfer`, `third_party`, `unfracking`); per-token **substandard** withdraw-zero scripts (`minting_logic_script`, `transfer_logic_script`, `third_party_logic_script`, `unfracking_logic_script`) and an optional `global_state_cs` | CIP-0113 §Layer 1–3, §RegistryNode datum |
 | F3 | A **smart wallet** is `(payment = PLB, stake = owner)`. "If the user is a smart contract, then it's the payment credentials of that contract." A wallet owner may use its payment or its stake key hash | CIP-0113 §User's smart wallet address derivation |
-| F4 | Owner consent: `VerificationKey(pkh)` needs the signature; `Script(h)` needs `h`'s withdrawal in the transaction. One withdrawal of a script owner authorises every PLB input with that stake credential in the transaction | core `validators/programmable_logic/owner.ak` (`authorised_stake_cred`), cip113-programmable-tokens `6b75ba32` (v0.0.1, 2026-09-23); `documentation/08-INTEGRATION-GUIDES.md` |
-| F5 | PLG runs once per transaction with one redeemer, `TransferAct`, `ThirdPartyAct` or `UnfrackingAct`: one action kind per transaction | core `validators/programmable_logic_global.ak` (`6b75ba32`) |
-| F6 | `ThirdPartyAct` acts "without the explicit permission of the token owner"; "the standard places no constraint on who, if anyone, may invoke this script". Seized tokens stay at PLB addresses | CIP-0113 §ThirdPartyAct Constructor, §Security Considerations for Transfers |
-| F7 | Every transaction spending programmable tokens MUST reference the protocol-parameters UTxO and one registry node per policy that needs a proof (spent or minted); a global-state NFT UTxO MUST be referenced when `global_state_cs` is set; substandards MAY need user-state reference inputs (for example denylist nodes) | CIP-0113 §Reference Inputs, §RegistryProof Requirements |
-| F8 | A PLB output carrying programmable tokens needs an inline stake credential, no datum hash, no reference script, and an inline datum of at most `max_inline_datum_bytes` (1024 in all three public deployments) | core `lib/prog_assets.ak` (`is_seizable_output_shape_bounded`); CCL `Cip113Deployments.java` lines 64, 109, 154 |
-| F9 | The PLB hash and each token's policy id are permanent; PLG, the issuance logic and the delegates are read live from the protocol-parameters datum and can be re-pointed by the upgrade authority | CIP-0113 §Protocol upgradability |
+| F4 | Owner consent: `VerificationKey(pkh)` needs the signature; `Script(h)` needs **any** withdrawal of `h` in the transaction. One withdrawal of a script owner authorises every PLB input with that stake credential in the transaction | core `validators/programmable_logic/owner.ak` (`authorised_stake_cred`: `Script(_hash) -> has_withdrawal(stake_cred)`); `documentation/08-INTEGRATION-GUIDES.md` |
+| F5 | PLG runs once per transaction with one redeemer, `TransferAct`, `ThirdPartyAct` or `UnfrackingAct`: one action kind per transaction. In v0.0.1 the delegate hashes are **compile-time parameters of PLG** (`validator programmable_logic_global(transfer_hash, third_party_hash, unfracking_hash)`), so re-pointing a delegate means a new PLG | core `validators/programmable_logic_global.ak:48–73` |
+| F6 | `ThirdPartyAct` acts "without the explicit permission of the token owner"; "the standard places no constraint on who, if anyone, may invoke this script"; it "supports **multiple UTxOs** in a single transaction". Seized tokens stay at PLB addresses | CIP-0113 §ThirdPartyAct Constructor, §Security Considerations for Transfers |
+| F7 | Every transaction spending programmable tokens MUST reference the protocol-parameters UTxO and one registry node per policy that needs a proof (spent or minted); a global-state NFT UTxO MUST be referenced when `global_state_cs` is set; substandards MAY need user-state reference inputs | CIP-0113 §Reference Inputs, §RegistryProof Requirements |
+| F8 | A PLB output carrying programmable tokens needs an inline stake credential, no datum hash, no reference script, and an inline datum of at most `max_inline_datum_bytes` (1024 in all three public deployments) | core `lib/prog_assets.ak` (`is_seizable_output_shape_bounded`); CCL `Cip113Deployments.java:64, 109, 154` |
+| F9 | "What MAY be re-pointed": the PLG credential, the protocol-level issuance logic credential, and the action delegate credentials, each "read live at validation time". "What MUST NOT move": PLB, and each token's minting policy. "The protocol parameters UTxO — not a cached script hash — is the authority on the current wiring" | CIP-0113 §Protocol upgradability |
 | F10 | The CIP's "Preview testnet parameters" hashes (PLB `f2182b00…`) differ from CCL's v0.0.1 Preview deployment (PLB `35622813…`), which CCL re-derived from the blueprint and checked on chain | CIP-0113 §CIP-113 Version; CCL `Cip113Deployments.PREVIEW` |
-| F11 | CCL's module is the separate, experimental artifact `com.bloxbean.cardano:cardano-client-programmable-token`, in tag `v0.8.0-pre7` (`cd62e597`, `settings.gradle:34`), targeting core v0.0.1 (`6b75ba3`); "public types may change before beta" | CCL `programmable-token/README.md` at `v0.8.0-pre7` |
-| F12 | CCL API: `Cip113ProgrammableTokenService.create(backend, Cip113Deployments.PREVIEW\|PREPROD\|MAINNET)`; `ProgrammableTokenTx extends Tx` with `from`, `transfer(receiver, amount, redeemer[, inlineDatum])`, `mint`, `burn`, `thirdPartyTransfer`, `thirdPartyBurn`, `register`, `updateRegistry`; used through `QuickTxBuilder.withExtension(service.extension()).compose(tx)` | CCL `ProgrammableTokenTx.java`, `README.md` |
-| F13 | CCL resolves CIP-113's index hints (`params_idx`, `wdrl_idx`, reward redeemers in ledger order) against the final transaction, and then requires that inputs, reference inputs, withdrawals and outputs do not change after its last evaluation | `Cip113TransactionMaterializer.java` (`resolveRewardRedeemers` :1283, `verifyStable` :1138) |
-| F14 | CCL **cannot spend** a smart wallet keyed by a script credential: `SmartWalletAddress.ownerSigner` throws "keyed by a script credential; authorising it needs a withdrawal, which this adapter does not build". It *can* pay into one (`ofOwner`) | `cip113/SmartWalletAddress.java:62–74` |
-| F15 | CCL refuses unfracking, programmable operations split across `compose(tx1, tx2)`, more than one policy per programmable output, and verification-key logic credentials. It ships no DevKit deployment: its integration tests bootstrap one in test code (`src/it/.../Cip113Bootstrap.java`) | CCL `README.md`, `RELEASE_NOTES`; research notes §2.3 |
-| F16 | CCL looks up a global-state UTxO by the token's `global_state_cs` through the backend's asset-holder index unless the caller supplies it with `readFrom`; Yaci Store and Ogmios offer no such index | research notes §2.3 (`Cip113TransactionMaterializer`) |
-| F17 | JOUST I30: an output claimed by a send "is never at a spent input's payment credential and never carries a JOUST payout or refund tag". `sendMatches` sets `fresh = false` when a script output's credential equals any spent input's | ADR-0007 §I30; `ValidatorGenerator.java:1724–1737` |
-| F18 | JOUST I7: a payout is paid to `PubKey(r)` outputs whose inline datum is the instance's own input reference (the payout tag), so two instances can never count one output | ADR-0001 §I7 |
-| F19 | `@Withdraw` handlers: the redeemer's `amount` must equal the withdrawal, the method returns sends totalling exactly `amount`, authorised over params; a zero-amount withdrawal with no sends is valid when the handler's authorisation passes | ADR-0010 D1 (r2) |
-| F20 | The page verifier is an allow-list: no certificates; withdrawals only of pinned JOUST verifiers, each of amount 0; only spend, mint and pinned-verifier reward redeemers | `js/state-client/src/compose.js:76–87, 134` |
-| F21 | ADR-0015 deferred foreign intents: "a plan composing foreign intents (a wallet payment, a CIP-113 transfer) needs a verifier that understands them" (its Q2) | ADR-0015 §3 (line 271), Q2 |
-| F22 | ADR-0016 keyed objects are a sorted on-chain linked list; absence evidence for other contracts (`key(A) < K < A.next` as a reference input) is its open Q3, lean "a follow-up ADR" | ADR-0016 §9 Q3 |
-| F23 | JOUST already ships plain JuLC `@WithdrawValidator` scripts beside state contracts (`examples/treasury/Guardian.java`), and the npm toolchain compiles plain JuLC validators into `validators.json` (ADR-0015 M3) | `examples/treasury`; ADR-0015 M3 |
-| F24 | The runtime builds with QuickTx (`QuickTxBuilder.compose`, `withReferenceScripts`) and restores wallet payouts after balancing (`postBalanceTx` → `restorePayouts`) | `TxRunner.java:249, 604–605` |
-| F25 | The CIP's DeFi guidance: protocols receive tokens "at a smart wallet address they control"; they "SHOULD verify the substandard before accepting tokens — some (e.g., freeze-and-seize) permit third-party actions that move tokens without the holder's consent" | CIP-0113 §Implementing programmable tokens in DeFi protocols, §Security Considerations |
+| F11 | CCL's module is the separate, experimental artifact `com.bloxbean.cardano:cardano-client-programmable-token` (`settings.gradle:34` at `9a5d6072`), targeting core v0.0.1, blueprint sha256 `b6c8cb09…44e7b9` (Aiken v1.1.23); "public types may change before beta" | CCL `programmable-token/README.md`; `src/it/resources/blueprint/cip113/compatibility.yml` |
+| F12 | CCL API: `Cip113ProgrammableTokenService.create(backend, Cip113Deployments.PREVIEW\|PREPROD\|MAINNET)`; `ProgrammableTokenTx extends Tx` with `from`, `transfer(receiver, amount, redeemer[, inlineDatum])`, `mint`, `burn`, `thirdPartyTransfer`, `thirdPartyBurn`, `register`, `updateRegistry`; used through `QuickTxBuilder.withExtension(service.extension()).compose(tx)` | CCL `ProgrammableTokenTx.java:51–73`, `README.md` |
+| F13 | CCL resolves CIP-113's index hints against the final transaction, and then requires that inputs, reference inputs, withdrawals and outputs (full content) do not change after its last evaluation; its `afterBalance` returns `REFINALIZED` when the index fingerprint changes | `Cip113TransactionMaterializer.java` (`verifyStable` :1138, `snapshot` :1191–1198, `resolveRewardRedeemers` :1283); `Cip113BuildExtension` |
+| F14 | CCL **cannot spend** a smart wallet keyed by a script credential: `SmartWalletAddress.ownerSigner` throws ("keyed by a script credential; authorising it needs a withdrawal, which this adapter does not build"). It *can* pay into one (`ofOwner`) | `cip113/SmartWalletAddress.java:60–79` |
+| F15 | CCL refuses unfracking, programmable operations split across `compose(tx1, tx2)`, more than one policy per programmable output, verification-key logic credentials, and protocol-upgrade operations. A third-party transaction acts on one policy, "any number of holders" | CCL `README.md` (§Operations, §Limitations, lines 95–105, 148–166) |
+| F16 | CCL's deployment resolution reads through services: `getTransactionService().getTransactionUtxos` to verify every reference-script outref and for the issuance template; `getAssetService()` for the issuance template and for global state (`getAllPolicyAssets`, `getAllAssetAddresses`) unless the caller supplies global state with `readFrom`. It adopts the live params datum (`withResolvedParams`) and only warns on drift (`warnIfUpgraded`) | `DefaultCip113ProtocolService.java:262–266, 307, 359–374, 406–440, 466–474` |
+| F17 | JOUST's Wasm engine backend refuses those services: `SnapshotBackend.getAssetService()` throws `Need("service","asset")`; its transaction service exists only because CCL's builders take it eagerly, and using it fails | `SnapshotBackend.java:84–101` |
+| F18 | CCL ships no DevKit deployment and no stake-registration code for logic scripts; its integration tests bootstrap a deployment in test code (`src/it/.../Cip113Bootstrap.java`), using `aiken-java-binding` (a native library) for parameter application | CCL `programmable-token/src/main` (no registration code), `src/it`, `build.gradle` |
+| F19 | JOUST I30: an output claimed by a send "is never at a spent input's payment credential and never carries a JOUST payout or refund tag". `sendMatches` sets `fresh = false` when a script output's credential equals any spent input's | ADR-0007 §I30; `ValidatorGenerator.java:1724–1737` |
+| F20 | JOUST I7: payouts are checked **in aggregate per recipient**: for each payout, the sum owed to its key over all payouts is compared with the sum of lovelace in outputs to that key tagged with the instance's own input reference; amounts must be positive | ADR-0001 §I7; `ValidatorGenerator.java:2202–2220` (`payoutsTagged`) |
+| F21 | `@Withdraw` handlers: `amount` must equal the withdrawal; the method returns sends totalling exactly `amount`, authorised over params; a zero-amount withdrawal with no sends is valid when the handler's authorisation passes | ADR-0010 D1 (r2) |
+| F22 | JOUST's `OutputVerifier` validates any rewarding invocation whose claim and deposit lists are empty (`ok = rewarding`, loops over empty lists), so anyone can add its zero withdrawal to a transaction | `julc-state-verifier/.../OutputVerifier.java:26–45` |
+| F23 | `@Params` are deploy-time parameters fixed by the script hash; whoever deploys chooses them; changing them is a new script and a migration | ADR-0009 D1; ADR-0011 |
+| F24 | The page verifier is an allow-list: no certificates; withdrawals only of pinned JOUST verifiers, each of amount 0; the wallet's net loss per unit is bounded by the calls' `pay` (lovelace plus `pay.assets`) and the fee; outputs to others are bounded by what the called scripts release. Wallet inputs come from the wallet; script inputs from the provider, authenticated from their producing transaction where it serves CBOR (`verifiedOutput`) | `js/state-client/src/compose.js:76–87, 134, 204–207, 304–325`; `keyed.js:6, 138, 230` |
+| F25 | ADR-0015 deferred foreign intents: "a plan composing foreign intents (a wallet payment, a CIP-113 transfer) needs a verifier that understands them" (its Q2), and payout restoration needs `afterBalance` to stay `STABLE` | ADR-0015 §3 (lines 264–272), Q2 |
+| F26 | ADR-0016 keyed objects are a sorted on-chain linked list; absence evidence for other contracts is its open Q3, lean "a follow-up ADR" | ADR-0016 §9 Q3 |
+| F27 | JOUST already ships plain JuLC `@WithdrawValidator` scripts beside state contracts (`examples/treasury/Guardian.java`), and the npm toolchain compiles plain JuLC validators into `validators.json` (ADR-0015 M3) | `examples/treasury`; ADR-0015 M3 |
+| F28 | The runtime's capture transaction is `TxRunner.RecordingTx extends Tx` and the runtime creates the `QuickTxBuilder`; wallet payouts are restored after balancing only on the wallet-prepare path (`postBalanceTx(restorePayouts)`), not on the Java-signed path | `TxRunner.java:152, 244–249, 597–605` |
+| F29 | The CIP's DeFi guidance: protocols "SHOULD verify the substandard before accepting tokens"; review the third-party logic for *what* it can do without consent and *who* can trigger it; "many nodes can point at the same logic script", and the registry binds a policy to its **minting** credential only | CIP-0113 §DeFi Security Considerations, §Registry redeemer and the binding of policy to logic; core `documentation/09-DEVELOPING-MODULES.md` §Finding your own policy id |
 
 ### 1.2 What conflicts with JOUST today
 
 1. **A state UTxO cannot hold programmable tokens.** They live at `(PLB, owner)` (F3) and move only PLB to PLB; a state
    UTxO sits at the contract's own address. A contract can only *own a smart wallet* `(PLB, Script(h))`.
 2. **I30 refuses a send to any smart wallet in a programmable transfer.** Every CIP-113 transfer spends a PLB input, and
-   every smart wallet has the PLB payment credential, so `fresh` is false (F17). The rule protects JOUST outputs from
-   being counted as another script's continuation; for the shared PLB credential it is meaningless.
-3. **A contract's own hash as a smart-wallet owner is a trap.** With `@Withdraw` (F19), a zero withdrawal authorised by
-   the params quorum is owner consent for *every* PLB input keyed by that hash (F4), so the quorum could move all tokens
-   all instances hold, without any instance's logic running.
-4. **Seizure and freeze reach contract-held tokens without the contract** (F6), and a freeze on one contract credential
-   freezes every instance that shares it.
-5. **The page verifier refuses every CIP-113 transaction** (F20, F21): PLG, delegate and logic withdrawals, PLB spend
-   redeemers, registry reference inputs.
+   every smart wallet has the PLB payment credential, so `fresh` is false (F19). For the shared PLB credential the
+   rule says nothing useful.
+3. **A smart wallet keyed by a script is only as safe as the easiest way to make that script's withdrawal pass** (F4).
+   Examples: a JOUST contract with `@Withdraw` (a quorum-approved zero withdrawal, F21) drains every instance's
+   tokens; the OutputVerifier with empty claims (F22) lets *anyone* sweep; a token's own transfer logic is withdrawn
+   in every transfer of that token, so any holder can sweep; the same for PLG, the delegates, permissive rules and
+   governors.
+4. **Seizure and freeze reach contract-held tokens without the contract** (F6), and a freeze on one credential freezes
+   everything keyed by it.
+5. **The page verifier refuses every CIP-113 transaction** (F24, F25), and its outflow rules would also refuse a
+   legitimate programmable payment: the merchant's output is a third-party output the scripts do not release.
 6. **One action kind per transaction** (F5): a JOUST transaction that moves programmable tokens cannot also seize.
+7. **The engine cannot run CCL's resolution** (F16, F17): it needs transaction and asset services the snapshot
+   backend refuses.
 
 ## 2. Threat model and trust assumptions
 
 - **Untrusted:**
   - every transaction builder, including the prepare service and the Wasm engine (the page verifies, ADR-0013/0015);
-  - chain providers and indexers: they may hide registry nodes, return stale or fabricated ones, or omit global state;
-  - other holders and other dApps sharing a transaction (double satisfaction, junk UTxOs at a contract's smart wallet);
-  - the **issuer**, as far as a dApp or holder is concerned: its `third_party_logic_script` may seize or freeze, and its
-    minting authority may re-point the token's logic scripts (`updateRegistry`);
-  - the **CIP-113 upgrade authority**: it can re-point PLG and the delegates (F9).
+  - chain providers and indexers: they may hide registry nodes, return stale or fabricated ones, misreport UTxO values
+    (including the wallet's own smart-wallet UTxOs, which CIP-30 does not return), or omit global state;
+  - other holders and other dApps sharing a transaction (double satisfaction, junk UTxOs, copied tags);
+  - token registrants: anyone may register a token whose node names someone else's logic scripts (F29);
+  - the **issuer**, as far as a dApp or holder is concerned: its third-party logic may seize or freeze, and its minting
+    authority may re-point the token's logic scripts (`updateRegistry`).
 - **Trusted:**
   - the ledger's phase-1/phase-2 rules (every withdrawal runs its script; exact redeemer set);
-  - the CIP-113 core contracts at the pinned version (v0.0.1, `6b75ba32`) and the pinned deployment hashes (D1); their
-    audit is the CIP authors', not this ADR's;
-  - JuLC compiling JOUST validators and substandard scripts faithfully, as everywhere else;
-  - CCL as a *builder*: nothing on chain trusts it; the page verifier re-checks what it builds (D7).
-- **At stake:** holders' tokens; tokens a contract requires or (later) holds; the compliance property "a denied holder
-  cannot transfer"; a page wallet's outflow.
+  - the CIP-113 core contracts at v0.0.1 and the deployment's **identity** (D1);
+  - the deployment's **upgrade authority, for holders' funds**: it can re-point PLG (and with it the delegates) and the
+    issuance logic for every token at once (F9). Nothing JOUST builds can protect funds from it; refusing to build
+    after a re-pointing protects no funds (D1). The residual risk is the authority itself; JOUST records which
+    authority a deployment names and surfaces every wiring change (D1);
+  - JuLC compiling JOUST validators and substandard rules faithfully, as everywhere else;
+  - CCL as a *builder* in Java: nothing on chain trusts it; the page re-checks what the engine builds (D7).
+- **At stake:** holders' tokens; payments contracts require; the compliance properties "a denied holder cannot
+  transfer" and "a seizure moves exactly what was approved"; a page wallet's outflow.
+- **Compliance quorum blast radius (D8):** a compromised officer quorum can deny every holder (one insert each) and,
+  within the seizure limits D8 sets, seize. Rotation goes through an ADR-0009 governor, so officers change without a
+  new token logic. The single-key interim rule (D8) gives one key unlimited seizure and is refused outside devnets.
 
 ## 3. Decision
 
-### D1. Pin the protocol and the deployment
+### D1. Pin the deployment's identity; follow its wiring visibly (r2)
 
-- JOUST targets **CIP-113 core v0.0.1** (`cardano-foundation/cip113-programmable-tokens@6b75ba32`) through CCL's
-  `cardano-client-programmable-token` at the CCL version JOUST pins (0.8.0-pre7 today).
-- The deployment (PLB, PLG, delegates, issuance logic, registry and params policies, reference-script outrefs) is
-  **pinned per network** in the runtime configuration and in a page's `deployments/<network>.json`, never discovered.
-  The pinned values come from CCL's `Cip113Deployments` (F10: not from the CIP's example table).
-- The runtime **refuses to build** when the live protocol-parameters datum names a PLG or delegate other than the pinned
-  ones (CCL only warns). Following a re-pointing is a configuration change that a maintainer reviews (Q6).
+- JOUST targets **CIP-113 core v0.0.1** (`6b75ba32`, blueprint sha256 `b6c8cb09…`) through CCL's
+  `cardano-client-programmable-token` at the CCL version JOUST pins.
+- **A JOUST-owned deployment file per network** (`julc-state-programmable`, and a page's `deployments/<network>.json`)
+  records the deployment's **identity**: PLB hash, params NFT policy, registry NFT policy and registry address,
+  bootstrap transaction, blueprint hash, and the upgrade authority the params datum names. CI compares it with CCL's
+  `Cip113Deployments` and the blueprint hash (and with the live params datum when a provider is configured), so a CCL
+  bump never changes JOUST's trust roots unreviewed. A mismatch of identity always **stops the build** (I60).
+- **Wiring** (PLG, the delegates PLG is compiled with, the protocol issuance logic) is read from the params UTxO the
+  transaction references, as the CIP directs (F9). The file also records the wiring last reviewed:
+  - the Java runtime follows the live wiring and reports each changed field (CCL only warns); a **strict** mode, for
+    regulated deployments, refuses any change of any wiring field, compared one by one, the issuance logic included;
+  - pages take the wiring only from a params output authenticated from its producing transaction (D7 rule 7); where
+    the provider cannot authenticate it, the file's wiring is used and a different live wiring refuses the build.
+  Following versus refusing by default is Q6.
 - Smart wallets are keyed by the owner's **payment** credential (CCL's default, the CIP's suggestion). The `STAKE`
-  variant is not supported in v1: mixing the two strands funds (Q2).
-- The integration lives in a new module, **`julc-state-programmable`**, so contracts and pages that do not use
-  programmable tokens pay nothing (size, Web Image metadata) (Q1).
+  variant is not supported in v1 (Q2).
+- **Mainnet is behind an explicit opt-in** (a runtime flag and a page build flag) until the core's audit status is
+  recorded in this ADR (Q12).
+- The integration lives in a new module, **`julc-state-programmable`**; the runtime gains only an SPI (D12) and never
+  depends on the CCL module (Q1).
 
 ### D2. Phases: requirement before custody
 
 1. a DevKit spike (M0);
 2. issuers and holders in Java (M1);
 3. contracts that **require** a payment in a programmable token but never hold it (M2, D5);
-4. pages and wallets (M3, D7);
+4. holder transfers and programmable payments from pages (M3, D7);
 5. a stateful compliance contract (M4, D8);
 6. contracts that **hold** programmable tokens: **a separate ADR**, under the constraints of D9.
 
-Phases 1–4 need no change to how a JOUST validator checks its own state; 5 needs ADR-0016's absence evidence; 6 needs
-new validator arms and an upstream CCL change (F14).
+Issuer and operator flows in pages are not in v1 (Q9).
 
-### D3. Token rules are JuLC withdraw validators, with a JOUST helper library
+### D3. Token rules are JuLC withdraw validators, parameterised by their policy (r2)
 
 - A token's minting, transfer and third-party logic are **plain JuLC `@WithdrawValidator` scripts**, built like JOUST
-  governors today (F23): in Gradle and in the npm toolchain (`validators.json`), with parameters applied by the runtime
-  or the engine.
-- JOUST ships an **on-chain helper library** (`ProgrammableLib`, bundled as JuLC library sources from
-  `julc-state-programmable`):
-  - enumerate the PLB inputs and outputs of a transaction for a policy, and each one's owner credential;
-  - decode a `RegistryNode` and find "my own policy" (the node whose logic field is this script);
-  - check owner consent the way the core does (F4) — for rules that need the sender;
-  - non-membership and membership in a JOUST keyed list by covering-node reference inputs — **only after** the
+  governors (F27), in Gradle and in the npm toolchain (`validators.json`).
+- **Every transfer and third-party rule built with JOUST's helpers is parameterised by its own policy id** (the CIP's
+  option 2; the policy depends only on the minting logic, so this is not circular). A rule never infers its policy
+  from "the registry node that names this script": many nodes may name one script, and an attacker can register a
+  token naming the victim's rule (F29). (r1's "find my own policy" helper is withdrawn.)
+- A rule checks **every** spent PLB input and every PLB output holding its policy, including UTxOs that hold several
+  policies, not only UTxOs that hold only it (I64).
+- The on-chain helper library, **`ProgrammableLib`** (JuLC library sources from `julc-state-programmable`):
+  - enumerate the spent PLB inputs and the PLB outputs holding a given policy, with each one's owner credential and
+    amount;
+  - read a registry node only when authenticated: it holds the registry NFT, sits at the registry address, and
+    `key == policy == the NFT's asset name`;
+  - check owner consent the way the core does (F4), for rules that need it;
+  - membership and non-membership in a JOUST keyed list by covering-node reference inputs, **only after** the
     ADR-0016 Q3 follow-up defines that evidence (D8).
-- A **token description** (`ProgrammableTokenSpec`: the four logic scripts, their parameters, the global-state policy)
-  produces CCL's `ProgrammableTokenRegistration` in Java and the same JSON for the engine.
-- **`.jsc`:** once ADR-0018 lands, a token rule could be written as a `.jsc` validator block over the same library;
-  until then rules are Java (Q8). No `.jsc` syntax is decided here.
+- **`ProgrammableTokenSpec`** (the four logic scripts, their parameters, the global-state policy) produces CCL's
+  `ProgrammableTokenRegistration` in Java. It **refuses** a third-party logic equal to the transfer logic, and requires
+  each third-party logic to declare its authority (a key, a governor, or the `Compliance` contract) (I67).
+- **`.jsc`:** once ADR-0018 lands, a rule could be written as a `.jsc` validator over the same library; until then
+  rules are Java (Q8).
 
-### D4. A runtime facade over CCL, one `ProgrammableTokenTx` per transaction
+### D4. A runtime facade over CCL, one `ProgrammableTokenTx` per transaction (r2)
 
-- `ProgrammableTokens` (Java, `julc-state-programmable`): `register`, `mint`, `burn`, `transfer`, `seize`
-  (third-party transfer), `thirdPartyBurn`, `updateRegistry`, `balance(owner, policy)`, `smartWallet(owner)`. Each is a
-  thin wrapper over CCL's `ProgrammableTokenTx` with the pinned deployment.
-- The runtime always supplies global-state and denylist reference inputs itself (`readFrom`), so DevKit's Yaci Store and
-  Ogmios work (F16).
+- `ProgrammableTokens` (Java, `julc-state-programmable`): `register`, `registerRuleCredentials`, `mint`, `burn`,
+  `transfer`, `seize` (D8), `updateRegistry`, `balance(owner, policy)`, `smartWallet(owner)`. Each wraps CCL's
+  `ProgrammableTokenTx` with the deployment of D1.
+- **Rule registration:** every withdraw-zero rule credential (minting, transfer, third-party logic) must be registered
+  as a stake credential before first use (CCL does not do it, F18). `registerRuleCredentials` issues the
+  certificates, legacy registration without a script witness as ADR-0010 D2, once per network.
+- The runtime supplies the CIP-113 read set itself (D13): the params UTxO, registry nodes, global state, user-state
+  nodes and the reference-script UTxOs, as reference inputs (`readFrom`) and as a pre-resolved deployment, so
+  resolution never needs a provider's asset or transaction service (DevKit's Yaci Store, Ogmios, the engine).
 - JOUST never builds PLB spends or computes CIP-113 indices itself: CCL owns that logic (F13).
+- Mainnet seizure with a single-key rule is refused (D8).
 
-### D5. Programmable payouts: a contract can require a payment it never holds
+### D5. Programmable payouts: a contract can require a payment it never holds (r2)
 
 A new result component, **`ProgrammablePayout(owner, policy, assetName, amount)`**, beside `payouts`, `sends` and
 `mint` (ADR-0007): "this transition is valid only if `amount` of `(policy, assetName)` reaches `owner`'s smart wallet
 in this transaction". Example: `Shop.buy` requires 25 units of a regulated stablecoin to reach the merchant.
 
-- **Generated check (per payout):** an output whose payment credential is the **pinned PLB hash** (from the contract's
-  `@Params`, so one source builds for every network), whose stake credential is `Inline(owner)`, whose inline datum is
-  **this instance's payout tag** (its own input reference, as I7), and whose value holds at least `amount` of the asset.
-- **Exclusivity by tag, not by credential.** I30's credential rule does not apply to programmable payouts (§1.2 item 2);
-  each output satisfies at most one programmable payout of one instance, and an output carrying any JOUST tag is never
-  claimed by a send.
-- **Value:** the contract pays nothing. The caller's smart wallet funds the transfer in the same transaction (the
-  runtime composes a CCL `transfer(receiver, amount, redeemer, tagDatum)`, F12), so the state value equation (I26) is
-  unchanged.
-- **Accepted assets:** the contract names the policies it accepts in `@Params`, so a governance quorum, not the caller,
-  decides which substandard the contract trusts (F25).
-- `.jsc` syntax for programmable payouts follows ADR-0018 (Q8).
+- **`owner` is a 28-byte verification-key hash in v1**, as I7's `PubKey(r)`. Script owners are refused (§1.2 item 3);
+  scripts come with the custody ADR.
+- **Generated check, in I7's aggregate form** (I56):
+  - every amount is positive and every owner is 28 bytes;
+  - for each `(owner, policy, assetName)` the instance's payouts name: the sum of that asset in outputs at
+    `(PLB, Inline(VerificationKey(owner)))` with no datum hash, no reference script and an inline datum equal to **this
+    instance's payout tag** (its own input reference) is at least the sum the payouts owe;
+  - **no spent input is a PLB input keyed by any payout's owner**, so an owner's own tokens can never satisfy its
+    payout (the alternative, a net check, is costlier and easier to get wrong). An owner who must also spend in the
+    same transaction composes separately.
+- The PLB hash is a contract `@Params` field (one source builds for every network); the runtime and the page check it
+  against the deployment file when they deploy or load the contract (I60).
+- **Exclusivity by tag, not by credential.** I30's credential rule does not apply to programmable payouts (§1.2 item
+  2); I30's tag rule stays: an output carrying any JOUST tag is never claimed by a send (I57). Two instances never
+  share a tag. **Residual:** another protocol in the same transaction may count the same output (the ADR-0007 D5
+  caveat).
+- **Value:** the contract pays nothing. The caller's smart wallet funds the transfer in the same transaction (a CCL
+  `transfer(receiver, amount, redeemer, tagDatum)`, F12), so I26 is unchanged (I59).
+- **Accepted assets:** the contract's `@Params` list the policies it accepts. The **deployer** chooses them (F23); a
+  change is a new script and a migration (ADR-0011). Accepting a policy does **not** pin its substandard: the issuer
+  may re-point the rules (`updateRegistry`). For payouts the contract holds nothing, so the risk falls on the
+  recipient, and v1 checks the substandard **off chain**: the runtime and the page compare the policy's registry node
+  (transfer and third-party logic) with the hashes pinned in the description and refuse on a mismatch (I58). The
+  custody ADR must check it on chain (D9).
+- **Datum-constraining substandards:** a substandard whose transfer logic constrains recipient datums can make tagged
+  payouts unpayable; M2 checks each accepted policy's rule accepts the tag datum.
+- **Where it may be returned (v1):** `@Action` and `@Destroy` of the instance (the tag is the state input). It is
+  refused in `@Init` (no state input), batched intents, owned and keyed objects, and purpose handlers.
+- `.jsc` syntax follows ADR-0018 (Q8).
 
-### D6. Composition rules
+### D6. Composition rules (r2)
 
 - A transaction carries **at most one CIP-113 action kind** (F5). A JOUST call can be composed with a `TransferAct`
   (holder transfers, programmable payouts) or, for the compliance contract (D8), with a `ThirdPartyAct`; never both.
-- When a JOUST call is composed with CIP-113 operations, the runtime's capture transaction is a `ProgrammableTokenTx`
-  (CCL requires a single `Tx`, F15), and JOUST's verifier withdrawals are in it before CCL resolves indices (F13).
-- Whether JOUST's payout restoration after balancing (F24) passes CCL's stability check (F13) is **M0's entry
-  question**: if it does not, the runtime restores payouts before CCL's final evaluation, or CCL needs a hook (Q5).
+- When a JOUST call is composed with CIP-113 operations, the capture transaction is a `ProgrammableTokenTx` (CCL
+  requires a single `Tx`, F15) through the runtime SPI (D12), and JOUST's verifier withdrawals are in it before CCL
+  resolves indices (F13).
+- **Payout restoration versus CCL's stability check.** ADR-0015 §3 already requires `afterBalance` to stay `STABLE`
+  for payout restoration (F25); CCL's `afterBalance` may return `REFINALIZED`, and `verifyStable` compares full output
+  content, which `restorePayouts` changes (F13, F28). M0 must exercise it on the **wallet-prepare** path, where
+  restoration runs; if it fails, the SPI orders restoration before CCL's final evaluation, or CCL needs a hook (Q5).
 
-### D7. Pages and wallets
+### D7. Pages and wallets: holder transfers and programmable payments (r2)
 
-- The engine includes `julc-state-programmable` (one implementation, ADR-0015 D1) unless M0's size measurement fails its
-  budget (Q7); the fallback is a JS builder with the same verifier.
-- Descriptions gain `x-joust.programmable` (accepted policies, the pinned deployment and logic hashes), bundled with the
-  page, never fetched.
+- The engine includes `julc-state-programmable` only if M0 shows it builds from the snapshot backend with no `Need`
+  (D13) and within a size budget (Q7); the fallback is a JS builder whose output the same verifier checks.
+- Descriptions gain `x-joust.programmable`: accepted policies, each one's pinned transfer and third-party logic hashes,
+  and the deployment identity (D1); bundled with the page, never fetched.
+- **A page-authored programmable intent:** each programmable payment the page asks for names the recipient key, the
+  policy, the asset name and the **quantity**, and a holder transfer the same; it is separate from `pay` (state
+  deposits). A call's `ProgrammablePayout` must be covered by such an intent.
 - **New page-verifier rules** (an allow-list, as ADR-0016 D11 did for keyed calls):
-  1. the wallet's smart-wallet UTxOs `(PLB, Inline(wallet payment key))` count as wallet inputs in outflow accounting;
-  2. withdrawals: exactly the pinned JOUST verifiers plus PLG with `TransferAct`, the pinned `transfer` delegate, and
-     the transfer logic of each programmable policy in play, as named by a registry-node reference input that holds the
-     pinned registry NFT; every one of amount 0;
-  3. `ThirdPartyAct` and `UnfrackingAct` are refused in wallet flows;
-  4. spend redeemers on PLB inputs only of the base-spend shape; reference inputs only the params UTxO (params NFT),
-     registry nodes (registry NFT), global state and user-state nodes named by the description;
-  5. every programmable token leaving the wallet's smart wallet goes to the smart wallet the call names, or back to the
-     wallet's own smart wallet;
-  6. still no certificates: registering a substandard or custody stake credential is an operator flow, as for
-     governors.
+  1. **Authenticated smart-wallet inputs.** CIP-30 does not return smart-wallet UTxOs, so they come from the provider.
+     A smart-wallet input of the wallet `(PLB, Inline(VerificationKey(wallet key)))` counts only if its value is
+     authenticated from its producing transaction (`verifiedOutput`, hash-checked); otherwise the page refuses. On a
+     deployment marked devnet, whose provider serves no transaction CBOR (Yaci Store), the page may accept unverified
+     values with a visible warning (Q11).
+  2. **Amounts, per `(policy, assetName)`:** the wallet's net programmable outflow (ordinary inputs plus smart-wallet
+     inputs, minus outputs back) is at most the sum of the page's programmable intents; the outputs to each named
+     recipient's smart wallet are at most that recipient's intents; nothing else of the unit leaves.
+  3. **Back means exactly** `(PLB, Inline(VerificationKey(wallet key)))` with no datum hash and no reference script, or
+     the wallet's own ordinary address; anything else is an outflow.
+  4. **Lovelace:** the min-ADA of each new PLB output is counted in the wallet's ADA allowance up to the min-ADA the
+     protocol parameters give for that output, and no more.
+  5. **Policies in play** are the policies of the wallet's spent PLB inputs and of the page's intents, each in the
+     description's accepted list.
+  6. **Withdrawals:** exactly the pinned JOUST verifiers plus PLG, the `transfer` delegate, and **one** transfer logic
+     per policy in play, whose hash equals both the authenticated registry node's and the description's; every one of
+     amount 0; PLG's reward redeemer decodes as `TransferAct`. The count is exact.
+  7. **Reference inputs:** the params UTxO (params NFT; its datum's wiring as D1), registry nodes that hold the registry
+     NFT at the registry address with `key == policy == asset name` (one per policy in play), and global-state and
+     user-state nodes the description names; nothing else.
+  8. `ThirdPartyAct` and `UnfrackingAct` are refused; spend redeemers on PLB inputs only of the base-spend shape.
+  9. Still no certificates. Programmable tokens go only to key-keyed smart wallets (I63).
 
-### D8. Compliance as a JOUST contract
+### D8. Compliance as a JOUST contract (r2)
 
-- A **`Compliance`** contract with a keyed type `Denied(credential)` (ADR-0016): officers insert and remove by
-  `@Quorum`; every change is an event (ADR-0009).
-- The token's transfer logic (D3) requires a non-membership proof for each sender (and, if the substandard wants it,
-  receiver) credential against that list, by covering-node reference inputs.
-- Its third-party logic requires the `Compliance` instance to be spent with a `Seize(policy, holder, to)` action in the
-  same transaction, so every seizure has a quorum and an on-chain event.
-- **Entry gate:** the ADR-0016 Q3 follow-up (absence evidence by neighbour) is accepted first. Until then, the
-  compliance example uses a stateless issuer-signed third-party logic and no denylist.
+- A **`Compliance`** contract with a keyed type `Denied(credential)` (ADR-0016): officers insert and remove through an
+  ADR-0009 governor (`@AuthorizedBy`), so the officer set rotates without new token logic; every change is an event.
+  `Denied` declares no retire: removal is the only way to un-deny, and a key is denied exactly while its node exists.
+- The token's transfer rule (D3) is parameterised by its policy and by the `Compliance` policy, and requires a
+  non-membership proof for the owner credential of **every** spent PLB input holding the policy (and, if the
+  substandard wants it, every receiving credential).
+- **Seizure is bound to its approval** (I65). The action is `Seize(policy, holders = [(credential, amount)], to)`:
+  - the third-party rule is parameterised by its policy and by the `Compliance` policy; it identifies the approval as
+    the spend of the input holding the `Compliance` instance token (a 32-byte name under the `Compliance` policy),
+    with the generated redeemer decoded at a fixed constructor (a stable encoding the processor publishes);
+  - exactly one `Seize` per transaction, naming the rule's own policy;
+  - the spent PLB inputs holding the policy are exactly those keyed by the listed credentials, and for each credential
+    the amount that leaves its smart wallet equals the listed amount;
+  - the seized total reaches `(PLB, Inline(VerificationKey(to)))` outputs; no other output gains the policy;
+  - no mint or burn of the policy in the transaction (wiping is a separate action, not in v1);
+  - the `Seize` event records the same policy, holders, amounts and destination.
+- **Limits:** the `Compliance` params may set a per-transaction cap and a delay (a `RequestSeize` that a later
+  `Seize` executes after the delay); whether v1 ships them is Q10.
+- **Entry gate:** the ADR-0016 Q3 follow-up (absence evidence by neighbour) is accepted first. Until then the
+  compliance example uses a single-key third-party rule and no denylist; the runtime refuses it outside devnets
+  (§2).
 - A denylist insert spends the covering node, so in-flight transfers that referenced it fail and are rebuilt; the
   runtime's keyed-object retries (ADR-0016 D7, designated input) cover the compliance side; holders' transfers are
   rebuilt by the caller.
 
-### D9. Contracts holding programmable tokens: deferred, with fixed constraints
+### D9. Contracts holding programmable tokens: deferred, with fixed constraints (r2)
 
 Custody gets its own ADR. That ADR must satisfy:
 
-1. **Never the contract's own hash as owner while `@Withdraw` can authorise a zero withdrawal** (§1.2 item 3); the
-   lean is a companion custody script (parameterised by the contract, or per instance), decided there (Q4).
-2. **Per-instance accounting:** every custody UTxO carries a tag naming its instance; an untagged UTxO at the custody
-   wallet is junk and is never counted.
+1. **The general consent rule:** a custody owner script consents only through an arm that reasons explicitly over the
+   PLB inputs keyed by itself in the transaction; every other arm of that script refuses when such inputs are spent.
+   A script that anyone can make pass, or that another flow withdraws anyway (§1.2 item 3), is never an owner. The
+   contract's own hash with `@Withdraw` is the first case; the lean is a companion custody script (Q4).
+2. **Authenticated per-instance accounting:** a custody UTxO counts for instance `X` only if its tag was written in a
+   transaction where `X` ran (a copied tag is a donation); an instance's balance never requires consuming every tagged
+   UTxO, so dust cannot block it.
 3. **Balances derived from value on every transition**, never from state alone, because seizure moves tokens without
-   the contract (§1.2 item 4).
+   the contract (§1.2 item 4), and a seizure keeps the datum on its paired output.
 4. **One custody transition per contract per transaction**, as for user mints (I28).
-5. **An upstream CCL change** to spend a script-keyed smart wallet with a caller-supplied consent withdrawal (F14).
-6. **Contracts document the issuer's powers** over custody, and accept only policies named in their params (F25).
+5. **The substandard checked on chain:** the accepted policy's registry node must name the pinned transfer and
+   third-party logic in every custody transition.
+6. **An upstream CCL change** to spend a script-keyed smart wallet with a caller-supplied consent withdrawal (F14).
+7. **Freeze blast radius:** whether instances share one custody credential is decided with the shared freeze in mind.
+8. Contracts document the issuer's powers over custody.
 
-Until that ADR is accepted, D10's guard applies.
+### D10. A guard until custody exists (r2)
 
-### D10. A guard until custody exists
+The runtime and the page pay programmable tokens **only to smart wallets keyed by a verification-key hash**, or by a
+script on an explicit allow-list in the deployment file that is **empty in v1**. On chain, `ProgrammablePayout`
+enforces the same for payouts (D5). (r1's guard, "refuse a JOUST contract's script hash known from loaded
+descriptions", missed scripts anyone can make pass and contracts not loaded; it is replaced.)
 
-The runtime and the page refuse to **pay a programmable token to a smart wallet keyed by a JOUST contract's script
-hash** (known from the contract descriptions the runtime or page has loaded), with an error that names this ADR. Tokens
-sent there would be stuck or, with `@Withdraw`, drainable.
-
-### D11. DevKit and tests
+### D11. DevKit and tests (r2)
 
 - `examples/devkit` gains a CIP-113 v0.0.1 bootstrap for DevKit, ported from CCL's integration-test bootstrap (or
-  published by CCL as a test fixture, Q5).
-- The real Aiken core contracts, deployed on DevKit, are the oracle: every JOUST-built CIP-113 transaction is validated
-  by them, not by JOUST code.
+  published by CCL as a test fixture, Q5). It checks the blueprint hash, uses keys and an upgrade authority that the
+  runtime refuses on any other network, and takes `aiken-java-binding` (native) as a test-only dependency, as CCL's
+  tests do (or uses pre-applied scripts, decided in M0).
+- The real Aiken core contracts, deployed on DevKit, are the on-chain oracle (§9).
+
+### D12. The runtime SPI (r2, new)
+
+`julc-state-runtime` gains a small SPI, implemented by `julc-state-programmable` and registered on
+`StateRuntime.Builder` (never discovered implicitly):
+
+- a **capture-transaction factory** (the `Tx` subclass a call or a `Compose` records into: `RecordingTx`, or a
+  recording `ProgrammableTokenTx`);
+- a **builder customiser** (adds `withExtension(...)` to the `QuickTxBuilder` the runtime creates);
+- the **order of post-balance hooks** (CCL's finalisation and JOUST's payout restoration, D6);
+- a **result handler** for `ProgrammablePayout`: the runtime hands each payout to the registered handler, which adds
+  the funding transfer; with no handler registered, a call returning one fails before building.
+
+The generated client and the runtime therefore never depend on the CCL module; the runtime part of
+`ProgrammablePayout` is owned by `julc-state-programmable`.
+
+### D13. The CIP-113 read set, for the engine and for providers without indexes (r2, new)
+
+- The read set of a CIP-113 build is explicit: the params UTxO at the params address, the registry nodes needed
+  (by key, from a registry-address scan), the reference-script UTxOs, global state and user-state nodes. In the engine
+  they are snapshot entries, recorded and served as ADR-0015's other chain reads.
+- Resolution runs from a **pre-resolved `Cip113Deployment`** that JOUST builds from the deployment file and the read
+  set, so neither the asset service nor `getTransactionUtxos` is called (F16, F17). If CCL's resolution cannot be
+  bypassed at the pinned version, a CCL change so that resolution reads only through a `UtxoSupplier` is requested
+  (Q5), and the engine path waits for it.
+- M0's exit includes "a CIP-113 transfer builds from a `SnapshotBackend` with no `Need`".
 
 ## 4. Invariants
 
@@ -242,33 +364,46 @@ Numbered from **I56**, after ADR-0016's I55 (ADR-0018 numbers its toolchain inva
 
 | ID | Invariant | Decisions |
 |---|---|---|
-| I56 | A `ProgrammablePayout` is satisfied only by an output with payment credential = the params' PLB hash, stake credential = `Inline(owner)`, inline datum = this instance's payout tag, and at least `amount` of `(policy, assetName)` | D5 |
-| I57 | One output satisfies at most one programmable payout of one instance; an output carrying a JOUST tag is never claimed by a send (I30's tag rule kept) | D5 |
-| I58 | A programmable payout names only a policy accepted in the contract's params | D5 |
+| I56 | (r2) For each `(owner, policy, assetName)` of an instance's programmable payouts: amounts are positive, `owner` is a 28-byte key hash, the sum of the asset in outputs at `(PLB, Inline(VerificationKey(owner)))` (params PLB; no datum hash, no reference script) tagged with this instance's payout tag is at least the sum owed, and no spent input is a PLB input keyed by `owner` | D5, D10 |
+| I57 | (r2) An output carrying a JOUST tag is never claimed by a send (I30's tag rule kept); payouts of different instances never share a tag | D5 |
+| I58 | (r2) A programmable payout names only a policy in the contract's params; the runtime and the page build it only when the policy's registry node names the transfer and third-party logic pinned in the description | D5, D7 |
 | I59 | Programmable payouts move none of the instance's value: I26 holds unchanged | D5 |
-| I60 | The runtime and the engine build CIP-113 parts only against the pinned deployment; a live PLG or delegate other than the pinned one stops the build | D1 |
+| I60 | (r2) Every build checks the deployment identity (PLB, params and registry NFT policies, registry address, bootstrap) against the deployment file, and a contract's params PLB against it; any mismatch stops the build. In strict mode, and in pages without an authenticated params output, a wiring field (PLG, delegates, issuance logic) other than the recorded one stops the build | D1, D5 |
 | I61 | A transaction JOUST builds carries at most one CIP-113 action kind; a wallet (page) flow never carries `ThirdPartyAct` or `UnfrackingAct` | D6, D7 |
-| I62 | The page accepts a programmable transfer only under D7's rules 1–6; anything else is refused before signing | D7 |
-| I63 | No JOUST runtime or page pays a programmable token to a smart wallet keyed by a JOUST contract's script hash, until a custody ADR replaces this rule | D9, D10 |
+| I62 | (r2) The page accepts a programmable transaction only under D7's rules 1–9; anything else is refused before signing | D7 |
+| I63 | (r2) JOUST pays programmable tokens only to smart wallets keyed by a verification-key hash (on chain for payouts, I56; in the runtime and the page for every transfer), unless a script is on the deployment's allow-list, which is empty until a custody ADR | D9, D10 |
+| I64 | (r2, new) A transfer or third-party rule built with `ProgrammableLib` is parameterised by its policy, checks every spent PLB input and every PLB output holding that policy (mixed UTxOs included), and reads only authenticated registry nodes | D3 |
+| I65 | (r2, new) A seizure through the `Compliance` contract moves exactly the holders and amounts its single approved `Seize` lists, to `(PLB, Inline(VerificationKey(to)))`, with no mint or burn of the policy, and its event records the same | D8 |
+| I66 | (r2, new) A page counts a smart-wallet input of the wallet only with its value authenticated from its producing transaction, except on a devnet deployment (Q11) | D7 |
+| I67 | (r2, new) `ProgrammableTokenSpec` refuses a third-party logic equal to the transfer logic or without a declared authority; a single-key third-party rule is refused outside devnets | D3, D8 |
 
 ## 5. Alternatives considered
 
 | Alternative | Why not |
 |---|---|
-| JOUST builds CIP-113 transactions itself | Duplicates CCL's index resolution and stability checks (F13), the hardest part to get right; CCL is the bloxbean library JOUST already builds on |
-| Relax I30 for PLB outputs and use `Send` | A send's exclusivity comes from credential freshness, which a shared credential cannot give; the tag (I7's mechanism) can (D5) |
-| Put the state UTxO itself at `(PLB, Script(c))` | The thread token would need registry non-existence proofs on every move; seizure could rewrite the state's value; state capped at 1024 bytes (F8); JOUST validation would have to leave SPEND. Rejected |
-| Custody now, with the contract's own hash as owner | The `@Withdraw` zero-withdrawal drain (§1.2 item 3) and one shared wallet for all instances. Deferred to a custody ADR under D9 |
-| A JS-only CIP-113 builder for pages (MeshSDK, Evolution SDK, `@easy1staking/cip113-sdk-ts`) | Two implementations to keep equal; kept as the fallback if the engine's size budget fails (Q7) |
-| Wait for CIP-113 to become Active | Phases 1–4 are off-chain or additive and pinned to one version; issuers are deploying on v0.0.1 now |
+| JOUST builds CIP-113 transactions itself | Duplicates CCL's index resolution and stability checks (F13), the hardest part to get right |
+| Relax I30 for PLB outputs and use `Send` | A send's exclusivity comes from credential freshness, which a shared credential cannot give; the tag can (D5) |
+| Per-payout existential check ("an output with ≥ amount") | One output satisfies two payouts of one instance (review C1/S3); the I7 aggregate form is used |
+| Net payout check (tagged outputs minus the owner's spent PLB inputs) | Sound but costlier on chain; refusing the owner's PLB inputs is simpler (D5) |
+| A rule that finds its policy from "the node that names this script" | Many nodes can name one script; an attacker-registered token switches the rule's checks off (F29). Rules are parameterised by policy (D3) |
+| Refuse to build on any wiring change, always | Protects no funds (the authority controls them anyway, F9) and breaks every pinned page on each legitimate upgrade; kept as strict mode (D1, Q6) |
+| Put the state UTxO itself at `(PLB, Script(c))` | Registry non-existence proofs for the thread token on every move; seizure rewrites the state's value; state capped at 1024 bytes (F8); validation leaves SPEND |
+| Custody now, with the contract's own hash as owner | §1.2 item 3; deferred under D9 |
+| Script owners for payouts in v1 | Any script anyone can make pass would be drainable (§1.2 item 3); key owners only (D10) |
+| A JS-only CIP-113 builder for pages | Two implementations to keep equal; the fallback if D13 or the size budget fails (Q7) |
+| Wait for CIP-113 to become Active | Phases 1–4 are off-chain or additive and pinned to one version; mainnet is opt-in (D1) |
 
 ## 6. Consequences
 
-- Issuers get JuLC-written token rules and a Java and JS API on day one; compliance with quorum and audit events
-  follows ADR-0016's absence evidence.
-- dApps can price in a regulated token without holding it, which covers shops, fees and subscriptions.
-- Pages can show and transfer programmable balances that CIP-30 wallets do not display (CIP-0113 §Acceptance Criteria).
-- JOUST takes a dependency on an experimental CCL module and on a Proposed CIP: both may change (§10 risks).
+- Issuers get JuLC-written rules and a Java API (register, rule registration, mint, burn, seize); compliance with a
+  governor-rotated quorum and audit events follows ADR-0016's absence evidence. Issuer and operator flows in pages are
+  not in v1 (Q9).
+- dApps can price in a regulated token without holding it, paid to the recipient's key, which covers shops, fees and
+  subscriptions.
+- Holders can see and move programmable balances in pages, which CIP-30 wallets do not display (CIP-0113 §Acceptance
+  Criteria), once the provider can authenticate smart-wallet UTxOs.
+- JOUST takes a dependency on an experimental CCL module and on a Proposed CIP; the deployment file and CI pin keep
+  changes reviewed.
 - Programmable transactions are large: four or more script withdrawals, registry reference inputs, reference scripts.
 
 ## 7. Compatibility
@@ -276,50 +411,78 @@ Numbered from **I56**, after ADR-0016's I55 (ADR-0018 numbers its toolchain inva
 - Existing contracts, validators, descriptions and pages are unchanged: `ProgrammablePayout` is a new optional result
   component, and a contract that does not use it generates the same validator.
 - Older page verifiers refuse programmable transactions (fail closed).
-- `julc-state-programmable` is a new published module; the runtime and api do not depend on it.
+- `julc-state-programmable` is a new published module. `julc-state-runtime` gains the SPI of D12 and no dependency on
+  CCL's module; `julc-state-api` gains the `ProgrammablePayout` record.
 
 ## 8. Milestones
 
 | ID | Entry gate | Work | Exit criteria |
 |---|---|---|---|
-| M0 spike | this ADR accepted | DevKit bootstrap (D11); a composed JOUST call + CIP-113 holder transfer; measure CCL stability vs payout restoration (D6), budgets, Wasm size (Q7) | one composed transaction lands on DevKit; numbers recorded in the ADR's implementation notes; D6's open point answered |
-| M1 issuers and holders (Java) | M0 | `julc-state-programmable` facade (D4), `ProgrammableTokenSpec`, `ProgrammableLib` (consent, registry); `examples/stablecoin` with stateless JuLC rules: register, mint, transfer, seize, burn | I60, I61 tested; the example runs on DevKit against the real core contracts |
-| M2 programmable payouts | M1 | `ProgrammablePayout` in the processor, generator and runtime; `examples/shop` | I56–I59 by harness attacks (§9) and DevKit |
-| M3 pages | M2 | engine module, `x-joust.programmable`, verifier rules, guard (D10) | I62, I63 by tamper tests; a page transfers and pays on DevKit |
-| M4 compliance | ADR-0016 Q3 follow-up accepted; M2 | `Compliance` keyed denylist, transfer logic with non-membership, quorum-gated seizure | a denied holder's transfer fails on chain; seizure emits its event; contention retry tested |
+| M0 spike | this ADR accepted | DevKit bootstrap (D11); the deployment file and its CI check (D1); a pre-resolved deployment (D13); a composed JOUST call + holder transfer; a **wallet prepare** of a JOUST call with a `ProgrammablePayout` composed with a call that pays the wallet an ordinary payout (D6); budgets; engine size (Q7) | the composed transactions land on DevKit; a CIP-113 transfer builds from a `SnapshotBackend` with no `Need`; D6's restoration question answered; numbers recorded in the implementation notes |
+| M1 issuers and holders (Java) | M0 | SPI (D12); facade with rule registration (D4); `ProgrammableTokenSpec` (I67); `ProgrammableLib` (I64); `examples/stablecoin`: register, register rule credentials, mint, transfer, seize (single key, devnet), burn | I60, I61, I64, I67 tested; the example runs on DevKit; §9's M1 negative cases are rejected by the core |
+| M2 programmable payouts | M1 | `ProgrammablePayout` in api, processor, generator; its handler (D12); `examples/shop`; the tag-datum check per accepted policy (D5) | I56–I59 by harness attacks (§9) and DevKit |
+| M3 pages | M2, D13 met | engine path, `x-joust.programmable`, intents, rules 1–9, guard (D10) | I62, I63, I66 by tamper tests, including independently built accept cases (§9); a page transfers and pays 25 units with change on DevKit |
+| M4 compliance | ADR-0016 Q3 follow-up accepted; M2; Q10 decided | `Compliance` keyed denylist via a governor; policy-parameterised transfer and third-party rules; bound seizure | I65; a denied holder cannot transfer, also through a second policy sharing the rule, a mixed UTxO, or an extra seizure pair; the reference freeze-and-seize module runs the same scenarios |
 | M5 custody | a custody ADR accepted (D9) | – | – |
 
 ## 9. Verification
 
-- **Independent oracle:** the CIP-113 Aiken core contracts at `6b75ba32`, deployed on DevKit, validate every
-  transaction JOUST builds (D11). CCL's own integration tests are a second, independent builder.
-- **Attacks on programmable payouts (M2):** payment credential other than PLB; stake credential of another owner; a
-  pointer or missing stake credential; datum hash instead of inline; another instance's tag; one output for two
-  instances' payouts; amount short by one; a policy outside params; the payout also claimed as a send.
-- **Page tamper tests (M3):** an extra smart-wallet input of the wallet; tokens redirected to another smart wallet;
-  `ThirdPartyAct` smuggled in; an unpinned logic withdrawal; a registry node without the registry NFT; a non-zero
-  withdrawal; a certificate; payment to a JOUST contract's smart wallet (I63).
-- **Differential:** the Java runtime and the Wasm engine build byte-identical transaction bodies for the same calls
-  and chain reads (ADR-0015 M0 fixtures).
-- **Drift:** a DevKit test re-points a delegate and checks that the build stops (I60).
+- **On-chain oracle:** the CIP-113 Aiken core contracts at `6b75ba32`, deployed on DevKit, validate every transaction
+  JOUST builds (D11). They say nothing about JOUST's own rules (payouts, page rules), which need the tests below.
+- **Independent builders for the page:** accept cases for the page verifier are also built by an independent CIP-113
+  builder (`@easy1staking/cip113-sdk-ts`, or Mesh/Evolution SDK), so the verifier is given transactions JOUST did not
+  build. The tamper corpus is decoded and value-accounted a second time with CSL (which ADR-0015 keeps for tests).
+  The Java/Wasm differential is a consistency check only: it runs the same code.
+- **Reference behaviour for rules:** the core repository's reference freeze-and-seize module, deployed on DevKit, runs
+  the same denied-holder and seizure scenarios as the JuLC rules (M4).
+- **M1 negative cases the core must reject:** an unsigned holder spend; a missing transfer-logic withdrawal; a wrong
+  or missing registry node; an unregistered rule credential.
+- **Attacks on programmable payouts (M2):** a payment credential other than PLB; another owner's stake credential; a
+  pointer or missing stake credential; a script owner; a datum hash instead of an inline datum; another instance's
+  tag; **two payouts of one instance to one owner satisfied by one output**; underpayment by one; a non-positive
+  amount; a policy outside params; **the owner's own PLB input recycled into the tagged output**; the payout also
+  claimed as a send.
+- **Attacks on rules (M1, M4):** a second registered policy naming the same rule, with only one policy's sender
+  denied; a mixed-policy UTxO; a registry node without the registry NFT, at another address, or with `key` ≠ asset
+  name.
+- **Attacks on seizure (M4):** an extra holder added to an approved `Seize`; a changed destination; an amount above
+  the approved one; a burn of the policy; a second `Seize`; another policy.
+- **Page tamper tests (M3):** 26 and 100 units to the correct recipient for a 25-unit intent; extra assets; excess
+  ADA in a new PLB output; change to a PLB output with another stake credential or a pointer; an extra smart-wallet
+  input of the wallet; a **lying provider** (a smart-wallet input reported as less than it holds, a target reported
+  as more); an extra registry node with its logic withdrawal; an unpinned logic withdrawal; a node without the NFT;
+  `ThirdPartyAct` smuggled in; a non-zero withdrawal; a certificate; a params datum naming an unrecorded PLG;
+  payment to a verifier-keyed and to a logic-keyed smart wallet (I63).
+- **Wiring (I60):** DevKit tests change each wiring field independently (PLG, each delegate via a new PLG, the
+  issuance logic alone) against the params UTxO the build references, and check: the Java runtime reports it, strict
+  mode stops, and a page without an authenticated params output stops.
 
 ## 10. Open questions
 
-- **Q1. Packaging.** A separate `julc-state-programmable` module, or inside the runtime? *Lean:* separate (D1).
+- **Q1. Packaging.** A separate `julc-state-programmable` module with a runtime SPI (D12). *Lean:* yes.
 - **Q2. Smart-wallet key.** Payment only, or also stake? *Lean:* payment only in v1; stake needs CIP-30 stake-key
   signing in pages, unverified across wallets.
-- **Q3. Absence evidence.** Write the ADR-0016 Q3 follow-up before M4, or fold it into M4? *Lean:* a separate short ADR,
-  since other contracts need the same evidence.
-- **Q4. Custody owner script.** Companion script per contract, per instance (isolated, a stake deposit each), or the
-  contract's own hash with a hardened withdraw arm? *Lean:* decided in the custody ADR; not the own hash.
-- **Q5. Upstream CCL requests** (as issues on CCL, not changes made here): spending a script-keyed smart wallet with a
-  supplied consent withdrawal; a published DevKit bootstrap fixture; a hook for payout restoration if M0 needs one.
-  *Lean:* file after M0, with the measurements.
-- **Q6. Drift policy** when the upgrade authority re-points PLG or a delegate: refuse (lean) or warn.
-- **Q7. Engine size budget** for the CCL module in the Wasm engine. *Lean:* measure in M0; fall back to a JS builder if
-  it grows the engine by more than a budget set then.
-- **Q8. `.jsc`.** Programmable payouts and token rules in `.jsc` follow ADR-0018. *Lean:* after ADR-0018 is accepted;
-  rules stay Java until `.jsc` can express withdraw validators.
+- **Q3. Absence evidence.** Write the ADR-0016 Q3 follow-up before M4, or fold it into M4? *Lean:* a separate short ADR.
+- **Q4. Custody owner script.** Companion script per contract or per instance, under D9.1. *Lean:* decided in the
+  custody ADR; never the contract's own hash with `@Withdraw`.
+- **Q5. Upstream CCL requests** (issues on CCL, not changes made here): spending a script-keyed smart wallet with a
+  supplied consent withdrawal; resolution through a `UtxoSupplier` only (D13); a published DevKit bootstrap; a hook
+  for payout restoration if M0 needs one. *Lean:* file after M0, with the measurements.
+- **Q6. Wiring changes** (r2: options and consequences). *Follow* (the Java default in D1): builds keep working
+  after a legitimate upgrade; a build may meet delegates nobody at the deployer has reviewed, which only the authority
+  could have installed. *Refuse* (strict mode; pages without authentication): every upgrade is an outage of every
+  pinned page until it is rebuilt, and protects no funds. *Lean:* follow by default in Java, refuse in strict mode,
+  pages follow only an authenticated params output.
+- **Q7. Engine size budget** for the CCL module. *Lean:* measure in M0 together with D13; a JS builder is the fallback.
+- **Q8. `.jsc`.** Programmable payouts and rules in `.jsc` follow ADR-0018. *Lean:* after ADR-0018 is accepted.
+- **Q9. Issuer and operator flows in pages** (register, mint, burn, seize with a CIP-30 wallet). *Lean:* not in v1;
+  a follow-up with its own verifier rules for `ThirdPartyAct` and issuance.
+- **Q10. Seizure limits.** Ship the per-transaction cap and the request-then-execute delay in v1 `Compliance`?
+  *Lean:* both, as params with defaults the deployer sets (a delay of 0 allowed only on devnets).
+- **Q11. Devnet pages without authenticated smart-wallet values** (Yaci Store serves no transaction CBOR).
+  *Lean:* allow with a visible warning only for deployments marked devnet.
+- **Q12. Mainnet opt-in.** What lifts it: a recorded audit of core v0.0.1, the CIP reaching Active, or both?
+  *Lean:* a recorded audit.
 
 ## 11. Related findings (out of scope)
 
@@ -327,7 +490,33 @@ Numbered from **I56**, after ADR-0016's I55 (ADR-0018 numbers its toolchain inva
 - CCL's programmable-token docs page (cardano-client.dev/learn/cip113-programmable-tokens/) is built from branch
   `feat/new_docs_site`, not `master`, and does not mention JuLC rules.
 - `julc-cip113` (local prior art) implements an older CIP-113/CIP-143 design with old packages; not reusable as is.
+- The OutputVerifier accepts an empty-claims withdrawal by anyone (F22). Harmless today; it matters only as a
+  smart-wallet owner, which D10 forbids.
 
 ## Revision history
 
-- **r1** (2026-11-12): initial proposal.
+- **r1** (2026-11-12): initial proposal (`74a1b3e`; invariants renumbered I56–I63 in `37ef8cf`).
+- **r2** (2026-11-12, responds to review of `37ef8cf`: Codex C1–C5, security S1–S13, design F1–F11):
+  - payouts: I7's aggregate form, positive amounts, key owners only, the owner's own PLB inputs refused, where they
+    may be returned, datum-constraining substandards, the residual (C1, S1, S2, S3, S12, F11) → D5, I56, I57, §9;
+  - consent trap generalised; D10 an allow-list of key-keyed wallets; I63 enforced on chain for payouts (S1, F6) →
+    §1.2, D9.1, D10, I63;
+  - rules parameterised by policy; "find my own policy" withdrawn; mixed UTxOs; authenticated nodes (C2, S4) → D3,
+    I64;
+  - seizure bound to its approval; stable identification of the `Compliance` spend; no retire for `Denied`; rotation
+    by governor; blast radius; cap and delay (C3, S5, S6, F7) → §2, D8, I65, Q10;
+  - page: programmable intents with quantities, net accounting, exact change, min-ADA bound, authenticated
+    smart-wallet inputs, exact withdrawals and authenticated nodes (C4, S7, S8, F1) → D7, I62, I66, Q11;
+  - drift: identity pinned, wiring followed visibly with a strict mode, every field incl. issuance logic, delegates as
+    PLG parameters, upgrade authority trusted for funds, Q6 with both consequences (C5, S12, F4) → §2, D1, I60, Q6;
+  - accepted policies chosen by the deployer, substandard checked off chain for payouts and on chain for custody
+    (F5) → D5, D9.5, I58;
+  - engine: the CIP-113 read set and a pre-resolved deployment; M0 exit "no `Need`" (F2) → D13, D7, M0;
+  - runtime SPI and module ownership; restoration tested on the wallet-prepare path (F3) → D12, D6, §7, M0;
+  - rule-credential registration; issuer and operator page flows a v1 non-goal (F8) → D4, M1, §1, §6, Q9;
+  - verification with independent builders, CSL, the reference module, named negative cases (S11, F9) → §9;
+  - supply chain: a JOUST deployment file with a CI check, commit `9a5d6072`, blueprint hash, mainnet opt-in, devnet
+    bootstrap keys, `aiken-java-binding` (S9, F10) → D1, D11, F11, Q12;
+  - `ProgrammableTokenSpec` refuses an unauthenticated third-party logic (S13) → D3, I67;
+  - custody constraints: tag forgery, dust, shared freeze, on-chain substandard check (S10) → D9;
+  - citations (F10): F11 commit, F14 span, F15/F16 cite CCL sources; "Amends ADR-0015 §3" (F11).
