@@ -22,11 +22,22 @@ final class Ir {
     static final int TIME = 1, WINDOW = 2;
 
     record Program(String pkg, String fileName, String name, List<ContractOption> options,
-                   Map<String, RecordType> records, RecordType state, List<Method> methods, List<Fn> fns,
-                   Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings) {
+                   Map<String, RecordType> records, Map<String, EnumType> enums, RecordType state, List<Method> methods,
+                   List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings) {
 
+        /** A record type, the state, or an enum variant (variant names are unique in a file). */
         RecordType record(String name) {
-            return name.equals("State") ? state : records.get(name);
+            if (name.equals("State")) return state;
+            RecordType r = records.get(name);
+            if (r != null) return r;
+            for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return e.variants().get(name);
+            return null;
+        }
+
+        /** The enum a variant belongs to, or null. */
+        EnumType enumOf(String variant) {
+            for (EnumType e : enums.values()) if (e.variants().containsKey(variant)) return e;
+            return null;
         }
 
         Method method(String name) {
@@ -49,8 +60,19 @@ final class Ir {
         }
     }
 
-    /** A located warning (D12). */
-    record Warning(int line, int col, String message) {}
+    /** An enum: its variants in declaration order (their constructor tags, D5), each a record of its fields. */
+    record EnumType(String name, LinkedHashMap<String, RecordType> variants, Pos pos) {
+        List<String> variantNames() {
+            return List.copyOf(variants.keySet());
+        }
+
+        int tag(String variant) {
+            return variantNames().indexOf(variant);
+        }
+    }
+
+    /** A located warning (D12), with its stable code. */
+    record Warning(int line, int col, String code, String message) {}
 
     enum Kind { INIT, ACTION, DESTROY, VIEW }
 
@@ -99,7 +121,7 @@ final class Ir {
 
     // ------------------------------------------------------------------ statements
 
-    sealed interface Stmt permits Let, Require, Pay, If, For {
+    sealed interface Stmt permits Let, Require, Pay, If, For, MatchStmt {
         Pos pos();
     }
 
@@ -114,11 +136,22 @@ final class Ir {
 
     record For(Local var, Expr list, Block body, boolean pays, Pos pos) implements Stmt {}
 
+    /** A match statement: arms' blocks have no value. {@code pays}: a pay is reachable in an arm. */
+    record MatchStmt(Expr scrutinee, List<Arm> arms, boolean pays, Pos pos) implements Stmt {}
+
+    /**
+     * A match arm. {@code ctors} are the variants (or {@code Some}/{@code None}) it covers: one for a written pattern,
+     * every remaining one for {@code _}. {@code fields} and {@code binds} pair each bound field with its local (for
+     * {@code Some(x)} the field is {@code "value"}); only a single-constructor arm binds.
+     */
+    record Arm(List<String> ctors, List<String> fields, List<Local> binds, Block body, Pos pos) {}
+
     // ------------------------------------------------------------------ expressions
 
     sealed interface Expr permits Lit, LocalRef, StateRef, StateField, CtxRef, NoneLit, SomeOf, GetField, New, CallFn,
             CallStd, Prelude, TimePred, ListLit, Neg, Not, Arith, Compare, Equals, Logic, Cond, Coalesce, BlockValue,
-            IfValue, ListProp, Concat, Contains, Hof, Fold {
+            IfValue, ListProp, Concat, Contains, Hof, Fold, Variant, Match, MapEmpty, MapOp, MapHof, MapFold, BigEmpty, BigOp,
+            Range, ListArg {
         Ty type();
 
         int taint();
@@ -209,4 +242,49 @@ final class Ir {
 
     /** {@code xs.fold(init, (acc, x) => body)}, front to back. */
     record Fold(Expr list, Expr init, Local acc, Local x, Block body, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** An enum value: {@code Open} or {@code Closed { at }}; {@code values} in the variant's field order. */
+    record Variant(String enumName, String variant, List<Expr> values, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** A match used as a value: only the taken arm runs (D6). */
+    record Match(Expr scrutinee, List<Arm> arms, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** {@code Map.empty()} at a known map type. */
+    record MapEmpty(Ty type, Pos pos) implements Expr {
+        public int taint() {
+            return 0;
+        }
+    }
+
+    /**
+     * An inline map operation (D7): {@code get} (Option), {@code has}, {@code set} and {@code delete} (new canonical
+     * maps), {@code size}, {@code keys}, {@code values}, {@code isEmpty}.
+     */
+    record MapOp(String op, Expr map, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** {@code m.any((k, v) => …)} / {@code m.all(…)}, in key order. */
+    record MapHof(String kind, Expr map, Local k, Local v, Block body, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** {@code m.fold(init, (acc, k, v) => …)}, in key order. */
+    record MapFold(Expr map, Expr init, Local acc, Local k, Local v, Block body, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** {@code BigMap.empty()}: only as a state field's value in an init (D7). */
+    record BigEmpty(Ty type, Pos pos) implements Expr {
+        public int taint() {
+            return 0;
+        }
+    }
+
+    /**
+     * A BigMap operation (D7): {@code get} (Option), {@code has}, {@code at} ({@code m[k]}, 0 when absent, Int values),
+     * {@code set}, {@code delete}, {@code isEmpty} (empty before the call, destroys only). {@code map} is the field read
+     * or a set/delete chain rooted at it.
+     */
+    record BigOp(String op, Expr map, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** {@code range(a, b)}: a to b, exclusive; only the receiver of a list method or a for loop (no list is built). */
+    record Range(Expr from, Expr to, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** {@code xs.take(n)} / {@code xs.drop(n)}: {@code n} negative fails on both sides (D7). */
+    record ListArg(String op, Expr list, Expr arg, Ty type, int taint, Pos pos) implements Expr {}
 }

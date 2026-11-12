@@ -23,7 +23,7 @@ final class Syntax {
         }
     }
 
-    record File(String pkg, List<Import> imports, List<TypeDecl> types, List<Fn> fns, Contract contract) {}
+    record File(String pkg, List<Import> imports, List<TypeDecl> types, List<EnumDecl> enums, List<Fn> fns, Contract contract) {}
 
     record Import(List<String> names, String from, Pos pos) {}
 
@@ -31,13 +31,18 @@ final class Syntax {
 
     record FieldDecl(String name, TypeRef type, Pos pos) {}
 
+    /** {@code enum E { A, B { x: Int } }}: variants in declaration order (their constructor tags, D5). */
+    record EnumDecl(String name, List<VariantDecl> variants, Pos pos) {}
+
+    record VariantDecl(String name, List<FieldDecl> fields, Pos pos) {}
+
     /** A written type: {@code Int}, {@code List<Key>}, {@code Share}. */
     record TypeRef(String name, List<TypeRef> args, Pos pos) {}
 
     record Option(String name, BigInteger value, Pos pos) {}
 
     record Contract(String name, List<Option> options, List<FieldDecl> state, List<Method> methods, List<Fn> fns,
-                    List<TypeDecl> types, Pos pos) {}
+                    List<TypeDecl> types, List<EnumDecl> enums, Pos pos) {}
 
     enum Kind { INIT, ACTION, DESTROY, VIEW }
 
@@ -59,7 +64,7 @@ final class Syntax {
         }
     }
 
-    sealed interface Stmt permits Const, Require, Pay, For, IfStmt {
+    sealed interface Stmt permits Const, Require, Pay, For, IfStmt, MatchStmt {
         Pos pos();
     }
 
@@ -73,8 +78,23 @@ final class Syntax {
 
     record IfStmt(Expr cond, Block then, Block otherwise, Pos pos) implements Stmt {}
 
+    /** A {@code match} whose arms end in statements (or that is not the block's last expression). */
+    record MatchStmt(Match match, Pos pos) implements Stmt {}
+
+    /**
+     * A pattern: a variant {@code Closed { at, by: who }} (fields bound to names, possibly renamed), {@code Some(x)},
+     * {@code None}, or {@code _} (every variant not named by an earlier arm).
+     */
+    record Pattern(String ctor, List<Bind> binds, Pos pos) {}
+
+    /** {@code field: name}; for {@code Some(x)} the field is null. */
+    record Bind(String field, String name, Pos pos) {}
+
+    /** An arm: its pattern and its body, a block (an expression arm is a block with only a result). */
+    record Arm(Pattern pattern, Block body, Pos pos) {}
+
     sealed interface Expr permits IntLit, BoolLit, BytesLit, StrLit, Name, Field, Call, MethodCall, Lambda, ObjLit,
-            ListLit, Unary, Binary, Cond, IfExpr, BlockExpr {
+            ListLit, Unary, Binary, Cond, IfExpr, BlockExpr, Match, Index {
         Pos pos();
     }
 
@@ -121,4 +141,10 @@ final class Syntax {
 
     /** A block used as a value ({@code x => { const y = …; y > 1 }}): its statements, then its result. */
     record BlockExpr(Block block, Pos pos) implements Expr {}
+
+    /** {@code match e { P => …, … }} (D6): exhaustive, arms are expressions or blocks. */
+    record Match(Expr scrutinee, List<Arm> arms, Pos pos) implements Expr {}
+
+    /** {@code m[k]}: a BigMap<K, Int> read that is 0 when the key is absent (D7). */
+    record Index(Expr target, Expr key, Pos pos) implements Expr {}
 }

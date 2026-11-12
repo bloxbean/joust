@@ -70,10 +70,100 @@ public final class Interpreter {
         }
     }
 
-    /** A record value: its type's name and its fields in declaration order. */
+    /** A record or enum-variant value: its type's (or variant's) name and its fields in declaration order. */
     public record Rec(String type, List<Object> fields) {
         public Rec {
             fields = List.copyOf(fields);
+        }
+    }
+
+    /**
+     * An inline map (D5): keys in canonical order (shorter first, then bytewise unsigned), unique, each at most 64
+     * bytes; {@code values} in the same order.
+     */
+    public record MapV(List<Bytes> keys, List<Object> values) {
+        public static final MapV EMPTY = new MapV(List.of(), List.of());
+
+        public MapV {
+            keys = List.copyOf(keys);
+            values = List.copyOf(values);
+        }
+
+        /** Canonical key order: a shorter key first, then unsigned bytewise (F19, up to 64 bytes). */
+        public static int compareKeys(Bytes a, Bytes b) {
+            if (a.value.length != b.value.length) return Integer.compare(a.value.length, b.value.length);
+            return Arrays.compareUnsigned(a.value, b.value);
+        }
+
+        int indexOf(Bytes k) {
+            for (int i = 0; i < keys.size(); i++) if (keys.get(i).equals(k)) return i;
+            return -1;
+        }
+
+        MapV set(Bytes k, Object v) {
+            var ks = new ArrayList<Bytes>(keys);
+            var vs = new ArrayList<Object>(values);
+            int i = indexOf(k);
+            if (i >= 0) {
+                vs.set(i, v);
+            } else {
+                int at = 0;
+                while (at < ks.size() && compareKeys(ks.get(at), k) < 0) at++;
+                ks.add(at, k);
+                vs.add(at, v);
+            }
+            return new MapV(ks, vs);
+        }
+
+        MapV delete(Bytes k) {
+            int i = indexOf(k);
+            if (i < 0) return this;
+            var ks = new ArrayList<Bytes>(keys);
+            var vs = new ArrayList<Object>(values);
+            ks.remove(i);
+            vs.remove(i);
+            return new MapV(ks, vs);
+        }
+
+        /** Built from any entries, in canonical order (for tests). */
+        public static MapV of(java.util.Map<Bytes, Object> entries) {
+            MapV m = EMPTY;
+            for (var e : entries.entrySet()) m = m.set(e.getKey(), e.getValue());
+            return m;
+        }
+    }
+
+    /**
+     * A BigMap (D7) as the language sees it: its contents before the call, its contents now, and whether this call
+     * wrote to it ({@code isEmpty} is "empty before the call, with no writes", F14).
+     */
+    public record BigMapV(java.util.Map<Bytes, Object> before, java.util.Map<Bytes, Object> now, boolean written) {
+        public BigMapV {
+            before = java.util.Map.copyOf(before);
+            now = java.util.Map.copyOf(now);
+        }
+
+        public static BigMapV of(java.util.Map<Bytes, Object> contents) {
+            return new BigMapV(contents, contents, false);
+        }
+    }
+
+    /** {@code range(a, b)}: a to b, exclusive (D7); never materialised. */
+    record RangeV(BigInteger from, BigInteger to) implements Iterable<Object> {
+        public java.util.Iterator<Object> iterator() {
+            return new java.util.Iterator<>() {
+                BigInteger i = from;
+
+                public boolean hasNext() {
+                    return i.compareTo(to) < 0;
+                }
+
+                public Object next() {
+                    BigInteger v = i;
+                    i = i.add(BigInteger.ONE);
+                    return v;
+                }
+            };
         }
     }
 
@@ -99,13 +189,46 @@ public final class Interpreter {
     }
 
     public static final Hashes JDK_HASHES = (name, input) -> {
-        if (!name.equals("sha2_256")) throw new UnsupportedOperationException(name + " needs a hash provider");
+        String alg = switch (name) {
+            case "sha2_256" -> "SHA-256";
+            case "sha3_256" -> "SHA3-256";
+            default -> throw new UnsupportedOperationException(name + " needs a hash provider");
+        };
         try {
-            return MessageDigest.getInstance("SHA-256").digest(input);
+            return MessageDigest.getInstance(alg).digest(input);
         } catch (java.security.NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
     };
+
+    /**
+     * Ed25519 as the ledger's builtin: a key that is not 32 bytes or a signature that is not 64 fails the call; any
+     * other input is answered true or false, by the JDK's verifier: a key that is no curve point, or a malformed
+     * signature, is false (as the builtin answers; the four-way vectors check it on every leg).
+     */
+    static boolean verifyEd25519(byte[] key, byte[] msg, byte[] sig) {
+        if (key.length != 32) throw new Refused("verifyEd25519: the key must be 32 bytes");
+        if (sig.length != 64) throw new Refused("verifyEd25519: the signature must be 64 bytes");
+        try {
+            byte[] y = key.clone();
+            boolean xOdd = (y[31] & 0x80) != 0;
+            y[31] &= 0x7f;
+            for (int i = 0; i < 16; i++) {
+                byte t = y[i];
+                y[i] = y[31 - i];
+                y[31 - i] = t;
+            }
+            var point = new java.security.spec.EdECPoint(xOdd, new BigInteger(1, y));
+            var spec = new java.security.spec.EdECPublicKeySpec(java.security.spec.NamedParameterSpec.ED25519, point);
+            var pk = java.security.KeyFactory.getInstance("Ed25519").generatePublic(spec);
+            var v = java.security.Signature.getInstance("Ed25519");
+            v.initVerify(pk);
+            v.update(msg);
+            return v.verify(sig);
+        } catch (java.security.GeneralSecurityException | RuntimeException e) {
+            return false;
+        }
+    }
 
     // ------------------------------------------------------------------ the program
 
@@ -120,6 +243,26 @@ public final class Interpreter {
     /** The contract's state fields, in order. */
     public List<String> stateFields() {
         return p.state().fieldNames();
+    }
+
+    /** The state's BigMap fields, in state order: true for {@code BigMap<K, Int>}, false for {@code BigMap<K, Bytes>}. */
+    public java.util.LinkedHashMap<String, Boolean> bigMaps() {
+        var out = new java.util.LinkedHashMap<String, Boolean>();
+        p.state().fields().forEach((n, t) -> {
+            if (t instanceof Ty.BigMapT b) out.put(n, b.val().equals(Ty.INT));
+        });
+        return out;
+    }
+
+    /** A variant's constructor tag (its index in its enum's declaration, D5), or 0 for a record. */
+    public int tag(String name) {
+        Ir.EnumType e = p.enumOf(name);
+        return e == null ? 0 : e.tag(name);
+    }
+
+    /** Whether a name is an enum variant (its value is a {@link Rec} named after it). */
+    public boolean isVariant(String name) {
+        return p.enumOf(name) != null;
     }
 
     /** A record type's fields, in order. */
@@ -165,7 +308,7 @@ public final class Interpreter {
         for (int i = 0; i < args.size(); i++) env = new Env(m.params().get(i), args.get(i), env);
         // Checked inputs (D5): every nested key is 28 bytes, before the body runs.
         for (Ir.Local l : m.checked()) {
-            if (!keysOk(lookup(env, l), l.type)) throw new Refused(l.name + " must hold 28-byte key hashes");
+            if (!checked(lookup(env, l), l.type)) throw new Refused(l.name + " is not a well-formed input");
         }
         env = exec(m.body().stmts(), env, f);
         Object value = m.body().result() == null ? null : eval(m.body().result(), env, f);
@@ -218,7 +361,12 @@ public final class Interpreter {
                     else if (i.otherwise() != null) exec(i.otherwise().stmts(), env, f);
                 }
                 case Ir.For fo -> {
-                    for (Object x : list(eval(fo.list(), env, f))) exec(fo.body().stmts(), new Env(fo.var(), x, env), f);
+                    for (Object x : iter(eval(fo.list(), env, f))) exec(fo.body().stmts(), new Env(fo.var(), x, env), f);
+                }
+                case Ir.MatchStmt ms -> {
+                    Object v = eval(ms.scrutinee(), env, f);
+                    Ir.Arm a = arm(ms.arms(), v);
+                    exec(a.body().stmts(), bindArm(a, v, env), f);
                 }
             }
         }
@@ -322,9 +470,119 @@ public final class Interpreter {
             case Ir.Hof h -> hof(h, env, f);
             case Ir.Fold fo -> {
                 Object acc = eval(fo.init(), env, f);
-                for (Object x : list(eval(fo.list(), env, f))) acc = block(fo.body(), new Env(fo.x(), x, new Env(fo.acc(), acc, env)), f);
+                for (Object x : iter(eval(fo.list(), env, f))) acc = block(fo.body(), new Env(fo.x(), x, new Env(fo.acc(), acc, env)), f);
                 yield acc;
             }
+            case Ir.Variant v -> {
+                var vs = new ArrayList<Object>();
+                for (Ir.Expr x : v.values()) vs.add(eval(x, env, f));
+                yield new Rec(v.variant(), vs);
+            }
+            case Ir.Match m -> {
+                Object v = eval(m.scrutinee(), env, f);
+                Ir.Arm a = arm(m.arms(), v);
+                yield block(a.body(), bindArm(a, v, env), f);
+            }
+            case Ir.MapEmpty m -> MapV.EMPTY;
+            case Ir.MapOp o -> mapOp(o, env, f);
+            case Ir.MapHof h -> {
+                MapV m = (MapV) eval(h.map(), env, f);
+                boolean any = h.kind().equals("any");
+                for (int i = 0; i < m.keys().size(); i++) {
+                    boolean hit = bool(block(h.body(), new Env(h.v(), m.values().get(i), new Env(h.k(), m.keys().get(i), env)), f));
+                    if (hit == any) yield any;
+                }
+                yield !any;
+            }
+            case Ir.MapFold fo -> {
+                MapV m = (MapV) eval(fo.map(), env, f);
+                Object acc = eval(fo.init(), env, f);
+                for (int i = 0; i < m.keys().size(); i++) {
+                    acc = block(fo.body(), new Env(fo.v(), m.values().get(i), new Env(fo.k(), m.keys().get(i), new Env(fo.acc(), acc, env))), f);
+                }
+                yield acc;
+            }
+            case Ir.BigEmpty b -> BigMapV.of(java.util.Map.of());
+            case Ir.BigOp o -> bigOp(o, env, f);
+            case Ir.Range r -> new RangeV(integer(eval(r.from(), env, f)), integer(eval(r.to(), env, f)));
+            case Ir.ListArg l -> {
+                List<Object> xs = list(eval(l.list(), env, f));
+                BigInteger n = integer(eval(l.arg(), env, f));
+                if (n.signum() < 0) throw new Refused(l.op() + ": a negative count");
+                int k = n.min(BigInteger.valueOf(xs.size())).intValue();
+                yield l.op().equals("take") ? List.copyOf(xs.subList(0, k)) : List.copyOf(xs.subList(k, xs.size()));
+            }
+        };
+    }
+
+    /** The arm whose constructors include the value's: an Option's Some/None, a variant's name. */
+    private static Ir.Arm arm(List<Ir.Arm> arms, Object v) {
+        String ctor = v instanceof Opt o ? (o.present() ? "Some" : "None") : ((Rec) v).type();
+        for (Ir.Arm a : arms) if (a.ctors().contains(ctor)) return a;
+        throw new IllegalStateException("no arm for " + ctor);
+    }
+
+    private Env bindArm(Ir.Arm a, Object v, Env env) {
+        for (int i = 0; i < a.binds().size(); i++) {
+            Object x = v instanceof Opt o ? o.value() : field((Rec) v, a.fields().get(i));
+            env = new Env(a.binds().get(i), x, env);
+        }
+        return env;
+    }
+
+    private Object mapOp(Ir.MapOp o, Env env, Frame f) {
+        MapV m = (MapV) eval(o.map(), env, f);
+        var a = new ArrayList<Object>();
+        for (Ir.Expr x : o.args()) a.add(eval(x, env, f));
+        return switch (o.op()) {
+            case "get" -> {
+                int i = m.indexOf((Bytes) a.get(0));
+                yield i < 0 ? Opt.NONE : Opt.some(m.values().get(i));
+            }
+            case "has" -> m.indexOf((Bytes) a.get(0)) >= 0;
+            case "set" -> {
+                if (((Bytes) a.get(0)).value.length > 64) throw new Refused("Map.set: a key has at most 64 bytes");
+                yield m.set((Bytes) a.get(0), a.get(1));
+            }
+            case "delete" -> m.delete((Bytes) a.get(0));
+            case "size" -> BigInteger.valueOf(m.keys().size());
+            case "isEmpty" -> m.keys().isEmpty();
+            case "keys" -> List.<Object>copyOf(m.keys());
+            case "values" -> m.values();
+            default -> throw new IllegalStateException(o.op());
+        };
+    }
+
+    private Object bigOp(Ir.BigOp o, Env env, Frame f) {
+        BigMapV m = (BigMapV) eval(o.map(), env, f);
+        var a = new ArrayList<Object>();
+        for (Ir.Expr x : o.args()) a.add(eval(x, env, f));
+        boolean ints = ((Ty.BigMapT) o.map().type()).val().equals(Ty.INT);
+        return switch (o.op()) {
+            case "at" -> m.now().getOrDefault((Bytes) a.get(0), BigInteger.ZERO);
+            case "get" -> m.now().containsKey((Bytes) a.get(0)) ? Opt.some(m.now().get((Bytes) a.get(0))) : Opt.NONE;
+            case "has" -> m.now().containsKey((Bytes) a.get(0));
+            case "isEmpty" -> m.before().isEmpty() && !m.written();
+            case "delete" -> {
+                var now = new java.util.HashMap<>(m.now());
+                now.remove((Bytes) a.get(0));
+                yield new BigMapV(m.before(), now, true);
+            }
+            case "set" -> {
+                Bytes k = (Bytes) a.get(0);
+                if (k.value.length > 64) throw new Refused("BigMap.set: a key has at most 64 bytes");
+                var now = new java.util.HashMap<>(m.now());
+                if (ints) {
+                    BigInteger v = integer(a.get(1));
+                    if (v.signum() < 0) throw new Refused("BigMap.set: a value cannot be negative");
+                    if (v.signum() == 0) now.remove(k);   // 0 is absence (D7)
+                    else now.put(k, v);
+                } else {
+                    now.put(k, a.get(1));
+                }
+                yield new BigMapV(m.before(), now, true);
+            }
+            default -> throw new IllegalStateException(o.op());
         };
     }
 
@@ -336,7 +594,7 @@ public final class Interpreter {
     }
 
     private Object hof(Ir.Hof h, Env env, Frame f) {
-        List<Object> xs = list(eval(h.list(), env, f));
+        Iterable<Object> xs = iter(eval(h.list(), env, f));
         switch (h.kind()) {
             case "any" -> {
                 for (Object x : xs) if (bool(block(h.body(), new Env(h.x(), x, env), f))) return true;
@@ -427,31 +685,154 @@ public final class Interpreter {
                 for (int i = 0; i < types.size(); i++) if (!same(x.fields().get(i), y.fields().get(i), types.get(i))) yield false;
                 yield true;
             }
+            case Ty.EnumT e -> {
+                Rec x = (Rec) a, y = (Rec) b;
+                if (!x.type().equals(y.type())) yield false;
+                var types = List.copyOf(p.record(x.type()).fields().values());
+                for (int i = 0; i < types.size(); i++) if (!same(x.fields().get(i), y.fields().get(i), types.get(i))) yield false;
+                yield true;
+            }
+            case Ty.MapT m -> {
+                MapV x = (MapV) a, y = (MapV) b;
+                if (!x.keys().equals(y.keys())) yield false;
+                for (int i = 0; i < x.values().size(); i++) if (!same(x.values().get(i), y.values().get(i), m.val())) yield false;
+                yield true;
+            }
+            case Ty.BigMapT bm -> throw new IllegalStateException("a BigMap is not comparable");
         };
     }
 
-    /** Checked inputs (D5): every key nested in a value of type {@code t} is 28 bytes. */
-    private boolean keysOk(Object v, Ty t) {
+    /**
+     * Checked inputs (D5, J15): every Key or Hash nested in a value of type {@code t} is 28 bytes, and every Map has
+     * unique keys of at most 64 bytes in strictly ascending canonical order (stated here from the rule, not from the
+     * generated check).
+     */
+    private boolean checked(Object v, Ty t) {
         return switch (t) {
-            case Ty.Prim pr -> !pr.equals(Ty.KEY) || ((Bytes) v).value.length == 28;
-            case Ty.ListT l -> list(v).stream().allMatch(x -> keysOk(x, l.elem()));
-            case Ty.OptT o -> !((Opt) v).present() || keysOk(((Opt) v).value(), o.elem());
-            case Ty.Rec r -> {
-                Rec x = (Rec) v;
-                var types = List.copyOf(p.record(r.name()).fields().values());
-                for (int i = 0; i < types.size(); i++) if (!keysOk(x.fields().get(i), types.get(i))) yield false;
+            case Ty.Prim pr -> !(pr.equals(Ty.KEY) || pr.equals(Ty.HASH)) || ((Bytes) v).value.length == 28;
+            case Ty.ListT l -> list(v).stream().allMatch(x -> checked(x, l.elem()));
+            case Ty.OptT o -> !((Opt) v).present() || checked(((Opt) v).value(), o.elem());
+            case Ty.Rec r -> fieldsChecked((Rec) v, r.name());
+            case Ty.EnumT e -> fieldsChecked((Rec) v, ((Rec) v).type());
+            case Ty.MapT m -> {
+                MapV x = (MapV) v;
+                for (int i = 0; i < x.keys().size(); i++) {
+                    Bytes k = x.keys().get(i);
+                    if (k.value.length > 64 || !checked(k, m.key())) yield false;
+                    if (i > 0 && MapV.compareKeys(x.keys().get(i - 1), k) >= 0) yield false;
+                    if (!checked(x.values().get(i), m.val())) yield false;
+                }
                 yield true;
             }
+            case Ty.BigMapT b -> true;
         };
+    }
+
+    private boolean fieldsChecked(Rec x, String type) {
+        var types = List.copyOf(p.record(type).fields().values());
+        for (int i = 0; i < types.size(); i++) if (!checked(x.fields().get(i), types.get(i))) return false;
+        return true;
     }
 
     /** The std bindings, by their domains (D8). */
     private Object std(Ir.CallStd c, Env env, Frame f) {
         var a = new ArrayList<Object>();
         for (Ir.Expr x : c.args()) a.add(eval(x, env, f));
+        switch (c.binding().name()) {
+            case "windowStart" -> {
+                return f.tx.validFrom();
+            }
+            case "windowEnd" -> {
+                return f.tx.validTo();
+            }
+            case "elapsedSince" -> {
+                return f.tx.validFrom().subtract(integer(a.get(0))).max(BigInteger.ZERO);
+            }
+            case "elapsedSinceAtMost" -> {
+                return f.tx.validTo().subtract(integer(a.get(0))).max(BigInteger.ZERO);
+            }
+            case "div", "mod" -> {
+                BigInteger x = integer(a.get(0)), y = integer(a.get(1));
+                if (y.signum() == 0) throw new Refused(c.binding().name() + ": division by zero");
+                // Floor: the quotient rounds toward negative infinity; the remainder has the divisor's sign.
+                BigInteger[] qr = x.divideAndRemainder(y);
+                if (qr[1].signum() != 0 && qr[1].signum() != y.signum()) {
+                    qr[0] = qr[0].subtract(BigInteger.ONE);
+                    qr[1] = qr[1].add(y);
+                }
+                return c.binding().name().equals("div") ? qr[0] : qr[1];
+            }
+            case "pow" -> {
+                BigInteger e = integer(a.get(1));
+                if (e.signum() < 0 || e.compareTo(BigInteger.valueOf(1024)) > 0) throw new Refused("pow: the exponent must be in [0, 1024]");
+                return integer(a.get(0)).pow(e.intValue());
+            }
+            case "expMod" -> {
+                BigInteger e = integer(a.get(1)), m = integer(a.get(2));
+                if (e.signum() < 0) throw new Refused("expMod: the exponent must not be negative");
+                if (m.signum() <= 0) throw new Refused("expMod: the modulus must be positive");
+                return integer(a.get(0)).modPow(e, m);
+            }
+            case "sign" -> {
+                return BigInteger.valueOf(integer(a.get(0)).signum());
+            }
+            case "last" -> {
+                List<Object> xs = list(a.get(0));
+                return xs.isEmpty() ? Opt.NONE : Opt.some(xs.get(xs.size() - 1));
+            }
+            case "nth" -> {
+                List<Object> xs = list(a.get(0));
+                BigInteger i = integer(a.get(1));
+                if (i.signum() < 0) throw new Refused("nth: a negative index");
+                return i.compareTo(BigInteger.valueOf(xs.size())) >= 0 ? Opt.NONE : Opt.some(xs.get(i.intValue()));
+            }
+            case "indexOf" -> {
+                List<Object> xs = list(a.get(0));
+                Ty e = ((Ty.ListT) c.args().get(0).type()).elem();
+                for (int i = 0; i < xs.size(); i++) if (same(xs.get(i), a.get(1), e)) return Opt.some(BigInteger.valueOf(i));
+                return Opt.NONE;
+            }
+            case "andBytes", "orBytes", "xorBytes" -> {
+                return bitwise(c.binding().name(), bool(a.get(0)), ((Bytes) a.get(1)).value, ((Bytes) a.get(2)).value);
+            }
+            default -> {
+            }
+        }
         byte[] b = ((Bytes) a.get(0)).value;
         return switch (c.binding().name()) {
-            case "sha2_256", "blake2b_256", "blake2b_224" -> new Bytes(hashes.hash(c.binding().name(), b));
+            case "sha2_256", "sha3_256", "blake2b_256", "blake2b_224" -> new Bytes(hashes.hash(c.binding().name(), b));
+            case "verifyEd25519" -> verifyEd25519(b, ((Bytes) a.get(1)).value, ((Bytes) a.get(2)).value);
+            case "concat" -> {
+                byte[] d = ((Bytes) a.get(1)).value, out = Arrays.copyOf(b, b.length + d.length);
+                System.arraycopy(d, 0, out, b.length, d.length);
+                yield new Bytes(out);
+            }
+            case "take", "drop" -> {
+                BigInteger n = integer(a.get(1));
+                if (n.signum() < 0 || n.compareTo(TWO_31) >= 0) throw new Refused(c.binding().name() + ": n must be in [0, 2^31)");
+                int k = (int) Math.min(n.longValue(), b.length);
+                yield new Bytes(c.binding().name().equals("take") ? Arrays.copyOfRange(b, 0, k) : Arrays.copyOfRange(b, k, b.length));
+            }
+            case "toInt" -> new BigInteger(1, b);
+            case "toHex" -> new Bytes(HexFormat.of().formatHex(b).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            case "complement" -> {
+                byte[] out = new byte[b.length];
+                for (int i = 0; i < b.length; i++) out[i] = (byte) ~b[i];
+                yield new Bytes(out);
+            }
+            case "readBit" -> {
+                BigInteger i = integer(a.get(1));
+                if (i.signum() < 0 || i.compareTo(TWO_31) >= 0) throw new Refused("readBit: index must be in [0, 2^31)");
+                if (i.compareTo(BigInteger.valueOf(8L * b.length)) >= 0) throw new Refused("readBit: index past the end");
+                yield new BigInteger(1, b).testBit(i.intValue());
+            }
+            case "shift", "rotate" -> {
+                BigInteger n = integer(a.get(1));
+                if (n.compareTo(TWO_31.negate()) <= 0 || n.compareTo(TWO_31) >= 0) throw new Refused(c.binding().name() + ": n must be in (-2^31, 2^31)");
+                yield new Bytes(shiftOrRotate(b, n.longValue(), c.binding().name().equals("rotate")));
+            }
+            case "countSetBits" -> BigInteger.valueOf(new BigInteger(1, b).bitCount());
+            case "findFirstSetBit" -> BigInteger.valueOf(new BigInteger(1, b).getLowestSetBit());
             case "length" -> BigInteger.valueOf(b.length);
             case "slice" -> {
                 BigInteger start = integer(a.get(1)), n = integer(a.get(2));
@@ -471,6 +852,41 @@ public final class Interpreter {
         };
     }
 
+    /** CIP-122 logical operations: bytes aligned at the start; with padding as long as the longer, else the shorter. */
+    private static Bytes bitwise(String op, boolean pad, byte[] a, byte[] b) {
+        int n = pad ? Math.max(a.length, b.length) : Math.min(a.length, b.length);
+        byte[] out = new byte[n];
+        for (int i = 0; i < n; i++) {
+            if (i >= a.length) out[i] = b[i];
+            else if (i >= b.length) out[i] = a[i];
+            else out[i] = (byte) switch (op) {
+                case "andBytes" -> a[i] & b[i];
+                case "orBytes" -> a[i] | b[i];
+                default -> a[i] ^ b[i];
+            };
+        }
+        return new Bytes(out);
+    }
+
+    /** The bytes as an unsigned number of 8·length bits, shifted (zero fill) or rotated left by n (right when negative). */
+    private static byte[] shiftOrRotate(byte[] b, long n, boolean rotate) {
+        if (b.length == 0) return b;
+        int bits = 8 * b.length;
+        BigInteger x = new BigInteger(1, b), mask = BigInteger.ONE.shiftLeft(bits).subtract(BigInteger.ONE), r;
+        if (rotate) {
+            int k = (int) Math.floorMod(n, (long) bits);
+            r = x.shiftLeft(k).or(x.shiftRight(bits - k)).and(mask);
+        } else if (Math.abs(n) >= bits) {
+            r = BigInteger.ZERO;
+        } else {
+            r = n >= 0 ? x.shiftLeft((int) n).and(mask) : x.shiftRight((int) -n);
+        }
+        byte[] raw = r.toByteArray(), out = new byte[b.length];
+        int copy = Math.min(raw.length, out.length);
+        System.arraycopy(raw, raw.length - copy, out, out.length - copy, copy);
+        return out;
+    }
+
     private Object prelude(Ir.Prelude c, Env env, Frame f) {
         var a = new ArrayList<Object>();
         for (Ir.Expr x : c.args()) a.add(eval(x, env, f));
@@ -478,8 +894,8 @@ public final class Interpreter {
             case "min" -> integer(a.get(0)).min(integer(a.get(1)));
             case "max" -> integer(a.get(0)).max(integer(a.get(1)));
             case "abs" -> integer(a.get(0)).abs();
-            case "asKey" -> {
-                if (((Bytes) a.get(0)).value.length != 28) throw new Refused("asKey: not a 28-byte key hash");
+            case "asKey", "asHash" -> {
+                if (((Bytes) a.get(0)).value.length != 28) throw new Refused(c.op() + ": not a 28-byte hash");
                 yield a.get(0);
             }
             default -> throw new IllegalStateException(c.op());
@@ -502,5 +918,11 @@ public final class Interpreter {
     @SuppressWarnings("unchecked")
     private static List<Object> list(Object o) {
         return (List<Object>) o;
+    }
+
+    /** A list or a range, front to back. */
+    @SuppressWarnings("unchecked")
+    private static Iterable<Object> iter(Object o) {
+        return o instanceof RangeV r ? r : (List<Object>) o;
     }
 }

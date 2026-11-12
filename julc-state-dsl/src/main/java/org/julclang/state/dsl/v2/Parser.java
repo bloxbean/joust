@@ -32,6 +32,20 @@ final class Parser {
         this.toks = toks;
         for (int k = 0; k + 1 < toks.size(); k++) {
             if (toks.get(k).is("type") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
+            // An enum's variants start constructors too: Closed { at: t } (D5).
+            if (toks.get(k).is("enum") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
+                int depth = 0;
+                for (int j = k + 2; j < toks.size(); j++) {
+                    Tok t = toks.get(j);
+                    if (t.is("{")) depth++;
+                    else if (t.is("}")) {
+                        if (--depth == 0) break;
+                    } else if (depth == 1 && t.kind() == K.IDENT && j + 1 < toks.size()
+                            && (toks.get(j + 1).is(",") || toks.get(j + 1).is("}") || toks.get(j + 1).is("{") || toks.get(j + 1).is(";"))) {
+                        typeNames.add(t.text());
+                    }
+                }
+            }
         }
     }
 
@@ -116,12 +130,14 @@ final class Parser {
         semis();
         var imports = new ArrayList<Import>();
         var types = new ArrayList<TypeDecl>();
+        var enums = new ArrayList<EnumDecl>();
         var fns = new ArrayList<Fn>();
         Contract contract = null;
         while (peek().kind() != K.EOF) {
             Tok t = peek();
             if (t.is("import")) imports.add(importDecl());
             else if (t.is("type")) types.add(typeDecl());
+            else if (t.is("enum")) enums.add(enumDecl());
             else if (t.is("fn")) fns.add(fn());
             else if (t.is("contract")) {
                 if (contract != null) throw t.pos().error("one contract per file");
@@ -129,11 +145,11 @@ final class Parser {
             } else if (t.is("function")) throw t.pos().error("functions are written 'fn name(x: Int): Int = …' in .jsc");
             else if (t.is("class")) throw t.pos().error("there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }'");
             else if (t.is("const") || t.is("let") || t.is("var")) throw t.pos().error("a file holds imports, types, fns and one contract: put constants in a fn (fn limit(): Int = 10)");
-            else throw t.pos().error("expected import, type, fn or contract but found " + t);
+            else throw t.pos().error("expected import, type, enum, fn or contract but found " + t);
             semis();
         }
         if (contract == null) throw peek().pos().error("the file declares no contract");
-        return new File(pkg.toString(), imports, types, fns, contract);
+        return new File(pkg.toString(), imports, types, enums, fns, contract);
     }
 
     private Import importDecl() {
@@ -155,6 +171,24 @@ final class Parser {
         String name = ident("a type name");
         expect("=");
         return new TypeDecl(name, fieldBlock(), p);
+    }
+
+    /** {@code enum E { A, B { x: Int } }}: variants separated by commas (or semicolons); fields as in a type. */
+    private EnumDecl enumDecl() {
+        Pos p = next().pos();
+        String name = ident("an enum name");
+        if (at("=")) throw peek().pos().error("an enum is written 'enum " + name + " { A, B { x: Int } }', without '='");
+        expect("{");
+        var variants = new ArrayList<VariantDecl>();
+        while (!at("}")) {
+            Pos vp = peek().pos();
+            String v = ident("a variant name");
+            List<FieldDecl> fields = at("{") ? fieldBlock() : List.of();
+            variants.add(new VariantDecl(v, fields, vp));
+            if (!eat(",")) eat(";");
+        }
+        expect("}");
+        return new EnumDecl(name, variants, p);
     }
 
     private List<FieldDecl> fieldBlock() {
@@ -241,6 +275,7 @@ final class Parser {
         var methods = new ArrayList<Method>();
         var fns = new ArrayList<Fn>();
         var types = new ArrayList<TypeDecl>();
+        var enums = new ArrayList<EnumDecl>();
         while (!at("}")) {
             Tok t = peek();
             if (t.is("state")) {
@@ -277,6 +312,8 @@ final class Parser {
                 fns.add(fn());
             } else if (t.is("type")) {
                 types.add(typeDecl());
+            } else if (t.is("enum")) {
+                enums.add(enumDecl());
             } else if (t.is("function")) {
                 throw t.pos().error("functions are written 'fn name(x: Int): Int = …' in .jsc");
             } else if (t.is("async") || t.is("await")) {
@@ -284,13 +321,13 @@ final class Parser {
             } else if (t.is("let") || t.is("const") || t.is("var")) {
                 throw t.pos().error("a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10)");
             } else {
-                throw t.pos().error("expected state, init, action, destroy, view, fn or type but found " + t);
+                throw t.pos().error("expected state, init, action, destroy, view, fn, type or enum but found " + t);
             }
             semis();
         }
         expect("}");
         if (state == null) throw p.error("the contract declares no state { … }");
-        return new Contract(name, options, state, methods, fns, types, p);
+        return new Contract(name, options, state, methods, fns, types, enums, p);
     }
 
     private List<Mod> mods() {
@@ -330,22 +367,9 @@ final class Parser {
             } else if (t.is("let") || t.is("var")) {
                 throw t.pos().error("values are immutable in .jsc: write 'const " + peek(1).text() + " = …'");
             } else if (t.is("require")) {
-                next();
-                expect("(");
-                Expr c = expr();
-                expect(",");
-                Tok m = next();
-                if (m.kind() != K.STRING) throw m.pos().error("require's message is a string: require(cond, \"why\")");
-                expect(")");
-                stmts.add(new Require(c, m.text(), t.pos()));
+                stmts.add(requireStmt());
             } else if (t.is("pay")) {
-                next();
-                expect("(");
-                Expr to = expr();
-                expect(",");
-                Expr amount = expr();
-                expect(")");
-                stmts.add(new Pay(to, amount, t.pos()));
+                stmts.add(payStmt());
             } else if (t.is("for")) {
                 next();
                 expect("(");
@@ -366,6 +390,15 @@ final class Parser {
                     result = toIfExpr(s);
                 } else {
                     stmts.add(s);
+                }
+            } else if (t.is("match")) {
+                Match m = match();
+                // A match whose arms all end in values is the block's value when nothing follows it.
+                semis();
+                if (at("}") && isValueMatch(m)) {
+                    result = m;
+                } else {
+                    stmts.add(new MatchStmt(m, m.pos()));
                 }
             } else if (t.is("return")) {
                 next();
@@ -388,6 +421,91 @@ final class Parser {
         }
         expect("}");
         return new Block(stmts, result, returnPos, p);
+    }
+
+    private Require requireStmt() {
+        Tok t = next();
+        expect("(");
+        Expr c = expr();
+        expect(",");
+        Tok m = next();
+        if (m.kind() != K.STRING) throw m.pos().error("require's message is a string: require(cond, \"why\")");
+        expect(")");
+        return new Require(c, m.text(), t.pos());
+    }
+
+    private Pay payStmt() {
+        Tok t = next();
+        expect("(");
+        Expr to = expr();
+        expect(",");
+        Expr amount = expr();
+        expect(")");
+        return new Pay(to, amount, t.pos());
+    }
+
+    /** {@code match e { P => e, P => { … } }}; arms separated by optional commas. */
+    private Match match() {
+        Pos p = next().pos();
+        Expr scrutinee = expr();
+        expect("{");
+        var arms = new ArrayList<Arm>();
+        while (!at("}")) {
+            Pattern pat = pattern();
+            Tok arrow = peek();
+            if (arrow.is("-") || arrow.is(":")) throw arrow.pos().error("a match arm is written 'Pattern => value'");
+            expect("=>");
+            Block body;
+            if (at("{") && peek(1).is("...")) {
+                throw peek().pos().error("an arm's '{' starts a block: write an object as its value in parentheses, A => ({ ...state, f: e })");
+            }
+            if (at("{")) {
+                body = block();
+            } else if (at("require") || at("pay")) {
+                // A statement arm: A => require(…) or A => pay(…).
+                Stmt st = at("require") ? requireStmt() : payStmt();
+                body = new Block(List.of(st), null, st.pos());
+            } else {
+                Expr e = expr();
+                body = new Block(List.of(), e, e.pos());
+            }
+            arms.add(new Arm(pat, body, pat.pos()));
+            if (!eat(",")) eat(";");
+        }
+        expect("}");
+        if (arms.isEmpty()) throw p.error("a match needs at least one arm");
+        return new Match(scrutinee, arms, p);
+    }
+
+    private Pattern pattern() {
+        Tok t = peek();
+        if (t.kind() != K.IDENT) throw t.pos().error("expected a pattern (a variant, Some(x), None or _) but found " + t);
+        next();
+        var binds = new ArrayList<Bind>();
+        if (t.text().equals("Some") && at("(")) {
+            next();
+            Pos bp = peek().pos();
+            binds.add(new Bind(null, ident("a name for the value"), bp));
+            expect(")");
+        } else if (at("{")) {
+            next();
+            while (!at("}")) {
+                Pos bp = peek().pos();
+                String field = ident("a field name");
+                String name = eat(":") ? ident("a name to bind") : field;
+                binds.add(new Bind(field, name, bp));
+                if (!eat(",")) break;
+            }
+            expect("}");
+        } else if (at("(")) {
+            throw peek().pos().error("a variant's fields are matched by name: " + t.text() + " { field } or " + t.text() + " { field: name }");
+        }
+        return new Pattern(t.text(), binds, t.pos());
+    }
+
+    private static boolean isValueMatch(Match m) {
+        for (Arm a : m.arms()) if (a.body().result() == null) return false;
+        return true;
     }
 
     private IfStmt ifStmt() {
@@ -521,13 +639,22 @@ final class Parser {
 
     private Expr postfix() {
         Expr e = primary();
-        while (at(".")) {
-            Pos p = next().pos();
-            String n = ident("a field or method name");
-            // A property (xs.length) and a record field (r.length) are both Field: the checker decides by type (C7).
-            e = at("(") ? new MethodCall(e, n, args(), startOf(e)) : new Field(e, n, startOf(e));
+        while (true) {
+            if (at(".")) {
+                Pos p = next().pos();
+                String n = ident("a field or method name");
+                // A property (xs.length) and a record field (r.length) are both Field: the checker decides by type (C7).
+                e = at("(") ? new MethodCall(e, n, args(), startOf(e)) : new Field(e, n, startOf(e));
+            } else if (at("[") && peek().line() == toks.get(i - 1).line()) {
+                // m[k] on the same line (a '[' on the next line starts a new expression).
+                next();
+                Expr k = expr();
+                expect("]");
+                e = new Index(e, k, startOf(e));
+            } else {
+                return e;
+            }
         }
-        return e;
     }
 
     private List<Expr> args() {
@@ -625,6 +752,16 @@ final class Parser {
             if (!isValueIf(s)) throw t.pos().error("an if used as a value needs an else, and both arms must end in a value");
             return toIfExpr(s);
         }
+        if (t.is("match")) {
+            Match m = match();
+            if (!isValueMatch(m)) {
+                for (Arm a : m.arms()) {
+                    if (a.body().result() == null) throw a.pos().error("a match used as a value needs a value in every arm");
+                }
+            }
+            return m;
+        }
+        if (t.is("switch")) throw t.pos().error("there is no switch in .jsc: write match e { A => …, B { x } => … }");
         if (t.kind() == K.IDENT) {
             switch (t.text()) {
                 case "true", "false" -> {

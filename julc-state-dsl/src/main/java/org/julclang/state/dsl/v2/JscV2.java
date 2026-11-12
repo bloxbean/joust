@@ -79,17 +79,18 @@ public final class JscV2 {
      * the target must resolve to.
      */
     public record BindingRow(String module, String name, List<String> params, String result, String targetClass, String target,
-                             String policy, String domain, boolean timeTotal, String javaSignature) {}
+                             List<String> prefix, String policy, String domain, boolean timeTotal, String javaSignature) {}
 
     /** Every {@code std} binding row, for the binding test. */
     public static List<BindingRow> bindings() {
         return Std.ROWS.values().stream().map(b -> new BindingRow(b.module(), b.name(), b.params().stream().map(Ty::show).toList(),
-                Ty.show(b.result()), b.targetClass(), b.target(), b.policy().name(), b.domain(), b.timeTotal(), b.javaSignature())).toList();
+                Ty.show(b.result()), b.targetClass(), b.target(), b.prefix(), b.policy().name(), b.domain(), b.timeTotal(),
+                b.javaSignature())).toList();
     }
 
     /** The exact Java signature behind every {@code std} binding row (ADR-0018 D8). */
     public static List<String> bindingSignatures() {
-        return Std.ROWS.values().stream().map(Std.Binding::javaSignature).toList();
+        return Std.ROWS.values().stream().map(Std.Binding::javaSignature).filter(java.util.Objects::nonNull).toList();
     }
 
     /** {@code a/b/Name.java} for the contract a source declares. */
