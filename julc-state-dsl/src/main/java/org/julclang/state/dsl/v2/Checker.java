@@ -73,7 +73,7 @@ final class Checker {
             "IntentHandle", "Batcher", "List");
 
     /** The form of a generated check's message key (D12): an author's require message may not take it. */
-    static final java.util.regex.Pattern GENERATED_KEY = java.util.regex.Pattern.compile("#[a-z]+:.*", java.util.regex.Pattern.DOTALL);
+    static final java.util.regex.Pattern GENERATED_KEY = java.util.regex.Pattern.compile("#[a-z]+:");
 
     static Set<String> clientLocals(Kind k) {
         return switch (k) {
@@ -182,6 +182,8 @@ final class Checker {
         for (TypeDecl t : allTypes) declaredAt.put(t.name(), t.pos());
         for (EnumDecl e : allEnums) declaredAt.put(e.name(), e.pos());
         typeDepths(declaredAt);
+        // The state is a root too: each field's type nests at most MAX_DEPTH levels (J18).
+        for (FieldDecl f : c.state()) measured(stateFields.get(f.name()), f.type().pos());
         if (stateFields.isEmpty()) throw c.pos().error("JSC0303", "the state needs at least one field");
 
         var methodNames = new HashSet<String>();
@@ -318,7 +320,7 @@ final class Checker {
             throw t.pos().error("JSC0307", "unknown type '" + t.name() + "' (Int, Bool, Bytes, Key, Hash, List<T>, Option<T>, Map<K, V>, BigMap<K, V>,"
                     + " or a declared type or enum)");
         }
-        return ty;
+        return measured(ty, t.pos());
     }
 
     /** A map key type: Bytes, Key or Hash, at most 64 bytes (D5, F19). */
@@ -395,15 +397,46 @@ final class Checker {
                 }
                 if (!ready) continue;
                 stack.pop();
+                // A value of n nests one level, then its deepest component: every List, Option and Map layer and every
+                // named type counts (review r1 C2, S3), as every walk over the value's type follows them all.
                 int d = 1;
-                for (String m : typeRefs(n)) d = Math.max(d, depth.get(m) + 1);
+                for (Ty t : components(n)) d = Math.max(d, 1 + structuralDepth(t, depth));
                 if (d > Parser.MAX_DEPTH) {
-                    throw declared.get(n).error("JSC0340", "the type " + n + " nests other types more than " + Parser.MAX_DEPTH
-                            + " deep (ADR-0018 J18): flatten it");
+                    throw declared.get(n).error("JSC0340", "the type " + n + " nests more than " + Parser.MAX_DEPTH
+                            + " levels deep, counting each List, Option and Map layer and each type it contains (ADR-0018 J18): flatten it");
                 }
                 depth.put(n, d);
             }
         }
+        namedDepth = depth;
+    }
+
+    /** Each declared type's structural depth (set once declared types are measured; null before). */
+    private Map<String, Integer> namedDepth;
+
+    /** How deep a value of {@code t} nests: a layer per List, Option and Map, and a named type's own depth. */
+    private static int structuralDepth(Ty t, Map<String, Integer> named) {
+        return switch (t) {
+            case Ty.Prim p -> 0;
+            case Ty.ListT l -> 1 + structuralDepth(l.elem(), named);
+            case Ty.OptT o -> 1 + structuralDepth(o.elem(), named);
+            case Ty.MapT m -> 1 + Math.max(structuralDepth(m.key(), named), structuralDepth(m.val(), named));
+            case Ty.BigMapT m -> 1 + structuralDepth(m.val(), named);
+            case Ty.Rec r -> named.getOrDefault(r.name(), 0);
+            case Ty.EnumT e -> named.getOrDefault(e.name(), 0);
+        };
+    }
+
+    /**
+     * A written type, measured once the declared types are (a state field, a parameter, a const's or fn's type): it nests
+     * at most {@link Parser#MAX_DEPTH} levels, refused where it is written, before any code using it is checked (J18).
+     */
+    private Ty measured(Ty t, Pos p) {
+        if (namedDepth != null && structuralDepth(t, namedDepth) > Parser.MAX_DEPTH) {
+            throw p.error("JSC0340", "this type nests more than " + Parser.MAX_DEPTH + " levels deep, counting each List, Option and Map"
+                    + " layer and each type it contains (ADR-0018 J18): flatten it");
+        }
+        return t;
     }
 
     /** The fields of a record, the state or a variant. */
@@ -858,9 +891,9 @@ final class Checker {
                 }
                 case Syntax.Require r -> {
                     // A generated check's key ("#input:spend2.1", D12) names one construct: an author's message never
-                    // takes that form, so tooling can tell the two apart.
-                    if (GENERATED_KEY.matcher(r.message()).matches()) {
-                        throw r.pos().error("JSC0430", "a require message starting '#word:' is reserved for the checks the lowering"
+                    // holds that form, anywhere, so no trace of it can be taken for a generated check (review r1 S2, C3).
+                    if (GENERATED_KEY.matcher(r.message()).find()) {
+                        throw r.pos().error("JSC0430", "a require message may not contain '#word:', the form of the checks the lowering"
                                 + " generates (ADR-0018 D12): reword it");
                     }
                     out.add(new Ir.Require(requireCond(r.cond(), sc), r.message(), r.pos()));
@@ -889,7 +922,9 @@ final class Checker {
                     var branches = new ArrayList<Ir.Branch>();
                     boolean pays = false;
                     for (Syntax.Branch b : i.branches()) {
-                        Ir.Expr cond = condition(b.cond(), sc);
+                        // The first condition is tested where the if is; a later one inside the helper of the branch
+                        // before's else, so a recursive call there is refused as in any arm (JSC0601, review r1 S5).
+                        Ir.Expr cond = condition(b.cond(), branches.isEmpty() ? sc : sc.child(false, false));
                         branches.add(new Ir.Branch(cond, armBlock(b.then(), sc), b.pos()));
                         pays |= paysIn(b.then());
                     }
@@ -1207,7 +1242,8 @@ final class Checker {
         callGraph.computeIfAbsent(sc.kind == null ? sc.owner : "", k -> new TreeSet<>()).add(f.name());
         if (sc.kind == null && f.name().equals(sc.owner) && sc.helperDepth > 0) {
             throw c.pos().error("JSC0601", f.name() + " calls itself from inside a lambda, an if or match arm, a value block or a ?? default: the generated helper would join"
-                    + " a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out");
+                    + " a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out (an else-if chain with statements"
+                    + " in an arm lowers each branch, its condition included, to a helper)");
         }
         var args = new ArrayList<Ir.Expr>();
         int taint = 0;
@@ -1713,10 +1749,12 @@ final class Checker {
      * Whether an if used as a value lowers to nested conditionals: at most {@link Parser#CHAIN} branches, no statements in
      * any arm. {@link Depth} counts a level per branch of such a chain, as the conditionals nest.
      */
-    static boolean plainChain(IfExpr i) {
-        if (i.branches().size() > Parser.CHAIN || !i.otherwise().stmts().isEmpty()) return false;
+    static boolean plainChain(IfExpr i, String fn) {
+        if (!i.otherwise().stmts().isEmpty()) return false;
         for (Syntax.Branch b : i.branches()) if (!b.then().stmts().isEmpty()) return false;
-        return true;
+        // A longer chain lowers to helpers, unless it calls the fn it is in: then it stays inline so the call stays a
+        // direct self-call (as it was before r12, review r1 C1), and nests a level per branch against the cap.
+        return i.branches().size() <= Parser.CHAIN || fn != null && Depth.calls(i, fn);
     }
 
     /**
@@ -1724,7 +1762,7 @@ final class Checker {
      * statements, an {@link Ir.IfValue}.
      */
     private Ir.Expr ifExpr(IfExpr i, Sc sc, Ty expected) {
-        if (plainChain(i)) {
+        if (plainChain(i, sc.kind == null ? sc.owner : null)) {
             // Up to Parser.CHAIN branches without statements: nested conditionals, inline (a recursive call may sit in an arm).
             Syntax.Branch b = i.branches().get(0);
             Expr rest = i.branches().size() == 1 ? i.otherwise().result()
@@ -1734,7 +1772,9 @@ final class Checker {
         // A longer chain, or one with statements, is one node (J18): its conditions, then its arms, each checked in a loop;
         // the lowering makes each arm a helper.
         var conds = new ArrayList<Ir.Expr>();
-        for (Syntax.Branch b : i.branches()) conds.add(condition(b.cond(), sc));
+        // Every condition is tested inside the chain's helpers, so a recursive call there is refused as in an arm
+        // (JSC0601 at the call, review r1 S5), never left for JuLC.
+        for (Syntax.Branch b : i.branches()) conds.add(condition(b.cond(), sc.child(false, false)));
         var arms = new ArrayList<Syntax.Block>();
         for (Syntax.Branch b : i.branches()) arms.add(b.then());
         arms.add(i.otherwise());

@@ -1012,6 +1012,8 @@ final class JavaEmitter {
         Std.Binding b = c.binding();
         var args = c.args().stream().map(this::ex).toList();
         if (b.policy() != Std.Policy.GENERATED) {
+            // An adapter's fixed failure messages are in the script: recorded at this call site (D12, review r1 C5, F3).
+            for (String m : Std.MESSAGES.getOrDefault(b.name(), List.of())) operation(m, c.pos());
             imports.add(b.targetClass());
             return b.call(args);
         }
@@ -1326,7 +1328,10 @@ final class JavaEmitter {
                 imports.add("org.julclang.stdlib.lib.ByteStringLib");
                 String h = ints ? "bigSet__Int" : "bigSet__Bytes";
                 operation("BigMap.set: a key has at most 64 bytes", o.pos());
-                if (ints) operation("BigMap.set: a value cannot be negative", o.pos());
+                if (ints) {
+                    operation("BigMap.set: a value cannot be negative", o.pos());
+                    operation(Std.PUT_INT, o.pos());   // MerkleMaps.putInt's own check, in the script though set checks first
+                }
                 String keyCheck = "        Require.that(ByteStringLib.length(k__) <= 64, \"BigMap.set: a key has at most 64 bytes\");\n";
                 String body = ints
                         // Int values are non-negative and 0 removes the entry (v1's rule, D7).

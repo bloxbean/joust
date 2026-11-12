@@ -17,31 +17,46 @@ import java.util.List;
 final class Depth {
     private Depth() {}
 
-    private record Item(Object node, int depth) {}
+    /** A node, its depth, and the fn whose body it is in (null in a method). */
+    private record Item(Object node, int depth, String fn) {}
 
     static void check(File f) {
         var stack = new ArrayDeque<Item>();
-        List<Object> roots = new ArrayList<>();
-        for (Fn fn : f.fns()) roots.add(fn.body());
-        for (Method m : f.contract().methods()) roots.add(m.body());
-        for (Fn fn : f.contract().fns()) roots.add(fn.body());
-        for (int k = roots.size() - 1; k >= 0; k--) stack.push(new Item(roots.get(k), 0));
+        List<Item> roots = new ArrayList<>();
+        for (Fn fn : f.fns()) roots.add(new Item(fn.body(), 0, fn.name()));
+        for (Method m : f.contract().methods()) roots.add(new Item(m.body(), 0, null));
+        for (Fn fn : f.contract().fns()) roots.add(new Item(fn.body(), 0, fn.name()));
+        for (int k = roots.size() - 1; k >= 0; k--) stack.push(roots.get(k));
         while (!stack.isEmpty()) {
             Item it = stack.pop();
             int d = it.node() instanceof Expr || it.node() instanceof Block ? it.depth() + 1 : it.depth();
             if (d > Parser.MAX_DEPTH) {
                 Pos p = it.node() instanceof Expr e ? e.pos() : ((Block) it.node()).pos();
                 throw p.error("JSC0150", "this expression nests deeper than " + Parser.MAX_DEPTH + " levels: a chain of /, %, ??, ==, field"
-                        + " reads, method calls or [ ] counts a level per link; name a part with const or move it into a fn (ADR-0018 J18)");
+                        + " reads, method calls or [ ] counts a level per link, as does each branch of an else-if chain used as a value"
+                        + " that stays inline (at most 8 branches, or one that calls its own fn); name a part with const or move it into"
+                        + " a fn (ADR-0018 J18)");
             }
             List<Object> kids = children(it.node());
             // A short else-if chain used as a value lowers to nested conditionals: a level per branch.
-            boolean nested = it.node() instanceof IfExpr ie && Checker.plainChain(ie);
+            boolean nested = it.node() instanceof IfExpr ie && Checker.plainChain(ie, it.fn());
             // Pushed in reverse, so the walk is in source order and the first node over the cap is reported.
             for (int k = kids.size() - 1; k >= 0; k--) {
-                if (kids.get(k) != null) stack.push(new Item(kids.get(k), nested ? d + Math.min(k / 2, kids.size() / 2 - 1) : d));
+                if (kids.get(k) != null) stack.push(new Item(kids.get(k), nested ? d + Math.min(k / 2, kids.size() / 2 - 1) : d, it.fn()));
             }
         }
+    }
+
+    /** Whether {@code root} holds a call of {@code fn} (a work list: J18). */
+    static boolean calls(Object root, String fn) {
+        var work = new ArrayDeque<Object>();
+        work.push(root);
+        while (!work.isEmpty()) {
+            Object n = work.pop();
+            if (n instanceof Call c && c.fn().equals(fn)) return true;
+            for (Object k : children(n)) if (k != null) work.push(k);
+        }
+        return false;
     }
 
     private static List<Object> children(Object n) {

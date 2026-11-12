@@ -155,6 +155,29 @@ final class Std {
                 "validTo: the window's end, to store", true, null));
     }
 
+    /**
+     * The fixed messages each adapter row's target can trace (D12, r12: review r1 C5, F3): recorded at every call site in
+     * the message map, so a refusal inside an adapter is attributed. {@code JscV2BindingTest} checks this table against
+     * the adapters' sources; {@code JscV2HashStabilityTest} checks that every string a compiled example traces is in its
+     * map. Rows without an entry trace nothing (stdlib builtins fail without a message).
+     */
+    static final Map<String, List<String>> MESSAGES = Map.ofEntries(
+            Map.entry("verifyEd25519", List.of("verifyEd25519: the key must be 32 bytes", "verifyEd25519: the signature must be 64 bytes")),
+            Map.entry("slice", List.of("slice: start must be in [0, 2^31)", "slice: length must be in [0, 2^31)")),
+            Map.entry("take", List.of("take: n must be in [0, 2^31)")),
+            Map.entry("drop", List.of("drop: n must be in [0, 2^31)")),
+            Map.entry("byteAt", List.of("at: index must be in [0, 2^31)", "at: index past the end")),
+            Map.entry("div", List.of("div: division by zero")),
+            Map.entry("mod", List.of("mod: division by zero")),
+            Map.entry("pow", List.of("pow: the exponent must be in [0, 1024]")),
+            Map.entry("expMod", List.of("expMod: the exponent must not be negative", "expMod: the modulus must be positive")),
+            Map.entry("readBit", List.of("readBit: index must be in [0, 2^31)", "readBit: index past the end")),
+            Map.entry("shift", List.of("shift: n must be in (-2^31, 2^31)")),
+            Map.entry("rotate", List.of("rotate: n must be in (-2^31, 2^31)")));
+
+    /** The fixed message of {@code MerkleMaps.putInt}, which an Int BigMap's set reaches (D7). */
+    static final String PUT_INT = "MerkleMaps.putInt: value must not be negative";
+
     /** Names a module also exports that are not rows: the prelude's time predicates, importable from std/time. */
     static final Map<String, String> ALSO_EXPORTED = Map.of("after", "std/time", "before", "std/time");
 

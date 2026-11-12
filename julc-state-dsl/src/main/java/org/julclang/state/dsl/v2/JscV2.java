@@ -34,16 +34,19 @@ public final class JscV2 {
         }
 
         /**
-         * Where a traced message comes from (D12): {@code File.jsc:line:col} with what raised it, for each site whose
-         * message {@code trace} is or ends with (a runtime prefixes its own context); empty when none does. A generated
-         * check's key ({@code #pay:spend3.1}) has one site; an author's message or an operation's may have several.
+         * Where a traced message comes from (D12): {@code File.jsc:line:col} with what raised it. A message matches a trace
+         * that is exactly it, or that ends with {@code ": "} and it (a runtime prefixes its own context); of the messages
+         * that match, only the longest counts, so an author's whole message wins over an operation's that it ends with,
+         * and {@code #pay:spend0.1} never matches {@code #pay:spend0.10}. The same rule as {@code @julclang/joust-runtime}'s
+         * {@code messageSites} (review r1 C3, S1, S2). A generated key has one site; an author's or an operation's message
+         * may have several. Empty when no message matches.
          */
         public List<String> explain(String trace) {
             var out = new java.util.ArrayList<String>();
-            if (trace == null) return out;
+            String best = matching(trace, messages.stream().map(Site::message).toList());
+            if (best == null) return out;
             for (Site s : messages) {
-                if (s.message().isEmpty() || !(trace.equals(s.message()) || trace.endsWith(": " + s.message()))) continue;
-                out.add(fileName + ":" + s.line() + ":" + s.col() + " (" + s.describe() + ")");
+                if (s.message().equals(best)) out.add(fileName + ":" + s.line() + ":" + s.col() + " (" + s.describe() + ")");
             }
             return out;
         }
@@ -68,6 +71,20 @@ public final class JscV2 {
                 default -> "in " + in;
             };
         }
+    }
+
+    /**
+     * The message a trace raised, of {@code messages}: the longest that the trace is, or ends with after {@code ": "};
+     * null when none. D12's matching rule, shared with the JS runtime.
+     */
+    public static String matching(String trace, java.util.Collection<String> messages) {
+        if (trace == null) return null;
+        String best = null;
+        for (String m : messages) {
+            if (m.isEmpty() || !(trace.equals(m) || trace.endsWith(": " + m))) continue;
+            if (best == null || m.length() > best.length()) best = m;
+        }
+        return best;
     }
 
     /** Whether a source is {@code .jsc} 2: its first word, after whitespace and comments, is {@code jsc}. */
