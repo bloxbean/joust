@@ -6,7 +6,10 @@ import org.julclang.state.dsl.v2.Interpreter.MapV;
 import org.julclang.state.dsl.v2.Interpreter.Rec;
 import org.julclang.state.dsl.v2.Interpreter.Tx;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.math.BigInteger;
 import java.nio.file.Files;
@@ -32,7 +35,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * break it with their outcome stated ({@code FourWay.modifierRefused}, review S2/F2): the interpreter, the JVM and the
  * transition program accept and agree, and the validator refuses. The attack suite adds the same per method, read from
  * the description (a stranger who signs as the caller, windows on the wrong side of the bound).
+ * <p>
+ * The fifth leg (M1b, D15), the JavaScript reference interpreter over the IR export, runs last over every call
+ * {@code check} recorded ({@link #fiveWay_theJavaScriptInterpreterAgrees}).
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class JscV2M1cFourWayTest {
 
     static final Map<String, FourWay> PORTS = new LinkedHashMap<>();
@@ -343,5 +350,25 @@ class JscV2M1cFourWayTest {
         f.mutants("close", p, List.of(), at(OWNER, 0, 3_000_000 + minAda), OWNER);
         javaDiffers(f);
         report(f);
+    }
+
+    /**
+     * ADR-0018 D15 (M1b): the fifth leg over the M1c ports (the merge of #67 and #68; #68's merge note). Every call the
+     * tests above checked, on the JavaScript reference interpreter over the IR export, must agree with the outcome the
+     * other four legs agreed on. It runs last, over all of them. Pool's IR carries {@code batched}, which the JavaScript
+     * reader knows (review F11 on #68).
+     */
+    @Test
+    @Order(Integer.MAX_VALUE)
+    void fiveWay_theJavaScriptInterpreterAgrees() throws Exception {
+        int total = 0;
+        for (FourWay f : PORTS.values()) {
+            int n = JsLeg.check(f);
+            System.out.println("[J3 five-way] " + f.name + ": " + n + " calls, JavaScript interpreter = Java interpreter = JVM = transition"
+                    + " program = validator");
+            total += n;
+        }
+        System.out.println("[J3 five-way] %s: %d calls agree on all five legs".formatted("M1c", total));
+        assertTrue(total > 0, "the tests above recorded calls");
     }
 }

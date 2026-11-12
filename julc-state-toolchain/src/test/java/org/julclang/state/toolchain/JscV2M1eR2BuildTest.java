@@ -170,7 +170,7 @@ class JscV2M1eR2BuildTest {
                 BigInteger.valueOf(1_800_000_120_000L));
     }
 
-    /** Design F7, Codex C1: the else-if lowering on the interpreter, the JVM, the transition program and the validator. */
+    /** Design F7, Codex C1: the else-if lowering on the interpreter, the JVM, the transition program and the validator (and the JavaScript interpreter). */
     @Test
     void elseIfChains_onAllFourLegs() throws Exception {
         var c = contract("Branches");
@@ -200,5 +200,8 @@ class JscV2M1eR2BuildTest {
         assertEquals(BigInteger.valueOf(65), ((Rec) in.call("grade", s0, List.of(BigInteger.valueOf(65)), at(OWNER)).value()).fields().get(1));
         assertEquals(BigInteger.valueOf(8), ((Rec) in.call("walk", s0, List.of(BigInteger.valueOf(40)), at(OWNER)).value()).fields().get(1));
         System.out.println("[M1e r2] Branches: " + calls + " calls on four legs, " + refused + " refused, " + c.scriptSizeBytes() + " bytes");
+        // The fifth leg (M1b, D15; added by the M1 merge): the JavaScript interpreter reads the flattened chains from
+        // the IR export (If and IfValue with branches) and agrees on every call.
+        assertEquals(calls, JsLeg.check(f), "the JavaScript interpreter answered every call");
     }
 }
