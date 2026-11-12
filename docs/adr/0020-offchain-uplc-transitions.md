@@ -1,6 +1,6 @@
 # ADR-0020: UPLC transition programs as the off-chain meaning on every path — a spike (answers ADR-0015 Q6)
 
-**Status:** Proposed (r9: §12 revised after the implementation's review; r8: §11.4's answer taken as the outcome and its "adopt now" items implemented, §12; r7: spike
+**Status:** Proposed (r10: review round 3 fixes; r9: §12 revised after the implementation's review; r8: §11.4's answer taken as the outcome and its "adopt now" items implemented, §12; r7: spike
 implemented and reported, §11; design approved by review at `04ea067`), **spike**: design plus a proof of concept to
 measure. The answer to ADR-0015 Q6 stays a proposal until this ADR is accepted; §12's items change the engine's
 behaviour (a bundle without a program manifest is refused) and are listed there.
@@ -668,8 +668,9 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
 - **Forged tags and decisions (r9).** A forged tag makes a failure show text the contract chose; it never makes a
   step. The review found one place where text did drive a decision: the keyed client parsed "prepare again at slot N"
   from any refusal and waited. The engine now returns the slot as a field of its result (`retryAtSlot`, set only from
-  the runtime's own `NotYetException`), the JS runtime and HTTP service carry it as `Error.retryAtSlot`, and
-  `JoustContract` waits on that field only. No other decision reads a refusal's text.
+  the runtime's own `NotYetException`), the JS runtime and its page worker carry it as `Error.retryAtSlot`, the HTTP
+  prepare services (`joust dev`'s `/joust/service/prepare`, `JoustServer`) send it in their error body (r10), and
+  `JoustContract` (through `httpService` too) waits on that field only. No other decision reads a refusal's text.
 - **Manifest format 2 (r9; minimal).** Documented on `ProgramManifest`: exactly eleven members; the JuLC version; the
   compiler block read from the `CompilerOptions` actually used (target, profile, cost profile, source maps, disabled
   rules; version 1's `optimiser` and `traces` were constants and are gone: JuLC has no trace-stripping option, and
@@ -821,3 +822,7 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
   check failing closed and merging recipes, the toolchain refusing off-list variants, a concurrency test, the
   `fixtures/m3` staleness test and refresh task, stored state checked strictly (with the reason); §12.4 adds the JuLC
   upgrade policy and the on-chain shape of stored arguments. Status stays Proposed.
+- **r10** (2026-11-12, PR #62 review round 3: Codex C5–C7, security S8–S11, design F10–F11): the HTTP prepare services
+  send `retryAtSlot` (it was dropped there in r9), the manifest's form is read strictly (the version as the integer 2,
+  real booleans, no duplicate members, one JSON value), and the Lifecycle definition is found by its exact name.
+  Status stays Proposed.
