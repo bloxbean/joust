@@ -124,8 +124,6 @@ async function governorOf(CSL, call, wallet, named, networkId) {
 /** A method that others sign for: @Quorum, or @AuthorizedBy (a key credential: the key's wallet co-signs). */
 export const signedByOthers = (meta) => !!meta.policies?.quorum || !!meta.policies?.authorizedBy?.length;
 
-let portableWarned = false;
-
 export class JoustContract {
   /**
    * @param o.CSL          (optional, ignored: earlier versions read transactions with it)
@@ -135,14 +133,16 @@ export class JoustContract {
    * @param o.chain        chain access (blockfrostChain(url))
    * @param o.limits       verifier limits (verify.js DEFAULT_LIMITS)
    * @param o.onReview     async (review) => void: shown before the wallet signs; throw to cancel
-   * @param o.portable     deprecated and ignored (the Wasm recomputation was retired, ADR-0020 §12.3); removed later
+   * @param o.portable     removed (ADR-0020 §12.3): a client given one is refused, so a page that asked for the
+   *                       in-page recomputation does not silently go without it
    */
   constructor(o) {
-    const { portable, ...rest } = o;
-    if (portable !== undefined && !portableWarned) {
-      portableWarned = true;
-      console.warn('@julclang/state-client: the `portable` option is deprecated and ignored (ADR-0020 §12.3); it will be removed in a later release');
+    // Fails closed (ADR-0020 §12.3): the option asked for a check that no longer exists.
+    if (o.portable != null) {
+      throw new Error('@julclang/state-client: the portable option was removed; the page verifier still checks every'
+        + ' transaction; remove the option');
     }
+    const { portable, ...rest } = o;
     Object.assign(this, { limits: {}, ...rest });
     this.codec = codec(o.description);
     this.x = o.description['x-joust'];

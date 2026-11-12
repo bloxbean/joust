@@ -60,10 +60,12 @@ the wallet's record is unsettled is a retry of that operation, until it settles 
 
 - **Plans.** `/prepare` returns the transaction's plan (`TxPlan`). The client derives its own with `planOf` and
   refuses a plan that does not describe the transaction.
-- **`portable` (deprecated).** The option took a GraalVM Web Image of the contract's Java transitions to recompute
-  each call in the page; that path is retired (ADR-0020 §12.3). The option is still accepted, prints one deprecation
-  warning and is ignored; it will be removed in a later release. Pages that need the contract's meaning in the page
-  use the runtime engine (`@julclang/joust-runtime`).
+- **`portable` (removed).** The option took a GraalVM Web Image of the contract's Java transitions to recompute
+  each call in the page; that path is retired (ADR-0020 §12.3). A client given `portable` (anything but `null` or
+  `undefined`) is refused at construction: the page verifier still checks every transaction; remove the option. What
+  the recomputation added beyond the validator (exact per-payee amounts, no tagged payout to a non-payee) now rests on
+  the verifier's bound on the wallet's net outflow; a wrong next state passes the page and is rejected by the validator
+  at submission, with no collateral taken (`is_valid` is checked).
 
 ## JSON conventions
 
