@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -148,6 +149,63 @@ class JscV2HashStabilityTest {
         return out;
     }
 
+    /** Words of the language (keywords, built-in values and types, operations, std and prelude names): never renamed. */
+    static final Set<String> LANGUAGE = new HashSet<>(List.of("jsc", "package", "import", "from", "type", "enum", "contract", "state",
+            "init", "action", "destroy", "view", "fn", "const", "return", "if", "else", "match", "for", "of", "in", "require", "pay", "only",
+            "open", "payable", "after", "before", "true", "false", "None", "Some", "caller", "received", "balance", "validFrom", "validTo",
+            "ada", "Int", "Bool", "Bytes", "Key", "Hash", "List", "Option", "Map", "BigMap", "State", "maxDatumBytes", "minAda",
+            "maxValidityMs", "min", "max", "abs", "asKey", "asHash", "range", "length", "isEmpty", "head", "sum", "reverse", "contains",
+            "any", "all", "find", "filter", "map", "fold", "concat", "take", "drop", "get", "has", "set", "delete", "size", "keys",
+            "values", "empty", "_", "utf8"));
+
+    static {
+        for (var b : org.julclang.state.dsl.v2.JscV2.bindings()) LANGUAGE.add(b.name());
+    }
+
+    /**
+     * Every name the file declares (types, enums, variants, the contract, fields, fns, methods, parameters, consts, lambda,
+     * loop and match variables), renamed so that their alphabetical order is reversed (design F1, F7: a suffix keeps the
+     * order, this does not). Imported names and the language's words are kept.
+     */
+    static Map<String, String> renameAll(String s) {
+        String code = stripComments(s).replaceAll("\"(?:[^\"\\\\]|\\\\.)*\"", "\"\"");
+        var declared = new java.util.TreeSet<String>();
+        for (String re : List.of("\\b(?:type|enum|contract)\\s+([A-Z]\\w*)", "\\b(?:fn|action|destroy|view|const)\\s+([a-z]\\w*)",
+                "\\bfor\\s*\\(\\s*const\\s+([a-z]\\w*)", "\\b([a-z]\\w*)\\s*=>", "Some\\(([a-z]\\w*)\\)", "\\b([a-z]\\w*)\\s*:")) {
+            Matcher m = Pattern.compile(re).matcher(code);
+            while (m.find()) declared.add(m.group(1));
+        }
+        Matcher lambdas = Pattern.compile("\\(([a-z]\\w*(?:\\s*,\\s*[a-z]\\w*)+)\\)\\s*=>").matcher(code);
+        while (lambdas.find()) declared.addAll(Arrays.asList(lambdas.group(1).split("\\s*,\\s*")));
+        // Variants: capitalised names inside an enum's braces.
+        Matcher enums = Pattern.compile("\\benum\\s+\\w+\\s*\\{").matcher(code);
+        while (enums.find()) {
+            int depth = 1, i = enums.end();
+            var body = new StringBuilder();
+            for (; i < code.length() && depth > 0; i++) {
+                char c = code.charAt(i);
+                if (c == '{') depth++;
+                if (c == '}') depth--;
+                if (depth == 1 && c != '}') body.append(c);
+                else body.append(' ');
+            }
+            Matcher v = Pattern.compile("\\b([A-Z]\\w*)").matcher(body);
+            while (v.find()) declared.add(v.group(1));
+        }
+        Matcher imports = Pattern.compile("import\\s*\\{([^}]*)\\}").matcher(code);
+        while (imports.find()) for (String n : imports.group(1).split("\\s*,\\s*")) declared.remove(n.trim());
+        declared.removeAll(LANGUAGE);
+        var names = new ArrayList<>(declared);
+        var out = new LinkedHashMap<String, String>();
+        for (int i = 0; i < names.size(); i++) {
+            int r = names.size() - i;   // reversed rank
+            String code3 = "" + (char) ('a' + r / 676 % 26) + (char) ('a' + r / 26 % 26) + (char) ('a' + r % 26);
+            String n = names.get(i);
+            out.put(n, (Character.isUpperCase(n.charAt(0)) ? "Zq" : "zq") + code3);
+        }
+        return out;
+    }
+
     static Map<String, String> edits(String src) {
         var e = new LinkedHashMap<String, String>();
         String nl = src;
@@ -160,6 +218,8 @@ class JscV2HashStabilityTest {
                 .replaceAll("(?m)\\{[ \\t]*$", "{ // opened"));
         e.put("comments removed", stripComments(nl));
         e.put("locals, lambda and loop variables, fns, parameters and methods renamed", rename(nl, renames(nl)));
+        e.put("every declared name renamed (types, enums, variants, the contract, fields, fns, methods, parameters, locals), in"
+                + " reversed alphabetical order", rename(nl, renameAll(nl)));
         return e;
     }
 
@@ -181,7 +241,41 @@ class JscV2HashStabilityTest {
             checked++;
         }
         System.out.print(table);
-        assertTrue(checked >= 8 * 9, "edits checked: " + checked);
+        assertTrue(checked >= 9 * 10, "edits checked: " + checked);
+    }
+
+    /**
+     * Design F1: the package is part of the contract's identity, recorded in the ABI manifest ({@code "contract"}), so a
+     * package move is an ABI change the gate reports, and it may move the script hash: JuLC's output depends on the order
+     * of the processor-generated validator's imports, and the contract's own import sorts by its package against the
+     * fixed library imports (bloxbean/julc#328). Asserted as it is today: a package that keeps the
+     * import's place keeps the hash, one that moves it may not; the ABI manifest changes either way.
+     */
+    @Test
+    void aPackageMove_isAnAbiChange_andMayMoveTheHash() throws Exception {
+        String src = Files.readString(DSL.resolve("Counter2.jsc"));
+        Built base = build("Counter2.jsc", src);
+        String home = "org.julclang.state.examples.dsl";
+        var abi = new LinkedHashMap<String, String>();
+        var hashes = new LinkedHashMap<String, String>();
+        for (String pkg : List.of(home, "org.julclang.state.examples.moved", "org.other.pkg", "com.acme.app")) {
+            String moved = src.replace("package " + home, "package " + pkg);
+            var r = Toolchain.build(Map.of(pkg.replace('.', '/') + "/Counter2.jsc", moved), Map.of());
+            assertTrue(r.ok(), pkg + ": " + r.diagnostics());
+            abi.put(pkg, r.generated().get(0).abiJson());
+            hashes.put(pkg, r.contracts().get(0).scriptHash());
+            System.out.println("[hash] Counter2 in " + pkg + ": " + r.contracts().get(0).scriptHash());
+        }
+        assertEquals(base.hash(), hashes.get(home));
+        // The contract's import keeps its place among the validator's imports: the hash stays.
+        assertEquals(base.hash(), hashes.get("org.julclang.state.examples.moved"));
+        // Every move is an ABI change: the manifest names the contract by its package.
+        for (String pkg : List.of("org.julclang.state.examples.moved", "org.other.pkg", "com.acme.app")) {
+            assertNotEquals(abi.get(home), abi.get(pkg), pkg);
+            assertTrue(abi.get(pkg).contains("\"contract\": \"" + pkg + ".Counter2\""), pkg);
+        }
+        // Today org.other.pkg sorts after org.julclang.stdlib.*, so the import moves and the hash with it (F1's table).
+        assertNotEquals(base.hash(), hashes.get("org.other.pkg"), "if JuLC no longer depends on import order, update D12 and J20");
     }
 
     @Test

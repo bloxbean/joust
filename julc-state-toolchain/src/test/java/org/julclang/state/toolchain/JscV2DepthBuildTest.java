@@ -38,9 +38,13 @@ class JscV2DepthBuildTest {
         c.put("value ifs 200", new String[]{action("if x > 0 { ".repeat(200) + "x" + " } else { 0 }".repeat(200)), "JSC0149"});
         c.put("sum of 5000", new String[]{sum(5000), "ok"});
         c.put("&& of 3000", new String[]{contract("  view v(x: Int): Bool = x > 0" + " && x > 1".repeat(2999)), "ok"});
-        // The Web Image runs 200 here: JuLC's passes nest with the compiled term, and its 1 MB stack holds about 250.
         c.put("else-if statements 200", new String[]{elseIfs(200), "ok"});
+        c.put("types 4 x 60 wrappers", new String[]{wrapped(4, 60), "JSC0340"});
+        c.put("recursive chain of 9", new String[]{recursive(9), "ok"});
+        // Past the front end (the Web Image runs these on joust build's 8 MB worker, cold).
         c.put("else-if statements 1000", new String[]{elseIfs(1000), "ok"});
+        c.put("else-if statements 4 x 100", new String[]{manyChains(4, 100), "ok"});
+        c.put("else-if values 300", new String[]{elseIfValues(300), "ok"});
         c.put("else-if values 1000", new String[]{elseIfValues(1000), "ok"});
         c.put("/ chain 200", new String[]{action("x" + " / 2".repeat(200)), "JSC0150"});
         c.put("types 100", new String[]{types(100), "JSC0340"});
@@ -82,6 +86,33 @@ class JscV2DepthBuildTest {
         var s = new StringBuilder("if x == 0 { 100 }");
         for (int k = 1; k < n; k++) s.append(" else if x == ").append(k).append(" { ").append(100 + k).append(" }");
         return action(s + " else { 7 }");
+    }
+
+    static String wrapped(int named, int wrappers) {
+        var t = new StringBuilder();
+        for (int k = 0; k < named; k++) {
+            t.append("type T").append(k).append(" = { f: ").append("List<".repeat(wrappers)).append(k == named - 1 ? "Key" : "T" + (k + 1))
+                    .append(">".repeat(wrappers)).append(" }\n");
+        }
+        return "jsc 2\npackage t\n" + t + "contract D {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
+                + "  action a(v: T0) { require(v == v, \"same\")\n return state }\n}\n";
+    }
+
+    static String recursive(int n) {
+        var s = new StringBuilder("if x == 0 { 0 }");
+        for (int k = 1; k < n; k++) s.append(" else if x == ").append(k).append(" { ").append(k).append(" }");
+        return contract("  view v(x: Int): Int = f(x)\n  fn f(x: Int): Int = " + s + " else { f(x - 1) }");
+    }
+
+    static String manyChains(int chains, int n) {
+        var sb = new StringBuilder();
+        for (int c = 0; c < chains; c++) {
+            String one = elseIfs(n);
+            sb.append(one, one.indexOf("  action a("), one.lastIndexOf("\n}")).append("\n");
+            int at = sb.lastIndexOf("action a(");
+            sb.replace(at, at + 9, "action a" + c + "(");
+        }
+        return contract(sb.toString());
     }
 
     static String types(int n) {
