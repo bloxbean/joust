@@ -50,3 +50,34 @@ def checkJscAbi = tasks.register('checkJscAbi', JavaExec) {
 }
 tasks.named('check') { dependsOn checkJscAbi }
 sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
+
+// ADR-0018 D16: the v1 files translated to .jsc 2, into build/jsc-migrated (src/main/jsc is not changed).
+tasks.register('migrateJsc', JavaExec) {
+    description = 'Translates the .jsc v1 files of src/main/jsc to .jsc 2, into build/jsc-migrated'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    args '--migrate', jscSrc.path, layout.buildDirectory.dir('jsc-migrated').get().asFile.path
+}
+
+// ADR-0018 D12: javac's diagnostics on the generated Java, reported again at their .jsc positions (as the plugin does).
+def javacLog = layout.buildDirectory.file('jsc/javac.log').get().asFile
+def remapJsc = tasks.register('remapJscDiagnostics', JavaExec) {
+    description = 'Reports compileJava\'s diagnostics on Java generated from .jsc at their .jsc positions'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    def log = javacLog
+    onlyIf { log.length() > 0 }
+    args '--remap', log.path, jscOut.get().asFile.path, jscSrc.path
+    doLast { log.delete() }
+}
+tasks.named('compileJava') {
+    def log = javacLog
+    doFirst {
+        log.parentFile.mkdirs()
+        log.text = ''
+        def append = { log.append(it.toString()) } as StandardOutputListener
+        logging.addStandardOutputListener(append)
+        logging.addStandardErrorListener(append)
+    }
+    finalizedBy remapJsc
+}
