@@ -77,7 +77,8 @@ public final class DescribedContract {
                 : ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
                         x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
                         mapFields(refKey(x.get("state"))), List.copyOf(keyed.values()));
-        this.fn = fn;
+        // Every evaluation's inputs are checked against the declared types first (ADR-0020 S15).
+        this.fn = new TransitionInputs(description, fn);
     }
 
     /** The contract's fully qualified name (the description's title). */
