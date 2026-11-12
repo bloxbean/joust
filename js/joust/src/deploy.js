@@ -89,6 +89,7 @@ export async function deploy({ root = process.cwd(), config, networkName, log = 
       }
     }
   }
+  writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
   log(`wrote ${file}`);
   return out;
 }
