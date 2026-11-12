@@ -75,7 +75,7 @@ attestation per archive; and `Formula/joust.rb` in `bloxbean/homebrew-tap`. The 
 | `cli` | first, before `maven` | builds and smoke-tests the binary on each platform; a failure stops the release before anything is published |
 | `cli-consumer` | after `maven` and `npm`, when CLI assets are allowed | `joust new` (java, jsc) with the unmodified templates, built from the public repositories |
 | `cli-assets` | after `github-release` and `cli-consumer` | attaches the archives (never replacing one: an existing asset must equal this run's build) and the sums; attests every archive |
-| `homebrew` | after `cli-assets`, with `homebrew_publish` | writes the formula with `.github/scripts/homebrew-formula.sh` and pushes it (environment `release-staging`, secret `JOUST_HOMEBREW_TAP_TOKEN`); never moves the formula to an earlier version |
+| `homebrew` | after `cli-assets`, with `homebrew_publish` | writes the formula with `.github/scripts/homebrew-formula.sh` and pushes it (environment `release-staging`, organization secret `HOMEBREW_TAP_TOKEN`, shared with the other bloxbean tap releases); never moves the formula to an earlier version |
 
 A failing `cli-consumer` leaves the GitHub release without CLI archives; re-running the failed jobs attaches them when the
 failure was transient (a repository not yet serving the files). Users can check an archive with `shasum -a 256 -c
@@ -91,7 +91,7 @@ Each must be `true` or `false`; `release.yml` refuses a missing or misspelled fl
 | `bloxbean_repo_publish` | publish to `https://repo.bloxbean.org/maven/releases`, public and permanent at once |
 | `npm_publish` | publish the npm packages; `false` runs `npm publish --dry-run` only |
 | `github_release` | create the GitHub release (pre-release for versions with a suffix); `false` for rehearsals. The native `joust` archives are attached only when `bloxbean_repo_publish` and `npm_publish` are `true` too (its `joust new` needs both) |
-| `homebrew_publish` | update `Formula/joust.rb` in `bloxbean/homebrew-tap`; needs `github_release`, `bloxbean_repo_publish` and `npm_publish`. **Keep `false`** until an admin has: added the `release-staging` secret `JOUST_HOMEBREW_TAP_TOKEN` (a fine-grained token, `contents: write` on the tap only); removed joust from the organization secrets `HOMEBREW_TAP_TOKEN` and `NPM_TOKEN`; activated the `V_tagrule` and `protected-branches` rulesets; and required a reviewer on the `release` environment (ADR-0017 D10; release-ops' `verify-repo-settings.sh` checks the settings) |
+| `homebrew_publish` | update `Formula/joust.rb` in `bloxbean/homebrew-tap`; needs `github_release`, `bloxbean_repo_publish` and `npm_publish`. Needs the organization secret `HOMEBREW_TAP_TOKEN` (`contents: write` on the tap) to reach `bloxbean/joust`. Still recommended (ADR-0017 D10): remove joust from the organization secret `NPM_TOKEN`; activate the `V_tagrule` and `protected-branches` rulesets; and require a reviewer on the `release` environment (ADR-0017 D10; release-ops' `verify-repo-settings.sh` checks the settings) |
 | `allow_snapshot_dependencies` | let a release depend on a SNAPSHOT pin in `gradle/libs.versions.toml`, with a warning. **Rehearsals only:** with it `true`, every publish flag above must be `false` (Central refuses snapshot dependencies, and a release naming a snapshot breaks once the snapshot is pruned) |
 
 `v0.1.0-pre1-rc3` and `-rc4` failed at "Validate tag and read release flags" because `allow_snapshot_dependencies`

@@ -661,5 +661,9 @@ Codex reviewers, approved by all three (final heads `58ea443`, `90e7e7f`, `71cc0
   script) run in `build`. First CI run of the implementation: all 8 jobs green.
 - **M4, release**: as D6, D7, D10; the formula step and the push step are separate so the script never sees the token,
   and the new jobs' actions are pinned by commit SHA. `homebrew_publish=false`.
+- **Amendment (2026-11-12, maintainer decision):** the tap is pushed with the organization secret
+  `HOMEBREW_TAP_TOKEN`, the token the other bloxbean releases use, instead of a `release-staging` secret
+  `JOUST_HOMEBREW_TAP_TOKEN`. This replaces D7's credential (S1) and that part of D10's gate. The token is still given
+  only to the push step, but every JOUST workflow job can read it (F9), so S1's isolation is not provided.
 - **Open follow-ups (P3)**: a nested-invocation test of the npm hand-over guard; descriptor-level non-blocking manifest
   reads (accepted as hardening); the Windows build (D2).

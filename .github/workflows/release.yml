@@ -758,9 +758,9 @@ jobs:
         with:
           subject-path: published/joust-*.zip
 
-  # ADR-0017 D7: Formula/joust.rb in bloxbean/homebrew-tap, gated by homebrew_publish. The token is an environment
-  # secret of release-staging (JOUST_HOMEBREW_TAP_TOKEN: a fine-grained token with contents: write on the tap only),
-  # given to the push step alone. The job runs only .github/scripts/homebrew-formula.sh from this repository.
+  # ADR-0017 D7: Formula/joust.rb in bloxbean/homebrew-tap, gated by homebrew_publish. The token is the organization
+  # secret HOMEBREW_TAP_TOKEN, shared with the other bloxbean releases that push to the tap (ADR-0017 implementation
+  # notes, 2026-11-12), given to the push step alone. The job runs only .github/scripts/homebrew-formula.sh from this repository.
   homebrew:
     needs: [maven, cli-assets]
     if: needs.maven.outputs.homebrew_publish == 'true'
@@ -839,12 +839,12 @@ jobs:
       - name: Push the formula
         if: steps.formula.outputs.push == 'true'
         env:
-          TAP_TOKEN: ${{ secrets.JOUST_HOMEBREW_TAP_TOKEN }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "$TAP_TOKEN" ]]; then
-            echo "::error::homebrew_publish=true needs the release-staging secret JOUST_HOMEBREW_TAP_TOKEN (ADR-0017 D10)." >&2
+            echo "::error::homebrew_publish=true needs the organization secret HOMEBREW_TAP_TOKEN (ADR-0017 D7)." >&2
             exit 1
           fi
           cd tap
