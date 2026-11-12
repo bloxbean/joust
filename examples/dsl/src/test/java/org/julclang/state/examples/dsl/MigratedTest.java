@@ -21,7 +21,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * ADR-0018 D16, J13: the v1 examples migrated by {@code joust migrate} ({@code src/main/jsc/.../migrated}, checked to be
  * migrate's output by {@code MigrateTest}) behave as their v1 originals. Both are built here by the same Gradle build;
  * random calls must give the same next state (the map's contents included) or both refuse. The migrated validators
- * accept the honest transactions and reject the attack suite. Jar is not migrated: its batched action waits for M3.
+ * accept the honest transactions and reject the attack suite. Jar is not migrated: migrate does not translate its batched
+ * action (JSC1103).
  */
 class MigratedTest {
     static final byte[][] KEYS = {StateHarness.fill(28, 0x0A), StateHarness.fill(28, 0xA1), StateHarness.fill(28, 0xB1)};

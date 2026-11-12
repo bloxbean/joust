@@ -823,7 +823,7 @@ Require.that(Clock.after(ctx, s.deadline()), "too early");
 | Header | `jsc 2`, `package a.b.c`, `import { f } from "std/bytes"`, then `type`s, `enum`s, `fn`s and one `contract Name(maxDatumBytes = 192) { ... }`; options `minAda`, `maxDatumBytes`, `maxValidityMs` |
 | State | `state { owner: Key, goal: Int }`; types `Int`, `Bool`, `Bytes`, `Key`, `Hash`, `List<T>`, `Option<T>`, `Map<K, V>` (inline, canonical), `BigMap<K, Int \| Bytes>` (a MerkleMap), records, enums |
 | Methods | `init(args) [payable] { return { ...all fields } }`, `action name(args) mods { return { ...state, f: e } }`, `destroy name(args) mods { pay(to, amount) }`, `view name(args): T = expr` |
-| Modifiers | `payable`, `only <field>`, `after <field>`, `before <field>`, `open` (no `batched` before M3) |
+| Modifiers | `payable`, `only <field>`, `after <field>`, `before <field>`, `open`, `batched`, `batched only` (an action; never with `only`/`after`/`before`; a paying one says `open`; not with `BigMap` state) |
 | Statements | `const x = e`, `require(cond, "message")`, `pay(to, amount)`, `if c { } else { }`, `match e { P => … }`, `for (const x of xs) { }` |
 | Expressions | `c ? a : b`, `if`/`match` as values, `o ?? d`, `{ ...state, f: e }`, `Type { f }`, `[a, ...xs]`, `xs.fold(0, (acc, x) => acc + x)`, `m[k]` on a `BigMap<K, Int>` |
 | Context | `caller`, `received`, `balance`, `validFrom`, `validTo` (not in views or `fn`s) |

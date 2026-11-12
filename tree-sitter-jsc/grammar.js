@@ -62,7 +62,8 @@ module.exports = grammar({
     [$.block, $._value_block],
     [$.match_arm, $._value_arm],
     [$._arm_block, $._arm_value_block],
-    // v1: `batched only` (intent only) against `batched` followed by `only <field>`.
+    // `batched only` (intent only) against `batched` followed by `only <field>`, in v2 (M1c) and v1.
+    [$.modifier],
     [$.v1_modifier],
   ],
 
@@ -175,9 +176,13 @@ module.exports = grammar({
       choice(seq('=', field('value', $._expression)), field('body', $.block)),
     ),
 
+    // M1c (ADR-0018 D10, r11): `batched` and `batched only` (intent only); `batched only owner` is `batched` and then
+    // `only owner`, which the checker refuses (JSC0417), as the v2 parser reads it.
     modifier: $ => choice(
       'payable',
       'open',
+      'batched',
+      seq('batched', 'only'),
       seq(choice('only', 'after', 'before'), field('field', $.identifier)),
     ),
 

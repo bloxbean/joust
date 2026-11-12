@@ -66,8 +66,9 @@ public class Pool {
 - `@Batched(only = true)` drops the direct call. Nobody can then spend the instance with that action directly, which
   would invalidate the batches being built against it. Use it for actions users race on.
 
-In `.jsc` v1 the modifier is `batched` (and `batched only` for intent-only). `.jsc` 2 has no batched actions yet
-(milestone M3 of ADR-0018), so this is a [v1](/languages/jsc-v1/) example; `joust migrate` refuses it (`JSC1103`):
+In `.jsc` the modifier is `batched` (and `batched only` for intent-only). In `.jsc` 2 a batched action that pays
+says `open` ([the rules](/languages/jsc-reference/#modifiers)); `joust migrate` does not translate a v1 batched action
+(`JSC1103`):
 
 <Tabs syncKey="lang">
 <TabItem label="Java">
@@ -85,11 +86,10 @@ public static State donate(State s, Ctx ctx) {
 </TabItem>
 <TabItem label=".jsc">
 
-```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Jar.jsc (v1)"
-action tip() payable batched {
-    require received >= 1 ada "tip at least 1 ADA"
-    total += received
-    tips += 1
+```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Pool.jsc"
+action donate() payable batched {
+  require(received >= 1 ada, "donate at least 1 ADA")
+  return { ...state, donated: donated + received }
 }
 ```
 

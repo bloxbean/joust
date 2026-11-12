@@ -16,7 +16,7 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 
 <Aside type="caution" title="A preview">
 `.jsc` 2 is a preview: the core language of milestone M1. The features of M2 to M4 (values and assets, owned and keyed
-objects, batched intents, purposes, libraries) still need [Java](/languages/java/).
+objects, purposes, libraries) still need [Java](/languages/java/).
 </Aside>
 
 ## Lexical rules
@@ -51,7 +51,7 @@ member    = "state" "{" { field [","] } "}"          (exactly once)
           | "view" Ident params ":" typeRef ( "=" expr | block )
           | fn | type | enum
 params    = "(" [ Ident ":" typeRef { "," Ident ":" typeRef } ] ")"
-modifier  = "payable" | "open" | ( "only" | "after" | "before" ) Ident
+modifier  = "payable" | "open" | "batched" [ "only" ] | ( "only" | "after" | "before" ) Ident
 block     = "{" { stmt } [ [ "return" ] expr ] "}"
 stmt      = "const" Ident [ ":" typeRef ] "=" expr
           | "require" "(" expr "," String ")"
@@ -148,8 +148,16 @@ modifier other than `open` and `only`, or mentions `caller`, `received`, `balanc
 | `after f` | `@ValidAfter("f")` | `action`, `destroy` | `Int` |
 | `before f` | `@ValidBefore("f")` | `action`, `destroy` | `Int` |
 | `open` | none | `action`, `destroy` | |
+| `batched` | `@Batched` | `action` (`JSC0418`) | |
+| `batched only` | `@Batched(only = true)`: intent-only, no direct call | `action` | |
 
-Modifiers name state fields, never parameters (`JSC0310`).
+Modifiers name state fields, never parameters (`JSC0310`). Each is given at most once (`JSC0416`). A `batched` action
+cannot also have `only`, `after` or `before` (`JSC0417`): the batcher signs a batch and sets its window, so check the
+caller or the time in the body. A paying one says `open` (`JSC0420`): an intent authorises its action until its
+deadline, against the state a batcher applies it to, in the batcher's order, so keep deadlines short and bound
+order-sensitive arguments. A contract with `BigMap` state cannot have batched actions (`JSC0419`). `batched only`
+followed by an identifier that is not a modifier reads as `batched` plus `only f` (then refused), and the six modifier
+words are no field or binding name (`JSC0211`).
 
 ## Statements
 

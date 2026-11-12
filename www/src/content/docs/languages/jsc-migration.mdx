@@ -162,7 +162,7 @@ each payout, so this matters only to code that reads the list by position; migra
 |---|---|
 | `JSC1101` | The file is already `.jsc` 2 |
 | `JSC1102` | The file is not valid v1 (the v1 error follows) |
-| `JSC1103` | A `batched` action: batched intents are not in `.jsc` 2 before milestone M3 |
+| `JSC1103` | A `batched` action: migrate does not translate them. `.jsc` 2 has `batched` ([its rules](/languages/jsc-reference/#modifiers) differ: a paying one says `open`), so write that part by hand |
 | `JSC1104` | The translation breaks a `.jsc` 2 rule; the rule's own code and message follow. The common case is time: v1 lets `validFrom` or `validTo` decide a branch (`if validTo > deadline`), which `.jsc` 2 refuses ([the time rule](/languages/jsc-reference/#time-d11)) |
 | `JSC1105` | An `if` writes a map entry at a key computed inside one of its arms: the key must be known before the `if` |
 | `JSC1106` | A value that can fail (a division) is computed but never read: v1 evaluates it, `.jsc` 2 would not, so the failure would be lost |
@@ -172,8 +172,8 @@ each payout, so this matters only to code that reads the list by position; migra
 | `JSC1110` | A state field, method or contract named with a word of `.jsc` 2 (`match`, `Some`, …): rename it in v1 first (its name is in the client and the ABI). A parameter or `let` so named is renamed `<name>Value`, with a note |
 
 A refused file stays v1 and keeps building. Rewrite the refused part by hand (the v1 file is short), or keep the
-contract in v1 until `.jsc` 2 has the feature: the example `examples/dsl/.../Jar.jsc` has a `batched` action, so it
-stays v1 until M3.
+contract in v1 until `.jsc` 2 has the feature. The example `examples/dsl/.../Jar.jsc` has a `batched` action, which
+migrate does not translate, so it stays v1; `examples/dsl/.../Pool.jsc` shows batched actions written in `.jsc` 2.
 
 ## After migrating
 

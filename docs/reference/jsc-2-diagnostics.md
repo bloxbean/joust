@@ -332,7 +332,7 @@ that still happens in the front end is JSC0005, never a crash.
 |---|---|---|---|
 | JSC1101 | error | this file is already .jsc 2: there is nothing to migrate | Migrate |
 | JSC1102 | error | this is not a valid .jsc v1 file, so it cannot be migrated: … | Migrate |
-| JSC1103 | error | 'batched' actions are not in .jsc 2 yet (ADR-0018 §8: batched intents come with M3), so this contract cannot be migrated; keep it in .jsc v1, or write it in Java | Migrate |
+| JSC1103 | error | 'batched' actions are not translated by migrate (.jsc 2 has them since M1c, ADR-0018 D10, with rules of its own: JSC0417, JSC0420), so this contract cannot be migrated; write its .jsc 2 by hand, keep it in .jsc v1, or write it in Java | Migrate |
 | JSC1104 | error | .jsc 2 refuses this code, so migrate cannot translate it (rewrite it by hand): [JSC…] … | Migrate |
 | JSC1105 | error | this if writes … at a key computed inside one of its arms; .jsc 2 changes a BigMap only in the next state, so migrate needs the key before the if: rewrite it by hand | Migrate |
 | JSC1106 | error | this value can fail (a division) but nothing reads it, so v1 computes it and .jsc 2 would not: rewrite it by hand (drop it, or check it with require) | Migrate |

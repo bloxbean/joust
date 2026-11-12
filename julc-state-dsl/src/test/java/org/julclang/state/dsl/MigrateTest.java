@@ -57,7 +57,7 @@ class MigrateTest {
     }
 
     @Test
-    void examples_jarIsRefused_batchedComesWithM3() throws Exception {
+    void examples_jarIsRefused_migrateDoesNotTranslateBatched() throws Exception {
         var e = assertThrows(JscException.class, () -> Migrate.migrate(Files.readString(DSL.resolve("Jar.jsc")), "Jar.jsc"));
         assertEquals("JSC1103", e.code);
         assertEquals(17, e.line);

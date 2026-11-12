@@ -20,7 +20,7 @@ leaves preview, so the same file may compile to a different script hash in a lat
 contract is rebuilt with the JOUST version recorded for it: each record of `build/joust/deployments.<network>.json` states
 it (commit those files if you must rebuild a deployed script later; `build/` is ignored), or the plugin's version.
 It covers the core language (milestone M1). Native assets, sends, mints, deploy parameters, events and reads of other
-contracts arrive in M2; owned and keyed objects, batched intents and script purposes in M3; `.jsc` libraries and
+contracts arrive in M2; owned and keyed objects and script purposes in M3; `.jsc` libraries and
 offline tests in M4. Until then, write a contract that needs one of them in [Java](/languages/java/). `.jsc` becomes
 the recommended language for JavaScript developers only after M2, M4 and an independent security review of the
 lowering.
@@ -208,6 +208,8 @@ Modifiers follow the parameter list:
 | `after f` | `@ValidAfter("f")`: valid only after the `Int` field `f` | `action`, `destroy` |
 | `before f` | `@ValidBefore("f")`: valid only before the `Int` field `f` | `action`, `destroy` |
 | `open` | none: you state that anyone may call a method that pays | `action`, `destroy` |
+| `batched` | `@Batched`: the action also runs as an intent that a batcher applies ([Batched intents](/contracts/batched-intents/)) | `action` |
+| `batched only` | `@Batched(only = true)`: the action runs only as an intent | `action` |
 
 <Aside type="danger" title="A method that can pay needs an audience">
 An action or destroy that can reach a `pay` in any arm or loop must say who may call it: `only <key field>`, or `open`
@@ -600,7 +602,6 @@ agree.
 |---|---|
 | Native assets, `send`, `mint`/`burn`, deposits, deploy parameters, invariants, events, quorums, reads of other contracts | milestone M2 |
 | Owned and keyed objects, moves, `init migrate`, script purposes (staking, governance) | M3 |
-| Batched intents | M3; a `BigMap` contract cannot have them at all (ADR-0004 D1) |
 | `.jsc` libraries, Java library imports, offline tests | M4 |
 | A language server | M5 |
 

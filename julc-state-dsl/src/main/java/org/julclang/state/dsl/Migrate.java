@@ -25,7 +25,7 @@ import java.util.function.UnaryOperator;
  * when the other arm is taken, the entry's current one.
  * <p>
  * The translation is then checked by the {@code .jsc} 2 front end. What {@code .jsc} 2 rejects is refused with the
- * reason, at the v1 position: batched actions (not in {@code .jsc} 2 before M3), time values deciding a branch (D11),
+ * reason, at the v1 position: batched actions (which migrate does not translate), time values deciding a branch (D11),
  * and any other rule of the checker. Behaviour is preserved in J13's sense: the same next state and the same multiset
  * of payouts. v1 lists payouts in reverse source order and {@code .jsc} 2 in source order; the notes say so.
  */
@@ -365,9 +365,9 @@ public final class Migrate {
             boolean init = m.kind() == Kind.INIT;
             for (Modifier mod : m.modifiers()) {
                 if (mod.name().equals("batched")) {
-                    throw new JscException(mod.pos().line(), mod.pos().col(), "JSC1103", "'batched' actions are not in .jsc 2 yet"
-                            + " (ADR-0018 §8: batched intents come with M3), so this contract cannot be migrated; keep it in"
-                            + " .jsc v1, or write it in Java");
+                    throw new JscException(mod.pos().line(), mod.pos().col(), "JSC1103", "'batched' actions are not translated by migrate"
+                            + " (.jsc 2 has them since M1c, ADR-0018 D10, with rules of its own: JSC0417, JSC0420), so this contract"
+                            + " cannot be migrated; write its .jsc 2 by hand, keep it in .jsc v1, or write it in Java");
                 }
             }
             // Parameters: .jsc 2 never lets a name hide a state field (in an action, destroy or view) or take a name the
