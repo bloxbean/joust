@@ -5,7 +5,7 @@
 **Builds on:** ADR-0007 (assets, sends, the output registry: I26–I30), ADR-0009 (params, quorum, events), ADR-0010
 (script purposes: `@Withdraw`, staked state), ADR-0011 (composition), ADR-0013 (wallets, the page verifier), ADR-0015
 (npm toolchain, the Wasm engine, governors in `validators.json`), ADR-0016 (keyed objects; its open Q3).
-**Related, in review in parallel:** ADR-0018 (`.jsc` 1.0). This ADR only cross-references it (§3 D3, Q8).
+**Related, in review in parallel:** ADR-0018 (`.jsc` 2, PR #59). This ADR only cross-references it (§3 D3, Q8).
 **Design only:** no implementation in this PR.
 **Risk:** high. Programmable tokens are regulated assets (stablecoins, securities). A mistake here pays the wrong smart
 wallet, lets a frozen holder move tokens through a JOUST page, or leaves contract-held tokens drainable by a governance
@@ -238,18 +238,18 @@ sent there would be stuck or, with `@Withdraw`, drainable.
 
 ## 4. Invariants
 
-Numbered from **I60**: I56–I59 are left for ADR-0018, in review in parallel; numbers are reconciled when both merge.
+Numbered from **I56**, after ADR-0016's I55 (ADR-0018 numbers its toolchain invariants J1…, so they do not compete).
 
 | ID | Invariant | Decisions |
 |---|---|---|
-| I60 | A `ProgrammablePayout` is satisfied only by an output with payment credential = the params' PLB hash, stake credential = `Inline(owner)`, inline datum = this instance's payout tag, and at least `amount` of `(policy, assetName)` | D5 |
-| I61 | One output satisfies at most one programmable payout of one instance; an output carrying a JOUST tag is never claimed by a send (I30's tag rule kept) | D5 |
-| I62 | A programmable payout names only a policy accepted in the contract's params | D5 |
-| I63 | Programmable payouts move none of the instance's value: I26 holds unchanged | D5 |
-| I64 | The runtime and the engine build CIP-113 parts only against the pinned deployment; a live PLG or delegate other than the pinned one stops the build | D1 |
-| I65 | A transaction JOUST builds carries at most one CIP-113 action kind; a wallet (page) flow never carries `ThirdPartyAct` or `UnfrackingAct` | D6, D7 |
-| I66 | The page accepts a programmable transfer only under D7's rules 1–6; anything else is refused before signing | D7 |
-| I67 | No JOUST runtime or page pays a programmable token to a smart wallet keyed by a JOUST contract's script hash, until a custody ADR replaces this rule | D9, D10 |
+| I56 | A `ProgrammablePayout` is satisfied only by an output with payment credential = the params' PLB hash, stake credential = `Inline(owner)`, inline datum = this instance's payout tag, and at least `amount` of `(policy, assetName)` | D5 |
+| I57 | One output satisfies at most one programmable payout of one instance; an output carrying a JOUST tag is never claimed by a send (I30's tag rule kept) | D5 |
+| I58 | A programmable payout names only a policy accepted in the contract's params | D5 |
+| I59 | Programmable payouts move none of the instance's value: I26 holds unchanged | D5 |
+| I60 | The runtime and the engine build CIP-113 parts only against the pinned deployment; a live PLG or delegate other than the pinned one stops the build | D1 |
+| I61 | A transaction JOUST builds carries at most one CIP-113 action kind; a wallet (page) flow never carries `ThirdPartyAct` or `UnfrackingAct` | D6, D7 |
+| I62 | The page accepts a programmable transfer only under D7's rules 1–6; anything else is refused before signing | D7 |
+| I63 | No JOUST runtime or page pays a programmable token to a smart wallet keyed by a JOUST contract's script hash, until a custody ADR replaces this rule | D9, D10 |
 
 ## 5. Alternatives considered
 
@@ -283,9 +283,9 @@ Numbered from **I60**: I56–I59 are left for ADR-0018, in review in parallel; n
 | ID | Entry gate | Work | Exit criteria |
 |---|---|---|---|
 | M0 spike | this ADR accepted | DevKit bootstrap (D11); a composed JOUST call + CIP-113 holder transfer; measure CCL stability vs payout restoration (D6), budgets, Wasm size (Q7) | one composed transaction lands on DevKit; numbers recorded in the ADR's implementation notes; D6's open point answered |
-| M1 issuers and holders (Java) | M0 | `julc-state-programmable` facade (D4), `ProgrammableTokenSpec`, `ProgrammableLib` (consent, registry); `examples/stablecoin` with stateless JuLC rules: register, mint, transfer, seize, burn | I64, I65 tested; the example runs on DevKit against the real core contracts |
-| M2 programmable payouts | M1 | `ProgrammablePayout` in the processor, generator and runtime; `examples/shop` | I60–I63 by harness attacks (§9) and DevKit |
-| M3 pages | M2 | engine module, `x-joust.programmable`, verifier rules, guard (D10) | I66, I67 by tamper tests; a page transfers and pays on DevKit |
+| M1 issuers and holders (Java) | M0 | `julc-state-programmable` facade (D4), `ProgrammableTokenSpec`, `ProgrammableLib` (consent, registry); `examples/stablecoin` with stateless JuLC rules: register, mint, transfer, seize, burn | I60, I61 tested; the example runs on DevKit against the real core contracts |
+| M2 programmable payouts | M1 | `ProgrammablePayout` in the processor, generator and runtime; `examples/shop` | I56–I59 by harness attacks (§9) and DevKit |
+| M3 pages | M2 | engine module, `x-joust.programmable`, verifier rules, guard (D10) | I62, I63 by tamper tests; a page transfers and pays on DevKit |
 | M4 compliance | ADR-0016 Q3 follow-up accepted; M2 | `Compliance` keyed denylist, transfer logic with non-membership, quorum-gated seizure | a denied holder's transfer fails on chain; seizure emits its event; contention retry tested |
 | M5 custody | a custody ADR accepted (D9) | – | – |
 
@@ -298,10 +298,10 @@ Numbered from **I60**: I56–I59 are left for ADR-0018, in review in parallel; n
   instances' payouts; amount short by one; a policy outside params; the payout also claimed as a send.
 - **Page tamper tests (M3):** an extra smart-wallet input of the wallet; tokens redirected to another smart wallet;
   `ThirdPartyAct` smuggled in; an unpinned logic withdrawal; a registry node without the registry NFT; a non-zero
-  withdrawal; a certificate; payment to a JOUST contract's smart wallet (I67).
+  withdrawal; a certificate; payment to a JOUST contract's smart wallet (I63).
 - **Differential:** the Java runtime and the Wasm engine build byte-identical transaction bodies for the same calls
   and chain reads (ADR-0015 M0 fixtures).
-- **Drift:** a DevKit test re-points a delegate and checks that the build stops (I64).
+- **Drift:** a DevKit test re-points a delegate and checks that the build stops (I60).
 
 ## 10. Open questions
 
