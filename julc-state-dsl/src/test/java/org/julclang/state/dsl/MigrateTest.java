@@ -465,10 +465,71 @@ class MigrateTest {
         var e = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
                 + "  view v(): Int = nope\n  view w(x: Int): Int {\n    x\n    - 1\n  }\n}\n", "C.jsc"));
         assertFalse(e.getMessage().contains("note: the line starting with '-'"), e.getMessage());
-        // Before it: the note.
-        var f = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+        // In another method, before it: no note either (r4: the note stays within the failing member).
+        var g = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
                 + "  view w(x: Int): Int {\n    x\n    - 1\n  }\n  view v(): Int = nope\n}\n", "C.jsc"));
+        assertFalse(g.getMessage().contains("note: the line starting with '-'"), g.getMessage());
+        // In the same method, on or before the error: the note.
+        var f = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+                + "  view w(x: Int): Int {\n    x\n    - nope\n  }\n}\n", "C.jsc"));
         assertTrue(f.getMessage().contains("note: the line starting with '-' at 8:5"), f.getMessage());
+    }
+
+    // ------------------------------------------------------------------ review r4
+
+    @Test
+    void r4C5_aHardLinkedOutputTarget_isRefused_andOutputsAreRenamedIntoPlace(@TempDir Path dir) throws Exception {
+        Path a = Files.createDirectories(dir.resolve("src/a")), b = Files.createDirectories(dir.resolve("src/b"));
+        String c = "package p\ncontract C { state n: Int init() {} action inc() { n += 1 } }\n";
+        String other = "package q\ncontract Other { state n: Int init() {} action dec() { n -= 1 } }\n";
+        Files.writeString(a.resolve("C.jsc"), c);
+        Files.writeString(b.resolve("C.jsc"), other);
+        Path out = Files.createDirectories(dir.resolve("out/a"));
+        for (Path source : List.of(b.resolve("C.jsc"), a.resolve("C.jsc"))) {   // another source, then the current one
+            Files.deleteIfExists(out.resolve("C.jsc"));
+            Files.createLink(out.resolve("C.jsc"), source);
+            String err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", dir.resolve("src").toString(), dir.resolve("out").toString()})));
+            assertTrue(err.contains("error[JSC1108]") && err.contains("the same file"), err);
+            assertEquals(c, Files.readString(a.resolve("C.jsc")));
+            assertEquals(other, Files.readString(b.resolve("C.jsc")));
+        }
+        // A target shared with a file outside the sources: refused too.
+        Files.delete(out.resolve("C.jsc"));
+        Files.writeString(dir.resolve("elsewhere.txt"), "keep");
+        Files.createLink(out.resolve("C.jsc"), dir.resolve("elsewhere.txt"));
+        String err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", dir.resolve("src").toString(), dir.resolve("out").toString()})));
+        assertTrue(err.contains("more than one hard link"), err);
+        assertEquals("keep", Files.readString(dir.resolve("elsewhere.txt")));
+        // A plain existing target is replaced by a rename (a new inode).
+        Files.delete(out.resolve("C.jsc"));
+        Files.writeString(out.resolve("C.jsc"), "old output");
+        Object before = Files.getAttribute(out.resolve("C.jsc"), "unix:ino");
+        assertEquals(0, JscMain.run(new String[]{"--migrate", dir.resolve("src").toString(), dir.resolve("out").toString()}));
+        assertTrue(Files.readString(out.resolve("C.jsc")).startsWith("jsc 2\n"));
+        assertNotEquals(before, Files.getAttribute(out.resolve("C.jsc"), "unix:ino"));
+    }
+
+    @Test
+    void r4S8_aFileArgumentInALinkedDirectory_isNotReplacedInPlace(@TempDir Path dir) throws Exception {
+        Path lib = Files.createDirectories(dir.resolve("sharedlib"));
+        Files.copy(DSL.resolve("Points.jsc"), lib.resolve("Points.jsc"));
+        Files.createDirectories(dir.resolve("src"));
+        Files.createSymbolicLink(dir.resolve("src/lib"), Path.of("../sharedlib"));
+        String err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", dir.resolve("src/lib/Points.jsc").toString(),
+                dir.resolve("out").toString(), "--in-place"})));
+        assertTrue(err.contains("error[JSC1109]") && err.contains("symbolic link"), err);
+        assertTrue(Files.readString(lib.resolve("Points.jsc")).startsWith("package"));
+        assertFalse(Files.exists(lib.resolve("Points.jsc.v1")));
+    }
+
+    @Test
+    void r4F12_theMinusNote_reachesForwardWithinTheMember() {
+        // N1 (design r3): the value block's error is found at its start, before the line starting with '-' that causes it.
+        String src = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
+                + "  view u(x: Int, y: Int): Int = if x > 0 { const t = x * 2\n -y } else { y }\n}\n";
+        var e = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(src, "C.jsc"));
+        assertEquals("JSC0137", e.code);
+        assertTrue(e.getMessage().contains("note: the line starting with '-' at 7:2"), e.getMessage());
     }
 
     interface Body {

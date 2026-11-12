@@ -2,9 +2,9 @@
 // Needs the engine in engine/ (./gradlew :julc-state-toolchain:toolchainWasm, copied as CI does).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { migrate } from '../src/migrate.js';
 import { build } from '../src/build.js';
@@ -66,6 +66,8 @@ test('joust migrate --in-place keeps the v1 text, never overwrites it, and the r
     // Review r3 F9: the compiler that built each script, carried into each deployment record.
     const built = JSON.parse(readFileSync(join(root, 'build/joust/contracts.json'), 'utf8'))[0].built;
     assert.ok(built.joust && built.engine && built.julc, JSON.stringify(built));
+    // Review r4 F13: stamped at build time, never 'dev'.
+    assert.ok(built.engine !== 'dev' && built.julc !== 'dev', JSON.stringify(built));
     assert.deepEqual(JSON.parse(readFileSync(join(root, 'build/joust/joust.lock.json'), 'utf8')).engine, { joust: built.engine, julc: built.julc });
   });
 
@@ -239,4 +241,50 @@ test('r3 S7: a deployments file of the wrong shape is unreadable, merging is nul
   }
   writeFileSync(join(dir, 'deployments.devkit.json'), '{ "contracts": { "app.Counter": {} } }');
   assert.match(staleDeployments(dir, contracts)[0], /neither a script digest nor a policy/);
+});
+
+// Review r4.
+test('r4 C5: a hard-linked output target is refused, whichever source it shares; outputs are renamed into place', { skip, timeout: 300_000 }, async () => {
+  const { linkSync, statSync: st } = await import('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'joust-migrate-r4-'));
+  mkdirSync(join(root, 'contracts/a'), { recursive: true });
+  mkdirSync(join(root, 'contracts/b'), { recursive: true });
+  const c = 'package p\ncontract C { state n: Int init() {} action inc() { n += 1 } }\n';
+  const other = 'package q\ncontract Other { state n: Int init() {} action dec() { n -= 1 } }\n';
+  writeFileSync(join(root, 'contracts/a/C.jsc'), c);
+  writeFileSync(join(root, 'contracts/b/C.jsc'), other);
+  mkdirSync(join(root, 'build/joust/migrated/a'), { recursive: true });
+  const target = join(root, 'build/joust/migrated/a/C.jsc');
+  const q = quiet();
+  for (const source of ['contracts/b/C.jsc', 'contracts/a/C.jsc']) {
+    rmSync(target, { force: true });
+    linkSync(join(root, source), target);
+    const r = await migrate({ root, files: ['contracts/a/C.jsc'], log: q.log, error: q.error });
+    assert.equal(r.ok, false, source);
+    assert.ok(q.lines.some((l) => l.startsWith('error[JSC1108]: a/C.jsc') && /hard link/.test(l)), q.lines.join('\n'));
+    assert.equal(readFileSync(join(root, 'contracts/a/C.jsc'), 'utf8'), c);
+    assert.equal(readFileSync(join(root, 'contracts/b/C.jsc'), 'utf8'), other);
+  }
+  rmSync(target);
+  writeFileSync(target, 'old output');
+  const before = st(target).ino;
+  const r = await migrate({ root, files: ['contracts/a/C.jsc'], log: q.log, error: q.error });
+  assert.ok(r.ok, q.lines.join('\n'));
+  assert.match(readFileSync(target, 'utf8'), /^jsc 2\n/);
+  assert.notEqual(st(target).ino, before, 'a new inode: renamed into place');
+});
+
+test('r4 C6: a stale temporary file of the same pid is left alone, and in place still succeeds', { skip, timeout: 300_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'joust-migrate-r4-'));
+  mkdirSync(join(root, 'contracts/a'), { recursive: true });
+  writeFileSync(join(root, 'contracts/a/C.jsc'), 'package p\ncontract C { state n: Int init() {} action inc() { n += 1 } }\n');
+  const stale = join(root, `contracts/a/.C.jsc.${process.pid}.migrating`);
+  writeFileSync(stale, 'existing temp data');
+  const q = quiet();
+  const r = await migrate({ root, files: ['contracts/a/C.jsc'], inPlace: true, log: q.log, error: q.error });
+  assert.ok(r.ok, q.lines.join('\n'));
+  assert.equal(readFileSync(stale, 'utf8'), 'existing temp data');
+  assert.match(readFileSync(join(root, 'contracts/a/C.jsc'), 'utf8'), /^jsc 2\n/);
+  const { readdirSync: ls } = await import('node:fs');
+  assert.deepEqual(ls(join(root, 'contracts/a')).filter((f) => f.endsWith('.migrating')), [basename(stale)]);
 });

@@ -111,7 +111,7 @@ final class Checker {
         try {
             return checkFile(file, fileName);
         } catch (JscException e) {
-            throw Parser.hinted(e, file.leadingMinus());
+            throw Parser.hinted(e, file.leadingMinus(), file.members());
         }
     }
 

@@ -162,8 +162,10 @@ public final class JscMain {
      */
     public static int migrate(Path src, Path out, boolean inPlace) throws IOException {
         List<Path> files = new ArrayList<>();
+        boolean fileArgument = false;
         if (Files.isRegularFile(src, java.nio.file.LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(src)) {
             files.add(src);
+            fileArgument = true;
             src = src.getParent() == null ? Path.of(".") : src.getParent();
         } else if (Files.isDirectory(src)) {
             // Files.walk does not follow directory links (review r2 S2).
@@ -198,7 +200,7 @@ public final class JscMain {
         for (Path f : files) {
             String name = src.relativize(f).toString();
             try {
-                if (inPlace) inPlaceProblem(f, src);
+                if (inPlace) inPlaceProblem(f, src, fileArgument);
                 String text = Files.readString(f);
                 if (org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
                 var r = Migrate.migrate(text, f.getFileName().toString());
@@ -215,16 +217,12 @@ public final class JscMain {
                     }
                     // Review r3 S5: a new file renamed over the source replaces the directory entry, never the contents of a
                     // shared inode or a link's target.
-                    Path tmp = Files.createTempFile(f.getParent(), "." + f.getFileName(), ".migrating");
-                    try {
-                        Files.writeString(tmp, r.source());
-                        Files.move(tmp, f, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                    } finally {
-                        Files.deleteIfExists(tmp);
-                    }
+                    renameOver(f, r.source());
                 } else {
+                    // Review r4 C5: a new file renamed over the target, never a write into an existing one, so no inode
+                    // a target shares with a source is ever changed.
                     Files.createDirectories(target.getParent());
-                    Files.writeString(target, r.source());
+                    renameOver(target, r.source());
                 }
                 r.notes().forEach(n -> System.err.println(n.format(name)));
                 System.out.println("jsc: migrated " + name + " to .jsc 2: " + target + (inPlace ? " (the v1 text is in " + backup.getFileName() + ")" : ""));
@@ -247,15 +245,42 @@ public final class JscMain {
         return refused > 0 ? 1 : 0;
     }
 
-    /** Why a default-mode target may not be written, or null (review r2 C2, r3 C2). */
+    /** Writes {@code text} to a new file beside {@code target} and renames it over {@code target} (review r3 S5, r4 C5). */
+    static void renameOver(Path target, String text) throws IOException {
+        Path tmp = Files.createTempFile(target.getParent(), "." + target.getFileName(), ".migrating");
+        try {
+            Files.writeString(tmp, text);
+            Files.move(tmp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+    }
+
+    /** Why a default-mode target may not be written, or null (review r2 C2, r3 C2, r4 C5). */
     static String targetProblem(Path target, Path out, Path src, List<Path> sources) throws IOException {
         if (!target.toAbsolutePath().normalize().startsWith(out.toAbsolutePath().normalize())) return "is outside the output directory";
         if (within(target, src)) return "lies in the sources (through a link on its path)";
         Path real = resolved(target);
+        if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            // The same file as a source by identity (a hard link has its own path, but the source's inode).
+            for (Path s : sources) {
+                if (Files.exists(s) && Files.isSameFile(target, s)) return "is the source " + s + " (the same file)";
+            }
+            if (links(target) > 1) return "has more than one hard link (another path shares its contents)";
+        }
         for (Path s : sources) {
             if (Files.exists(s) && real.equals(s.toRealPath())) return "is the source " + s;
         }
         return null;
+    }
+
+    /** The hard links of {@code f} (1 where the file system does not say). */
+    static int links(Path f) throws IOException {
+        try {
+            return Files.getAttribute(f, "unix:nlink", java.nio.file.LinkOption.NOFOLLOW_LINKS) instanceof Integer n ? n : 1;
+        } catch (UnsupportedOperationException | IllegalArgumentException e) {
+            return 1;
+        }
     }
 
     /**
@@ -263,7 +288,7 @@ public final class JscMain {
      * shared with another path, and no link on its path under the source directory (its real path lies under the source
      * directory's, and no directory between them is a link).
      */
-    static void inPlaceProblem(Path f, Path src) throws IOException {
+    static void inPlaceProblem(Path f, Path src, boolean fileArgument) throws IOException {
         if (Files.isSymbolicLink(f)) {
             throw new JscException(1, 1, "JSC1109", "this file is a symbolic link: migrate --in-place never replaces a file through a"
                     + " link; migrate a copy, or the link's target in its own project");
@@ -279,6 +304,12 @@ public final class JscMain {
         }
         Path root = src.toAbsolutePath().normalize();
         Path abs = f.toAbsolutePath().normalize();
+        // Review r4 S8: a file given by itself has its directory as its root: that directory may not be a link either.
+        // (Links further up, such as macOS's /tmp, are the user's file system, not a shared source.)
+        if (fileArgument && Files.isSymbolicLink(root)) {
+            throw new JscException(1, 1, "JSC1109", "the directory " + root.getFileName() + " is a symbolic link: migrate --in-place never"
+                    + " replaces a file through a link; migrate the link's target in its own project");
+        }
         for (Path p = abs.getParent(); p != null && p.startsWith(root) && !p.equals(root); p = p.getParent()) {
             if (Files.isSymbolicLink(p)) {
                 throw new JscException(1, 1, "JSC1109", "the directory " + root.relativize(p) + " is a symbolic link: migrate --in-place"

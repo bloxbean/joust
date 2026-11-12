@@ -18,10 +18,10 @@ import java.util.Map;
 public final class JoustToolchainWasm {
 
     /** The engine's version; the CLI checks it against its own. */
-    static final String VERSION = System.getProperty("joust.version", "dev");
+    static final String VERSION = EngineVersions.JOUST;
 
-    /** The JuLC version the engine embeds (review r3 F9: recorded with each deployment). */
-    static final String JULC_VERSION = System.getProperty("julc.version", "dev");
+    /** The JuLC version the engine embeds (review r3 F9: recorded with each deployment; F13: stamped at build time). */
+    static final String JULC_VERSION = EngineVersions.JULC;
 
     private JoustToolchainWasm() {
     }

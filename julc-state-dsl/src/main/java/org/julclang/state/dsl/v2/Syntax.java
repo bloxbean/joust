@@ -29,7 +29,7 @@ final class Syntax {
      * end statements; review r2 F2, S4): each is warned about (JSC9007) and named in any error.
      */
     record File(String pkg, List<Import> imports, List<TypeDecl> types, List<EnumDecl> enums, List<Fn> fns, Contract contract,
-                List<Pos> leadingMinus) {}
+                List<Pos> leadingMinus, List<int[]> members) {}
 
     record Import(List<String> names, String from, Pos pos) {}
 

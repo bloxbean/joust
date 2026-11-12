@@ -6,6 +6,7 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync,
   writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { loadToolchain } from './toolchain.js';
 
 /** Whether {@code p} exists, a dangling link included (lstat: never follows a link). */
@@ -108,14 +109,31 @@ function keepV1Artifacts(root, out, name) {
   return copied;
 }
 
-/** Writes {@code text} to a new file beside {@code path} and renames it over {@code path} (review r3 S5). */
+/**
+ * Writes {@code text} to a new file beside {@code path} and renames it over {@code path} (review r3 S5, r4 C5): the
+ * directory entry is replaced, never the contents of an inode another path shares. The temporary name is unique, and
+ * only a file this call created is removed (review r4 C6).
+ */
 function replace(path, text) {
-  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.migrating`);
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomBytes(8).toString('hex')}.migrating`);
+  let created = false;
   try {
     writeFileSync(tmp, text, { flag: 'wx' });
+    created = true;
     renameSync(tmp, path);
+    created = false;
   } finally {
-    rmSync(tmp, { force: true });
+    if (created) rmSync(tmp, { force: true });
+  }
+}
+
+/** The file identity of {@code p} (device and inode), or null. */
+function identity(p) {
+  try {
+    const s = statSync(p);
+    return `${s.dev}:${s.ino}`;
+  } catch {
+    return null;
   }
 }
 
@@ -160,13 +178,18 @@ export async function migrate({ root = process.cwd(), src = 'contracts', out = '
   // link on its path (resolved at its nearest existing ancestor), it lies in the sources or is any source file.
   if (!inPlace) {
     const sources = new Set(paths.filter(present).map((p) => { try { return realpathSync(p); } catch { return p; } }));
+    // By identity too (review r4 C5): a hard link has its own path but a source's inode.
+    const ids = new Set([...paths, ...jscFiles(srcDir)].map(identity).filter(Boolean));
     let bad = 0;
     for (const n of Object.keys(byName)) {
       const target = resolve(migratedDir, n);
       const real = resolved(target);
+      const exists = present(target);
       const why = !inside(target, migratedDir) ? 'is outside build/joust/migrated'
         : within(target, srcDir) ? 'lies in the contracts directory (through a link on its path)'
-          : sources.has(real) ? 'is a source file' : null;
+          : sources.has(real) ? 'is a source file'
+            : exists && ids.has(identity(target)) ? 'is a source file (a hard link to it)'
+              : exists && lstatSync(target).nlink > 1 ? 'has more than one hard link (another path shares its contents)' : null;
       if (why) {
         error(`error[JSC1108]: ${n}:1:1: the output ${relative(root, target)} ${why}: without --in-place, migrate never changes the`
           + ' sources; nothing was written');
@@ -224,7 +247,7 @@ export async function migrate({ root = process.cwd(), src = 'contracts', out = '
     }
     const target = resolve(migratedDir, m.file);
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, m.source);
+    replace(target, m.source);   // a rename over the target: never a write into an existing inode (review r4 C5)
     for (const n of m.notes) log(`note: ${where(n)}: ${n.message}`);
     log(`migrated ${m.file} to .jsc 2: ${relative(root, target)}`);
     migrated.push({ file: m.file, target });

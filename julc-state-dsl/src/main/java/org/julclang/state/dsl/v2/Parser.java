@@ -54,8 +54,45 @@ final class Parser {
         try {
             return p.file();
         } catch (JscException e) {
-            throw hinted(e, p.leadingMinus);
+            throw hinted(e, p.leadingMinus, p.members());
         }
+    }
+
+    /**
+     * The lines of each declaration and contract member (review r3 F12): {startLine, startToken, endLine}. A member
+     * still being parsed when an error is thrown ends at the '}' that closes its first '{' (or at the end of the file).
+     */
+    private final List<int[]> members = new ArrayList<>();
+
+    private int[] startMember() {
+        int[] m = {peek().line(), i, -1};
+        members.add(m);
+        return m;
+    }
+
+    private void endMember(int[] m) {
+        m[2] = toks.get(Math.max(i - 1, 0)).line();
+    }
+
+    /** Each member's [startLine, endLine]. */
+    private List<int[]> members() {
+        var out = new ArrayList<int[]>();
+        for (int[] m : members) {
+            int end = m[2];
+            if (end < 0) {
+                int depth = 0;
+                end = toks.get(toks.size() - 1).line();
+                for (int k = m[1]; k < toks.size(); k++) {
+                    if (toks.get(k).is("{")) depth++;
+                    else if (toks.get(k).is("}") && --depth == 0) {
+                        end = toks.get(k).line();
+                        break;
+                    }
+                }
+            }
+            out.add(new int[]{m[0], end});
+        }
+        return out;
     }
 
     /** Binary '-' tokens that start a line (review r2 F2, S4). */
@@ -65,10 +102,20 @@ final class Parser {
      * An error with a note when a line starting with '-', on or before the error's line, continued the expression above it: the cause is often there,
      * not where the error is found (a block without its value, an unknown name).
      */
-    static JscException hinted(JscException e, List<Pos> leadingMinus) {
+    static JscException hinted(JscException e, List<Pos> leadingMinus, List<int[]> members) {
+        // The member (declaration, method) the error is in: a leading '-' there, the nearest on or before the error's line,
+        // else the first after it within the member, since an error found at a construct's start (a value block without
+        // its value) comes before its cause (review r3 F12). Outside any member: the nearest on or before (F10).
+        int[] in = null;
+        for (int[] m : members) if (m[0] <= e.line && e.line <= m[1] && (in == null || m[0] >= in[0])) in = m;
         Pos near = null;
-        for (Pos p : leadingMinus) if (p.line() <= e.line && (near == null || p.line() > near.line())) near = p;
-        // Only a leading '-' on or before the error's line, the nearest: never one after it (review r3 F10).
+        for (Pos p : leadingMinus) {
+            if (in != null && (p.line() < in[0] || p.line() > in[1])) continue;
+            if (p.line() <= e.line && (near == null || p.line() > near.line())) near = p;
+        }
+        if (near == null && in != null) {
+            for (Pos p : leadingMinus) if (p.line() > e.line && p.line() <= in[1] && (near == null || p.line() < near.line())) near = p;
+        }
         if (near == null) return e;
         return new JscException(e.line, e.col, e.code, e.getMessage() + " (note: the line starting with '-' at " + near
                 + " continues the expression above it, as newlines do not end statements in .jsc; if it is meant to stand alone, end"
@@ -162,6 +209,7 @@ final class Parser {
         Contract contract = null;
         while (peek().kind() != K.EOF) {
             Tok t = peek();
+            int[] member = startMember();
             if (t.is("import")) imports.add(importDecl());
             else if (t.is("type")) types.add(typeDecl());
             else if (t.is("enum")) enums.add(enumDecl());
@@ -173,10 +221,11 @@ final class Parser {
             else if (t.is("class")) throw t.pos().error("JSC0116", "there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }'");
             else if (t.is("const") || t.is("let") || t.is("var")) throw t.pos().error("JSC0117", "a file holds imports, types, fns and one contract: put constants in a fn (fn limit(): Int = 10)");
             else throw t.pos().error("JSC0118", "expected import, type, enum, fn or contract but found " + t);
+            if (!t.is("contract")) endMember(member);
             semis();
         }
         if (contract == null) throw peek().pos().error("JSC0119", "the file declares no contract");
-        return new File(pkg.toString(), imports, types, enums, fns, contract, List.copyOf(leadingMinus));
+        return new File(pkg.toString(), imports, types, enums, fns, contract, List.copyOf(leadingMinus), members());
     }
 
     private Import importDecl() {
@@ -305,6 +354,7 @@ final class Parser {
         var enums = new ArrayList<EnumDecl>();
         while (!at("}")) {
             Tok t = peek();
+            int[] member = startMember();
             if (t.is("state")) {
                 if (state != null) throw t.pos().error("JSC0121", "the state is declared once: state { … }");
                 next();
@@ -350,6 +400,7 @@ final class Parser {
             } else {
                 throw t.pos().error("JSC0125", "expected state, init, action, destroy, view, fn, type or enum but found " + t);
             }
+            endMember(member);
             semis();
         }
         expect("}");
