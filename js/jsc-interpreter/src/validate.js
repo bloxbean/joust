@@ -294,18 +294,17 @@ export function validate(p) {
     block(f.body, `fn ${f.name}`, scope);
   }
   const methodNames = new Set();
+  const stateFields = new Map(p.state.fields.map((f) => [f.name, f.type]));
   for (const m of p.methods) {
     const where = `method ${m.name}`;
     keys(m, ['kind', 'name', 'params', 'mods', 'checked', 'usesCtx', 'pays', 'result', 'body', 'at'], where);
+    if (!Array.isArray(m.mods)) fail(where, 'mods is not a list');
     if (!KINDS.has(m.kind)) fail(where, `unknown kind ${m.kind}`);
     if (methodNames.has(m.name)) fail(where, 'two methods of that name');
     methodNames.add(m.name);
     const scope = new Set();
     m.params.forEach((l) => decl(l, where, scope));
-    for (const mod of m.mods) {
-      keys(mod, ['name', 'field'], where);
-      if (!MODS.has(mod.name)) fail(where, `unknown modifier ${mod.name}`);
-    }
+    modifiers(m, where, fail, keys, stateFields);
     if (m.result !== null) type(m.result, where);
     block(m.body, where, scope);
     // F7: the checker's two decisions, recomputed from their definitions.
@@ -320,6 +319,42 @@ export function validate(p) {
   for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${n}`);
 }
 
+/**
+ * A method's modifiers are the checker's (D4, D10; M1 hardening, review S5 on #76): each is known; `payable` and `open`
+ * name no field; `only f` names a Key field of the state and `after f`/`before f` an Int field; `batched` names none
+ * or is `batched only`, on an action, with no `only`, `after` or `before` beside it; none is given twice; an init takes
+ * only `payable`, a view none, a destroy is never payable. A reader that took any other shape on trust would decide on
+ * its own who may call a method (an `only` with no field was skipped, and the call accepted unsigned).
+ */
+function modifiers(m, where, fail, keys, state) {
+  const seen = new Set();
+  const names = m.mods.map((x) => x?.name);
+  for (const mod of m.mods) {
+    keys(mod, ['name', 'field'], where);
+    const w = mod.name;
+    if (!MODS.has(w)) fail(where, `unknown modifier ${w}`);
+    const field = mod.field ?? null;
+    if (seen.has(w)) fail(where, `the modifier ${w} is given twice`);
+    seen.add(w);
+    if (m.kind === 'view') fail(where, `a view takes no modifiers, not ${w}`);
+    if (m.kind === 'init' && w !== 'payable') fail(where, `an init takes only payable, not ${w}`);
+    if (w === 'payable' || w === 'open') {
+      if (field !== null) fail(where, `${w} names no field, not ${JSON.stringify(field)}`);
+      if (w === 'payable' && m.kind === 'destroy') fail(where, 'a destroy cannot be payable');
+    } else if (w === 'only' || w === 'after' || w === 'before') {
+      const want = w === 'only' ? 'Key' : 'Int';
+      if (typeof field !== 'string') fail(where, `${w} names a state field, not ${JSON.stringify(field)}`);
+      if (!state.has(field)) fail(where, `${w} ${field}: the state has no field ${field}`);
+      if (state.get(field) !== want) fail(where, `${w} ${field}: ${field} is of type ${JSON.stringify(state.get(field))}, not ${want}`);
+    } else if (w === 'batched') {
+      if (field !== null && field !== 'only') fail(where, `batched is plain or "batched only", not ${JSON.stringify(field)}`);
+      if (m.kind !== 'action') fail(where, `only an action can be batched, not a${m.kind === 'init' ? 'n' : ''} ${m.kind}`);
+    }
+  }
+  if (names.includes('batched')) {
+    for (const w of ['only', 'after', 'before']) if (names.includes(w)) fail(where, `a batched action cannot use ${w}`);
+  }
+}
 /** §4: a type holds a Key, a Hash or a Map somewhere (records and variants through their fields). */
 function needsCheck(t, shapes, enums) {
   if (typeof t === 'string') return t === 'Key' || t === 'Hash';

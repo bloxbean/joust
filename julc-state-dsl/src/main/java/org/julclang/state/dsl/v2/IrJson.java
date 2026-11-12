@@ -5,6 +5,7 @@ import org.julclang.state.dsl.v2.Syntax.Pos;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -432,10 +433,19 @@ final class IrJson {
                 var x = m(o);
                 var params = decls(x.get("params"));
                 var mods = new ArrayList<Ir.Mod>();
-                for (Object mo : l(x.get("mods"))) mods.add(new Ir.Mod(s(m(mo).get("name")), (String) m(mo).get("field")));
+                for (Object mo : l(x.get("mods"))) {
+                    for (String k : m(mo).keySet()) {
+                        if (!k.equals("name") && !k.equals("field")) throw new IllegalArgumentException("a modifier has no field \"" + k + "\"");
+                    }
+                    Object field = m(mo).get("field");
+                    if (field != null && !(field instanceof String)) throw new IllegalArgumentException("a modifier's field is a name: " + field);
+                    mods.add(new Ir.Mod(s(m(mo).get("name")), (String) field));
+                }
+                Ir.Kind kind = Ir.Kind.valueOf(s(x.get("kind")).toUpperCase());
+                modifiers(kind, s(x.get("name")), mods, state);
                 var checked = new ArrayList<Ir.Local>();
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
-                methods.add(new Ir.Method(Ir.Kind.valueOf(s(x.get("kind")).toUpperCase()), s(x.get("name")), params, mods, checked,
+                methods.add(new Ir.Method(kind, s(x.get("name")), params, mods, checked,
                         (Boolean) x.get("usesCtx"), (Boolean) x.get("pays"), block(x.get("body")),
                         x.get("result") == null ? null : type(x.get("result")), pos(x.get("at"))));
             }
@@ -451,6 +461,49 @@ final class IrJson {
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
                     Set.copyOf(timeFields), recursive, warnings);
         }
+
+        /**
+         * A method's modifiers are the checker's (D4, D10; M1 hardening, review S5 on #76), as the JavaScript reader
+         * requires: each known; {@code payable} and {@code open} without a field; {@code only f} on a Key field of the
+         * state, {@code after f}/{@code before f} on an Int field; {@code batched} plain or {@code batched only}, on an
+         * action, with no {@code only}, {@code after} or {@code before} beside it; none twice; an init takes only
+         * {@code payable}, a view none, and a destroy is never payable.
+         */
+        static void modifiers(Ir.Kind kind, String method, List<Ir.Mod> mods, Ir.RecordType state) {
+            String where = "method " + method + ": ";
+            var seen = new HashSet<String>();
+            for (Ir.Mod mod : mods) {
+                String w = mod.name(), f = mod.field();
+                if (!MODIFIERS.contains(w)) throw new IllegalArgumentException(where + "unknown modifier " + w);
+                if (!seen.add(w)) throw new IllegalArgumentException(where + "the modifier " + w + " is given twice");
+                if (kind == Ir.Kind.VIEW) throw new IllegalArgumentException(where + "a view takes no modifiers, not " + w);
+                if (kind == Ir.Kind.INIT && !w.equals("payable")) throw new IllegalArgumentException(where + "an init takes only payable, not " + w);
+                switch (w) {
+                    case "payable", "open" -> {
+                        if (f != null) throw new IllegalArgumentException(where + w + " names no field, not " + f);
+                        if (w.equals("payable") && kind == Ir.Kind.DESTROY) throw new IllegalArgumentException(where + "a destroy cannot be payable");
+                    }
+                    case "only", "after", "before" -> {
+                        Ty want = w.equals("only") ? Ty.KEY : Ty.INT;
+                        if (f == null) throw new IllegalArgumentException(where + w + " names a state field, not null");
+                        Ty t = state.fields().get(f);
+                        if (t == null) throw new IllegalArgumentException(where + w + " " + f + ": the state has no field " + f);
+                        if (!t.equals(want)) throw new IllegalArgumentException(where + w + " " + f + ": " + f + " is of type " + Ty.show(t) + ", not " + Ty.show(want));
+                    }
+                    default -> {   // batched
+                        if (f != null && !f.equals("only")) throw new IllegalArgumentException(where + "batched is plain or batched only, not " + f);
+                        if (kind != Ir.Kind.ACTION) throw new IllegalArgumentException(where + "only an action can be batched, not a " + kind.name().toLowerCase());
+                    }
+                }
+            }
+            if (seen.contains("batched")) {
+                for (String w : List.of("only", "after", "before")) {
+                    if (seen.contains(w)) throw new IllegalArgumentException(where + "a batched action cannot use " + w);
+                }
+            }
+        }
+
+        static final Set<String> MODIFIERS = Set.of("payable", "open", "only", "after", "before", "batched");
 
         Ir.RecordType record(Map<String, Object> r) {
             var fields = new LinkedHashMap<String, Ty>();

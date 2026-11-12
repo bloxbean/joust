@@ -365,6 +365,11 @@ public final class Interpreter {
         Ir.Method m = method(name);
         if (args.size() != m.params().size()) throw new IllegalArgumentException(name + " takes " + m.params().size() + " arguments");
         if ((m.kind() == Ir.Kind.INIT) != (state == null)) throw new IllegalArgumentException("an init has no input state; others do");
+        // Semantics §2: τ.signers holds the caller (review S6 on #76). A τ whose caller did not sign is the caller's
+        // error, like a missing τ: no answer, never an agreement with a validator that requires the caller's signature.
+        if (tx != null && !tx.signers().contains(tx.caller())) {
+            throw new IllegalArgumentException(name + ": the transaction's caller is not among its signers (semantics §2: the caller signs)");
+        }
         return deep(() -> {
             if (modifiers) modifiers(m, state, tx);
             return run(m, state, args, tx);
@@ -379,8 +384,9 @@ public final class Interpreter {
     private void modifiers(Ir.Method m, Rec state, Tx tx) {
         for (Ir.Mod mod : m.mods()) {
             String w = mod.name();
-            if (!w.equals("only") && !w.equals("after") && !w.equals("before")) continue;
-            if (mod.field() == null) continue;   // 'batched only' is not 'only f'
+            if (!w.equals("only") && !w.equals("after") && !w.equals("before")) continue;   // 'batched only' is batched
+            // Never skipped (review S5 on #76): the reader refuses a modifier without its field, and so does this.
+            if (mod.field() == null) throw new IllegalArgumentException(m.name() + " has '" + w + "' without a state field: not a checked program");
             if (tx == null) throw new IllegalArgumentException(m.name() + " has '" + w + " " + mod.field() + "': its call needs the transaction");
             Object v = field(state, mod.field());
             boolean holds = switch (w) {

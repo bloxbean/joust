@@ -463,7 +463,7 @@ test('a reader refuses up front what it does not know or cannot trust (review S3
   refuses((t) => t.replace('"name": "only"', '"name": "sealed"'), /unknown modifier sealed/);
   // F11: M1c's batched is known (a version-1 reader loads #67's IR), and like every modifier but open and only it
   // makes a method read the transaction.
-  refuses((t) => t.replace('"name": "only"', '"name": "batched"'), /usesCtx is false, but the method reads the transaction/);
+  refuses((t) => t.replace('{ "name": "only", "field": "owner" }', '{ "name": "batched" }'), /usesCtx is false, but the method reads the transaction/);
   // C4, S7: an initializer that reads its own binding; a local out of its scope; a fn, field or arity that is not there.
   const withSelfRef = (t) => {
     const p = JSON.parse(t);
@@ -582,4 +582,65 @@ test('the reader refuses a malformed branches list and a condition that is not a
       /branch condition is of type "Int", not Bool/, node);
   }
   assert.throws(edit((p) => { firstIf(p, 'IfValue').otherwise = null; }), Error);
+});
+
+// ------------------------------------------------------------------ M1 hardening: modifier shapes (S5) and the caller (S6)
+
+test('the reader refuses a modifier the checker would not emit: fields, kinds, duplicates (review S5 on #76)', () => {
+  const edit = (name, f) => () => {
+    const p = JSON.parse(readFileSync(new URL(`./fixtures/${name}.ir.json`, import.meta.url), 'utf8'));
+    f(p, (n) => p.methods.find((m) => m.name === n));
+    return load(JSON.stringify(p));
+  };
+  assert.doesNotThrow(edit('Pool', () => {}));
+  assert.doesNotThrow(edit('Vault', () => {}));
+  // 'only' with no field: loaded and skipped before, so Pool's withdraw was accepted unsigned.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods[0].field = null; }), /only names a state field, not null/);
+  assert.throws(edit('Pool', (p, m) => { delete m('withdraw').mods[0].field; }), /only names a state field, not null/);
+  assert.throws(edit('Vault', (p, m) => { m('withdraw').mods[1].field = null; }), /after names a state field, not null/);
+  // A field that is not there, or of the wrong type.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods[0].field = 'nobody'; }), /only nobody: the state has no field nobody/);
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods[0].field = 'donated'; }), /only donated: donated is of type "Int", not Key/);
+  assert.throws(edit('Vault', (p, m) => { m('withdraw').mods[1].field = 'owner'; }), /after owner: owner is of type "Key", not Int/);
+  assert.throws(edit('Vault', (p, m) => { m('withdraw').mods[1] = { name: 'before', field: 'owner' }; }), /before owner: owner is of type "Key", not Int/);
+  // Duplicates; an init's and a view's modifiers; a payable destroy; 'payable' and 'open' with a field.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods.push({ name: 'only', field: 'admin' }); }), /the modifier only is given twice/);
+  assert.throws(edit('Vault', (p, m) => { m('init').mods.push({ name: 'only', field: 'owner' }); }), /an init takes only payable, not only/);
+  assert.throws(edit('Vault', (p, m) => { m('total').mods.push({ name: 'open' }); }), /a view takes no modifiers, not open/);
+  assert.throws(edit('Vault', (p, m) => { m('close').mods.push({ name: 'payable' }); }), /a destroy cannot be payable/);
+  assert.throws(edit('Vault', (p, m) => { m('deposit').mods[0].field = 'owner'; }), /payable names no field, not "owner"/);
+  assert.throws(edit('Pool', (p, m) => { m('buy').mods[2].field = 'admin'; }), /open names no field, not "admin"/);
+  // batched: plain or 'batched only', on an action, never with only/after/before.
+  assert.throws(edit('Pool', (p, m) => { m('close').mods.push({ name: 'batched', field: 'only' }); }), /only an action can be batched, not a destroy/);
+  assert.throws(edit('Pool', (p, m) => { m('init').mods.push({ name: 'batched' }); }), /an init takes only payable, not batched/);
+  assert.throws(edit('Pool', (p, m) => { m('donate').mods[1].field = 'admin'; }), /batched is plain or "batched only", not "admin"/);
+  assert.throws(edit('Pool', (p, m) => { m('donate').mods.push({ name: 'only', field: 'admin' }); }), /a batched action cannot use only/);
+  assert.throws(edit('Vault', (p, m) => { m('withdraw').mods.push({ name: 'batched' }); }), /a batched action cannot use only/);
+  // The interpreter never skips one either: a program whose modifier lost its field (past the reader) is an error.
+  const pool = fixture('Pool');
+  pool.methods.get('withdraw').mods[0].field = null;
+  const admin = fromHex('0a'.repeat(28));
+  const s = new Rec('State', [admin, 0n, 0n, 1n, 1n]);
+  assert.throws(() => pool.call('withdraw', s, [0n], { ...TX, caller: admin, balance: 0n }), (e) => !(e instanceof Refused) && /without a state field/.test(e.message));
+});
+
+test('§2 the caller is among the signers: a τ whose caller did not sign is the caller\'s error (review S6 on #76)', () => {
+  const vault = fixture('Vault');
+  const owner = fromHex('0a'.repeat(28)), ann = fromHex('a1'.repeat(28));
+  const s = new Rec('State', [owner, 1500n, 10_000_000n]);
+  const tx = (o) => ({ ...TX, balance: 10_000_000n, validFrom: 1500n, validTo: 2000n, ...o });
+  // Ann calls, the owner signs and Ann does not: not an answer ('only owner' holds, but the caller never signed).
+  for (const f of ['call', 'transition']) {
+    assert.throws(() => vault[f]('withdraw', s, [1_000_000n], tx({ caller: ann, signers: [owner] })),
+      (e) => !(e instanceof Refused) && /caller is not among its signers/.test(e.message), f);
+    assert.throws(() => vault[f]('withdraw', s, [1_000_000n], tx({ caller: ann, signers: [] })), (e) => !(e instanceof Refused), f);
+  }
+  // Both sign: accepted; the caller alone (no signers given: [caller]): refused by 'only owner'.
+  assert.equal(vault.call('withdraw', s, [1_000_000n], tx({ caller: ann, signers: [ann, owner] })).value.fields[2], 9_000_000n);
+  assert.throws(() => vault.call('withdraw', s, [1_000_000n], tx({ caller: ann })), (e) => e instanceof Refused && e.refusal === 'modifier:only owner');
+  // The JSON entry (run-vectors) says the same.
+  const call = (signers) => runCall(vault, { method: 'withdraw', state: { rec: 'State', fields: [{ bytes: '0a'.repeat(28) }, { int: '1500' }, { int: '10000000' }] },
+    args: [{ int: '1000000' }], tx: { caller: 'a1'.repeat(28), received: '0', balance: '10000000', validFrom: '1500', validTo: '2000', signers } });
+  assert.ok(call(['a1'.repeat(28), '0a'.repeat(28)]).ok);
+  assert.throws(() => call(['0a'.repeat(28)]), /caller is not among its signers/);
 });

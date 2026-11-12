@@ -104,6 +104,11 @@ class Program {
     const m = this.#method(name);
     if (args.length !== m.params.length) throw new Error(`${name} takes ${m.params.length} arguments`);
     if ((m.kind === 'init') !== (state === null || state === undefined)) throw new Error('an init has no input state; others do');
+    // §2: τ.signers holds the caller (review S6 on #76). A τ whose caller did not sign is the caller's error, like a
+    // missing τ: no answer, never an agreement with a validator that requires the caller's signature.
+    if (tx && tx.signers != null && !tx.signers.some((k) => bytesEqual(k, tx.caller))) {
+      throw new Error(`${name}: the transaction's caller is not among its signers (semantics §2: the caller signs)`);
+    }
     return depthGuard(() => {
       if (modifiers) this.#modifiers(m, state, tx);
       const frame = { state, tx, payouts: [] };
@@ -128,7 +133,9 @@ class Program {
   #modifiers(m, state, tx) {
     for (const mod of m.mods) {
       const w = mod.name;
-      if ((w !== 'only' && w !== 'after' && w !== 'before') || mod.field === null) continue;
+      if (w !== 'only' && w !== 'after' && w !== 'before') continue;
+      // Never skipped (review S5 on #76): the reader refuses a modifier without its field, and so does this.
+      if (typeof mod.field !== 'string') throw new Error(`${m.name} has '${w}' without a state field: not a checked program`);
       if (!tx) throw new Error(`${m.name} has '${w} ${mod.field}': its call needs the transaction`);
       const v = this.#field(state, mod.field);
       const signers = tx.signers ?? [tx.caller];
