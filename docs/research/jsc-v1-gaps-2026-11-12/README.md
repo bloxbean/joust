@@ -1,5 +1,11 @@
 # Is `.jsc` ready to be the recommended contract language for JS developers?
 
+> **Status note (2026-11-12, with ADR-0018 r3).** This is the research as written before ADR-0018 r1, kept for the
+> record. Superseded statements: "within about 5%" (the crowdfund port was +63%; sizes are historical observations
+> with the engine of that day, not reproduced with a pinned artifact: ADR-0018 F4); "the template does not use `.jsc`"
+> (PR #53 made `.jsc` the default). `probe-results.txt` was regenerated from `probes/` against `julc-state-dsl` at
+> `0e4ad41` and has one row per probe.
+
 Research date 2026-11-12. Sources: `julc-state-dsl` (Lexer/Parser/Ast/Lowering/JscMain), ADR-0005, ADR-0015, `examples/dsl`,
 `js/create-joust`, `js/joust`, `www/src/content/docs/languages/jsc*.mdx`, JuLC docs. Probes, ports and outputs are in this directory: `probes/` (the probe files), `probe-results.txt` (their lowering
 results, from `Probe.java` run against `julc-state-dsl` at `0e4ad41`: `java -cp <dsl classes> Probe.java probes out`), and

@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r2)
+**Status:** Proposed (r3)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -29,7 +29,7 @@ files with their lowering results, five example ports and a two-counter machine,
 | F1 | v1 has the types `Int`, `Bool`, `Bytes`, `Key`, `Map<Key, Int>` (a MerkleMap, state only), and the built-in functions `min`, `max`, `has`, `isEmpty`, `after`, `before`: nothing else. No user functions, loops, lists, records, sum types, Option, `Address`, `Value`, conditional expression or byte/hash functions | `julc-state-dsl/.../Parser.java:127-144` (types), `Lowering.java:33-34`, `:750-786` (functions); ADR-0005 D2 |
 | F2 | v1 is written as mutation (`total += received`, `m[k] -= amt`) and lowered to SSA: each assignment becomes a fresh local, never reassigned (effectively final; not declared `final`), each `if` arm a static helper returning the fields it assigns | ADR-0005 D3; `Lowering.java:96-100` (`Emitter.bind`), `:475-484`, `:537-635` |
 | F3 | No v1 protocol feature after ADR-0005: no owned or keyed objects, assets, sends, mints, params, invariants, events, quorum, `@AuthorizedBy`, reads, deposits, script purposes, migration; batched actions with maps are rejected | `Parser.java:20-21`, `:107-120`; `Lowering.java:372-376`; research README §1 |
-| F4 | Of the Java examples, vault, escrow, crowdfund, token and pool port to v1 and build with the npm toolchain; bank, market, registry, treasury, oracle, fees, staking and upgrade do not. Sizes measured on 2026-11-12 (`joust build`, `.jsc` vs Java): vault 6,335 vs 6,273 B; escrow 5,955 vs 5,688; token 12,303 vs 11,718; pool 9,859 vs 9,586; crowdfund 13,008 vs 7,976 (forced onto a MerkleMap, +63%). These are single measurements, not a general bound | `docs/research/jsc-v1-gaps-2026-11-12/` (`ports/`, README §4); Java sizes from `www/.../reference/examples.mdx` |
+| F4 | Of the Java examples, vault, escrow, crowdfund, token and pool port to v1 and build with the npm toolchain; bank, market, registry, treasury, oracle, fees, staking and upgrade do not. Sizes observed on 2026-11-12 (`joust build` with the engine of that day, `.jsc` vs Java): vault 6,335 vs 6,273 B; escrow 5,955 vs 5,688; token 12,303 vs 11,718; pool 9,859 vs 9,586; crowdfund 13,008 vs 7,976 (forced onto a MerkleMap, +63%). Historical single observations, not reproduced with a pinned engine artifact and not a general bound; M1 re-measures with a recorded recipe | `docs/research/jsc-v1-gaps-2026-11-12/` (`ports/`, README §4); Java sizes from `www/.../reference/examples.mdx` |
 | F5 | `validFrom` and `validTo` are plain `Int` built-ins, so `if validFrom >= t` and `!(validFrom >= t)` are accepted, although ADR-0005 D2 allows `after`/`before` only as requirements; and the sound `require a \|\| after(t)` is rejected because only `&&` propagates the "requirement" position | `Lowering.java:33`, `:744-745`, `:792-796`; probes `18_after_or`, `19_validfrom_or`; `www/.../tutorials/escrow-crowdfund.mdx:90` |
 | F6 | On the npm path a `.jsc` error has no position (`Toolchain.java:104` passes line -1), warnings are dropped (`:102` calls `JscMain.lower`, not `lowerWithWarnings`), and processor or JuLC errors cite generated Java the user never sees; the npm build writes descriptions, scripts and clients, not the generated Java | `julc-state-toolchain/.../Toolchain.java:98-130`; `js/joust/src/build.js:48-59` |
 | F7 | No editor support in the repository; the docs highlight `.jsc` with Kotlin's grammar | `www/astro.config.mjs:24-27` |
@@ -38,7 +38,7 @@ files with their lowering results, five example ports and a two-counter machine,
 | F10 | JuLC's standard library is a set of `@OnchainLibrary` classes bundled as sources (`META-INF/plutus-sources`): `ByteStringLib` (25 public static functions), `CryptoLib` (9), `MathLib` (10), `ListsLib` (17), `MapLib` (10), `ValuesLib` (42), `AddressLib` (4), `IntervalLib` (9), `BitwiseLib` (10), `OutputLib` (14), `ContextsLib` (24), `BlsLib` (19), `NativeValueLib` (7), `TypedArrayLib` (3), `TypedMapLib` (9). Several return `long`, `PlutusData`, `Tuple2` or `Optional`; `ByteStringLib.integerToByteString` is overloaded | `julc-stdlib/src/main/java/org/julclang/stdlib/lib/*.java`; `julc-stdlib/build.gradle:18-41` |
 | F11 | JOUST's `SubsetLint` rejects fixed-width arithmetic and fixed-width locals in a `@StateContract` (the JVM wraps, on-chain integers do not), but allows a fixed-width call result passed straight to `BigInteger.valueOf`. It runs on `@StateContract` classes only, not on library bodies | `julc-state-processor/.../SubsetLint.java:27-40`, `:60-62`, `:225-243` |
 | F12 | JuLC ADR-050 (commit `d6e716e2`, in the tag) describes on-chain libraries for DSL frontends: `JavaLibraryProvider(sources, lookup, options).describe(module)` returns `LibraryExport`s with ordered **normalised** source types, without loading classes; `long`, `int` and `BigInteger` all describe as the same integer type, and overloads are reported as unsupported. Experimental and invocation-local | JuLC `adr/050-library-source-type-descriptions.md`; `JavaLibraryProvider.java:52-100`; `backend/LibraryExport.java:7-13`; `JavacLibraryTypes.java:185-194,217-224` |
-| F13 | An action may return the state, or a record with `state` and any of `payouts`, `sends`, `deposits`, `mint` (a `Value`), `accepted` (a `Value`), `events`; a destroy needs at least one of payouts/sends/mint/deposits. `@Init`/`@OwnedInit`/`@Migrate` may only add `accepted`, and may not emit events; `@Batched` actions may not take `Funds`, send, mint, deposit, emit, or use `@Quorum`/`@AuthorizedBy`/`@SignedBy`/time annotations; `accepted` needs `@Payable` and `Funds` | `julc-state-processor/.../ContractReader.java:1043-1053`, `:1130-1132`, `:1145-1158`, `:1176-1182`, `:1230-1300` |
+| F13 | An action may return the state, or a record with `state` and any of `payouts`, `sends`, `deposits`, `mint` (a `Value`), `accepted` (a `Value`), `events`; a destroy needs at least one of payouts/sends/mint/deposits. `@Init`/`@OwnedInit`/`@Migrate` may only add `accepted`, and may not emit events; `@Batched` actions may not take `Funds`, send, mint, deposit, emit, or use `@Quorum`/`@AuthorizedBy`/`@SignedBy`/time annotations. `@OwnedAction` and `@OwnedDestroy` take the same result shapes as `@Action` and `@Destroy` (destroys may be `@Payable`: market's `buy`). `accepted` is allowed only with `@Payable` and `Funds`, and **required** for every `@Payable` method with `Funds` | `julc-state-processor/.../ContractReader.java:1043-1076`, `:1130-1132`, `:1145-1158`, `:1176-1182`, `:1230-1300`; `examples/market/.../Market.java:81-82,117-120` |
 | F14 | `MerkleMap` values are `byte[]` (`put`/`get`) or `BigInteger` (`putInt`/`getInt`), keys `byte[]`; `isEmpty` means "empty before the call, with no pending writes". `SortedMaps` keeps inline `JulcMap<byte[], BigInteger>` in canonical key order (shorter key first, then bytewise) and validates nothing it did not build | `julc-state-api/.../MerkleMaps.java:15-62`; `SortedMaps.java:20-42` |
 | F15 | Elci, an Elm-syntax Cardano language by the same organisation, compiles `.elm` straight to typed PIR through JuLC's language-neutral backend (JuLC ADR-056, ADR-059) and reads Java libraries through JuLC's library descriptions; it ships a tree-sitter grammar, a diagnostic catalogue with stable categories and an ABI manifest checked against a pinned copy. It describes itself as experimental, on a JuLC `0.1.0-pre20` snapshot pin | `github.com/bloxbean/elci-lang` at `a3ec190` (2026-10-23): `README.md:6-12`, `docs/ARCHITECTURE.md`, `docs/DIAGNOSTICS.md:3-19`, `tree-sitter-elci/grammar.js`, `src/main/java/org/elci/cli/Main.java:181-185`, `gradle.properties:1-3` |
 | F16 | **Equality diverges for compound types.** On-chain, record and sum equality is `EqualsData` (content). On the JVM, a Java record's `equals` compares `byte[]` components by reference, and `JulcList.contains`/`JulcMap` compare content only for a top-level `byte[]` (`ContentEquality`). JDK 25 probe: `record Share(byte[] to, BigInteger bps)`, two equal values: `equals` false, `JulcList.of(a).contains(b)` false | JuLC `TypeMethodRegistry.java:409-411`; `julc-core/.../ContentEquality.java:18-21`; review r1 probes (security S2, design F1) |
@@ -106,8 +106,9 @@ on an existing name, `+=`, `-=`, `++` or `--` (each reported with the fix, D12).
 - **No shadowing of the contract's names.** In an `action`, `destroy`, owned method, `view` or handler, a parameter,
   `const`, lambda parameter or `match` binding may not have the name of a state field or of `state`, `params`, `funds`,
   `caller`, `received`, `balance`, `validFrom`, `validTo` (a located error with a fix: `newOwner`). In an `init` and an
-  owned `init`, which have no input state, parameters may share field names, so `return { owner: caller, goal }` reads
-  the parameter `goal`. `{ goal }` is shorthand for `{ goal: goal }`. Modifiers (`only`, `authorized`, `after`,
+  owned `init`, which have no input state, parameters may share the names of the fields being created (the state's, or
+  the owned record's), so `return { owner: caller, goal }` reads the parameter `goal`; they still may not shadow the
+  built-in names, nor the fields of a `shared` state parameter. `{ goal }` is shorthand for `{ goal: goal }`. Modifiers (`only`, `authorized`, `after`,
   `before`) name state fields or `params.f`, never a parameter (v1 rule, `Lowering.java:386-388`, kept).
 - **Object literals are typed by context**: the expected type (a method's result, a typed parameter or field, a typed
   `const x: Share = …`, a list or map element whose type is known). Where there is no context, the constructor form
@@ -126,16 +127,20 @@ or lambdas:
 
 | Method kind | `pay` | `send` | `mint`/`burn` | `deposit` | `accept` | `emit` |
 |---|---|---|---|---|---|---|
-| `init`, owned `init`, `init migrate` | – | – | – | – | yes (with `payable`, asset-aware) | – |
-| `action` | yes | yes | yes | yes | yes (with `payable`, asset-aware) | yes |
+| `init`, owned `init` | – | – | – | – | `payable` + asset-aware | – |
+| `init migrate` | – | – | – | – | – (migration is refused in asset-aware contracts, `ContractReader.java:568-576`) | – |
+| `action`, owned `action` (both may be `receives`) | yes | yes | yes | yes | `payable` + asset-aware | yes |
 | `batched` action | yes | – | – | – | – | – |
-| `destroy` | yes | yes | yes | yes | – | yes |
-| owned `action`, owned `destroy` | yes | – | – | – | – | – |
+| `destroy`, owned `destroy` | yes | yes | yes | yes | `payable` + asset-aware | yes |
 | `withdraw` handler | – | yes (its result is the sends, totalling the amount) | – | – | – | – |
 | `certify`, `vote`, `propose` handlers | – | – | – | – | – | – |
 
-The table is derived from `ContractReader` at `0e4ad41`; the implementing milestone re-derives it, and the checker
-enforces it at `.jsc` positions. A destroy must produce at least one of pay/send/mint/deposit (F13).
+**`accept` is required, not only allowed, in every `payable` method of an asset-aware contract** (ADR-0007 r2: the
+method states exactly the native assets it takes in), so the checker reports a missing `accept` there. The table is
+derived from `ContractReader` at `0e4ad41` (F13) and matches the gating ports (market's owned destroys send and
+accept; locker's send). Every allowed cell gets a positive fixture and every refused cell a negative one in M0/M1,
+whatever milestone implements the feature; the checker enforces the table at `.jsc` positions. A
+destroy must produce at least one of pay/send/mint/deposit.
 
 | `.jsc` 2 | Result component | Accumulation |
 |---|---|---|
@@ -168,15 +173,16 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 | `Hash` | `byte[]` | a 28-byte script hash or policy id, same rules |
 | `Credential` | `Credential` | `keyCred(k)`, `scriptCred(h)`; `match` on `KeyCred { key }` / `ScriptCred { hash }`. Needed by `authorized` (ADR-0009 D3) |
 | `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`) |
-| `Value` | `Value` | `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)` |
+| `Value` | `Value` | `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos |
 | `List<T>` | `JulcList<T>` | literals `[a, b]`, `[x, ...xs]`; D7 |
 | `Map<K, V>` | `JulcMap<K, V>`, canonical | an inline map in the datum. `K` is `Bytes`, `Key` or `Hash`, at most 64 bytes (F19); keys strictly ascending in canonical order, unique. `Map.empty()`. D7 |
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | a Merkle map (ADR-0002/0014), state fields only; `K` as for `Map` (F14). Rules in D7 |
 | `Option<T>` | `java.util.Optional<T>` | `Some(x)`, `None`, `o ?? d` (lazy default), `match` (F20). `Option<Option<T>>` directly nested is rejected (the JS codec would lose `Some(None)`) |
 | `type R = { f: T, … }` | a generated record | user records; accessors through a typed local inside the arm or helper that needs them (D6) |
 | `enum E { A, B { x: Int } }` | a generated sealed interface with records | user sum types; `match` (D6). Variant constructor tags are the declaration order |
-| `Instance<C>` | `ForeignInstance` | another contract's instance (policy, 32-byte id), typed by its contract `C` (D9); used by `reads`, `deposit`, params |
-| ledger types for handlers | JuLC ledger types | `TxCert`, `Voter`, `GovernanceActionId`, `Vote`, `ProposalProcedure`, `GovernanceAction`: opaque, with the projections and patterns M3 defines (D10) |
+| `Instance<C>` | `ForeignInstance` | another contract's instance (policy, 32-byte id), typed by its contract `C` (D9). Only in `params` (as ADR-0011 keeps `ForeignInstance`): the deployer fixes which script it trusts. A method parameter cannot claim to be an instance of `C`; `deposit` and `reads` take `params` instances |
+| ledger types for handlers | JuLC ledger types | `TxCert`, `Voter`, `GovernanceActionId`, `Vote`, `ProposalProcedure`, `GovernanceAction`: sealed types the handler `match`es on, their variants' fields readable as `.jsc` types (`Credential`, `Int`, `Bytes`, …); no construction |
+| `LedgerMap<K, V>` | `JulcMap<K, V>` from ledger data | read-only maps in ledger order (e.g. `GovernanceAction`'s withdrawals `LedgerMap<Credential, Int>`): `get`, `has`, `size`, `any`/`all`/`fold`; keys any comparable type; never stored, so no canonical-order rule applies |
 
 - **No generic user types** (F9). Built-in generics are instantiated with concrete types; per-instantiation helpers
   are generated into the class that needs them, and helpers shared across modules (`.jsc` libraries, D9) are generated
@@ -193,11 +199,14 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 - **Checked inputs (deep).** Every value that crosses a trust boundary is checked by a generated function before user
   code sees it: method parameters (the redeemer), `init` arguments, foreign datums (`reads`), deposit memos and claims,
   and `java:` library results (D9). The check is recursive: every nested `Key`/`Hash` is 28 bytes; every `Map` has
-  unique keys of at most 64 bytes in strictly ascending canonical order; every `Value` is canonical (sorted, no zero
-  quantities, no empty token maps); every `Address` has valid constructor tags and 28-byte credentials. A failure is a
-  located `require` failure. `Value` parameters are carried in the redeemer as data and decoded by the generated
-  decoder plus this check (CLAUDE.md: redeemer fields typed `Value` mis-decode in JuLC). The on-chain cost of the
-  checks is measured in M0 and budgeted in each milestone (J15, J16).
+  unique keys of at most 64 bytes in strictly ascending canonical order; every stored or received `Value` is canonical in its wire
+  form (encoded-key order, no zero quantities, no empty token maps), checked before conversion to `Assets` order (M2); every `Address` has valid constructor tags and 28-byte credentials. A failure is a
+  located `require` failure. From M2, `Value` parameters are carried in the redeemer as data and decoded by the
+  generated wire-to-native conversion plus this check (CLAUDE.md: redeemer fields typed `Value` mis-decode in JuLC). The on-chain cost of the
+  checks is measured in M0 and budgeted in each milestone (J15, J16). A foreign datum that fails the checks makes that
+  instance unreadable by this contract: for JOUST contracts, whose validators fix their datum's shape, this can only
+  happen if the foreign contract itself accepted a non-canonical value, and the reader's author is warned at build time
+  that strict reads mean the foreign contract's state shape decides whether `reads` calls can run.
 
 ### D6. Expressions, equality, `match`, laziness
 
@@ -229,7 +238,7 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 - **Recursion:** a function may call itself directly. JuLC also supports two-method mutual recursion (F9); `.jsc` 2
   rejects it by choice, for simplicity. **Recursion is checked after lowering:** a lambda body, branch arm or loop
   helper may not call (directly or through other helpers) a recursive function that encloses it, since its helper
-  would join a cycle of more than two methods, which JuLC refuses (`fn f(n) = … xs.fold(0, (a, x) => f(n - 1))` is a
+  would join a cycle that is not a self-cycle, which J9 rejects (JuLC refuses some such cycles outright) (`fn f(n) = … xs.fold(0, (a, x) => f(n - 1))` is a
   located error). The build report lists recursive functions (J9).
 - **Lambdas** `x => e`, `(acc, x) => e` exist only as direct arguments of the built-in collection methods. They capture
   `const`s and cannot be stored, returned or passed on.
@@ -240,7 +249,7 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
   (no list is built). Traversal is front to back; `any`/`all`/`find` stop at the first decisive element.
 - **`Map` methods:** `Map.empty()`, `m.get(k)` (`Option`), `m.has(k)`, `m.set(k, v)` and `m.delete(k)` (new canonical
   maps; `set` checks the key length), `m.size`, `m.keys`, `m.values`, `any`/`all`/`fold` over `(k, v)` in key order.
-- **`BigMap` rules:** a state field only. It may not be bound to a `const`, passed to a `fn`, captured by a lambda,
+- **`BigMap` rules:** a field of the state or of an owned record only (locker's `Safe.notes`). It may not be bound to a `const`, passed to a `fn`, captured by a lambda,
   used as a `fold` accumulator, compared, or created except `BigMap.empty()` in an `init`. A new value of a `BigMap`
   field is only its own field transformed by `set`/`delete` (`{ ...state, balances: balances.set(to, v) }`). Reads:
   `m.get(k)` (`Option`) and `m.has(k)`; on `BigMap<K, Int>` also `m[k]`, which reads 0 when absent. Values of a
@@ -250,12 +259,14 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 - **Effects per element:** `for (const x of xs) { … }` (the JavaScript form) is a statement whose body may contain
   `const`, `require`, `if`/`match` and effects (D4), and nothing that escapes it. A fold is `xs.fold`.
 - **Lowering:** each fold, `for`, `find`, `contains` and `range` method becomes a generated, typed, self-recursive static
-  helper (closure-converted). `any`/`all`/`filter`/`map` may lower to `JulcList`'s own methods with the lambda inline
-  only for element types without bytes (F16); M0 measures both lowerings and fixes the choice. No `while` and no
+  helper (closure-converted). `map` always lowers to a generated helper (JuLC's `JulcList.map`
+  returns `JulcList<PlutusData>`, not a typed list). `any`/`all`/`filter` may lower to `JulcList`'s own methods with the
+  lambda inline only for element types without bytes (F16); M0 measures both lowerings and fixes the choice. No `while` and no
   mutable accumulator, in `.jsc` or in the generated Java (J2).
-- **Off-chain depth.** Generated recursion runs on the JVM and in the Web Image engine without tail calls. Engines run
-  transitions with a stack sized for the deepest recursion the per-transaction budget allows, and the prepare service
-  and the batcher evaluate transitions under a step or depth cap (J18).
+- **Off-chain depth.** On the JVM, generated recursion is Java recursion without tail calls: the runtime runs
+  transitions on a thread whose stack fits the deepest recursion the per-transaction budget allows, and the prepare
+  service and the batcher evaluate under a step or depth cap. In the npm engine, transitions are UPLC programs (F21)
+  evaluated under a budget, which bounds them already (J18).
 
 ### D8. A standard library curated for `.jsc`, bound to JuLC's
 
@@ -264,12 +275,18 @@ import { sha2_256, blake2b_224, verifyEd25519 } from "std/crypto"
 import { concat, slice, length } from "std/bytes"
 ```
 
-- Modules: `std/bytes`, `std/crypto`, `std/math`, `std/bits`, `std/value`, `std/address`, `std/list`. A prelude needs
+- Modules: `std/bytes`, `std/crypto`, `std/math`, `std/bits`, `std/value`, `std/address`, `std/list`, `std/time`
+  (`after`, `before`, `elapsedSince`, `elapsedSinceAtMost`, `windowStart`, `windowEnd`: D11). A prelude needs
   no import: `min`, `max`, `abs`, `utf8`, `asKey`, `range`, `keyCred`, `scriptCred`, `wallet`, `script`, `Some`, `None`.
 - **Every binding row has a `.jsc` signature, a Java target, a conversion policy and a domain.** Targets are JuLC stdlib
   or JOUST API methods. Conversions: a `long` result goes straight into `BigInteger.valueOf`; an `Int` argument for a
-  `long` or `int` parameter is checked against the row's domain (e.g. byte counts and indices `0 ≤ n < 2^31`) by a
-  generated `require` on both sides before the call, so no wrapping can occur (F18's `drop`); `Tuple2` and `Optional`
+  `long` or `int` parameter never reaches the stdlib from generated code. Each such row binds to a **JOUST API
+  adapter** (a small, audited `@OnchainLibrary` class in `julc-state-api`, e.g. `BytesAdapter.slice(byte[] b,
+  BigInteger start, BigInteger length)`) that takes `BigInteger`, checks the row's domain (e.g. `0 ≤ n < 2^31`) with a
+  `require` on both sides, then narrows and calls the stdlib. The adapters are part of the trusted API, like `Require`
+  and `Assets`, outside generated code and outside J1's lint requirement (they are reviewed and differentially tested
+  instead, J7). Generated code passes only `BigInteger`s, so no wrapping can occur (F18's `drop`). M0 binds a
+  variable-index `slice` and `at` through adapters, with rejection at both domain edges, on both build paths; `Tuple2` and `Optional`
   results become records and `Option`.
 - **Crypto is bound only with ledger semantics on every runtime.** A function is bound only if every runtime provider
   (`CclCryptoProvider`, the Web Image engine's) implements it and fails exactly where the builtin fails. Ed25519 is
@@ -298,11 +315,24 @@ import { concat, slice, length } from "std/bytes"
   - **Signatures** come from scoped javac attribution of those sources (F22): exact Java types. ADR-050 descriptions
     (F12) are used only for what javac does not say (which record projections are representation-verified). A
     function is refused **at the import**, with the reason, if a parameter or result does not map to a D5 type
-    (`PlutusData`, generics, Java types without a counterpart), if it has a fixed-width parameter without a domain
-    the importer declares, or if its result is a map or `Value` (checked as an input, D5, or refused).
+    (`PlutusData`, generics, Java types without a counterpart), if it has a fixed-width parameter or result (only the
+    JOUST adapters of D8 bridge those), or if its result is a map or `Value` (checked as an input, D5, or refused).
   - **One body on both sides.** The JVM side of an imported library is compiled from the same on-chain sources, not
-    taken from the jar's classes (the npm toolchain already works from sources), and `SubsetLint`'s rules run on the
-    imported bodies transitively; a body with fixed-width arithmetic on its arguments is refused (F18).
+    taken from the jar's classes. On npm the toolchain already works from sources. On Gradle, a `java:` import's
+    library is declared in a dedicated, sources-only configuration (`joustLibrary`): the plugin compiles its
+    `META-INF/plutus-sources` into the build, and the build **fails** if a class of the same name also reaches the
+    runtime classpath from a jar (a duplicate-class check), so the jar's class can never shadow the compiled one.
+  - **Admitted only if certified.** Same source on both sides is necessary, not sufficient: JuLC accepts constructs
+    whose JVM meaning differs. An imported library's bodies, transitively, must pass: `SubsetLint`'s full rule set
+    (fixed-width arithmetic and locals, narrowing calls); **no unchecked representation casts** (`(R) (Object)
+    Builtins.constrData(…)` throws on the JVM: `Datum.java:10-12`); and a **builtin capability check**: every builtin
+    reachable from the import must be on an allow-list of builtins with identical semantics and failure conditions on
+    every runtime (D8's crypto rule applies transitively, so a wrapper around keccak-256 or an unchecked Ed25519 call is
+    refused). A library that fails is refused at the import with the reason. J3's equivalence covers certified
+    libraries only, and the build report marks every library certified.
+  - **No second variant.** A library that ships an on-chain variant different from its JVM source (as JOUST's own
+    `Require` and `Assets` do, under `src/onchain/java`) is refused, except the JOUST API itself, whose variants are
+    part of the trusted base and covered by its own differential tests.
   - Library records map to `.jsc` records with read-only fields where the projection is representation-verified;
     otherwise they are opaque.
 - **No `extern` declarations**: a `.jsc` author never writes a signature for Java code.
@@ -334,8 +364,8 @@ positions. Each row names the example whose port gates it (J11).
 | `@Receives`, deposits | `action name(…) receives`, `deposit(…)` | fees (M2) |
 | `@Owned`, `@OwnedInit/Action/Destroy`, `@Shared`, `@Into`, `@Admits` | `owned Account { … }`, `owned init/action/destroy`, a `shared` parameter, `into`, `admits` | bank, locker (M3), guild (M3: three owned types, moves, invariant) |
 | keyed objects (ADR-0016) | `owned Name keyed by key (signed, maxKeyBytes = 32, linkCooldownMs = …, linkWindowMs = …)`; `owned destroy … retire` | registry (M3) |
-| `@Withdraw`, `@Certify`, `@Votes`, `@Propose` | `withdraw(…)`, `certify(…)`, `vote(…)`, `propose(…)` with their ledger types (D5) and required authorisation | staking (M3) |
-| `@Migrate`, `@MigrateTo` | `init migrate from params.prev(old: Old.State)`, `destroy … migrates to successor` | upgrade (M3) |
+| `@Withdraw`, `@Certify`, `@Votes`, `@Propose` | `withdraw(params, amount: Int, …args): sends`; `certify(params, cert: TxCert): Bool`; `vote(params, voter: Voter, action: GovernanceActionId, vote: Vote): Bool`; `propose(params, p: ProposalProcedure): Bool` (the shapes of `ContractReader.java:1332-1355`), with their required `quorum`/`authorized` | staking (M3) |
+| `@Migrate`, `@MigrateTo` | `init migrate from params.prev(old: Old.State)`, `destroy … migrates to successor`; not with `BigMap`s, owned objects or assets, as in the processor (`ContractReader.java:568-576`) | upgrade (M3) |
 | `@Batched` with `MerkleMap` state | `batched` action on a contract with a `BigMap` | a new example (`examples/dsl` `Tally`, with a Java twin), M3 |
 
 The exact grammar for each row, including the full parameter and result types of each handler kind, is fixed in
@@ -364,14 +394,31 @@ the milestone that implements it, reviewed against the processor's rules, and do
   if any argument is), a record, list, map or `Option` field, a lambda parameter or capture, a `match` binding, or a
   **state field**: a field that any method sets to a time value is a time field, contract-wide, and reading it gives
   a time value. Immutability makes this a single forward pass with a fixed point over fields.
+- **Time values from other contracts.** A field of another contract's state (through `reads`, `import contract`,
+  `init migrate`'s old state) or of a deposit memo is a time value if the other contract can set it from its own window.
+  The checker knows this for `.jsc` contracts from their checked AST (the ABI manifest lists time fields, D12), and for
+  Java contracts from a conservative analysis of their attributed source (a state component whose value in any method
+  depends on `ctx.validFrom()` or `ctx.validTo()`); when the source is unavailable, every field is a time value.
 - **Time values never decide.** A time value may not be, or be part of, the condition of an `if`, `?:` or `require`,
   a `match` scrutinee, an operand of `&&`, `||` or `!`, a collection predicate (`any`, `all`, `filter`, `find`), or a
-  comparison whose result is used anywhere. The only way to compare with time is `after(t)` and `before(t)` (with
-  `t` not a time value).
+  comparison whose result is used anywhere. The only way to compare with time is `after(t)` and `before(t)`.
+- **Time values never reach a partial operation directly.** An operation that fails for some inputs is a hidden
+  `require` (`slice(id, 0, deadline - validFrom)` fails exactly when `validFrom > deadline`). So a time value may not be
+  an argument of: a division or remainder divisor, a domain-checked library argument (D8), `take`/`drop`/`range`
+  bounds, a `pay`/`mint`/`burn`/`accept` amount, or a `BigMap<K, Int>.set` value, **except** through the `std/time`
+  helpers, which never fail and never go negative: `elapsedSince(t)` = `max(0, validFrom - t)` (a lower bound of the
+  time elapsed), `elapsedSinceAtMost(t)` = `max(0, validTo - t)` (an upper bound), and `windowStart()` / `windowEnd()`
+  (the bounds, as time values to store). Their results stay time values.
 - **`after(t)` / `before(t)`** hold for the whole validity window. They are allowed only in **positive positions of a
   `require`**: the condition itself, or an operand of `&&` or `||` at its top, never under `!`, in an `if`/`match`
   condition, a `?:`, a `const`, a `fn` or a lambda. `require(a || after(t))` is sound: it asks that `a` hold or that the
-  whole window be after `t`.
+  whole window be after `t`. **`t` may itself be a time value** (a stored `updatedAt`, as the oracle's staleness check
+  needs: `require(before(updatedAt + maxAge))`): the predicate is sound for any `t`, because it constrains the whole
+  current window. The checker warns when `t` depends on the current call's own window, which makes the check vacuous.
+- **What remains.** Explicit decisions on time are only `after`/`before`. A time value can still change an outcome
+  implicitly where an amount it sets makes the transaction balance or not (for example a payout larger than the
+  balance); the submitter's influence there is bounded by `maxValidityMs`, and the bias warning names it. J6 states
+  exactly this scope.
 - **Time values may flow into amounts and state.** Arithmetic on time values is allowed, with a warning naming the
   bias when the result reaches an effect amount or a state field. The submitter chooses the window (§2): `validFrom`
   can be up to `maxValidityMs` early, `validTo` that much late. For accrual that pays the caller, measure elapsed time
@@ -379,7 +426,9 @@ the milestone that implements it, reviewed against the processor's rules, and do
   both patterns.
 - The checker tests include each bypass found in review: `require(validFrom < deadline)`, `const late = …; if late`,
   `fn expired(from, d)` called with `validFrom`, `deadlines.all(d => validFrom < d)`, a stored `lastSeen: validFrom`
-  later compared, and `max(0, deadline - validFrom)` reaching `pay` (a warning) (J6). The v1 front end gets the
+  later compared, a time field read from another contract and compared, `slice(id, 0, deadline - validFrom)` and other
+  partial operations, and `max(0, deadline - validFrom)` reaching `pay` (refused; `elapsedSince` accepted with a
+  warning); and the oracle's `before(updatedAt + maxAge)` accepted (J6). The v1 front end gets the
   positional part of this rule as a warning.
 
 ### D12. Diagnostics, source maps, the generated Java and the ABI
@@ -394,9 +443,13 @@ the milestone that implements it, reviewed against the processor's rules, and do
   `===` → `==`; `function` → `fn`; `class`, `this`, `null`, `undefined`, `async` → what to use instead. Each is one
   spelling; aliases are not accepted, so there is one way to write each thing.
 - `joust build --traces` on the npm CLI (Gradle has `-Pjoust.traces`).
+- **A budget report for every contract**, not only the example ports: the build evaluates each method at a state
+  saturated to `maxDatumBytes` (generated worst-case inputs) and reports execution units and script size, warning above
+  80% of the protocol maximum, so a user's destroy or refund that could stop fitting is visible before deployment (J19).
 - **Stable diagnostic codes** (`JSC0001`…) with a catalogue in the reference docs (after Elci, F15).
 - **The ABI manifest.** The build writes the encoding of every type a contract exposes (D5's rules applied: tags, field
-  order, list, map and `Option` shapes, imported types) to `<Contract>.abi.json`. The project commits it; the build
+  order, list, map and `Option` shapes, imported types), and which state fields are time fields (D11), to
+  `<Contract>.abi.json`. The project commits it; the build
   compares with the committed copy and fails on a difference unless the change is accepted explicitly
   (`joust build --accept-abi`), so a lowering change that would alter a datum or redeemer cannot strand deployed
   instances unnoticed. The manifest is checked against independently written CBOR golden vectors (J17).
@@ -478,7 +531,9 @@ contract Counter(maxDatumBytes = 128) {
 }
 ```
 
-A crowdfund with an inline map, folds and a multi-recipient payout (illustrative; not audited):
+A crowdfund with an inline map, folds and a multi-recipient payout (illustrative; not audited). Its inline map is
+bounded by `maxDatumBytes` (about 50 pledgers at 2,048 bytes; a pledge costs at least 1 ADA, refunded if the goal is
+missed); a crowdfund for many pledgers would keep pledges in a `BigMap`:
 
 ```
 jsc 2
@@ -513,6 +568,12 @@ contract Crowdfund(maxDatumBytes = 2048) {
     return { ...state, pledges: pledges.delete(caller) }
   }
 
+  // Goal missed and every pledge refunded: the owner closes it and recovers the instance's deposit.
+  destroy close() only owner after deadline {
+    require(raised(pledges) < goal && pledges.size == 0, "pledges remain")
+    pay(owner, balance)
+  }
+
   // Goal reached: the shares are paid; the rounding remainder goes to the owner.
   destroy payout() only owner after deadline {
     require(raised(pledges) >= goal, "goal not reached")
@@ -536,7 +597,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J3 | **Four ways agree** for every construct of the milestone: the reference interpreter, the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
 | J4 | Effects appear in each kind's result in source order (loops: list order), only from taken branches; mint and accepted are net sums | D4 | differential tests; on-chain fixtures |
 | J5 | Every diagnostic on either build path names a `.jsc` file, line and column, and a stable code | D12 | tests with errors from each layer (checker, processor, JuLC) |
-| J6 | No time value decides control flow or a `require`, except `after`/`before` in positive positions of a `require`; time values reaching amounts or state warn | D11 | checker tests: every bypass of D11, both directions |
+| J6 | No time value (including one read from another contract) decides control flow or a `require`, except through `after`/`before` (any `t`) in positive positions of a `require`; no time value reaches a partial operation except through the `std/time` helpers; time values reaching amounts or state warn. Implicit influence through whether a transaction balances is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
 | J7 | Every library call is type-checked against the exact Java signature; every `Int → long/int` conversion is checked against the row's domain on both sides; no unmappable signature is callable; JVM and UPLC agree on each binding's edge and malformed vectors | D8, D9 | the binding test; per-row differential vectors; import-refusal tests |
 | J8 | No `.jsc` equality or membership lowers to reference equality, Java `equals`, `JulcList.contains/find` or `JulcMap` lookup on a type containing bytes | D6, D7 | lowering tests; generators with distinct-allocation bytes nested in records, enums, options, lists and maps |
 | J9 | Only direct self-recursion, checked after lowering; the build report lists recursive functions | D7 | checker tests (nested folds and branches) |
@@ -549,6 +610,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J16 | No method that can reach `pay`, `send`, `mint`/`burn` or `deposit` lacks an audience (`only`, `authorized`, `quorum` or `open`) | D4 | checker tests per effect kind |
 | J17 | Data built from `.jsc` values (state, redeemers, `send` datums, memos) equals JuLC's encoding of the generated Java and the committed ABI manifest, and matches independent CBOR golden vectors | D5, D12 | encoder tests on the JVM, JS and on-chain; manifest comparison |
 | J18 | Off-chain evaluation of a transition is bounded (step or depth cap) in the prepare service and the batcher, and engines' stacks fit the deepest recursion the budget allows | D7 | depth tests on the JVM and Web Image |
+| J19 | Every build reports each method's execution units and script size at a saturated state, warning above 80% of the protocol maximum | D12 | build-report tests |
 
 ## 6. Alternatives considered
 
@@ -718,3 +780,25 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   - Facts (C12, S13, design F13, F15): research committed under `docs/research/jsc-v1-gaps-2026-11-12/`; F2, F4, F9,
     F10, F12, F13, F15 corrected; F16–F22 added; Q10 closed; §6 corrected about the npm engine (design F7).
   - Example (S9): refund path, positive shares, checked nested keys.
+- **r3** (2026-11-12, responds to the round-2 reviews of `a3aa50c`: security S14–S19, design F3/F4 (partly), F16, F17):
+  - Time (design F16, F3; security S14): `after`/`before` accept any `t`, time values included (the oracle's staleness
+    check), with a warning when `t` depends on the current window; time values read from other contracts are tracked
+    (ABI manifest for `.jsc`, a source analysis for Java, all fields when unknown); time values may not reach partial
+    operations except through never-failing `std/time` helpers; J6 restated with the implicit residue named.
+  - Effects (design F4): legality matrix re-derived: owned actions and destroys take the same shapes as actions and
+    destroys; `accept` is required in every payable method of an asset-aware contract; F13 corrected.
+  - Libraries (security S16; design F17): `java:` imports go through a sources-only `joustLibrary` configuration with a
+    duplicate-class check; `SubsetLint`'s full rules on imported bodies; libraries with a separate on-chain variant
+    refused; the narrowing helper (`Checked.toLong`) lives in the JOUST API.
+  - `Instance<C>` only in params (security S15); init shadowing keeps built-ins and shared fields protected (S17);
+    strict foreign reads documented (S18); budget report for every contract and crowdfund close path and size note
+    (S19, J19).
+  - Nits (design F17): `BigMap` allowed in owned records; `map` always a generated helper; probe results regenerated
+    from the committed probes at `0e4ad41` (adds 60–63, fixes 20/21).
+  - Also the Codex round-2 review of `a3aa50c` (C13–C17, partial C1/C3/C6/C9/C12): migration split out of the effect
+    matrix with fixtures for every cell (C13); `Int`→fixed-width only through audited JOUST adapters, `java:` imports
+    with fixed-width signatures refused (C14); library admission adds no unchecked representation casts and a
+    transitive builtin capability check, J3 limited to certified libraries (C15); `Value` native vs wire order, stored
+    and passed `Value`s deferred to M2's explicit conversion (C16); crowdfund close path (C17); ledger handler types,
+    `LedgerMap` and handler shapes (C6); F4 marked historical, research README annotated (C12); D7 off-chain depth
+    split between the JVM and the engine (C11 nit).

@@ -17,8 +17,11 @@ ERROR 16_match.jsc:6:30: error: expected '=', '+=' or '-=' but found 'k'
 ERROR 17_import.jsc:1:1: error: expected 'package' but found 'import'
 ERROR 18_after_or.jsc:7:45: error: after(t) holds for the whole validity window, so it is allowed only as a requirement (require after(t) ..., or with &&): not negated, in ||, or in an if
 OK    19_validfrom_or.jsc
-ERROR 20_pay_bytes.jsc:5:5: error: state field 'b' (Bytes) must be assigned in init on every path
-ERROR 21_bytes_fn.jsc:5:5: error: state field 'b' (Bytes) must be assigned in init on every path
+ERROR 20_pay_bytes.jsc:8:32: error: expected Key but this is Bytes
+ERROR 21_bytes_fn.jsc:8:30: error: unknown function 'sha2_256' (min, max, has, isEmpty, after, before)
+ERROR 21b_concat.jsc:8:30: error: expected Int but this is Bytes
+OK    21c_bytes_eq.jsc
+ERROR 21d_bytes_lt.jsc:8:34: error: expected Int but this is Bytes
 ERROR 22_bytes_len.jsc:7:31: error: expected a statement but found '.'
 ERROR 23_view_caller.jsc:6:5: error: a view runs off-chain without a transaction: it cannot read caller, received, balance or time
 ERROR 24_view_block.jsc:6:19: error: expected '=' but found '{'
@@ -46,11 +49,6 @@ ERROR 45_quorum.jsc:6:16: error: expected '{' but found 'quorum'
 ERROR 46_bool_in_require_if.jsc:7:21: error: after(t) holds for the whole validity window, so it is allowed only as a requirement (require after(t) ..., or with &&): not negated, in ||, or in an if
 ERROR 47_mint.jsc:6:34: error: expected '=', '+=' or '-=' but found '1'
 ERROR 48_multiple_contracts.jsc:7:1: error: one contract per file
-ERROR 20_pay_bytes.jsc:8:32: error: expected Key but this is Bytes
-ERROR 21_bytes_fn.jsc:8:30: error: unknown function 'sha2_256' (min, max, has, isEmpty, after, before)
-ERROR 21b_concat.jsc:8:30: error: expected Int but this is Bytes
-OK    21c_bytes_eq.jsc
-ERROR 21d_bytes_lt.jsc:8:34: error: expected Int but this is Bytes
 OK    49_destroy_nobalance.jsc  warnings=[49_destroy_nobalance.jsc:8: warning: destroy close never reads balance: it must pay out all of it (deposit included), or every call is rejected]
 ERROR 50_ada_nonliteral.jsc:8:30: error: expected a statement but found 'ada'
 ERROR 51_index_non_map.jsc:8:28: error: 'b' is not a Map state field
@@ -60,3 +58,7 @@ ERROR 54_while_kw_name.jsc:8:14: error: 'while' is reserved and cannot be a para
 ERROR 55_multi_require_comma.jsc:8:37: error: expected ')' but found ','
 OK    56_semicolon_style.jsc
 ERROR 57_double_eq_bool_int.jsc:8:34: error: cannot compare Int with Bool
+OK    60_if_validfrom.jsc
+OK    61_not_validfrom.jsc
+ERROR 62_after_and_in_or.jsc:7:47: error: after(t) holds for the whole validity window, so it is allowed only as a requirement (require after(t) ..., or with &&): not negated, in ||, or in an if
+ERROR 63_view_validto.jsc:7:5: error: a view runs off-chain without a transaction: it cannot read caller, received, balance or time
