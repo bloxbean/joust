@@ -226,10 +226,14 @@ class ProgramManifestTest {
         cases.put("a program that is not the manifest's", check(counter.manifestJson(), counter, swapped));
         cases.put("an argument layout that is not the description's", check(edit(counter,
                 m -> ((ObjectNode) m.path("programs").path("increment")).putArray("args").add("by").add("extra")), counter, counter.transitions()));
-        cases.put("a substitution off the allowlist", check(edit(counter, m -> {
-            ((ObjectNode) m.get("libraries")).put("org.julclang.state.api.Payouts", "00");
+        // A well-formed manifest whose only fault is the substitution, so the allowlist check itself must refuse it
+        // (PR #62 C7: with a malformed hash the form check refused it first, and the allowlist went untested).
+        var offList = check(edit(counter, m -> {
+            ((ObjectNode) m.get("libraries")).put("org.julclang.state.api.Payouts", "a".repeat(64));
             ((ArrayNode) m.get("substituted")).add("org.julclang.state.api.Payouts");
-        }), counter, counter.transitions()));
+        }), counter, counter.transitions());
+        assertEquals(List.of("a substituted library that may not be: org.julclang.state.api.Payouts"), offList);
+        cases.put("a substitution off the allowlist", offList);
         cases.put("Require from its on-chain source (untagged programs)", check(edit(counter,
                 m -> ((ArrayNode) m.get("substituted")).removeAll()), counter, counter.transitions()));
         cases.put("MerkleMaps without read discovery", check(edit(token, m -> {
@@ -254,6 +258,16 @@ class ProgramManifestTest {
         cases.put("another compiler target", check(edit(counter, m -> ((ObjectNode) m.get("compiler")).put("target", "plutus-v2")), counter, counter.transitions()));
         cases.put("another JuLC version", check(edit(counter, m -> m.put("julc", "0.1.0-pre20")), counter, counter.transitions()));
         cases.put("another manifest version (1: the description's bytes)", check(edit(counter, m -> m.put("manifest", 1)), counter, counter.transitions()));
+        // Strict form (PR #62 C6, S9): no coercion of the version or the booleans, no duplicates, one JSON value.
+        cases.put("the version as a string", check(edit(counter, m -> m.put("manifest", "2")), counter, counter.transitions()));
+        cases.put("a fractional version", check(edit(counter, m -> m.put("manifest", 2.9)), counter, counter.transitions()));
+        cases.put("a version that wraps to 2", check(edit(counter, m -> m.put("manifest", 4294967298L)), counter, counter.transitions()));
+        cases.put("sourceMaps as a string", check(edit(counter, m -> ((ObjectNode) m.get("compiler")).put("sourceMaps", "false")), counter, counter.transitions()));
+        cases.put("sourceMaps as a number", check(edit(counter, m -> ((ObjectNode) m.get("compiler")).put("sourceMaps", 0)), counter, counter.transitions()));
+        String good = counter.manifestJson().strip();
+        cases.put("a duplicate member (a bad script, then the good one)", check("{\"script\":\"" + "b".repeat(64) + "\"," + good.substring(1),
+                counter, counter.transitions()));
+        cases.put("a second JSON value after the manifest", check(good + " {}", counter, counter.transitions()));
         var accepted = new ArrayList<String>();
         cases.forEach((k, v) -> {
             if (v.isEmpty()) accepted.add(k);

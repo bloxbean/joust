@@ -52,7 +52,8 @@ public final class UplcTransitions implements TransitionFn {
      * {@link IllegalArgumentException} with every mismatch and the remedy.
      */
     public static UplcTransitions verified(String manifest, String description, String scriptCborHex, Map<String, String> programs) {
-        var p = programs == null ? Map.<String, String>of() : programs;
+        // One immutable copy, checked and then decoded: the caller cannot change the map in between (PR #62 S10).
+        var p = programs == null ? Map.<String, String>of() : Map.copyOf(programs);
         ProgramManifest.check(manifest, description, scriptCborHex, p);
         return new UplcTransitions(p);
     }

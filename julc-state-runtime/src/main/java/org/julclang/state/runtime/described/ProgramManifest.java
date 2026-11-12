@@ -78,6 +78,10 @@ public final class ProgramManifest {
             + " engine (JuLC " + JulcVersion.VERSION + ", manifest version " + VERSION + ").";
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    /** Reads a manifest strictly: duplicate members and anything after its one JSON value are refused (PR #62 C6). */
+    private static final ObjectMapper STRICT = new ObjectMapper(com.fasterxml.jackson.core.JsonFactory.builder()
+            .enable(com.fasterxml.jackson.core.StreamReadFeature.STRICT_DUPLICATE_DETECTION).build())
+            .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final java.util.regex.Pattern HEX64 = java.util.regex.Pattern.compile("[0-9a-f]{64}");
 
     /** Blake2b-256 of {@code bytes}, lowercase hex. */
@@ -137,14 +141,21 @@ public final class ProgramManifest {
         JsonNode m;
         JsonNode d;
         try {
-            m = JSON.readTree(manifest);
-            d = JSON.readTree(description);
+            m = STRICT.readTree(manifest);
         } catch (Exception e) {
-            out.add("the manifest or the description is not JSON");
+            out.add("the manifest is not one JSON value without duplicate members: "
+                    + String.valueOf(e.getMessage()).lines().findFirst().orElse(""));
             return out;
         }
-        if (!m.isObject() || m.path("manifest").asInt(-1) != VERSION) {
-            out.add("manifest version " + m.path("manifest") + " (this engine reads version " + VERSION + ")");
+        try {
+            d = JSON.readTree(description);
+        } catch (Exception e) {
+            out.add("the description is not JSON");
+            return out;
+        }
+        // The version is the JSON integer 2: no string, fraction or wrapped large number (as the JS runtime reads it).
+        if (m == null || !m.isObject() || !m.path("manifest").isInt() || m.path("manifest").intValue() != VERSION) {
+            out.add("manifest version " + (m == null ? "none" : m.path("manifest")) + " (this engine reads version " + VERSION + ")");
             return out;
         }
         if (!form(m, out)) return out;
@@ -157,7 +168,7 @@ public final class ProgramManifest {
         if (!o.path("target").asText().equals(TARGET)) out.add("compiler target " + o.path("target").asText() + ", not " + TARGET);
         if (!o.path("profile").asText().equals(PROFILE)) out.add("optimisation profile " + o.path("profile").asText() + ", not " + PROFILE);
         if (!o.path("costProfile").isNull()) out.add("an optimisation cost profile (" + o.path("costProfile") + "); the engine's programs have none");
-        if (o.path("sourceMaps").asBoolean(true)) out.add("source-mapped programs (diagnostic artifacts are never evaluated)");
+        if (o.path("sourceMaps").booleanValue()) out.add("source-mapped programs (diagnostic artifacts are never evaluated)");
         if (!o.path("disabledRules").isEmpty()) out.add("optimisation rules disabled: " + o.path("disabledRules"));
         if (!m.path("inputs").equals(JSON.valueToTree(INPUTS))) out.add("program inputs " + m.path("inputs") + ", not " + INPUTS);
         if (!m.path("script").asText().equals(hashHex(scriptCborHex))) out.add("the programs were compiled for another validator script");
@@ -222,7 +233,16 @@ public final class ProgramManifest {
         o.fieldNames().forEachRemaining(cn::add);
         if (!o.isObject() || !cn.equals(new TreeSet<>(COMPILER))) out.add("compiler members " + cn + ", not " + new TreeSet<>(COMPILER));
         if (!o.path("disabledRules").isArray()) out.add("compiler.disabledRules is not an array");
+        o.path("disabledRules").forEach(x -> {
+            if (!x.isTextual()) out.add("compiler.disabledRules holds a non-string");
+        });
+        for (String k : List.of("target", "profile")) {
+            if (!o.path(k).isTextual()) out.add("compiler." + k + " is not a string");
+        }
+        if (!o.path("sourceMaps").isBoolean()) out.add("compiler.sourceMaps is not a boolean");
+        if (!o.path("costProfile").isNull() && !o.path("costProfile").isTextual()) out.add("compiler.costProfile is neither null nor a string");
         if (!m.path("inputs").isArray()) out.add("inputs is not an array");
+        if (!m.path("manifest").isInt()) out.add("manifest member manifest is not an integer");
         if (!m.path("libraries").isObject()) out.add("libraries is not an object");
         m.path("libraries").fields().forEachRemaining(e -> {
             if (!e.getKey().matches("[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*")) out.add("library name " + e.getKey());

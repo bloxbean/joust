@@ -143,11 +143,13 @@ public final class Prepare {
             var programs = UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions());
             return new DescribedContract(JSON.readTree(c.description()), c.script(), substitute.apply(c, programs));
         }
-        DescribedContract d = LOADED.get(c);
+        // The cache key holds its own copy of the programs (PR #62 S10): the caller's map cannot change it.
+        var key = new Contract(c.description(), c.script(), c.transitions() == null ? null : Map.copyOf(c.transitions()), c.manifest());
+        DescribedContract d = LOADED.get(key);
         if (d == null) {
-            var programs = UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions());
-            d = new DescribedContract(JSON.readTree(c.description()), c.script(), programs);
-            var earlier = LOADED.putIfAbsent(c, d);
+            var programs = UplcTransitions.verified(key.manifest(), key.description(), key.script(), key.transitions());
+            d = new DescribedContract(JSON.readTree(key.description()), key.script(), programs);
+            var earlier = LOADED.putIfAbsent(key, d);
             if (earlier != null) d = earlier;
         }
         return d;
