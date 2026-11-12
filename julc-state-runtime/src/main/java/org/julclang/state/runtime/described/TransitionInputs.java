@@ -23,12 +23,21 @@ import java.util.Map;
  *   <li>the shared instance state, when the recipe takes it ({@code shared});</li>
  *   <li>the arguments: {@code Constr 0} with exactly the recipe's {@code transitionArgs}, each by its declared schema
  *       ({@code $params} by the params type, {@code $into} by the state, {@code $admitted} by the arriving owned type,
- *       a {@code $read} by its schema when the description carries one, {@code $amount} as an integer); {@code $funds}
- *       is built by the runtime itself and is not checked;</li>
- *   <li>the Ctx, when the call declares one.</li>
+ *       a {@code $read} by its schema when the description carries one, {@code $amount} as an integer);</li>
+ *   <li>the Ctx, when any recipe of the transition declares one (an action that is also a batched intent call keeps
+ *       its Ctx check).</li>
  * </ul>
- * An input the transition does not take is not checked (the program ignores it). No reflection: this runs in the Wasm
- * engine.
+ * It fails closed: a transition the description does not declare, a recipe without {@code transitionArgs}, an
+ * {@code $admitted} whose owned type does not resolve, and recipes of one transition that disagree (target, shared
+ * state or argument layout) are refused when the transition is run. Two inputs are exempt by design, and named here:
+ * {@code $funds}, which the runtime builds itself, and a {@code $read} without a schema (a foreign contract's state:
+ * the reading contract's description does not carry its type; the foreign validator wrote it). An input the
+ * transition does not take is not checked (the program ignores it).
+ * <p>
+ * State read from the chain (the target, the shared state, {@code $into}, {@code $admitted}) is checked as strictly as a
+ * caller's arguments: the page verifier and {@code DescribedContract.state} decode it strictly too, so a state the
+ * validator accepted but the description's types do not fit is refused on every off-chain path (ADR-0020 §12.1). No
+ * reflection: this runs in the Wasm engine.
  */
 public final class TransitionInputs implements TransitionFn {
 
@@ -41,11 +50,17 @@ public final class TransitionInputs implements TransitionFn {
 
     private static final JsonNode INTEGER = JsonNodeFactory.instance.objectNode().put("dataType", "integer");
 
-    /** One argument of the args record: its name in the recipe, and its schema (null: not checked). */
-    record Arg(String name, JsonNode schema) {}
+    /**
+     * One argument of the args record: its name in the recipe, its schema (null: exempt), and why it cannot be checked
+     * (non-null: the transition is refused).
+     */
+    record Arg(String name, JsonNode schema, String unresolved) {}
 
-    /** What a transition takes: each schema null when the transition does not take that input. */
-    record Abi(JsonNode target, String targetName, JsonNode shared, List<Arg> args, JsonNode ctx) {}
+    /**
+     * What a transition takes: each schema null when the transition does not take that input; {@code args} null when
+     * the recipe gives no layout; {@code refused}: why the transition cannot be checked (it is then refused).
+     */
+    record Abi(JsonNode target, String targetName, JsonNode shared, List<Arg> args, JsonNode ctx, String refused) {}
 
     private final String contract;
     private final SchemaCodec codec;
@@ -79,6 +94,7 @@ public final class TransitionInputs implements TransitionFn {
         // Intents have no ctx flag: their Ctx is the batch's, built by the runtime, and not checked.
         JsonNode ctx = meta.path("ctx").asBoolean() ? ref("org.julclang.state.api.Ctx") : null;
         List<Arg> args = null;
+        String refused = null;
         if (recipe.has("transitionArgs")) {
             args = new ArrayList<>();
             var byName = new HashMap<String, JsonNode>();
@@ -88,17 +104,47 @@ public final class TransitionInputs implements TransitionFn {
             for (JsonNode n : recipe.get("transitionArgs")) {
                 String a = n.asText();
                 JsonNode schema;
-                if (a.equals("$params")) schema = x.get("params");
-                else if (a.startsWith("$read:")) schema = reads.get(a.substring(6));
-                else if (a.equals("$funds")) schema = null;
-                else if (a.equals("$amount")) schema = INTEGER;
-                else if (a.equals("$into")) schema = x.get("state");
-                else if (a.equals("$admitted")) schema = owned(x, recipe.path("admits").asText());
-                else schema = byName.get(a);
-                args.add(new Arg(a, schema));
+                String unresolved = null;
+                if (a.equals("$params")) {
+                    schema = x.get("params");
+                    if (schema == null) unresolved = "$params, but the description has no params type";
+                } else if (a.startsWith("$read:")) {
+                    schema = reads.get(a.substring(6));   // exempt when absent (a foreign state)
+                } else if (a.equals("$funds")) {
+                    schema = null;   // exempt: built by the runtime
+                } else if (a.equals("$amount")) {
+                    schema = INTEGER;
+                } else if (a.equals("$into")) {
+                    schema = x.get("state");
+                } else if (a.equals("$admitted")) {
+                    schema = owned(x, recipe.path("admits").asText());
+                    if (schema == null) unresolved = "$admitted names no owned type of the description (" + recipe.path("admits").asText() + ")";
+                } else {
+                    schema = byName.get(a);
+                    if (schema == null) unresolved = "the argument " + a + " has no declared schema";
+                }
+                args.add(new Arg(a, schema, unresolved));
             }
+        } else {
+            refused = "the description gives no argument layout (transitionArgs)";
         }
-        abis.put(transition, new Abi(target, targetName, shared, args, ctx));
+        var abi = new Abi(target, targetName, shared, args, ctx, refused);
+        abis.merge(transition, abi, TransitionInputs::merge);
+    }
+
+    /**
+     * Two recipes of one transition (an action that is also a batched intent call): one check that covers both. The Ctx
+     * is checked if either declares it; a difference in target, shared state or arguments refuses the transition.
+     */
+    static Abi merge(Abi a, Abi b) {
+        String refused = a.refused() != null ? a.refused() : b.refused();
+        if (refused == null && (!java.util.Objects.equals(a.targetName(), b.targetName())
+                || !java.util.Objects.equals(a.shared(), b.shared()) || !java.util.Objects.equals(a.args(), b.args()))) {
+            refused = "the description's recipes for this transition disagree (target, shared state or arguments)";
+        }
+        JsonNode target = a.target() != null ? a.target() : b.target();
+        String targetName = a.targetName() != null ? a.targetName() : b.targetName();
+        return new Abi(target, targetName, a.shared(), a.args(), a.ctx() != null ? a.ctx() : b.ctx(), refused);
     }
 
     private JsonNode ref(String key) {
@@ -120,6 +166,10 @@ public final class TransitionInputs implements TransitionFn {
         Abi abi = abis.get(method);
         String where = contract + "." + method;
         if (abi == null) throw new Malformed(where + ": the description declares no such transition");
+        if (abi.refused() != null) throw new Malformed(where + ": its inputs cannot be checked: " + abi.refused());
+        for (Arg a : abi.args()) {
+            if (a.unresolved() != null) throw new Malformed(where + ": its inputs cannot be checked: " + a.unresolved());
+        }
         if (abi.target() != null) fits(where, "the target (" + simpleName(abi.targetName()) + ")", abi.target(), target, "target");
         if (abi.shared() != null) fits(where, "the shared instance state", abi.shared(), shared, "shared");
         if (abi.args() != null) {
