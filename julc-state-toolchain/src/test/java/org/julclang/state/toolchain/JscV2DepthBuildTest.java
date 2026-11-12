@@ -8,7 +8,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * ADR-0018 J18 (r10, review S2 on #66) end to end on the JVM path: the toolchain (front end, javac, the processor,
+ * ADR-0018 J18 (r12, review S2 on #66) end to end on the JVM path: the toolchain (front end, javac, the processor,
  * JuLC) builds each case below or refuses it with the cap's code at a {@code .jsc} position, never with a crash. The
  * Web Image runs the same cases on a default-stack Node ({@code src/test/js/depth-in-node.mjs}, in
  * {@code toolchainWasmTest}), and must give the same outcome.

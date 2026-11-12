@@ -170,7 +170,7 @@ exhaustion that still happens is reported as JSC0005, never as a crash.
 | JSC0413 | error | pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4) | Checker |
 | JSC0414 | error | 'state' is the input state of an action, destroy or view | Checker |
 | JSC0415 | error | is part of the transaction: it is not available in a view or fn (pass it as an argument) | Checker |
-| JSC0416 | error | a require message starting '#word:' is reserved for the checks the lowering generates (ADR-0018 D12): reword it | Checker |
+| JSC0430 | error | a require message starting '#word:' is reserved for the checks the lowering generates (ADR-0018 D12): reword it | Checker |
 
 ## Time (ADR-0018 D11, J6)
 

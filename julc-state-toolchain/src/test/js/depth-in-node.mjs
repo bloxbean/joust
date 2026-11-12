@@ -1,4 +1,4 @@
-// ADR-0018 J18 (r10, review S2 on #66) on the Web Image: each case builds, or is refused with the nesting cap's code at
+// ADR-0018 J18 (r12, review S2 on #66) on the Web Image: each case builds, or is refused with the nesting cap's code at
 // a .jsc position, on a Node with its default stack (about 1 MB: the worker stack `joust build` and editors run on).
 // Before the cap, joust.build failed with an opaque TypeError at 250 nested parentheses. The cases and outcomes equal
 // JscV2DepthBuildTest's on the JVM.

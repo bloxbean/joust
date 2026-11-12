@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * ADR-0018 J18 (r10, review S2 on #66): the front end never recurses deeper than a fixed bound. Nesting is capped at
+ * ADR-0018 J18 (r12, review S2 on #66): the front end never recurses deeper than a fixed bound. Nesting is capped at
  * {@value Parser#MAX_DEPTH} levels with a located, coded error (JSC0149 while parsing, JSC0150 for chains measured on
  * the tree, JSC0340 for types); chains of {@code + - * && ||} are balanced and else-if chains are one node, so they
  * lower, run in the interpreter and keep their value at any length; a fn chain carrying a time value is analysed from

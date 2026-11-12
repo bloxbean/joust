@@ -15,7 +15,7 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * ADR-0018 D12 (r10) and J20: what may reach the script. A generated check's message is a key built from ABI facts and
+ * ADR-0018 D12 (r12) and J20: what may reach the script. A generated check's message is a key built from ABI facts and
  * source order ({@code #input:spend2.1}, {@code #pay:spend3.1}); no file name, line, column or name reaches a message;
  * every generated key is unique in the script and names one construct; the source map records every message with its
  * {@code .jsc} sites, and tooling turns a trace back into {@code File.jsc:line:col}. The script hashes themselves are
@@ -120,7 +120,7 @@ class JscV2MessagesTest {
     @Test
     void anAuthorsMessage_cannotTakeAKeysForm() {
         var e = assertThrows(JscException.class, () -> JscV2.lower(SRC.replace("\"not negative\"", "\"#pay:spend1.2\""), "Pay.jsc"));
-        assertEquals("JSC0416", e.code);
+        assertEquals("JSC0430", e.code);
         assertEquals(9, e.line);
         // Any other text is the author's, verbatim, even with a '#'.
         String java = JscV2.lower(SRC.replace("\"not negative\"", "\"# of items: none\""), "Pay.jsc").java();

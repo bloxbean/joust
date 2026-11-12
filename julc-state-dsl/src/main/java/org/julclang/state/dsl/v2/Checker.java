@@ -860,7 +860,7 @@ final class Checker {
                     // A generated check's key ("#input:spend2.1", D12) names one construct: an author's message never
                     // takes that form, so tooling can tell the two apart.
                     if (GENERATED_KEY.matcher(r.message()).matches()) {
-                        throw r.pos().error("JSC0416", "a require message starting '#word:' is reserved for the checks the lowering"
+                        throw r.pos().error("JSC0430", "a require message starting '#word:' is reserved for the checks the lowering"
                                 + " generates (ADR-0018 D12): reword it");
                     }
                     out.add(new Ir.Require(requireCond(r.cond(), sc), r.message(), r.pos()));

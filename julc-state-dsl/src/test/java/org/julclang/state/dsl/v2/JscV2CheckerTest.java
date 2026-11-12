@@ -453,7 +453,7 @@ class JscV2CheckerTest {
         assertThrows(JscException.class, () -> JscV2.lower(gate, "Zähler.jsc"), "ASCII only");
         String java = JscMain.lowerWithWarnings(gate, "Gate-1_v2.jsc").java();
         assertTrue(java.contains("Require.that(false, \"nobody may claim\");"), java);
-        // ADR-0018 D12 (r10): the input check's message is its ABI key; the file name is only in comments.
+        // ADR-0018 D12 (r12): the input check's message is its ABI key; the file name is only in comments.
         assertTrue(java.contains("\"#input:spend0.0\""), java);
         assertFalse(java.contains("\"Gate-1_v2.jsc"), java);
     }

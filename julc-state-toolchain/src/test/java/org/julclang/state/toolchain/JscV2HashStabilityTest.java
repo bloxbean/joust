@@ -17,7 +17,7 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * ADR-0018 D12 (r10): what may reach the script. Every {@code .jsc} 2 example is built by the toolchain (javac, the
+ * ADR-0018 D12 (r12): what may reach the script. Every {@code .jsc} 2 example is built by the toolchain (javac, the
  * processor, JuLC) as committed and under edits that change no behaviour, and its script hash must not move: blank
  * lines at several places, re-indentation, CRLF line ends, comments added and removed, the file renamed, and every
  * local, lambda and loop variable, {@code fn}, parameter and method renamed (the ABI's names included: no name reaches

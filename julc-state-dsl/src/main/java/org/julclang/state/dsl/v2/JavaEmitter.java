@@ -184,7 +184,7 @@ final class JavaEmitter {
     // ------------------------------------------------------------------ on-chain messages (D12, J20)
 
     /**
-     * The message key of a generated check (ADR-0018 D12, r10): {@code #<kind>:<redeemer>.<n>}. The redeemer is the
+     * The message key of a generated check (ADR-0018 D12, r12): {@code #<kind>:<redeemer>.<n>}. The redeemer is the
      * method's constructor in the ABI manifest ({@code spend2}: the third spend constructor; {@code mint0}: the init's
      * {@code CreateInstance}); {@code n} is the redeemer field an input check guards ({@code input}), or the pay
      * statement's ordinal in the method, in source order from 1 ({@code pay}). Only ABI facts and source order: no file

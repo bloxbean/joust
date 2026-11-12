@@ -164,7 +164,7 @@ final class Abi {
      * an operation's fixed message) to the {@code .jsc} sites that raise it, sorted, with their kind, the method or fn
      * they are in, and for an input check the parameter. Tooling (the runtime's refusals, the language server) turns a
      * trace back into {@code File.jsc:line:col} with it; the build keeps it beside the script as the audit trail of
-     * what each on-chain message means (r10, review S5).
+     * what each on-chain message means (r12, review S5).
      */
     static String sourceMapJson(String java, String fileName, String javaPath, List<JavaEmitter.Check> checks) {
         var entries = new ArrayList<String>();
