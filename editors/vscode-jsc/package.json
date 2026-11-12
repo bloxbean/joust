@@ -12,7 +12,7 @@
     "directory": "editors/vscode-jsc"
   },
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.109.0"
   },
   "categories": ["Programming Languages"],
   "contributes": {

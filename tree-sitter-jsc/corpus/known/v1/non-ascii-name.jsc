@@ -1,0 +1,9 @@
+package known
+
+contract K {
+    state né: Int
+
+    init() {
+        né = 1
+    }
+}

@@ -45,6 +45,7 @@ module.exports = grammar({
     $._index_open,       // '[' on the line of the expression before it: m[k] (v2 Parser.postfix)
     $.bytes,             // #hex with an even number of digits (both lexers)
     $._block_open,       // '{' right after a match arm's or a lambda's '=>': always a block (v2 Parser.match, lambdaBody)
+    $._call_open,        // '(' on the line of the name before it: f(x); on a later line it starts a new expression (review r2 F2)
     $.refused,            // never produced: see _javascript_word
     $._error_sentinel,
   ],
@@ -403,7 +404,7 @@ module.exports = grammar({
 
     call_expression: $ => prec(PREC.CALL, seq(field('function', $.identifier), field('arguments', $.arguments))),
 
-    arguments: $ => seq('(', optional(sep1(choice($.lambda, $._expression), ',')), ')'),
+    arguments: $ => seq(alias($._call_open, '('), optional(sep1(choice($.lambda, $._expression), ',')), ')'),
 
     // Lambdas are only arguments of calls (v2 Parser.argument).
     lambda: $ => seq(

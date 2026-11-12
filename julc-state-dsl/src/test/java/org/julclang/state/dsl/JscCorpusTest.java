@@ -120,6 +120,66 @@ class JscCorpusTest {
                 + found.values().stream().filter("valid"::equals).count() + " valid)");
     }
 
+    // ------------------------------------------------------------------ review r2 F5: structure, and pinned differences
+
+    /** The declarations of a file, as tree-sitter-jsc/test/shared-corpus.mjs builds them from its tree. */
+    static String shape(String text) {
+        text = text.replace("@@package@@", "app");
+        if (JscV2.isV2(text)) return CorpusParse.shape(text);
+        Ast.Contract c = Parser.parse(text);
+        var out = new ArrayList<String>();
+        out.add("package " + c.pkg());
+        out.add("contract " + c.name() + "(" + String.join(",", c.options().keySet()) + ")");
+        out.add("state: " + String.join(",", c.fields().stream().map(Ast.Field::name).toList()));
+        out.add("methods: " + String.join("; ", c.methods().stream().map(m -> {
+            String mods = String.join(" ", m.modifiers().stream().map(x -> x.arg() == null ? x.name() : x.name() + " " + x.arg()).toList());
+            return m.kind().name().toLowerCase() + (m.kind() == Ast.Kind.INIT ? "" : " " + m.name()) + "("
+                    + String.join(",", m.params().stream().map(Ast.Param::name).toList()) + ")" + (mods.isEmpty() ? "" : " " + mods);
+        }).toList()));
+        return String.join(" | ", out);
+    }
+
+    /** Every file whose structure both sides compare: the valid corpus files and the repository's .jsc files. */
+    static TreeMap<String, String> shapes() throws IOException {
+        var out = new TreeMap<String, String>();
+        for (String version : List.of("v2", "v1")) {
+            for (Path f : jsc(CORPUS.resolve(version).resolve("valid"))) out.put(ROOT.relativize(f).toString(), shape(Files.readString(f)));
+        }
+        for (Path f : repositoryFiles()) out.put(ROOT.relativize(f).toString(), shape(Files.readString(f)));
+        return out;
+    }
+
+    @Test
+    void shapes_theDeclarationsEachFileParsesTo_areTheCommittedOnes() throws IOException {
+        var now = shapes();
+        Path file = CORPUS.resolve("shapes.txt");
+        var text = new StringBuilder("# Each file's declarations, as both parsers read them (JscCorpusTest, test/shared-corpus.mjs). Regenerate:\n"
+                + "# ./gradlew :julc-state-dsl:test --tests '*JscCorpusTest*' -Djsc.writeShapes=true\n");
+        now.forEach((k, v) -> text.append(k).append('\t').append(v).append('\n'));
+        if (Boolean.getBoolean("jsc.writeShapes")) Files.writeString(file, text);
+        assertEquals(text.toString(), Files.exists(file) ? Files.readString(file) : "", "corpus/shapes.txt is stale: regenerate it (-Djsc.writeShapes=true)");
+        System.out.println("[corpus] " + now.size() + " files' declarations are the committed shapes (tree-sitter checks the same)");
+    }
+
+    /**
+     * The README's known differences, pinned: each corpus/known file has the Java verdict corpus/known.txt states (and
+     * shared-corpus.mjs checks that tree-sitter's differs, as stated).
+     */
+    @Test
+    void knownDifferences_haveTheirStatedJavaVerdicts() throws IOException {
+        int n = 0;
+        for (String line : Files.readAllLines(CORPUS.resolve("known.txt"))) {
+            if (line.isBlank() || line.startsWith("#")) continue;
+            String[] kv = line.trim().split("\\s+", 4);
+            String got = verdict(CORPUS.resolve(kv[0])) == null ? "valid" : "invalid";
+            assertEquals(kv[1], got, kv[0] + ": " + kv[3]);
+            assertNotEquals(kv[1], kv[2], kv[0] + ": a known difference states two verdicts");
+            n++;
+        }
+        assertTrue(n >= 9, "known differences: " + n);
+        System.out.println("[corpus] " + n + " known differences have their stated Java verdicts");
+    }
+
     /** Prints research-verdicts.txt's body (a helper for when a research file is added). */
     public static void main(String[] args) throws IOException {
         Map<String, String> found = new TreeMap<>();

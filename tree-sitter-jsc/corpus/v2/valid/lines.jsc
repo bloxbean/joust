@@ -7,7 +7,8 @@ fn list(x: Int): List<Int> {
   [y, x]
 }
 
-// On the same line it is an index; a call's '(' on the next line still continues the expression.
+// On the same line it is an index. A '(' on the next line starts a new expression too (review r2 F2): here f is the fn
+// digits as a name (a checker error, not a parse error), and (x) the block's value.
 fn index(m: BigMap<Bytes, Int>, k: Bytes): Int = m[k]
 
 fn call(x: Int): Int {
@@ -16,6 +17,10 @@ fn call(x: Int): Int {
 }
 
 fn digits(n: Int): Int = n
+
+// On its own line, a call's '(' continues it.
+fn twice(x: Int): Int = digits(
+  x) + digits(x)
 
 // Operators continue across lines.
 fn sum(a: Int, b: Int): Int {

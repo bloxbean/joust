@@ -282,7 +282,7 @@
       "patterns": [
         {
           "name": "variable.language.jsc",
-          "match": "\\b(caller|received|balance|validFrom|validTo|state)\\b"
+          "match": "\\b(caller|received|balance|validFrom|validTo|state|params|funds)\\b"
         }
       ]
     },

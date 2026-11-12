@@ -5,12 +5,14 @@
 //               is produced and the parse has an error.
 //  _block_open: '{' where a match arm's or a lambda's body starts: there '{' always starts a block (v2 Parser.match,
 //               lambdaBody), so `x => { ...x }` is refused as by the Java parser.
+//  _call_open:  '(' on the same line as the name before it, so f(x) is a call and a '(' on the next line starts a new
+//               expression (v2 Parser.primary and postfix, review r2 F2), as '[' does.
 // Comments are skipped here too (a block comment that spans lines puts the '[' on another line, as in the lexer).
 #include "tree_sitter/parser.h"
 
 #include <stdbool.h>
 
-enum TokenType { INDEX_OPEN, BYTES, BLOCK_OPEN, NEVER, ERROR_SENTINEL };
+enum TokenType { INDEX_OPEN, BYTES, BLOCK_OPEN, CALL_OPEN, NEVER, ERROR_SENTINEL };
 
 void *tree_sitter_jsc_external_scanner_create(void) { return NULL; }
 void tree_sitter_jsc_external_scanner_destroy(void *payload) {}
@@ -23,7 +25,7 @@ static bool is_hex(int32_t c) {
 
 bool tree_sitter_jsc_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
   if (valid_symbols[ERROR_SENTINEL]) return false;
-  if (!valid_symbols[INDEX_OPEN] && !valid_symbols[BYTES] && !valid_symbols[BLOCK_OPEN]) return false;
+  if (!valid_symbols[INDEX_OPEN] && !valid_symbols[BYTES] && !valid_symbols[BLOCK_OPEN] && !valid_symbols[CALL_OPEN]) return false;
   bool same_line = true;
   for (;;) {
     int32_t c = lexer->lookahead;
@@ -58,6 +60,12 @@ bool tree_sitter_jsc_external_scanner_scan(void *payload, TSLexer *lexer, const 
     lexer->advance(lexer, false);
     lexer->mark_end(lexer);
     lexer->result_symbol = BLOCK_OPEN;
+    return true;
+  }
+  if (valid_symbols[CALL_OPEN] && same_line && lexer->lookahead == '(') {
+    lexer->advance(lexer, false);
+    lexer->mark_end(lexer);
+    lexer->result_symbol = CALL_OPEN;
     return true;
   }
   if (valid_symbols[INDEX_OPEN] && same_line && lexer->lookahead == '[') {
