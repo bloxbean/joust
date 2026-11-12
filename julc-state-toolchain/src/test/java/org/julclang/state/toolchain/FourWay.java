@@ -463,9 +463,18 @@ final class FourWay {
 
     String check(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate) throws Exception {
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
-        String want = interpreted(method, state, args, t);
+        // The Java interpreter's outcome; a Limit (its stack ran out) propagates and fails the test (semantics §2.4).
+        Interpreter.Outcome o = null;
+        Interpreter.Refused refused = null;
+        try {
+            o = interp.call(method, state, args, t);
+        } catch (Interpreter.Refused e) {
+            refused = e;
+        }
+        String want = refused != null ? "refused" : encode(method, o);
+        if (o != null) JsLeg.canonical(o.value(), what);
         assertEquals(want, jvm(method, state, args, t), "JVM vs interpreter: " + what);
-        jsCalls.add(new JsLeg.Call(method, JsLeg.call(method, state, args, t), want, what));
+        jsCalls.add(JsLeg.call(method, state, args, t, want, o, refused, what));
         if (!interp.kind(method).equals("view")) {
             assertEquals(want, transition(method, state, args, t), "transition program vs interpreter: " + what);
             Boolean accepted = validator(method, state, args, t, signer, candidate);

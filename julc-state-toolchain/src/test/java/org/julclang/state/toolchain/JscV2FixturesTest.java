@@ -118,6 +118,10 @@ class JscV2FixturesTest {
                 + " action a(k: Bytes) { require(!b.has(k), \"x\")\n return state }\n}");
         fixture("BigDeleteOnly", "contract BigDeleteOnly {\n state { b: BigMap<Bytes, Int> }\n init() { return { b: BigMap.empty() } }\n"
                 + " action a(k: Bytes) { return { b: b.delete(k) } }\n}");
+        // M1b review S1: recursion as deep as the budget allows (the chain accepts down(3000) at 20% of its CPU, 56% of its
+        // memory); both interpreters must answer it, not report a limit or refuse.
+        fixture("Deep", "fn down(n: Int): Int = n <= 0 ? 0 : 1 + down(n - 1)\ncontract Deep {\n state { count: Int }\n"
+                + " init() { return { count: 0 } }\n action go(n: Int) { return { ...state, count: down(n) } }\n}");
         // A view reads a nested record field through an accessor helper.
         fixture("Nested", "type In = { k: Key, v: Int }\ntype Out = { i: In, tag: Bytes }\ncontract Nested {\n state { o: Option<Out> }\n"
                 + " init(o: Option<Out>) { return { o } }\n"
@@ -177,15 +181,17 @@ class JscV2FixturesTest {
     }
 
     static String interpreted(Interpreter in, String method, Rec state, List<Object> args) {
-        String want;
+        Interpreter.Outcome o = null;
+        Interpreter.Refused refused = null;
         try {
-            want = encoded(in.call(method, state, args, null));
+            o = in.call(method, state, args, null);
         } catch (Interpreter.Refused e) {
-            want = "refused";
+            refused = e;
         }
+        String want = refused != null ? "refused" : encoded(o);
         String contract = NAMES.get(in);
         JS_CALLS.computeIfAbsent(contract, k -> new ArrayList<>())
-                .add(new JsLeg.Call(method, JsLeg.call(method, state, args, null), want, contract + "." + method + " " + args));
+                .add(JsLeg.call(method, state, args, null, want, o, refused, contract + "." + method + " " + args));
         return want;
     }
 
@@ -286,6 +292,23 @@ class JscV2FixturesTest {
             String want = "ok:" + result(new Rec("State", List.of(BigInteger.valueOf(n == 1 ? 1 : 0))));
             assertEquals(want, interpreted(e, "a", s, List.of(h)));
             assertEquals(want, evaluate(et.get("a"), data(s), NONE, argsOf(List.of(h)), NONE));
+        }
+    }
+
+    /**
+     * M1b review S1: recursion of depth 500 to 3,000, which the transition program (as the chain) evaluates within its
+     * budget, gets the same answer from both interpreters (the JavaScript one in the fifth-leg test below): no limit and
+     * no refusal.
+     */
+    @Test
+    void deepRecursion_thatTheBudgetAllows_isAnsweredByEveryLeg() {
+        var in = interp("Deep");
+        var t = transitions("Deep");
+        Rec s = new Rec("State", List.of(BigInteger.ZERO));
+        for (long n : List.of(500L, 1_000L, 3_000L)) {
+            String want = "ok:" + result(new Rec("State", List.of(BigInteger.valueOf(n))));
+            assertEquals(want, interpreted(in, "go", s, List.of(BigInteger.valueOf(n))), "the Java interpreter, depth " + n);
+            assertEquals(want, evaluate(t.get("go"), data(s), NONE, argsOf(List.of(BigInteger.valueOf(n))), NONE), "the transition program, depth " + n);
         }
     }
 
