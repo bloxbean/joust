@@ -1,0 +1,312 @@
+================================================================================
+Precedence: ?: below ?? below || below && below == below < below + below * below unary
+================================================================================
+
+jsc 2
+package p
+fn f(a: Int, o: Option<Int>, d: Bool): Int = d || a < 1 + 2 * -a == true && d ? (o ?? 0) : a % 2
+contract C { state { n: Int } init() { return { n: 0 } } }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (identifier)))
+      (parameter
+        (identifier)
+        (type
+          (identifier)
+          (type
+            (identifier))))
+      (parameter
+        (identifier)
+        (type
+          (identifier))))
+    (type
+      (identifier))
+    (conditional_expression
+      (binary_expression
+        (identifier)
+        (binary_expression
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (binary_expression
+                (number
+                  (integer))
+                (binary_expression
+                  (number
+                    (integer))
+                  (unary_expression
+                    (identifier)))))
+            (boolean))
+          (identifier)))
+      (parenthesized_expression
+        (binary_expression
+          (identifier)
+          (number
+            (integer))))
+      (binary_expression
+        (identifier)
+        (number
+          (integer)))))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (init_declaration
+        (parameters)
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (number
+                  (integer))))))))))
+
+================================================================================
+Postfix: fields, methods, a same-line index and a list on the next line
+================================================================================
+
+jsc 2
+package p
+fn f(m: BigMap<Bytes, Int>, k: Bytes): List<Int> {
+  const v = m.set(k, 1)[k]
+  [v, m[k]]
+}
+contract C { state { n: Int } init() { return { n: 0 } } }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (identifier)
+          (type
+            (identifier))
+          (type
+            (identifier))))
+      (parameter
+        (identifier)
+        (type
+          (identifier))))
+    (type
+      (identifier)
+      (type
+        (identifier)))
+    (block
+      (const_declaration
+        (identifier)
+        (index_expression
+          (method_call
+            (identifier)
+            (identifier)
+            (arguments
+              (identifier)
+              (number
+                (integer))))
+          (identifier)))
+      (list_literal
+        (identifier)
+        (index_expression
+          (identifier)
+          (identifier)))))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (init_declaration
+        (parameters)
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (number
+                  (integer))))))))))
+
+================================================================================
+Literals
+================================================================================
+
+jsc 2
+package p
+fn f(): Int {
+  const b = #00ff
+  const e = #
+  const s = "a \"b\" \\ c\n"
+  const r = Share { to: k, bps: 1 }
+  const l = [1, ...rest]
+  10_000 + 5 ada
+}
+contract C { state { n: Int } init() { return { n: 0 } } }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (function_declaration
+    (identifier)
+    (parameters)
+    (type
+      (identifier))
+    (block
+      (const_declaration
+        (identifier)
+        (bytes))
+      (const_declaration
+        (identifier)
+        (bytes))
+      (const_declaration
+        (identifier)
+        (string
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)
+          (string_content)
+          (escape_sequence)))
+      (const_declaration
+        (identifier)
+        (record_literal
+          (identifier)
+          (field_initializer
+            (identifier)
+            (identifier))
+          (field_initializer
+            (identifier)
+            (number
+              (integer)))))
+      (const_declaration
+        (identifier)
+        (list_literal
+          (number
+            (integer))
+          (spread_element
+            (identifier))))
+      (binary_expression
+        (number
+          (integer))
+        (number
+          (integer)))))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (init_declaration
+        (parameters)
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (number
+                  (integer))))))))))
+
+================================================================================
+Lambdas and value blocks
+================================================================================
+
+jsc 2
+package p
+fn f(xs: List<Int>): Bool = xs.any(x => { const y = x * 2; y > 3 }) && xs.all(() => true)
+contract C { state { n: Int } init() { return { n: 0 } } }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (identifier)
+          (type
+            (identifier)))))
+    (type
+      (identifier))
+    (binary_expression
+      (method_call
+        (identifier)
+        (identifier)
+        (arguments
+          (lambda
+            (identifier)
+            (block
+              (const_declaration
+                (identifier)
+                (binary_expression
+                  (identifier)
+                  (number
+                    (integer))))
+              (binary_expression
+                (identifier)
+                (number
+                  (integer)))))))
+      (method_call
+        (identifier)
+        (identifier)
+        (arguments
+          (lambda
+            (lambda_parameters)
+            (boolean))))))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (init_declaration
+        (parameters)
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (number
+                  (integer))))))))))

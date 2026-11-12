@@ -13,8 +13,24 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0002 | error | the ABI manifest … differs from the committed one at line …: a datum or redeemer encoding changed, which strands deployed instances; accept it with the acceptJscAbi task (npm: joust build --accept-abi) and commit it | JscMain, joust build |
 | JSC0003 | error | no ABI manifest … beside this file: the encoding of its datum and redeemers must be committed; create it with the acceptJscAbi task (npm: joust build --accept-abi), review it and commit it | JscMain, joust build |
 | JSC0004 | error | the ABI manifest of … disagrees with the processor's encoding: … (an internal error of the .jsc lowering: please report it) | Toolchain |
+| JSC0005 | error | internal error lowering this file: … (an internal error of the .jsc front end: please report it) | JscMain, Toolchain |
 
 ## Syntax and JavaScript habits (ADR-0018 D2, D3, D12)
+
+**The nesting cap (J18): 64 levels**, the same on every build path (Gradle, the npm CLI's Web Image engine, editors).
+- **JSC0149:** the parser counts a level for each parenthesis, block, argument, match or if arm, lambda and type
+  argument it enters, and reports the token that would open the 65th.
+- **JSC0150:** the parser then measures the tree it built, and reports the first node past the cap. Each expression
+  and block is a level. Each link of a chain the parser does not balance also counts a level: `/`, `%`, `??`,
+  `==`/`!=`, field reads, method calls, `[ ]`, and each branch of an else-if chain used as a value that stays inline.
+  Such a chain stays inline when it has no statements and either has at most 8 branches or calls its own fn.
+- **JSC0340:** a type nests at most 64 levels. Each `List`, `Option` and `Map` layer counts, and so does each type it
+  contains.
+- **Not limited:** chains of `+`/`-`, `*`, `&&` and `||` are balanced as they are read, and any other else-if chain is
+  one node, so their length is not limited.
+
+Why 64: on Node's ~1 MB main thread, the Web Image holds about 232 nesting levels (ADR-0021 r3 §1). Any stack exhaustion
+that still happens in the front end is JSC0005, never a crash.
 
 | Code | Severity | Message | Raised by |
 |---|---|---|---|
@@ -66,6 +82,8 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0146 | error | ' … ' (U+…) is not an ASCII letter (or digit): names in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike | Lexer |
 | JSC0147 | error | U+… breaks a line for some readers but not for .jsc: end lines with LF (or CRLF), so that a comment cannot hide the code after it | Lexer |
 | JSC0148 | error | control character U+…: .jsc files hold no control characters but TAB and line ends (LF or CRLF), even in comments and strings, so that the text reads as it compiles | Lexer |
+| JSC0149 | error | this nests deeper than … levels (each parenthesis, block, argument, arm, lambda and type argument opens one): name a part with const or move it into a fn (ADR-0018 J18) | Parser |
+| JSC0150 | error | this expression nests deeper than … levels: a chain of /, %, ??, ==, field reads, method calls or [ ] counts a level per link, as does each branch of an else-if chain used as a value that stays inline (at most 8 branches, or one that calls its own fn); name a part with const or move it into a fn (ADR-0018 J18) | Depth |
 
 ## Names and declarations (ADR-0018 D3, J10)
 
@@ -81,7 +99,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0208 | error | ' … ' is a built-in name, so it cannot be a state field: choose another name | Checker |
 | JSC0209 | error | declares … twice | Checker |
 | JSC0210 | error | names cannot contain '__' (reserved for generated code): | Checker |
-| JSC0211 | error | ' … ' is reserved and cannot be a … name | Checker |
+| JSC0211 | error | ' … ' is reserved and cannot be a … name (a method modifier word, M1c: payable, open, only, after, before, batched, as a field or binding) | Checker |
 | JSC0212 | error | ' … ' is already declared; names are never redeclared or shadowed | Checker |
 | JSC0213 | error | ' … ' would hide the state field or built-in of the same name; choose another name (e.g. new … ) | Checker |
 | JSC0214 | error | ' … ' is a built-in name | Checker |
@@ -93,6 +111,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0220 | error | ' … ' is a name the generated validator or client uses for its own types; choose another … name | Checker |
 | JSC0221 | error | the fn … has the name of a declared type or variant; rename one | Checker |
 | JSC0222 | error | ' … ' would hide the type / enum / variant / fn …; a name is bound once and never replaces a declaration | Checker |
+| JSC0223 | error | the batched action … has an intent form named …Intent (the client's method) and …Intent (the validator's record); a method or type of that name would clash with it: rename one of them | Checker |
 
 ## Types and values (ADR-0018 D5, D6)
 
@@ -137,6 +156,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0337 | error | None ?? d is always d: write d | Checker |
 | JSC0338 | error | ?? needs an Option on its left, not | Checker |
 | JSC0339 | error | expected … but this is | Checker |
+| JSC0340 | error | the type … this type … nests more than … levels deep, counting each List, Option and Map layer and each type it contains (ADR-0018 J18): flatten it | Checker |
 
 ## Methods, effects and audiences (ADR-0018 D4, D10)
 
@@ -157,6 +177,12 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0413 | error | pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4) | Checker |
 | JSC0414 | error | 'state' is the input state of an action, destroy or view | Checker |
 | JSC0415 | error | is part of the transaction: it is not available in a view or fn (pass it as an argument) | Checker |
+| JSC0416 | error | the modifier ' … ' is given twice | Checker |
+| JSC0417 | error | a batched action cannot use ' … ': the batcher, not the caller, signs a batch: check the caller in the body with require(caller == …, …) / the batcher sets a batch's window: check time in the body with require(after(…), …) or require(before(…), …) (ADR-0004 D1). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
+| JSC0418 | error | only an action can be batched (ADR-0004 D1) | Checker |
+| JSC0419 | error | a contract with BigMap state cannot have batched actions: each step of a batch would need its own map proofs (ADR-0004 D1, ADR-0018 D7) | Checker |
+| JSC0420 | error | … can pay out, so it must say who may call it; a batched action cannot use 'only' (any intent's owner is its caller), so write 'open' and check the caller in the body (ADR-0018 D4). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
+| JSC0430 | error | a require message may not contain '#word:', the form of the checks the lowering generates (ADR-0018 D12): reword it | Checker |
 
 ## Time (ADR-0018 D11, J6)
 
@@ -185,7 +211,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 
 | Code | Severity | Message | Raised by |
 |---|---|---|---|
-| JSC0601 | error | … calls itself from inside a lambda, an if or match arm, a value block or a ?? default: the generated helper would join a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out | Checker |
+| JSC0601 | error | … calls itself from inside a lambda, an if or match arm, a value block or a ?? default: the generated helper would join a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out (an else-if chain with statements in an arm lowers each branch, its condition included, to a helper) | Checker |
 | JSC0602 | error | is part of a mutual recursion: only direct self-recursion is allowed (ADR-0018 D7) | Checker |
 
 ## Imports and the standard library (ADR-0018 D8, D9, J7)
@@ -298,6 +324,23 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC1027 | error | ...rest needs a List | Checker |
 | JSC1028 | error | the type of this list is unknown here: give it one (const xs: List<Int> = []) | Checker |
 
+## Migration from .jsc v1 (ADR-0018 D16)
+
+`joust migrate` (Gradle: `migrateJsc`; `JscMain --migrate`) refuses, at the v1 position, what it cannot translate.
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1101 | error | this file is already .jsc 2: there is nothing to migrate | Migrate |
+| JSC1102 | error | this is not a valid .jsc v1 file, so it cannot be migrated: … | Migrate |
+| JSC1103 | error | 'batched' actions are not translated by migrate (.jsc 2 has them since M1c, ADR-0018 D10, with rules of its own: JSC0417, JSC0420), so this contract cannot be migrated; write its .jsc 2 by hand, keep it in .jsc v1, or write it in Java | Migrate |
+| JSC1104 | error | .jsc 2 refuses this code, so migrate cannot translate it (rewrite it by hand): [JSC…] … | Migrate |
+| JSC1105 | error | this if writes … at a key computed inside one of its arms; .jsc 2 changes a BigMap only in the next state, so migrate needs the key before the if: rewrite it by hand | Migrate |
+| JSC1106 | error | this value can fail (a division) but nothing reads it, so v1 computes it and .jsc 2 would not: rewrite it by hand (drop it, or check it with require) | Migrate |
+| JSC1107 | error | … exists already: migrate --in-place keeps the v1 text there and never overwrites it; move it away first | JscMain, joust migrate |
+| JSC1108 | error | the output directory … is the source directory or inside it (or the output … would replace the source): without --in-place, migrate writes outside the sources and never changes them | JscMain, joust migrate |
+| JSC1109 | error | this file is a symbolic link / has … hard links / the directory … is a symbolic link / its real path is not under the source directory: migrate --in-place replaces only plain files of the sources, never through a link | JscMain, joust migrate |
+| JSC1110 | error | ' … ' is a word of .jsc 2, so the contract / state field / method … cannot keep its name, and its name is part of the client and the ABI: rename it in the v1 file first, then migrate | Migrate |
+
 ## Warnings (ADR-0018 D11, D12)
 
 | Code | Severity | Message | Raised by |
@@ -307,3 +350,5 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC9003 | warning | stores a value of the validity window in … : whoever submits the transaction … chooses the window, so validFrom can be up to maxValidityMs early and validTo that much late … (ADR-0018 D11) | Checker |
 | JSC9004 | warning | stores a value derived from a stored time in … : that time came from an earlier … call's validity window, so its bias (up to maxValidityMs) carries into … (ADR-0018 D11) | Checker |
 | JSC9005 | warning | a time value sets this payout: whoever submits the transaction chooses the … window, so validFrom can be up to maxValidityMs early and validTo that much late, and the … amount moves with it (ADR-0018 D11) | Checker |
+| JSC9006 | warning | this file is .jsc v1, which is deprecated (ADR-0018 D16): it still builds, unchanged, but new code is .jsc 2; run `joust migrate` (Gradle: the migrateJsc task) to translate it, as a new script | JscMain (every v1 file, both paths) |
+| JSC9007 | warning | this line starts with '-', which continues the expression on the line above (a subtraction): newlines do not end statements in .jsc; if that is meant, join the lines or put the expression in parentheses; if the line is meant to stand alone, end the line above with ';' | Checker |

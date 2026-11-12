@@ -131,8 +131,14 @@ final class Ir {
 
     record Pay(Expr to, Expr amount, Pos pos) implements Stmt {}
 
-    /** An if statement; {@code otherwise} may be null. {@code pays}: a pay is reachable in an arm. */
-    record If(Expr cond, Block then, Block otherwise, boolean pays, Pos pos) implements Stmt {}
+    /** One test of an if or else-if chain: its condition and its arm. */
+    record Branch(Expr cond, Block then, Pos pos) {}
+
+    /**
+     * An if statement with its else-if chain flattened (J18): the first branch whose condition holds runs, else
+     * {@code otherwise} (may be null). {@code pays}: a pay is reachable in an arm.
+     */
+    record If(List<Branch> branches, Block otherwise, boolean pays, Pos pos) implements Stmt {}
 
     record For(Local var, Expr list, Block body, boolean pays, Pos pos) implements Stmt {}
 
@@ -226,8 +232,11 @@ final class Ir {
     /** A block used as a value: its statements are {@code const} and {@code require} only. */
     record BlockValue(Block block, Ty type, int taint, Pos pos) implements Expr {}
 
-    /** An if used as a value whose arms have statements (an if without statements is a {@link Cond}). */
-    record IfValue(Expr cond, Block then, Block otherwise, Ty type, int taint, Pos pos) implements Expr {}
+    /**
+     * An if used as a value whose arms have statements, or an else-if chain (a single if/else without statements is a
+     * {@link Cond}): the first branch whose condition holds gives the value, else {@code otherwise}.
+     */
+    record IfValue(List<Branch> branches, Block otherwise, Ty type, int taint, Pos pos) implements Expr {}
 
     /** A list property or method without arguments: {@code length}, {@code isEmpty}, {@code head}, {@code sum}, {@code reverse}. */
     record ListProp(String op, Expr list, Ty type, int taint, Pos pos) implements Expr {}

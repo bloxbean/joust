@@ -87,17 +87,13 @@ ends and everything it holds goes to the winner.
 
    <Aside type="note">
 
-   `.jsc` allows `after(t)` and `before(t)` only as requirements, not inside `||`, so this refund must be written in
-   Java. A simpler escrow (buyer releases; refunds only after the deadline) fits in `.jsc`:
+   `.jsc` 2 allows `after(t)` and `before(t)` at the top of a `require`, alone or under `&&` or `||`, so this refund
+   fits in `.jsc` too (`caller == seller` compares bytes by value):
 
    ```jsc
-   destroy release() only buyer {
-       pay balance to seller
-   }
-
    destroy refund() open {
-       require after(deadline) "refunds open at the deadline"
-       pay balance to buyer
+     require(caller == seller || caller == arbiter || after(deadline), "only the seller or the arbiter can refund before the deadline")
+     pay(buyer, balance)
    }
    ```
 

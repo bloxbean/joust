@@ -26,7 +26,9 @@ for (const template of TEMPLATES) {
     test(`template ${template}, lang ${lang}`, () => {
       const dir = join(tmp(), 'My App');
       const files = scaffold({ dir, template, lang });
-      assert.deepEqual(files, [...FILES[template], `contracts/app/Counter.${lang}`].sort());
+      // ADR-0018 D14: the .jsc 2 contract ships its ABI manifest.
+      const contract = lang === 'jsc' ? ['contracts/app/Counter.jsc', 'contracts/app/Counter.abi.json'] : ['contracts/app/Counter.java'];
+      assert.deepEqual(files, [...FILES[template], ...contract].sort());
 
       const pkg = json(dir, 'package.json');
       assert.equal(pkg.name, 'my-app');
@@ -49,6 +51,11 @@ for (const template of TEMPLATES) {
       assert.doesNotMatch(readme, /\{\{/);
       assert.ok(readme.includes(`contracts/app/Counter.${lang}`));
       assert.ok(readme.includes(lang === 'jsc' ? "JOUST's .jsc language" : 'written in Java'));
+      assert.equal(readme.includes('joust build --accept-abi'), lang === 'jsc');
+      // Review r2 F4: a language preview, said so, with what it means for a deployment.
+      assert.equal(readme.includes('a language preview'), lang === 'jsc');
+      assert.equal(readme.includes("don't\ndeploy it to hold value") || readme.includes("don't deploy it to hold value"), lang === 'jsc');
+      if (lang === 'jsc') assert.match(readFileSync(join(dir, 'contracts/app/Counter.jsc'), 'utf8'), /^jsc 2\npackage app\n/);
       assert.ok(!existsSync(join(dir, 'gitignore')));
     });
   }
@@ -75,6 +82,7 @@ test('the command line', () => {
   let r = run();
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /joust-app: contracts\/app\/Counter\.jsc and index\.js/);
+  assert.match(r.stdout, /Note: \.jsc 2 is a language preview: the same file may compile to a different script hash/);
   assert.ok(existsSync(join(cwd, 'joust-app', 'index.js')));
 
   r = run('web-java', '--template', 'web', '--lang', 'java');

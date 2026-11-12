@@ -1,0 +1,6 @@
+jsc 2
+package corpus
+
+fn f(): Int { const g = x => x
+ 1 }
+contract C { state { n: Int } init() { return { n: 0 } } }

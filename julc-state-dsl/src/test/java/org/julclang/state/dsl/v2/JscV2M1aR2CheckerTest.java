@@ -35,7 +35,7 @@ class JscV2M1aR2CheckerTest {
         badSource(file("enum A { X }\nfn X(): Int = 1"), "has the name of a declared type or variant", 4, 1);
         badSource(file("type R = { a: Int }\nfn R(): Int = 1"), "has the name of a declared type or variant", 4, 1);
         badSource(file("enum A { X }").replace("init() {", "init(X: Int) {"), "would hide the variant X", 6, 8);
-        ok("action reopen() only owner { const open: Phase = phase\n require(open == Open, \"only while open\")\n return state }");
+        ok("action reopen() only owner { const now: Phase = phase\n require(now == Open, \"only while open\")\n return state }");
     }
 
     /** Round r3, security S7: a state field is read by its bare name, so it never takes a declared name either. */

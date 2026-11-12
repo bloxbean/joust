@@ -1,0 +1,573 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "df6fd0e61fec4e624ef5ddfb638c6137195e6044d9c1bf147c29a1baaae539b2",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Crowdfund",
+  "source": "Crowdfund.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "1024" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "creator", "type": "Key" },
+      { "name": "goal", "type": "Int" },
+      { "name": "deadline", "type": "Int" },
+      { "name": "minContribution", "type": "Int" },
+      { "name": "raised", "type": "Int" },
+      { "name": "backers", "type": { "map": ["Key", "Int"] } }
+    ],
+    "at": [8, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [
+        { "id": 1, "name": "goal", "type": "Int", "taint": 0, "at": [11, 8] },
+        { "id": 2, "name": "deadline", "type": "Int", "taint": 0, "at": [11, 19] },
+        { "id": 3, "name": "minContribution", "type": "Int", "taint": 0, "at": [11, 34] }
+      ],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [12, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [12, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [12, 13]
+            },
+            "message": "goal must be positive",
+            "at": [12, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [13, 13] },
+              "right": { "node": "Lit", "value": "2000000", "type": "Int", "taint": 0, "at": [13, 32] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [13, 13]
+            },
+            "message": "minimum contribution is at least 2 ADA",
+            "at": [13, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": false,
+              "threshold": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [14, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [14, 13]
+            },
+            "message": "deadline must be in the future",
+            "at": [14, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [15, 23] },
+            { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [15, 31] },
+            { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [15, 37] },
+            { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [15, 47] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 72] },
+            { "node": "MapEmpty", "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [15, 84] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [15, 12]
+        },
+        "at": [11, 56]
+      },
+      "at": [11, 3]
+    },
+    {
+      "kind": "action",
+      "name": "contribute",
+      "params": [],
+      "mods": [{ "name": "payable" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": false,
+              "threshold": { "node": "StateField", "field": "deadline", "type": "Int", "taint": 0, "at": [19, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [19, 13]
+            },
+            "message": "the campaign has ended",
+            "at": [19, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [20, 13] },
+              "right": { "node": "StateField", "field": "minContribution", "type": "Int", "taint": 0, "at": [20, 25] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [20, 13]
+            },
+            "message": "below the minimum contribution",
+            "at": [20, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 4, "name": "prior", "type": "Int", "taint": 0, "at": [21, 5] },
+            "value": {
+              "node": "Coalesce",
+              "option": {
+                "node": "MapOp",
+                "op": "get",
+                "map": {
+                  "node": "StateField",
+                  "field": "backers",
+                  "type": { "map": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [21, 19]
+                },
+                "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [21, 31] }],
+                "type": { "option": "Int" },
+                "taint": 0,
+                "at": [21, 19]
+              },
+              "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [21, 42] },
+              "type": "Int",
+              "taint": 0,
+              "at": [21, 19]
+            },
+            "at": [21, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [22, 17] },
+              "record": "State",
+              "field": "creator",
+              "type": "Key",
+              "taint": 0,
+              "at": [22, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [22, 17] },
+              "record": "State",
+              "field": "goal",
+              "type": "Int",
+              "taint": 0,
+              "at": [22, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [22, 17] },
+              "record": "State",
+              "field": "deadline",
+              "type": "Int",
+              "taint": 0,
+              "at": [22, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [22, 17] },
+              "record": "State",
+              "field": "minContribution",
+              "type": "Int",
+              "taint": 0,
+              "at": [22, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "raised", "type": "Int", "taint": 0, "at": [22, 32] },
+              "right": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [22, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [22, 32]
+            },
+            {
+              "node": "MapOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "backers",
+                "type": { "map": ["Key", "Int"] },
+                "taint": 0,
+                "at": [22, 60]
+              },
+              "args": [
+                { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [22, 72] },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [22, 80] },
+                  "right": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [22, 88] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [22, 80]
+                }
+              ],
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [22, 60]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [22, 12]
+        },
+        "at": [18, 31]
+      },
+      "at": [18, 3]
+    },
+    {
+      "kind": "action",
+      "name": "refund",
+      "params": [],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": true,
+              "threshold": { "node": "StateField", "field": "deadline", "type": "Int", "taint": 0, "at": [27, 19] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [27, 13]
+            },
+            "message": "the campaign is still running",
+            "at": [27, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": "<",
+              "left": { "node": "StateField", "field": "raised", "type": "Int", "taint": 0, "at": [28, 13] },
+              "right": { "node": "StateField", "field": "goal", "type": "Int", "taint": 0, "at": [28, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [28, 13]
+            },
+            "message": "the goal was reached: no refunds",
+            "at": [28, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "MapOp",
+              "op": "has",
+              "map": {
+                "node": "StateField",
+                "field": "backers",
+                "type": { "map": ["Key", "Int"] },
+                "taint": 0,
+                "at": [29, 13]
+              },
+              "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [29, 25] }],
+              "type": "Bool",
+              "taint": 0,
+              "at": [29, 13]
+            },
+            "message": "nothing to refund",
+            "at": [29, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 5, "name": "amount", "type": "Int", "taint": 0, "at": [30, 5] },
+            "value": {
+              "node": "Coalesce",
+              "option": {
+                "node": "MapOp",
+                "op": "get",
+                "map": {
+                  "node": "StateField",
+                  "field": "backers",
+                  "type": { "map": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [30, 20]
+                },
+                "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [30, 32] }],
+                "type": { "option": "Int" },
+                "taint": 0,
+                "at": [30, 20]
+              },
+              "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [30, 43] },
+              "type": "Int",
+              "taint": 0,
+              "at": [30, 20]
+            },
+            "at": [30, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [31, 9] },
+            "amount": { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [31, 17] },
+            "at": [31, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [32, 17] },
+              "record": "State",
+              "field": "creator",
+              "type": "Key",
+              "taint": 0,
+              "at": [32, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [32, 17] },
+              "record": "State",
+              "field": "goal",
+              "type": "Int",
+              "taint": 0,
+              "at": [32, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [32, 17] },
+              "record": "State",
+              "field": "deadline",
+              "type": "Int",
+              "taint": 0,
+              "at": [32, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [32, 17] },
+              "record": "State",
+              "field": "minContribution",
+              "type": "Int",
+              "taint": 0,
+              "at": [32, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "-",
+              "left": { "node": "StateField", "field": "raised", "type": "Int", "taint": 0, "at": [32, 32] },
+              "right": { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [32, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [32, 32]
+            },
+            {
+              "node": "MapOp",
+              "op": "delete",
+              "map": {
+                "node": "StateField",
+                "field": "backers",
+                "type": { "map": ["Key", "Int"] },
+                "taint": 0,
+                "at": [32, 58]
+              },
+              "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [32, 73] }],
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [32, 58]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [32, 12]
+        },
+        "at": [26, 24]
+      },
+      "at": [26, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "claim",
+      "params": [],
+      "mods": [{ "name": "only", "field": "creator" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": true,
+              "threshold": { "node": "StateField", "field": "deadline", "type": "Int", "taint": 0, "at": [37, 19] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [37, 13]
+            },
+            "message": "the campaign is still running",
+            "at": [37, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "StateField", "field": "raised", "type": "Int", "taint": 0, "at": [38, 13] },
+              "right": { "node": "StateField", "field": "goal", "type": "Int", "taint": 0, "at": [38, 23] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [38, 13]
+            },
+            "message": "the goal was not reached",
+            "at": [38, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "creator", "type": "Key", "taint": 0, "at": [39, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [39, 18] },
+            "at": [39, 5]
+          }
+        ],
+        "result": null,
+        "at": [36, 32]
+      },
+      "at": [36, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "creator" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": true,
+              "threshold": { "node": "StateField", "field": "deadline", "type": "Int", "taint": 0, "at": [44, 19] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [44, 13]
+            },
+            "message": "the campaign is still running",
+            "at": [44, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "MapOp",
+              "op": "isEmpty",
+              "map": {
+                "node": "StateField",
+                "field": "backers",
+                "type": { "map": ["Key", "Int"] },
+                "taint": 0,
+                "at": [45, 13]
+              },
+              "args": [],
+              "type": "Bool",
+              "taint": 0,
+              "at": [45, 13]
+            },
+            "message": "backers still have funds in the campaign",
+            "at": [45, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "creator", "type": "Key", "taint": 0, "at": [46, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [46, 18] },
+            "at": [46, 5]
+          }
+        ],
+        "result": null,
+        "at": [43, 32]
+      },
+      "at": [43, 3]
+    },
+    {
+      "kind": "view",
+      "name": "raised",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateField", "field": "raised", "type": "Int", "taint": 0, "at": [49, 24] },
+        "at": [49, 24]
+      },
+      "at": [49, 3]
+    },
+    {
+      "kind": "view",
+      "name": "contributionOf",
+      "params": [{ "id": 6, "name": "backer", "type": "Key", "taint": 0, "at": [50, 23] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Coalesce",
+          "option": {
+            "node": "MapOp",
+            "op": "get",
+            "map": { "node": "StateField", "field": "backers", "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [50, 43] },
+            "args": [{ "node": "LocalRef", "local": 6, "type": "Key", "taint": 0, "at": [50, 55] }],
+            "type": { "option": "Int" },
+            "taint": 0,
+            "at": [50, 43]
+          },
+          "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [50, 66] },
+          "type": "Int",
+          "taint": 0,
+          "at": [50, 43]
+        },
+        "at": [50, 43]
+      },
+      "at": [50, 3]
+    }
+  ],
+  "warnings": []
+}

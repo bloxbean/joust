@@ -15,7 +15,6 @@ import com.bloxbean.cardano.client.transaction.spec.Asset;
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
 import com.bloxbean.cardano.client.transaction.spec.Value;
 import com.bloxbean.cardano.client.util.HexUtil;
-import org.julclang.clientlib.JulcScriptLoader;
 import org.julclang.clientlib.PlutusDataAdapter;
 import org.julclang.ledger.TxId;
 import org.julclang.ledger.TxOutRef;
@@ -181,8 +180,9 @@ public final class StateContractHandle<S> {
                         .toProgram(spec.scriptCborHex()).applyParams(params instanceof org.julclang.core.PlutusData d ? d
                                 : PlutusDataAdapter.fromClientLib(PlutusDataAdapter.convert(params))))
                 : spec.scriptCborHex() != null ? PlutusV3Script.builder().cborHex(spec.scriptCborHex()).build()
-                : params == null ? JulcScriptLoader.load(spec.validatorClass())
-                : JulcScriptLoader.load(spec.validatorClass(), PlutusDataAdapter.convert(params));
+                // The script beside the validator class, never another validator's of the same simple name (M1c S1).
+                : params == null ? ValidatorScripts.load(spec.validatorClass())
+                : ValidatorScripts.load(spec.validatorClass(), PlutusDataAdapter.convert(params));
         int size = HexUtil.decodeHexString(s.getCborHex()).length;
         if (size > 15_000) {
             throw new JoustException(spec.name() + ": the applied script is " + size + " bytes; a reference script must fit a"
@@ -338,7 +338,8 @@ public final class StateContractHandle<S> {
                 : new Ctx(callerPkh, d.received(), BigInteger.ZERO, window.fromMs(), window.toMs());
         if (d.assetRun() != null) return deployAssets(d, ref, seed, instance, ctx, window, callerPkh);
         MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapProver()) : null;
-        S made = maps ? merkle.run(() -> d.run().apply(ctx)) : d.run().apply(ctx);   // the developer's @Init, on the JVM
+        // The developer's @Init, on the JVM; a .jsc 2 refusal names its .jsc sites (D12).
+        S made = JscMessages.run(spec, () -> maps ? merkle.run(() -> d.run().apply(ctx)) : d.run().apply(ctx));
         var seedOwner = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())),
                 BigInteger.valueOf(seed.getOutputIndex()));
         java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();

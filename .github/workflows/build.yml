@@ -94,10 +94,30 @@ jobs:
         working-directory: js/create-joust
         run: npm test
 
+      # ADR-0018 D13: the tree-sitter grammar (its own tests, then the shared parse corpus against the hand-written
+      # parsers' verdicts and declarations, which JscCorpusTest checks on the Java side), and the TextMate grammar.
+      - name: Test the tree-sitter grammar and the shared parse corpus
+        working-directory: tree-sitter-jsc
+        run: |
+          npm ci
+          npm test
+
+      - name: Test the TextMate grammar
+        working-directory: editors/vscode-jsc
+        run: |
+          npm ci
+          npm test
+
       # The npm joust's command line (ADR-0017 D5, D9): Node built-ins only, no packages installed.
       - name: Test the npm joust command line
         working-directory: js/joust
         run: node --test test/cli.test.js
+
+      # The .jsc 2 reference interpreter (ADR-0018 D15): its crypto and the semantics' hand-written vectors. No packages
+      # installed. The five-way differential tests in ./gradlew build run it too.
+      - name: Test the .jsc reference interpreter
+        working-directory: js/jsc-interpreter
+        run: npm test
 
       # ADR-0017 D7, D10: the Homebrew formula and JOUST's version order; the release flags' combinations.
       - name: Test the release scripts

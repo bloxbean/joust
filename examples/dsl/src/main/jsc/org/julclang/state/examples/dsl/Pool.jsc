@@ -1,0 +1,41 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/pool in .jsc 2 (ADR-0018 M1c, J11; ADR-0004): a community pool. Anyone donates, and anyone buys a ticket
+// whose price rises with every ticket sold. Both are batched: each runs as an intent the batcher applies, so buyers
+// never contend for the pool UTxO. buy runs only as an intent (batched only), so nobody can invalidate pending batches
+// with a direct buy; the buyer bounds the price with maxPrice and gets the change back.
+contract Pool(maxDatumBytes = 192) {
+  state { admin: Key, donated: Int, sold: Int, price: Int, step: Int }
+
+  init(price: Int, step: Int) {
+    require(price > 0 && step >= 0, "bad pricing")
+    return { admin: caller, donated: 0, sold: 0, price, step }
+  }
+
+  action donate() payable batched {
+    require(received >= 1 ada, "donate at least 1 ADA")
+    return { ...state, donated: donated + received }
+  }
+
+  // Buys one ticket at the current price, if it is at most maxPrice; the change goes back to the buyer (a pay of 0 is
+  // skipped, so an exact payment pays nothing back).
+  action buy(maxPrice: Int) payable batched only open {
+    require(price <= maxPrice, "price above the buyer's bound")
+    require(received >= price, "pays less than the price")
+    pay(caller, received - price)
+    return { ...state, sold: sold + 1, price: price + step }
+  }
+
+  action withdraw(amount: Int) only admin {
+    require(amount > 0 && amount <= balance, "bad amount")
+    pay(admin, amount)
+    return state
+  }
+
+  destroy close() only admin {
+    pay(admin, balance)
+  }
+
+  view nextPrice(): Int = price
+}

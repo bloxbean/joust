@@ -1,0 +1,30 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/escrow in .jsc 2 (ADR-0018 M1c, J11): two-party escrow with an arbiter. The buyer funds it when deploying.
+// The buyer (or the arbiter) releases the funds to the seller; the seller (or the arbiter) can refund the buyer at any
+// time, and anyone can once the deadline has passed (after under ||, D11).
+contract Escrow(maxDatumBytes = 192) {
+  state { buyer: Key, seller: Key, arbiter: Key, amount: Int, deadline: Int }
+
+  // The buyer deposits the price.
+  init(seller: Key, arbiter: Key, deadline: Int) payable {
+    require(received > 0, "the escrow must be funded")
+    require(before(deadline), "deadline must be in the future")
+    return { buyer: caller, seller, arbiter, amount: received, deadline }
+  }
+
+  // Buyer or arbiter: the seller delivered, pay them.
+  destroy release() open {
+    require(caller == buyer || caller == arbiter, "only the buyer or the arbiter can release")
+    pay(seller, balance)
+  }
+
+  // Seller or arbiter at any time, anyone after the deadline: give the buyer their money back.
+  destroy refund() open {
+    require(caller == seller || caller == arbiter || after(deadline), "only the seller or the arbiter can refund before the deadline")
+    pay(buyer, balance)
+  }
+
+  view amount(): Int = amount
+}

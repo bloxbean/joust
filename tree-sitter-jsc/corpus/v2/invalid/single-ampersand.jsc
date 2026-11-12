@@ -1,0 +1,5 @@
+jsc 2
+package corpus
+
+fn f(a: Bool): Bool = a & a
+contract C { state { n: Int } init() { return { n: 0 } } }

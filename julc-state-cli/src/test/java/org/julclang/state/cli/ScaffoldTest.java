@@ -72,10 +72,15 @@ class ScaffoldTest {
         FakeSys s = sys();
         assertThat(run(s, RELEASE, "new", "app", "-l", "jsc", "-p", "org.example.counter")).isZero();
         Path d = tmp.resolve("app");
-        assertThat(tree(d)).contains("src/main/jsc/org/example/counter/Counter.jsc",
+        assertThat(tree(d)).contains("src/main/jsc/org/example/counter/Counter.jsc", "src/main/jsc/org/example/counter/Counter.abi.json",
                 "src/main/java/org/example/counter/CounterMain.java").doesNotContain("src/main/java/org/example/counter/Counter.java");
+        // ADR-0018 D14: .jsc 2 (a preview), its ABI manifest beside it, for this package.
         assertThat(Files.readString(d.resolve("src/main/jsc/org/example/counter/Counter.jsc")))
-                .startsWith("package org.example.counter\n");
+                .startsWith("jsc 2\npackage org.example.counter\n");
+        assertThat(Files.readString(d.resolve("src/main/jsc/org/example/counter/Counter.abi.json")))
+                .contains("\"contract\": \"org.example.counter.Counter\"").doesNotContain("@@");
+        assertThat(Files.readString(d.resolve("README.md"))).contains("acceptJscAbi").contains("a language preview").doesNotContain("@@");
+        assertThat(s.outText()).contains("Note: .jsc 2 is a language preview");
         assertThat(Files.readString(d.resolve("build.gradle"))).contains("mainClass = 'org.example.counter.CounterMain'");
         assertThat(Files.readString(d.resolve("README.md"))).contains("src/main/jsc/org/example/counter/Counter.jsc");
     }
@@ -355,6 +360,6 @@ class ScaffoldTest {
             assertThat(run(s, RELEASE, "new", "u-" + l, "-l", l, "-p", "org._internal")).as(l).isZero();
         }
         assertThat(Files.readString(tmp.resolve("u-jsc/src/main/jsc/org/_internal/Counter.jsc")))
-                .startsWith("package org._internal\n");
+                .startsWith("jsc 2\npackage org._internal\n");
     }
 }

@@ -48,7 +48,7 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `joust` (julc#311).
 
 ## Build / test
-- JDK 25. `./gradlew build`.
+- JDK 25 and Node 22 (the `.jsc` 2 five-way tests run the JavaScript reference interpreter, `js/jsc-interpreter`). `./gradlew build`.
 - Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is the release **`0.1.0-pre21-rc1`** (with
   #311/#313), resolved from the BloxBean release repository (`https://repo.bloxbean.org/maven/releases`; not on Maven
   Central). `settings.gradle` lists the BloxBean repositories for the `org.julclang.julc` plugin too. A release refuses
@@ -174,6 +174,23 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   link window may start ahead (within maxStartSlots): submit at its start. DevKit's Yaci Store serves no transaction
   CBOR, so pages there bind keyed inputs by Ctx or the balance equation. `js/state-client/test/fixtures/
   registry.description.json` is a copy of the generated description (`RegistryDescriptionTest` fails when stale).
+- **Validators are found by simple name in JuLC** (bloxbean/julc#326): JuLC writes and `JulcScriptLoader` reads
+  `META-INF/plutus/<SimpleName>.plutus.json`, so two validators with one simple name (`…vault.VaultValidator`,
+  `…dsl.VaultValidator`) share a resource. JOUST loads scripts through `ValidatorScripts` (the copy beside the validator
+  class: its own readable location must hold it; JuLC's parameter checks kept); never call `JulcScriptLoader.load(Class)`
+  for a generated validator. Two contracts with one simple name must not share a runtime class path: `check` runs
+  `checkPlutusResources`, and a fat or shaded jar must never merge or drop duplicate `META-INF/plutus/*` entries (a
+  resource-only plant would replace a contract's script).
+- ADR-0018 M1c: the Java examples vault, escrow, crowdfund, token and pool also run against their `.jsc` 2 ports
+  (`examples/dsl`'s `copyPortTests` copies their `*Test.java`; `:examples:dsl:test` runs them). Keep those tests in their
+  package directory (the copy fails on subpackages or resources), and call the init as `<Contract>.<init>(`.
+- ADR-0018 `.jsc` 2 generated artifacts: after changing the IR, the lowering or an example, rewrite the JS
+  interpreter's IR fixtures (`./gradlew :julc-state-dsl:test -Pjoust.writeIrFixtures`; `JscV2IrTest` fails when stale)
+  and tree-sitter's shapes (`... --tests '*JscCorpusTest*' -Djsc.writeShapes=true`), and run `npm test` in
+  `tree-sitter-jsc` (its shared corpus fails when the grammar lags the parser). `.jsc` 2 refusals show their sites
+  (`… [app/Counter.jsc:22:5 (a require in increment)]`, M1e), so tests match them for `.jsc`, not for Java. Message keys
+  are ABI facts (`#pay:spend<i>.<n>`, `intent<k>` for `batched only`). The interpreters check `only`/`after`/`before`
+  (their `Tx` has `signers`); the JVM method and transition program don't: compare those with `Interpreter.transition`.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

@@ -12,7 +12,9 @@ import java.util.regex.Pattern;
  * source order, then destroys; the mint validator's {@code Lifecycle}: {@code CreateInstance} and
  * {@code BurnInstance}) with its constructor index and every field, the generated {@code seed} and {@code ctx}
  * included (review F2, S1, C2), every schema they reference (the contract's records and enums, and the API's
- * {@code Ctx}, {@code TxOutRef}, {@code MerkleMap}), and which state fields hold time values (D11). Views are not
+ * {@code Ctx}, {@code TxOutRef}, {@code MerkleMap}), and which state fields hold time values (D11). A contract with
+ * batched actions (ADR-0004, M1c) also states the intent's datum ({@code Intent}, its {@code IntentCall} and the ledger's
+ * {@code Address}), the refund tag, the batch's spend redeemers and the mint's {@code CreateIntent}. Views are not
  * encoded on-chain and are left out, so reordering them, or moving a destroy among actions, changes nothing.
  * <p>
  * Written deterministically from the checked IR; the toolchain checks it against the processor's description of the
@@ -74,15 +76,19 @@ final class Abi {
         // Redeemers, as the processor lays them out (ContractIR.spendTransitions; the Lifecycle of the mint validator).
         boolean ctx = false;
         var spend = new ArrayList<String>();
-        var order = new ArrayList<Ir.Method>();
-        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION) order.add(m);
-        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.DESTROY) order.add(m);
-        for (Ir.Method m : order) {
+        for (Ir.Method m : spendOrder(p)) {
             var fs = new ArrayList<String>();
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
             ctx |= m.usesCtx();
             spend.add("      " + ctor(Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1), spend.size(), fs, "        "));
+        }
+        // Batched actions (ADR-0004, M1c): the batch's redeemers follow, and intents have their own datum and mint.
+        List<Ir.Method> batched = intentOrder(p);
+        if (!batched.isEmpty()) {
+            spend.add("      " + ctor("Batch", spend.size(), List.of(field("validFrom", "Int", "int", ind), field("validTo", "Int", "int", ind)), "        "));
+            spend.add("      " + ctor("InBatch", spend.size(), List.of(), "        "));
+            spend.add("      " + ctor("CancelIntent", spend.size(), List.of(), "        "));
         }
         var mint = new ArrayList<String>();
         for (Ir.Method m : p.methods()) {
@@ -95,6 +101,12 @@ final class Abi {
             mint.add("      " + ctor("CreateInstance", 0, fs, "        "));
         }
         mint.add("      " + ctor("BurnInstance", 1, List.of(), "        "));
+        if (!batched.isEmpty()) {
+            mint.add("      " + ctor("CreateIntent", 2, List.of(field("seed", "TxOutRef", "TxOutRef", ind), field("intent", "Intent", "Intent", ind)),
+                    "        "));
+            // An intent's datum, and the tag of its refund output, beside the state's (their schemas are in "types").
+            w.append("  \"intent\": { \"datum\": \"Intent\", \"refund\": \"IntentRefund\" },\n");
+        }
         w.append("  \"redeemers\": {\n    \"spend\": [").append(spend.isEmpty() ? "" : "\n" + String.join(",\n", spend) + "\n    ").append("],\n");
         w.append("    \"mint\": [\n").append(String.join(",\n", mint)).append("\n    ]\n  },\n");
         // The schemas they reference: the contract's own, then the API's.
@@ -106,6 +118,32 @@ final class Abi {
             var vs = new ArrayList<String>();
             for (Ir.RecordType v : e.variants().values()) vs.add("      " + ctor(v.name(), e.tag(v.name()), fields(v, ind), "        "));
             types.add("    " + str(e.name()) + ": { \"kind\": \"enum\", \"constructors\": [\n" + String.join(",\n", vs) + "\n    ] }");
+        }
+        if (!batched.isEmpty()) {
+            // The intent's call: one variant per batched action, in source order, with the action's arguments (no Ctx).
+            var calls = new ArrayList<String>();
+            for (Ir.Method m : batched) {
+                var fs = new ArrayList<String>();
+                for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
+                calls.add("      " + ctor(Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1) + "Intent", calls.size(), fs, "        "));
+            }
+            types.add("    \"Intent\": { \"kind\": \"validator\", \"constructors\": [" + ctor("Intent", 0, List.of(
+                    field("instance", "Bytes", "bytes", "        "), field("owner", "Key", "bytes28", "        "),
+                    field("refund", "Address", "Address", "        "), field("deadline", "Int", "int", "        "),
+                    field("received", "Int", "int", "        "), field("call", "IntentCall", "IntentCall", "        ")), "      ") + "] }");
+            types.add("    \"IntentCall\": { \"kind\": \"validator\", \"constructors\": [\n" + String.join(",\n", calls) + "\n    ] }");
+            types.add("    \"IntentRefund\": { \"kind\": \"validator\", \"constructors\": [" + ctor("IntentRefund", 0, List.of(
+                    field("intent", "TxOutRef", "TxOutRef", "        ")), "      ") + "] }");
+            types.add("    \"Address\": { \"kind\": \"ledger\", \"constructors\": [" + ctor("Address", 0, List.of(
+                    field("credential", "Credential", "Credential", "        "),
+                    field("stakingCredential", "Option<StakingCredential>", "option<StakingCredential>", "        ")), "      ") + "] }");
+            types.add("    \"Credential\": { \"kind\": \"ledger\", \"constructors\": [\n"
+                    + "      " + ctor("PubKeyCredential", 0, List.of(field("hash", "Bytes", "bytes", ind)), "        ") + ",\n"
+                    + "      " + ctor("ScriptCredential", 1, List.of(field("hash", "Bytes", "bytes", ind)), "        ") + "\n    ] }");
+            types.add("    \"StakingCredential\": { \"kind\": \"ledger\", \"constructors\": [\n"
+                    + "      " + ctor("StakingHash", 0, List.of(field("credential", "Credential", "Credential", ind)), "        ") + ",\n"
+                    + "      " + ctor("StakingPtr", 1, List.of(field("slot", "Int", "int", ind), field("txIndex", "Int", "int", ind),
+                    field("certIndex", "Int", "int", ind)), "        ") + "\n    ] }");
         }
         boolean merkle = p.state().fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT);
         if (ctx) {
@@ -121,12 +159,44 @@ final class Abi {
         }
         types.add("    \"TxOutRef\": { \"kind\": \"ledger\", \"constructors\": [" + ctor("TxOutRef", 0, List.of(field("txId", "Bytes", "bytes", "        "),
                 field("index", "Int", "int", "        ")), "      ") + "] }");
+        // One schema per name (review C4): a contract type never shares a key with an API or ledger schema.
+        var keys = new java.util.HashSet<String>();
+        for (String t : types) {
+            String key = t.substring(t.indexOf('"') + 1, t.indexOf('"', t.indexOf('"') + 1));
+            if (!keys.add(key)) throw new IllegalStateException("the ABI manifest of " + p.name() + " would state the type " + key + " twice");
+        }
         w.append("  \"types\": {\n").append(String.join(",\n", types)).append("\n  },\n");
         var time = new ArrayList<String>();
         for (String f : new TreeSet<>(p.timeFields())) time.add(str(f));
         w.append("  \"timeFields\": [").append(String.join(", ", time)).append("]\n");
         w.append("}\n");
         return w.toString();
+    }
+
+    /**
+     * The methods with a spend constructor, in the manifest's order: actions in source order, then destroys. A
+     * {@code batched only} action has none: it runs only as an intent (M1c). The message keys use this order too (D12).
+     */
+    static List<Ir.Method> spendOrder(Ir.Program p) {
+        var order = new ArrayList<Ir.Method>();
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION && !batchedOnly(m)) order.add(m);
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.DESTROY) order.add(m);
+        return order;
+    }
+
+    /** The batched actions in source order: the {@code IntentCall} variants, in the manifest's order (M1c). */
+    static List<Ir.Method> intentOrder(Ir.Program p) {
+        var order = new ArrayList<Ir.Method>();
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION && batched(m)) order.add(m);
+        return order;
+    }
+
+    static boolean batched(Ir.Method m) {
+        return m.mods().stream().anyMatch(x -> x.name().equals("batched"));
+    }
+
+    static boolean batchedOnly(Ir.Method m) {
+        return m.mods().stream().anyMatch(x -> x.name().equals("batched") && "only".equals(x.field()));
     }
 
     static String str(String s) {
@@ -158,10 +228,28 @@ final class Abi {
         return out;
     }
 
-    static String sourceMapJson(String java, String fileName, String javaPath) {
+    /**
+     * The source map (D12), format 2: {@code lines} maps each generated Java line to its {@code .jsc} line and column;
+     * {@code messages} maps every message the script can trace (a generated check's key, an author's require message,
+     * an operation's fixed message) to the {@code .jsc} sites that raise it, sorted, with their kind, the method or fn
+     * they are in, and for an input check the parameter. Tooling (the runtime's refusals, the language server) turns a
+     * trace back into {@code File.jsc:line:col} with it; the build keeps it beside the script as the audit trail of
+     * what each on-chain message means (r12, review S5).
+     */
+    static String sourceMapJson(String java, String fileName, String javaPath, List<JavaEmitter.Check> checks) {
         var entries = new ArrayList<String>();
         for (int[] e : sourceMap(java, fileName)) entries.add("[" + e[0] + ", " + e[1] + ", " + e[2] + "]");
-        return "{\n  \"version\": 1,\n  \"source\": " + str(fileName) + ",\n  \"java\": " + str(javaPath) + ",\n  \"lines\": ["
-                + String.join(", ", entries) + "]\n}\n";
+        var byMessage = new java.util.TreeMap<String, java.util.TreeSet<String>>();
+        for (JavaEmitter.Check c : checks) {
+            String site = String.format("{ \"line\": %d, \"col\": %d, \"kind\": %s, \"in\": %s%s }", c.pos().line(), c.pos().col(),
+                    str(c.kind()), str(c.in() == null ? "" : c.in()), c.what() == null ? "" : ", \"what\": " + str(c.what()));
+            // Sorted by position (zero-padded), then text: the same sites in the same order on every build.
+            byMessage.computeIfAbsent(c.message(), k -> new java.util.TreeSet<>()).add(String.format("%09d%09d", c.pos().line(), c.pos().col()) + site);
+        }
+        var messages = new ArrayList<String>();
+        byMessage.forEach((m, sites) -> messages.add("    " + str(m) + ": [" + String.join(", ", sites.stream().map(x -> x.substring(18)).toList()) + "]"));
+        return "{\n  \"version\": 2,\n  \"source\": " + str(fileName) + ",\n  \"java\": " + str(javaPath) + ",\n  \"lines\": ["
+                + String.join(", ", entries) + "],\n  \"messages\": {" + (messages.isEmpty() ? "" : "\n" + String.join(",\n", messages) + "\n  ")
+                + "}\n}\n";
     }
 }

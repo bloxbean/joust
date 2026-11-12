@@ -71,9 +71,9 @@ public static JulcList<Payout> claim(State s, Ctx ctx) {
 
 ```jsc
 destroy claim() only creator {
-    require after(deadline) "the campaign is still running"
-    require raised >= goal "the goal was not reached"
-    pay balance to creator
+  require(after(deadline), "the campaign is still running")
+  require(raised >= goal, "the goal was not reached")
+  pay(creator, balance)
 }
 ```
 
@@ -275,8 +275,8 @@ await treasury.at(id).freeze(walletA, { frozen: true }, { governor: { governor, 
 <Aside type="note">
 
 `@Quorum` and `@AuthorizedBy` read the current state, so neither can go on an `@Init` or `@Migrate` creation. Neither
-can go on a `@Batched` action: an intent's owner is the caller. `.jsc` has no form of either yet; write those
-contracts in Java.
+can go on a `@Batched` action: an intent's owner is the caller. `.jsc` 2 gets `quorum` and `authorized` in milestone M2;
+until then write those contracts in Java.
 
 </Aside>
 

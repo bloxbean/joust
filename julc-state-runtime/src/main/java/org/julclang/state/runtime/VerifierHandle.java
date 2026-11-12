@@ -10,7 +10,6 @@ import com.bloxbean.cardano.client.quicktx.Tx;
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput;
 import com.bloxbean.cardano.client.transaction.spec.Value;
 import com.bloxbean.cardano.client.util.HexUtil;
-import org.julclang.clientlib.JulcScriptLoader;
 import org.julclang.clientlib.PlutusDataAdapter;
 import org.julclang.core.types.JulcList;
 import org.julclang.state.api.mpf.MapClaim;
@@ -40,7 +39,7 @@ public final class VerifierHandle {
     VerifierHandle(StateRuntime runtime, Class<?> verifier, String label) {
         this.runtime = runtime;
         this.label = label;
-        this.script = JulcScriptLoader.load(verifier);
+        this.script = ValidatorScripts.load(verifier);
         try {
             this.hash = HexUtil.encodeHexString(script.getScriptHash());
         } catch (Exception e) {

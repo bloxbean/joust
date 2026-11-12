@@ -1,0 +1,1013 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "24c5761821829eb58afec709c1d3ad0e6a449d3172be53ca3448fcdd7f599565",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Pledges",
+  "source": "Pledges.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "1024" }],
+  "records": [{ "name": "Share", "fields": [{ "name": "to", "type": "Key" }, { "name": "bps", "type": "Int" }], "at": [8, 1] }],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "owner", "type": "Key" },
+      { "name": "goal", "type": "Int" },
+      { "name": "deadline", "type": "Int" },
+      { "name": "raised", "type": "Int" },
+      { "name": "shares", "type": { "list": { "record": "Share" } } },
+      { "name": "tag", "type": "Bytes" },
+      { "name": "lastBacker", "type": { "option": "Key" } }
+    ],
+    "at": [15, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": ["digits"],
+  "fns": [
+    {
+      "name": "total",
+      "params": [{ "id": 18, "name": "shares", "type": { "list": { "record": "Share" } }, "taint": 0, "at": [10, 10] }],
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Fold",
+          "list": { "node": "LocalRef", "local": 18, "type": { "list": { "record": "Share" } }, "taint": 0, "at": [10, 38] },
+          "init": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [10, 50] },
+          "acc": { "id": 19, "name": "acc", "type": "Int", "taint": 0, "at": [10, 53] },
+          "x": { "id": 20, "name": "s", "type": { "record": "Share" }, "taint": 0, "at": [10, 53] },
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "LocalRef", "local": 19, "type": "Int", "taint": 0, "at": [10, 65] },
+              "right": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 20, "type": { "record": "Share" }, "taint": 0, "at": [10, 71] },
+                "record": "Share",
+                "field": "bps",
+                "type": "Int",
+                "taint": 0,
+                "at": [10, 71]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [10, 65]
+            },
+            "at": [10, 53]
+          },
+          "type": "Int",
+          "taint": 0,
+          "at": [10, 38]
+        },
+        "at": [10, 38]
+      },
+      "at": [10, 1]
+    },
+    {
+      "name": "digits",
+      "params": [{ "id": 21, "name": "n", "type": "Int", "taint": 0, "at": [13, 11] }],
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Cond",
+          "cond": {
+            "node": "Compare",
+            "op": "<",
+            "left": { "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [13, 26] },
+            "right": { "node": "Lit", "value": "10", "type": "Int", "taint": 0, "at": [13, 30] },
+            "type": "Bool",
+            "taint": 0,
+            "at": [13, 26]
+          },
+          "then": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [13, 35] },
+          "otherwise": {
+            "node": "Arith",
+            "op": "+",
+            "left": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [13, 39] },
+            "right": {
+              "node": "CallFn",
+              "fn": "digits",
+              "args": [
+                {
+                  "node": "Arith",
+                  "op": "/",
+                  "left": { "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [13, 50] },
+                  "right": { "node": "Lit", "value": "10", "type": "Int", "taint": 0, "at": [13, 54] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [13, 50]
+                }
+              ],
+              "type": "Int",
+              "taint": 0,
+              "at": [13, 43]
+            },
+            "type": "Int",
+            "taint": 0,
+            "at": [13, 39]
+          },
+          "type": "Int",
+          "taint": 0,
+          "at": [13, 26]
+        },
+        "at": [13, 26]
+      },
+      "at": [13, 1]
+    }
+  ],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [
+        { "id": 1, "name": "goal", "type": "Int", "taint": 0, "at": [26, 8] },
+        { "id": 2, "name": "deadline", "type": "Int", "taint": 0, "at": [26, 19] },
+        { "id": 3, "name": "shares", "type": { "list": { "record": "Share" } }, "taint": 0, "at": [26, 34] },
+        { "id": 4, "name": "label", "type": "Bytes", "taint": 0, "at": [26, 55] }
+      ],
+      "mods": [],
+      "checked": [3],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [27, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [27, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [27, 13]
+            },
+            "message": "the goal must be positive",
+            "at": [27, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Hof",
+              "kind": "all",
+              "list": { "node": "LocalRef", "local": 3, "type": { "list": { "record": "Share" } }, "taint": 0, "at": [28, 13] },
+              "x": { "id": 5, "name": "s", "type": { "record": "Share" }, "taint": 0, "at": [28, 24] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Compare",
+                  "op": ">",
+                  "left": {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 5, "type": { "record": "Share" }, "taint": 0, "at": [28, 29] },
+                    "record": "Share",
+                    "field": "bps",
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [28, 29]
+                  },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [28, 37] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [28, 29]
+                },
+                "at": [28, 24]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [28, 13]
+            },
+            "message": "every share must be positive",
+            "at": [28, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": {
+                "node": "CallFn",
+                "fn": "total",
+                "args": [
+                  {
+                    "node": "LocalRef",
+                    "local": 3,
+                    "type": { "list": { "record": "Share" } },
+                    "taint": 0,
+                    "at": [29, 19]
+                  }
+                ],
+                "type": "Int",
+                "taint": 0,
+                "at": [29, 13]
+              },
+              "right": { "node": "Lit", "value": "10000", "type": "Int", "taint": 0, "at": [29, 30] },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [29, 13]
+            },
+            "message": "shares must total 100%",
+            "at": [29, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": "<=",
+              "left": {
+                "node": "CallStd",
+                "module": "std/bytes",
+                "name": "length",
+                "args": [{ "node": "LocalRef", "local": 4, "type": "Bytes", "taint": 0, "at": [30, 20] }],
+                "type": "Int",
+                "taint": 0,
+                "at": [30, 13]
+              },
+              "right": { "node": "Lit", "value": "64", "type": "Int", "taint": 0, "at": [30, 30] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [30, 13]
+            },
+            "message": "label too long",
+            "at": [30, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [31, 21] },
+            { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [31, 29] },
+            { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [31, 35] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [31, 53] },
+            { "node": "LocalRef", "local": 3, "type": { "list": { "record": "Share" } }, "taint": 0, "at": [31, 56] },
+            {
+              "node": "CallStd",
+              "module": "std/bytes",
+              "name": "slice",
+              "args": [
+                {
+                  "node": "CallStd",
+                  "module": "std/crypto",
+                  "name": "blake2b_224",
+                  "args": [{ "node": "LocalRef", "local": 4, "type": "Bytes", "taint": 0, "at": [31, 87] }],
+                  "type": "Bytes",
+                  "taint": 0,
+                  "at": [31, 75]
+                },
+                { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [31, 95] },
+                { "node": "Lit", "value": "8", "type": "Int", "taint": 0, "at": [31, 98] }
+              ],
+              "type": "Bytes",
+              "taint": 0,
+              "at": [31, 69]
+            },
+            { "node": "NoneLit", "type": { "option": "Key" }, "taint": 0, "at": [31, 114] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [31, 12]
+        },
+        "at": [26, 69]
+      },
+      "at": [26, 3]
+    },
+    {
+      "kind": "action",
+      "name": "pledge",
+      "params": [],
+      "mods": [{ "name": "payable" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [35, 13] },
+              "right": { "node": "Lit", "value": "1000000", "type": "Int", "taint": 0, "at": [35, 25] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [35, 13]
+            },
+            "message": "pledge at least 1 ADA",
+            "at": [35, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": false,
+              "threshold": { "node": "StateField", "field": "deadline", "type": "Int", "taint": 0, "at": [36, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [36, 13]
+            },
+            "message": "pledging closed",
+            "at": [36, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [37, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [37, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [37, 17] },
+              "record": "State",
+              "field": "goal",
+              "type": "Int",
+              "taint": 0,
+              "at": [37, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [37, 17] },
+              "record": "State",
+              "field": "deadline",
+              "type": "Int",
+              "taint": 0,
+              "at": [37, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "raised", "type": "Int", "taint": 0, "at": [37, 32] },
+              "right": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [37, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [37, 32]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [37, 17] },
+              "record": "State",
+              "field": "shares",
+              "type": { "list": { "record": "Share" } },
+              "taint": 0,
+              "at": [37, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [37, 17] },
+              "record": "State",
+              "field": "tag",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [37, 12]
+            },
+            {
+              "node": "SomeOf",
+              "value": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [37, 68] },
+              "type": { "option": "Key" },
+              "taint": 0,
+              "at": [37, 63]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [37, 12]
+        },
+        "at": [34, 27]
+      },
+      "at": [34, 3]
+    },
+    {
+      "kind": "view",
+      "name": "shareOf",
+      "params": [{ "id": 6, "name": "who", "type": "Key", "taint": 0, "at": [41, 16] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "GetField",
+          "target": {
+            "node": "Coalesce",
+            "option": {
+              "node": "Hof",
+              "kind": "find",
+              "list": {
+                "node": "StateField",
+                "field": "shares",
+                "type": { "list": { "record": "Share" } },
+                "taint": 0,
+                "at": [41, 34]
+              },
+              "x": { "id": 7, "name": "s", "type": { "record": "Share" }, "taint": 0, "at": [41, 46] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Equals",
+                  "negate": false,
+                  "left": {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 7, "type": { "record": "Share" }, "taint": 0, "at": [41, 51] },
+                    "record": "Share",
+                    "field": "to",
+                    "type": "Key",
+                    "taint": 0,
+                    "at": [41, 51]
+                  },
+                  "right": { "node": "LocalRef", "local": 6, "type": "Key", "taint": 0, "at": [41, 59] },
+                  "operand": "Key",
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [41, 51]
+                },
+                "at": [41, 46]
+              },
+              "type": { "option": { "record": "Share" } },
+              "taint": 0,
+              "at": [41, 34]
+            },
+            "default": {
+              "node": "New",
+              "record": "Share",
+              "values": [
+                { "node": "LocalRef", "local": 6, "type": "Key", "taint": 0, "at": [41, 79] },
+                { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [41, 89] }
+              ],
+              "type": { "record": "Share" },
+              "taint": 0,
+              "at": [41, 67]
+            },
+            "type": { "record": "Share" },
+            "taint": 0,
+            "at": [41, 34]
+          },
+          "record": "Share",
+          "field": "bps",
+          "type": "Int",
+          "taint": 0,
+          "at": [41, 33]
+        },
+        "at": [41, 33]
+      },
+      "at": [41, 3]
+    },
+    {
+      "kind": "view",
+      "name": "isShareholder",
+      "params": [{ "id": 8, "name": "who", "type": "Key", "taint": 0, "at": [43, 22] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bool",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Contains",
+          "list": {
+            "node": "Hof",
+            "kind": "map",
+            "list": {
+              "node": "StateField",
+              "field": "shares",
+              "type": { "list": { "record": "Share" } },
+              "taint": 0,
+              "at": [43, 40]
+            },
+            "x": { "id": 9, "name": "s", "type": { "record": "Share" }, "taint": 0, "at": [43, 51] },
+            "body": {
+              "stmts": [],
+              "result": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 9, "type": { "record": "Share" }, "taint": 0, "at": [43, 56] },
+                "record": "Share",
+                "field": "to",
+                "type": "Key",
+                "taint": 0,
+                "at": [43, 56]
+              },
+              "at": [43, 51]
+            },
+            "type": { "list": "Key" },
+            "taint": 0,
+            "at": [43, 40]
+          },
+          "value": { "node": "LocalRef", "local": 8, "type": "Key", "taint": 0, "at": [43, 71] },
+          "elem": "Key",
+          "type": "Bool",
+          "taint": 0,
+          "at": [43, 40]
+        },
+        "at": [43, 40]
+      },
+      "at": [43, 3]
+    },
+    {
+      "kind": "view",
+      "name": "digitsRaised",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "CallFn",
+          "fn": "digits",
+          "args": [{ "node": "StateField", "field": "raised", "type": "Int", "taint": 0, "at": [45, 37] }],
+          "type": "Int",
+          "taint": 0,
+          "at": [45, 30]
+        },
+        "at": [45, 30]
+      },
+      "at": [45, 3]
+    },
+    {
+      "kind": "action",
+      "name": "reassign",
+      "params": [
+        { "id": 10, "name": "from", "type": { "record": "Share" }, "taint": 0, "at": [48, 19] },
+        { "id": 11, "name": "to", "type": "Key", "taint": 0, "at": [48, 32] }
+      ],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [10, 11],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Contains",
+              "list": {
+                "node": "StateField",
+                "field": "shares",
+                "type": { "list": { "record": "Share" } },
+                "taint": 0,
+                "at": [49, 13]
+              },
+              "value": { "node": "LocalRef", "local": 10, "type": { "record": "Share" }, "taint": 0, "at": [49, 29] },
+              "elem": { "record": "Share" },
+              "type": "Bool",
+              "taint": 0,
+              "at": [49, 13]
+            },
+            "message": "no such share",
+            "at": [49, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 13, "name": "moved", "type": { "list": { "record": "Share" } }, "taint": 0, "at": [50, 5] },
+            "value": {
+              "node": "Hof",
+              "kind": "map",
+              "list": {
+                "node": "StateField",
+                "field": "shares",
+                "type": { "list": { "record": "Share" } },
+                "taint": 0,
+                "at": [50, 19]
+              },
+              "x": { "id": 12, "name": "s", "type": { "record": "Share" }, "taint": 0, "at": [50, 30] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Cond",
+                  "cond": {
+                    "node": "Equals",
+                    "negate": false,
+                    "left": { "node": "LocalRef", "local": 12, "type": { "record": "Share" }, "taint": 0, "at": [50, 35] },
+                    "right": { "node": "LocalRef", "local": 10, "type": { "record": "Share" }, "taint": 0, "at": [50, 40] },
+                    "operand": { "record": "Share" },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [50, 35]
+                  },
+                  "then": {
+                    "node": "New",
+                    "record": "Share",
+                    "values": [
+                      { "node": "LocalRef", "local": 11, "type": "Key", "taint": 0, "at": [50, 55] },
+                      {
+                        "node": "GetField",
+                        "target": { "node": "LocalRef", "local": 12, "type": { "record": "Share" }, "taint": 0, "at": [50, 64] },
+                        "record": "Share",
+                        "field": "bps",
+                        "type": "Int",
+                        "taint": 0,
+                        "at": [50, 64]
+                      }
+                    ],
+                    "type": { "record": "Share" },
+                    "taint": 0,
+                    "at": [50, 47]
+                  },
+                  "otherwise": { "node": "LocalRef", "local": 12, "type": { "record": "Share" }, "taint": 0, "at": [50, 74] },
+                  "type": { "record": "Share" },
+                  "taint": 0,
+                  "at": [50, 35]
+                },
+                "at": [50, 30]
+              },
+              "type": { "list": { "record": "Share" } },
+              "taint": 0,
+              "at": [50, 19]
+            },
+            "at": [50, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [51, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [51, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [51, 17] },
+              "record": "State",
+              "field": "goal",
+              "type": "Int",
+              "taint": 0,
+              "at": [51, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [51, 17] },
+              "record": "State",
+              "field": "deadline",
+              "type": "Int",
+              "taint": 0,
+              "at": [51, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [51, 17] },
+              "record": "State",
+              "field": "raised",
+              "type": "Int",
+              "taint": 0,
+              "at": [51, 12]
+            },
+            { "node": "LocalRef", "local": 13, "type": { "list": { "record": "Share" } }, "taint": 0, "at": [51, 32] },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [51, 17] },
+              "record": "State",
+              "field": "tag",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [51, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [51, 17] },
+              "record": "State",
+              "field": "lastBacker",
+              "type": { "option": "Key" },
+              "taint": 0,
+              "at": [51, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [51, 12]
+        },
+        "at": [48, 52]
+      },
+      "at": [48, 3]
+    },
+    {
+      "kind": "action",
+      "name": "setBacker",
+      "params": [{ "id": 14, "name": "who", "type": { "option": "Key" }, "taint": 0, "at": [55, 20] }],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [14],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [56, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [56, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [56, 17] },
+              "record": "State",
+              "field": "goal",
+              "type": "Int",
+              "taint": 0,
+              "at": [56, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [56, 17] },
+              "record": "State",
+              "field": "deadline",
+              "type": "Int",
+              "taint": 0,
+              "at": [56, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [56, 17] },
+              "record": "State",
+              "field": "raised",
+              "type": "Int",
+              "taint": 0,
+              "at": [56, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [56, 17] },
+              "record": "State",
+              "field": "shares",
+              "type": { "list": { "record": "Share" } },
+              "taint": 0,
+              "at": [56, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [56, 17] },
+              "record": "State",
+              "field": "tag",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [56, 12]
+            },
+            { "node": "LocalRef", "local": 14, "type": { "option": "Key" }, "taint": 0, "at": [56, 36] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [56, 12]
+        },
+        "at": [55, 49]
+      },
+      "at": [55, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "distribute",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "||",
+              "left": {
+                "node": "TimePred",
+                "after": true,
+                "threshold": { "node": "StateField", "field": "deadline", "type": "Int", "taint": 0, "at": [61, 19] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [61, 13]
+              },
+              "right": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "StateField", "field": "raised", "type": "Int", "taint": 0, "at": [61, 32] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [61, 42] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [61, 32]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [61, 13]
+            },
+            "message": "too early",
+            "at": [61, 5]
+          },
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Compare",
+                  "op": ">=",
+                  "left": { "node": "StateField", "field": "raised", "type": "Int", "taint": 0, "at": [62, 8] },
+                  "right": { "node": "StateField", "field": "goal", "type": "Int", "taint": 0, "at": [62, 18] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [62, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "For",
+                      "var": { "id": 15, "name": "s", "type": { "record": "Share" }, "taint": 0, "at": [63, 7] },
+                      "list": {
+                        "node": "StateField",
+                        "field": "shares",
+                        "type": { "list": { "record": "Share" } },
+                        "taint": 0,
+                        "at": [63, 23]
+                      },
+                      "body": {
+                        "stmts": [
+                          {
+                            "stmt": "Pay",
+                            "to": {
+                              "node": "GetField",
+                              "target": {
+                                "node": "LocalRef",
+                                "local": 15,
+                                "type": { "record": "Share" },
+                                "taint": 0,
+                                "at": [64, 13]
+                              },
+                              "record": "Share",
+                              "field": "to",
+                              "type": "Key",
+                              "taint": 0,
+                              "at": [64, 13]
+                            },
+                            "amount": {
+                              "node": "Arith",
+                              "op": "/",
+                              "left": {
+                                "node": "Arith",
+                                "op": "*",
+                                "left": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [64, 19] },
+                                "right": {
+                                  "node": "GetField",
+                                  "target": {
+                                    "node": "LocalRef",
+                                    "local": 15,
+                                    "type": { "record": "Share" },
+                                    "taint": 0,
+                                    "at": [64, 29]
+                                  },
+                                  "record": "Share",
+                                  "field": "bps",
+                                  "type": "Int",
+                                  "taint": 0,
+                                  "at": [64, 29]
+                                },
+                                "type": "Int",
+                                "taint": 0,
+                                "at": [64, 19]
+                              },
+                              "right": { "node": "Lit", "value": "10000", "type": "Int", "taint": 0, "at": [64, 37] },
+                              "type": "Int",
+                              "taint": 0,
+                              "at": [64, 19]
+                            },
+                            "at": [64, 9]
+                          }
+                        ],
+                        "result": null,
+                        "at": [63, 31]
+                      },
+                      "pays": true,
+                      "at": [63, 7]
+                    },
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [66, 11] },
+                      "amount": {
+                        "node": "Arith",
+                        "op": "-",
+                        "left": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [66, 18] },
+                        "right": {
+                          "node": "Fold",
+                          "list": {
+                            "node": "StateField",
+                            "field": "shares",
+                            "type": { "list": { "record": "Share" } },
+                            "taint": 0,
+                            "at": [66, 28]
+                          },
+                          "init": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [66, 40] },
+                          "acc": { "id": 16, "name": "acc", "type": "Int", "taint": 0, "at": [66, 43] },
+                          "x": { "id": 17, "name": "s", "type": { "record": "Share" }, "taint": 0, "at": [66, 43] },
+                          "body": {
+                            "stmts": [],
+                            "result": {
+                              "node": "Arith",
+                              "op": "+",
+                              "left": { "node": "LocalRef", "local": 16, "type": "Int", "taint": 0, "at": [66, 55] },
+                              "right": {
+                                "node": "Arith",
+                                "op": "/",
+                                "left": {
+                                  "node": "Arith",
+                                  "op": "*",
+                                  "left": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [66, 61] },
+                                  "right": {
+                                    "node": "GetField",
+                                    "target": {
+                                      "node": "LocalRef",
+                                      "local": 17,
+                                      "type": { "record": "Share" },
+                                      "taint": 0,
+                                      "at": [66, 71]
+                                    },
+                                    "record": "Share",
+                                    "field": "bps",
+                                    "type": "Int",
+                                    "taint": 0,
+                                    "at": [66, 71]
+                                  },
+                                  "type": "Int",
+                                  "taint": 0,
+                                  "at": [66, 61]
+                                },
+                                "right": { "node": "Lit", "value": "10000", "type": "Int", "taint": 0, "at": [66, 79] },
+                                "type": "Int",
+                                "taint": 0,
+                                "at": [66, 61]
+                              },
+                              "type": "Int",
+                              "taint": 0,
+                              "at": [66, 55]
+                            },
+                            "at": [66, 43]
+                          },
+                          "type": "Int",
+                          "taint": 0,
+                          "at": [66, 28]
+                        },
+                        "type": "Int",
+                        "taint": 0,
+                        "at": [66, 18]
+                      },
+                      "at": [66, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [62, 23]
+                },
+                "at": [62, 5]
+              }
+            ],
+            "otherwise": {
+              "stmts": [
+                {
+                  "stmt": "Pay",
+                  "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [68, 11] },
+                  "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [68, 18] },
+                  "at": [68, 7]
+                }
+              ],
+              "result": null,
+              "at": [67, 12]
+            },
+            "pays": true,
+            "at": [62, 5]
+          }
+        ],
+        "result": null,
+        "at": [60, 35]
+      },
+      "at": [60, 3]
+    }
+  ],
+  "warnings": []
+}

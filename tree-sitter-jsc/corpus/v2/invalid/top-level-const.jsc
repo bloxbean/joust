@@ -1,0 +1,5 @@
+jsc 2
+package corpus
+
+const LIMIT = 10
+contract C { state { n: Int } init() { return { n: 0 } } }

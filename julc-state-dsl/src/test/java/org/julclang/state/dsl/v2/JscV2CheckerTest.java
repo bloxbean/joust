@@ -453,11 +453,13 @@ class JscV2CheckerTest {
         assertThrows(JscException.class, () -> JscV2.lower(gate, "Zähler.jsc"), "ASCII only");
         String java = JscMain.lowerWithWarnings(gate, "Gate-1_v2.jsc").java();
         assertTrue(java.contains("Require.that(false, \"nobody may claim\");"), java);
-        assertTrue(java.contains("\"Gate-1_v2.jsc:7: k must hold 28-byte key hashes\""), java);
+        // ADR-0018 D12 (r12): the input check's message is its ABI key; the file name is only in comments.
+        assertTrue(java.contains("\"#input:spend0.0\""), java);
+        assertFalse(java.contains("\"Gate-1_v2.jsc"), java);
     }
 
     @Test
-    void jscMainDispatchesOnTheVersionLine_andV1CompilesWithoutTheM1Warning() {
+    void jscMainDispatchesOnTheVersionLine_andV1WarnsThatItIsDeprecated() {
         var v2 = JscMain.lowerWithWarnings(contract(""), "T.jsc");
         assertTrue(v2.java().contains("ADR-0018"));
         String v1 = """
@@ -466,7 +468,8 @@ class JscV2CheckerTest {
                   init() { n = 1 } }
                 """;
         var lowered = JscMain.lowerWithWarnings(v1, "C.jsc");
-        // F9: v1's deprecation warning arrives with M1 (templates switched, `joust migrate` present).
-        assertTrue(lowered.warnings().isEmpty(), lowered.warnings().toString());
+        // F9, D16: v1's deprecation warning arrived with M1d (templates switched, `joust migrate` present).
+        assertEquals(1, lowered.warnings().size(), lowered.warnings().toString());
+        assertTrue(lowered.warnings().get(0).startsWith("C.jsc:1:1: warning[JSC9006]: "), lowered.warnings().toString());
     }
 }

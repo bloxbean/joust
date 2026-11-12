@@ -85,32 +85,37 @@ export npm_config_registry=http://127.0.0.1:4873/
    The contract is the same in both languages:
 
    ```jsc title="contracts/app/Counter.jsc"
+   jsc 2
    package app
 
    contract Counter(maxDatumBytes = 128) {
-       state count: Int
-       state owner: Key
+     state { count: Int, owner: Key }
 
-       init() {
-           owner = caller
-       }
+     init() {
+       return { count: 0, owner: caller }
+     }
 
-       action increment(by: Int) {
-           require by > 0 "increment must be positive"
-           count += by
-       }
+     action increment(by: Int) {
+       require(by > 0, "increment must be positive")
+       return { ...state, count: count + by }
+     }
 
-       action reset() only owner {
-           count = 0
-       }
+     action reset() only owner {
+       return { ...state, count: 0 }
+     }
 
-       destroy close() only owner {
-           pay balance to owner
-       }
+     destroy close() only owner {
+       pay(owner, balance)
+     }
 
-       view count(): Int = count
+     view count(): Int = count
    }
    ```
+
+   It is written in `.jsc` 2, a preview ([.jsc](/languages/jsc/)). Beside it, `create-joust` writes
+   `Counter.abi.json`, the contract's ABI manifest: how its state and its calls are encoded on chain. A build fails
+   when the manifest is missing or differs from what the contract now compiles to, so an encoding change cannot slip
+   through; `npx joust build --accept-abi` accepts a change you intend, to review and commit.
 
    `joust build` generates the same description and the same JavaScript client from `Counter.jsc` as from
    `Counter.java`, so nothing else in the project depends on the language.
@@ -124,8 +129,8 @@ export npm_config_registry=http://127.0.0.1:4873/
    `joust build` compiles every `.java` and `.jsc` file under `contracts/` into `build/joust/`:
 
    ```txt
-   app.Counter: 5714 bytes, hash 596c9f4316a2dc3b3c45e054b3abaccc067163af5b89651b711886d6, 4 transitions
-   built 1 contract(s) into build/joust in 1164 ms
+   app.Counter: … bytes, hash …, 4 transitions
+   built 1 contract(s) into build/joust in … ms
    ```
 
    The size and hash depend on the contract, its language and the toolchain's version. The four transitions are the contract's
@@ -173,7 +178,7 @@ export npm_config_registry=http://127.0.0.1:4873/
    increment 5 tx bf03fd41a39d3298e6dcd5550ee2422b30477738af255552bd02dc71bb6b5670
    increment 2 tx 132896a73abd88de4f3791c821ff2ee3529132f8239ebd890af12dcde5009272
    count       7n
-   refused     increment must be positive
+   refused     increment must be positive [app/Counter.jsc:22:5 (a require in increment)]
    closed      tx 9421540ed8a497c54734d29dcd0700246f5c653296d6da4fde9ab52b02ca9081
    state       null
    ```
@@ -222,11 +227,13 @@ export npm_config_registry=http://127.0.0.1:4873/
 - contracts/
   - app/
     - Counter.jsc the contract (Counter.java with --lang java)
+    - Counter.abi.json its ABI manifest (.jsc only)
 - index.js the app: deploys a counter and calls it
 - test/
   - counter.test.js a Node test on DevKit
 - build/ written by joust build and joust deploy
   - joust/
+    - generated/ the Java lowered from Counter.jsc, with its source map
     - Counter.js the typed client, with the contract's description pinned
     - Counter.d.ts its TypeScript types
     - Counter.json the description
@@ -239,7 +246,7 @@ export npm_config_registry=http://127.0.0.1:4873/
 
 </FileTree>
 
-In `.jsc`, a contract is its state fields and its `init`, `action`, `destroy` and `view` declarations; `joust build`
+In `.jsc`, a contract is its `state` and its `init`, `action`, `destroy` and `view` declarations; `joust build`
 lowers it to a Java contract and compiles that ([.jsc](/languages/jsc/)). In Java, it is a `State` record and static
 methods marked `@Init`, `@Action`, `@Destroy` and `@View`, in the subset JuLC compiles
 ([Your first contract](/start/first-contract/)). `package.json` holds these scripts:
@@ -266,6 +273,7 @@ npm install
 - contracts/
   - app/
     - Counter.jsc the same contract
+    - Counter.abi.json its ABI manifest
 - page/
   - index.html the Counter page
   - main.js the page's code: wallet, review dialog, calls

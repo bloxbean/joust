@@ -1,0 +1,760 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "f1eaf66f6bcdd618b36db9a921b09596947c6a03485e81c589b452b2dc1f095e",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Branches",
+  "source": "Branches.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": { "name": "State", "fields": [{ "name": "owner", "type": "Key" }, { "name": "n", "type": "Int" }], "at": [14, 1] },
+  "timeFields": [],
+  "recursiveFns": ["steps"],
+  "fns": [
+    {
+      "name": "steps",
+      "params": [{ "id": 8, "name": "x", "type": "Int", "taint": 0, "at": [11, 10] }],
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Cond",
+          "cond": {
+            "node": "Equals",
+            "negate": false,
+            "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [11, 28] },
+            "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [11, 33] },
+            "operand": "Int",
+            "type": "Bool",
+            "taint": 0,
+            "at": [11, 28]
+          },
+          "then": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [11, 37] },
+          "otherwise": {
+            "node": "Cond",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [11, 49] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [11, 54] },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [11, 49]
+            },
+            "then": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [11, 58] },
+            "otherwise": {
+              "node": "Cond",
+              "cond": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [11, 70] },
+                "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [11, 75] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [11, 70]
+              },
+              "then": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [11, 79] },
+              "otherwise": {
+                "node": "Cond",
+                "cond": {
+                  "node": "Equals",
+                  "negate": false,
+                  "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [11, 91] },
+                  "right": { "node": "Lit", "value": "3", "type": "Int", "taint": 0, "at": [11, 96] },
+                  "operand": "Int",
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [11, 91]
+                },
+                "then": { "node": "Lit", "value": "3", "type": "Int", "taint": 0, "at": [11, 100] },
+                "otherwise": {
+                  "node": "Cond",
+                  "cond": {
+                    "node": "Equals",
+                    "negate": false,
+                    "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [11, 112] },
+                    "right": { "node": "Lit", "value": "4", "type": "Int", "taint": 0, "at": [11, 117] },
+                    "operand": "Int",
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [11, 112]
+                  },
+                  "then": { "node": "Lit", "value": "4", "type": "Int", "taint": 0, "at": [11, 121] },
+                  "otherwise": {
+                    "node": "Cond",
+                    "cond": {
+                      "node": "Equals",
+                      "negate": false,
+                      "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [12, 11] },
+                      "right": { "node": "Lit", "value": "5", "type": "Int", "taint": 0, "at": [12, 16] },
+                      "operand": "Int",
+                      "type": "Bool",
+                      "taint": 0,
+                      "at": [12, 11]
+                    },
+                    "then": { "node": "Lit", "value": "5", "type": "Int", "taint": 0, "at": [12, 20] },
+                    "otherwise": {
+                      "node": "Cond",
+                      "cond": {
+                        "node": "Equals",
+                        "negate": false,
+                        "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [12, 32] },
+                        "right": { "node": "Lit", "value": "6", "type": "Int", "taint": 0, "at": [12, 37] },
+                        "operand": "Int",
+                        "type": "Bool",
+                        "taint": 0,
+                        "at": [12, 32]
+                      },
+                      "then": { "node": "Lit", "value": "6", "type": "Int", "taint": 0, "at": [12, 41] },
+                      "otherwise": {
+                        "node": "Cond",
+                        "cond": {
+                          "node": "Equals",
+                          "negate": false,
+                          "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [12, 53] },
+                          "right": { "node": "Lit", "value": "7", "type": "Int", "taint": 0, "at": [12, 58] },
+                          "operand": "Int",
+                          "type": "Bool",
+                          "taint": 0,
+                          "at": [12, 53]
+                        },
+                        "then": { "node": "Lit", "value": "7", "type": "Int", "taint": 0, "at": [12, 62] },
+                        "otherwise": {
+                          "node": "Cond",
+                          "cond": {
+                            "node": "Equals",
+                            "negate": false,
+                            "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [12, 74] },
+                            "right": { "node": "Lit", "value": "8", "type": "Int", "taint": 0, "at": [12, 79] },
+                            "operand": "Int",
+                            "type": "Bool",
+                            "taint": 0,
+                            "at": [12, 74]
+                          },
+                          "then": { "node": "Lit", "value": "8", "type": "Int", "taint": 0, "at": [12, 83] },
+                          "otherwise": {
+                            "node": "CallFn",
+                            "fn": "steps",
+                            "args": [
+                              {
+                                "node": "Arith",
+                                "op": "-",
+                                "left": { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [12, 100] },
+                                "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [12, 104] },
+                                "type": "Int",
+                                "taint": 0,
+                                "at": [12, 100]
+                              }
+                            ],
+                            "type": "Int",
+                            "taint": 0,
+                            "at": [12, 94]
+                          },
+                          "type": "Int",
+                          "taint": 0,
+                          "at": [12, 71]
+                        },
+                        "type": "Int",
+                        "taint": 0,
+                        "at": [12, 50]
+                      },
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [12, 29]
+                    },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [12, 8]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [11, 109]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [11, 88]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [11, 67]
+            },
+            "type": "Int",
+            "taint": 0,
+            "at": [11, 46]
+          },
+          "type": "Int",
+          "taint": 0,
+          "at": [11, 25]
+        },
+        "at": [11, 25]
+      },
+      "at": [11, 1]
+    }
+  ],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [18, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [18, 32] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [18, 12]
+        },
+        "at": [17, 10]
+      },
+      "at": [17, 3]
+    },
+    {
+      "kind": "action",
+      "name": "settle",
+      "params": [
+        { "id": 1, "name": "to", "type": "Key", "taint": 0, "at": [22, 17] },
+        { "id": 2, "name": "x", "type": "Int", "taint": 0, "at": [22, 26] }
+      ],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [1],
+      "usesCtx": false,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Equals",
+                  "negate": false,
+                  "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [23, 8] },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [23, 13] },
+                  "operand": "Int",
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [23, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "LocalRef", "local": 1, "type": "Key", "taint": 0, "at": [24, 11] },
+                      "amount": { "node": "Lit", "value": "1000000", "type": "Int", "taint": 0, "at": [24, 15] },
+                      "at": [24, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [23, 15]
+                },
+                "at": [23, 5]
+              },
+              {
+                "cond": {
+                  "node": "Equals",
+                  "negate": false,
+                  "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [25, 15] },
+                  "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [25, 20] },
+                  "operand": "Int",
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [25, 15]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "LocalRef", "local": 1, "type": "Key", "taint": 0, "at": [26, 11] },
+                      "amount": { "node": "Lit", "value": "2000000", "type": "Int", "taint": 0, "at": [26, 15] },
+                      "at": [26, 7]
+                    },
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [27, 11] },
+                      "amount": { "node": "Lit", "value": "1000000", "type": "Int", "taint": 0, "at": [27, 18] },
+                      "at": [27, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [25, 22]
+                },
+                "at": [25, 12]
+              },
+              {
+                "cond": {
+                  "node": "Compare",
+                  "op": "<",
+                  "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [28, 15] },
+                  "right": { "node": "Lit", "value": "10", "type": "Int", "taint": 0, "at": [28, 19] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [28, 15]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Require",
+                      "cond": {
+                        "node": "Equals",
+                        "negate": true,
+                        "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [29, 15] },
+                        "right": { "node": "Lit", "value": "5", "type": "Int", "taint": 0, "at": [29, 20] },
+                        "operand": "Int",
+                        "type": "Bool",
+                        "taint": 0,
+                        "at": [29, 15]
+                      },
+                      "message": "five is refused",
+                      "at": [29, 7]
+                    },
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "LocalRef", "local": 1, "type": "Key", "taint": 0, "at": [30, 11] },
+                      "amount": {
+                        "node": "Arith",
+                        "op": "*",
+                        "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [30, 15] },
+                        "right": { "node": "Lit", "value": "1000000", "type": "Int", "taint": 0, "at": [30, 19] },
+                        "type": "Int",
+                        "taint": 0,
+                        "at": [30, 15]
+                      },
+                      "at": [30, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [28, 22]
+                },
+                "at": [28, 12]
+              }
+            ],
+            "otherwise": {
+              "stmts": [
+                {
+                  "stmt": "Pay",
+                  "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [32, 11] },
+                  "amount": { "node": "Lit", "value": "3000000", "type": "Int", "taint": 0, "at": [32, 18] },
+                  "at": [32, 7]
+                }
+              ],
+              "result": null,
+              "at": [31, 12]
+            },
+            "pays": true,
+            "at": [23, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [34, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "n", "type": "Int", "taint": 0, "at": [34, 27] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [34, 31] },
+              "type": "Int",
+              "taint": 0,
+              "at": [34, 27]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [34, 12]
+        },
+        "at": [22, 45]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "action",
+      "name": "grade",
+      "params": [{ "id": 3, "name": "x", "type": "Int", "taint": 0, "at": [38, 16] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 5, "name": "g", "type": "Int", "taint": 0, "at": [39, 5] },
+            "value": {
+              "node": "IfValue",
+              "branches": [
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [39, 18] },
+                    "right": { "node": "Lit", "value": "10", "type": "Int", "taint": 0, "at": [39, 22] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [39, 18]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [39, 27] },
+                    "at": [39, 25]
+                  },
+                  "at": [39, 15]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [39, 39] },
+                    "right": { "node": "Lit", "value": "20", "type": "Int", "taint": 0, "at": [39, 43] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [39, 39]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [39, 48] },
+                    "at": [39, 46]
+                  },
+                  "at": [39, 36]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [39, 60] },
+                    "right": { "node": "Lit", "value": "30", "type": "Int", "taint": 0, "at": [39, 64] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [39, 60]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [39, 69] },
+                    "at": [39, 67]
+                  },
+                  "at": [39, 57]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [39, 81] },
+                    "right": { "node": "Lit", "value": "40", "type": "Int", "taint": 0, "at": [39, 85] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [39, 81]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "3", "type": "Int", "taint": 0, "at": [39, 90] },
+                    "at": [39, 88]
+                  },
+                  "at": [39, 78]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [39, 102] },
+                    "right": { "node": "Lit", "value": "50", "type": "Int", "taint": 0, "at": [39, 106] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [39, 102]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "4", "type": "Int", "taint": 0, "at": [39, 111] },
+                    "at": [39, 109]
+                  },
+                  "at": [39, 99]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [39, 123] },
+                    "right": { "node": "Lit", "value": "60", "type": "Int", "taint": 0, "at": [39, 127] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [39, 123]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "5", "type": "Int", "taint": 0, "at": [39, 132] },
+                    "at": [39, 130]
+                  },
+                  "at": [39, 120]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [39, 144] },
+                    "right": { "node": "Lit", "value": "70", "type": "Int", "taint": 0, "at": [39, 148] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [39, 144]
+                  },
+                  "then": {
+                    "stmts": [
+                      {
+                        "stmt": "Let",
+                        "local": { "id": 4, "name": "y", "type": "Int", "taint": 0, "at": [40, 7] },
+                        "value": {
+                          "node": "Arith",
+                          "op": "*",
+                          "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [40, 17] },
+                          "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [40, 21] },
+                          "type": "Int",
+                          "taint": 0,
+                          "at": [40, 17]
+                        },
+                        "at": [40, 7]
+                      }
+                    ],
+                    "result": {
+                      "node": "Arith",
+                      "op": "-",
+                      "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [41, 7] },
+                      "right": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [41, 11] },
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [41, 7]
+                    },
+                    "at": [39, 151]
+                  },
+                  "at": [39, 141]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [42, 15] },
+                    "right": { "node": "Lit", "value": "80", "type": "Int", "taint": 0, "at": [42, 19] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [42, 15]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "7", "type": "Int", "taint": 0, "at": [42, 24] },
+                    "at": [42, 22]
+                  },
+                  "at": [42, 12]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [42, 36] },
+                    "right": { "node": "Lit", "value": "90", "type": "Int", "taint": 0, "at": [42, 40] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [42, 36]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "8", "type": "Int", "taint": 0, "at": [42, 45] },
+                    "at": [42, 43]
+                  },
+                  "at": [42, 33]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [42, 57] },
+                    "right": { "node": "Lit", "value": "100", "type": "Int", "taint": 0, "at": [42, 61] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [42, 57]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "9", "type": "Int", "taint": 0, "at": [42, 67] },
+                    "at": [42, 65]
+                  },
+                  "at": [42, 54]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [42, 79] },
+                    "right": { "node": "Lit", "value": "110", "type": "Int", "taint": 0, "at": [42, 83] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [42, 79]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "10", "type": "Int", "taint": 0, "at": [42, 89] },
+                    "at": [42, 87]
+                  },
+                  "at": [42, 76]
+                },
+                {
+                  "cond": {
+                    "node": "Compare",
+                    "op": "<",
+                    "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [42, 102] },
+                    "right": { "node": "Lit", "value": "120", "type": "Int", "taint": 0, "at": [42, 106] },
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [42, 102]
+                  },
+                  "then": {
+                    "stmts": [],
+                    "result": { "node": "Lit", "value": "11", "type": "Int", "taint": 0, "at": [42, 112] },
+                    "at": [42, 110]
+                  },
+                  "at": [42, 99]
+                }
+              ],
+              "otherwise": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": "12", "type": "Int", "taint": 0, "at": [42, 124] },
+                "at": [42, 122]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [39, 15]
+            },
+            "at": [39, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [43, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [43, 12]
+            },
+            { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [43, 27] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [43, 12]
+        },
+        "at": [38, 24]
+      },
+      "at": [38, 3]
+    },
+    {
+      "kind": "action",
+      "name": "walk",
+      "params": [{ "id": 6, "name": "x", "type": "Int", "taint": 0, "at": [46, 15] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [47, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [47, 12]
+            },
+            {
+              "node": "CallFn",
+              "fn": "steps",
+              "args": [{ "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [47, 33] }],
+              "type": "Int",
+              "taint": 0,
+              "at": [47, 27]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [47, 12]
+        },
+        "at": [46, 23]
+      },
+      "at": [46, 3]
+    },
+    {
+      "kind": "action",
+      "name": "power",
+      "params": [{ "id": 7, "name": "e", "type": "Int", "taint": 0, "at": [50, 16] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [51, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [51, 12]
+            },
+            {
+              "node": "CallStd",
+              "module": "std/math",
+              "name": "pow",
+              "args": [
+                { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [51, 31] },
+                { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [51, 34] }
+              ],
+              "type": "Int",
+              "taint": 0,
+              "at": [51, 27]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [51, 12]
+        },
+        "at": [50, 24]
+      },
+      "at": [50, 3]
+    }
+  ],
+  "warnings": []
+}

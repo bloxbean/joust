@@ -1,0 +1,63 @@
+jsc 2
+package corpus
+
+enum Phase { Open, Closed { day: Int, by: Key } }
+
+type Item = { name: Bytes, qty: Int }
+
+contract Stmts(maxDatumBytes = 512) {
+  state { owner: Key, phase: Phase, items: List<Item>, last: Option<Int> }
+
+  init() {
+    const first = Item { name: #01, qty: 1 }
+    const shorthand = Item { name: #02, qty: 2, }
+    return { owner: caller, phase: Open, items: [first, shorthand], last: None };
+  }
+
+  action close(day: Int) only owner {
+    match phase {
+      Closed => require(false, "already closed")
+      _ => { }
+    }
+    if day > 10 {
+      require(day < 100, "too late")
+    } else if day > 5 {
+      require(day != 7, "not seven")
+    } else {
+      const d = day * 2
+      require(d >= 0, "never negative")
+    }
+    for (const it of items) {
+      require(it.qty > 0, "positive")
+    }
+    return { ...state, phase: Closed { day, by: caller } }
+  }
+
+  action note(n: Int) {
+    const code = match phase {
+      Open => 0,
+      Closed { day: d, by } => { require(d > 0, "day"); d },
+    }
+    const lastCode = match last { Some(v) => v; None => -1 }
+    return { ...state, last: Some(code + lastCode + n) }
+  }
+
+  destroy settle() only owner {
+    match phase {
+      Closed { by } => {
+        pay(by, balance / 2)
+        pay(owner, balance - balance / 2)
+      }
+      Open => pay(owner, balance)
+    }
+  }
+
+  view phaseCode(): Int = match phase {
+    Open => 0
+    Closed { day } => 100 + day
+  }
+
+  view valueIf(): Int {
+    if items.isEmpty { 0 } else { items.length }
+  }
+}

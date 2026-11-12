@@ -30,14 +30,14 @@ public static Result withdraw(State s, BigInteger amount, Ctx ctx) {
 
 ```jsc
 action withdraw(amount: Int) only owner after unlockAt {
-    require amount > 0 "amount must be positive"
-    require amount <= total "insufficient funds"
-    total -= amount
-    pay amount to owner
+  require(amount > 0, "amount must be positive")
+  require(amount <= total, "insufficient funds")
+  pay(owner, amount)
+  return { ...state, total: total - amount }
 }
 ```
 
-`require <condition> "<message>"` lowers to `Require.that`. The message is required.
+`require(condition, "message")` lowers to `Require.that`. The message is a required string literal.
 
 </TabItem>
 </Tabs>

@@ -7,10 +7,14 @@ import org.julclang.state.dsl.v2.Interpreter.Opt;
 import org.julclang.state.dsl.v2.Interpreter.Rec;
 import org.julclang.state.dsl.v2.JscV2;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * the generated Java (Boolean collections, pass-through imports, strings with escapes, record fields named like list
  * properties, a capitalised const before a block) and the positive forms of the checker's rules.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class JscV2FixturesTest {
 
     static final Map<String, String> FIXTURES = new LinkedHashMap<>();
@@ -113,6 +118,10 @@ class JscV2FixturesTest {
                 + " action a(k: Bytes) { require(!b.has(k), \"x\")\n return state }\n}");
         fixture("BigDeleteOnly", "contract BigDeleteOnly {\n state { b: BigMap<Bytes, Int> }\n init() { return { b: BigMap.empty() } }\n"
                 + " action a(k: Bytes) { return { b: b.delete(k) } }\n}");
+        // M1b review S1: recursion as deep as the budget allows (the chain accepts down(3000) at 20% of its CPU, 56% of its
+        // memory); both interpreters must answer it, not report a limit or refuse.
+        fixture("Deep", "fn down(n: Int): Int = n <= 0 ? 0 : 1 + down(n - 1)\ncontract Deep {\n state { count: Int }\n"
+                + " init() { return { count: 0 } }\n action go(n: Int) { return { ...state, count: down(n) } }\n}");
         // A view reads a nested record field through an accessor helper.
         fixture("Nested", "type In = { k: Key, v: Int }\ntype Out = { i: In, tag: Bytes }\ncontract Nested {\n state { o: Option<Out> }\n"
                 + " init(o: Option<Out>) { return { o } }\n"
@@ -145,8 +154,14 @@ class JscV2FixturesTest {
         return built.contracts().stream().filter(c -> c.name().equals(contract)).findFirst().orElseThrow().transitions();
     }
 
+    /** Each interpreter's contract, and every call it answered, for the JavaScript leg (ADR-0018 D15, M1b). */
+    static final Map<Interpreter, String> NAMES = new IdentityHashMap<>();
+    static final Map<String, List<JsLeg.Call>> JS_CALLS = new LinkedHashMap<>();
+
     static Interpreter interp(String contract) {
-        return JscV2.interpreter(FIXTURES.get("f/" + contract + ".jsc"), contract + ".jsc", Interpreter.JDK_HASHES);
+        var in = JscV2.interpreter(FIXTURES.get("f/" + contract + ".jsc"), contract + ".jsc", Interpreter.JDK_HASHES);
+        NAMES.put(in, contract);
+        return in;
     }
 
     /** The interpreter's next state as data (records Constr 0, Bool Constr 0/1, Option Constr 0 [x] / 1 []: D5). */
@@ -166,14 +181,42 @@ class JscV2FixturesTest {
     }
 
     static String interpreted(Interpreter in, String method, Rec state, List<Object> args) {
+        Interpreter.Outcome o = null;
+        Interpreter.Refused refused = null;
         try {
-            var o = in.call(method, state, args, null);
-            return "ok:" + com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
-                    com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0, data(o.value())),
-                    com.bloxbean.cardano.client.plutus.spec.ListPlutusData.builder().build()).serializeToHex();
+            o = in.transition(method, state, args, null);   // compared with the transition program (no modifiers, §2.6)
         } catch (Interpreter.Refused e) {
-            return "refused";
+            refused = e;
         }
+        String want = refused != null ? "refused" : encoded(o);
+        String contract = NAMES.get(in);
+        JS_CALLS.computeIfAbsent(contract, k -> new ArrayList<>())
+                .add(JsLeg.transitionCall(method, state, args, null, want, o, refused, contract + "." + method + " " + args));
+        return want;
+    }
+
+    /** An outcome as the transition program's result: the next state, no payouts. */
+    static String encoded(Interpreter.Outcome o) {
+        return "ok:" + com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
+                com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0, data(o.value())),
+                com.bloxbean.cardano.client.plutus.spec.ListPlutusData.builder().build()).serializeToHex();
+    }
+
+    /**
+     * ADR-0018 D15 (M1b): every call above, on the JavaScript reference interpreter over the fixture's IR export, agrees
+     * with the Java interpreter and the transition program. Runs last.
+     */
+    @Test
+    @Order(Integer.MAX_VALUE)
+    void theJavaScriptInterpreterAgrees() throws Exception {
+        int total = 0;
+        for (var e : JS_CALLS.entrySet()) {
+            String irJson = JscV2.lower(FIXTURES.get("f/" + e.getKey() + ".jsc"), e.getKey() + ".jsc").irJson();
+            total += JsLeg.check(e.getKey(), irJson, e.getValue(), (method, o) -> encoded(o));
+        }
+        System.out.println("[C10 fixtures] " + total + " calls of " + JS_CALLS.keySet() + ": JavaScript interpreter = Java interpreter"
+                + " = transition program");
+        assertTrue(total > 60, "the tests above recorded their calls: " + total);
     }
 
     static PlutusData argsOf(List<Object> args) {
@@ -249,6 +292,23 @@ class JscV2FixturesTest {
             String want = "ok:" + result(new Rec("State", List.of(BigInteger.valueOf(n == 1 ? 1 : 0))));
             assertEquals(want, interpreted(e, "a", s, List.of(h)));
             assertEquals(want, evaluate(et.get("a"), data(s), NONE, argsOf(List.of(h)), NONE));
+        }
+    }
+
+    /**
+     * M1b review S1: recursion of depth 500 to 3,000, which the transition program (as the chain) evaluates within its
+     * budget, gets the same answer from both interpreters (the JavaScript one in the fifth-leg test below): no limit and
+     * no refusal.
+     */
+    @Test
+    void deepRecursion_thatTheBudgetAllows_isAnsweredByEveryLeg() {
+        var in = interp("Deep");
+        var t = transitions("Deep");
+        Rec s = new Rec("State", List.of(BigInteger.ZERO));
+        for (long n : List.of(500L, 1_000L, 3_000L)) {
+            String want = "ok:" + result(new Rec("State", List.of(BigInteger.valueOf(n))));
+            assertEquals(want, interpreted(in, "go", s, List.of(BigInteger.valueOf(n))), "the Java interpreter, depth " + n);
+            assertEquals(want, evaluate(t.get("go"), data(s), NONE, argsOf(List.of(BigInteger.valueOf(n))), NONE), "the transition program, depth " + n);
         }
     }
 

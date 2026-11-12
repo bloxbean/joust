@@ -7,7 +7,10 @@ import org.julclang.state.dsl.v2.Interpreter.Rec;
 import org.julclang.state.dsl.v2.Interpreter.Tx;
 import org.julclang.state.examples.dsl.Vectors;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.math.BigInteger;
 import java.nio.file.Files;
@@ -29,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * integer signs (D6), Booleans in lists and options (C4), records with bytes, Option in state and redeemer, pays in
  * loops and branches, time predicates and the checked inputs (D5).
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class JscV2FourWayTest {
 
     static final Path DSL = Path.of("../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl");
@@ -246,5 +250,23 @@ class JscV2FourWayTest {
 
     static String ok(Object state) {
         return "ok:" + result(state, null);
+    }
+
+    /**
+     * ADR-0018 D15 (M1b): the fifth leg. Every call the tests above made, on the JavaScript reference interpreter over
+     * the IR export, must agree with the outcome the other four legs agreed on. It runs last, over all of them.
+     */
+    @Test
+    @Order(Integer.MAX_VALUE)
+    void fiveWay_theJavaScriptInterpreterAgrees() throws Exception {
+        int total = 0;
+        for (FourWay f : LEGS.values()) {
+            int n = JsLeg.check(f);
+            System.out.println("[J3 five-way] " + f.name + ": " + n + " calls, JavaScript interpreter = Java interpreter = JVM = transition"
+                    + " program = validator");
+            total += n;
+        }
+        System.out.println("[J3 five-way] %s: %d calls agree on all five legs".formatted("M0", total));
+        assertTrue(total > 0, "the tests above recorded calls");
     }
 }

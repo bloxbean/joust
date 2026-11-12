@@ -1,0 +1,46 @@
+jsc 2
+package corpus
+
+/* A block comment
+   over two lines. */
+contract Exprs {
+  state { n: Int, m: Map<Bytes, Int>, b: BigMap<Bytes, Int>, k: Key, o: Option<Int>, xs: List<Int> }
+
+  init() { return { n: 0, m: Map.empty(), b: BigMap.empty(), k: caller, o: None, xs: [] } }
+
+  action ops(a: Int, c: Int, d: Bool) {
+    const x = a + c * 2 - -a % 3 / (c + 1)
+    const y = !d && a < c || a >= c && a != c
+    const z = (o ?? 0) + (o ?? 1 ?? 2)
+    const w = (a > 0 || d) ? x : y ? 1 : 2
+    const q = (a > 0 && d) == true
+    const bytes = #00ff
+    const none = #
+    const s = #AbCd
+    const big = 123_456_789_012_345_678_901_234_567_890
+    const ada = 5 ada
+    require(x + z + w + big + ada > 0 && q != y, "an \"escaped\" message \\ with a\nnew line")
+    require(length(bytes) == 1 && length(s) == 2 && length(none) == 0, "bytes")
+    return { ...state, n: x }
+  }
+
+  action posts(key: Bytes) {
+    const v = b[key] + m.get(key) ?? 0
+    const chained = b.set(key, 1)[key]
+    const f = xs.map(x => x + 1).filter((x) => x > 1).fold(0, (acc, x) => acc + x)
+    const g = xs.any(x => { const y = x * 2; y > 3 })
+    const h = xs.length + m.size + xs.take(1).drop(0).length
+    const lst = [1, 2, 3,]
+    const lst2 = [0, ...lst]
+    const lst3 = [...lst]
+    const e: List<Int> = []
+    const t = f > 0 ? { ...state, n: f } : state
+    const p = Some(1)
+    require(v + chained + g + h + lst2.length + lst3.length + e.length + t.n >= 0, "uses")
+    return { ...state, n: if v > 0 { v } else if v < 0 { -v } else { 0 }, o: p }
+  }
+
+  view noArgs(): Int = range(0, 3).fold(0, (acc, i) => acc + i)
+
+  view lambdas(): Bool = xs.all(() => true) || xs.contains(1)
+}

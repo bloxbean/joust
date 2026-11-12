@@ -1,0 +1,44 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/token in .jsc 2 (ADR-0018 M1c, J11): an account-model fungible token, balances in a BigMap (a Merkle map,
+// ADR-0002/0014), so any number of holders fit in a datum of about 100 bytes; each call proves only the balances it
+// reads and writes.
+contract Token(maxDatumBytes = 160) {
+  state { admin: Key, supply: Int, balances: BigMap<Key, Int> }
+
+  init() {
+    return { admin: caller, supply: 0, balances: BigMap.empty() }
+  }
+
+  // The admin creates new tokens for a holder.
+  action mint(to: Key, amount: Int) only admin {
+    require(amount > 0, "amount must be positive")
+    return { ...state, supply: supply + amount, balances: balances.set(to, balances[to] + amount) }
+  }
+
+  // A holder sends tokens; an emptied balance is removed from the map (set(k, 0) removes). The recipient's balance is
+  // read through the debit, so a self-transfer keeps the balance.
+  action transfer(to: Key, amount: Int) {
+    require(amount > 0, "amount must be positive")
+    const left = balances[caller] - amount
+    require(left >= 0, "insufficient balance")
+    return { ...state, balances: balances.set(caller, left).set(to, balances.set(caller, left)[to] + amount) }
+  }
+
+  // A holder destroys some of their tokens.
+  action burn(amount: Int) {
+    const left = balances[caller] - amount
+    require(amount > 0 && left >= 0, "cannot burn that much")
+    return { ...state, supply: supply - amount, balances: balances.set(caller, left) }
+  }
+
+  // The admin closes the token once everything has been burned.
+  destroy close() only admin {
+    require(supply == 0 && balances.isEmpty, "tokens are still in circulation")
+    pay(admin, balance)
+  }
+
+  view balanceOf(holder: Key): Int = balances[holder]
+  view supply(): Int = supply
+}

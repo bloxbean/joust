@@ -26,6 +26,10 @@ final class Scaffold {
 
     static final List<String> TEMPLATES = List.of("gradle", "node", "web");
     static final List<String> LANGS = List.of("java", "jsc");
+
+    /** What `joust new -l jsc` says once the project is written (review r2 F4). */
+    static final String LANGUAGE_PREVIEW = ".jsc 2 is a language preview: the same file may compile to a different script hash in a later"
+            + " JOUST, so use it on DevKit and testnets and don't deploy it to hold value (README.md)";
     static final String RELEASES = "https://repo.bloxbean.org/maven/releases";
     static final String SNAPSHOTS = "https://repo.bloxbean.org/maven/snapshots";
     static final Set<String> KEYWORDS = Set.of("abstract", "assert", "boolean", "break", "byte", "case", "catch",
@@ -141,6 +145,15 @@ final class Scaffold {
         vars.put("contract", contract);
         vars.put("pluginRepositories", pluginRepositories(r));
         vars.put("repositories", repositories(r));
+        // ADR-0018 D14: .jsc 2, as a preview, with its ABI manifest beside it (a first build fails without one: JSC0003).
+        vars.put("jscNote", jsc ? "\n**The contract is written in `.jsc` 2, a language preview** (ADR-0018). The language and the compiler's"
+                + "\noutput may change before it leaves preview, so the same `Counter.jsc` may compile to a different script hash in a later"
+                + "\nJOUST (milestone M1e changed once the hash of every `.jsc` 2 script with a generated check). Use it on DevKit and"
+                + "\ntestnets, and don't deploy it to hold value; a deployed preview contract is rebuilt with the JOUST version it was"
+                + "\nbuilt with (this project's plugin version). `Counter.abi.json` beside it records how the state and the calls are"
+                + "\nencoded on chain: the build fails when the encoding changes (JSC0002), until you accept the change with"
+                + "\n`./gradlew acceptJscAbi` and commit the new manifest."
+                + "\nThe Java the build generates from it is in `build/generated/sources/jsc`.\n" : "");;
 
         Map<String, byte[]> files = new LinkedHashMap<>();
         files.put("settings.gradle", text("settings.gradle", vars));
@@ -149,6 +162,7 @@ final class Scaffold {
         files.put(".gitignore", text("gitignore", vars));
         files.put("README.md", text("README.md", vars));
         files.put(contract, text(jsc ? "Counter.jsc" : "Counter.java", vars));
+        if (jsc) files.put(contract.replace(".jsc", ".abi.json"), text("Counter.abi.json", vars));
         files.put("src/main/java/" + path + "/CounterMain.java", text("CounterMain.java", vars));
         files.put("src/main/java/" + path + "/Devnet.java", text("Devnet.java", vars));
         files.put("src/test/java/" + path + "/CounterTest.java", text("CounterTest.java", vars));

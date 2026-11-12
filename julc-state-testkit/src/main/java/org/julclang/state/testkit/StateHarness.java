@@ -1,6 +1,5 @@
 package org.julclang.state.testkit;
 
-import org.julclang.clientlib.JulcScriptLoader;
 import org.julclang.clientlib.PlutusDataAdapter;
 import org.julclang.core.PlutusData;
 import org.julclang.core.Program;
@@ -86,14 +85,14 @@ public final class StateHarness<S> {
             throw new IllegalStateException(e);
         }
         this.seed = new TxOutRef(new TxId(fill(32, 0x5E)), BigInteger.ZERO);
-        var ov = JulcScriptLoader.load(org.julclang.state.verifier.OutputVerifier.class);
+        var ov = org.julclang.state.runtime.ValidatorScripts.load(org.julclang.state.verifier.OutputVerifier.class);
         this.outputVerifier = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(ov.getCborHex())));
         try {
             this.outputVerifierHash = ov.getScriptHash();
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
-        var v = JulcScriptLoader.load(org.julclang.state.verifier.MapVerifier.class);
+        var v = org.julclang.state.runtime.ValidatorScripts.load(org.julclang.state.verifier.MapVerifier.class);
         this.verifier = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(v.getCborHex())));
         try {
             this.verifierHash = v.getScriptHash();
@@ -749,6 +748,17 @@ public final class StateHarness<S> {
         BigInteger to = T0.add(WINDOW_MS);
         var plan = org.julclang.state.runtime.Batcher.fold(codec, live.state(),
                 live.lovelace().subtract(BigInteger.valueOf(spec.minAda())), pending, T0, to, Integer.MAX_VALUE);
+        return batch(live, codec, intents, plan);
+    }
+
+    /**
+     * A batch transaction for a given {@code plan} rather than the JVM's fold: the plan's applied intents (each one of
+     * {@code intents}), their payouts, and its final state and balance. A test states the outcome it expects (from an
+     * independent oracle, ADR-0018 J3) or a wrong one, and the validator judges it.
+     */
+    public Batch<S> batch(Live<S> live, org.julclang.state.runtime.IntentCodec<S> codec, List<LiveIntent> intents,
+                          org.julclang.state.runtime.Batcher.Plan<S> plan) {
+        BigInteger to = T0.add(WINDOW_MS);
         var tx = new TxModel(TxModel.Kind.ACTION);
         var inputs = new ArrayList<TxInInfo>();
         inputs.add(new TxInInfo(live.ref(), stateOut(live.state(), live.lovelace())));

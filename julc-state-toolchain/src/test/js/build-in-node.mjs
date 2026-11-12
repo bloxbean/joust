@@ -32,6 +32,11 @@ for (const m of modules) {
   }
   const t = Date.now();
   const r = engine.joust.build({ files, options: {} });
+  // Review r3 F13: a built engine reports the versions it was built with, never 'dev'.
+  if (!r.joust || r.joust === 'dev' || !r.julc || r.julc === 'dev') {
+    console.log(`DIFF engine versions: joust ${r.joust}, julc ${r.julc}`);
+    failures++;
+  }
   const ms = Date.now() - t;
   if (!r.ok) {
     failures++;
@@ -39,17 +44,19 @@ for (const m of modules) {
     continue;
   }
   // ADR-0018 D12: the engine returns the Java each .jsc file lowered to (Gradle's, byte for byte) and its ABI manifest
-  // (the committed one).
+  // (the committed one); D15 (M1b): and its checked IR (Gradle's Name.ir.json, byte for byte).
   for (const g of r.generated ?? []) {
     const gradle = join(examples, m, 'build/generated/sources/jsc/java/main', g.javaFile);
     const javaSame = existsSync(gradle) && readFileSync(gradle, 'utf8') === g.java;
     const committed = join(examples, m, 'src/main/jsc', g.jscFile.replace(/[^/]+\.jsc$/, ''), g.javaFile.split('/').pop().replace(/\.java$/, '.abi.json'));
     const abiSame = !g.abi || (existsSync(committed) && readFileSync(committed, 'utf8') === g.abi);
-    if (!javaSame || !abiSame) {
+    const gradleIr = gradle.replace(/\.java$/, '.ir.json');
+    const irSame = !g.abi || (!!g.ir && existsSync(gradleIr) && readFileSync(gradleIr, 'utf8') === g.ir);
+    if (!javaSame || !abiSame || !irSame) {
       failures++;
-      console.log(`DIFF generated ${g.javaFile}: java:${javaSame} abi:${abiSame}`);
+      console.log(`DIFF generated ${g.javaFile}: java:${javaSame} abi:${abiSame} ir:${irSame}`);
     } else if (g.abi) {
-      console.log(`same generated ${g.javaFile} (source map, ABI manifest)`);
+      console.log(`same generated ${g.javaFile} (source map, ABI manifest, IR)`);
     }
   }
   for (const c of r.contracts) {

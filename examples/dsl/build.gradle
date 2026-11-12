@@ -50,6 +50,83 @@ def checkJscAbi = tasks.register('checkJscAbi', JavaExec) {
 }
 tasks.named('check') { dependsOn checkJscAbi }
 sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
+// ADR-0018 D12 (r12): each contract's message map is a resource beside its classes (the runtime explains refusals with it).
+tasks.named('processResources') { from(files(jscOut).builtBy(generateJsc)) { include '**/*.jscmap.json' } }
 
-// ADR-0018 M0: Option through the portable codecs (ADR-0013 D4, experimental) is checked on the .jsc 2 contracts.
-tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.portable=true'] }
+// ADR-0018 M1c (J11): the Java examples' own tests, run against their .jsc 2 ports (src/main/jsc/.../{Vault,Escrow,
+// Crowdfund,Token,Pool}.jsc). copyPortTests copies each example's test sources with three textual changes: the package
+// becomes the ports' package, each class gets a Port suffix, and the init is called by its .jsc 2 name (init). Nothing
+// else changes, so a port passes exactly the scenarios (unit, attack suite, description, DevKit) its Java example passes,
+// and the two cannot drift apart. :examples:dsl:test runs them (this task only copies). It fails closed (review F7):
+// an example's src/test holding anything the rule does not copy (a subpackage, a helper class, resources) stops the build.
+def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['Crowdfund', 'launch'],
+             token: ['Token', 'create'], pool: ['Pool', null]]
+def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
+def copyPortTests = tasks.register('copyPortTests', Sync) {
+    description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'
+    // The rewrite below is code, not a file: state it as an input, so a changed rule re-runs the copy.
+    inputs.property('ports', ports.collect { k, v -> "${k}=${v}" }.join(','))
+    inputs.property('rules', 'package; class <X>Test -> <X>PortTest; DescriptionTest -> <Contract>DescriptionPortTest; <Contract>.<init>( -> <Contract>.init(')
+    ports.keySet().each { example -> inputs.dir(rootProject.file("examples/${example}/src/test")) }
+    into portTestsOut
+    doFirst {
+        ports.keySet().each { example ->
+            def root = rootProject.file("examples/${example}/src/test")
+            def pkg = new File(root, "java/org/julclang/state/examples/${example}")
+            root.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+                if (f.parentFile != pkg || !f.name.endsWith('Test.java')) {
+                    throw new GradleException("copyPortTests cannot run ${rootProject.relativePath(f)} against the ${example} port: only " +
+                            "*Test.java directly in ${rootProject.relativePath(pkg)} are copied; extend the copy rule (examples/dsl/build.gradle)")
+                }
+            }
+        }
+    }
+    ports.each { example, port ->
+        String contract = port[0]
+        String init = port[1]
+        from(rootProject.file("examples/${example}/src/test/java/org/julclang/state/examples/${example}")) {
+            include '*Test.java'
+            into 'org/julclang/state/examples/dsl'
+            rename { String f -> f == 'DescriptionTest.java' ? "${contract}DescriptionPortTest.java" : f.replace('Test.java', 'PortTest.java') }
+            filter { String line ->
+                String out = line.replace("package org.julclang.state.examples.${example};", 'package org.julclang.state.examples.dsl;')
+                        .replaceAll(/\bclass (\w+)Test\b/, 'class $1PortTest')
+                        .replace('class DescriptionPortTest', "class ${contract}DescriptionPortTest")
+                if (init != null) out = out.replace("${contract}.${init}(", "${contract}.init(")
+                return out
+            }
+        }
+    }
+}
+sourceSets.test.java.srcDir(files(portTestsOut).builtBy(copyPortTests))
+
+// ADR-0018 D16: the v1 files translated to .jsc 2, into build/jsc-migrated (src/main/jsc is not changed).
+tasks.register('migrateJsc', JavaExec) {
+    description = 'Translates the .jsc v1 files of src/main/jsc to .jsc 2, into build/jsc-migrated'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    args '--migrate', jscSrc.path, layout.buildDirectory.dir('jsc-migrated').get().asFile.path
+}
+
+// ADR-0018 D12: javac's diagnostics on the generated Java, reported again at their .jsc positions (as the plugin does).
+def javacLog = layout.buildDirectory.file('jsc/javac.log').get().asFile
+def remapJsc = tasks.register('remapJscDiagnostics', JavaExec) {
+    description = 'Reports compileJava\'s diagnostics on Java generated from .jsc at their .jsc positions'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    def log = javacLog
+    onlyIf { log.length() > 0 }
+    args '--remap', log.path, jscOut.get().asFile.path, jscSrc.path
+    doLast { log.delete() }
+}
+tasks.named('compileJava') {
+    def log = javacLog
+    doFirst {
+        log.parentFile.mkdirs()
+        log.text = ''
+        def append = { log.append(it.toString()) } as StandardOutputListener
+        logging.addStandardOutputListener(append)
+        logging.addStandardErrorListener(append)
+    }
+    finalizedBy remapJsc
+}

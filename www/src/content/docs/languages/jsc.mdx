@@ -1,544 +1,578 @@
 ---
 title: ".jsc"
-description: "Write a JOUST contract in .jsc, a compact contract language with mutable-looking state, and see how it lowers to a Java @StateContract."
+description: "Write a JOUST contract in .jsc 2, an immutable, expression-oriented contract language that reads like TypeScript and lowers to a Java @StateContract."
 ---
 
-import { Tabs, TabItem, Aside, Steps, LinkCard, CardGrid, FileTree } from '@astrojs/starlight/components';
+import { Tabs, TabItem, Aside, LinkCard, CardGrid, FileTree } from '@astrojs/starlight/components';
 
-`.jsc` is JOUST's contract language. You write state fields and methods that look like assignments
-(`total += received`, `points[to] += n`), and the build lowers each file to an ordinary Java `@StateContract`
-class. From there everything is the same as for a contract written in Java: the JOUST processor generates the
-validator and the typed client, and JuLC compiles the validator to UPLC.
+`.jsc` is JOUST's contract language. Version 2 reads like TypeScript: a contract is its state, an `init` that returns
+the first state, actions that return the next one (`{ ...state, count: count + by }`), destroys that pay out, and
+views. Values never change, every `if` and `match` is an expression, and lists, records, enums, options and maps are
+built in. The build lowers each file to an ordinary Java `@StateContract` class; from there everything is the same as
+for a contract written in Java: the JOUST processor generates the validator and the typed client, and JuLC compiles the
+validator to UPLC.
 
-Use `.jsc` when your contract fits its subset (integers, booleans, bytes, keys and one kind of map) and you want
-the shortest readable source. Use [Java](/languages/java/) when you need loops, your own records, owned objects,
-native assets or any annotation `.jsc` has no modifier for. You can switch at any time: the generated Java is
-plain and readable, and you can keep it as your new source.
+<Aside type="caution" title="A language preview">
+`.jsc` 2 is a language preview ([ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)
+D14), not to be confused with Cardano's preview network. The language and the compiler's output may change before it
+leaves preview, so the same file may compile to a different script hash in a later JOUST (milestone M1e changed once
+the hash of every `.jsc` 2 script with a generated check). Use it on DevKit and testnets, and don't deploy it to hold value; a deployed preview
+contract is rebuilt with the JOUST version recorded for it: each record of `build/joust/deployments.<network>.json` states
+it (commit those files if you must rebuild a deployed script later; `build/` is ignored), or the plugin's version.
+It covers the core language (milestone M1). Native assets, sends, mints, deploy parameters, events and reads of other
+contracts arrive in M2; owned and keyed objects and script purposes in M3; `.jsc` libraries and
+offline tests in M4. Until then, write a contract that needs one of them in [Java](/languages/java/). `.jsc` becomes
+the recommended language for JavaScript developers only after M2, M4 and an independent security review of the
+lowering.
+</Aside>
+
+A file that does not start with `jsc 2` is a `.jsc` **v1** file. v1 keeps compiling, with a deprecation warning
+(`JSC9006`); [`joust migrate`](/languages/jsc-migration/) translates it. Its reference is [.jsc v1](/languages/jsc-v1/).
 
 ## Why it exists
 
-A Java `@StateContract` is readable, but its immutability shows. Every update rebuilds the state record, and every
-map write threads a new map value through the method. Developers who know Solidity expect `total += received` and
-`balances[to] += amount`. `.jsc` gives them that surface and lowers it to the same Java a careful author would write
-([ADR-0005](https://github.com/bloxbean/joust/blob/main/docs/adr/0005-option-e-jsc-dsl.md)).
+A Java `@StateContract` is readable, but it is Java: `BigInteger.compareTo`, `ByteStringLib.equals`, records rebuilt
+field by field. `.jsc` 2 gives JavaScript developers the same contract model in the syntax they know, and it removes
+the ways to get the subset wrong: there is no `byte[] ==`, no fixed-width integer, no mutable local.
 
-The design choice that matters most: **`.jsc` lowers to Java, not to UPLC.** Nothing new is trusted on chain. The
-validator's invariants (thread token, exact datum, exact value, verified `Ctx`, tagged payouts) come from the JOUST
-processor, exactly as for a Java contract. The same generated method runs on the JVM to build the transaction and on
-chain to check it.
+**`.jsc` lowers to Java, not to UPLC.** Nothing new is trusted on chain. The validator's invariants (thread token,
+exact datum, exact value, verified `Ctx`, tagged payouts) come from the JOUST processor, exactly as for a Java
+contract, and the same generated method runs on the JVM to build the transaction and on chain to check it.
 
 <Aside type="caution" title="A miscompile is still your bug">
 The trusted base does not grow, but a wrong lowering would produce a contract that the validator then enforces
-faithfully. The checker's rules and the tests in `julc-state-dsl` and `examples/dsl` are the defence. Read the
-generated Java of any contract that holds real value: it is short, and each statement carries a comment with its
-`.jsc` line.
+faithfully. The checker's rules, the four-way differential tests (a reference interpreter, the JVM, the transition
+program and the validator must agree) and the generated checks are the defence. Read the generated Java of any
+contract that holds real value: every line carries a comment with its `.jsc` position.
 </Aside>
 
 ## A first contract
 
-`Jar.jsc` is a tip jar: anyone tips (directly or as a batched intent), and the owner withdraws, with a rule that
-applies before the goal is reached.
+This is the counter `npm create joust` writes:
 
-```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Jar.jsc"
-package org.julclang.state.examples.dsl
+```jsc title="contracts/app/Counter.jsc"
+jsc 2
+package app
 
-// A tip jar: anyone tips (also as a batched intent); the owner withdraws.
-contract Jar(maxDatumBytes = 192) {
-    state owner: Key
-    state goal: Int
-    state total: Int
-    state tips: Int
+// A counter anyone can increment and only its owner can reset or close.
+contract Counter(maxDatumBytes = 128) {
+  // The state, stored as the inline datum of the state UTxO.
+  state { count: Int, owner: Key }
 
-    init(goal: Int) payable {
-        require goal > 0 "the goal must be positive"
-        owner = caller
-        this.goal = goal
-        total = received
-    }
+  // The deployer becomes the owner; the count starts at 0.
+  init() {
+    return { count: 0, owner: caller }
+  }
 
-    action tip() payable batched {
-        require received >= 1 ada "tip at least 1 ADA"
-        total += received
-        tips += 1
-    }
+  // Anyone can increment by a positive amount (it never reads caller: no signature needed, cheaper).
+  action increment(by: Int) {
+    require(by > 0, "increment must be positive")
+    return { ...state, count: count + by }
+  }
 
-    // Before the goal is reached, the owner may take at most half of what the jar holds.
-    action withdraw(amount: Int) only owner {
-        require amount > 0 && amount <= balance "bad amount"
-        if total < goal {
-            require amount * 2 <= balance "before the goal, at most half"
-        }
-        pay amount to owner
-    }
+  // Only the owner can reset.
+  action reset() only owner {
+    return { ...state, count: 0 }
+  }
 
-    destroy close() only owner {
-        pay balance to owner
-    }
+  // Only the owner can close the counter; the deposit goes back to them.
+  destroy close() only owner {
+    pay(owner, balance)
+  }
 
-    view reached(): Bool = total >= goal
+  // A read-only view (off-chain, no transaction).
+  view count(): Int = count
 }
 ```
 
-The build turns this into `Jar.java`, then into `JarValidator` and `JarClient`. The Yaci DevKit test drives it like
-any other contract:
-
-```java title="examples/dsl/src/test/java/org/julclang/state/examples/dsl/DslDevnetTest.java"
-var jar = JarClient.deploy(runtime, owner, ada(50), ada(5));   // goal 50 ADA, 5 ADA received
-jar.tip(ann, ada(3));                                          // a direct call
-Instant later = Instant.now().plus(Duration.ofMinutes(30));
-var a = CompletableFuture.supplyAsync(() -> jar.tipIntent(ann, ada(4), later));   // an intent
-var batch = jar.batch(batcher, 8);                             // a batcher applies the intents
-assertThrows(RequireException.class, () -> jar.withdraw(owner, ada(10)));       // more than half, before the goal
-var closed = jar.close(owner);
-```
+Beside it the project commits `Counter.abi.json`, the contract's [ABI manifest](#the-abi-manifest): how its state and
+its calls are encoded on chain. `joust build` (or Gradle) turns the file into `Counter.java`, then into the validator
+and a client with `deploy`, `increment`, `reset`, `close` and `count`.
 
 ## A guided tour
 
-### The file and the contract header
+### The file
 
-A `.jsc` file holds exactly one contract. It starts with a package (a `;` after it is optional; package segments
-may be `.jsc` keywords), then `contract Name`, then optional options in parentheses:
+A `.jsc` 2 file starts with `jsc 2` (comments may come before it), then a `package`, then any number of `import`s,
+`type`s, `enum`s and `fn`s, and exactly one `contract`:
 
-```jsc
-package org.example.jar
+```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Pledges.jsc (head)"
+jsc 2
+package org.julclang.state.examples.dsl
 
-contract Jar(maxDatumBytes = 192, maxValidityMs = 600000) { ... }
+import { blake2b_224 } from "std/crypto"
+import { slice, length } from "std/bytes"
+
+type Share = { to: Key, bps: Int }
+
+fn total(shares: List<Share>): Int = shares.fold(0, (acc, s) => acc + s.bps)
+
+contract Pledges(maxDatumBytes = 1024) {
+  ...
+}
 ```
 
-The options are the `@StateContract` elements of the same name, with integer values:
+Comments are `//` and `/* … */`. Newlines do not end statements; `;` between statements is optional. An index's `[`
+and a call's `(` must be on the line of what they follow (on a later line they start a new expression), and a line that
+starts with `-` continues the expression above it, with a warning (`JSC9007`): see
+[the reference](/languages/jsc-reference/#lexical-rules). The generated class
+goes to `<package path>/<Contract>.java`: its name comes from the `contract` line, not from the file name.
 
-| Option | Meaning | Default when omitted |
+The contract's options are the `@StateContract` elements of the same name ([Annotations](/reference/annotations/)):
+
+| Option | Meaning | Default |
 |---|---|---|
-| `minAda` | Lovelace locked as the state UTxO's min-ADA deposit, on top of the contract's funds | `0`: derived from `maxDatumBytes` |
+| `minAda` | Lovelace locked as the state UTxO's min-ADA deposit (`2 ada` is allowed) | derived from `maxDatumBytes` |
 | `maxDatumBytes` | Largest serialised state the validator accepts | `512` |
-| `maxValidityMs` | Widest validity interval a call that reads `Ctx` may use, in POSIX ms | `3600000` (one hour) |
+| `maxValidityMs` | Widest validity interval a call that reads the transaction may use, in POSIX ms | `3600000` (one hour) |
 
-The generated class goes to `<package path>/<Name>.java`: the name comes from the `contract` line, not from the file
-name. Comments are line comments (`//`). Newlines are not significant, and `;` after a statement is optional.
+### State
 
-### State fields and types
+`state { … }` declares the state record once, its fields in order: `state { owner: Key, goal: Int, raised: Int }`. A
+field has any type the language has, a `BigMap` included. Inside a method a bare field name reads the **input** state,
+and `state` is the whole input state. The input never changes, so the order of reads cannot matter.
 
-Each `state name: Type` line declares one component of the state record, in order. A contract needs at least one.
+| Type | What it is |
+|---|---|
+| `Int` | The only number type: arbitrary precision, as on chain. `1_000_000`, `5 ada` (5,000,000 lovelace) |
+| `Bool` | `true`, `false` |
+| `Bytes` | A byte string: `#cafe`, or `utf8("text")` |
+| `Key` | A 28-byte key hash. A `Key` is also `Bytes`; `Bytes` become a `Key` only through `asKey(b)`, a checked conversion |
+| `Hash` | A 28-byte script hash or policy id (`asHash(b)`) |
+| `List<T>` | `[a, b]`, `[x, ...xs]` |
+| `Option<T>` | `Some(x)` or `None` |
+| `Map<K, V>` | An inline map in the datum, in canonical key order; keys are `Bytes`, `Key` or `Hash` of at most 64 bytes |
+| `BigMap<K, Int>`, `BigMap<K, Bytes>` | A Merkle map: any number of entries behind a 32-byte root ([MerkleMaps](/contracts/merklemaps/)); a state field only |
+| `type R = { … }` | Your records |
+| `enum E { A, B { x: Int } }` | Your sum types |
 
-| `.jsc` type | Java type | Notes |
+The [reference](/languages/jsc-reference/#types-and-their-encodings) gives each type's on-chain encoding.
+
+### Methods and their results
+
+| Member | Form | Its value |
 |---|---|---|
-| `Int` | `BigInteger` | Arbitrary precision, as on chain |
-| `Bool` | `boolean` | |
-| `Bytes` | `byte[]` | Hex literals: `#cafe` |
-| `Key` | `byte[]` | A 28-byte key hash (a payment key or script hash) |
-| `Map<Key, Int>` | `MerkleMap` | An unbounded map with non-negative integer values, stored as a 32-byte root ([MerkleMaps](/contracts/merklemaps/)) |
+| `init` | `init(params) [payable] { … }` (exactly one, no name) | the first state: `return { count: 0, owner: caller }` |
+| `action` | `action name(params) modifiers { … }` | the next state: `return { ...state, count: count + by }` |
+| `destroy` | `destroy name(params) modifiers { … }` | nothing: it ends the instance, and must `pay` out what it holds |
+| `view` | `view name(params): T = expr`, or a block | a value, computed off chain without a transaction |
 
-A `Key` is also `Bytes`, but `Bytes` is not a `Key`. Keys come from `caller`, from `Key` parameters and fields, and
-from 28-byte hex literals (56 hex digits). Every `Key` parameter of an `init`, `action` or `destroy` gets a generated
-check that it is 28 bytes long: a wrong-length key could never sign (an `only` check would lock the contract) or
-would credit a key nobody holds.
+A block's value is its last expression; `return e` as the last statement means the same, and there is no early
+return. An object literal of the state type gives every field, explicitly or through one leading `...state`; unknown
+fields, a field given twice and a spread of another type are errors. `{ goal }` is short for `{ goal: goal }`. An
+action that changes nothing returns `state`.
 
-A `Map<Key, Int>` can only be a state field: not a parameter, a `let`, a view's result, or a value you assign whole.
-
-### Methods: init, action, destroy, view
-
-| Member | Form | Lowers to |
-|---|---|---|
-| `init` | `init(params) modifiers { ... }` (exactly one, no name) | `@Init public static State init(...)` |
-| `action` | `action name(params) modifiers { ... }` | `@Action`, returning `State` (or `Outcome` when it pays) |
-| `destroy` | `destroy name(params) modifiers { ... }` | `@Destroy`, returning `JulcList<Payout>` |
-| `view` | `view name(params): Type = expression` | `@View`, a single expression |
-
-Method names must be unique (no overloading). In `init`, `Int`, `Bool` and `Map` fields start at `0`, `false` and
-empty; every `Bytes` and `Key` field must be assigned on every path. A destroy ends the instance, so it cannot assign
-state: it only checks and pays. A view runs off chain without a transaction, so it cannot read `caller`,
-`received`, `balance` or the time.
-
-See [State and lifecycle](/contracts/state-and-lifecycle/) for what each kind of method means on chain.
-
-### Names and built-ins
-
-A bare name resolves, in order, to a `let`, a parameter, a state field, then a built-in:
-
-| Built-in | Type | Java |
-|---|---|---|
-| `caller` | `Key` | `ctx.caller()`: the signer the validator verified |
-| `received` | `Int` | `ctx.received()`: lovelace this call adds |
-| `balance` | `Int` | `ctx.balance()`: lovelace the instance holds, the min-ADA deposit included |
-| `validFrom` | `Int` | `ctx.validFrom()`: lower bound of the validity interval (POSIX ms) |
-| `validTo` | `Int` | `ctx.validTo()`: upper bound of the validity interval (POSIX ms) |
-
-`this.f` names the state field `f` even when a parameter has the same name, and reads its **current** value (after
-earlier assignments in the method). That is how `init(goal: Int)` assigns the field: `this.goal = goal`.
-
-Names cannot be redeclared or shadowed, cannot contain `__` (generated locals use it), and cannot be Java keywords,
-built-ins, function names or names the generated client uses (`deploy`, `state`, `batch`, `intent` and others; see
-the [reference](/languages/jsc-reference/#reserved-names)). The method gets a `Ctx ctx` parameter automatically
-when it needs one; you never write it. See [Ctx, funds and payouts](/contracts/ctx-and-funds/).
-
-### Assignments and lets
+An `init` has no input state, so its parameters may share the names of the fields it creates:
 
 ```jsc
-total += received        // a state field: =, += or -= (+= and -= need an Int field)
-this.goal = goal         // the field, when a parameter shares its name
-let have = points[caller]   // an immutable local, visible to the end of its block
+init(goal: Int, deadline: Int, shares: List<Share>, label: Bytes) {
+  require(goal > 0, "the goal must be positive")
+  return { owner: caller, goal, deadline, raised: 0, shares, tag: slice(blake2b_224(label), 0, 8), lastBacker: None }
+}
 ```
 
-Each assignment becomes a fresh local in the generated Java (single static assignment), which fits JuLC's rule that
-locals are immutable. Parameters, `let`s and built-ins are read-only.
+In every other method a parameter, `const` or binding may not take a state field's name or a built-in's (`JSC0213`,
+which suggests `newOwner`): `goal` always means the state's `goal`.
 
-A `let` must be used. JuLC may drop an unused binding on chain while the JVM still evaluates it, so
-`let x = 100 / d` must not look like a check. Write a `require` instead.
+### The transaction: built-ins
 
-### require
+| Name | Type | Meaning |
+|---|---|---|
+| `caller` | `Key` | The signer the validator verified |
+| `received` | `Int` | Lovelace this call adds (a `payable` method) |
+| `balance` | `Int` | Lovelace the instance holds, the min-ADA deposit included |
+| `validFrom`, `validTo` | `Int` | The bounds of the transaction's validity interval, POSIX ms: [time values](#time) |
+
+A method gets the transaction (a generated `Ctx ctx` parameter) only when it reads one of these, or has a modifier
+that needs it. Views and `fn`s never do (`JSC0415`): pass what they need as arguments.
+
+### require, pay and modifiers
 
 ```jsc
-require amount > 0 && amount <= balance "bad amount"
+require(amount > 0 && amount <= balance, "bad amount")
+pay(owner, balance)
 ```
 
-A condition, then a message string. It lowers to `Require.that(cond, "message")`: on the JVM a failing call throws
-`RequireException` with the message before anything is submitted; on chain it fails the script with the message as
-a trace. Strings have no escapes and stay on one line. See [Require and errors](/contracts/require-and-errors/).
+`require(cond, "message")` fails the call unless `cond` holds: on the JVM it throws `RequireException` before anything
+is submitted, on chain it fails the script with the message as a trace. `pay(to, amount)` adds a payout of `amount`
+lovelace to the `Key` `to`: payouts are in source order, an amount of 0 is skipped and a negative one fails. `pay` is
+allowed only in an action or destroy, never in `init`, a view, a `fn`, a lambda or a value block (`JSC0404`,
+`JSC0413`). See [Ctx, funds and payouts](/contracts/ctx-and-funds/).
 
-### Modifiers
+Modifiers follow the parameter list:
 
-Modifiers follow the parameter list and map one to one onto annotations:
-
-| Modifier | Annotation | Applies to |
+| Modifier | Annotation | Allowed on |
 |---|---|---|
 | `payable` | `@Payable`: the call may add lovelace (`received`) | `init`, `action` |
 | `only f` | `@SignedBy("f")`: the `Key` field `f` must sign | `action`, `destroy` |
-| `after f` | `@ValidAfter("f")`: the transaction is valid only after the `Int` field `f` | `action`, `destroy` |
-| `before f` | `@ValidBefore("f")`: the transaction is valid only before the `Int` field `f` | `action`, `destroy` |
-| `batched` | `@Batched`: the action may also run as an intent | `action` |
+| `after f` | `@ValidAfter("f")`: valid only after the `Int` field `f` | `action`, `destroy` |
+| `before f` | `@ValidBefore("f")`: valid only before the `Int` field `f` | `action`, `destroy` |
+| `open` | none: you state that anyone may call a method that pays | `action`, `destroy` |
+| `batched` | `@Batched`: the action also runs as an intent that a batcher applies ([Batched intents](/contracts/batched-intents/)) | `action` |
 | `batched only` | `@Batched(only = true)`: the action runs only as an intent | `action` |
-| `open` | none: you state that anyone may call a method that pays out | `action`, `destroy` |
 
-The checker applies the processor's rules at `.jsc` positions. `only`, `after` and `before` need a field of the
-right type and don't apply to `init` (there is no current state yet) or to a `batched` action (the batcher signs the
-batch: check `caller` or the time in the body). `batched` is for actions only, and not in a contract with Map state.
-See [Authorization](/contracts/authorization/), [Time](/contracts/time/) and
-[Batched intents](/contracts/batched-intents/).
-
-<Aside type="note">
-`batched only owner` reads as `batched` plus `only owner`, which the checker then rejects. `batched only` with no
-field after it is the intent-only form.
+<Aside type="danger" title="A method that can pay needs an audience">
+An action or destroy that can reach a `pay` in any arm or loop must say who may call it: `only <key field>`, or `open`
+if anyone may, in which case its `require`s are the only guard (`JSC0408`). A destroy must pay at least once
+(`JSC0409`), and the checker warns when it never reads `balance` (`JSC9001`): a destroy must pay out everything the
+instance holds, the deposit included, or every call is rejected.
 </Aside>
 
-### Paying out
+### Immutable values
 
-```jsc
-pay amount to owner
-```
+A name is bound once, with `const`, and never changes. The JavaScript habits that would change one are errors that
+say what to write instead:
 
-`pay amount to key` adds a payout of `amount` lovelace to a `Key`. An action that pays returns a generated
-`Outcome(State state, JulcList<Payout> payouts)`; a destroy returns the payouts. A negative amount fails with a
-located message (`Jar.jsc:29: a payout cannot be negative`), and an amount of 0 is skipped, because the validator
-rejects zero payouts. `init` cannot pay: the instance starts with everything it receives.
+| You write | You get |
+|---|---|
+| `let x = 1`, `var x = 1` | `JSC0128`: values are immutable in .jsc: write `const x = …` |
+| `x = 2`, `x += 1`, `x++` | `JSC0130` (`JSC0135` for a prefix `++`): build a new value, e.g. `return { ...state, x: x + 1 }` |
+| `a === b` | `JSC0133`: write `==`: `.jsc` equality is always by value |
+| `for (let i = 0; …)`, `while`, `for … in` | `JSC1001`, `JSC1003`, `JSC1002`: use `xs.fold(…)`, `range(a, b)`, `for (const x of xs)` or a recursive `fn` |
+| `function f() {}` | `JSC0115`: functions are written `fn name(x: Int): Int = …` |
+| `class`, `this`, `new` | `JSC0116`/`JSC0140`, `JSC0139`, `JSC0142`: records are `type Name = { f: T }`, a bare field name reads the state |
+| `null`, `undefined` | `JSC0138`: use `Option<T>` with `None` and `Some(x)` |
+| `async`, `await` | `JSC0123`/`JSC0141`: a call runs in one transaction |
+| `switch` | `JSC0908`: write `match e { A => …, B { x } => … }` |
+| `return` before the end of a block | `JSC0129`: a block's value is its last expression |
 
-<Aside type="danger" title="A method that pays needs an audience">
-An action or destroy that pays must say who may call it: `only <key field>`, or `open` if anyone may, in which case
-its `require`s are the only guard. Without one of them the checker refuses the method, so that
-`action drain(to: Key) { pay balance to to }` cannot be written by accident.
-</Aside>
+Every `const` must be used (`JSC0215`): JuLC may drop an unused binding on chain while the JVM still evaluates it, so
+`const x = 100 / d` must not look like a check. Write a `require` instead.
 
-A destroy must pay out everything the instance holds, the min-ADA deposit included, or the validator rejects every
-call. The checker warns when a destroy never reads `balance`.
+### Conditionals and match
 
-### if and else
+`if c { a } else { b }` is an expression when both arms end in a value; `c ? a : b` is its short form. Without an
+`else`, or with arms that end in statements, an `if` is a statement: its arms may `require` and `pay`. Only the taken
+arm runs, on the JVM and on chain.
 
-```jsc
-if total < goal {
-    require amount * 2 <= balance "before the goal, at most half"
+`match` takes an enum or an `Option`, must be exhaustive, and is an expression or a statement. From `Ledger.jsc`:
+
+```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Ledger.jsc (excerpts)"
+enum Phase {
+  Open,
+  Paused { reason: Bytes },
+  Closed { day: Int, by: Key }
 }
-```
 
-`if cond { ... } else { ... }`, with `else if` chains. Only the taken arm runs, on the JVM and on chain, so a
-division or a map read in an untaken arm never happens. The right side of a false `||` does not run either.
-`Guards.jsc` is the fixture that checks both on chain:
+  view phaseCode(): Int = match phase {
+    Open => 0
+    Paused { reason } => 1 + length(reason)
+    Closed { day } => 100 + day
+  }
 
-```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Guards.jsc"
-action set(d: Int) {
-    if d == 0 {
-        n = 0
-    } else {
-        n = 100 / d
+  // Closed and every token burned: a closer named in the phase takes half, the admin the rest.
+  destroy settle() only admin {
+    require(balances.isEmpty, "tokens remain")
+    match phase {
+      Closed { by } => {
+        pay(by, balance / 2)
+        pay(admin, balance - balance / 2)
+      }
+      _ => {
+        pay(admin, balance)
+      }
     }
-}
-
-action check(d: Int) {
-    require d == 0 || 100 / d > 1 "d too large"
-    n = d
-}
+  }
 ```
 
-A state field assigned in only one arm must already have a value before the `if` (in `init`: a `Bytes` or `Key`
-field must be assigned before the `if` or in both arms).
+Patterns are a variant (`Open`), a variant with fields bound by name (`Closed { by }`, or `Closed { day: d }` to
+rename), `Some(x)`, `None`, and `_` for every case not named by an earlier arm. A binding must be used; nested patterns
+are not supported (bind the value and match it again). An arm whose value is an object literal needs parentheses,
+since an arm's `{` starts a block: `Some(it) => ({ ...state, items: items.delete(id) })`.
+
+### Functions and recursion
+
+```jsc
+fn total(shares: List<Share>): Int = shares.fold(0, (acc, s) => acc + s.bps)
+
+// Direct self-recursion: the number of digits of n.
+fn digits(n: Int): Int = n < 10 ? 1 : 1 + digits(n / 10)
+```
+
+A `fn` has typed parameters and a typed result, at the top of the file or in the contract. It is pure: no `pay`, no
+transaction built-ins, no state (pass what it needs). A function may call itself directly; mutual recursion is refused
+(`JSC0602`), and so is a recursive call from inside a lambda, an `if` or `match` arm, a value block or a `??` default
+(`JSC0601`), since the generated helper would join a cycle. Write `cond ? base : … f(…)` instead, as `digits` does.
+
+### Lists
+
+```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Pledges.jsc (excerpts)"
+  view shareOf(who: Key): Int = (shares.find(s => s.to == who) ?? Share { to: who, bps: 0 }).bps
+
+  view isShareholder(who: Key): Bool = shares.map(s => s.to).contains(who)
+
+  // Goal reached after the deadline: pay every share, the rounding remainder to the owner.
+  destroy distribute() only owner {
+    require(after(deadline) || raised == 0, "too early")
+    if raised >= goal {
+      for (const s of shares) {
+        pay(s.to, balance * s.bps / 10_000)
+      }
+      pay(owner, balance - shares.fold(0, (acc, s) => acc + balance * s.bps / 10_000))
+    } else {
+      pay(owner, balance)
+    }
+  }
+```
+
+| Member | Result |
+|---|---|
+| `xs.length`, `xs.isEmpty`, `xs.head` | `Int`, `Bool`, `Option<T>` (properties: no parentheses) |
+| `xs.contains(x)` | `Bool`, by structural equality |
+| `xs.any(x => …)`, `xs.all(x => …)` | `Bool`; they stop at the first decisive element |
+| `xs.find(x => …)` | `Option<T>`: the first match |
+| `xs.filter(x => …)`, `xs.map(x => …)` | a new list |
+| `xs.fold(init, (acc, x) => …)` | the accumulated value |
+| `xs.sum()` (on `List<Int>`), `xs.reverse()`, `xs.concat(ys)` | |
+| `xs.take(n)`, `xs.drop(n)` | a new list; a negative `n` fails on both sides |
+| `range(a, b)` | the `Int`s from `a` up to `b`, exclusive, as the receiver of `any`, `all`, `fold`, `filter`, `map` or a `for` list; no list is built |
+
+Lambdas (`x => e`, `(acc, x) => e`, or a block of `const` and `require` ending in its value) exist only as arguments of
+these methods. `for (const x of xs) { … }` is a statement whose body may hold `const`, `require`, `if`, `match` and
+`pay`; accumulate with `fold`. `std/list` adds `last`, `nth` and `indexOf` ([standard library](/languages/jsc-std/)).
+
+### Records
+
+`type Share = { to: Key, bps: Int }` declares a record. Build one with `Share { to, bps: 0 }`, or with `{ to, bps: 0 }`
+where the type is known (a typed parameter, field or `const`, a list element). Read a field with `s.bps`. Two record
+types with the same fields are distinct, and records compare by value: `shares.contains(from)`, `s == from`. Type, enum
+and variant names start with a capital and share one namespace.
+
+### Option
+
+`Some(x)` and `None`. `o ?? d` is `o`'s value, or `d` when it is `None` (`d` runs only then). `match o { Some(x) => …,
+None => … }` reads it. `Option<Option<T>>` and `Some(None)` are refused: JavaScript cannot tell `Some(None)` from
+`None`. `??` is not mixed with `&&` or `||` without parentheses, as in JavaScript.
+
+### Map and BigMap
+
+Two map types, for two sizes:
+
+- **`Map<K, V>`** is an inline map in the datum: every entry is in the state UTxO, so its size is bounded by
+  `maxDatumBytes`. `m.get(k)` (an `Option`), `m.has(k)`, `m.set(k, v)` and `m.delete(k)` (new maps, always in
+  canonical key order), `m.size`, `m.keys`, `m.values`, `m.isEmpty`, `m.any((k, v) => …)`, `m.all(…)`,
+  `m.fold(init, (acc, k, v) => …)`, `Map.empty()`. Maps compare by value.
+- **`BigMap<K, Int>`** and **`BigMap<K, Bytes>`** are Merkle maps: any number of entries behind a 32-byte root; each
+  call proves only the keys it reads and writes. A state field only.
+
+```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Ledger.jsc (excerpts)"
+  // Minting is capped per holder by the limits map, and only while open.
+  action mint(to: Key, amount: Int) only admin {
+    require(phase == Open, "not open")
+    require(amount > 0, "amount must be positive")
+    const cap = limits.get(to) ?? 0
+    require(balances[to] + amount <= cap, "over the holder's limit")
+    return { ...state, balances: balances.set(to, balances[to] + amount), supply: supply + amount }
+  }
+
+  // A transfer reads the recipient through the debit, so a self-transfer keeps the balance.
+  action transfer(to: Key, amount: Int) {
+    require(amount > 0, "amount must be positive")
+    const left = balances[caller] - amount
+    require(left >= 0, "insufficient balance")
+    return { ...state, balances: balances.set(caller, left).set(to, balances.set(caller, left)[to] + amount) }
+  }
+```
+
+A `BigMap` is read with `m.get(k)`, `m.has(k)` and, on `BigMap<K, Int>`, `m[k]` (0 when absent). It is changed only in
+its own field of the next state, by `set` and `delete`: `{ ...state, balances: balances.set(to, v) }`. Its `Int` values
+are never negative, and `set(k, 0)` removes the entry. It is never bound to a `const`, passed to a `fn`, captured by a
+lambda, compared or chosen by a condition; `BigMap.empty()` starts one in an `init`, and `m.isEmpty` ("empty before
+this call") is read only in a destroy. A method reads its own writes through the chain, as `transfer` does.
 
 ### Time
 
-`after(t)` and `before(t)` are `Clock.after(ctx, t)` and `Clock.before(ctx, t)`: true when the whole validity
-window lies after (before) `t`. Because they hold for the whole window, `!after(t)` does not mean "before t". So the
-checker allows them only as requirements: at the top of a `require`, or as a conjunct under `&&`.
+`validFrom` and `validTo` are chosen by whoever submits the transaction, within `maxValidityMs`. So `.jsc` 2 keeps
+them from deciding anything (ADR-0018 D11):
+
+- **Decide only with `after(t)` and `before(t)`.** They hold for the whole validity window, and they are allowed only
+  at the top of a `require`, alone or under `&&` or `||`: `require(after(deadline) || raised == 0, "too early")`.
+  Never negated, in an `if`, a `?:`, a `const`, a `fn` or a lambda.
+- **A time value never decides.** Any value computed from `validFrom` or `validTo` (through arithmetic, a `const`, a
+  `fn` call, a record, a stored field) is a *time value*. It may not be a condition, an operand of `&&`, `||` or `!`, a
+  predicate, or a comparison: `require(validFrom < deadline, …)` is refused (`JSC0502`).
+- **A time value never makes an operation fail.** It may not be a divisor, a map key, a list index or count, a
+  domain-checked `std` argument, or a `BigMap<K, Int>` value. A payout may depend on one only as `pay(to, max(0, …))`.
+- **Time values may flow into amounts and state**, with a warning that names the bias (`JSC9003` to `JSC9005`). A
+  field that any method sets from a time value becomes a time field, and the ABI manifest lists it.
+
+`std/time` has `elapsedSince(t)` (`max(0, validFrom - t)`, never an over-estimate), `elapsedSinceAtMost(t)`,
+`windowStart()` and `windowEnd()`. For a field-based rule on a whole method, prefer the `after f` and `before f`
+modifiers. See [Time](/contracts/time/) and [the precise rule](/languages/jsc-reference/#time-d11).
+
+### Checked inputs
+
+Every value that crosses into the contract from a caller (an `init` argument or an action's parameter, in the
+redeemer) is checked by generated code before your code sees it, recursively: every `Key` and `Hash` in it is 28
+bytes, and every `Map` has unique keys of at most 64 bytes in strictly ascending canonical order. A failing check is
+a located `require` failure. So `reassign(from: Share, to: Key)` can trust that `to` and `from.to` are real key hashes.
+
+### The standard library
 
 ```jsc
-require after(this.deadline) && received > 0 "too early"   // allowed
-if after(deadline) { ... }                                  // rejected
+import { blake2b_224 } from "std/crypto"
+import { slice, length } from "std/bytes"
 ```
 
-For a field-based rule on the whole method, prefer the `after f` / `before f` modifiers. See [Time](/contracts/time/).
-
-### Maps
-
-`Map<Key, Int>` is a MerkleMap: any number of entries behind a 32-byte root in the datum, proven by the shared map
-verifier. `Points.jsc` keeps loyalty points in one:
-
-```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Points.jsc"
-package org.julclang.state.examples.dsl
-
-// Loyalty points in a Map<Key, Int> (a MerkleMap: any number of holders, a 32-byte root on chain).
-contract Points(maxDatumBytes = 160) {
-    state admin: Key
-    state supply: Int
-    state points: Map<Key, Int>
-
-    init() {
-        admin = caller
-    }
-
-    action award(to: Key, n: Int) only admin {
-        require n > 0 "award a positive amount"
-        points[to] += n
-        supply += n
-    }
-
-    // Spending everything removes the holder.
-    action spend(n: Int) {
-        let have = points[caller]
-        require n > 0 && have >= n "not enough points"
-        if have == n {
-            delete points[caller]
-        } else {
-            points[caller] -= n
-        }
-        supply -= n
-    }
-
-    action give(to: Key, n: Int) {
-        require n > 0 && points[caller] >= n "not enough points"
-        points[caller] -= n
-        points[to] += n
-    }
-
-    destroy close() only admin {
-        require supply == 0 && isEmpty(points) "points are still out"
-        pay balance to admin
-    }
-
-    view pointsOf(who: Key): Int = points[who]
-}
-```
-
-The rules:
-
-- `m[k]` reads an entry; an absent key reads as 0.
-- `m[k] = v`, `m[k] += v` and `m[k] -= v` write one. The new value must be at least 0 (a located `require` checks
-  it), and **0 is stored as absence**: the entry is removed.
-- `delete m[k]` removes an entry. `has(m, k)` is true when `k` has an entry (the same as `m[k] != 0`), and
-  `isEmpty(m)` is true when the map has no entries.
-- A read after a write in the same method sees the write, so `give` to yourself works.
-- Keys are `Key`s; values are `Int`s. No other map type exists in `.jsc`.
-
-See [MerkleMaps](/contracts/merklemaps/) for the proofs, the verifier and the off-chain mirror.
-
-### Batched intents
-
-`action tip() payable batched` lets users lock tips as intents in their own UTxOs, which a permissionless batcher
-then applies to the instance in one transaction, so concurrent tippers do not contend for the state UTxO. In a
-batch, `caller` is the intent's owner, `received` the amount the intent carries, and `balance` the contract's
-balance at that point of the batch (so it depends on the intents' order). The generated client gets `tipIntent` and
-`batch` alongside `tip`. See [Batched intents](/contracts/batched-intents/).
+`std/bytes`, `std/crypto`, `std/math` (`div` and `mod` floor, where `/` and `%` truncate), `std/bits`, `std/list` and
+`std/time`, plus the prelude (`min`, `max`, `abs`, `utf8`, `asKey`, `asHash`, `range`, `Some`, `after`, `before`). Every
+function, its domain and its Java target: [.jsc standard library](/languages/jsc-std/).
 
 ## How it lowers
 
-The lowering is mechanical, and the output is meant to be read. Here is `tip` and `withdraw` from `Jar.jsc` next to
-the Java the build generated for them (`build/generated/sources/jsc/java/main/.../Jar.java`, unedited apart from
-the omitted imports and methods):
+The lowering is mechanical, and the output is meant to be read. The counter above becomes (imports omitted):
 
-<Tabs>
-<TabItem label=".jsc">
+```java title="build/generated/sources/jsc/java/main/app/Counter.java"
+/**
+ * GENERATED from Counter.jsc by julc-state-dsl (ADR-0018, .jsc 2). Do not edit: change the .jsc file.
+ */
+// Counter.jsc:9:1
+@StateContract(maxDatumBytes = 128)
+public class Counter {
 
-```jsc
-contract Jar(maxDatumBytes = 192) {
-    state owner: Key
-    state goal: Int
-    state total: Int
-    state tips: Int
+    // Counter.jsc:9:1
+    public record State(BigInteger count, byte[] owner) {}
 
-    action tip() payable batched {
-        require received >= 1 ada "tip at least 1 ADA"
-        total += received
-        tips += 1
+    // Counter.jsc:14:3
+    @Init
+    public static State init(Ctx ctx) {
+        return new State(BigInteger.valueOf(0L), ctx.caller());
     }
 
-    action withdraw(amount: Int) only owner {
-        require amount > 0 && amount <= balance "bad amount"
-        if total < goal {
-            require amount * 2 <= balance "before the goal, at most half"
-        }
-        pay amount to owner
+    // Counter.jsc:19:3
+    @Action
+    public static State increment(State s__, BigInteger by) {
+        // Counter.jsc:20:5
+        Require.that((by.compareTo(BigInteger.valueOf(0L)) > 0), "increment must be positive");
+        return new State(s__.count().add(by), s__.owner());
     }
+
+    // Counter.jsc:25:3
+    @Action
+    @SignedBy("owner")
+    public static State reset(State s__) {
+        return new State(BigInteger.valueOf(0L), s__.owner());
+    }
+
+    // Counter.jsc:30:3
+    @Destroy
+    @SignedBy("owner")
+    public static JulcList<Payout> close(State s__, Ctx ctx) {
+        // Counter.jsc:31:5
+        BigInteger amount__1 = ctx.balance();
+        Require.that(amount__1.compareTo(BigInteger.ZERO) >= 0, "Counter.jsc:31: a payout cannot be negative");
+        JulcList<Payout> payouts__2 = amount__1.compareTo(BigInteger.ZERO) == 0 ? Payouts.none() : Payouts.add(Payouts.none(), s__.owner(), amount__1);
+        return payouts__2.reverse();
+    }
+
+    // Counter.jsc:35:3
+    @View
+    public static BigInteger count(State s__) {
+        return s__.count();
+    }
+
 }
 ```
 
+What to notice:
+
+- **Modifiers became annotations**: `only owner` is `@SignedBy("owner")`.
+- **`Ctx` appears only where needed**: `init` reads `caller`, `close` reads `balance`; `increment` and `reset` take none,
+  so they need no signature and cost less.
+- **No loops and no reassigned locals** in the generated Java: `fold`, `for`, `map` and the other list methods become
+  typed, self-recursive static helpers; `if` and `match` arms become helpers that run only when taken.
+- **Equality is generated**: `==` on bytes lowers to `ByteStringLib.equals`, and on records, enums, lists, options and
+  maps to generated helpers, never Java `equals` or a reference comparison.
+- **Every line carries its `.jsc` position** (`// Counter.jsc:20:5`), and the generated checks carry it in their
+  messages, so a failure on chain points back to your source.
+
+The generated Java is on disk: `build/generated/sources/jsc/java/main/` on Gradle, `build/joust/generated/` with
+`joust build`. Beside each file, `<Contract>.jscmap.json` maps each generated line to its `.jsc` line and column; a
+javac or processor diagnostic on generated Java is reported at the `.jsc` position, with the generated location as a
+note.
+
+## The ABI manifest
+
+The build writes `<Contract>.abi.json` for every `.jsc` 2 contract: the encoding of its datum and of every redeemer
+(constructor indices, field names and order, data shapes, the schemas they reach) and its time fields. The project
+**commits it beside the `.jsc` file**. Every build compares what the lowering produces with the committed copy, so a
+change that would alter how a deployed instance's datum or redeemer is encoded cannot pass unnoticed:
+
+| The build finds | Result |
+|---|---|
+| The same manifest | builds |
+| No committed manifest | fails: `JSC0003` |
+| A different manifest | fails: `JSC0002`, naming the first line that differs |
+
+When the change is intended (a new contract, or a new script you will deploy afresh), accept it, review the diff and
+commit it:
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```sh
+./gradlew acceptJscAbi      # writes the manifests beside the .jsc files
+git diff -- '*.abi.json'
+```
+
 </TabItem>
-<TabItem label="Generated Java">
+<TabItem label="JavaScript">
 
-```java
-/**
- * GENERATED from Jar.jsc by julc-state-dsl (ADR-0005). Do not edit: change the .jsc file.
- */
-@StateContract(maxDatumBytes = 192)
-public class Jar {
-
-    public record State(byte[] owner, BigInteger goal, BigInteger total, BigInteger tips) {}
-
-    public record Outcome(State state, JulcList<Payout> payouts) {}
-
-    // Jar.jsc:17
-    @Action
-    @Payable
-    @Batched
-    public static State tip(State s__, Ctx ctx) {
-        // Jar.jsc:18
-        Require.that((ctx.received().compareTo(BigInteger.valueOf(1000000)) >= 0), "tip at least 1 ADA");
-        // Jar.jsc:19
-        BigInteger total__1 = s__.total().add(ctx.received());
-        // Jar.jsc:20
-        BigInteger tips__1 = s__.tips().add(BigInteger.valueOf(1));
-        return new State(s__.owner(), s__.goal(), total__1, tips__1);
-    }
-
-    // Jar.jsc:24
-    @Action
-    @SignedBy("owner")
-    public static Outcome withdraw(State s__, BigInteger amount, Ctx ctx) {
-        // Jar.jsc:25
-        Require.that(((amount.compareTo(BigInteger.valueOf(0)) > 0) && (amount.compareTo(ctx.balance()) <= 0)), "bad amount");
-        // Jar.jsc:26
-        boolean cond__1 = (s__.total().compareTo(s__.goal()) < 0);
-        Require.that(cond__1 ? withdraw__if1_then(amount, s__.owner(), s__.goal(), s__.total(), s__.tips(), Payouts.none(), ctx) : withdraw__if1_else(amount, s__.owner(), s__.goal(), s__.total(), s__.tips(), Payouts.none(), ctx), "Jar.jsc:26: unreachable");
-        // Jar.jsc:29
-        BigInteger amount__1 = amount;
-        Require.that(amount__1.compareTo(BigInteger.ZERO) >= 0, "Jar.jsc:29: a payout cannot be negative");
-        JulcList<Payout> payouts__1 = amount__1.compareTo(BigInteger.ZERO) == 0 ? Payouts.none() : Payouts.add(Payouts.none(), s__.owner(), amount__1);
-        return new Outcome(new State(s__.owner(), s__.goal(), s__.total(), s__.tips()), payouts__1);
-    }
-
-    // Jar.jsc:26 (then)
-    static boolean withdraw__if1_then(BigInteger amount, byte[] owner__in, BigInteger goal__in, BigInteger total__in, BigInteger tips__in, JulcList<Payout> payouts__in, Ctx ctx) {
-        // Jar.jsc:27
-        Require.that((amount.multiply(BigInteger.valueOf(2)).compareTo(ctx.balance()) <= 0), "before the goal, at most half");
-        return true;
-    }
-
-    // Jar.jsc:26 (else)
-    static boolean withdraw__if1_else(BigInteger amount, byte[] owner__in, BigInteger goal__in, BigInteger total__in, BigInteger tips__in, JulcList<Payout> payouts__in, Ctx ctx) {
-        return true;
-    }
-}
+```sh
+npx joust build --accept-abi      # or: joust dev --accept-abi
+git diff -- '*.abi.json'
 ```
 
 </TabItem>
 </Tabs>
 
-What to notice:
-
-- **Modifiers became annotations**: `payable batched` is `@Payable @Batched`, `only owner` is `@SignedBy("owner")`.
-- **`Ctx` appears only where needed.** `tip` reads `received`, `withdraw` reads `balance`, so both take `Ctx ctx`.
-- **SSA.** `total += received` is a new local `total__1`; the method returns `new State(...)` from the latest values.
-- **`1 ada` is `1000000`.** Integer arithmetic is `BigInteger` throughout.
-- **`if` arms are helpers.** Each arm is a static method that takes every value live at the `if` and runs only when
-  taken. An arm that assigns nothing returns `true`, and the call is wrapped in `Require.that`, so its checks run.
-  When an arm assigns fields, it returns a generated record (`IfArm1(BigInteger n)` in `Guards.java`) and the call
-  site reads the new values from it. The code grows linearly with the source.
-- **`pay` threads the payout list**, skips a zero amount, and turns the return type into `Outcome`.
-- **Byte equality** (`caller == owner`) lowers to `ByteStringLib.equals`, never `==`, which would compare references
-  on the JVM. Map operations lower to `MerkleMaps.getInt`, `putInt`, `remove`, `contains` and `isEmpty`.
-- **Every statement carries its `.jsc` line** as a comment, and the generated checks carry it in their messages, so
-  a failure on chain points back to your source.
+Nothing else accepts a manifest: no Gradle or system property switches the check off. Each build also checks the
+manifest against the processor's own description of the contract (`JSC0004`, an internal error of the lowering if it
+ever fires; on Gradle the `checkJscAbi` task, part of `check`). See
+[the reference](/languages/jsc-reference/#the-abi-manifest).
 
 ## Building .jsc
 
 <Tabs syncKey="lang">
 <TabItem label="Java">
 
-In a Gradle project, a `JavaExec` task runs the lowering (`org.julclang.state.dsl.JscMain`) on `src/main/jsc` before
-`compileJava`, and registers its output as a source directory. This is `examples/dsl/build.gradle`:
+With the Gradle plugin `org.julclang.joust` ([Quick start: Java](/start/quick-start-java/)), put `.jsc` files under
+`src/main/jsc/`, in directories that match their packages. The plugin adds:
 
-```groovy title="examples/dsl/build.gradle"
-configurations {
-    jsc
-}
-
-dependencies {
-    jsc project(':julc-state-dsl')
-
-    implementation project(':julc-state-runtime')
-
-    annotationProcessor project(':julc-state-processor')
-    annotationProcessor libs.julc.annotation.processor
-    annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
-
-    testImplementation project(':julc-state-testkit')
-}
-
-// .jsc -> Java @StateContract, before compileJava (ADR-0005 D5). The generated Java is ordinary source: the JOUST
-// processor turns it into a validator and a client like hand-written contracts.
-def jscSrc = file('src/main/jsc')
-def jscOut = layout.buildDirectory.dir('generated/sources/jsc/java/main')
-def generateJsc = tasks.register('generateJsc', JavaExec) {
-    description = 'Lowers src/main/jsc/**/*.jsc to Java'
-    classpath = configurations.jsc
-    mainClass = 'org.julclang.state.dsl.JscMain'
-    inputs.dir(jscSrc)
-    outputs.dir(jscOut)
-    args jscSrc.path, jscOut.get().asFile.path
-}
-sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
-```
+| Task | What it does |
+|---|---|
+| `generateJsc` | Lowers `src/main/jsc/**/*.jsc` to `build/generated/sources/jsc/java/main/` before `compileJava`; fails on a refused or missing ABI manifest |
+| `acceptJscAbi` | Writes the ABI manifests beside the `.jsc` files, accepting new and changed ones |
+| `checkJscAbi` | After `compileJava`, checks each manifest against the processor's description; part of `check` |
 
 <FileTree>
 
-- examples/dsl
-  - build.gradle
-  - src/main/jsc/org/julclang/state/examples/dsl
-    - Jar.jsc
-    - Points.jsc
-    - Guards.jsc
-  - build/generated/sources/jsc/java/main/org/julclang/state/examples/dsl
-    - Jar.java generated, then processed like hand-written Java
-    - Points.java
-    - Guards.java
+- src/main/jsc/org/example/vault
+  - Vault.jsc
+  - Vault.abi.json committed
+- build/generated/sources/jsc/java/main/org/example/vault
+  - Vault.java generated, then processed like hand-written Java
+  - Vault.jscmap.json its source map
 
 </FileTree>
 
-`./gradlew :examples:dsl:build` lowers, compiles and tests. Each run empties the output directory first (a deleted
-or renamed `.jsc` leaves no stale contract behind) and rejects two files that generate the same class. Errors print
-as `file:line:col: error: message`, and the task fails. The processor path is the same as for a Java contract (see
-[Quick start: Java & Gradle](/start/quick-start-java/)).
+Each run empties the output directory first, so a deleted or renamed `.jsc` leaves no stale contract behind, and two
+files that generate the same class are an error. `examples/dsl/build.gradle` wires the same three tasks by hand.
 
 </TabItem>
 <TabItem label="JavaScript">
 
-With the npm toolchain, put `.jsc` files beside (or instead of) `.java` files in your project's `contracts/`
-directory. `joust build` compiles both, with no JDK: the lowering runs inside the toolchain's Wasm engine, exactly as
-in the Gradle build. `joust dev` rebuilds when you save a `.jsc` file.
+Put `.jsc` files beside (or instead of) `.java` files in the project's `contracts/` directory. `joust build` compiles
+both with no JDK: the lowering runs inside the toolchain's Wasm engine, exactly as in the Gradle build. `joust dev`
+rebuilds when you save a `.jsc` file, and keeps serving the last good build when a manifest is refused.
 
 ```sh
 npx joust build
-# build/joust/Jar.json      the contract description
-# build/joust/Jar.plutus    the compiled validator
-# build/joust/Jar.js/.d.ts  the typed JavaScript client
+# build/joust/Counter.json        the contract description
+# build/joust/Counter.plutus      the compiled validator
+# build/joust/Counter.js/.d.ts    the typed JavaScript client
+# build/joust/generated/app/      Counter.java and Counter.jscmap.json
 ```
-
-A checker error is reported against the `.jsc` file with the checker's message. See
-[The joust CLI and projects](/apps/cli-and-projects/) and [Quick start: npm & JavaScript](/start/quick-start-npm/).
 
 <Aside type="caution">
 The npm packages are not on npmjs.org yet. Until they are, publish them to a local registry at
@@ -549,41 +583,36 @@ engines and runs `js/publish-local.sh`. Then install with `npm_config_registry=h
 </TabItem>
 </Tabs>
 
-<Aside type="note" title="Two layers of errors">
-The `.jsc` checker reports its errors at `.jsc` positions before any Java is emitted, and it applies the
-processor's rules itself. If the processor or JuLC still reports something in the generated Java, the `// File.jsc:line`
-comment above the statement points back to your source.
-</Aside>
+Errors and warnings carry their position and a stable code on both paths: Gradle prints
+`app/Counter.jsc:20:13: error[JSC0502]: a time value cannot decide here: …`, and `joust build` prints
+`error[JSC0502]: app/Counter.jsc:20:13: …`. Each code is in the
+[diagnostics catalogue](https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-diagnostics.md).
 
 ## Testing a .jsc contract
 
-Test it exactly like a Java contract: the generated class, validator and client are ordinary code. `examples/dsl`
-has all three levels: `DslTest` runs the generated methods on the JVM and evaluates the validators with the harness
-and the attack suite, and `DslDevnetTest` runs Jar (intents and a batch included) and Points on Yaci DevKit. See
-[Testing](/contracts/testing/).
+Test it exactly like a Java contract: the generated class, validator and client are ordinary code
+([Testing](/contracts/testing/)). `examples/dsl`'s `Dsl2Test` calls the generated methods on the JVM, inputs checked
+and refused included, and evaluates the validators with the harness; `julc-state-toolchain`'s four-way tests run every
+call through the reference interpreter, the JVM, the transition program and the validator, and require all four to
+agree.
 
-The generated contracts cost about the same as hand-written ones. From the examples' table (JuLC, `plutus-v3-pv11`,
-per script execution, from the harness tests): Jar's script is 9,507 bytes, `tip` uses 102.3M CPU and 312k memory
-units; Points is 12,276 bytes plus the shared map verifier, and `give` uses 235.1M + 393.6M CPU. See
-[Examples](/reference/examples/).
+## What still needs Java
 
-## Limits
+| Feature | In `.jsc` 2 |
+|---|---|
+| Native assets, `send`, `mint`/`burn`, deposits, deploy parameters, invariants, events, quorums, reads of other contracts | milestone M2 |
+| Owned and keyed objects, moves, `init migrate`, script purposes (staking, governance) | M3 |
+| `.jsc` libraries, Java library imports, offline tests | M4 |
+| A language server | M5 |
 
-`.jsc` is a deliberately small language (version 1):
-
-- no loops, no user-defined records, no owned objects;
-- one map type, `Map<Key, Int>`, and no `batched` actions in a contract that has one;
-- no native assets, sends, mints, deploy parameters, quorums, events, reads of other contracts or script purposes
-  beyond spending and minting: the Java contract model has all of these.
-
-When you need one of them, write the contract in [Java](/languages/java/); start from the generated Java if you
-like. The planned additions (owned objects, bounded loops, editor support) are listed in ADR-0005 §5.
+Until then, write such a contract in [Java](/languages/java/); you can start from the generated Java of a `.jsc`
+version.
 
 ## Next steps
 
 <CardGrid>
-<LinkCard title=".jsc reference" description="Every keyword, type, operator, statement, built-in and error." href="/languages/jsc-reference/" />
+<LinkCard title=".jsc reference" description="Lexical rules, grammar, types and encodings, operators, the time rule, the ABI manifest." href="/languages/jsc-reference/" />
+<LinkCard title=".jsc standard library" description="Every std function, its domain and its Java target." href="/languages/jsc-std/" />
+<LinkCard title="Migrating from .jsc v1" description="joust migrate, and what it changes." href="/languages/jsc-migration/" />
 <LinkCard title="State and lifecycle" description="What init, action, destroy and view mean on chain." href="/contracts/state-and-lifecycle/" />
-<LinkCard title="MerkleMaps" description="How Map<Key, Int> is stored and proven." href="/contracts/merklemaps/" />
-<LinkCard title="Batched intents" description="How batched actions run as intents." href="/contracts/batched-intents/" />
 </CardGrid>

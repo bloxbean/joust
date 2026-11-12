@@ -28,6 +28,26 @@ final class Parser {
         return parenStart.getOrDefault(e, e.pos());
     }
 
+    /**
+     * The nesting cap (ADR-0018 J18, review S2): at most {@value #MAX_DEPTH} levels, the same on every build path, so the
+     * front end never recurses deeper than a small, fixed bound (the Web Image's stack held about 250 nested
+     * parentheses before this cap). The parser counts its own recursion here (each expression, block and type argument
+     * opens a level); {@link Depth} measures the tree it built, where a chain that is not balanced counts a level per link.
+     */
+    static final int MAX_DEPTH = 64;
+    private int depth;
+
+    private void enter(Pos p) {
+        if (++depth > MAX_DEPTH) {
+            throw p.error("JSC0149", "this nests deeper than " + MAX_DEPTH + " levels (each parenthesis, block, argument, arm, lambda and"
+                    + " type argument opens one): name a part with const or move it into a fn (ADR-0018 J18)");
+        }
+    }
+
+    private void leave() {
+        depth--;
+    }
+
     private Parser(List<Tok> toks) {
         this.toks = toks;
         for (int k = 0; k + 1 < toks.size(); k++) {
@@ -50,7 +70,84 @@ final class Parser {
     }
 
     static File parse(String src) {
-        return new Parser(Lexer.lex(src)).file();
+        var p = new Parser(Lexer.lex(src));
+        File f;
+        try {
+            f = p.file();
+        } catch (JscException e) {
+            throw hinted(e, p.leadingMinus, p.members());
+        }
+        Depth.check(f);
+        return f;
+    }
+
+    /**
+     * The lines of each declaration and contract member (review r3 F12): {startLine, startToken, endLine}. A member
+     * still being parsed when an error is thrown ends at the '}' that closes its first '{' (or at the end of the file).
+     */
+    private final List<int[]> members = new ArrayList<>();
+
+    private int[] startMember() {
+        int[] m = {peek().line(), i, -1};
+        members.add(m);
+        return m;
+    }
+
+    private void endMember(int[] m) {
+        m[2] = toks.get(Math.max(i - 1, 0)).line();
+    }
+
+    /** Each member's [startLine, endLine]. */
+    private List<int[]> members() {
+        var out = new ArrayList<int[]>();
+        for (int[] m : members) {
+            int end = m[2];
+            if (end < 0) {
+                int depth = 0;
+                end = toks.get(toks.size() - 1).line();
+                for (int k = m[1]; k < toks.size(); k++) {
+                    if (toks.get(k).is("{")) depth++;
+                    else if (toks.get(k).is("}") && --depth == 0) {
+                        end = toks.get(k).line();
+                        break;
+                    }
+                }
+            }
+            out.add(new int[]{m[0], end});
+        }
+        return out;
+    }
+
+    /** Binary '-' tokens that start a line (review r2 F2, S4). */
+    private final List<Pos> leadingMinus = new ArrayList<>();
+
+    /**
+     * An error with a note when a line starting with '-', on or before the error's line, continued the expression above it: the cause is often there,
+     * not where the error is found (a block without its value, an unknown name).
+     */
+    static JscException hinted(JscException e, List<Pos> leadingMinus, List<int[]> members) {
+        // The member (declaration, method) the error is in: a leading '-' there, the nearest on or before the error's line,
+        // else the first after it within the member, since an error found at a construct's start (a value block without
+        // its value) comes before its cause (review r3 F12). Outside any member: the nearest on or before (F10).
+        int[] in = null;
+        for (int[] m : members) if (m[0] <= e.line && e.line <= m[1] && (in == null || m[0] >= in[0])) in = m;
+        Pos near = null;
+        for (Pos p : leadingMinus) {
+            if (in != null && (p.line() < in[0] || p.line() > in[1])) continue;
+            if (p.line() <= e.line && (near == null || p.line() > near.line())) near = p;
+        }
+        if (near == null && in != null) {
+            for (Pos p : leadingMinus) if (p.line() > e.line && p.line() <= in[1] && (near == null || p.line() < near.line())) near = p;
+        }
+        if (near == null) return e;
+        return new JscException(e.line, e.col, e.code, e.getMessage() + " (note: the line starting with '-' at " + near
+                + " continues the expression above it, as newlines do not end statements in .jsc; if it is meant to stand alone, end"
+                + " the line above with ';', else put the whole expression in parentheses)");
+    }
+
+    /** Whether the current token starts a line (no earlier token on its line). */
+    private boolean startsLine() {
+        return i > 0 && peek().line() > toks.get(i - 1).line();
     }
 
     /**
@@ -96,6 +193,9 @@ final class Parser {
         return t.text();
     }
 
+    /** The method modifiers (D4, D10); none is a field or binding name (M1c review F4). */
+    static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched");
+
     /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
     private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
             "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum",
@@ -135,6 +235,7 @@ final class Parser {
         Contract contract = null;
         while (peek().kind() != K.EOF) {
             Tok t = peek();
+            int[] member = startMember();
             if (t.is("import")) imports.add(importDecl());
             else if (t.is("type")) types.add(typeDecl());
             else if (t.is("enum")) enums.add(enumDecl());
@@ -146,10 +247,11 @@ final class Parser {
             else if (t.is("class")) throw t.pos().error("JSC0116", "there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }'");
             else if (t.is("const") || t.is("let") || t.is("var")) throw t.pos().error("JSC0117", "a file holds imports, types, fns and one contract: put constants in a fn (fn limit(): Int = 10)");
             else throw t.pos().error("JSC0118", "expected import, type, enum, fn or contract but found " + t);
+            if (!t.is("contract")) endMember(member);
             semis();
         }
         if (contract == null) throw peek().pos().error("JSC0119", "the file declares no contract");
-        return new File(pkg.toString(), imports, types, enums, fns, contract);
+        return new File(pkg.toString(), imports, types, enums, fns, contract, List.copyOf(leadingMinus), members());
     }
 
     private Import importDecl() {
@@ -207,6 +309,13 @@ final class Parser {
 
     private TypeRef type() {
         Pos p = peek().pos();
+        enter(p);
+        TypeRef t = typeRef(p);
+        leave();
+        return t;
+    }
+
+    private TypeRef typeRef(Pos p) {
         String n = ident("a type");
         var args = new ArrayList<TypeRef>();
         if (eat("<")) {
@@ -278,6 +387,7 @@ final class Parser {
         var enums = new ArrayList<EnumDecl>();
         while (!at("}")) {
             Tok t = peek();
+            int[] member = startMember();
             if (t.is("state")) {
                 if (state != null) throw t.pos().error("JSC0121", "the state is declared once: state { … }");
                 next();
@@ -323,6 +433,7 @@ final class Parser {
             } else {
                 throw t.pos().error("JSC0125", "expected state, init, action, destroy, view, fn, type or enum but found " + t);
             }
+            endMember(member);
             semis();
         }
         expect("}");
@@ -340,6 +451,21 @@ final class Parser {
             } else if (t.is("only") || t.is("after") || t.is("before")) {
                 next();
                 mods.add(new Mod(t.text(), ident("a state field after '" + t.text() + "'"), t.pos()));
+            } else if (t.is("batched")) {
+                // ADR-0018 D10 (M1c): 'batched' runs the action as an intent too; 'batched only' only as an intent
+                // (@Batched(only = true)). 'only' after 'batched' names a field when an identifier other than a modifier
+                // follows ('batched only owner': batched with 'only owner', which the checker refuses).
+                next();
+                String arg = null;
+                if (at("only")) {
+                    Tok after = peek(1);
+                    boolean namesField = after.kind() == K.IDENT && !MODIFIERS.contains(after.text());
+                    if (!namesField) {
+                        next();
+                        arg = "only";
+                    }
+                }
+                mods.add(new Mod("batched", arg, t.pos()));
             } else {
                 return mods;
             }
@@ -350,6 +476,13 @@ final class Parser {
 
     /** {@code { stmt* [expr] }}: the last expression, if any, is the block's value. */
     private Block block() {
+        enter(peek().pos());
+        Block b = blockBody();
+        leave();
+        return b;
+    }
+
+    private Block blockBody() {
         Pos p = expect("{").pos();
         var stmts = new ArrayList<Stmt>();
         Expr result = null;
@@ -511,35 +644,77 @@ final class Parser {
         return true;
     }
 
+    /**
+     * {@code if c { … } else if d { … } else { … }}: the else-if chain is read in a loop into one node (J18, review S2),
+     * so a chain of any length nests no deeper than one if.
+     */
     private IfStmt ifStmt() {
         Pos p = next().pos();
+        var branches = new ArrayList<Branch>();
         Expr c = expr();
-        Block then = block();
+        branches.add(new Branch(c, block(), p));
         Block otherwise = null;
-        if (eat("else")) {
+        while (eat("else")) {
             if (at("if")) {
-                IfStmt nested = ifStmt();
-                Expr asValue = isValueIf(nested) ? toIfExpr(nested) : null;
-                otherwise = new Block(asValue == null ? List.of(nested) : List.of(), asValue, nested.pos());
+                Pos q = next().pos();
+                Expr ci = expr();
+                branches.add(new Branch(ci, block(), q));
             } else {
                 otherwise = block();
+                break;
             }
         }
-        return new IfStmt(c, then, otherwise, p);
+        return new IfStmt(List.copyOf(branches), otherwise, p);
     }
 
     private static boolean isValueIf(IfStmt s) {
-        return s.otherwise() != null && s.then().result() != null && s.otherwise().result() != null;
+        if (s.otherwise() == null || s.otherwise().result() == null) return false;
+        for (Branch b : s.branches()) if (b.then().result() == null) return false;
+        return true;
     }
 
     private static IfExpr toIfExpr(IfStmt s) {
-        return new IfExpr(s.cond(), s.then(), s.otherwise(), s.pos());
+        return new IfExpr(s.branches(), s.otherwise(), s.pos());
     }
 
     // ------------------------------------------------------------------ expressions
 
     Expr expr() {
-        return conditional();
+        enter(peek().pos());
+        Expr e = conditional();
+        leave();
+        return e;
+    }
+
+    /**
+     * Operator chains of {@code +}/{@code -}, {@code *}, {@code &&} and {@code ||} are read in a loop and built as a
+     * balanced tree (J18, review S2): up to {@value #CHAIN} operands left to right as written, longer chains split in the
+     * middle, so a chain of n operands nests about {@code CHAIN + log2(n / CHAIN)} deep and every later pass (the checker,
+     * the emitter, the interpreter, javac and JuLC) recurses only that far. The operands keep their order, so evaluation
+     * order and laziness are unchanged, and the value is the same: integers are exact, {@code &&}/{@code ||} associate,
+     * and a split at a {@code -} flips the signs inside its right part ({@code a - b + c = a - (b - c)}).
+     */
+    static final int CHAIN = 8;
+
+    private Expr chain(List<Expr> ts, List<String> ops, int lo, int hi, boolean flip) {
+        if (hi - lo < CHAIN) {
+            Expr l = ts.get(lo);
+            for (int j = lo + 1; j <= hi; j++) l = new Binary(flip ? flipped(ops.get(j)) : ops.get(j), l, ts.get(j), startOf(l));
+            return l;
+        }
+        int mid = (lo + hi + 1) / 2;
+        Expr l = chain(ts, ops, lo, mid - 1, flip);
+        String op = flip ? flipped(ops.get(mid)) : ops.get(mid);
+        Expr r = chain(ts, ops, mid, hi, flip ^ op.equals("-"));
+        return new Binary(op, l, r, startOf(l));
+    }
+
+    private static String flipped(String op) {
+        return switch (op) {
+            case "+" -> "-";
+            case "-" -> "+";
+            default -> op;
+        };
     }
 
     private Expr conditional() {
@@ -574,21 +749,23 @@ final class Parser {
     }
 
     private Expr or() {
-        Expr l = and();
+        var ts = new ArrayList<Expr>(List.of(and()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
         while (at("||")) {
-            Pos p = next().pos();
-            l = new Binary("||", l, and(), startOf(l));
+            ops.add(next().text());
+            ts.add(and());
         }
-        return l;
+        return chain(ts, ops, 0, ts.size() - 1, false);
     }
 
     private Expr and() {
-        Expr l = equality();
+        var ts = new ArrayList<Expr>(List.of(equality()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
         while (at("&&")) {
-            Pos p = next().pos();
-            l = new Binary("&&", l, equality(), startOf(l));
+            ops.add(next().text());
+            ts.add(equality());
         }
-        return l;
+        return chain(ts, ops, 0, ts.size() - 1, false);
     }
 
     private Expr equality() {
@@ -612,20 +789,27 @@ final class Parser {
     }
 
     private Expr additive() {
-        Expr l = multiplicative();
+        var ts = new ArrayList<Expr>(List.of(multiplicative()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
         while (at("+") || at("-")) {
-            Tok t = next();
-            l = new Binary(t.text(), l, multiplicative(), startOf(l));
+            if (at("-") && startsLine()) leadingMinus.add(peek().pos());
+            ops.add(next().text());
+            ts.add(multiplicative());
         }
-        return l;
+        return chain(ts, ops, 0, ts.size() - 1, false);
     }
 
+    /** {@code *} chains are balanced; a chain with {@code /} or {@code %} is not associative and stays as written. */
     private Expr multiplicative() {
-        Expr l = unary();
+        var ts = new ArrayList<Expr>(List.of(unary()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
         while (at("*") || at("/") || at("%")) {
-            Tok t = next();
-            l = new Binary(t.text(), l, unary(), startOf(l));
+            ops.add(next().text());
+            ts.add(unary());
         }
+        if (ops.stream().skip(1).allMatch("*"::equals)) return chain(ts, ops, 0, ts.size() - 1, false);
+        Expr l = ts.get(0);
+        for (int j = 1; j < ts.size(); j++) l = new Binary(ops.get(j), l, ts.get(j), startOf(l));
         return l;
     }
 
@@ -635,7 +819,10 @@ final class Parser {
         }
         if (at("!") || at("-")) {
             Tok t = next();
-            return new Unary(t.text(), unary(), t.pos());
+            enter(t.pos());
+            Expr operand = unary();
+            leave();
+            return new Unary(t.text(), operand, t.pos());
         }
         return postfix();
     }
@@ -647,7 +834,7 @@ final class Parser {
                 Pos p = next().pos();
                 String n = ident("a field or method name");
                 // A property (xs.length) and a record field (r.length) are both Field: the checker decides by type (C7).
-                e = at("(") ? new MethodCall(e, n, args(), startOf(e)) : new Field(e, n, startOf(e));
+                e = at("(") && peek().line() == toks.get(i - 1).line() ? new MethodCall(e, n, args(), startOf(e)) : new Field(e, n, startOf(e));
             } else if (at("[") && peek().line() == toks.get(i - 1).line()) {
                 // m[k] on the same line (a '[' on the next line starts a new expression).
                 next();
@@ -780,7 +967,9 @@ final class Parser {
                 default -> { }
             }
             next();
-            if (at("(")) return new Call(t.text(), args(), t.pos());
+            // A '(' on a later line never continues a call, as a '[' never continues an index (review r2 F2): it starts a
+            // new expression.
+            if (at("(") && peek().line() == t.line()) return new Call(t.text(), args(), t.pos());
             if (at("{") && typeNames.contains(t.text()) && looksLikeObject()) return objLit(t.text(), t.pos());
             return new Name(t.text(), t.pos());
         }

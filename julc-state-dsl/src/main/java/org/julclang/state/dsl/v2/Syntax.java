@@ -24,7 +24,12 @@ final class Syntax {
         }
     }
 
-    record File(String pkg, List<Import> imports, List<TypeDecl> types, List<EnumDecl> enums, List<Fn> fns, Contract contract) {}
+    /**
+     * {@code leadingMinus}: where a binary '-' starts a line, continuing the expression above it (D3: newlines do not
+     * end statements; review r2 F2, S4): each is warned about (JSC9007) and named in any error.
+     */
+    record File(String pkg, List<Import> imports, List<TypeDecl> types, List<EnumDecl> enums, List<Fn> fns, Contract contract,
+                List<Pos> leadingMinus, List<int[]> members) {}
 
     record Import(List<String> names, String from, Pos pos) {}
 
@@ -77,7 +82,14 @@ final class Syntax {
 
     record For(String var, Expr list, Block body, Pos pos) implements Stmt {}
 
-    record IfStmt(Expr cond, Block then, Block otherwise, Pos pos) implements Stmt {}
+    /** One test of an if or else-if chain: its condition and its arm; {@code pos} is its {@code if} keyword. */
+    record Branch(Expr cond, Block then, Pos pos) {}
+
+    /**
+     * An if statement with its else-if chain flattened (ADR-0018 J18, review S2): the branches in order, then the final
+     * else ({@code otherwise}, may be null). A chain of any length is one node, so no pass recurses along it.
+     */
+    record IfStmt(List<Branch> branches, Block otherwise, Pos pos) implements Stmt {}
 
     /** A {@code match} whose arms end in statements (or that is not the block's last expression). */
     record MatchStmt(Match match, Pos pos) implements Stmt {}
@@ -137,8 +149,8 @@ final class Syntax {
 
     record Cond(Expr cond, Expr then, Expr otherwise, Pos pos) implements Expr {}
 
-    /** {@code if c { … } else { … }} used as a value: both arms are blocks with results. */
-    record IfExpr(Expr cond, Block then, Block otherwise, Pos pos) implements Expr {}
+    /** {@code if c { … } else if d { … } else { … }} used as a value: every arm is a block with a result. */
+    record IfExpr(List<Branch> branches, Block otherwise, Pos pos) implements Expr {}
 
     /** A block used as a value ({@code x => { const y = …; y > 1 }}): its statements, then its result. */
     record BlockExpr(Block block, Pos pos) implements Expr {}

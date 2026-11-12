@@ -14,7 +14,7 @@ import java.util.Map;
  * exactly {@code False} 0 and {@code True} 1 without fields, an Option exactly {@code Some} 0 with one field and
  * {@code None} 1 without, a named schema by its full reference. A declared type that no encoded root reaches (a type
  * used only inside a method) is not part of the ABI and is not compared. A reached schema the description lacks,
- * API types included, is a difference.
+ * API types included, is a difference. With batched actions the intent's datum and refund tag are roots too (M1c).
  */
 public final class AbiCheck {
     private AbiCheck() {}
@@ -26,12 +26,62 @@ public final class AbiCheck {
         Map<String, Object> abi = (Map<String, Object>) Json.parse(abiJson);
         Map<String, Object> defs = (Map<String, Object>) ((Map<String, Object>) Json.parse(descriptionJson)).get("definitions");
         var types = (Map<String, Object>) abi.get("types");
-        var c = new Compare(defs, types, pkg + "." + name + ".", problems);
+        var c = new Compare(defs, types, pkg + "." + name + ".", pkg + "." + name + "Validator.", problems);
         String validator = pkg + "." + name + "Validator.";
         c.constructors("the datum", List.of(abi.get("datum")), pkg + "." + name + ".State");
         var redeemers = (Map<String, Object>) abi.get("redeemers");
         c.constructors("the spend redeemer", (List<Object>) redeemers.get("spend"), validator + "Calls");
         c.constructors("the mint redeemer", (List<Object>) redeemers.get("mint"), validator + "Lifecycle");
+        // Batched actions (M1c): the intent's datum and its refund tag are encoded on-chain too. Each role is bound to
+        // the processor's own root for it (x-joust.intents.datum / .refund), never to the schema the manifest names
+        // (review C3, S4): a manifest that names another schema for a role, or swaps the roles, differs.
+        var xjoust = (Map<String, Object>) ((Map<String, Object>) Json.parse(descriptionJson)).get("x-joust");
+        var described = xjoust == null ? null : (Map<String, Object>) xjoust.get("intents");
+        if (abi.get("intent") instanceof Map<?, ?> intent) {
+            if (described == null) {
+                problems.add("the manifest states intents (batched actions) that the description does not have");
+            } else {
+                for (String root : List.of("datum", "refund")) {
+                    String t = (String) intent.get(root);
+                    String want = described.get(root) instanceof Map<?, ?> d && d.get("$ref") instanceof String r ? r.replace("#/definitions/", "") : null;
+                    if (want == null) {
+                        problems.add("the description states no intent " + root);
+                        continue;
+                    }
+                    if (t == null || !(types.get(t) instanceof Map<?, ?> m)) {
+                        problems.add("the manifest's intent " + root + " is not stated");
+                        continue;
+                    }
+                    if (!c.ref(t).equals(want)) {
+                        problems.add("the intent " + root + " is " + c.ref(t) + " here, " + want + " described");
+                        continue;
+                    }
+                    c.seen.add(t);
+                    c.constructors("the intent " + root, (List<Object>) m.get("constructors"), want);
+                }
+                // Each batched action's call variant: the processor's constructor name and index, in its order.
+                List<?> calls = described.get("calls") instanceof List<?> l ? l : List.of();
+                List<?> stated = types.get("IntentCall") instanceof Map<?, ?> ic && ic.get("constructors") instanceof List<?> cs ? cs : List.of();
+                if (calls.size() != stated.size()) {
+                    problems.add("the intent calls: " + stated.size() + " stated, " + calls.size() + " described");
+                } else {
+                    for (int i = 0; i < calls.size(); i++) {
+                        var d = (Map<String, Object>) calls.get(i);
+                        var call = (Map<String, Object>) d.get("call");
+                        var v = (Map<String, Object>) stated.get(i);
+                        String method = (String) d.get("name");
+                        String variant = Character.toUpperCase(method.charAt(0)) + method.substring(1) + "Intent";
+                        if (!variant.equals(v.get("name")) || !call.get("constructor").equals(v.get("name"))
+                                || ((Number) call.get("index")).intValue() != ((Number) v.get("constr")).intValue()) {
+                            problems.add("the intent call " + i + " is " + v.get("name") + " " + v.get("constr") + " here, "
+                                    + call.get("constructor") + " " + call.get("index") + " (" + method + ") described");
+                        }
+                    }
+                }
+            }
+        } else if (described != null || defs.containsKey(validator + "Intent")) {
+            problems.add("the description has intents (batched actions) that the manifest does not state");
+        }
         // Every named schema the roots reach, once.
         while (!c.pending.isEmpty()) {
             String t = c.pending.removeFirst();
@@ -92,15 +142,16 @@ public final class AbiCheck {
 
     private static final class Compare {
         final Map<String, Object> defs, types;
-        final String own;
+        final String own, validator;
         final List<String> problems;
         final java.util.ArrayDeque<String> pending = new java.util.ArrayDeque<>();
         final java.util.Set<String> seen = new java.util.HashSet<>();
 
-        Compare(Map<String, Object> defs, Map<String, Object> types, String own, List<String> problems) {
+        Compare(Map<String, Object> defs, Map<String, Object> types, String own, String validator, List<String> problems) {
             this.defs = defs;
             this.types = types;
             this.own = own;
+            this.validator = validator;
             this.problems = problems;
         }
 
@@ -112,6 +163,7 @@ public final class AbiCheck {
             return switch (kind) {
                 case "api" -> "org.julclang.state.api." + t;
                 case "ledger" -> "org.julclang.ledger." + t;
+                case "validator" -> validator + t;
                 default -> own + t;
             };
         }
@@ -236,14 +288,25 @@ public final class AbiCheck {
     /** A minimal JSON reader: objects (ordered), arrays, strings, numbers, booleans and null. */
     public static final class Json {
         private final String s;
+        private final boolean strict;
         private int i;
 
-        private Json(String s) {
+        private Json(String s, boolean strict) {
             this.s = s;
+            this.strict = strict;
         }
 
         public static Object parse(String s) {
-            var j = new Json(s);
+            return parse(s, false);
+        }
+
+        /** As {@link #parse}, but a duplicate key, or a number that is not a plain integer, is refused (IR exports). */
+        public static Object parseStrict(String s) {
+            return parse(s, true);
+        }
+
+        private static Object parse(String s, boolean strict) {
+            var j = new Json(s, strict);
             Object v = j.value();
             j.ws();
             if (j.i != s.length()) throw new IllegalArgumentException("trailing text at " + j.i);
@@ -268,6 +331,7 @@ public final class AbiCheck {
                 while (true) {
                     ws();
                     String k = string();
+                    if (strict && m.containsKey(k)) throw new IllegalArgumentException("the duplicate key \"" + k + "\" at " + i);
                     ws();
                     expect(':');
                     m.put(k, value());
@@ -313,6 +377,7 @@ public final class AbiCheck {
             int j = i;
             while (i < s.length() && "+-0123456789.eE".indexOf(s.charAt(i)) >= 0) i++;
             String n = s.substring(j, i);
+            if (strict && !n.matches("-?(0|[1-9][0-9]*)")) throw new IllegalArgumentException("not a plain integer: " + n + " at " + j);
             return n.contains(".") || n.contains("e") || n.contains("E") ? (Object) Double.parseDouble(n) : (Object) Long.parseLong(n);
         }
 
@@ -324,9 +389,15 @@ public final class AbiCheck {
         private String string() {
             expect('"');
             var out = new StringBuilder();
-            while (s.charAt(i) != '"') {
+            while (true) {
+                if (i >= s.length()) throw new IllegalArgumentException("an unterminated string");
                 char c = s.charAt(i++);
+                if (c == '"') break;
+                // Strict mode (IR exports, review C5) reads strings as RFC 8259 does, as the JavaScript reader does: no
+                // raw control character, only the defined escapes, and a \\u escape of exactly four hex digits.
+                if (strict && c < 0x20) throw new IllegalArgumentException("a control character in a string at " + (i - 1));
                 if (c == '\\') {
+                    if (i >= s.length()) throw new IllegalArgumentException("an unterminated string");
                     char e = s.charAt(i++);
                     switch (e) {
                         case 'n' -> out.append('\n');
@@ -334,17 +405,22 @@ public final class AbiCheck {
                         case 'r' -> out.append('\r');
                         case 'b' -> out.append('\b');
                         case 'f' -> out.append('\f');
+                        case '"', '\\', '/' -> out.append(e);
                         case 'u' -> {
-                            out.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
+                            String h = i + 4 <= s.length() ? s.substring(i, i + 4) : "";
+                            if (!h.matches("[0-9a-fA-F]{4}")) throw new IllegalArgumentException("a bad \\u escape at " + (i - 2));
+                            out.append((char) Integer.parseInt(h, 16));
                             i += 4;
                         }
-                        default -> out.append(e);
+                        default -> {
+                            if (strict) throw new IllegalArgumentException("an unknown escape \\" + e + " at " + (i - 2));
+                            out.append(e);
+                        }
                     }
                 } else {
                     out.append(c);
                 }
             }
-            i++;
             return out.toString();
         }
     }

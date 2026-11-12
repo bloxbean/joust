@@ -1,0 +1,270 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "58effeaa06a390a7baa198bdd34f506abd70655276cbeac1c4fd9360ec2a6d08",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Vault",
+  "source": "Vault.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "128" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [{ "name": "owner", "type": "Key" }, { "name": "unlockAt", "type": "Int" }, { "name": "total", "type": "Int" }],
+    "at": [6, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [{ "id": 1, "name": "unlockAt", "type": "Int", "taint": 0, "at": [10, 8] }],
+      "mods": [{ "name": "payable" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": false,
+              "threshold": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [11, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [11, 13]
+            },
+            "message": "unlockAt must be in the future",
+            "at": [11, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [12, 21] },
+            { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [12, 29] },
+            { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [12, 46] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [12, 12]
+        },
+        "at": [10, 31]
+      },
+      "at": [10, 3]
+    },
+    {
+      "kind": "action",
+      "name": "deposit",
+      "params": [],
+      "mods": [{ "name": "payable" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [17, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [17, 24] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [17, 13]
+            },
+            "message": "deposit must be positive",
+            "at": [17, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [18, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [18, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [18, 17] },
+              "record": "State",
+              "field": "unlockAt",
+              "type": "Int",
+              "taint": 0,
+              "at": [18, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "total", "type": "Int", "taint": 0, "at": [18, 31] },
+              "right": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [18, 39] },
+              "type": "Int",
+              "taint": 0,
+              "at": [18, 31]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [18, 12]
+        },
+        "at": [16, 28]
+      },
+      "at": [16, 3]
+    },
+    {
+      "kind": "action",
+      "name": "withdraw",
+      "params": [{ "id": 2, "name": "amount", "type": "Int", "taint": 0, "at": [22, 19] }],
+      "mods": [{ "name": "only", "field": "owner" }, { "name": "after", "field": "unlockAt" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [23, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [23, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [23, 13]
+            },
+            "message": "amount must be positive",
+            "at": [23, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": "<=",
+              "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [24, 13] },
+              "right": { "node": "StateField", "field": "total", "type": "Int", "taint": 0, "at": [24, 23] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [24, 13]
+            },
+            "message": "insufficient funds",
+            "at": [24, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [25, 9] },
+            "amount": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [25, 16] },
+            "at": [25, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [26, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
+              "record": "State",
+              "field": "unlockAt",
+              "type": "Int",
+              "taint": 0,
+              "at": [26, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "-",
+              "left": { "node": "StateField", "field": "total", "type": "Int", "taint": 0, "at": [26, 31] },
+              "right": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [26, 39] },
+              "type": "Int",
+              "taint": 0,
+              "at": [26, 31]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [26, 12]
+        },
+        "at": [22, 58]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }, { "name": "after", "field": "unlockAt" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [31, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [31, 16] },
+            "at": [31, 5]
+          }
+        ],
+        "result": null,
+        "at": [30, 45]
+      },
+      "at": [30, 3]
+    },
+    {
+      "kind": "view",
+      "name": "total",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateField", "field": "total", "type": "Int", "taint": 0, "at": [34, 23] },
+        "at": [34, 23]
+      },
+      "at": [34, 3]
+    },
+    {
+      "kind": "view",
+      "name": "unlockAt",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateField", "field": "unlockAt", "type": "Int", "taint": 0, "at": [35, 26] },
+        "at": [35, 26]
+      },
+      "at": [35, 3]
+    }
+  ],
+  "warnings": []
+}
