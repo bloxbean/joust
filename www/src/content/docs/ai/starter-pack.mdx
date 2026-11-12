@@ -32,7 +32,7 @@ This pack is written for machine ingestion. For people, start at [How JOUST work
   a verified `Ctx` (caller signed, received, balance, validity bounds); payouts tagged against double satisfaction; the
   token burned on destroy; the datum within `maxDatumBytes`.
 - Two languages for contracts: **Java** (a `@StateContract` class) and **.jsc** (a contract language that reads like
-  TypeScript, lowered to a Java `@StateContract` at build time; `.jsc` 2 is a preview). Clients: Java (`XClient`) or JavaScript (`X.js`, plus `X.d.ts`).
+  TypeScript, lowered to a Java `@StateContract` at build time; `.jsc` 2 is a language preview). Clients: Java (`XClient`) or JavaScript (`X.js`, plus `X.d.ts`).
 - Built on JuLC (Java to UPLC compiler, julc.dev) and cardano-client-lib `0.8.0-pre7`. Plutus V3.
 - Status: experimental, pre-release, not for production. JOUST release candidates (`0.1.0-pre1-rc2`) and JuLC
   (`0.1.0-pre21-rc1`) are in `https://repo.bloxbean.org/maven/releases`; nothing is on Maven Central. The npm

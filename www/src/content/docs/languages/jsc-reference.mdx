@@ -31,7 +31,7 @@ objects, batched intents, purposes, libraries) still need [Java](/languages/java
 | Integers | Decimal digits, `_` between groups (`1_000_000`). No sign: `-5` is unary minus. `5 ada` is 5,000,000 |
 | Bytes | `#` then an even number of hex digits (`#cafe`, `JSC0102`); upper case is lower-cased |
 | Strings | `"…"` on one line, with the escapes `\"`, `\\` and `\n`; no control characters (`JSC0104`). Only `require` messages and `utf8("…")` arguments |
-| Separators | `;` and newlines both end statements; `;` is optional. A `[` on the next line starts a new expression, so `m[k]` is written on one line |
+| Separators and newlines | Newlines do not end statements: a statement ends where its expression cannot continue, or at `;` (optional). Two tokens look at the line: a `[` or a `(` continues an index or a call only on the line of what it follows, so `m[k]` and `f(x)` start on one line, and on a later line `[` or `(` starts a new expression. A line that starts with a binary `-` continues the expression above it (a subtraction) and warns `JSC9007`: join the lines, parenthesise, or end the line above with `;` |
 
 ## Grammar at a glance
 
