@@ -1,0 +1,38 @@
+description = 'ADR-0020 spike (test-only, not published): transition programs vs the JVM on the described core'
+
+// Everything is test code: JvmTransitions, ShadowTransitions, the manifest (D8), the comparison (D9), the corpus (D4)
+// and the measurements (D5). Production code is unchanged (ADR-0020 D1, U1).
+dependencies {
+    testImplementation project(':julc-state-runtime')
+    testImplementation project(':julc-state-runtime-wasm')   // Prepare: the described core's call path, as the engine runs it
+    testImplementation project(':julc-state-toolchain')      // descriptions, scripts, programs and <Name>Transitions, as npm builds them
+    testImplementation project(':julc-state-api')
+    testImplementation project(':examples:devkit')           // Fixtures
+    testImplementation libs.julc.vm.java
+    testImplementation libs.julc.compiler
+    testImplementation libs.julc.cardano.client.lib
+    testImplementation project(':examples:counter')
+    testImplementation project(':examples:bank')
+    testImplementation project(':examples:vault')
+    testImplementation project(':examples:token')
+    testImplementation project(':examples:escrow')
+    testImplementation project(':examples:crowdfund')
+    testImplementation project(':examples:pool')
+    testImplementation project(':examples:fees')
+    testImplementation project(':examples:guild')
+    testImplementation project(':examples:locker')
+    testImplementation project(':examples:oracle')
+    testImplementation project(':examples:registry')
+    testImplementation project(':examples:staking')
+    testImplementation project(':examples:treasury')
+    testImplementation project(':examples:upgrade')
+    testImplementation project(':examples:dex')
+}
+
+tasks.named('test') {
+    // Reports (U6): build/spike/*.json and *.txt.
+    systemProperty 'spike.reps', System.getProperty('spike.reps', '30')
+    maxHeapSize = '4g'
+    testLogging { showStandardStreams = true; events 'failed'; exceptionFormat 'full' }
+    dependsOn ':examples:counter:classes', ':examples:bank:classes', ':examples:vault:classes', ':examples:token:classes', ':examples:escrow:classes', ':examples:crowdfund:classes', ':examples:pool:classes', ':examples:fees:classes', ':examples:guild:classes', ':examples:locker:classes', ':examples:oracle:classes', ':examples:registry:classes', ':examples:staking:classes', ':examples:treasury:classes', ':examples:upgrade:classes', ':examples:dex:classes'
+}

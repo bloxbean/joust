@@ -32,6 +32,7 @@ include 'julc-state-toolchain'
 include 'julc-state-runtime-wasm'
 include 'julc-state-gradle-plugin'
 include 'julc-state-cli'
+include 'julc-state-uplc-spike'   // ADR-0020 spike: test-only, not published
 include 'examples:devkit'
 include 'examples:counter'
 include 'examples:vault'
