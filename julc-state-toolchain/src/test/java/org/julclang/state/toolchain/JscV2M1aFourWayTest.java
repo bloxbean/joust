@@ -8,7 +8,10 @@ import org.julclang.state.dsl.v2.Interpreter.Opt;
 import org.julclang.state.dsl.v2.Interpreter.Rec;
 import org.julclang.state.dsl.v2.Interpreter.Tx;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * drop, and every M1a {@code std} row at its domain edges. Outcomes are also stated by hand where the rule is simple
  * enough to state independently.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class JscV2M1aFourWayTest {
 
     static final Path DSL = Path.of("../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl");
@@ -435,5 +439,23 @@ class JscV2M1aFourWayTest {
         assertEquals(ok(f, "since", n(5_000), "upTo", n(125_000)), f.check("stamp", s, List.of(T0.subtract(n(5_000))), at(OWNER, 0, 0), OWNER));
         assertEquals(ok(f, "since", n(0), "upTo", n(60_000)), f.check("stamp", s, List.of(T0.add(n(60_000))), at(OWNER, 0, 0), OWNER));
         report(f);
+    }
+
+    /**
+     * ADR-0018 D15 (M1b): the fifth leg. Every call the tests above made, on the JavaScript reference interpreter over
+     * the IR export, must agree with the outcome the other four legs agreed on. It runs last, over all of them.
+     */
+    @Test
+    @Order(Integer.MAX_VALUE)
+    void fiveWay_theJavaScriptInterpreterAgrees() throws Exception {
+        int total = 0;
+        for (FourWay f : LEGS.values()) {
+            int n = JsLeg.check(f);
+            System.out.println("[J3 five-way] " + f.name + ": " + n + " calls, JavaScript interpreter = Java interpreter = JVM = transition"
+                    + " program = validator");
+            total += n;
+        }
+        System.out.println("[J3 five-way] %s: %d calls agree on all five legs".formatted("M1a", total));
+        assertTrue(total > 0, "the tests above recorded calls");
     }
 }

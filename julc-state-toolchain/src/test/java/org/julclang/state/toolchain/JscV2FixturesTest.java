@@ -7,10 +7,14 @@ import org.julclang.state.dsl.v2.Interpreter.Opt;
 import org.julclang.state.dsl.v2.Interpreter.Rec;
 import org.julclang.state.dsl.v2.JscV2;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * the generated Java (Boolean collections, pass-through imports, strings with escapes, record fields named like list
  * properties, a capitalised const before a block) and the positive forms of the checker's rules.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class JscV2FixturesTest {
 
     static final Map<String, String> FIXTURES = new LinkedHashMap<>();
@@ -145,8 +150,14 @@ class JscV2FixturesTest {
         return built.contracts().stream().filter(c -> c.name().equals(contract)).findFirst().orElseThrow().transitions();
     }
 
+    /** Each interpreter's contract, and every call it answered, for the JavaScript leg (ADR-0018 D15, M1b). */
+    static final Map<Interpreter, String> NAMES = new IdentityHashMap<>();
+    static final Map<String, List<JsLeg.Call>> JS_CALLS = new LinkedHashMap<>();
+
     static Interpreter interp(String contract) {
-        return JscV2.interpreter(FIXTURES.get("f/" + contract + ".jsc"), contract + ".jsc", Interpreter.JDK_HASHES);
+        var in = JscV2.interpreter(FIXTURES.get("f/" + contract + ".jsc"), contract + ".jsc", Interpreter.JDK_HASHES);
+        NAMES.put(in, contract);
+        return in;
     }
 
     /** The interpreter's next state as data (records Constr 0, Bool Constr 0/1, Option Constr 0 [x] / 1 []: D5). */
@@ -166,14 +177,40 @@ class JscV2FixturesTest {
     }
 
     static String interpreted(Interpreter in, String method, Rec state, List<Object> args) {
+        String want;
         try {
-            var o = in.call(method, state, args, null);
-            return "ok:" + com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
-                    com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0, data(o.value())),
-                    com.bloxbean.cardano.client.plutus.spec.ListPlutusData.builder().build()).serializeToHex();
+            want = encoded(in.call(method, state, args, null));
         } catch (Interpreter.Refused e) {
-            return "refused";
+            want = "refused";
         }
+        String contract = NAMES.get(in);
+        JS_CALLS.computeIfAbsent(contract, k -> new ArrayList<>())
+                .add(new JsLeg.Call(method, JsLeg.call(method, state, args, null), want, contract + "." + method + " " + args));
+        return want;
+    }
+
+    /** An outcome as the transition program's result: the next state, no payouts. */
+    static String encoded(Interpreter.Outcome o) {
+        return "ok:" + com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
+                com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0, data(o.value())),
+                com.bloxbean.cardano.client.plutus.spec.ListPlutusData.builder().build()).serializeToHex();
+    }
+
+    /**
+     * ADR-0018 D15 (M1b): every call above, on the JavaScript reference interpreter over the fixture's IR export, agrees
+     * with the Java interpreter and the transition program. Runs last.
+     */
+    @Test
+    @Order(Integer.MAX_VALUE)
+    void theJavaScriptInterpreterAgrees() throws Exception {
+        int total = 0;
+        for (var e : JS_CALLS.entrySet()) {
+            String irJson = JscV2.lower(FIXTURES.get("f/" + e.getKey() + ".jsc"), e.getKey() + ".jsc").irJson();
+            total += JsLeg.check(e.getKey(), irJson, e.getValue(), (method, o) -> encoded(o));
+        }
+        System.out.println("[C10 fixtures] " + total + " calls of " + JS_CALLS.keySet() + ": JavaScript interpreter = Java interpreter"
+                + " = transition program");
+        assertTrue(total > 60, "the tests above recorded their calls: " + total);
     }
 
     static PlutusData argsOf(List<Object> args) {

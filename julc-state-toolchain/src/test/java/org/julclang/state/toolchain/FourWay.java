@@ -75,6 +75,10 @@ final class FourWay {
     final InMemoryNodeStore store = new InMemoryNodeStore();
     /** Each root this harness built, with its contents (key hex → stored bytes), for the transition leg's reads. */
     final Map<String, Map<String, byte[]>> contents = new LinkedHashMap<>();
+    /** The checked IR as exported (ADR-0018 D15), for the JavaScript leg ({@link JsLeg}). */
+    final String irJson;
+    /** Every call {@link #check} made, with the outcome the four legs agreed on, for the JavaScript leg. */
+    final List<JsLeg.Call> jsCalls = new ArrayList<>();
     int calls, refusals, validatorRuns, rounds;
     StateHarness.Verdict lastVerdict;
 
@@ -84,6 +88,7 @@ final class FourWay {
         this.cls = Class.forName(PKG + "." + name);
         this.stateClass = Class.forName(PKG + "." + name + "$State");
         this.interp = JscV2.interpreter(jscSource, name + ".jsc", HASHES);
+        this.irJson = JscV2.lower(jscSource, name + ".jsc").irJson();
         this.transitions = transitions;
         var spec = (org.julclang.state.runtime.ContractSpec) Class.forName(PKG + "." + name + "Client").getField("SPEC").get(null);
         this.harness = (StateHarness<Object>) StateHarness.of(spec);
@@ -208,16 +213,22 @@ final class FourWay {
 
     /** The interpreter's outcome, encoded as the runtime encodes a transition's result; "refused" when it fails. */
     String interpreted(String method, Rec state, List<Object> args, Tx t) {
+        Interpreter.Outcome o;
         try {
-            var o = interp.call(method, state, args, t);
-            return switch (interp.kind(method)) {
-                case "view" -> "ok:" + data(java(o.value())).serializeToHex();
-                case "destroy" -> "ok:" + result(null, payouts(o.payouts()));
-                default -> "ok:" + result(java(o.value()), payouts(o.payouts()));
-            };
+            o = interp.call(method, state, args, t);
         } catch (Interpreter.Refused e) {
             return "refused";
         }
+        return encode(method, o);
+    }
+
+    /** An interpreter's outcome (either interpreter's: {@link JsLeg}) encoded as the runtime encodes a transition's result. */
+    String encode(String method, Interpreter.Outcome o) {
+        return switch (interp.kind(method)) {
+            case "view" -> "ok:" + data(java(o.value())).serializeToHex();
+            case "destroy" -> "ok:" + result(null, payouts(o.payouts()));
+            default -> "ok:" + result(java(o.value()), payouts(o.payouts()));
+        };
     }
 
     private Method method(String method) {
@@ -442,7 +453,10 @@ final class FourWay {
         return rc.getDeclaredConstructor(types).newInstance(values.toArray());
     }
 
-    /** All four legs (two for a view), asserted equal; returns the agreed outcome. */
+    /**
+     * All four legs (two for a view), asserted equal; returns the agreed outcome. The call is also recorded for the fifth
+     * leg, the JavaScript interpreter, which {@link JsLeg#check} runs over every recorded call at the end of a suite.
+     */
     String check(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
         return check(method, state, args, t, signer, null);
     }
@@ -451,6 +465,7 @@ final class FourWay {
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
         String want = interpreted(method, state, args, t);
         assertEquals(want, jvm(method, state, args, t), "JVM vs interpreter: " + what);
+        jsCalls.add(new JsLeg.Call(method, JsLeg.call(method, state, args, t), want, what));
         if (!interp.kind(method).equals("view")) {
             assertEquals(want, transition(method, state, args, t), "transition program vs interpreter: " + what);
             Boolean accepted = validator(method, state, args, t, signer, candidate);
