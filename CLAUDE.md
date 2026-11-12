@@ -177,8 +177,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - **Validators are found by simple name in JuLC** (bloxbean/julc#326): JuLC writes and `JulcScriptLoader` reads
   `META-INF/plutus/<SimpleName>.plutus.json`, so two validators with one simple name (`…vault.VaultValidator`,
   `…dsl.VaultValidator`) share a resource. JOUST loads scripts through `ValidatorScripts` (the copy beside the validator
-  class; refuses ambiguity); never call `JulcScriptLoader.load(Class)` for a generated validator. Don't give two
-  contracts on one class path the same simple name in a shaded jar (refused).
+  class: its own readable location must hold it; JuLC's parameter checks kept); never call `JulcScriptLoader.load(Class)`
+  for a generated validator. Two contracts with one simple name must not share a runtime class path: `check` runs
+  `checkPlutusResources`, and a fat or shaded jar must never merge or drop duplicate `META-INF/plutus/*` entries (a
+  resource-only plant would replace a contract's script).
 - ADR-0018 M1c: the Java examples vault, escrow, crowdfund, token and pool also run against their `.jsc` 2 ports
   (`examples/dsl`'s `copyPortTests` copies their `*Test.java`; `:examples:dsl:test` runs them). Keep those tests in their
   package directory (the copy fails on subpackages or resources), and call the init as `<Contract>.<init>(`.

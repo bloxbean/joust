@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M1c: report (ADR-0018 §8, J11)
 
-Date 2026-11-13, review round r2. Branch `feat/jsc-2-m1c`, stacked on `feat/jsc-2-m1a` (r4, `dfa7025`, merged in). JuLC `v0.1.0-pre21-rc1`,
+Date 2026-11-13, review round r3. Branch `feat/jsc-2-m1c`, stacked on `feat/jsc-2-m1a` (r4, `dfa7025`, merged in). JuLC `v0.1.0-pre21-rc1`,
 cardano-client-lib `0.8.0-pre7`, JDK 25, macOS arm64. Every number below was measured at this branch's head; the test
 that prints it is named with each table.
 
@@ -20,8 +20,8 @@ protocol's per-transaction maximum at a state saturated to `maxDatumBytes`.
 | Four-way vectors and mutation rejection for each port | `JscV2M1cFourWayTest`; `FourWay` gains batched actions (through a batch of one intent, and a direct call unless `batched only`), `mutants(…)`, and `pinned(spec)` (below) | 515 calls (12 of them modifier refusals, stated); 185 mutants and 481 attacks rejected; every call also run on the Java example (3 stated differences) |
 | The gates: size, encoding, behaviour, per-call budget, the budget gate at saturation | `JscV2M1cGateTest` | 4 tests, 62 calls measured on both implementations (31 at saturation) |
 | A batch built from a stated plan | `StateHarness.batch(live, codec, intents, plan)` (testkit) | used by `FourWay` |
-| r2: a validator's script is the one beside its class (review S1/F1) | `julc-state-runtime` `ValidatorScripts`, used by `StateContractHandle.scriptFor`, `VerifierHandle` and `StateHarness` | `ValidatorScriptsTest` (3), `ValidatorScriptCollisionTest` (3) |
-| r2: attacks only a method's own modifiers can refuse (S2/F2) | `Attacks.modifierAttacks`, read from the description's `policies` | every example's attack suite |
+| r2–r3: a validator's script is the one beside its class, with JuLC's parameter checks (reviews S1/F1, C5, S7, F11, F12) | `julc-state-runtime` `ValidatorScripts`, used by `StateContractHandle.scriptFor`, `VerifierHandle` and `StateHarness`; `checkPlutusResources` in every project's `check` (S8) | `ValidatorScriptsTest` (5), `ValidatorScriptCollisionTest` (4) |
+| r2–r3: attacks only a method's own modifiers can refuse (S2/F2, C6, F13) | `Attacks.modifierAttacks`, read from the description's `policies`; an attacker that is none of the parties; skips counted | every example's attack suite; `ModifierAttacksTest` (2) |
 | r2: the generated client compiles (C1) | `JscV2GeneratedClientTest`: javac with the JOUST processor over each port and a batched fixture | 2 |
 | r2: the intent ABI bound to the processor's roots (C3, S4) | `AbiCheck.compare`, against `x-joust.intents` | `JscV2M1cAbiCheckTest` (12 mutations) |
 
@@ -249,9 +249,9 @@ review showed that a lowering that dropped them passed at five of the ten sites.
 
 ## Decisions for the maintainers (after round r2)
 
-1. **Same-named validators:** JOUST fails closed now (`ValidatorScripts`); JuLC's fix is bloxbean/julc#326. A runtime
-   check of the script's hash against one the processor records would also cover a fat jar whose merge kept the wrong
-   copy without keeping both classes; not built.
+1. **Same-named validators:** JOUST fails closed now (`ValidatorScripts`, `checkPlutusResources`); JuLC's fix is
+   bloxbean/julc#326. A script hash compiled into bytecode (not a resource, which a merge can plant too) and compared at
+   load would also stop a resource-only plant in a merged jar; it belongs with #326 (security review S8).
 2. **A paying `batched` action says `open`:** kept (both reviews agreed); ADR-0018 r11 D4.
 3. **`batched only f`:** kept, and the six modifier words are now reserved as field and binding names (JSC0211), so a
    state field named `open` can no longer turn `batched only open` into an unguarded action (review F4).
@@ -289,6 +289,19 @@ Not fixed: `Intent.owner` stated as `bytes28` matches a description field of pla
 description states no byte lengths, so the structural check cannot tell them apart; the committed manifest must still
 equal the generated one (JSC0002).
 
+## Review round r3
+
+The reviews of r2 (`46de618`): security approved, with S7 and S8 (P3); Codex and design requested C5, C6 and F11–F13.
+
+| ID | Finding | Change | Test |
+|---|---|---|---|
+| F11 (P2) | `ValidatorScripts` dropped JuLC's parameter checks: a `@Params` contract without its parameters gave the policy id and address of its **unapplied** script (funds sent there are locked), and an unparameterized validator took parameters | the resource is parsed with JuLC's `ValidatorOutput.fromJson`, and JuLC's three checks hold (parameterized without parameters, parameters without a parameterized validator, the count) | `ValidatorScriptCollisionTest.juLCsParameterChecks_areKeptOnEveryPath`: `ValidatorScripts.load`, `scriptFor`, `policyIdFor`, the generated `TreasuryClient.policyIdFor(null)` and `contract(runtime, null)`, and `StateHarness.of` all refuse treasury without parameters; MapVerifier and Vault with parameters, and the wrong count, are refused; with them, every path equals JuLC's loader |
+| C5, S7 | the duplicate-class check ran only when the script sat beside the class; a readable location without the script fell back to a copy from anywhere | the validator's own location, when it can be read (a directory, a jar, a `jar:file:…!/` URL), is the only source: it must hold the script and no second class of that simple name, whatever the script's placement, or the load is refused. Only an unreadable location (none, `jrt:`, a nested jar) considers the class path, and there a copy counts only if its own location holds this validator's class and no other of that name; a single unreadable copy is the one remaining fallback (documented) | `ValidatorScriptsTest`: the security review's cases A2, B, B′, C, C′, C″, D, E and Codex's split classes/resources layout, each refused or loaded as stated; a `jar:` location read beside |
+| C6 | the modifier attack's fixed key could be the owner, so a legitimate call was reported as an accepted attack | the attacker is derived from a seed and checked, by content, against every signer, the redeemer's caller and every byte string of the spent state | `ModifierAttacksTest.theAttacker_isNeverAnAuthorisedParty` (Codex's repro: a vault owned by the old key) |
+| F12 | the cache pinned class loaders; the fallback undocumented | `ClassValue`; the class Javadoc states the rules and the remaining fallback | |
+| F13 | silent skips | skips are counted by reason (`Attacks.modifierSkips()`, printed by the four-way test); a missing description, or one that does not describe the spent method's fields and policies, fails | `ModifierAttacksTest.theJavaExamples_receiveTheModifierAttacks` (Vault, Crowdfund, Pool and Token's Java examples get theirs) |
+| S8 | a resource-only plant in a merged jar; a hash recorded as a resource would not help | `checkPlutusResources` (in every project's `check`) fails when two locations on a project's runtime class path ship the same `META-INF/plutus` name, the class path a fat or shaded jar is built from; CLAUDE.md says merges must not drop duplicates. A script hash compiled into bytecode, compared at load, is the fix that remains; it belongs with bloxbean/julc#326 (noted in the PR reply) | the repo's projects pass; a probe adding `examples:vault` to `examples:dsl`'s runtime class path fails with `META-INF/plutus/VaultValidator.plutus.json: …/examples/dsl/build/classes/java/main, …/vault.jar` |
+
 ## Not in M1c
 
 - **J19's build report** (a budget report for every contract at every build, D12) is not built: M1c's gate test
@@ -298,6 +311,14 @@ equal the generated one (JSC0002).
   `batched only` and the rules above).
 
 ## Tests run at this head
+
+Round r3:
+
+| Command | Result |
+|---|---|
+| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL: 224 tasks (114 executed; `checkPlutusResources` in every project's `check`), none failed. dsl 68, toolchain 80 (`ValidatorScriptCollisionTest` 4, `ModifierAttacksTest` 2), runtime 73 (`ValidatorScriptsTest` 5), testkit 6, processor 71, examples/dsl 67 without DevKit, and every example's tests with the derived attacker. `checkJscAbi`: `13 ABI manifest(s) agree with the processor's descriptions` |
+| `./gradlew :examples:dsl:test --tests '*DevnetPortTest' --tests '*DslDevnetTest'` (DevKit up) | BUILD SUCCESSFUL in 5 m 47 s: all 7 passed against a live DevKit |
+| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` | BUILD SUCCESSFUL: `ALL SAME`; S2 in Wasm 1,736/1,736; S2b 43/43 |
 
 Round r2:
 
