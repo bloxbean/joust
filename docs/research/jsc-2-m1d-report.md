@@ -19,7 +19,7 @@ reference interpreter and the written semantics) and M1c (the example ports and 
 | D14 templates: create-joust's `.jsc` variant (node and web) and the native joust's Gradle `-l jsc` template are `.jsc` 2, labelled preview, and ship `Counter.abi.json` (the Gradle one with `@@package@@`), so a first build passes the gate (the M1a report's JSC0003 point) | `js/create-joust/variants/jsc`, `julc-state-cli` templates, `Scaffold` | `JscTemplatesTest` (shipped manifest = the lowering's, for several packages), create-joust's build test (`.jsc` and Java templates give the same description and client), `ScaffoldTest`, js/joust `create.test.js`, `dev.test.js`, `page.test.js` (DevKit) |
 | D12 leftover, Gradle path: compileJava's output kept in `build/jsc/javac.log` (a listener added at execution, configuration-cache safe); `remapJscDiagnostics` (its finalizer, only when the log holds something) prints each javac/processor diagnostic on generated Java at the `.jsc` line and column of the source map beside it, with the generated location as a note | `JscMain --remap`, `JoustPlugin`, examples/dsl `build.gradle` | `MigrateTest.gradleRemap_*`; by hand on examples/dsl (below); `JoustPluginTest` |
 | D13 tree-sitter grammar for `.jsc` 2 and v1 (one grammar, two top-level forms), an external scanner (`[` on the same line, even `#hex`, `{` after `=>`), highlight and fold queries | `tree-sitter-jsc/` | `tree-sitter test` (12 trees) |
-| D13 a shared parse corpus: 71 files (v2/v1, valid/invalid) plus every `.jsc` in the repository and the 70 research files, run through both the hand-written lexers/parsers and tree-sitter | `tree-sitter-jsc/corpus`, `JscCorpusTest`, `test/shared-corpus.mjs` | both sides agree; 1 known difference (README) |
+| D13 a shared parse corpus: 71 files (v2/v1, valid/invalid) plus every `.jsc` in the repository and the 70 research files, run through both the hand-written lexers/parsers and tree-sitter | `tree-sitter-jsc/corpus`, `JscCorpusTest`, `test/shared-corpus.mjs` | both sides agree on verdicts (r1: only verdicts were compared, and one of the README's seven differences was pinned; r2 compares declarations and pins every difference, below) |
 | D13 a TextMate grammar (VS Code extension, not published) used by the docs' Shiki in place of the Kotlin alias | `editors/vscode-jsc`, `www/astro.config.mjs` | `grammar.test.mjs` (vscode-textmate), the www build |
 | Docs: `.jsc` 2 guide, reference (ABI accept flow, diagnostics with the catalogue link), std library (tables generated from `JscV2.bindings()`), migration, v1 (deprecated); other pages' snippets moved to `.jsc` 2 where it has the feature | `www/src/content/docs/languages/*`, others | `JscV2StdDocTest`; the www build with its link check |
 | Cleanup: `-Ajoust.portable=true` and `Dsl2PortableTest` removed from examples/dsl (#65 retires portable); `Dsl2JsFixturesTest` stays | | |
@@ -58,30 +58,61 @@ Counter2.jsc: org/julclang/state/examples/dsl/Counter2.java:21:8)`, after Gradle
   `import org.julclang.state.api.MerkleMap`, so javac refuses it (the import is added only when a method body names
   the type, after the imports are rendered). The generator hit it 3 times in 157 map programs before its seeding was
   fixed; `JscMigrateDifferentialTest` skips such programs. Fixing it changes no script that compiles today.
-- **Newlines do not end statements in `.jsc` 2**: a line starting with `(` or `-` continues the expression above it
-  (`const c = !flag && flag` then `(c ? m : -m) - …` parses as a call of `flag`). Migrate ends the line above such a
-  line with `;`. Authors can hit it too; a lint (or a parser rule like the one for `[`) is a maintainer decision.
+- **Newlines do not end statements in `.jsc` 2**: a line starting with `(` or `-` continued the expression above it.
+  Decided in r2 (ADR-0018 r13 D3): a `(` on a later line never continues a call; a leading `-` continues, with
+  JSC9007. Migrate still ends a line above a leading `-` with `;`.
 - A v1 method named like a generated name (`step` → `Step`, JSC0203) is refused by `.jsc` 2, so migrate refuses it
   (JSC1104 with JSC0203).
 
-## Tests run at this head
-
-After merging `feat/jsc-2-m1a` at r4 (`dfa7025`):
+## Tests run at this head (review round r2)
 
 | Command | Result |
 |---|---|
-| `./gradlew :julc-state-dsl:test :examples:dsl:test :julc-state-toolchain:test :julc-state-gradle-plugin:test` (each after `cleanTest`) | green: dsl 82, examples/dsl 19, toolchain 64, plugin 8; none failed or skipped |
-| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (both images rebuilt from this head) | `ALL SAME` (every `.jsc` file's generated Java, source map and manifest equal to Gradle's, GuardsV2 and PointsV2 included); S2 in Wasm 1,393/1,393; S2b 43/43 |
-| `npm test` in `js/joust` (the rebuilt engines in `engine/`; DevKit up) | 29/29, including `migrate.test.js` (3) and the DevKit tests of the templates (`create.test.js`, `dev.test.js`, `page.test.js`) |
-| `npm test` in `js/create-joust` | 9/9, the build test included (the `.jsc` 2 and Java templates give the same description and client) |
-| Template smoke: `create-joust app --template node --lang jsc`, packages linked, `joust build`, `joust deploy`, `npm test` on DevKit | `app.Counter: 5759 bytes`, deployed, template test 1/1 |
-| `npm test` in `tree-sitter-jsc` | 12/12 trees; shared corpus: 71 corpus files, 15 repository files, 70 research files, tree-sitter agreeing with the hand-written parsers (1 known difference) |
-| `node --test` in `editors/vscode-jsc` | 3/3 |
+| `./gradlew :julc-state-dsl:test :examples:dsl:test :examples:dsl:checkJscAbi :julc-state-toolchain:test :julc-state-gradle-plugin:test -PnoDevnet` (each after `cleanTest`) | BUILD SUCCESSFUL: dsl 91, examples/dsl 17 (19 with DevKit), toolchain 64, plugin 8; none failed or skipped. The differential: 262 programs (160 Gen1, 100 Gen2, 3 repros), 156 migrated (refusals JSC1105 7, JSC1106 99), 6,240 calls agree (1,628 refused by both); all 8 mutants caught (13 to 598 disagreements each). `checkJscAbi`: 10 manifests agree |
+| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (both images rebuilt from this head) | `ALL SAME` (GuardsV2 and PointsV2 included); S2 in Wasm 1,393/1,393; S2b 43/43 |
+| `npm test` in `js/joust` (the rebuilt engines; DevKit up) | 30/32; the two failures were DevKit's dry faucet (`the faucet is dry …`, and a page whose deploy had failed for it); `page.test.js` rerun alone: 3/3 |
+| `npm test` in `js/create-joust` | 9/9, the build test included |
+| `npm test` in `tree-sitter-jsc` | 12/12 trees; shared corpus: 82 corpus files, 15 repository files, 70 research files; agrees on every verdict (11 known differences, pinned) and on the declarations of 21 files |
+| `npm test` in `editors/vscode-jsc` | 3/3 |
 | `npm run build` in `www` | 67 pages, every internal link resolves |
-| `./gradlew build --continue` | everything green except 10 DevKit tests in examples/escrow, registry and wallet, each `IllegalStateException: topup failed` (DevKit's faucet answered 500 to concurrent top-ups; none of those modules is changed here); `:examples:dsl:checkJscAbi`: `10 ABI manifest(s) agree with the processor's descriptions`. Rerun alone, `./gradlew :examples:escrow:test :examples:registry:test :examples:wallet:test --max-workers=1`: BUILD SUCCESSFUL (escrow 7, registry 81, wallet 3 tests, none failed) |
+| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL (189 tasks); `checkJscAbi`: 10 manifests agree |
+
+Round r1's runs, at `d7aa862`, are in the PR's history (the r1 description).
+
+## Review round r2
+
+The three reviews of r1 (`d7aa862`) and what changed; every repro and mutation is a committed test.
+
+- **Migrate fidelity** (Codex C1, P1; design F1). A const now has an identity kept through pruning and inlining:
+  same-named locals on one line in sibling arms were taken for each other, so a dead division in one arm was lost and
+  a call v1 refuses was accepted; it is refused (JSC1106) again. F1's mutation (inlining a value that can fail into a
+  lazy position) survived the r1 differential; the generator now writes such values (and the same-line locals), and
+  `eachMutantOfMigrateFailsTheDifferential` compiles eight named mutations of `Migrate.java` (F1's, C1's name-and-line
+  identity, swapped arms, a read ignoring a write, `has` always true, `delete` as a no-op, a missing parenthesis, a
+  merge reading the base map) and requires each to fail. The differential also runs the security review's independent
+  generator (two maps, `Bytes`, `received`/`balance`, `else if`, depth 3, aliasing keys, a reassignable owner) and the
+  repros, with every Int argument zero in each method's first calls.
+- **Paths and links** (C2, S2, S3). Without `--in-place`, an output that is or holds the sources, or a target that is
+  a source, is refused (JSC1108); npm's default mode writes only under `build/joust/migrated/`. `--in-place` never
+  replaces a link (JSC1109) and writes the backup create-new (a dangling link is JSC1107); neither walker follows a
+  directory link, and npm's skips a dangling one.
+- **Remap** (C3): the `.jsc` file that declares the unit's package and contract; none or several keep javac's location.
+- **The migration flow** (S1): `joust deploy` merges, keeping replaced records under `superseded`; `--in-place` copies
+  the v1 build's artifacts to `build/joust/v1/`; the stale warning covers another script (by script digest, so
+  `@Params` too), a renamed or removed contract and an unreadable file; `migrateJsc` says the new-script warning. The
+  migration page documents how to reach v1 instances.
+- **Newlines** (F2, S4): a `(` on a later line never continues a call (both parsers); a line starting with `-` still
+  continues, with JSC9007 and a hint in any error of the file. `const payout = amount` then `-fee` now warns.
+- **CI** (F3): `npm test` in `tree-sitter-jsc` and `editors/vscode-jsc`.
+- **Language preview** (F4): the templates, READMEs and both scaffolds' output say what it means; ADR-0018 r13 D14
+  says preview deployments are rebuilt with the compiler recorded for them (M1e changes every `.jsc` 2 hash once).
+- **P3s.** F5: the corpus compares declarations (`corpus/shapes.txt`) and pins each README difference
+  (`corpus/known.txt`, the reviewer's `retun {…}` and `return else {` included). F6: v1 names that are `.jsc` 2 words
+  are renamed (parameters, lets) or refused (JSC1110); JSC1104 points at the statement's column; the `isEmpty` row
+  corrected. F7: `wordPattern`, `engines.vscode ^1.109.0`, `JscTextMateTest` (the grammar names exactly the front
+  ends' words), the path noted for ADR-0021 M5a. F8: ADR-0018 r13.
 
 ## Not in M1d
 
-Gradle's half of "both CLIs warn about recorded deployments" (the Gradle path records no deployments file); a
-language server (M5); publishing the VS Code extension or the tree-sitter grammar; wiring the tree-sitter and TextMate
-tests into CI (they run with `npm test` in their directories).
+A deployments record on the Gradle path (it has none; ADR-0018 r13 D16 narrows the stale warning to npm); a language
+server (M5); publishing the VS Code extension or the tree-sitter grammar (ADR-0021 M5e).
