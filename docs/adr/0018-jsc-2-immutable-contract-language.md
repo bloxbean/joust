@@ -36,6 +36,7 @@ toolchain) found that `.jsc` v1 is good for single-UTxO contracts and not enough
 | F12 | JuLC ADR-050 (in `v0.1.0-pre21-rc1`, commit `d6e716e2`) describes on-chain libraries for DSL frontends: `JavaLibraryProvider(sources, lookup, options).describe(module)` returns `LibraryExport`s with ordered source parameter and result types, from the same parsed sources the compiler uses, without loading classes. It is marked experimental and invocation-local | JuLC `adr/050-library-source-type-descriptions.md`; `julc-compiler/.../JavaLibraryProvider.java:52-100`, `backend/LibraryExport.java` |
 | F13 | An action may return the state, or a record with `state` and any of `payouts`, `sends`, `deposits`, `mint`, `accepted`, `events`; a destroy returns `JulcList<Payout>` or such a record without `state` | `julc-state-processor/.../ContractReader.java:1230-1300` |
 | F14 | `MerkleMap` values are `byte[]` (`put`/`get`) or `BigInteger` (`putInt`/`getInt`), keys `byte[]`; `SortedMaps` keeps inline `JulcMap<byte[], BigInteger>` in canonical CBOR key order | `julc-state-api/.../MerkleMaps.java`, `SortedMaps.java` |
+| F15 | Elci, an Elm-syntax Cardano language by the same organisation, compiles `.elm` straight to typed PIR through JuLC's language-neutral backend (JuLC ADR-056, ADR-059) and reads Java libraries through JuLC's library descriptions; it ships a tree-sitter grammar, a diagnostic catalogue with stable categories and an ABI manifest of data representations checked for drift. It describes itself as experimental (135 tests; JuLC `0.1.0-pre20` snapshot pin) | `github.com/bloxbean/elci-lang` `README.md`, `docs/ARCHITECTURE.md`, `docs/DIAGNOSTICS.md`, `tree-sitter-elci/`, `gradle.properties` (main `a3ec190`, 2026-10-23); elci-lang.dev |
 
 The maintainer's direction (2026-11-12): make `.jsc` the recommended language for JS developers; make it
 **immutable, to align with UPLC**; **integrate it with the existing JuLC libraries**; keep it **simple, but able to
@@ -263,12 +264,19 @@ rules for that feature, and documented in `jsc-reference.mdx`. A row is not "sup
   build a new one with { ...state, x: x + 1 }"; `for (;;)`, `while` → `fold`, `for x in xs`; `===` → `==`;
   `function` → `fn`; `class`, `this`, `null`, `undefined`, `async` → what to use instead.
 - `joust build --traces` on the npm CLI (Gradle has `-Pjoust.traces`).
+- **Stable diagnostic codes** (`JSC0001`…) with a catalogue in the reference docs, after Elci's diagnostic catalogue
+  (F15): tests and docs refer to codes, not message text, and messages can improve without breaking them.
+- **A representation manifest:** the build writes how each `.jsc` type is encoded as Plutus data (constructor tags,
+  field order, list and map shapes) next to the contract, and a test compares it with a pinned copy, so a lowering
+  change that would alter a datum or redeemer encoding fails the build instead of stranding deployed instances
+  (after Elci's ABI manifest, F15).
 
 ### D13. Editor support
 
-A TextMate grammar for `.jsc` 2 (and v1), used by a VS Code extension and by the docs (replacing the Kotlin alias,
-F7). A language server (hover types, go to definition, diagnostics while typing) is later work (M5), built on the
-same checker.
+A **tree-sitter grammar** for `.jsc` 2 (and v1), as Elci has (F15): one grammar serves highlighting in editors that
+use tree-sitter, a VS Code extension, the docs (replacing the Kotlin alias, F7) and later the language server's
+syntax layer. A TextMate grammar generated or kept beside it covers highlighters that need one (Shiki). A language
+server (hover types, go to definition, diagnostics while typing) is later work (M5), built on the same checker.
 
 ### D14. npm projects
 
@@ -398,8 +406,27 @@ I1–I55 of ADR-0001 to ADR-0016, which `.jsc` 2 leaves unchanged.
 - **A TypeScript subset.** Most familiar to JS developers. Rejected: TS meanings (`number`, mutation, closures,
   classes, `null`) differ from on-chain meanings exactly where a contract is unsafe, and every difference would be a
   rule. `.jsc` 2 borrows TS's look (objects, arrows, spread, `const`, `??`) and none of its semantics.
-- **Lower `.jsc` straight to PIR or UPLC.** Smaller scripts possibly. Rejected: it bypasses the processor and its
-  invariants, which is ADR-0005 D1's main reason to exist.
+- **Lower `.jsc` straight to PIR or UPLC.** Possibly smaller scripts, though v1 is already within about 5% of Java
+  (F4). Rejected: the processor reads Java to build the State IR, the validator generator emits Java that calls the
+  contract's methods, and the runtime, clients and npm engine run those methods. A PIR `.jsc` would need a second path
+  into the State IR, a second validator generator (the thread-token, value, payout-tag, map and object checks written
+  twice: the trusted base ADR-0005 D1 keeps small), and an off-chain evaluator in place of the JVM (next items).
+- **Reuse Elci's syntax** (Elm: layout-based, curried, `case … of`, separate type signatures). Its semantics are
+  close to `.jsc` 2's (immutable, expression-oriented, records, unions, `Maybe`, folds, recursion), which supports
+  this design. Rejected as the surface: `.jsc` exists so that a JavaScript developer can read a contract on day one,
+  and ML-family syntax is a second thing to learn. Taken from Elci instead: the tree-sitter grammar (D13), stable
+  diagnostic codes and the representation manifest (D12), and its experience as the first user of JuLC's library
+  descriptions (Q6). Elci may later be a contract language for functional programmers; reaching JOUST would mean the
+  same State IR and validator path as any frontend, which is out of scope here.
+- **Reuse Elci's compiler (lower `.jsc` to PIR through it).** Rejected with the next item, and because Elci is
+  experimental (F15): JOUST's contracts would depend on a second compiler's maturity.
+- **Run transitions off-chain in a UPLC evaluator** (compile each action as a standalone UPLC function, apply it to
+  the encoded state, arguments and `Ctx`, decode the next state). Feasible: JuLC has JVM and Wasm evaluators and a
+  function entrypoint in its neutral backend, and it would give exact off-chain/on-chain equivalence (one artifact),
+  exact execution units, a smaller npm engine and room for any PIR frontend. Rejected **here** because it is a
+  JOUST-wide change: `StateRuntime`, the generated clients, the portable codecs and the engine call Java methods
+  today, and Java contracts would have to move with `.jsc`. Worth its own research note; if JOUST adopts it, lowering
+  `.jsc` to PIR becomes an option to revisit.
 - **Expose JuLC's stdlib as is**, every public method. Rejected: `long`, `PlutusData` and `ScriptContext` would leak
   into `.jsc` (F10, F11), and transaction-level helpers would let authors re-check (or bypass) what the processor
   checks. A curated, typed table, tested against JuLC's descriptions, keeps the surface stable (D8).
@@ -431,7 +458,7 @@ budgeted in each milestone).
 | # | Scope | Entry gate | Exit criteria |
 |---|---|---|---|
 | M0 | Spike: the version line, `const`, spread updates, `fn` with direct recursion, a `fold` helper and `filter` (both lowerings, D7), a generated `Option`, one `std/crypto` binding, positions on the npm path | ADR accepted | The spike contract builds on both paths; JVM and on-chain agree on hand-written vectors; script-size and budget numbers for each lowering choice recorded; ADR-050 `describe` runs inside the Web Image toolchain (or Q6 falls back) |
-| M1 | Core language: D2–D7, D11, D12 (diagnostics, source maps, generated Java on disk), the std library (D8) with its binding test, records, enums, `match`, lists, `Map`, `BigMap`, `Option`; v1 coexistence and `joust migrate` (D16); the reference interpreter (D15); TextMate grammar (D13); templates switched (D14) | M0 exit | J2–J10, J13–J15 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported with their tests passing (J11); differential tests over generated programs green; docs (`jsc.mdx`, `jsc-reference.mdx`, the escrow tutorial) rewritten |
+| M1 | Core language: D2–D7, D11, D12 (diagnostics, source maps, generated Java on disk), the std library (D8) with its binding test, records, enums, `match`, lists, `Map`, `BigMap`, `Option`; v1 coexistence and `joust migrate` (D16); the reference interpreter (D15); tree-sitter grammar (D13), diagnostic codes and the representation manifest (D12); templates switched (D14) | M0 exit | J2–J10, J13–J15 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported with their tests passing (J11); differential tests over generated programs green; docs (`jsc.mdx`, `jsc-reference.mdx`, the escrow tutorial) rewritten |
 | M2 | Assets and composition: `Value`, `Address`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads` | M1 exit | treasury, oracle and fees ported (J11); attack suites green |
 | M3 | Owned and keyed objects, moves, migration, script purposes, batched actions with maps | M2 exit | bank, market, registry, staking and upgrade ported (J11) |
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports through ADR-050 (D9), npm library packages, offline tests (D14), `joust build --traces` | M1 exit; Web Image engine evaluates validators without a chain (verified) | J7, J12; a `.jsc` library called from a Java contract and a Java library from `.jsc`; the template's tests run offline |
@@ -487,4 +514,6 @@ they say which features need Java). M3–M5 do not block the recommendation.
 ## Revision history
 
 - **r1** (2026-11-12): initial version, from the `.jsc` research of the same day and the maintainer's direction
-  (immutable; JuLC libraries; simple and complete).
+  (immutable; JuLC libraries; simple and complete). Before review, with the maintainer: Elci (F15) considered;
+  its syntax and compiler rejected as `.jsc`'s, its tree-sitter grammar (D13), diagnostic codes and representation
+  manifest (D12) adopted; lowering to PIR and off-chain UPLC evaluation recorded as alternatives (§6).
