@@ -1,6 +1,6 @@
 ---
 title: Architecture decisions
-description: Every JOUST architecture decision record (ADR-0001 to ADR-0017), with its status, the decision in one paragraph and the guide that covers it.
+description: Every JOUST architecture decision record (ADR-0001 to ADR-0017, and ADR-0021), with its status, the decision in one paragraph and the guide that covers it.
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
@@ -41,6 +41,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
+| [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc-2) | A language server and VS Code extension for `.jsc` 2 | Proposed (r5) | – |
 
 ## The base
 
@@ -307,6 +308,21 @@ Homebrew formula gated on repository settings.
 
 Covered in: [Quick start: Java & Gradle](/start/quick-start-java/#create-it-with-joust-new),
 [the native `joust`](/reference/joust-cli/#the-native-joust).
+
+### ADR-0021: A language server and VS Code extension for `.jsc` 2
+
+[`0021-jsc-language-server-and-vscode-extension.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0021-jsc-language-server-and-vscode-extension.md)
+· Proposed (r5)
+
+The editor runs the build's own `.jsc` 2 front end, so the editor and the build cannot disagree about the language.
+A Java language core beside the checker turns files into a document model (diagnostics with their stable codes,
+symbols, resolved names, types and time taint); it is compiled into the existing toolchain Wasm engine, and a
+JavaScript LSP layer serves it, so nobody needs a JDK; every engine runs in a worker that a watchdog can stop. The
+VS Code extension is a thin client: in a trusted npm project it starts the project's own compiler (project-matched
+mode), otherwise a bundled one (advisory mode), and says which. Milestones add, in order: diagnostics as you type;
+recovery, hover, navigation, completion, rename, quick fixes and a hash-bound Accept ABI; libraries across files; a
+formatter, once ADR-0018's M1e makes on-chain messages independent of layout and names; other editors. Publishing to
+the Marketplace and Open VSX stays manual.
 
 ## Research behind the ADRs
 
