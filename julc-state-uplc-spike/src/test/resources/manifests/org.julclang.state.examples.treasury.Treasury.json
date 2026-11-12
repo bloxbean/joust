@@ -1,0 +1,42 @@
+{
+  "contract" : "org.julclang.state.examples.treasury.Treasury",
+  "set" : "primary",
+  "unappliedScriptSha256" : "11ea4994921ad6374b50a0fd97316de2da2628b01a62df07dce7373ff1f957c0",
+  "scriptHash" : "",
+  "descriptionSha256" : "7a72c54dd3abe2c300e9055ad497a6660b5df056311ac0eb3ac4086d02ad6033",
+  "julc" : "0.1.0-pre21-rc1",
+  "options" : {
+    "target" : "plutus-v3-pv11-uplc-1.1.0",
+    "profile" : "pv11-safe",
+    "sourceMapEnabled" : false,
+    "uplcOptimiser" : true,
+    "traces" : true
+  },
+  "programs" : {
+    "close" : "f4aaaec2dad413a0de09318dcecfa6439a4a6a7ecac2de6ca083560548ba082e",
+    "freeze" : "6f4d54a22c1e73a192bae91365ad6bf30b225c866bee09647faa05511f67bf88",
+    "fund" : "1d0bf79e0a65cbf1221b38cfc379cde93eb6738baf18a6579c0145ada2737e4a",
+    "open" : "038e1ef36ef1f46fc05b6f98fff2d1d347574118a666dde5f98af4200e772bad",
+    "pay" : "0e421c11801679013f9cb6969ff09b9241029f643070adbb9701b9aa86915565",
+    "rotate" : "98f136961f57068fd4b4327db614083eff22aa9005d43d5853d23376cabc243f"
+  },
+  "pool" : {
+    "org.julclang.state.api.Action" : "17a6f3288818e72f7058ef69831ccf6dfecb7cdad137ca3f18d97a682e69a2a5",
+    "org.julclang.state.api.AuthorizedBy" : "ccfaa48202602bc6ca938a7d2d30dd6d9cef312bff067de5b9d5bda5f36d843d",
+    "org.julclang.state.api.Ctx" : "1aca33994171b8d5fcaf7f329b432fe02abc43abcdec39b477bf410b9e24290f",
+    "org.julclang.state.api.Destroy" : "8e83088f4d67c4c4cdd7cd7d4935614bf30c21ac6e2c26a0eefd1b879296ef3f",
+    "org.julclang.state.api.Init" : "41b94851afe8652b2ee1477c3d42f555850227d47eae9d3af081159c5c143677",
+    "org.julclang.state.api.Invariant" : "571f268fe6ed8417943a825fbbb85c40a7d8c4d16fe70d05c9a4a040a3f75c1e",
+    "org.julclang.state.api.Params" : "0608ccbdd9a69a0fc74f5ac2f04c9741dd1180df2268cd18511f43da891afa0e",
+    "org.julclang.state.api.Payable" : "e9aa70e5976fd058ab3afca1de7bf28334945733a101c4e28fe6f35e236e248a",
+    "org.julclang.state.api.Payout" : "c3b892ca9126d5ee33e3dc71e0aa1fa40c6aaf7ca0f3211eef60d91d2377a505",
+    "org.julclang.state.api.Payouts" : "032a5859015180cb62d05157a57f040828356dae96cc6b886672bbe0067db961",
+    "org.julclang.state.api.Quorum" : "a29d42e2bf846d1129e3f47b2310f7bee55216d12831baed1bc2a94abf673bb7",
+    "org.julclang.state.api.Require" : "aa3bbfce6db86f513ea65a0904e182cccd8b36606abcff845a83e485ee2ff8e9",
+    "org.julclang.state.api.StateContract" : "959ed8bc1b1f4f966f49800dd89681a716a7d524f39f5aea252e7c78913989ca",
+    "org.julclang.state.examples.treasury.Treasury" : "22aeb4c82030578e558fb055dbf1f24ae22af6be2bfde0a60297411122baa955",
+    "org.julclang.stdlib.lib.AddressLib" : "df275f3a63163e63d992c8ad80bcb26b435828395c3d3abdc2667ab938f7b66a",
+    "org.julclang.stdlib.lib.ContextsLib" : "2d8a0e8a2c7ae31487e8f20ed216b133f8751865efec474c8c0aaf6f86b00ba9"
+  },
+  "substituted" : [ ]
+}

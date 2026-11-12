@@ -1,0 +1,48 @@
+{
+  "contract" : "org.julclang.state.examples.staking.StakedVault",
+  "set" : "primary",
+  "unappliedScriptSha256" : "b71ad588e70f9304ac85e708d7ee2dfee95813aae2445379196c9f5894becf4c",
+  "scriptHash" : "",
+  "descriptionSha256" : "7688738181e34532601250ae5a320f60dc62eed56c7cee741f16f3f746aa659a",
+  "julc" : "0.1.0-pre21-rc1",
+  "options" : {
+    "target" : "plutus-v3-pv11-uplc-1.1.0",
+    "profile" : "pv11-safe",
+    "sourceMapEnabled" : false,
+    "uplcOptimiser" : true,
+    "traces" : true
+  },
+  "programs" : {
+    "close" : "84cfb9de86dde27f17eb8c5c14792fc1342527e6e580f611eb08096a574844d6",
+    "collect" : "a90d513cd5b74b8c5455614702a417edd0520e3ca7b40a516ed2414d4276ed76",
+    "deposit" : "4a4dfe76a0831be4ac78339a823d7f0982f1a997b21237ae0529600da4944151",
+    "open" : "96f1ce5557b3ed35dc86f09cef00e740db5a8844e17bfff52469a5c6bace70ae"
+  },
+  "pool" : {
+    "org.julclang.state.api.Action" : "17a6f3288818e72f7058ef69831ccf6dfecb7cdad137ca3f18d97a682e69a2a5",
+    "org.julclang.state.api.Assets" : "75c7c068e885827b2df704238243fb33b69ed356a02a3b53e3682160780ff62b",
+    "org.julclang.state.api.Certify" : "9a91b5cbce884072012be10513ef641be663d3f8657d6cdc9cf1d12b13a2f49e",
+    "org.julclang.state.api.Certs" : "15520233991de3b1805f6a204698841e751ae1e26b480a2a9c020c1688b0093c",
+    "org.julclang.state.api.Ctx" : "1aca33994171b8d5fcaf7f329b432fe02abc43abcdec39b477bf410b9e24290f",
+    "org.julclang.state.api.Deposit" : "cd01d441b22cc97e3406f29448a11e351c520dc7014aedfc63fe7d6628993c97",
+    "org.julclang.state.api.Destroy" : "8e83088f4d67c4c4cdd7cd7d4935614bf30c21ac6e2c26a0eefd1b879296ef3f",
+    "org.julclang.state.api.Init" : "41b94851afe8652b2ee1477c3d42f555850227d47eae9d3af081159c5c143677",
+    "org.julclang.state.api.Params" : "0608ccbdd9a69a0fc74f5ac2f04c9741dd1180df2268cd18511f43da891afa0e",
+    "org.julclang.state.api.Payable" : "e9aa70e5976fd058ab3afca1de7bf28334945733a101c4e28fe6f35e236e248a",
+    "org.julclang.state.api.Payout" : "c3b892ca9126d5ee33e3dc71e0aa1fa40c6aaf7ca0f3211eef60d91d2377a505",
+    "org.julclang.state.api.Payouts" : "032a5859015180cb62d05157a57f040828356dae96cc6b886672bbe0067db961",
+    "org.julclang.state.api.Propose" : "a2465bb1af83a297d1581f5d4eaa0401703c21be0e7609ed6cf87b6c99e2f63e",
+    "org.julclang.state.api.Quorum" : "a29d42e2bf846d1129e3f47b2310f7bee55216d12831baed1bc2a94abf673bb7",
+    "org.julclang.state.api.Require" : "aa3bbfce6db86f513ea65a0904e182cccd8b36606abcff845a83e485ee2ff8e9",
+    "org.julclang.state.api.Send" : "bf5da85f6ba4c91dcafc832de371610df0d07886a442c1a5f8d1843aeb614d68",
+    "org.julclang.state.api.Sends" : "02272b6551d93e374d6f927970d00a7a0113afaf535da489571d675b0129e9a2",
+    "org.julclang.state.api.StateContract" : "959ed8bc1b1f4f966f49800dd89681a716a7d524f39f5aea252e7c78913989ca",
+    "org.julclang.state.api.Votes" : "e49da4b9fee62e9757d32024077aee233579fafcf26363f77ae37c7285148080",
+    "org.julclang.state.api.Withdraw" : "3efa02014f59622905feb9ba4595877f3861e59325c39046288731f4d3c52f60",
+    "org.julclang.state.examples.staking.StakedVault" : "2a0075828d8fb16bfe1bb354725acd567c166c8e8b06b368daeec960a83be30e",
+    "org.julclang.stdlib.lib.AddressLib" : "df275f3a63163e63d992c8ad80bcb26b435828395c3d3abdc2667ab938f7b66a",
+    "org.julclang.stdlib.lib.ByteStringLib" : "827170da6f2733f8ee53954c491ef7c59f125b255099b24b363afef68c323361",
+    "org.julclang.stdlib.lib.ContextsLib" : "2d8a0e8a2c7ae31487e8f20ed216b133f8751865efec474c8c0aaf6f86b00ba9"
+  },
+  "substituted" : [ ]
+}

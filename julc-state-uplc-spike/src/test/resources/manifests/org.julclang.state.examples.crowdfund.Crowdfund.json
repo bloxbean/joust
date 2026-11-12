@@ -1,0 +1,42 @@
+{
+  "contract" : "org.julclang.state.examples.crowdfund.Crowdfund",
+  "set" : "primary",
+  "unappliedScriptSha256" : "1da328602eadb61854a1d811c3aee449b18812c3ae9552e12c9b71b9550c3d57",
+  "scriptHash" : "9d2167e43379358d57d6a31010553c8f796dd97a44d419495386ab7c",
+  "descriptionSha256" : "f4cbbacacc4febd06dba5ab9fcc34fed0e0ec4ca7949f56e088a1203672c60bb",
+  "julc" : "0.1.0-pre21-rc1",
+  "options" : {
+    "target" : "plutus-v3-pv11-uplc-1.1.0",
+    "profile" : "pv11-safe",
+    "sourceMapEnabled" : false,
+    "uplcOptimiser" : true,
+    "traces" : true
+  },
+  "programs" : {
+    "claim" : "92204979a105541827ed677d55dec99b736c3287f6443623ba6041ef25e94ef7",
+    "close" : "66dd94064d7db455de2193984e61eb2dd8bc17c4b956a4561737d577a9fc16d7",
+    "contribute" : "29f275b37c9754c218b45d8cc7455678db62ac6b0ffc2d998bfa6defa64ff6e4",
+    "launch" : "2431c45a81156cdd15d8ead5319f36c5ca304b7bd496bfd330aa09d812179178",
+    "refund" : "718d53a101a6d3338b523955d7fc0df19508e48f36e875393187385e3a78bab0"
+  },
+  "pool" : {
+    "org.julclang.state.api.Action" : "17a6f3288818e72f7058ef69831ccf6dfecb7cdad137ca3f18d97a682e69a2a5",
+    "org.julclang.state.api.Clock" : "2ed50e4ecf59f3d879faf3ed1ea7dd324ee7a1155bcbcbb0c322dbfe88b61f85",
+    "org.julclang.state.api.Ctx" : "1aca33994171b8d5fcaf7f329b432fe02abc43abcdec39b477bf410b9e24290f",
+    "org.julclang.state.api.Destroy" : "8e83088f4d67c4c4cdd7cd7d4935614bf30c21ac6e2c26a0eefd1b879296ef3f",
+    "org.julclang.state.api.Init" : "41b94851afe8652b2ee1477c3d42f555850227d47eae9d3af081159c5c143677",
+    "org.julclang.state.api.Payable" : "e9aa70e5976fd058ab3afca1de7bf28334945733a101c4e28fe6f35e236e248a",
+    "org.julclang.state.api.Payout" : "c3b892ca9126d5ee33e3dc71e0aa1fa40c6aaf7ca0f3211eef60d91d2377a505",
+    "org.julclang.state.api.Payouts" : "032a5859015180cb62d05157a57f040828356dae96cc6b886672bbe0067db961",
+    "org.julclang.state.api.Require" : "aa3bbfce6db86f513ea65a0904e182cccd8b36606abcff845a83e485ee2ff8e9",
+    "org.julclang.state.api.SignedBy" : "297fe3308b36f8f52c69392f106161d03702c34e5565d8b7d26626bd7fe203ee",
+    "org.julclang.state.api.SortedMaps" : "9e70a2e66e54c14c68c44d56c5cd16fcecb612c5443f7eb248e5a6b72b81f3a6",
+    "org.julclang.state.api.StateContract" : "959ed8bc1b1f4f966f49800dd89681a716a7d524f39f5aea252e7c78913989ca",
+    "org.julclang.state.api.View" : "bf7e52ab14011248a8df5e2269fc1e166646200200bee7dd8a759d5b644ab975",
+    "org.julclang.state.examples.crowdfund.Crowdfund" : "734baaf65f7c2e06f24e1ff5a1c798d63308f41c85d299e91ffb5f3465e849ea",
+    "org.julclang.stdlib.lib.AddressLib" : "df275f3a63163e63d992c8ad80bcb26b435828395c3d3abdc2667ab938f7b66a",
+    "org.julclang.stdlib.lib.ByteStringLib" : "827170da6f2733f8ee53954c491ef7c59f125b255099b24b363afef68c323361",
+    "org.julclang.stdlib.lib.ContextsLib" : "2d8a0e8a2c7ae31487e8f20ed216b133f8751865efec474c8c0aaf6f86b00ba9"
+  },
+  "substituted" : [ ]
+}

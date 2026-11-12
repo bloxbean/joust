@@ -1,0 +1,40 @@
+{
+  "contract" : "org.julclang.state.examples.vault.Vault",
+  "set" : "primary",
+  "unappliedScriptSha256" : "0ad486c23d292357a3b4641b7b231d433215daa7177b844d37a4ab0a674af22f",
+  "scriptHash" : "6be7873b08d1485edc1a5956306663ea57d501cc25225f41175740ea",
+  "descriptionSha256" : "b1170d8d412dc6f50417fb659f994a783ee9ffe74eb6dd50f0037520d8ee243f",
+  "julc" : "0.1.0-pre21-rc1",
+  "options" : {
+    "target" : "plutus-v3-pv11-uplc-1.1.0",
+    "profile" : "pv11-safe",
+    "sourceMapEnabled" : false,
+    "uplcOptimiser" : true,
+    "traces" : true
+  },
+  "programs" : {
+    "close" : "c35322733cdc3fbfb621b0236fcbcc4a92be50b08715869af517dc43005b9d64",
+    "deposit" : "7b8e046b0e7aa0796aad5819316b93e18164230b52e173059f8502bb33e97b94",
+    "open" : "3c5c2884b712ce335e85c3f38656c0645c7e1ab59034d67cf7299d271fe5db62",
+    "withdraw" : "107a965e4b637d1b22cd094568535ff0808a6f3e1a0eceefde5d04f016cd7617"
+  },
+  "pool" : {
+    "org.julclang.state.api.Action" : "17a6f3288818e72f7058ef69831ccf6dfecb7cdad137ca3f18d97a682e69a2a5",
+    "org.julclang.state.api.Clock" : "2ed50e4ecf59f3d879faf3ed1ea7dd324ee7a1155bcbcbb0c322dbfe88b61f85",
+    "org.julclang.state.api.Ctx" : "1aca33994171b8d5fcaf7f329b432fe02abc43abcdec39b477bf410b9e24290f",
+    "org.julclang.state.api.Destroy" : "8e83088f4d67c4c4cdd7cd7d4935614bf30c21ac6e2c26a0eefd1b879296ef3f",
+    "org.julclang.state.api.Init" : "41b94851afe8652b2ee1477c3d42f555850227d47eae9d3af081159c5c143677",
+    "org.julclang.state.api.OnlyOwner" : "aafb427040b70630a4f823d5ab151c5c85ed01f9dcdd540c7d7057e6315530a9",
+    "org.julclang.state.api.Payable" : "e9aa70e5976fd058ab3afca1de7bf28334945733a101c4e28fe6f35e236e248a",
+    "org.julclang.state.api.Payout" : "c3b892ca9126d5ee33e3dc71e0aa1fa40c6aaf7ca0f3211eef60d91d2377a505",
+    "org.julclang.state.api.Payouts" : "032a5859015180cb62d05157a57f040828356dae96cc6b886672bbe0067db961",
+    "org.julclang.state.api.Require" : "aa3bbfce6db86f513ea65a0904e182cccd8b36606abcff845a83e485ee2ff8e9",
+    "org.julclang.state.api.StateContract" : "959ed8bc1b1f4f966f49800dd89681a716a7d524f39f5aea252e7c78913989ca",
+    "org.julclang.state.api.ValidAfter" : "3ea54baa80ee10a192a71b4cf9d8991591190fd2f44a6caf61e664456832b2f4",
+    "org.julclang.state.api.View" : "bf7e52ab14011248a8df5e2269fc1e166646200200bee7dd8a759d5b644ab975",
+    "org.julclang.state.examples.vault.Vault" : "4c254802ee07ce33052a2b154e86c425271d78496c2b6047f783182e3d209246",
+    "org.julclang.stdlib.lib.AddressLib" : "df275f3a63163e63d992c8ad80bcb26b435828395c3d3abdc2667ab938f7b66a",
+    "org.julclang.stdlib.lib.ContextsLib" : "2d8a0e8a2c7ae31487e8f20ed216b133f8751865efec474c8c0aaf6f86b00ba9"
+  },
+  "substituted" : [ ]
+}

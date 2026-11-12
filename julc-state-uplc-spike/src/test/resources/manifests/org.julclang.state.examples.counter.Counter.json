@@ -1,0 +1,37 @@
+{
+  "contract" : "org.julclang.state.examples.counter.Counter",
+  "set" : "primary",
+  "unappliedScriptSha256" : "ec0095e677eaa80a1d2e5490266036baf6d317e1de3c36c9fb3bf15c26400dc3",
+  "scriptHash" : "c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823",
+  "descriptionSha256" : "ce55799acf7b158c93de61b65c05649ad20318e9b880a6c1aee0fbcb01082302",
+  "julc" : "0.1.0-pre21-rc1",
+  "options" : {
+    "target" : "plutus-v3-pv11-uplc-1.1.0",
+    "profile" : "pv11-safe",
+    "sourceMapEnabled" : false,
+    "uplcOptimiser" : true,
+    "traces" : true
+  },
+  "programs" : {
+    "close" : "a73ebba6015b96c9ea586080171cb591682a7e12e5afa0022bc6d8208960b83f",
+    "increment" : "2131f2d866d3c52cefd6f6ea9e634f535c77d4eefd53e6d3b040f72d017df029",
+    "init" : "d1a0a640f7bf6ea6fa745103630ecabd464a51f3a64158a4861772618b6708af",
+    "reset" : "cfc2cd0318e4b8adec7085b3ef5029ccd6d9a863d42bf36c8d670c4ffca71ddd"
+  },
+  "pool" : {
+    "org.julclang.state.api.Action" : "17a6f3288818e72f7058ef69831ccf6dfecb7cdad137ca3f18d97a682e69a2a5",
+    "org.julclang.state.api.Ctx" : "1aca33994171b8d5fcaf7f329b432fe02abc43abcdec39b477bf410b9e24290f",
+    "org.julclang.state.api.Destroy" : "8e83088f4d67c4c4cdd7cd7d4935614bf30c21ac6e2c26a0eefd1b879296ef3f",
+    "org.julclang.state.api.Init" : "41b94851afe8652b2ee1477c3d42f555850227d47eae9d3af081159c5c143677",
+    "org.julclang.state.api.OnlyOwner" : "aafb427040b70630a4f823d5ab151c5c85ed01f9dcdd540c7d7057e6315530a9",
+    "org.julclang.state.api.Payout" : "c3b892ca9126d5ee33e3dc71e0aa1fa40c6aaf7ca0f3211eef60d91d2377a505",
+    "org.julclang.state.api.Payouts" : "032a5859015180cb62d05157a57f040828356dae96cc6b886672bbe0067db961",
+    "org.julclang.state.api.Require" : "aa3bbfce6db86f513ea65a0904e182cccd8b36606abcff845a83e485ee2ff8e9",
+    "org.julclang.state.api.StateContract" : "959ed8bc1b1f4f966f49800dd89681a716a7d524f39f5aea252e7c78913989ca",
+    "org.julclang.state.api.View" : "bf7e52ab14011248a8df5e2269fc1e166646200200bee7dd8a759d5b644ab975",
+    "org.julclang.state.examples.counter.Counter" : "1f31b6ae9f0e8b521aec8720f86e9bb06ac98ea3695272e7e1957576404c4e33",
+    "org.julclang.stdlib.lib.AddressLib" : "df275f3a63163e63d992c8ad80bcb26b435828395c3d3abdc2667ab938f7b66a",
+    "org.julclang.stdlib.lib.ContextsLib" : "2d8a0e8a2c7ae31487e8f20ed216b133f8751865efec474c8c0aaf6f86b00ba9"
+  },
+  "substituted" : [ ]
+}

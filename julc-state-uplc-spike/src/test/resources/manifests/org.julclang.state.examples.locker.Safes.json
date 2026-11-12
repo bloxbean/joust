@@ -1,0 +1,52 @@
+{
+  "contract" : "org.julclang.state.examples.locker.Safes",
+  "set" : "primary",
+  "unappliedScriptSha256" : "6ded2cf4eba8a67ce9031e4564db11503bb8c27c5ea52e638a0ca84d8fe09bd8",
+  "scriptHash" : "95c25019e81fc3d1603215ccda137e32825de7985c94aed72944c9be",
+  "descriptionSha256" : "991b40333b0238169a9d40719138145572ae3a95c8c9b2e041db9c22327af791",
+  "julc" : "0.1.0-pre21-rc1",
+  "options" : {
+    "target" : "plutus-v3-pv11-uplc-1.1.0",
+    "profile" : "pv11-safe",
+    "sourceMapEnabled" : false,
+    "uplcOptimiser" : true,
+    "traces" : true
+  },
+  "programs" : {
+    "empty" : "93de07cf0f81eda66733391ee86b31bf1afe473b70e0d635c9ac391df12e6c2d",
+    "init" : "a5b8d727708c04898a936833cbfb75fd62e80ce51258eb9450a8d6c8b980c2e7",
+    "note" : "05465d1ef78c9634624ce946339ab26527f21f65c2dac29c551686d726a01194",
+    "openSafe" : "8158e2e98692bf5d1f3d68375901f799d35b98207e8e512aad5c685f65444731"
+  },
+  "pool" : {
+    "org.julclang.state.api.Assets" : "75c7c068e885827b2df704238243fb33b69ed356a02a3b53e3682160780ff62b",
+    "org.julclang.state.api.Ctx" : "1aca33994171b8d5fcaf7f329b432fe02abc43abcdec39b477bf410b9e24290f",
+    "org.julclang.state.api.Deposit" : "cd01d441b22cc97e3406f29448a11e351c520dc7014aedfc63fe7d6628993c97",
+    "org.julclang.state.api.DepositClaim" : "741e876f9ca015e183a696025e15d29ad44d477eef54b2eeb52f9afe3b5651d7",
+    "org.julclang.state.api.Funds" : "1105040c9c2a30b7957b8e67793ab29e3f4ca9c1ea22b3416d85159ae538eb2b",
+    "org.julclang.state.api.Init" : "41b94851afe8652b2ee1477c3d42f555850227d47eae9d3af081159c5c143677",
+    "org.julclang.state.api.MapEntry" : "42ae9db3d79632b80c32be60be2525c778dd9d0dfd019ca3005c3e56825578c1",
+    "org.julclang.state.api.MerkleMap" : "a60dea8c92b80563ad0e3b2bcb060b98f635b1b97d28eb4dc00600cc065b00fa",
+    "org.julclang.state.api.MerkleMaps" : "198f10c0878d5852c6800952f1d391aa25fe05068c66913789f6afd81a653eb5",
+    "org.julclang.state.api.Owned" : "7b6ead6cd2b030061e60bd5e0efe15bf68b903f7cc190220e9ef559ca2103beb",
+    "org.julclang.state.api.OwnedAction" : "2125b2da15fa9226765d8eb715c598f26a95daa568e39e1c3190c79d0924ff0e",
+    "org.julclang.state.api.OwnedDestroy" : "1b703d7ce90c03b1df208ace61551eed5c927f194160a5adaa2064ca44e70fed",
+    "org.julclang.state.api.OwnedInit" : "d3406bb6f9bac0fcd7a23a4926da700b41eb513043eb531b793a6089f2809440",
+    "org.julclang.state.api.Payable" : "e9aa70e5976fd058ab3afca1de7bf28334945733a101c4e28fe6f35e236e248a",
+    "org.julclang.state.api.Payout" : "c3b892ca9126d5ee33e3dc71e0aa1fa40c6aaf7ca0f3211eef60d91d2377a505",
+    "org.julclang.state.api.Payouts" : "032a5859015180cb62d05157a57f040828356dae96cc6b886672bbe0067db961",
+    "org.julclang.state.api.Require" : "aa3bbfce6db86f513ea65a0904e182cccd8b36606abcff845a83e485ee2ff8e9",
+    "org.julclang.state.api.Send" : "bf5da85f6ba4c91dcafc832de371610df0d07886a442c1a5f8d1843aeb614d68",
+    "org.julclang.state.api.Sends" : "02272b6551d93e374d6f927970d00a7a0113afaf535da489571d675b0129e9a2",
+    "org.julclang.state.api.Shared" : "f64e70bf168811d5c6473ea961acc09adaff987f62c7d3ddd2cae6fec800511f",
+    "org.julclang.state.api.SignedBy" : "297fe3308b36f8f52c69392f106161d03702c34e5565d8b7d26626bd7fe203ee",
+    "org.julclang.state.api.StateContract" : "959ed8bc1b1f4f966f49800dd89681a716a7d524f39f5aea252e7c78913989ca",
+    "org.julclang.state.api.mpf.Mpf" : "c4dc7c158f6ac3ce3bce9a5fb5c27a8b50f31185fca8ced6679626432bbfa940",
+    "org.julclang.state.api.mpf.ProofStep" : "baf9592543f3e267dca11cd73da842c0847c9fae1d5bf1f44fc2238ac7cf8630",
+    "org.julclang.state.examples.locker.Safes" : "289c38971865ac8bddc1bda651ba81b7a49bcb28f879691c8c600444539332c4",
+    "org.julclang.stdlib.lib.AddressLib" : "df275f3a63163e63d992c8ad80bcb26b435828395c3d3abdc2667ab938f7b66a",
+    "org.julclang.stdlib.lib.ByteStringLib" : "827170da6f2733f8ee53954c491ef7c59f125b255099b24b363afef68c323361",
+    "org.julclang.stdlib.lib.ContextsLib" : "2d8a0e8a2c7ae31487e8f20ed216b133f8751865efec474c8c0aaf6f86b00ba9"
+  },
+  "substituted" : [ "org.julclang.state.api.MerkleMaps" ]
+}

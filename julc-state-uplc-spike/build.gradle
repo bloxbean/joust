@@ -32,6 +32,7 @@ dependencies {
 tasks.named('test') {
     // Reports (U6): build/spike/*.json and *.txt.
     systemProperty 'spike.reps', System.getProperty('spike.reps', '30')
+    systemProperty 'spike.writeManifests', System.getProperty('spike.writeManifests', 'false')
     maxHeapSize = '4g'
     testLogging { showStandardStreams = true; events 'failed'; exceptionFormat 'full' }
     dependsOn ':examples:counter:classes', ':examples:bank:classes', ':examples:vault:classes', ':examples:token:classes', ':examples:escrow:classes', ':examples:crowdfund:classes', ':examples:pool:classes', ':examples:fees:classes', ':examples:guild:classes', ':examples:locker:classes', ':examples:oracle:classes', ':examples:registry:classes', ':examples:staking:classes', ':examples:treasury:classes', ':examples:upgrade:classes', ':examples:dex:classes'

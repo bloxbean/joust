@@ -1,0 +1,52 @@
+{
+  "contract" : "org.julclang.state.examples.registry.Registry",
+  "set" : "primary",
+  "unappliedScriptSha256" : "dbea49469f1f832eb37b5581d525a0080972e6312a3bee2ed4f125bf3d9cff7a",
+  "scriptHash" : "6dd1cca38bde10649ad09bef7f0910576d1aed68e9f0e64e21fa32ef",
+  "descriptionSha256" : "1485a9d8414eb275b4495eb2419166ae5425ed87be1e419c87f8d6ecf62360bb",
+  "julc" : "0.1.0-pre21-rc1",
+  "options" : {
+    "target" : "plutus-v3-pv11-uplc-1.1.0",
+    "profile" : "pv11-safe",
+    "sourceMapEnabled" : false,
+    "uplcOptimiser" : true,
+    "traces" : true
+  },
+  "programs" : {
+    "cast" : "94fc38455b99f87f8649931d63853c63aa33d3170d714e87cd651a59d9ee8007",
+    "change" : "479c7fba781abdd9b13d5c20a5dbc153ddbc2e1c2404fb23b1f077112df0965c",
+    "claim" : "612c0f437f3aaa777fe9b7a5cad78eae4f1043c46d706395a5159f5c6792dc84",
+    "grant" : "50df0a69cc87588290570af0a2e0bc7e62fff4a4fbbd06754d77229415fe9c14",
+    "init" : "f6d0d299f8776f51e2b585642a6f599152bd57f683a30f1aa8278c64e3634542",
+    "leave" : "6eafa1c3bdfea84f0ef9afc24ac6c11b90bd31c96cc6e32643a40926106aae54",
+    "recover" : "38d5c16ffe087b537e9fb1d40690ccd572d4e10fe01af600b31ea2ab237e300a",
+    "release" : "a73ebba6015b96c9ea586080171cb591682a7e12e5afa0022bc6d8208960b83f",
+    "retire" : "346cc2f4d08327d62e46f22a20ae5f4d8ebd23f343ba9021d5dbecdcd15b5bc1",
+    "setOpen" : "e4d29ce3316da18d8d438b189e2a20b160542644ec82d18eb948c182293b8056",
+    "upgrade" : "2aece7be46db2a61aeddacdb6ed7fab87bad254407ef615f934b06021d3c1462",
+    "withdraw" : "cd40fc6984fb0bd2eb66e87208c5675cf4be35feb3dedaf95f350bae2ba3e6e6"
+  },
+  "pool" : {
+    "org.julclang.state.api.Action" : "17a6f3288818e72f7058ef69831ccf6dfecb7cdad137ca3f18d97a682e69a2a5",
+    "org.julclang.state.api.Ctx" : "1aca33994171b8d5fcaf7f329b432fe02abc43abcdec39b477bf410b9e24290f",
+    "org.julclang.state.api.Init" : "41b94851afe8652b2ee1477c3d42f555850227d47eae9d3af081159c5c143677",
+    "org.julclang.state.api.Invariant" : "571f268fe6ed8417943a825fbbb85c40a7d8c4d16fe70d05c9a4a040a3f75c1e",
+    "org.julclang.state.api.Owned" : "7b6ead6cd2b030061e60bd5e0efe15bf68b903f7cc190220e9ef559ca2103beb",
+    "org.julclang.state.api.OwnedAction" : "2125b2da15fa9226765d8eb715c598f26a95daa568e39e1c3190c79d0924ff0e",
+    "org.julclang.state.api.OwnedDestroy" : "1b703d7ce90c03b1df208ace61551eed5c927f194160a5adaa2064ca44e70fed",
+    "org.julclang.state.api.OwnedInit" : "d3406bb6f9bac0fcd7a23a4926da700b41eb513043eb531b793a6089f2809440",
+    "org.julclang.state.api.Payable" : "e9aa70e5976fd058ab3afca1de7bf28334945733a101c4e28fe6f35e236e248a",
+    "org.julclang.state.api.Payout" : "c3b892ca9126d5ee33e3dc71e0aa1fa40c6aaf7ca0f3211eef60d91d2377a505",
+    "org.julclang.state.api.Payouts" : "032a5859015180cb62d05157a57f040828356dae96cc6b886672bbe0067db961",
+    "org.julclang.state.api.Quorum" : "a29d42e2bf846d1129e3f47b2310f7bee55216d12831baed1bc2a94abf673bb7",
+    "org.julclang.state.api.Require" : "aa3bbfce6db86f513ea65a0904e182cccd8b36606abcff845a83e485ee2ff8e9",
+    "org.julclang.state.api.Shared" : "f64e70bf168811d5c6473ea961acc09adaff987f62c7d3ddd2cae6fec800511f",
+    "org.julclang.state.api.SignedBy" : "297fe3308b36f8f52c69392f106161d03702c34e5565d8b7d26626bd7fe203ee",
+    "org.julclang.state.api.StateContract" : "959ed8bc1b1f4f966f49800dd89681a716a7d524f39f5aea252e7c78913989ca",
+    "org.julclang.state.examples.registry.Registry" : "d5591beef792b01ee7e6e965e0807f1d243483a4083dc02b1a10804dd670ad55",
+    "org.julclang.stdlib.lib.AddressLib" : "df275f3a63163e63d992c8ad80bcb26b435828395c3d3abdc2667ab938f7b66a",
+    "org.julclang.stdlib.lib.ByteStringLib" : "827170da6f2733f8ee53954c491ef7c59f125b255099b24b363afef68c323361",
+    "org.julclang.stdlib.lib.ContextsLib" : "2d8a0e8a2c7ae31487e8f20ed216b133f8751865efec474c8c0aaf6f86b00ba9"
+  },
+  "substituted" : [ ]
+}
