@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.julclang.state.api.RequireException;
 
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,18 +26,39 @@ public final class JscMessages {
     private static final Map<String, JsonNode> MAPS = new ConcurrentHashMap<>();
     private static final JsonNode NONE = JSON.createObjectNode();
 
-    /** The message map of contract {@code name}, a resource beside {@code anchor} (its package); null when there is none. */
+    /**
+     * The message map of contract {@code name}: {@code Name.jscmap.json} in {@code anchor}'s package (M1 integration review
+     * S4, after {@link ValidatorScripts}' rules). The copy in the code source {@code anchor} was loaded from wins. Else
+     * (a build's classes and resources are separate directories) the class path's copy, only when there is exactly one:
+     * with two (a split package across jars), neither is taken. Null when there is none: the refusal is then shown
+     * without sites.
+     */
     static JsonNode map(Class<?> anchor, String name) {
         // A described contract (the engine's, ADR-0015) has no class: its map is the JS runtime's to read.
         if (anchor == null || name == null) return null;
         JsonNode m = MAPS.computeIfAbsent(anchor.getName() + "/" + name, k -> {
-            try (InputStream in = anchor.getResourceAsStream(name + ".jscmap.json")) {
-                return in == null ? NONE : JSON.readTree(in);
+            String pkg = anchor.getPackageName();
+            String entry = (pkg.isEmpty() ? "" : pkg.replace('.', '/') + "/") + name + ".jscmap.json";
+            try {
+                String text = ValidatorScripts.besideClass(anchor, entry);
+                if (text == null) {
+                    ClassLoader loader = anchor.getClassLoader() != null ? anchor.getClassLoader() : ClassLoader.getSystemClassLoader();
+                    text = only(java.util.Collections.list(loader.getResources(entry)));
+                }
+                return text == null ? NONE : JSON.readTree(text);
             } catch (Exception e) {
                 return NONE;
             }
         });
         return m == NONE ? null : m;
+    }
+
+    /** The text of the one copy in {@code copies}; null when there is none or more than one (never a guess). */
+    static String only(List<java.net.URL> copies) throws java.io.IOException {
+        if (copies.size() != 1) return null;
+        try (var in = copies.get(0).openStream()) {
+            return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
     }
 
     /** D12's rule: of the messages the trace is, or ends with after {@code ": "}, the longest; null when none. */

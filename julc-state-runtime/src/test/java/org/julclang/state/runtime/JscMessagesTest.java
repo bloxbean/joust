@@ -32,6 +32,25 @@ class JscMessagesTest {
         assertSame(noMap, JscMessages.explained(null, "Described", noMap), "a described contract has no class");
     }
 
+    /** Review S4 on #76: a map is taken from the contract's own code source, else only when the class path has one copy. */
+    @Test
+    void aMapIsNeverAGuess_twoCopiesOnTheClassPathGiveNone() throws Exception {
+        Path a = java.nio.file.Files.createTempDirectory("jscmap-a"), b = java.nio.file.Files.createTempDirectory("jscmap-b");
+        for (Path d : List.of(a, b)) {
+            java.nio.file.Files.createDirectories(d.resolve("t"));
+            java.nio.file.Files.writeString(d.resolve("t/Pay.jscmap.json"), "{\"source\": \"" + d.getFileName() + "\", \"messages\": {}}");
+        }
+        try (var one = new java.net.URLClassLoader(new java.net.URL[]{a.toUri().toURL()}, null);
+             var two = new java.net.URLClassLoader(new java.net.URL[]{a.toUri().toURL(), b.toUri().toURL()}, null)) {
+            assertTrue(JscMessages.only(java.util.Collections.list(one.getResources("t/Pay.jscmap.json"))).contains(a.getFileName().toString()));
+            assertNull(JscMessages.only(java.util.Collections.list(two.getResources("t/Pay.jscmap.json"))), "two copies: neither");
+            assertNull(JscMessages.only(java.util.Collections.list(one.getResources("t/None.jscmap.json"))));
+        }
+        // The contract's own code source is read first: this test class's directory holds no map, the class path one.
+        assertNull(ValidatorScripts.besideClass(JscMessagesTest.class, "org/julclang/state/runtime/Pay.jscmap.json"));
+        assertNotNull(JscMessages.map(JscMessagesTest.class, "Pay"));
+    }
+
     @Test
     void theSharedMatchingVectors() throws Exception {
         JsonNode v = new ObjectMapper().readTree(Path.of("../julc-state-dsl/src/test/resources/jsc2-message-matching.json").toFile());

@@ -172,6 +172,20 @@ public final class ValidatorScripts {
         }
     }
 
+    /**
+     * The text of {@code entry} (a path from the root, {@code a/b/Name.jscmap.json}) in the code source that {@code anchor}'s
+     * class was loaded from, by the same container rules as the script; null when that code source cannot be read or
+     * does not hold it. Nothing is taken from elsewhere on the class path (M1 integration review S4: a split package
+     * could otherwise lend another jar's file).
+     */
+    static String besideClass(Class<?> anchor, String entry) {
+        var pd = anchor.getProtectionDomain();
+        URL where = pd != null && pd.getCodeSource() != null ? pd.getCodeSource().getLocation() : null;
+        try (Container own = Container.open(where)) {
+            return own == null ? null : own.read(entry);
+        }
+    }
+
     /** A classes directory or a jar (or a directory inside one), read by entry name. */
     private interface Container extends AutoCloseable {
         /** The entry's text, or null when there is none. */
