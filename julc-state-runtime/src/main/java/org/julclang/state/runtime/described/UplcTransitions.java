@@ -24,12 +24,16 @@ public final class UplcTransitions implements TransitionFn {
 
     private static final JulcVm VM = JulcVm.create();
 
-    private final Map<String, String> programs;
-    private final Map<String, org.julclang.core.Program> decoded = new HashMap<>();
+    private final Map<String, org.julclang.core.Program> decoded;
 
-    /** Programs (script CBOR hex) by method name. */
+    /**
+     * Programs (script CBOR hex) by method name, decoded here once: the instance is then read-only, so concurrent calls
+     * may share it (ADR-0020 D11).
+     */
     public UplcTransitions(Map<String, String> programs) {
-        this.programs = Map.copyOf(programs);
+        var d = new HashMap<String, org.julclang.core.Program>();
+        programs.forEach((m, hex) -> d.put(m, JulcScriptAdapter.toProgram(hex)));
+        this.decoded = Map.copyOf(d);
     }
 
     @Override
@@ -41,11 +45,8 @@ public final class UplcTransitions implements TransitionFn {
 
     @Override
     public Run run(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
-        var program = decoded.computeIfAbsent(method, m -> {
-            String hex = programs.get(m);
-            if (hex == null) throw new IllegalArgumentException("no transition program for " + m);
-            return JulcScriptAdapter.toProgram(hex);
-        });
+        var program = decoded.get(method);
+        if (program == null) throw new IllegalArgumentException("no transition program for " + method);
         EvalResult r = VM.evaluateWithArgs(program, LedgerEvaluationTarget.pv11(PlutusLanguage.PLUTUS_V3),
                 List.of(target, shared, args, ctx), new ExBudget(10_000_000_000L, 14_000_000L), EvalOptions.DEFAULT);
         if (r instanceof EvalResult.Success s) return new Run(TermExtractor.extractData(s.resultTerm()), null, s.traces());
