@@ -749,6 +749,17 @@ public final class StateHarness<S> {
         BigInteger to = T0.add(WINDOW_MS);
         var plan = org.julclang.state.runtime.Batcher.fold(codec, live.state(),
                 live.lovelace().subtract(BigInteger.valueOf(spec.minAda())), pending, T0, to, Integer.MAX_VALUE);
+        return batch(live, codec, intents, plan);
+    }
+
+    /**
+     * A batch transaction for a given {@code plan} rather than the JVM's fold: the plan's applied intents (each one of
+     * {@code intents}), their payouts, and its final state and balance. A test states the outcome it expects (from an
+     * independent oracle, ADR-0018 J3) or a wrong one, and the validator judges it.
+     */
+    public Batch<S> batch(Live<S> live, org.julclang.state.runtime.IntentCodec<S> codec, List<LiveIntent> intents,
+                          org.julclang.state.runtime.Batcher.Plan<S> plan) {
+        BigInteger to = T0.add(WINDOW_MS);
         var tx = new TxModel(TxModel.Kind.ACTION);
         var inputs = new ArrayList<TxInInfo>();
         inputs.add(new TxInInfo(live.ref(), stateOut(live.state(), live.lovelace())));
