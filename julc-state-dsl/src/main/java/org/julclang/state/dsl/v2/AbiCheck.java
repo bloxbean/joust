@@ -14,7 +14,7 @@ import java.util.Map;
  * exactly {@code False} 0 and {@code True} 1 without fields, an Option exactly {@code Some} 0 with one field and
  * {@code None} 1 without, a named schema by its full reference. A declared type that no encoded root reaches (a type
  * used only inside a method) is not part of the ABI and is not compared. A reached schema the description lacks,
- * API types included, is a difference.
+ * API types included, is a difference. With batched actions the intent's datum and refund tag are roots too (M1c).
  */
 public final class AbiCheck {
     private AbiCheck() {}
@@ -26,12 +26,26 @@ public final class AbiCheck {
         Map<String, Object> abi = (Map<String, Object>) Json.parse(abiJson);
         Map<String, Object> defs = (Map<String, Object>) ((Map<String, Object>) Json.parse(descriptionJson)).get("definitions");
         var types = (Map<String, Object>) abi.get("types");
-        var c = new Compare(defs, types, pkg + "." + name + ".", problems);
+        var c = new Compare(defs, types, pkg + "." + name + ".", pkg + "." + name + "Validator.", problems);
         String validator = pkg + "." + name + "Validator.";
         c.constructors("the datum", List.of(abi.get("datum")), pkg + "." + name + ".State");
         var redeemers = (Map<String, Object>) abi.get("redeemers");
         c.constructors("the spend redeemer", (List<Object>) redeemers.get("spend"), validator + "Calls");
         c.constructors("the mint redeemer", (List<Object>) redeemers.get("mint"), validator + "Lifecycle");
+        // Batched actions (M1c): the intent's datum and its refund tag are encoded on-chain too.
+        if (abi.get("intent") instanceof Map<?, ?> intent) {
+            for (String root : List.of("datum", "refund")) {
+                String t = (String) intent.get(root);
+                if (t == null || !(types.get(t) instanceof Map<?, ?> m)) {
+                    problems.add("the manifest's intent " + root + " is not stated");
+                    continue;
+                }
+                c.seen.add(t);
+                c.constructors("the intent " + root, (List<Object>) m.get("constructors"), c.ref(t));
+            }
+        } else if (defs.containsKey(validator + "Intent")) {
+            problems.add("the description has intents (batched actions) that the manifest does not state");
+        }
         // Every named schema the roots reach, once.
         while (!c.pending.isEmpty()) {
             String t = c.pending.removeFirst();
@@ -92,15 +106,16 @@ public final class AbiCheck {
 
     private static final class Compare {
         final Map<String, Object> defs, types;
-        final String own;
+        final String own, validator;
         final List<String> problems;
         final java.util.ArrayDeque<String> pending = new java.util.ArrayDeque<>();
         final java.util.Set<String> seen = new java.util.HashSet<>();
 
-        Compare(Map<String, Object> defs, Map<String, Object> types, String own, List<String> problems) {
+        Compare(Map<String, Object> defs, Map<String, Object> types, String own, String validator, List<String> problems) {
             this.defs = defs;
             this.types = types;
             this.own = own;
+            this.validator = validator;
             this.problems = problems;
         }
 
@@ -112,6 +127,7 @@ public final class AbiCheck {
             return switch (kind) {
                 case "api" -> "org.julclang.state.api." + t;
                 case "ledger" -> "org.julclang.ledger." + t;
+                case "validator" -> validator + t;
                 default -> own + t;
             };
         }

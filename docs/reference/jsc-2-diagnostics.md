@@ -92,6 +92,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0220 | error | ' … ' is a name the generated validator or client uses for its own types; choose another … name | Checker |
 | JSC0221 | error | the fn … has the name of a declared type or variant; rename one | Checker |
 | JSC0222 | error | ' … ' would hide the type / enum / variant / fn …; a name is bound once and never replaces a declaration | Checker |
+| JSC0223 | error | the batched action … has an intent form named …Intent (the client's method) and …Intent (the validator's record); a method or type of that name would clash with it: rename one of them | Checker |
 
 ## Types and values (ADR-0018 D5, D6)
 
@@ -156,6 +157,11 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0413 | error | pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4) | Checker |
 | JSC0414 | error | 'state' is the input state of an action, destroy or view | Checker |
 | JSC0415 | error | is part of the transaction: it is not available in a view or fn (pass it as an argument) | Checker |
+| JSC0416 | error | the modifier ' … ' is given twice | Checker |
+| JSC0417 | error | a batched action cannot use ' … ': the batcher, not the caller, signs a batch and sets its window; check the caller with require(caller == …, …) and time with require(after(…)) or require(before(…)) in the body (ADR-0004 D1) | Checker |
+| JSC0418 | error | only an action can be batched (ADR-0004 D1) | Checker |
+| JSC0419 | error | a contract with BigMap state cannot have batched actions: each step of a batch would need its own map proofs (ADR-0004 D1, ADR-0018 D7) | Checker |
+| JSC0420 | error | … can pay out, so it must say who may call it; a batched action cannot use 'only' (any intent's owner is its caller), so write 'open' and check the caller in the body (ADR-0018 D4) | Checker |
 
 ## Time (ADR-0018 D11, J6)
 

@@ -97,6 +97,9 @@ final class Parser {
     }
 
     /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
+    /** The method modifiers (D4, D10). */
+    static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched");
+
     private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
             "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum",
             "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int",
@@ -340,6 +343,21 @@ final class Parser {
             } else if (t.is("only") || t.is("after") || t.is("before")) {
                 next();
                 mods.add(new Mod(t.text(), ident("a state field after '" + t.text() + "'"), t.pos()));
+            } else if (t.is("batched")) {
+                // ADR-0018 D10 (M1c): 'batched' runs the action as an intent too; 'batched only' only as an intent
+                // (@Batched(only = true)). 'only' after 'batched' names a field when an identifier other than a modifier
+                // follows ('batched only owner': batched with 'only owner', which the checker refuses).
+                next();
+                String arg = null;
+                if (at("only")) {
+                    Tok after = peek(1);
+                    boolean namesField = after.kind() == K.IDENT && !MODIFIERS.contains(after.text());
+                    if (!namesField) {
+                        next();
+                        arg = "only";
+                    }
+                }
+                mods.add(new Mod("batched", arg, t.pos()));
             } else {
                 return mods;
             }
