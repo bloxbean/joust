@@ -1,0 +1,30 @@
+jsc 2
+package corpus
+
+// '[' on the next line starts a new expression: here the fn's value, a list.
+fn list(x: Int): List<Int> {
+  const y = x
+  [y, x]
+}
+
+// On the same line it is an index; a call's '(' on the next line still continues the expression.
+fn index(m: BigMap<Bytes, Int>, k: Bytes): Int = m[k]
+
+fn call(x: Int): Int {
+  const f = digits
+  (x)
+}
+
+fn digits(n: Int): Int = n
+
+// Operators continue across lines.
+fn sum(a: Int, b: Int): Int {
+  a
+    + b
+    - 1
+}
+
+contract Lines {
+  state { n: Int }
+  init() { return { n: list(1).length } }
+}

@@ -1,0 +1,5 @@
+jsc 2
+package corpus
+
+contract C { state { n: Int } init() { require(true, "open
+) return { n: 0 } } }

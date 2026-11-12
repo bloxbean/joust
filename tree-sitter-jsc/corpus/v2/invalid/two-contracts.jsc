@@ -1,0 +1,5 @@
+jsc 2
+package corpus
+
+contract A { state { n: Int } init() { return { n: 0 } } }
+contract B { state { n: Int } init() { return { n: 0 } } }

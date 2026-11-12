@@ -1,0 +1,42 @@
+{
+  "name": "vscode-jsc",
+  "displayName": "JOUST .jsc",
+  "description": "Syntax highlighting for JOUST's contract language, .jsc 2 and .jsc v1 (ADR-0018 D13)",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "publisher": "bloxbean",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bloxbean/joust.git",
+    "directory": "editors/vscode-jsc"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "jsc",
+        "aliases": [".jsc", "jsc", "JOUST"],
+        "extensions": [".jsc"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "jsc",
+        "scopeName": "source.jsc",
+        "path": "./syntaxes/jsc.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2"
+  }
+}

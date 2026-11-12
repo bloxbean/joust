@@ -1,0 +1,5 @@
+jsc 2
+package corpus
+
+fn f(): Bytes = #abc
+contract C { state { n: Int } init() { return { n: 0 } } }

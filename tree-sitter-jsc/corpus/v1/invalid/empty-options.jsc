@@ -1,0 +1,2 @@
+package p
+contract C() { state n: Int init() { } }
