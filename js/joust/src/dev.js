@@ -15,6 +15,7 @@
 //   /dev/topup                 POST { address, ada? } (DevKit only)
 //   anything else              the page: Vite (when the project has it) or the page directory's files
 
+import { servePrepare } from './http-prepare.js';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync, watch, createReadStream } from 'node:fs';
 import { join, resolve, extname, normalize } from 'node:path';
@@ -160,17 +161,8 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
           clock: net.clock, ttlMs: pageTtlMs(config, net), explorer: net.explorer ?? null, deployments: deployed ?? {} }));
       }
       if (url.pathname === '/joust/service/prepare' && req.method === 'POST') {
-        const body = await new Promise((ok) => { let s = ''; req.on('data', (c) => { s += c; }); req.on('end', () => ok(s)); });
         if (!runtime) throw new Error('no deployment yet (see the dev server\'s log)');
-        try {
-          const r = await runtime.service.prepare(JSON.parse(body));
-          res.writeHead(200, { 'content-type': 'application/json' });
-          return res.end(JSON.stringify(r));
-        } catch (e) {
-          // A contract's refusal (Require.that) or a build failure: the page shows it.
-          res.writeHead(422, { 'content-type': 'application/json' });
-          return res.end(JSON.stringify({ error: String(e.message ?? e) }));
-        }
+        return servePrepare(req, res, runtime.service);   // a cooldown keeps its retryAtSlot (http-prepare.js)
       }
       if (url.pathname.startsWith('/joust/engine/')) return engineFile(req, res, url.pathname.slice('/joust/engine/'.length));
       if (url.pathname.startsWith('/joust/')) return file(res, out, url.pathname.slice('/joust/'.length));

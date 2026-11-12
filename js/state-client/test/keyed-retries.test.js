@@ -7,7 +7,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import CSL from '@emurgo/cardano-serialization-lib-nodejs';
-import { JoustContract, memoryRetryStore, PendingKeyedOperation, KeyedCallInProgress, settle, planOf, txHash as hashOf } from '../src/index.js';
+import { createServer } from 'node:http';
+import { servePrepare, prepareErrorBody } from '../../joust/src/http-prepare.js';
+import { JoustContract, httpService, memoryRetryStore, PendingKeyedOperation, KeyedCallInProgress, settle, planOf, txHash as hashOf } from '../src/index.js';
 import { dataHex } from '../src/pdata.js';
 import { world, build, actionScn, DESCRIPTION, ADA, PARAMS, I, ref, deployment as DEPLOYMENT, TIP } from './keyed-world.js';
 
@@ -463,4 +465,49 @@ test('ADR-0020 §12.1 (PR #62 S2): a cooldown is waited on only through the stru
   const done = await r2.call(r2.page(cooling));
   assert.ok(done.txHash);
   assert.equal(calls, 2, 'prepared again after the structured cooldown');
+});
+
+test('PR #62 C5, F10, S8: a cooldown over HTTP (joust dev\'s prepare route) keeps its slot: the page waits, then the call succeeds', async () => {
+  // joust dev's POST /joust/service/prepare (http-prepare.js) in a real HTTP server, called by httpService.
+  const r = rig();
+  let calls = 0;
+  const behind = { prepare: async (req) => {
+    calls++;
+    if (calls === 1) throw Object.assign(new Error(`Registry.upgrade: not yet; prepare again at slot ${TIP}`), { retryAtSlot: TIP });
+    if (calls === 2) throw new Error(`a forged refusal: prepare again at slot ${TIP}`);
+    return r.service.prepare(req);
+  } };
+  const server = createServer((req, res) => servePrepare(req, res, behind));
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+  try {
+    const svc = httpService(`http://127.0.0.1:${server.address().port}`);
+    r.state.submit = async (cbor) => { r.state.spent.add(ref('a0')); return hashOf(cbor); };
+    // 1st prepare: a cooldown (field) -> wait and prepare again; 2nd: forged text only -> no wait: the call fails.
+    await assert.rejects(r.call(r.page(svc)), /a forged refusal: prepare again at slot/);
+    assert.equal(calls, 2, 'waited once on the structured slot, never on the forged text');
+    // A fresh operation: the cooldown again, then the real build: the call completes.
+    const r2 = rig();
+    r2.state.submit = async (cbor) => { r2.state.spent.add(ref('a0')); return hashOf(cbor); };
+    let n = 0;
+    const behind2 = { prepare: async (req) => {
+      n++;
+      if (n === 1) throw Object.assign(new Error('not yet'), { retryAtSlot: TIP });
+      return r2.service.prepare(req);
+    } };
+    const server2 = createServer((req, res) => servePrepare(req, res, behind2));
+    await new Promise((ok) => server2.listen(0, '127.0.0.1', ok));
+    try {
+      const done = await r2.call(r2.page(httpService(`http://127.0.0.1:${server2.address().port}`)));
+      assert.ok(done.txHash);
+      assert.equal(n, 2, 'prepared again after the cooldown, over HTTP');
+    } finally {
+      server2.close();
+    }
+  } finally {
+    server.close();
+  }
+  // The error body: the field only when it is a real, non-negative safe integer.
+  assert.deepEqual(prepareErrorBody(Object.assign(new Error('x'), { retryAtSlot: 7 })), { error: 'x', retryAtSlot: 7 });
+  assert.deepEqual(prepareErrorBody(new Error('prepare again at slot 7')), { error: 'prepare again at slot 7' });
+  assert.deepEqual(prepareErrorBody(Object.assign(new Error('x'), { retryAtSlot: '7' })), { error: 'x' });
 });
