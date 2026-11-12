@@ -137,6 +137,32 @@ class JoustPluginTest {
         assertThat(checkArgs.get(2).replace('\\', '/')).endsWith("classes/java/main/META-INF/joust");
         assertThat(checkAbi.getDependsOn()).contains("compileJava");
         assertThat(p.getTasks().getByName("check").getDependsOn().stream().map(String::valueOf).toList().toString()).contains("checkJscAbi");
+        // ADR-0018 D16: migrateJsc writes into build/jsc-migrated unless --in-place.
+        MigrateJsc migrate = (MigrateJsc) p.getTasks().getByName("migrateJsc");
+        var migrateArgs = new java.util.ArrayList<String>();
+        migrate.getArgumentProviders().forEach(a -> a.asArguments().forEach(migrateArgs::add));
+        assertThat(migrateArgs).hasSize(3).startsWith("--migrate", genArgs.get(0));
+        assertThat(migrateArgs.get(2).replace('\\', '/')).endsWith("build/jsc-migrated");
+        migrate.getInPlace().set(true);
+        var inPlace = new java.util.ArrayList<String>();
+        migrate.getArgumentProviders().forEach(a -> a.asArguments().forEach(inPlace::add));
+        assertThat(inPlace).endsWith("--in-place");
+        // ADR-0018 D12: compileJava's diagnostics on generated Java remapped to .jsc positions, after it.
+        JavaExec remap = (JavaExec) p.getTasks().getByName("remapJscDiagnostics");
+        var remapArgs = new java.util.ArrayList<String>();
+        remap.getArgumentProviders().forEach(a -> a.asArguments().forEach(remapArgs::add));
+        assertThat(remapArgs.get(0)).isEqualTo("--remap");
+        assertThat(remapArgs.get(1).replace('\\', '/')).endsWith("build/jsc/javac.log");
+        assertThat(remapArgs.get(2)).isEqualTo(genArgs.get(1));
+        assertThat(remapArgs.get(3)).isEqualTo(genArgs.get(0));
+        assertThat(p.getTasks().getByName("compileJava").getFinalizedBy().getDependencies(null).stream().map(org.gradle.api.Task::getName).toList()).contains("remapJscDiagnostics");
+    }
+
+    @org.junit.jupiter.api.Test
+    void migrateJscTakesInPlace() throws IOException {
+        Files.createDirectories(dir.resolve("src/main/jsc/app"));
+        BuildResult r = runner("plugins { id 'org.julclang.joust' }\n", "help", "--task", "migrateJsc").build();
+        assertThat(r.getOutput()).contains("--in-place").contains("Replaces each v1 file");
     }
 
     // ---- TestKit: a real Gradle build of a project applying the plugin (no dependency resolution needed)

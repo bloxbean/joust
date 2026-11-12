@@ -1,0 +1,2 @@
+package p
+contract C { state n: Int init() { require 0 < n < 2 "x" } }

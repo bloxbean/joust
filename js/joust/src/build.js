@@ -17,6 +17,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { buildInWorker, ENGINE_STACK_MB } from './toolchain.js';
 import { abiGate } from './abi.js';
+import { deploymentsShape, scriptDigest } from './deploy.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -99,8 +100,10 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     const map = messagesOf[`${c.packageName.replaceAll('.', '/')}/${c.name}.java`];
     // The script it explains: a map read from an audit file names its script (review r1 S1).
     const messages = map ? { ...map, scriptHash: c.scriptHash } : undefined;
-    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, built: { joust: VERSION },
-      ...(messages ? { messages } : {}) });
+    // Review r3 F9: the compiler that built each script (this package's version, the engine's JOUST and JuLC versions),
+    // carried into each deployment record.
+    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions,
+      built: { joust: VERSION, engine: r.joust ?? null, julc: r.julc ?? null }, ...(messages ? { messages } : {}) });
     log(`${c.packageName}.${c.name}: ${c.scriptSizeBytes} bytes, hash ${c.scriptHash || '(parameterised)'}, `
       + `${Object.keys(c.transitions).length} transitions`);
   }
@@ -115,10 +118,56 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   }
   if (validators.length) writeFileSync(join(dir, 'validators.json'), JSON.stringify(validators) + '\n');
   writeFileSync(join(dir, 'joust.lock.json'), JSON.stringify({
-    joust: VERSION, descriptionVersion: 2,
+    joust: VERSION, engine: { joust: r.joust ?? null, julc: r.julc ?? null }, descriptionVersion: 2,
     contracts: Object.fromEntries(r.contracts.map((c) => [`${c.packageName}.${c.name}`, { scriptHash: c.scriptHash }])),
     ...(validators.length ? { validators: Object.fromEntries(validators.map((v) => [`${v.package}.${v.name}`, { purpose: v.purpose, scriptHash: v.scriptHash }])) } : {}),
   }, null, 2) + '\n');
+  for (const w of staleDeployments(dir, r.contracts)) log(w);
   log(`built ${r.contracts.length} contract(s) into ${relative(root, dir)} in ${Date.now() - t} ms`);
   return { ok: true, contracts: r.contracts, validators, diagnostics: r.diagnostics };
+}
+
+/**
+ * ADR-0018 D16 (review r2 S1): recorded deployments (deployments.<network>.json) this build no longer produces, as
+ * warnings: a contract built to another script (a migrated .jsc file, a changed contract; by the digest of its script
+ * before parameters, so @Params contracts too, else by its policy), a contract no longer built (renamed or removed), and
+ * a file that cannot be read. Instances deployed earlier stay on the recorded script.
+ */
+export function staleDeployments(dir, contracts) {
+  const out = [];
+  const built = new Map(contracts.map((c) => [`${c.packageName}.${c.name}`, c]));
+  const files = existsSync(dir) ? readdirSync(dir).filter((f) => /^deployments\..+\.json$/.test(f)).sort() : [];
+  const tail = 'instances deployed earlier stay on that script; to call them, keep the build that made it (joust migrate'
+    + ' --in-place keeps the v1 artifacts in build/joust/v1/; joust deploy keeps superseded records) (ADR-0018 D16)';
+  for (const f of files) {
+    let recorded;
+    try {
+      recorded = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+      const problem = deploymentsShape(recorded);
+      if (problem) throw new Error(problem);
+    } catch (e) {
+      out.push(`warning: ${f} cannot be read (${e.message}): its deployments are not checked against this build; joust deploy keeps it`
+        + ' beside the new file');
+      continue;
+    }
+    for (const [title, d] of Object.entries(recorded.contracts ?? {})) {
+      const c = built.get(title);
+      if (!c) {
+        out.push(`warning: ${f} records ${title}, which this build does not produce (renamed or removed): ${tail}`);
+        continue;
+      }
+      const digest = scriptDigest(c.scriptCborHex);
+      if (d.scriptDigest) {
+        if (d.scriptDigest !== digest) out.push(`warning: ${f} records ${title} with another script than this build's: ${tail}`);
+      } else if (d.params !== undefined) {
+        out.push(`warning: ${f} records ${title} with params but no script digest (deployed by an earlier JOUST): it cannot be`
+          + ' checked against this build; deploy again to record one');
+      } else if (d.policy && c.scriptHash) {
+        if (d.policy !== c.scriptHash) out.push(`warning: ${f} records ${title} at script ${d.policy}, which this build does not produce (it builds ${c.scriptHash}): ${tail}`);
+      } else {
+        out.push(`warning: ${f} records ${title} with neither a script digest nor a policy: it cannot be checked against this build`);
+      }
+    }
+  }
+  return out;
 }

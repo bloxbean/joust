@@ -171,22 +171,25 @@ client; the [Java runtime](/apps/java-runtime/) builds, submits and confirms tra
 <TabItem label=".jsc">
 
 ```jsc
+jsc 2
+package app
+
 contract Counter(maxDatumBytes = 128) {
-    state count: Int
-    state owner: Key
+  state { count: Int, owner: Key }
 
-    init() {
-        owner = caller
-    }
+  init() {
+    return { count: 0, owner: caller }
+  }
 
-    action increment(by: Int) {
-        require by > 0 "increment must be positive"
-        count += by
-    }
+  action increment(by: Int) {
+    require(by > 0, "increment must be positive")
+    return { ...state, count: count + by }
+  }
 }
 ```
 
-`.jsc` is lowered to a Java `@StateContract`, then compiled exactly like hand-written Java. See [.jsc](/languages/jsc/).
+`.jsc` 2 reads like TypeScript, with immutable values, and is lowered to a Java `@StateContract`, then compiled exactly
+like hand-written Java. It is a preview. See [.jsc](/languages/jsc/).
 
 </TabItem>
 <TabItem label="JavaScript">

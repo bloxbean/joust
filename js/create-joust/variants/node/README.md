@@ -2,7 +2,7 @@
 
 A Cardano state contract written in {{language}} (`contracts/app/{{contract}}`), and a Node script (`index.js`) that
 deploys and calls it. Built and used with npm only: no JDK or GraalVM.
-
+{{jscNote}}
 ```sh
 npm install
 npm start          # build, deploy and run index.js on a local Yaci DevKit

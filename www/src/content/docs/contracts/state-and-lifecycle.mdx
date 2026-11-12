@@ -82,37 +82,37 @@ public class Counter {
 <TabItem label=".jsc">
 
 ```jsc title="Counter.jsc"
+jsc 2
 package org.example.counter
 
 // A counter anyone can increment and only its owner can reset or close.
 contract Counter(maxDatumBytes = 128) {
-    state count: Int
-    state owner: Key
+  state { count: Int, owner: Key }
 
-    init() {
-        owner = caller
-    }
+  init() {
+    return { count: 0, owner: caller }
+  }
 
-    action increment(by: Int) {
-        require by > 0 "increment must be positive"
-        count += by
-    }
+  action increment(by: Int) {
+    require(by > 0, "increment must be positive")
+    return { ...state, count: count + by }
+  }
 
-    action reset() only owner {
-        count = 0
-    }
+  action reset() only owner {
+    return { ...state, count: 0 }
+  }
 
-    destroy close() only owner {
-        pay balance to owner
-    }
+  destroy close() only owner {
+    pay(owner, balance)
+  }
 
-    view current(): Int = count
+  view current(): Int = count
 }
 ```
 
-Each `state` line is a component of the generated `State` record. In `init`, `Int`, `Bool` and `Map` fields you do not
-assign start at 0, `false` and empty; `Key` and `Bytes` fields must be assigned. `only owner` lowers to
-`@SignedBy("owner")`. See [.jsc](/languages/jsc/).
+`state { … }` declares the components of the generated `State` record, in order. `init` returns the first state,
+every field given; an action returns the next one, `{ ...state, … }` keeping the fields it does not change.
+`only owner` lowers to `@SignedBy("owner")`. See [.jsc](/languages/jsc/).
 
 </TabItem>
 <TabItem label="JavaScript">
@@ -366,7 +366,8 @@ org.julclang.state.api.SortedMaps
 <Aside type="tip">
 
 `SortedMaps` covers `byte[]` keys and `BigInteger` values. For other maps in the state, insert in canonical key order
-yourself, or use a MerkleMap. In `.jsc`, `Map<Key, Int>` is always a MerkleMap.
+yourself, or use a MerkleMap. In `.jsc` 2, a `Map<K, V>` is an inline map that the generated code keeps canonical, and a `BigMap<K, V>`
+is a MerkleMap.
 
 </Aside>
 

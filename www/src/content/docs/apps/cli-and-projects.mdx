@@ -29,6 +29,7 @@ during development and after a build. It needs Node 22 or newer and nothing else
 - contracts/ your contracts: .java and .jsc files, in package folders
   - app/
     - Counter.jsc
+    - Counter.abi.json the .jsc contract's ABI manifest, committed
 - index.js the Node script (node template)
 - page/ the page (web template): index.html, main.js, engine.worker.js
 - test/ Node tests (node --test)
@@ -66,14 +67,21 @@ public network, but it is still a key.
 ## `joust build`
 
 ```sh
-joust build [--src <dir>] [--out <dir>]
+joust build [--src <dir>] [--out <dir>] [--accept-abi]
 ```
 
 Compiles every `.java` and `.jsc` file under `contracts/` (or `--src`) into `build/joust/` (or `--out`), with the
-toolchain engine, in-process. The `.jsc` language is JOUST's contract DSL ([.jsc](/languages/jsc/)). Plain JuLC
+toolchain engine, in-process. The `.jsc` language is JOUST's contract language ([.jsc](/languages/jsc/)). Plain JuLC
 validators (`@WithdrawValidator`, `@SpendingValidator`, ...) in the same folder are compiled too, for use as
-governors. Diagnostics are printed as `error: <file>:<line>: <message>`; on an error the command exits with status 1
-and writes nothing.
+governors. Diagnostics are printed as `error: <file>:<line>: <message>`, a `.jsc` 2 diagnostic with its column and
+code (`error[JSC0502]: app/Counter.jsc:20:13: <message>`); on an error the command exits with status 1 and writes
+no contract.
+
+Each `.jsc` 2 contract has an ABI manifest, `<Contract>.abi.json`, committed beside the `.jsc` file. The build fails
+when it is missing (`JSC0003`) or differs from what the contract now compiles to (`JSC0002`); `--accept-abi` writes it
+instead, to review and commit ([the ABI manifest](/languages/jsc/#the-abi-manifest)). The Java each `.jsc` file lowered
+to is written to `build/joust/generated/`, with its source map, also when the build failed (not for a file whose
+manifest was refused).
 
 | File in `build/joust/` | What it is |
 |---|---|
@@ -161,7 +169,7 @@ The values follow the description's schema in the [JSON conventions](/apps/javas
 ## `joust dev`
 
 ```sh
-joust dev [--network <name>] [--port <port>]
+joust dev [--network <name>] [--port <port>] [--accept-abi]
 ```
 
 The development loop, on one port (default **5178**, or the config's `dev.port`):
@@ -173,7 +181,9 @@ The development loop, on one port (default **5178**, or the config's `dev.port`)
 2. **Build and deploy**, then start a prepare service over the result.
 3. **Serve**: the page, the chain proxy, the build, the engine and the faucet (routes below).
 4. **Watch** `contracts/`: a saved `.java` or `.jsc` file rebuilds and redeploys (debounced; one run at a time, and a
-   save during a run queues one more). A failed build waits for the next save.
+   save during a run queues one more). A failed build waits for the next save. A `.jsc` 2 file whose ABI manifest is
+   missing or changed fails the build unless `joust dev` was started with `--accept-abi`; the server keeps serving
+   the last good build meanwhile.
 
 </Steps>
 

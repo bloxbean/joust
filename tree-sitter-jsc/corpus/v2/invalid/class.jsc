@@ -1,0 +1,4 @@
+jsc 2
+package corpus
+
+class C { }

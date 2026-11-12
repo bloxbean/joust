@@ -8,6 +8,9 @@
     { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$Validator", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
     { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$Param", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
     { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$RunRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
-    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$RunResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true }
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$RunResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$MigrateRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$Migrated", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.toolchain.wasm.JoustToolchainWasm$MigrateResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true }
   ]
 }

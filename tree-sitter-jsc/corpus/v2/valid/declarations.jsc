@@ -1,0 +1,65 @@
+jsc 2;
+package org.example.jsc.corpus;
+
+import { blake2b_224, sha3_256 } from "std/crypto"
+import { slice, length } from "std/bytes";
+
+// Records, enums and fns at the top of the file, before and after the contract.
+type Share = { to: Key, bps: Int }
+type Pair = { a: Int; b: Int; }
+type Loose = { x: Int y: Bytes }
+type Empty = {}
+
+enum Phase {
+  Open,
+  Paused { reason: Bytes },
+  Closed { day: Int, by: Key }
+}
+
+enum Flag { On; Off }
+
+fn total(shares: List<Share>): Int = shares.fold(0, (acc, s) => acc + s.bps)
+
+fn digits(n: Int): Int = n < 10 ? 1 : 1 + digits(n / 10)
+
+fn nested(m: Map<Key, List<Option<Int>>>): Int {
+  const n: Int = m.size
+  n
+}
+
+contract Corpus(maxDatumBytes = 1024, minAda = 2 ada, maxValidityMs = 600_000) {
+  state {
+    owner: Key,
+    phase: Phase
+    count: Int;
+    shares: List<Share>,
+    balances: BigMap<Key, Int>,
+  }
+
+  type Local = { v: Int }
+  enum Mode { A, B }
+  fn twice(x: Int): Int = x * 2
+
+  init(shares: List<Share>) payable {
+    return { owner: caller, phase: Open, count: 0, shares, balances: BigMap.empty() }
+  };
+
+  action bump(by: Int) only owner after count before count {
+    return { ...state, count: count + by }
+  }
+
+  action anyone() open payable { return state }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+
+  view current(): Int = count
+
+  view block(): Int {
+    const x = count
+    return x
+  }
+}
+
+fn after(): Int = 1

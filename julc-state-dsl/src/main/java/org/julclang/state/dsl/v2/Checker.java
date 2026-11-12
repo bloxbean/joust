@@ -121,6 +121,14 @@ final class Checker {
     }
 
     static Ir.Program check(File file, String fileName) {
+        try {
+            return checkFile(file, fileName);
+        } catch (JscException e) {
+            throw Parser.hinted(e, file.leadingMinus(), file.members());
+        }
+    }
+
+    private static Ir.Program checkFile(File file, String fileName) {
         var c = new Checker(file, fileName);
         c.declare();
         Ir.Program p;
@@ -133,6 +141,11 @@ final class Checker {
             if (++round > c.stateFields.size() + 1) throw new IllegalStateException("time fields did not converge");
         }
         c.checkRecursion();
+        for (Pos m : file.leadingMinus()) {
+            c.warn(m, "JSC9007", "this line starts with '-', which continues the expression on the line above (a subtraction):"
+                    + " newlines do not end statements in .jsc; if that is meant, join the lines or put the expression in parentheses;"
+                    + " if the line is meant to stand alone, end the line above with ';'");
+        }
         return new Ir.Program(p.pkg(), p.fileName(), p.name(), p.options(), p.records(), p.enums(), p.state(), p.methods(), p.fns(),
                 Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings));
     }

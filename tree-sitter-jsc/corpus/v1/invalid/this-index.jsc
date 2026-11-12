@@ -1,0 +1,2 @@
+package p
+contract C { state m: Map<Key, Int> init() { this.m[caller] = 1 } }

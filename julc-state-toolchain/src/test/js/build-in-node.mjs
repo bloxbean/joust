@@ -32,6 +32,11 @@ for (const m of modules) {
   }
   const t = Date.now();
   const r = engine.joust.build({ files, options: {} });
+  // Review r3 F13: a built engine reports the versions it was built with, never 'dev'.
+  if (!r.joust || r.joust === 'dev' || !r.julc || r.julc === 'dev') {
+    console.log(`DIFF engine versions: joust ${r.joust}, julc ${r.julc}`);
+    failures++;
+  }
   const ms = Date.now() - t;
   if (!r.ok) {
     failures++;

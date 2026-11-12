@@ -1,0 +1,5 @@
+jsc 2
+package corpus
+
+fn f(o: Option<Int>): Int = match o { Some(x) => { require(x > 0, "positive") }, None => 0 }
+contract C { state { n: Int } init() { return { n: 0 } } }

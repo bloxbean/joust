@@ -1,6 +1,11 @@
 package org.julclang.state.gradle;
 
+import org.gradle.api.Action;
 import org.gradle.api.GradleException;
+import org.gradle.api.Task;
+import org.gradle.api.logging.StandardOutputListener;
+import org.gradle.api.file.RegularFile;
+import org.gradle.api.provider.Property;
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
@@ -20,6 +25,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Properties;
 
@@ -31,7 +38,8 @@ import java.util.Properties;
  *   <li>the runtime, the Blockfrost backend (DevKit), the testkit and the JUnit Platform launcher;</li>
  *   <li>the JOUST processor, JuLC's processor and the on-chain API sources on the annotation processor path;</li>
  *   <li>{@code -parameters}, UTF-8, native access for tests and {@code run}, MerkleMap mirrors in memory for tests;</li>
- *   <li>{@code generateJsc}, when {@code src/main/jsc} exists: {@code .jsc} lowered to Java before compiling.</li>
+ *   <li>{@code generateJsc}, when {@code src/main/jsc} exists: {@code .jsc} lowered to Java before compiling; with it
+ *       {@code acceptJscAbi}, {@code checkJscAbi}, {@code migrateJsc} and {@code remapJscDiagnostics} (ADR-0018).</li>
  * </ul>
  *
  * <p>Every version comes from the JOUST build that produced the plugin ({@code META-INF/joust/gradle-plugin.properties}),
@@ -146,6 +154,82 @@ public class JoustPlugin implements Plugin<Project> {
             t.getArgumentProviders().add(() -> List.of("--check-abi", src.getAbsolutePath(), described.get().getAsFile().getAbsolutePath()));
         });
         project.getTasks().named("check", c -> c.dependsOn(checkAbi));
+
+        // ADR-0018 D16: v1 files translated to .jsc 2, into build/jsc-migrated (or in place, with --in-place).
+        Provider<Directory> migrated = project.getLayout().getBuildDirectory().dir("jsc-migrated");
+        project.getTasks().register("migrateJsc", MigrateJsc.class, t -> {
+            t.setGroup("build");
+            t.setDescription("Translates the .jsc v1 files of " + MAIN_JSC + " to .jsc 2, into build/jsc-migrated (--in-place: replaces"
+                    + " them, keeping Name.jsc.v1)");
+            t.setClasspath(tool);
+            t.getMainClass().set("org.julclang.state.dsl.JscMain");
+            Property<Boolean> inPlace = t.getInPlace();
+            t.getArgumentProviders().add(() -> inPlace.get()
+                    ? List.of("--migrate", src.getAbsolutePath(), migrated.get().getAsFile().getAbsolutePath(), "--in-place")
+                    : List.of("--migrate", src.getAbsolutePath(), migrated.get().getAsFile().getAbsolutePath()));
+        });
+
+        // ADR-0018 D12: javac's and the processors' diagnostics on the generated Java, reported again at their .jsc
+        // positions (the source map beside the Java), as the npm toolchain reports them. compileJava's output is kept
+        // in build/jsc/javac.log; when it holds anything, remapJscDiagnostics reads it (and removes it).
+        Provider<RegularFile> log = project.getLayout().getBuildDirectory().file("jsc/javac.log");
+        TaskProvider<JavaExec> remap = project.getTasks().register("remapJscDiagnostics", JavaExec.class, t -> {
+            t.setGroup("build");
+            t.setDescription("Reports compileJava's diagnostics on Java generated from .jsc at their .jsc positions");
+            t.setClasspath(tool);
+            t.getMainClass().set("org.julclang.state.dsl.JscMain");
+            File logFile = log.get().getAsFile();
+            t.onlyIf(x -> logFile.length() > 0);
+            t.getArgumentProviders().add(() -> List.of("--remap", logFile.getAbsolutePath(), out.get().getAsFile().getAbsolutePath(),
+                    src.getAbsolutePath()));
+            t.doLast(new DeleteFile(logFile));
+        });
+        project.getTasks().named(JavaPlugin.COMPILE_JAVA_TASK_NAME, JavaCompile.class, t -> {
+            t.doFirst(new CaptureOutput(log.get().getAsFile()));
+            t.finalizedBy(remap);
+        });
+    }
+
+    /** Keeps a task's standard output and error in a file (javac's diagnostics, as Gradle prints them). */
+    static final class CaptureOutput implements Action<Task> {
+        private final File file;
+
+        CaptureOutput(File file) {
+            this.file = file;
+        }
+
+        @Override
+        public void execute(Task task) {
+            try {
+                Files.createDirectories(file.toPath().getParent());
+                Files.writeString(file.toPath(), "");
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            StandardOutputListener append = text -> {
+                try {
+                    Files.writeString(file.toPath(), text, StandardOpenOption.APPEND);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            };
+            task.getLogging().addStandardOutputListener(append);
+            task.getLogging().addStandardErrorListener(append);
+        }
+    }
+
+    /** Removes a file after a task. */
+    static final class DeleteFile implements Action<Task> {
+        private final File file;
+
+        DeleteFile(File file) {
+            this.file = file;
+        }
+
+        @Override
+        public void execute(Task task) {
+            file.delete();
+        }
     }
 
     /** The versions written by the build that produced this plugin. */

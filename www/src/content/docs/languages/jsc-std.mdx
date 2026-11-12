@@ -1,0 +1,152 @@
+---
+title: ".jsc standard library"
+description: "Every function a .jsc 2 contract can call: the prelude and the std modules, with each one's signature, domain, time rule and the Java it binds to."
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+A `.jsc` 2 contract calls three kinds of functions: the **prelude** (always in scope), the **`std` modules** (imported
+by name), and its own `fn`s. List and map methods (`xs.fold`, `m.get`) are on the
+[language reference](/languages/jsc-reference/#lists-maps-and-options).
+
+```jsc
+import { blake2b_224 } from "std/crypto"
+import { slice, length } from "std/bytes"
+```
+
+An import names functions of one module. A function used without its import is an error (`JSC0704`, which names the
+module to import it from); a name imported from the wrong module is `JSC0702`; a `fn` with an imported name is
+`JSC0703`.
+
+<Aside type="note" title="A preview">
+`.jsc` 2 is a preview ([ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)).
+`std/value` and `std/address` come with `Value` and `Address` in milestone M2; importing them now is `JSC0304`.
+</Aside>
+
+## How a row is bound
+
+Each `std` function is a row of a binding table
+([`Std.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/Std.java),
+ADR-0018 D8): a `.jsc` signature, a Java target, a conversion policy and a domain. The generated Java calls the target,
+so the same function runs on the JVM and, compiled by JuLC, on chain.
+
+| Policy | Meaning |
+|---|---|
+| direct | Every argument and the result have the same Java type on both sides (`byte[]`, `boolean`, `BigInteger`) |
+| long result | The target returns a `long`, which goes straight into `BigInteger.valueOf`; no `Int` argument is narrowed |
+| adapter | The target is a JOUST API adapter (`BytesAdapter`, `MathAdapter`, `BitsAdapter`, `CryptoAdapter` in `julc-state-api`) that takes `BigInteger`s, checks the domain with a `require` on both sides, then narrows and calls JuLC's stdlib |
+| generated | No library target: the lowering generates the code, and the reference interpreter implements it independently |
+
+**Domain:** the arguments a function accepts. Outside it the call fails, on the JVM before anything is submitted and on
+chain alike. **A time value as an argument:** whether a value that depends on `validFrom` or `validTo` may reach the
+function. Only functions that are total and whose cost does not depend on the window accept one
+([the time rule](/languages/jsc-reference/#time-d11)); passing a time value to any other is an error at the call
+(`JSC0509`).
+
+A test (`JscV2BindingTest` in `julc-state-toolchain`) resolves every row's Java target with javac and compares it with
+the table, so a JuLC upgrade that renames or retypes a function fails JOUST's build, never your contract. The tables
+below are generated from the same table and checked by `JscV2StdDocTest`.
+
+## The prelude
+
+No import needed.
+
+| Function | Signature | Meaning |
+|---|---|---|
+| `min`, `max` | `min(Int, Int): Int` | The smaller or larger of two `Int`s |
+| `abs` | `abs(Int): Int` | The absolute value |
+| `utf8` | `utf8("text"): Bytes` | The UTF-8 bytes of a string literal (the only place a string is a value) |
+| `asKey` | `asKey(Bytes): Key` | A checked conversion to a 28-byte key hash: a literal is checked when the file compiles (`JSC0323`), any other value at run time. A time value cannot reach it (`JSC0507`) |
+| `asHash` | `asHash(Bytes): Hash` | The same, to a 28-byte script hash or policy id |
+| `range` | `range(a, b)` | The `Int`s from `a` up to `b`, exclusive; empty when `b <= a`. Only the receiver of `any`, `all`, `fold`, `filter` or `map`, or the list of a `for` loop: no list is built (`JSC1009`). A bound cannot be a time value (`JSC0516`) |
+| `Some` | `Some(x): Option<T>` | A present `Option`; `None` is the absent one. `Some(None)` is refused (`JSC0322`) |
+| `after`, `before` | `after(Int): Bool` | The whole validity window is after (before) the time. Only at the top of a `require`, alone or under `&&` or `\|\|` ([time](/languages/jsc-reference/#time-d11)). Also importable from `std/time` |
+
+## The modules
+
+`std/list` functions are generic: `T` is the element type of the list they get, and `indexOf` compares with the
+structural equality of `==`.
+
+{/* std:begin: generated from JscV2.bindings() by JscV2StdDocTest; do not edit */}
+### `std/crypto`
+
+| Function | Signature | Domain | A time value as an argument | Target (policy) |
+|---|---|---|---|---|
+| `sha2_256` | `sha2_256(Bytes): Bytes` | any bytes | yes | `CryptoLib.sha2_256` (direct) |
+| `sha3_256` | `sha3_256(Bytes): Bytes` | any bytes | yes | `CryptoLib.sha3_256` (direct) |
+| `blake2b_256` | `blake2b_256(Bytes): Bytes` | any bytes | yes | `CryptoLib.blake2b_256` (direct) |
+| `blake2b_224` | `blake2b_224(Bytes): Bytes` | any bytes | yes | `CryptoLib.blake2b_224` (direct) |
+| `verifyEd25519` | `verifyEd25519(Bytes, Bytes, Bytes): Bool` | key of 32 bytes and signature of 64 bytes, else a failure (where the builtin fails); then true or false by libsodium's rules: a small-order key or R, a non-canonical key or S, a key off the curve are false | no | `CryptoAdapter.verifyEd25519` (adapter) |
+
+### `std/bytes`
+
+| Function | Signature | Domain | A time value as an argument | Target (policy) |
+|---|---|---|---|---|
+| `length` | `length(Bytes): Int` | any bytes; the result is in [0, 2^63) | yes | `ByteStringLib.length` (long result) |
+| `concat` | `concat(Bytes, Bytes): Bytes` | any bytes | yes | `ByteStringLib.append` (direct) |
+| `slice` | `slice(Bytes, Int, Int): Bytes` | start and length in [0, 2^31), else a failure; the result is clamped to b as the builtin does | no | `BytesAdapter.slice` (adapter) |
+| `take` | `take(Bytes, Int): Bytes` | n in [0, 2^31), else a failure; at most length(b) bytes | no | `BytesAdapter.take` (adapter) |
+| `drop` | `drop(Bytes, Int): Bytes` | n in [0, 2^31), else a failure (F18: the stdlib's drop wraps on the JVM); empty past the end | no | `BytesAdapter.drop` (adapter) |
+| `byteAt` | `byteAt(Bytes, Int): Int` | index in [0, length(b)) and below 2^31, else a failure; the result is in [0, 255] | no | `BytesAdapter.at` (adapter) |
+| `toInt` | `toInt(Bytes): Int` | any bytes, read as an unsigned big-endian integer (empty is 0) | yes | `ByteStringLib.byteStringToInteger` (direct) |
+| `toHex` | `toHex(Bytes): Bytes` | any bytes; lower-case ASCII hex, two characters a byte | yes | `ByteStringLib.toHex` (direct) |
+
+### `std/math`
+
+| Function | Signature | Domain | A time value as an argument | Target (policy) |
+|---|---|---|---|---|
+| `div` | `div(Int, Int): Int` | b != 0, else a failure; rounds toward negative infinity | no | `MathAdapter.div` (adapter) |
+| `mod` | `mod(Int, Int): Int` | b != 0, else a failure; the result has b's sign | no | `MathAdapter.mod` (adapter) |
+| `pow` | `pow(Int, Int): Int` | exponent in [0, 1024], else a failure (the cost grows with it) | no | `MathAdapter.pow` (adapter) |
+| `expMod` | `expMod(Int, Int, Int): Int` | exponent >= 0 and modulus > 0, else a failure; the result is in [0, modulus); the ExpModInteger builtin of protocol version 11 (CIP-109), which the toolchain's PLUTUS_V3_PV11 target provides | no | `MathAdapter.expMod` (adapter) |
+| `sign` | `sign(Int): Int` | any Int; -1, 0 or 1 | yes | `MathLib.sign` (direct) |
+
+### `std/bits`
+
+| Function | Signature | Domain | A time value as an argument | Target (policy) |
+|---|---|---|---|---|
+| `andBytes` | `andBytes(Bool, Bytes, Bytes): Bytes` | any bytes; with pad the result is as long as the longer, else as the shorter | yes | `BitwiseLib.andByteString` (direct) |
+| `orBytes` | `orBytes(Bool, Bytes, Bytes): Bytes` | any bytes; with pad the result is as long as the longer, else as the shorter | yes | `BitwiseLib.orByteString` (direct) |
+| `xorBytes` | `xorBytes(Bool, Bytes, Bytes): Bytes` | any bytes; with pad the result is as long as the longer, else as the shorter | yes | `BitwiseLib.xorByteString` (direct) |
+| `complement` | `complement(Bytes): Bytes` | any bytes | yes | `BitwiseLib.complementByteString` (direct) |
+| `readBit` | `readBit(Bytes, Int): Bool` | index in [0, 8 * length(b)), else a failure; bit 0 is the last byte's lowest | no | `BitsAdapter.readBit` (adapter) |
+| `shift` | `shift(Bytes, Int): Bytes` | n in (-2^31, 2^31), else a failure; positive shifts left, zero bits fill | no | `BitsAdapter.shift` (adapter) |
+| `rotate` | `rotate(Bytes, Int): Bytes` | n in (-2^31, 2^31), else a failure; positive rotates left | no | `BitsAdapter.rotate` (adapter) |
+| `countSetBits` | `countSetBits(Bytes): Int` | any bytes | yes | `BitwiseLib.countSetBits` (long result) |
+| `findFirstSetBit` | `findFirstSetBit(Bytes): Int` | any bytes; -1 when no bit is set | yes | `BitwiseLib.findFirstSetBit` (long result) |
+
+### `std/list`
+
+| Function | Signature | Domain | A time value as an argument | Target (policy) |
+|---|---|---|---|---|
+| `last` | `last(List<T>): Option<T>` | any list; None when empty | yes | none (generated) |
+| `nth` | `nth(List<T>, Int): Option<T>` | index >= 0, else a failure; None past the end | no | none (generated) |
+| `indexOf` | `indexOf(List<T>, T): Option<Int>` | any list and value (structural equality, D6); the first index, or None | yes | none (generated) |
+
+### `std/time`
+
+| Function | Signature | Domain | A time value as an argument | Target (policy) |
+|---|---|---|---|---|
+| `elapsedSince` | `elapsedSince(Int): Int` | max(0, validFrom - t): a lower bound of the time elapsed since t | yes | none (generated) |
+| `elapsedSinceAtMost` | `elapsedSinceAtMost(Int): Int` | max(0, validTo - t): an upper bound of the time elapsed since t | yes | none (generated) |
+| `windowStart` | `windowStart(): Int` | validFrom: the window's start, to store | yes | none (generated) |
+| `windowEnd` | `windowEnd(): Int` | validTo: the window's end, to store | yes | none (generated) |
+
+{/* std:end */}
+
+## Not bound
+
+- `keccak_256`, ECDSA and Schnorr signatures, RIPEMD-160: the JVM's crypto provider lacks them, and a function is
+  bound only when every runtime fails exactly where the ledger's builtin fails (ADR-0018 D8, F18).
+- `integerToByteString` and `writeBits`: their domains need checks `.jsc` 2 does not have yet.
+- Functions over raw `PlutusData`, and JuLC's transaction libraries (`ContextsLib`, `OutputLib`): the processor owns
+  the transaction checks.
+
+For anything else, write the contract, or that part of it, in [Java](/languages/java/).
+
+## Next steps
+
+<CardGrid>
+<LinkCard title=".jsc guide" description="The language, by example." href="/languages/jsc/" />
+<LinkCard title=".jsc reference" description="Types, operators, the time rule, the ABI manifest and diagnostics." href="/languages/jsc-reference/" />
+</CardGrid>

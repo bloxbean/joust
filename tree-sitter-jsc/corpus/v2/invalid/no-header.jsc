@@ -1,0 +1,6 @@
+package corpus
+
+contract NoHeader {
+  state { n: Int }
+  init() { return { n: 0 } }
+}

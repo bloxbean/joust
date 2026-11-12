@@ -89,6 +89,18 @@ public final class JscV2 {
         return best;
     }
 
+    /** Words the {@code .jsc} 2 parser reads as syntax wherever an expression starts (JavaScript habits included). */
+    private static final Set<String> EXPRESSION_WORDS = Set.of("match", "undefined", "null", "async", "await", "function", "this", "new",
+            "class", "switch", "if", "true", "false");
+
+    /**
+     * Whether {@code n} cannot be a name in {@code .jsc} 2: a reserved word of the checker or a word the parser reads as
+     * syntax ({@code match}, {@code undefined}, …). {@code joust migrate} renames such v1 names or refuses them.
+     */
+    public static boolean isReservedName(String n) {
+        return Checker.RESERVED.contains(n) || EXPRESSION_WORDS.contains(n);
+    }
+
     /** Whether a source is {@code .jsc} 2: its first word, after whitespace and comments, is {@code jsc}. */
     public static boolean isV2(String source) {
         return Parser.isV2(source);

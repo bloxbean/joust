@@ -1,0 +1,21 @@
+{
+  "name": "tree-sitter-jsc",
+  "version": "0.1.0",
+  "description": "tree-sitter grammar for JOUST's contract language, .jsc 2 and .jsc v1 (ADR-0018 D13)",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bloxbean/joust.git",
+    "directory": "tree-sitter-jsc"
+  },
+  "keywords": ["incremental", "parsing", "tree-sitter", "jsc", "joust", "cardano"],
+  "files": ["grammar.js", "tree-sitter.json", "queries/*", "src/**"],
+  "devDependencies": {
+    "tree-sitter-cli": "0.25.10"
+  },
+  "scripts": {
+    "generate": "tree-sitter generate --abi 14",
+    "test": "tree-sitter generate --abi 14 && tree-sitter test && node test/shared-corpus.mjs"
+  }
+}

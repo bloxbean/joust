@@ -1,0 +1,5 @@
+jsc 2
+package corpus
+
+fn f(xs: List<Int>): Int { for (const x in xs) { } 0 }
+contract C { state { n: Int } init() { return { n: 0 } } }

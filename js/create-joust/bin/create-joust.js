@@ -2,7 +2,7 @@
 // npm create joust <dir> [-- --template node|web] [--lang jsc|java]: a new JOUST app with a Counter contract.
 import { parseArgs } from 'node:util';
 import { resolve } from 'node:path';
-import { scaffold, TEMPLATES, LANGS, DEFAULTS } from '../src/scaffold.js';
+import { scaffold, TEMPLATES, LANGS, DEFAULTS, LANGUAGE_PREVIEW } from '../src/scaffold.js';
 
 const USAGE = `Usage: npm create joust@latest [dir] -- [--template node|web] [--lang jsc|java]
 
@@ -58,4 +58,5 @@ console.log(o.template === 'node' ? `Created ${dir}: ${file} and index.js, a Nod
   npm run build
   npm run deploy     # needs a DevKit: yaci-devkit up --enable-yaci-store
   npm test
-  npm run dev        # the page at http://127.0.0.1:5178 (npm run dev:preview for preview)`);
+  npm run dev        # the page at http://127.0.0.1:5178 (npm run dev:preview for Cardano's preview network)`);
+if (o.lang === 'jsc') console.log(`\nNote: ${LANGUAGE_PREVIEW}.`);

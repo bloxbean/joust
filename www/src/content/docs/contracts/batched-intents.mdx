@@ -66,7 +66,8 @@ public class Pool {
 - `@Batched(only = true)` drops the direct call. Nobody can then spend the instance with that action directly, which
   would invalidate the batches being built against it. Use it for actions users race on.
 
-In `.jsc` the modifier is `batched` (and `batched only` for intent-only):
+In `.jsc` v1 the modifier is `batched` (and `batched only` for intent-only). `.jsc` 2 has no batched actions yet
+(milestone M3 of ADR-0018), so this is a [v1](/languages/jsc-v1/) example; `joust migrate` refuses it (`JSC1103`):
 
 <Tabs syncKey="lang">
 <TabItem label="Java">
@@ -84,7 +85,7 @@ public static State donate(State s, Ctx ctx) {
 </TabItem>
 <TabItem label=".jsc">
 
-```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Jar.jsc"
+```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Jar.jsc (v1)"
 action tip() payable batched {
     require received >= 1 ada "tip at least 1 ADA"
     total += received
@@ -256,5 +257,5 @@ a bound as an argument and check it: `buy(maxPrice)` refuses if the price has ri
   <LinkCard title="Tutorial: pool with batched intents" href="/tutorials/pool-batched-intents/" description="Lock intents, cancel one, batch the rest on DevKit." />
   <LinkCard title="Owned objects" href="/contracts/owned-objects/" description="Contention-free per-user state." />
   <LinkCard title="Time" href="/contracts/time/" description="Clock checks, which batched actions use instead of @ValidAfter." />
-  <LinkCard title=".jsc" href="/languages/jsc/" description="The batched modifier in the contract language." />
+  <LinkCard title=".jsc v1" href="/languages/jsc-v1/" description="The batched modifier in the v1 contract language." />
 </CardGrid>

@@ -1,0 +1,9 @@
+jsc 2
+package known.class
+
+contract K {
+  state { n: Int }
+  init() {
+    return { n: 0 }
+  }
+}

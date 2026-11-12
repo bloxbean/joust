@@ -6,6 +6,7 @@
 //                               on save, serve the page with the chain API proxied at /chain
 //   joust serve [--network n] [--dir dist] [--port p]  serve a built page (vite build) as static files, with the chain
 //                               API proxied at /chain (and a DevKit's faucet): nothing built, deployed or bundled
+//   joust migrate [<file.jsc>…] [--in-place]   .jsc v1 files to .jsc 2 (into build/joust/migrated/, or in place)
 //   joust version | help | new
 //
 // ADR-0017 D5/D9: version, help (also `<cmd> --help`) and new are answered here and never run project code. Project
@@ -29,6 +30,7 @@ const COMMANDS = {
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
   dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
   serve: 'serve [--network <name>] [--dir <dir>] [--port <port>]   serve a built page with the chain API proxied',
+  migrate: 'migrate [<file.jsc>…] [--in-place]   translate .jsc v1 files to .jsc 2, into build/joust/migrated/ (--in-place: replace them, keeping <Name>.jsc.v1)',
   version: 'version                     this joust\'s version',
   help: 'help [<command>]            this help',
   new: 'new <dir>                   how to create a project (npm create joust, or the native joust new)',
@@ -113,6 +115,12 @@ async function project() {
     case 'build': {
       const { build } = await import('../src/build.js');
       const r = await build({ src: flag('src') ?? config.contracts, out: flag('out') ?? config.out, acceptAbi: args.includes('--accept-abi') });
+      return r.ok ? 0 : 1;
+    }
+    case 'migrate': {
+      const { migrate } = await import('../src/migrate.js');
+      const files = args.slice(1).filter((a) => !a.startsWith('--'));
+      const r = await migrate({ src: config.contracts, out: config.out, files, inPlace: args.includes('--in-place') });
       return r.ok ? 0 : 1;
     }
     case 'deploy': {

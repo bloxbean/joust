@@ -1,402 +1,355 @@
 ---
 title: ".jsc reference"
-description: "The complete .jsc language: lexical rules, keywords, types, members, modifiers, statements, expressions, built-ins, lowering and every checker error."
+description: "The precise .jsc 2 language: lexical rules, grammar, types and encodings, names, operators, effects, the time rule, BigMaps, the ABI manifest and diagnostics."
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-This page is the complete definition of `.jsc` (version 1), taken from the parser, checker and lowering in
-`julc-state-dsl` ([`Lexer.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/Lexer.java),
-[`Parser.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/Parser.java),
-[`Lowering.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/Lowering.java))
-and [ADR-0005](https://github.com/bloxbean/joust/blob/main/docs/adr/0005-option-e-jsc-dsl.md). For a guided
-introduction, read the [.jsc guide](/languages/jsc/) first.
+This page defines `.jsc` 2, as the front end in `julc-state-dsl` implements it
+([`v2/Lexer.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/Lexer.java),
+[`v2/Parser.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/Parser.java),
+[`v2/Checker.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/Checker.java),
+[`v2/JavaEmitter.java`](https://github.com/bloxbean/joust/blob/main/julc-state-dsl/src/main/java/org/julclang/state/dsl/v2/JavaEmitter.java))
+and [ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md) states
+it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the functions, the
+[standard library](/languages/jsc-std/). A file without `jsc 2` is [.jsc v1](/languages/jsc-v1/).
 
-## Grammar at a glance
-
-```text
-file        = "package" name { "." name } [";"]
-              "contract" Ident [ "(" option { "," option } ")" ] "{" { member } "}"
-option      = ( "minAda" | "maxDatumBytes" | "maxValidityMs" ) "=" Int
-member      = "state" Ident ":" type [";"]
-            | "init" params { modifier } block
-            | ( "action" | "destroy" ) Ident params { modifier } block
-            | "view" Ident params ":" type "=" expr [";"]
-params      = "(" [ Ident ":" type { "," Ident ":" type } ] ")"
-type        = "Int" | "Bool" | "Bytes" | "Key" | "Map" "<" "Key" "," "Int" ">"
-modifier    = "payable" | "open" | "batched" [ "only" ] | ( "only" | "after" | "before" ) Ident
-block       = "{" { stmt [";"] } "}"
-stmt        = "let" Ident "=" expr
-            | "require" expr String
-            | "pay" expr "to" expr
-            | "if" expr block [ "else" ( "if" ... | block ) ]
-            | "delete" Ident "[" expr "]"
-            | [ "this" "." ] Ident ( "=" | "+=" | "-=" ) expr
-            | Ident "[" expr "]" ( "=" | "+=" | "-=" ) expr
-expr        = binary operators by precedence, then unary "!" | "-", then primary
-primary     = Int [ "ada" ] | Hex | "true" | "false" | "this" "." Ident
-            | Ident "(" [ expr { "," expr } ] ")" | Ident "[" expr "]" | Ident | "(" expr ")"
-```
-
-A file holds exactly one contract (`one contract per file`). Members can come in any order; state fields keep their
-order in the state record.
+<Aside type="caution" title="A preview">
+`.jsc` 2 is a preview: the core language of milestone M1. The features of M2 to M4 (values and assets, owned and keyed
+objects, batched intents, purposes, libraries) still need [Java](/languages/java/).
+</Aside>
 
 ## Lexical rules
 
 | Element | Rule |
 |---|---|
-| Whitespace | Spaces, tabs and newlines separate tokens; newlines are not significant |
-| Comments | `//` to the end of the line. There are no block comments |
-| Identifiers | A letter or `_`, then letters, digits or `_`. Case-sensitive |
-| Integers | Decimal digits; `_` may separate groups (`1_000_000`). No sign: `-5` is unary minus applied to `5` |
-| `ada` suffix | `5 ada` is `5000000` (multiplied by 1,000,000). Only directly after an integer literal |
-| Bytes | `#` then hex digits (`#cafe`), an even number of them; upper case is accepted and lower-cased. `#` with 56 digits (28 bytes) is a `Key`, any other length is `Bytes` |
-| Strings | `"..."` on one line, no escapes. Used only as `require` messages |
-| Separators | `;` is optional after a statement, a state field, a view and the package line |
-| Symbols | `+= -= == != <= >= && \|\| { } ( ) [ ] , : ; = < > + - * / % ! .` |
+| Version line | The first word of the file, after whitespace and comments, is `jsc`, followed by `2` (`JSC0112`, `JSC0113`). A file whose first word is anything else is v1 |
+| Line ends | LF or CRLF only. A lone CR, NEL, U+2028, U+2029, VT and FF are refused (`JSC0147`): some editors break lines there and a `//` comment could hide the code after them |
+| Format characters | No Unicode format character (category Cf: the bidirectional controls, zero-width characters) anywhere in the file, comments and strings included (`JSC0145`); a leading byte-order mark is allowed |
+| Comments | `//` to the end of the line, and `/* … */` |
+| Identifiers | `[A-Za-z_][A-Za-z0-9_]*`: ASCII only (`JSC0146`), so no two names can look alike. Case-sensitive |
+| Integers | Decimal digits, `_` between groups (`1_000_000`). No sign: `-5` is unary minus. `5 ada` is 5,000,000 |
+| Bytes | `#` then an even number of hex digits (`#cafe`, `JSC0102`); upper case is lower-cased |
+| Strings | `"…"` on one line, with the escapes `\"`, `\\` and `\n`; no control characters (`JSC0104`). Only `require` messages and `utf8("…")` arguments |
+| Separators and newlines | Newlines do not end statements: a statement ends where its expression cannot continue, or at `;` (optional). Two tokens look at the line: a `[` or a `(` continues an index or a call only on the line of what it follows, so `m[k]` and `f(x)` start on one line, and on a later line `[` or `(` starts a new expression. A line that starts with a binary `-` continues the expression above it (a subtraction) and warns `JSC9007`: join the lines, parenthesise, or end the line above with `;` |
 
-## Keywords
+## Grammar at a glance
 
-These words are reserved by the parser: they cannot name a contract, field, parameter, method or `let`. (Package
-segments may still be keywords, as in `org.example.state`.)
+```text
+file      = "jsc" "2" "package" seg { "." seg } { import | type | enum | fn } contract
+import    = "import" "{" Ident { "," Ident } "}" "from" String
+type      = "type" Name "=" "{" { field [","] } "}"
+enum      = "enum" Name "{" { Name [ "{" { field [","] } "}" ] [","] } "}"
+field     = Ident ":" typeRef
+typeRef   = Ident [ "<" typeRef { "," typeRef } ">" ]
+fn        = "fn" Ident params ":" typeRef ( "=" expr | block )
+contract  = "contract" Name [ "(" option { "," option } ")" ] "{" { member } "}"
+option    = ( "minAda" | "maxDatumBytes" | "maxValidityMs" ) "=" Int [ "ada" ]
+member    = "state" "{" { field [","] } "}"          (exactly once)
+          | "init" params [ "payable" ] block
+          | ( "action" | "destroy" ) Ident params { modifier } block
+          | "view" Ident params ":" typeRef ( "=" expr | block )
+          | fn | type | enum
+params    = "(" [ Ident ":" typeRef { "," Ident ":" typeRef } ] ")"
+modifier  = "payable" | "open" | ( "only" | "after" | "before" ) Ident
+block     = "{" { stmt } [ [ "return" ] expr ] "}"
+stmt      = "const" Ident [ ":" typeRef ] "=" expr
+          | "require" "(" expr "," String ")"
+          | "pay" "(" expr "," expr ")"
+          | "if" expr block [ "else" ( if | block ) ]
+          | "match" expr "{" { pattern "=>" ( block | require | pay | expr ) [","] } "}"
+          | "for" "(" "const" Ident "of" expr ")" block
+pattern   = "_" | "None" | "Some" "(" Ident ")" | Name [ "{" Ident [ ":" Ident ] { "," … } "}" ]
+expr      = see the operator table; primaries: Int [ "ada" ], Hex, "true", "false", Ident, Ident "(" args ")",
+            "(" expr ")", "[" [ expr { "," expr } ] [ "," "..." expr ] "]", "{" [ "..." expr "," ] inits "}",
+            Name "{" inits "}", if-expression, match-expression
+args      = argument { "," argument };   argument = expr | Ident "=>" body | "(" [ Ident { "," Ident } ] ")" "=>" body
+```
 
-| Keyword | Role |
-|---|---|
-| `package` | Starts the file: the Java package of the generated class |
-| `contract` | Declares the contract and its name |
-| `state` | Declares a state field |
-| `init` | The constructor: creates an instance |
-| `action` | A state transition |
-| `destroy` | Ends the instance and pays out |
-| `view` | A read-only query, a single expression |
-| `let` | An immutable local |
-| `require` | A check with a message |
-| `pay` | Adds a payout (with the contextual word `to`) |
-| `if`, `else` | Branches |
-| `delete` | Removes a map entry |
-| `this` | `this.f`: the state field `f` |
-| `true`, `false` | `Bool` literals |
-| `payable`, `only`, `after`, `before`, `batched`, `open` | Modifiers. `after` and `before` are also functions (`after(t)`) |
-| `ada` | The lovelace suffix of an integer literal |
-| `Int`, `Bool`, `Bytes`, `Key`, `Map` | Types |
-
-`to` is not a keyword: it is recognised only after the amount in `pay amount to key`, so a parameter may be called
-`to` (`pay n to to` is valid, if unusual).
+A file holds one contract (`JSC0114`), a contract one `state` block (`JSC0121`) and exactly one `init` (`JSC0401`).
+Members may come in any order. A block's last expression is its value; a statement after it is `JSC0127`.
 
 ## Contract options
 
-`contract Name(option = value, ...)`. Values are integer literals. Each becomes the `@StateContract` element of the
-same name ([Annotations](/reference/annotations/)).
-
 | Option | Java element | Default | Meaning |
 |---|---|---|---|
-| `minAda` | `long minAda()` | `0` (derived: `4310 * (160 + 200 + maxDatumBytes)`, rounded up to 0.1 ADA) | Lovelace locked as the state UTxO's min-ADA deposit. A value below the derived one is a compile error |
+| `minAda` | `long minAda()` | derived from `maxDatumBytes` | Lovelace locked as the state UTxO's min-ADA deposit; below the derived value is a compile error |
 | `maxDatumBytes` | `int maxDatumBytes()` | `512` | Largest serialised state the validator accepts |
-| `maxValidityMs` | `long maxValidityMs()` | `3600000` | Widest validity interval (`validTo - validFrom`, POSIX ms) for a call that reads `Ctx` |
+| `maxValidityMs` | `long maxValidityMs()` | `3600000` | Widest validity interval a call that reads the transaction may use |
 
-Any other name is an error: `unknown option 'x' (minAda, maxDatumBytes, maxValidityMs)`.
+Values are non-negative integer literals (`ada` allowed); anything else is `JSC0402` or `JSC0403`.
 
-## Types
+## Types and their encodings
 
-| `.jsc` | Java | Values | Where allowed |
+The encoding is fixed and is what the [ABI manifest](#the-abi-manifest) states. It is JuLC's encoding of the generated
+Java, so a `.jsc` contract and a Java contract with the same state agree on chain.
+
+| `.jsc` | Java | On-chain data (manifest `data`) | Notes |
 |---|---|---|---|
-| `Int` | `BigInteger` | Arbitrary-precision integers | Fields, parameters, lets, view results |
-| `Bool` | `boolean` | `true`, `false` | Fields, parameters, lets, view results |
-| `Bytes` | `byte[]` | Byte strings | Fields, parameters, lets, view results |
-| `Key` | `byte[]` | A 28-byte key hash | Fields, parameters, lets, view results |
-| `Map<Key, Int>` | `MerkleMap` | Keys to non-negative `Int`s; absent reads as 0 | **State fields only** |
+| `Int` | `BigInteger` | integer (`int`) | unbounded on both sides |
+| `Bool` | `boolean` | `Constr 0 []` false, `Constr 1 []` true (`bool`) | |
+| `Bytes` | `byte[]` | bytes (`bytes`) | `<`, `<=`, `>`, `>=` compare bytes |
+| `Key` | `byte[]` | bytes, 28 of them (`bytes28`) | a `Key` is a `Bytes`; the reverse only through `asKey` |
+| `Hash` | `byte[]` | bytes, 28 of them | a script hash or policy id; `asHash` |
+| `List<T>` | `JulcList<T>` | list (`list<…>`) | |
+| `Option<T>` | `Optional<T>` | `Constr 0 [x]` / `Constr 1 []` (`option<…>`) | `Option<Option<T>>` is refused (`JSC0305`) |
+| `Map<K, V>` | `JulcMap<K, V>` | map with unique keys in canonical order (`map<…>`) | `K` is `Bytes`, `Key` or `Hash`, at most 64 bytes (`JSC0308`) |
+| `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | the `MerkleMap` record: its root, and the reads and writes of the call (`merkleMap<…>`) | a state field only (`JSC0803`) |
+| `type R = { f: T, … }` | a generated record | `Constr 0` with the fields in declaration order | no generic records |
+| `enum E { A, B { x: Int } }` | a generated sealed interface and one record per variant | `Constr i`, `i` the variant's declaration index, then its fields | |
 
-Assignability: every type accepts itself, and `Bytes` also accepts a `Key`. `Key` does not accept `Bytes`. `==` and
-`!=` accept `Bytes` and `Key` in either order. Any other map type is an error: `v1 maps are Map<Key, Int>`.
+There are no strings at run time, no implicit conversions, no `null` and no generic user types. Type, enum and variant
+names start with a capital (`JSC0205`), have no `_` (`JSC0206`), share one namespace (`JSC0910`), and may not be a
+name the processor generates (`Lifecycle`, `Calls`, `Step`, `Funds`, … : `JSC0220`).
 
-Every `Key` parameter of an `init`, `action` or `destroy` gets a generated first check,
-`Require.that(ByteStringLib.length(p) == 28, "File.jsc:L: p must be a 28-byte key hash")`.
+### Checked inputs
+
+Every `init` argument and every action and destroy parameter (the redeemer) is checked by generated code before the
+method's body runs, recursively through records, enums, lists and options: every `Key` and `Hash` is 28 bytes, and
+every `Map` has unique keys of at most 64 bytes in strictly ascending canonical order. A failure is a located
+`require` failure. View parameters are not checked: a view runs off chain on your own inputs.
+
+## Names and scope
+
+- A name is bound once and never redeclared or shadowed (`JSC0212`).
+- In an action, destroy or view, no parameter, `const`, lambda parameter, loop variable or `match` binding may take a
+  state field's name or a built-in's (`caller`, `received`, `balance`, `validFrom`, `validTo`, `state`, `params`,
+  `funds`): `JSC0213`. In an `init`, which has no input state, parameters may share the names of the fields it
+  creates.
+- No binding and no state field takes the name of a declared type, enum, variant or `fn` (`JSC0222`): `const Open:
+  Phase = phase` would make `phase == Open` always true.
+- Names cannot contain `__` (`JSC0210`) or be Java keywords and literals, members of `Object`, or names the generated
+  code uses (`ctx`, `State`, `Outcome`, `deploy`, `instance`, `seed`, `ByteStringLib`, `Int`, `List`, `Option`, …:
+  `JSC0211`). The full list is `RESERVED` in `Checker.java`.
+- The generated client binds `s` and `r` in actions and destroys, `s` in views, and `seed` and `result` in an
+  `init`; a parameter may not take them (`JSC0216`).
 
 ## Members
 
-| Member | Syntax | Generated Java | Rules |
-|---|---|---|---|
-| State field | `state name: Type` | A component of `public record State(...)`, in order | At least one; names unique |
-| Init | `init(params) modifiers { body }` | `@Init public static State init(params[, Ctx ctx])` | Exactly one; no name; cannot pay |
-| Action | `action name(params) modifiers { body }` | `@Action public static State name(State s__, params[, Ctx ctx])`, or `Outcome` when the body pays | |
-| Destroy | `destroy name(params) modifiers { body }` | `@Destroy public static JulcList<Payout> name(State s__, params, Ctx ctx)` | Cannot assign state; cannot be `payable`; must pay out the whole balance |
-| View | `view name(params): Type = expr` | `@View public static T name(State s__, params)` | Cannot return a `Map`; cannot read `caller`, `received`, `balance`, `validFrom`, `validTo` or time |
+| Member | Generated Java | Rules |
+|---|---|---|
+| `state { … }` | `public record State(...)`, components in order | at least one field (`JSC0303`) |
+| `init(params) [payable] { … }` | `@Init public static State init(params[, Ctx ctx])` | returns the first state (`JSC0410`); only `payable` (`JSC0405`); cannot pay (`JSC0404`) |
+| `action name(params) mods { … }` | `@Action public static State name(State s__, params[, Ctx ctx])`, or a record of the state and its payouts when it pays | returns the next state (`JSC0410`) |
+| `destroy name(params) mods { … }` | `@Destroy public static JulcList<Payout> name(State s__, params, Ctx ctx)` | no result (`JSC0411`); must pay at least once (`JSC0409`); cannot be `payable` (`JSC0406`) |
+| `view name(params): T = expr` | `@View public static T name(State s__, params)` | no transaction built-ins (`JSC0415`), no `pay` |
+| `fn name(params): T = expr` | a `static` method of the contract class | pure: no state, no built-ins, no `pay` |
 
-Method names are unique across the contract (no overloading). When any method pays, the class also gets
-`public record Outcome(State state, JulcList<Payout> payouts) {}`.
-
-**When a method takes `Ctx ctx`:** always for a `destroy`; when it is `payable` or `batched`; when its body mentions
-`caller`, `received`, `balance`, `validFrom`, `validTo`, `after(...)` or `before(...)`.
-
-**Init defaults:** `Int` fields start at `0`, `Bool` at `false`, `Map` at `MerkleMaps.empty()`. `Bytes` and `Key`
-fields have no default and must be assigned on every path.
+Method names are unique, and a `fn` may not share one (`JSC0202`). A method gets `Ctx ctx` when it is a destroy, has a
+modifier other than `open` and `only`, or mentions `caller`, `received`, `balance`, `validFrom`, `validTo`, `after` or
+`before`.
 
 ## Modifiers
 
-Written after the parameter list, in any order, each at most once.
+| Modifier | Annotation | Allowed on | Field type |
+|---|---|---|---|
+| `payable` | `@Payable` | `init`, `action` | |
+| `only f` | `@SignedBy("f")` | `action`, `destroy` | `Key` (`JSC0311`) |
+| `after f` | `@ValidAfter("f")` | `action`, `destroy` | `Int` |
+| `before f` | `@ValidBefore("f")` | `action`, `destroy` | `Int` |
+| `open` | none | `action`, `destroy` | |
 
-| Modifier | Annotation | Allowed on | Field type | Rules |
-|---|---|---|---|---|
-| `payable` | `@Payable` | `init`, `action` | | Not on a `destroy` |
-| `only f` | `@SignedBy("f")` | `action`, `destroy` | `Key` | Not on `init`; not with `batched`; not with `open` |
-| `after f` | `@ValidAfter("f")` | `action`, `destroy` | `Int` | Not on `init`; not with `batched` |
-| `before f` | `@ValidBefore("f")` | `action`, `destroy` | `Int` | Not on `init`; not with `batched` |
-| `batched` | `@Batched` | `action` | | Not in a contract with a `Map` field |
-| `batched only` | `@Batched(only = true)` | `action` | | Intent-only. `batched only owner` parses as `batched` plus `only owner` |
-| `open` | (none) | `action`, `destroy` | | Says that anyone may call a method that pays out; contradicts `only` |
-
-**Audience rule:** an `action` or `destroy` that pays (any `destroy`, or any method with a `pay`) must have
-`only <key field>` or `open`.
+Modifiers name state fields, never parameters (`JSC0310`).
 
 ## Statements
 
-| Statement | Meaning | Lowering | Rules |
-|---|---|---|---|
-| `let x = e` | Binds an immutable local, visible to the end of its block | `T x__1 = e;` | Must be used; not a `Map`; name not already a let, parameter or field |
-| `f = e` | Assigns a state field | A fresh local `f__k` | Types must match; not in a `destroy` |
-| `f += e`, `f -= e` | Adds to / subtracts from an `Int` field | `f.add(e)`, `f.subtract(e)` | `Int` field and value; the field must have a value |
-| `this.f = e` (also `+=`, `-=`) | Assigns field `f` when a parameter has its name | As above | |
-| `m[k] = v`, `m[k] += v`, `m[k] -= v` | Writes a map entry | `MerkleMaps.putInt`, or `MerkleMaps.remove` when the new value is 0 | `k` is a `Key`, `v` an `Int`; the new value must be ≥ 0 (checked at run time) |
-| `delete m[k]` | Removes a map entry | `MerkleMaps.remove(m, k)` | `k` is a `Key` |
-| `require cond "msg"` | Fails the call unless `cond` holds | `Require.that(cond, "msg")` | `cond` is a `Bool`; the message is required |
-| `pay amount to key` | Adds a payout of `amount` lovelace | `Payouts.add(payouts, key, amount)` | `amount` is an `Int` ≥ 0 (checked at run time; 0 is skipped), `key` a `Key`; not in `init` |
-| `if c { ... } else { ... }` | Branches; `else if` chains | One static helper per arm (`m__ifK_then`, `m__ifK_else`) and a record `IfArmK` of the fields it assigns | `c` is a `Bool`; only the taken arm runs |
+| Statement | Meaning | Rules |
+|---|---|---|
+| `const x = e`, `const x: T = e` | binds `x` | must be used (`JSC0215`) |
+| `require(cond, "msg")` | fails the call unless `cond` holds | the message is a string literal (`JSC0131`) |
+| `pay(to, amount)` | a payout of `amount` lovelace to the `Key` `to` | only in an action or destroy, not in a value block, `fn`, view or lambda (`JSC0413`); 0 is skipped, negative fails |
+| `if c { … } else { … }` | branches; `else if` chains | as a statement, its arms end in statements (`JSC0314`) |
+| `match e { … }` | branches by case | exhaustive (`JSC0924`); as a statement, its arms end in statements |
+| `for (const x of xs) { … }` | runs the body per element, in order | the body has no value (`JSC1011`); effects in it accumulate in list order |
 
-Assignments, map writes and `delete` are state writes: a `destroy` cannot contain them. Parameters, lets and
-built-ins are read-only. There are no loops and no `return`.
+A block used as a value (a lambda's block, a value `if` or `match` arm) holds only `const` and `require` statements
+(`JSC0315`).
 
 ## Expressions
 
 ### Operators and precedence
 
-Lowest precedence first. Binary operators are left-associative; comparisons do not chain (`a < b < c` is an error).
+Lowest first. Binary operators are left-associative; comparisons do not chain (`JSC0134`).
 
-| Level | Operators | Operands | Result | Java |
-|---|---|---|---|---|
-| 1 | `\|\|` | `Bool` | `Bool` | `a \|\| b` (short-circuit: the right side runs only when the left is false) |
-| 2 | `&&` | `Bool` | `Bool` | `a && b` (short-circuit) |
-| 3 | `==` `!=` | Same type (`Bytes` and `Key` mix) | `Bool` | `Int`: `compareTo(...) == 0`; `Bool`: `==`; `Bytes`/`Key`: `ByteStringLib.equals`. Not on maps |
-| 4 | `<` `<=` `>` `>=` | `Int` | `Bool` | `a.compareTo(b) < 0`, ... |
-| 5 | `+` `-` | `Int` | `Int` | `add`, `subtract` |
-| 6 | `*` `/` `%` | `Int` | `Int` | `multiply`, `divide` (truncates toward zero, `QuotientInteger` on chain), `remainder` (sign of the dividend, `RemainderInteger` on chain) |
-| 7 | unary `!`, unary `-` | `Bool`, `Int` | same | `!(a)`, `a.negate()` |
-
-Division by zero fails on both sides. Parentheses group as usual.
-
-### Primary expressions
-
-| Form | Type | Java |
-|---|---|---|
-| `42`, `1_000`, `2 ada` | `Int` | `BigInteger.valueOf(...)`; a literal must fit in 63 bits |
-| `true`, `false` | `Bool` | `true`, `false` |
-| `#cafe` | `Bytes` (`Key` when 28 bytes) | `new byte[]{...}` |
-| `name` | The let's, parameter's or field's type, or a built-in's | See the resolution order below |
-| `this.f` | The field's type | The field's current value |
-| `m[k]` | `Int` | `MerkleMaps.getInt(m, k, BigInteger.ZERO)` |
-| `fn(args)` | See functions | |
-| `(e)` | The type of `e` | |
-
-**Name resolution:** a bare name is a `let`, else a parameter, else a state field, else a built-in, else an error
-(`unknown name 'x'`). A field read before it has a value is an error; a `Map` field must be indexed (`m[k]`), not
-read whole.
-
-### Built-in values
-
-| Name | Type | Java | Meaning |
+| Level | Operators | Operands | Notes |
 |---|---|---|---|
-| `caller` | `Key` | `ctx.caller()` | The verified signer of the call (in a batch: the intent's owner) |
-| `received` | `Int` | `ctx.received()` | Lovelace the call adds (in a batch: what the intent carries) |
-| `balance` | `Int` | `ctx.balance()` | Lovelace the instance holds, min-ADA deposit included (in a batch: at that point of the fold) |
-| `validFrom` | `Int` | `ctx.validFrom()` | Lower bound of the transaction's validity interval (POSIX ms) |
-| `validTo` | `Int` | `ctx.validTo()` | Upper bound of the validity interval (POSIX ms) |
+| 1 | `c ? a : b` | `Bool` condition | lazy: only the taken arm runs |
+| 2 | `o ?? d` | `Option<T>`, `T` | `d` runs only when `o` is `None`; not mixed with `&&`/`\|\|` without parentheses (`JSC0132`); `None ?? d` is `JSC0337` |
+| 3 | `\|\|` | `Bool` | lazy |
+| 4 | `&&` | `Bool` | lazy |
+| 5 | `==`, `!=` | comparable values of one type | structural, through generated helpers; `===` is `JSC0133` |
+| 6 | `<`, `<=`, `>`, `>=` | two `Int`s or two `Bytes` (`JSC0334`) | |
+| 7 | `+`, `-` | `Int` | |
+| 8 | `*`, `/`, `%` | `Int` | `/` truncates toward zero (`QuotientInteger`), `%` takes the dividend's sign (`RemainderInteger`), as JavaScript's `BigInt`; a zero divisor fails. `div` and `mod` in `std/math` floor |
+| 9 | `!`, unary `-` | `Bool`, `Int` | |
+| 10 | `x.f`, `x.m(args)`, `m[k]` | | a field, a property or a method; `m[k]` on a `BigMap<K, Int>` |
 
-### Functions
+### Equality
 
-| Function | Arguments | Result | Java | Rules |
-|---|---|---|---|---|
-| `min(a, b)` | `Int`, `Int` | `Int` | `(a.compareTo(b) <= 0 ? a : b)` | |
-| `max(a, b)` | `Int`, `Int` | `Int` | `(a.compareTo(b) >= 0 ? a : b)` | |
-| `has(m, k)` | Map field, `Key` | `Bool` | `MerkleMaps.contains(m, k)` | The first argument is a bare map field name |
-| `isEmpty(m)` | Map field | `Bool` | `MerkleMaps.isEmpty(m)` | The first argument is a bare map field name |
-| `after(t)` | `Int` | `Bool` | `Clock.after(ctx, t)` | Only as a requirement: at the top of a `require` or a conjunct under `&&` |
-| `before(t)` | `Int` | `Bool` | `Clock.before(ctx, t)` | Only as a requirement, as `after` |
+`==` and `!=` are defined on `Int`, `Bool`, `Bytes`, `Key`, `Hash`, lists, maps, options, records and enums whose
+components are comparable. They lower to generated helpers: field by field, `ByteStringLib.equals` on bytes,
+`compareTo == 0` on integers, element by element on lists and maps, tag then fields on enums and options. No `.jsc`
+equality is Java `equals` or a reference comparison. `xs.contains`, `indexOf`, `m.get`, `m.has` use the same rules. A
+`BigMap`, or a state holding one, is not comparable (`JSC0812`): it is a witness of a Merkle root, not its contents.
 
-`after(t)` holds when the whole validity window is after `t`, so `!after(t)` does not mean "before `t`". That is why
-it cannot be negated, used under `||`, or used as an `if` condition.
+### Laziness
 
-## Reserved names
+Only the taken arm of `if`, `match` and `?:`, the needed side of `&&` and `||`, and the default of `??` when the
+option is empty run, on the JVM and on chain. A division, a failing `require` or a map read in an untaken branch
+never happens.
 
-A contract, state field, method, parameter or `let` name cannot:
+### Lists, maps and options
 
-- contain `__` (generated locals use it);
-- be a built-in (`caller`, `received`, `balance`, `validFrom`, `validTo`) or a function (`min`, `max`, `has`,
-  `isEmpty`, `after`, `before`);
-- be a `.jsc` keyword;
-- be a Java keyword or literal (`abstract`, `assert`, `boolean`, `break`, `byte`, `case`, `catch`, `char`, `class`,
-  `const`, `continue`, `default`, `do`, `double`, `else`, `enum`, `extends`, `final`, `finally`, `float`, `for`,
-  `goto`, `if`, `implements`, `import`, `instanceof`, `int`, `interface`, `long`, `native`, `new`, `package`,
-  `private`, `protected`, `public`, `return`, `short`, `static`, `strictfp`, `super`, `switch`, `synchronized`,
-  `this`, `throw`, `throws`, `transient`, `try`, `void`, `volatile`, `while`, `var`, `record`, `yield`, `sealed`,
-  `permits`, `null`, `true`, `false`);
-- be a name the lowering or the generated client uses: `ctx`, `State`, `Outcome`, `deploy`, `at`, `contract`,
-  `state`, `instance`, `instanceId`, `lovelace`, `SPEC`, `callerAccount`, `payLovelace`, `runtime`, `INTENTS`,
-  `batch`, `pendingIntents`, `intent`, `maps`, `seed`.
-
-A contract also cannot be named `State`, `Outcome` or anything starting with `IfArm`. Names cannot be redeclared or
-shadowed: a `let` cannot reuse the name of another let, a parameter or a state field. A parameter may share a state
-field's name; then the bare name is the parameter and `this.f` is the field.
-
-## What the lowering generates
-
-| `.jsc` | Generated Java |
+| On | Members |
 |---|---|
-| The file | `package p; ... @StateContract(options) public class Name { ... }` at `p/Name.java`, with the header comment `GENERATED from File.jsc by julc-state-dsl (ADR-0005). Do not edit: change the .jsc file.` |
-| Each method and statement | A `// File.jsc:line` comment above it |
-| Current state | The parameter `State s__`; fields read as `s__.f()` |
-| An assignment | A fresh local (`total__1`, `total__2`, ...) |
-| An `if` | `boolean cond__k = ...;` then `cond ? m__ifK_then(...) : m__ifK_else(...)`; each helper takes every value live at the `if` (parameters, lets as `x__in`, fields as `f__in`, `payouts__in`, `ctx`) |
-| An arm that assigns nothing | Returns `true`; the call is wrapped in `Require.that(..., "File.jsc:L: unreachable")`, so its checks run |
-| An arm that assigns | `record IfArmK(...)` of the assigned fields (and `payouts`); the call site reads them back |
-| A `pay` | `Payouts.add` on a threaded `JulcList<Payout>`, starting from `Payouts.none()` |
-| A map write | `MerkleMaps.getInt` / `putInt` / `remove`, with a non-negative check |
+| `List<T>` | `length`, `isEmpty`, `head` (properties); `contains(x)`, `any(f)`, `all(f)`, `find(f)` (`Option`), `filter(f)`, `map(f)`, `fold(init, (acc, x) => …)`, `sum()` (`List<Int>`), `reverse()`, `concat(ys)`, `take(n)`, `drop(n)` (`n < 0` fails). Literals `[a, b]`, `[x, ...rest]` (the spread last) |
+| `range(a, b)` | `any`, `all`, `fold`, `filter`, `map` and `for … of` only (`JSC1009`) |
+| `Map<K, V>` | `Map.empty()`; `get(k)` (`Option`), `has(k)`, `set(k, v)`, `delete(k)`, `size`, `keys`, `values`, `isEmpty`, `any((k, v) => …)`, `all(…)`, `fold(init, (acc, k, v) => …)`, in key order. `set` checks the key's length |
+| `BigMap<K, V>` | `get(k)`, `has(k)`, `m[k]` (`BigMap<K, Int>`: 0 when absent), `set(k, v)`, `delete(k)`, `isEmpty` (a destroy only), `BigMap.empty()` (an `init` only). See [BigMap rules](#bigmap-rules) |
+| `Option<T>` | `Some(x)`, `None`, `o ?? d`, `match` |
 
-The runtime checks the lowering adds, with their messages:
+Lambdas are only direct arguments of these methods: `x => e`, `(acc, x) => e`, or a value block. They capture
+`const`s and cannot be stored or returned.
 
-| Check | Message |
+## Effects and audiences
+
+`pay` is the only effect in `.jsc` 2 today; `send`, `mint`/`burn`, `deposit`, `accept` and `emit` arrive in M2.
+Payouts accumulate **in source order** (in a `for`, in list order; an effect in an untaken branch does not happen).
+An action that can reach a `pay` in any arm or loop must have `only <field>` or `open` (`JSC0408`).
+
+## Time (D11)
+
+`validFrom` and `validTo` are the only sources of *time values*. A value is a time value if it depends on one through
+any expression (`min`, `max` and `abs` included), a `const`, a `fn` argument, a record, list, map or option, a lambda
+or `match` binding, or a **time field**: a state field any method sets to a time value, contract-wide (the ABI
+manifest lists them as `timeFields`).
+
+- **Deciding.** A time value may not be a condition of `if`, `?:` or `require`, an operand of `&&`, `||` or `!`, a
+  collection predicate, or a comparison whose result is used (`JSC0502`, `JSC0514`). The only comparisons with time
+  are `after(t)` and `before(t)`, which hold for the whole window and are allowed only as the condition of a `require`
+  or an operand of `&&` or `||` at its top (`JSC0506`); never under `!`, in an `if`, a `?:`, a `const`, a `fn` or a
+  lambda (`JSC0504`), nor in a view (`JSC0503`). `t` may be a stored time, but not one computed from this call's window (`JSC0505`:
+  `after(validFrom - 1)`).
+- **Shapes are never time values**: a value's constructor, an option's presence, a list's length and a map's keys.
+  So `match` may scrutinise a value holding a time value (its bindings stay time values), and `xs.isEmpty`,
+  `m.has(k)` and `== None` are ordinary.
+- **Failing.** A time value may not be a divisor (`JSC0515`), a domain-checked `std` argument (`JSC0509`), a map key
+  (`JSC0517`), a range bound (`JSC0516`), a `take`/`drop` count (`JSC0512`), an `nth` index (`JSC0510`), a `Key` or
+  `Hash` conversion (`JSC0507`) or a `BigMap<K, Int>` value (`JSC0518`). A `fn` called with a time argument is checked
+  with that parameter as a time value.
+- **Flowing.** Arithmetic on time values is allowed, and they may set state and amounts. A payout set by one must be
+  exactly `pay(to, max(0, …))` (`JSC0501`). Warnings name the bias: a stored window value (`JSC9003`), a value derived
+  from a stored time (`JSC9004`), a payout (`JSC9005`).
+
+The submitter chooses the window, within `maxValidityMs`: `validFrom` can be that much early, `validTo` that much late.
+For accrual that pays the caller, measure from `validFrom` (`elapsedSince(t)`); for a charge the caller pays, from
+`validTo` (`elapsedSinceAtMost(t)`).
+
+## BigMap rules
+
+- A field of the state only (`JSC0803`), with `Int` or `Bytes` values (`JSC0804`).
+- Its new value is its own field transformed by `set` and `delete`, in that field of the next state:
+  `{ ...state, balances: balances.set(to, v) }` (`JSC0811`, `JSC0827`). `set` and `delete` appear nowhere else.
+- Never bound to a `const`, passed to a `fn`, held in an option or a list, captured by a lambda (`JSC0814`), compared,
+  chosen by a condition or `match`, or used as a fold accumulator (`JSC0813`). A state whose `BigMap` is written is
+  never bound, chosen or accumulated either.
+- `BigMap.empty()` only as a field's value in an `init` (`JSC0810`, `JSC0817`); `m.isEmpty` ("empty before this call")
+  only in a destroy (`JSC0808`).
+- `Int` values are non-negative and `set(k, 0)` removes the entry; an `Int` value is stored in at most 8,192 bytes.
+  `BigMap<K, Bytes>` tells absence from empty bytes. Keys of `set` and `delete` are at most 64 bytes.
+- A method reads its own writes through the chain: `balances.set(caller, left)[to]`.
+
+Every read and write is proven against the root by the shared map verifier ([MerkleMaps](/contracts/merklemaps/)).
+
+## The ABI manifest
+
+For every `.jsc` 2 contract the lowering writes `<Contract>.abi.json` (format `"abi": 2`), which the project commits
+beside the `.jsc` file:
+
+| Key | Content |
 |---|---|
-| A `Key` parameter is 28 bytes | `File.jsc:L: p must be a 28-byte key hash` |
-| A map entry stays ≥ 0 | `File.jsc:L: m entries cannot go negative` |
-| A payout is ≥ 0 | `File.jsc:L: a payout cannot be negative` |
+| `contract`, `source` | the qualified contract name and the `.jsc` file |
+| `datum` | the `State` constructor, its fields in order, each with its `.jsc` type and data shape |
+| `redeemers.spend` | one constructor per action, then per destroy, in source order, with its index and fields (the generated `ctx` included) |
+| `redeemers.mint` | `CreateInstance` (`seed`, `ctx`) and `BurnInstance` |
+| `types` | every schema the datum and the redeemers reach: records, enums, and API and ledger types such as `Ctx`, `TxOutRef`, `MerkleMap` |
+| `timeFields` | the state's time fields |
 
-## Errors and warnings
+Views are not encoded, so moving or adding a view does not change the manifest.
 
-The lowering reports errors as `file:line:col: error: message` (Gradle's `generateJsc` prints them and fails) before
-any Java is written. The checker applies the processor's rules (modifier legality, field types, views without
-`Ctx`) itself, so you see them at `.jsc` positions. Anything the processor or JuLC still reports is in the generated
-Java, where the `// File.jsc:line` comment above the statement points back to your source.
+**The gate.** Every build compares the lowering's manifest with the committed one. Equal passes. A missing manifest
+fails with `JSC0003`; a different one with `JSC0002`, naming the first line that differs; and Java lowered from a file
+whose manifest is refused is not written. The only ways to accept a new or changed manifest are explicit:
 
-### Lexical
-
-| Message | Cause |
+| Path | Accept |
 |---|---|
-| `hex bytes need an even number of digits` | `#abc` |
-| `escapes are not supported in strings` | A `\` inside a string |
-| `unterminated string` | A string not closed on its line |
-| `unexpected character 'c'` | A character that starts no token (`@`, `$`, ...) |
+| npm | `joust build --accept-abi`, `joust dev --accept-abi` |
+| Gradle (plugin `org.julclang.joust`) | `./gradlew acceptJscAbi` |
+| JVM | `JscMain <srcDir> <outDir> --accept-abi` |
 
-### Syntax
+No Gradle property, system property or `gradle.properties` line switches the gate off. Review the diff and commit
+the manifest: a change means a deployed instance's datum or redeemers would be read differently, so the new contract
+must be deployed as a new script.
 
-| Message | Cause |
+**The cross-check.** Each manifest is also compared, structurally, with the processor's description of the same
+contract (constructor indices, field names and order, data shapes, every reachable schema): at every npm build, and on
+Gradle in `checkJscAbi`, after `compileJava`, as part of `check`. A difference is `JSC0004`, an internal error of the
+lowering; please report it.
+
+## Diagnostics
+
+Every error and warning has a stable code and a position, on both build paths. Gradle (`JscMain`) prints, with the
+file relative to `src/main/jsc`:
+
+```text
+Ledger.jsc:34:13: error[JSC0502]: a time value cannot decide here: compare times only with after(t) or before(t) in a require (ADR-0018 D11)
+Ledger.jsc:72:3: warning[JSC9001]: settle never reads balance; a destroy must pay out everything the instance holds
+```
+
+`joust build` prints the same fields in the order `error[JSC0502]: <file>:<line>:<col>: <message>`, the file relative to
+the contracts folder.
+
+A code names one rule and is never reused; a message may change wording, its code does not. The full list, checked
+against the sources by a test, is the
+[diagnostics catalogue](https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-diagnostics.md). The ranges:
+
+| Codes | Area |
 |---|---|
-| `expected 'x' but found 'y'` | A required symbol or keyword is missing (`expected ':'`, `expected '{'`, `expected 'to'`, ...) |
-| `expected <what> but found 'y'` | A name was expected (the contract name, a state field name, a method name, a view name, a parameter name, a name, a statement, a map field, a state field, an option, a state field after 'only') and a keyword or symbol came instead |
-| `expected a package name but found 'y'` | A bad package segment |
-| `unknown option 'x' (minAda, maxDatumBytes, maxValidityMs)` | An unsupported contract option |
-| `option values are integers` | `maxDatumBytes = true`, ... |
-| `expected state, init, action, destroy or view but found 'y'` | Anything else inside the contract body |
-| `one contract per file` | Tokens after the contract's closing `}` |
-| `unknown type 'T' (Int, Bool, Bytes, Key, Map<Key, Int>)` | An unknown type name |
-| `v1 maps are Map<Key, Int>` | Any other map type |
-| `require needs a message string after the condition` | `require cond` without a message |
-| `expected '=', '+=' or '-=' but found 'y'` | A statement that is not a valid assignment |
-| `comparisons do not chain; use && between them` | `a < b < c`, `a == b == c` |
-| `unexpected 'x' in an expression` | A keyword or symbol where an expression must start |
+| `JSC0001`–`JSC0004` | files and the ABI manifest |
+| `JSC01xx` | syntax and JavaScript habits |
+| `JSC02xx` | names and declarations |
+| `JSC03xx` | types and expressions |
+| `JSC04xx` | methods, modifiers, effects |
+| `JSC05xx` | time (D11) |
+| `JSC06xx` | recursion |
+| `JSC07xx` | imports |
+| `JSC08xx` | maps |
+| `JSC09xx` | enums and `match` |
+| `JSC10xx` | lists, loops and lambdas |
+| `JSC11xx` | `joust migrate` refusals |
+| `JSC9xxx` | warnings |
 
-### Declarations and names
+`JSC9006` is the warning every build of a v1 file prints: v1 is deprecated, and
+[`joust migrate`](/languages/jsc-migration/) translates the file.
 
-| Message | Cause |
-|---|---|
-| `a contract cannot be named X` | `State`, `Outcome`, or a name starting with `IfArm` |
-| `<what> names cannot contain '__' (reserved for generated locals)` | A name with `__` |
-| `'x' is reserved and cannot be a <what> name` | A Java keyword or a generated-client name |
-| `'x' is built in and cannot be a <what> name` | A built-in or function name |
-| `duplicate state field 'f'` | Two fields with one name |
-| `a contract needs at least one state field` | No `state` lines |
-| `a contract needs exactly one init, found N` | No `init`, or several |
-| `duplicate method name 'm' (no overloading)` | Two methods with one name |
-| `duplicate parameter 'p'` | Two parameters with one name |
-| `a Map can only be a state field` | A `Map` parameter |
-| `another .jsc file already generates a/b/Name.java` | Two files declaring the same package and contract |
-
-### Modifiers
-
-| Message | Cause |
-|---|---|
-| `duplicate modifier 'm'` | A modifier written twice |
-| `a destroy cannot be payable` | `destroy ... payable` |
-| `only an action can be batched` | `batched` on `init` or `destroy` |
-| `batched actions and Map state cannot be combined yet (ADR-0004 D1)` | `batched` in a contract with a `Map` field |
-| `'only' checks the current state, which init does not have` | `only`, `after` or `before` on `init` |
-| `a batched action cannot use 'only': the batcher signs the batch; check caller or time in the body` | `only`, `after` or `before` with `batched` |
-| `'only f' names no state field` | The field does not exist |
-| `'only f' needs a Key field, but it is Int` | `only` on a non-`Key` field, or `after`/`before` on a non-`Int` field |
-| `'open' and 'only' contradict each other` | Both written |
-| `action m pays out but anyone can call it: add 'only <key field>', or 'open' if that is intended (the body's requires are then the only guard)` | A paying action or any destroy without `only` or `open` |
-
-### Statements
-
-| Message | Cause |
-|---|---|
-| `'x' is already defined; choose another name` | A `let` reusing a let, parameter or field name |
-| `a Map cannot be bound to a let; index it instead` | `let m2 = m` |
-| `'x' is never used: a let is not a check; use require` | An unused `let` |
-| `a destroy ends the instance: it cannot assign state` | An assignment, map write or `delete` in a `destroy` |
-| `parameters are read-only` (`; write this.f to assign the state field` when a field has the name) | Assigning a parameter |
-| `'x' is a let: lets are immutable` | Assigning a `let` |
-| `'x' is built in and read-only` | Assigning `caller`, `balance`, ... |
-| `no state field 'f'` | Assigning, or reading `this.f` of, an unknown field |
-| `a Map is changed through its entries: m[key] = value, or delete m[key]` | Assigning a map whole |
-| `'+=' needs an Int field` | `+=` or `-=` on a non-`Int` field |
-| `'f' is not assigned yet` | `+=` on a field without a value |
-| `'m' is not a Map state field` | Indexing or deleting from a non-map name |
-| `init cannot pay out: the instance starts with everything it receives` | `pay` in `init` |
-| `state field 'f' (Key) must be assigned in init on every path` | A `Bytes` or `Key` field left unassigned by `init` |
-| `state field 'f' must be assigned before this if or in both of its arms` | An `if` arm leaves a field it assigns without a value on the other path |
-
-### Expressions and types
-
-| Message | Cause |
-|---|---|
-| `expected T but this is U` | A type mismatch (`U` is `payouts` for the payout list) |
-| `cannot compare T with U` | `==` or `!=` between unrelated types |
-| `Maps cannot be compared` | `==` on maps |
-| `unknown name 'x'` | A name that is not a let, parameter, field or built-in |
-| `state field 'f' is not assigned yet` | Reading a `Bytes`/`Key` field in `init` before assigning it |
-| `index a Map: m[key]` | Using a map field as a value |
-| `unknown function 'f' (min, max, has, isEmpty, after, before)` | A call to anything else |
-| `f takes N argument(s)` | Wrong arity |
-| `has needs a Map state field` / `isEmpty needs a Map state field` | The first argument is not a bare map field name |
-| `after(t) holds for the whole validity window, so it is allowed only as a requirement (require after(t) ..., or with &&): not negated, in \|\|, or in an if` | `after`/`before` used outside a requirement |
-| `integer literal too large` | A literal that does not fit in 63 bits |
-| `a view cannot return a Map; return one of its values` | `view v(): Map<Key, Int>` |
-| `a view runs off-chain without a transaction: it cannot read caller, received, balance or time` | A view reading `Ctx` |
-
-### Warnings
-
-| Warning | Meaning |
-|---|---|
-| `File.jsc:L: warning: destroy m never reads balance: it must pay out all of it (deposit included), or every call is rejected` | A destroy that does not pay out `balance` cannot succeed |
-
-<Aside type="note">
-With the npm toolchain (`joust build`), a lowering error is reported against the `.jsc` file with the message above,
-without the line and column, and warnings are not printed. The Gradle task prints both with their positions.
-</Aside>
+A diagnostic of javac or the JOUST processor on generated Java is reported at the `.jsc` line and column the source
+map gives, with the generated file and line as a note.
 
 ## Running the lowering
 
 | Entry point | Use |
 |---|---|
-| `org.julclang.state.dsl.JscMain <srcDir> <outDir>` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first). Prints `jsc: lowered N file(s) into outDir`; exits 1 on any error, 2 on bad usage. Gradle's `generateJsc` task runs it |
-| `JscMain.lower(String source, String fileName)` | Returns the Java source for one file |
-| `JscMain.lowerWithWarnings(String source, String fileName)` | Returns `Lowered(String java, List<String> warnings)` |
-| `JscException` | The error type: `line`, `col`, and `format(file)` giving `file:line:col: error: message` |
+| `org.julclang.state.dsl.JscMain <srcDir> <outDir> [--accept-abi]` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first), with each `.jsc` 2 file's source map; checks (or with `--accept-abi` writes) the ABI manifests. Exits 1 on an error, 2 on bad usage. Gradle's `generateJsc` and `acceptJscAbi` run it |
+| `JscMain --check-abi <srcDir> <descriptionsDir>` | Checks every manifest against the processor's descriptions (`checkJscAbi`) |
+| `JscMain --migrate <srcDir> <outDir> [--in-place]` | Translates v1 files to `.jsc` 2 ([migration](/languages/jsc-migration/)) |
+| `JscMain.lowerWithWarnings(source, fileName)` | `Lowered(java, diagnostics, fileName, sourceMapJson, abiJson)` for one file |
 | `Toolchain.build(files, options)` (`julc-state-toolchain`) | Lowers `.jsc` entries, then compiles everything as Gradle does; used by `joust build` |
 
 ## Next steps
 
 <CardGrid>
-<LinkCard title=".jsc guide" description="A guided tour with Jar, Points and Guards." href="/languages/jsc/" />
+<LinkCard title=".jsc guide" description="The language by example." href="/languages/jsc/" />
+<LinkCard title=".jsc standard library" description="The prelude and the std modules." href="/languages/jsc-std/" />
+<LinkCard title="Migrating from .jsc v1" description="joust migrate and what it changes." href="/languages/jsc-migration/" />
 <LinkCard title="Annotations" description="The annotations .jsc modifiers lower to." href="/reference/annotations/" />
-<LinkCard title="State API" description="MerkleMaps, Payouts, Clock and Require, used by the generated Java." href="/reference/state-api/" />
-<LinkCard title="The joust CLI and projects" description="Building .jsc with npm only." href="/apps/cli-and-projects/" />
 </CardGrid>

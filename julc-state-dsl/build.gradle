@@ -2,8 +2,11 @@ description = 'JOUST .jsc: a state-contract surface syntax that lowers to a Java
 
 // -Pjoust.writeIrFixtures: rewrite the JavaScript interpreter's IR fixtures (js/jsc-interpreter/test/fixtures) from the
 // current lowering (JscV2IrTest); without it the test fails when they are stale.
+// -Djsc.writeStdDoc=true: JscV2StdDocTest rewrites the std library tables of www's jsc-std.mdx instead of checking them.
 tasks.named('test') {
     if (project.hasProperty('joust.writeIrFixtures')) systemProperty 'joust.writeIrFixtures', 'true'
+    systemProperty 'jsc.writeStdDoc', System.getProperty('jsc.writeStdDoc', 'false')
+    systemProperty 'jsc.writeShapes', System.getProperty('jsc.writeShapes', 'false')
     // JscV2IrTest compares the fixtures with the current exports, and Ed25519Test reads the libsodium vectors (review F9).
     inputs.dir(rootProject.file('js/jsc-interpreter/test/fixtures')).withPropertyName('jscInterpreterFixtures')
             .withPathSensitivity(PathSensitivity.RELATIVE)

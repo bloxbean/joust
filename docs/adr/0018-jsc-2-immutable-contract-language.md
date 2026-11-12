@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r12)
+**Status:** Proposed (r13)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -123,6 +123,12 @@ on an existing name, `+=`, `-=`, `++` or `--` (each reported with the fix, D12).
   and FF are refused, since some editors break lines there and a `//` comment could hide the code after them. No other
   control character (C0, DEL, C1) appears either, in code, comments or strings: only TAB and the line ends (r9, S12).
   So the text reads as it compiles.
+- **Newlines do not end statements; two tokens look at the line** (r13, M1d review F2, S4). A statement ends where
+  its expression cannot continue, or at `;`. A `[` or a `(` continues an index or a call only on the line of what it
+  follows; on a later line it starts a new expression (`const t = a` then `(t)` is two statements, not `a(t)`). A line
+  that starts with a binary `-` still continues the expression above it (the leading-operator style stays legal), but
+  warns JSC9007 with a hint (join the lines or parenthesise; `;` to stand alone), and any error of the file names that
+  line, since `const payout = amount` then `-fee` is `amount - fee`.
 - **Object literals are typed by context**: the expected type (a method's result, a typed parameter or field, a typed
   `const x: Share = …`, a list or map element whose type is known). Where there is no context, the constructor form
   `Share { to, bps }` is required; it is allowed everywhere and is the only form for events (`Sold { price }`).
@@ -691,13 +697,29 @@ the caller; windows on the wrong side of, or straddling, the bound). **By M1b's 
 ### D13. Editor support
 
 A **tree-sitter grammar** for `.jsc` 2 (and v1), as Elci has (F15): it serves editors that use tree-sitter, a VS Code
-extension, the docs (replacing the Kotlin alias, F7) and later the language server's syntax layer; a TextMate grammar
-beside it covers highlighters that need one (Shiki). A language server is later work (M5).
+extension and the docs (replacing the Kotlin alias, F7); a TextMate grammar beside it covers highlighters that need one
+(Shiki). A language server is later work (M5); it keeps the hand-written front end (ADR-0021 D5), so tree-sitter stays
+in the editor.
+
+As built in M1d (r13): `tree-sitter-jsc/` and `editors/vscode-jsc/` (ADR-0021 M5a moves the TextMate grammar and the
+language configuration into `js/vscode-joust/`, or reuses them from there). Both parsers read one shared corpus and must
+agree on each file's verdict and on its declarations (`corpus/shapes.txt`); each known difference is pinned by a file
+with both verdicts; CI runs both sides. The generated `src/parser.c` is not committed: CI regenerates it, and it goes
+into the release artefact when the grammar is packaged (ADR-0021 M5e).
 
 ### D14. npm projects
 
 - `npm create joust` and `joust new -t node|web` scaffold `.jsc` 2 once M1 exits, labelled preview until the
-  recommendation gate (§8).
+  recommendation gate (§8). M1d switched them early, as a **language preview** (r13, M1d review F4): the scaffolds, the
+  templates' comment and READMEs say that the language and the compiler's output may change before it leaves preview
+  (M1e, #71, changes every `.jsc` 2 script hash once), to use it on DevKit and testnets, and not to deploy it to hold
+  value. Each template ships its ABI manifest, so a first build passes the gate (D12).
+- **Preview deployments stay rebuildable with the compiler recorded for them** (r13): a preview script deployed with
+  one JOUST version is rebuilt with that version, not promised to be reproduced by a later one. On npm each record of
+  `deployments.<network>.json` states it (`built`: the `@julclang/joust` version, the engine's JOUST version and its JuLC
+  version), and `build/` is not committed, so a project that must rebuild a deployed preview script commits its
+  deployments files; on Gradle the plugin's version in `build.gradle` is the record. M1e's change and any later preview change are breaking for new builds
+  only; `joust build` warns when a recorded deployment's script is not what it builds (D16).
 - `.jsc` libraries and Java library sources ship in npm packages under `joust-lib/`, pinned by `joust.lock` (D9).
 - **Offline tests** (`@julclang/joust/test`): a contract's calls against an in-memory ledger, with the generated
   validator evaluated and the attack suite, without DevKit. They need the Web Image engine to evaluate validators
@@ -747,8 +769,21 @@ beside it covers highlighters that need one (Shiki). A language server is later 
   reports the change.
 - **A migrated contract is a new script** (different script hash, address and policy); instances deployed from v1 stay
   on their v1 script. `migrate` writes a new file and keeps the v1 file and artifacts (script, description, client); it
-  overwrites only with an explicit flag, and says that deployed instances stay on v1. Both CLIs warn when a recorded
-  deployment's script hash is not produced by the current build.
+  overwrites only with an explicit flag, and says that deployed instances stay on v1.
+- **In place and paths, as built** (r13, M1d review C2, S1–S3): by default `migrate` writes under the build directory
+  (`build/joust/migrated/`, `build/jsc-migrated/`) and never changes the sources; an output that is or holds the
+  sources, or a target that is a source, is refused (JSC1108). `--in-place` replaces the v1 file and keeps its text as
+  `Name.jsc.v1`, written create-new (an existing file or link is JSC1107); it never replaces a symbolic link, a file with
+  more than one hard link or a file whose path under the sources goes through a link (JSC1109), and writes the new text
+  to a temporary file renamed over the source. Every default-mode target is checked before anything is written: none may
+  lie in the sources or be a source through a link on its path, resolved at its nearest existing ancestor.
+  On npm it first copies the v1 build's artifacts to `build/joust/v1/` (the contract's, by the name the parser reads,
+  and the shared ones), and does not replace the file if that fails; `joust deploy` keeps each record it replaces under
+  `superseded` in `deployments.<network>.json`, and keeps a file of the wrong shape beside the new one.
+- **Recorded deployments** (r13, M1d review S1, F8): the npm CLI, which records deployments, warns at `joust build`
+  when a recorded contract is built to another script (by the digest of its script before parameters, so `@Params`
+  contracts too), is no longer built, or the record cannot be read. The Gradle path records no deployments: its
+  `migrateJsc` says the new-script warning on every run that migrates.
 - Java contracts are unaffected.
 
 ## 4. Example (illustrative)
@@ -1130,3 +1165,10 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   (bloxbean/julc#328); traces matched whole and only against the refusing contract's map; JSC0430 anywhere in a message;
   adapters' messages in the map; the map on the JVM classpath; types measured by every layer; recursive value chains
   kept inline; conditions in helpers under JSC0601; `joust build`'s engine on an 8 MB worker (bloxbean/julc#327).
+- **r13** (2026-11-13, M1d review round r2 on #72: Codex C1–C3; design F1–F8; security S1–S4): D3 states the newline
+  rule (`[` and `(` continue only on their line; a line starting with `-` continues with JSC9007); D13 records what M1d
+  built (paths, the shared corpus with structure and pinned differences, CI) and that `parser.c` stays uncommitted until
+  ADR-0021 M5e; tree-sitter stays in the editor (ADR-0021 D5); D14 calls the early templates a language preview and says
+  preview deployments are rebuilt with the compiler recorded for them (M1e changes every `.jsc` 2 script hash once);
+  D16 records migrate's in-place and path semantics and narrows the stale-deployment warning to the npm CLI, Gradle's
+  `migrateJsc` saying the new-script warning.
