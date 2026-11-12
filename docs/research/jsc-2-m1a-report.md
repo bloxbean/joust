@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M1a: report (ADR-0018 §8)
 
-Date 2026-11-12, review round r2. Branch `feat/jsc-2-m1a`, stacked on `feat/jsc-2-m0` (`cab7c5f`). JuLC `v0.1.0-pre21-rc1`,
+Date 2026-11-13, review round r3. Branch `feat/jsc-2-m1a`, stacked on `feat/jsc-2-m0` (`cab7c5f`). JuLC `v0.1.0-pre21-rc1`,
 cardano-client-lib `0.8.0-pre7`, JDK 25, macOS arm64. Every number below was measured at this branch's head; the test
 that prints it is named with each table.
 
@@ -150,14 +150,37 @@ The three reviews of r1 (`9805c37`) and what changed (every finding has a regres
   #5 (`asHash` in the prelude), #6 (the domains, `expMod`'s PV11 builtin, Ed25519's ledger rules), #7 (J8's "compound
   types containing bytes") and #10 (write chains are cheap; examples stay below 15,000 B until J19).
 
-## Tests run at this head (r2)
+## Review round r3
+
+The reviews of r2 (`5b760b2`) and what changed (each repro is a regression test):
+
+- **The manifest check is structural** (Codex C5–C7): from the datum and the redeemers through every schema they
+  reach; a type used only inside a method, or not at all, is not part of the ABI and is not compared; a Bool is
+  exactly False 0 / True 1 without fields, an Option exactly Some 0 [x] / None 1 []; shapes are parsed, so a type named
+  `Wrapperbytes28` is never rewritten. A reached schema the description lacks, an API type included, is a difference
+  (security S10). `AbiCheck` moved to the dsl module.
+- **The check runs on Gradle too** (design F12, S10): `checkJscAbi` (plugin and `examples/dsl`) runs
+  `JscMain --check-abi` over `META-INF/joust` after `compileJava`, as part of `check`.
+- **State fields** never take a declared name (S7); **line ends** other than LF and CRLF are refused (S8: a lone CR,
+  NEL, U+2028, U+2029, VT, FF); **refused Java is not written** (S9: `JscMain` and `joust build`
+  both check before they write, from a clean directory, so an earlier build's Java does not stay either); **only the field being built** is written in its
+  value (S11).
+- **The javac remap** names generated units by their package path, so two packages' `Foo.java` are told apart, and
+  javac's column is carried (F13).
+- r2 gave the lexer's new rules codes the parser already used (JSC0141, JSC0142) and overwrote their catalogue rows;
+  the lexer's codes are now JSC0145–JSC0147, the parser's rows are restored, and the catalogue test refuses a code
+  raised from two files.
+- ADR-0018 r8: D3 (state fields; the lexical identifier pattern; line ends), J10, D12 (the check on both paths, by
+  structure); the file ends with a newline (F14).
+
+## Tests run at this head (r3)
 
 | Command | Result |
 |---|---|
-| `./gradlew :julc-state-dsl:test :examples:dsl:test :julc-state-toolchain:test :julc-state-gradle-plugin:test` | green. Checker: M0 22, M1a 12, r2 6; ABI 4; diagnostics 3. Four-way: M1a 1,100 calls (Ledger 273, Shelf 88, StdBytes 552, StdMath 181, Bounds 6), all four legs agreeing; M0's 422 still agree. Plus binding, 27 fixtures (14 Map/BigMap-only), tooling (a real javac remap, manifests against descriptions, sizes, J2), measurement, parity |
-| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (GraalVM 25.3.4.1) | green: `ALL SAME` (scripts, descriptions, validator sources, Bounds included), every `.jsc` file's generated Java equal to Gradle's and its manifest to the committed one; S2 in Wasm 1,393/1,393; S2b 43/43 |
-| `npm test` in `js/joust` (with both Web Image engines built into `engine/`, packages installed in the worktree) | 24/24, `abi.test.js` included (the npm gate: missing, accepted, equal, changed, a string `"false"`). r1's report wrongly said `cli.test.js` covered `--accept-abi`: it did not; `abi.test.js` does. `js/state-client` was not changed |
-| `./gradlew build --continue` | BUILD SUCCESSFUL (9 m 24 s; modules this round does not touch were up to date from r1's green run) |
+| `./gradlew :julc-state-dsl:test :examples:dsl:test :julc-state-toolchain:test :julc-state-gradle-plugin:test` (each after `cleanTest`) | green: dsl 63, toolchain 60, plugin 7, examples/dsl 18, none failed. Checker: M0 22, M1a 12, r2/r3 7; ABI 4; diagnostics 3; tooling 12 (r3: reachability, exact Bool/Option, no rewriting, same-named files of two packages, the Gradle path's check). Four-way: M1a 1,100 calls (Ledger 273, Shelf 88, StdBytes 552, StdMath 181, Bounds 6), all four legs agreeing; M0's still agree. `:examples:dsl:checkJscAbi`: `8 ABI manifest(s) agree with the processor's descriptions` |
+| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (GraalVM 25.3.4.1; image rebuilt from r3's sources) | green: `ALL SAME` (scripts, descriptions, validator sources), every `.jsc` file's generated Java equal to Gradle's and its manifest to the committed one; S2 in Wasm 1,393/1,393; S2b 43/43 |
+| `npm test` in `js/joust` (both Web Image engines rebuilt into `engine/`) | 26/26, including r3's two `abi.test.js` tests (`abiGate`'s `refused`; `joust build` leaves no refused Java, an earlier build's included, which fails against r2's `build.js`). `js/state-client` was not changed |
+| `./gradlew build --continue` | BUILD SUCCESSFUL in 9 m 18 s (11 tasks executed, 178 up to date from the runs above; `:examples:dsl:checkJscAbi` ran as part of `check`: 8 manifests agree) |
 
 ## Not in M1a
 
@@ -167,8 +190,9 @@ further leg of `FourWay.check`; generated programs and inputs (§9's generators;
 saturated to `maxDatumBytes`, the build report (J19). **M1d:** the tree-sitter grammar, `joust migrate` and v1's
 deprecation warning, the templates switched to `.jsc` 2, the docs rewritten (the diagnostic catalogue and the ABI
 manifest's flags documented in `jsc-reference.mdx`). **M2:** `Value`, `Address`, `Credential`, `std/value`,
-`std/address`. Also open: J18's off-chain depth cap; **M1d**: on Gradle, javac's and the processor's messages on
-generated Java are not rewritten to `.jsc` positions (the map is written beside the Java, and every generated line
+`std/address`. Also open: J18's off-chain depth cap; **M1d**: the templates ship each contract's ABI manifest (or
+`npm create joust` runs the accept step), since a project's first build fails without one (JSC0003); on Gradle,
+javac's and the processor's messages on generated Java are not rewritten to `.jsc` positions (the map is written beside the Java, and every generated line
 carries its `.jsc` position in a comment); BigMap transition vectors run in rounds on the JVM's VM only, not in the
 Wasm replay.
 

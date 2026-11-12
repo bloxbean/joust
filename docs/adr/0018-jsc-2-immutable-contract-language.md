@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r7)
+**Status:** Proposed (r8)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -110,13 +110,18 @@ on an existing name, `+=`, `-=`, `++` or `--` (each reported with the fix, D12).
   the owned record's), so `return { owner: caller, goal }` reads the parameter `goal`; they still may not shadow the
   built-in names, nor the fields of a `shared` state parameter. `{ goal }` is shorthand for `{ goal: goal }`. Modifiers (`only`, `authorized`, `after`,
   `before`) name state fields or `params.f`, never a parameter (v1 rule, `Lowering.java:386-388`, kept).
-- **No binding replaces a declaration** (r7, M1a review S2). A parameter, `const`, lambda, loop or `match` binding never
-  takes the name of a declared type, enum, variant or `fn`, and a `fn` never takes a type's or variant's name: `const
-  Open: Phase = phase` would turn `phase == Open` into a check that always holds.
-- **Names are ASCII, and a file holds no format character** (r7, S6). Identifiers are `[A-Za-z_][A-Za-z0-9_]*`, so no
-  two names can look alike (no mixed scripts, no confusables); strings and comments may hold any other text, but no
+- **No binding replaces a declaration** (r7, M1a review S2; r8, S7). A parameter, `const`, lambda, loop or `match`
+  binding, and a state field (read by its bare name), never takes the name of a declared type, enum, variant or `fn`,
+  and a `fn` never takes a type's or variant's name: `const Open: Phase = phase`, or a state field `Open`, would turn
+  `phase == Open` into a check that always holds. Record and variant fields may share such names: they are always read
+  through their value.
+- **Names are ASCII, and lines end alike for every reader** (r7, S6; r8, S8). Lexically, an identifier is
+  `[A-Za-z_][A-Za-z0-9_]*` (declared type, enum and variant names are further restricted: capitalised, without `_`), so
+  no two names can look alike (no mixed scripts, no confusables); strings and comments may hold any other text. No
   Unicode format character (category Cf: the bidirectional controls U+202A–202E and U+2066–2069, zero-width
-  characters) appears anywhere in a `.jsc` file, so its text reads as it compiles.
+  characters) appears anywhere in a `.jsc` file, and a line ends only at LF or CRLF: a lone CR, NEL, U+2028, U+2029, VT
+  and FF are refused, since some editors break lines there and a `//` comment could hide the code after them. So the
+  text reads as it compiles.
 - **Object literals are typed by context**: the expected type (a method's result, a typed parameter or field, a typed
   `const x: Share = …`, a list or map element whose type is known). Where there is no context, the constructor form
   `Share { to, bps }` is required; it is allowed everywhere and is the only form for events (`Sold { price }`).
@@ -550,10 +555,14 @@ the milestone that implements it, reviewed against the processor's rules, and do
   validator's `CreateInstance` and `BurnInstance`) with its constructor index and every field, the generated `seed` and
   `ctx` included, and every schema they reference; views are not encoded and are left out. Every build checks the
   manifest against the processor's description of the same contract (constructor indices, field names and order, data
-  shapes). The project commits it; the build compares with the committed copy and fails on a difference, or when there
+  shapes; on Gradle in `checkJscAbi`, below). The project commits it; the build compares with the committed copy and fails on a difference, or when there
   is none, unless accepted explicitly (`joust build --accept-abi`, `joust dev --accept-abi`; Gradle: the
   `acceptJscAbi` task, never a property), so a lowering change that would alter a datum or redeemer cannot strand
-  deployed instances unnoticed. The manifest is checked against independently written CBOR golden vectors (J17).
+  deployed instances unnoticed. Java lowered from a file whose manifest is refused is not written. The check against
+  the processor's description runs on both paths (r8, M1a review F12, S10): in every toolchain build, and on Gradle in
+  `checkJscAbi` after `compileJava`, part of `check`. It compares structures, from the datum and the redeemers through
+  every schema they reach (a type used only inside a method is not part of the ABI); a reached schema the description
+  lacks, an API type included, is a difference. The manifest is checked against independently written CBOR golden vectors (J17).
 
 ### D13. Editor support
 
@@ -702,7 +711,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J7 | Every library call is type-checked against the exact Java signature; every `Int → long/int` conversion is checked against the row's domain on both sides; no unmappable signature is callable; JVM and UPLC agree on each binding's edge and malformed vectors | D8, D9 | the binding test; per-row differential vectors; import-refusal tests |
 | J8 | No `.jsc` equality or membership lowers to reference equality, Java `equals`, `JulcList.contains/find` or `JulcMap` lookup on a compound type containing bytes (a top-level byte-string key compares by content on both sides) | D6, D7 | lowering tests; generators with distinct-allocation bytes nested in records, enums, options, lists and maps |
 | J9 | Only direct self-recursion, checked after lowering; the build report lists recursive functions | D7 | checker tests (nested folds and branches) |
-| J10 | Generated names cannot collide with user names; no binding shadows a state field or a built-in name in methods with input state | D3, D7 | checker tests |
+| J10 | Generated names cannot collide with user names; no binding shadows a state field or a built-in name in methods with input state; no binding or state field replaces a declared type, enum, variant or `fn`; names are ASCII, and a file holds no format character and no line end other than LF or CRLF (r8) | D3, D7 | checker tests |
 | J11 | A D10 row is supported only once its gating port builds, passes its Java example's tests and attack suite, and stays within the size and budget bounds of §8 | D10 | milestone exit criteria |
 | J12 | The build names every library with its on-chain-source hash, and fails when it does not match `joust.lock` | D9 | build tests |
 | J13 | `joust migrate` preserves behaviour (equal next state, equal per-kind obligation multisets) or refuses with a reason; it never overwrites without a flag | D16 | migration tests over v1 vectors and generated v1 programs |
@@ -945,3 +954,8 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   `asHash` to the prelude, the domains chosen in M1a (`pow`, `shift`/`rotate`, `pad`, `expMod`'s PV11 builtin) and
   Ed25519's ledger rules; D12 states the manifest's redeemers, its check against the processor's description and the
   explicit acceptance flow.
+- **r8** (2026-11-13, M1a review round r3 on #63: design F12, F14; security S7, S8, S10; Codex C5–C7): D3's no-shadowing
+  rule covers state fields, and the lexical rule says the identifier pattern is lexical (declared names are further
+  restricted) and refuses line ends other than LF and CRLF; J10 covers both; D12 runs the manifest check on Gradle too
+  (`checkJscAbi`), compares structures from the encoded roots (a type used only inside a method is not part of the
+  ABI), refuses a reached schema the description lacks, and does not write Java whose manifest is refused.
