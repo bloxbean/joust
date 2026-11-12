@@ -1,44 +1,75 @@
 {
-  "abi": 1,
+  "abi": 2,
   "contract": "org.julclang.state.examples.dsl.Shelf",
   "source": "Shelf.jsc",
-  "state": { "name": "State", "constr": 0, "fields": [
+  "datum": { "name": "State", "constr": 0, "fields": [
       { "name": "owner", "type": "Key", "data": "bytes28" },
       { "name": "items", "type": "Map<Bytes, Item>", "data": "map<bytes, Item>" },
       { "name": "notes", "type": "BigMap<Bytes, Bytes>", "data": "merkleMap<bytes>" },
       { "name": "last", "type": "Option<Kind>", "data": "option<Kind>" }
     ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Put", "constr": 0, "fields": [
+          { "name": "id", "type": "Bytes", "data": "bytes" },
+          { "name": "item", "type": "Item", "data": "Item" }
+        ] },
+      { "name": "Remove", "constr": 1, "fields": [
+          { "name": "id", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Note", "constr": 2, "fields": [
+          { "name": "k", "type": "Bytes", "data": "bytes" },
+          { "name": "v", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Forget", "constr": 3, "fields": [
+          { "name": "k", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Close", "constr": 4, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
   "types": {
-    "Item": { "kind": "record", "constr": 0, "fields": [
+    "Item": { "kind": "record", "constructors": [{ "name": "Item", "constr": 0, "fields": [
         { "name": "title", "type": "Bytes", "data": "bytes" },
         { "name": "kind", "type": "Kind", "data": "Kind" },
         { "name": "tags", "type": "List<Bytes>", "data": "list<bytes>" }
-      ] },
-    "Kind": {
-      "kind": "enum",
-      "variants": [
-        { "name": "Book", "constr": 0, "fields": [] },
-        { "name": "Disc", "constr": 1, "fields": [
-            { "name": "minutes", "type": "Int", "data": "int" }
-          ] },
-        { "name": "Other", "constr": 2, "fields": [] }
-      ]
-    }
+      ] }] },
+    "Kind": { "kind": "enum", "constructors": [
+      { "name": "Book", "constr": 0, "fields": [] },
+      { "name": "Disc", "constr": 1, "fields": [
+          { "name": "minutes", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Other", "constr": 2, "fields": [] }
+    ] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "MapEntry": { "kind": "api", "constructors": [{ "name": "MapEntry", "constr": 0, "fields": [
+        { "name": "key", "type": "Bytes", "data": "bytes" },
+        { "name": "present", "type": "Bool", "data": "bool" },
+        { "name": "value", "type": "Bytes", "data": "bytes" }
+      ] }] },
+    "MerkleMap": { "kind": "api", "constructors": [{ "name": "MerkleMap", "constr": 0, "fields": [
+        { "name": "root", "type": "Bytes", "data": "bytes" },
+        { "name": "reads", "type": "List<MapEntry>", "data": "list<MapEntry>" },
+        { "name": "writes", "type": "List<MapEntry>", "data": "list<MapEntry>" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
   },
-  "methods": [
-    { "name": "init", "kind": "init", "args": [] },
-    { "name": "put", "kind": "action", "args": [{ "name": "id", "type": "Bytes", "data": "bytes" }, { "name": "item", "type": "Item", "data": "Item" }] },
-    { "name": "remove", "kind": "action", "args": [{ "name": "id", "type": "Bytes", "data": "bytes" }] },
-    { "name": "note", "kind": "action", "args": [{ "name": "k", "type": "Bytes", "data": "bytes" }, { "name": "v", "type": "Bytes", "data": "bytes" }] },
-    { "name": "forget", "kind": "action", "args": [{ "name": "k", "type": "Bytes", "data": "bytes" }] },
-    { "name": "minutes", "kind": "view", "args": [], "result": "int" },
-    { "name": "titles", "kind": "view", "args": [{ "name": "n", "type": "Int", "data": "int" }], "result": "list<bytes>" },
-    { "name": "lastTag", "kind": "view", "args": [{ "name": "id", "type": "Bytes", "data": "bytes" }], "result": "option<bytes>" },
-    { "name": "position", "kind": "view", "args": [{ "name": "id", "type": "Bytes", "data": "bytes" }], "result": "option<int>" },
-    { "name": "squares", "kind": "view", "args": [{ "name": "n", "type": "Int", "data": "int" }], "result": "int" },
-    { "name": "evens", "kind": "view", "args": [{ "name": "n", "type": "Int", "data": "int" }], "result": "list<int>" },
-    { "name": "noteOf", "kind": "view", "args": [{ "name": "k", "type": "Bytes", "data": "bytes" }], "result": "option<bytes>" },
-    { "name": "close", "kind": "destroy", "args": [] }
-  ],
   "timeFields": []
 }

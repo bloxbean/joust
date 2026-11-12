@@ -8,12 +8,14 @@
 //   joust.lock.json       the versions that built it (I7)
 //   generated/            the Java each .jsc file lowered to, with its source map (ADR-0018 D12)
 // Beside each .jsc 2 file, <Contract>.abi.json: its ABI manifest, which the project commits; a build whose manifest
-// differs fails unless the change is accepted (--accept-abi), so an encoding change cannot strand deployed instances.
+// differs, or is missing, fails unless accepted (--accept-abi: src/abi.js), so an encoding change cannot strand
+// deployed instances.
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { loadToolchain } from './toolchain.js';
+import { abiGate } from './abi.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -55,22 +57,9 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     if (g.sourceMap) writeFileSync(target.replace(/\.java$/, '.jscmap.json'), g.sourceMap);
   }
   if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics };
-  let abiOk = true;
-  for (const g of r.generated ?? []) {
-    if (!g.abi) continue;
-    const committed = join(resolve(root, src), dirname(g.jscFile), g.javaFile.split('/').pop().replace(/\.java$/, '.abi.json'));
-    if (existsSync(committed) && readFileSync(committed, 'utf8') === g.abi) continue;
-    if (existsSync(committed) && !acceptAbi) {
-      console.error(`error[JSC0002]: ${g.jscFile}: the ABI manifest ${relative(root, committed)} differs from the committed one: a datum or `
-        + 'redeemer encoding changed, which strands deployed instances; if the change is intended, run joust build --accept-abi and commit it');
-      abiOk = false;
-      continue;
-    }
-    const existed = existsSync(committed);
-    writeFileSync(committed, g.abi);
-    log(`${relative(root, committed)}: ${existed ? 'accepted' : 'written'}; commit it beside the .jsc file`);
-  }
-  if (!abiOk) return { ok: false, contracts: [], diagnostics: r.diagnostics };
+  const abiErrors = abiGate({ generated: r.generated ?? [], srcDir: src, root, acceptAbi, log });
+  for (const e of abiErrors) console.error(e);
+  if (abiErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, abiErrors };
   mkdirSync(dir, { recursive: true });
   const bundle = [];
   for (const c of r.contracts) {

@@ -68,33 +68,59 @@ public final class JscMain {
     }
 
     /**
-     * ADR-0018 D12: the ABI manifest is committed beside the {@code .jsc} file. A missing one is written (commit it); a
-     * different one fails the build, unless the change is accepted ({@code -Djoust.acceptAbi=true}; Gradle
-     * {@code -Pjoust.acceptAbi}), so a lowering change that would alter a datum or a redeemer cannot pass unnoticed.
+     * ADR-0018 D12 (review F1, S3): the ABI manifest is committed beside the {@code .jsc} file, and a build compares the
+     * lowering's manifest with it. Equal passes. A different or missing manifest fails the build (JSC0002, JSC0003), unless
+     * the build was asked to accept it: {@code JscMain --accept-abi} (Gradle: the {@code acceptJscAbi} task; npm:
+     * {@code joust build --accept-abi}), which writes it, to be committed. Nothing else accepts: no system or Gradle
+     * property, so neither {@code gradle.properties} nor an environment can switch the gate off.
+     *
+     * @return the diagnostic to print, or null when the manifest is accepted
      */
-    static boolean checkAbi(Path committed, String abi, String name) throws IOException {
-        boolean accept = Boolean.getBoolean("joust.acceptAbi");
-        if (Files.exists(committed)) {
-            String old = Files.readString(committed);
-            if (old.equals(abi)) return true;
-            if (!accept) {
-                System.err.println(name + ":1:1: error[JSC0002]: the ABI manifest " + committed.getFileName() + " differs from the committed"
-                        + " one: a datum or redeemer encoding changed, which strands deployed instances; if the change is intended,"
-                        + " build with -Pjoust.acceptAbi (npm: joust build --accept-abi) and commit the new manifest");
-                return false;
-            }
-            System.err.println(name + ": note: the ABI manifest " + committed.getFileName() + " changed and was accepted: commit it");
-        } else {
-            System.err.println(name + ": note: wrote the ABI manifest " + committed.getFileName() + ": commit it beside the .jsc file");
+    static String checkAbi(Path committed, String abi, String name, boolean accept) throws IOException {
+        boolean exists = Files.exists(committed);
+        String old = exists ? Files.readString(committed) : null;
+        if (abi.equals(old)) return null;
+        if (accept) {
+            Files.writeString(committed, abi);
+            System.err.println(name + ": note: " + (exists ? "accepted the changed" : "created the") + " ABI manifest " + committed.getFileName()
+                    + ": commit it beside the .jsc file");
+            return null;
         }
-        Files.writeString(committed, abi);
-        return true;
+        if (!exists) {
+            return name + ":1:1: error[JSC0003]: no ABI manifest " + committed.getFileName() + " beside this file: the encoding of its datum"
+                    + " and redeemers must be committed; create it with the acceptJscAbi task (npm: joust build --accept-abi), review it"
+                    + " and commit it";
+        }
+        return name + ":1:1: error[JSC0002]: the ABI manifest " + committed.getFileName() + " differs from the committed one at "
+                + firstDifference(old, abi) + ": a datum or redeemer encoding changed, which strands deployed instances; if the change"
+                + " is intended, accept it with the acceptJscAbi task (npm: joust build --accept-abi) and commit the new manifest";
+    }
+
+    /** {@code line N: expected …, found …}, for the first line where two manifests differ. */
+    static String firstDifference(String committed, String now) {
+        String[] a = committed.split("\n", -1), b = now.split("\n", -1);
+        for (int i = 0; i < Math.max(a.length, b.length); i++) {
+            // A trailing comma is not a difference of its own: an entry added after a line adds one to it.
+            String x = i < a.length ? a[i].strip().replaceAll(",$", "") : "(end)", y = i < b.length ? b[i].strip().replaceAll(",$", "") : "(end)";
+            if (!x.equals(y)) return "line " + (i + 1) + ": committed " + x + ", now " + y;
+        }
+        return "(whitespace only)";
     }
 
     public static void main(String[] args) throws IOException {
-        if (args.length != 2) {
-            System.err.println("usage: JscMain <srcDir> <outDir>");
-            System.exit(2);
+        int code = run(args);
+        if (code != 0) System.exit(code);
+    }
+
+    /**
+     * {@code JscMain <srcDir> <outDir> [--accept-abi]}: lowers every {@code .jsc} file; 0 when all lowered and every
+     * {@code .jsc} 2 manifest is accepted, 1 on an error, 2 on a usage error.
+     */
+    public static int run(String[] args) throws IOException {
+        boolean accept = args.length == 3 && args[2].equals("--accept-abi");
+        if (args.length != 2 && !accept) {
+            System.err.println("usage: JscMain <srcDir> <outDir> [--accept-abi]");
+            return 2;
         }
         Path src = Path.of(args[0]);
         Path out = Path.of(args[1]);
@@ -131,7 +157,12 @@ public final class JscMain {
                     // manifest beside the .jsc file, where the project commits it.
                     Files.writeString(target.resolveSibling(target.getFileName().toString().replace(".java", ".jscmap.json")),
                             lowered.sourceMapJson());
-                    if (!checkAbi(f.resolveSibling(target.getFileName().toString().replace(".java", ".abi.json")), lowered.abiJson(), name)) errors++;
+                    String refused = checkAbi(f.resolveSibling(target.getFileName().toString().replace(".java", ".abi.json")), lowered.abiJson(),
+                            name, accept);
+                    if (refused != null) {
+                        System.err.println(refused);
+                        errors++;
+                    }
                 }
             } catch (JscException e) {
                 System.err.println(e.format(name));
@@ -142,7 +173,8 @@ public final class JscMain {
                 errors++;
             }
         }
-        if (errors > 0) System.exit(1);
+        if (errors > 0) return 1;
         System.out.println("jsc: lowered " + files.size() + " file(s) into " + out);
+        return 0;
     }
 }

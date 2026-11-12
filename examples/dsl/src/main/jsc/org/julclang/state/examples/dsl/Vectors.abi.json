@@ -1,8 +1,8 @@
 {
-  "abi": 1,
+  "abi": 2,
   "contract": "org.julclang.state.examples.dsl.Vectors",
   "source": "Vectors.jsc",
-  "state": { "name": "State", "constr": 0, "fields": [
+  "datum": { "name": "State", "constr": 0, "fields": [
       { "name": "owner", "type": "Key", "data": "bytes28" },
       { "name": "cut", "type": "Bytes", "data": "bytes" },
       { "name": "octet", "type": "Int", "data": "int" },
@@ -12,15 +12,53 @@
       { "name": "flags", "type": "List<Bool>", "data": "list<bool>" },
       { "name": "seen", "type": "Option<Bool>", "data": "option<bool>" }
     ] },
-  "types": {},
-  "methods": [
-    { "name": "init", "kind": "init", "args": [] },
-    { "name": "cut", "kind": "action", "args": [{ "name": "b", "type": "Bytes", "data": "bytes" }, { "name": "start", "type": "Int", "data": "int" }, { "name": "n", "type": "Int", "data": "int" }] },
-    { "name": "pick", "kind": "action", "args": [{ "name": "b", "type": "Bytes", "data": "bytes" }, { "name": "i", "type": "Int", "data": "int" }] },
-    { "name": "divide", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "d", "type": "Int", "data": "int" }] },
-    { "name": "flag", "kind": "action", "args": [{ "name": "fs", "type": "List<Bool>", "data": "list<bool>" }, { "name": "f", "type": "Bool", "data": "bool" }] },
-    { "name": "give", "kind": "action", "args": [{ "name": "b", "type": "Bytes", "data": "bytes" }, { "name": "amount", "type": "Int", "data": "int" }] },
-    { "name": "close", "kind": "destroy", "args": [] }
-  ],
+  "redeemers": {
+    "spend": [
+      { "name": "Cut", "constr": 0, "fields": [
+          { "name": "b", "type": "Bytes", "data": "bytes" },
+          { "name": "start", "type": "Int", "data": "int" },
+          { "name": "n", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Pick", "constr": 1, "fields": [
+          { "name": "b", "type": "Bytes", "data": "bytes" },
+          { "name": "i", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Divide", "constr": 2, "fields": [
+          { "name": "a", "type": "Int", "data": "int" },
+          { "name": "d", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Flag", "constr": 3, "fields": [
+          { "name": "fs", "type": "List<Bool>", "data": "list<bool>" },
+          { "name": "f", "type": "Bool", "data": "bool" }
+        ] },
+      { "name": "Give", "constr": 4, "fields": [
+          { "name": "b", "type": "Bytes", "data": "bytes" },
+          { "name": "amount", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Close", "constr": 5, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
   "timeFields": []
 }

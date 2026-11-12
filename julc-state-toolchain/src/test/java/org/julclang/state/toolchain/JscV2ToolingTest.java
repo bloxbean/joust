@@ -67,13 +67,59 @@ class JscV2ToolingTest {
                 + "org/julclang/state/examples/dsl/Ledger.java:"), ledger.message());
         // A diagnostic outside a mapped line (a generated helper) names the .jsc file, without a line.
         var helper = Toolchain.remap(List.of(new Toolchain.Diagnostic(Toolchain.Severity.ERROR, "x", "/org/julclang/state/examples/dsl/Ledger.java",
-                1, 1, "javac")), r.generated());
+                1, 1, "javac")), r.generated(), List.of());
         assertEquals(List.of("org/julclang/state/examples/dsl/Ledger.jsc", -1L), List.of(helper.get(0).file(), helper.get(0).line()));
+    }
+
+    /** Review F4: a real javac error in generated Java (reported by its simple file name) lands on the .jsc file. */
+    @Test
+    void aRealJavacErrorInGeneratedJava_isReportedAtTheJscPosition() {
+        var files = new LinkedHashMap<String, String>();
+        // A hand-written class of the same name as the contract, listed first: javac reports the duplicate on the
+        // generated unit, at its class declaration.
+        files.put("app/Dup.java", "package app;\nclass Counter {}\n");
+        files.put("app/Counter.jsc", "jsc 2\npackage app\n\ncontract Counter {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n");
+        var r = Toolchain.build(files, Map.of());
+        assertFalse(r.ok());
+        var d = r.diagnostics().stream().filter(x -> "javac".equals(x.source()) && x.message().contains("duplicate class")).findFirst()
+                .orElseThrow(() -> new AssertionError(r.diagnostics().toString()));
+        assertEquals(List.of("app/Counter.jsc", 4L, 1L), List.of(d.file(), d.line(), d.col()), d.toString());
+        assertTrue(d.message().contains("(in the Java generated from app/Counter.jsc: app/Counter.java:"), d.message());
+    }
+
+    /** Review F7: until J19's build report, each example stays below the runtime's 15,000-byte reference-script limit. */
+    @Test
+    void everyExampleScript_staysBelowTheReferenceScriptLimit() throws Exception {
+        var r = build("Counter2", "Pledges", "Vectors", "Ledger", "Shelf", "StdBytes", "StdMath", "Bounds");
+        assertTrue(r.ok(), r.diagnostics().toString());
+        for (var c : r.contracts()) {
+            if (c.scriptSizeBytes() > 14_336) System.out.println("[size] WARNING " + c.name() + " is " + c.scriptSizeBytes() + " bytes, above 14 KB");
+            assertTrue(c.scriptSizeBytes() < 15_000, c.name() + ": " + c.scriptSizeBytes() + " bytes, at or above the runtime's 15,000-byte limit");
+        }
+    }
+
+    /** Review F2, C2: on the Gradle path too, every committed manifest agrees with the processor's description. */
+    @Test
+    void committedManifests_agreeWithGradlesDescriptions() throws Exception {
+        Path described = Path.of("../examples/dsl/build/classes/java/main/META-INF/joust");
+        for (String n : List.of("Counter2", "Pledges", "Vectors", "Ledger", "Shelf", "StdBytes", "StdMath", "Bounds")) {
+            String abi = Files.readString(DSL.resolve(n + ".abi.json"));
+            String desc = Files.readString(described.resolve("org.julclang.state.examples.dsl." + n + ".json"));
+            assertEquals(List.of(), AbiCheck.compare(abi, desc, "org.julclang.state.examples.dsl", n), n);
+        }
+        // A manifest that missed a generated field, or misnumbered a variant, is caught.
+        String ledger = Files.readString(DSL.resolve("Ledger.abi.json"));
+        String desc = Files.readString(described.resolve("org.julclang.state.examples.dsl.Ledger.json"));
+        String noCtx = ledger.replaceFirst(",\\n          \\{ \"name\": \"ctx\", \"type\": \"Ctx\", \"data\": \"Ctx\" \\}", "");
+        assertNotEquals(ledger, noCtx);
+        assertFalse(AbiCheck.compare(noCtx, desc, "org.julclang.state.examples.dsl", "Ledger").isEmpty());
+        String renumbered = ledger.replace("{ \"name\": \"Closed\", \"constr\": 2", "{ \"name\": \"Closed\", \"constr\": 3");
+        assertFalse(AbiCheck.compare(renumbered, desc, "org.julclang.state.examples.dsl", "Ledger").isEmpty());
     }
 
     @Test
     void abiManifests_equalTheCommittedOnes_onBothPaths() throws Exception {
-        var r = build("Counter2", "Pledges", "Vectors", "Ledger", "Shelf", "StdBytes", "StdMath");
+        var r = build("Counter2", "Pledges", "Vectors", "Ledger", "Shelf", "StdBytes", "StdMath", "Bounds");
         assertTrue(r.ok(), r.diagnostics().toString());
         for (var g : r.generated()) {
             Path committed = DSL.resolve(Path.of(g.jscFile()).getFileName().toString().replace(".jsc", ".abi.json"));
@@ -83,6 +129,7 @@ class JscV2ToolingTest {
         String ledger = r.generated().stream().filter(g -> g.jscFile().endsWith("Ledger.jsc")).findFirst().orElseThrow().abiJson();
         assertTrue(ledger.contains("{ \"name\": \"Open\", \"constr\": 0") && ledger.contains("{ \"name\": \"Paused\", \"constr\": 1")
                 && ledger.contains("{ \"name\": \"Closed\", \"constr\": 2"), ledger);
+        assertTrue(ledger.contains("{ \"name\": \"Settle\", \"constr\": 5, \"fields\": [\n          { \"name\": \"ctx\""), ledger);
         assertTrue(ledger.contains("\"data\": \"map<bytes28, int>\"") && ledger.contains("\"data\": \"merkleMap<int>\""), ledger);
         String stdMath = r.generated().stream().filter(g -> g.jscFile().endsWith("StdMath.jsc")).findFirst().orElseThrow().abiJson();
         assertTrue(stdMath.contains("\"timeFields\": [\"since\", \"upTo\"]"), stdMath);
@@ -91,7 +138,7 @@ class JscV2ToolingTest {
     /** J2: the generated Java has no loops, and no local is assigned after its declaration. */
     @Test
     void generatedJava_hasNoLoopsAndNoReassignedLocals() throws Exception {
-        var r = build("Counter2", "Pledges", "Vectors", "Ledger", "Shelf", "StdBytes", "StdMath");
+        var r = build("Counter2", "Pledges", "Vectors", "Ledger", "Shelf", "StdBytes", "StdMath", "Bounds");
         assertTrue(r.ok(), r.diagnostics().toString());
         var assignment = java.util.regex.Pattern.compile("(?m)^\\s+[A-Za-z_][A-Za-z0-9_]*\\s*(=[^=]|\\+=|-=|\\+\\+|--)");
         for (var g : r.generated()) {

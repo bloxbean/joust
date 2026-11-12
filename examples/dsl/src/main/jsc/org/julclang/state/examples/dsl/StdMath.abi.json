@@ -1,8 +1,8 @@
 {
-  "abi": 1,
+  "abi": 2,
   "contract": "org.julclang.state.examples.dsl.StdMath",
   "source": "StdMath.jsc",
-  "state": { "name": "State", "constr": 0, "fields": [
+  "datum": { "name": "State", "constr": 0, "fields": [
       { "name": "owner", "type": "Key", "data": "bytes28" },
       { "name": "n", "type": "Int", "data": "int" },
       { "name": "r", "type": "Int", "data": "int" },
@@ -11,16 +11,59 @@
       { "name": "since", "type": "Int", "data": "int" },
       { "name": "upTo", "type": "Int", "data": "int" }
     ] },
-  "types": {},
-  "methods": [
-    { "name": "init", "kind": "init", "args": [] },
-    { "name": "floor", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "b", "type": "Int", "data": "int" }] },
-    { "name": "power", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "e", "type": "Int", "data": "int" }] },
-    { "name": "modPow", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "e", "type": "Int", "data": "int" }, { "name": "m", "type": "Int", "data": "int" }] },
-    { "name": "pick", "kind": "action", "args": [{ "name": "ys", "type": "List<Int>", "data": "list<int>" }, { "name": "i", "type": "Int", "data": "int" }, { "name": "which", "type": "Int", "data": "int" }] },
-    { "name": "slices", "kind": "action", "args": [{ "name": "ys", "type": "List<Int>", "data": "list<int>" }, { "name": "k", "type": "Int", "data": "int" }] },
-    { "name": "ranged", "kind": "action", "args": [{ "name": "a", "type": "Int", "data": "int" }, { "name": "b", "type": "Int", "data": "int" }] },
-    { "name": "stamp", "kind": "action", "args": [{ "name": "t", "type": "Int", "data": "int" }] }
-  ],
+  "redeemers": {
+    "spend": [
+      { "name": "Floor", "constr": 0, "fields": [
+          { "name": "a", "type": "Int", "data": "int" },
+          { "name": "b", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Power", "constr": 1, "fields": [
+          { "name": "a", "type": "Int", "data": "int" },
+          { "name": "e", "type": "Int", "data": "int" }
+        ] },
+      { "name": "ModPow", "constr": 2, "fields": [
+          { "name": "a", "type": "Int", "data": "int" },
+          { "name": "e", "type": "Int", "data": "int" },
+          { "name": "m", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Pick", "constr": 3, "fields": [
+          { "name": "ys", "type": "List<Int>", "data": "list<int>" },
+          { "name": "i", "type": "Int", "data": "int" },
+          { "name": "which", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Slices", "constr": 4, "fields": [
+          { "name": "ys", "type": "List<Int>", "data": "list<int>" },
+          { "name": "k", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Ranged", "constr": 5, "fields": [
+          { "name": "a", "type": "Int", "data": "int" },
+          { "name": "b", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Stamp", "constr": 6, "fields": [
+          { "name": "t", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
   "timeFields": ["since", "upTo"]
 }

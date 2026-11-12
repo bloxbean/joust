@@ -76,7 +76,8 @@ export async function attach(config, name, { log = console.log, waitMs = 180_000
  * Runs the dev loop until {@code signal} aborts: build, deploy, serve; rebuild and redeploy when a contract changes.
  * Returns { url, port, close }.
  */
-export async function dev({ root = process.cwd(), config, networkName, port = config.dev?.port ?? 5178, log = console.log, signal } = {}) {
+export async function dev({ root = process.cwd(), config, networkName, port = config.dev?.port ?? 5178, log = console.log, signal,
+  acceptAbi = false } = {}) {
   const name = networkName ?? config.network;
   const net = await attach(config, name, { log });
   // One upstream session for everything this server reads (deploys, the prepare service, the page's /chain).
@@ -98,7 +99,9 @@ export async function dev({ root = process.cwd(), config, networkName, port = co
     running = (async () => {
       do {
         again = false;
-        const r = await build({ root, src: config.contracts, out: config.out, log });
+        // ADR-0018 D12: a changed ABI manifest fails the build (the last good build keeps serving) unless dev runs with
+        // --accept-abi.
+        const r = await build({ root, src: config.contracts, out: config.out, log, acceptAbi });
         if (!r.ok) {
           log('build failed: fix the contract and save again');
           continue;

@@ -66,7 +66,7 @@ class JscV2M1aFourWayTest {
     static void build() throws Exception {
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         Map<String, String> files = new LinkedHashMap<>();
-        for (String c : List.of("Ledger", "Shelf", "StdBytes", "StdMath")) {
+        for (String c : List.of("Ledger", "Shelf", "StdBytes", "StdMath", "Bounds")) {
             files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
         }
         var r = Toolchain.build(files, Map.of());
@@ -321,8 +321,52 @@ class JscV2M1aFourWayTest {
                 List.of(Bytes.of(notPoint), Bytes.of(msg), Bytes.of(sig)), List.of(Bytes.of(key), Bytes.of(msg), Bytes.of(sBig)))) {
             assertEquals(ok(f, "flag", false), f.check("sig", s, a, null, null));
         }
+        // Review C3, S5: the ledger's rules (libsodium), not the JDK's. The identity point as the key with R the identity
+        // and S = 0 satisfies the equation, but a small-order key or R is refused: false on every leg, the interpreter
+        // included. Likewise S + L (non-canonical S), and a key encoding p + 1 (non-canonical and small order).
+        byte[] identity = new byte[32];
+        identity[0] = 1;
+        byte[] identitySig = new byte[64];
+        identitySig[0] = 1;
+        BigInteger l = BigInteger.TWO.pow(252).add(new BigInteger("27742317777372353535851937790883648493"));
+        byte[] sPlusL = sig.clone();
+        byte[] sLe = new java.math.BigInteger(1, reverse(Arrays.copyOfRange(sig, 32, 64))).add(l).toByteArray();
+        byte[] sNew = new byte[32];
+        for (int i = 0; i < Math.min(32, sLe.length); i++) sNew[i] = sLe[sLe.length - 1 - i];
+        System.arraycopy(sNew, 0, sPlusL, 32, 32);
+        byte[] pPlus1 = new byte[32];
+        Arrays.fill(pPlus1, (byte) 0xff);
+        pPlus1[0] = (byte) 0xee;
+        pPlus1[31] = 0x7f;
+        for (List<Object> a : List.<List<Object>>of(List.of(Bytes.of(identity), Bytes.of(new byte[0]), Bytes.of(identitySig)),
+                List.of(Bytes.of(identity), Bytes.of(msg), Bytes.of(identitySig)), List.of(Bytes.of(key), Bytes.of(msg), Bytes.of(sPlusL)),
+                List.of(Bytes.of(pPlus1), Bytes.of(msg), Bytes.of(identitySig)))) {
+            assertEquals(ok(f, "flag", false), f.check("sig", s, a, null, null), a.toString());
+        }
         assertEquals("refused", f.check("sig", s, List.of(Bytes.of(Arrays.copyOf(key, 31)), Bytes.of(msg), Bytes.of(sig)), null, null));
         assertEquals("refused", f.check("sig", s, List.of(Bytes.of(key), Bytes.of(msg), Bytes.of(Arrays.copyOf(sig, 63))), null, null));
+        report(f);
+    }
+
+    static byte[] reverse(byte[] b) {
+        byte[] r = new byte[b.length];
+        for (int i = 0; i < b.length; i++) r[i] = b[b.length - 1 - i];
+        return r;
+    }
+
+    // ------------------------------------------------------------------ Bounds: BigMap<K, Int> values at 8,192 bytes
+
+    /** Review C4: the largest value a BigMap<K, Int> stores, the first it refuses, and a refused write read through and discarded. */
+    @Test
+    void bounds_bigMapIntValues_atTheEncodingLimit() throws Exception {
+        var f = LEGS.get("Bounds");
+        f.check("init", null, List.of(), at(OWNER, 0, 0), OWNER);
+        Rec s = rec("State", b(OWNER), BigMapV.of(Map.of()));
+        assertTrue(f.check("write", s, List.of(n(64), n(1)), null, null).startsWith("ok:"), "2^65536 - 1: 8,192 bytes");
+        assertEquals("refused", f.check("write", s, List.of(n(64), n(0)), null, null), "2^65536: 8,193 bytes");
+        assertTrue(f.check("write", s, List.of(n(63), n(0)), null, null).startsWith("ok:"));
+        assertEquals("refused", f.check("discarded", s, List.of(n(64), n(0)), null, null), "a discarded write fails where it is made");
+        assertTrue(f.check("discarded", s, List.of(n(64), n(1)), null, null).startsWith("ok:"));
         report(f);
     }
 

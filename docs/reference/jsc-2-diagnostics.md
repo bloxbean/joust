@@ -11,6 +11,8 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 |---|---|---|---|
 | JSC0001 | error | the file name … (none) … ' … ' … may contain only ASCII letters and digits, '.', '_' and '-', and must start with a letter or digit (it is embedded in the generated Java) | JscV2 |
 | JSC0002 | error | the ABI manifest … differs from the committed one at line …: a datum or redeemer encoding changed, which strands deployed instances; accept it with the acceptJscAbi task (npm: joust build --accept-abi) and commit it | JscMain, joust build |
+| JSC0003 | error | no ABI manifest … beside this file: the encoding of its datum and redeemers must be committed; create it with the acceptJscAbi task (npm: joust build --accept-abi), review it and commit it | JscMain, joust build |
+| JSC0004 | error | the ABI manifest of … disagrees with the processor's encoding: … (an internal error of the .jsc lowering: please report it) | Toolchain |
 
 ## Syntax and JavaScript habits (ADR-0018 D2, D3, D12)
 

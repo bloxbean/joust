@@ -113,6 +113,18 @@ class JoustPluginTest {
         var main = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets().getByName("main");
         assertThat(main.getJava().getSrcDirs()).contains(
                 p.getLayout().getBuildDirectory().dir("generated/sources/jsc/java/main").get().getAsFile());
+        // ADR-0018 D12 (review F1, S3): generateJsc never accepts an ABI manifest, whatever the properties; only the
+        // acceptJscAbi task passes --accept-abi.
+        assertThat(gen.getSystemProperties()).doesNotContainKey("joust.acceptAbi");
+        var genArgs = new java.util.ArrayList<String>();
+        gen.getArgumentProviders().forEach(a -> a.asArguments().forEach(genArgs::add));
+        assertThat(genArgs).doesNotContain("--accept-abi").hasSize(2);
+        JavaExec accept = (JavaExec) p.getTasks().getByName("acceptJscAbi");
+        assertThat(accept.getMainClass().get()).isEqualTo("org.julclang.state.dsl.JscMain");
+        var acceptArgs = new java.util.ArrayList<String>();
+        accept.getArgumentProviders().forEach(a -> a.asArguments().forEach(acceptArgs::add));
+        assertThat(acceptArgs).endsWith("--accept-abi");
+        assertThat(acceptArgs.get(0)).isEqualTo(genArgs.get(0));
     }
 
     // ---- TestKit: a real Gradle build of a project applying the plugin (no dependency resolution needed)

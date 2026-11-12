@@ -237,6 +237,8 @@ final class FourWay {
             return method(method).invoke(null, call.toArray());
         } catch (InvocationTargetException e) {
             if (e.getCause() instanceof RequireException || e.getCause() instanceof ArithmeticException) return null;
+            // A builtin's failure on the JVM (as on-chain): integerToByteString past 8,192 bytes (review C4).
+            if (e.getCause() instanceof IllegalArgumentException x && x.getMessage() != null && x.getMessage().startsWith("integerToByteString")) return null;
             if (e.getCause() instanceof RuntimeException r) throw r;
             throw e;
         }

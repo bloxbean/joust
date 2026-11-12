@@ -112,9 +112,17 @@ public class JoustPlugin implements Plugin<Project> {
             t.getInputs().dir(src).withPropertyName("jsc");
             t.getOutputs().dir(out).withPropertyName("java");
             t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), out.get().getAsFile().getAbsolutePath()));
-            // ADR-0018 D12: a .jsc 2 file's ABI manifest (Name.abi.json beside it) that changed fails the build unless
-            // accepted with -Pjoust.acceptAbi.
-            t.systemProperty("joust.acceptAbi", project.getProviders().gradleProperty("joust.acceptAbi").isPresent());
+        });
+        // ADR-0018 D12 (review F1): generateJsc never accepts a .jsc 2 file's ABI manifest (Name.abi.json beside it); a
+        // missing or changed one fails it. Only this task accepts: it writes the manifests, to be reviewed and committed.
+        // No property switches the gate off.
+        Provider<Directory> scratch = project.getLayout().getBuildDirectory().dir("tmp/acceptJscAbi");
+        project.getTasks().register("acceptJscAbi", JavaExec.class, t -> {
+            t.setGroup("build");
+            t.setDescription("Writes the ABI manifests of " + MAIN_JSC + "/**/*.jsc, accepting new and changed ones");
+            t.setClasspath(tool);
+            t.getMainClass().set("org.julclang.state.dsl.JscMain");
+            t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), scratch.get().getAsFile().getAbsolutePath(), "--accept-abi"));
         });
         SourceSet main = project.getExtensions().getByType(JavaPluginExtension.class).getSourceSets()
                 .getByName(SourceSet.MAIN_SOURCE_SET_NAME);

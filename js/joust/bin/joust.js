@@ -27,7 +27,7 @@ const handedOver = deferredTo === SELF;
 const COMMANDS = {
   build: 'build [--accept-abi]        compile contracts/ (.java, .jsc) into build/joust/',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
-  dev: 'dev [--network <name>] [--port <port>]   build, deploy, rebuild on save, serve the page',
+  dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
   serve: 'serve [--network <name>] [--dir <dir>] [--port <port>]   serve a built page with the chain API proxied',
   version: 'version                     this joust\'s version',
   help: 'help [<command>]            this help',
@@ -124,7 +124,7 @@ async function project() {
     case 'serve': {
       const run = cmd === 'dev' ? (await import('../src/dev.js')).dev : (await import('../src/serve.js')).serve;
       const d = await run({ config, networkName: flag('network'), dir: flag('dir'),
-        port: flag('port') ? Number(flag('port')) : undefined });
+        port: flag('port') ? Number(flag('port')) : undefined, acceptAbi: args.includes('--accept-abi') });
       const stop = async () => { await d.close(); process.exit(0); };
       process.on('SIGINT', stop);
       process.on('SIGTERM', stop);

@@ -118,8 +118,20 @@ public final class Toolchain {
     public static Result build(Map<String, String> files, Map<String, String> options) {
         var generated = new ArrayList<Generated>();
         Result r = build(files, options, generated);
-        var diagnostics = remap(r.diagnostics(), generated);
-        return new Result(r.ok(), r.contracts(), r.validators(), diagnostics, List.copyOf(generated));
+        var diagnostics = new ArrayList<>(remap(r.diagnostics(), generated, files.keySet()));
+        // ADR-0018 D12 (review F2): every .jsc 2 manifest agrees with the processor's description of the contract.
+        for (Contract c : r.contracts()) {
+            for (Generated g : generated) {
+                if (g.abiJson() == null || !g.javaFile().equals(c.packageName().replace('.', '/') + "/" + c.name() + ".java")) continue;
+                for (String problem : AbiCheck.compare(g.abiJson(), c.descriptionJson(), c.packageName(), c.name())) {
+                    diagnostics.add(new Diagnostic(Severity.ERROR, "the ABI manifest of " + c.name() + " disagrees with the processor's"
+                            + " encoding: " + problem + " (an internal error of the .jsc lowering: please report it)", g.jscFile(), 1, 1,
+                            "jsc", "JSC0004"));
+                }
+            }
+        }
+        boolean ok = r.ok() && diagnostics.stream().noneMatch(d -> d.severity() == Severity.ERROR);
+        return new Result(ok, r.contracts(), r.validators(), diagnostics, List.copyOf(generated));
     }
 
     /**
@@ -127,13 +139,26 @@ public final class Toolchain {
      * reported at the {@code .jsc} line and column the source map gives, with the generated location as a note; on a
      * generated helper with no source position, at the {@code .jsc} file.
      */
-    static List<Diagnostic> remap(List<Diagnostic> diagnostics, List<Generated> generated) {
+    static List<Diagnostic> remap(List<Diagnostic> diagnostics, List<Generated> generated, java.util.Collection<String> files) {
         var byJava = new java.util.HashMap<String, Generated>();
         for (Generated g : generated) byJava.put("/" + g.javaFile(), g);
+        // javac reports a unit by its simple file name (review F4): a generated file is found by it when no other source
+        // of the build has the same simple name.
+        var bySimple = new java.util.HashMap<String, Generated>();
+        var simpleCount = new java.util.HashMap<String, Integer>();
+        for (Generated g : generated) {
+            String n = g.javaFile().substring(g.javaFile().lastIndexOf('/') + 1);
+            bySimple.put(n, g);
+            simpleCount.merge(n, 1, Integer::sum);
+        }
+        for (String f : files) {
+            if (f.endsWith(".java")) simpleCount.merge(f.substring(Math.max(f.lastIndexOf('/'), f.lastIndexOf('\\')) + 1), 1, Integer::sum);
+        }
         var out = new ArrayList<Diagnostic>();
         for (Diagnostic d : diagnostics) {
             String f = d.file() == null ? null : (d.file().startsWith("/") ? d.file() : "/" + d.file());
             Generated g = f == null ? null : byJava.get(f);
+            if (g == null && d.file() != null && !d.file().contains("/") && simpleCount.getOrDefault(d.file(), 0) == 1) g = bySimple.get(d.file());
             if (g == null || "jsc".equals(d.source())) {
                 out.add(d);
                 continue;
