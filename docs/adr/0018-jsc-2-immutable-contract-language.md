@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r3)
+**Status:** Proposed (r4)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -127,16 +127,22 @@ or lambdas:
 
 | Method kind | `pay` | `send` | `mint`/`burn` | `deposit` | `accept` | `emit` |
 |---|---|---|---|---|---|---|
-| `init`, owned `init` | – | – | – | – | `payable` + asset-aware | – |
+| `init`, owned `init` | – | – | – | – | `payable` with `Funds` | – |
 | `init migrate` | – | – | – | – | – (migration is refused in asset-aware contracts, `ContractReader.java:568-576`) | – |
-| `action`, owned `action` (both may be `receives`) | yes | yes | yes | yes | `payable` + asset-aware | yes |
+| `action`, owned `action` (both may be `receives`) | yes | yes | yes | yes | `payable` with `Funds` | yes |
 | `batched` action | yes | – | – | – | – | – |
-| `destroy`, owned `destroy` | yes | yes | yes | yes | `payable` + asset-aware | yes |
+| `destroy`, owned `destroy` | yes | yes | yes | yes | `payable` with `Funds` | yes |
 | `withdraw` handler | – | yes (its result is the sends, totalling the amount) | – | – | – | – |
 | `certify`, `vote`, `propose` handlers | – | – | – | – | – | – |
 
-**`accept` is required, not only allowed, in every `payable` method of an asset-aware contract** (ADR-0007 r2: the
-method states exactly the native assets it takes in), so the checker reports a missing `accept` there. The table is
+**A `payable` method takes native assets only if it uses `funds` or `accept`**; it is then lowered with the `Funds`
+parameter, and `accept` is **required** in it (ADR-0007 r2: the method states exactly the native assets it takes in;
+`ContractReader.java:1176-1182` ties the rule to the method's `Funds`, not to the contract). A `payable` method that
+uses neither takes ADA only and has no `Funds` (fees' `sell`, which deposits but takes no native assets). The fixtures
+include that sale and a contract mixing ADA-only and asset-taking payable methods. **Contract-level combinations**
+the processor refuses are reported at `.jsc` positions too: owned objects with an instance `destroy`; owned objects with
+instance-state `BigMap`s; keyed types with native assets; native assets with `batched` actions (`ContractReader.java:
+520-530` and the ADR-0012/0016 rules), each re-derived in the milestone that implements the feature. The table is
 derived from `ContractReader` at `0e4ad41` (F13) and matches the gating ports (market's owned destroys send and
 accept; locker's send). Every allowed cell gets a positive fixture and every refused cell a negative one in M0/M1,
 whatever milestone implements the feature; the checker enforces the table at `.jsc` positions. A
@@ -181,7 +187,7 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 | `type R = { f: T, … }` | a generated record | user records; accessors through a typed local inside the arm or helper that needs them (D6) |
 | `enum E { A, B { x: Int } }` | a generated sealed interface with records | user sum types; `match` (D6). Variant constructor tags are the declaration order |
 | `Instance<C>` | `ForeignInstance` | another contract's instance (policy, 32-byte id), typed by its contract `C` (D9). Only in `params` (as ADR-0011 keeps `ForeignInstance`): the deployer fixes which script it trusts. A method parameter cannot claim to be an instance of `C`; `deposit` and `reads` take `params` instances |
-| ledger types for handlers | JuLC ledger types | `TxCert`, `Voter`, `GovernanceActionId`, `Vote`, `ProposalProcedure`, `GovernanceAction`: sealed types the handler `match`es on, their variants' fields readable as `.jsc` types (`Credential`, `Int`, `Bytes`, …); no construction |
+| ledger types for handlers | JuLC ledger types | `TxCert`, `Voter`, `Vote`, `GovernanceAction` are sealed types the handler `match`es on; `GovernanceActionId` and `ProposalProcedure` are records read by projection. Fields whose JuLC type maps to a `.jsc` type are readable; fields typed `PlutusData` (e.g. `GovernanceAction.ParameterChange.parameters`) are **inaccessible**, so a guardrail that must inspect proposed parameter changes stays in Java until a typed protocol-parameter view exists. No construction |
 | `LedgerMap<K, V>` | `JulcMap<K, V>` from ledger data | read-only maps in ledger order (e.g. `GovernanceAction`'s withdrawals `LedgerMap<Credential, Int>`): `get`, `has`, `size`, `any`/`all`/`fold`; keys any comparable type; never stored, so no canonical-order rule applies |
 
 - **No generic user types** (F9). Built-in generics are instantiated with concrete types; per-instantiation helpers
@@ -249,7 +255,9 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
   (no list is built). Traversal is front to back; `any`/`all`/`find` stop at the first decisive element.
 - **`Map` methods:** `Map.empty()`, `m.get(k)` (`Option`), `m.has(k)`, `m.set(k, v)` and `m.delete(k)` (new canonical
   maps; `set` checks the key length), `m.size`, `m.keys`, `m.values`, `any`/`all`/`fold` over `(k, v)` in key order.
-- **`BigMap` rules:** a field of the state or of an owned record only (locker's `Safe.notes`). It may not be bound to a `const`, passed to a `fn`, captured by a lambda,
+- **`BigMap` rules:** a field of the state or of an owned record only (locker's `Safe.notes`). A contract with
+  `BigMap` state cannot have `batched` actions: the processor refuses the combination (`ContractReader.java:527-530`,
+  ADR-0004 D1), so `.jsc` 2 reports it at the `.jsc` position; lifting it is a processor change outside this ADR. It may not be bound to a `const`, passed to a `fn`, captured by a lambda,
   used as a `fold` accumulator, compared, or created except `BigMap.empty()` in an `init`. A new value of a `BigMap`
   field is only its own field transformed by `set`/`delete` (`{ ...state, balances: balances.set(to, v) }`). Reads:
   `m.get(k)` (`Option`) and `m.has(k)`; on `BigMap<K, Int>` also `m[k]`, which reads 0 when absent. Values of a
@@ -259,8 +267,9 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 - **Effects per element:** `for (const x of xs) { … }` (the JavaScript form) is a statement whose body may contain
   `const`, `require`, `if`/`match` and effects (D4), and nothing that escapes it. A fold is `xs.fold`.
 - **Lowering:** each fold, `for`, `find`, `contains` and `range` method becomes a generated, typed, self-recursive static
-  helper (closure-converted). `map` always lowers to a generated helper (JuLC's `JulcList.map`
-  returns `JulcList<PlutusData>`, not a typed list). `any`/`all`/`filter` may lower to `JulcList`'s own methods with the
+  helper (closure-converted). `map` lowers to a generated helper, by choice: one lowering for all
+  element types (including those with bytes, whose equality D6 generates) and one closure-conversion scheme for every
+  collection method (`JulcList.map` itself is typed, `JulcList.java:66-67`). `any`/`all`/`filter` may lower to `JulcList`'s own methods with the
   lambda inline only for element types without bytes (F16); M0 measures both lowerings and fixes the choice. No `while` and no
   mutable accumulator, in `.jsc` or in the generated Java (J2).
 - **Off-chain depth.** On the JVM, generated recursion is Java recursion without tail calls: the runtime runs
@@ -328,8 +337,19 @@ import { concat, slice, length } from "std/bytes"
     Builtins.constrData(…)` throws on the JVM: `Datum.java:10-12`); and a **builtin capability check**: every builtin
     reachable from the import must be on an allow-list of builtins with identical semantics and failure conditions on
     every runtime (D8's crypto rule applies transitively, so a wrapper around keccak-256 or an unchecked Ed25519 call is
-    refused). A library that fails is refused at the import with the reason. J3's equivalence covers certified
-    libraries only, and the build report marks every library certified.
+    refused); and **no construct from the catalogue of known JVM/on-chain differences** in JuLC's subset, kept in the
+    reference docs and extended as JuLC documents more (its JVM/UPLC consistency programme, JuLC ADR-062/063):
+    equality and `contains`/map lookup on types containing bytes (F16), the native `JulcList.find` in any form (null
+    on the JVM, a failing field read on-chain: F17), `JulcMap.insert` duplicates (F19), reference casts, fixed-width
+    arithmetic. Each catalogue entry is a compiler intrinsic or library operation with a known divergence and gets an
+    import-refusal test and an equivalence vector. A library that fails is refused at the import with the reason.
+    Certification also needs **per-function JVM-vs-UPLC vectors** (generated over each exported function's domain,
+    including edges) before J3 counts the library as covered. Certification stops at the trusted base: the pinned JuLC
+    stdlib through D8's table, and the JOUST API with its adapters. The build report marks every library certified.
+  - **Downstream class loading.** The duplicate-class check covers the contract's own build. Every class compiled from
+    a certified library's sources carries a generated constant with its on-chain-source hash, and the runtime checks
+    it when it loads the contract's clients, refusing to run if an application's class path supplies a different class
+    of that name (an application that also depends on the library's jar).
   - **No second variant.** A library that ships an on-chain variant different from its JVM source (as JOUST's own
     `Require` and `Assets` do, under `src/onchain/java`) is refused, except the JOUST API itself, whose variants are
     part of the trusted base and covered by its own differential tests.
@@ -366,7 +386,6 @@ positions. Each row names the example whose port gates it (J11).
 | keyed objects (ADR-0016) | `owned Name keyed by key (signed, maxKeyBytes = 32, linkCooldownMs = …, linkWindowMs = …)`; `owned destroy … retire` | registry (M3) |
 | `@Withdraw`, `@Certify`, `@Votes`, `@Propose` | `withdraw(params, amount: Int, …args): sends`; `certify(params, cert: TxCert): Bool`; `vote(params, voter: Voter, action: GovernanceActionId, vote: Vote): Bool`; `propose(params, p: ProposalProcedure): Bool` (the shapes of `ContractReader.java:1332-1355`), with their required `quorum`/`authorized` | staking (M3) |
 | `@Migrate`, `@MigrateTo` | `init migrate from params.prev(old: Old.State)`, `destroy … migrates to successor`; not with `BigMap`s, owned objects or assets, as in the processor (`ContractReader.java:568-576`) | upgrade (M3) |
-| `@Batched` with `MerkleMap` state | `batched` action on a contract with a `BigMap` | a new example (`examples/dsl` `Tally`, with a Java twin), M3 |
 
 The exact grammar for each row, including the full parameter and result types of each handler kind, is fixed in
 the milestone that implements it, reviewed against the processor's rules, and documented in `jsc-reference.mdx`. The
@@ -397,28 +416,42 @@ the milestone that implements it, reviewed against the processor's rules, and do
 - **Time values from other contracts.** A field of another contract's state (through `reads`, `import contract`,
   `init migrate`'s old state) or of a deposit memo is a time value if the other contract can set it from its own window.
   The checker knows this for `.jsc` contracts from their checked AST (the ABI manifest lists time fields, D12), and for
-  Java contracts from a conservative analysis of their attributed source (a state component whose value in any method
-  depends on `ctx.validFrom()` or `ctx.validTo()`); when the source is unavailable, every field is a time value.
+  Java contracts from a conservative analysis of their attributed source, **per state component**: a component is a
+  time field if, in any method, its new value depends on `ctx.validFrom()`/`ctx.validTo()` by data flow, or is chosen
+  under a branch whose condition depends on them or on `Clock.after`/`Clock.before` (control dependence: `phase =
+  Clock.after(ctx, t) ? Closed : Open`). Other components of the same state (the oracle's `price`, unless set under such
+  a branch) stay ordinary. When the source is unavailable, every field is a time value.
 - **Time values never decide.** A time value may not be, or be part of, the condition of an `if`, `?:` or `require`,
   a `match` scrutinee, an operand of `&&`, `||` or `!`, a collection predicate (`any`, `all`, `filter`, `find`), or a
   comparison whose result is used anywhere. The only way to compare with time is `after(t)` and `before(t)`.
-- **Time values never reach a partial operation directly.** An operation that fails for some inputs is a hidden
-  `require` (`slice(id, 0, deadline - validFrom)` fails exactly when `validFrom > deadline`). So a time value may not be
-  an argument of: a division or remainder divisor, a domain-checked library argument (D8), `take`/`drop`/`range`
-  bounds, a `pay`/`mint`/`burn`/`accept` amount, or a `BigMap<K, Int>.set` value, **except** through the `std/time`
-  helpers, which never fail and never go negative: `elapsedSince(t)` = `max(0, validFrom - t)` (a lower bound of the
-  time elapsed), `elapsedSinceAtMost(t)` = `max(0, validTo - t)` (an upper bound), and `windowStart()` / `windowEnd()`
-  (the bounds, as time values to store). Their results stay time values.
+- **Time values never make an operation fail.** An operation that fails for some inputs is a hidden `require`
+  (`slice(id, 0, deadline - validFrom)` fails exactly when `validFrom > deadline`; a Dutch auction's
+  `pay(seller, startPrice - elapsedSince(start) * step)` fails once the price is negative, so a late buyer would pick an
+  early window to keep it positive). The rule is per position, for any time value, whatever arithmetic produced it:
+  - **refused outright:** a divisor or remainder divisor; a domain-checked library argument (D8); `take`/`drop`/
+    `range` bounds and list indices; a `mint`/`burn` quantity; a `Key`/`Hash`/map-key construction;
+  - **allowed only under an outermost clamp:** a `pay` or `accept` amount and a `BigMap<K, Int>.set` value must be
+    exactly `max(0, e)` (or `clamp(0, e, hi)`) at the top, which the checker recognises; the operation then cannot fail
+    on the sign (a `pay` of 0 is skipped, `set(k, 0)` removes the entry);
+  - **allowed freely:** arithmetic, `const`s, record and state fields, `send` values built with `Value.lovelace(max(0,
+    e))`, events.
+  The `std/time` helpers are sources of time values with a documented bias, not exemptions: `elapsedSince(t)` =
+  `max(0, validFrom - t)` (a lower bound of the time elapsed), `elapsedSinceAtMost(t)` = `max(0, validTo - t)` (an
+  upper bound), `windowStart()` / `windowEnd()` (the bounds, to store). The docs show the Dutch auction written
+  correctly: `require(before(end))` decides; the clamped price only sets the amount.
 - **`after(t)` / `before(t)`** hold for the whole validity window. They are allowed only in **positive positions of a
   `require`**: the condition itself, or an operand of `&&` or `||` at its top, never under `!`, in an `if`/`match`
   condition, a `?:`, a `const`, a `fn` or a lambda. `require(a || after(t))` is sound: it asks that `a` hold or that the
   whole window be after `t`. **`t` may itself be a time value** (a stored `updatedAt`, as the oracle's staleness check
   needs: `require(before(updatedAt + maxAge))`): the predicate is sound for any `t`, because it constrains the whole
-  current window. The checker warns when `t` depends on the current call's own window, which makes the check vacuous.
-- **What remains.** Explicit decisions on time are only `after`/`before`. A time value can still change an outcome
-  implicitly where an amount it sets makes the transaction balance or not (for example a payout larger than the
-  balance); the submitter's influence there is bounded by `maxValidityMs`, and the bias warning names it. J6 states
-  exactly this scope.
+  current window. A `t` that depends on the **current call's** window (data-flow from this call's `validFrom`/`validTo`, as
+  in `after(validFrom - 1)` or `after(2 * validFrom - deadline)`, which is `validFrom <= deadline` in disguise) is an
+  **error**: such a threshold can invert the predicate. Thresholds from stored state (set by earlier calls) or other
+  contracts are allowed; reading a field always reads the input state, never this call's window.
+- **What remains.** Explicit decisions on time are only `after`/`before`, and no operation fails because of a time
+  value's sign or range. A time value can still change an outcome where the amount it sets makes the transaction
+  balance or not (a clamped payout larger than the balance); the submitter's influence there is bounded by
+  `maxValidityMs`, and the bias warning names it. J6 states exactly this scope.
 - **Time values may flow into amounts and state.** Arithmetic on time values is allowed, with a warning naming the
   bias when the result reaches an effect amount or a state field. The submitter chooses the window (§2): `validFrom`
   can be up to `maxValidityMs` early, `validTo` that much late. For accrual that pays the caller, measure elapsed time
@@ -427,8 +460,10 @@ the milestone that implements it, reviewed against the processor's rules, and do
 - The checker tests include each bypass found in review: `require(validFrom < deadline)`, `const late = …; if late`,
   `fn expired(from, d)` called with `validFrom`, `deadlines.all(d => validFrom < d)`, a stored `lastSeen: validFrom`
   later compared, a time field read from another contract and compared, `slice(id, 0, deadline - validFrom)` and other
-  partial operations, and `max(0, deadline - validFrom)` reaching `pay` (refused; `elapsedSince` accepted with a
-  warning); and the oracle's `before(updatedAt + maxAge)` accepted (J6). The v1 front end gets the
+  partial operations, `max(0, deadline - validFrom)` reaching `pay` without being the outermost operation (refused),
+  the Dutch auction's unclamped price (refused) and clamped price (accepted with a warning), `rate / elapsedSince(t)`
+  (refused), `after(validFrom - 1)` (refused), a Java contract's field set under `Clock.after` (a time field); and the
+  oracle's `before(updatedAt + maxAge)` accepted (J6). The v1 front end gets the
   positional part of this rule as a warning.
 
 ### D12. Diagnostics, source maps, the generated Java and the ABI
@@ -443,9 +478,12 @@ the milestone that implements it, reviewed against the processor's rules, and do
   `===` → `==`; `function` → `fn`; `class`, `this`, `null`, `undefined`, `async` → what to use instead. Each is one
   spelling; aliases are not accepted, so there is one way to write each thing.
 - `joust build --traces` on the npm CLI (Gradle has `-Pjoust.traces`).
-- **A budget report for every contract**, not only the example ports: the build evaluates each method at a state
-  saturated to `maxDatumBytes` (generated worst-case inputs) and reports execution units and script size, warning above
-  80% of the protocol maximum, so a user's destroy or refund that could stop fitting is visible before deployment (J19).
+- **A budget report for every contract**, not only the example ports: the build evaluates each method over
+  **measured scenarios**: empty, small and `maxDatumBytes`-sized states, branch-covering inputs generated from the
+  checked AST, and argument sizes up to bounds the author may declare (else defaults, reported as such), under an
+  evaluation cap. It reports execution units and script size per scenario, the paths no scenario reached, and the
+  arguments with no declared bound, warning above 80% of the protocol maximum. A result is called a worst-case bound
+  only when the method's inputs form a bounded domain the build enumerated; otherwise it is a measurement (J19).
 - **Stable diagnostic codes** (`JSC0001`…) with a catalogue in the reference docs (after Elci, F15).
 - **The ABI manifest.** The build writes the encoding of every type a contract exposes (D5's rules applied: tags, field
   order, list, map and `Option` shapes, imported types), and which state fields are time fields (D11), to
@@ -597,7 +635,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J3 | **Four ways agree** for every construct of the milestone: the reference interpreter, the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
 | J4 | Effects appear in each kind's result in source order (loops: list order), only from taken branches; mint and accepted are net sums | D4 | differential tests; on-chain fixtures |
 | J5 | Every diagnostic on either build path names a `.jsc` file, line and column, and a stable code | D12 | tests with errors from each layer (checker, processor, JuLC) |
-| J6 | No time value (including one read from another contract) decides control flow or a `require`, except through `after`/`before` (any `t`) in positive positions of a `require`; no time value reaches a partial operation except through the `std/time` helpers; time values reaching amounts or state warn. Implicit influence through whether a transaction balances is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
+| J6 | No time value (including one read from another contract) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities; only under an outermost `max(0, …)` in pay/accept amounts and `BigMap` int values); time values reaching amounts or state warn. Influence through whether a transaction balances is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
 | J7 | Every library call is type-checked against the exact Java signature; every `Int → long/int` conversion is checked against the row's domain on both sides; no unmappable signature is callable; JVM and UPLC agree on each binding's edge and malformed vectors | D8, D9 | the binding test; per-row differential vectors; import-refusal tests |
 | J8 | No `.jsc` equality or membership lowers to reference equality, Java `equals`, `JulcList.contains/find` or `JulcMap` lookup on a type containing bytes | D6, D7 | lowering tests; generators with distinct-allocation bytes nested in records, enums, options, lists and maps |
 | J9 | Only direct self-recursion, checked after lowering; the build report lists recursive functions | D7 | checker tests (nested folds and branches) |
@@ -610,7 +648,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J16 | No method that can reach `pay`, `send`, `mint`/`burn` or `deposit` lacks an audience (`only`, `authorized`, `quorum` or `open`) | D4 | checker tests per effect kind |
 | J17 | Data built from `.jsc` values (state, redeemers, `send` datums, memos) equals JuLC's encoding of the generated Java and the committed ABI manifest, and matches independent CBOR golden vectors | D5, D12 | encoder tests on the JVM, JS and on-chain; manifest comparison |
 | J18 | Off-chain evaluation of a transition is bounded (step or depth cap) in the prepare service and the batcher, and engines' stacks fit the deepest recursion the budget allows | D7 | depth tests on the JVM and Web Image |
-| J19 | Every build reports each method's execution units and script size at a saturated state, warning above 80% of the protocol maximum | D12 | build-report tests |
+| J19 | Every build reports each method's execution units and script size over measured scenarios (empty, small, saturated states; branch-covering inputs), names uncovered paths and unbounded arguments, warns above 80% of the protocol maximum, and calls a figure a bound only for an enumerated bounded domain | D12 | build-report tests |
 
 ## 6. Alternatives considered
 
@@ -668,7 +706,7 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 | M0 | Spike: version line, `const`, spread updates, shadowing rule, `fn` with direct recursion and the after-lowering recursion check (nested folds), a `fold`/`find`/`contains` helper and both `filter` lowerings, `Option` as `Optional` end to end (datum, redeemer, portable codec, JS; `Some(None)` rejected), one generated equality helper over a record with bytes, one checked input, one `std/crypto` and one `std/bytes` binding with domains, the binding test via javac attribution, positions on the npm path, the time dataflow pass | ADR accepted | builds on both paths; four-way agreement (J3) on hand vectors; size, budget and check-cost numbers recorded; javac attribution of library sources works inside the Web Image toolchain |
 | M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; four-way differential tests and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten |
 | M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); interpreter and four-way tests extended (D15); attack suites and mutation-rejection tests green |
-| M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types, batched actions with maps | M2 exit | bank, locker, guild, market, registry, staking, upgrade and the new batched-map example ported within the bounds; interpreter extended; attack suites green |
+| M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green |
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12; a `.jsc` library called from Java and a Java library from `.jsc`; the template's tests run offline |
 | M5 | Language server | M3, M4 exit | — |
 
@@ -802,3 +840,21 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
     and passed `Value`s deferred to M2's explicit conversion (C16); crowdfund close path (C17); ledger handler types,
     `LedgerMap` and handler shapes (C6); F4 marked historical, research README annotated (C12); D7 off-chain depth
     split between the JVM and the engine (C11 nit).
+- **r4** (2026-11-12, responds to the round-3 reviews of `a2c72d7`: design F18–F20, security S14 (partly), S20–S23):
+  - Time (design F19, security S14, S22, S23): the partial-operation rule is now per position for any time value:
+    refused in divisors, domain-checked arguments, bounds, indices and mint quantities; allowed in pay/accept amounts and
+    `BigMap` int values only under an outermost `max(0, …)`; the `std/time` helpers are sources, not exemptions; the
+    Dutch auction and `rate / elapsedSince(t)` cases listed; `after`/`before` on the current window is an error; the
+    Java time analysis is per component and includes control dependence; J6 restated.
+  - Batched actions with `BigMap` state (design F18): the D10 row and the M3 example are dropped; the processor refuses
+    the combination and `.jsc` 2 reports it.
+  - Funds parameter for payable asset-aware methods and contract-level combinations at `.jsc` positions (design F20).
+  - Libraries (security S20, S21): certification adds the catalogue of known JVM/on-chain differences and
+    per-function JVM-vs-UPLC vectors, and states where it stops; classes compiled from certified sources carry their
+    source hash, checked at load downstream.
+  - Also the Codex round-3 review of `a2c72d7` (C18–C22; partial C1, C3, C6, C13, C15): current-window thresholds are
+    errors, with the inverted-endpoint example (C18); no helper exemption for divisors, indices, bounds or mint
+    quantities (C19); `accept` required per method with `Funds`, ADA-only payable methods keep no `Funds` (C20, C3,
+    C13); the budget report reports measured scenarios, not worst cases (C21, J19); the `map` helper's reason corrected
+    (C22); native `find` in the certification catalogue (C15, C1); `PlutusData` ledger fields inaccessible, records vs
+    sums (C6).
