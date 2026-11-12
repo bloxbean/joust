@@ -278,7 +278,7 @@ class JscV2M1cGateTest {
     }
 
     /** The outcome of one call on one implementation: its JVM result as data, its stored datum sizes, its execution units. */
-    record Run(String result, int inBytes, int outBytes, long cpu, long mem, StateHarness.Verdict verdict) {}
+    record Run(String result, int inBytes, int outBytes, long cpu, long mem, StateHarness.Verdict verdict, TxModel tx) {}
 
     /** A state's size as stored on chain (review F9): canonical CBOR, its MerkleMaps as their roots (no reads or writes). */
     static int bytes(Object state) {
@@ -319,7 +319,7 @@ class JscV2M1cGateTest {
                 paid.append("| ");
             }
             return new Run(StateHarness.data(b.plan().state()) + " / " + paid, bytes(before), bytes(b.plan().state()),
-                    cpu(v), mem(v), v);
+                    cpu(v), mem(v), v, b.tx());
         }
         Object r = ms.run(() -> {
             try {
@@ -377,7 +377,7 @@ class JscV2M1cGateTest {
             default -> throw new IllegalArgumentException(c.kind());
         }
         var v = h.evaluate(tx);
-        return new Run(result, before == null ? 0 : bytes(before), stored == null ? 0 : bytes(stored), cpu(v), mem(v), v);
+        return new Run(result, before == null ? 0 : bytes(before), stored == null ? 0 : bytes(stored), cpu(v), mem(v), v, tx);
     }
 
     static long cpu(StateHarness.Verdict v) {

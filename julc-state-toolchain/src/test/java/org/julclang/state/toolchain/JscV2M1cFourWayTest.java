@@ -65,6 +65,7 @@ class JscV2M1cFourWayTest {
                 + f.refusals + " refusals, " + f.validatorRuns + " validator runs" + (f.batchRuns > 0 ? ", " + f.batchRuns + " through a batch" : "")
                 + (f.hasMaps() ? ", at most " + f.rounds + " read rounds" : "") + "); mutants rejected: " + f.mutantsRejected
                 + ", attacks rejected: " + f.attacksRejected + ", modifier refusals: " + f.modifierRefusals);
+        System.out.println("[M1c four-way] modifier attacks skipped so far, by reason (review F13): " + org.julclang.state.testkit.Attacks.modifierSkips());
         assertTrue(f.refusals > 0 && f.refusals < f.calls, "accepted and refused calls");
         assertTrue(f.mutantsRejected > 0 && f.attacksRejected > 0, "mutation and attack coverage");
         assertEquals(f.name.equals("Escrow") ? 0 : 1, Math.min(1, f.modifierRefusals), "every modifier site has a refused vector");
