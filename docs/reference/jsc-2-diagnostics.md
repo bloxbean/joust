@@ -65,6 +65,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0145 | error | invisible format character U+…: .jsc files may not hold bidirectional controls or other format characters, even in comments and strings, so that the text reads as it compiles | Lexer |
 | JSC0146 | error | ' … ' (U+…) is not an ASCII letter (or digit): names in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike | Lexer |
 | JSC0147 | error | U+… breaks a line for some readers but not for .jsc: end lines with LF (or CRLF), so that a comment cannot hide the code after it | Lexer |
+| JSC0148 | error | control character U+…: .jsc files hold no control characters but TAB and line ends (LF or CRLF), even in comments and strings, so that the text reads as it compiles | Lexer |
 
 ## Names and declarations (ADR-0018 D3, J10)
 

@@ -1,6 +1,8 @@
 package org.julclang.state.dsl.v2;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -87,15 +89,20 @@ sealed interface Ty {
 
     /** Whether a type holds a BigMap anywhere (it then cannot be compared, bound, captured or passed: D7). */
     static boolean hasBigMap(Ty t, Function<String, List<Ty>> components) {
+        return hasBigMap(t, components, new HashSet<>());
+    }
+
+    // {@code seen}: the named types already searched. The checker refuses type cycles (C8); these walks end on one anyway.
+    private static boolean hasBigMap(Ty t, Function<String, List<Ty>> components, Set<String> seen) {
         return switch (t) {
             case BigMapT b -> true;
             case Prim p -> false;
-            case ListT l -> hasBigMap(l.elem(), components);
-            case OptT o -> hasBigMap(o.elem(), components);
-            case MapT m -> hasBigMap(m.val(), components);
+            case ListT l -> hasBigMap(l.elem(), components, seen);
+            case OptT o -> hasBigMap(o.elem(), components, seen);
+            case MapT m -> hasBigMap(m.val(), components, seen);
             // The state too (security S4): a value of the state's type holds its BigMaps.
-            case Rec r -> components.apply(r.name()).stream().anyMatch(f -> hasBigMap(f, components));
-            case EnumT e -> components.apply(e.name()).stream().anyMatch(f -> hasBigMap(f, components));
+            case Rec r -> seen.add(r.name()) && components.apply(r.name()).stream().anyMatch(f -> hasBigMap(f, components, seen));
+            case EnumT e -> seen.add(e.name()) && components.apply(e.name()).stream().anyMatch(f -> hasBigMap(f, components, seen));
         };
     }
 
@@ -105,12 +112,16 @@ sealed interface Ty {
      * types of a record, or of every variant of an enum.
      */
     static boolean needsCheck(Ty t, Function<String, List<Ty>> components) {
+        return needsCheck(t, components, new HashSet<>());
+    }
+
+    private static boolean needsCheck(Ty t, Function<String, List<Ty>> components, Set<String> seen) {
         return switch (t) {
             case Prim p -> p.equals(KEY) || p.equals(HASH);
-            case ListT l -> needsCheck(l.elem(), components);
-            case OptT o -> needsCheck(o.elem(), components);
-            case Rec r -> components.apply(r.name()).stream().anyMatch(f -> needsCheck(f, components));
-            case EnumT e -> components.apply(e.name()).stream().anyMatch(f -> needsCheck(f, components));
+            case ListT l -> needsCheck(l.elem(), components, seen);
+            case OptT o -> needsCheck(o.elem(), components, seen);
+            case Rec r -> seen.add(r.name()) && components.apply(r.name()).stream().anyMatch(f -> needsCheck(f, components, seen));
+            case EnumT e -> seen.add(e.name()) && components.apply(e.name()).stream().anyMatch(f -> needsCheck(f, components, seen));
             case MapT m -> true;
             case BigMapT b -> false;
         };
