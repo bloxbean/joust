@@ -351,7 +351,8 @@ public final class Migrate {
             for (Param p : m.params()) {
                 String n = p.name();
                 if (!init && fields.containsKey(n) || clientLocals.contains(n)) {
-                    String renamed = fresh("new" + Character.toUpperCase(n.charAt(0)) + n.substring(1));
+                    String base = "new" + Character.toUpperCase(n.charAt(0)) + n.substring(1);
+                    String renamed = !taken.contains(base) && chosen.add(base) ? base : fresh(base);
                     notes.add(new Note(p.pos().line(), p.pos().col(), "the parameter " + n + " of " + m.name() + " is renamed " + renamed
                             + (fields.containsKey(n) ? ": in .jsc 2 a name never hides a state field" : ": the generated client uses '" + n + "' itself")
                             + "; the JavaScript client's argument is now " + renamed));

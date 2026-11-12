@@ -93,6 +93,32 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     contracts: Object.fromEntries(r.contracts.map((c) => [`${c.packageName}.${c.name}`, { scriptHash: c.scriptHash }])),
     ...(validators.length ? { validators: Object.fromEntries(validators.map((v) => [`${v.package}.${v.name}`, { purpose: v.purpose, scriptHash: v.scriptHash }])) } : {}),
   }, null, 2) + '\n');
+  for (const w of staleDeployments(dir, r.contracts)) log(w);
   log(`built ${r.contracts.length} contract(s) into ${relative(root, dir)} in ${Date.now() - t} ms`);
   return { ok: true, contracts: r.contracts, validators, diagnostics: r.diagnostics };
+}
+
+/**
+ * ADR-0018 D16: a recorded deployment (deployments.<network>.json) whose script this build no longer produces (a
+ * migrated .jsc file, a changed contract) is a warning: instances deployed earlier stay on the old script.
+ */
+export function staleDeployments(dir, contracts) {
+  const out = [];
+  const built = new Map(contracts.filter((c) => c.scriptHash).map((c) => [`${c.packageName}.${c.name}`, c.scriptHash]));
+  const files = existsSync(dir) ? readdirSync(dir).filter((f) => /^deployments\..+\.json$/.test(f)).sort() : [];
+  for (const f of files) {
+    let recorded;
+    try {
+      recorded = JSON.parse(readFileSync(join(dir, f), 'utf8')).contracts ?? {};
+    } catch {
+      continue;
+    }
+    for (const [title, d] of Object.entries(recorded)) {
+      const now = built.get(title);
+      if (!now || !d?.policy || d.params !== undefined || d.policy === now) continue;
+      out.push(`warning: ${f} records ${title} at script ${d.policy}, which this build does not produce (it builds ${now}):`
+        + ' instances deployed earlier stay on that script; joust deploy publishes the new one (ADR-0018 D16)');
+    }
+  }
+  return out;
 }

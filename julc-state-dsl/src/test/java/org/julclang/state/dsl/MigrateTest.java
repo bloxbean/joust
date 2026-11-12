@@ -160,12 +160,12 @@ class MigrateTest {
                 }
                 """, "C.jsc");
         String v2 = r.source();
-        assertTrue(v2.contains("action set(newCount1: Int) {\n    return { ...state, count: newCount1 }"), v2);
+        assertTrue(v2.contains("action set(newCount: Int) {\n    return { ...state, count: newCount }"), v2);
         assertTrue(v2.contains("owner: asKey(#0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c)"), v2);
         assertTrue(v2.contains("require(balance >= 2 ada, \"at least 2 ada\")"), v2);
         assertTrue(v2.contains("// A header comment.\n") && v2.contains("  // Sets the count.\n  action set"), v2);
         assertTrue(v2.contains("contract C(minAda = 2000000)"), v2);
-        assertTrue(r.notes().stream().anyMatch(n -> n.message().contains("renamed newCount1")), r.notes().toString());
+        assertTrue(r.notes().stream().anyMatch(n -> n.message().contains("renamed newCount")), r.notes().toString());
         assertTrue(r.notes().stream().anyMatch(n -> n.message().contains("reverse source order")), r.notes().toString());
     }
 
