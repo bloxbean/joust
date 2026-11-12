@@ -217,11 +217,14 @@ final class FourWay {
 
     // ------------------------------------------------------------------ the legs
 
-    /** The interpreter's outcome, encoded as the runtime encodes a transition's result; "refused" when it fails. */
+    /**
+     * The interpreter's transition alone (no modifiers, semantics §2.6: what the JVM method and the transition program
+     * compute), encoded as the runtime encodes a transition's result; "refused" when it fails.
+     */
     String interpreted(String method, Rec state, List<Object> args, Tx t) {
         Interpreter.Outcome o;
         try {
-            o = interp.call(method, state, args, t);
+            o = interp.transition(method, state, args, t);
         } catch (Interpreter.Refused e) {
             return "refused";
         }
@@ -384,9 +387,10 @@ final class FourWay {
     @SuppressWarnings({"unchecked", "rawtypes"})
     Boolean validator(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate) throws Exception {
         String kind = interp.kind(method);
+        // The transition's outcome builds the transaction; a broken modifier leaves it honest, for the validator to refuse.
         Interpreter.Outcome o;
         try {
-            o = interp.call(method, state, args, t);
+            o = interp.transition(method, state, args, t);
         } catch (Interpreter.Refused e) {
             o = null;
         }
@@ -641,7 +645,7 @@ final class FourWay {
     @SuppressWarnings({"unchecked", "rawtypes"})
     int mutants(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
         String kind = interp.kind(method);
-        var o = interp.call(method, state, args, t);
+        var o = interp.transition(method, state, args, t);
         var redeemerArgs = new ArrayList<Object>();
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
         for (Object a : args) redeemerArgs.add(java(a));
@@ -835,26 +839,34 @@ final class FourWay {
     }
 
     String check(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate) throws Exception {
+        // The interpreters see the keys that sign the transaction the validator evaluates (semantics §2.6: 'only f'). A
+        // method that reads nothing else of the transaction is called without one on the other legs (usesCtx: false).
+        Tx ti = interpreterTx(t, signer);
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
         // The Java interpreter's outcome; a Limit (its stack ran out) propagates and fails the test (semantics §2.4).
         Interpreter.Outcome o = null;
         Interpreter.Refused refused = null;
         try {
-            o = interp.call(method, state, args, t);
+            o = interp.call(method, state, args, ti);
         } catch (Interpreter.Refused e) {
             refused = e;
         }
         String want = refused != null ? "refused" : encode(method, o);
+        lastRefusal = refused == null ? null : refused.refusal();
+        // The JVM method and the transition program compute the transition alone: a broken modifier (§2.6) is the
+        // validator's to refuse, so they are compared with the interpreter's transition, which then succeeds.
+        boolean modifier = refused != null && refused.refusal().startsWith("modifier:");
+        String body = modifier ? interpreted(method, state, args, ti) : want;
         if (o != null) JsLeg.canonical(o.value(), what);
-        assertEquals(want, jvm(method, state, args, t), "JVM vs interpreter: " + what);
-        jsCalls.add(JsLeg.call(method, state, args, t, want, o, refused, what));
+        assertEquals(body, jvm(method, state, args, t), "JVM vs interpreter: " + what);
+        jsCalls.add(JsLeg.call(method, state, args, ti, want, o, refused, what));
         if (reference != null) {
             String ref = javaReference(method, state, args, t);
-            if (!ref.equals(want)) javaDiffs.add(what + ": the Java example " + (ref.equals("refused") ? "refuses" : "accepts") + ", the port "
-                    + (want.equals("refused") ? "refuses" : "accepts") + (ref.startsWith("ok:") && want.startsWith("ok:") ? " (different results)" : ""));
+            if (!ref.equals(body)) javaDiffs.add(what + ": the Java example " + (ref.equals("refused") ? "refuses" : "accepts") + ", the port "
+                    + (body.equals("refused") ? "refuses" : "accepts") + (ref.startsWith("ok:") && body.startsWith("ok:") ? " (different results)" : ""));
         }
         if (!interp.kind(method).equals("view")) {
-            assertEquals(want, transition(method, state, args, t), "transition program vs interpreter: " + what);
+            assertEquals(body, transition(method, state, args, t), "transition program vs interpreter: " + what);
             Boolean accepted = validator(method, state, args, t, signer, candidate);
             if (accepted != null) assertEquals(!want.equals("refused"), accepted, "validator vs interpreter: " + what + " " + lastVerdict);
         }
@@ -863,28 +875,35 @@ final class FourWay {
         return want;
     }
 
+    /** The transaction the interpreters see: {@code t} signed by {@code signer}, or the signer's alone when {@code t} is null. */
+    static Tx interpreterTx(Tx t, byte[] signer) {
+        if (signer == null) return t;
+        return t != null ? t.signedBy(List.of(Bytes.of(signer)))
+                : new Tx(Bytes.of(signer), BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO);
+    }
+
+    /** The class of the last refusal {@link #check} saw (semantics §2.5), or null when it was accepted. */
+    String lastRefusal;
+
     /**
      * A call that breaks one of the method's modifiers ({@code only f}: signed by a stranger who is the caller;
-     * {@code after f}/{@code before f}: a window on the wrong side of, or straddling, the bound), with its outcome stated
-     * (ADR-0018 M1c review S2/F2): the modifiers are checks on the transaction, which the interpreter, the JVM method and
-     * the transition program do not see, so those three accept it and agree; the validator must refuse it. Until M1b
-     * models the modifiers in the interpreter (ADR-0018 D15), this is how they are covered.
+     * {@code after f}/{@code before f}: a window on the wrong side of, or straddling, the bound), on all five legs
+     * (ADR-0018 D10, semantics §2.6; M1c review S2/F2, M1 integration review F1): both interpreters refuse it with the
+     * modifier's class, the JVM method and the transition program compute the transition (they leave the modifiers to
+     * the validator) and agree with the interpreter's transition, and the validator refuses it.
      */
     void modifierRefused(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t) + " signed by " + HEX.formatHex(signer).substring(0, 4);
-        String want = interpreted(method, state, args, t);
-        assertTrue(want.startsWith("ok:"), "the transition accepts it (stated): " + what + " " + want);
-        assertEquals(want, jvm(method, state, args, t), "JVM vs interpreter: " + what);
-        assertEquals(want, transition(method, state, args, t), "transition program vs interpreter: " + what);
-        Boolean accepted = validator(method, state, args, t, signer, null);
-        assertEquals(Boolean.FALSE, accepted, "the validator refuses a broken modifier: " + what + " " + lastVerdict);
+        assertTrue(interpreted(method, state, args, interpreterTx(t, signer)).startsWith("ok:"),
+                "the transition accepts it (stated): " + what);
+        assertEquals("refused", check(method, state, args, t, signer), what);
+        assertTrue(lastRefusal.startsWith("modifier:"), "refused by the modifier: " + what + " " + lastRefusal);
         modifierRefusals++;
-        calls++;
     }
 
-    /** The interpreter's next state of a successful call (to chain calls). */
+    /** The interpreter's next state of a successful transition (to chain calls; modifiers are not checked). */
     Rec next(String method, Rec state, List<Object> args, Tx t) {
-        return (Rec) interp.call(method, state, args, t).value();
+        return (Rec) interp.transition(method, state, args, t).value();
     }
 
     static PlutusData unit() {

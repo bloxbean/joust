@@ -30,11 +30,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * attack suite. Batched actions run through a batch (an intent applied by the batcher), and through a direct call too
  * unless they are {@code batched only}.
  * <p>
- * The interpreter leaves {@code only}, {@code after} and {@code before} modifiers to the validator (they are checks on
- * the transaction, not the transition; ADR-0018 D15 has M1b model them). So every modifier site also gets vectors that
- * break it with their outcome stated ({@code FourWay.modifierRefused}, review S2/F2): the interpreter, the JVM and the
- * transition program accept and agree, and the validator refuses. The attack suite adds the same per method, read from
- * the description (a stranger who signs as the caller, windows on the wrong side of the bound).
+ * Both interpreters model the {@code only}, {@code after} and {@code before} modifiers (semantics §2.6; ADR-0018 D10
+ * r14, #76 review F1). So every modifier site also gets vectors that break it ({@code FourWay.modifierRefused}, review
+ * S2/F2), on all five legs: both interpreters refuse with the modifier's class, the JVM and the transition program
+ * compute the transition and agree with the interpreter's, and the validator refuses. The attack suite adds the same per
+ * method, read from the description (a stranger who signs as the caller, windows on the wrong side of the bound).
  * <p>
  * The fifth leg (M1b, D15), the JavaScript reference interpreter over the IR export, runs last over every call
  * {@code check} recorded ({@link #fiveWay_theJavaScriptInterpreterAgrees}).

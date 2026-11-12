@@ -204,8 +204,8 @@ test('§3.8 BigMaps: absence vs empty bytes, 0 removes, and the 8,192-byte bound
   assert.deepEqual(toJson(written.fields[2]), { bigmap: [[{ bytes: '6b' }, { bytes: '' }]] }, 'present and empty');
   const stored = new Rec('State', [owner, MapV.EMPTY, BigMapV.of(written.fields[2].now), NONE]);
   assert.deepEqual(shelf.call('noteOf', stored, [k], null).value, some(new Uint8Array(0)));
-  assert.throws(() => shelf.call('forget', s, [k], null), Refused, 'no such note');
-  assert.equal(shelf.call('forget', stored, [k], null).value.fields[2].now.size, 0);
+  assert.throws(() => shelf.call('forget', s, [k], { ...TX, caller: owner }), Refused, 'no such note');
+  assert.equal(shelf.call('forget', stored, [k], { ...TX, caller: owner }).value.fields[2].now.size, 0);
   // Ledger: a transfer of everything sets the sender's balance to 0, which removes it.
   const ledger = fixture('Ledger');
   const ann = fromHex('a1'.repeat(28)), ben = fromHex('b1'.repeat(28));
@@ -244,7 +244,7 @@ test('§2.3 pay evaluates its recipient, then its amount; skips 0; refuses a neg
     [{ to: ann, lovelace: 5_000_000n }, { to: owner, lovelace: 5_000_001n }]);
   // Modifiers are the validator's: Counter2's reset is `only owner`, and the call itself does not check it.
   const counter = fixture('Counter2');
-  assert.deepEqual(counter.call('reset', new Rec('State', [7n, owner]), [], null).value.fields, [0n, owner]);
+  assert.deepEqual(counter.call('reset', new Rec('State', [7n, owner]), [], { ...TX, caller: owner }).value.fields, [0n, owner]);
 });
 
 // ------------------------------------------------------------------ §3.9 fns
@@ -528,4 +528,58 @@ test('every exported example loads: the M1c ports (Pool with batched), Branches 
   const names = readdirSync(dir).filter((f) => f.endsWith('.ir.json')).map((f) => f.replace('.ir.json', ''));
   for (const c of ['Vault', 'Escrow', 'Crowdfund', 'Token', 'Pool', 'Branches']) assert.ok(names.includes(c), c);
   for (const name of names) assert.doesNotThrow(() => fixture(name), name);
+});
+
+// ------------------------------------------------------------------ §2.6 modifiers (M1 integration, review F1)
+
+test('§2.6 only, after and before refuse a call whose transaction breaks them, in source order; transition() skips them', () => {
+  const vault = fixture('Vault');
+  const owner = fromHex('0a'.repeat(28)), ann = fromHex('a1'.repeat(28));
+  const s = new Rec('State', [owner, 1500n, 10_000_000n]);   // unlockAt 1500
+  const tx = (o) => ({ ...TX, balance: 10_000_000n, ...o });
+  const refusal = (f) => { try { f(); } catch (e) { if (e instanceof Refused) return e.refusal; throw e; } return 'accepted'; };
+  // withdraw is 'only owner after unlockAt': signed by the owner, from 1500 on.
+  assert.equal(refusal(() => vault.call('withdraw', s, [1_000_000n], tx({ caller: owner, validFrom: 1500n, validTo: 2000n }))), 'accepted');
+  assert.equal(refusal(() => vault.call('withdraw', s, [1_000_000n], tx({ caller: ann, validFrom: 1500n, validTo: 2000n }))), 'modifier:only owner');
+  // The owner among several signers; the caller's own key is not enough when it is not the owner's.
+  assert.equal(refusal(() => vault.call('withdraw', s, [1_000_000n], tx({ caller: ann, signers: [ann, owner], validFrom: 1500n, validTo: 2000n }))), 'accepted');
+  assert.equal(refusal(() => vault.call('withdraw', s, [1_000_000n], tx({ caller: owner, validFrom: 1499n, validTo: 2000n }))), 'modifier:after unlockAt');
+  // Source order: 'only owner' is checked before 'after unlockAt', and both before the body's require.
+  assert.equal(refusal(() => vault.call('withdraw', s, [0n], tx({ caller: ann, validFrom: 1000n, validTo: 2000n }))), 'modifier:only owner');
+  assert.match(refusal(() => vault.call('withdraw', s, [0n], tx({ caller: owner, validFrom: 1500n, validTo: 2000n }))), /^require:/);
+  // The transition alone (the JVM method's and the transition program's view) does not see the modifiers.
+  assert.equal(vault.transition('withdraw', s, [1_000_000n], tx({ caller: ann, validFrom: 0n, validTo: 1n })).value.fields[2], 9_000_000n);
+  // before: Escrow-like bounds through a hand-edited copy of Vault (after -> before).
+  const text = readFileSync(new URL('./fixtures/Vault.ir.json', import.meta.url), 'utf8');
+  const before = load(text.replaceAll('"name": "after"', '"name": "before"'));
+  assert.equal(refusal(() => before.call('withdraw', s, [1_000_000n], tx({ caller: owner, validFrom: 0n, validTo: 1500n }))), 'accepted');
+  assert.equal(refusal(() => before.call('withdraw', s, [1_000_000n], tx({ caller: owner, validFrom: 0n, validTo: 1501n }))), 'modifier:before unlockAt');
+  // A modifier needs the transaction: a call without one is a caller's error, not a refusal.
+  assert.throws(() => vault.call('withdraw', s, [1_000_000n], null), (e) => !(e instanceof Refused) && /needs the transaction/.test(e.message));
+});
+
+test('the reader refuses a malformed branches list and a condition that is not a Bool (review F2, S3 on #76)', () => {
+  const text = readFileSync(new URL('./fixtures/Branches.ir.json', import.meta.url), 'utf8');
+  load(text);
+  const edit = (f) => () => { const p = JSON.parse(text); f(p); return load(JSON.stringify(p)); };
+  const firstIf = (p, node) => {
+    let found = null;
+    const walk = (o) => {
+      if (found || !o || typeof o !== 'object') return;
+      if ((node === 'If' && o.stmt === 'If') || (node === 'IfValue' && o.node === 'IfValue')) { found = o; return; }
+      Object.values(o).forEach(walk);
+    };
+    walk(p.methods);
+    return found;
+  };
+  for (const node of ['If', 'IfValue']) {
+    assert.throws(edit((p) => { firstIf(p, node).branches = []; }), /at least one branch/, node);
+    assert.throws(edit((p) => { firstIf(p, node).branches = {}; }), /at least one branch/, node);
+    assert.throws(edit((p) => { firstIf(p, node).branches[0].extra = 1; }), /unknown field "extra"|extra/, node);
+    assert.throws(edit((p) => { delete firstIf(p, node).branches[0].at; }), /at/, node);
+    assert.throws(edit((p) => { const b = firstIf(p, node).branches[0]; firstIf(p, node).cond = b.cond; }), /cond/, node);
+    assert.throws(edit((p) => { firstIf(p, node).branches[0].cond = { node: 'Lit', value: '0', type: 'Int', taint: 0, at: [1, 1] }; }),
+      /branch condition is of type "Int", not Bool/, node);
+  }
+  assert.throws(edit((p) => { firstIf(p, 'IfValue').otherwise = null; }), Error);
 });

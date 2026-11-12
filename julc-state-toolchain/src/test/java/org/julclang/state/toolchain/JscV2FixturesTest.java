@@ -184,14 +184,14 @@ class JscV2FixturesTest {
         Interpreter.Outcome o = null;
         Interpreter.Refused refused = null;
         try {
-            o = in.call(method, state, args, null);
+            o = in.transition(method, state, args, null);   // compared with the transition program (no modifiers, §2.6)
         } catch (Interpreter.Refused e) {
             refused = e;
         }
         String want = refused != null ? "refused" : encoded(o);
         String contract = NAMES.get(in);
         JS_CALLS.computeIfAbsent(contract, k -> new ArrayList<>())
-                .add(JsLeg.call(method, state, args, null, want, o, refused, contract + "." + method + " " + args));
+                .add(JsLeg.transitionCall(method, state, args, null, want, o, refused, contract + "." + method + " " + args));
         return want;
     }
 

@@ -59,6 +59,14 @@ final class JsLeg {
         return new Call(method, call(method, state, args, t), want, refused != null ? refusedForm(refused.refusal()) : form(o), what);
     }
 
+    /** A call of the transition alone (semantics §2.6: no modifiers), recorded from the Java interpreter's {@code transition}. */
+    static Call transitionCall(String method, Rec state, List<Object> args, Tx t, String want, Interpreter.Outcome o,
+                               Interpreter.Refused refused, String what) {
+        Call c = call(method, state, args, t, want, o, refused, what);
+        String json = c.json().substring(0, c.json().length() - 1) + ", \"transition\": true}";
+        return new Call(c.method(), json, c.want(), c.form(), c.what());
+    }
+
     /** Runs every recorded call of {@code f} on the JavaScript interpreter and asserts each agrees; returns the count. */
     static int check(FourWay f) throws IOException, InterruptedException {
         return check(f.name, f.irJson, f.jsCalls, f::encode);
@@ -278,7 +286,8 @@ final class JsLeg {
         var parts = new ArrayList<String>();
         for (Object a : args) parts.add(json(a));
         String tx = t == null ? "null" : "{\"caller\": \"" + HEX.formatHex(t.caller().bytes()) + "\", \"received\": \"" + t.received()
-                + "\", \"balance\": \"" + t.balance() + "\", \"validFrom\": \"" + t.validFrom() + "\", \"validTo\": \"" + t.validTo() + "\"}";
+                + "\", \"balance\": \"" + t.balance() + "\", \"validFrom\": \"" + t.validFrom() + "\", \"validTo\": \"" + t.validTo()
+                + "\", \"signers\": [" + String.join(", ", t.signers().stream().map(k -> "\"" + HEX.formatHex(k.bytes()) + "\"").toList()) + "]}";
         return "{\"method\": \"" + method + "\", \"state\": " + json(state) + ", \"args\": [" + String.join(", ", parts) + "], \"tx\": " + tx + "}";
     }
 }

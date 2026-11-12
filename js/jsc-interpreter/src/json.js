@@ -43,16 +43,20 @@ export function txFromJson(t) {
     balance: BigInt(t.balance),
     validFrom: BigInt(t.validFrom),
     validTo: BigInt(t.validTo),
+    // §2.6: the keys that signed the transaction; the caller alone when the vector does not say.
+    signers: (t.signers ?? [t.caller]).map(fromHex),
   };
 }
 
 /**
- * Runs one call in the JSON form. The answer is { ok: { value, payouts } }, { refused: message, class: "kind:detail" }
+ * Runs one call in the JSON form; with "transition": true, the transition alone (§2.6: without the modifiers, as the
+ * generated Java and the transition program compute it). The answer is { ok: { value, payouts } }, { refused: message, class: "kind:detail" }
  * (semantics §2.5), or { limit: message } when this interpreter could not finish (§2.4: no answer).
  */
 export function runCall(program, call) {
   try {
-    const o = program.call(call.method, call.state == null ? null : fromJson(call.state), call.args.map(fromJson), txFromJson(call.tx));
+    const run = call.transition === true ? program.transition.bind(program) : program.call.bind(program);
+    const o = run(call.method, call.state == null ? null : fromJson(call.state), call.args.map(fromJson), txFromJson(call.tx));
     return {
       ok: {
         value: o.value === null ? null : toJson(o.value),

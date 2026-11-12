@@ -628,7 +628,8 @@ class JscMigrateDifferentialTest {
         for (Object a : c.args()) args.add(a instanceof byte[] b ? Bytes.of(b) : a);
         Interpreter.Outcome o;
         try {
-            o = in.call(c.method(), init ? null : new Rec("State", st), args,
+            // J13 compares transitions: the v1 JVM method leaves its modifiers to the validator, as the transition does (§2.6).
+            o = in.transition(c.method(), init ? null : new Rec("State", st), args,
                     view ? null : new Tx(Bytes.of(c.caller()), c.received(), c.balance(), BigInteger.ZERO, BigInteger.ZERO));
         } catch (RuntimeException e) {
             return "refused";

@@ -167,8 +167,25 @@ public final class Interpreter {
         }
     }
 
-    /** The transaction a call sees: {@code caller}, {@code received}, {@code balance} and the validity window. */
-    public record Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo) {}
+    /**
+     * The transaction a call sees: {@code caller}, {@code received}, {@code balance}, the validity window, and the keys
+     * that signed it ({@code signers}, the caller among them), which the {@code only} modifier reads (semantics §2.6).
+     */
+    public record Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers) {
+        public Tx {
+            signers = List.copyOf(signers);
+        }
+
+        /** Signed by the caller alone. */
+        public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo) {
+            this(caller, received, balance, validFrom, validTo, List.of(caller));
+        }
+
+        /** The same transaction, signed by {@code keys}. */
+        public Tx signedBy(List<Bytes> keys) {
+            return new Tx(caller, received, balance, validFrom, validTo, keys);
+        }
+    }
 
     /** A payout, in source order. */
     public record Payment(Bytes to, BigInteger lovelace) {}
@@ -178,7 +195,8 @@ public final class Interpreter {
 
     /**
      * The call fails (a require, a checked input, a binding's domain, a division by zero, a negative payout). Its class
-     * (semantics §2.5, review S4, S6) says which rule: {@code require} with the require's position and message, {@code input} with the
+     * (semantics §2.5, review S4, S6) says which rule: {@code modifier} with the modifier ({@code only owner}, §2.6),
+     * {@code require} with the require's position and message, {@code input} with the
      * parameter's name, or {@code domain} with the operation ({@code /}, {@code slice}, {@code Map.set}, …). The
      * differential tests compare the class with the JavaScript interpreter's.
      */
@@ -328,13 +346,57 @@ public final class Interpreter {
 
     /**
      * Calls a method: {@code state} is the input state (null for init), {@code args} the arguments in order, {@code tx}
-     * the transaction (null for a view).
+     * the transaction (null for a view). The method's modifiers are checked first (semantics §2.6): a call whose
+     * transaction breaks {@code only f}, {@code after f} or {@code before f} is refused, as the validator refuses it.
      */
     public Outcome call(String name, Rec state, List<Object> args, Tx tx) {
+        return call(name, state, args, tx, true);
+    }
+
+    /**
+     * The transition alone: {@link #call} without the modifiers, which is what the generated Java method and the UPLC
+     * transition program compute (they leave the modifiers to the validator, §2.6).
+     */
+    public Outcome transition(String name, Rec state, List<Object> args, Tx tx) {
+        return call(name, state, args, tx, false);
+    }
+
+    private Outcome call(String name, Rec state, List<Object> args, Tx tx, boolean modifiers) {
         Ir.Method m = method(name);
         if (args.size() != m.params().size()) throw new IllegalArgumentException(name + " takes " + m.params().size() + " arguments");
         if ((m.kind() == Ir.Kind.INIT) != (state == null)) throw new IllegalArgumentException("an init has no input state; others do");
-        return deep(() -> run(m, state, args, tx));
+        return deep(() -> {
+            if (modifiers) modifiers(m, state, tx);
+            return run(m, state, args, tx);
+        });
+    }
+
+    /**
+     * Semantics §2.6: the transaction preconditions, in source order. {@code only f}: the key in state field {@code f}
+     * is among the transaction's signers. {@code after f}: the window starts at or after the time in {@code f}.
+     * {@code before f}: it ends at or before it. {@code payable}, {@code open} and {@code batched} are not refusals.
+     */
+    private void modifiers(Ir.Method m, Rec state, Tx tx) {
+        for (Ir.Mod mod : m.mods()) {
+            String w = mod.name();
+            if (!w.equals("only") && !w.equals("after") && !w.equals("before")) continue;
+            if (mod.field() == null) continue;   // 'batched only' is not 'only f'
+            if (tx == null) throw new IllegalArgumentException(m.name() + " has '" + w + " " + mod.field() + "': its call needs the transaction");
+            Object v = field(state, mod.field());
+            boolean holds = switch (w) {
+                case "only" -> tx.signers().contains((Bytes) v);
+                case "after" -> tx.validFrom().compareTo((BigInteger) v) >= 0;
+                default -> tx.validTo().compareTo((BigInteger) v) <= 0;
+            };
+            if (!holds) {
+                String what = switch (w) {
+                    case "only" -> "the transaction is not signed by " + mod.field();
+                    case "after" -> "the validity window starts before " + mod.field();
+                    default -> "the validity window ends after " + mod.field();
+                };
+                throw new Refused(what, "modifier", w + " " + mod.field());
+            }
+        }
     }
 
     /** The stack calls run on (semantics §2.4): deep enough for the recursion a transaction's budget allows. */

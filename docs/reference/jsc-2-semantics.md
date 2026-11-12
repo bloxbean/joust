@@ -1,6 +1,7 @@
 # `.jsc` 2 semantics
 
-What a checked `.jsc` 2 program evaluates to (ADR-0018 D15), for the constructs of milestones M0 and M1a. It is
+What a checked `.jsc` 2 program evaluates to (ADR-0018 D15), for the constructs of milestone M1 (M0, M1a, and M1c's
+modifiers and batched actions). It is
 written so that an interpreter can be built from it alone. The JavaScript reference interpreter
 (`js/jsc-interpreter`) is built from this document, and its tests hold the hand-written vectors cited here
 (`test/semantics.test.js`). Five implementations must agree on every outcome defined here (J3): the JavaScript
@@ -14,7 +15,9 @@ except where a rule is what makes an evaluation well defined. Every node name be
 The encodings of values as Plutus data (D5) are in the ADR and in the ABI manifest. They are not part of evaluation.
 
 **Not yet covered:** `Value`, `Address`, `Credential`, `send`, `mint`, `deposit`, `accept`, `emit`, `params` and
-other contracts (M2), owned and keyed objects and batches (M3), libraries (M4).
+other contracts (M2), owned and keyed objects (M3), libraries (M4). A `batched` action (M1c) is covered: its transition
+is an ordinary action's, the same in a batch and in a direct call; batch execution itself (the batcher's order, the
+fold over intents, refunds) is the validator's and the batcher's, not a call's.
 
 ## 1. Values
 
@@ -56,8 +59,8 @@ captured (D7, a static rule), so its value is visible only through the operation
 ## 2. Calls
 
 A call evaluates one method. Its inputs are the method's name, the input state σ (a `State` record, absent for an
-`init`), the arguments in parameter order, and the transaction context τ. τ is absent for a view and for a method whose
-IR says `usesCtx: false`, which then never reads it. τ holds five values:
+`init`), the arguments in parameter order, and the transaction context τ. τ is absent for a view, and for a method whose
+IR says `usesCtx: false` and that has no `only f` modifier, which then never reads it. τ holds six values:
 
 | Name | Type | Meaning |
 |---|---|---|
@@ -66,6 +69,7 @@ IR says `usesCtx: false`, which then never reads it. τ holds five values:
 | `balance` | `Int` | the lovelace the call may allocate (for a destroy: everything the instance holds) |
 | `validFrom` | `Int` | the start of the transaction's validity window (POSIX ms) |
 | `validTo` | `Int` | its end |
+| `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, §2.6; the caller alone when a vector does not say) |
 
 **The outcome** is one of the following:
 
@@ -86,18 +90,19 @@ finish a call (its stack runs out) gives **no answer**, which is not a refusal (
 **Steps of a call:**
 
 1. Bind each parameter to its argument.
-2. **Checked inputs** (§4). For each parameter listed in the method's `checked` list, in order, the argument must be
+2. **Modifiers** (§2.6), in source order: a broken one fails the call.
+3. **Checked inputs** (§4). For each parameter listed in the method's `checked` list, in order, the argument must be
    well formed at the parameter's type; otherwise the call fails. This happens before any statement runs.
-3. Run the body's statements in order (§2.2).
-4. Evaluate the body's result expression, if any: the next state (init, action) or the value (view). A destroy has no
+4. Run the body's statements in order (§2.2).
+5. Evaluate the body's result expression, if any: the next state (init, action) or the value (view). A destroy has no
    result.
-5. The outcome is that value with the payouts collected in step 3, in the order they were made.
+6. The outcome is that value with the payouts collected in step 4, in the order they were made.
 
-**Transaction-level rules are not evaluated by a call.** Modifiers, `payable`, `open`, `only f` (the transaction is
-signed by the key in state field `f`), `after f` and `before f` (the window against state field `f`), are checks the
-generated validator makes. So is everything about the payouts as a whole: whether they total more than τ.`balance`, what
-a destroy leaves over, and the ledger's minimum per output. The method's evaluation does not see them, and a call's
-outcome does not depend on them. The validator leg checks them with the rest of the transaction.
+**The modifiers are preconditions of a call** (§2.6): `only f`, `after f` and `before f` are evaluated against τ before
+the body. `payable`, `open` and `batched` refuse nothing in a call. **Other transaction-level rules are not evaluated by
+a call:** everything about the payouts as a whole (whether they total more than τ.`balance`, what a destroy leaves
+over, the ledger's minimum per output) and a batch's own rules. The validator leg checks them with the rest of the
+transaction.
 
 **Names.** Records, enum variants and the state (`State`) share one namespace in a file (D5, M1a decision #3), so a
 record or variant value is identified by its name alone, as both interpreters and the vectors' `{"rec": name}` do.
@@ -181,11 +186,30 @@ A refusal's class names the rule that refused the call, as `kind:detail`:
 |---|---|
 | `require:<line>:<col>:<message>` | a `require` did not hold; the detail is its position in the `.jsc` file (the IR's `at`) and its message, as written, so two `require`s with one message are told apart (review S6) |
 | `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name |
+| `modifier:<word> <field>` | a modifier did not hold (§2.6): `only owner`, `after deadline`, `before deadline` |
 | `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; or `pay` (a negative amount) |
 
 The two interpreters must give the same class for every refused call (review S4), so a vector meant to reach one rule
 shows that both interpreters reach that rule. With several failures in one call, the first in evaluation order (§2.1)
 decides.
+
+### 2.6 Modifiers
+
+A method's modifiers (D10) are checked in source order, after binding the arguments and before the checked inputs.
+Each reads a state field `f` of σ and τ:
+
+| Modifier | Holds when |
+|---|---|
+| `only f` | the key in `f` is one of τ.`signers` (compared by content) |
+| `after f` | τ.`validFrom` ≥ the time in `f` |
+| `before f` | τ.`validTo` ≤ the time in `f` |
+
+The first that does not hold refuses the call with the class `modifier:<word> <field>`; no statement runs. The
+validator makes the same checks on the transaction (an unbounded window end never passes). The generated Java method
+and the UPLC transition program compute the *transition* alone: every step but step 2, since they leave the
+modifiers to the validator. So on a call that breaks a modifier, both interpreters refuse, the validator refuses, and the
+JVM and transition legs agree with the interpreters' transition (`Interpreter.transition`, the JS `program.transition`).
+A call of a method with a modifier needs τ; without one it is the caller's error, not a refusal.
 
 ## 3. Expressions
 

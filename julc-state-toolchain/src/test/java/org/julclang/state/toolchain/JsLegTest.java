@@ -51,8 +51,10 @@ class JsLegTest {
         Rec s = new Rec("State", List.of(key(28, 0x0a), MapV.EMPTY, BigMapV.of(Map.of()), Opt.NONE));
         for (Bytes k : List.of(key(64, 0x01), key(0, 0), key(3, 0xff), key(1, 0x80), key(28, 0x02))) {
             List<Object> args = List.of(k, item("t"));
-            var o = shelf.interp.call("put", s, args, null);
-            CALLS.add(JsLeg.call("put", s, args, null, shelf.encode("put", o), o, null, "Shelf.put " + k));
+            // put is 'only owner': the owner signs (semantics §2.6).
+            var tx = new org.julclang.state.dsl.v2.Interpreter.Tx(key(28, 0x0a), java.math.BigInteger.ZERO, java.math.BigInteger.ZERO, java.math.BigInteger.ZERO, java.math.BigInteger.ZERO);
+            var o = shelf.interp.call("put", s, args, tx);
+            CALLS.add(JsLeg.call("put", s, args, tx, shelf.encode("put", o), o, null, "Shelf.put " + k));
             s = (Rec) o.value();
         }
         assertEquals(List.of(0, 1, 3, 28, 64), ((MapV) s.fields().get(1)).keys().stream().map(b -> b.bytes().length).toList());

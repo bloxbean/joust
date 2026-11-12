@@ -87,14 +87,25 @@ class Program {
 
   /**
    * Calls a method (§2): `state` is the input state (null for an init), `args` the arguments in order, `tx` the
-   * transaction context { caller, received, balance, validFrom, validTo } (null where the method does not read it).
+   * transaction context { caller, received, balance, validFrom, validTo, signers } (null where the method neither
+   * reads it nor has a modifier that does; `signers` defaults to [caller]). The modifiers are checked first (§2.6).
    * Returns { value, payouts } or throws Refused.
    */
   call(name, state, args, tx) {
+    return this.#call(name, state, args, tx, true);
+  }
+
+  /** The transition alone (§2.6): a call without its modifiers, as the generated Java and the transition program compute it. */
+  transition(name, state, args, tx) {
+    return this.#call(name, state, args, tx, false);
+  }
+
+  #call(name, state, args, tx, modifiers) {
     const m = this.#method(name);
     if (args.length !== m.params.length) throw new Error(`${name} takes ${m.params.length} arguments`);
     if ((m.kind === 'init') !== (state === null || state === undefined)) throw new Error('an init has no input state; others do');
     return depthGuard(() => {
+      if (modifiers) this.#modifiers(m, state, tx);
       const frame = { state, tx, payouts: [] };
       let env = null;
       m.params.forEach((l, i) => (env = bind(env, l, args[i])));
@@ -107,6 +118,27 @@ class Program {
       const value = m.body.result === null ? null : this.#eval(m.body.result, env, frame);
       return { value, payouts: frame.payouts };
     });
+  }
+
+  /**
+   * §2.6: the transaction preconditions, in source order. `only f`: the key in state field f is among the signers;
+   * `after f`: the window starts at or after f; `before f`: it ends at or before f. A broken one refuses the call with
+   * the class modifier:<word> <field>.
+   */
+  #modifiers(m, state, tx) {
+    for (const mod of m.mods) {
+      const w = mod.name;
+      if ((w !== 'only' && w !== 'after' && w !== 'before') || mod.field === null) continue;
+      if (!tx) throw new Error(`${m.name} has '${w} ${mod.field}': its call needs the transaction`);
+      const v = this.#field(state, mod.field);
+      const signers = tx.signers ?? [tx.caller];
+      const holds = w === 'only' ? signers.some((k) => bytesEqual(k, v)) : w === 'after' ? tx.validFrom >= v : tx.validTo <= v;
+      if (!holds) {
+        const what = w === 'only' ? `the transaction is not signed by ${mod.field}`
+          : w === 'after' ? `the validity window starts before ${mod.field}` : `the validity window ends after ${mod.field}`;
+        throw new Refused(what, 'modifier', `${w} ${mod.field}`);
+      }
+    }
   }
 
   /** Calls a fn directly (§3.9). */
@@ -161,7 +193,7 @@ class Program {
 
   /** The arm of the first branch whose condition holds, in order, else `otherwise` (null for a statement without one). */
   #branch(branches, otherwise, env, f) {
-    for (const b of branches) if (this.#eval(b.cond, env, f)) return b.then;
+    for (const b of branches) if (this.#eval(b.cond, env, f) === true) return b.then;
     return otherwise;
   }
 
@@ -208,16 +240,16 @@ class Program {
         return Object.freeze(items);
       }
       case 'Neg': return -this.#eval(e.operand, env, f);
-      case 'Not': return !this.#eval(e.operand, env, f);
+      case 'Not': return this.#eval(e.operand, env, f) !== true;
       case 'Arith': return arith(e.op, this.#eval(e.left, env, f), this.#eval(e.right, env, f));
       case 'Compare': return compare(e.op, this.#eval(e.left, env, f), this.#eval(e.right, env, f));
       case 'Equals': return this.same(this.#eval(e.left, env, f), this.#eval(e.right, env, f), e.operand) !== e.negate;
       case 'Logic':
         // §2.1: the right operand only when the left does not decide.
-        if (e.op === '&&') return this.#eval(e.left, env, f) ? this.#eval(e.right, env, f) : false;
-        if (e.op === '||') return this.#eval(e.left, env, f) ? true : this.#eval(e.right, env, f);
+        if (e.op === '&&') return this.#eval(e.left, env, f) === true ? this.#eval(e.right, env, f) : false;
+        if (e.op === '||') return this.#eval(e.left, env, f) === true ? true : this.#eval(e.right, env, f);
         throw new Error(`unknown operator ${e.op}`);
-      case 'Cond': return this.#eval(e.cond, env, f) ? this.#eval(e.then, env, f) : this.#eval(e.otherwise, env, f);
+      case 'Cond': return this.#eval(e.cond, env, f) === true ? this.#eval(e.then, env, f) : this.#eval(e.otherwise, env, f);
       case 'IfValue': return this.#block(this.#branch(e.branches, e.otherwise, env, f), env, f);
       case 'BlockValue': return this.#block(e.block, env, f);
       case 'Coalesce': {
