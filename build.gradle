@@ -66,11 +66,6 @@ subprojects {
         }
     }
 
-    // -PjoustPortableAll: generate <Name>Portable for every example contract (checks PortableGenerator; ADR-0013 D4).
-    if (rootProject.hasProperty('joustPortableAll') && path.startsWith(':examples:')) {
-        tasks.withType(JavaCompile).configureEach { options.compilerArgs += ['-Ajoust.portable=true'] }
-    }
-
     group = rootProject.group
     version = rootProject.version
 

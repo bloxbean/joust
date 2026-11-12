@@ -22,8 +22,3 @@ application {
 tasks.named('run', JavaExec) {
     jvmArgs '--enable-native-access=ALL-UNNAMED'
 }
-
-// The portable transitions (ADR-0013 D4, experimental), compiled to Wasm by examples/dapp.
-tasks.named('compileJava', JavaCompile) {
-    options.compilerArgs += ['-Ajoust.portable=true']
-}

@@ -176,8 +176,8 @@ public final class DappServer {
     }
 
     /**
-     * The page's chain API, forwarded to Yaci Store (its browser CORS policy is not configured): reads,
-     * {@code POST /tx/submit} and {@code POST /utils/txs/evaluate}. A public-network page talks to Blockfrost (or its own indexer) directly instead.
+     * The page's chain API, forwarded to Yaci Store (its browser CORS policy is not configured): reads and
+     * {@code POST /tx/submit}. A public-network page talks to Blockfrost (or its own indexer) directly instead.
      */
     static final class ChainProxy implements HttpHandler {
         private static final Set<String> HEADERS = Set.of("content-type");
@@ -196,7 +196,6 @@ public final class DappServer {
                 String query = ex.getRequestURI().getRawQuery();
                 boolean post = ex.getRequestMethod().equals("POST");
                 boolean submit = post && path.equals("/tx/submit");
-                boolean evaluate = post && path.equals("/utils/txs/evaluate");   // budgets for a page-built tx (phase 4)
                 String lower = path.toLowerCase();
                 // POSTs only from this machine's pages (a cross-site form could otherwise spend Yaci Store's CPU), and few.
                 String origin = ex.getRequestHeaders().getFirst("Origin");
@@ -208,13 +207,13 @@ public final class DappServer {
                     ex.sendResponseHeaders(429, -1);
                     return;
                 }
-                if (!(ex.getRequestMethod().equals("GET") || submit || evaluate) || path.contains("..") || lower.contains("%2e")
+                if (!(ex.getRequestMethod().equals("GET") || submit) || path.contains("..") || lower.contains("%2e")
                         || lower.contains("%2f") || lower.contains("%5c")) {
                     ex.sendResponseHeaders(405, -1);
                     return;
                 }
                 var req = HttpRequest.newBuilder(URI.create(base + path + (query == null ? "" : "?" + query))).timeout(Duration.ofSeconds(20));
-                if (submit || evaluate) {
+                if (submit) {
                     byte[] body = ex.getRequestBody().readNBytes(64 * 1024 + 1);   // hex of at most a 16 KB transaction, and some
                     if (body.length > 64 * 1024) {
                         ex.sendResponseHeaders(413, -1);

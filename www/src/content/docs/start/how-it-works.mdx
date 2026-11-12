@@ -56,7 +56,7 @@ In detail, inside the build:
    - It builds the **State IR** (`org.julclang.state.processor.ir`: `ContractIR`, `TransitionIR`, `ViewIR`,
      `ParamIR`), which records the storage, execution and transaction-level strategy of the contract.
    - The generators write `<Name>Validator.java`, `<Name>Client.java` and the description into the contract's
-     package. With `-Ajoust.portable=true` they also write `<Name>Portable` (experimental, for Wasm pages).
+     package.
 
 2. **Round 2: JuLC.** JuLC's annotation processor finds the generated `@MultiValidator` and compiles it to UPLC,
    together with everything it calls: your contract class (JuLC treats `@StateContract` as an alias of its

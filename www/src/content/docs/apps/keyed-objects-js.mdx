@@ -107,8 +107,7 @@ word. Among its rules (ADR-0016 D11):
 - **One keyed call per transaction.** A composition containing a keyed call is refused (`verifyComposed`,
   `runComposed`).
 
-The page also refuses, for now, a keyed call with an `@AuthorizedBy` governor, and keyed calls on a client configured
-with `portable` (the page cannot recompute a keyed step yet, and says so rather than skip it).
+The page also refuses, for now, a keyed call with an `@AuthorizedBy` governor.
 
 ## Retries that survive a reload
 

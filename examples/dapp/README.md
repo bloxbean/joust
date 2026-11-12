@@ -32,25 +32,22 @@ Open http://localhost:8095, pick a **DevKit wallet**, **Connect** and **Top up 1
 To develop the page, run `npm run dev` in `frontend` (http://localhost:5174). It proxies `/api`, `/chain` and `/dev` to
 the server on :8095, which must be running.
 
-## Experimental: the contracts' Java in the page (Wasm)
+## Recomputation in the page (retired)
 
-With GraalVM 25.3 (Web Image) and Binaryen:
+The page checks what it signs against the description and the chain; it does not recompute the next state itself.
+The experimental Wasm build of the contracts' Java (`-Ajoust.portable`, the `:wasm` task) that recomputed calls in the
+page, and its "+1 (no service)" demo, were retired (ADR-0020 §12.3). Pages that prepare calls without a service use
+the runtime engine (`@julclang/joust-runtime`, ADR-0015).
 
-```sh
-./gradlew :examples:dapp:wasm -PgraalvmHome=/path/to/graalvm-25.3     # frontend/public/wasm/joust.js(.wasm), ~1.4 MB
-(cd examples/dapp/frontend && npm run build) && ./gradlew :examples:dapp:run
-```
+What the page no longer checks before signing:
 
-The page then loads the contracts' own Java methods, compiled to Wasm (`CounterPortable`, `BankPortable`, generated
-with `-Ajoust.portable=true`):
-
-- **Every call is recomputed in the page before signing.** The review says so, and a different next state is refused.
-- **"+1 (no service)"** builds a counter increment entirely in the page. The next state comes from Wasm, the budgets
-  from the chain API, and the transaction is verified, signed and submitted with no prepare service.
-
-`WasmParityTest` checks the Wasm results byte for byte against the JVM (136 vectors). `DappDevnetTest` runs the Wasm
-steps on DevKit when the image is built. Both skip themselves otherwise. Chrome 137+ is needed (WebAssembly exnref);
-Node 22 needs `--experimental-wasm-exnref`.
+- **The next state.** The validator binds it exactly, so a service that changes it gets a transaction the page accepts
+  and the wallet signs, and that the validator rejects at submission. `is_valid` is checked, so no collateral is
+  taken. `e2e/run.mjs` keeps this case as an **expected failure at submission** ("a changed next state"): it checks
+  that the transaction was signed, that the chain still holds the old state, and that the wallet's UTxOs are unchanged.
+- **The exact amount paid to each payee, and that no payout tagged with the target goes to anyone the contract does
+  not pay.** The validator binds only a lower bound per payee, so these rest on the verifier's bound on the wallet's
+  net outflow. The follow-up is a step-independent outflow bound (ADR-0020 C7).
 
 ## Pieces
 
@@ -60,9 +57,6 @@ Node 22 needs `--experimental-wasm-exnref`.
 | `frontend/src/main.js` | The page |
 | `frontend/src/tamper.js` | What a malicious service could do (ten variants) |
 | `frontend/e2e/run.mjs` | The page's flows in Node (CSL nodejs), run by `DappDevnetTest` |
-| `frontend/src/serverless.js` | Experimental: the Wasm loader, and a call built in the page with no service |
-| `src/wasm/java/.../JoustWasm.java` | Experimental: the Web Image entry point (`globalThis.joustWasm.step`) |
-| `frontend/e2e/parity.mjs` | Experimental: runs `WasmParityTest`'s vectors through the image |
 | `../../js/state-client` | The client library: codec, verifier, CIP-30 flow, dev wallet, `joust-gen` |
 
 ## Production notes

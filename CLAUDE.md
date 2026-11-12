@@ -119,10 +119,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   JS recognises Bool/Optional by shape. Calls with `needsService` are generated too since ADR-0015 M4 (the engine prepares them; I5 covers them). The page verifier
   allows outputs to other parties but requires the tx to balance and bounds the wallet's net outflow. Vite: no
   `vite-plugin-top-level-await` (swc breaks); target es2022. DevKit's default-mnemonic accounts may be empty: top up.
-  Phase 4 (serverless Wasm) uses GraalVM Web Image (`/Users/satya/work/java/graalvm-25.3.4.1+1.1`), experimental; no TeaVM.
-- Phase 4: `-Ajoust.portable=true` -> `<Name>Portable` (non-reflective codecs + `step`); `:examples:dapp:wasm
-  -PgraalvmHome=...`. Keep the image classpath lean (julc-stdlib non-transitive: julc-compiler's native-image metadata
-  bloats 1.4 MB to 8.7 MB); no streams/String.join/toString-of-anything in portable code. Web Image exports: a Java
+  The engines' Wasm uses GraalVM Web Image (`/Users/satya/work/java/graalvm-25.3.4.1+1.1`); no TeaVM.
+- Phase 4's `-Ajoust.portable` (`<Name>Portable`, the dApp's `:wasm` image and its "+1 (no service)" demo) is retired
+  (ADR-0020 §12.3): the engine runs the transition programs. `@julclang/state-client` refuses a client given `portable`
+  (fails closed; `null`/`undefined` pass). Web Image exports: a Java
   `Function` passed into a `@JS` snippet (julc-wasm's pattern); `@JS.Export` methods need reflection metadata and
   `JSString` params. Output is a classic script (a `{"type":"commonjs"}` package.json beside it for Node).
   DevKit's time horizon: page-built txs use the runtime TTL (`ttlSlots` in the deployment), else PastHorizon.
@@ -137,7 +137,7 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   within a test (epochs): staking flows collect a zero balance.
 - ADR-0015 M4: the JS layer reads ledger formats only through `js/state-client/src/ledger.js` (cardano-js-sdk,
   pinned exactly); Plutus data is `pdata.js` (own CBOR; decoded nodes keep `raw` bytes). CSL is gone from the packages
-  (tests and the dApp's tamper/serverless demos keep it, as an independent implementation). `devwallet.js` awaits
+  (tests and the dApp's tamper demo keep it, as an independent implementation). `devwallet.js` awaits
   libsodium at import (top-level await). Chain reads go through a provider (`providers.js`: Blockfrost/Yaci Store,
   Ogmios; `PROVIDER=ogmios` runs the example flows over Ogmios on DevKit :1337).
 - ADR-0015 §13.12 (MerkleMap mirrors): the engine takes map *proofs* (`SuppliedProver`, needs `mapProof`), answered

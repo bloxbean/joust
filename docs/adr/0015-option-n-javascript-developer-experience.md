@@ -465,6 +465,7 @@ acceptance run (I4). Expected values come from the JVM path or the chain, never 
    the UPLC program the reference on both paths (it is what the chain enforces; `byte[]` equality and `JulcMap`
    insertion already differ between JVM and chain)? Also: retire phase 4's `-Ajoust.portable` once S2 holds? Lean:
    I2 first; UPLC as the reference once the core is in (M1), with the JVM transition kept for debugging.
+   *Forward note:* ADR-0020 answers Q6 (§11.4, §12); `-Ajoust.portable` is retired (ADR-0020 §12.3, r11).
 
 ## 11. Related findings (out of scope)
 
@@ -1101,7 +1102,7 @@ Blockfrost-style API only (`blockfrostApi`; Blockfrost, or Yaci Store's `/api/v1
     - Every function that took it first still accepts it, and ignores it.
     - The packages no longer depend on CSL, peer or otherwise.
     - It remains a dev dependency of the runtime's tests and the example dApp: there it builds the tampered
-      transactions, an independent implementation, and runs the experimental serverless spike.
+      transactions, an independent implementation (the serverless spike was retired later: ADR-0020 §12.3).
   - **The gates:**
     - *Body bytes:* all 191 recorded transactions round-trip byte for byte, and keep their hash with a witness added.
     - *PlutusData fidelity:* all 593 of their redeemers and inline datums re-decode to the same bytes, and re-encode
