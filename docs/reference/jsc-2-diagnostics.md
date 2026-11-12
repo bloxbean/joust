@@ -83,6 +83,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0217 | error | unknown name ' … ' | Checker |
 | JSC0218 | error | spread a named value: { ...state, … } or { ...r, … } | Checker |
 | JSC0219 | error | is given twice | Checker |
+| JSC0220 | error | ' … ' is a name the generated validator or client uses for its own types; choose another … name | Checker |
 
 ## Types and values (ADR-0018 D5, D6)
 

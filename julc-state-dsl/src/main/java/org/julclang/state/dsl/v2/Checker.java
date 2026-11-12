@@ -59,6 +59,19 @@ final class Checker {
      * })}, {@code (seed, ctx) ->}, {@code var result = …}: ClientGenerator): a parameter of the same name would not
      * compile, or would be captured (J10).
      */
+    /**
+     * Type names the JOUST processor generates beside a contract's own (ContractReader.GENERATED_NAMES and INTENT_NAMES):
+     * a record, enum or variant of the same name would clash with them in the validator or the client (J10).
+     */
+    static final Set<String> PROCESSOR_TYPES = Set.of("PlutusData", "AssetEntry", "ScriptContext", "TxInfo", "TxOut", "TxInInfo",
+            "TxOutRef", "ScriptInfo", "Entrypoint", "MultiValidator", "Purpose", "AddressLib", "ContextsLib", "OutputLib", "ValuesLib",
+            "IntervalLib", "Interval", "IntervalBoundType", "OutputDatum", "Funds", "Send", "Sends", "Assets", "OutputClaim",
+            "OutputClaims", "DepositClaim", "ByAction", "JulcValue", "Param", "Approval", "CreateInstance", "BurnInstance", "Account",
+            "StateRuntime", "StateInstance", "TxResult", "Transition", "Lifecycle", "Calls", "Call", "MapWitness", "MapWitnesses",
+            "Mpf", "Deploy", "ContractSpec", "StateContractHandle", "Utxo", "Arrays", "Holding", "ScriptPurpose", "Intent",
+            "IntentCall", "Step", "IntentRefund", "Batch", "InBatch", "CancelIntent", "CreateIntent", "IntentCodec", "IntentData",
+            "IntentHandle", "Batcher", "List");
+
     static Set<String> clientLocals(Kind k) {
         return switch (k) {
             case INIT -> Set.of("seed", "result");
@@ -218,6 +231,9 @@ final class Checker {
         if (!Character.isUpperCase(n.charAt(0))) throw p.error("JSC0205", what + " names start with a capital: " + n);
         if (n.contains("_")) throw p.error("JSC0206", what + " names are written without '_' (e.g. " + n.replace("_", "") + ")");
         checkUserName(n, p, what);
+        if (PROCESSOR_TYPES.contains(n)) {
+            throw p.error("JSC0220", "'" + n + "' is a name the generated validator or client uses for its own types; choose another " + what + " name");
+        }
         if (n.equals(c.name())) {
             throw p.error("JSC0207", "the " + what + " " + n + " has the contract's name; rename one (it is generated inside the contract's class)");
         }

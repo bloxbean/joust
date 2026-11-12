@@ -66,6 +66,10 @@ class JscV2M1aCheckerTest {
         badSource(file("enum A = { X }"), "without '='", 3, 8);
         badSource(file("enum A { C }"), "contract's name", 3, 10);
         badSource(file("enum A { Some }"), "reserved", 3, 10);
+        // Names the processor generates beside the contract's own types (J10).
+        badSource(file("enum A { Lifecycle }"), "the generated validator or client uses", 3, 10);
+        badSource(file("type Calls = { a: Int }"), "the generated validator or client uses", 3, 1);
+        badSource(file("enum Step { A }"), "the generated validator or client uses", 3, 1);
         // A variant's name is a redeemer variant's too (both are Java classes of the contract).
         bad("action open() { return state }", "clash with the generated name Open", 0, 1);
         bad("action a(x: Closed) { return state }", "is a variant of Phase, not a type", 0, 13);
