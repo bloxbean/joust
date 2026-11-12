@@ -20,6 +20,7 @@ dependencies {
     testImplementation project(':examples:escrow')
     testImplementation project(':examples:crowdfund')
     testImplementation project(':examples:pool')
+    testImplementation project(':examples:treasury')  // M1c review S1: a parameterised script, read beside its class
     testImplementation libs.julc.vm.java
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes

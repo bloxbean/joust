@@ -1,6 +1,5 @@
 package org.julclang.state.testkit;
 
-import org.julclang.clientlib.JulcScriptLoader;
 import org.julclang.clientlib.PlutusDataAdapter;
 import org.julclang.core.PlutusData;
 import org.julclang.core.Program;
@@ -86,14 +85,14 @@ public final class StateHarness<S> {
             throw new IllegalStateException(e);
         }
         this.seed = new TxOutRef(new TxId(fill(32, 0x5E)), BigInteger.ZERO);
-        var ov = JulcScriptLoader.load(org.julclang.state.verifier.OutputVerifier.class);
+        var ov = org.julclang.state.runtime.ValidatorScripts.load(org.julclang.state.verifier.OutputVerifier.class);
         this.outputVerifier = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(ov.getCborHex())));
         try {
             this.outputVerifierHash = ov.getScriptHash();
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
-        var v = JulcScriptLoader.load(org.julclang.state.verifier.MapVerifier.class);
+        var v = org.julclang.state.runtime.ValidatorScripts.load(org.julclang.state.verifier.MapVerifier.class);
         this.verifier = UplcFlatDecoder.decodeProgram(unwrapCbor(HexFormat.of().parseHex(v.getCborHex())));
         try {
             this.verifierHash = v.getScriptHash();
