@@ -81,6 +81,25 @@ class Dsl2Test {
                 + Attacks.assertAllRejected(counter, close));
     }
 
+    /**
+     * Issue #74 (design F9 on #71): a real example's refusal on the JVM names its {@code .jsc} site, from the message map
+     * the build put beside the contract's classes (Counter2.jscmap.json), read by the contract's spec as the runtime
+     * reads it. An author's require and a generated check (a negative payout's key) both.
+     */
+    @Test
+    void counter_aRefusalNamesItsJscSite_fromTheMapTheBuildShips() {
+        var spec = Counter2Client.SPEC;
+        var s = new Counter2.State(n(4), OWNER);
+        var byZero = assertThrows(RequireException.class, () -> Counter2.increment(s, BigInteger.ZERO));
+        assertEquals("increment must be positive [Counter2.jsc:13:5 (a require in increment)]",
+                org.julclang.state.runtime.JscMessages.explained(spec.validatorClass(), spec.name(), byZero).getMessage());
+        // close pays the owner the balance: a negative one is refused by a generated check, whose key names the site.
+        var negative = assertThrows(RequireException.class, () -> Counter2.close(s, counter.ctx(OWNER, BigInteger.ZERO, n(-1))));
+        String explained = org.julclang.state.runtime.JscMessages.explained(spec.validatorClass(), spec.name(), negative).getMessage();
+        assertTrue(explained.matches("#pay:spend\\d+\\.\\d+ \\[Counter2\\.jsc:22:5 \\(a payout in close is negative\\)\\]"), explained);
+        assertTrue(explained.startsWith(negative.getMessage() + " ["), explained);
+    }
+
     // ------------------------------------------------------------------ Pledges: records, lists, Option, std, time
 
     final StateHarness<Pledges.State> pl = StateHarness.of(PledgesClient.SPEC);

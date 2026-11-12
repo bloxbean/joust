@@ -15,7 +15,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
-import { buildInWorker, ENGINE_STACK_MB } from './toolchain.js';
+import { buildInWorker, engineLimits } from './toolchain.js';
 import { abiGate } from './abi.js';
 import { deploymentsShape, scriptDigest } from './deploy.js';
 
@@ -43,17 +43,21 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   const files = sources(resolve(root, src), keep);
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
   const t = Date.now();
+  // The worker's limits (issue #74): an invalid JOUST_ENGINE_* setting is the user's error, said before anything runs.
+  const limits = engineLimits();
   let r;
   try {
-    // On a worker with a set stack (ENGINE_STACK_MB), so a cold engine builds what the JVM builds (ADR-0018 J18, r12).
-    r = await buildInWorker({ files, options });
+    // On a worker with a set stack (ENGINE_STACK_MB), so a cold engine builds what the JVM builds (ADR-0018 J18, r12),
+    // a heap limit and a time limit.
+    r = await buildInWorker({ files, options, limits });
   } catch (e) {
     // The engine's stack ran out past the front end (whose nesting cap keeps it within the stack, ADR-0018 J18): in
     // JuLC's passes, on a contract far larger than a script can be. Web Image surfaces that as a TypeError; the build
     // reports it and fails.
     r = { ok: false, contracts: [], diagnostics: [{ severity: 'error', source: 'toolchain', message: 'internal error: the'
       + ` toolchain engine failed (${e?.message ?? e}); a contract this large may exhaust the engine's stack`
-      + ` (JOUST_ENGINE_STACK_MB=${ENGINE_STACK_MB}): build it on Gradle, or split it (please report it, with the file)` }],
+      + ` (JOUST_ENGINE_STACK_MB=${limits.stackMb}, JOUST_ENGINE_MEMORY_MB=${limits.memoryMb}, JOUST_ENGINE_TIMEOUT_S=${limits.timeoutS}):`
+      + ' build it on Gradle, or split it (please report it, with the file)' }],
       generated: [] };
   }
   for (const d of r.diagnostics) {
