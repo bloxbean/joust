@@ -17,13 +17,20 @@ public final class JscMain {
 
     /** The Java source for one .jsc file's text. */
     public static String lower(String source, String fileName) {
-        return Lowering.lower(Parser.parse(source), fileName).java();
+        return lowerWithWarnings(source, fileName).java();
     }
 
     /** The Java source and warnings for one .jsc file's text. */
     public static Lowered lowerWithWarnings(String source, String fileName) {
+        if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
+            var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName);
+            return new Lowered(r.java(), r.warnings());
+        }
+        // .jsc v1 (ADR-0005): still compiled, deprecated in favour of .jsc 2 (ADR-0018 D2, D16).
         var r = Lowering.lower(Parser.parse(source), fileName);
-        return new Lowered(r.java(), r.warnings());
+        var warnings = new java.util.ArrayList<String>(r.warnings());
+        warnings.add(fileName + ":1:1: warning: .jsc v1 is deprecated; start the file with 'jsc 2' (joust migrate rewrites it)");
+        return new Lowered(r.java(), warnings);
     }
 
     /** Lowered Java and warnings. */
@@ -31,6 +38,7 @@ public final class JscMain {
 
     /** The package and class name the .jsc text declares, as a relative path {@code a/b/Name.java}. */
     static String outputPath(String source) {
+        if (org.julclang.state.dsl.v2.JscV2.isV2(source)) return org.julclang.state.dsl.v2.JscV2.outputPath(source);
         var c = Parser.parse(source);
         return c.pkg().replace('.', '/') + "/" + c.name() + ".java";
     }

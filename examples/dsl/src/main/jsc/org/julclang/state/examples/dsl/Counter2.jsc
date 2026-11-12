@@ -1,0 +1,26 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// The template counter in .jsc 2 (ADR-0018 §4).
+contract Counter2(maxDatumBytes = 128) {
+  state { count: Int, owner: Key }
+
+  init() {
+    return { count: 0, owner: caller }
+  }
+
+  action increment(by: Int) {
+    require(by > 0, "increment must be positive")
+    return { ...state, count: count + by }
+  }
+
+  action reset() only owner {
+    return { ...state, count: 0 }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+
+  view current(): Int = count
+}

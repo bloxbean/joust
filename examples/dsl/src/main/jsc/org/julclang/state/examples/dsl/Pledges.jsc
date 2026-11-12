@@ -1,0 +1,66 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { blake2b_224 } from "std/crypto"
+import { slice, length } from "std/bytes"
+
+// A crowdfund in .jsc 2 (ADR-0018 M0): records, lists, folds, Option, std bindings, time, pays in loops and branches.
+type Share = { to: Key, bps: Int }
+
+fn total(shares: List<Share>): Int = shares.fold(0, (acc, s) => acc + s.bps)
+
+// Direct self-recursion (D7): the number of digits of n.
+fn digits(n: Int): Int = n < 10 ? 1 : 1 + digits(n / 10)
+
+contract Pledges(maxDatumBytes = 1024) {
+  state {
+    owner: Key,
+    goal: Int,
+    deadline: Int,
+    raised: Int,
+    shares: List<Share>,
+    tag: Bytes,
+    lastBacker: Option<Key>
+  }
+
+  init(goal: Int, deadline: Int, shares: List<Share>, label: Bytes) {
+    require(goal > 0, "the goal must be positive")
+    require(shares.all(s => s.bps > 0), "every share must be positive")
+    require(total(shares) == 10_000, "shares must total 100%")
+    require(length(label) <= 64, "label too long")
+    return { owner: caller, goal, deadline, raised: 0, shares, tag: slice(blake2b_224(label), 0, 8), lastBacker: None }
+  }
+
+  action pledge() payable {
+    require(received >= 1 ada, "pledge at least 1 ADA")
+    require(before(deadline), "pledging closed")
+    return { ...state, raised: raised + received, lastBacker: Some(caller) }
+  }
+
+  // Anyone who holds a share can read their basis points.
+  view shareOf(who: Key): Int = (shares.find(s => s.to == who) ?? Share { to: who, bps: 0 }).bps
+
+  view isShareholder(who: Key): Bool = shares.map(s => s.to).contains(who)
+
+  view digitsRaised(): Int = digits(raised)
+
+  // The owner may move one share to a new key (records compared by value, keys checked at the boundary).
+  action reassign(from: Share, to: Key) only owner {
+    require(shares.contains(from), "no such share")
+    const moved = shares.map(s => s == from ? Share { to, bps: s.bps } : s)
+    return { ...state, shares: moved }
+  }
+
+  // Goal reached after the deadline: pay every share, the rounding remainder to the owner.
+  destroy distribute() only owner {
+    require(after(deadline) || raised == 0, "too early")
+    if raised >= goal {
+      for (const s of shares) {
+        pay(s.to, balance * s.bps / 10_000)
+      }
+      pay(owner, balance - shares.fold(0, (acc, s) => acc + balance * s.bps / 10_000))
+    } else {
+      pay(owner, balance)
+    }
+  }
+}
