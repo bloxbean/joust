@@ -118,7 +118,15 @@ public final class Toolchain {
      */
     public static Result build(Map<String, String> files, Map<String, String> options) {
         var generated = new ArrayList<Generated>();
-        Result r = build(files, options, generated);
+        Result r;
+        try {
+            r = build(files, options, generated);
+        } catch (StackOverflowError e) {
+            // A safety net past the front end (javac, the processor, JuLC): the build fails with a diagnostic, it does not
+            // crash its caller (the npm CLI's engine, an editor) (ADR-0018 J18, review S2).
+            return new Result(false, List.of(), List.of(), List.of(new Diagnostic(Severity.ERROR, "internal error: the compiler ran out of"
+                    + " stack (please report it, with the file)", null, -1, "toolchain")), List.copyOf(generated));
+        }
         var diagnostics = new ArrayList<>(remap(r.diagnostics(), generated, files.keySet()));
         // ADR-0018 D12 (review F2): every .jsc 2 manifest agrees with the processor's description of the contract.
         for (Contract c : r.contracts()) {
@@ -202,8 +210,10 @@ public final class Toolchain {
                     }
                 } catch (org.julclang.state.dsl.JscException e) {
                     diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), name, e.line, e.col, "jsc", e.code));
-                } catch (RuntimeException e) {
-                    diagnostics.add(new Diagnostic(Severity.ERROR, "internal error lowering this file: " + e, name, -1, "jsc"));
+                } catch (RuntimeException | Error e) {
+                    // Any Error too, a StackOverflowError included (ADR-0018 J18, review S2): a located, coded diagnostic,
+                    // never a crash of the build.
+                    diagnostics.add(new Diagnostic(Severity.ERROR, JscMain.internalError(e), name, 1, 1, "jsc", "JSC0005"));
                 }
             } else if (name.endsWith(".java")) {
                 sources.put(name, text);

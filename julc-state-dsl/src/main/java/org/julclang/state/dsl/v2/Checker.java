@@ -72,6 +72,9 @@ final class Checker {
             "IntentCall", "Step", "IntentRefund", "Batch", "InBatch", "CancelIntent", "CreateIntent", "IntentCodec", "IntentData",
             "IntentHandle", "Batcher", "List");
 
+    /** The form of a generated check's message key (D12): an author's require message may not take it. */
+    static final java.util.regex.Pattern GENERATED_KEY = java.util.regex.Pattern.compile("#[a-z]+:.*", java.util.regex.Pattern.DOTALL);
+
     static Set<String> clientLocals(Kind k) {
         return switch (k) {
             case INIT -> Set.of("seed", "result");
@@ -175,6 +178,10 @@ final class Checker {
                 throw e.pos().error("JSC0302", "the enum " + e.name() + " contains itself; recursive types are not supported");
             }
         }
+        var declaredAt = new LinkedHashMap<String, Pos>();
+        for (TypeDecl t : allTypes) declaredAt.put(t.name(), t.pos());
+        for (EnumDecl e : allEnums) declaredAt.put(e.name(), e.pos());
+        typeDepths(declaredAt);
         if (stateFields.isEmpty()) throw c.pos().error("JSC0303", "the state needs at least one field");
 
         var methodNames = new HashSet<String>();
@@ -329,24 +336,74 @@ final class Checker {
      * types ends.
      */
     private boolean cyclic(String name) {
+        // A work list, not recursion: a long chain of types cannot exhaust the stack (ADR-0018 J18).
         var seen = new HashSet<String>();
-        return components(name).stream().anyMatch(f -> reaches(f, name, seen));
+        var work = new ArrayDeque<>(typeRefs(name));
+        while (!work.isEmpty()) {
+            String n = work.pop();
+            if (n.equals(name)) return true;
+            if (seen.add(n)) work.addAll(typeRefs(n));
+        }
+        return false;
     }
 
-    /** Whether {@code t} reaches the named type {@code target}; {@code seen}: the named types already searched. */
-    private boolean reaches(Ty t, String target, Set<String> seen) {
-        return switch (t) {
-            case Ty.Prim p -> false;
-            case Ty.ListT l -> reaches(l.elem(), target, seen);
-            case Ty.OptT o -> reaches(o.elem(), target, seen);
-            case Ty.MapT m -> reaches(m.val(), target, seen);
-            case Ty.BigMapT m -> reaches(m.val(), target, seen);
-            // The target is recognised before the visited-node shortcut, wherever the edge back to it comes from.
-            case Ty.Rec r -> r.name().equals(target)
-                    || seen.add(r.name()) && components(r.name()).stream().anyMatch(f -> reaches(f, target, seen));
-            case Ty.EnumT e -> e.name().equals(target)
-                    || seen.add(e.name()) && components(e.name()).stream().anyMatch(f -> reaches(f, target, seen));
-        };
+    /** The declared types a record's or an enum's components name, inside lists, options and maps too. */
+    private List<String> typeRefs(String name) {
+        var out = new ArrayList<String>();
+        for (Ty t : components(name)) named(t, out);
+        return out;
+    }
+
+    /** The declared types {@code t} names (a written type nests at most {@link Parser#MAX_DEPTH} deep). */
+    private static void named(Ty t, List<String> out) {
+        switch (t) {
+            case Ty.Prim p -> { }
+            case Ty.ListT l -> named(l.elem(), out);
+            case Ty.OptT o -> named(o.elem(), out);
+            case Ty.MapT m -> {
+                named(m.key(), out);
+                named(m.val(), out);
+            }
+            case Ty.BigMapT m -> named(m.val(), out);
+            case Ty.Rec r -> out.add(r.name());
+            case Ty.EnumT e -> out.add(e.name());
+        }
+    }
+
+    /**
+     * The nesting cap on types (ADR-0018 J18): a type contains others at most {@link Parser#MAX_DEPTH} deep, since every
+     * walk over a value's type (checked inputs, equality, the codecs) follows that chain. Measured on the acyclic type
+     * graph, in a loop; refused at the type whose chain is too long.
+     */
+    private void typeDepths(Map<String, Pos> declared) {
+        var depth = new HashMap<String, Integer>();
+        for (String root : declared.keySet()) {
+            var stack = new ArrayDeque<String>();
+            stack.push(root);
+            while (!stack.isEmpty()) {
+                String n = stack.peek();
+                if (depth.containsKey(n)) {
+                    stack.pop();
+                    continue;
+                }
+                boolean ready = true;
+                for (String m : typeRefs(n)) {
+                    if (!depth.containsKey(m)) {
+                        stack.push(m);
+                        ready = false;
+                    }
+                }
+                if (!ready) continue;
+                stack.pop();
+                int d = 1;
+                for (String m : typeRefs(n)) d = Math.max(d, depth.get(m) + 1);
+                if (d > Parser.MAX_DEPTH) {
+                    throw declared.get(n).error("JSC0340", "the type " + n + " nests other types more than " + Parser.MAX_DEPTH
+                            + " deep (ADR-0018 J18): flatten it");
+                }
+                depth.put(n, d);
+            }
+        }
     }
 
     /** The fields of a record, the state or a variant. */
@@ -668,7 +725,9 @@ final class Checker {
                 return merge(stateTaints(c.then()), stateTaints(c.otherwise()));
             }
             case Ir.IfValue i -> {
-                return merge(stateTaints(i.then().result()), stateTaints(i.otherwise().result()));
+                Map<String, FT> acc = stateTaints(i.otherwise().result());
+                for (Ir.Branch b : i.branches()) acc = merge(stateTaints(b.then().result()), acc);
+                return acc;
             }
             case Ir.BlockValue b -> {
                 return stateTaints(b.block().result());
@@ -739,16 +798,40 @@ final class Checker {
         return new Ir.Fn(f.name(), params, ret, new Ir.Block(stmts, r, f.body().pos()), f.pos());
     }
 
-    /** D11 through calls: a fn called with time arguments is checked again with those parameters marked (S25). */
+    /** A fn to check again with time parameters marked, and the call chain that reached it (for the message). */
+    private record Pending(Syntax.Fn f, int[] taints, String context) {}
+
+    private final ArrayDeque<Pending> pending = new ArrayDeque<>();
+    private boolean draining;
+    private String analysing = "";
+
+    /**
+     * D11 through calls: a fn called with time arguments is checked again with those parameters marked (S25). The fns a
+     * call chain reaches are checked from a work list, not by recursion, so a long chain of fns cannot exhaust the stack
+     * (ADR-0018 J18); an error names every call on the way, innermost first, as before.
+     */
     private void analyseCall(Syntax.Fn f, int[] taints, Pos at) {
         boolean any = false;
         for (int t : taints) any |= t != 0;
         if (!any) return;
         if (!analysed.add(f.name() + "/" + Arrays.toString(taints))) return;
+        pending.add(new Pending(f, taints, " (in " + f.name() + ", called with a time value at " + at + ")" + analysing));
+        if (draining) return;
+        draining = true;
         try {
-            checkFn(f, taints);
-        } catch (JscException e) {
-            throw new JscException(e.line, e.col, e.code, e.getMessage() + " (in " + f.name() + ", called with a time value at " + at + ")");
+            while (!pending.isEmpty()) {
+                Pending p = pending.poll();
+                analysing = p.context();
+                try {
+                    checkFn(p.f(), p.taints());
+                } catch (JscException e) {
+                    throw new JscException(e.line, e.col, e.code, e.getMessage() + p.context());
+                }
+            }
+        } finally {
+            draining = false;
+            analysing = "";
+            pending.clear();
         }
     }
 
@@ -773,7 +856,15 @@ final class Checker {
                     if (fts != null) localFT.put(local, fts);
                     out.add(new Ir.Let(local, v, c.pos()));
                 }
-                case Syntax.Require r -> out.add(new Ir.Require(requireCond(r.cond(), sc), r.message(), r.pos()));
+                case Syntax.Require r -> {
+                    // A generated check's key ("#input:spend2.1", D12) names one construct: an author's message never
+                    // takes that form, so tooling can tell the two apart.
+                    if (GENERATED_KEY.matcher(r.message()).matches()) {
+                        throw r.pos().error("JSC0416", "a require message starting '#word:' is reserved for the checks the lowering"
+                                + " generates (ADR-0018 D12): reword it");
+                    }
+                    out.add(new Ir.Require(requireCond(r.cond(), sc), r.message(), r.pos()));
+                }
                 case Syntax.Pay p -> {
                     if (!sc.effects) {
                         throw p.pos().error("JSC0413", "pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4)");
@@ -794,11 +885,17 @@ final class Checker {
                     out.add(new Ir.Pay(to, amount, p.pos()));
                 }
                 case IfStmt i -> {
-                    Ir.Expr cond = condition(i.cond(), sc);
-                    Ir.Block then = armBlock(i.then(), sc);
+                    // An else-if chain is one node: its branches are checked in order, in a loop (J18).
+                    var branches = new ArrayList<Ir.Branch>();
+                    boolean pays = false;
+                    for (Syntax.Branch b : i.branches()) {
+                        Ir.Expr cond = condition(b.cond(), sc);
+                        branches.add(new Ir.Branch(cond, armBlock(b.then(), sc), b.pos()));
+                        pays |= paysIn(b.then());
+                    }
                     Ir.Block other = i.otherwise() == null ? null : armBlock(i.otherwise(), sc);
-                    boolean pays = paysIn(i.then()) || (i.otherwise() != null && paysIn(i.otherwise()));
-                    out.add(new Ir.If(cond, then, other, pays, i.pos()));
+                    pays |= i.otherwise() != null && paysIn(i.otherwise());
+                    out.add(new Ir.If(List.copyOf(branches), other, pays, i.pos()));
                 }
                 case MatchStmt ms -> out.add(matchStmt(ms.match(), sc));
                 case For f -> {
@@ -1612,26 +1709,63 @@ final class Checker {
         return new Ir.Cond(k, a, d, t, a.taint() | d.taint(), pos);
     }
 
-    /** An if used as a value. Arms without statements are a {@link Ir.Cond}; arms with statements, an {@link Ir.IfValue}. */
+    /**
+     * Whether an if used as a value lowers to nested conditionals: at most {@link Parser#CHAIN} branches, no statements in
+     * any arm. {@link Depth} counts a level per branch of such a chain, as the conditionals nest.
+     */
+    static boolean plainChain(IfExpr i) {
+        if (i.branches().size() > Parser.CHAIN || !i.otherwise().stmts().isEmpty()) return false;
+        for (Syntax.Branch b : i.branches()) if (!b.then().stmts().isEmpty()) return false;
+        return true;
+    }
+
+    /**
+     * An if used as a value. A short chain without statements is nested {@link Ir.Cond}s; a longer chain, or arms with
+     * statements, an {@link Ir.IfValue}.
+     */
     private Ir.Expr ifExpr(IfExpr i, Sc sc, Ty expected) {
-        if (i.then().stmts().isEmpty() && i.otherwise().stmts().isEmpty()) {
-            return cond(i.cond(), i.then().result(), i.otherwise().result(), i.pos(), sc, expected);
+        if (plainChain(i)) {
+            // Up to Parser.CHAIN branches without statements: nested conditionals, inline (a recursive call may sit in an arm).
+            Syntax.Branch b = i.branches().get(0);
+            Expr rest = i.branches().size() == 1 ? i.otherwise().result()
+                    : new IfExpr(i.branches().subList(1, i.branches().size()), i.otherwise(), i.branches().get(1).pos());
+            return cond(b.cond(), b.then().result(), rest, i.pos(), sc, expected);
         }
-        Ir.Expr k = condition(i.cond(), sc);
-        Ir.Block a, d;
-        if (expected == null && needsContext(i.then().result()) && !needsContext(i.otherwise().result())) {
-            d = valueBlock(i.otherwise(), sc.child(false, false), null);
-            a = valueBlock(i.then(), sc.child(false, false), d.result().type());
-        } else {
-            a = valueBlock(i.then(), sc.child(false, false), expected);
-            d = valueBlock(i.otherwise(), sc.child(false, false), expected != null ? expected : a.result().type());
+        // A longer chain, or one with statements, is one node (J18): its conditions, then its arms, each checked in a loop;
+        // the lowering makes each arm a helper.
+        var conds = new ArrayList<Ir.Expr>();
+        for (Syntax.Branch b : i.branches()) conds.add(condition(b.cond(), sc));
+        var arms = new ArrayList<Syntax.Block>();
+        for (Syntax.Branch b : i.branches()) arms.add(b.then());
+        arms.add(i.otherwise());
+        // Without an expected type, the first arm that does not need one gives it to the others.
+        int first = 0;
+        if (expected == null) {
+            for (int k = 0; k < arms.size(); k++) {
+                if (!needsContext(arms.get(k).result())) {
+                    first = k;
+                    break;
+                }
+            }
         }
-        Ty t = expected != null ? expected : unify(a.result().type(), d.result().type(), i.pos());
-        expectType(t, a.result(), a.result().pos());
-        expectType(t, d.result(), d.result().pos());
-        noBigWrite(t, a.result(), i.pos(), "chosen by a condition");
-        noBigWrite(t, d.result(), i.pos(), "chosen by a condition");
-        return new Ir.IfValue(k, a, d, t, a.result().taint() | d.result().taint(), i.pos());
+        var out = new Ir.Block[arms.size()];
+        out[first] = valueBlock(arms.get(first), sc.child(false, false), expected);
+        Ty want = expected != null ? expected : out[first].result().type();
+        for (int k = 0; k < arms.size(); k++) if (k != first) out[k] = valueBlock(arms.get(k), sc.child(false, false), want);
+        Ty t = expected;
+        if (t == null) {
+            t = out[out.length - 1].result().type();
+            for (int k = out.length - 2; k >= 0; k--) t = unify(out[k].result().type(), t, i.pos());
+        }
+        int taint = 0;
+        for (Ir.Block b : out) {
+            expectType(t, b.result(), b.result().pos());
+            noBigWrite(t, b.result(), i.pos(), "chosen by a condition");
+            taint |= b.result().taint();
+        }
+        var branches = new ArrayList<Ir.Branch>();
+        for (int k = 0; k < conds.size(); k++) branches.add(new Ir.Branch(conds.get(k), out[k], i.branches().get(k).pos()));
+        return new Ir.IfValue(List.copyOf(branches), out[out.length - 1], t, taint, i.pos());
     }
 
     // ------------------------------------------------------------------ BigMap positions (D7)
@@ -1678,7 +1812,7 @@ final class Checker {
                 yield false;
             }
             case Ir.Cond c -> writesBigMap(c.then()) || writesBigMap(c.otherwise());
-            case Ir.IfValue i -> writesBigMap(i.then().result()) || writesBigMap(i.otherwise().result());
+            case Ir.IfValue i -> writesBigMap(i.otherwise().result()) || i.branches().stream().anyMatch(b -> writesBigMap(b.then().result()));
             case Ir.Match m -> m.arms().stream().anyMatch(a -> writesBigMap(a.body().result()));
             case Ir.BlockValue b -> writesBigMap(b.block().result());
             case Ir.Fold f -> writesBigMap(f.init()) || writesBigMap(f.body().result());
@@ -2069,7 +2203,8 @@ final class Checker {
                     return true;
                 }
                 case IfStmt i -> {
-                    if (paysIn(i.then()) || (i.otherwise() != null && paysIn(i.otherwise()))) return true;
+                    for (Syntax.Branch br : i.branches()) if (paysIn(br.then())) return true;
+                    if (i.otherwise() != null && paysIn(i.otherwise())) return true;
                 }
                 case For f -> {
                     if (paysIn(f.body())) return true;
@@ -2088,7 +2223,7 @@ final class Checker {
         for (Stmt s : b.stmts()) {
             if (s instanceof Syntax.Pay p) return p.pos();
             if (s instanceof IfStmt i) {
-                if (paysIn(i.then())) return firstPay(i.then());
+                for (Syntax.Branch br : i.branches()) if (paysIn(br.then())) return firstPay(br.then());
                 if (i.otherwise() != null && paysIn(i.otherwise())) return firstPay(i.otherwise());
             }
             if (s instanceof For f && paysIn(f.body())) return firstPay(f.body());
@@ -2121,7 +2256,8 @@ final class Checker {
                 case Syntax.Require r -> walk(r.cond(), p);
                 case Syntax.Pay y -> walk(y.to(), p) || walk(y.amount(), p);
                 case For f -> walk(f.list(), p) || walk(f.body(), p);
-                case IfStmt i -> walk(i.cond(), p) || walk(i.then(), p) || (i.otherwise() != null && walk(i.otherwise(), p));
+                case IfStmt i -> i.branches().stream().anyMatch(br -> walk(br.cond(), p) || walk(br.then(), p))
+                        || (i.otherwise() != null && walk(i.otherwise(), p));
                 case MatchStmt ms -> walk(ms.match(), p);
             };
             if (hit) return true;
@@ -2142,7 +2278,7 @@ final class Checker {
             case Unary u -> walk(u.operand(), p);
             case Binary b -> walk(b.left(), p) || walk(b.right(), p);
             case Syntax.Cond c -> walk(c.cond(), p) || walk(c.then(), p) || walk(c.otherwise(), p);
-            case IfExpr i -> walk(i.cond(), p) || walk(i.then(), p) || walk(i.otherwise(), p);
+            case IfExpr i -> i.branches().stream().anyMatch(br -> walk(br.cond(), p) || walk(br.then(), p)) || walk(i.otherwise(), p);
             case BlockExpr be -> walk(be.block(), p);
             case Syntax.Match m -> walk(m.scrutinee(), p) || m.arms().stream().anyMatch(a -> walk(a.body(), p));
             case Index ix -> walk(ix.target(), p) || walk(ix.key(), p);

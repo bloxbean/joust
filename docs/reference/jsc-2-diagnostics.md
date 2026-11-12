@@ -13,8 +13,18 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0002 | error | the ABI manifest … differs from the committed one at line …: a datum or redeemer encoding changed, which strands deployed instances; accept it with the acceptJscAbi task (npm: joust build --accept-abi) and commit it | JscMain, joust build |
 | JSC0003 | error | no ABI manifest … beside this file: the encoding of its datum and redeemers must be committed; create it with the acceptJscAbi task (npm: joust build --accept-abi), review it and commit it | JscMain, joust build |
 | JSC0004 | error | the ABI manifest of … disagrees with the processor's encoding: … (an internal error of the .jsc lowering: please report it) | Toolchain |
+| JSC0005 | error | internal error lowering this file: … (an internal error of the .jsc front end: please report it) | JscMain, Toolchain |
 
 ## Syntax and JavaScript habits (ADR-0018 D2, D3, D12)
+
+**The nesting cap (J18): 64 levels**, the same on every build path (Gradle, the npm CLI's Web Image engine, editors).
+The parser counts a level for each parenthesis, block, argument, match or if arm, lambda and type argument it enters
+(JSC0149, at the token that would open the 65th); then it measures the tree it built, where each expression and block
+is a level and a chain it does not balance (`/`, `%`, `??`, `==`/`!=`, field reads, method calls, `[ ]`, and an else-if
+chain of at most 8 branches without statements used as a value) counts a level per link (JSC0150, at the first node
+past the cap). Chains of `+`/`-`, `*`, `&&` and `||` are balanced as they are read, and an else-if chain is one node,
+so their length is not limited. Before the cap, the Web Image's stack held about 250 nested parentheses; any stack
+exhaustion that still happens is reported as JSC0005, never as a crash.
 
 | Code | Severity | Message | Raised by |
 |---|---|---|---|
@@ -66,6 +76,8 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0146 | error | ' … ' (U+…) is not an ASCII letter (or digit): names in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike | Lexer |
 | JSC0147 | error | U+… breaks a line for some readers but not for .jsc: end lines with LF (or CRLF), so that a comment cannot hide the code after it | Lexer |
 | JSC0148 | error | control character U+…: .jsc files hold no control characters but TAB and line ends (LF or CRLF), even in comments and strings, so that the text reads as it compiles | Lexer |
+| JSC0149 | error | this nests deeper than … levels (each parenthesis, block, argument, arm, lambda and type argument opens one): name a part with const or move it into a fn (ADR-0018 J18) | Parser |
+| JSC0150 | error | this expression nests deeper than … levels: a chain of /, %, ??, ==, field reads, method calls or [ ] counts a level per link; name a part with const or move it into a fn (ADR-0018 J18) | Depth |
 
 ## Names and declarations (ADR-0018 D3, J10)
 
@@ -137,6 +149,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0337 | error | None ?? d is always d: write d | Checker |
 | JSC0338 | error | ?? needs an Option on its left, not | Checker |
 | JSC0339 | error | expected … but this is | Checker |
+| JSC0340 | error | the type … nests other types more than … deep (ADR-0018 J18): flatten it | Checker |
 
 ## Methods, effects and audiences (ADR-0018 D4, D10)
 
@@ -157,6 +170,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0413 | error | pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4) | Checker |
 | JSC0414 | error | 'state' is the input state of an action, destroy or view | Checker |
 | JSC0415 | error | is part of the transaction: it is not available in a view or fn (pass it as an argument) | Checker |
+| JSC0416 | error | a require message starting '#word:' is reserved for the checks the lowering generates (ADR-0018 D12): reword it | Checker |
 
 ## Time (ADR-0018 D11, J6)
 

@@ -28,6 +28,26 @@ final class Parser {
         return parenStart.getOrDefault(e, e.pos());
     }
 
+    /**
+     * The nesting cap (ADR-0018 J18, review S2): at most {@value #MAX_DEPTH} levels, the same on every build path, so the
+     * front end never recurses deeper than a small, fixed bound (the Web Image's stack held about 250 nested
+     * parentheses before this cap). The parser counts its own recursion here (each expression, block and type argument
+     * opens a level); {@link Depth} measures the tree it built, where a chain that is not balanced counts a level per link.
+     */
+    static final int MAX_DEPTH = 64;
+    private int depth;
+
+    private void enter(Pos p) {
+        if (++depth > MAX_DEPTH) {
+            throw p.error("JSC0149", "this nests deeper than " + MAX_DEPTH + " levels (each parenthesis, block, argument, arm, lambda and"
+                    + " type argument opens one): name a part with const or move it into a fn (ADR-0018 J18)");
+        }
+    }
+
+    private void leave() {
+        depth--;
+    }
+
     private Parser(List<Tok> toks) {
         this.toks = toks;
         for (int k = 0; k + 1 < toks.size(); k++) {
@@ -50,7 +70,9 @@ final class Parser {
     }
 
     static File parse(String src) {
-        return new Parser(Lexer.lex(src)).file();
+        File f = new Parser(Lexer.lex(src)).file();
+        Depth.check(f);
+        return f;
     }
 
     /**
@@ -207,6 +229,13 @@ final class Parser {
 
     private TypeRef type() {
         Pos p = peek().pos();
+        enter(p);
+        TypeRef t = typeRef(p);
+        leave();
+        return t;
+    }
+
+    private TypeRef typeRef(Pos p) {
         String n = ident("a type");
         var args = new ArrayList<TypeRef>();
         if (eat("<")) {
@@ -350,6 +379,13 @@ final class Parser {
 
     /** {@code { stmt* [expr] }}: the last expression, if any, is the block's value. */
     private Block block() {
+        enter(peek().pos());
+        Block b = blockBody();
+        leave();
+        return b;
+    }
+
+    private Block blockBody() {
         Pos p = expect("{").pos();
         var stmts = new ArrayList<Stmt>();
         Expr result = null;
@@ -511,35 +547,77 @@ final class Parser {
         return true;
     }
 
+    /**
+     * {@code if c { … } else if d { … } else { … }}: the else-if chain is read in a loop into one node (J18, review S2),
+     * so a chain of any length nests no deeper than one if.
+     */
     private IfStmt ifStmt() {
         Pos p = next().pos();
+        var branches = new ArrayList<Branch>();
         Expr c = expr();
-        Block then = block();
+        branches.add(new Branch(c, block(), p));
         Block otherwise = null;
-        if (eat("else")) {
+        while (eat("else")) {
             if (at("if")) {
-                IfStmt nested = ifStmt();
-                Expr asValue = isValueIf(nested) ? toIfExpr(nested) : null;
-                otherwise = new Block(asValue == null ? List.of(nested) : List.of(), asValue, nested.pos());
+                Pos q = next().pos();
+                Expr ci = expr();
+                branches.add(new Branch(ci, block(), q));
             } else {
                 otherwise = block();
+                break;
             }
         }
-        return new IfStmt(c, then, otherwise, p);
+        return new IfStmt(List.copyOf(branches), otherwise, p);
     }
 
     private static boolean isValueIf(IfStmt s) {
-        return s.otherwise() != null && s.then().result() != null && s.otherwise().result() != null;
+        if (s.otherwise() == null || s.otherwise().result() == null) return false;
+        for (Branch b : s.branches()) if (b.then().result() == null) return false;
+        return true;
     }
 
     private static IfExpr toIfExpr(IfStmt s) {
-        return new IfExpr(s.cond(), s.then(), s.otherwise(), s.pos());
+        return new IfExpr(s.branches(), s.otherwise(), s.pos());
     }
 
     // ------------------------------------------------------------------ expressions
 
     Expr expr() {
-        return conditional();
+        enter(peek().pos());
+        Expr e = conditional();
+        leave();
+        return e;
+    }
+
+    /**
+     * Operator chains of {@code +}/{@code -}, {@code *}, {@code &&} and {@code ||} are read in a loop and built as a
+     * balanced tree (J18, review S2): up to {@value #CHAIN} operands left to right as written, longer chains split in the
+     * middle, so a chain of n operands nests about {@code CHAIN + log2(n / CHAIN)} deep and every later pass (the checker,
+     * the emitter, the interpreter, javac and JuLC) recurses only that far. The operands keep their order, so evaluation
+     * order and laziness are unchanged, and the value is the same: integers are exact, {@code &&}/{@code ||} associate,
+     * and a split at a {@code -} flips the signs inside its right part ({@code a - b + c = a - (b - c)}).
+     */
+    static final int CHAIN = 8;
+
+    private Expr chain(List<Expr> ts, List<String> ops, int lo, int hi, boolean flip) {
+        if (hi - lo < CHAIN) {
+            Expr l = ts.get(lo);
+            for (int j = lo + 1; j <= hi; j++) l = new Binary(flip ? flipped(ops.get(j)) : ops.get(j), l, ts.get(j), startOf(l));
+            return l;
+        }
+        int mid = (lo + hi + 1) / 2;
+        Expr l = chain(ts, ops, lo, mid - 1, flip);
+        String op = flip ? flipped(ops.get(mid)) : ops.get(mid);
+        Expr r = chain(ts, ops, mid, hi, flip ^ op.equals("-"));
+        return new Binary(op, l, r, startOf(l));
+    }
+
+    private static String flipped(String op) {
+        return switch (op) {
+            case "+" -> "-";
+            case "-" -> "+";
+            default -> op;
+        };
     }
 
     private Expr conditional() {
@@ -574,21 +652,23 @@ final class Parser {
     }
 
     private Expr or() {
-        Expr l = and();
+        var ts = new ArrayList<Expr>(List.of(and()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
         while (at("||")) {
-            Pos p = next().pos();
-            l = new Binary("||", l, and(), startOf(l));
+            ops.add(next().text());
+            ts.add(and());
         }
-        return l;
+        return chain(ts, ops, 0, ts.size() - 1, false);
     }
 
     private Expr and() {
-        Expr l = equality();
+        var ts = new ArrayList<Expr>(List.of(equality()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
         while (at("&&")) {
-            Pos p = next().pos();
-            l = new Binary("&&", l, equality(), startOf(l));
+            ops.add(next().text());
+            ts.add(equality());
         }
-        return l;
+        return chain(ts, ops, 0, ts.size() - 1, false);
     }
 
     private Expr equality() {
@@ -612,20 +692,26 @@ final class Parser {
     }
 
     private Expr additive() {
-        Expr l = multiplicative();
+        var ts = new ArrayList<Expr>(List.of(multiplicative()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
         while (at("+") || at("-")) {
-            Tok t = next();
-            l = new Binary(t.text(), l, multiplicative(), startOf(l));
+            ops.add(next().text());
+            ts.add(multiplicative());
         }
-        return l;
+        return chain(ts, ops, 0, ts.size() - 1, false);
     }
 
+    /** {@code *} chains are balanced; a chain with {@code /} or {@code %} is not associative and stays as written. */
     private Expr multiplicative() {
-        Expr l = unary();
+        var ts = new ArrayList<Expr>(List.of(unary()));
+        var ops = new ArrayList<String>(java.util.Collections.singletonList(null));
         while (at("*") || at("/") || at("%")) {
-            Tok t = next();
-            l = new Binary(t.text(), l, unary(), startOf(l));
+            ops.add(next().text());
+            ts.add(unary());
         }
+        if (ops.stream().skip(1).allMatch("*"::equals)) return chain(ts, ops, 0, ts.size() - 1, false);
+        Expr l = ts.get(0);
+        for (int j = 1; j < ts.size(); j++) l = new Binary(ops.get(j), l, ts.get(j), startOf(l));
         return l;
     }
 
@@ -635,7 +721,10 @@ final class Parser {
         }
         if (at("!") || at("-")) {
             Tok t = next();
-            return new Unary(t.text(), unary(), t.pos());
+            enter(t.pos());
+            Expr operand = unary();
+            leave();
+            return new Unary(t.text(), operand, t.pos());
         }
         return postfix();
     }
