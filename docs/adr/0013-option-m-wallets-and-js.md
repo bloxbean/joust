@@ -414,6 +414,10 @@ TeaVM. Web Image is experimental, and so is everything here.
 
 ### 10.2 Portable transitions (`-Ajoust.portable=true`)
 
+> **Retired** (ADR-0020 §12.3, r11): `-Ajoust.portable`, `PortableGenerator`, the dApp's `:wasm` image (§10.3), its
+> in-page recomputation and its serverless call (§10.4) are removed; ADR-0015's engine runs the transition programs.
+> `@julclang/state-client`'s `portable` option is deprecated and ignored. §10.2–§10.4 are kept as the record.
+
 `PortableGenerator` writes `<Name>Portable`:
 - **The contract's pure transitions**, with generated non-reflective codecs over julc-core's `PlutusData`: records,
   sealed variants, Bool, Optional, `JulcList`, `JulcMap`, ledger types and `@NewType`s.

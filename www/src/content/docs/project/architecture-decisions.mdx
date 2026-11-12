@@ -269,7 +269,8 @@ prepares an unsigned transaction for an address-only `WalletAccount` (`Compose.p
 the wallet signs, and **the page verifies every transaction before the wallet is asked** (D2). D3 describes each
 contract for JavaScript (CIP-57 plus `x-joust`), from which `@julclang/state-client` encodes calls, verifies and
 generates typed clients (`joust-gen`); `julc-state-server` is the prepare service. Phase 4 ran a contract's Java in
-the page through GraalVM Web Image (`-Ajoust.portable=true`); ADR-0015's engines replace it.
+the page through GraalVM Web Image (`-Ajoust.portable=true`); ADR-0015's engines replaced it, and it is retired
+(ADR-0020 §12.3).
 
 Covered in: [Wallets](/apps/wallets/), [JavaScript clients](/apps/javascript-clients/),
 [Contract description](/reference/description-format/).

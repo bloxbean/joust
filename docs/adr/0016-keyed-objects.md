@@ -1650,6 +1650,9 @@ unchanged; the deviations below are the conservative readings chosen where the t
   (`RegistryPortable`, compiled and tested in the build; `RETIRES` marks the retires, whose "ends" keeps the node as
   `Retired_T`; R-G5). The JVM prepare service (`julc-state-server`) refuses keyed calls and, since the review (R-G1), a
   keyed contract's creation: the engine prepares them (D11, "without the service").
+  *Forward note (ADR-0020 §12.3, r11):* `-Ajoust.portable` is retired, with `RegistryPortable` and its test; the
+  `portable` option is deprecated and ignored, so F84's refusal is gone. The registry's keyed steps (`change`, `leave`,
+  `retire`, ...) are checked off chain by the engine's replays instead (`ReplayDifferentialTest`, `fixtures/m3/registry`).
 - *Wallet preparation and fees.* With a designated input, `prepare()` skips its extra funding pick (the designated input
   gives the change output; picking the largest UTxO again could pick it twice).
 
