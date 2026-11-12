@@ -109,13 +109,26 @@ public final class Prepare {
      */
     private static final Map<String, DescribedContract> LOADED = new HashMap<>();
 
+    /**
+     * How a loaded contract's transitions run: its programs, by JuLC's VM. Package-private for the comparison tests
+     * (ADR-0020 §11.4), which run the same calls through the contract's JVM methods and both; the manifest is checked
+     * first either way.
+     */
+    static java.util.function.Function<Contract, org.julclang.state.runtime.described.TransitionFn> transitions =
+            c -> new UplcTransitions(c.transitions());
+
+    /** Forgets the loaded contracts (the comparison tests, between modes). */
+    static void unload() {
+        LOADED.clear();
+    }
+
     static DescribedContract load(Contract c) throws Exception {
         String key = c.description() + '\u0000' + c.script() + '\u0000'
                 + (c.transitions() == null ? "" : new java.util.TreeMap<>(c.transitions()).toString()) + '\u0000' + c.manifest();
         DescribedContract d = LOADED.get(key);
         if (d == null) {
             ProgramManifest.check(c.manifest(), c.description(), c.script(), c.transitions() == null ? Map.of() : c.transitions());
-            d = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
+            d = new DescribedContract(JSON.readTree(c.description()), c.script(), transitions.apply(c));
             LOADED.put(key, d);
         }
         return d;

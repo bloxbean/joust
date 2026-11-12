@@ -11,11 +11,16 @@ dependencies {
     // ADR-0020 D8: the manifests' recompile check compiles the programs again with JuLC's compiler, independently.
     testImplementation libs.julc.compiler
     testImplementation libs.julc.stdlib
+    // ADR-0020 §11.4, the comparison mode: each recorded contract's JVM methods (<Name>Transitions compiled by javac
+    // against them) beside its programs.
+    ['counter', 'bank', 'vault', 'token', 'escrow', 'crowdfund', 'pool', 'fees', 'guild', 'locker', 'oracle', 'registry',
+     'staking', 'treasury', 'upgrade', 'dex'].each { testImplementation project(":examples:$it") }
 }
 
-// I3 on the JVM, and the vectors for I3 in Wasm (build/prepare-vectors.json).
+// I3 on the JVM, the vectors for I3 in Wasm (build/prepare-vectors.json), and the comparison mode (ADR-0020 §11.4).
 tasks.named('test') {
     dependsOn ':examples:counter:classes', ':examples:bank:classes'
+    maxHeapSize = '2g'
 }
 
 // ---- The runtime engine: a GraalVM Web Image embedding julc-wasm (JuLC ADR-064).
