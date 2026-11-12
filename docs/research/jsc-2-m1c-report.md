@@ -330,3 +330,23 @@ Round r2:
 
 Round r1 (`6392c46`): the same suites green, with two DevKit tests in modules M1c does not touch failing on DevKit's
 faucet and its tip (they passed when run again).
+
+## After the M1 integration (`feat/jsc-2-m1`)
+
+M1e (#71) replaced the generated messages with name-free keys (ADR-0018 D12, r12), so every port's script changed
+once. The gates were rerun on the merged branch (`JscV2M1cGateTest`, 4 tests, none failed): every port is smaller,
+and no execution unit changed (all 62 measured calls give the same CPU and memory, before and after: the messages are
+only traced on a refusal).
+
+| Contract | Java (B) | `.jsc` 2 at M1c's head (B) | `.jsc` 2 merged (B) | Change against Java | Script hash at M1c's head → merged |
+|---|---|---|---|---|---|
+| Vault | 6,281 | 6,517 | 6,461 | +2.9% | `d3ceee9b…` → `ea634798…` |
+| Escrow | 5,696 | 6,068 | 5,937 | +4.2% | `393f9fa5…` → `b61b16ca…` |
+| Crowdfund | 7,984 | 8,175 | 8,079 | +1.2% | `e51c8f4d…` → `a5caeaac…` |
+| Token | 11,815 | 12,150 | 12,062 | +2.1% | `a649a9fa…` → `61df2074…` |
+| Pool | 9,595 | 9,910 | 9,829 | +2.4% | `dba3bc6b…` → `ff54fc63…` |
+
+The Java examples' scripts are unchanged. The budget gate's two warnings are unchanged too: Pool's `buy` in a batch of
+8 with change uses 40.1% of the CPU and 88.6% of the memory maximum (40.2% / 88.6% at saturation). The four-way tests
+gained the fifth leg (`JscV2M1cFourWayTest.fiveWay_theJavaScriptInterpreterAgrees`: 503 calls, the JavaScript
+interpreter included), and `JscV2HashStabilityTest` now builds the ports too, since it reads every `.jsc` 2 example.
