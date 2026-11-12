@@ -99,6 +99,12 @@ jobs:
         working-directory: js/joust
         run: node --test test/cli.test.js
 
+      # The .jsc 2 reference interpreter (ADR-0018 D15): its crypto and the semantics' hand-written vectors. No packages
+      # installed. The five-way differential tests in ./gradlew build run it too.
+      - name: Test the .jsc reference interpreter
+        working-directory: js/jsc-interpreter
+        run: npm test
+
       # ADR-0017 D7, D10: the Homebrew formula and JOUST's version order; the release flags' combinations.
       - name: Test the release scripts
         run: |

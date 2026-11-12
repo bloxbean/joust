@@ -1,0 +1,1095 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "a242b1d2389454dad9b59c94c3d34360b55f77417834a90c7ad7eb9f3954705a",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Ledger",
+  "source": "Ledger.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "2048" }],
+  "records": [],
+  "enums": [
+    {
+      "name": "Phase",
+      "variants": [
+        { "name": "Open", "fields": [], "at": [10, 3] },
+        { "name": "Paused", "fields": [{ "name": "reason", "type": "Bytes" }], "at": [11, 3] },
+        {
+          "name": "Closed",
+          "fields": [{ "name": "day", "type": "Int" }, { "name": "by", "type": "Key" }],
+          "at": [12, 3]
+        }
+      ],
+      "at": [9, 1]
+    }
+  ],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "admin", "type": "Key" },
+      { "name": "phase", "type": { "enum": "Phase" } },
+      { "name": "limits", "type": { "map": ["Key", "Int"] } },
+      { "name": "balances", "type": { "bigmap": ["Key", "Int"] } },
+      { "name": "supply", "type": "Int" }
+    ],
+    "at": [15, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [{ "id": 1, "name": "limits", "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [25, 8] }],
+      "mods": [],
+      "checked": [1],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "MapHof",
+              "kind": "all",
+              "map": { "node": "LocalRef", "local": 1, "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [26, 13] },
+              "k": { "id": 2, "name": "k", "type": "Key", "taint": 0, "at": [26, 24] },
+              "v": { "id": 3, "name": "v", "type": "Int", "taint": 0, "at": [26, 24] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Compare",
+                  "op": ">",
+                  "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [26, 34] },
+                  "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [26, 38] },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [26, 34]
+                },
+                "at": [26, 24]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [26, 13]
+            },
+            "message": "limits must be positive",
+            "at": [26, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [27, 21] },
+            {
+              "node": "Variant",
+              "enum": "Phase",
+              "variant": "Open",
+              "values": [],
+              "type": { "enum": "Phase" },
+              "taint": 0,
+              "at": [27, 36]
+            },
+            { "node": "LocalRef", "local": 1, "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [27, 42] },
+            { "node": "BigEmpty", "type": { "bigmap": ["Key", "Int"] }, "taint": 0, "at": [27, 60] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [27, 84] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [27, 12]
+        },
+        "at": [25, 31]
+      },
+      "at": [25, 3]
+    },
+    {
+      "kind": "action",
+      "name": "pause",
+      "params": [{ "id": 4, "name": "reason", "type": "Bytes", "taint": 0, "at": [30, 16] }],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "StateField", "field": "phase", "type": { "enum": "Phase" }, "taint": 0, "at": [31, 13] },
+              "right": {
+                "node": "Variant",
+                "enum": "Phase",
+                "variant": "Open",
+                "values": [],
+                "type": { "enum": "Phase" },
+                "taint": 0,
+                "at": [31, 22]
+              },
+              "operand": { "enum": "Phase" },
+              "type": "Bool",
+              "taint": 0,
+              "at": [31, 13]
+            },
+            "message": "not open",
+            "at": [31, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": "<=",
+              "left": {
+                "node": "CallStd",
+                "module": "std/bytes",
+                "name": "length",
+                "args": [{ "node": "LocalRef", "local": 4, "type": "Bytes", "taint": 0, "at": [32, 20] }],
+                "type": "Int",
+                "taint": 0,
+                "at": [32, 13]
+              },
+              "right": { "node": "Lit", "value": "32", "type": "Int", "taint": 0, "at": [32, 31] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [32, 13]
+            },
+            "message": "reason too long",
+            "at": [32, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [33, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [33, 12]
+            },
+            {
+              "node": "Variant",
+              "enum": "Phase",
+              "variant": "Paused",
+              "values": [{ "node": "LocalRef", "local": 4, "type": "Bytes", "taint": 0, "at": [33, 40] }],
+              "type": { "enum": "Phase" },
+              "taint": 0,
+              "at": [33, 31]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [33, 17] },
+              "record": "State",
+              "field": "limits",
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [33, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [33, 17] },
+              "record": "State",
+              "field": "balances",
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [33, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [33, 17] },
+              "record": "State",
+              "field": "supply",
+              "type": "Int",
+              "taint": 0,
+              "at": [33, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [33, 12]
+        },
+        "at": [30, 42]
+      },
+      "at": [30, 3]
+    },
+    {
+      "kind": "action",
+      "name": "close",
+      "params": [{ "id": 5, "name": "day", "type": "Int", "taint": 0, "at": [36, 16] }],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Match",
+            "scrutinee": { "node": "StateField", "field": "phase", "type": { "enum": "Phase" }, "taint": 0, "at": [37, 11] },
+            "arms": [
+              {
+                "ctors": ["Closed"],
+                "fields": [],
+                "binds": [],
+                "body": {
+                  "stmts": [
+                    {
+                      "stmt": "Require",
+                      "cond": { "node": "Lit", "value": false, "type": "Bool", "taint": 0, "at": [38, 25] },
+                      "message": "already closed",
+                      "at": [38, 17]
+                    }
+                  ],
+                  "result": null,
+                  "at": [38, 17]
+                },
+                "at": [38, 7]
+              },
+              {
+                "ctors": ["Open", "Paused"],
+                "fields": [],
+                "binds": [],
+                "body": { "stmts": [], "result": null, "at": [39, 12] },
+                "at": [39, 7]
+              }
+            ],
+            "pays": false,
+            "at": [37, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [41, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [41, 12]
+            },
+            {
+              "node": "Variant",
+              "enum": "Phase",
+              "variant": "Closed",
+              "values": [
+                { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [41, 40] },
+                { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [41, 49] }
+              ],
+              "type": { "enum": "Phase" },
+              "taint": 0,
+              "at": [41, 31]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [41, 17] },
+              "record": "State",
+              "field": "limits",
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [41, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [41, 17] },
+              "record": "State",
+              "field": "balances",
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [41, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [41, 17] },
+              "record": "State",
+              "field": "supply",
+              "type": "Int",
+              "taint": 0,
+              "at": [41, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [41, 12]
+        },
+        "at": [36, 37]
+      },
+      "at": [36, 3]
+    },
+    {
+      "kind": "action",
+      "name": "setLimit",
+      "params": [
+        { "id": 6, "name": "who", "type": "Key", "taint": 0, "at": [44, 19] },
+        { "id": 7, "name": "limit", "type": "Int", "taint": 0, "at": [44, 29] }
+      ],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [6],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [45, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [45, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [45, 13]
+            },
+            "message": "a limit is not negative",
+            "at": [45, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "phase",
+              "type": { "enum": "Phase" },
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "Cond",
+              "cond": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [46, 32] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [46, 41] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [46, 32]
+              },
+              "then": {
+                "node": "MapOp",
+                "op": "delete",
+                "map": {
+                  "node": "StateField",
+                  "field": "limits",
+                  "type": { "map": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [46, 45]
+                },
+                "args": [{ "node": "LocalRef", "local": 6, "type": "Key", "taint": 0, "at": [46, 59] }],
+                "type": { "map": ["Key", "Int"] },
+                "taint": 0,
+                "at": [46, 45]
+              },
+              "otherwise": {
+                "node": "MapOp",
+                "op": "set",
+                "map": {
+                  "node": "StateField",
+                  "field": "limits",
+                  "type": { "map": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [46, 66]
+                },
+                "args": [
+                  { "node": "LocalRef", "local": 6, "type": "Key", "taint": 0, "at": [46, 77] },
+                  { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [46, 82] }
+                ],
+                "type": { "map": ["Key", "Int"] },
+                "taint": 0,
+                "at": [46, 66]
+              },
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [46, 32]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "balances",
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "supply",
+              "type": "Int",
+              "taint": 0,
+              "at": [46, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [46, 12]
+        },
+        "at": [44, 52]
+      },
+      "at": [44, 3]
+    },
+    {
+      "kind": "action",
+      "name": "mint",
+      "params": [
+        { "id": 8, "name": "to", "type": "Key", "taint": 0, "at": [50, 15] },
+        { "id": 9, "name": "amount", "type": "Int", "taint": 0, "at": [50, 24] }
+      ],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [8],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "StateField", "field": "phase", "type": { "enum": "Phase" }, "taint": 0, "at": [51, 13] },
+              "right": {
+                "node": "Variant",
+                "enum": "Phase",
+                "variant": "Open",
+                "values": [],
+                "type": { "enum": "Phase" },
+                "taint": 0,
+                "at": [51, 22]
+              },
+              "operand": { "enum": "Phase" },
+              "type": "Bool",
+              "taint": 0,
+              "at": [51, 13]
+            },
+            "message": "not open",
+            "at": [51, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [52, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [52, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [52, 13]
+            },
+            "message": "amount must be positive",
+            "at": [52, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 10, "name": "cap", "type": "Int", "taint": 0, "at": [53, 5] },
+            "value": {
+              "node": "Coalesce",
+              "option": {
+                "node": "MapOp",
+                "op": "get",
+                "map": {
+                  "node": "StateField",
+                  "field": "limits",
+                  "type": { "map": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [53, 17]
+                },
+                "args": [{ "node": "LocalRef", "local": 8, "type": "Key", "taint": 0, "at": [53, 28] }],
+                "type": { "option": "Int" },
+                "taint": 0,
+                "at": [53, 17]
+              },
+              "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [53, 35] },
+              "type": "Int",
+              "taint": 0,
+              "at": [53, 17]
+            },
+            "at": [53, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": "<=",
+              "left": {
+                "node": "Arith",
+                "op": "+",
+                "left": {
+                  "node": "BigOp",
+                  "op": "at",
+                  "map": {
+                    "node": "StateField",
+                    "field": "balances",
+                    "type": { "bigmap": ["Key", "Int"] },
+                    "taint": 0,
+                    "at": [54, 13]
+                  },
+                  "args": [{ "node": "LocalRef", "local": 8, "type": "Key", "taint": 0, "at": [54, 22] }],
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [54, 13]
+                },
+                "right": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [54, 28] },
+                "type": "Int",
+                "taint": 0,
+                "at": [54, 13]
+              },
+              "right": { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [54, 38] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [54, 13]
+            },
+            "message": "over the holder's limit",
+            "at": [54, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [55, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [55, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [55, 17] },
+              "record": "State",
+              "field": "phase",
+              "type": { "enum": "Phase" },
+              "taint": 0,
+              "at": [55, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [55, 17] },
+              "record": "State",
+              "field": "limits",
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [55, 12]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "balances",
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [55, 34]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 8, "type": "Key", "taint": 0, "at": [55, 47] },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "BigOp",
+                    "op": "at",
+                    "map": {
+                      "node": "StateField",
+                      "field": "balances",
+                      "type": { "bigmap": ["Key", "Int"] },
+                      "taint": 0,
+                      "at": [55, 51]
+                    },
+                    "args": [{ "node": "LocalRef", "local": 8, "type": "Key", "taint": 0, "at": [55, 60] }],
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [55, 51]
+                  },
+                  "right": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [55, 66] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [55, 51]
+                }
+              ],
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [55, 34]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "supply", "type": "Int", "taint": 0, "at": [55, 83] },
+              "right": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [55, 92] },
+              "type": "Int",
+              "taint": 0,
+              "at": [55, 83]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [55, 12]
+        },
+        "at": [50, 48]
+      },
+      "at": [50, 3]
+    },
+    {
+      "kind": "action",
+      "name": "transfer",
+      "params": [
+        { "id": 11, "name": "to", "type": "Key", "taint": 0, "at": [59, 19] },
+        { "id": 12, "name": "amount", "type": "Int", "taint": 0, "at": [59, 28] }
+      ],
+      "mods": [],
+      "checked": [11],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 12, "type": "Int", "taint": 0, "at": [60, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [60, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [60, 13]
+            },
+            "message": "amount must be positive",
+            "at": [60, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 13, "name": "left", "type": "Int", "taint": 0, "at": [61, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "-",
+              "left": {
+                "node": "BigOp",
+                "op": "at",
+                "map": {
+                  "node": "StateField",
+                  "field": "balances",
+                  "type": { "bigmap": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [61, 18]
+                },
+                "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [61, 27] }],
+                "type": "Int",
+                "taint": 0,
+                "at": [61, 18]
+              },
+              "right": { "node": "LocalRef", "local": 12, "type": "Int", "taint": 0, "at": [61, 37] },
+              "type": "Int",
+              "taint": 0,
+              "at": [61, 18]
+            },
+            "at": [61, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [62, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [62, 21] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [62, 13]
+            },
+            "message": "insufficient balance",
+            "at": [62, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [63, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [63, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [63, 17] },
+              "record": "State",
+              "field": "phase",
+              "type": { "enum": "Phase" },
+              "taint": 0,
+              "at": [63, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [63, 17] },
+              "record": "State",
+              "field": "limits",
+              "type": { "map": ["Key", "Int"] },
+              "taint": 0,
+              "at": [63, 12]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "BigOp",
+                "op": "set",
+                "map": {
+                  "node": "StateField",
+                  "field": "balances",
+                  "type": { "bigmap": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [63, 34]
+                },
+                "args": [
+                  { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [63, 47] },
+                  { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [63, 55] }
+                ],
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [63, 34]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 11, "type": "Key", "taint": 0, "at": [63, 65] },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "BigOp",
+                    "op": "at",
+                    "map": {
+                      "node": "BigOp",
+                      "op": "set",
+                      "map": {
+                        "node": "StateField",
+                        "field": "balances",
+                        "type": { "bigmap": ["Key", "Int"] },
+                        "taint": 0,
+                        "at": [63, 69]
+                      },
+                      "args": [
+                        { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [63, 82] },
+                        { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [63, 90] }
+                      ],
+                      "type": { "bigmap": ["Key", "Int"] },
+                      "taint": 0,
+                      "at": [63, 69]
+                    },
+                    "args": [{ "node": "LocalRef", "local": 11, "type": "Key", "taint": 0, "at": [63, 96] }],
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [63, 69]
+                  },
+                  "right": { "node": "LocalRef", "local": 12, "type": "Int", "taint": 0, "at": [63, 102] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [63, 69]
+                }
+              ],
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [63, 34]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [63, 17] },
+              "record": "State",
+              "field": "supply",
+              "type": "Int",
+              "taint": 0,
+              "at": [63, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [63, 12]
+        },
+        "at": [59, 41]
+      },
+      "at": [59, 3]
+    },
+    {
+      "kind": "view",
+      "name": "balanceOf",
+      "params": [{ "id": 14, "name": "who", "type": "Key", "taint": 0, "at": [66, 18] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "BigOp",
+          "op": "at",
+          "map": {
+            "node": "StateField",
+            "field": "balances",
+            "type": { "bigmap": ["Key", "Int"] },
+            "taint": 0,
+            "at": [66, 35]
+          },
+          "args": [{ "node": "LocalRef", "local": 14, "type": "Key", "taint": 0, "at": [66, 44] }],
+          "type": "Int",
+          "taint": 0,
+          "at": [66, 35]
+        },
+        "at": [66, 35]
+      },
+      "at": [66, 3]
+    },
+    {
+      "kind": "view",
+      "name": "limitOf",
+      "params": [{ "id": 15, "name": "who", "type": "Key", "taint": 0, "at": [68, 16] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Coalesce",
+          "option": {
+            "node": "MapOp",
+            "op": "get",
+            "map": { "node": "StateField", "field": "limits", "type": { "map": ["Key", "Int"] }, "taint": 0, "at": [68, 33] },
+            "args": [{ "node": "LocalRef", "local": 15, "type": "Key", "taint": 0, "at": [68, 44] }],
+            "type": { "option": "Int" },
+            "taint": 0,
+            "at": [68, 33]
+          },
+          "default": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [68, 52] },
+          "type": "Int",
+          "taint": 0,
+          "at": [68, 33]
+        },
+        "at": [68, 33]
+      },
+      "at": [68, 3]
+    },
+    {
+      "kind": "view",
+      "name": "phaseCode",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Match",
+          "scrutinee": { "node": "StateField", "field": "phase", "type": { "enum": "Phase" }, "taint": 0, "at": [70, 33] },
+          "arms": [
+            {
+              "ctors": ["Open"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [71, 13] },
+                "at": [71, 13]
+              },
+              "at": [71, 5]
+            },
+            {
+              "ctors": ["Paused"],
+              "fields": ["reason"],
+              "binds": [{ "id": 16, "name": "reason", "type": "Bytes", "taint": 0, "at": [72, 14] }],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [72, 26] },
+                  "right": {
+                    "node": "CallStd",
+                    "module": "std/bytes",
+                    "name": "length",
+                    "args": [{ "node": "LocalRef", "local": 16, "type": "Bytes", "taint": 0, "at": [72, 37] }],
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [72, 30]
+                  },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [72, 26]
+                },
+                "at": [72, 26]
+              },
+              "at": [72, 5]
+            },
+            {
+              "ctors": ["Closed"],
+              "fields": ["day"],
+              "binds": [{ "id": 17, "name": "day", "type": "Int", "taint": 0, "at": [73, 14] }],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": { "node": "Lit", "value": "100", "type": "Int", "taint": 0, "at": [73, 23] },
+                  "right": { "node": "LocalRef", "local": 17, "type": "Int", "taint": 0, "at": [73, 29] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [73, 23]
+                },
+                "at": [73, 23]
+              },
+              "at": [73, 5]
+            }
+          ],
+          "type": "Int",
+          "taint": 0,
+          "at": [70, 27]
+        },
+        "at": [70, 27]
+      },
+      "at": [70, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "settle",
+      "params": [],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "BigOp",
+              "op": "isEmpty",
+              "map": {
+                "node": "StateField",
+                "field": "balances",
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [78, 13]
+              },
+              "args": [],
+              "type": "Bool",
+              "taint": 0,
+              "at": [78, 13]
+            },
+            "message": "tokens remain",
+            "at": [78, 5]
+          },
+          {
+            "stmt": "Match",
+            "scrutinee": { "node": "StateField", "field": "phase", "type": { "enum": "Phase" }, "taint": 0, "at": [79, 11] },
+            "arms": [
+              {
+                "ctors": ["Closed"],
+                "fields": ["by"],
+                "binds": [{ "id": 18, "name": "by", "type": "Key", "taint": 0, "at": [80, 16] }],
+                "body": {
+                  "stmts": [
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "LocalRef", "local": 18, "type": "Key", "taint": 0, "at": [81, 13] },
+                      "amount": {
+                        "node": "Arith",
+                        "op": "/",
+                        "left": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [81, 17] },
+                        "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [81, 27] },
+                        "type": "Int",
+                        "taint": 0,
+                        "at": [81, 17]
+                      },
+                      "at": [81, 9]
+                    },
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "StateField", "field": "admin", "type": "Key", "taint": 0, "at": [82, 13] },
+                      "amount": {
+                        "node": "Arith",
+                        "op": "-",
+                        "left": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [82, 20] },
+                        "right": {
+                          "node": "Arith",
+                          "op": "/",
+                          "left": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [82, 30] },
+                          "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [82, 40] },
+                          "type": "Int",
+                          "taint": 0,
+                          "at": [82, 30]
+                        },
+                        "type": "Int",
+                        "taint": 0,
+                        "at": [82, 20]
+                      },
+                      "at": [82, 9]
+                    }
+                  ],
+                  "result": null,
+                  "at": [80, 24]
+                },
+                "at": [80, 7]
+              },
+              {
+                "ctors": ["Open", "Paused"],
+                "fields": [],
+                "binds": [],
+                "body": {
+                  "stmts": [
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "StateField", "field": "admin", "type": "Key", "taint": 0, "at": [85, 13] },
+                      "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [85, 20] },
+                      "at": [85, 9]
+                    }
+                  ],
+                  "result": null,
+                  "at": [84, 12]
+                },
+                "at": [84, 7]
+              }
+            ],
+            "pays": true,
+            "at": [79, 5]
+          }
+        ],
+        "result": null,
+        "at": [77, 31]
+      },
+      "at": [77, 3]
+    }
+  ],
+  "warnings": []
+}

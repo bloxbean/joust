@@ -176,11 +176,55 @@ public final class Interpreter {
     /** A call's result: the next state (init, action), the view's value, or null (destroy); and the payouts. */
     public record Outcome(Object value, List<Payment> payouts) {}
 
-    /** The call fails (a require, a checked input, a binding's domain, a division by zero, a negative payout). */
+    /**
+     * The call fails (a require, a checked input, a binding's domain, a division by zero, a negative payout). Its class
+     * (semantics §2.5, review S4, S6) says which rule: {@code require} with the require's position and message, {@code input} with the
+     * parameter's name, or {@code domain} with the operation ({@code /}, {@code slice}, {@code Map.set}, …). The
+     * differential tests compare the class with the JavaScript interpreter's.
+     */
     public static final class Refused extends RuntimeException {
-        public Refused(String message) {
+        private final String kind, detail;
+
+        public Refused(String message, String kind, String detail) {
+            super(message);
+            this.kind = kind;
+            this.detail = detail;
+        }
+
+        /** A domain failure of {@code op}. */
+        static Refused domain(String op, String message) {
+            return new Refused(message, "domain", op);
+        }
+
+        /** {@code kind:detail}. */
+        public String refusal() {
+            return kind + ":" + detail;
+        }
+    }
+
+    /**
+     * The interpreter could not finish: its stack ran out (semantics §2.4). No answer, never a refusal: the chain may
+     * accept the call within its budget, so the differential tests treat it as a failure of this leg (review S1).
+     */
+    public static final class Limit extends RuntimeException {
+        public Limit(String message) {
             super(message);
         }
+    }
+
+    /**
+     * The call was cancelled: the thread waiting for it was interrupted (review C3). No answer, never a refusal. The
+     * evaluation stops at its next step and has ended when this is thrown; the waiting thread keeps its interrupt.
+     */
+    public static final class Cancelled extends RuntimeException {
+        public Cancelled(String message) {
+            super(message);
+        }
+    }
+
+    /** Ends an evaluation whose waiting caller was interrupted, at an evaluation step (every expression and statement list). */
+    private static void checkCancelled() {
+        if (Thread.currentThread().isInterrupted()) throw new Cancelled("the call was cancelled (no answer)");
     }
 
     /** Hash functions for std/crypto. sha2_256 is the JDK's; blake2b needs a provider (tests pass an independent one). */
@@ -207,8 +251,8 @@ public final class Interpreter {
      * R, a non-canonical key or S, a key off the curve are all false (review C3, S5).
      */
     static boolean verifyEd25519(byte[] key, byte[] msg, byte[] sig) {
-        if (key.length != 32) throw new Refused("verifyEd25519: the key must be 32 bytes");
-        if (sig.length != 64) throw new Refused("verifyEd25519: the signature must be 64 bytes");
+        if (key.length != 32) throw Refused.domain("verifyEd25519", "verifyEd25519: the key must be 32 bytes");
+        if (sig.length != 64) throw Refused.domain("verifyEd25519", "verifyEd25519: the signature must be 64 bytes");
         return Ed25519.verify(key, msg, sig);
     }
 
@@ -276,12 +320,53 @@ public final class Interpreter {
         Ir.Method m = method(name);
         if (args.size() != m.params().size()) throw new IllegalArgumentException(name + " takes " + m.params().size() + " arguments");
         if ((m.kind() == Ir.Kind.INIT) != (state == null)) throw new IllegalArgumentException("an init has no input state; others do");
+        return deep(() -> run(m, state, args, tx));
+    }
+
+    /** The stack calls run on (semantics §2.4): deep enough for the recursion a transaction's budget allows. */
+    static final long STACK_BYTES = 512L << 20;
+
+    /**
+     * Runs an evaluation on a thread with a {@link #STACK_BYTES} stack, so recursion as deep as the chain's budget allows
+     * gets an answer (review S1). A stack overflow even there is a {@link Limit}, never a refusal. If the waiting thread is
+     * interrupted, the evaluation is interrupted too, stops at its next step, and is waited for before this throws
+     * {@link Cancelled} with the waiter's interrupt restored (review C3): nothing keeps running after its caller has gone.
+     * The evaluator is a daemon thread, so it never holds a JVM open either.
+     */
+    private static <T> T deep(java.util.function.Supplier<T> eval) {
+        Object[] out = new Object[1];
+        Throwable[] err = new Throwable[1];
+        Thread t = new Thread(null, () -> {
+            try {
+                out[0] = eval.get();
+            } catch (StackOverflowError e) {
+                err[0] = new Limit("evaluation too deep for this interpreter's stack (no answer, semantics §2.4)");
+            } catch (Throwable e) {
+                err[0] = e;
+            }
+        }, "jsc-interpreter", STACK_BYTES);
+        t.setDaemon(true);
+        t.start();
         try {
-            return run(m, state, args, tx);
-        } catch (StackOverflowError e) {
-            // Unbounded recursion: on-chain the budget ends it; here the stack does (J18).
-            throw new Refused("evaluation too deep");
+            t.join();
+        } catch (InterruptedException e) {
+            t.interrupt();
+            while (t.isAlive()) {
+                try {
+                    t.join();
+                } catch (InterruptedException again) {
+                    // keep waiting: the evaluation ends at its next step
+                }
+            }
+            Thread.currentThread().interrupt();
+            throw new Cancelled("the call was cancelled: its caller was interrupted (no answer)");
         }
+        if (err[0] instanceof RuntimeException r) throw r;
+        if (err[0] instanceof Error e) throw e;
+        if (err[0] != null) throw new IllegalStateException(err[0]);
+        @SuppressWarnings("unchecked")
+        T v = (T) out[0];
+        return v;
     }
 
     private Outcome run(Ir.Method m, Rec state, List<Object> args, Tx tx) {
@@ -290,7 +375,7 @@ public final class Interpreter {
         for (int i = 0; i < args.size(); i++) env = new Env(m.params().get(i), args.get(i), env);
         // Checked inputs (D5): every nested key is 28 bytes, before the body runs.
         for (Ir.Local l : m.checked()) {
-            if (!checked(lookup(env, l), l.type)) throw new Refused(l.name + " is not a well-formed input");
+            if (!checked(lookup(env, l), l.type)) throw new Refused(l.name + " is not a well-formed input", "input", l.name);
         }
         env = exec(m.body().stmts(), env, f);
         Object value = m.body().result() == null ? null : eval(m.body().result(), env, f);
@@ -299,7 +384,7 @@ public final class Interpreter {
 
     /** Calls a {@code fn} directly. */
     public Object callFn(String name, List<Object> args) {
-        return invoke(p.fn(name), args, new Frame(null, null));
+        return deep(() -> invoke(p.fn(name), args, new Frame(null, null)));
     }
 
     // ------------------------------------------------------------------ evaluation
@@ -324,18 +409,19 @@ public final class Interpreter {
     }
 
     private Env exec(List<Ir.Stmt> stmts, Env env, Frame f) {
+        checkCancelled();
         for (Ir.Stmt s : stmts) {
             switch (s) {
                 case Ir.Let l -> env = new Env(l.local(), eval(l.value(), env, f), env);
                 case Ir.Require r -> {
-                    if (!bool(eval(r.cond(), env, f))) throw new Refused(r.message());
+                    if (!bool(eval(r.cond(), env, f))) throw new Refused(r.message(), "require", r.pos().line() + ":" + r.pos().col() + ":" + r.message());
                 }
                 case Ir.Pay y -> {
                     // pay(to, amount) evaluates both arguments, left to right, like any call: pay is not one of D6's lazy
                     // positions. Then a negative amount fails and a zero amount is skipped (C12).
                     Bytes to = (Bytes) eval(y.to(), env, f);
                     BigInteger amount = integer(eval(y.amount(), env, f));
-                    if (amount.signum() < 0) throw new Refused("a payout cannot be negative");
+                    if (amount.signum() < 0) throw Refused.domain("pay", "a payout cannot be negative");
                     if (amount.signum() > 0) f.payouts.add(new Payment(to, amount));
                 }
                 case Ir.If i -> {
@@ -360,6 +446,7 @@ public final class Interpreter {
     }
 
     private Object eval(Ir.Expr e, Env env, Frame f) {
+        checkCancelled();
         return switch (e) {
             case Ir.Lit l -> l.value() instanceof byte[] b ? new Bytes(b) : l.value();
             case Ir.LocalRef r -> lookup(env, r.local());
@@ -439,9 +526,10 @@ public final class Interpreter {
                 yield List.copyOf(out);
             }
             case Ir.Contains c -> {
+                List<Object> xs = list(eval(c.list(), env, f));   // the receiver first (semantics §2.1)
                 Object v = eval(c.value(), env, f);
                 boolean hit = false;
-                for (Object x : list(eval(c.list(), env, f))) {
+                for (Object x : xs) {
                     if (same(x, v, c.elem())) {
                         hit = true;
                         break;
@@ -451,8 +539,9 @@ public final class Interpreter {
             }
             case Ir.Hof h -> hof(h, env, f);
             case Ir.Fold fo -> {
+                Iterable<Object> xs = iter(eval(fo.list(), env, f));   // the receiver first (semantics §2.1)
                 Object acc = eval(fo.init(), env, f);
-                for (Object x : iter(eval(fo.list(), env, f))) acc = block(fo.body(), new Env(fo.x(), x, new Env(fo.acc(), acc, env)), f);
+                for (Object x : xs) acc = block(fo.body(), new Env(fo.x(), x, new Env(fo.acc(), acc, env)), f);
                 yield acc;
             }
             case Ir.Variant v -> {
@@ -490,7 +579,7 @@ public final class Interpreter {
             case Ir.ListArg l -> {
                 List<Object> xs = list(eval(l.list(), env, f));
                 BigInteger n = integer(eval(l.arg(), env, f));
-                if (n.signum() < 0) throw new Refused(l.op() + ": a negative count");
+                if (n.signum() < 0) throw Refused.domain("List." + l.op(), l.op() + ": a negative count");
                 int k = n.min(BigInteger.valueOf(xs.size())).intValue();
                 yield l.op().equals("take") ? List.copyOf(xs.subList(0, k)) : List.copyOf(xs.subList(k, xs.size()));
             }
@@ -523,7 +612,7 @@ public final class Interpreter {
             }
             case "has" -> m.indexOf((Bytes) a.get(0)) >= 0;
             case "set" -> {
-                if (((Bytes) a.get(0)).value.length > 64) throw new Refused("Map.set: a key has at most 64 bytes");
+                if (((Bytes) a.get(0)).value.length > 64) throw Refused.domain("Map.set", "Map.set: a key has at most 64 bytes");
                 yield m.set((Bytes) a.get(0), a.get(1));
             }
             case "delete" -> m.delete((Bytes) a.get(0));
@@ -546,21 +635,21 @@ public final class Interpreter {
             case "has" -> m.now().containsKey((Bytes) a.get(0));
             case "isEmpty" -> m.before().isEmpty() && !m.written();
             case "delete" -> {
-                if (((Bytes) a.get(0)).value.length > 64) throw new Refused("BigMap.delete: a key has at most 64 bytes");
+                if (((Bytes) a.get(0)).value.length > 64) throw Refused.domain("BigMap.delete", "BigMap.delete: a key has at most 64 bytes");
                 var now = new java.util.HashMap<>(m.now());
                 now.remove((Bytes) a.get(0));
                 yield new BigMapV(m.before(), now, true);
             }
             case "set" -> {
                 Bytes k = (Bytes) a.get(0);
-                if (k.value.length > 64) throw new Refused("BigMap.set: a key has at most 64 bytes");
+                if (k.value.length > 64) throw Refused.domain("BigMap.set", "BigMap.set: a key has at most 64 bytes");
                 var now = new java.util.HashMap<>(m.now());
                 if (ints) {
                     BigInteger v = integer(a.get(1));
-                    if (v.signum() < 0) throw new Refused("BigMap.set: a value cannot be negative");
+                    if (v.signum() < 0) throw Refused.domain("BigMap.set", "BigMap.set: a value cannot be negative");
                     // Stored as its minimal big-endian bytes (MerkleMaps.putInt: integerToByteString), at most 8,192 of
                     // them; a larger value fails where it is written, even if the write is later discarded (Codex C4).
-                    if ((v.bitLength() + 7) / 8 > 8192) throw new Refused("integerToByteString: result exceeds 8192 bytes");
+                    if ((v.bitLength() + 7) / 8 > 8192) throw Refused.domain("BigMap.set", "integerToByteString: result exceeds 8192 bytes");
                     if (v.signum() == 0) now.remove(k);   // 0 is absence (D7)
                     else now.put(k, v);
                 } else {
@@ -619,7 +708,7 @@ public final class Interpreter {
             case "-" -> a.subtract(b);
             case "*" -> a.multiply(b);
             case "/", "%" -> {
-                if (b.signum() == 0) throw new Refused("division by zero");
+                if (b.signum() == 0) throw Refused.domain(op, "division by zero");
                 BigInteger q = a.abs().divide(b.abs());
                 if (a.signum() * b.signum() < 0) q = q.negate();
                 yield op.equals("/") ? q : a.subtract(q.multiply(b));
@@ -739,7 +828,7 @@ public final class Interpreter {
             }
             case "div", "mod" -> {
                 BigInteger x = integer(a.get(0)), y = integer(a.get(1));
-                if (y.signum() == 0) throw new Refused(c.binding().name() + ": division by zero");
+                if (y.signum() == 0) throw Refused.domain(c.binding().name(), c.binding().name() + ": division by zero");
                 // Floor: the quotient rounds toward negative infinity; the remainder has the divisor's sign.
                 BigInteger[] qr = x.divideAndRemainder(y);
                 if (qr[1].signum() != 0 && qr[1].signum() != y.signum()) {
@@ -750,13 +839,13 @@ public final class Interpreter {
             }
             case "pow" -> {
                 BigInteger e = integer(a.get(1));
-                if (e.signum() < 0 || e.compareTo(BigInteger.valueOf(1024)) > 0) throw new Refused("pow: the exponent must be in [0, 1024]");
+                if (e.signum() < 0 || e.compareTo(BigInteger.valueOf(1024)) > 0) throw Refused.domain("pow", "pow: the exponent must be in [0, 1024]");
                 return integer(a.get(0)).pow(e.intValue());
             }
             case "expMod" -> {
                 BigInteger e = integer(a.get(1)), m = integer(a.get(2));
-                if (e.signum() < 0) throw new Refused("expMod: the exponent must not be negative");
-                if (m.signum() <= 0) throw new Refused("expMod: the modulus must be positive");
+                if (e.signum() < 0) throw Refused.domain("expMod", "expMod: the exponent must not be negative");
+                if (m.signum() <= 0) throw Refused.domain("expMod", "expMod: the modulus must be positive");
                 return integer(a.get(0)).modPow(e, m);
             }
             case "sign" -> {
@@ -769,7 +858,7 @@ public final class Interpreter {
             case "nth" -> {
                 List<Object> xs = list(a.get(0));
                 BigInteger i = integer(a.get(1));
-                if (i.signum() < 0) throw new Refused("nth: a negative index");
+                if (i.signum() < 0) throw Refused.domain("nth", "nth: a negative index");
                 return i.compareTo(BigInteger.valueOf(xs.size())) >= 0 ? Opt.NONE : Opt.some(xs.get(i.intValue()));
             }
             case "indexOf" -> {
@@ -795,7 +884,7 @@ public final class Interpreter {
             }
             case "take", "drop" -> {
                 BigInteger n = integer(a.get(1));
-                if (n.signum() < 0 || n.compareTo(TWO_31) >= 0) throw new Refused(c.binding().name() + ": n must be in [0, 2^31)");
+                if (n.signum() < 0 || n.compareTo(TWO_31) >= 0) throw Refused.domain(c.binding().name(), c.binding().name() + ": n must be in [0, 2^31)");
                 int k = (int) Math.min(n.longValue(), b.length);
                 yield new Bytes(c.binding().name().equals("take") ? Arrays.copyOfRange(b, 0, k) : Arrays.copyOfRange(b, k, b.length));
             }
@@ -808,13 +897,13 @@ public final class Interpreter {
             }
             case "readBit" -> {
                 BigInteger i = integer(a.get(1));
-                if (i.signum() < 0 || i.compareTo(TWO_31) >= 0) throw new Refused("readBit: index must be in [0, 2^31)");
-                if (i.compareTo(BigInteger.valueOf(8L * b.length)) >= 0) throw new Refused("readBit: index past the end");
+                if (i.signum() < 0 || i.compareTo(TWO_31) >= 0) throw Refused.domain("readBit", "readBit: index must be in [0, 2^31)");
+                if (i.compareTo(BigInteger.valueOf(8L * b.length)) >= 0) throw Refused.domain("readBit", "readBit: index past the end");
                 yield new BigInteger(1, b).testBit(i.intValue());
             }
             case "shift", "rotate" -> {
                 BigInteger n = integer(a.get(1));
-                if (n.compareTo(TWO_31.negate()) <= 0 || n.compareTo(TWO_31) >= 0) throw new Refused(c.binding().name() + ": n must be in (-2^31, 2^31)");
+                if (n.compareTo(TWO_31.negate()) <= 0 || n.compareTo(TWO_31) >= 0) throw Refused.domain(c.binding().name(), c.binding().name() + ": n must be in (-2^31, 2^31)");
                 yield new Bytes(shiftOrRotate(b, n.longValue(), c.binding().name().equals("rotate")));
             }
             case "countSetBits" -> BigInteger.valueOf(new BigInteger(1, b).bitCount());
@@ -822,16 +911,16 @@ public final class Interpreter {
             case "length" -> BigInteger.valueOf(b.length);
             case "slice" -> {
                 BigInteger start = integer(a.get(1)), n = integer(a.get(2));
-                if (start.signum() < 0 || start.compareTo(TWO_31) >= 0) throw new Refused("slice: start must be in [0, 2^31)");
-                if (n.signum() < 0 || n.compareTo(TWO_31) >= 0) throw new Refused("slice: length must be in [0, 2^31)");
+                if (start.signum() < 0 || start.compareTo(TWO_31) >= 0) throw Refused.domain("slice", "slice: start must be in [0, 2^31)");
+                if (n.signum() < 0 || n.compareTo(TWO_31) >= 0) throw Refused.domain("slice", "slice: length must be in [0, 2^31)");
                 // Clamped to the bytes, as the builtin: from min(start, len) to min(start + n, len).
                 long from = Math.min(start.longValue(), b.length), to = Math.min(start.longValue() + n.longValue(), b.length);
                 yield new Bytes(Arrays.copyOfRange(b, (int) from, (int) Math.max(from, to)));
             }
             case "byteAt" -> {
                 BigInteger i = integer(a.get(1));
-                if (i.signum() < 0 || i.compareTo(TWO_31) >= 0) throw new Refused("at: index must be in [0, 2^31)");
-                if (i.compareTo(BigInteger.valueOf(b.length)) >= 0) throw new Refused("at: index past the end");
+                if (i.signum() < 0 || i.compareTo(TWO_31) >= 0) throw Refused.domain("byteAt", "byteAt: index must be in [0, 2^31)");
+                if (i.compareTo(BigInteger.valueOf(b.length)) >= 0) throw Refused.domain("byteAt", "byteAt: index past the end");
                 yield BigInteger.valueOf(b[i.intValue()] & 0xff);
             }
             default -> throw new IllegalStateException(c.binding().name());
@@ -881,7 +970,7 @@ public final class Interpreter {
             case "max" -> integer(a.get(0)).max(integer(a.get(1)));
             case "abs" -> integer(a.get(0)).abs();
             case "asKey", "asHash" -> {
-                if (((Bytes) a.get(0)).value.length != 28) throw new Refused(c.op() + ": not a 28-byte hash");
+                if (((Bytes) a.get(0)).value.length != 28) throw Refused.domain(c.op(), c.op() + ": not a 28-byte hash");
                 yield a.get(0);
             }
             default -> throw new IllegalStateException(c.op());

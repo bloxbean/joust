@@ -48,7 +48,7 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `joust` (julc#311).
 
 ## Build / test
-- JDK 25. `./gradlew build`.
+- JDK 25 and Node 22 (the `.jsc` 2 five-way tests run the JavaScript reference interpreter, `js/jsc-interpreter`). `./gradlew build`.
 - Versions live in `gradle/libs.versions.toml`. CCL **0.8.0-pre7**. JuLC is the release **`0.1.0-pre21-rc1`** (with
   #311/#313), resolved from the BloxBean release repository (`https://repo.bloxbean.org/maven/releases`; not on Maven
   Central). `settings.gradle` lists the BloxBean repositories for the `org.julclang.julc` plugin too. A release refuses

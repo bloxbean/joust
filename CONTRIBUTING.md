@@ -12,7 +12,9 @@ through [SECURITY.md](SECURITY.md) instead, never a public issue.
 ## Prerequisites
 
 - **JDK 25** (Temurin recommended). Gradle comes from the wrapper (`./gradlew`).
-- **Node.js 22+** for the JavaScript packages under `js/` and the dApp example.
+- **Node.js 22+** on the `PATH`, also for `./gradlew build`: the `.jsc` 2 differential tests run the JavaScript
+  reference interpreter (`js/jsc-interpreter`, no packages to install). The JavaScript packages under `js/` and the dApp
+  example need it too.
 - **Optional:** [Yaci DevKit](https://github.com/bloxbean/yaci-devkit) for the end-to-end tests, with Yaci Store on
   `localhost:8080` and the admin API on `:10000`. Tests tagged `devnet` skip themselves when it isn't running.
 - **Optional:** Oracle GraalVM 25.3 with Web Image, and Binaryen, to rebuild the Wasm engines

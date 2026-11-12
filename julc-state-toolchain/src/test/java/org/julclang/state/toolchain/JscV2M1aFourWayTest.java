@@ -8,7 +8,10 @@ import org.julclang.state.dsl.v2.Interpreter.Opt;
 import org.julclang.state.dsl.v2.Interpreter.Rec;
 import org.julclang.state.dsl.v2.Interpreter.Tx;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * drop, and every M1a {@code std} row at its domain edges. Outcomes are also stated by hand where the rule is simple
  * enough to state independently.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class JscV2M1aFourWayTest {
 
     static final Path DSL = Path.of("../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl");
@@ -75,6 +79,26 @@ class JscV2M1aFourWayTest {
             System.out.println("[M1a] " + c.name() + ": " + c.scriptSizeBytes() + " bytes");
             LEGS.put(c.name(), new FourWay(c.name(), files.get("org/julclang/state/examples/dsl/" + c.name() + ".jsc"), c.transitions()));
         }
+    }
+
+    record Edge(String label, String key, String msg, String sig, boolean valid) {}
+
+    /** Up to two vectors of each category of the recorded libsodium file (the five legs are slow; the file runs whole in npm test). */
+    @SuppressWarnings("unchecked")
+    static List<Edge> libsodiumEdges() throws Exception {
+        var doc = (Map<String, Object>) org.julclang.state.dsl.v2.AbiCheck.Json.parse(
+                Files.readString(Path.of("../js/jsc-interpreter/test/fixtures/ed25519-libsodium.json")));
+        var perLabel = new LinkedHashMap<String, Integer>();
+        var out = new ArrayList<Edge>();
+        for (Object o : (List<Object>) doc.get("vectors")) {
+            var v = (Map<String, Object>) o;
+            String label = (String) v.get("label");
+            if (!label.matches("R=identity-S=ha|R-small|R-small-S0|A=R-small-S0-empty|A-small|R-noncanon-on|R-noncanon-off|A-noncanon-on"
+                    + "|A-mixed8-h0mod8|A-mixed8-hnot0|A-mixed-eqholds|R-mixed-A-mixed-eqholds|R-mixed-A-prime|S=L-1|S=L|A-y2\\^255-d|R-y2\\^255-d")) continue;
+            if (perLabel.merge(label, 1, Integer::sum) > 2) continue;
+            out.add(new Edge(label, (String) v.get("key"), (String) v.get("msg"), (String) v.get("sig"), (Boolean) v.get("valid")));
+        }
+        return out;
     }
 
     static Tx at(byte[] caller, long received, long balance) {
@@ -345,6 +369,17 @@ class JscV2M1aFourWayTest {
         }
         assertEquals("refused", f.check("sig", s, List.of(Bytes.of(Arrays.copyOf(key, 31)), Bytes.of(msg), Bytes.of(sig)), null, null));
         assertEquals("refused", f.check("sig", s, List.of(Bytes.of(key), Bytes.of(msg), Bytes.of(Arrays.copyOf(sig, 63))), null, null));
+        // M1b review F2, S2: the rules where libsodium and RFC 8032 differ, on every leg, with the answers the ledger's
+        // libsodium 1.0.18 recorded (js/jsc-interpreter/test/fixtures/ed25519-libsodium.json): R = identity with S = h·a
+        // (RFC 8032 accepts), small-order and mixed-order R, mixed-order keys accepted and refused, non-canonical
+        // encodings, S at L - 1 and L.
+        int libsodium = 0;
+        for (var v : libsodiumEdges()) {
+            assertEquals(ok(f, "flag", v.valid()), f.check("sig", s, List.of(Bytes.hex(v.key()), Bytes.hex(v.msg()), Bytes.hex(v.sig())), null, null),
+                    v.label());
+            libsodium++;
+        }
+        assertTrue(libsodium >= 25, "libsodium edge vectors run: " + libsodium);
         report(f);
     }
 
@@ -435,5 +470,23 @@ class JscV2M1aFourWayTest {
         assertEquals(ok(f, "since", n(5_000), "upTo", n(125_000)), f.check("stamp", s, List.of(T0.subtract(n(5_000))), at(OWNER, 0, 0), OWNER));
         assertEquals(ok(f, "since", n(0), "upTo", n(60_000)), f.check("stamp", s, List.of(T0.add(n(60_000))), at(OWNER, 0, 0), OWNER));
         report(f);
+    }
+
+    /**
+     * ADR-0018 D15 (M1b): the fifth leg. Every call the tests above made, on the JavaScript reference interpreter over
+     * the IR export, must agree with the outcome the other four legs agreed on. It runs last, over all of them.
+     */
+    @Test
+    @Order(Integer.MAX_VALUE)
+    void fiveWay_theJavaScriptInterpreterAgrees() throws Exception {
+        int total = 0;
+        for (FourWay f : LEGS.values()) {
+            int n = JsLeg.check(f);
+            System.out.println("[J3 five-way] " + f.name + ": " + n + " calls, JavaScript interpreter = Java interpreter = JVM = transition"
+                    + " program = validator");
+            total += n;
+        }
+        System.out.println("[J3 five-way] %s: %d calls agree on all five legs".formatted("M1a", total));
+        assertTrue(total > 0, "the tests above recorded calls");
     }
 }

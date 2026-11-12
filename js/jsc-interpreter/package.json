@@ -1,0 +1,30 @@
+{
+  "name": "@julclang/jsc-interpreter",
+  "version": "0.1.0-pre1-snapshot",
+  "private": true,
+  "description": "The reference interpreter of JOUST's contract language .jsc 2 (ADR-0018 D15): evaluates a contract's checked IR (Name.ir.json) by the written semantics, in plain JavaScript with no dependencies",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "jsc-run-vectors": "bin/run-vectors.js"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/bloxbean/joust/tree/main/js/jsc-interpreter",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bloxbean/joust.git",
+    "directory": "js/jsc-interpreter"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
