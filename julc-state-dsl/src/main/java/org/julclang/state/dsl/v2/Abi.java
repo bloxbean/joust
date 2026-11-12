@@ -158,10 +158,28 @@ final class Abi {
         return out;
     }
 
-    static String sourceMapJson(String java, String fileName, String javaPath) {
+    /**
+     * The source map (D12), format 2: {@code lines} maps each generated Java line to its {@code .jsc} line and column;
+     * {@code messages} maps every message the script can trace (a generated check's key, an author's require message,
+     * an operation's fixed message) to the {@code .jsc} sites that raise it, sorted, with their kind, the method or fn
+     * they are in, and for an input check the parameter. Tooling (the runtime's refusals, the language server) turns a
+     * trace back into {@code File.jsc:line:col} with it; the build keeps it beside the script as the audit trail of
+     * what each on-chain message means (r12, review S5).
+     */
+    static String sourceMapJson(String java, String fileName, String javaPath, List<JavaEmitter.Check> checks) {
         var entries = new ArrayList<String>();
         for (int[] e : sourceMap(java, fileName)) entries.add("[" + e[0] + ", " + e[1] + ", " + e[2] + "]");
-        return "{\n  \"version\": 1,\n  \"source\": " + str(fileName) + ",\n  \"java\": " + str(javaPath) + ",\n  \"lines\": ["
-                + String.join(", ", entries) + "]\n}\n";
+        var byMessage = new java.util.TreeMap<String, java.util.TreeSet<String>>();
+        for (JavaEmitter.Check c : checks) {
+            String site = String.format("{ \"line\": %d, \"col\": %d, \"kind\": %s, \"in\": %s%s }", c.pos().line(), c.pos().col(),
+                    str(c.kind()), str(c.in() == null ? "" : c.in()), c.what() == null ? "" : ", \"what\": " + str(c.what()));
+            // Sorted by position (zero-padded), then text: the same sites in the same order on every build.
+            byMessage.computeIfAbsent(c.message(), k -> new java.util.TreeSet<>()).add(String.format("%09d%09d", c.pos().line(), c.pos().col()) + site);
+        }
+        var messages = new ArrayList<String>();
+        byMessage.forEach((m, sites) -> messages.add("    " + str(m) + ": [" + String.join(", ", sites.stream().map(x -> x.substring(18)).toList()) + "]"));
+        return "{\n  \"version\": 2,\n  \"source\": " + str(fileName) + ",\n  \"java\": " + str(javaPath) + ",\n  \"lines\": ["
+                + String.join(", ", entries) + "],\n  \"messages\": {" + (messages.isEmpty() ? "" : "\n" + String.join(",\n", messages) + "\n  ")
+                + "}\n}\n";
     }
 }

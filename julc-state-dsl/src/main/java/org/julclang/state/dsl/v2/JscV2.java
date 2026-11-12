@@ -27,16 +27,64 @@ public final class JscV2 {
      * manifest (D12, J17: JSON, committed as {@code Name.abi.json}).
      */
     public record Lowered(String java, List<Warning> diagnostics, Set<String> recursiveFns, String fileName, String javaPath,
-                          String sourceMapJson, String abiJson) {
+                          String sourceMapJson, String abiJson, List<Site> messages) {
         /** For each generated Java line (1-based) with a source: {@code [javaLine, jscLine, jscCol]}. */
         public List<int[]> sourceMap() {
             return Abi.sourceMap(java, fileName);
+        }
+
+        /**
+         * Where a traced message comes from (D12): {@code File.jsc:line:col} with what raised it. A message matches a trace
+         * that is exactly it, or that ends with {@code ": "} and it (a runtime prefixes its own context); of the messages
+         * that match, only the longest counts, so an author's whole message wins over an operation's that it ends with,
+         * and {@code #pay:spend0.1} never matches {@code #pay:spend0.10}. The same rule as {@code @julclang/joust-runtime}'s
+         * {@code messageSites} (review r1 C3, S1, S2). A generated key has one site; an author's or an operation's message
+         * may have several. Empty when no message matches.
+         */
+        public List<String> explain(String trace) {
+            var out = new java.util.ArrayList<String>();
+            String best = matching(trace, messages.stream().map(Site::message).toList());
+            if (best == null) return out;
+            for (Site s : messages) {
+                if (s.message().equals(best)) out.add(fileName + ":" + s.line() + ":" + s.col() + " (" + s.describe() + ")");
+            }
+            return out;
         }
 
         /** The warnings, each formatted {@code file:line:col: warning: message}. */
         public List<String> warnings() {
             return diagnostics.stream().map(w -> w.format(fileName)).toList();
         }
+    }
+
+    /**
+     * A message the script can trace and the {@code .jsc} construct that raises it (D12): {@code kind} is {@code input}
+     * (a checked parameter), {@code pay} (a payout's sign), {@code require} (the author's) or {@code operation} (a std or
+     * collection operation's domain); {@code in} the method or fn; {@code what} the parameter of an input check.
+     */
+    public record Site(String message, String kind, int line, int col, String in, String what) {
+        String describe() {
+            return switch (kind) {
+                case "input" -> "the parameter " + what + " of " + in + " is not a well-formed input";
+                case "pay" -> "a payout in " + in + " is negative";
+                case "require" -> "a require in " + in;
+                default -> "in " + in;
+            };
+        }
+    }
+
+    /**
+     * The message a trace raised, of {@code messages}: the longest that the trace is, or ends with after {@code ": "};
+     * null when none. D12's matching rule, shared with the JS runtime.
+     */
+    public static String matching(String trace, java.util.Collection<String> messages) {
+        if (trace == null) return null;
+        String best = null;
+        for (String m : messages) {
+            if (m.isEmpty() || !(trace.equals(m) || trace.endsWith(": " + m))) continue;
+            if (best == null || m.length() > best.length()) best = m;
+        }
+        return best;
     }
 
     /** Whether a source is {@code .jsc} 2: its first word, after whitespace and comments, is {@code jsc}. */
@@ -74,9 +122,12 @@ public final class JscV2 {
         checkFileName(fileName);
         Ir.Program p = Checker.check(Parser.parse(source), fileName);
         var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList();
-        String java = JavaEmitter.emit(p);
+        JavaEmitter.Emitted e = JavaEmitter.emit(p);
         String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";
-        return new Lowered(java, warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(java, fileName, javaPath), Abi.of(p));
+        var sites = new java.util.ArrayList<Site>();
+        for (JavaEmitter.Check c : e.checks()) sites.add(new Site(c.message(), c.kind(), c.pos().line(), c.pos().col(), c.in(), c.what()));
+        return new Lowered(e.java(), warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(e.java(), fileName, javaPath, e.checks()),
+                Abi.of(p), List.copyOf(sites));
     }
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */

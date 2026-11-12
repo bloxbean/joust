@@ -60,6 +60,16 @@ public final class JscMain {
         }
     }
 
+    /**
+     * The text of JSC0005: an internal error of the front end on this file (an exception or an Error, a
+     * StackOverflowError included), which the build reports at the file instead of crashing (ADR-0018 J18).
+     */
+    public static String internalError(Throwable e) {
+        String what = e instanceof StackOverflowError ? "the front end ran out of stack (a construct nested deeper than the nesting cap"
+                + " lets through)" : e.toString();
+        return "internal error lowering this file: " + what + " (an internal error of the .jsc front end: please report it)";
+    }
+
     /** The package and class name the .jsc text declares, as a relative path {@code a/b/Name.java}. */
     static String outputPath(String source) {
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) return org.julclang.state.dsl.v2.JscV2.outputPath(source);
@@ -210,9 +220,11 @@ public final class JscMain {
             } catch (JscException e) {
                 System.err.println(e.format(name));
                 errors++;
-            } catch (RuntimeException e) {
-                // A defect of the front end, not of the file: still reported against the file, and the build fails.
-                System.err.println(name + ":1:1: error: internal error lowering this file: " + e);
+            } catch (RuntimeException | Error e) {
+                // A defect of the front end, not of the file: still reported against the file, with a code, and the build
+                // fails. A StackOverflowError (or any Error) is caught too: the nesting cap (ADR-0018 J18) should make it
+                // unreachable, and this keeps a crash from escaping as one (review S2).
+                System.err.println(name + ":1:1: error[JSC0005]: " + internalError(e));
                 errors++;
             }
         }

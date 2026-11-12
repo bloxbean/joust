@@ -13,8 +13,24 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0002 | error | the ABI manifest … differs from the committed one at line …: a datum or redeemer encoding changed, which strands deployed instances; accept it with the acceptJscAbi task (npm: joust build --accept-abi) and commit it | JscMain, joust build |
 | JSC0003 | error | no ABI manifest … beside this file: the encoding of its datum and redeemers must be committed; create it with the acceptJscAbi task (npm: joust build --accept-abi), review it and commit it | JscMain, joust build |
 | JSC0004 | error | the ABI manifest of … disagrees with the processor's encoding: … (an internal error of the .jsc lowering: please report it) | Toolchain |
+| JSC0005 | error | internal error lowering this file: … (an internal error of the .jsc front end: please report it) | JscMain, Toolchain |
 
 ## Syntax and JavaScript habits (ADR-0018 D2, D3, D12)
+
+**The nesting cap (J18): 64 levels**, the same on every build path (Gradle, the npm CLI's Web Image engine, editors).
+- **JSC0149:** the parser counts a level for each parenthesis, block, argument, match or if arm, lambda and type
+  argument it enters, and reports the token that would open the 65th.
+- **JSC0150:** the parser then measures the tree it built, and reports the first node past the cap. Each expression
+  and block is a level. Each link of a chain the parser does not balance also counts a level: `/`, `%`, `??`,
+  `==`/`!=`, field reads, method calls, `[ ]`, and each branch of an else-if chain used as a value that stays inline.
+  Such a chain stays inline when it has no statements and either has at most 8 branches or calls its own fn.
+- **JSC0340:** a type nests at most 64 levels. Each `List`, `Option` and `Map` layer counts, and so does each type it
+  contains.
+- **Not limited:** chains of `+`/`-`, `*`, `&&` and `||` are balanced as they are read, and any other else-if chain is
+  one node, so their length is not limited.
+
+Why 64: on Node's ~1 MB main thread, the Web Image holds about 232 nesting levels (ADR-0021 r3 §1). Any stack exhaustion
+that still happens in the front end is JSC0005, never a crash.
 
 | Code | Severity | Message | Raised by |
 |---|---|---|---|
@@ -66,6 +82,8 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0146 | error | ' … ' (U+…) is not an ASCII letter (or digit): names in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike | Lexer |
 | JSC0147 | error | U+… breaks a line for some readers but not for .jsc: end lines with LF (or CRLF), so that a comment cannot hide the code after it | Lexer |
 | JSC0148 | error | control character U+…: .jsc files hold no control characters but TAB and line ends (LF or CRLF), even in comments and strings, so that the text reads as it compiles | Lexer |
+| JSC0149 | error | this nests deeper than … levels (each parenthesis, block, argument, arm, lambda and type argument opens one): name a part with const or move it into a fn (ADR-0018 J18) | Parser |
+| JSC0150 | error | this expression nests deeper than … levels: a chain of /, %, ??, ==, field reads, method calls or [ ] counts a level per link, as does each branch of an else-if chain used as a value that stays inline (at most 8 branches, or one that calls its own fn); name a part with const or move it into a fn (ADR-0018 J18) | Depth |
 
 ## Names and declarations (ADR-0018 D3, J10)
 
@@ -137,6 +155,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0337 | error | None ?? d is always d: write d | Checker |
 | JSC0338 | error | ?? needs an Option on its left, not | Checker |
 | JSC0339 | error | expected … but this is | Checker |
+| JSC0340 | error | the type … this type … nests more than … levels deep, counting each List, Option and Map layer and each type it contains (ADR-0018 J18): flatten it | Checker |
 
 ## Methods, effects and audiences (ADR-0018 D4, D10)
 
@@ -157,6 +176,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0413 | error | pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4) | Checker |
 | JSC0414 | error | 'state' is the input state of an action, destroy or view | Checker |
 | JSC0415 | error | is part of the transaction: it is not available in a view or fn (pass it as an argument) | Checker |
+| JSC0430 | error | a require message may not contain '#word:', the form of the checks the lowering generates (ADR-0018 D12): reword it | Checker |
 
 ## Time (ADR-0018 D11, J6)
 
@@ -185,7 +205,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 
 | Code | Severity | Message | Raised by |
 |---|---|---|---|
-| JSC0601 | error | … calls itself from inside a lambda, an if or match arm, a value block or a ?? default: the generated helper would join a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out | Checker |
+| JSC0601 | error | … calls itself from inside a lambda, an if or match arm, a value block or a ?? default: the generated helper would join a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out (an else-if chain with statements in an arm lowers each branch, its condition included, to a helper) | Checker |
 | JSC0602 | error | is part of a mutual recursion: only direct self-recursion is allowed (ADR-0018 D7) | Checker |
 
 ## Imports and the standard library (ADR-0018 D8, D9, J7)

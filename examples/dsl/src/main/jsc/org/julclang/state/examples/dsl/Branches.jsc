@@ -1,0 +1,53 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { pow } from "std/math"
+
+// ADR-0018 M1e (review r1 F7): else-if chains as the lowering builds them since r12, on every leg. An else-if chain is
+// one node, lowered to one helper per branch; a short chain without statements, or one that calls its own fn, stays
+// inline conditionals. Also an adapter's refusal, whose message the message map attributes (D12).
+
+// Nine branches and a direct self-call: the chain stays inline, so steps calls itself directly.
+fn steps(x: Int): Int = if x == 0 { 0 } else if x == 1 { 1 } else if x == 2 { 2 } else if x == 3 { 3 } else if x == 4 { 4 }
+  else if x == 5 { 5 } else if x == 6 { 6 } else if x == 7 { 7 } else if x == 8 { 8 } else { steps(x - 1) }
+
+contract Branches {
+  state { owner: Key, n: Int }
+
+  init() {
+    return { owner: caller, n: 0 }
+  }
+
+  // A paying statement chain: three branches and an else; the payouts thread through the branch helpers.
+  action settle(to: Key, x: Int) only owner {
+    if x == 0 {
+      pay(to, 1_000_000)
+    } else if x == 1 {
+      pay(to, 2_000_000)
+      pay(owner, 1_000_000)
+    } else if x < 10 {
+      require(x != 5, "five is refused")
+      pay(to, x * 1_000_000)
+    } else {
+      pay(owner, 3_000_000)
+    }
+    return { ...state, n: n + 1 }
+  }
+
+  // A value chain of twelve branches, one with statements: a helper per branch.
+  action grade(x: Int) {
+    const g = if x < 10 { 0 } else if x < 20 { 1 } else if x < 30 { 2 } else if x < 40 { 3 } else if x < 50 { 4 } else if x < 60 { 5 } else if x < 70 {
+      const y = x * 2
+      y - x
+    } else if x < 80 { 7 } else if x < 90 { 8 } else if x < 100 { 9 } else if x < 110 { 10 } else if x < 120 { 11 } else { 12 }
+    return { ...state, n: g }
+  }
+
+  action walk(x: Int) {
+    return { ...state, n: steps(x) }
+  }
+
+  action power(e: Int) {
+    return { ...state, n: pow(2, e) }
+  }
+}

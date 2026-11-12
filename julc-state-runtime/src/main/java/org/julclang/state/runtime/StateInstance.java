@@ -66,8 +66,8 @@ public final class StateInstance<S> {
      */
     public <T> T view(java.util.function.Function<S, T> f) {
         S s = state();
-        if (!contract.spec.layout().hasMaps()) return f.apply(s);
-        return new MerkleSupport(contract.runtime.mapProver(contract.policyId + instanceId)).run(() -> f.apply(s));
+        if (!contract.spec.layout().hasMaps()) return JscMessages.run(contract.spec, () -> f.apply(s));
+        return JscMessages.run(contract.spec, () -> new MerkleSupport(contract.runtime.mapProver(contract.policyId + instanceId)).run(() -> f.apply(s)));
     }
 
     /** Lovelace the state UTxO holds (deposit included). */
@@ -137,8 +137,8 @@ public final class StateInstance<S> {
         boolean maps = spec.layout().hasMaps();
         MerkleSupport merkle = maps ? new MerkleSupport(contract.runtime.mapProver(contract.policyId + instanceId)) : null;
         if (call.run == null) throw new JoustException(what + ": an instance call needs run(...)");
-        Transition<S> t = maps ? merkle.run(() -> call.run.apply(current, ctx))   // the developer's method, on the JVM
-                : call.run.apply(current, ctx);
+        // The developer's method, on the JVM; a .jsc 2 refusal names its .jsc sites (D12).
+        Transition<S> t = JscMessages.run(spec, () -> maps ? merkle.run(() -> call.run.apply(current, ctx)) : call.run.apply(current, ctx));
         java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();
         S stored = t.next();
         TxOutRef owner = new TxOutRef(new TxId(HexUtil.decodeHexString(stateUtxo.getTxHash())),
