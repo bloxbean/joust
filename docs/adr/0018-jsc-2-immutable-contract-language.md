@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r5)
+**Status:** Proposed (r6)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -448,6 +448,13 @@ the milestone that implements it, reviewed against the processor's rules, and do
   - **allowed only under an outermost clamp:** a `pay` amount must be exactly `max(0, e)` at the top, which the
     checker recognises; the payout then cannot fail on its sign (a `pay` of 0 is skipped);
   - **allowed freely:** arithmetic, `const`s, record and state fields, events.
+  - **Through calls, the same rules.** A `fn` called with a time argument is checked with that parameter marked as a
+    time value (per call signature, transitively through the functions it calls), so a division, a `require`, an
+    index or any other refused position inside its body is refused at the call (`fn perPeriod(total, n) = total / n`
+    called with an elapsed time; `fn nonNeg(n) { require(n >= 0); n }` applied to `deadline - validFrom`). A `std`
+    function accepts a time argument only where its binding row (D8) declares that parameter **total and of
+    window-independent cost** (so `div(pot, elapsed)` and `pow(2, elapsed)` are refused: the first can divide by zero,
+    the second makes the budget depend on the window); a `java:` import never accepts one.
   The `std/time` helpers are sources of time values with a documented bias, not exemptions: `elapsedSince(t)` =
   `max(0, validFrom - t)` (a lower bound of the time elapsed), `elapsedSinceAtMost(t)` = `max(0, validTo - t)` (an
   upper bound), `windowStart()` / `windowEnd()` (the bounds, to store). The docs show the Dutch auction written
@@ -476,8 +483,10 @@ the milestone that implements it, reviewed against the processor's rules, and do
   later compared, a time field read from another contract and compared, `slice(id, 0, deadline - validFrom)` and other
   partial operations, `max(0, deadline - validFrom)` reaching `pay` without being the outermost operation (refused),
   the Dutch auction's unclamped price (refused) and clamped price (accepted with a warning), `rate / elapsedSince(t)`
-  (refused), `after(validFrom - 1)` (refused), a Java contract's field set under `Clock.after` (a time field); and the
-  oracle's `before(updatedAt + maxAge)` accepted (J6). The v1 front end gets the
+  (refused), `after(validFrom - 1)` (refused), a Java contract's field set under `Clock.after` (a time field), a clamped zero
+  `send`, a time value in an `accept`, `deposit` or `BigMap` int value (refused), a `fn` dividing or requiring on a
+  time parameter (refused at the call), `div`/`pow` with a time argument (refused); and the oracle's
+  `before(updatedAt + maxAge)` accepted (J6). The v1 front end gets the
   positional part of this rule as a warning.
 
 ### D12. Diagnostics, source maps, the generated Java and the ABI
@@ -649,7 +658,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J3 | **Four ways agree** for every construct of the milestone: the reference interpreter, the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
 | J4 | Effects appear in each kind's result in source order (loops: list order), only from taken branches; mint and accepted are net sums | D4 | differential tests; on-chain fixtures |
 | J5 | Every diagnostic on either build path names a `.jsc` file, line and column, and a stable code | D12 | tests with errors from each layer (checker, processor, JuLC) |
-| J6 | No time value (including one read from another contract) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities, `BigMap` int values, and send, accept and deposit values; only under an outermost `max(0, …)` in pay amounts); time values reaching amounts or state warn. Influence through transaction-level rules (balance, minimum per output) is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
+| J6 | No time value (including one read from another contract) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities, `BigMap` int values, and send, accept and deposit values, including inside called `fn`s; accepted by `std` functions only where the binding row declares the parameter total and of window-independent cost, never by `java:` imports; only under an outermost `max(0, …)` in pay amounts); time values reaching amounts or state warn. Influence through transaction-level rules (balance, minimum per output) is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
 | J7 | Every library call is type-checked against the exact Java signature; every `Int → long/int` conversion is checked against the row's domain on both sides; no unmappable signature is callable; JVM and UPLC agree on each binding's edge and malformed vectors | D8, D9 | the binding test; per-row differential vectors; import-refusal tests |
 | J8 | No `.jsc` equality or membership lowers to reference equality, Java `equals`, `JulcList.contains/find` or `JulcMap` lookup on a type containing bytes | D6, D7 | lowering tests; generators with distinct-allocation bytes nested in records, enums, options, lists and maps |
 | J9 | Only direct self-recursion, checked after lowering; the build report lists recursive functions | D7 | checker tests (nested folds and branches) |
@@ -872,9 +881,9 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
     C13); the budget report reports measured scenarios, not worst cases (C21, J19); the `map` helper's reason corrected
     (C22); native `find` in the certification catalogue (C15, C1); `PlutusData` ledger fields inaccessible, records vs
     sums (C6).
-- **r5** (2026-11-12, responds to the round-4 reviews of `d0e241b`): time values refused in any part of a `deposit`
-  value and as a `Value` subtrahend, allowed in send/accept values only as clamped `Value.lovelace`/`Value.asset`
-  quantities combined by `+` (security S14); the downstream check hashes the loaded bytecode against a hash the build
+- **r5** (2026-11-12, responds to the round-4 reviews of `d0e241b`): time values refused in any part of `deposit`,
+  `send` and `accept` values and in `BigMap` int values (security S14; an intermediate draft allowed clamped
+  quantities in send/accept, superseded before commit); the downstream check hashes the loaded bytecode against a hash the build
   records, not a constant in the class (security S24). Also the design round-4 review: time values refused in send
   and accept values (a clamped 0 send still fails; accept must equal what is received), the minimum-per-output case
   named with balancing as the residue outside J6 (F19); `Value.none()`, `accept`'s exact meaning, and a neutral reason
@@ -882,3 +891,7 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   misses in the certification catalogue for all types (C15); time-derived `BigMap` int values refused, `clamp` dropped
   (C19); `JulcMap.insert` duplicates reclassified as a boundary restriction, not a divergence (C23); downstream classes
   defined by an isolated loader from verified bytes, with a substitution test (C24, S24).
+- **r6** (2026-11-12, responds to the round-5 reviews of `09c6770`): time rules apply through calls: `fn` bodies are
+  checked with time parameters marked, transitively; `std` functions take time arguments only where the binding row
+  declares the parameter total and of window-independent cost (not `div`, `pow`); `java:` imports never (security
+  S25). The r5 history entry and the D11 test list corrected (design F22, security S26, Codex C25).
