@@ -141,6 +141,11 @@ final class Scaffold {
         vars.put("contract", contract);
         vars.put("pluginRepositories", pluginRepositories(r));
         vars.put("repositories", repositories(r));
+        // ADR-0018 D14: .jsc 2, as a preview, with its ABI manifest beside it (a first build fails without one: JSC0003).
+        vars.put("jscNote", jsc ? "\nThe contract is written in `.jsc` 2, a preview (ADR-0018). `Counter.abi.json` beside it records how the"
+                + "\nstate and the calls are encoded on chain: the build fails when the encoding changes (JSC0002), until you accept"
+                + "\nthe change with `./gradlew acceptJscAbi` and commit the new manifest. The Java the build generates from it is"
+                + "\nin `build/generated/sources/jsc`.\n" : "");
 
         Map<String, byte[]> files = new LinkedHashMap<>();
         files.put("settings.gradle", text("settings.gradle", vars));
@@ -149,6 +154,7 @@ final class Scaffold {
         files.put(".gitignore", text("gitignore", vars));
         files.put("README.md", text("README.md", vars));
         files.put(contract, text(jsc ? "Counter.jsc" : "Counter.java", vars));
+        if (jsc) files.put(contract.replace(".jsc", ".abi.json"), text("Counter.abi.json", vars));
         files.put("src/main/java/" + path + "/CounterMain.java", text("CounterMain.java", vars));
         files.put("src/main/java/" + path + "/Devnet.java", text("Devnet.java", vars));
         files.put("src/test/java/" + path + "/CounterTest.java", text("CounterTest.java", vars));

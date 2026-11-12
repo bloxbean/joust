@@ -12,6 +12,14 @@ export const DEFAULTS = { template: 'node', lang: 'jsc' };
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
+/** ADR-0018 D14: the .jsc template is .jsc 2, a preview, and ships its ABI manifest (a first build needs one: JSC0003). */
+const JSC_NOTE = `
+The contract is written in \`.jsc\` 2, a preview (ADR-0018). \`contracts/app/Counter.abi.json\` beside it records how the
+state and the calls are encoded on chain: \`joust build\` fails when the encoding changes (JSC0002), until you accept
+the change with \`joust build --accept-abi\` and commit the new manifest. The Java the build generates from the contract
+is in \`build/joust/generated/\`.
+`;
+
 /** What the page needs, and a Node script does not. */
 const PAGE_ONLY = {
   files: ['page', 'vite.config.js'],
@@ -53,6 +61,7 @@ export function scaffold({ dir, template = DEFAULTS.template, lang = DEFAULTS.la
   const readme = join(dir, 'README.md');
   const contract = lang === 'jsc' ? 'Counter.jsc' : 'Counter.java';
   writeFileSync(readme, readFileSync(readme, 'utf8')
+    .replaceAll('{{jscNote}}', lang === 'jsc' ? JSC_NOTE : '')
     .replaceAll('{{contract}}', contract)
     .replaceAll('{{language}}', lang === 'jsc' ? "JOUST's .jsc language" : 'Java'));
   return list(dir);

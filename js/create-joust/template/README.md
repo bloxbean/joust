@@ -2,7 +2,7 @@
 
 A Cardano state contract written in {{language}} (`contracts/app/{{contract}}`), built and used with npm only: no JDK
 or GraalVM.
-
+{{jscNote}}
 ```sh
 npm install
 npm run build      # contracts/ -> build/joust/: the validator, its description, a typed JS client

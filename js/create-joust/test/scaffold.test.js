@@ -26,7 +26,9 @@ for (const template of TEMPLATES) {
     test(`template ${template}, lang ${lang}`, () => {
       const dir = join(tmp(), 'My App');
       const files = scaffold({ dir, template, lang });
-      assert.deepEqual(files, [...FILES[template], `contracts/app/Counter.${lang}`].sort());
+      // ADR-0018 D14: the .jsc 2 contract ships its ABI manifest.
+      const contract = lang === 'jsc' ? ['contracts/app/Counter.jsc', 'contracts/app/Counter.abi.json'] : ['contracts/app/Counter.java'];
+      assert.deepEqual(files, [...FILES[template], ...contract].sort());
 
       const pkg = json(dir, 'package.json');
       assert.equal(pkg.name, 'my-app');
@@ -49,6 +51,8 @@ for (const template of TEMPLATES) {
       assert.doesNotMatch(readme, /\{\{/);
       assert.ok(readme.includes(`contracts/app/Counter.${lang}`));
       assert.ok(readme.includes(lang === 'jsc' ? "JOUST's .jsc language" : 'written in Java'));
+      assert.equal(readme.includes('joust build --accept-abi'), lang === 'jsc');
+      if (lang === 'jsc') assert.match(readFileSync(join(dir, 'contracts/app/Counter.jsc'), 'utf8'), /^jsc 2\npackage app\n/);
       assert.ok(!existsSync(join(dir, 'gitignore')));
     });
   }
