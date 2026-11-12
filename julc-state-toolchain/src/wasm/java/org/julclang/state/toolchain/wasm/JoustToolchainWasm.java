@@ -39,8 +39,8 @@ public final class JoustToolchainWasm {
     public record Validator(String name, String packageName, String purpose, String scriptCborHex, String scriptHash,
                             int scriptSizeBytes, List<Param> params) {}
 
-    /** The Java a {@code .jsc} file lowered to, its source map and its ABI manifest (ADR-0018 D12; null for v1). */
-    public record Generated(String jscFile, String javaFile, String java, String sourceMap, String abi) {}
+    /** The Java a {@code .jsc} file lowered to, its source map, ABI manifest and checked IR (ADR-0018 D12, D15; null for v1). */
+    public record Generated(String jscFile, String javaFile, String java, String sourceMap, String abi, String ir) {}
 
     public record BuildResult(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics,
                               List<Generated> generated) {}
@@ -92,6 +92,6 @@ public final class JoustToolchainWasm {
                         v.scriptHash(), v.scriptSizeBytes(), v.params().stream().map(p -> new Param(p.name(), p.type())).toList())).toList(),
                 r.diagnostics().stream().map(d -> new Diagnostic(d.severity().name().toLowerCase(), d.message(), d.file(), d.line(),
                         d.col(), d.source(), d.code())).toList(),
-                r.generated().stream().map(g -> new Generated(g.jscFile(), g.javaFile(), g.java(), g.sourceMapJson(), g.abiJson())).toList()));
+                r.generated().stream().map(g -> new Generated(g.jscFile(), g.javaFile(), g.java(), g.sourceMapJson(), g.abiJson(), g.irJson())).toList()));
     }
 }

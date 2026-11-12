@@ -236,14 +236,25 @@ public final class AbiCheck {
     /** A minimal JSON reader: objects (ordered), arrays, strings, numbers, booleans and null. */
     public static final class Json {
         private final String s;
+        private final boolean strict;
         private int i;
 
-        private Json(String s) {
+        private Json(String s, boolean strict) {
             this.s = s;
+            this.strict = strict;
         }
 
         public static Object parse(String s) {
-            var j = new Json(s);
+            return parse(s, false);
+        }
+
+        /** As {@link #parse}, but a duplicate key, or a number that is not a plain integer, is refused (IR exports). */
+        public static Object parseStrict(String s) {
+            return parse(s, true);
+        }
+
+        private static Object parse(String s, boolean strict) {
+            var j = new Json(s, strict);
             Object v = j.value();
             j.ws();
             if (j.i != s.length()) throw new IllegalArgumentException("trailing text at " + j.i);
@@ -268,6 +279,7 @@ public final class AbiCheck {
                 while (true) {
                     ws();
                     String k = string();
+                    if (strict && m.containsKey(k)) throw new IllegalArgumentException("the duplicate key \"" + k + "\" at " + i);
                     ws();
                     expect(':');
                     m.put(k, value());
@@ -313,6 +325,7 @@ public final class AbiCheck {
             int j = i;
             while (i < s.length() && "+-0123456789.eE".indexOf(s.charAt(i)) >= 0) i++;
             String n = s.substring(j, i);
+            if (strict && !n.matches("-?(0|[1-9][0-9]*)")) throw new IllegalArgumentException("not a plain integer: " + n + " at " + j);
             return n.contains(".") || n.contains("e") || n.contains("E") ? (Object) Double.parseDouble(n) : (Object) Long.parseLong(n);
         }
 
@@ -324,9 +337,15 @@ public final class AbiCheck {
         private String string() {
             expect('"');
             var out = new StringBuilder();
-            while (s.charAt(i) != '"') {
+            while (true) {
+                if (i >= s.length()) throw new IllegalArgumentException("an unterminated string");
                 char c = s.charAt(i++);
+                if (c == '"') break;
+                // Strict mode (IR exports, review C5) reads strings as RFC 8259 does, as the JavaScript reader does: no
+                // raw control character, only the defined escapes, and a \\u escape of exactly four hex digits.
+                if (strict && c < 0x20) throw new IllegalArgumentException("a control character in a string at " + (i - 1));
                 if (c == '\\') {
+                    if (i >= s.length()) throw new IllegalArgumentException("an unterminated string");
                     char e = s.charAt(i++);
                     switch (e) {
                         case 'n' -> out.append('\n');
@@ -334,17 +353,22 @@ public final class AbiCheck {
                         case 'r' -> out.append('\r');
                         case 'b' -> out.append('\b');
                         case 'f' -> out.append('\f');
+                        case '"', '\\', '/' -> out.append(e);
                         case 'u' -> {
-                            out.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
+                            String h = i + 4 <= s.length() ? s.substring(i, i + 4) : "";
+                            if (!h.matches("[0-9a-fA-F]{4}")) throw new IllegalArgumentException("a bad \\u escape at " + (i - 2));
+                            out.append((char) Integer.parseInt(h, 16));
                             i += 4;
                         }
-                        default -> out.append(e);
+                        default -> {
+                            if (strict) throw new IllegalArgumentException("an unknown escape \\" + e + " at " + (i - 2));
+                            out.append(e);
+                        }
                     }
                 } else {
                     out.append(c);
                 }
             }
-            i++;
             return out.toString();
         }
     }

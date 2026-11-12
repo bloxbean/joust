@@ -23,11 +23,12 @@ public final class JscV2 {
 
     /**
      * Generated Java, warnings, the functions that call themselves (reported, J9), the path of the Java file
-     * ({@code a/b/Name.java}), its source map (D12: JSON, generated line to {@code .jsc} line and column) and the ABI
-     * manifest (D12, J17: JSON, committed as {@code Name.abi.json}).
+     * ({@code a/b/Name.java}), its source map (D12: JSON, generated line to {@code .jsc} line and column), the ABI
+     * manifest (D12, J17: JSON, committed as {@code Name.abi.json}) and the checked IR (D15, M1b: JSON, written as
+     * {@code Name.ir.json} beside the Java, for the JavaScript reference interpreter; {@code docs/reference/jsc-2-ir.md}).
      */
     public record Lowered(String java, List<Warning> diagnostics, Set<String> recursiveFns, String fileName, String javaPath,
-                          String sourceMapJson, String abiJson) {
+                          String sourceMapJson, String abiJson, String irJson) {
         /** For each generated Java line (1-based) with a source: {@code [javaLine, jscLine, jscCol]}. */
         public List<int[]> sourceMap() {
             return Abi.sourceMap(java, fileName);
@@ -76,7 +77,8 @@ public final class JscV2 {
         var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList();
         String java = JavaEmitter.emit(p);
         String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";
-        return new Lowered(java, warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(java, fileName, javaPath), Abi.of(p));
+        return new Lowered(java, warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(java, fileName, javaPath), Abi.of(p),
+                IrJson.write(p, IrJson.sourceHash(source)));
     }
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */

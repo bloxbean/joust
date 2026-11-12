@@ -1,0 +1,948 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "a4ccb73c49bf2b2efcfb48ad4c164dbc4070a0df1b367ce34d52ff6354f5228c",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Shelf",
+  "source": "Shelf.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "2048" }],
+  "records": [
+    {
+      "name": "Item",
+      "fields": [
+        { "name": "title", "type": "Bytes" },
+        { "name": "kind", "type": { "enum": "Kind" } },
+        { "name": "tags", "type": { "list": "Bytes" } }
+      ],
+      "at": [12, 1]
+    }
+  ],
+  "enums": [
+    {
+      "name": "Kind",
+      "variants": [
+        { "name": "Book", "fields": [], "at": [10, 13] },
+        { "name": "Disc", "fields": [{ "name": "minutes", "type": "Int" }], "at": [10, 19] },
+        { "name": "Other", "fields": [], "at": [10, 42] }
+      ],
+      "at": [10, 1]
+    }
+  ],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "owner", "type": "Key" },
+      { "name": "items", "type": { "map": ["Bytes", { "record": "Item" }] } },
+      { "name": "notes", "type": { "bigmap": ["Bytes", "Bytes"] } },
+      { "name": "last", "type": { "option": { "enum": "Kind" } } }
+    ],
+    "at": [14, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [18, 21] },
+            { "node": "MapEmpty", "type": { "map": ["Bytes", { "record": "Item" }] }, "taint": 0, "at": [18, 36] },
+            { "node": "BigEmpty", "type": { "bigmap": ["Bytes", "Bytes"] }, "taint": 0, "at": [18, 56] },
+            { "node": "NoneLit", "type": { "option": { "enum": "Kind" } }, "taint": 0, "at": [18, 78] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [18, 12]
+        },
+        "at": [17, 10]
+      },
+      "at": [17, 3]
+    },
+    {
+      "kind": "action",
+      "name": "put",
+      "params": [
+        { "id": 1, "name": "id", "type": "Bytes", "taint": 0, "at": [22, 14] },
+        { "id": 2, "name": "item", "type": { "record": "Item" }, "taint": 0, "at": [22, 25] }
+      ],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": {
+                "node": "CallStd",
+                "module": "std/bytes",
+                "name": "length",
+                "args": [
+                  {
+                    "node": "GetField",
+                    "target": { "node": "LocalRef", "local": 2, "type": { "record": "Item" }, "taint": 0, "at": [23, 20] },
+                    "record": "Item",
+                    "field": "title",
+                    "type": "Bytes",
+                    "taint": 0,
+                    "at": [23, 20]
+                  }
+                ],
+                "type": "Int",
+                "taint": 0,
+                "at": [23, 13]
+              },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [23, 34] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [23, 13]
+            },
+            "message": "a title",
+            "at": [23, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [24, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [24, 12]
+            },
+            {
+              "node": "MapOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "items",
+                "type": { "map": ["Bytes", { "record": "Item" }] },
+                "taint": 0,
+                "at": [24, 31]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 1, "type": "Bytes", "taint": 0, "at": [24, 41] },
+                { "node": "LocalRef", "local": 2, "type": { "record": "Item" }, "taint": 0, "at": [24, 45] }
+              ],
+              "type": { "map": ["Bytes", { "record": "Item" }] },
+              "taint": 0,
+              "at": [24, 31]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [24, 17] },
+              "record": "State",
+              "field": "notes",
+              "type": { "bigmap": ["Bytes", "Bytes"] },
+              "taint": 0,
+              "at": [24, 12]
+            },
+            {
+              "node": "SomeOf",
+              "value": {
+                "node": "GetField",
+                "target": { "node": "LocalRef", "local": 2, "type": { "record": "Item" }, "taint": 0, "at": [24, 63] },
+                "record": "Item",
+                "field": "kind",
+                "type": { "enum": "Kind" },
+                "taint": 0,
+                "at": [24, 63]
+              },
+              "type": { "option": { "enum": "Kind" } },
+              "taint": 0,
+              "at": [24, 58]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [24, 12]
+        },
+        "at": [22, 48]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "action",
+      "name": "remove",
+      "params": [{ "id": 3, "name": "id", "type": "Bytes", "taint": 0, "at": [27, 17] }],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Match",
+          "scrutinee": {
+            "node": "MapOp",
+            "op": "get",
+            "map": {
+              "node": "StateField",
+              "field": "items",
+              "type": { "map": ["Bytes", { "record": "Item" }] },
+              "taint": 0,
+              "at": [28, 18]
+            },
+            "args": [{ "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [28, 28] }],
+            "type": { "option": { "record": "Item" } },
+            "taint": 0,
+            "at": [28, 18]
+          },
+          "arms": [
+            {
+              "ctors": ["Some"],
+              "fields": ["value"],
+              "binds": [{ "id": 4, "name": "it", "type": { "record": "Item" }, "taint": 0, "at": [29, 12] }],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "New",
+                  "record": "State",
+                  "values": [
+                    {
+                      "node": "GetField",
+                      "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [29, 25] },
+                      "record": "State",
+                      "field": "owner",
+                      "type": "Key",
+                      "taint": 0,
+                      "at": [29, 20]
+                    },
+                    {
+                      "node": "MapOp",
+                      "op": "delete",
+                      "map": {
+                        "node": "StateField",
+                        "field": "items",
+                        "type": { "map": ["Bytes", { "record": "Item" }] },
+                        "taint": 0,
+                        "at": [29, 39]
+                      },
+                      "args": [{ "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [29, 52] }],
+                      "type": { "map": ["Bytes", { "record": "Item" }] },
+                      "taint": 0,
+                      "at": [29, 39]
+                    },
+                    {
+                      "node": "GetField",
+                      "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [29, 25] },
+                      "record": "State",
+                      "field": "notes",
+                      "type": { "bigmap": ["Bytes", "Bytes"] },
+                      "taint": 0,
+                      "at": [29, 20]
+                    },
+                    {
+                      "node": "SomeOf",
+                      "value": {
+                        "node": "GetField",
+                        "target": { "node": "LocalRef", "local": 4, "type": { "record": "Item" }, "taint": 0, "at": [29, 68] },
+                        "record": "Item",
+                        "field": "kind",
+                        "type": { "enum": "Kind" },
+                        "taint": 0,
+                        "at": [29, 68]
+                      },
+                      "type": { "option": { "enum": "Kind" } },
+                      "taint": 0,
+                      "at": [29, 63]
+                    }
+                  ],
+                  "type": { "record": "State" },
+                  "taint": 0,
+                  "at": [29, 20]
+                },
+                "at": [29, 20]
+              },
+              "at": [29, 7]
+            },
+            {
+              "ctors": ["None"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [30, 15] },
+                "at": [30, 15]
+              },
+              "at": [30, 7]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [28, 12]
+        },
+        "at": [27, 39]
+      },
+      "at": [27, 3]
+    },
+    {
+      "kind": "action",
+      "name": "note",
+      "params": [
+        { "id": 5, "name": "k", "type": "Bytes", "taint": 0, "at": [35, 15] },
+        { "id": 6, "name": "v", "type": "Bytes", "taint": 0, "at": [35, 25] }
+      ],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 7, "name": "prior", "type": "Bytes", "taint": 0, "at": [36, 5] },
+            "value": {
+              "node": "Coalesce",
+              "option": {
+                "node": "BigOp",
+                "op": "get",
+                "map": {
+                  "node": "StateField",
+                  "field": "notes",
+                  "type": { "bigmap": ["Bytes", "Bytes"] },
+                  "taint": 0,
+                  "at": [36, 19]
+                },
+                "args": [{ "node": "LocalRef", "local": 5, "type": "Bytes", "taint": 0, "at": [36, 29] }],
+                "type": { "option": "Bytes" },
+                "taint": 0,
+                "at": [36, 19]
+              },
+              "default": { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [36, 35] },
+              "type": "Bytes",
+              "taint": 0,
+              "at": [36, 19]
+            },
+            "at": [36, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [37, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [37, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [37, 17] },
+              "record": "State",
+              "field": "items",
+              "type": { "map": ["Bytes", { "record": "Item" }] },
+              "taint": 0,
+              "at": [37, 12]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "notes",
+                "type": { "bigmap": ["Bytes", "Bytes"] },
+                "taint": 0,
+                "at": [37, 31]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 5, "type": "Bytes", "taint": 0, "at": [37, 41] },
+                {
+                  "node": "CallStd",
+                  "module": "std/bytes",
+                  "name": "concat",
+                  "args": [
+                    { "node": "LocalRef", "local": 7, "type": "Bytes", "taint": 0, "at": [37, 51] },
+                    { "node": "LocalRef", "local": 6, "type": "Bytes", "taint": 0, "at": [37, 58] }
+                  ],
+                  "type": "Bytes",
+                  "taint": 0,
+                  "at": [37, 44]
+                }
+              ],
+              "type": { "bigmap": ["Bytes", "Bytes"] },
+              "taint": 0,
+              "at": [37, 31]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [37, 17] },
+              "record": "State",
+              "field": "last",
+              "type": { "option": { "enum": "Kind" } },
+              "taint": 0,
+              "at": [37, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [37, 12]
+        },
+        "at": [35, 40]
+      },
+      "at": [35, 3]
+    },
+    {
+      "kind": "action",
+      "name": "forget",
+      "params": [{ "id": 8, "name": "k", "type": "Bytes", "taint": 0, "at": [40, 17] }],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "BigOp",
+              "op": "has",
+              "map": {
+                "node": "StateField",
+                "field": "notes",
+                "type": { "bigmap": ["Bytes", "Bytes"] },
+                "taint": 0,
+                "at": [41, 13]
+              },
+              "args": [{ "node": "LocalRef", "local": 8, "type": "Bytes", "taint": 0, "at": [41, 23] }],
+              "type": "Bool",
+              "taint": 0,
+              "at": [41, 13]
+            },
+            "message": "no such note",
+            "at": [41, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "items",
+              "type": { "map": ["Bytes", { "record": "Item" }] },
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "BigOp",
+              "op": "delete",
+              "map": {
+                "node": "StateField",
+                "field": "notes",
+                "type": { "bigmap": ["Bytes", "Bytes"] },
+                "taint": 0,
+                "at": [42, 31]
+              },
+              "args": [{ "node": "LocalRef", "local": 8, "type": "Bytes", "taint": 0, "at": [42, 44] }],
+              "type": { "bigmap": ["Bytes", "Bytes"] },
+              "taint": 0,
+              "at": [42, 31]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "last",
+              "type": { "option": { "enum": "Kind" } },
+              "taint": 0,
+              "at": [42, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [42, 12]
+        },
+        "at": [40, 38]
+      },
+      "at": [40, 3]
+    },
+    {
+      "kind": "view",
+      "name": "minutes",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "MapFold",
+          "map": {
+            "node": "StateField",
+            "field": "items",
+            "type": { "map": ["Bytes", { "record": "Item" }] },
+            "taint": 0,
+            "at": [45, 25]
+          },
+          "init": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [45, 36] },
+          "acc": { "id": 9, "name": "acc", "type": "Int", "taint": 0, "at": [45, 39] },
+          "k": { "id": 10, "name": "id", "type": "Bytes", "taint": 0, "at": [45, 39] },
+          "v": { "id": 11, "name": "it", "type": { "record": "Item" }, "taint": 0, "at": [45, 39] },
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [45, 56] },
+              "right": {
+                "node": "Match",
+                "scrutinee": {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 11, "type": { "record": "Item" }, "taint": 0, "at": [45, 68] },
+                  "record": "Item",
+                  "field": "kind",
+                  "type": { "enum": "Kind" },
+                  "taint": 0,
+                  "at": [45, 68]
+                },
+                "arms": [
+                  {
+                    "ctors": ["Disc"],
+                    "fields": ["minutes"],
+                    "binds": [{ "id": 12, "name": "minutes", "type": "Int", "taint": 0, "at": [46, 12] }],
+                    "body": {
+                      "stmts": [],
+                      "result": { "node": "LocalRef", "local": 12, "type": "Int", "taint": 0, "at": [46, 25] },
+                      "at": [46, 25]
+                    },
+                    "at": [46, 5]
+                  },
+                  {
+                    "ctors": ["Book", "Other"],
+                    "fields": [],
+                    "binds": [],
+                    "body": {
+                      "stmts": [],
+                      "result": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [47, 10] },
+                      "at": [47, 10]
+                    },
+                    "at": [47, 5]
+                  }
+                ],
+                "type": "Int",
+                "taint": 0,
+                "at": [45, 62]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [45, 56]
+            },
+            "at": [45, 39]
+          },
+          "type": "Int",
+          "taint": 0,
+          "at": [45, 25]
+        },
+        "at": [45, 25]
+      },
+      "at": [45, 3]
+    },
+    {
+      "kind": "view",
+      "name": "titles",
+      "params": [{ "id": 13, "name": "n", "type": "Int", "taint": 0, "at": [50, 15] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "list": "Bytes" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "ListArg",
+          "op": "take",
+          "list": {
+            "node": "ListArg",
+            "op": "drop",
+            "list": {
+              "node": "Hof",
+              "kind": "map",
+              "list": {
+                "node": "MapOp",
+                "op": "values",
+                "map": {
+                  "node": "StateField",
+                  "field": "items",
+                  "type": { "map": ["Bytes", { "record": "Item" }] },
+                  "taint": 0,
+                  "at": [50, 38]
+                },
+                "args": [],
+                "type": { "list": { "record": "Item" } },
+                "taint": 0,
+                "at": [50, 38]
+              },
+              "x": { "id": 14, "name": "it", "type": { "record": "Item" }, "taint": 0, "at": [50, 55] },
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 14, "type": { "record": "Item" }, "taint": 0, "at": [50, 61] },
+                  "record": "Item",
+                  "field": "title",
+                  "type": "Bytes",
+                  "taint": 0,
+                  "at": [50, 61]
+                },
+                "at": [50, 55]
+              },
+              "type": { "list": "Bytes" },
+              "taint": 0,
+              "at": [50, 38]
+            },
+            "arg": { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [50, 76] },
+            "type": { "list": "Bytes" },
+            "taint": 0,
+            "at": [50, 38]
+          },
+          "arg": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [50, 84] },
+          "type": { "list": "Bytes" },
+          "taint": 0,
+          "at": [50, 38]
+        },
+        "at": [50, 38]
+      },
+      "at": [50, 3]
+    },
+    {
+      "kind": "view",
+      "name": "lastTag",
+      "params": [{ "id": 15, "name": "id", "type": "Bytes", "taint": 0, "at": [52, 16] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "option": "Bytes" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Match",
+          "scrutinee": {
+            "node": "MapOp",
+            "op": "get",
+            "map": {
+              "node": "StateField",
+              "field": "items",
+              "type": { "map": ["Bytes", { "record": "Item" }] },
+              "taint": 0,
+              "at": [52, 50]
+            },
+            "args": [{ "node": "LocalRef", "local": 15, "type": "Bytes", "taint": 0, "at": [52, 60] }],
+            "type": { "option": { "record": "Item" } },
+            "taint": 0,
+            "at": [52, 50]
+          },
+          "arms": [
+            {
+              "ctors": ["Some"],
+              "fields": ["value"],
+              "binds": [{ "id": 16, "name": "it", "type": { "record": "Item" }, "taint": 0, "at": [53, 10] }],
+              "body": {
+                "stmts": [],
+                "result": {
+                  "node": "CallStd",
+                  "module": "std/list",
+                  "name": "last",
+                  "args": [
+                    {
+                      "node": "GetField",
+                      "target": { "node": "LocalRef", "local": 16, "type": { "record": "Item" }, "taint": 0, "at": [53, 22] },
+                      "record": "Item",
+                      "field": "tags",
+                      "type": { "list": "Bytes" },
+                      "taint": 0,
+                      "at": [53, 22]
+                    }
+                  ],
+                  "type": { "option": "Bytes" },
+                  "taint": 0,
+                  "at": [53, 17]
+                },
+                "at": [53, 17]
+              },
+              "at": [53, 5]
+            },
+            {
+              "ctors": ["None"],
+              "fields": [],
+              "binds": [],
+              "body": {
+                "stmts": [],
+                "result": { "node": "NoneLit", "type": { "option": "Bytes" }, "taint": 0, "at": [54, 13] },
+                "at": [54, 13]
+              },
+              "at": [54, 5]
+            }
+          ],
+          "type": { "option": "Bytes" },
+          "taint": 0,
+          "at": [52, 44]
+        },
+        "at": [52, 44]
+      },
+      "at": [52, 3]
+    },
+    {
+      "kind": "view",
+      "name": "position",
+      "params": [{ "id": 17, "name": "id", "type": "Bytes", "taint": 0, "at": [57, 17] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "option": "Int" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "CallStd",
+          "module": "std/list",
+          "name": "indexOf",
+          "args": [
+            {
+              "node": "MapOp",
+              "op": "keys",
+              "map": {
+                "node": "StateField",
+                "field": "items",
+                "type": { "map": ["Bytes", { "record": "Item" }] },
+                "taint": 0,
+                "at": [57, 51]
+              },
+              "args": [],
+              "type": { "list": "Bytes" },
+              "taint": 0,
+              "at": [57, 51]
+            },
+            { "node": "LocalRef", "local": 17, "type": "Bytes", "taint": 0, "at": [57, 63] }
+          ],
+          "type": { "option": "Int" },
+          "taint": 0,
+          "at": [57, 43]
+        },
+        "at": [57, 43]
+      },
+      "at": [57, 3]
+    },
+    {
+      "kind": "view",
+      "name": "squares",
+      "params": [{ "id": 18, "name": "n", "type": "Int", "taint": 0, "at": [59, 16] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Fold",
+          "list": {
+            "node": "Range",
+            "from": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [59, 37] },
+            "to": { "node": "LocalRef", "local": 18, "type": "Int", "taint": 0, "at": [59, 40] },
+            "type": { "list": "Int" },
+            "taint": 0,
+            "at": [59, 31]
+          },
+          "init": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [59, 48] },
+          "acc": { "id": 19, "name": "acc", "type": "Int", "taint": 0, "at": [59, 51] },
+          "x": { "id": 20, "name": "i", "type": "Int", "taint": 0, "at": [59, 51] },
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "LocalRef", "local": 19, "type": "Int", "taint": 0, "at": [59, 63] },
+              "right": {
+                "node": "Arith",
+                "op": "*",
+                "left": { "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [59, 69] },
+                "right": { "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [59, 73] },
+                "type": "Int",
+                "taint": 0,
+                "at": [59, 69]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [59, 63]
+            },
+            "at": [59, 51]
+          },
+          "type": "Int",
+          "taint": 0,
+          "at": [59, 31]
+        },
+        "at": [59, 31]
+      },
+      "at": [59, 3]
+    },
+    {
+      "kind": "view",
+      "name": "evens",
+      "params": [{ "id": 21, "name": "n", "type": "Int", "taint": 0, "at": [61, 14] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "list": "Int" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Hof",
+          "kind": "filter",
+          "list": {
+            "node": "Range",
+            "from": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [61, 41] },
+            "to": { "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [61, 44] },
+            "type": { "list": "Int" },
+            "taint": 0,
+            "at": [61, 35]
+          },
+          "x": { "id": 22, "name": "i", "type": "Int", "taint": 0, "at": [61, 54] },
+          "body": {
+            "stmts": [],
+            "result": {
+              "node": "Equals",
+              "negate": false,
+              "left": {
+                "node": "Arith",
+                "op": "%",
+                "left": { "node": "LocalRef", "local": 22, "type": "Int", "taint": 0, "at": [61, 59] },
+                "right": { "node": "Lit", "value": "2", "type": "Int", "taint": 0, "at": [61, 63] },
+                "type": "Int",
+                "taint": 0,
+                "at": [61, 59]
+              },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [61, 68] },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [61, 59]
+            },
+            "at": [61, 54]
+          },
+          "type": { "list": "Int" },
+          "taint": 0,
+          "at": [61, 35]
+        },
+        "at": [61, 35]
+      },
+      "at": [61, 3]
+    },
+    {
+      "kind": "view",
+      "name": "noteOf",
+      "params": [{ "id": 23, "name": "k", "type": "Bytes", "taint": 0, "at": [63, 15] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "option": "Bytes" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "BigOp",
+          "op": "get",
+          "map": {
+            "node": "StateField",
+            "field": "notes",
+            "type": { "bigmap": ["Bytes", "Bytes"] },
+            "taint": 0,
+            "at": [63, 42]
+          },
+          "args": [{ "node": "LocalRef", "local": 23, "type": "Bytes", "taint": 0, "at": [63, 52] }],
+          "type": { "option": "Bytes" },
+          "taint": 0,
+          "at": [63, 42]
+        },
+        "at": [63, 42]
+      },
+      "at": [63, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "BigOp",
+              "op": "isEmpty",
+              "map": {
+                "node": "StateField",
+                "field": "notes",
+                "type": { "bigmap": ["Bytes", "Bytes"] },
+                "taint": 0,
+                "at": [66, 13]
+              },
+              "args": [],
+              "type": "Bool",
+              "taint": 0,
+              "at": [66, 13]
+            },
+            "message": "notes remain",
+            "at": [66, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [67, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [67, 16] },
+            "at": [67, 5]
+          }
+        ],
+        "result": null,
+        "at": [65, 30]
+      },
+      "at": [65, 3]
+    }
+  ],
+  "warnings": []
+}
