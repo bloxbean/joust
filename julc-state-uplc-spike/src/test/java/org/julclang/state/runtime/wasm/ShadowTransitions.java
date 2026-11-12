@@ -20,12 +20,17 @@ final class ShadowTransitions implements TransitionFn {
     /** {@code DescribedContract.MAX_READ_ROUNDS} (ADR-0015 D3). */
     static final int MAX_ROUNDS = 4;
 
+    /** One side of the comparison. */
+    interface Side {
+        Outcome outcome(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx);
+    }
+
     final String contract;
-    final UplcRunner uplc;
-    final JvmTransitions jvm;
+    final Side uplc;
+    final Side jvm;
     int compared;
 
-    ShadowTransitions(String contract, UplcRunner uplc, JvmTransitions jvm) {
+    ShadowTransitions(String contract, Side uplc, Side jvm) {
         this.contract = contract;
         this.uplc = uplc;
         this.jvm = jvm;

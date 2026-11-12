@@ -24,7 +24,7 @@ import java.util.Map;
  * trace is a message (the engine's rule; the auxiliary tagged-{@code Require} classification is not built in this
  * spike, see the report), {@code error} when there is none, {@code budget} when the cap is exhausted.
  */
-final class UplcRunner implements TransitionFn {
+final class UplcRunner implements TransitionFn, ShadowTransitions.Side {
 
     static final ExBudget CAP = new ExBudget(10_000_000_000L, 14_000_000L);
     static final LedgerEvaluationTarget TARGET = LedgerEvaluationTarget.pv11(PlutusLanguage.PLUTUS_V3);
@@ -50,7 +50,8 @@ final class UplcRunner implements TransitionFn {
                 o.kind() == Outcome.Kind.STEP ? null : o.message(), o.traces());
     }
 
-    Outcome outcome(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
+    @Override
+    public Outcome outcome(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
         Program p = programs.get(method);
         if (p == null) throw new IllegalArgumentException("no transition program for " + method + " (ADR-0020 U7)");
         long t0 = System.nanoTime();

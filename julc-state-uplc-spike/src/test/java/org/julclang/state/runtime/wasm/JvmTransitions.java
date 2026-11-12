@@ -22,7 +22,7 @@ import java.util.Map;
  * with {@link MerkleMaps#withReads} answers a key outside the read set as absent and reports it as a
  * {@code joust:read <root> <key>} need, as the program's discovery variant does (D3, D9).
  */
-final class JvmTransitions implements TransitionFn {
+final class JvmTransitions implements TransitionFn, ShadowTransitions.Side {
 
     private final Map<String, Method> methods = new HashMap<>();
 
@@ -46,7 +46,8 @@ final class JvmTransitions implements TransitionFn {
                 o.kind() == Outcome.Kind.STEP ? null : o.message(), o.traces());
     }
 
-    Outcome outcome(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
+    @Override
+    public Outcome outcome(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
         Method m = methods.get(method);
         if (m == null) throw new IllegalArgumentException("no transition " + method);
         Type[] types = m.getGenericParameterTypes();
