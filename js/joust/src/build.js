@@ -16,6 +16,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { loadToolchain } from './toolchain.js';
 import { abiGate } from './abi.js';
+import { scriptDigest } from './deploy.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -99,25 +100,41 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
 }
 
 /**
- * ADR-0018 D16: a recorded deployment (deployments.<network>.json) whose script this build no longer produces (a
- * migrated .jsc file, a changed contract) is a warning: instances deployed earlier stay on the old script.
+ * ADR-0018 D16 (review r2 S1): recorded deployments (deployments.<network>.json) this build no longer produces, as
+ * warnings: a contract built to another script (a migrated .jsc file, a changed contract; by the digest of its script
+ * before parameters, so @Params contracts too, else by its policy), a contract no longer built (renamed or removed), and
+ * a file that cannot be read. Instances deployed earlier stay on the recorded script.
  */
 export function staleDeployments(dir, contracts) {
   const out = [];
-  const built = new Map(contracts.filter((c) => c.scriptHash).map((c) => [`${c.packageName}.${c.name}`, c.scriptHash]));
+  const built = new Map(contracts.map((c) => [`${c.packageName}.${c.name}`, c]));
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => /^deployments\..+\.json$/.test(f)).sort() : [];
+  const tail = 'instances deployed earlier stay on that script; to call them, keep the build that made it (joust migrate'
+    + ' --in-place keeps the v1 artifacts in build/joust/v1/; joust deploy keeps superseded records) (ADR-0018 D16)';
   for (const f of files) {
     let recorded;
     try {
-      recorded = JSON.parse(readFileSync(join(dir, f), 'utf8')).contracts ?? {};
-    } catch {
+      recorded = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+      if (typeof recorded !== 'object' || recorded === null) throw new Error('not an object');
+    } catch (e) {
+      out.push(`warning: ${f} cannot be read (${e.message}): its deployments are not checked against this build`);
       continue;
     }
-    for (const [title, d] of Object.entries(recorded)) {
-      const now = built.get(title);
-      if (!now || !d?.policy || d.params !== undefined || d.policy === now) continue;
-      out.push(`warning: ${f} records ${title} at script ${d.policy}, which this build does not produce (it builds ${now}):`
-        + ' instances deployed earlier stay on that script; joust deploy publishes the new one (ADR-0018 D16)');
+    for (const [title, d] of Object.entries(recorded.contracts ?? {})) {
+      const c = built.get(title);
+      if (!c) {
+        out.push(`warning: ${f} records ${title}, which this build does not produce (renamed or removed): ${tail}`);
+        continue;
+      }
+      const digest = scriptDigest(c.scriptCborHex);
+      if (d?.scriptDigest) {
+        if (d.scriptDigest !== digest) out.push(`warning: ${f} records ${title} with another script than this build's: ${tail}`);
+      } else if (d?.params !== undefined) {
+        out.push(`warning: ${f} records ${title} with params but no script digest (deployed by an earlier JOUST): it cannot be`
+          + ' checked against this build; deploy again to record one');
+      } else if (d?.policy && c.scriptHash && d.policy !== c.scriptHash) {
+        out.push(`warning: ${f} records ${title} at script ${d.policy}, which this build does not produce (it builds ${c.scriptHash}): ${tail}`);
+      }
     }
   }
   return out;

@@ -1,6 +1,7 @@
 // joust deploy: publishes each contract's reference script (once) and writes build/joust/deployments.<network>.json,
 // what pages and apps pin (ADR-0013 D2). Paid and signed by the deployer's key, which never enters the engine.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { network } from './config.js';
 
@@ -52,11 +53,50 @@ export async function deploy({ root = process.cwd(), config, networkName, log = 
       continue;
     }
     const d = await rt.ensureDeployment(title, wallet, params);
-    out[title] = d;
+    // The digest of the script before parameters are applied (ADR-0018 D16): joust build compares it with what it
+    // builds, @Params contracts included.
+    out[title] = { ...d, scriptDigest: scriptDigest(c.script) };
     log(`${title}: ${d.address} (reference script ${d.referenceScripts[0]})`);
   }
   const file = join(root, config.out, `deployments.${net.name}.json`);
-  writeFileSync(file, JSON.stringify({ network: net.name, networkId: net.networkId, chain: net.chain, clock: net.clock, contracts: out }, null, 2) + '\n');
+  // Review r2 S1: merged, never rewritten from scratch: a record this deploy replaces or no longer makes is kept under
+  // "superseded", since instances deployed from it still hold funds. An unreadable file is kept beside it.
+  let previous = null;
+  if (existsSync(file)) {
+    const text = readFileSync(file, 'utf8');
+    try {
+      previous = JSON.parse(text);
+    } catch {
+      const kept = file.replace(/\.json$/, `.unreadable-${Date.now()}.json`);
+      writeFileSync(kept, text);
+      log(`warning: ${file} could not be read; kept as ${kept}`);
+    }
+  }
+  const next = mergeDeployments(previous, { network: net.name, networkId: net.networkId, chain: net.chain, clock: net.clock, contracts: out });
+  for (const s of (next.superseded ?? []).slice((previous?.superseded ?? []).length)) {
+    log(`${s.title}: the deployment at ${s.address ?? s.policy} is superseded and kept in ${file} ("superseded"): its instances stay on that script`);
+  }
+  writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
   log(`wrote ${file}`);
   return out;
+}
+
+/** sha256 of a script's CBOR hex, before parameters are applied: "sha256:<hex>". */
+export function scriptDigest(cborHex) {
+  return 'sha256:' + createHash('sha256').update(String(cborHex ?? '').trim().toLowerCase()).digest('hex');
+}
+
+/**
+ * The deployments file after a deploy (review r2 S1): this deploy's records, and every earlier record it replaces (a
+ * different script, address or params) or no longer makes, under "superseded" with the time, after the ones there.
+ */
+export function mergeDeployments(previous, next, now = new Date().toISOString()) {
+  const superseded = Array.isArray(previous?.superseded) ? [...previous.superseded] : [];
+  const same = (a, b) => a.policy === b.policy && a.address === b.address && JSON.stringify(a.params) === JSON.stringify(b.params);
+  for (const [title, d] of Object.entries(previous?.contracts ?? {})) {
+    const n = next.contracts[title];
+    if (n && same(n, d)) continue;
+    superseded.push({ title, ...d, supersededAt: now, reason: n ? 'redeployed as another script' : 'not deployed by this build' });
+  }
+  return superseded.length ? { ...next, superseded } : next;
 }
