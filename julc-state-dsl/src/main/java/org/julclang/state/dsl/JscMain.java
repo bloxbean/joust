@@ -162,33 +162,57 @@ public final class JscMain {
      */
     public static int migrate(Path src, Path out, boolean inPlace) throws IOException {
         List<Path> files = new ArrayList<>();
-        if (Files.isRegularFile(src)) {
+        if (Files.isRegularFile(src, java.nio.file.LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(src)) {
             files.add(src);
             src = src.getParent() == null ? Path.of(".") : src.getParent();
         } else if (Files.isDirectory(src)) {
+            // Files.walk does not follow directory links (review r2 S2).
             try (Stream<Path> s = Files.walk(src)) {
                 s.filter(p -> p.toString().endsWith(".jsc")).sorted().forEach(files::add);
             }
         }
+        // Review r2 C2: without --in-place, nothing under the sources is written: the output may not be the source
+        // directory or lie inside it (by path or by link), and no target may be a source file.
+        if (!inPlace && within(out, src)) {
+            System.err.println(src + ":1:1: error[JSC1108]: the output directory " + out + " is the source directory or inside it: without"
+                    + " --in-place, migrate writes outside the sources and never changes them; choose another output directory, or"
+                    + " pass --in-place to replace the v1 files (each kept as Name.jsc.v1)");
+            return 1;
+        }
         int migrated = 0, refused = 0;
         for (Path f : files) {
-            String text = Files.readString(f);
-            if (org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
             String name = src.relativize(f).toString();
             try {
+                if (inPlace && Files.isSymbolicLink(f)) {
+                    // Review r2 S2: a link's target may be shared with other projects (still on v1) or lie outside the sources.
+                    throw new JscException(1, 1, "JSC1109", "this file is a symbolic link: migrate --in-place never replaces a file"
+                            + " through a link; migrate a copy, or the link's target in its own project");
+                }
+                String text = Files.readString(f);
+                if (org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
                 var r = Migrate.migrate(text, f.getFileName().toString());
                 Path backup = f.resolveSibling(f.getFileName() + ".v1");
-                if (inPlace && Files.exists(backup)) {
-                    throw new JscException(1, 1, "JSC1107", backup.getFileName() + " exists already: migrate --in-place keeps the v1"
-                            + " text there and never overwrites it; move it away first");
+                Path target = inPlace ? f : out.resolve(name).normalize();
+                if (!inPlace && (!target.toAbsolutePath().normalize().startsWith(out.toAbsolutePath().normalize())
+                        || Files.exists(target) && Files.isSameFile(target, f))) {
+                    throw new JscException(1, 1, "JSC1108", "the output " + target + " would replace the source: without --in-place,"
+                            + " migrate never changes the sources");
                 }
-                Path target = inPlace ? f : out.resolve(name);
                 if (inPlace) {
-                    Files.writeString(backup, text);
+                    // Never through a link and never over an existing file, a dangling link included (review r2 S2).
+                    try {
+                        Files.writeString(backup, text, java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE,
+                                java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    } catch (java.nio.file.FileAlreadyExistsException e) {
+                        throw new JscException(1, 1, "JSC1107", backup.getFileName() + " exists already: migrate --in-place keeps the v1"
+                                + " text there and never overwrites it; move it away first");
+                    }
+                    Files.writeString(f, r.source(), java.nio.file.StandardOpenOption.TRUNCATE_EXISTING, java.nio.file.StandardOpenOption.WRITE,
+                            java.nio.file.LinkOption.NOFOLLOW_LINKS);
                 } else {
                     Files.createDirectories(target.getParent());
+                    Files.writeString(target, r.source());
                 }
-                Files.writeString(target, r.source());
                 r.notes().forEach(n -> System.err.println(n.format(name)));
                 System.out.println("jsc: migrated " + name + " to .jsc 2: " + target + (inPlace ? " (the v1 text is in " + backup.getFileName() + ")" : ""));
                 migrated++;
@@ -197,9 +221,27 @@ public final class JscMain {
                 refused++;
             }
         }
-        if (migrated > 0) System.out.println("jsc: " + Migrate.NEW_SCRIPT);
+        if (migrated > 0) {
+            // Review r2 S1: the Gradle path records no deployments, so the warning is said here, once per run.
+            System.err.println("jsc: warning: " + Migrate.NEW_SCRIPT);
+            if (inPlace) {
+                System.err.println("jsc: warning: the next build replaces the v1 contracts' generated Java, validators and clients: copy"
+                        + " build/classes/java/main/META-INF (scripts, descriptions) and the generated clients first if v1 instances are"
+                        + " deployed; the v1 text is in Name.jsc.v1, and rebuilding it with this JOUST version gives the same v1 scripts");
+            }
+        }
         if (migrated == 0 && refused == 0) System.out.println("jsc: no .jsc v1 file under " + src);
         return refused > 0 ? 1 : 0;
+    }
+
+    /** Whether {@code dir} is {@code root} or inside it, by path or, where both exist, by their real paths. */
+    static boolean within(Path dir, Path root) throws IOException {
+        Path d = dir.toAbsolutePath().normalize(), r = root.toAbsolutePath().normalize();
+        if (d.startsWith(r)) return true;
+        // The nearest existing ancestor of dir, by its real path (a link into the sources counts).
+        Path e = d;
+        while (e != null && !Files.exists(e)) e = e.getParent();
+        return e != null && Files.exists(r) && e.toRealPath().resolve(e.relativize(d)).startsWith(r.toRealPath());
     }
 
     /**
@@ -235,6 +277,12 @@ public final class JscMain {
             String bare = name.find() ? name.group(1) : unit.getFileName().toString().replace(".java", ".jsc");
             String rel = root.relativize(unit).toString().replace('\\', '/');
             String jsc = jscPath(src, bare, rel);
+            if (jsc == null) {
+                // No single .jsc file declares this unit: keep javac's location, say so.
+                out.add(unit + ":" + javaLine + ": " + m.group(3) + ": " + m.group(4) + " (generated from " + bare + ", but no single file"
+                        + " named " + bare + " under " + src + " declares " + rel.replace(".java", "").replace('/', '.') + ")");
+                continue;
+            }
             var at = Pattern.compile("\\[" + javaLine + ", (\\d+), (\\d+)\\]").matcher(json);
             boolean mapped = at.find();
             out.add(jsc + ":" + (mapped ? at.group(1) + ":" + at.group(2) : "1:1") + ": " + m.group(3) + ": " + m.group(4)
@@ -245,18 +293,27 @@ public final class JscMain {
         return out;
     }
 
-    /** The {@code .jsc} file a generated unit came from: in its package's directory under {@code src} if there, else by name. */
+    /**
+     * The {@code .jsc} file a generated unit came from, or null: among the files under {@code src} with its source map's
+     * file name, the one that declares the unit's package and contract (review r2 C3: as the toolchain names units by
+     * package path; two packages may each have a {@code Contract.jsc}). None or several: null, and the diagnostic keeps its
+     * generated location.
+     */
     static String jscPath(Path src, String bare, String javaRel) throws IOException {
-        String dir = javaRel.contains("/") ? javaRel.substring(0, javaRel.lastIndexOf('/') + 1) : "";
-        Path guess = src.resolve(dir + bare);
-        if (Files.exists(guess)) return guess.toString();
+        String pkg = javaRel.contains("/") ? javaRel.substring(0, javaRel.lastIndexOf('/')).replace('/', '.') : "";
+        String contract = javaRel.substring(javaRel.lastIndexOf('/') + 1).replace(".java", "");
+        var found = new ArrayList<Path>();
         if (Files.isDirectory(src)) {
             try (Stream<Path> s = Files.walk(src)) {
-                var found = s.filter(p -> p.getFileName().toString().equals(bare)).findFirst();
-                if (found.isPresent()) return found.get().toString();
+                for (Path p : s.filter(x -> x.getFileName().toString().equals(bare) && Files.isRegularFile(x)).sorted().toList()) {
+                    String text = Files.readString(p);
+                    var pm = Pattern.compile("(?m)^\\s*package\\s+([A-Za-z0-9_.]+)").matcher(text);
+                    var cm = Pattern.compile("(?m)^\\s*contract\\s+([A-Za-z0-9_]+)").matcher(text);
+                    if (pm.find() && pm.group(1).equals(pkg) && cm.find() && cm.group(1).equals(contract)) found.add(p);
+                }
             }
         }
-        return bare;
+        return found.size() == 1 ? found.get(0).toString() : null;
     }
 
     public static void main(String[] args) throws IOException {

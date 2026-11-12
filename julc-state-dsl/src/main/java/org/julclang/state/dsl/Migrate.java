@@ -5,7 +5,6 @@ import org.julclang.state.dsl.Ast.*;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -72,7 +71,11 @@ public final class Migrate {
             org.julclang.state.dsl.v2.JscV2.lower(v2, fileName);
         } catch (JscException e) {
             int line = Math.max(1, e.line >= 1 && e.line <= m.origins.size() ? m.origins.get(e.line - 1) : 1);
-            throw new JscException(line, 1, "JSC1104", ".jsc 2 refuses this code, so migrate cannot translate it"
+            // The v1 statement the refused code came from: its line, at its first non-blank column (review r2 F6).
+            String[] v1Lines = source.split("\n", -1);
+            String text = line <= v1Lines.length ? v1Lines[line - 1] : "";
+            int col = text.length() - text.stripLeading().length() + 1;
+            throw new JscException(line, col, "JSC1104", ".jsc 2 refuses this code, so migrate cannot translate it"
                     + " (rewrite it by hand): " + (e.code == null ? "" : "[" + e.code + "] ") + e.getMessage());
         }
         return new Result(v2, List.copyOf(m.notes));
@@ -115,7 +118,12 @@ public final class Migrate {
     }
 
     /** {@code ssa}: introduced by the translation (inlined when used once and total); else a v1 {@code let}. */
-    private record Const(String name, Val value, boolean ssa, int line) implements Item {}
+    /**
+     * {@code id}: the binding's identity, unique in the translation and kept through every copy (pruning, inlining), so
+     * a const is never taken for another of the same name and line (review r2 C1: sibling arms may each declare
+     * {@code let x} on one line).
+     */
+    private record Const(String name, Val value, boolean ssa, int line, int id) implements Item {}
 
     private record Req(Text cond, String message, int line) implements Item {}
 
@@ -153,7 +161,8 @@ public final class Migrate {
         int nextComment;
         final Map<String, Field> fields = new LinkedHashMap<>();
         /** Every const the translation built that can fail: each must survive into the output (else it never runs). */
-        final Map<Const, Boolean> failing = new IdentityHashMap<>();
+        final Map<Integer, Const> failing = new LinkedHashMap<>();
+        int nextId;
 
         Run(String source, Contract c) {
             this.source = source;
@@ -170,6 +179,11 @@ public final class Migrate {
                     "abs", "utf8", "asKey", "asHash", "range", "Some", "None", "after", "before", "const", "return", "if", "else",
                     "match", "fn", "seed", "result", "s", "r", "true", "false"));
             comments();
+        }
+
+        /** {@code base} if free in this method, else {@code base1}, {@code base2}, … */
+        String rename(String base) {
+            return !taken.contains(base) && chosen.add(base) ? base : fresh(base);
         }
 
         /** Names this method's translation chose: a generated name is unique in its method. */
@@ -224,6 +238,11 @@ public final class Migrate {
         }
 
         String render() {
+            // Review r2 F6: a field's, method's or contract's name is part of the client and the ABI, so a name .jsc 2
+            // reserves ('match', 'Some', …) is refused rather than renamed.
+            reserved(c.name(), c.pos(), "the contract");
+            for (Field f : c.fields()) reserved(f.name(), f.pos(), "the state field");
+            for (Method m : c.methods()) if (m.kind() != Kind.INIT) reserved(m.name(), m.pos(), "the method");
             line("", "jsc 2", 1);
             int pkgLine = Lexer.lex(source).get(0).line();
             flushComments("", pkgLine);
@@ -279,6 +298,13 @@ public final class Migrate {
                 }
             }
             return String.join("\n", lines);
+        }
+
+        static void reserved(String n, Pos p, String what) {
+            if (org.julclang.state.dsl.v2.JscV2.isReservedName(n)) {
+                throw new JscException(p.line(), p.col(), "JSC1110", "'" + n + "' is a word of .jsc 2, so " + what + " " + n + " cannot keep"
+                        + " its name, and its name is part of the client and the ABI: rename it in the v1 file first, then migrate");
+            }
         }
 
         static String type(Type t) {
@@ -350,7 +376,12 @@ public final class Migrate {
             };
             for (Param p : m.params()) {
                 String n = p.name();
-                if (!init && fields.containsKey(n) || clientLocals.contains(n)) {
+                if (org.julclang.state.dsl.v2.JscV2.isReservedName(n)) {
+                    String renamed = rename(n + "Value");
+                    notes.add(new Note(p.pos().line(), p.pos().col(), "the parameter " + n + " of " + m.name() + " is renamed " + renamed
+                            + ": '" + n + "' is a word of .jsc 2; the JavaScript client's argument is now " + renamed));
+                    n = renamed;
+                } else if (!init && fields.containsKey(n) || clientLocals.contains(n)) {
                     String base = "new" + Character.toUpperCase(n.charAt(0)) + n.substring(1);
                     String renamed = !taken.contains(base) && chosen.add(base) ? base : fresh(base);
                     notes.add(new Note(p.pos().line(), p.pos().col(), "the parameter " + n + " of " + m.name() + " is renamed " + renamed
@@ -401,9 +432,9 @@ public final class Migrate {
             line("  ", head + (mods.isEmpty() ? "" : " " + String.join(" ", mods)) + " {", m.pos().line());
             renderItems(items, "    ");
             line("  ", "}", lastLine(m));
-            for (var e : failing.entrySet()) {
-                if (!present(items, e.getKey())) {
-                    int l = e.getKey().line();
+            for (Const k : failing.values()) {
+                if (!present(items, k)) {
+                    int l = k.line();
                     throw new JscException(l, 1, "JSC1106", "this value can fail (a division) but nothing reads it, so v1 computes"
                             + " it and .jsc 2 would not: rewrite it by hand (drop it, or check it with require)");
                 }
@@ -458,8 +489,8 @@ public final class Migrate {
         }
 
         Const constant(String name, Val v, boolean ssa, int line) {
-            var k = new Const(name, v, ssa, line);
-            if (!totalVal(v)) failing.put(k, true);
+            var k = new Const(name, v, ssa, line, ++nextId);
+            if (!totalVal(v)) failing.put(k.id(), k);
             return k;
         }
 
@@ -467,8 +498,14 @@ public final class Migrate {
             switch (s) {
                 case Let l -> {
                     Text v = expr(l.value(), env);
-                    items.add(constant(l.name(), new TextVal(v), false, l.pos().line()));
-                    env.lets.put(l.name(), l.name());
+                    String n = l.name();
+                    if (org.julclang.state.dsl.v2.JscV2.isReservedName(n)) {
+                        n = rename(n + "Value");
+                        notes.add(new Note(l.pos().line(), l.pos().col(), "the let " + l.name() + " is renamed " + n + ": '" + l.name()
+                                + "' is a word of .jsc 2"));
+                    }
+                    items.add(constant(n, new TextVal(v), false, l.pos().line()));
+                    env.lets.put(l.name(), n);
                 }
                 case Assign a -> {
                     Text cur = env.fields.get(a.field());
@@ -794,7 +831,7 @@ public final class Migrate {
                     case Const k when k.value() instanceof IfVal v -> {
                         var a = inlineBlock(v.then(), v.a());
                         var b = inlineBlock(v.other(), v.b());
-                        yield new Const(k.name(), new IfVal(v.cond(), a.items, a.result, b.items, b.result), k.ssa(), k.line());
+                        yield new Const(k.name(), new IfVal(v.cond(), a.items, a.result, b.items, b.result), k.ssa(), k.line(), k.id());
                     }
                     default -> it;
                 });
@@ -819,7 +856,7 @@ public final class Migrate {
                     if (uses != 1 || !totalVal(k.value()) && !strict) continue;
                     cur.remove(i);
                     // Inlined where it is always evaluated: it still runs.
-                    failing.keySet().removeIf(x -> x.name().equals(k.name()) && x.line() == k.line());
+                    failing.remove(k.id());
                     for (int j = i; j < cur.size(); j++) cur.set(j, mapTexts(cur.get(j), x -> substitute(x, k.name(), t)));
                     changed = true;
                     break;
@@ -878,7 +915,7 @@ public final class Migrate {
 
         static Item mapTexts(Item it, UnaryOperator<Text> f) {
             return switch (it) {
-                case Const k -> new Const(k.name(), mapVal(k.value(), f), k.ssa(), k.line());
+                case Const k -> new Const(k.name(), mapVal(k.value(), f), k.ssa(), k.line(), k.id());
                 case Req r -> new Req(f.apply(r.cond()), r.message(), r.line());
                 case PayI p -> new PayI(f.apply(p.to()), f.apply(p.amount()), p.line());
                 case IfI x -> new IfI(f.apply(x.cond()), x.then().stream().map(y -> mapTexts(y, f)).toList(),
@@ -963,8 +1000,7 @@ public final class Migrate {
 
         static boolean present(List<Item> items, Const k) {
             for (Item it : items) {
-                if (it == k) return true;
-                if (it instanceof Const c2 && c2.name().equals(k.name()) && c2.line() == k.line()) return true;
+                if (it instanceof Const c2 && c2.id() == k.id()) return true;
                 if (it instanceof IfI f && (present(f.then(), k) || present(f.other(), k))) return true;
                 if (it instanceof Const c2 && c2.value() instanceof IfVal v && (present(v.then(), k) || present(v.other(), k))) return true;
             }

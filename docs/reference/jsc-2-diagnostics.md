@@ -311,6 +311,9 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC1105 | error | this if writes … at a key computed inside one of its arms; .jsc 2 changes a BigMap only in the next state, so migrate needs the key before the if: rewrite it by hand | Migrate |
 | JSC1106 | error | this value can fail (a division) but nothing reads it, so v1 computes it and .jsc 2 would not: rewrite it by hand (drop it, or check it with require) | Migrate |
 | JSC1107 | error | … exists already: migrate --in-place keeps the v1 text there and never overwrites it; move it away first | JscMain, joust migrate |
+| JSC1108 | error | the output directory … is the source directory or inside it (or the output … would replace the source): without --in-place, migrate writes outside the sources and never changes them | JscMain, joust migrate |
+| JSC1109 | error | this file is a symbolic link: migrate --in-place never replaces a file through a link; migrate a copy, or the link's target in its own project | JscMain, joust migrate |
+| JSC1110 | error | ' … ' is a word of .jsc 2, so the contract / state field / method … cannot keep its name, and its name is part of the client and the ABI: rename it in the v1 file first, then migrate | Migrate |
 
 ## Warnings (ADR-0018 D11, D12)
 
@@ -322,3 +325,4 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC9004 | warning | stores a value derived from a stored time in … : that time came from an earlier … call's validity window, so its bias (up to maxValidityMs) carries into … (ADR-0018 D11) | Checker |
 | JSC9005 | warning | a time value sets this payout: whoever submits the transaction chooses the … window, so validFrom can be up to maxValidityMs early and validTo that much late, and the … amount moves with it (ADR-0018 D11) | Checker |
 | JSC9006 | warning | this file is .jsc v1, which is deprecated (ADR-0018 D16): it still builds, unchanged, but new code is .jsc 2; run `joust migrate` (Gradle: the migrateJsc task) to translate it, as a new script | JscMain (every v1 file, both paths) |
+| JSC9007 | warning | this line starts with '-', which continues the expression on the line above (a subtraction): newlines do not end statements in .jsc; if that is meant, join the lines or put the expression in parentheses; if the line is meant to stand alone, end the line above with ';' | Checker |

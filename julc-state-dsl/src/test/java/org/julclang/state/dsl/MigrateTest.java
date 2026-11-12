@@ -292,6 +292,107 @@ class MigrateTest {
                 + " from Counter2.jsc: org/julclang/state/examples/dsl/Counter2.java:" + line + ":8)", out.get(0));
     }
 
+    // ------------------------------------------------------------------ review r2
+
+    @Test
+    void r2C1_sameNamedLocalsOnOneLine_inSiblingArms_areDistinctBindings() {
+        // Codex C1: the else arm's division is dead (n is overwritten); a same-named, same-line local in the then arm used
+        // to stand in for it, and the division was lost (v1 refuses d = 0, the migration accepted it).
+        var e = assertThrows(JscException.class, () -> Migrate.migrate("""
+                package probe
+                contract SameLine {
+                  state n: Int
+                  init() {}
+                  action act(d: Int, flag: Bool) { if flag { let x = 1 / d n = x } else { let x = 1 / d n = x n = 2 } }
+                }
+                """, "SameLine.jsc"));
+        assertEquals("JSC1106", e.code);
+        // Both read: migrated, each arm's division where v1 runs it.
+        String v2 = migrate("package p\ncontract C {\n  state n: Int\n  init() {}\n  action act(d: Int, flag: Bool) { if flag { let x = 1 / d n = x }"
+                + " else { let x = 2 / d n = x } }\n}\n");
+        assertThrows(RuntimeException.class, () -> call1(v2, "act", List.of(BigInteger.ZERO, false)));
+        assertEquals(BigInteger.ONE, ((Rec) call1(v2, "act", List.of(BigInteger.TWO, false)).value()).fields().get(0));
+    }
+
+    static Interpreter.Outcome call1(String v2, String method, List<Object> args) {
+        var tx = new Tx(Bytes.of(ALICE), BigInteger.ZERO, BigInteger.TEN, BigInteger.ZERO, BigInteger.ZERO);
+        return JscV2.interpreter(v2, "C.jsc", Interpreter.JDK_HASHES).call(method, new Rec("State", List.of(BigInteger.valueOf(7))), args, tx);
+    }
+
+    @Test
+    void r2F6_namesThatAreWordsOfJsc2_renamedOrRefused_andJsc1104AtTheStatementsColumn() {
+        var r = Migrate.migrate("package p\ncontract C {\n  state c: Int\n  init() {}\n  action a(match: Int) {\n    let await = match + 1\n"
+                + "    c = await\n  }\n}\n", "C.jsc");
+        assertTrue(r.source().contains("action a(matchValue: Int) {\n    const awaitValue = matchValue + 1\n"), r.source());
+        assertTrue(r.notes().stream().anyMatch(n -> n.message().contains("renamed matchValue")), r.notes().toString());
+        var field = assertThrows(JscException.class, () -> migrate("package p\ncontract C {\n  state match: Int\n  init() {}\n}\n"));
+        assertEquals("JSC1110", field.code);
+        assertEquals(3, field.line);
+        var time = assertThrows(JscException.class, () -> migrate(v1("    action late() {\n        if validTo > 5 {\n            count = 1\n        }\n    }\n")));
+        assertEquals("JSC1104", time.code);
+        // At the first column of the v1 statement on that line (the if at 12:9, or its arm's assignment at 13:13), not 1.
+        assertEquals(time.line == 12 ? 9 : 13, time.col);
+    }
+
+    @Test
+    void r2C2_anOutputThatIsOrHoldsTheSourcesIsRefused_withoutInPlace(@TempDir Path dir) throws Exception {
+        Path src = Files.createDirectories(dir.resolve("src"));
+        Files.writeString(src.resolve("C.jsc"), "package p\ncontract C { state n: Int init() {} action inc() { n += 1 } }\n");
+        String err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", src.toString(), src.toString()})));
+        assertTrue(err.contains("error[JSC1108]"), err);
+        err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", src.toString(), src.resolve("out").toString()})));
+        assertTrue(err.contains("error[JSC1108]"), err);
+        // Through a link to the sources, too.
+        Files.createSymbolicLink(dir.resolve("alias"), src);
+        err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", src.toString(), dir.resolve("alias").toString()})));
+        assertTrue(err.contains("error[JSC1108]"), err);
+        assertTrue(Files.readString(src.resolve("C.jsc")).startsWith("package p"));
+        assertFalse(Files.exists(src.resolve("C.jsc.v1")));
+    }
+
+    @Test
+    void r2S2_inPlaceNeverFollowsLinks(@TempDir Path dir) throws Exception {
+        Path src = Files.createDirectories(dir.resolve("src/app"));
+        Files.copy(DSL.resolve("Guards.jsc"), src.resolve("Guards.jsc"));
+        // A dangling backup link: refused, and its target is not created.
+        Files.createSymbolicLink(src.resolve("Guards.jsc.v1"), dir.resolve("elsewhere/planted.txt"));
+        String err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", dir.resolve("src").toString(), dir.resolve("out").toString(), "--in-place"})));
+        assertTrue(err.contains("error[JSC1107]"), err);
+        assertFalse(Files.exists(dir.resolve("elsewhere/planted.txt")));
+        assertTrue(Files.readString(src.resolve("Guards.jsc")).startsWith("package"));
+        Files.delete(src.resolve("Guards.jsc.v1"));
+        Files.delete(src.resolve("Guards.jsc"));
+        // A linked source: never replaced in place; the shared file keeps v1.
+        Path shared = Files.createDirectories(dir.resolve("shared"));
+        Files.copy(DSL.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        Files.createSymbolicLink(src.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", dir.resolve("src").toString(), dir.resolve("out").toString(), "--in-place"})));
+        assertTrue(err.contains("error[JSC1109]"), err);
+        assertTrue(Files.readString(shared.resolve("Points.jsc")).startsWith("package"));
+        assertFalse(Files.exists(src.resolve("Points.jsc.v1"), java.nio.file.LinkOption.NOFOLLOW_LINKS));
+    }
+
+    @Test
+    void r2C3_remap_twoFilesWithOneName_theOneThatDeclaresTheUnit(@TempDir Path dir) throws Exception {
+        Path src = dir.resolve("src");
+        for (String[] x : new String[][]{{"feature-a", "a", "A"}, {"feature-b", "b", "B"}}) {
+            Path d = Files.createDirectories(src.resolve(x[0]));
+            Files.writeString(d.resolve("Contract.jsc"), "jsc 2\npackage " + x[1] + "\n\ncontract " + x[2] + " {\n  state { n: Int }\n  init() {\n"
+                    + "    return { n: 0 }\n  }\n}\n");
+        }
+        Path gen = dir.resolve("gen");
+        assertEquals(0, JscMain.run(new String[]{src.toString(), gen.toString(), "--accept-abi"}));
+        Path b = gen.resolve("b/B.java");
+        int line = Files.readAllLines(b).indexOf("public class B {") + 1;
+        var out = JscMain.remapped(b + ":" + line + ": error: duplicate class: b.B\npublic class B {\n       ^\n", gen, src);
+        assertTrue(out.get(0).startsWith(src.resolve("feature-b/Contract.jsc") + ":4:1: error: duplicate class: b.B"), out.toString());
+        // Ambiguous (two files declare b.B): javac's location is kept, and says why.
+        Path c = Files.createDirectories(src.resolve("feature-c"));
+        Files.copy(src.resolve("feature-b/Contract.jsc"), c.resolve("Contract.jsc"));
+        out = JscMain.remapped(b + ":" + line + ": error: duplicate class: b.B\n", gen, src);
+        assertTrue(out.get(0).startsWith(b + ":" + line + ": error: duplicate class: b.B (generated from Contract.jsc, but no single file"), out.toString());
+    }
+
     interface Body {
         void run() throws Exception;
     }
