@@ -25,7 +25,7 @@ class JscV2MessagesTest {
 
     static final Path EXAMPLES = Path.of("../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl");
     static final Pattern REQUIRE = Pattern.compile("Require\\.that\\(.*, (\"(?:[^\"\\\\]|\\\\.)*\")\\);$", Pattern.MULTILINE);
-    static final Pattern KEY = Pattern.compile("#(input|pay):(spend|mint)\\d+\\.\\d+");
+    static final Pattern KEY = Pattern.compile("#(input|pay):(spend|mint|intent)\\d+\\.\\d+");
 
     static List<Path> examples() throws Exception {
         try (Stream<Path> s = Files.list(EXAMPLES)) {
@@ -78,6 +78,87 @@ class JscV2MessagesTest {
         }
         assertTrue(keys >= 8, "keys seen: " + keys);
     }
+
+    /**
+     * Review S1 on #76: every key's redeemer is its method's constructor in the ABI manifest, by the manifest's own
+     * constructor order, for every example and a contract whose {@code batched only} action comes before other actions
+     * and a destroy: {@code spend<i>} is the spend constructor named after the method, {@code mint0} the init's
+     * {@code CreateInstance}, and {@code intent<k>} the {@code IntentCall} variant of a {@code batched only} action, which
+     * has no spend constructor. An input key's field is the parameter's field in that constructor.
+     */
+    @Test
+    void everyKeysRedeemer_isItsMethodsConstructorInTheAbiManifest() throws Exception {
+        var sources = new java.util.LinkedHashMap<String, String>();
+        for (Path f : examples()) sources.put(f.getFileName().toString(), Files.readString(f));
+        sources.put("Order.jsc", ORDER);
+        int checked = 0, intents = 0;
+        for (var e : sources.entrySet()) {
+            var lowered = JscV2.lower(e.getValue(), e.getKey());
+            @SuppressWarnings("unchecked")
+            var abi = (Map<String, Object>) AbiCheck.Json.parse(lowered.abiJson());
+            @SuppressWarnings("unchecked")
+            var redeemers = (Map<String, List<Map<String, Object>>>) abi.get("redeemers");
+            @SuppressWarnings("unchecked")
+            var types = (Map<String, Map<String, Object>>) abi.get("types");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> intentCalls = types.containsKey("IntentCall")
+                    ? (List<Map<String, Object>>) types.get("IntentCall").get("constructors") : List.of();
+            for (JscV2.Site s : lowered.messages()) {
+                var m = KEY.matcher(s.message());
+                if (!m.matches()) continue;
+                String red = s.message().substring(s.message().indexOf(':') + 1, s.message().lastIndexOf('.'));
+                int n = Integer.parseInt(s.message().substring(s.message().lastIndexOf('.') + 1));
+                String cap = Character.toUpperCase(s.in().charAt(0)) + s.in().substring(1);
+                List<Map<String, Object>> ctors;
+                String ctor, want;
+                if (red.startsWith("mint")) {
+                    ctors = redeemers.get("mint");
+                    ctor = "CreateInstance";
+                    want = "mint";
+                } else if (red.startsWith("intent")) {
+                    ctors = intentCalls;
+                    ctor = cap + "Intent";
+                    want = "intent";
+                    intents++;
+                    assertTrue(redeemers.get("spend").stream().noneMatch(c -> c.get("name").equals(cap)),
+                            e.getKey() + ": " + s.message() + " is an intent key, but " + cap + " has a spend constructor");
+                } else {
+                    ctors = redeemers.get("spend");
+                    ctor = cap;
+                    want = "spend";
+                }
+                var found = ctors.stream().filter(c -> c.get("name").equals(ctor)).findFirst();
+                assertTrue(found.isPresent(), e.getKey() + ": " + s.message() + " in " + s.in() + ": no constructor " + ctor);
+                assertEquals(want + ((Number) found.get().get("constr")).intValue(), red, e.getKey() + ": " + s.message() + " in " + s.in());
+                if (s.kind().equals("input")) {
+                    @SuppressWarnings("unchecked")
+                    var fields = (List<Map<String, Object>>) found.get().get("fields");
+                    assertEquals(s.what(), fields.get(n).get("name"), e.getKey() + ": " + s.message() + " guards field " + n);
+                }
+                checked++;
+            }
+        }
+        assertTrue(checked >= 10 && intents >= 2, "keys checked: " + checked + ", intent keys: " + intents);
+    }
+
+    /** A {@code batched only} action before an action and a destroy, with an input check and a pay in each (review S1). */
+    static final String ORDER = """
+            jsc 2
+            package t
+            contract Order {
+              state { admin: Key, n: Int }
+              init() { return { admin: caller, n: 0 } }
+              action take(to: Key, x: Int) payable batched only open {
+                pay(to, x)
+                return { ...state, n: n + 1 }
+              }
+              action give(to: Key, x: Int) only admin {
+                pay(to, x)
+                return state
+              }
+              destroy close(to: Key) only admin { pay(to, balance) }
+            }
+            """;
 
     static final String SRC = """
             jsc 2

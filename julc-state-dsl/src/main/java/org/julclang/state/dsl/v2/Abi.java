@@ -76,11 +76,7 @@ final class Abi {
         // Redeemers, as the processor lays them out (ContractIR.spendTransitions; the Lifecycle of the mint validator).
         boolean ctx = false;
         var spend = new ArrayList<String>();
-        var order = new ArrayList<Ir.Method>();
-        // A 'batched only' action has no direct redeemer: it runs only as an intent (M1c).
-        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION && !batchedOnly(m)) order.add(m);
-        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.DESTROY) order.add(m);
-        for (Ir.Method m : order) {
+        for (Ir.Method m : spendOrder(p)) {
             var fs = new ArrayList<String>();
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
@@ -88,8 +84,7 @@ final class Abi {
             spend.add("      " + ctor(Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1), spend.size(), fs, "        "));
         }
         // Batched actions (ADR-0004, M1c): the batch's redeemers follow, and intents have their own datum and mint.
-        var batched = new ArrayList<Ir.Method>();
-        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION && batched(m)) batched.add(m);
+        List<Ir.Method> batched = intentOrder(p);
         if (!batched.isEmpty()) {
             spend.add("      " + ctor("Batch", spend.size(), List.of(field("validFrom", "Int", "int", ind), field("validTo", "Int", "int", ind)), "        "));
             spend.add("      " + ctor("InBatch", spend.size(), List.of(), "        "));
@@ -176,6 +171,24 @@ final class Abi {
         w.append("  \"timeFields\": [").append(String.join(", ", time)).append("]\n");
         w.append("}\n");
         return w.toString();
+    }
+
+    /**
+     * The methods with a spend constructor, in the manifest's order: actions in source order, then destroys. A
+     * {@code batched only} action has none: it runs only as an intent (M1c). The message keys use this order too (D12).
+     */
+    static List<Ir.Method> spendOrder(Ir.Program p) {
+        var order = new ArrayList<Ir.Method>();
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION && !batchedOnly(m)) order.add(m);
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.DESTROY) order.add(m);
+        return order;
+    }
+
+    /** The batched actions in source order: the {@code IntentCall} variants, in the manifest's order (M1c). */
+    static List<Ir.Method> intentOrder(Ir.Program p) {
+        var order = new ArrayList<Ir.Method>();
+        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION && batched(m)) order.add(m);
+        return order;
     }
 
     static boolean batched(Ir.Method m) {

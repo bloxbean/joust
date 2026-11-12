@@ -41,8 +41,12 @@ final class JavaEmitter {
     private String redeemer;
     /** Each pay statement of the method being emitted, by position, and its ordinal in source order (from 1). */
     private Map<Syntax.Pos, Integer> payOrdinals = Map.of();
-    /** Each action's and destroy's constructor index in the spend redeemer: actions in source order, then destroys (ABI). */
-    private final Map<String, Integer> spendIndex = new HashMap<>();
+    /**
+     * Each method's redeemer in the ABI manifest, for message keys: {@code spend<i>} for an action or destroy with a spend
+     * constructor ({@link Abi#spendOrder}), {@code intent<k>} for a {@code batched only} action, which has none, by its
+     * {@code IntentCall} variant ({@link Abi#intentOrder}; M1 integration, review S1).
+     */
+    private final Map<String, String> redeemers = new HashMap<>();
     private final Set<String> imports = new TreeSet<>();
     private final LinkedHashMap<String, String> helpers = new LinkedHashMap<>();
     private int counter;
@@ -62,8 +66,9 @@ final class JavaEmitter {
     // ------------------------------------------------------------------ the class
 
     private String source() {
-        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.ACTION) spendIndex.put(m.name(), spendIndex.size());
-        for (Ir.Method m : p.methods()) if (m.kind() == Ir.Kind.DESTROY) spendIndex.put(m.name(), spendIndex.size());
+        List<Ir.Method> spend = Abi.spendOrder(p), intents = Abi.intentOrder(p);
+        for (int i = 0; i < spend.size(); i++) redeemers.put(spend.get(i).name(), "spend" + i);
+        for (int k = 0; k < intents.size(); k++) redeemers.putIfAbsent(intents.get(k).name(), "intent" + k);
         var body = new StringBuilder();
         boolean outcome = false;
         for (Ir.Method m : p.methods()) {
@@ -184,9 +189,10 @@ final class JavaEmitter {
     // ------------------------------------------------------------------ on-chain messages (D12, J20)
 
     /**
-     * The message key of a generated check (ADR-0018 D12, r12): {@code #<kind>:<redeemer>.<n>}. The redeemer is the
+     * The message key of a generated check (ADR-0018 D12, r12, r14): {@code #<kind>:<redeemer>.<n>}. The redeemer is the
      * method's constructor in the ABI manifest ({@code spend2}: the third spend constructor; {@code mint0}: the init's
-     * {@code CreateInstance}); {@code n} is the redeemer field an input check guards ({@code input}), or the pay
+     * {@code CreateInstance}; {@code intent1}: the second {@code IntentCall} variant, for a {@code batched only} action,
+     * which has no spend constructor); {@code n} is the redeemer field an input check guards ({@code input}), or the pay
      * statement's ordinal in the method, in source order from 1 ({@code pay}). Only ABI facts and source order: no file
      * name, line, column or name, so layout, comments, the file's name and renames other than the ABI's never reach the
      * script, and each key names one construct.
@@ -241,7 +247,7 @@ final class JavaEmitter {
         owner = m.name();
         redeemer = switch (m.kind()) {
             case INIT -> "mint0";
-            case ACTION, DESTROY -> "spend" + spendIndex.get(m.name());
+            case ACTION, DESTROY -> redeemers.get(m.name());
             case VIEW -> null;
         };
         payOrdinals = payOrdinals(m.body());

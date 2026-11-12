@@ -99,7 +99,7 @@ test('joust build: Java whose manifest is refused is not on disk', async () => {
     assert.equal(messages?.source, join(pkg, 'Counter2.jsc'));
     const keys = Object.keys(messages.messages).filter((m) => m.startsWith('#'));
     assert.ok(keys.length > 0, 'generated keys in the map');
-    for (const k of keys) assert.match(k, /^#(input|pay):(spend|mint)\d+\.\d+$/);
+    for (const k of keys) assert.match(k, /^#(input|pay):(spend|mint|intent)\d+\.\d+$/);
     for (const sites of Object.values(messages.messages)) for (const s of sites) assert.ok(s.line > 0 && s.col > 0);
     const manifest = join(root, 'contracts', pkg, 'Counter2.abi.json');
     writeFileSync(manifest, readFileSync(manifest, 'utf8').replace('"Increment"', '"Bump"'));
