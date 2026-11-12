@@ -166,12 +166,12 @@ final class Checker {
         }
         fillFields(stateFields, c.state(), "state", true);
         for (TypeDecl t : allTypes) {
-            if (reaches(new Ty.Rec(t.name()), t.name(), new HashSet<>())) {
+            if (cyclic(t.name())) {
                 throw t.pos().error("JSC0301", "the type " + t.name() + " contains itself; recursive types are not supported");
             }
         }
         for (EnumDecl e : allEnums) {
-            if (reaches(new Ty.EnumT(e.name()), e.name(), new HashSet<>())) {
+            if (cyclic(e.name())) {
                 throw e.pos().error("JSC0302", "the enum " + e.name() + " contains itself; recursive types are not supported");
             }
         }
@@ -323,22 +323,30 @@ final class Checker {
         return t;
     }
 
+    /**
+     * Whether a declared record or enum contains itself, directly or through other types, inside a List, an Option, a
+     * Map or a BigMap's values too (review r4 C8): a cycle is refused at its declaration, so every later walk over the
+     * types ends.
+     */
+    private boolean cyclic(String name) {
+        var seen = new HashSet<String>();
+        return components(name).stream().anyMatch(f -> reaches(f, name, seen));
+    }
+
+    /** Whether {@code t} reaches the named type {@code target}; {@code seen}: the named types already searched. */
     private boolean reaches(Ty t, String target, Set<String> seen) {
         return switch (t) {
             case Ty.Prim p -> false;
             case Ty.ListT l -> reaches(l.elem(), target, seen);
             case Ty.OptT o -> reaches(o.elem(), target, seen);
             case Ty.MapT m -> reaches(m.val(), target, seen);
-            case Ty.BigMapT m -> false;
-            case Ty.Rec r -> seen.add(r.name()) && records.getOrDefault(r.name(), new LinkedHashMap<>()).values().stream()
-                    .anyMatch(f -> named(f, target) || reaches(f, target, seen));
-            case Ty.EnumT e -> seen.add(e.name()) && components(e.name()).stream()
-                    .anyMatch(f -> named(f, target) || reaches(f, target, seen));
+            case Ty.BigMapT m -> reaches(m.val(), target, seen);
+            // The target is recognised before the visited-node shortcut, wherever the edge back to it comes from.
+            case Ty.Rec r -> r.name().equals(target)
+                    || seen.add(r.name()) && components(r.name()).stream().anyMatch(f -> reaches(f, target, seen));
+            case Ty.EnumT e -> e.name().equals(target)
+                    || seen.add(e.name()) && components(e.name()).stream().anyMatch(f -> reaches(f, target, seen));
         };
-    }
-
-    private static boolean named(Ty t, String name) {
-        return t instanceof Ty.Rec r && r.name().equals(name) || t instanceof Ty.EnumT e && e.name().equals(name);
     }
 
     /** The fields of a record, the state or a variant. */

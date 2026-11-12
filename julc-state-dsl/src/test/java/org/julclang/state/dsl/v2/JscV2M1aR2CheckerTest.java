@@ -1,5 +1,6 @@
 package org.julclang.state.dsl.v2;
 
+import org.julclang.state.dsl.JscException;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -175,8 +176,68 @@ class JscV2M1aR2CheckerTest {
         // CRLF is a line end: the require is compiled.
         String crlf = ok("action take(k: Key) {\r\n    // anyone may call\r\n    require(caller == owner, \"only the owner\")\r\n    return { ...state, owner: k } }");
         assertTrue(crlf.contains("Require.that(eq__Bytes(ctx.caller(), s__.owner()), \"only the owner\")"), crlf);
+        // Round r4, security S12: no other control character either, in comments, strings or code. U+001C..U+001E after
+        // // are what the review used; ESC, NUL, DEL and a C1 control likewise. TAB stays allowed outside strings.
+        for (String c : new String[]{"\u001C", "\u001D", "\u001E"}) {
+            bad("action take(k: Key) {\n    // anyone may call" + c + "    require(caller == owner, \"only the owner\")\n    return { ...state, owner: k } }",
+                    String.format("control character U+%04X: .jsc files hold no control characters", (int) c.charAt(0)), 1, 23);
+        }
+        bad("action a() { /* \u001B[2K */ return state }", "control character U+001B", 0, 17);
+        bad("action a() { require(true, \"a\u0000b\")\n return state }", "control character U+0000", 0, 30);
+        bad("action a() {\u007F return state }", "control character U+007F", 0, 13);
+        bad("// \u009B a comment\n action a() { return state }", "control character U+009B", 0, 4);
+        var code = assertThrows(JscException.class, () -> JscV2.lower(contract("// \u001C\n"), "T.jsc"));
+        assertEquals("JSC0148", code.code);
+        ok("action a() {\t// a tab\there\n\treturn state }");
         // Any other text is fine in strings and comments; a leading byte-order mark too.
         ok("action a() { /* Zähler, 計数 */ require(true, \"Zähler: 計数 ✓\")\n return state }");
         assertDoesNotThrow(() -> JscV2.lower("﻿" + contract(""), "T.jsc"));
+    }
+
+    // ------------------------------------------------------------------ r4, C8: no type contains itself
+
+    /**
+     * Round r4, Codex C8: a type cycle is refused at its declaration however it closes: directly, through a List, an
+     * Option or a Map, through another record or enum. The checker's later walks over the types (BigMaps, checks)
+     * assumed none, and a cycle through a container overflowed the stack.
+     */
+    @Test
+    void typeCyclesAreRefusedAtTheirDeclaration_throughAnyContainer() {
+        // Codex's repro.
+        String repro = "jsc 2\npackage probe\n enum E { End, Link { xs: List<E> } }\n contract EnumCycle {\n   state { e: E }\n"
+                + "   init() { return { e: Link { xs: [] } } }\n }\n";
+        cycle(repro, "JSC0302", "the enum E contains itself", 3, 2);
+        cycle(file("enum E { End, Link { next: Option<E> } }"), "JSC0302", "the enum E contains itself", 3, 1);
+        cycle(file("enum E { End, Link { m: Map<Bytes, E> } }"), "JSC0302", "the enum E contains itself", 3, 1);
+        cycle(file("enum E { End, Link { m: Map<Bytes, List<Option<E>>> } }"), "JSC0302", "the enum E contains itself", 3, 1);
+        cycle(file("enum A { X { b: B }, Y }\nenum B { Z { a: List<A> }, W }"), "JSC0302", "the enum A contains itself", 3, 1);
+        cycle(file("type Rec = { x: List<Rec> }"), "JSC0301", "the type Rec contains itself", 3, 1);
+        cycle(file("type P = { q: Option<Q> }\ntype Q = { p: Option<P> }"), "JSC0301", "the type P contains itself", 3, 1);
+        cycle(file("type R = { e: Option<E> }\nenum E { A { r: R }, B }"), "JSC0301", "the type R contains itself", 3, 1);
+        cycle(file("type R = { m: Map<Bytes, R> }"), "JSC0301", "the type R contains itself", 3, 1);
+        // A cycle that does not pass through the first type is still found, at a type on it.
+        cycle(file("type Top = { b: B }\ntype B = { d: Option<D> }\ntype D = { b: List<B> }"), "JSC0301", "the type B contains itself", 4, 1);
+        // Controls: shared, acyclic graphs (one type reached along several paths, through every container).
+        assertDoesNotThrow(() -> JscV2.lower(file("""
+                type Leaf = { n: Int }
+                type L = { a: Leaf, b: List<Leaf>, c: Option<Leaf>, d: Map<Bytes, Leaf> }
+                enum E { X { l: L, m: Map<Bytes, Leaf> }, Y { o: Option<L>, ls: List<L> } }
+                type Top = { e: E, l: L, es: List<E> }"""), "T.jsc"));
+    }
+
+    /** Round r4, C8: the type walks end on a cycle too (the checker refuses one first). */
+    @Test
+    void typeWalksEndOnACycle() {
+        java.util.function.Function<String, java.util.List<Ty>> cyclic = n -> java.util.List.of(
+                new Ty.ListT(new Ty.EnumT("E")), new Ty.OptT(new Ty.Rec("R")), new Ty.MapT(Ty.BYTES, new Ty.EnumT("E")));
+        assertFalse(Ty.hasBigMap(new Ty.EnumT("E"), cyclic));
+        assertFalse(Ty.hasBigMap(new Ty.Rec("R"), cyclic));
+        assertTrue(Ty.needsCheck(new Ty.EnumT("E"), cyclic), "a Map anywhere needs a check");
+        assertFalse(Ty.needsCheck(new Ty.Rec("R"), n -> java.util.List.of(new Ty.ListT(new Ty.Rec("R")), Ty.INT)));
+    }
+
+    private static void cycle(String source, String code, String fragment, int line, int col) {
+        badSource(source, fragment, line, col);
+        assertEquals(code, assertThrows(JscException.class, () -> JscV2.lower(source, "T.jsc")).code);
     }
 }
