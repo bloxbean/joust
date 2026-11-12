@@ -132,7 +132,9 @@ class JscV2IrTest {
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 1, \"ir\": 1,")));
         assertTrue(e.getMessage().contains("duplicate key"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"value\": \"(\\d+)\"", "\"value\": \"0x10\"")));
-        assertTrue(e.getMessage().contains("x10"), e.getMessage());   // BigInteger refuses a hex literal
+        assertTrue(e.getMessage().contains("not a decimal integer: 0x10"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"value\": \"01\"", "\"value\": \"0A\"")));
+        assertTrue(e.getMessage().contains("not lower-case hex: 0A"), e.getMessage());
     }
 
     /** The Gradle path (generateJsc runs JscMain) writes Name.ir.json beside Name.java and its source map. */

@@ -547,6 +547,9 @@ final class IrJson {
             return switch (s(x.get("node"))) {
                 case "Lit" -> {
                     Object v = x.get("value");
+                    if (v instanceof String text && !(t.equals(Ty.INT) ? text.matches("-?(0|[1-9][0-9]*)") : text.matches("([0-9a-f]{2})*"))) {
+                        throw new IllegalArgumentException("a literal that is not " + (t.equals(Ty.INT) ? "a decimal integer" : "lower-case hex") + ": " + text);
+                    }
                     Object value = v instanceof Boolean b ? b : t.equals(Ty.INT) ? new BigInteger(s(v)) : HEX.parseHex(s(v));
                     yield new Ir.Lit(value, t, at);
                 }
