@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { load, Refused, Limit, NONE, Some, some, Rec, MapV, BigMapV, hex, fromHex, toJson, runCall } from '../src/index.js';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -500,4 +500,32 @@ test('a reader refuses up front what it does not know or cannot trust (review S3
   refuses((t) => t.replace(/"node": "StateField", "field": "goal"/, '"node": "StateField", "field": "gaol"'), /the state has no field gaol/);
   refuses((t) => t.replace('"sourceSha256": "', '"sourceSha256": "x'), /sourceSha256/);
   assert.throws(() => load(JSON.parse(text)), TypeError, 'load takes the text, so it can refuse duplicates');
+});
+
+// ------------------------------------------------------------------ §2.2 else-if chains (M1e), every export loads (M1 merge)
+
+test('§2.2 an else-if chain runs the first branch whose condition holds, else the else block', () => {
+  const branches = fixture('Branches');
+  const owner = fromHex('0a'.repeat(28)), to = fromHex('a1'.repeat(28));
+  const s = new Rec('State', [owner, 0n]);
+  const tx = { ...TX, caller: owner };
+  const n = (method, args) => branches.call(method, s, args, tx).value.fields[1];
+  // A value chain of twelve branches, one with statements (x < 70: y = 2x, then y - x).
+  assert.deepEqual([5n, 15n, 65n, 75n, 119n, 120n, 1000n].map((x) => n('grade', [x])), [0n, 1n, 65n, 7n, 11n, 12n, 12n]);
+  // A recursive chain of nine branches: steps(x) is x up to 8, then 8.
+  assert.deepEqual([0n, 3n, 8n, 9n, 40n].map((x) => n('walk', [x])), [0n, 3n, 8n, 8n, 8n]);
+  // A paying statement chain: only the taken branch pays; the third branch's require refuses 5.
+  const pays = (x) => branches.call('settle', s, [to, x], tx).payouts.map((p) => [hex(p.to), p.lovelace]);
+  assert.deepEqual(pays(0n), [[hex(to), 1_000_000n]]);
+  assert.deepEqual(pays(1n), [[hex(to), 2_000_000n], [hex(owner), 1_000_000n]]);
+  assert.deepEqual(pays(7n), [[hex(to), 7_000_000n]]);
+  assert.deepEqual(pays(10n), [[hex(owner), 3_000_000n]]);
+  assert.throws(() => pays(5n), (e) => e instanceof Refused && e.message === 'five is refused');
+});
+
+test('every exported example loads: the M1c ports (Pool with batched), Branches (flat else-if chains) and the rest', () => {
+  const dir = new URL('./fixtures/', import.meta.url);
+  const names = readdirSync(dir).filter((f) => f.endsWith('.ir.json')).map((f) => f.replace('.ir.json', ''));
+  for (const c of ['Vault', 'Escrow', 'Crowdfund', 'Token', 'Pool', 'Branches']) assert.ok(names.includes(c), c);
+  for (const name of names) assert.doesNotThrow(() => fixture(name), name);
 });
