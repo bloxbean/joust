@@ -11,7 +11,7 @@
 
 /**
  * A call is refused (§2): every failure of the semantics. Its class says which rule refused it (§2.5, review S4):
- * `require` with the require's message, `input` with the parameter's name (§4), or `domain` with the operation whose
+ * `require` with the require's position and message (`require:<line>:<col>:<message>`), `input` with the parameter's name (§4), or `domain` with the operation whose
  * domain the call left (`/`, `slice`, `Map.set`, …). The class is what implementations compare; the message is prose.
  */
 export class Refused extends Error {

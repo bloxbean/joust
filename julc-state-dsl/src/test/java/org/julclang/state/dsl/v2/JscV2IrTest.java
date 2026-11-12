@@ -135,6 +135,34 @@ class JscV2IrTest {
         assertTrue(e.getMessage().contains("not a decimal integer: 0x10"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"value\": \"01\"", "\"value\": \"0A\"")));
         assertTrue(e.getMessage().contains("not lower-case hex: 0A"), e.getMessage());
+        // Review C5: strings as RFC 8259 reads them, as the JavaScript reader does.
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"contract\": \"Forms\"", "\"contract\": \"Edges\\q\"")));
+        assertTrue(e.getMessage().contains("unknown escape \\q"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"source\": \"Forms.jsc\"", "\"source\": \"Forms\n.jsc\"")));
+        assertTrue(e.getMessage().contains("control character"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"source\": \"Forms.jsc\"", "\"source\": \"Forms\\u00g1\"")));
+        assertTrue(e.getMessage().contains("bad \\u escape"), e.getMessage());
+        assertEquals("a\"b/c\u00e9", AbiCheck.Json.parseStrict("\"a\\\"b\\/c\\u00e9\""), "the defined escapes are read");
+        // Review C4: an initializer that reads the binding it introduces is refused at load, by both readers.
+        String bind = JscV2.lower("""
+                jsc 2
+                package t
+                contract Bind {
+                  state { n: Int }
+                  init() { return { n: 0 } }
+                  view bind(): Int {
+                    const x = 1
+                    x
+                  }
+                }
+                """, "Bind.jsc").irJson();
+        IrJson.read(bind);
+        var m = java.util.regex.Pattern.compile("\"local\": \\{ \"id\": (\\d+), \"name\": \"x\"").matcher(bind);
+        assertTrue(m.find(), bind);
+        String selfRef = bind.replaceFirst("\"value\": \\{ \"node\": \"Lit\", \"value\": \"1\"", "\"value\": { \"node\": \"LocalRef\", \"local\": " + m.group(1));
+        assertNotEquals(bind, selfRef);
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(selfRef));
+        assertTrue(e.getMessage().contains("undeclared local " + m.group(1)), e.getMessage());
     }
 
     /** The Gradle path (generateJsc runs JscMain) writes Name.ir.json beside Name.java and its source map. */

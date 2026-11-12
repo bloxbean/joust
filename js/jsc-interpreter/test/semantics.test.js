@@ -322,14 +322,14 @@ test('§2.5 a refusal has a class: require with its message, input with the para
   assert.equal(classOf(() => ev(node('Prelude', { op: 'asKey', args: [b('01')] }, 'Key'))), 'domain:asKey');
   const counter = fixture('Counter2');
   const s = new Rec('State', [1n, fromHex('0a'.repeat(28))]);
-  assert.equal(classOf(() => counter.call('increment', s, [0n], null)), 'require:increment must be positive');
+  assert.equal(classOf(() => counter.call('increment', s, [0n], null)), 'require:13:5:increment must be positive');
   const ledger = fixture('Ledger');
   assert.equal(classOf(() => ledger.call('init', null, [MapV.raw([[fromHex('00'), 1n]])], TX)), 'input:limits');
   const v = fixture('Vectors');
   const vs = new Rec('State', [fromHex('0a'.repeat(28)), new Uint8Array(0), 0n, 0n, 0n, 0n, [], NONE]);
   assert.equal(classOf(() => v.call('give', vs, [fromHex('a1'.repeat(28)), -1n], TX)), 'domain:pay');
   assert.deepEqual(runCall(counter, { method: 'increment', state: { rec: 'State', fields: [{ int: '1' }, { bytes: '0a'.repeat(28) }] },
-    args: [{ int: '0' }], tx: null }), { refused: 'increment must be positive', class: 'require:increment must be positive' });
+    args: [{ int: '0' }], tx: null }), { refused: 'increment must be positive', class: 'require:13:5:increment must be positive' });
 });
 
 // ------------------------------------------------------------------ §3.10 std rows at their domain edges
@@ -443,7 +443,7 @@ test('a reader refuses another IR version, an unknown std row, and keeps answers
     args: [{ int: '2' }], tx: null });
   assert.deepEqual(answer, { ok: { value: { rec: 'State', fields: [{ int: '3' }, { bytes: '0a'.repeat(28) }] }, payouts: [] } });
   assert.deepEqual(runCall(counter, { method: 'increment', state: answer.ok.value, args: [{ int: '0' }], tx: null }),
-    { refused: 'increment must be positive', class: 'require:increment must be positive' });
+    { refused: 'increment must be positive', class: 'require:13:5:increment must be positive' });
   assert.ok(new Some(1n) instanceof Some);
 });
 
@@ -460,7 +460,44 @@ test('a reader refuses up front what it does not know or cannot trust (review S3
   refuses((t) => t.replace(/"node": "Lit", "value": "(\d+)", "type": "Int"/, '"node": "Lit", "value": "0x10", "type": "Int"'), /not a decimal integer/);
   refuses((t) => t.replace(/"value": "(\d+)" }/, '"value": "0x10" }'), /option\): not an integer/);
   refuses((t) => t.replace('"usesCtx": true', '"usesCtx": false'), /usesCtx is false, but the method reads the transaction/);
-  refuses((t) => t.replace('"name": "only"', '"name": "batched"'), /unknown modifier batched/);
+  refuses((t) => t.replace('"name": "only"', '"name": "sealed"'), /unknown modifier sealed/);
+  // F11: M1c's batched is known (a version-1 reader loads #67's IR), and like every modifier but open and only it
+  // makes a method read the transaction.
+  refuses((t) => t.replace('"name": "only"', '"name": "batched"'), /usesCtx is false, but the method reads the transaction/);
+  // C4, S7: an initializer that reads its own binding; a local out of its scope; a fn, field or arity that is not there.
+  const withSelfRef = (t) => {
+    const p = JSON.parse(t);
+    const reassign = p.methods.find((m) => m.name === 'reassign');
+    const st = { stmt: 'Let', local: { id: 9000, name: 'self', type: 'Int', taint: 0, at: [1, 1] },
+      value: { node: 'LocalRef', local: 9000, type: 'Int', taint: 0, at: [1, 1] }, at: [1, 1] };
+    reassign.body.stmts.unshift(st);
+    return JSON.stringify(p);
+  };
+  refuses(withSelfRef, /undeclared local 9000/);
+  const outOfScope = (t) => {
+    const p = JSON.parse(t);
+    const [first, second] = p.methods.filter((m) => m.params.length > 0);
+    const ref = { node: 'LocalRef', local: first.params[0].id, type: first.params[0].type, taint: 0, at: [1, 1] };
+    second.body.stmts.unshift({ stmt: 'Require', cond: { node: 'Equals', negate: false, left: ref, right: ref, operand: first.params[0].type,
+      type: 'Bool', taint: 0, at: [1, 1] }, message: 'x', at: [1, 1] });
+    return JSON.stringify(p);
+  };
+  refuses(outOfScope, /outside its scope/);
+  refuses((t) => t.replace('"fn": "total"', '"fn": "nosuch"'), /no fn nosuch/);
+  const extraArg = (t) => {
+    const p = JSON.parse(t);
+    const visit = (n) => {
+      if (Array.isArray(n)) n.forEach(visit);
+      else if (n && typeof n === 'object') {
+        if (n.node === 'CallFn') n.args.push({ node: 'Lit', value: '1', type: 'Int', taint: 0, at: [1, 1] });
+        Object.values(n).forEach(visit);
+      }
+    };
+    visit(p.methods);
+    return JSON.stringify(p);
+  };
+  refuses(extraArg, /fn total takes 1 argument\(s\), not 2/);
+  refuses((t) => t.replace(/"node": "StateField", "field": "goal"/, '"node": "StateField", "field": "gaol"'), /the state has no field gaol/);
   refuses((t) => t.replace('"sourceSha256": "', '"sourceSha256": "x'), /sourceSha256/);
   assert.throws(() => load(JSON.parse(text)), TypeError, 'load takes the text, so it can refuse duplicates');
 });

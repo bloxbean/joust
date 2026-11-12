@@ -128,7 +128,7 @@ class Program {
           env = bind(env, s.local, this.#eval(s.value, env, f));
           break;
         case 'Require':
-          if (this.#eval(s.cond, env, f) !== true) throw new Refused(s.message, 'require', s.message);
+          if (this.#eval(s.cond, env, f) !== true) throw new Refused(s.message, 'require', `${s.at[0]}:${s.at[1]}:${s.message}`)   // §2.5: its position, then its message (review S6);
           break;
         case 'Pay': {
           const to = this.#eval(s.to, env, f);

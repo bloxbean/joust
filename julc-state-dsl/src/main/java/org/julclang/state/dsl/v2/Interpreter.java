@@ -178,7 +178,7 @@ public final class Interpreter {
 
     /**
      * The call fails (a require, a checked input, a binding's domain, a division by zero, a negative payout). Its class
-     * (semantics §2.5, review S4) says which rule: {@code require} with the require's message, {@code input} with the
+     * (semantics §2.5, review S4, S6) says which rule: {@code require} with the require's position and message, {@code input} with the
      * parameter's name, or {@code domain} with the operation ({@code /}, {@code slice}, {@code Map.set}, …). The
      * differential tests compare the class with the JavaScript interpreter's.
      */
@@ -210,6 +210,21 @@ public final class Interpreter {
         public Limit(String message) {
             super(message);
         }
+    }
+
+    /**
+     * The call was cancelled: the thread waiting for it was interrupted (review C3). No answer, never a refusal. The
+     * evaluation stops at its next step and has ended when this is thrown; the waiting thread keeps its interrupt.
+     */
+    public static final class Cancelled extends RuntimeException {
+        public Cancelled(String message) {
+            super(message);
+        }
+    }
+
+    /** Ends an evaluation whose waiting caller was interrupted, at an evaluation step (every expression and statement list). */
+    private static void checkCancelled() {
+        if (Thread.currentThread().isInterrupted()) throw new Cancelled("the call was cancelled (no answer)");
     }
 
     /** Hash functions for std/crypto. sha2_256 is the JDK's; blake2b needs a provider (tests pass an independent one). */
@@ -313,7 +328,10 @@ public final class Interpreter {
 
     /**
      * Runs an evaluation on a thread with a {@link #STACK_BYTES} stack, so recursion as deep as the chain's budget allows
-     * gets an answer (review S1). A stack overflow even there is a {@link Limit}, never a refusal.
+     * gets an answer (review S1). A stack overflow even there is a {@link Limit}, never a refusal. If the waiting thread is
+     * interrupted, the evaluation is interrupted too, stops at its next step, and is waited for before this throws
+     * {@link Cancelled} with the waiter's interrupt restored (review C3): nothing keeps running after its caller has gone.
+     * The evaluator is a daemon thread, so it never holds a JVM open either.
      */
     private static <T> T deep(java.util.function.Supplier<T> eval) {
         Object[] out = new Object[1];
@@ -327,12 +345,21 @@ public final class Interpreter {
                 err[0] = e;
             }
         }, "jsc-interpreter", STACK_BYTES);
+        t.setDaemon(true);
         t.start();
         try {
             t.join();
         } catch (InterruptedException e) {
+            t.interrupt();
+            while (t.isAlive()) {
+                try {
+                    t.join();
+                } catch (InterruptedException again) {
+                    // keep waiting: the evaluation ends at its next step
+                }
+            }
             Thread.currentThread().interrupt();
-            throw new IllegalStateException(e);
+            throw new Cancelled("the call was cancelled: its caller was interrupted (no answer)");
         }
         if (err[0] instanceof RuntimeException r) throw r;
         if (err[0] instanceof Error e) throw e;
@@ -382,11 +409,12 @@ public final class Interpreter {
     }
 
     private Env exec(List<Ir.Stmt> stmts, Env env, Frame f) {
+        checkCancelled();
         for (Ir.Stmt s : stmts) {
             switch (s) {
                 case Ir.Let l -> env = new Env(l.local(), eval(l.value(), env, f), env);
                 case Ir.Require r -> {
-                    if (!bool(eval(r.cond(), env, f))) throw new Refused(r.message(), "require", r.message());
+                    if (!bool(eval(r.cond(), env, f))) throw new Refused(r.message(), "require", r.pos().line() + ":" + r.pos().col() + ":" + r.message());
                 }
                 case Ir.Pay y -> {
                     // pay(to, amount) evaluates both arguments, left to right, like any call: pay is not one of D6's lazy
@@ -418,6 +446,7 @@ public final class Interpreter {
     }
 
     private Object eval(Ir.Expr e, Env env, Frame f) {
+        checkCancelled();
         return switch (e) {
             case Ir.Lit l -> l.value() instanceof byte[] b ? new Bytes(b) : l.value();
             case Ir.LocalRef r -> lookup(env, r.local());

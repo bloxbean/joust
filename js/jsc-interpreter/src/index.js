@@ -4,7 +4,7 @@
 //   const counter = load(readFileSync('build/joust/generated/app/Counter.ir.json', 'utf8'));
 //   counter.call('increment', state, [5n], null);   // { value, payouts }; throws Refused, or Limit (no answer)
 //
-// Deep recursion needs a deep stack: bin/run-vectors.js evaluates in a worker with a 1 GiB stack (§2.4).
+// Deep recursion needs a deep stack: bin/run-vectors.js evaluates in a worker with a 512 MiB stack (STACK_MB, §2.4).
 //
 // The meaning of every construct: docs/reference/jsc-2-semantics.md. The IR format: docs/reference/jsc-2-ir.md.
 

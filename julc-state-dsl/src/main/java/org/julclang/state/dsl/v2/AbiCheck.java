@@ -337,9 +337,15 @@ public final class AbiCheck {
         private String string() {
             expect('"');
             var out = new StringBuilder();
-            while (s.charAt(i) != '"') {
+            while (true) {
+                if (i >= s.length()) throw new IllegalArgumentException("an unterminated string");
                 char c = s.charAt(i++);
+                if (c == '"') break;
+                // Strict mode (IR exports, review C5) reads strings as RFC 8259 does, as the JavaScript reader does: no
+                // raw control character, only the defined escapes, and a \\u escape of exactly four hex digits.
+                if (strict && c < 0x20) throw new IllegalArgumentException("a control character in a string at " + (i - 1));
                 if (c == '\\') {
+                    if (i >= s.length()) throw new IllegalArgumentException("an unterminated string");
                     char e = s.charAt(i++);
                     switch (e) {
                         case 'n' -> out.append('\n');
@@ -347,17 +353,22 @@ public final class AbiCheck {
                         case 'r' -> out.append('\r');
                         case 'b' -> out.append('\b');
                         case 'f' -> out.append('\f');
+                        case '"', '\\', '/' -> out.append(e);
                         case 'u' -> {
-                            out.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
+                            String h = i + 4 <= s.length() ? s.substring(i, i + 4) : "";
+                            if (!h.matches("[0-9a-fA-F]{4}")) throw new IllegalArgumentException("a bad \\u escape at " + (i - 2));
+                            out.append((char) Integer.parseInt(h, 16));
                             i += 4;
                         }
-                        default -> out.append(e);
+                        default -> {
+                            if (strict) throw new IllegalArgumentException("an unknown escape \\" + e + " at " + (i - 2));
+                            out.append(e);
+                        }
                     }
                 } else {
                     out.append(c);
                 }
             }
-            i++;
             return out.toString();
         }
     }
