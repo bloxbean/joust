@@ -39,7 +39,7 @@ public class JoustProcessor extends AbstractProcessor {
 
     @Override
     public Set<String> getSupportedOptions() {
-        return Set.of("joust.traces", "joust.portable", "joust.jsMode", "joust.transitions");
+        return Set.of("joust.traces", "joust.jsMode", "joust.transitions");
     }
 
     @Override
@@ -77,7 +77,6 @@ public class JoustProcessor extends AbstractProcessor {
         write(g.validatorFqcn(), g.validatorSource(), origin);
         if (g.clientSource() != null) write(g.packageName() + "." + g.clientName(), g.clientSource(), origin);
         describe(ir, g.descriptionJson(), origin);
-        if (g.portableSource() != null) write(g.packageName() + "." + g.contractName() + "Portable", g.portableSource(), origin);
     }
 
     /** {@code META-INF/joust/<package>.<Contract>.json}: the description JavaScript clients use (ADR-0013 D3). */

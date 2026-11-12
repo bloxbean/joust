@@ -168,7 +168,7 @@ public final class Toolchain {
                     try {
                         var o = JoustGenerators.Options.of(env);
                         // Transition programs are on unless asked otherwise: the runtime engine runs them (D3).
-                        o = new JoustGenerators.Options(o.traces(), o.javaClient(), o.portable(),
+                        o = new JoustGenerators.Options(o.traces(), o.javaClient(),
                                 !"false".equals(options.get("joust.transitions")));
                         JoustGenerators.generate(env, type, o).ifPresent(generated::add);
                     } catch (RuntimeException e) {

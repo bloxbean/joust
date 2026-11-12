@@ -33,7 +33,7 @@ import java.util.Map;
  *   <li>the Ctx (any Data when unused).</li>
  * </ol>
  * It returns {@code Constr 0 [next, payouts]}, where {@code next} is {@code Some(value)} or {@code None} (the instance or
- * object ends). That is the format of phase 4's {@code <Name>Portable.step} (ADR-0013 §10.2). A failing
+ * object ends). A failing
  * {@code Require} fails the program.
  * <p>
  * Transitions with MerkleMaps, foreign reads, params, native assets, batches, composition, sends, mints or events are
