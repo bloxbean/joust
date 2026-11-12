@@ -1,6 +1,6 @@
 # ADR-0020: UPLC transition programs as the off-chain meaning on every path — a spike (answers ADR-0015 Q6)
 
-**Status:** Proposed (r3), **spike**: design plus a proof of concept to measure. Not a commitment: nothing changes
+**Status:** Proposed (r4), **spike**: design plus a proof of concept to measure. Not a commitment: nothing changes
 for users until the spike's report is reviewed and this ADR is accepted or rejected.
 **Date:** 2026-11-12
 **Builds on:** ADR-0015 D3 (transition programs, `TransitionFn`), D4 (one description-driven runtime core; typed
@@ -37,10 +37,12 @@ measure it now, while `.jsc` 2 (ADR-0018) is in review. The research and the r1 
 | F16 | Datum encoding: CCL writes inline datums canonically (sorted map keys, duplicates collapsed); julc-core's encoder keeps order and duplicates; the runtime refuses non-canonical state; `DataFidelity` checks Data that CCL would alter | `SortedMaps.java:14-17`; `Datums.java:24-37`; `DataFidelity.java:8-14`; JuLC `PlutusDataCborEncoder.java:116-126` |
 | F17 | JuLC `v0.1.0-pre21-rc1` (JOUST's pin): `JulcCompiler.compileMethod(source, method, librarySources)` ("the method becomes a lambda accepting Data arguments", lines 463/477), `JulcVm.evaluateWithArgs`, `EvalResult` with consumed units for every outcome, source maps and execution traces (`JulcEval`, `FailureReportBuilder`) | JuLC at the tag |
 | F18 | Engine size: JOUST's runtime engine (`./gradlew :julc-state-runtime-wasm:runtimeWasm`) contains QuickTx building, codecs and the VM; a local build of 2026-11-09 was 20.4 MB of Wasm. JuLC's VM-only Web Image probe is 11.58 MB (4.32 MB gzip), a lower bound | `julc-state-runtime-wasm/build.gradle:41`; JuLC `adr/057-…md:36-47` |
-| F20 | `DescribedContract` refuses today: `@Quorum`/`@AuthorizedBy` on kinds other than action (and `@AuthorizedBy` on keyed calls); batched methods on the call path; some redeemer fields; a `@Withdraw` taking Ctx; batches of asset-aware or MerkleMap contracts; `$` arguments in batched actions (ADR-0015 M3 gaps) | `DescribedContract.java:185, 188-189, 193, 484, 753, 804-805, 859` |
+| F19 | The runtime can be given a `TransactionEvaluator`, which evaluates the real validators before submission | `StateRuntime.java:199` |
+| F20 | `DescribedContract` refuses today: `@Quorum`/`@AuthorizedBy` on kinds other than action, destroy and keyed action, and `@AuthorizedBy` on keyed calls (r4: quorum and authorization on action and destroy, and quorum on keyed actions, are supported and stay in the required coverage); batched methods on the call path; some redeemer fields; a `@Withdraw` taking Ctx; batches of asset-aware or MerkleMap contracts; `$` arguments in batched actions (ADR-0015 M3 gaps) | `DescribedContract.java:185, 188-189, 193, 484, 753, 804-805, 859` |
 | F21 | For a parameterised contract the toolchain records an empty script hash (`@Params` are applied at deploy time) | `Toolchain.java:221`; `StateContractHandle.java:176-195` |
 | F22 | On the JVM, `MerkleMaps` serves keys outside a map's read set from a `ReadSource` bound per call (`MerkleMaps.withReads`); keys inside the read set are answered directly. `Batcher.fold` catches every `RuntimeException` from a step and skips the intent. `StateRuntime.Builder.onBuilt` sees every built transaction before it is submitted or returned | `julc-state-api/src/main/java/…/MerkleMaps.java:105-146`; `Batcher.java:84-90`; `StateRuntime.java:105, 217` |
-| F19 | The runtime can be given a `TransactionEvaluator`, which evaluates the real validators before submission | `StateRuntime.java:199` |
+| F23 | At JuLC `v0.1.0-pre21-rc1`, compiling with a source map **skips the UPLC optimiser** (`PirBackend` builds the map in place of calling `UplcOptimizer`, "optimization skipped"); source maps are off by default and the toolchain does not enable them, so the engine's programs and the validators are optimised and map-less. `compileMethod`'s wrapper decodes record arguments without checking constructor tag or arity (the strict record transform belongs to the validator route) | JuLC `PirBackend.java:106-127`, `CompilerOptions.java:19-25, 103-113`, `ValidatorAssembly.java:304-342`, `PirHelpers.java:289-344` at the tag |
+| F24 | JVM `MerkleMaps.lookup` answers from this call's own writes and from the read set directly, and answers absent for the empty root without a `ReadSource`; only other keys reach `missing` | `julc-state-api/src/main/java/…/MerkleMaps.java:64-86` |
 
 So the JVM can already run transition programs, through the description-driven core. The open question is
 **ADR-0015 Q6 for the typed Java path** (generated clients, `StateRuntime` users, `JoustServer`): should it compute
@@ -102,7 +104,8 @@ wrappers over the described core, so that "JVM or UPLC" is only a choice of `Tra
 ### D2. Programs for the examples, with their manifest (revised r2)
 
 The spike compiles programs for each example as the npm toolchain does (`Toolchain.build`: `<Name>Transitions`, then
-`compileMethod` per method), so they are the engine's programs, and records a manifest for each (D8). A method left
+`compileMethod` per method, optimised, **without source maps**), so they are the engine's programs, and records a
+manifest for each (D8). These optimised programs are the only ones compared, used and measured (r4, F23). A method left
 without a program is an error in the spike (no JVM fallback, no warning).
 
 ### D3. Three transition functions over one Data interface (revised r2)
@@ -119,17 +122,34 @@ without a program is an error in the spike (no JVM fallback, no warning).
 - **`ShadowTransitions`**: runs both and compares them (D9); on a difference it fails the call with an outcome report
   (D9), written to a file or log, and returns a short error to remote callers (no vectors over the network).
   Because `Batcher.fold` turns any exception into a skipped intent (F22), a difference also sets a **failure latch**
-  that the spike checks in the runtime's `onBuilt` hook, before anything is submitted or returned: a latched call
-  produces no transaction. Only the `require` and `budget` classes may skip an intent; a differential mismatch,
-  `error` on one side only, `missing-proof` and infrastructure failures are fatal. Test: a batch with one matching and
-  one mismatching intent returns an error and no transaction.
+  (revised r4):
+  - **Scope:** per call: created and cleared when the spike harness starts a call, held on the calling thread, and
+    covering everything the call does, a batch's halving retries included.
+  - **Checks:** in the runtime's `onBuilt` hook, before anything is submitted or returned, by throwing an exception
+    that propagates out of both the submit and the prepare paths (`onBuilt` is documented as diagnostic only; the
+    spike relies on the propagation at the four `TxRunner` call sites, and a test pins it); **and** at the end of every
+    call, so a batch in which every intent mismatched (`Batcher` then returns without building, `Batcher.java:175`)
+    still fails.
+  - Only the `require` and `budget` classes may skip an intent; a differential mismatch, `error` on one side only,
+    `missing-proof` and infrastructure failures are fatal.
+  - Tests: one matching and one mismatching intent (error, no transaction); every intent mismatching (error, no
+    transaction); a latched call next to a clean concurrent call (only the latched one fails).
 - **Map reads inside discovery** (r3, replaces r2's "identical by design"): all three run inside
   `DescribedContract.discover` (F5). `JvmTransitions` binds a spike `ReadSource` through `MerkleMaps.withReads` (F22;
   no change to `MerkleMaps`): it answers a key from the verified supplied reads, and answers an unknown key **absent**
   while reporting it as a `joust:read` need in `Run.traces`, exactly as the program's discovery variant does. So
   both sides take part in the same rounds.
 - **`ShadowTransitions` compares only final runs:** when neither side reports an unknown read. Provisional rounds
-  legitimately differ (round-1 absences are unproven) and are never compared or used.
+  legitimately differ (round-1 absences are unproven) and are never compared or used. In each round
+  `ShadowTransitions` returns to `discover` the **union** of both sides' `joust:read` needs (r4); a round in which one
+  side is final and the other still has needs is not a mismatch, the next round continues; reaching the round limit
+  with needs on one side only is a mismatch (`round-limit` against `step` or `require`), not a `round-limit` on both.
+- **A common ABI check** (new in r4, F23): before either side runs, every input (target, `@Shared` state, arguments,
+  Ctx) is validated against the description's schema, method-aware: constructor tags, arity and field types; an
+  unused argument is the `NONE` sentinel `DescribedContract` supplies (`JvmTransitions` passes no Ctx to a method
+  that takes none). The program's wrapper decodes leniently and the JVM codec strictly (F23), so without this stage a
+  malformed input would show a codec difference, not a semantic one. Inputs the check rejects never reach the
+  comparison; they are tested as ABI rejections.
 
 ### D4. Corpus: offline replay, generated vectors, a divergence corpus (revised r2; completes ADR-0015 I2)
 
@@ -151,7 +171,10 @@ D4 is ADR-0015 I2's unfinished obligation (F10), not new scope. Three parts:
     to refuse (each expectation derived from the contract's rules, recorded with the vector); these count for C1;
   - **well-typed unreachable states**: no expectation of refusal (`Counter.State(-2, owner)` with `increment(1)`
     legitimately gives `-1`); both sides must agree in outcome class and step;
-  - **malformed encodings**: wrong constructor tags, field counts or types; both sides must give `error` (decode).
+  - **malformed encodings**: wrong constructor tags, field counts or types; the common ABI check (D3) must reject
+    each (tested). They are also run raw through both evaluators and recorded as **observations**, not as C1
+    mismatches (the program's lenient decoding can succeed where the JVM codec refuses, F23: e.g. a target
+    `Constr 7 [0, owner]` to `Counter.increment`). The codec round trip is required only for inputs the check accepts.
 - **(c) A divergence corpus:** spike-only contracts that use each known JVM/chain difference (ADR-0015 Q6, CLAUDE.md):
   `JulcMap.insert` duplicates and order, `byte[].equals`, and any other the spike finds. Each entry records whether
   both compilers accept it. `ShadowTransitions` must flag each accepted one, and the validator leg must show that the
@@ -187,7 +210,8 @@ If the report supports it, a revision of this ADR (then implementation PRs) woul
   kind, batches with assets or maps, `@Withdraw` with Ctx, the remaining redeemer fields). **Risk:** the typed path is
   compared with programs only on the dapp recordings and DevKit suites (D4a);
 - retire `-Ajoust.portable` (ADR-0015 Q6's second half);
-- make a missing program a build error; reserve the `joust:` prefix for contract traces in `SubsetLint` (Q7);
+- make a missing program a build error; settle the trace namespace (Q7);
+- add the step-independent outflow bound for local-`Account` callers (C7), or record the risk as accepted;
 - leave the npm engine as it is: it already runs programs, and its size is mostly transaction building (F18).
 
 Adoption criteria (all must hold):
@@ -199,9 +223,14 @@ Adoption criteria (all must hold):
 - **C3:** every kind `DescribedContract` supports covered, with a nonzero invocation count per kind (D6a); no
   program missing. Kinds it refuses today (F20) are reported as "insufficient evidence", which blocks adoption until
   they are closed.
-- **C4:** for the `require` class, messages identical; for other failures, a source-mapped location at least as
+- **C4:** for the `require` class, messages identical; for other failures, a source-mapped location (from the
+  diagnostic rerun, D9, when it reproduces the outcome; otherwise "location unavailable", itself reported) at least as
   useful as a JVM stack trace.
 - **C5:** the service's per-request evaluation is bounded (D11) and concurrent calls are safe.
+- **C7** (r4, at adoption): the JVM builder enforces a **step-independent bound** on the wallet's net outflow for
+  local-`Account` callers: at most what the call itself declares (`received`, deposits, fee, min-UTxO top-ups),
+  mirroring the ADR-0013 page verifier, because once UPLC is the only leg U9 is no longer checked and a preview
+  comes from the same step. The alternative is to record this as an accepted risk; the report recommends one.
 - **C6:** U9 holds on every buildable call of D4(a) and D4(b-reachable), and each seeded wrong-step test of §8 is
   refused by the validator or flagged by U9.
 
@@ -228,22 +257,27 @@ programs; and typed Java clients of a `.jsc` contract still need its records. Th
 
 - The build that compiles the programs writes a **manifest** per contract: the hash of the **unapplied** validator
   script's CBOR (r3; a parameterised script has no hash before deployment, F21), the description's hash, each
-  program's hash and its source map's hash, the JuLC version, the compiler options (target, optimisation profile
-  recorded explicitly, traces on), the library pool's source hashes and **the exact substitution set** (fully
-  qualified names, with each override's hash).
+  program's hash, the JuLC version, the compiler options of the **evaluated** programs (target, optimisation profile
+  recorded explicitly, `sourceMapEnabled = false`, optimiser on, traces on), the library pool's source hashes and
+  **the exact substitution set** (fully qualified names, with each override's hash).
+- **Diagnostic artifacts** (r4, F23): a second, source-mapped compile of each program is a separate artifact with its
+  own hash and options (`sourceMapEnabled = true`, optimiser skipped) in a separate manifest section. It is never
+  compared, used or measured; it only locates a failure the optimised program already produced (D9).
 - **Allowed substitutions** are an allowlist: `org.julclang.state.api.MerkleMaps` (discovery) and `Require` (D9),
   read from `julc-state-api`'s own artifact and pinned by hash; any other override fails the build. A mechanical
   check requires each variant to equal its on-chain source except the marked branch. **Spike-only:** an
   access-recording `MerkleMaps` variant (D9) is allowlisted for the instrumented program set only; D2's claim that
   the programs are the engine's excludes that set, and S2 shows that the instrumented and shipped programs give the
   same step on every vector.
-- `UplcTransitions` and `ShadowTransitions` run only programs whose manifest matches the deployment: applying the
-  deployment's parameters (if any) to the manifest's unapplied script must give the script hash the runtime spends
-  with, and the JuLC version and recorded profile must match; otherwise they refuse before evaluating.
+- `UplcTransitions` and `ShadowTransitions` run only programs whose manifest matches the deployment, checked in two
+  steps (r4, S14): (1) the hash of the unapplied script CBOR the runtime holds (from the description or bundle)
+  equals the manifest's; (2) applying the deployment's parameters (if any) to that CBOR gives the **script credential
+  of the state UTxO's address** (the payment credential the runtime spends from, not a reference script's own hash).
+  The JuLC version and recorded profile must match too; otherwise they refuse before evaluating.
 - Programs must keep traces (read discovery depends on them, F12); a manifest without traces is refused.
 - Negative tests (§8): a stale program (v1 programs against a v2 deployment), programs bound to a different
-  unapplied script, a program compiled with a user-overridden profile, an unexpected discovery override, a
-  stripped-trace program. Each is refused before evaluation, in `UplcTransitions` as in `ShadowTransitions`.
+  unapplied script, a correct manifest with another deployment's reference script, a program compiled with a
+  user-overridden profile or with source maps, an unexpected discovery override, a stripped-trace program. Each is refused before evaluation, in `UplcTransitions` as in `ShadowTransitions`.
 - **Recompile check (CI):** as ADR-0015 I1 does for validators, CI recompiles each example's programs from source and
   requires the manifest's program hashes to match.
 
@@ -259,6 +293,14 @@ The manifest establishes consistency (§2), not integrity or equivalence; equiva
   for `require`. A last trace is never taken as a refusal message; `error` keeps the VM's cause and the source-mapped
   location. (The validator's `Require` is unchanged.) Tests include a message starting `joust:` and a non-Require VM
   error.
+- **Trace namespace in the spike** (r4, C14): contract code can emit any trace, computed or through a library, so the
+  `joust:` prefix cannot be made unforgeable by rejecting literals. The spike's rule makes forgery harmless instead:
+  a `joust:read` need is only a request, answered with a verified proof against the map's root and counted against
+  the cumulative limit (D11), so a forged need adds cost, never a result; a `require` classification only selects
+  which text a refusal shows and is never used for a decision, and the comparison counts a `require`/`error` split
+  between the sides as a mismatch to adjudicate (D10), not as agreement. Tests: a computed trace
+  (`ContextsLib.trace` of decoded bytes) and a library-mediated one, each forging `joust:read` and `joust:require`.
+  Q7 keeps the post-adoption rule.
 - **Step equality, two checks:**
   1. *Semantic:* both steps encoded with julc-core's `PlutusDataCborEncoder` (order and duplicates kept, no sorting)
      and compared as Data, **every field** (next, payouts, sends, mint, accepted, deposits, events), after one narrow
@@ -266,11 +308,16 @@ The manifest establishes consistency (§2), not integrity or equivalence; equiva
      does, F13), because `JvmTransitions` and the program run on the same supplied reads (D3).
   2. *Preservation:* the step that is used goes through the real datum and redeemer path (`DataFidelity.check`, the
      runtime's canonical-datum refusal kept) and the final unsigned transaction is compared with the other mode's.
-- **Read sets:** the compared set is **the accesses of the final, fully proven run**, recorded by both sides:
-  on the program side by the allowlisted, spike-only access-recording variant (D8), which traces every lookup,
-  hits included; on the JVM side by running the final round with the map's in-datum read set empty and every
-  verified entry served through the spike `ReadSource`, so every access passes the recorder (the witnesses this
-  changes are normalised anyway). The union over rounds
+- **Read sets:** the compared set is **the backing-map reads of the final, fully proven run** (r4, C4): lookups
+  answered neither by the call's own earlier writes nor by the empty root (F24). Both recorders exclude those two
+  cases the same way: on the program side the allowlisted, spike-only access-recording variant (D8) traces a lookup
+  only when it falls through the writes and the root is not empty; on the JVM side the final round runs with the
+  map's in-datum read set empty and every verified entry served through the spike `ReadSource`, which is reached
+  exactly for those lookups. Vectors: the first `Token.mint` after `create` (empty root), a write then a read of the
+  same key, a read of a supplied key.
+- **Recording runs are extra runs** (r4, F26): both instrumented runs exist only for U5's access sets. The compared
+  and used steps come from the uninstrumented runs on the real inputs, and the instrumented runs are excluded from
+  D5's latency, units and round counts. The union over rounds
   is proof *acquisition* and may be a verified superset of the accesses; the transaction's read claims must be
   accepted by the validator and the MapVerifier. No provisional result or refusal becomes final while a read is
   unknown; every proof is verified (key, membership or non-membership, root) as `SuppliedProver` does. Tests: a funded
@@ -279,9 +326,12 @@ The manifest establishes consistency (§2), not integrity or equivalence; equiva
   over the limit.
 - **Failure details reach the comparison:** the spike evaluates through a structured carrier (in the spike module;
   production `TransitionFn.Run` is unchanged) holding the outcome class, the VM's cause, all traces, the consumed
-  units and the source location. Programs are compiled with source maps; each map is a build artifact named by hash
-  in the manifest (D8), loaded with its program and passed to evaluation (`EvalOptions.withSourceMap`), as JuLC's
-  `JulcEval` does.
+  units. **Source locations come from a diagnostic rerun** (r4, F23): when the optimised program fails with `error`,
+  the spike reruns the same inputs on the source-mapped diagnostic artifact (D8), with its map passed to evaluation
+  (`EvalOptions.withSourceMap`, as JuLC's `JulcEval` does). A location is attributed only if the rerun reproduces the
+  outcome class (and, for a step, the step); otherwise the report says "location unavailable" and records the
+  difference as an optimiser-sensitive finding. Units from reruns are reported separately, never as the program's.
+  Source maps for optimised programs would remove the rerun; that is a JuLC follow-up, not a spike dependency.
 
 ### D10. The validator leg and mismatch adjudication (new in r2)
 
@@ -355,11 +405,11 @@ replayable recordings of D4a), ADR-0015 I2 is completed by D4, and Q6 is answere
 
 | # | Scope | Entry gate | Exit criteria |
 |---|---|---|---|
-| S1 | `JvmTransitions` with its codec, `ShadowTransitions` with the latch, the manifest and its checks (D8), outcome classes, the `Require` variant and the structured carrier (D9), thread-safe `UplcTransitions` (D11); counter and vault; the 34 dapp replays with the typed-path leg | ADR r3 reviewed | U1, U2, U3, U7, U8; the codec round trip; D8's negative tests |
+| S1 | `JvmTransitions` with its codec, `ShadowTransitions` with the latch, the manifest and its checks (D8), outcome classes, the `Require` variant and the structured carrier (D9), thread-safe `UplcTransitions` (D11); the per-call latch and the ABI check (D3); counter and vault; the 34 dapp replays with the typed-path leg | ADR r4 reviewed | U1, U2, U3, U7, U8; the codec round trip; D8's negative tests; the latch tests |
 | S2 | Maps and owned objects: token and bank; the spike `ReadSource`, the access recorders and the read tests (D9); instrumented ≡ shipped programs | S1 | U5 |
 | S3 | Every replayable recording (D4a), generated vectors (D4b) and the divergence corpus (D4c); the validator leg, adjudication (D10) and U9 with the seeded wrong-step tests | S1 | the coverage table (example × kind × outcome class); U9 |
 | S4 | Measurements (D5) on the JVM and in Node | S1–S3 | the report, with U6 |
-| S5 | Recommendation: revise this ADR (r3) with the report and a proposed answer to ADR-0015 Q6 | S4 | reviewed; the maintainer accepts or rejects |
+| S5 | Recommendation: revise this ADR (the next revision after the spike) with the report and a proposed answer to ADR-0015 Q6 | S4 | reviewed; the maintainer accepts or rejects |
 
 ## 8. Verification
 
@@ -387,8 +437,11 @@ replayable recordings of D4a), ADR-0015 I2 is completed by D4, and Q6 is answere
    allowed". ADR-0015 is accepted, so this needs the maintainer.
 7. **The `joust:` prefix** (reframed in r3): with D9's `joust:require` protocol a `Require` message is unambiguous;
    the remaining collision is a contract's own **trace** (`ContextsLib.trace("joust:read …")` would make discovery
-   fetch a key; `"joust:require …"` would turn an `error` into a fake `require`). Lean: `SubsetLint` rejects trace
-   literals starting `joust:`; a maintainer decision because it can break a user contract.
+   fetch a key; `"joust:require …"` would turn an `error` into a fake `require`). Literals are not enough (r4, C14):
+   traces can be computed or come from libraries. Lean: keep D9's "forgery is harmless" rule (verified proofs, advisory
+   classification) after adoption, and add `SubsetLint` rejecting trace calls in contract code whose message is not a
+   constant without the prefix, as a lint rather than the safety mechanism. A maintainer decision because it can
+   refuse existing contracts.
 8. *(r2's profile question is withdrawn in r3: there is no default-profile difference at the pinned JuLC, F14. The
    profile is recorded in the manifest and a mismatch refused, D8; Q2 covers the post-adoption Gradle task.)*
 
@@ -431,3 +484,13 @@ replayable recordings of D4a), ADR-0015 I2 is completed by D4, and Q6 is answere
   lower-bound claim made testable: U9, C6, seeded wrong-step tests, the deposits row filled in (S8). Q7 reframed to
   contract traces (F18). `JvmTransitions`' codec named with a round-trip criterion (F19). Facts F7 extended,
   F20–F22 added.
+- **r4** (2026-11-12, responds to the round-3 reviews of `784fab3`: security S12–S14 (approved at `784fab3`), design
+  F23–F27, Codex C12–C15 and the open parts of C4/C9): only optimised, map-less programs are compared, used and
+  measured; source-mapped compiles are separate diagnostic artifacts whose reruns must reproduce the outcome (fact
+  F23; F23, C12). The failure latch is per call, checked in `onBuilt` and at the end of every call, with the
+  all-mismatching and concurrent tests (F24, S13, C9). The shadow round protocol returns the union of needs (F25);
+  recording runs are extra runs (F26); the compared read set is backing-map reads, with both recorders excluding
+  write hits and the empty root (fact F24; C4). A common, method-aware ABI check precedes both sides; malformed
+  vectors become observations (C13). Trace forgery made harmless in the spike, Q7 restated (C14). F20 corrected
+  (C15). Manifest check in two steps against the spent address's credential (S14). Step-independent outflow bound as
+  adoption criterion C7 (S12). Facts reordered, S5's revision reference fixed (F27).
