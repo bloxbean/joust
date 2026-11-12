@@ -174,6 +174,14 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   link window may start ahead (within maxStartSlots): submit at its start. DevKit's Yaci Store serves no transaction
   CBOR, so pages there bind keyed inputs by Ctx or the balance equation. `js/state-client/test/fixtures/
   registry.description.json` is a copy of the generated description (`RegistryDescriptionTest` fails when stale).
+- ADR-0020 (adopted items): transition programs are compiled with a tagged `Require` (`julc-state-api/src/discovery`,
+  traces `joust:require <message>`); `UplcTransitions` takes a refusal's message only from that tag (else
+  `<method> failed: <VM cause>`). `DescribedContract` checks every evaluation's inputs against the description
+  (`TransitionInputs`). `Prepare.load` refuses programs without a matching manifest (`ProgramManifest`; the toolchain
+  writes it, `contracts.json` carries it). `fixtures/m3/contracts/*.json` carry manifests too: a JuLC upgrade makes the
+  engine refuse them (re-record, or rebuild their programs and manifests while descriptions and scripts are unchanged).
+  The comparison mode (`ReplayDifferentialTest`, `GeneratedVectorsTest`: programs vs JVM methods) is in
+  `julc-state-runtime-wasm`'s tests.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

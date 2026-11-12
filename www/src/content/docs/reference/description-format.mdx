@@ -45,7 +45,8 @@ A `.jsc` contract is lowered to a Java `@StateContract` first, so it gets the sa
 | `<Contract>.json` | The description (CIP-57 plus `x-joust` version 2) |
 | `<Contract>.plutus` | The compiled validator, CBOR hex |
 | `<Contract>.js`, `<Contract>.d.ts` | The typed client (`joust-gen`), with the description inlined |
-| `contracts.json` | What the runtime loads: `[{ description, script, transitions, built: { joust } }]` |
+| `contracts.json` | What the runtime loads: `[{ description, script, transitions, manifest, built: { joust } }]` |
+| `<Contract>.manifest.json` | The transition programs' manifest, checked by the engine before it runs them (ADR-0020 D8) |
 | `joust.lock.json` | The versions that built it, including `descriptionVersion: 2` |
 
 </TabItem>
@@ -476,7 +477,7 @@ each of them, so `joust-gen` generates every call. The flag remains in the descr
 | `@julclang/state-client`: `verifyPrepared`, `verifyComposed`, `verifyIntent`, `verifyPurpose` | The [page verifier](/reference/glossary/#page-verifier): checks a prepared transaction makes exactly the described call before the wallet signs |
 | `@julclang/state-client`: `JoustContract` | Runs calls described by `x-joust` against a prepare service |
 | `joust-gen` (`@julclang/state-client`) | Writes `<Contract>.js` and `<Contract>.d.ts`, with the description inlined so the page pins it: `joust-gen <description.json>... --out <dir> [--import <module>]` |
-| `@julclang/joust-runtime` | Loads `contracts.json` into the runtime engine. Refuses any description whose `x-joust.version` is not 2, and a build by an incompatible toolchain |
+| `@julclang/joust-runtime` | Loads `contracts.json` into the runtime engine. Refuses any description whose `x-joust.version` is not 2, and a build by an incompatible toolchain. The engine refuses programs whose manifest does not match the description (its hash and each program's `transitionArgs`), and checks every program's inputs against the description's schemas |
 | `julc-state-runtime` (`described` package) | `SchemaCodec` and `DescribedContract`: the description-driven dispatcher the engine and the service share. Refuses a description before version 2 |
 | `julc-state-server` | Serves `GET /api/description?contract=...`; decodes `/api/prepare` arguments by the JSON conventions |
 | `julc-state-testkit` | `Descriptions.assertMatches(Contract.class, ContractValidator.class)` checks a description against the generated validator: constructor order, indices and fields, the state, the owned values and the `Holding` tags |

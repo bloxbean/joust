@@ -1,6 +1,6 @@
 ---
 title: Architecture decisions
-description: Every JOUST architecture decision record (ADR-0001 to ADR-0017), with its status, the decision in one paragraph and the guide that covers it.
+description: Every JOUST architecture decision record (ADR-0001 to ADR-0017, and ADR-0020), with its status, the decision in one paragraph and the guide that covers it.
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
@@ -41,6 +41,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
+| [0020](#adr-0020-uplc-transition-programs-off-chain-a-spike) | UPLC transition programs as the off-chain meaning: a spike and its report | Proposed (r8); the spike's "adopt now" items implemented in the engine | [Pages](/apps/pages/) |
 
 ## The base
 
@@ -307,6 +308,21 @@ Homebrew formula gated on repository settings.
 
 Covered in: [Quick start: Java & Gradle](/start/quick-start-java/#create-it-with-joust-new),
 [the native `joust`](/reference/joust-cli/#the-native-joust).
+
+### ADR-0020: UPLC transition programs off chain, a spike
+
+[`0020-offchain-uplc-transitions.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0020-offchain-uplc-transitions.md)
+· Proposed (r8); the spike is reported (§11) and its "adopt now" items are implemented in the runtime engine
+
+ADR-0015 left open which meaning of a contract's method is the reference off chain (Q6): the JVM method, or its
+transition program (the same Java compiled by JuLC, evaluated by JuLC's VM). The spike ran both on every recorded
+transaction and on generated inputs and found no difference, so its proposed answer keeps the JVM methods on the
+typed Java path and the programs in the engine, and compares the two in CI. It also adopts, in the engine: a strict
+check of each program's inputs against the contract's declared types, a tagged `Require` (a refusal is recognised by
+its tag, not by its last trace), a program manifest per contract that the engine checks before it evaluates anything,
+and a thread-safe `UplcTransitions`.
+
+Covered in: [Pages](/apps/pages/), [Contract description](/reference/description-format/).
 
 ## Research behind the ADRs
 

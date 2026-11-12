@@ -1,8 +1,9 @@
 # ADR-0020: UPLC transition programs as the off-chain meaning on every path — a spike (answers ADR-0015 Q6)
 
-**Status:** Proposed (r7: spike implemented and reported, §11; design approved by review at `04ea067`), **spike**: design plus a
-proof of concept to measure. Not a commitment: nothing changes
-for users until the spike's report is reviewed and this ADR is accepted or rejected.
+**Status:** Proposed (r8: §11.4's answer taken as the outcome and its "adopt now" items implemented, §12; r7: spike
+implemented and reported, §11; design approved by review at `04ea067`), **spike**: design plus a proof of concept to
+measure. The answer to ADR-0015 Q6 stays a proposal until this ADR is accepted; §12's items change the engine's
+behaviour (a bundle without a program manifest is refused) and are listed there.
 **Date:** 2026-11-12
 **Builds on:** ADR-0015 D3 (transition programs, `TransitionFn`), D4 (one description-driven runtime core; typed
 clients as wrappers over it), I1, I2 and Q6 (open: "the reference meaning off-chain"); ADR-0013 §10 (phase 4's
@@ -638,6 +639,82 @@ Adopt now, independently of Q6:
 Revisit UPLC on the typed path if a divergence appears in shadow, or when JuLC source maps cover library code
 (C4) and `DescribedContract`'s gaps are closed (ADR-0015 M3); C7's outflow bound is then a precondition.
 
+## 12. Adoption of the "adopt now" items (r8)
+
+The outcome is §11.4's answer: **the JVM methods stay on the typed Java path, the programs stay the engine's meaning,
+and CI compares the two.** This revision records what the implementing PR (which supersedes the spike's draft #60;
+the spike module stays on its branch as the evidence) does with §11.4's list. Nothing on the typed Java path changes.
+
+| §11.4 item | Done | Where | Checked by |
+|---|---|---|---|
+| Shadow in CI | yes: the comparison mode, offline, in `./gradlew build` (about 11 s) | `julc-state-runtime-wasm` tests: `ReplayDifferentialTest`, `GeneratedVectorsTest`, with `JvmTransitions`, `DataCodec`, `ShadowTransitions` | themselves: 34 + 214 recordings byte-identical in three modes (68 + 523 comparisons); 4,024 reachable and 1,364 unreachable vectors agree; 300 malformed rejected |
+| The tagged `Require` | yes, in the programs the engine runs | `julc-state-api` `src/discovery/.../Require.java`; `UplcTransitions` | `OutcomeClassTest`, `ProgramVariantsTest` |
+| The ABI check before every evaluation (S15) | yes | `TransitionInputs`, wrapped around every `DescribedContract`'s transitions | `TransitionInputsTest`, `GeneratedVectorsTest` |
+| Program manifests and the recompile check | yes | `Toolchain`/`Manifests` (written), `ProgramManifest` (format, check), `Prepare.load` (refuses before evaluating), `joust build` | `ProgramManifestTest`, `EngineFixturesTest` |
+| Thread-safe `UplcTransitions` | yes (the spike's `cb19dbb`) | `UplcTransitions` | `ReplayDifferentialTest`, `EngineFixturesTest` |
+| Retire `-Ajoust.portable` | **no**: still used (§12.3) | — | — |
+
+### 12.1 Where the adopted design differs from the spike's
+
+- **One program set in the engine.** D9 kept unmodified *primary* programs and classified their failures by rerunning
+  an *auxiliary* tagged set, so that parity, units and budgets came from unmodified programs. The engine compares
+  nothing and reports no units, so it now runs the tagged programs themselves: the toolchain compiles every transition
+  program with the tagged `Require`, and a failed run is the contract's refusal only when it carries the tag (the
+  last tagged message), otherwise an error with the VM's cause (`<method> failed: <cause>`). D8's r6 rule ("a primary
+  manifest that substitutes `Require` is refused") is replaced for the engine by its converse: a manifest whose
+  programs use `Require` must record the tagged variant. The cost is the size below; D9's forgery rule is unchanged
+  (a forged tag changes only the text a failure shows, never a step; Q7).
+- **Manifest format, minimal (version 1).** Documented on `ProgramManifest`: the JuLC version, the compiler options
+  (target, profile, optimiser, no source maps, traces), Blake2b-256 hashes of the unapplied script, the description,
+  every library source in the programs' pool and each program, the substitutions (allowlist: `MerkleMaps`, `Require`;
+  each required when used), the four program inputs, and each entry point's argument layout (from
+  `TransitionsGenerator`, checked against the description's `transitionArgs`). No diagnostic section (no source-mapped
+  programs are produced). The engine cannot read the variants' sources, so their pinned hashes are checked by the
+  recompile test, not at run time. D8's second step (the applied script is the spent credential) holds by
+  construction in the engine: it derives the address and policy from the script the manifest binds.
+- **A missing manifest is refused**, with "build the contracts again": every bundle `joust build` writes has one.
+  `fixtures/m3/contracts/*.json` were brought forward without DevKit: their descriptions and scripts are byte-identical
+  to today's toolchain output, so this build's programs and manifests were written into them (same file names); the
+  recorded calls, snapshots and transactions are untouched, and `EngineFixturesTest` replays all 214 byte-identical
+  through the new programs. A JuLC upgrade will make the engine refuse these manifests until they are rebuilt or
+  re-recorded.
+- **The ABI check uses the description**, not Java types (the engine has no contract classes): `SchemaCodec`'s strict
+  decoder on the target (the recipe's type), the shared state, each argument (`Constr 0` with exactly the recipe's
+  `transitionArgs`) and the Ctx. Not checked: inputs a transition does not take, `$funds` (built by the runtime), and a
+  `$read` (a foreign contract's state, whose schema the reading contract's description does not carry; its own
+  validator wrote it).
+
+### 12.2 Measured
+
+- Programs, the toolchain's for all 26 example contracts: 63,746 → 65,378 bytes (+2.6 %); per contract +0.0 %
+  (CounterV1, CounterV2: no `Require` in their transitions) to +8.2 % (Oracle). §11.2 measured 2–8 % for the auxiliary
+  set.
+- Engines (GraalVM Web Image 25.3, Binaryen 132, macOS aarch64): runtime `joust-runtime.js.wasm` 20,692,984 →
+  20,744,658 bytes (+0.25 %); toolchain `joust-toolchain.js.wasm` 30,214,403 → 30,332,603 bytes (+0.39 %).
+- Malformed Counter targets: 300/300 refused by the engine's input check; the raw programs run 145 (fresh seed in
+  `TransitionInputsTest`) or 150 (`GeneratedVectorsTest`, the spike's sequence) of them to a step.
+
+### 12.3 Not adopted here
+
+- **Retiring `-Ajoust.portable`.** §11.4 says "once nothing uses it"; it is still used, in ways that are not a
+  deletion: the dApp's Web Image (`examples/dapp` `:wasm`, `JoustWasm` over `CounterPortable`/`BankPortable`) backs
+  its in-page recomputation before signing and its serverless call (`frontend/src/serverless.js`, `main.js`,
+  `e2e/run.mjs`, `e2e/parity.mjs`, `WasmParityTest`, `DappDevnetTest`'s Wasm leg); `@julclang/state-client`'s published
+  `portable` option (`JoustContract.recompute`, and the keyed-call refusal of F84) takes that image; `examples/registry`
+  generates `RegistryPortable` for ADR-0016's R-G5 test; `examples/counter` and `examples/bank` set the option for the
+  dApp; the root build's `-PjoustPortableAll`; the docs (`www`: starter pack, how it works, status, keyed objects in
+  JS). Retiring it means replacing the page's recomputation (for example with the engine's programs) or dropping it:
+  a follow-up with its own decision.
+- C5 (a per-request bound in the prepare service), caps from protocol parameters, C7 (a step-independent outflow
+  bound) and C4 (locations inside library code): unchanged, as §11.3 left them.
+
+### 12.4 Decisions left to the maintainer
+
+- **Q6:** amend ADR-0015 I2's "equal map read sets" to "equal final accesses; verified superset acquisition allowed".
+- **Q7:** lint trace calls in contract code whose message is not a constant without the `joust:` prefix (it can
+  refuse existing contracts), or keep only D9's "forgery is harmless" rule.
+- **Accepting this ADR** (and so §11.4's answer to ADR-0015 Q6).
+
 ## Revision history
 
 - **r1** (2026-11-12): initial version. Research found ADR-0015 D3's transition programs in the npm engine, so the
@@ -690,3 +767,10 @@ Revisit UPLC on the typed path if a divergence appears in shadow, or when JuLC s
   Node), no reachable divergence at JuLC `v0.1.0-pre21-rc1`, the costs (≈0.3 ms per call), the wrong-step and
   diagnostics findings, the criteria's status, and a proposed answer to ADR-0015 Q6 (JVM on the typed path, programs
   in the engine, shadow in CI; adopt the tagged `Require`, the ABI check and manifests in the engine now).
+- **r8** (2026-11-12, the adoption; no spike result changed): §11.4's answer is the outcome. §12 records the "adopt now"
+  items as implemented: the comparison mode in CI, the tagged `Require` in the engine's programs (refusals classified
+  by the tag), the ABI check before every evaluation, program manifests checked before any evaluation with the
+  recompile check, and the thread-safe `UplcTransitions`; where the adopted design differs from the spike's (one
+  tagged program set in the engine, the minimal manifest format, a missing manifest refused, the `fixtures/m3`
+  artifacts brought forward); the measured sizes; why `-Ajoust.portable` is not retired yet; Q6, Q7 and acceptance
+  left to the maintainer. Status stays Proposed.
