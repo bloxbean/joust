@@ -57,6 +57,46 @@ def publishedModules = ['julc-state-api', 'julc-state-processor', 'julc-state-ru
 subprojects {
     apply plugin: 'java-library'
 
+    // ADR-0018 M1c review S8: JuLC keys a validator's script by its simple name (bloxbean/julc#326). Two locations on
+    // one runtime class path that ship META-INF/plutus/<Name>.plutus.json share that resource, and a fat or shaded jar
+    // built from the class path keeps one of them silently (a resource-only plant could replace a contract's script).
+    // checkPlutusResources (part of check) fails when a project's runtime class path holds such a pair.
+    plugins.withType(JavaPlugin) {
+        def runtime = configurations.named('runtimeClasspath')
+        def classes = sourceSets.main.output
+        def check = tasks.register('checkPlutusResources') {
+            description = 'Fails when two locations on the runtime class path ship the same META-INF/plutus/<Name>.plutus.json'
+            group = 'verification'
+            inputs.files(runtime)
+            inputs.files(classes)
+            doLast {
+                def where = new TreeMap<String, List<String>>()
+                (classes.files + runtime.get().files).findAll { it.exists() }.unique().each { f ->
+                    def names = []
+                    if (f.isDirectory()) {
+                        def dir = new File(f, 'META-INF/plutus')
+                        if (dir.isDirectory()) dir.eachFileMatch(~/.*\.plutus\.json/) { names << it.name }
+                    } else if (f.name.endsWith('.jar')) {
+                        new java.util.zip.ZipFile(f).withCloseable { z ->
+                            z.entries().each { e ->
+                                def m = e.name =~ /^META-INF\/plutus\/([^\/]+\.plutus\.json)$/
+                                if (m.matches()) names << m.group(1)
+                            }
+                        }
+                    }
+                    names.unique().each { n -> where.computeIfAbsent(n) { [] } << f.path }
+                }
+                def clashes = where.findAll { n, ls -> n != 'plutus.json' && ls.size() > 1 }
+                if (!clashes.isEmpty()) {
+                    throw new GradleException("validators with one simple name share a script resource on ${project.path}'s runtime"
+                            + " class path (JuLC, bloxbean/julc#326); a jar built from it would keep one silently:\n  "
+                            + clashes.collect { n, ls -> "META-INF/plutus/${n}: ${ls.join(', ')}" }.join('\n  '))
+                }
+            }
+        }
+        tasks.named('check') { dependsOn check }
+    }
+
     // -PjoustFixtures: the examples' tests record ADR-0015 M0 fixtures (every built transaction with the chain reads
     // behind it) into fixtures/m0/<module>; DevKit must be running. See examples/devkit FixtureRecorder.
     if (rootProject.hasProperty('joustFixtures') && path.startsWith(':examples:')) {

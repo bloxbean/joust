@@ -80,6 +80,43 @@ class ValidatorScriptCollisionTest {
                 new org.julclang.state.examples.dsl.Escrow.State(buyer, seller27, arbiter, price, future), pctx), "a 27-byte seller (D5)");
     }
 
+    /**
+     * Review F11: JuLC's parameter checks are kept on every path that computes a script, a policy id or an address. A
+     * {@code @Params} contract without its parameters is refused (its unapplied script's address would lock funds), an
+     * unparameterized validator with parameters is refused, and the count must match.
+     */
+    @Test
+    void juLCsParameterChecks_areKeptOnEveryPath() throws Exception {
+        Class<?> treasury = org.julclang.state.examples.treasury.TreasuryValidator.class;
+        var spec = org.julclang.state.examples.treasury.TreasuryClient.SPEC;
+        var cfg = PlutusDataAdapter.convert(new org.julclang.state.examples.treasury.Treasury.Config(
+                new Credential.ScriptCredential(new ScriptHash(StateHarness.fill(28, 0x6A))), BigInteger.valueOf(100_000_000)));
+        // 1. parameterized, no parameters: as JuLC refuses it, on every path.
+        assertThrows(IllegalArgumentException.class, () -> JulcScriptLoader.load(treasury), "JuLC's own refusal");
+        var e = assertThrows(IllegalArgumentException.class, () -> ValidatorScripts.load(treasury));
+        assertTrue(e.getMessage().contains("TreasuryValidator is parameterized and requires 1 param(s)"), e.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> StateContractHandle.scriptFor(spec, null));
+        assertThrows(RuntimeException.class, () -> StateContractHandle.policyIdFor(spec, null), "the policy id of an unapplied script");
+        assertThrows(RuntimeException.class, () -> org.julclang.state.examples.treasury.TreasuryClient.policyIdFor(null));
+        // The generated client's contract(runtime, params): the handle computes its script, policy and address first.
+        assertThrows(IllegalArgumentException.class, () -> org.julclang.state.examples.treasury.TreasuryClient.contract(null, null));
+        assertThrows(IllegalArgumentException.class, () -> StateHarness.of(spec), "the testkit's harness");
+        // 2. unparameterized, with parameters.
+        Class<?> verifier = org.julclang.state.verifier.MapVerifier.class;
+        assertThrows(IllegalArgumentException.class, () -> JulcScriptLoader.load(verifier, cfg), "JuLC's own refusal");
+        e = assertThrows(IllegalArgumentException.class, () -> ValidatorScripts.load(verifier, cfg));
+        assertTrue(e.getMessage().contains("MapVerifier is not parameterized, but 1 param(s) were provided"), e.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> StateContractHandle.scriptFor(org.julclang.state.examples.dsl.VaultClient.SPEC,
+                new org.julclang.state.examples.treasury.Treasury.Config(new Credential.ScriptCredential(new ScriptHash(StateHarness.fill(28, 1))), BigInteger.ONE)));
+        // 3. the count.
+        e = assertThrows(IllegalArgumentException.class, () -> ValidatorScripts.load(treasury, cfg, cfg));
+        assertTrue(e.getMessage().contains("requires 1 param(s), but 2 were provided"), e.getMessage());
+        // And with its parameters, every path agrees with JuLC's loader.
+        String applied = JulcScriptLoader.load(treasury, cfg).getCborHex();
+        assertEquals(applied, StateContractHandle.scriptFor(spec, new org.julclang.state.examples.treasury.Treasury.Config(
+                new Credential.ScriptCredential(new ScriptHash(StateHarness.fill(28, 0x6A))), BigInteger.valueOf(100_000_000))).getCborHex());
+    }
+
     @Test
     void parameters_areAppliedAsJuLCsLoaderAppliesThem() throws Exception {
         // A validator without a twin: the script beside it, with params applied, equals JuLC's own loading.
