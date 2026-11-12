@@ -148,10 +148,11 @@ final class Scaffold {
         // ADR-0018 D14: .jsc 2, as a preview, with its ABI manifest beside it (a first build fails without one: JSC0003).
         vars.put("jscNote", jsc ? "\n**The contract is written in `.jsc` 2, a language preview** (ADR-0018). The language and the compiler's"
                 + "\noutput may change before it leaves preview, so the same `Counter.jsc` may compile to a different script hash in a later"
-                + "\nJOUST (milestone M1e changes every `.jsc` 2 script hash once). Use it on DevKit and testnets, and don't deploy it to"
-                + "\nhold value; a deployed preview contract is rebuilt with the JOUST version it was built with (this project's plugin"
-                + "\nversion). `Counter.abi.json` beside it records how the state and the calls are encoded on chain: the build fails when"
-                + "\nthe encoding changes (JSC0002), until you accept the change with `./gradlew acceptJscAbi` and commit the new manifest."
+                + "\nJOUST (milestone M1e changed once the hash of every `.jsc` 2 script with a generated check). Use it on DevKit and"
+                + "\ntestnets, and don't deploy it to hold value; a deployed preview contract is rebuilt with the JOUST version it was"
+                + "\nbuilt with (this project's plugin version). `Counter.abi.json` beside it records how the state and the calls are"
+                + "\nencoded on chain: the build fails when the encoding changes (JSC0002), until you accept the change with"
+                + "\n`./gradlew acceptJscAbi` and commit the new manifest."
                 + "\nThe Java the build generates from it is in `build/generated/sources/jsc`.\n" : "");;
 
         Map<String, byte[]> files = new LinkedHashMap<>();

@@ -94,11 +94,13 @@ public final class JscV2 {
             "class", "switch", "if", "true", "false");
 
     /**
-     * Whether {@code n} cannot be a name in {@code .jsc} 2: a reserved word of the checker or a word the parser reads as
-     * syntax ({@code match}, {@code undefined}, …). {@code joust migrate} renames such v1 names or refuses them.
+     * Whether {@code n} cannot be a name in {@code .jsc} 2: a reserved word of the checker, a word the parser reads as
+     * syntax ({@code match}, {@code undefined}, …), or a method modifier ({@code only}, {@code batched}, …; as a field or
+     * binding name, JSC0211). {@code joust migrate} renames such v1 names or refuses them.
      */
     public static boolean isReservedName(String n) {
-        return Checker.RESERVED.contains(n) || EXPRESSION_WORDS.contains(n);
+        // The modifier words (M1c, JSC0211) are no field or binding name either (#76 review F6).
+        return Checker.RESERVED.contains(n) || EXPRESSION_WORDS.contains(n) || Parser.MODIFIERS.contains(n);
     }
 
     /** Whether a source is {@code .jsc} 2: its first word, after whitespace and comments, is {@code jsc}. */

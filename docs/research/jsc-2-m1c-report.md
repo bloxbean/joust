@@ -347,6 +347,17 @@ only traced on a refusal).
 | Pool | 9,595 | 9,910 | 9,829 | +2.4% | `dba3bc6b…` → `ff54fc63…` |
 
 The Java examples' scripts are unchanged. The budget gate's two warnings are unchanged too: Pool's `buy` in a batch of
-8 with change uses 40.1% of the CPU and 88.6% of the memory maximum (40.2% / 88.6% at saturation). The four-way tests
-gained the fifth leg (`JscV2M1cFourWayTest.fiveWay_theJavaScriptInterpreterAgrees`: 503 calls, the JavaScript
-interpreter included), and `JscV2HashStabilityTest` now builds the ports too, since it reads every `.jsc` 2 example.
+8 with change uses 40.1% of the CPU and 88.6% of the memory maximum (40.2% / 88.6% at saturation). `JscV2HashStabilityTest`
+now builds the ports too, since it reads every `.jsc` 2 example.
+
+**Review round r1 on #76** changed two more things:
+- **Pool's keys** (security S1, ADR-0018 r14). The keys counted every action, but `buy` (`batched only`) has no spend
+  constructor, so `withdraw`'s and `close`'s keys named the next constructor (`Close`, `Batch`). Keys now follow the
+  manifest's order, and `buy`'s are `#pay:intent1.1` (its `IntentCall` variant). Pool: 9,829 → **9,830** bytes
+  (+2.4% against Java), hash `ff54fc63…` → **`69f80806…`**. The other ports have no `batched only` action and keep
+  their scripts. Execution units are unchanged.
+- **The modifiers in the interpreters** (design F1). Item 7 below, assigned to M1b's exit, is done in the integration:
+  both interpreters refuse a call whose transaction breaks `only`, `after` or `before` (semantics §2.6, class
+  `modifier:<word> <field>`). `FourWay.modifierRefused` now runs its 12 vectors on all five legs, so the fifth leg
+  (`JscV2M1cFourWayTest.fiveWay_theJavaScriptInterpreterAgrees`) covers **515 calls**: 503 plus the 12 modifier
+  refusals, which both interpreters refuse with the same class.

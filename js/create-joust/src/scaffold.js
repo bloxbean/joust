@@ -19,7 +19,7 @@ const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const JSC_NOTE = `
 **\`.jsc\` 2 is a language preview** (ADR-0018), not to be confused with Cardano's preview network. The language and
 the compiler's output may change before it leaves preview, so the same \`Counter.jsc\` may compile to a different script
-hash in a later JOUST (milestone M1e changes every \`.jsc\` 2 script hash once). Use it on DevKit and testnets, and don't
+hash in a later JOUST (milestone M1e changed once the hash of every \`.jsc\` 2 script with a generated check). Use it on DevKit and testnets, and don't
 deploy it to hold value. A deployed preview contract is rebuilt with the JOUST version recorded for it: each record of
 \`build/joust/deployments.<network>.json\` states it (\`build/\` is ignored: commit that file if you need it later).
 

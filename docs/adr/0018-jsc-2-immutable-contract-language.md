@@ -1,13 +1,14 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r13)
+**Status:** Proposed (r14)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
 `generateJsc`), and the contract model of ADR-0001 to ADR-0016, which `.jsc` 2 only spells differently. JuLC's scoped
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
-**Design only:** no implementation in this PR. Every snippet is illustrative.
+**Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76)
+implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -491,13 +492,15 @@ six modifier words are no field or binding name (JSC0211), so a header means the
 ABI manifest of a contract with batched actions states the intent's datum and refund tag and the batch's redeemers
 (D12), bound to the processor's description.
 
-**Modifiers are transaction preconditions** (r11, M1c review S2/F2): `only`, `after` and `before` check the signers
-and the validity window, which the JVM method and the transition program do not see, and which the M1 reference
-interpreter does not model either. Until it does, J3's legs agree on calls that satisfy them, and every modifier site of
-every port also has vectors that break it with their outcome stated (the interpreter, the JVM and the transition
-program accept; the validator refuses), plus attack-suite entries read from the description (a stranger who signs as
-the caller; windows on the wrong side of, or straddling, the bound). **By M1b's exit the interpreter models them**
-(its transaction carries the signers and the window), so that their refusals are four-way too.
+**Modifiers are transaction preconditions** (r11, M1c review S2/F2; r14): `only`, `after` and `before` check the
+signers and the validity window, which the JVM method and the transition program do not see. **Both reference
+interpreters model them** (r14, the M1 integration, #76 review F1; semantics §2.6): their transaction carries the
+signers and the window, the modifiers are checked in source order before the checked inputs, and a broken one refuses
+the call with the class `modifier:<word> <field>`. So every modifier site of every port has vectors that break it on
+all five legs: both interpreters refuse it with that class, the JVM method and the transition program compute the
+transition (and agree with the interpreters' transition alone), and the validator refuses. The attack suite adds
+entries read from the description (a stranger who signs as the caller; windows on the wrong side of, or straddling,
+the bound). M2's `authorized` and `quorum` are further preconditions on the same transaction.
 
 **ADR-0005 rules kept, changed and dropped:**
 
@@ -633,8 +636,11 @@ the caller; windows on the wrong side of, or straddling, the bound). **By M1b's 
     Declaration order of actions and destroys is ABI (their constructor indices); of `fn`s, types and views it is in no
     message (JuLC's output was measured unchanged with Pledges' two `fn`s swapped, which is a fact of JuLC, not a promise).
   - **The message key** of a generated check is `#<kind>:<redeemer>.<n>`: `<redeemer>` is the method's constructor in
-    the ABI manifest (`spend2`: the third spend constructor, actions in source order then destroys; `mint0`: the init's
-    `CreateInstance`). `#input:<redeemer>.<field>` is a checked input (D5), `<field>` the redeemer field it guards as
+    the ABI manifest, by the manifest's own constructor order (`spend2`: the third spend constructor, the actions that
+    have one in source order, then the destroys; `mint0`: the init's `CreateInstance`). A `batched only` action has no
+    spend constructor (D10): its keys name its `IntentCall` variant, `intent<k>`, the k-th batched action in source
+    order (r14, #76 review S1; before r14 the keys counted every action, so after a `batched only` action they named the
+    next constructor). `#input:<redeemer>.<field>` is a checked input (D5), `<field>` the redeemer field it guards as
     the manifest numbers it (an init's fields start with the seed, field 0). `#pay:<redeemer>.<n>` is a payout's sign
     check, `<n>` the pay statement's ordinal in its method, counted from 1 in source (token) order, which layout does
     not change. Why: only ABI facts and source order, so a one-click rename (D13, ADR-0021) changes no deployed script;
@@ -642,6 +648,11 @@ the caller; windows on the wrong side of, or straddling, the bound). **By M1b's 
     helper counter, so a trace from a deployed script means the same construct under any later compiler. An author's
     message never contains the key's form (`#word:` anywhere, JSC0430), so no author's trace can be taken for a
     generated check.
+  - **Keys inside a batch** (r14). A batched action's key names the action, never the transaction's redeemer: in a
+    batch the redeemer is `Batch` or `InBatch` and the intent's `IntentCall` variant names the method, while the key
+    still reads `spend<i>` (a `batched` action, the same constructor as its direct call) or `intent<k>` (`batched
+    only`). So a key read against the manifest names the method whichever way it ran; the batch's own failures (the
+    fold, the refunds) are the processor's messages, not keys.
   - **Matching a trace (#71 review r1 C3, C4, S1, S2, F5).** A key is unique within its script, not across scripts, so a
     trace is looked up only in the map of the contract that refused: the engine names it (`refusedBy`) in a
     composition, a single call names it itself, and each map in `contracts.json` carries its script's hash. A message
@@ -675,7 +686,9 @@ the caller; windows on the wrong side of, or straddling, the bound). **By M1b's 
     build's map. The keys cost little: the scripts got smaller (§8's measurements in the M1e report: Ledger 14,871 →
     14,633 B). A stripping build option stays possible later, as a different script hash.
   - **The one change of hashes.** Scripts with generated checks changed once at r12 (Counter2 `7baf4785…` →
-    `0b1c24bc…`, Ledger `927e1a0e…` → `03c48c00…`); those without (Bounds, StdBytes, StdMath) kept theirs. No `.jsc` 2
+    `0b1c24bc…`, Ledger `927e1a0e…` → `03c48c00…`); those without (Bounds, StdBytes, StdMath) kept theirs. At r14 the
+    keys of a contract with a `batched only` action followed by another action or a destroy changed once more (Pool
+    `ff54fc63…` → its r14 hash, recorded in the M1c report's integration section). No `.jsc` 2
     contract is deployed (a preview, M1 not exited); by D16's rule a script built before r12 is rebuilt by the
     compiler that built it (`feat/jsc-2-m1a` at `dfa7025`), which deployments record.
 - **The ABI manifest.** The build writes the encoding of every type a contract exposes (D5's rules applied: tags, field
@@ -712,7 +725,8 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
 - `npm create joust` and `joust new -t node|web` scaffold `.jsc` 2 once M1 exits, labelled preview until the
   recommendation gate (§8). M1d switched them early, as a **language preview** (r13, M1d review F4): the scaffolds, the
   templates' comment and READMEs say that the language and the compiler's output may change before it leaves preview
-  (M1e, #71, changes every `.jsc` 2 script hash once), to use it on DevKit and testnets, and not to deploy it to hold
+  (M1e, #71, merged in the M1 integration, changed once the hash of every `.jsc` 2 script with a generated check), to
+  use it on DevKit and testnets, and not to deploy it to hold
   value. Each template ships its ABI manifest, so a first build passes the gate (D12).
 - **Preview deployments stay rebuildable with the compiler recorded for them** (r13): a preview script deployed with
   one JOUST version is rebuilt with that version, not promised to be reproduced by a later one. On npm each record of
@@ -763,7 +777,9 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
 - `joust migrate` translates the **checked v1 AST**, using v1's own dataflow (the SSA environment of
   `Lowering.java:475-484` and branch merges), into an immutable `.jsc` 2 program, not by text substitution: a read
   after an earlier assignment (`count += 1; let s = count; count += s`) keeps v1's meaning. It **refuses**, with the
-  reason, v1 code that `.jsc` 2 rejects (time values deciding branches, D11).
+  reason, v1 code that `.jsc` 2 rejects (time values deciding branches, D11), and v1 `batched` actions, which `.jsc` 2
+  has (D10, M1c) but migrate does not translate (JSC1103; r14): `.jsc` 2's rules for them differ (a paying one says
+  `open`, JSC0420), so they are written by hand. A translation is not planned for M1.
 - **Behaviour preserved** (J13) means: equal next state and equal multisets of obligations per kind. v1 returns payouts
   in reverse source order (`Payouts.add` prepends, `Lowering.java:528-529`); `.jsc` 2 uses source order. `migrate`
   reports the change.
@@ -954,7 +970,7 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 |---|---|---|---|
 | M0 | Spike: version line, `const`, spread updates, shadowing rule, `fn` with direct recursion and the after-lowering recursion check (nested folds), a `fold`/`find`/`contains` helper and both `filter` lowerings, `Option` as `Optional` end to end (datum, redeemer, portable codec, JS; `Some(None)` rejected), one generated equality helper over a record with bytes, one checked input, one `std/crypto` and one `std/bytes` binding with domains, the binding test via javac attribution, positions on the npm path, the time dataflow pass | ADR accepted | builds on both paths; four-way agreement (J3) on hand vectors; size, budget and check-cost numbers recorded; javac attribution of library sources works inside the Web Image toolchain |
 | M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; five-way differential tests (four-way to M1a) and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten. M1c's thresholds (r11): "below 14 KB" is below 14,000 bytes; "the protocol maximum" is 10,000,000,000 CPU steps and 14,000,000 memory units (the pre-Plomin memory limit, the stricter one), summed over every script of the transaction, with a warning above 80%; the saturated state is the largest one the Java example accepts (its stored datum within `maxDatumBytes`), which the port must then accept; a batched action is measured at `Batcher.DEFAULT_MAX` intents too |
-| M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); interpreter and four-way tests extended (D15); attack suites and mutation-rejection tests green |
+| M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green |
 | M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green |
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12; a `.jsc` library called from Java and a Java library from `.jsc`; the template's tests run offline |
 | M5 | Language server | M3, M4 exit | — |
@@ -967,8 +983,9 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
 
 - **Independent expectations.** The written semantics' vectors and the reference interpreter state expected outcomes;
   nothing is checked by running the lowering's output against itself.
-- **Four-way differential testing** (J3): generated well-typed programs (bounded size) and inputs, evaluated by the
-  interpreter, the generated Java on the JVM, the UPLC transition program, and the validator on-chain (JuLC VM). In
+- **Differential testing, all legs** (J3; five-way from M1b, r10): generated well-typed programs (bounded size) and
+  inputs, evaluated by both reference interpreters (Java and JavaScript), the generated Java on the JVM, the UPLC
+  transition program, and the validator on-chain (JuLC VM). In
   every milestone, for that milestone's constructs. Generators cover: laziness (division by zero, failing `??`
   defaults, `require` and call-result accessors in untaken arms); recursion depth and nested folds; empty and long
   lists; `range` edges (descending, empty); negative `take`/`drop`; integer sign cases (`(-7,3)`, `(7,-3)`, `(-7,-3)`
@@ -1169,6 +1186,14 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   rule (`[` and `(` continue only on their line; a line starting with `-` continues with JSC9007); D13 records what M1d
   built (paths, the shared corpus with structure and pinned differences, CI) and that `parser.c` stays uncommitted until
   ADR-0021 M5e; tree-sitter stays in the editor (ADR-0021 D5); D14 calls the early templates a language preview and says
-  preview deployments are rebuilt with the compiler recorded for them (M1e changes every `.jsc` 2 script hash once);
+  preview deployments are rebuilt with the compiler recorded for them (M1e changes the hash of every `.jsc` 2 script
+  with a generated check once; corrected in r14);
   D16 records migrate's in-place and path semantics and narrows the stale-deployment warning to the npm CLI, Gradle's
   `migrateJsc` saying the new-script warning.
+- **r14** (2026-11-13, the M1 integration #76, review round r1: security S1, design F1–F6): D12's keys follow the
+  manifest's constructor order, and a `batched only` action's keys name its `IntentCall` variant (`intent<k>`); keys
+  inside a batch are read as the action's, not the transaction's redeemer (Pool's script changed). D10: both reference
+  interpreters model `only`, `after` and `before` (semantics §2.6, refusal class `modifier`), which r11 assigned to
+  M1b's exit and M1b had not done; the modifier vectors are five-way. §9 and the M2 row say five-way. D14 and r13's
+  entry: M1e changed the hashes of scripts with generated checks only. D16 states the JSC1103 refusal of v1
+  `batched`. The header no longer says design only.

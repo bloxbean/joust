@@ -105,7 +105,8 @@ The three reviews of r1 (`d7aa862`) and what changed; every repro and mutation i
   continues, with JSC9007 and a hint in any error of the file. `const payout = amount` then `-fee` now warns.
 - **CI** (F3): `npm test` in `tree-sitter-jsc` and `editors/vscode-jsc`.
 - **Language preview** (F4): the templates, READMEs and both scaffolds' output say what it means; ADR-0018 r13 D14
-  says preview deployments are rebuilt with the compiler recorded for them (M1e changes every `.jsc` 2 hash once).
+  says preview deployments are rebuilt with the compiler recorded for them (M1e changes every `.jsc` 2 hash once; corrected after the M1 integration: M1e changed the hashes of the scripts with a
+  generated check only).
 - **P3s.** F5: the corpus compares declarations (`corpus/shapes.txt`) and pins each README difference
   (`corpus/known.txt`, the reviewer's `retun {…}` and `return else {` included). F6: v1 names that are `.jsc` 2 words
   are renamed (parameters, lets) or refused (JSC1110); JSC1104 points at the statement's column; the `isEmpty` row
@@ -150,3 +151,24 @@ Design and security approved r3; Codex's C5 (P2) and C6, S8, F12, F13 (P3):
 
 A deployments record on the Gradle path (it has none; ADR-0018 r13 D16 narrows the stale warning to npm); a language
 server (M5); publishing the VS Code extension or the tree-sitter grammar (ADR-0021 M5e).
+
+## After the M1 integration (`feat/jsc-2-m1`, #76)
+
+M1e's message keys (#71) reached the migrated examples when the four M1 parts were merged. Measured as above (the
+`cborHex` of `examples/dsl/build/classes/java/main/META-INF/plutus/*.plutus.json`):
+
+| Contract | At M1d's head | Merged | Hash merged |
+|---|---|---|---|
+| Guards (v1) | 4,451 | 4,451 | `dadd5921…` (v1 is frozen) |
+| GuardsV2 | 4,347 | 4,347 | `d810e1fa…` |
+| Points (v1) | 12,380 | 12,380 | `17e41c6c…` |
+| PointsV2 | 12,180 | 12,083 | `91bab1a4…` |
+
+The migrated text is unchanged (`MigrateTest`), and Gradle and the Web Image toolchain give the same scripts. Other
+consequences of the merge for M1d's work:
+- The `.jsc` template's refusal now names its site (`[app/Counter.jsc:22:5 (a require in increment)]`), which
+  `js/joust/test/create.test.js` and the npm quick start expect.
+- `batched` is in `.jsc` 2 since M1c, so tree-sitter's v2 grammar has `batched` and `batched only`, JSC1103 says that
+  migrate does not translate v1 `batched` actions (ADR-0018 D16, r14), and the www pages describe the modifier.
+- `JscV2.isReservedName` includes the modifier words (JSC0211). v1 cannot declare such names (they are v1 keywords),
+  so migrate's output does not change.

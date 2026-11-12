@@ -15,8 +15,8 @@ validator to UPLC.
 <Aside type="caution" title="A language preview">
 `.jsc` 2 is a language preview ([ADR-0018](https://github.com/bloxbean/joust/blob/main/docs/adr/0018-jsc-2-immutable-contract-language.md)
 D14), not to be confused with Cardano's preview network. The language and the compiler's output may change before it
-leaves preview, so the same file may compile to a different script hash in a later JOUST (milestone M1e changes every
-`.jsc` 2 script hash once). Use it on DevKit and testnets, and don't deploy it to hold value; a deployed preview
+leaves preview, so the same file may compile to a different script hash in a later JOUST (milestone M1e changed once
+the hash of every `.jsc` 2 script with a generated check). Use it on DevKit and testnets, and don't deploy it to hold value; a deployed preview
 contract is rebuilt with the JOUST version recorded for it: each record of `build/joust/deployments.<network>.json` states
 it (commit those files if you must rebuild a deployed script later; `build/` is ignored), or the plugin's version.
 It covers the core language (milestone M1). Native assets, sends, mints, deploy parameters, events and reads of other

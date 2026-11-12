@@ -184,6 +184,13 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
 - ADR-0018 M1c: the Java examples vault, escrow, crowdfund, token and pool also run against their `.jsc` 2 ports
   (`examples/dsl`'s `copyPortTests` copies their `*Test.java`; `:examples:dsl:test` runs them). Keep those tests in their
   package directory (the copy fails on subpackages or resources), and call the init as `<Contract>.<init>(`.
+- ADR-0018 `.jsc` 2 generated artifacts: after changing the IR, the lowering or an example, rewrite the JS
+  interpreter's IR fixtures (`./gradlew :julc-state-dsl:test -Pjoust.writeIrFixtures`; `JscV2IrTest` fails when stale)
+  and tree-sitter's shapes (`... --tests '*JscCorpusTest*' -Djsc.writeShapes=true`), and run `npm test` in
+  `tree-sitter-jsc` (its shared corpus fails when the grammar lags the parser). `.jsc` 2 refusals show their sites
+  (`… [app/Counter.jsc:22:5 (a require in increment)]`, M1e), so tests match them for `.jsc`, not for Java. Message keys
+  are ABI facts (`#pay:spend<i>.<n>`, `intent<k>` for `batched only`). The interpreters check `only`/`after`/`before`
+  (their `Tx` has `signers`); the JVM method and transition program don't: compare those with `Interpreter.transition`.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).
