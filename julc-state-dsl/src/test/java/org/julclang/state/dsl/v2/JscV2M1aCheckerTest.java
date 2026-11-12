@@ -209,7 +209,7 @@ class JscV2M1aCheckerTest {
         bad("action a() { require(xs.all(x => bal.has(owner)), \"x\")\n return state }", "captured by a lambda", 0, 34);
         bad("action a() { require(Some(bal) != None, \"x\")\n return state }", "held in an Option", 0, 27);
         bad("action a() { return { ...state, bal: bal2 } }", "must be bal itself", 0, 38);
-        bad("action a() { return { ...state, bal: bal2.set(owner, 1) } }", "must be bal itself", 0, 38);
+        bad("action a() { return { ...state, bal: bal2.set(owner, 1) } }", "changed only in the value of its own field", 0, 38);
         bad("action a() { return { ...state, bal: BigMap.empty() } }", "starts a map in an init", 0, 38);
         bad("action a() { require(BigMap.empty().has(owner), \"x\")\n return state }", "only the value of a BigMap state field", 0, 22);
         bad("action a() { require(bal.isEmpty, \"x\")\n return state }", "read only in a destroy", 0, 22);

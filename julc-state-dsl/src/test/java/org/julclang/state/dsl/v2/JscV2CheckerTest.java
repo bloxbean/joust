@@ -400,7 +400,8 @@ class JscV2CheckerTest {
     /** Codex C8: control characters in strings are refused; escapes stay escaped in the Java. */
     @Test
     void strings_controlCharactersRefused_escapesKept() {
-        bad("action a() { require(true, \"a\rb\")\n return state }", "unterminated string", 0, 28);
+        // M1a r3 (security S8): a lone CR is refused anywhere, before the string is read.
+        bad("action a() { require(true, \"a\rb\")\n return state }", "breaks a line for some readers", 0, 30);
         bad("action a() { require(true, \"a\tb\")\n return state }", "control character U+0009", 0, 30);
         String java = ok("action a() { require(count >= 0, \"say \\\"no\\\" \\\\ then\\nstop\")\n return state }");
         assertTrue(java.contains("\"say \\\"no\\\" \\\\ then\\nstop\""), java);

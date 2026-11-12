@@ -37,6 +37,31 @@ class JscV2M1aR2CheckerTest {
         ok("action reopen() only owner { const open: Phase = phase\n require(open == Open, \"only while open\")\n return state }");
     }
 
+    /** Round r3, security S7: a state field is read by its bare name, so it never takes a declared name either. */
+    @Test
+    void stateFieldsNeverReplaceATypeAVariantOrAFn() {
+        String attack = """
+                jsc 2
+                package t
+                enum Phase { Open, Closed }
+                contract S {
+                  state { owner: Key, phase: Phase, Open: Phase }
+                  init() { return { owner: caller, phase: Open, Open: Closed } }
+                  action pay2() only owner {
+                    require(phase == Open, "only while open")
+                    return { ...state, phase: Closed }
+                  }
+                }
+                """;
+        badSource(attack, "'Open' would hide the variant Open of Phase", 5, 37);
+        badSource(file("type R = { a: Int }").replace("state { n: Int }", "state { n: Int, R: Int }").replace("{ n: 0 }", "{ n: 0, R: 0 }"),
+                "would hide the type R", 5, 19);
+        badSource(file("fn g(): Int = 1").replace("state { n: Int }", "state { n: Int, g: Int }").replace("{ n: 0 }", "{ n: 0, g: 0 }"),
+                "would hide the fn g", 5, 19);
+        // Record and variant fields are always read through their value (r.f, a pattern), so they may share a name.
+        assertDoesNotThrow(() -> JscV2.lower(file("enum A { X }\ntype R = { X: Int }"), "C.jsc"));
+    }
+
     // ------------------------------------------------------------------ S4: BigMaps through the state
 
     @Test
@@ -56,6 +81,11 @@ class JscV2M1aR2CheckerTest {
         bad("action a(k: Key) { require(bal.delete(k)[k] == 0, \"x\")\n return state }", "changed only in the value of its own field", 0, 28);
         bad("action a(k: Key) { return { ...state, stamp: bal.set(k, 5)[k] } }", "changed only in the value of its own field", 0, 46);
         ok("action a(k: Key, to: Key) open { return { ...state, bal: bal.set(k, 0).set(to, bal.set(k, 0)[to] + bal[k]) } }");
+        // Round r3, security S11: only the field being built is written in its value; another BigMap is not.
+        bad("action a(k: Key) open { return { ...state, bal: bal.set(k, notes.set(#01, #02).has(#01) ? 1 : 2) } }",
+                "changed only in the value of its own field", 0, 60);
+        bad("action a(k: Key) open { return { ...state, bal: bal.set(k, bal2.set(k, 9)[k]) } }", "changed only in the value of its own field", 0, 60);
+        ok("action a(k: Key, j: Key) open { return { ...state, bal: bal.set(k, bal.set(j, 9)[j]) } }");
         // Nothing holding the state is compared, held or searched (these crashed the emitter at r1).
         bad("action a() { require(Some(state) == Some(state), \"x\")\n return state }", "held in an Option", 0, 27);
         bad("action a() { require([state] != [state], \"x\")\n return state }", "an element of a list", 0, 22);
@@ -136,6 +166,15 @@ class JscV2M1aR2CheckerTest {
         bad("action a() { require(true, \"a ‮ b\")\n return state }", "invisible format character U+202E", 0, 31);
         bad("// ⁧ a comment\n action a() { return state }", "U+2067", 0, 4);
         bad("action a() { require(true, \"zero​width\")\n return state }", "U+200B", 0, 33);
+        // Round r3, security S8: a // comment ends only at a line end the lexer and the reader agree on. A lone CR, NEL
+        // and the line and paragraph separators would let a comment hide the require after them.
+        for (String sep : new String[]{"\u2028", "\r", "\u0085", "\u2029", "\u000B", "\u000C"}) {
+            bad("action take(k: Key) {\n    // anyone may call" + sep + "    require(caller == owner, \"only the owner\")\n    return { ...state, owner: k } }",
+                    "breaks a line for some readers but not for .jsc", 1, 23);
+        }
+        // CRLF is a line end: the require is compiled.
+        String crlf = ok("action take(k: Key) {\r\n    // anyone may call\r\n    require(caller == owner, \"only the owner\")\r\n    return { ...state, owner: k } }");
+        assertTrue(crlf.contains("Require.that(eq__Bytes(ctx.caller(), s__.owner()), \"only the owner\")"), crlf);
         // Any other text is fine in strings and comments; a leading byte-order mark too.
         ok("action a() { /* Zähler, 計数 */ require(true, \"Zähler: 計数 ✓\")\n return state }");
         assertDoesNotThrow(() -> JscV2.lower("﻿" + contract(""), "T.jsc"));

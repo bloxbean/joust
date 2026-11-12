@@ -194,6 +194,9 @@ final class Checker {
             }
             fns.put(f.name(), f);
         }
+        // Security S7: a state field is read by its bare name, so it never takes a declared type's, enum's, variant's
+        // or fn's name, which it would hide in every method (a field Open would replace the variant Open).
+        for (FieldDecl f : c.state()) declaredName(f.name(), f.pos());
         for (Import im : file.imports()) {
             for (String n : im.names()) {
                 Std.Binding b = Std.ROWS.get(n);
@@ -1378,12 +1381,13 @@ final class Checker {
             Expr ve = f.value() != null ? f.value() : new Name(f.name(), f.pos());
             // A BigMap is written only here: in the value of its own field in a state (D7, security S4).
             boolean bigField = ft instanceof Ty.BigMapT && recName.equals("State");
-            if (bigField) bigWriteOk++;
+            String outer = bigWriteField;
+            if (bigField) bigWriteField = f.name();
             Ir.Expr v;
             try {
                 v = expr(ve, sc, ft);
             } finally {
-                if (bigField) bigWriteOk--;
+                bigWriteField = outer;
             }
             expectType(ft, v, ve.pos());
             given.put(f.name(), v);
@@ -1805,7 +1809,7 @@ final class Checker {
             }
             case "set" -> {
                 if (args.size() != 2) throw m.pos().error("JSC0820", "set takes a key and a value: m.set(k, v)");
-                bigWriteHere(m.pos());
+                bigWriteHere(m.pos(), target);
                 Ir.Expr k = mapKeyArg(args.get(0), bt.key(), sc, "the map's keys");
                 Ir.Expr v = expr(args.get(1), sc, bt.val());
                 expectType(bt.val(), v, args.get(1).pos());
@@ -1817,7 +1821,7 @@ final class Checker {
             }
             case "delete" -> {
                 if (args.size() != 1) throw m.pos().error("JSC0821", "delete takes one key: m.delete(k)");
-                bigWriteHere(m.pos());
+                bigWriteHere(m.pos(), target);
                 Ir.Expr k = mapKeyArg(args.get(0), bt.key(), sc, "the map's keys");
                 return new Ir.BigOp("delete", target, List.of(k), bt, target.taint(), m.pos());
             }
@@ -1825,11 +1829,14 @@ final class Checker {
         }
     }
 
-    /** Inside the value of a BigMap field of a state literal: where a BigMap may be written (D7). */
-    private int bigWriteOk;
+    /** The BigMap field whose new value is being checked: the only BigMap that may be written there (D7, S11). */
+    private String bigWriteField;
 
-    private void bigWriteHere(Pos p) {
-        if (bigWriteOk == 0) {
+    private void bigWriteHere(Pos p, Ir.Expr target) {
+        Ir.Expr root = target;
+        while (root instanceof Ir.BigOp b) root = b.map();
+        String field = root instanceof Ir.StateField sf ? sf.field() : root instanceof Ir.GetField g ? g.field() : null;
+        if (bigWriteField == null || !bigWriteField.equals(field)) {
             throw p.error("JSC0827", "a BigMap is changed only in the value of its own field in the next state, { ...state, f: f.set(k, v) },"
                     + " not in a require, a condition or a view (ADR-0018 D7)");
         }

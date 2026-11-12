@@ -29,6 +29,7 @@ class JscV2DiagnosticsTest {
     @Test
     void everyDiagnosticHasACode_andTheCatalogueListsExactlyThem() throws Exception {
         var used = new TreeMap<String, String>();   // code -> severity
+        var raisedIn = new TreeMap<String, java.util.Set<String>>();   // code -> source files (review r3: no code reused)
         for (String f : List.of("Lexer.java", "Parser.java", "Checker.java", "JscV2.java")) {
             String s = source(f);
             // Every exception the front end builds goes through Pos.error(code, …) or the coded constructor.
@@ -39,6 +40,7 @@ class JscV2DiagnosticsTest {
             var m = Pattern.compile("(\\.error\\(|new JscException\\([^,]+, [^,]+, |\\bwarn\\([^,]+, )\"(JSC\\d{4})\"").matcher(s);
             while (m.find()) {
                 String sev = m.group(1).startsWith("warn") ? "warning" : "error";
+                raisedIn.computeIfAbsent(m.group(2), k -> new java.util.TreeSet<>()).add(f);
                 String prior = used.put(m.group(2), sev);
                 assertTrue(prior == null || prior.equals(sev), m.group(2) + " is both an error and a warning");
             }
@@ -52,6 +54,8 @@ class JscV2DiagnosticsTest {
         // The toolchain's: the manifest checked against the processor's description.
         var tool = Pattern.compile("\"(JSC\\d{4})\"").matcher(Files.readString(Path.of("../julc-state-toolchain/src/main/java/org/julclang/state/toolchain/Toolchain.java")));
         while (tool.find()) used.put(tool.group(1), "error");
+        // One code, one rule: a code is raised from one file (JSC0930, nested patterns, is the parser's and the checker's).
+        raisedIn.forEach((code, in) -> assertTrue(in.size() == 1 || code.equals("JSC0930"), code + " is raised in " + in));
         assertTrue(used.size() > 200, "codes found: " + used.size());
         String doc = Files.readString(Path.of("../docs/reference/jsc-2-diagnostics.md"));
         var listed = new TreeMap<String, String>();

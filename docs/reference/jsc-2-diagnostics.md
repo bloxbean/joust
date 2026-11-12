@@ -58,10 +58,13 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0138 | error | there is no … in .jsc: use Option<T> with None and Some(x) | Parser |
 | JSC0139 | error | there is no 'this' in .jsc: a bare field name, or state.field, reads the state | Parser |
 | JSC0140 | error | there are no classes in .jsc: records are 'type Name = { f: T }', built with Name { f: e } | Parser |
-| JSC0141 | error | invisible format character U+…: .jsc files may not hold bidirectional controls or other format characters, even in comments and strings, so that the text reads as it compiles | Lexer |
-| JSC0142 | error | ' … ' (U+…) is not an ASCII letter (or digit): names in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike | Lexer |
+| JSC0141 | error | there is no ' … ' in .jsc: everything a call computes happens in its transaction | Parser |
+| JSC0142 | error | there is no 'new' in .jsc: build a record with Name { f: e } | Parser |
 | JSC0143 | error | unexpected … in an expression | Parser |
 | JSC0144 | error | a spread goes first: { ...state, f: e } | Parser |
+| JSC0145 | error | invisible format character U+…: .jsc files may not hold bidirectional controls or other format characters, even in comments and strings, so that the text reads as it compiles | Lexer |
+| JSC0146 | error | ' … ' (U+…) is not an ASCII letter (or digit): names in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike | Lexer |
+| JSC0147 | error | U+… breaks a line for some readers but not for .jsc: end lines with LF (or CRLF), so that a comment cannot hide the code after it | Lexer |
 
 ## Names and declarations (ADR-0018 D3, J10)
 
