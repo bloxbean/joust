@@ -55,19 +55,33 @@ sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
 tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.portable=true'] }
 
 // ADR-0018 M1c (J11): the Java examples' own tests, run against their .jsc 2 ports (src/main/jsc/.../{Vault,Escrow,
-// Crowdfund,Token,Pool}.jsc). Each example's test sources are copied with three textual changes: the package becomes
-// the ports' package, each class gets a Port suffix, and the init is called by its .jsc 2 name (init). Nothing else
-// changes, so a port passes exactly the scenarios (unit, attack suite, DevKit) its Java example passes, and the two
-// cannot drift apart.
+// Crowdfund,Token,Pool}.jsc). copyPortTests copies each example's test sources with three textual changes: the package
+// becomes the ports' package, each class gets a Port suffix, and the init is called by its .jsc 2 name (init). Nothing
+// else changes, so a port passes exactly the scenarios (unit, attack suite, description, DevKit) its Java example passes,
+// and the two cannot drift apart. :examples:dsl:test runs them (this task only copies). It fails closed (review F7):
+// an example's src/test holding anything the rule does not copy (a subpackage, a helper class, resources) stops the build.
 def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['Crowdfund', 'launch'],
              token: ['Token', 'create'], pool: ['Pool', null]]
 def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
-def portTests = tasks.register('portTests', Sync) {
-    description = 'Copies the Java examples\' tests to run against their .jsc 2 ports'
+def copyPortTests = tasks.register('copyPortTests', Sync) {
+    description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'
     // The rewrite below is code, not a file: state it as an input, so a changed rule re-runs the copy.
     inputs.property('ports', ports.collect { k, v -> "${k}=${v}" }.join(','))
     inputs.property('rules', 'package; class <X>Test -> <X>PortTest; DescriptionTest -> <Contract>DescriptionPortTest; <Contract>.<init>( -> <Contract>.init(')
+    ports.keySet().each { example -> inputs.dir(rootProject.file("examples/${example}/src/test")) }
     into portTestsOut
+    doFirst {
+        ports.keySet().each { example ->
+            def root = rootProject.file("examples/${example}/src/test")
+            def pkg = new File(root, "java/org/julclang/state/examples/${example}")
+            root.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+                if (f.parentFile != pkg || !f.name.endsWith('Test.java')) {
+                    throw new GradleException("copyPortTests cannot run ${rootProject.relativePath(f)} against the ${example} port: only " +
+                            "*Test.java directly in ${rootProject.relativePath(pkg)} are copied; extend the copy rule (examples/dsl/build.gradle)")
+                }
+            }
+        }
+    }
     ports.each { example, port ->
         String contract = port[0]
         String init = port[1]
@@ -85,4 +99,4 @@ def portTests = tasks.register('portTests', Sync) {
         }
     }
 }
-sourceSets.test.java.srcDir(files(portTestsOut).builtBy(portTests))
+sourceSets.test.java.srcDir(files(portTestsOut).builtBy(copyPortTests))

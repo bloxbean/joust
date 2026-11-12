@@ -265,7 +265,101 @@ public final class Attacks {
                 return c;
             }));
         }
+        modifierAttacks(h, tx, out);
         return out;
+    }
+
+    /** A key no example uses: the stranger who signs in the modifier attacks. */
+    static final byte[] STRANGER = StateHarness.fill(28, 0xE5);
+
+    /**
+     * Attacks only the method's own modifiers can refuse (ADR-0018 M1c review S2/F2), read from the contract's description
+     * ({@code x-joust.actions[].policies}): for {@code @SignedBy(f)} with a Ctx, a stranger who signs and is
+     * {@code ctx.caller} (so the generated caller-signed check holds, and only {@code @SignedBy} can refuse; "required
+     * signer missing" leaves the caller as it was, so the caller check refuses it whatever the modifier lowered to); for
+     * {@code @ValidAfter(f)} a window that ends before the state's {@code f}, and one that straddles it; for
+     * {@code @ValidBefore(f)} a window that starts at {@code f}, and one that straddles it. The redeemer's Ctx and the
+     * transaction agree in each, so only the modifier can refuse. Single-instance actions and destroys only.
+     */
+    private static void modifierAttacks(StateHarness<?> h, TxModel tx, List<Attack> out) {
+        if (tx.kind == TxModel.Kind.CREATE || tx.spendRedeemers.size() != 1 || tx.token != null && tx.token.length == 29) return;
+        var entry = tx.spendRedeemers.entrySet().iterator().next();
+        if (!(entry.getValue() instanceof PlutusData.ConstrData redeemer)) return;
+        TxInInfo input = tx.inputs.stream().filter(i -> i.outRef().equals(entry.getKey())).findFirst().orElse(null);
+        if (input == null || !(input.resolved().datum() instanceof OutputDatum.OutputDatumInline inline)
+                || !(inline.datum() instanceof PlutusData.ConstrData datum)) return;
+        Class<?> contract = h.spec().stateClass() == null ? null : h.spec().stateClass().getEnclosingClass();
+        if (contract == null) return;
+        com.fasterxml.jackson.databind.JsonNode d;
+        try {
+            d = Descriptions.of(contract);
+        } catch (AssertionError e) {
+            return;
+        }
+        com.fasterxml.jackson.databind.JsonNode method = null;
+        for (var a : d.path("x-joust").path("actions")) {
+            var r = a.path("redeemer");
+            if (r.path("purpose").asText().equals("spend") && r.path("index").asInt(-1) == redeemer.tag()) method = a;
+        }
+        if (method == null) return;
+        var fields = new ArrayList<String>();
+        method.path("fields").forEach(f -> fields.add(f.asText()));
+        int ctxAt = fields.indexOf("ctx");
+        if (ctxAt >= 0 && (ctxAt >= redeemer.fields().size() || !(redeemer.fields().get(ctxAt) instanceof PlutusData.ConstrData ctx)
+                || ctx.fields().size() != 5)) return;
+        String name = method.path("name").asText();
+        var policies = method.path("policies");
+        if (ctxAt >= 0) {
+            for (var f : policies.path("signedBy")) {
+                out.add(new Attack(name + ": a stranger signs as the caller (only " + f.asText() + ")", "I5", t -> {
+                    var c = t.copy();
+                    c.spendRedeemers.put(entry.getKey(), withCtx(redeemer, ctxAt, 0, PlutusData.bytes(STRANGER)));
+                    c.signers.clear();
+                    c.signers.add(STRANGER);
+                    return c;
+                }));
+            }
+        }
+        // The state's field values, by name (the description's state schema).
+        var stateFields = new ArrayList<String>();
+        var stateRef = d.path("x-joust").path("state").path("$ref").asText().replace("#/definitions/", "");
+        d.path("definitions").path(stateRef).path("anyOf").path(0).path("fields").forEach(f -> stateFields.add(f.path("title").asText()));
+        for (String kind : List.of("validAfter", "validBefore")) {
+            for (var f : policies.path(kind)) {
+                int at = stateFields.indexOf(f.asText());
+                if (at < 0 || at >= datum.fields().size() || !(datum.fields().get(at) instanceof PlutusData.IntData bound)) continue;
+                BigInteger b = bound.value();
+                boolean after = kind.equals("validAfter");
+                // after(t) needs validFrom >= t; before(t) needs validTo <= t (Clock).
+                BigInteger[][] windows = after
+                        ? new BigInteger[][]{{b.subtract(BigInteger.valueOf(60_001)), b.subtract(BigInteger.ONE)}, {b.subtract(BigInteger.ONE), b.add(BigInteger.valueOf(59_999))}}
+                        : new BigInteger[][]{{b, b.add(BigInteger.valueOf(60_000))}, {b.subtract(BigInteger.valueOf(59_999)), b.add(BigInteger.ONE)}};
+                String[] what = after ? new String[]{"a window ending before " + f.asText(), "a window straddling " + f.asText()}
+                        : new String[]{"a window starting at " + f.asText(), "a window straddling " + f.asText()};
+                for (int k = 0; k < 2; k++) {
+                    BigInteger from = windows[k][0], to = windows[k][1];
+                    out.add(new Attack(name + ": " + what[k] + " (" + (after ? "after " : "before ") + f.asText() + ")", "I6", t -> {
+                        var c = t.copy();
+                        if (ctxAt >= 0) {
+                            var r = withCtx(redeemer, ctxAt, 3, PlutusData.integer(from));
+                            c.spendRedeemers.put(entry.getKey(), withCtx((PlutusData.ConstrData) r, ctxAt, 4, PlutusData.integer(to)));
+                        }
+                        c.range = StateHarness.window(from, to);
+                        return c;
+                    }));
+                }
+            }
+        }
+    }
+
+    /** {@code redeemer} with field {@code i} of its Ctx (field {@code at}) replaced. */
+    private static PlutusData withCtx(PlutusData.ConstrData redeemer, int at, int i, PlutusData v) {
+        var ctx = (PlutusData.ConstrData) redeemer.fields().get(at);
+        var cf = new ArrayList<>(ctx.fields());
+        cf.set(i, v);
+        var rf = new ArrayList<>(redeemer.fields());
+        rf.set(at, new PlutusData.ConstrData(ctx.tag(), cf));
+        return new PlutusData.ConstrData(redeemer.tag(), rf);
     }
 
     /** Evaluates every applicable attack; fails listing the ones that were accepted. */

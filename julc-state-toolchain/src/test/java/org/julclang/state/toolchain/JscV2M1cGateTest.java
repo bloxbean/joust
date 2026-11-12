@@ -163,8 +163,8 @@ class JscV2M1cGateTest {
             this.cls = Class.forName(pkg + "." + name);
             this.stateClass = Class.forName(pkg + "." + name + "$State");
             var spec = (org.julclang.state.runtime.ContractSpec<Object>) Class.forName(pkg + "." + name + "Client").getField("SPEC").get(null);
-            // Each its own script: the Java example's and the port's validators share a simple name (FourWay.pinned).
-            this.h = StateHarness.of((org.julclang.state.runtime.ContractSpec<Object>) FourWay.pinned(spec));
+            // Each its own script, though the Java example's and the port's validators share a simple name (ValidatorScripts).
+            this.h = StateHarness.of(spec);
         }
 
         /** A state from its fields in declaration order; a {@code Map<byte[], BigInteger>} becomes a stored MerkleMap of those contents. */
@@ -255,16 +255,36 @@ class JscV2M1cGateTest {
         }));
     }
 
-    /** A call to run on both implementations: kind is init, action, destroy or batch (an intent applied by a batch of one). */
+    /**
+     * A call to run on both implementations: kind is init, action, destroy or batch. A batch applies {@code intents}
+     * intents of {@code method} ({@code donate}, {@code buy}, or {@code mix}: donate and buy in turn), the first from
+     * {@code caller}, each paying {@code received} plus {@code receivedStep} per intent before it (review F3).
+     */
     record Call(String label, String kind, String method, List<Object> state, List<Object> args, byte[] caller, BigInteger received,
-                BigInteger balance) {}
+                BigInteger balance, int intents, BigInteger receivedStep) {
+        Call(String label, String kind, String method, List<Object> state, List<Object> args, byte[] caller, BigInteger received,
+             BigInteger balance) {
+            this(label, kind, method, state, args, caller, received, balance, 1, BigInteger.ZERO);
+        }
 
-    /** The outcome of one call on one implementation: its JVM result as data, its datum size, its execution units. */
+        Call labelled(String l) {
+            return new Call(l, kind, method, state, args, caller, received, balance, intents, receivedStep);
+        }
+
+        /** The methods it runs. */
+        List<String> methods() {
+            return method.equals("mix") ? List.of("donate", "buy") : List.of(method);
+        }
+    }
+
+    /** The outcome of one call on one implementation: its JVM result as data, its stored datum sizes, its execution units. */
     record Run(String result, int inBytes, int outBytes, long cpu, long mem, StateHarness.Verdict verdict) {}
 
+    /** A state's size as stored on chain (review F9): canonical CBOR, its MerkleMaps as their roots (no reads or writes). */
     static int bytes(Object state) {
         try {
-            return org.julclang.clientlib.PlutusDataAdapter.convert(state).serializeToBytes().length;
+            var ccl = org.julclang.clientlib.PlutusDataAdapter.convert(state);
+            return com.bloxbean.cardano.client.common.cbor.CborSerializationUtil.serialize(ccl.serialize(), true).length;
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
@@ -277,6 +297,30 @@ class JscV2M1cGateTest {
         boolean maps = MerkleSupport.hasMaps(impl.stateClass);
         var ms = new MerkleSupport(impl.store);
         Object before = c.state() == null ? null : impl.state(c.state());
+        String cap = Character.toUpperCase(c.method().charAt(0)) + c.method().substring(1);
+        if (c.kind().equals("batch")) {
+            var codec = (org.julclang.state.runtime.IntentCodec<Object>) Class.forName(impl.pkg + "." + impl.name + "Client").getField("INTENTS").get(null);
+            var intents = new ArrayList<StateHarness.LiveIntent>();
+            for (int i = 0; i < c.intents(); i++) {
+                String m = c.method().equals("mix") ? (i % 2 == 0 ? "donate" : "buy") : c.method();
+                byte[] who = i == 0 ? c.caller() : StateHarness.fill(28, 0x10 + i);
+                BigInteger paid = c.received().add(c.receivedStep().multiply(BigInteger.valueOf(i)));
+                Object call = impl.construct("Validator$" + Character.toUpperCase(m.charAt(0)) + m.substring(1) + "Intent",
+                        m.equals("donate") ? List.of() : c.args());
+                Object intent = codec.intent(h.instanceId(), who, StateHarness.pkhAddress(who), LATER, paid, call);
+                intents.add(h.liveIntent(i + 1, intent, paid.add(ada(2))));
+            }
+            var b = h.batch(h.live(before, c.balance()), codec, intents);
+            assertEquals(c.intents(), b.plan().applied().size(), c.label() + ": skipped " + b.plan().skipped());
+            var v = h.evaluate(b.tx());
+            var paid = new StringBuilder();
+            for (var step : b.plan().payouts()) {
+                for (Payout po : step) paid.append(HEX.formatHex(po.to())).append(':').append(po.lovelace()).append(' ');
+                paid.append("| ");
+            }
+            return new Run(StateHarness.data(b.plan().state()) + " / " + paid, bytes(before), bytes(b.plan().state()),
+                    cpu(v), mem(v), v);
+        }
         Object r = ms.run(() -> {
             try {
                 return impl.invoke(c.method(), before, c.args(), ctx);
@@ -294,7 +338,7 @@ class JscV2M1cGateTest {
             pays = (JulcList<Payout>) r.getClass().getMethod("payouts").invoke(r);
         }
         String result = (next == null ? "-" : StateHarness.data(next).toString()) + " / " + StateHarness.data(pays);
-        String cap = Character.toUpperCase(c.method().charAt(0)) + c.method().substring(1);
+        Object stored = next;
         var redeemerArgs = new ArrayList<Object>(c.args());
         TxModel tx;
         switch (c.kind()) {
@@ -304,6 +348,7 @@ class JscV2M1cGateTest {
                 Object redeemer = impl.construct("Validator$CreateInstance", redeemerArgs);
                 if (maps) {
                     var p = ms.prepareCreation(h.policy(), (Class) impl.stateClass, next, h.seed());
+                    stored = p.stored();
                     tx = h.withClaims(h.create(redeemer, p.stored(), ctx), p.claims());
                 } else {
                     tx = h.create(redeemer, next, ctx);
@@ -316,6 +361,7 @@ class JscV2M1cGateTest {
                 Ctx given = impl.takesCtx("Validator$" + cap) ? ctx : null;
                 if (maps) {
                     var p = ms.prepare(h.policy(), (Class) impl.stateClass, before, next, StateHarness.LIVE_REF);
+                    stored = p.stored();
                     tx = h.withClaims(h.act(live, redeemer, p.stored(), pays, c.caller(), given), p.claims());
                 } else {
                     tx = h.act(live, redeemer, next, pays, c.caller(), given);
@@ -328,32 +374,31 @@ class JscV2M1cGateTest {
                 tx = h.destroy(live, redeemer, impl.construct("Validator$BurnInstance", List.of()), pays, c.caller(), ctx);
                 if (maps) tx = h.withClaims(tx, ms.prepare(h.policy(), (Class) impl.stateClass, before, null, StateHarness.LIVE_REF).claims());
             }
-            case "batch" -> {
-                var codec = (org.julclang.state.runtime.IntentCodec<Object>) Class.forName(impl.pkg + "." + impl.name + "Client").getField("INTENTS").get(null);
-                Object call = impl.construct("Validator$" + cap + "Intent", c.args());
-                Object intent = codec.intent(h.instanceId(), c.caller(), StateHarness.pkhAddress(c.caller()), LATER, c.received(), call);
-                var it = h.liveIntent(1, intent, c.received().add(ada(2)));
-                var b = h.batch(h.live(before, c.balance()), codec, List.of(it));
-                assertEquals(1, b.plan().applied().size(), c.label() + ": skipped " + b.plan().skipped());
-                tx = b.tx();
-            }
             default -> throw new IllegalArgumentException(c.kind());
         }
         var v = h.evaluate(tx);
-        long cpu = 0, mem = 0;
-        for (EvalResult e : v.results().values()) {
-            var u = e.budgetConsumed();
-            cpu += u.cpuSteps();
-            mem += u.memoryUnits();
-        }
-        return new Run(result, before == null ? 0 : bytes(before), next == null ? 0 : bytes(next), cpu, mem, v);
+        return new Run(result, before == null ? 0 : bytes(before), stored == null ? 0 : bytes(stored), cpu(v), mem(v), v);
+    }
+
+    static long cpu(StateHarness.Verdict v) {
+        return v.results().values().stream().mapToLong(e -> e.budgetConsumed().cpuSteps()).sum();
+    }
+
+    static long mem(StateHarness.Verdict v) {
+        return v.results().values().stream().mapToLong(e -> e.budgetConsumed().memoryUnits()).sum();
+    }
+
+    static Impl java(String name) throws Exception {
+        Example e = EXAMPLES.stream().filter(x -> x.name().equals(name)).findFirst().orElseThrow();
+        return impl("org.julclang.state.examples." + e.javaPkg(), name, e.javaInit());
     }
 
     /** Runs {@code c} on the Java example and on the port: both accepted, the same JVM result, the port within +15%. */
     static Run compare(String name, Call c, boolean saturated) throws Exception {
-        Example e = EXAMPLES.stream().filter(x -> x.name().equals(name)).findFirst().orElseThrow();
-        Run j = run(impl("org.julclang.state.examples." + e.javaPkg(), name, e.javaInit()), c);
-        Run p = run(port(name), c);
+        return record(name, c, run(java(name), c), run(port(name), c), saturated);
+    }
+
+    static Run record(String name, Call c, Run j, Run p, boolean saturated) {
         assertTrue(j.verdict().accepted(), name + " " + c.label() + " (Java):\n" + j.verdict());
         assertTrue(p.verdict().accepted(), name + " " + c.label() + " (.jsc 2):\n" + p.verdict());
         assertEquals(j.result(), p.result(), name + " " + c.label() + ": the port's JVM result differs from the Java example's");
@@ -366,36 +411,63 @@ class JscV2M1cGateTest {
         assertTrue(cpu <= BOUND, name + " " + c.label() + ": CPU " + p.cpu() + " is more than 15% above Java's " + j.cpu());
         assertTrue(mem <= BOUND, name + " " + c.label() + ": memory " + p.mem() + " is more than 15% above Java's " + j.mem());
         assertTrue(p.cpu() <= MAX_CPU && p.mem() <= MAX_MEM, name + " " + c.label() + ": over the per-transaction maximum");
-        if (p.cpu() > 0.8 * MAX_CPU || p.mem() > 0.8 * MAX_MEM) System.out.println("[M1c budget] WARNING: " + name + " " + c.label() + " is above 80% of the maximum");
+        if (p.cpu() > 0.8 * MAX_CPU || p.mem() > 0.8 * MAX_MEM) {
+            String w = name + " " + c.label() + " is above 80% of the maximum (" + String.format("%.1f%% CPU, %.1f%% memory", 100.0 * p.cpu() / MAX_CPU,
+                    100.0 * p.mem() / MAX_MEM) + ")";
+            System.out.println("[M1c budget] WARNING: " + w);
+            WARNINGS.add(w);
+        }
         return p;
     }
 
-    /**
-     * The saturated form of a call: the largest padding (Int fields of {@code digits} decimal digits, collections filled)
-     * whose input state fits {@code maxDatumBytes} and for which the call is still valid (its output fits too).
-     */
+    static final List<String> WARNINGS = new ArrayList<>();
+    /** The methods each port was measured on at a saturated state (review F8: all of them). */
+    static final Map<String, java.util.Set<String>> SATURATED = new LinkedHashMap<>();
+
+    interface Runner {
+        Run run(Call c) throws Exception;
+    }
+
     static void saturated(String name, String label, IntFunction<Call> at) throws Exception {
-        var port = port(name);
-        int max = port.h.spec().maxDatumBytes();
-        // The largest padding whose input state (an init: its output) fits; a call without padding is measured as it is.
+        saturated(name, label, at, c -> run(port(name), c));
+    }
+
+    /**
+     * The saturated form of a call (review C2): the fixture is the largest padding (Int fields of many digits,
+     * collections filled) whose stored input state fits {@code maxDatumBytes} and which the <b>Java example</b> accepts
+     * (on the JVM and on-chain, its output state within the cap too). Only the reference decides the fixture; the port
+     * must then accept exactly that fixture, and a failure there fails the gate rather than shrinking the state.
+     */
+    static void saturated(String name, String label, IntFunction<Call> at, Runner portRunner) throws Exception {
+        Impl ref = java(name);
+        int max = ref.h.spec().maxDatumBytes();
         int d = 1;
-        if (size(port, at.apply(1)) != size(port, at.apply(400))) {
-            while (d < 4000 && size(port, at.apply(d + 1)) <= max) d++;
+        if (size(ref, at.apply(1)) != size(ref, at.apply(400))) {
+            while (d < 4000 && size(ref, at.apply(d + 1)) <= max) d++;
         }
-        for (int k = d; k > 0; k--) {
+        Call fixture = null;
+        Run j = null;
+        for (int k = d; k > 0 && fixture == null; k--) {
             Call c = at.apply(k);
-            Run p;
             try {
-                p = run(port, c);
-            } catch (IllegalStateException refused) {
-                continue;   // refused on the JVM at this padding (an output past the cap is refused on-chain only)
+                j = run(ref, c);
+            } catch (IllegalStateException refusedByJava) {
+                continue;   // the reference refuses this padding (e.g. an output past the cap): not admissible
             }
-            if (p.verdict().accepted()) {
-                compare(name, new Call(label + " @ max", c.kind(), c.method(), c.state(), c.args(), c.caller(), c.received(), c.balance()), true);
-                return;
-            }
+            if (j.verdict().accepted() && j.outBytes() <= max) fixture = c;
         }
-        fail(name + " " + label + ": no saturated state accepted");
+        assertNotNull(fixture, name + " " + label + ": no saturated state the Java example accepts");
+        Call c = fixture.labelled(label + " @ max");
+        Run p;
+        try {
+            p = portRunner.run(c);
+        } catch (Exception | AssertionError e) {
+            throw new org.opentest4j.AssertionFailedError(name + " " + label + ": the port fails on the Java-valid saturated state (" + j.inBytes()
+                    + " bytes): " + e, e);
+        }
+        assertTrue(p.verdict().accepted(), name + " " + label + ": the port rejects the Java-valid saturated state (" + j.inBytes() + " bytes):\n" + p.verdict());
+        record(name, c, j, p, true);
+        SATURATED.computeIfAbsent(name, x -> new java.util.TreeSet<>()).addAll(c.methods());
     }
 
     static Map<byte[], BigInteger> holders(int n, BigInteger each) {
@@ -417,6 +489,30 @@ class JscV2M1cGateTest {
         JulcMap<byte[], BigInteger> m = JulcMap.empty();
         for (int i = keys.size() - 1; i >= 0; i--) m = m.insert(keys.get(i), each);
         return m;
+    }
+
+    // ------------------------------------------------------------------ the gate's own regression (review C2)
+
+    @Test
+    void theSaturationGate_failsWhenThePortCannotHandleTheJavaValidMaximum() throws Exception {
+        // Codex's mutant: a port that refuses large valid deposits. The fixture is chosen by the Java example, so the gate
+        // fails instead of shrinking the state until the port accepts.
+        IntFunction<Call> deposit = d -> new Call("", "action", "deposit", List.of(OWNER, future(d), big(d)), List.of(), STRANGER, ada(5), ada(10));
+        var thrown = assertThrows(org.opentest4j.AssertionFailedError.class, () -> saturated("Vault", "deposit (mutant: refuses large deposits)", deposit, c -> {
+            if (((BigInteger) c.state().get(2)).compareTo(BigInteger.TEN.pow(9)) >= 0) {
+                throw new IllegalStateException(new org.julclang.state.api.RequireException("review mutant: rejects large valid deposits"));
+            }
+            return run(port("Vault"), c);
+        }));
+        assertTrue(thrown.getMessage().contains("the port fails on the Java-valid saturated state"), thrown.getMessage());
+        // A port whose validator rejects the maximum (here: its transaction signed by a stranger) fails the gate too.
+        IntFunction<Call> withdraw = d -> new Call("", "action", "withdraw", List.of(OWNER, past(d), ada(10).add(big(d))), List.of(ada(3)), OWNER,
+                BigInteger.ZERO, ada(10));
+        thrown = assertThrows(org.opentest4j.AssertionFailedError.class, () -> saturated("Vault", "withdraw (mutant: rejected on-chain)", withdraw,
+                c -> run(port("Vault"), new Call(c.label(), c.kind(), c.method(), c.state(), c.args(), STRANGER, c.received(), c.balance()))));
+        assertTrue(thrown.getMessage().contains("the port fails on") || thrown.getMessage().contains("the port rejects"), thrown.getMessage());
+        // The unmutated port passes the same gate.
+        saturated("Vault", "deposit (gate check)", deposit);
     }
 
     // ------------------------------------------------------------------ the calls
@@ -492,6 +588,13 @@ class JscV2M1cGateTest {
         saturated("Token", "mint (1,024 holders)", d -> new Call("", "action", "mint", List.of(OWNER, big(d), many), List.of(ANN, n(10)), OWNER, BigInteger.ZERO, BigInteger.ZERO));
         saturated("Token", "transfer (1,024 holders)", d -> new Call("", "action", "transfer", List.of(OWNER, big(d), many), List.of(ANN, n(3)), holder, BigInteger.ZERO, BigInteger.ZERO));
         saturated("Token", "burn (1,024 holders)", d -> new Call("", "action", "burn", List.of(OWNER, big(d), many), List.of(n(3)), holder, BigInteger.ZERO, BigInteger.ZERO));
+        // Review F9: the cost grows with the trie's depth, not the datum (a 32-byte root at any size). An MPF trie is radix
+        // 16, so 1,024 holders give proofs about 3 levels deep and 65,536 about 4; both are measured, to show the growth.
+        var more = holders(65_536, n(7));
+        byte[] deep = more.keySet().iterator().next();
+        saturated("Token", "mint (65,536 holders)", d -> new Call("", "action", "mint", List.of(OWNER, big(d), more), List.of(ANN, n(10)), OWNER, BigInteger.ZERO, BigInteger.ZERO));
+        saturated("Token", "transfer (65,536 holders)", d -> new Call("", "action", "transfer", List.of(OWNER, big(d), more), List.of(ANN, n(3)), deep, BigInteger.ZERO, BigInteger.ZERO));
+        saturated("Token", "burn (65,536 holders)", d -> new Call("", "action", "burn", List.of(OWNER, big(d), more), List.of(n(3)), deep, BigInteger.ZERO, BigInteger.ZERO));
         saturated("Token", "close (fixed size)", d -> new Call("", "destroy", "close", List.of(OWNER, BigInteger.ZERO, Map.of()), List.of(), OWNER, BigInteger.ZERO, n(tokenMin)));
 
         long poolMin = port("Pool").h.minAda();
@@ -508,8 +611,32 @@ class JscV2M1cGateTest {
         saturated("Pool", "donate (batch of 1)", d -> new Call("", "batch", "donate", List.of(OWNER, big(d), big(d), ada(10), big(d)), List.of(), ANN, ada(5), ada(3)));
         saturated("Pool", "buy (batch of 1)", d -> new Call("", "batch", "buy", List.of(OWNER, big(d), big(d), ada(10), big(d)), List.of(ada(11)), ANN, ada(12), ada(3)));
         saturated("Pool", "withdraw", d -> new Call("", "action", "withdraw", List.of(OWNER, big(d), big(d), ada(10), big(d)), List.of(ada(1)), OWNER, BigInteger.ZERO, ada(3)));
+        // Review F3/S3: batched actions run in batches; Batcher.DEFAULT_MAX intents is the shape the batcher builds. Order
+        // matters for buy (each ticket raises the price by step), so the buyers bound it with maxPrice and get change.
+        int batchMax = org.julclang.state.runtime.Batcher.DEFAULT_MAX;
+        compare("Pool", new Call("donate (batch of " + batchMax + ")", "batch", "donate", pool, List.of(), ANN, ada(5), ada(3), batchMax, BigInteger.ZERO), false);
+        compare("Pool", new Call("buy (batch of " + batchMax + ", change)", "batch", "buy", pool, List.of(ada(30)), ANN, ada(30), ada(3), batchMax, BigInteger.ZERO), false);
+        saturated("Pool", "donate (batch of " + batchMax + ")", d -> new Call("", "batch", "donate", List.of(OWNER, big(d), big(d), ada(10), ada(1)), List.of(),
+                ANN, ada(5), ada(3), batchMax, BigInteger.ZERO));
+        saturated("Pool", "buy (batch of " + batchMax + ", change)", d -> new Call("", "batch", "buy", List.of(OWNER, big(d), big(d), ada(10), ada(1)),
+                List.of(ada(30)), ANN, ada(30), ada(3), batchMax, BigInteger.ZERO));
+        saturated("Pool", "buy (batch of " + batchMax + ", exact)", d -> new Call("", "batch", "buy", List.of(OWNER, big(d), big(d), ada(10), ada(1)),
+                List.of(ada(30)), ANN, ada(10), ada(3), batchMax, ada(1)));
+        saturated("Pool", "donate and buy (batch of " + batchMax + ")", d -> new Call("", "batch", "mix", List.of(OWNER, big(d), big(d), ada(10), ada(1)),
+                List.of(ada(30)), ANN, ada(30), ada(3), batchMax, BigInteger.ZERO));
         saturated("Pool", "close", d -> new Call("", "destroy", "close", List.of(OWNER, big(d), big(d), ada(10), big(d)), List.of(), OWNER, BigInteger.ZERO, ada(3).add(n(poolMin))));
 
+        // Review F8: every method of every port (init, actions, destroys; views run off-chain) was measured at saturation.
+        for (Example e : EXAMPLES) {
+            var interp = org.julclang.state.dsl.v2.JscV2.interpreter(Files.readString(JscV2M1aFourWayTest.DSL.resolve(e.name() + ".jsc")),
+                    e.name() + ".jsc", FourWay.HASHES);
+            var want = new java.util.TreeSet<String>();
+            interp.methods().forEach((m, kind) -> {
+                if (!kind.equals("view")) want.add(m);
+            });
+            assertEquals(want, SATURATED.get(e.name()), e.name() + ": the methods measured at a saturated state");
+        }
+        System.out.println("[M1c budget] warnings above 80%: " + WARNINGS);
         System.out.println("[M1c budget table]\n| Contract | Call | Datum bytes (saturated: in → out) | Java CPU | .jsc 2 CPU | Δ CPU | Java memory | .jsc 2 memory (Δ) | % of max CPU / memory |\n|---|---|---|---|---|---|---|---|---|\n"
                 + String.join("\n", ROWS));
     }

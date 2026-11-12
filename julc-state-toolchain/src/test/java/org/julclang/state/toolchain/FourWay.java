@@ -76,7 +76,7 @@ final class FourWay {
     final InMemoryNodeStore store = new InMemoryNodeStore();
     /** Each root this harness built, with its contents (key hex → stored bytes), for the transition leg's reads. */
     final Map<String, Map<String, byte[]>> contents = new LinkedHashMap<>();
-    int calls, refusals, validatorRuns, rounds, batchRuns, mutantsRejected, attacksRejected;
+    int calls, refusals, validatorRuns, rounds, batchRuns, mutantsRejected, attacksRejected, modifierRefusals;
     StateHarness.Verdict lastVerdict;
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -87,29 +87,9 @@ final class FourWay {
         this.interp = JscV2.interpreter(jscSource, name + ".jsc", HASHES);
         this.transitions = transitions;
         var spec = (org.julclang.state.runtime.ContractSpec) Class.forName(PKG + "." + name + "Client").getField("SPEC").get(null);
-        this.harness = (StateHarness<Object>) StateHarness.of(pinned(spec));
+        this.harness = (StateHarness<Object>) StateHarness.of(spec);
         this.bigMaps = interp.bigMaps();
         contents.put(HEX.formatHex(Mpf.emptyRoot()), Map.of());
-    }
-
-    /**
-     * {@code spec} with its script read from its own validator's build output. The runtime loads a script by the
-     * validator's simple name ({@code META-INF/plutus/VaultValidator.plutus.json}), and this test class path holds the
-     * Java examples and their .jsc 2 ports side by side (M1c), so the first one found would serve both.
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    static org.julclang.state.runtime.ContractSpec pinned(org.julclang.state.runtime.ContractSpec spec) throws Exception {
-        Class<?> v = spec.validatorClass();
-        var where = v.getProtectionDomain().getCodeSource().getLocation();
-        try (var own = new java.net.URLClassLoader(new java.net.URL[]{where}, null);
-             var in = own.getResourceAsStream("META-INF/plutus/" + v.getSimpleName() + ".plutus.json")) {
-            assertNotNull(in, v.getName() + ": no compiled script beside it in " + where);
-            String json = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            var m = java.util.regex.Pattern.compile("\"cborHex\"\\s*:\\s*\"([0-9a-f]+)\"").matcher(json);
-            assertTrue(m.find(), v.getName() + ": no cborHex");
-            return new org.julclang.state.runtime.ContractSpec(spec.name(), v, spec.stateClass(), spec.minAda(), spec.maxDatumBytes(),
-                    spec.maxValidityMs(), spec.stakeSelf(), m.group(1), spec.mapFields(), spec.keyed());
-        }
     }
 
     boolean hasMaps() {
@@ -149,34 +129,39 @@ final class FourWay {
 
     /** An interpreter value as the generated Java's value (records and variants by their generated classes). */
     Object java(Object v) {
+        return java(v, cls);
+    }
+
+    /** The same, with records and variants as nested classes of {@code c} (the port's, or its Java example's). */
+    Object java(Object v, Class<?> c) {
         try {
             return switch (v) {
                 case BigInteger i -> i;
                 case Boolean x -> x;
                 case Bytes x -> x.bytes();
-                case Opt o -> o.present() ? Optional.of(java(o.value())) : Optional.empty();
+                case Opt o -> o.present() ? Optional.of(java(o.value(), c)) : Optional.empty();
                 case List<?> l -> {
                     if (l.isEmpty()) yield JulcList.empty();
                     var xs = new ArrayList<Object>();
-                    for (Object x : l) xs.add(java(x));
+                    for (Object x : l) xs.add(java(x, c));
                     yield JulcList.of(xs.toArray());
                 }
                 case MapV m -> {
                     // JulcMap.insert prepends: insert from the last key, so the map keeps the canonical order.
                     JulcMap<Object, Object> out = JulcMap.empty();
-                    for (int i = m.keys().size() - 1; i >= 0; i--) out = out.insert(java(m.keys().get(i)), java(m.values().get(i)));
+                    for (int i = m.keys().size() - 1; i >= 0; i--) out = out.insert(java(m.keys().get(i), c), java(m.values().get(i), c));
                     yield out;
                 }
                 // The stored form: the root of the contents now, no reads or writes.
                 case BigMapV m -> new MerkleMap(root(m.now()), JulcList.empty(), JulcList.empty());
                 case Rec r -> {
-                    Class<?> rc = Class.forName(cls.getName() + "$" + r.type());
+                    Class<?> rc = Class.forName(c.getName() + "$" + r.type());
                     var comps = rc.getRecordComponents();
                     var types = new Class<?>[comps.length];
                     var vals = new Object[comps.length];
                     for (int i = 0; i < comps.length; i++) {
                         types[i] = comps[i].getType();
-                        vals[i] = java(r.fields().get(i));
+                        vals[i] = java(r.fields().get(i), c);
                     }
                     yield rc.getDeclaredConstructor(types).newInstance(vals);
                 }
@@ -496,14 +481,22 @@ final class FourWay {
         }
     }
 
-    /** A batched action has an intent form ({@code <M>Intent} in the validator's IntentCall). */
+    /**
+     * Whether the action is batched, from the {@code .jsc} source's checked IR (review F8), never from the generated code
+     * under test; the generated validator must agree (an intent variant {@code <M>Intent}, and a direct redeemer unless
+     * {@code batched only}).
+     */
     boolean batched(String method) {
-        return exists(PKG + "." + name + "Validator$" + cap(method) + "Intent");
+        boolean source = interp.modifiers(method).stream().anyMatch(m -> m.startsWith("batched"));
+        assertEquals(source, exists(PKG + "." + name + "Validator$" + cap(method) + "Intent"), name + "." + method + ": batched in the source and the validator");
+        return source;
     }
 
-    /** A direct call exists unless the action is {@code batched only}. */
+    /** A direct call exists unless the action is {@code batched only} (from the source; the validator must agree). */
     boolean direct(String method) {
-        return exists(PKG + "." + name + "Validator$" + cap(method));
+        boolean source = !interp.modifiers(method).contains("batched only");
+        assertEquals(source, exists(PKG + "." + name + "Validator$" + cap(method)), name + "." + method + ": a direct redeemer in the source and the validator");
+        return source;
     }
 
     @SuppressWarnings("unchecked")
@@ -764,6 +757,64 @@ final class FourWay {
         return rc.getDeclaredConstructor(types).newInstance(values.toArray());
     }
 
+    // ------------------------------------------------------------------ the Java example, as a reference (M1c review F8)
+
+    Class<?> reference;
+    String referenceInit;
+    /** Calls whose outcome on the Java example differs from the port's (each test states which it expects). */
+    final List<String> javaDiffs = new ArrayList<>();
+
+    /** Also runs every vector on the Java example {@code pkg.<name>}, whose init is {@code init}, and records differences. */
+    FourWay reference(String pkg, String init) throws Exception {
+        this.reference = Class.forName(pkg + "." + name);
+        this.referenceInit = init;
+        return this;
+    }
+
+    /** The Java example's JVM outcome, encoded as {@link #jvm} encodes the port's ("refused" when it fails). */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    String javaReference(String method, Rec state, List<Object> args, Tx t) throws Exception {
+        String kind = interp.kind(method);
+        Class<?> rs = Class.forName(reference.getName() + "$State");
+        Object before = state == null ? null : java(state, reference);
+        String m = kind.equals("init") ? referenceInit : method;
+        Method found = null;
+        for (Method x : reference.getDeclaredMethods()) if (x.getName().equals(m) && java.lang.reflect.Modifier.isStatic(x.getModifiers())) found = x;
+        assertNotNull(found, reference.getName() + "." + m);
+        var call = new ArrayList<Object>();
+        if (before != null) call.add(before);
+        for (Object a : args) call.add(java(a, reference));
+        if (found.getParameterCount() > call.size()) call.add(ctx(t));
+        final Method target = found;
+        var ms = new MerkleSupport(store);
+        Object[] out = new Object[1];
+        Throwable[] failed = new Throwable[1];
+        ms.run(() -> {
+            try {
+                out[0] = target.invoke(null, call.toArray());
+            } catch (InvocationTargetException e) {
+                failed[0] = e.getCause();
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(e);
+            }
+            return null;
+        });
+        if (failed[0] != null) {
+            if (failed[0] instanceof RequireException || failed[0] instanceof ArithmeticException) return "refused";
+            throw new IllegalStateException(reference.getName() + "." + m, failed[0]);
+        }
+        Object r = out[0];
+        if (kind.equals("view")) return "ok:" + data(r).serializeToHex();
+        if (r instanceof JulcList<?> l) return "ok:" + result(null, (JulcList<Payout>) l);
+        Object next = rs.isInstance(r) ? r : r.getClass().getMethod("state").invoke(r);
+        JulcList<Payout> pays = rs.isInstance(r) ? null : (JulcList<Payout>) r.getClass().getMethod("payouts").invoke(r);
+        if (hasMaps()) {
+            next = kind.equals("init") ? ms.prepareCreation(harness.policy(), (Class) rs, next, harness.seed()).stored()
+                    : ms.prepare(harness.policy(), (Class) rs, before, next, StateHarness.LIVE_REF).stored();
+        }
+        return "ok:" + result(next, pays);
+    }
+
     /** All four legs (two for a view), asserted equal; returns the agreed outcome. */
     String check(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
         return check(method, state, args, t, signer, null);
@@ -773,6 +824,11 @@ final class FourWay {
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
         String want = interpreted(method, state, args, t);
         assertEquals(want, jvm(method, state, args, t), "JVM vs interpreter: " + what);
+        if (reference != null) {
+            String ref = javaReference(method, state, args, t);
+            if (!ref.equals(want)) javaDiffs.add(what + ": the Java example " + (ref.equals("refused") ? "refuses" : "accepts") + ", the port "
+                    + (want.equals("refused") ? "refuses" : "accepts") + (ref.startsWith("ok:") && want.startsWith("ok:") ? " (different results)" : ""));
+        }
         if (!interp.kind(method).equals("view")) {
             assertEquals(want, transition(method, state, args, t), "transition program vs interpreter: " + what);
             Boolean accepted = validator(method, state, args, t, signer, candidate);
@@ -781,6 +837,25 @@ final class FourWay {
         calls++;
         if (want.equals("refused")) refusals++;
         return want;
+    }
+
+    /**
+     * A call that breaks one of the method's modifiers ({@code only f}: signed by a stranger who is the caller;
+     * {@code after f}/{@code before f}: a window on the wrong side of, or straddling, the bound), with its outcome stated
+     * (ADR-0018 M1c review S2/F2): the modifiers are checks on the transaction, which the interpreter, the JVM method and
+     * the transition program do not see, so those three accept it and agree; the validator must refuse it. Until M1b
+     * models the modifiers in the interpreter (ADR-0018 D15), this is how they are covered.
+     */
+    void modifierRefused(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        String what = name + "." + method + " " + args + " " + (t == null ? "" : t) + " signed by " + HEX.formatHex(signer).substring(0, 4);
+        String want = interpreted(method, state, args, t);
+        assertTrue(want.startsWith("ok:"), "the transition accepts it (stated): " + what + " " + want);
+        assertEquals(want, jvm(method, state, args, t), "JVM vs interpreter: " + what);
+        assertEquals(want, transition(method, state, args, t), "transition program vs interpreter: " + what);
+        Boolean accepted = validator(method, state, args, t, signer, null);
+        assertEquals(Boolean.FALSE, accepted, "the validator refuses a broken modifier: " + what + " " + lastVerdict);
+        modifierRefusals++;
+        calls++;
     }
 
     /** The interpreter's next state of a successful call (to chain calls). */

@@ -28,8 +28,10 @@ import static org.junit.jupiter.api.Assertions.*;
  * unless they are {@code batched only}.
  * <p>
  * The interpreter leaves {@code only}, {@code after} and {@code before} modifiers to the validator (they are checks on
- * the transaction, not the transition), so the vectors here satisfy them; their refusals are the ported examples'
- * tests ({@code examples/dsl}'s {@code *PortTest}) and the attack suite's (a missing signer, a shifted window).
+ * the transaction, not the transition; ADR-0018 D15 has M1b model them). So every modifier site also gets vectors that
+ * break it with their outcome stated ({@code FourWay.modifierRefused}, review S2/F2): the interpreter, the JVM and the
+ * transition program accept and agree, and the validator refuses. The attack suite adds the same per method, read from
+ * the description (a stranger who signs as the caller, windows on the wrong side of the bound).
  */
 class JscV2M1cFourWayTest {
 
@@ -62,9 +64,20 @@ class JscV2M1cFourWayTest {
         System.out.println("[M1c four-way] " + f.name + ": " + f.calls + " calls, interpreter = JVM = transition program = validator ("
                 + f.refusals + " refusals, " + f.validatorRuns + " validator runs" + (f.batchRuns > 0 ? ", " + f.batchRuns + " through a batch" : "")
                 + (f.hasMaps() ? ", at most " + f.rounds + " read rounds" : "") + "); mutants rejected: " + f.mutantsRejected
-                + ", attacks rejected: " + f.attacksRejected);
+                + ", attacks rejected: " + f.attacksRejected + ", modifier refusals: " + f.modifierRefusals);
         assertTrue(f.refusals > 0 && f.refusals < f.calls, "accepted and refused calls");
         assertTrue(f.mutantsRejected > 0 && f.attacksRejected > 0, "mutation and attack coverage");
+        assertEquals(f.name.equals("Escrow") ? 0 : 1, Math.min(1, f.modifierRefusals), "every modifier site has a refused vector");
+    }
+
+    /**
+     * Review F8: every vector also ran on the Java example's JVM method; the outcomes differ exactly where the test says
+     * (D5's key checks, which the Java examples do not have: bloxbean/joust#69), and nowhere else.
+     */
+    static void javaDiffers(FourWay f, String... expected) {
+        f.javaDiffs.forEach(d -> System.out.println("[M1c vs Java] " + d));
+        assertEquals(expected.length, f.javaDiffs.size(), f.name + ": differences from the Java example " + f.javaDiffs);
+        for (int i = 0; i < expected.length; i++) assertTrue(f.javaDiffs.get(i).contains(expected[i]), f.javaDiffs.get(i) + " / " + expected[i]);
     }
 
     static String ok(String outcome) {
@@ -80,7 +93,7 @@ class JscV2M1cFourWayTest {
 
     @Test
     void vault() throws Exception {
-        var f = PORTS.get("Vault");
+        var f = PORTS.get("Vault").reference("org.julclang.state.examples.vault", "open");
         long minAda = f.harness.minAda();
         // init: before(unlockAt) holds for the whole window [T0, T0 + 2 min); the first deposit is the total.
         for (BigInteger unlockAt : List.of(T0.subtract(n(1)), T0, T0.add(WINDOW).subtract(n(1)), T0.add(WINDOW), T0.add(WINDOW).add(n(1)), LATER)) {
@@ -106,10 +119,19 @@ class JscV2M1cFourWayTest {
         assertEquals("ok:" + TransitionParityTest.data(ada(10)).serializeToHex(), f.check("total", vault(PAST, ada(10)), List.of(), null, null));
         f.check("unlockAt", vault(PAST, ada(10)), List.of(), null, null);
 
+        // Modifiers (review S2/F2), outcomes stated: the transition accepts, the validator refuses.
+        for (String m : List.of("withdraw", "close")) {
+            List<Object> args = m.equals("withdraw") ? List.of(ada(3)) : List.of();
+            long bal = m.equals("withdraw") ? 10_000_000 : 10_000_000 + minAda;
+            f.modifierRefused(m, vault(PAST, ada(10)), args, at(STRANGER, 0, bal), STRANGER);          // only owner: a stranger signs
+            f.modifierRefused(m, vault(LATER, ada(10)), args, at(OWNER, 0, bal), OWNER);               // after unlockAt: still locked
+            f.modifierRefused(m, vault(T0.add(n(1)), ada(10)), args, at(OWNER, 0, bal), OWNER);        // after: the window straddles it
+        }
         f.mutants("init", null, List.of(LATER), at(OWNER, 10_000_000, 0), OWNER);
         f.mutants("deposit", vault(LATER, ada(10)), List.of(), at(BOB, 5_000_000, 10_000_000), BOB);
         f.mutants("withdraw", vault(PAST, ada(10)), List.of(ada(3)), at(OWNER, 0, 10_000_000), OWNER);
         f.mutants("close", vault(PAST, ada(10)), List.of(), at(OWNER, 0, 10_000_000 + minAda), OWNER);
+        javaDiffers(f);
         report(f);
     }
 
@@ -121,7 +143,7 @@ class JscV2M1cFourWayTest {
 
     @Test
     void escrow() throws Exception {
-        var f = PORTS.get("Escrow");
+        var f = PORTS.get("Escrow").reference("org.julclang.state.examples.escrow", "open");
         long held = 25_000_000 + f.harness.minAda();
         for (BigInteger deadline : List.of(T0, T0.add(WINDOW).subtract(n(1)), T0.add(WINDOW), LATER)) {
             for (long received : List.of(0L, 1L, 25_000_000L)) {
@@ -152,6 +174,7 @@ class JscV2M1cFourWayTest {
         f.mutants("release", escrow(LATER), List.of(), at(ARBITER, 0, held), ARBITER);
         f.mutants("refund", escrow(LATER), List.of(), at(SELLER, 0, held), SELLER);
         f.mutants("refund", escrow(PAST), List.of(), at(STRANGER, 0, held), STRANGER);
+        javaDiffers(f, "Escrow.init [#" + "00".repeat(27) + ",");
         report(f);
     }
 
@@ -165,7 +188,7 @@ class JscV2M1cFourWayTest {
 
     @Test
     void crowdfund() throws Exception {
-        var f = PORTS.get("Crowdfund");
+        var f = PORTS.get("Crowdfund").reference("org.julclang.state.examples.crowdfund", "launch");
         long minAda = f.harness.minAda();
         for (long goal : List.of(0L, 1L, 100_000_000L)) {
             for (BigInteger deadline : List.of(T0, T0.add(WINDOW), LATER)) {
@@ -204,12 +227,16 @@ class JscV2M1cFourWayTest {
         assertEquals("refused", f.check("refund", campaign(PAST, 15_000_000, 15_000_000, two), List.of(), at(ANN_CF, 0, 15_000_000), ANN_CF));
         assertEquals("refused", f.check("close", campaign(PAST, 100_000_000, 15_000_000, two), List.of(), at(OWNER, 0, 15_000_000 + minAda), OWNER));
 
+        // Modifiers (S2/F2): claim and close are 'only creator'; a stranger who signs is refused by the validator only.
+        f.modifierRefused("claim", campaign(PAST, 15_000_000, 15_000_000, two), List.of(), at(STRANGER, 0, 15_000_000 + minAda), STRANGER);
+        f.modifierRefused("close", campaign(PAST, 15_000_000, 0, MapV.EMPTY), List.of(), at(STRANGER, 0, minAda), STRANGER);
         f.mutants("init", null, List.of(ada(100), LATER, ada(2)), at(OWNER, 0, 0), OWNER);
         f.mutants("contribute", campaign(LATER, 100_000_000, 15_000_000, two), List.of(), at(CAT, 3_000_000, 15_000_000), CAT);
         f.mutants("contribute", campaign(LATER, 100_000_000, 15_000_000, two), List.of(), at(ANN_CF, 3_000_000, 15_000_000), ANN_CF);
         f.mutants("refund", campaign(PAST, 100_000_000, 15_000_000, two), List.of(), at(BEN_CF, 0, 15_000_000), BEN_CF);
         f.mutants("claim", campaign(PAST, 15_000_000, 15_000_000, two), List.of(), at(OWNER, 0, 15_000_000 + minAda), OWNER);
         f.mutants("close", campaign(PAST, 15_000_000, 0, MapV.EMPTY), List.of(), at(OWNER, 0, minAda), OWNER);
+        javaDiffers(f);
         report(f);
     }
 
@@ -221,7 +248,7 @@ class JscV2M1cFourWayTest {
 
     @Test
     void token() throws Exception {
-        var f = PORTS.get("Token");
+        var f = PORTS.get("Token").reference("org.julclang.state.examples.token", "create");
         long minAda = f.harness.minAda();
         ok(f.check("init", null, List.of(), at(OWNER, 0, 0), OWNER));
         Map<Bytes, Object> held = new LinkedHashMap<>();
@@ -259,12 +286,16 @@ class JscV2M1cFourWayTest {
         assertEquals("refused", f.check("transfer", s, List.of(Bytes.of(new byte[29]), n(1)), at(ANN, 0, 0), ANN));
         ok(f.check("close", token(0, Map.of()), List.of(), at(OWNER, 0, minAda), OWNER));
 
+        // Modifiers (S2/F2): mint (no Ctx) and close are 'only admin'.
+        f.modifierRefused("mint", s, List.of(b(BOB), n(10)), null, STRANGER);
+        f.modifierRefused("close", token(0, Map.of()), List.of(), at(STRANGER, 0, minAda), STRANGER);
         f.mutants("init", null, List.of(), at(OWNER, 0, 0), OWNER);
         f.mutants("mint", s, List.of(b(BOB), n(10)), null, OWNER);
         f.mutants("transfer", s, List.of(b(BEN), n(30)), at(ANN, 0, 0), ANN);
         f.mutants("transfer", s, List.of(b(ANN), n(25)), at(CAT, 0, 0), CAT);
         f.mutants("burn", s, List.of(n(10)), at(BEN, 0, 0), BEN);
         f.mutants("close", token(0, Map.of()), List.of(), at(OWNER, 0, minAda), OWNER);
+        javaDiffers(f, "Token.mint [#" + "00".repeat(27) + ",", "Token.transfer [#" + "00".repeat(29) + ",");
         report(f);
     }
 
@@ -276,7 +307,7 @@ class JscV2M1cFourWayTest {
 
     @Test
     void pool() throws Exception {
-        var f = PORTS.get("Pool");
+        var f = PORTS.get("Pool").reference("org.julclang.state.examples.pool", "init");
         long minAda = f.harness.minAda();
         for (long price : List.of(0L, 1L, 10_000_000L)) {
             for (long step : List.of(-1L, 0L, 1_000_000L)) {
@@ -300,12 +331,16 @@ class JscV2M1cFourWayTest {
         ok(f.check("buy", p, List.of(n(10_000_000)), at(ANN, 12_000_000, 3_000_000), ANN));
         assertEquals("refused", f.check("buy", p, List.of(n(9_999_999)), at(ANN, 12_000_000, 3_000_000), ANN), "price above the bound");
 
+        // Modifiers (S2/F2): withdraw and close are 'only admin'.
+        f.modifierRefused("withdraw", p, List.of(n(1_000_000)), at(STRANGER, 0, 3_000_000), STRANGER);
+        f.modifierRefused("close", p, List.of(), at(STRANGER, 0, 3_000_000 + minAda), STRANGER);
         f.mutants("init", null, List.of(n(10_000_000), n(1_000_000)), at(OWNER, 0, 0), OWNER);
         f.mutants("donate", p, List.of(), at(ANN, 5_000_000, 3_000_000), ANN);
         f.mutants("buy", p, List.of(n(11_000_000)), at(BOB, 12_000_000, 3_000_000), BOB);
         f.mutants("buy", p, List.of(n(10_000_000)), at(BOB, 10_000_000, 3_000_000), BOB);
         f.mutants("withdraw", p, List.of(n(1_000_000)), at(OWNER, 0, 3_000_000), OWNER);
         f.mutants("close", p, List.of(), at(OWNER, 0, 3_000_000 + minAda), OWNER);
+        javaDiffers(f);
         report(f);
     }
 }
