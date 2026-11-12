@@ -115,6 +115,9 @@ tasks.register('toolchainWasmTest', Exec) {
         // S2 in Wasm: every transition vector through the engine's VM, against the JVM's answers.
         injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2-vectors.json'; workingDir rootDir }
+        // J18 in Wasm (ADR-0018 r12): the nesting cap and long chains, on Node's default stack, as on the JVM.
+        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/depth-in-node.mjs',
+                'julc-state-toolchain/build/wasm'; workingDir rootDir }
         // S2b in Wasm: read discovery (build/s2b-vectors.json, from ReadDiscoveryTest).
         injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-discovery.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2b-vectors.json', 'examples/token/src/main/java'; workingDir rootDir }

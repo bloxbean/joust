@@ -1,0 +1,20 @@
+{
+  "comment": "ADR-0018 D12 (r12): the matching rule of a traced message against a contract's message map, shared by JscV2.matching (dsl), JscMessages.matching (runtime) and matchingMessage (js/joust-runtime). Of the messages the trace is, or ends with after ': ', the longest; null when none.",
+  "messages": ["#pay:spend0.1", "#pay:spend0.10", "#input:spend1.0", "#input:spend1.10", "not negative", "take: a negative count", "a negative count", ""],
+  "vectors": [
+    { "trace": "#pay:spend0.1", "expected": "#pay:spend0.1" },
+    { "trace": "#pay:spend0.10", "expected": "#pay:spend0.10" },
+    { "trace": "withdraw: #pay:spend0.10", "expected": "#pay:spend0.10" },
+    { "trace": "#pay:spend0.11", "expected": null },
+    { "trace": "x #pay:spend0.1", "expected": null },
+    { "trace": "#pay:spend0.1 y", "expected": null },
+    { "trace": "#input:spend1.10", "expected": "#input:spend1.10" },
+    { "trace": "split: #input:spend1.0", "expected": "#input:spend1.0" },
+    { "trace": "take: a negative count", "expected": "take: a negative count" },
+    { "trace": "first: take: a negative count", "expected": "take: a negative count" },
+    { "trace": "a negative count", "expected": "a negative count" },
+    { "trace": "not negative", "expected": "not negative" },
+    { "trace": "not negative at all", "expected": null },
+    { "trace": "", "expected": null }
+  ]
+}

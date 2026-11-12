@@ -439,8 +439,14 @@ public final class Interpreter {
                     if (amount.signum() > 0) f.payouts.add(new Payment(to, amount));
                 }
                 case Ir.If i -> {
-                    if (bool(eval(i.cond(), env, f))) exec(i.then().stmts(), env, f);
-                    else if (i.otherwise() != null) exec(i.otherwise().stmts(), env, f);
+                    Ir.Block taken = i.otherwise();
+                    for (Ir.Branch b : i.branches()) {
+                        if (bool(eval(b.cond(), env, f))) {
+                            taken = b.then();
+                            break;
+                        }
+                    }
+                    if (taken != null) exec(taken.stmts(), env, f);
                 }
                 case Ir.For fo -> {
                     for (Object x : iter(eval(fo.list(), env, f))) exec(fo.body().stmts(), new Env(fo.var(), x, env), f);
@@ -514,7 +520,16 @@ public final class Interpreter {
                 yield o.present() ? o.value() : eval(c.dflt(), env, f);
             }
             case Ir.BlockValue b -> block(b.block(), env, f);
-            case Ir.IfValue i -> bool(eval(i.cond(), env, f)) ? block(i.then(), env, f) : block(i.otherwise(), env, f);
+            case Ir.IfValue i -> {
+                Ir.Block taken = i.otherwise();
+                for (Ir.Branch b : i.branches()) {
+                    if (bool(eval(b.cond(), env, f))) {
+                        taken = b.then();
+                        break;
+                    }
+                }
+                yield block(taken, env, f);
+            }
             case Ir.ListProp l -> {
                 List<Object> xs = list(eval(l.list(), env, f));
                 yield switch (l.op()) {

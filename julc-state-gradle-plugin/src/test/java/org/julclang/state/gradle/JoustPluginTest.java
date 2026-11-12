@@ -113,6 +113,9 @@ class JoustPluginTest {
         var main = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets().getByName("main");
         assertThat(main.getJava().getSrcDirs()).contains(
                 p.getLayout().getBuildDirectory().dir("generated/sources/jsc/java/main").get().getAsFile());
+        // ADR-0018 D12 (r12, review r1 F4): the message maps are resources beside the classes, built by generateJsc.
+        var processResources = p.getTasks().getByName("processResources");
+        assertThat(processResources.getTaskDependencies().getDependencies(processResources).stream().map(t -> t.getName()).toList()).contains("generateJsc");
         // ADR-0018 D12 (review F1, S3): generateJsc never accepts an ABI manifest, whatever the properties; only the
         // acceptJscAbi task passes --accept-abi.
         assertThat(gen.getSystemProperties()).doesNotContainKey("joust.acceptAbi");

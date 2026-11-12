@@ -30,7 +30,7 @@ class JscV2DiagnosticsTest {
     void everyDiagnosticHasACode_andTheCatalogueListsExactlyThem() throws Exception {
         var used = new TreeMap<String, String>();   // code -> severity
         var raisedIn = new TreeMap<String, java.util.Set<String>>();   // code -> source files (review r3: no code reused)
-        for (String f : List.of("Lexer.java", "Parser.java", "Checker.java", "JscV2.java")) {
+        for (String f : List.of("Lexer.java", "Parser.java", "Depth.java", "Checker.java", "JscV2.java")) {
             String s = source(f);
             // Every exception the front end builds goes through Pos.error(code, …) or the coded constructor.
             var bare = Pattern.compile("new JscException\\(([^\"]*?), \"(?!JSC)").matcher(s);

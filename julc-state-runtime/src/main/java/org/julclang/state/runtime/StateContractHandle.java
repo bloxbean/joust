@@ -338,7 +338,8 @@ public final class StateContractHandle<S> {
                 : new Ctx(callerPkh, d.received(), BigInteger.ZERO, window.fromMs(), window.toMs());
         if (d.assetRun() != null) return deployAssets(d, ref, seed, instance, ctx, window, callerPkh);
         MerkleSupport merkle = maps ? new MerkleSupport(runtime.mapProver()) : null;
-        S made = maps ? merkle.run(() -> d.run().apply(ctx)) : d.run().apply(ctx);   // the developer's @Init, on the JVM
+        // The developer's @Init, on the JVM; a .jsc 2 refusal names its .jsc sites (D12).
+        S made = JscMessages.run(spec, () -> maps ? merkle.run(() -> d.run().apply(ctx)) : d.run().apply(ctx));
         var seedOwner = new TxOutRef(new TxId(HexUtil.decodeHexString(seed.getTxHash())),
                 BigInteger.valueOf(seed.getOutputIndex()));
         java.util.List<org.julclang.state.api.mpf.MapClaim> claims = java.util.List.of();

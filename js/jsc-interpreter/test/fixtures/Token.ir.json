@@ -1,0 +1,542 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "885302645768354d9fc2534de66f7b826fe91b0c9bd609d42753112f621cfb67",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Token",
+  "source": "Token.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "160" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "admin", "type": "Key" },
+      { "name": "supply", "type": "Int" },
+      { "name": "balances", "type": { "bigmap": ["Key", "Int"] } }
+    ],
+    "at": [7, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [11, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [11, 37] },
+            { "node": "BigEmpty", "type": { "bigmap": ["Key", "Int"] }, "taint": 0, "at": [11, 50] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [11, 12]
+        },
+        "at": [10, 10]
+      },
+      "at": [10, 3]
+    },
+    {
+      "kind": "action",
+      "name": "mint",
+      "params": [
+        { "id": 1, "name": "to", "type": "Key", "taint": 0, "at": [15, 15] },
+        { "id": 2, "name": "amount", "type": "Int", "taint": 0, "at": [15, 24] }
+      ],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [1],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [16, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [16, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [16, 13]
+            },
+            "message": "amount must be positive",
+            "at": [16, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [17, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [17, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "supply", "type": "Int", "taint": 0, "at": [17, 32] },
+              "right": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [17, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [17, 32]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "balances",
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [17, 59]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 1, "type": "Key", "taint": 0, "at": [17, 72] },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "BigOp",
+                    "op": "at",
+                    "map": {
+                      "node": "StateField",
+                      "field": "balances",
+                      "type": { "bigmap": ["Key", "Int"] },
+                      "taint": 0,
+                      "at": [17, 76]
+                    },
+                    "args": [{ "node": "LocalRef", "local": 1, "type": "Key", "taint": 0, "at": [17, 85] }],
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [17, 76]
+                  },
+                  "right": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [17, 91] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [17, 76]
+                }
+              ],
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [17, 59]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [17, 12]
+        },
+        "at": [15, 48]
+      },
+      "at": [15, 3]
+    },
+    {
+      "kind": "action",
+      "name": "transfer",
+      "params": [
+        { "id": 3, "name": "to", "type": "Key", "taint": 0, "at": [22, 19] },
+        { "id": 4, "name": "amount", "type": "Int", "taint": 0, "at": [22, 28] }
+      ],
+      "mods": [],
+      "checked": [3],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [23, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [23, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [23, 13]
+            },
+            "message": "amount must be positive",
+            "at": [23, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 5, "name": "left", "type": "Int", "taint": 0, "at": [24, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "-",
+              "left": {
+                "node": "BigOp",
+                "op": "at",
+                "map": {
+                  "node": "StateField",
+                  "field": "balances",
+                  "type": { "bigmap": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [24, 18]
+                },
+                "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [24, 27] }],
+                "type": "Int",
+                "taint": 0,
+                "at": [24, 18]
+              },
+              "right": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [24, 37] },
+              "type": "Int",
+              "taint": 0,
+              "at": [24, 18]
+            },
+            "at": [24, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [25, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [25, 21] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [25, 13]
+            },
+            "message": "insufficient balance",
+            "at": [25, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [26, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
+              "record": "State",
+              "field": "supply",
+              "type": "Int",
+              "taint": 0,
+              "at": [26, 12]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "BigOp",
+                "op": "set",
+                "map": {
+                  "node": "StateField",
+                  "field": "balances",
+                  "type": { "bigmap": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [26, 34]
+                },
+                "args": [
+                  { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [26, 47] },
+                  { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [26, 55] }
+                ],
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [26, 34]
+              },
+              "args": [
+                { "node": "LocalRef", "local": 3, "type": "Key", "taint": 0, "at": [26, 65] },
+                {
+                  "node": "Arith",
+                  "op": "+",
+                  "left": {
+                    "node": "BigOp",
+                    "op": "at",
+                    "map": {
+                      "node": "BigOp",
+                      "op": "set",
+                      "map": {
+                        "node": "StateField",
+                        "field": "balances",
+                        "type": { "bigmap": ["Key", "Int"] },
+                        "taint": 0,
+                        "at": [26, 69]
+                      },
+                      "args": [
+                        { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [26, 82] },
+                        { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [26, 90] }
+                      ],
+                      "type": { "bigmap": ["Key", "Int"] },
+                      "taint": 0,
+                      "at": [26, 69]
+                    },
+                    "args": [{ "node": "LocalRef", "local": 3, "type": "Key", "taint": 0, "at": [26, 96] }],
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [26, 69]
+                  },
+                  "right": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [26, 102] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [26, 69]
+                }
+              ],
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [26, 34]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [26, 12]
+        },
+        "at": [22, 41]
+      },
+      "at": [22, 3]
+    },
+    {
+      "kind": "action",
+      "name": "burn",
+      "params": [{ "id": 6, "name": "amount", "type": "Int", "taint": 0, "at": [30, 15] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 7, "name": "left", "type": "Int", "taint": 0, "at": [31, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "-",
+              "left": {
+                "node": "BigOp",
+                "op": "at",
+                "map": {
+                  "node": "StateField",
+                  "field": "balances",
+                  "type": { "bigmap": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [31, 18]
+                },
+                "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [31, 27] }],
+                "type": "Int",
+                "taint": 0,
+                "at": [31, 18]
+              },
+              "right": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [31, 37] },
+              "type": "Int",
+              "taint": 0,
+              "at": [31, 18]
+            },
+            "at": [31, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [32, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [32, 22] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [32, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": ">=",
+                "left": { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [32, 27] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [32, 35] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [32, 27]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [32, 13]
+            },
+            "message": "cannot burn that much",
+            "at": [32, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [33, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [33, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "-",
+              "left": { "node": "StateField", "field": "supply", "type": "Int", "taint": 0, "at": [33, 32] },
+              "right": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [33, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [33, 32]
+            },
+            {
+              "node": "BigOp",
+              "op": "set",
+              "map": {
+                "node": "StateField",
+                "field": "balances",
+                "type": { "bigmap": ["Key", "Int"] },
+                "taint": 0,
+                "at": [33, 59]
+              },
+              "args": [
+                { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [33, 72] },
+                { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [33, 80] }
+              ],
+              "type": { "bigmap": ["Key", "Int"] },
+              "taint": 0,
+              "at": [33, 59]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [33, 12]
+        },
+        "at": [30, 28]
+      },
+      "at": [30, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "StateField", "field": "supply", "type": "Int", "taint": 0, "at": [38, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [38, 23] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [38, 13]
+              },
+              "right": {
+                "node": "BigOp",
+                "op": "isEmpty",
+                "map": {
+                  "node": "StateField",
+                  "field": "balances",
+                  "type": { "bigmap": ["Key", "Int"] },
+                  "taint": 0,
+                  "at": [38, 28]
+                },
+                "args": [],
+                "type": "Bool",
+                "taint": 0,
+                "at": [38, 28]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [38, 13]
+            },
+            "message": "tokens are still in circulation",
+            "at": [38, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "admin", "type": "Key", "taint": 0, "at": [39, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [39, 16] },
+            "at": [39, 5]
+          }
+        ],
+        "result": null,
+        "at": [37, 30]
+      },
+      "at": [37, 3]
+    },
+    {
+      "kind": "view",
+      "name": "balanceOf",
+      "params": [{ "id": 8, "name": "holder", "type": "Key", "taint": 0, "at": [42, 18] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "BigOp",
+          "op": "at",
+          "map": {
+            "node": "StateField",
+            "field": "balances",
+            "type": { "bigmap": ["Key", "Int"] },
+            "taint": 0,
+            "at": [42, 38]
+          },
+          "args": [{ "node": "LocalRef", "local": 8, "type": "Key", "taint": 0, "at": [42, 47] }],
+          "type": "Int",
+          "taint": 0,
+          "at": [42, 38]
+        },
+        "at": [42, 38]
+      },
+      "at": [42, 3]
+    },
+    {
+      "kind": "view",
+      "name": "supply",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateField", "field": "supply", "type": "Int", "taint": 0, "at": [43, 24] },
+        "at": [43, 24]
+      },
+      "at": [43, 3]
+    }
+  ],
+  "warnings": []
+}

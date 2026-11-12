@@ -41,7 +41,7 @@ export const NODES = {
   Cond: { cond: 'e', then: 'e', otherwise: 'e' },
   Coalesce: { option: 'e', default: 'e' },
   BlockValue: { block: 'b' },
-  IfValue: { cond: 'e', then: 'b', otherwise: 'b' },
+  IfValue: { branches: 'branches', otherwise: 'b' },
   ListProp: { op: set('length', 'isEmpty', 'head', 'sum', 'reverse'), list: 'e' },
   Concat: { left: 'e', right: 'e' },
   Contains: { list: 'e', value: 'e', elem: 't' },
@@ -63,7 +63,7 @@ export const STMTS = {
   Let: { value: 'e', local: 'let' },
   Require: { cond: 'e', message: 's' },
   Pay: { to: 'e', amount: 'e' },
-  If: { cond: 'e', then: 'b', otherwise: 'b?', pays: 'z' },
+  If: { branches: 'branches', otherwise: 'b?', pays: 'z' },
   For: { list: 'e', var: 'l', body: 'b', pays: 'z' },
   Match: { scrutinee: 'e', arms: 'arms', pays: 'z' },
 };
@@ -195,6 +195,16 @@ export function validate(p) {
       block(a.body, where, inner);
     }
   };
+  /** An if's or else-if chain's tests (M1e flattened the chain, J18): at least one; each a condition and its arm. */
+  const branches = (bs, where, scope) => {
+    if (!Array.isArray(bs) || bs.length === 0) fail(where, 'an if has at least one branch');
+    for (const b of bs) {
+      keys(b, ['cond', 'then', 'at'], where);
+      expr(b.cond, scope);
+      block(b.then, where, scope);
+      at(b.at, where);
+    }
+  };
   /** A node's own fields; bindings it introduces (a loop variable, lambda parameters) are in scope in its blocks only. */
   const fields = (o, spec, where, scope) => {
     const inner = new Set(scope);
@@ -213,6 +223,7 @@ export function validate(p) {
       else if (kind === 's') str(v, where);
       else if (kind === 'z') { if (typeof v !== 'boolean') fail(where, `${k} is not a boolean`); }
       else if (kind === 'arms') arms(v, where, scope);
+      else if (kind === 'branches') branches(v, where, scope);
       else if (kind === 'ref') {
         if (!locals.has(v)) fail(where, `a reference to the undeclared local ${v}`);
         if (!scope.has(v)) fail(where, `a reference to the local ${v} (${locals.get(v).name}) outside its scope`);

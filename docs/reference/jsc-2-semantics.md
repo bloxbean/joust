@@ -111,7 +111,7 @@ is evaluated only if the rule says so (D6).
 |---|---|
 | `a && b` | `b`, only when `a` is `true` |
 | `a \|\| b` | `b`, only when `a` is `false` |
-| `c ? a : b`, value `if` (`Cond`, `IfValue`), `if` statement | only the arm the condition selects |
+| `c ? a : b`, value `if` (`Cond`, `IfValue`), `if` statement | only the arm the condition selects; in an else-if chain, the conditions in order up to the first that is `true` |
 | `match` (value or statement) | only the arm the scrutinee selects |
 | `o ?? d` | `d`, only when `o` is `None` |
 | `xs.any(f)`, `xs.all(f)`, `xs.find(f)`, `xs.contains(v)`, `indexOf(xs, v)`, `m.any(f)`, `m.all(f)` | elements after the first decisive one are not visited |
@@ -137,7 +137,7 @@ evaluated in the environment they extended.
 | `const x = e` (`Let`) | evaluate `e`; bind `x` to it for the rest of the block |
 | `require(c, msg)` | evaluate `c`; fail with `msg` unless it is `true` |
 | `pay(to, amount)` | §2.3 |
-| `if c { … } else { … }` (`If`) | evaluate `c`; run the selected block's statements (no `else`: nothing when `c` is `false`). Bindings made inside an arm do not leave it |
+| `if c { … } else if d { … } else { … }` (`If`) | evaluate the conditions in order until one is `true`, and run that branch's block; when none is, run the `else` block (no `else`: nothing). Bindings made inside an arm do not leave it |
 | `for (const x of xs) { … }` (`For`) | evaluate `xs` (a list or a range), then run the body once per element, front to back, with `x` bound to it |
 | `match e { … }` (`Match` statement) | evaluate `e`, select the arm (§3.5), bind its names and run its statements |
 

@@ -88,7 +88,7 @@ class JscV2IrTest {
             Ir.Program back = IrJson.read(json);
             assertEquals(IrJson.sourceHash(e.getValue()), IrJson.sourceHashOf(json), e.getKey() + ": the export names its source");
             assertEquals(json, IrJson.write(back, IrJson.sourceHashOf(json)), e.getKey() + ": written again");
-            assertEquals(lowered.java(), JavaEmitter.emit(back), e.getKey() + ": the Java lowered from the program read back");
+            assertEquals(lowered.java(), JavaEmitter.emit(back).java(), e.getKey() + ": the Java lowered from the program read back");
             assertEquals(lowered.abiJson(), Abi.of(back), e.getKey() + ": the ABI manifest of the program read back");
             collect(AbiCheck.Json.parse(json), nodes);
         }

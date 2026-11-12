@@ -1,0 +1,230 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "3bae84bba6b36c6c10236181367e0fb21ce49a87916afaecb64f3e0863186a54",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Escrow",
+  "source": "Escrow.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "192" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "buyer", "type": "Key" },
+      { "name": "seller", "type": "Key" },
+      { "name": "arbiter", "type": "Key" },
+      { "name": "amount", "type": "Int" },
+      { "name": "deadline", "type": "Int" }
+    ],
+    "at": [7, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [
+        { "id": 1, "name": "seller", "type": "Key", "taint": 0, "at": [11, 8] },
+        { "id": 2, "name": "arbiter", "type": "Key", "taint": 0, "at": [11, 21] },
+        { "id": 3, "name": "deadline", "type": "Int", "taint": 0, "at": [11, 35] }
+      ],
+      "mods": [{ "name": "payable" }],
+      "checked": [1, 2],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [12, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [12, 24] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [12, 13]
+            },
+            "message": "the escrow must be funded",
+            "at": [12, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": false,
+              "threshold": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [13, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [13, 13]
+            },
+            "message": "deadline must be in the future",
+            "at": [13, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [14, 21] },
+            { "node": "LocalRef", "local": 1, "type": "Key", "taint": 0, "at": [14, 29] },
+            { "node": "LocalRef", "local": 2, "type": "Key", "taint": 0, "at": [14, 37] },
+            { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [14, 54] },
+            { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [14, 64] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [14, 12]
+        },
+        "at": [11, 58]
+      },
+      "at": [11, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "release",
+      "params": [],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "||",
+              "left": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [19, 13] },
+                "right": { "node": "StateField", "field": "buyer", "type": "Key", "taint": 0, "at": [19, 23] },
+                "operand": "Key",
+                "type": "Bool",
+                "taint": 0,
+                "at": [19, 13]
+              },
+              "right": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [19, 32] },
+                "right": { "node": "StateField", "field": "arbiter", "type": "Key", "taint": 0, "at": [19, 42] },
+                "operand": "Key",
+                "type": "Bool",
+                "taint": 0,
+                "at": [19, 32]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [19, 13]
+            },
+            "message": "only the buyer or the arbiter can release",
+            "at": [19, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "seller", "type": "Key", "taint": 0, "at": [20, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [20, 17] },
+            "at": [20, 5]
+          }
+        ],
+        "result": null,
+        "at": [18, 26]
+      },
+      "at": [18, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "refund",
+      "params": [],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "||",
+              "left": {
+                "node": "Logic",
+                "op": "||",
+                "left": {
+                  "node": "Equals",
+                  "negate": false,
+                  "left": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [25, 13] },
+                  "right": { "node": "StateField", "field": "seller", "type": "Key", "taint": 0, "at": [25, 23] },
+                  "operand": "Key",
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [25, 13]
+                },
+                "right": {
+                  "node": "Equals",
+                  "negate": false,
+                  "left": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [25, 33] },
+                  "right": { "node": "StateField", "field": "arbiter", "type": "Key", "taint": 0, "at": [25, 43] },
+                  "operand": "Key",
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [25, 33]
+                },
+                "type": "Bool",
+                "taint": 0,
+                "at": [25, 13]
+              },
+              "right": {
+                "node": "TimePred",
+                "after": true,
+                "threshold": { "node": "StateField", "field": "deadline", "type": "Int", "taint": 0, "at": [25, 60] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [25, 54]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [25, 13]
+            },
+            "message": "only the seller or the arbiter can refund before the deadline",
+            "at": [25, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "buyer", "type": "Key", "taint": 0, "at": [26, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [26, 16] },
+            "at": [26, 5]
+          }
+        ],
+        "result": null,
+        "at": [24, 25]
+      },
+      "at": [24, 3]
+    },
+    {
+      "kind": "view",
+      "name": "amount",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateField", "field": "amount", "type": "Int", "taint": 0, "at": [29, 24] },
+        "at": [29, 24]
+      },
+      "at": [29, 3]
+    }
+  ],
+  "warnings": []
+}

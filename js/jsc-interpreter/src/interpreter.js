@@ -137,10 +137,12 @@ class Program {
           if (amount > 0n) f.payouts.push({ to, lovelace: amount });
           break;
         }
-        case 'If':
-          if (this.#eval(s.cond, env, f)) this.#exec(s.then.stmts, env, f);
-          else if (s.otherwise) this.#exec(s.otherwise.stmts, env, f);
+        case 'If': {
+          // §3: the first branch whose condition holds runs, else the otherwise block (an else-if chain is one node).
+          const taken = this.#branch(s.branches, s.otherwise, env, f);
+          if (taken) this.#exec(taken.stmts, env, f);
           break;
+        }
         case 'For':
           for (const x of this.#seq(this.#eval(s.list, env, f))) this.#exec(s.body.stmts, bind(env, s.var, x), f);
           break;
@@ -155,6 +157,12 @@ class Program {
       }
     }
     return env;
+  }
+
+  /** The arm of the first branch whose condition holds, in order, else `otherwise` (null for a statement without one). */
+  #branch(branches, otherwise, env, f) {
+    for (const b of branches) if (this.#eval(b.cond, env, f)) return b.then;
+    return otherwise;
   }
 
   #block(b, env, f) {
@@ -210,7 +218,7 @@ class Program {
         if (e.op === '||') return this.#eval(e.left, env, f) ? true : this.#eval(e.right, env, f);
         throw new Error(`unknown operator ${e.op}`);
       case 'Cond': return this.#eval(e.cond, env, f) ? this.#eval(e.then, env, f) : this.#eval(e.otherwise, env, f);
-      case 'IfValue': return this.#eval(e.cond, env, f) ? this.#block(e.then, env, f) : this.#block(e.otherwise, env, f);
+      case 'IfValue': return this.#block(this.#branch(e.branches, e.otherwise, env, f), env, f);
       case 'BlockValue': return this.#block(e.block, env, f);
       case 'Coalesce': {
         const o = this.#eval(e.option, env, f);

@@ -104,10 +104,12 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `Let` | `local` (Local), `value` |
   | `Require` | `cond`, `message` |
   | `Pay` | `to`, `amount` |
-  | `If` | `cond`, `then` (Block), `otherwise` (Block or null), `pays` |
+  | `If` | `branches` (Branch…, at least one), `otherwise` (Block or null), `pays` |
   | `For` | `var` (Local), `list`, `body` (Block), `pays` |
   | `Match` | `scrutinee`, `arms`, `pays` |
 
+- **Branch:** `{ "cond": Expr, "then": Block, "at" }`, one test of an `if` and its else-if chain (`If`, `IfValue`).
+  An else-if chain is one node with a branch per test (ADR-0018 J18, M1e), so its depth does not grow with its length.
 - **Arm:** `{ "ctors": [name…], "fields": [name…], "binds": [Local…], "body": Block, "at" }`. `ctors` lists the
   variants it covers (`Some`/`None` for an option), and `fields[i]` is the field that `binds[i]` takes (`value` for
   `Some(x)`).
@@ -134,7 +136,7 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `Arith` | `op` (`+ - * / %`), `left`, `right` | | `Cond` | `cond`, `then`, `otherwise` |
   | `Compare` | `op` (`< <= > >=`), `left`, `right` | | `Coalesce` | `option`, `default` |
   | `Equals` | `negate`, `left`, `right`, `operand` (Type) | | `BlockValue` | `block` |
-  | `Logic` | `op` (`&& \|\|`), `left`, `right` | | `IfValue` | `cond`, `then`, `otherwise` (Blocks) |
+  | `Logic` | `op` (`&& \|\|`), `left`, `right` | | `IfValue` | `branches`, `otherwise` (Block) |
 
 A local is always bound before it is referenced in document order. That holds for a method's or `fn`'s parameters
 before its body, a `Let`'s local after its value, and lambda and arm bindings after the collection or scrutinee and

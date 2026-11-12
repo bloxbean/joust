@@ -175,8 +175,11 @@ final class IrJson {
                 }
                 case Ir.Require r -> obj("stmt", "Require", "cond", expr(r.cond()), "message", r.message(), "at", at(r.pos()));
                 case Ir.Pay y -> obj("stmt", "Pay", "to", expr(y.to()), "amount", expr(y.amount()), "at", at(y.pos()));
-                case Ir.If i -> obj("stmt", "If", "cond", expr(i.cond()), "then", block(i.then()),
-                        "otherwise", i.otherwise() == null ? null : block(i.otherwise()), "pays", i.pays(), "at", at(i.pos()));
+                case Ir.If i -> {
+                    Object branches = branches(i.branches());
+                    yield obj("stmt", "If", "branches", branches, "otherwise", i.otherwise() == null ? null : block(i.otherwise()),
+                            "pays", i.pays(), "at", at(i.pos()));
+                }
                 case Ir.For f -> {
                     Object list = expr(f.list());
                     yield obj("stmt", "For", "var", decl(f.var()), "list", list, "body", block(f.body()), "pays", f.pays(), "at", at(f.pos()));
@@ -186,6 +189,16 @@ final class IrJson {
                     yield obj("stmt", "Match", "scrutinee", scrutinee, "arms", arms(m.arms()), "pays", m.pays(), "at", at(m.pos()));
                 }
             };
+        }
+
+        /** An if's or else-if chain's tests in order (M1e flattened the chain, J18): each condition, then its arm. */
+        List<Object> branches(List<Ir.Branch> bs) {
+            var out = new ArrayList<Object>();
+            for (Ir.Branch b : bs) {
+                Object cond = expr(b.cond());
+                out.add(obj("cond", cond, "then", block(b.then()), "at", at(b.pos())));
+            }
+            return out;
         }
 
         List<Object> arms(List<Ir.Arm> arms) {
@@ -235,7 +248,10 @@ final class IrJson {
                 case Ir.Cond c -> obj("node", "Cond", "cond", expr(c.cond()), "then", expr(c.then()), "otherwise", expr(c.otherwise()));
                 case Ir.Coalesce c -> obj("node", "Coalesce", "option", expr(c.option()), "default", expr(c.dflt()));
                 case Ir.BlockValue b -> obj("node", "BlockValue", "block", block(b.block()));
-                case Ir.IfValue i -> obj("node", "IfValue", "cond", expr(i.cond()), "then", block(i.then()), "otherwise", block(i.otherwise()));
+                case Ir.IfValue i -> {
+                    Object branches = branches(i.branches());
+                    yield obj("node", "IfValue", "branches", branches, "otherwise", block(i.otherwise()));
+                }
                 case Ir.ListProp l -> obj("node", "ListProp", "op", l.op(), "list", expr(l.list()));
                 case Ir.Concat c -> obj("node", "Concat", "left", expr(c.left()), "right", expr(c.right()));
                 case Ir.Contains c -> obj("node", "Contains", "list", expr(c.list()), "value", expr(c.value()), "elem", type(c.elem()));
@@ -507,8 +523,10 @@ final class IrJson {
                 }
                 case "Require" -> new Ir.Require(expr(x.get("cond")), s(x.get("message")), at);
                 case "Pay" -> new Ir.Pay(expr(x.get("to")), expr(x.get("amount")), at);
-                case "If" -> new Ir.If(expr(x.get("cond")), block(x.get("then")), x.get("otherwise") == null ? null : block(x.get("otherwise")),
-                        (Boolean) x.get("pays"), at);
+                case "If" -> {
+                    var branches = branches(x.get("branches"));
+                    yield new Ir.If(branches, x.get("otherwise") == null ? null : block(x.get("otherwise")), (Boolean) x.get("pays"), at);
+                }
                 case "For" -> {
                     Ir.Expr list = expr(x.get("list"));
                     yield new Ir.For(decl(x.get("var")), list, block(x.get("body")), (Boolean) x.get("pays"), at);
@@ -519,6 +537,18 @@ final class IrJson {
                 }
                 default -> throw new IllegalArgumentException("unknown statement " + x.get("stmt"));
             };
+        }
+
+        /** An if's or else-if chain's tests: at least one, each a condition and its arm. */
+        List<Ir.Branch> branches(Object o) {
+            var out = new ArrayList<Ir.Branch>();
+            for (Object x : l(o)) {
+                var b = m(x);
+                Ir.Expr cond = expr(b.get("cond"));
+                out.add(new Ir.Branch(cond, block(b.get("then")), pos(b.get("at"))));
+            }
+            if (out.isEmpty()) throw new IllegalArgumentException("an if without a branch");
+            return out;
         }
 
         List<Ir.Arm> arms(Object o) {
@@ -579,7 +609,10 @@ final class IrJson {
                 case "Cond" -> new Ir.Cond(expr(x.get("cond")), expr(x.get("then")), expr(x.get("otherwise")), t, taint, at);
                 case "Coalesce" -> new Ir.Coalesce(expr(x.get("option")), expr(x.get("default")), t, taint, at);
                 case "BlockValue" -> new Ir.BlockValue(block(x.get("block")), t, taint, at);
-                case "IfValue" -> new Ir.IfValue(expr(x.get("cond")), block(x.get("then")), block(x.get("otherwise")), t, taint, at);
+                case "IfValue" -> {
+                    var branches = branches(x.get("branches"));
+                    yield new Ir.IfValue(branches, block(x.get("otherwise")), t, taint, at);
+                }
                 case "ListProp" -> new Ir.ListProp(s(x.get("op")), expr(x.get("list")), t, taint, at);
                 case "Concat" -> new Ir.Concat(expr(x.get("left")), expr(x.get("right")), t, taint, at);
                 case "Contains" -> new Ir.Contains(expr(x.get("list")), expr(x.get("value")), type(x.get("elem")), t, taint, at);

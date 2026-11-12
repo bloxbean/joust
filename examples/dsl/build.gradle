@@ -50,6 +50,8 @@ def checkJscAbi = tasks.register('checkJscAbi', JavaExec) {
 }
 tasks.named('check') { dependsOn checkJscAbi }
 sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
+// ADR-0018 D12 (r12): each contract's message map is a resource beside its classes (the runtime explains refusals with it).
+tasks.named('processResources') { from(files(jscOut).builtBy(generateJsc)) { include '**/*.jscmap.json' } }
 
 // ADR-0018 M0: Option through the portable codecs (ADR-0013 D4, experimental) is checked on the .jsc 2 contracts.
 tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.portable=true'] }
