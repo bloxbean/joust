@@ -56,13 +56,14 @@ wallet input and records it (`retryStore`; IndexedDB in a browser), and signs on
 the wallet's record is unsettled is a retry of that operation, until it settles or `opts.abandon` (or
 `abandonKeyed(wallet)`) starts a new one. A call whose neighbour is cooling down waits for the slot the engine names.
 
-## Plans and Wasm (ADR-0013 D4, experimental)
+## Plans (ADR-0013 D4)
 
 - **Plans.** `/prepare` returns the transaction's plan (`TxPlan`). The client derives its own with `planOf` and
   refuses a plan that does not describe the transaction.
-- **`portable`.** Pass a Wasm image of the contract's transitions (`globalThis.joustWasm` from a GraalVM Web Image
-  build; see `examples/dapp`). The client then recomputes each call's next state in the page and refuses a
-  transaction whose next state differs.
+- **`portable` (deprecated).** The option took a GraalVM Web Image of the contract's Java transitions to recompute
+  each call in the page; that path is retired (ADR-0020 §12.3). The option is still accepted, prints one deprecation
+  warning and is ignored; it will be removed in a later release. Pages that need the contract's meaning in the page
+  use the runtime engine (`@julclang/joust-runtime`).
 
 ## JSON conventions
 
