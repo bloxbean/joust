@@ -92,3 +92,50 @@ test('Ed25519: signatures made by OpenSSL verify, and changed ones do not', () =
     assert.equal(verifyEd25519(key, other, sig), false);
   }
 });
+
+// ------------------------------------------------------------------ the ledger's libsodium, recorded (review F2, S2)
+
+import { readFileSync } from 'node:fs';
+
+const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
+
+test('Ed25519: 783 edge vectors answered as the ledger\'s libsodium 1.0.18 answers them', () => {
+  // The oracle and generator are named in the file. Categories: every small-order encoding (both sign bits) as the key,
+  // as R, and as both with S = 0; R = identity with S = h·a; y = p … p + 18 and 2^255 − 18 … 2^255 − 1 as the key and as
+  // R; keys off the curve; mixed-order keys aB + T (T of order 2, 4 and 8), accepted exactly when the cofactorless
+  // equation holds (h = 0 mod 8 for order 8); mixed-order R with mixed and prime-order keys; S at L − 1, L, L + S,
+  // 2^253 − 1 and 2^256 − 1; honest signatures and messages of 0 to 1,000 bytes.
+  const { oracle, vectors } = fixture('ed25519-libsodium.json');
+  assert.match(oracle, /libsodium 1\.0\.18, IOG build/);
+  const wrong = vectors.filter((v) => verifyEd25519(fromHex(v.key), fromHex(v.msg), fromHex(v.sig)) !== v.valid);
+  assert.deepEqual(wrong.map((v) => v.label), []);
+  assert.equal(vectors.length, 783);
+  const count = (re, valid) => vectors.filter((v) => re.test(v.label) && v.valid === valid).length;
+  assert.ok(count(/^R=identity-S=ha$/, false) >= 8, 'R = identity, S = h·a: the cofactorless equation holds, libsodium refuses');
+  assert.ok(count(/^A-mixed8-h0mod8$/, true) >= 6 && count(/^A-mixed8-hnot0$/, false) >= 6, 'mixed-order keys, both ways');
+  assert.ok(count(/^R-mixed-A-mixed-eqholds$/, true) >= 10, 'mixed R with a mixed key, accepted');
+  assert.ok(count(/^R-noncanon-on$/, false) >= 10, 'a non-canonical R encoding of a curve point is always false (§3.11)');
+});
+
+test('Ed25519: the vectors that tell libsodium from RFC 8032, by name (security review S2)', () => {
+  // R = identity, S = h·a: OpenSSL (RFC 8032) accepts; libsodium refuses (R of small order). Removing rule 2 of §3.11
+  // turns this true.
+  assert.equal(verifyEd25519(fromHex('2550eb0033a7279366447f5bd1a6de211ce90d1837221e91c9f486e054d575be'), fromHex('aba77c1609'),
+    fromHex('0100000000000000000000000000000000000000000000000000000000000000549901fff159b3bd013411f4c775a01b4cdfe48db6e2acd7b0ea69a064a24109')), false);
+  // A mixed-order key whose signature verifies on libsodium, JuLC's VM, OpenSSL and here.
+  assert.equal(verifyEd25519(fromHex('b3a443e23dceba54af4a44833cf249756e0bccde25a5833efb3b6545b2e652d9'), fromHex('ba5816162ccc382a'),
+    fromHex('723d49c93446b0efc44a835ea9a3904b708c3041dca86206db2e90660587a5cf59c5746fbdd58a0eb8ca9d8e9e9e0521814e2f765fa8d33d9586a3edbe175b05')), true);
+});
+
+test('hashes: multi-block vectors from the ledger\'s libsodium (BLAKE2b-224/256, SHA-256/512) and hashlib (SHA3-256)', () => {
+  const { vectors } = fixture('hashes.json');
+  assert.equal(vectors.length, 18);
+  for (const v of vectors) {
+    const b = fromHex(v.input);
+    assert.equal(hex(blake2b(b, 28)), v.blake2b_224, `blake2b_224 of ${b.length} bytes`);
+    assert.equal(hex(blake2b(b, 32)), v.blake2b_256, `blake2b_256 of ${b.length} bytes`);
+    assert.equal(hex(sha256(b)), v.sha2_256, `sha2_256 of ${b.length} bytes`);
+    assert.equal(hex(sha512(b)), v.sha512, `sha512 of ${b.length} bytes`);
+    assert.equal(hex(sha3_256(b)), v.sha3_256, `sha3_256 of ${b.length} bytes`);
+  }
+});
