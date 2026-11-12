@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -31,11 +32,19 @@ public final class JscMain {
             return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
                     fileName, r.sourceMapJson(), r.abiJson());
         }
-        // .jsc v1 (ADR-0005): compiled as before. Its deprecation warning arrives with M1, when the templates switch to
-        // .jsc 2 and `joust migrate` exists (ADR-0018 Q5, D14, D16; review F9).
+        // .jsc v1 (ADR-0005): frozen, not removed (ADR-0018 D16): it compiles exactly as before, so a deployed v1 script stays
+        // rebuildable, and every build says it is deprecated and how to migrate.
         var r = Lowering.lower(Parser.parse(source), fileName);
-        return new Lowered(r.java(), r.warnings(), fileName, null, null);
+        var warnings = new ArrayList<Warning>();
+        var first = Lexer.lex(source).get(0);
+        warnings.add(new Warning(first.line(), first.col(), "JSC9006", DEPRECATED));
+        warnings.addAll(r.warnings());
+        return new Lowered(r.java(), List.copyOf(warnings), fileName, null, null);
     }
+
+    /** The v1 deprecation warning (ADR-0018 D16), at the first token of every v1 file. */
+    public static final String DEPRECATED = "this file is .jsc v1, which is deprecated (ADR-0018 D16): it still builds, unchanged,"
+            + " but new code is .jsc 2; run `joust migrate` (Gradle: the migrateJsc task) to translate it, as a new script";
 
     /** A located warning: line and column in the .jsc file, and its stable code ({@code .jsc} 2; null for v1) (D12). */
     public record Warning(int line, int col, String code, String message) {
@@ -145,6 +154,111 @@ public final class JscMain {
         return 0;
     }
 
+    /**
+     * {@code JscMain --migrate <srcDir> <outDir> [--in-place]} (ADR-0018 D16; Gradle's {@code migrateJsc}): every
+     * {@code .jsc} v1 file under {@code srcDir} translated to {@code .jsc} 2 ({@link Migrate}). By default each is written
+     * to {@code outDir} under its relative path, and nothing in {@code srcDir} changes. With {@code --in-place} the v1 file
+     * is replaced and its text kept beside it as {@code Name.jsc.v1}. 0 when every v1 file migrated, 1 on a refusal.
+     */
+    public static int migrate(Path src, Path out, boolean inPlace) throws IOException {
+        List<Path> files = new ArrayList<>();
+        if (Files.isRegularFile(src)) {
+            files.add(src);
+            src = src.getParent() == null ? Path.of(".") : src.getParent();
+        } else if (Files.isDirectory(src)) {
+            try (Stream<Path> s = Files.walk(src)) {
+                s.filter(p -> p.toString().endsWith(".jsc")).sorted().forEach(files::add);
+            }
+        }
+        int migrated = 0, refused = 0;
+        for (Path f : files) {
+            String text = Files.readString(f);
+            if (org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
+            String name = src.relativize(f).toString();
+            try {
+                var r = Migrate.migrate(text, f.getFileName().toString());
+                Path backup = f.resolveSibling(f.getFileName() + ".v1");
+                if (inPlace && Files.exists(backup)) {
+                    throw new JscException(1, 1, "JSC1107", backup.getFileName() + " exists already: migrate --in-place keeps the v1"
+                            + " text there and never overwrites it; move it away first");
+                }
+                Path target = inPlace ? f : out.resolve(name);
+                if (inPlace) {
+                    Files.writeString(backup, text);
+                } else {
+                    Files.createDirectories(target.getParent());
+                }
+                Files.writeString(target, r.source());
+                r.notes().forEach(n -> System.err.println(n.format(name)));
+                System.out.println("jsc: migrated " + name + " to .jsc 2: " + target + (inPlace ? " (the v1 text is in " + backup.getFileName() + ")" : ""));
+                migrated++;
+            } catch (JscException e) {
+                System.err.println(e.format(name));
+                refused++;
+            }
+        }
+        if (migrated > 0) System.out.println("jsc: " + Migrate.NEW_SCRIPT);
+        if (migrated == 0 && refused == 0) System.out.println("jsc: no .jsc v1 file under " + src);
+        return refused > 0 ? 1 : 0;
+    }
+
+    /**
+     * {@code JscMain --remap <javacLog> <generatedDir> <srcDir>} (ADR-0018 D12; Gradle runs it after {@code compileJava}
+     * fails): javac's and the processors' diagnostics on Java lowered from a {@code .jsc} 2 file
+     * ({@code path:line: error: message}, then the source line and a caret) printed again at the {@code .jsc} line and
+     * column of the source map beside the Java, with the generated location as a note, as the npm toolchain reports them.
+     * Always 0: the compile has failed already, and says so.
+     */
+    public static int remap(Path log, Path generated, Path src) throws IOException {
+        for (String line : remapped(Files.exists(log) ? Files.readString(log) : "", generated, src)) System.err.println(line);
+        return 0;
+    }
+
+    /** The diagnostics of a javac log that fall on generated Java, at their {@code .jsc} positions (see {@link #remap}). */
+    public static List<String> remapped(String log, Path generated, Path src) throws IOException {
+        var out = new ArrayList<String>();
+        var lines = log.split("\\R");
+        Path root = generated.toAbsolutePath().normalize();
+        var pattern = Pattern.compile("^(.+\\.java):(\\d+): (error|warning): (.*)$");
+        for (int i = 0; i < lines.length; i++) {
+            var m = pattern.matcher(lines[i]);
+            if (!m.matches()) continue;
+            Path unit = Path.of(m.group(1)).toAbsolutePath().normalize();
+            if (!unit.startsWith(root)) continue;
+            Path map = unit.resolveSibling(unit.getFileName().toString().replace(".java", ".jscmap.json"));
+            if (!Files.exists(map)) continue;   // v1: no source map, but every generated line names its .jsc line
+            int javaLine = Integer.parseInt(m.group(2));
+            // javac prints the source line, then a caret under the column.
+            int col = i + 2 < lines.length && lines[i + 2].strip().equals("^") ? lines[i + 2].indexOf('^') + 1 : -1;
+            String json = Files.readString(map);
+            var name = Pattern.compile("\"source\": \"([^\"]+)\"").matcher(json);
+            String bare = name.find() ? name.group(1) : unit.getFileName().toString().replace(".java", ".jsc");
+            String rel = root.relativize(unit).toString().replace('\\', '/');
+            String jsc = jscPath(src, bare, rel);
+            var at = Pattern.compile("\\[" + javaLine + ", (\\d+), (\\d+)\\]").matcher(json);
+            boolean mapped = at.find();
+            out.add(jsc + ":" + (mapped ? at.group(1) + ":" + at.group(2) : "1:1") + ": " + m.group(3) + ": " + m.group(4)
+                    + " (in the Java generated from " + bare + ": " + rel + ":" + javaLine + (col > 0 ? ":" + col : "")
+                    + (mapped ? "" : ", a generated helper") + ")");
+        }
+        if (!out.isEmpty()) out.add("jsc: " + out.size() + " diagnostic(s) above fall on Java generated from .jsc, shown at their .jsc positions");
+        return out;
+    }
+
+    /** The {@code .jsc} file a generated unit came from: in its package's directory under {@code src} if there, else by name. */
+    static String jscPath(Path src, String bare, String javaRel) throws IOException {
+        String dir = javaRel.contains("/") ? javaRel.substring(0, javaRel.lastIndexOf('/') + 1) : "";
+        Path guess = src.resolve(dir + bare);
+        if (Files.exists(guess)) return guess.toString();
+        if (Files.isDirectory(src)) {
+            try (Stream<Path> s = Files.walk(src)) {
+                var found = s.filter(p -> p.getFileName().toString().equals(bare)).findFirst();
+                if (found.isPresent()) return found.get().toString();
+            }
+        }
+        return bare;
+    }
+
     public static void main(String[] args) throws IOException {
         int code = run(args);
         if (code != 0) System.exit(code);
@@ -156,6 +270,15 @@ public final class JscMain {
      */
     public static int run(String[] args) throws IOException {
         if (args.length == 3 && args[0].equals("--check-abi")) return checkAgainstDescriptions(Path.of(args[1]), Path.of(args[2]));
+        if (args.length >= 3 && args[0].equals("--migrate")) {
+            boolean inPlace = args.length == 4 && args[3].equals("--in-place");
+            if (args.length > 4 || args.length == 4 && !inPlace) {
+                System.err.println("usage: JscMain --migrate <srcDir> <outDir> [--in-place]");
+                return 2;
+            }
+            return migrate(Path.of(args[1]), Path.of(args[2]), inPlace);
+        }
+        if (args.length == 4 && args[0].equals("--remap")) return remap(Path.of(args[1]), Path.of(args[2]), Path.of(args[3]));
         boolean accept = args.length == 3 && args[2].equals("--accept-abi");
         if (args.length != 2 && !accept) {
             System.err.println("usage: JscMain <srcDir> <outDir> [--accept-abi]");

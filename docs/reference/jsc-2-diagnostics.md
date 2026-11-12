@@ -297,6 +297,20 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC1027 | error | ...rest needs a List | Checker |
 | JSC1028 | error | the type of this list is unknown here: give it one (const xs: List<Int> = []) | Checker |
 
+## Migration from .jsc v1 (ADR-0018 D16)
+
+`joust migrate` (Gradle: `migrateJsc`; `JscMain --migrate`) refuses, at the v1 position, what it cannot translate.
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1101 | error | this file is already .jsc 2: there is nothing to migrate | Migrate |
+| JSC1102 | error | this is not a valid .jsc v1 file, so it cannot be migrated: … | Migrate |
+| JSC1103 | error | 'batched' actions are not in .jsc 2 yet (ADR-0018 §8: batched intents come with M3), so this contract cannot be migrated; keep it in .jsc v1, or write it in Java | Migrate |
+| JSC1104 | error | .jsc 2 refuses this code, so migrate cannot translate it (rewrite it by hand): [JSC…] … | Migrate |
+| JSC1105 | error | this if writes … at a key computed inside one of its arms; .jsc 2 changes a BigMap only in the next state, so migrate needs the key before the if: rewrite it by hand | Migrate |
+| JSC1106 | error | this value can fail (a division) but nothing reads it, so v1 computes it and .jsc 2 would not: rewrite it by hand (drop it, or check it with require) | Migrate |
+| JSC1107 | error | … exists already: migrate --in-place keeps the v1 text there and never overwrites it; move it away first | JscMain, joust migrate |
+
 ## Warnings (ADR-0018 D11, D12)
 
 | Code | Severity | Message | Raised by |
@@ -306,3 +320,4 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC9003 | warning | stores a value of the validity window in … : whoever submits the transaction … chooses the window, so validFrom can be up to maxValidityMs early and validTo that much late … (ADR-0018 D11) | Checker |
 | JSC9004 | warning | stores a value derived from a stored time in … : that time came from an earlier … call's validity window, so its bias (up to maxValidityMs) carries into … (ADR-0018 D11) | Checker |
 | JSC9005 | warning | a time value sets this payout: whoever submits the transaction chooses the … window, so validFrom can be up to maxValidityMs early and validTo that much late, and the … amount moves with it (ADR-0018 D11) | Checker |
+| JSC9006 | warning | this file is .jsc v1, which is deprecated (ADR-0018 D16): it still builds, unchanged, but new code is .jsc 2; run `joust migrate` (Gradle: the migrateJsc task) to translate it, as a new script | JscMain (every v1 file, both paths) |
