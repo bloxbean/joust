@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M1a: report (ADR-0018 §8)
 
-Date 2026-11-12. Branch `feat/jsc-2-m1a`, stacked on `feat/jsc-2-m0` (`cab7c5f`). JuLC `v0.1.0-pre21-rc1`,
+Date 2026-11-12, review round r2. Branch `feat/jsc-2-m1a`, stacked on `feat/jsc-2-m0` (`cab7c5f`). JuLC `v0.1.0-pre21-rc1`,
 cardano-client-lib `0.8.0-pre7`, JDK 25, macOS arm64. Every number below was measured at this branch's head; the test
 that prints it is named with each table.
 
@@ -54,8 +54,9 @@ the JVM, the transition program and the validator, and all four agree.
 |---|---|---|---|---|
 | `Ledger` | 273 | 170 | 243 | `init` with a checked `Map<Key, Int>` (canonical, unsorted, duplicate, 27-byte key, a zero limit); `pause`, `close` (statement match), `setLimit` (set and delete, keys kept canonical: by hand), `mint` (`Map.get`, BigMap read and write), `transfer` (two BigMap writes, a self-transfer reading through its debit: by hand), views, `settle` (BigMap `isEmpty`, a match whose arms pay: 5,000,000 / 5,000,001 by hand) across three phases and two holdings |
 | `Shelf` | 88 | 16 | 34 | a `Map<Bytes, Item>` of records with enums, keys of 0–80 bytes (65 and 80 refused; canonical order by hand), match on `Map.get`, `BigMap<Bytes, Bytes>` (absent vs empty bytes, by hand), `Option<Kind>`, `fold` with a match, `drop`/`take`, `last`, `indexOf`, ranges (`squares(4) = 14`, `evens(7)` by hand) |
-| `StdBytes` | 548 | 99 | 548 | every `std/bytes` and `std/bits` row at its domain edges (−2³¹, 2³¹−1, 2³¹, lengths 0–70), hashes against JDK and cardano-client-lib digests, Ed25519 (a JDK signature, a wrong message, a flipped signature, a key that is no curve point, an S of 2²⁵⁶−1, short keys and signatures) |
+| `StdBytes` | 552 | 99 | 552 | every `std/bytes` and `std/bits` row at its domain edges (−2³¹, 2³¹−1, 2³¹, lengths 0–70), hashes against JDK and cardano-client-lib digests, Ed25519 (a JDK signature, a wrong message, a flipped signature, a key that is no curve point, an S of 2²⁵⁶−1, short keys and signatures) |
 | `StdMath` | 181 | 51 | 181 | floor `div`/`mod` for every sign pair (by hand), zero divisors, 131-bit operands, `pow` at 1024/1025, `expMod` edges, `last`/`nth`/`indexOf`, `take`/`drop`, ranges (descending, empty), the window helpers |
+| `Bounds` (r2) | 6 | 2 | 6 | a `BigMap<Bytes, Int>` value of 8,192 bytes stored (2^65536 − 1), one of 8,193 refused (2^65536), and a refused write that is only read through and discarded, on every leg (review C4) |
 
 **BigMap legs.** The interpreter's map is its contents; the JVM's a `MerkleMap` over a node store. A state crosses as
 the runtime stores it (the root of its contents), so the JVM's next state, prepared by `MerkleSupport` as the runtime
@@ -65,9 +66,12 @@ witnesses. **Arguments** reach the transition program and the validator encoded 
 independently of the runtime's codec, so a non-canonical or duplicate-key map arrives as an attacker would send it
 (cardano-client-lib's encoder would sort and deduplicate it). M0's 422 calls still agree on the extended harness.
 
-**Ed25519.** The ledger's builtin fails only on lengths (key 32, signature 64) and otherwise answers true or false;
-the vectors show the JVM provider and the VM answer false for a key that is no curve point and for a malformed
-signature, so the adapter checks the lengths only and the interpreter answers false where the JDK cannot decode.
+**Ed25519.** The ledger's builtin (libsodium's `crypto_sign_verify_detached`) fails only on lengths (key 32, signature
+64) and otherwise answers true or false. Round r1's interpreter used the JDK's verifier, which accepts the identity point
+as a key; at r2 the interpreter states libsodium's rules itself (`v2/Ed25519.java`: S below the group order, no
+small-order R or key by their encodings, a canonical key on the curve, then the equation compared as R's bytes). Every
+leg answers false on the identity key with R the identity and S = 0, on S + L, on a key encoding p + 1, on a key that
+is no curve point and on a flipped signature, and true on a real one.
 
 ## Measurements
 
@@ -76,8 +80,9 @@ Script sizes (`JscV2M1aFourWayTest`, `JscV2ToolchainTest`; the toolchain's, equa
 | Contract | Bytes | |
 |---|---|---|
 | `Counter2`, `Pledges`, `Vectors` (M0) | 5,760 / 8,454 / 7,883 | unchanged (same script hashes) |
-| `Ledger` (enum, match, `Map<Key, Int>`, `BigMap<Key, Int>`) | 14,871 | below the runtime's 15,000-byte reference-script limit, above the 14 KB port bound (not a port) |
-| `Shelf` (`Map` of records, `BigMap<Bytes, Bytes>`, ranges, `std/list`) | 12,718 | |
+| `Ledger` (enum, match, `Map<Key, Int>`, `BigMap<Key, Int>`) | 14,871 | below the runtime's 15,000-byte reference-script limit (asserted for every example since r2), above 14 KB: its features (an enum with equality, a checked `Map` input, `Map.set`/`delete`, a BigMap) make it large, not D7 (review F7: a `.jsc` 2 token port is 12,148 B against Java's 11,815, and its repeated write chain costs 12 B) |
+| `Shelf` (`Map` of records, `BigMap<Bytes, Bytes>`, ranges, `std/list`) | 12,783 | r1: 12,718; r2 checks the key length on `delete` |
+| `Bounds` (r2) | 9,973 | |
 | `StdBytes`, `StdMath` (vector contracts) | 7,385 / 8,150 | |
 
 Execution units on-chain, the whole transaction (`JscV2M1aMeasureTest`; the map verifier's withdraw script included
@@ -92,23 +97,67 @@ where the call reads or writes a BigMap):
 | `Ledger.mint` (`Map.get`, a BigMap read and write) | 406,302,082 | 1,401,749 |
 | `Ledger.transfer` (two BigMap writes) | 811,229,715 | 2,928,240 |
 | `Ledger.settle` (BigMap `isEmpty`, a match whose arm pays twice) | 207,793,729 | 743,852 |
-| `Shelf.put` (`Map` of records, `Option` of an enum) | 190,656,124 | 601,017 |
-| `Shelf.remove` (match on `Map.get`) | 174,005,656 | 554,916 |
-| `Shelf.note` (`BigMap<Bytes, Bytes>`) | 236,456,539 | 762,789 |
+| `Shelf.put` (`Map` of records, `Option` of an enum) | 190,704,124 | 601,317 |
+| `Shelf.remove` (match on `Map.get`) | 174,053,656 | 555,216 |
+| `Shelf.note` (`BigMap<Bytes, Bytes>`) | 236,504,539 | 763,089 |
 
 A checked `Map<Key, Int>` input with its `all` predicate costs about 12M CPU per entry here (2 → 10 entries); M0
 measured a checked `List<Share>` at 1.35M CPU per element by difference, which this table does not separate.
 
-## Tests run at this head
+## Review round r2
+
+The three reviews of r1 (`9805c37`) and what changed (every finding has a regression test):
+
+- **The ABI gate** (design F1, security S3): a missing manifest fails (JSC0003) and a different one fails (JSC0002,
+  naming the first differing line), on both paths, unless the build accepts it: Gradle's `acceptJscAbi` task (the
+  only place `--accept-abi` is passed; no property switches the gate, so `-Pjoust.acceptAbi=false` or a
+  `gradle.properties` line cannot), npm's `joust build --accept-abi` and `joust dev --accept-abi` (`dev` keeps serving
+  the last good build after a JSC0002). `generateJsc` no longer writes into its input directory. Tests:
+  `JscV2AbiTest` (JscMain: missing, accepted, equal, changed, a system property ignored), `js/joust/test/abi.test.js`
+  (the npm gate, including a string `"false"`), `JoustPluginTest` (the tasks' arguments).
+- **The ABI content** (F2, S1, C2): the manifest (format 2) states the datum, each redeemer with its constructor index
+  as the processor numbers it (actions, then destroys) and every field, the generated `ctx` and `seed` included, and
+  the referenced schemas (`Ctx`, `TxOutRef`, `MerkleMap`, `MapEntry`); views are left out. The toolchain checks it
+  against the processor's description at every build (JSC0004); the committed manifests are checked against Gradle's
+  descriptions. A body-only `caller` read changes the manifest; moving a view or a destroy does not.
+- **Imports** (F3, C1): every library type the generated text names is imported, whichever helper wrote it; 14
+  one-construct Map and BigMap fixtures (no list, no pay) compile with javac and JuLC.
+- **Diagnostics on generated Java** (F4): javac reports a unit by its simple file name; those are now remapped to the
+  `.jsc` position too, tested with a real javac error (a duplicate class) on the npm path. Gradle's remapping is M1d.
+- **One shape rule** (F5, decisions #1 and #2): a value's shape (constructor, presence, length, key set) is never a
+  time value, so `isEmpty`, `length`, `==`/`!=` against a payload-free constructor and `match` are treated alike; a
+  test walks every row returning an `Option` and checks that a time value cannot decide its presence. ADR-0018 r7
+  amends D11 and J6.
+- **Bindings** (S2): no binding takes a declared type's, enum's, variant's or fn's name, nor a fn a type's.
+- **BigMaps through the state** (S4): a state whose BigMap is written is never bound, chosen or accumulated;
+  nothing holding the state is compared, held or searched (located errors where the emitter crashed); `set`/`delete`
+  only in the field's own new value; `delete` checks the key length.
+- **Oracles** (S5, C3, C4): Ed25519 by libsodium's rules (above); the interpreter refuses a BigMap Int value over 8,192
+  bytes where it is written.
+- **Lexical** (S6): names are ASCII; no Unicode format character (bidirectional controls, zero-width characters)
+  anywhere in a file. ASCII rather than a confusable check: it is one rule a reader can apply by eye, and `.jsc` names
+  are code, not prose (strings and comments keep any other text).
+- **Messages** (F8, F9): nested patterns, `m.get` on a Map of Options, a method named like a variant, and recursion
+  from a match arm say what happened.
+- **Decision #4** (F6): the refusal of `s`, `r`, `seed`, `result` stays as a stopgap; the `ClientGenerator` bug is
+  bloxbean/joust#64, with a Java repro.
+- **Decision #8** (F8): recursion from inside a match arm is still refused, with a correct message. An arm is a
+  helper, so a recursive call there is a two-method cycle (J9). Lowering expression arms inline as `switch` cases
+  would make it a self-cycle, but an `Option` scrutinee would then be evaluated twice (`o.isPresent() ? …(o.get())`)
+  and JuLC needs a typed local before an accessor on a call result (`head(xs).get()`); M1c should try it with the
+  ports, measured. The `?:` form (`xs.isEmpty ? 0 : (xs.head ?? 0) + total(xs.drop(1))`) works today.
+- **ADR-0018 r7** records the accepted decisions: #3 (one namespace; a variant clashes with a capitalised method),
+  #5 (`asHash` in the prelude), #6 (the domains, `expMod`'s PV11 builtin, Ed25519's ledger rules), #7 (J8's "compound
+  types containing bytes") and #10 (write chains are cheap; examples stay below 15,000 B until J19).
+
+## Tests run at this head (r2)
 
 | Command | Result |
 |---|---|
-| `./gradlew :julc-state-dsl:test` | green (checker M0 22, M1a 12, diagnostics 3, v1 15) |
-| `./gradlew :julc-state-toolchain:test` (includes the M0 and M1a four-way, binding, fixtures, tooling, measurement, parity) | green |
-| `./gradlew :examples:dsl:test` | green |
-| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (GraalVM 25.3.4.1) | green: every example's script, description and validator source the same as Gradle's (`ALL SAME`, M1a's four contracts included), every `.jsc` file's generated Java equal to Gradle's and its ABI manifest to the committed one; S2 in Wasm 1,388/1,388 transition vectors as on the JVM (M0: 650), S2b 43/43 |
-| `./gradlew build` | green. The first run failed one DevKit test, `examples:registry` `ContestedGapDevnetTest`, on a faucet top-up ("Input limit exceeded", CLAUDE.md: DevKit's faucet may run dry); the rerun (`--continue`) passed it and everything else |
-| `node --test js/joust/test/cli.test.js` | 13/13 (the CLI's `--accept-abi`; `build.js` itself needs the engine and installed packages, which this worktree does not have: checked with `node --check` and through the engine's output in the Wasm test) |
+| `./gradlew :julc-state-dsl:test :examples:dsl:test :julc-state-toolchain:test :julc-state-gradle-plugin:test` | green. Checker: M0 22, M1a 12, r2 6; ABI 4; diagnostics 3. Four-way: M1a 1,100 calls (Ledger 273, Shelf 88, StdBytes 552, StdMath 181, Bounds 6), all four legs agreeing; M0's 422 still agree. Plus binding, 27 fixtures (14 Map/BigMap-only), tooling (a real javac remap, manifests against descriptions, sizes, J2), measurement, parity |
+| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (GraalVM 25.3.4.1) | green: `ALL SAME` (scripts, descriptions, validator sources, Bounds included), every `.jsc` file's generated Java equal to Gradle's and its manifest to the committed one; S2 in Wasm 1,393/1,393; S2b 43/43 |
+| `npm test` in `js/joust` (with both Web Image engines built into `engine/`, packages installed in the worktree) | 24/24, `abi.test.js` included (the npm gate: missing, accepted, equal, changed, a string `"false"`). r1's report wrongly said `cli.test.js` covered `--accept-abi`: it did not; `abi.test.js` does. `js/state-client` was not changed |
+| `./gradlew build --continue` | BUILD SUCCESSFUL (9 m 24 s; modules this round does not touch were up to date from r1's green run) |
 
 ## Not in M1a
 
@@ -118,11 +167,22 @@ further leg of `FourWay.check`; generated programs and inputs (§9's generators;
 saturated to `maxDatumBytes`, the build report (J19). **M1d:** the tree-sitter grammar, `joust migrate` and v1's
 deprecation warning, the templates switched to `.jsc` 2, the docs rewritten (the diagnostic catalogue and the ABI
 manifest's flags documented in `jsc-reference.mdx`). **M2:** `Value`, `Address`, `Credential`, `std/value`,
-`std/address`. Also open: J18's off-chain depth cap; on Gradle, javac's own messages on generated Java are not
-rewritten (the map is written beside the Java and the generated lines carry their `.jsc` position in comments).
+`std/address`. Also open: J18's off-chain depth cap; **M1d**: on Gradle, javac's and the processor's messages on
+generated Java are not rewritten to `.jsc` positions (the map is written beside the Java, and every generated line
+carries its `.jsc` position in a comment); BigMap transition vectors run in rounds on the JVM's VM only, not in the
+Wasm replay.
+
+**What M1b–M2 need from the structure (review F11):**
+- **M1b:** the IR has no serialised form. The JavaScript interpreter needs either a versioned IR export from the engine
+  (with a round-trip test) or a second front end in JavaScript; decide before M1b starts. An export keeps one checker;
+  a second front end is the more independent oracle D15 asks for.
+- **M2:** `Checker.java` (about 2,200 lines) mixes typing, the time dataflow and the BigMap flow rules. Split it into
+  passes (names and types; effects and audiences; time; BigMap flow) before M2 adds values, sends and mints.
+- **M1d:** the tree-sitter grammar is a second parser. Both parsers should agree on a shared corpus: the examples, the
+  checker tests' sources and the fixtures.
 
 Not bound (D8): `keccak_256`, ECDSA, Schnorr, RIPEMD-160 (F18); `integerToByteString` (its upper bound needs a
-check M1a does not have) and `writeBits` (a `PlutusData` list argument). Known edges outside the language rules: a
-`BigMap<K, Int>` value over 8,192 bytes fails `putInt` on the JVM with an `IllegalArgumentException` where the chain
-fails the script; the interpreter's Ed25519 is the JDK's (libsodium's small-order and non-canonical edge cases are not
-in the vectors).
+check M1a does not have) and `writeBits` (a `PlutusData` list argument). Known edges: a `BigMap<K, Int>` value over
+8,192 bytes fails `putInt` on the JVM with the builtin's `IllegalArgumentException` (not a `RequireException`) where the
+chain fails the script, and every leg now refuses it; libsodium's non-canonical R encodings beyond its small-order
+list are not in the Ed25519 vectors (an open item for §8's security review).

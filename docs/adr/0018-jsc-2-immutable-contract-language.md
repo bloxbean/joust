@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r6)
+**Status:** Proposed (r7)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -110,6 +110,13 @@ on an existing name, `+=`, `-=`, `++` or `--` (each reported with the fix, D12).
   the owned record's), so `return { owner: caller, goal }` reads the parameter `goal`; they still may not shadow the
   built-in names, nor the fields of a `shared` state parameter. `{ goal }` is shorthand for `{ goal: goal }`. Modifiers (`only`, `authorized`, `after`,
   `before`) name state fields or `params.f`, never a parameter (v1 rule, `Lowering.java:386-388`, kept).
+- **No binding replaces a declaration** (r7, M1a review S2). A parameter, `const`, lambda, loop or `match` binding never
+  takes the name of a declared type, enum, variant or `fn`, and a `fn` never takes a type's or variant's name: `const
+  Open: Phase = phase` would turn `phase == Open` into a check that always holds.
+- **Names are ASCII, and a file holds no format character** (r7, S6). Identifiers are `[A-Za-z_][A-Za-z0-9_]*`, so no
+  two names can look alike (no mixed scripts, no confusables); strings and comments may hold any other text, but no
+  Unicode format character (category Cf: the bidirectional controls U+202A–202E and U+2066–2069, zero-width
+  characters) appears anywhere in a `.jsc` file, so its text reads as it compiles.
 - **Object literals are typed by context**: the expected type (a method's result, a typed parameter or field, a typed
   `const x: Share = …`, a list or map element whose type is known). Where there is no context, the constructor form
   `Share { to, bps }` is required; it is allowed everywhere and is the only form for events (`Sold { price }`).
@@ -185,7 +192,7 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | a Merkle map (ADR-0002/0014), state fields only; `K` as for `Map` (F14). Rules in D7 |
 | `Option<T>` | `java.util.Optional<T>` | `Some(x)`, `None`, `o ?? d` (lazy default), `match` (F20). `Option<Option<T>>` directly nested is rejected (the JS codec would lose `Some(None)`) |
 | `type R = { f: T, … }` | a generated record | user records; accessors through a typed local inside the arm or helper that needs them (D6) |
-| `enum E { A, B { x: Int } }` | a generated sealed interface with records | user sum types; `match` (D6). Variant constructor tags are the declaration order |
+| `enum E { A, B { x: Int } }` | a generated sealed interface with records | user sum types; `match` (D6). Variant constructor tags are the declaration order. Types, enums and variants share one namespace, as in Elm (no `E.A` qualification); a variant also clashes with a capitalised method name, since a method's redeemer is a class of the same name (r7) |
 | `Instance<C>` | `ForeignInstance` | another contract's instance (policy, 32-byte id), typed by its contract `C` (D9). Only in `params` (as ADR-0011 keeps `ForeignInstance`): the deployer fixes which script it trusts. A method parameter cannot claim to be an instance of `C`; `deposit` and `reads` take `params` instances |
 | ledger types for handlers | JuLC ledger types | `TxCert`, `Voter`, `Vote`, `GovernanceAction` are sealed types the handler `match`es on; `GovernanceActionId` and `ProposalProcedure` are records read by projection. Fields whose JuLC type maps to a `.jsc` type are readable; fields typed `PlutusData` (e.g. `GovernanceAction.ParameterChange.parameters`) are **inaccessible**, so a guardrail that must inspect proposed parameter changes stays in Java until a typed protocol-parameter view exists. No construction |
 | `LedgerMap<K, V>` | `JulcMap<K, V>` from ledger data | read-only maps in ledger order (e.g. `GovernanceAction`'s withdrawals `LedgerMap<Credential, Int>`): `get`, `has`, `size`, `any`/`all`/`fold`; keys any comparable type; never stored, so no canonical-order rule applies |
@@ -225,7 +232,10 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
   `compareTo == 0` on integers, element-wise on lists and maps, tag-then-fields on enums and `Option`, and the
   canonical comparison of `Assets` on `Value`. `xs.contains(x)`, `m.get(k)`, `m.has(k)` and every other membership test
   use the same helpers. **No `.jsc` equality lowers to Java `equals`, `==` on references, `JulcList.contains`,
-  `JulcList.find` or `JulcMap` lookup on a type that contains bytes** (F16, J8). `BigMap` and opaque library types
+  `JulcList.find` or `JulcMap` lookup on a compound type that contains bytes** (a record, enum, list, option or map
+  holding bytes: F16, J8). A top-level byte string, the only kind of `Map` key `.jsc` has, compares by content on both
+  sides (JuLC's `ContentEquality` on the JVM, `EqualsData` on-chain), so `m.get`, `m.has` and `m.delete` lower to
+  `JulcMap.lookup`, `containsKey` and `delete` (r7). `BigMap` and opaque library types
   are not comparable (a `BigMap` value is a witness, not its contents: F14); an opaque library type is comparable only
   through an equality function its library exports.
 - **`match`** is exhaustive, its arms are expressions or blocks, its bindings immutable; it lowers to a Java `switch`
@@ -259,7 +269,14 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
   `BigMap` state cannot have `batched` actions: the processor refuses the combination (`ContractReader.java:527-530`,
   ADR-0004 D1), so `.jsc` 2 reports it at the `.jsc` position; lifting it is a processor change outside this ADR. It may not be bound to a `const`, passed to a `fn`, captured by a lambda,
   used as a `fold` accumulator, compared, or created except `BigMap.empty()` in an `init`. A new value of a `BigMap`
-  field is only its own field transformed by `set`/`delete` (`{ ...state, balances: balances.set(to, v) }`). Reads:
+  field is only its own field transformed by `set`/`delete` (`{ ...state, balances: balances.set(to, v) }`), and
+  `set`/`delete` appear nowhere else (not in a `require`, a condition or a view). A value of the state's type counts as
+  holding its BigMaps (r7, M1a review S4): it is never compared, held in an `Option` or a list, and it is bound to a
+  `const`, chosen by a condition or `match`, or accumulated only while none of its BigMaps is written. A method reads
+  its own writes through the chain, `balances.set(caller, left)[to]`: a repeated chain is another entry in the call's
+  write list, not another proof, so it costs little (r7, design F7). Keys of `set` and `delete` are checked to at most
+  64 bytes; an Int value is stored as at most 8,192 bytes (`integerToByteString`), so a larger one fails where it is
+  written, even if that write is only read through (r7, Codex C4). Reads:
   `m.get(k)` (`Option`) and `m.has(k)`; on `BigMap<K, Int>` also `m[k]`, which reads 0 when absent. Values of a
   `BigMap<K, Int>` are non-negative and `set(k, 0)` removes the entry (v1 rule kept); `BigMap<K, Bytes>` distinguishes
   absence from empty bytes. `m.isEmpty` means "empty before the call" (F14), allowed in a `destroy` only. Every read and
@@ -286,7 +303,8 @@ import { concat, slice, length } from "std/bytes"
 
 - Modules: `std/bytes`, `std/crypto`, `std/math`, `std/bits`, `std/value`, `std/address`, `std/list`, `std/time`
   (`after`, `before`, `elapsedSince`, `elapsedSinceAtMost`, `windowStart`, `windowEnd`: D11). A prelude needs
-  no import: `min`, `max`, `abs`, `utf8`, `asKey`, `range`, `keyCred`, `scriptCred`, `wallet`, `script`, `Some`, `None`.
+  no import: `min`, `max`, `abs`, `utf8`, `asKey`, `asHash` (D5's checked conversion to a `Hash`, r7), `range`,
+  `keyCred`, `scriptCred`, `wallet`, `script`, `Some`, `None`.
 - **Every binding row has a `.jsc` signature, a Java target, a conversion policy and a domain.** Targets are JuLC stdlib
   or JOUST API methods. Conversions: a `long` result goes straight into `BigInteger.valueOf`; an `Int` argument for a
   `long` or `int` parameter never reaches the stdlib from generated code. Each such row binds to a **JOUST API
@@ -300,7 +318,15 @@ import { concat, slice, length } from "std/bytes"
 - **Crypto is bound only with ledger semantics on every runtime.** A function is bound only if every runtime provider
   (`CclCryptoProvider`, the Web Image engine's) implements it and fails exactly where the builtin fails. Ed25519 is
   bound with generated length checks (key 32, signature 64 bytes) that fail on both sides; keccak-256, ECDSA, Schnorr
-  and RIPEMD-160 are not bound until the providers implement them (F18).
+  and RIPEMD-160 are not bound until the providers implement them (F18). Past the lengths the ledger's builtin
+  (libsodium's `crypto_sign_verify_detached`) answers true or false and never fails: a small-order key or R, a
+  non-canonical key or S, a key off the curve are false. The reference interpreter states those rules itself, never
+  through a JDK provider (r7, M1a review C3, S5); libsodium's remaining edge cases (non-canonical R encodings beyond the
+  small-order list) are an open item for the security review of §8.
+- **Domains chosen in M1a** (r7): `pow`'s exponent is in [0, 1024] (its cost is linear in it); `shift` and `rotate`
+  take amounts in (−2³¹, 2³¹); `andBytes`/`orBytes`/`xorBytes` take the builtin's `pad: Bool`; `expMod` needs an
+  exponent ≥ 0 and a modulus > 0 and binds `ExpModInteger`, a protocol-version-11 builtin (CIP-109), which the
+  toolchain's `PLUTUS_V3_PV11` target provides.
 - **Not exposed:** functions over raw `PlutusData`; `ContextsLib` and `OutputLib` (the processor owns the transaction
   checks); `NativeValueLib` (`Value` goes through `Assets`); `TypedArrayLib`, `TypedMapLib` (no `.jsc` counterpart);
   `BlsLib` (a later module); partial functions whose precondition the row cannot check.
@@ -431,8 +457,17 @@ the milestone that implements it, reviewed against the processor's rules, and do
   Clock.after(ctx, t) ? Closed : Open`). Other components of the same state (the oracle's `price`, unless set under such
   a branch) stay ordinary. When the source is unavailable, every field is a time value.
 - **Time values never decide.** A time value may not be, or be part of, the condition of an `if`, `?:` or `require`,
-  a `match` scrutinee, an operand of `&&`, `||` or `!`, a collection predicate (`any`, `all`, `filter`, `find`), or a
-  comparison whose result is used anywhere. The only way to compare with time is `after(t)` and `before(t)`.
+  an operand of `&&`, `||` or `!`, a collection predicate (`any`, `all`, `filter`, `find`), or a comparison whose
+  result is used anywhere. The only way to compare with time is `after(t)` and `before(t)`.
+- **The shape of a value is never a time value** (r7, M1a review F5): which constructor a value has (an enum's variant,
+  an `Option`'s presence), how long a list is, which keys a map has. Every construct that could make a shape depend on
+  a time value is refused: conditions and predicates, map keys, range bounds, `take`/`drop` counts, list indices,
+  `indexOf`'s value; no `std` row turns a time value into bytes. So a `match` may scrutinise a value that holds a time
+  value (it decides on the constructor; its bindings keep the taint), and `xs.isEmpty`, `xs.length`, `m.has(k)`,
+  `m.size`, `m.isEmpty`, `m.keys` and `==`/`!=` against a constructor without payload (`Open`, `None`, `[]`,
+  `Map.empty()`) are ordinary values; a payload read out of the value stays a time value. A test walks every row
+  returning an `Option` and checks that a time value cannot decide its presence, so a later row cannot quietly break
+  the rule.
 - **Time values never make an operation fail.** An operation that fails for some inputs is a hidden `require`
   (`slice(id, 0, deadline - validFrom)` fails exactly when `validFrom > deadline`; a Dutch auction's
   `pay(seller, startPrice - elapsedSince(start) * step)` fails once the price is negative, so a late buyer would pick an
@@ -510,10 +545,15 @@ the milestone that implements it, reviewed against the processor's rules, and do
 - **Stable diagnostic codes** (`JSC0001`…) with a catalogue in the reference docs (after Elci, F15).
 - **The ABI manifest.** The build writes the encoding of every type a contract exposes (D5's rules applied: tags, field
   order, list, map and `Option` shapes, imported types), and which state fields are time fields (D11), to
-  `<Contract>.abi.json`. The project commits it; the build
-  compares with the committed copy and fails on a difference unless the change is accepted explicitly
-  (`joust build --accept-abi`), so a lowering change that would alter a datum or redeemer cannot strand deployed
-  instances unnoticed. The manifest is checked against independently written CBOR golden vectors (J17).
+  `<Contract>.abi.json`. It states what is encoded on-chain, as the processor lays it out (r7, M1a review F2, S1, C2):
+  the datum, each redeemer (the spend validator's constructors, actions in source order then destroys; the mint
+  validator's `CreateInstance` and `BurnInstance`) with its constructor index and every field, the generated `seed` and
+  `ctx` included, and every schema they reference; views are not encoded and are left out. Every build checks the
+  manifest against the processor's description of the same contract (constructor indices, field names and order, data
+  shapes). The project commits it; the build compares with the committed copy and fails on a difference, or when there
+  is none, unless accepted explicitly (`joust build --accept-abi`, `joust dev --accept-abi`; Gradle: the
+  `acceptJscAbi` task, never a property), so a lowering change that would alter a datum or redeemer cannot strand
+  deployed instances unnoticed. The manifest is checked against independently written CBOR golden vectors (J17).
 
 ### D13. Editor support
 
@@ -658,9 +698,9 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J3 | **Four ways agree** for every construct of the milestone: the reference interpreter, the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
 | J4 | Effects appear in each kind's result in source order (loops: list order), only from taken branches; mint and accepted are net sums | D4 | differential tests; on-chain fixtures |
 | J5 | Every diagnostic on either build path names a `.jsc` file, line and column, and a stable code | D12 | tests with errors from each layer (checker, processor, JuLC) |
-| J6 | No time value (including one read from another contract) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities, `BigMap` int values, and send, accept and deposit values, including inside called `fn`s; accepted by `std` functions only where the binding row declares the parameter total and of window-independent cost, never by `java:` imports; only under an outermost `max(0, …)` in pay amounts); time values reaching amounts or state warn. Influence through transaction-level rules (balance, minimum per output) is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
+| J6 | No time value (including one read from another contract; a value's shape never is one) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities, `BigMap` int values, and send, accept and deposit values, including inside called `fn`s; accepted by `std` functions only where the binding row declares the parameter total and of window-independent cost, never by `java:` imports; only under an outermost `max(0, …)` in pay amounts); time values reaching amounts or state warn. Influence through transaction-level rules (balance, minimum per output) is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
 | J7 | Every library call is type-checked against the exact Java signature; every `Int → long/int` conversion is checked against the row's domain on both sides; no unmappable signature is callable; JVM and UPLC agree on each binding's edge and malformed vectors | D8, D9 | the binding test; per-row differential vectors; import-refusal tests |
-| J8 | No `.jsc` equality or membership lowers to reference equality, Java `equals`, `JulcList.contains/find` or `JulcMap` lookup on a type containing bytes | D6, D7 | lowering tests; generators with distinct-allocation bytes nested in records, enums, options, lists and maps |
+| J8 | No `.jsc` equality or membership lowers to reference equality, Java `equals`, `JulcList.contains/find` or `JulcMap` lookup on a compound type containing bytes (a top-level byte-string key compares by content on both sides) | D6, D7 | lowering tests; generators with distinct-allocation bytes nested in records, enums, options, lists and maps |
 | J9 | Only direct self-recursion, checked after lowering; the build report lists recursive functions | D7 | checker tests (nested folds and branches) |
 | J10 | Generated names cannot collide with user names; no binding shadows a state field or a built-in name in methods with input state | D3, D7 | checker tests |
 | J11 | A D10 row is supported only once its gating port builds, passes its Java example's tests and attack suite, and stays within the size and budget bounds of §8 | D10 | milestone exit criteria |
@@ -895,3 +935,13 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   checked with time parameters marked, transitively; `std` functions take time arguments only where the binding row
   declares the parameter total and of window-independent cost (not `div`, `pow`); `java:` imports never (security
   S25). The r5 history entry and the D11 test list corrected (design F22, security S26, Codex C25).
+- **r7** (2026-11-12, amended with M1a's implementation review on #63: design F5, F7, F10; security S2, S4, S5, S6;
+  Codex C3, C4): D11 states that a value's shape is never a time value (a `match` may scrutinise a time-holding value;
+  `isEmpty`, `length`, the map key set and `==` against a payload-free constructor are ordinary values), and J6 with
+  it; D6 and J8 say "compound type containing bytes" (a top-level byte-string key compares by content on both sides);
+  D3 adds that no binding replaces a declaration and that names are ASCII with no format characters in a file; D5
+  records the one namespace of types, enums and variants; D7 adds where BigMaps are written, the state's type holding
+  its BigMaps, cheap write chains, the 64-byte key check on `delete` and the 8,192-byte Int value bound; D8 adds
+  `asHash` to the prelude, the domains chosen in M1a (`pow`, `shift`/`rotate`, `pad`, `expMod`'s PV11 builtin) and
+  Ed25519's ledger rules; D12 states the manifest's redeemers, its check against the processor's description and the
+  explicit acceptance flow.
