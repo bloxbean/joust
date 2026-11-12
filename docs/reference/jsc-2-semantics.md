@@ -170,7 +170,8 @@ limit stops it), it gives *no answer*, which is never a refusal: the chain may w
 interpreters run calls on a stack deep enough for every recursion a transaction's budget allows (512 MiB: the
 JavaScript one in a worker, `bin/run-vectors.js`; the Java one on its own thread), and report a stack overflow even there
 as a *limit* (JavaScript `Limit`, Java `Interpreter.Limit`), which the differential tests treat as a failure of that
-leg, never as an agreement. The vectors include `down(3000)` on the transition program and both interpreters.
+leg, never as an agreement. A call whose caller gives up (the Java interpreter's waiting thread is interrupted) is
+*cancelled*: no answer either; the evaluation stops at its next step and has ended when the caller returns. The vectors include `down(3000)` on the transition program and both interpreters.
 
 ### 2.5 Refusal classes
 
@@ -178,7 +179,7 @@ A refusal's class names the rule that refused the call, as `kind:detail`:
 
 | Class | When |
 |---|---|
-| `require:<message>` | a `require` did not hold; the detail is its message, as written |
+| `require:<line>:<col>:<message>` | a `require` did not hold; the detail is its position in the `.jsc` file (the IR's `at`) and its message, as written, so two `require`s with one message are told apart (review S6) |
 | `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name |
 | `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; or `pay` (a negative amount) |
 

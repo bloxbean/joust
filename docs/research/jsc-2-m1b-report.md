@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M1b: report (ADR-0018 §8)
 
-Date 2026-11-13, review round r2. Branch `feat/jsc-2-m1b`, stacked on `feat/jsc-2-m1a` (merged at its review round r4,
+Date 2026-11-13, review round r3. Branch `feat/jsc-2-m1b`, stacked on `feat/jsc-2-m1a` (merged at its review round r4,
 `dfa7025`). JuLC `v0.1.0-pre21-rc1`, cardano-client-lib `0.8.0-pre7`, JDK 25, Node 22.12, macOS arm64. Every number
 below was measured at this round's head, by the test named with it.
 
@@ -55,7 +55,7 @@ time and nested checked records.
 tagged JSON of `jsc-2-ir.md`. Each JavaScript answer must:
 
 1. equal the Java interpreter's outcome in that tagged form, which keeps a map's entry order and duplicates, and for a
-   refusal its class (`require:<message>`, `input:<parameter>`, `domain:<operation>`: review S4);
+   refusal its class (`require:<line>:<col>:<message>`, `input:<parameter>`, `domain:<operation>`: review S4, S6);
 2. hold only canonical inline maps (the Java interpreter's outcome is held to the same);
 3. encoded as the runtime encodes a result, equal the bytes the JVM, transition and validator legs agreed on.
 
@@ -124,9 +124,8 @@ once and passed when its file was run again (2/2). `./gradlew build` with DevKit
    M1d uses it for `joust check`, ship it inside `@julclang/joust` or pin it to the engine through `joust.lock`, so
    `"ir": 1` stays an internal contract; `bin/run-vectors.js` is a test runner, not an API. (Design review: accepted.)
 2. **Node 22 in `./gradlew build`.** The toolchain's tests need `node` 22 or later on the `PATH`: CI's build job and,
-   since r2, `release.yml`'s `maven` job set it up, `JsLeg` checks the version, and `CONTRIBUTING.md` says so.
-   `CLAUDE.md`'s "Build / test" section should say "JDK 25 and Node 22": left to the maintainer, since that file is
-   the maintainer's instructions to agents. (Accepted, with these.)
+   since r2, `release.yml`'s `maven` job set it up, `JsLeg` checks the version, and `CONTRIBUTING.md` and `CLAUDE.md`
+   (`04f59e6`, the maintainer's commit) say so. Nothing is left open here. (Accepted.)
 3. **The IR export is a build output, not an ABI.** It is versioned, refused when unknown, and names its source by
    hash, but it is not committed. Only the interpreter's test fixtures are copies; `JscV2IrTest` fails when they are
    stale and they are Gradle inputs of the tests that read them. (Accepted.)
@@ -138,7 +137,10 @@ once and passed when its file was run again (2/2). `./gradlew build` with DevKit
 
 #67 (M1c) adds `JscV2M1cFourWayTest` (503 calls) on the same base. Whichever of #67 and #68 lands second gives it the
 fifth leg: record its calls through `FourWay.check` (already done for every suite using it) and add the ordered last
-test that calls `JsLeg.check` for each contract.
+test that calls `JsLeg.check` for each contract. M1c's `batched` modifier is already known to the JavaScript reader
+(since r3, review F11: like every modifier but `open` and `only` it means the method reads the transaction, as M1c's
+checker says), so #67's IR loads; M1c changes no IR node or `std` row. The merge must also reconcile #67's edits to
+`v2/Interpreter.java` with the refusal classes, limits and cancellation added here.
 
 ## Not in M1b
 
@@ -164,3 +166,17 @@ The three reviews of r1 (`53f3a30`) and what changed. Each repro or mutation is 
 | F5 (P3) | semantics: views' unchecked maps have no defined outcome; payout totals are transaction-level; `BlockValue`; non-canonical `R`; one namespace for records, variants and the state | — |
 | F8 (P3) | ADR-0018 D15, J3 and the M1 row edited in place, kept at r10 | — |
 | F9 (P3) | the fixtures and the examples are inputs of `julc-state-dsl`'s tests; the M1c merge noted above | — |
+
+## Review round r3
+
+Design and security approved r2; the Codex review of r2 (`04f59e6`) and the approving reviews' P3s:
+
+| ID | Change | Test |
+|---|---|---|
+| C3 (P2) | the Java interpreter's evaluator stops at its next step (every expression and statement list) when its waiting caller is interrupted; the caller waits for it, keeps its interrupt and gets `Interpreter.Cancelled` (no answer, never a refusal); the evaluator is a daemon thread | `JscV2CancelTest`: a fold and an empty-bodied `for` over `range(0, 2^100)`, interrupted after 300 ms: the caller returns, cancelled and still interrupted, and no evaluator thread is left |
+| C4 (P3) | the JavaScript validator reads a `const`'s initializer and a loop's collection before the binding they introduce, and tracks lexical scope (S7) | `semantics.test.js` (a self-referencing `const` is refused at load); `JscV2IrTest` (the Java reader refuses the same) |
+| C5 (P3) | strict mode in `AbiCheck.Json` reads strings as RFC 8259 does: no raw control character, the defined escapes only, `\u` with four hex digits | `JscV2IrTest`: `Edges\q`, a raw line feed, `\u00g1` refused; the defined escapes read |
+| F10 (P3) | the report and the PR body: `CLAUDE.md` says Node 22 since `04f59e6`; decision 2 has nothing open | — |
+| F11 (P3) | `batched` is a known modifier of the JavaScript reader, reading the transaction like every modifier but `open` and `only`; the merge note says what the second of #67 and #68 to land must do | `semantics.test.js` (`batched` loads, and makes a method read the transaction) |
+| S6 (P3) | a `require`'s class is `require:<line>:<col>:<message>`, in both interpreters | `semantics.test.js` §2.5; every refused five-way call |
+| S7 (P3) | the validator refuses an unknown fn, a wrong argument count (fns, std rows, the prelude, map operations, records, variants), an unknown field (`GetField`, `StateField`, arm bindings), an unknown arm variant, and a local referenced outside its lexical scope; `index.js` says 512 MiB | `semantics.test.js` (an unknown fn, an extra argument, an unknown state field, a parameter of another method) |
