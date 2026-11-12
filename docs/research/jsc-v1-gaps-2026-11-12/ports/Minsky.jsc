@@ -1,0 +1,29 @@
+package m
+// A 2-counter (Minsky) machine, one instruction per transaction: anyone calls step().
+// Program (computes a := a + b, b := 0):  0: if b == 0 goto 3 else b -= 1;  1: a += 1;  2: goto 0;  3: halt
+contract Minsky {
+    state pc: Int
+    state a: Int
+    state b: Int
+
+    init(a0: Int, b0: Int) {
+        require a0 >= 0 && b0 >= 0 "counters are naturals"
+        a = a0
+        b = b0
+    }
+
+    action step() {
+        require pc != 3 "halted"
+        if pc == 0 {
+            if b == 0 { pc = 3 } else { b -= 1
+                pc = 1 }
+        } else if pc == 1 {
+            a += 1
+            pc = 2
+        } else {
+            pc = 0
+        }
+    }
+
+    view halted(): Bool = pc == 3
+}

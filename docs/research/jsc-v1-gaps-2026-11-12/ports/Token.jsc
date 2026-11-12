@@ -1,0 +1,38 @@
+package ports
+// Port of examples/token Token.java
+contract Token(maxDatumBytes = 160) {
+    state admin: Key
+    state supply: Int
+    state balances: Map<Key, Int>
+
+    init() {
+        admin = caller
+    }
+
+    action mint(to: Key, amount: Int) only admin {
+        require amount > 0 "amount must be positive"
+        balances[to] += amount
+        supply += amount
+    }
+
+    action transfer(to: Key, amount: Int) {
+        require amount > 0 "amount must be positive"
+        require balances[caller] >= amount "insufficient balance"
+        balances[caller] -= amount
+        balances[to] += amount
+    }
+
+    action burn(amount: Int) {
+        require amount > 0 && balances[caller] >= amount "cannot burn that much"
+        balances[caller] -= amount
+        supply -= amount
+    }
+
+    destroy close() only admin {
+        require supply == 0 && isEmpty(balances) "tokens are still in circulation"
+        pay balance to admin
+    }
+
+    view balanceOf(holder: Key): Int = balances[holder]
+    view supply(): Int = supply
+}

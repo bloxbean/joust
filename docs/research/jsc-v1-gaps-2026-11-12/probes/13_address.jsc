@@ -1,0 +1,5 @@
+package p
+contract P {
+    state vault: Address
+    init() { }
+}

@@ -1,0 +1,6 @@
+package p
+contract P {
+    record Point { x: Int, y: Int }
+    state n: Int
+    init() { }
+}

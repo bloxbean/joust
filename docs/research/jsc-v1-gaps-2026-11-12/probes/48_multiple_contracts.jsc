@@ -1,0 +1,8 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    init() { owner = caller }
+}
+contract Q { state n: Int
+ init() {} }

@@ -1,0 +1,52 @@
+package ports
+// Port of examples/crowdfund Crowdfund.java (backers in a MerkleMap instead of an inline sorted JulcMap)
+contract Crowdfund(maxDatumBytes = 192) {
+    state creator: Key
+    state goal: Int
+    state deadline: Int
+    state minContribution: Int
+    state raised: Int
+    state backers: Map<Key, Int>
+
+    init(goal: Int, deadline: Int, minContribution: Int) {
+        require goal > 0 "goal must be positive"
+        require minContribution >= 2 ada "minimum contribution is at least 2 ADA"
+        require before(deadline) "deadline must be in the future"
+        creator = caller
+        this.goal = goal
+        this.deadline = deadline
+        this.minContribution = minContribution
+    }
+
+    action contribute() payable {
+        require before(deadline) "the campaign has ended"
+        require received >= minContribution "below the minimum contribution"
+        backers[caller] += received
+        raised += received
+    }
+
+    action refund() open {
+        require after(deadline) "the campaign is still running"
+        require raised < goal "the goal was reached: no refunds"
+        require has(backers, caller) "nothing to refund"
+        let amount = backers[caller]
+        delete backers[caller]
+        raised -= amount
+        pay amount to caller
+    }
+
+    destroy claim() only creator {
+        require after(deadline) "the campaign is still running"
+        require raised >= goal "the goal was not reached"
+        pay balance to creator
+    }
+
+    destroy close() only creator {
+        require after(deadline) "the campaign is still running"
+        require isEmpty(backers) "backers still have funds in the campaign"
+        pay balance to creator
+    }
+
+    view raised(): Int = raised
+    view contributionOf(backer: Key): Int = backers[backer]
+}

@@ -1,0 +1,62 @@
+ERROR 01_while.jsc:6:30: error: expected '=', '+=' or '-=' but found 'n'
+ERROR 02_for_in.jsc:6:28: error: expected '=', '+=' or '-=' but found 'i'
+ERROR 03_for_c.jsc:6:28: error: expected '=', '+=' or '-=' but found '('
+ERROR 04_fn_member.jsc:6:5: error: expected state, init, action, destroy or view but found 'fn'
+ERROR 05_call_unknown.jsc:6:28: error: unknown function 'double' (min, max, has, isEmpty, after, before)
+ERROR 06_list_state.jsc:3:15: error: unknown type 'List' (Int, Bool, Bytes, Key, Map<Key, Int>)
+OK    07_nested_if.jsc
+ERROR 08_map_bytes.jsc:3:18: error: v1 maps are Map<Key, Int>
+ERROR 09_let_reassign.jsc:7:9: error: 'x' is a let: lets are immutable
+ERROR 10_ternary.jsc:6:34: error: unexpected character '?'
+ERROR 11_return.jsc:6:43: error: expected '=', '+=' or '-=' but found '}'
+ERROR 12_string_expr.jsc:7:26: error: unexpected 'abc' in an expression
+ERROR 13_address.jsc:3:18: error: unknown type 'Address' (Int, Bool, Bytes, Key, Map<Key, Int>)
+ERROR 14_option.jsc:3:14: error: unknown type 'Option' (Int, Bool, Bytes, Key, Map<Key, Int>)
+ERROR 15_record.jsc:3:5: error: expected state, init, action, destroy or view but found 'record'
+ERROR 16_match.jsc:6:30: error: expected '=', '+=' or '-=' but found 'k'
+ERROR 17_import.jsc:1:1: error: expected 'package' but found 'import'
+ERROR 18_after_or.jsc:7:45: error: after(t) holds for the whole validity window, so it is allowed only as a requirement (require after(t) ..., or with &&): not negated, in ||, or in an if
+OK    19_validfrom_or.jsc
+ERROR 20_pay_bytes.jsc:5:5: error: state field 'b' (Bytes) must be assigned in init on every path
+ERROR 21_bytes_fn.jsc:5:5: error: state field 'b' (Bytes) must be assigned in init on every path
+ERROR 22_bytes_len.jsc:7:31: error: expected a statement but found '.'
+ERROR 23_view_caller.jsc:6:5: error: a view runs off-chain without a transaction: it cannot read caller, received, balance or time
+ERROR 24_view_block.jsc:6:19: error: expected '=' but found '{'
+ERROR 25_big_literal.jsc:6:22: error: integer literal too large
+ERROR 26_block_comment.jsc:6:5: error: expected state, init, action, destroy or view but found '/'
+OK    27_destroy_if_pay.jsc
+ERROR 28_batched_map.jsc:6:16: error: batched actions and Map state cannot be combined yet (ADR-0004 D1)
+OK    29_bool_ops.jsc
+ERROR 30_let_in_arm_used_after.jsc:7:12: error: unknown name 'y'
+ERROR 31_if_expr_let.jsc:6:32: error: unexpected 'if' in an expression
+ERROR 32_assets.jsc:6:60: error: unknown function 'receivedAsset' (min, max, has, isEmpty, after, before)
+ERROR 33_params.jsc:2:12: error: unknown option 'params' (minAda, maxDatumBytes, maxValidityMs)
+ERROR 34_event.jsc:6:5: error: expected state, init, action, destroy or view but found 'event'
+ERROR 35_invariant.jsc:6:5: error: expected state, init, action, destroy or view but found 'invariant'
+ERROR 36_owned.jsc:6:5: error: expected state, init, action, destroy or view but found 'owned'
+OK    37_mod_ops.jsc
+ERROR 38_key_from_bytes.jsc:6:34: error: expected Key but this is Bytes
+ERROR 39_shadow_let.jsc:7:18: error: 'n2' is already defined; choose another name
+ERROR 40_list_param.jsc:6:18: error: unknown type 'List' (Int, Bool, Bytes, Key, Map<Key, Int>)
+ERROR 41_pow_shift.jsc:6:31: error: unexpected '*' in an expression
+ERROR 42_send_addr.jsc:6:34: error: expected '=', '+=' or '-=' but found '5'
+ERROR 43_escape.jsc:6:38: error: escapes are not supported in strings
+OK    44_nested_if_10.jsc
+ERROR 45_quorum.jsc:6:16: error: expected '{' but found 'quorum'
+ERROR 46_bool_in_require_if.jsc:7:21: error: after(t) holds for the whole validity window, so it is allowed only as a requirement (require after(t) ..., or with &&): not negated, in ||, or in an if
+ERROR 47_mint.jsc:6:34: error: expected '=', '+=' or '-=' but found '1'
+ERROR 48_multiple_contracts.jsc:7:1: error: one contract per file
+ERROR 20_pay_bytes.jsc:8:32: error: expected Key but this is Bytes
+ERROR 21_bytes_fn.jsc:8:30: error: unknown function 'sha2_256' (min, max, has, isEmpty, after, before)
+ERROR 21b_concat.jsc:8:30: error: expected Int but this is Bytes
+OK    21c_bytes_eq.jsc
+ERROR 21d_bytes_lt.jsc:8:34: error: expected Int but this is Bytes
+OK    49_destroy_nobalance.jsc  warnings=[49_destroy_nobalance.jsc:8: warning: destroy close never reads balance: it must pay out all of it (deposit included), or every call is rejected]
+ERROR 50_ada_nonliteral.jsc:8:30: error: expected a statement but found 'ada'
+ERROR 51_index_non_map.jsc:8:28: error: 'b' is not a Map state field
+OK    52_pay_in_branch_open.jsc
+OK    53_views.jsc
+ERROR 54_while_kw_name.jsc:8:14: error: 'while' is reserved and cannot be a parameter name
+ERROR 55_multi_require_comma.jsc:8:37: error: expected ')' but found ','
+OK    56_semicolon_style.jsc
+ERROR 57_double_eq_bool_int.jsc:8:34: error: cannot compare Int with Bool

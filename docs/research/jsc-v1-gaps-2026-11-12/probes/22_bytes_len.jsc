@@ -1,0 +1,8 @@
+package p
+contract P {
+    state owner: Key
+    state n: Int
+    init() { owner = caller }
+    state b: Bytes
+    action a(x: Bytes) { n = x.length }
+}

@@ -1,0 +1,7 @@
+package p
+contract P {
+    state owner: Key
+    state m: Map<Key, Int>
+    init() { owner = caller }
+    action a() batched { m[caller] += 1 }
+}
