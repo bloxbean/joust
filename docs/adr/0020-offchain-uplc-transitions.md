@@ -1,6 +1,6 @@
 # ADR-0020: UPLC transition programs as the off-chain meaning on every path — a spike (answers ADR-0015 Q6)
 
-**Status:** Proposed (r4), **spike**: design plus a proof of concept to measure. Not a commitment: nothing changes
+**Status:** Proposed (r5), **spike**: design plus a proof of concept to measure. Not a commitment: nothing changes
 for users until the spike's report is reviewed and this ADR is accepted or rejected.
 **Date:** 2026-11-12
 **Builds on:** ADR-0015 D3 (transition programs, `TransitionFn`), D4 (one description-driven runtime core; typed
@@ -105,7 +105,9 @@ wrappers over the described core, so that "JVM or UPLC" is only a choice of `Tra
 
 The spike compiles programs for each example as the npm toolchain does (`Toolchain.build`: `<Name>Transitions`, then
 `compileMethod` per method, optimised, **without source maps**), so they are the engine's programs, and records a
-manifest for each (D8). These optimised programs are the only ones compared, used and measured (r4, F23). A method left
+manifest for each (D8). These optimised programs are the only ones compared, used and measured (r4, F23). They are
+**unmodified** toolchain artifacts: the only substitution is today's discovery `MerkleMaps` (r5, C16). The tagged
+`Require` of D9 is a *proposed program format* used only in auxiliary runs. A method left
 without a program is an error in the spike (no JVM fallback, no warning).
 
 ### D3. Three transition functions over one Data interface (revised r2)
@@ -149,7 +151,9 @@ without a program is an error in the spike (no JVM fallback, no warning).
   unused argument is the `NONE` sentinel `DescribedContract` supplies (`JvmTransitions` passes no Ctx to a method
   that takes none). The program's wrapper decodes leniently and the JVM codec strictly (F23), so without this stage a
   malformed input would show a codec difference, not a semantic one. Inputs the check rejects never reach the
-  comparison; they are tested as ABI rejections.
+  comparison; they are tested as ABI rejections. The check also precedes **every** `UplcTransitions` evaluation, in
+  the spike's UPLC-only runs and after adoption (r5, S15): the program's lenient decoding could otherwise produce a
+  step from an input the validator's strict decoding refuses.
 
 ### D4. Corpus: offline replay, generated vectors, a divergence corpus (revised r2; completes ADR-0015 I2)
 
@@ -212,6 +216,10 @@ If the report supports it, a revision of this ADR (then implementation PRs) woul
 - retire `-Ajoust.portable` (ADR-0015 Q6's second half);
 - make a missing program a build error; settle the trace namespace (Q7);
 - add the step-independent outflow bound for local-`Account` callers (C7), or record the risk as accepted;
+- keep the ABI check before every program evaluation (S15); strict record decoding in `compileMethod`'s wrapper is a
+  JuLC follow-up that would make it defence in depth;
+- if the tagged `Require` of D9 is adopted, it changes the engine's and toolchain's programs (sizes, units): a cost
+  measured by the auxiliary runs (D9), not assumed;
 - leave the npm engine as it is: it already runs programs, and its size is mostly transaction building (F18).
 
 Adoption criteria (all must hold):
@@ -228,9 +236,12 @@ Adoption criteria (all must hold):
   useful as a JVM stack trace.
 - **C5:** the service's per-request evaluation is bounded (D11) and concurrent calls are safe.
 - **C7** (r4, at adoption): the JVM builder enforces a **step-independent bound** on the wallet's net outflow for
-  local-`Account` callers: at most what the call itself declares (`received`, deposits, fee, min-UTxO top-ups),
-  mirroring the ADR-0013 page verifier, because once UPLC is the only leg U9 is no longer checked and a preview
-  comes from the same step. The alternative is to record this as an accepted risk; the report recommends one.
+  local-`Account` callers: at most what the call itself declares (`received` and deposits), plus a **caller-declared
+  maximum** for min-UTxO top-ups of contract-initiated outputs (payouts, sends) and a caller-declared maximum fee (or
+  the network's maximum), mirroring the ADR-0013 page verifier, because once UPLC is the only leg U9 is no longer
+  checked and a preview comes from the same step (r5, F28: top-ups and the fee grow with the step, so they cannot be
+  allowed as computed; paying top-ups from the contract's value is not possible, since its continuing value is exact,
+  ADR-0001 I3). Test (§8): a wrong step with an extra sub-min-UTxO payout is refused by the bound. The alternative is to record this as an accepted risk; the report recommends one.
 - **C6:** U9 holds on every buildable call of D4(a) and D4(b-reachable), and each seeded wrong-step test of §8 is
   refused by the validator or flagged by U9.
 
@@ -274,6 +285,18 @@ programs; and typed Java clients of a `.jsc` contract still need its records. Th
   equals the manifest's; (2) applying the deployment's parameters (if any) to that CBOR gives the **script credential
   of the state UTxO's address** (the payment credential the runtime spends from, not a reference script's own hash).
   The JuLC version and recorded profile must match too; otherwise they refuse before evaluating.
+  Step (2) depends on the kind (r5, C17); step (1) applies to every call:
+
+  | Kind | What the applied script must equal |
+  |---|---|
+  | state, owned and keyed spends | the payment credential of the spent input's address |
+  | init (no state input yet) | the minting policy and the state output's script credential of the deployment the runtime builds with |
+  | `@Withdraw` and other purposes | the script credential of the reward (stake) address the call uses |
+  | migrate | the successor's own deployment, as for init; the adopted UTxO is checked against the predecessor's policy named in the params (`from`), never taken as the successor's credential |
+
+  Where there is no state input, the deployment identity comes from the deployment record the runtime is configured
+  with (the one it builds the transaction from), not from a reference UTxO. Tests: a correct and a wrong-deployment
+  call for init, withdraw and migrate, refused before evaluation.
 - Programs must keep traces (read discovery depends on them, F12); a manifest without traces is refused.
 - Negative tests (§8): a stale program (v1 programs against a v2 deployment), programs bound to a different
   unapplied script, a correct manifest with another deployment's reference script, a program compiled with a
@@ -288,8 +311,12 @@ The manifest establishes consistency (§2), not integrity or equivalence; equiva
 - **Outcome classes:** `step` (a result); `require` (a contract requirement, with its message); `error` (any other
   evaluation failure: a builtin error, a decode error, a JVM `ArithmeticException` or `IndexOutOfBoundsException`);
   `missing-proof` (a read not yet proven); `round-limit`; `budget`. Two outcomes agree only within the same class.
-- **Require, unambiguously:** transition programs get a discovery variant of `Require` (allowlisted, D8) that traces
-  `joust:require <message>` before failing; the JVM side catches `RequireException`. Message parity is compared only
+- **Require, unambiguously:** an **auxiliary** program set (r5, C16) is compiled with a variant of `Require`
+  (allowlisted, recorded in its manifest, D8) that traces `joust:require <message>` before failing; the JVM side
+  catches `RequireException`. A failure of the primary (unmodified) program is classified by rerunning the inputs on
+  the auxiliary program, which must reproduce the failure; parity, latency, units and budget outcomes always come from
+  the primary program, and the auxiliary set's size and units are reported separately as the cost of the proposed
+  format. Vector: `Counter.increment` with `by = 0` (a reachable refusal). Message parity is compared only
   for `require`. A last trace is never taken as a refusal message; `error` keeps the VM's cause and the source-mapped
   location. (The validator's `Require` is unchanged.) Tests include a message starting `joust:` and a non-Require VM
   error.
@@ -354,7 +381,8 @@ The manifest establishes consistency (§2), not integrity or equivalence; equiva
   transaction's (D10). A program within its cap does not mean the transaction fits (the validator does more, and
   scripts share the transaction's budget).
 - A **cumulative off-chain work limit** per call (sum over rounds) is added in the spike; after adoption the caps come
-  from the protocol parameters.
+  from the protocol parameters. Diagnostic and auxiliary reruns (D9) count against it (r5, S16); after adoption they
+  stay off a multi-tenant service's request path or are rate-limited (part of C5).
 - `UplcTransitions` decodes every program in its constructor (no shared mutable map); the spike checks that one
   `JulcVm` is safe to share between threads (or uses one per thread) and runs a concurrent-calls test. Adoption needs
   a per-request evaluation bound or concurrency limit in the prepare service (C5).
@@ -420,7 +448,8 @@ replayable recordings of D4a), ADR-0015 I2 is completed by D4, and Q6 is answere
   budget-exhausting input; a `Require` message starting `joust:`; a non-Require VM error; reordered, duplicate and
   nested map steps (D9); concurrent calls (D11); a batch with one mismatching intent (D3); programs bound to another
   unapplied script (D8). **Seeded wrong steps**, one per lower-bound row of §2: an extra payout recipient, a larger
-  send, a smaller migration successor; each must be refused by the validator or flagged by U9.
+  send, a smaller migration successor; each must be refused by the validator or flagged by U9. A wrong step with an
+  extra sub-min-UTxO payout must also be refused by C7's bound (r5).
 - **Default untouched (U1):** `ReplayTest`, `DescribedReplayTest` and `EngineFixturesTest` (r2: r1 named
   `FixturesTest`, which only checks the recordings' own consistency).
 
@@ -494,3 +523,8 @@ replayable recordings of D4a), ADR-0015 I2 is completed by D4, and Q6 is answere
   vectors become observations (C13). Trace forgery made harmless in the spike, Q7 restated (C14). F20 corrected
   (C15). Manifest check in two steps against the spent address's credential (S14). Step-independent outflow bound as
   adoption criterion C7 (S12). Facts reordered, S5's revision reference fixed (F27).
+- **r5** (2026-11-12, responds to the round-4 reviews of `27b5af3`: security S15–S16 (approved at `27b5af3`), design
+  F28, Codex C16–C17): the ABI check precedes every program evaluation (S15); reruns count against the per-call limit
+  and stay off a multi-tenant request path (S16); C7's allowances for top-ups and fee become caller-declared maxima,
+  with a sub-min-UTxO test (F28); the tagged `Require` moves to an auxiliary program set, the primary programs stay
+  unmodified (C16); the manifest's script-credential check gets a per-kind binding table (C17).
