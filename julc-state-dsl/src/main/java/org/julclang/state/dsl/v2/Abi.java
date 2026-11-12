@@ -164,6 +164,12 @@ final class Abi {
         }
         types.add("    \"TxOutRef\": { \"kind\": \"ledger\", \"constructors\": [" + ctor("TxOutRef", 0, List.of(field("txId", "Bytes", "bytes", "        "),
                 field("index", "Int", "int", "        ")), "      ") + "] }");
+        // One schema per name (review C4): a contract type never shares a key with an API or ledger schema.
+        var keys = new java.util.HashSet<String>();
+        for (String t : types) {
+            String key = t.substring(t.indexOf('"') + 1, t.indexOf('"', t.indexOf('"') + 1));
+            if (!keys.add(key)) throw new IllegalStateException("the ABI manifest of " + p.name() + " would state the type " + key + " twice");
+        }
         w.append("  \"types\": {\n").append(String.join(",\n", types)).append("\n  },\n");
         var time = new ArrayList<String>();
         for (String f : new TreeSet<>(p.timeFields())) time.add(str(f));

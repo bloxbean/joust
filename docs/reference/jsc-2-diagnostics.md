@@ -81,7 +81,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0208 | error | ' … ' is a built-in name, so it cannot be a state field: choose another name | Checker |
 | JSC0209 | error | declares … twice | Checker |
 | JSC0210 | error | names cannot contain '__' (reserved for generated code): | Checker |
-| JSC0211 | error | ' … ' is reserved and cannot be a … name | Checker |
+| JSC0211 | error | ' … ' is reserved and cannot be a … name (a method modifier word, M1c: payable, open, only, after, before, batched, as a field or binding) | Checker |
 | JSC0212 | error | ' … ' is already declared; names are never redeclared or shadowed | Checker |
 | JSC0213 | error | ' … ' would hide the state field or built-in of the same name; choose another name (e.g. new … ) | Checker |
 | JSC0214 | error | ' … ' is a built-in name | Checker |
@@ -159,10 +159,10 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0414 | error | 'state' is the input state of an action, destroy or view | Checker |
 | JSC0415 | error | is part of the transaction: it is not available in a view or fn (pass it as an argument) | Checker |
 | JSC0416 | error | the modifier ' … ' is given twice | Checker |
-| JSC0417 | error | a batched action cannot use ' … ': the batcher, not the caller, signs a batch and sets its window; check the caller with require(caller == …, …) and time with require(after(…)) or require(before(…)) in the body (ADR-0004 D1) | Checker |
+| JSC0417 | error | a batched action cannot use ' … ': the batcher, not the caller, signs a batch: check the caller in the body with require(caller == …, …) / the batcher sets a batch's window: check time in the body with require(after(…), …) or require(before(…), …) (ADR-0004 D1). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
 | JSC0418 | error | only an action can be batched (ADR-0004 D1) | Checker |
 | JSC0419 | error | a contract with BigMap state cannot have batched actions: each step of a batch would need its own map proofs (ADR-0004 D1, ADR-0018 D7) | Checker |
-| JSC0420 | error | … can pay out, so it must say who may call it; a batched action cannot use 'only' (any intent's owner is its caller), so write 'open' and check the caller in the body (ADR-0018 D4) | Checker |
+| JSC0420 | error | … can pay out, so it must say who may call it; a batched action cannot use 'only' (any intent's owner is its caller), so write 'open' and check the caller in the body (ADR-0018 D4). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
 
 ## Time (ADR-0018 D11, J6)
 

@@ -77,6 +77,31 @@ class JscV2M1cCheckerTest {
         bad("action tip() batched { return state }\n action tipIntent() { return state }", "has an intent form named tipIntent", 0, 1);
         badSource(pool("action tip() batched { return state }").replace("contract P {", "type TipIntent = { a: Int }\ncontract P {"),
                 "TipIntent (the validator's record)", 7, 1);
+        // Review C1: the intent method takes its own deadline after the arguments (ClientGenerator).
+        bad("action go(deadline: Int) batched only { return { ...state, total: deadline } }", "'deadline' is a name the generated client uses", 0, 11);
+        assertTrue(JscV2.lower("jsc 2\npackage t\ncontract D {\n state { n: Int }\n init() { return { n: 0 } }\n"
+                + " action go(deadline: Int) { return { n: deadline } }\n}\n", "D.jsc").java().contains("go(State s__, BigInteger deadline)"),
+                "an action that is not batched may name a parameter deadline");
+        // Review C4: the ledger schemas a batched contract's manifest states beside the contract's types are not free names.
+        for (String ledger : java.util.List.of("StakingCredential", "PubKeyCredential", "ScriptCredential", "StakingHash", "StakingPtr")) {
+            badSource(pool("action go(v: Int) batched only { return state }").replace("contract P {", "type " + ledger + " = { x: Int }\ncontract P {"),
+                    "the generated validator or client uses", 3, 1);
+            badSource(pool("action go(v: Int) batched only { return state }").replace("contract P {", "enum E { " + ledger + " }\ncontract P {"),
+                    "the generated validator or client uses", 3, 10);
+        }
+        // Review F4: the probe. With a state field named 'open', 'batched only open' meant intent-only with no signer
+        // check, where 'only open' means @SignedBy("open"). The modifier words are no field or binding name.
+        for (String word : java.util.List.of("open", "only", "after", "before", "batched", "payable")) {
+            badSource(pool("").replace("state { admin: Key,", "state { " + word + ": Key, admin: Key,"), "it is a method modifier", 4, 11);
+            bad("action a(" + word + ": Int) { return state }", "it is a method modifier", 0, 10);
+            bad("action a() { const " + word + " = 1\n return { ...state, total: " + word + " } }", "it is a method modifier", 0, 14);
+        }
+        assertTrue(java("action open() { return state }").contains("open(State s__)"), "a method may be named like a modifier");
+        // The hint names the right check (F4) and ADR-0004's caveat (S6).
+        bad("action a() batched after deadline { return state }", "check time in the body with require(after(deadline), …)", 0, 20);
+        bad("action a() batched only admin { return state }", "require(caller == admin, …)", 0, 20);
+        bad("action a() batched before deadline { return state }", "an intent authorises its action until its deadline", 0, 20);
+        bad("action a() payable batched { pay(caller, 1)\n return state }", "keep deadlines short and bound order-sensitive arguments", 0, 1);
         // The same names are free when tip is not batched.
         assertDoesNotThrow(() -> java("action tip() { return state }\n action tipIntent() { return state }"));
     }

@@ -96,10 +96,10 @@ final class Parser {
         return t.text();
     }
 
-    /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
-    /** The method modifiers (D4, D10). */
+    /** The method modifiers (D4, D10); none is a field or binding name (M1c review F4). */
     static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched");
 
+    /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
     private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
             "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum",
             "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int",
