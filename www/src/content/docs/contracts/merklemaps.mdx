@@ -101,9 +101,11 @@ public static State transfer(State s, byte[] to, BigInteger amount, Ctx ctx) {
 
 ## In `.jsc`
 
-In [`.jsc`](/languages/jsc/), a `Map<Key, Int>` state field is a MerkleMap. Reading a missing key gives `0`;
-assigning `0` removes the key; a value can never go negative. `delete`, `has(map, key)` and `isEmpty(map)` cover the
-rest.
+In [`.jsc`](/languages/jsc/) 2, a `BigMap<K, Int>` or `BigMap<K, Bytes>` state field is a MerkleMap (keys are
+`Bytes`, `Key` or `Hash` of at most 64 bytes). `m[k]` reads an `Int` entry, `0` when absent; `m.get(k)` and `m.has(k)`
+read any entry. A write is the field's own value in the next state, `{ ...state, points: points.set(k, v) }`:
+`set(k, 0)` removes an `Int` entry, a value can never go negative, and `delete(k)` removes any entry. `m.isEmpty`
+(empty before the call) is read in a destroy. A method reads its own writes through the chain, as `give` does.
 
 <Tabs syncKey="lang">
 <TabItem label="Java">
@@ -126,41 +128,43 @@ public class Token {
 </TabItem>
 <TabItem label=".jsc">
 
-```jsc title="examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/Points.jsc"
-// Loyalty points in a Map<Key, Int> (a MerkleMap: any number of holders, a 32-byte root on chain).
+```jsc title="Points.jsc"
+jsc 2
+package org.example.points
+
+// Loyalty points in a BigMap<Key, Int> (a Merkle map: any number of holders, a 32-byte root on chain).
 contract Points(maxDatumBytes = 160) {
-    state admin: Key
-    state supply: Int
-    state points: Map<Key, Int>
+  state { admin: Key, supply: Int, points: BigMap<Key, Int> }
 
-    init() {
-        admin = caller
-    }
+  init() {
+    return { admin: caller, supply: 0, points: BigMap.empty() }
+  }
 
-    action award(to: Key, n: Int) only admin {
-        require n > 0 "award a positive amount"
-        points[to] += n
-        supply += n
-    }
+  action award(to: Key, n: Int) only admin {
+    require(n > 0, "award a positive amount")
+    return { ...state, points: points.set(to, points[to] + n), supply: supply + n }
+  }
 
-    // Spending everything removes the holder.
-    action spend(n: Int) {
-        let have = points[caller]
-        require n > 0 && have >= n "not enough points"
-        if have == n {
-            delete points[caller]
-        } else {
-            points[caller] -= n
-        }
-        supply -= n
-    }
+  // Spending everything removes the holder: set(k, 0) removes the entry.
+  action spend(n: Int) {
+    const have = points[caller]
+    require(n > 0 && have >= n, "not enough points")
+    return { ...state, points: points.set(caller, have - n), supply: supply - n }
+  }
 
-    destroy close() only admin {
-        require supply == 0 && isEmpty(points) "points are still out"
-        pay balance to admin
-    }
+  // A transfer reads the recipient through the debit, so giving to yourself keeps your balance.
+  action give(to: Key, n: Int) {
+    require(n > 0 && points[caller] >= n, "not enough points")
+    const left = points[caller] - n
+    return { ...state, points: points.set(caller, left).set(to, points.set(caller, left)[to] + n) }
+  }
 
-    view pointsOf(who: Key): Int = points[who]
+  destroy close() only admin {
+    require(supply == 0 && points.isEmpty, "points are still out")
+    pay(admin, balance)
+  }
+
+  view pointsOf(who: Key): Int = points[who]
 }
 ```
 
@@ -181,7 +185,8 @@ proofs, and attaches the map verifier. See [MerkleMap mirrors](/apps/map-mirrors
 </TabItem>
 </Tabs>
 
-`.jsc` maps are `Map<Key, Int>` only. For other key or value shapes, write the contract in Java.
+`.jsc` 2 `BigMap` values are `Int` or `Bytes`. For other value shapes, write the contract in Java. In `.jsc` v1, the
+only map type is `Map<Key, Int>`, and it is a MerkleMap ([.jsc v1](/languages/jsc-v1/)).
 
 ## How a call works
 
@@ -377,5 +382,5 @@ A transaction may use 10,000M CPU and 14M memory on mainnet.
   <LinkCard title="Tutorial: token balances in a MerkleMap" href="/tutorials/token-merklemap/" description="Build, run and call the token from Java and from a page." />
   <LinkCard title="MerkleMap mirrors" href="/apps/map-mirrors/" description="Stores, caches and rebuilding a map from the chain." />
   <LinkCard title="Owned objects" href="/contracts/owned-objects/" description="Per-user UTxOs, each of which can hold its own MerkleMap." />
-  <LinkCard title=".jsc" href="/languages/jsc/" description="Map<Key, Int> fields in the contract language." />
+  <LinkCard title=".jsc" href="/languages/jsc/" description="BigMap fields in the contract language." />
 </CardGrid>

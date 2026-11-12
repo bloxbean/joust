@@ -32,15 +32,16 @@ Every command reads `joust.config.json` from the working directory (see [`joust.
 
 | Command | Flags | What it does |
 |---|---|---|
-| `joust build` | `--src <dir>` (default config `contracts`), `--out <dir>` (default config `out`) | compiles every `.java` and `.jsc` file under the source folder into the output folder; exits 1 on a compile error |
+| `joust build` | `--src <dir>` (default config `contracts`), `--out <dir>` (default config `out`), `--accept-abi` | compiles every `.java` and `.jsc` file under the source folder into the output folder; exits 1 on a compile error, or on a `.jsc` 2 ABI manifest that is missing or changed unless `--accept-abi` writes it ([the ABI manifest](/languages/jsc/#the-abi-manifest)) |
+| `joust migrate` | `[<file.jsc>…]`, `--in-place` | translates `.jsc` v1 files (with no file named, every v1 file under the contracts folder) to `.jsc` 2, written to `build/joust/migrated/<same path>`; `--in-place` replaces each v1 file and keeps its text as `<Name>.jsc.v1`. Refusals are `JSC11xx` errors ([migration](/languages/jsc-migration/)) |
 | `joust deploy` | `--network <name>` | publishes each contract's reference script (once) and writes `<out>/deployments.<network>.json` |
-| `joust dev` | `--network <name>`, `--port <port>` (default config `dev.port`, else 5178) | attaches to the chain (starting it with the network's `start` command if needed), builds, deploys, serves the page; rebuilds and redeploys on save |
+| `joust dev` | `--network <name>`, `--port <port>` (default config `dev.port`, else 5178), `--accept-abi` | attaches to the chain (starting it with the network's `start` command if needed), builds, deploys, serves the page; rebuilds and redeploys on save |
 | `joust serve` | `--network <name>`, `--dir <dir>` (default `dist`), `--port <port>` (default as `dev`) | serves a built page as static files, with the chain API at `/chain` and on DevKit the faucet |
 | `joust version` | (also `joust --version`, `-V`, `-v`) | prints `joust <version> (npm)` |
 | `joust help` | (also `--help`, `-h`, `<command> --help`) | the usage; never runs a command |
 | `joust new` | | prints the `npm create joust` command to run (Gradle projects come from the native `joust`); creates nothing |
 
-In a project, a project command (`build`, `deploy`, `dev`, `serve`) runs at the project's root (the nearest directory
+In a project, a project command (`build`, `migrate`, `deploy`, `dev`, `serve`) runs at the project's root (the nearest directory
 with `joust.config.json`, or a `package.json` that depends on `@julclang/joust`), and by the project's own
 `@julclang/joust`: a global or other copy hands over to it, as [the native `joust`](#the-native-joust) does.
 
@@ -56,6 +57,7 @@ with `joust.config.json`, or a `package.json` that depends on `@julclang/joust`)
 | `<Contract>.json` | the description (CIP-57 + `x-joust`, version 2) |
 | `<Contract>.plutus` | the validator, CBOR hex |
 | `<Contract>.js`, `<Contract>.d.ts` | the typed client and its types |
+| `generated/<package path>/<Contract>.java`, `.jscmap.json` | the Java a `.jsc` file lowered to, and its source map (`.jsc` only) |
 | `validators.json` | plain JuLC validators: `[{ name, package, purpose, script, scriptHash, params, built }]` (only if there are any) |
 | `<Validator>.plutus` | each plain validator's script, parameters not applied |
 | `joust.lock.json` | `{ joust, descriptionVersion, contracts: { <title>: { scriptHash } }, validators? }` |
@@ -194,7 +196,7 @@ folder. Every project has a `Counter` contract, `joust.config.json` for DevKit, 
 | Option | Values |
 |---|---|
 | `--template`, `-t` | `node` (default): `index.js`, a Node script that deploys and calls the contract; scripts `start`, `build`, `deploy`, `test`. `web`: a page (`page/`) with the Cardano Foundation's connect button and an in-page DevKit key, and `vite.config.js`; the scripts listed under [A browser page](/start/quick-start-npm/#a-browser-page) |
-| `--lang`, `-l` | `jsc` (default): `contracts/app/Counter.jsc`. `java`: `contracts/app/Counter.java`. Both give the same description and client |
+| `--lang`, `-l` | `jsc` (default): `contracts/app/Counter.jsc` in `.jsc` 2 (a preview), with its ABI manifest `Counter.abi.json`. `java`: `contracts/app/Counter.java`. Both give the same description and client |
 | `--help`, `-h` | the usage |
 
 Options go after `--` with `npm create` (npm passes them on); `npx create-joust my-app --lang java` takes them
