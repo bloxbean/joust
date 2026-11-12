@@ -47,8 +47,15 @@ public final class Toolchain {
         }
     }
 
-    /** A finding, from javac, JOUST (reader and lint) or JuLC; {@code line} and {@code col} are 1-based, or -1 when unknown. */
-    public record Diagnostic(Severity severity, String message, String file, long line, long col, String source) {
+    /**
+     * A finding, from javac, JOUST (reader and lint) or JuLC; {@code line} and {@code col} are 1-based, or -1 when
+     * unknown; {@code code} is a {@code .jsc} 2 diagnostic's stable code (ADR-0018 D12), else null.
+     */
+    public record Diagnostic(Severity severity, String message, String file, long line, long col, String source, String code) {
+        public Diagnostic(Severity severity, String message, String file, long line, long col, String source) {
+            this(severity, message, file, line, col, source, null);
+        }
+
         public Diagnostic(Severity severity, String message, String file, long line, String source) {
             this(severity, message, file, line, -1, source);
         }
@@ -108,10 +115,10 @@ public final class Toolchain {
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());
                     // ADR-0018 D12: warnings reach the npm path with their line and column (F13).
                     for (var w : lowered.diagnostics()) {
-                        diagnostics.add(new Diagnostic(Severity.WARNING, w.message(), name, w.line(), w.col(), "jsc"));
+                        diagnostics.add(new Diagnostic(Severity.WARNING, w.message(), name, w.line(), w.col(), "jsc", w.code()));
                     }
                 } catch (org.julclang.state.dsl.JscException e) {
-                    diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), name, e.line, e.col, "jsc"));
+                    diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), name, e.line, e.col, "jsc", e.code));
                 } catch (RuntimeException e) {
                     diagnostics.add(new Diagnostic(Severity.ERROR, "internal error lowering this file: " + e, name, -1, "jsc"));
                 }

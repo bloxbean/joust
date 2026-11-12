@@ -68,7 +68,7 @@ final class Lexer {
             }
             if (src.startsWith("/*", i)) {
                 int end = src.indexOf("*/", i + 2);
-                if (end < 0) throw new JscException(line, col, "unterminated comment");
+                if (end < 0) throw new JscException(line, col, "JSC0101", "unterminated comment");
                 for (int j = i; j < end + 2; j++) {
                     if (src.charAt(j) == '\n') { line++; col = 1; } else col++;
                 }
@@ -98,7 +98,7 @@ final class Lexer {
                 int j = i + 1;
                 while (j < src.length() && Character.digit(src.charAt(j), 16) >= 0) j++;
                 String hex = src.substring(i + 1, j).toLowerCase();
-                if (hex.length() % 2 != 0) throw new JscException(sl, sc, "a #hex literal needs an even number of digits");
+                if (hex.length() % 2 != 0) throw new JscException(sl, sc, "JSC0102", "a #hex literal needs an even number of digits");
                 out.add(new Tok(K.HEX, hex, sl, sc));
                 col += j - i; i = j;
                 continue;
@@ -108,20 +108,20 @@ final class Lexer {
                 var sb = new StringBuilder();
                 while (j < src.length() && src.charAt(j) != '"') {
                     char d = src.charAt(j);
-                    if (d == '\n' || d == '\r') throw new JscException(sl, sc, "unterminated string: a string ends on its line");
+                    if (d == '\n' || d == '\r') throw new JscException(sl, sc, "JSC0103", "unterminated string: a string ends on its line");
                     // Control characters (tab, carriage return, …) are refused rather than copied into generated Java
                     // (Codex C8): a string holds printable text; write \n for a new line.
                     if (d < 0x20 || d == 0x7f) {
-                        throw new JscException(sl, sc + (j - i), String.format("control character U+%04X in a string: write printable text (\\n for a new line)", (int) d));
+                        throw new JscException(sl, sc + (j - i), "JSC0104", String.format("control character U+%04X in a string: write printable text (\\n for a new line)", (int) d));
                     }
                     if (d == '\\') {
-                        if (j + 1 >= src.length()) throw new JscException(sl, sc, "unterminated string");
+                        if (j + 1 >= src.length()) throw new JscException(sl, sc, "JSC0105", "unterminated string");
                         char e = src.charAt(j + 1);
                         switch (e) {
                             case '"' -> sb.append('"');
                             case '\\' -> sb.append('\\');
                             case 'n' -> sb.append('\n');
-                            default -> throw new JscException(line, col + (j - i), "unknown escape \\" + e);
+                            default -> throw new JscException(line, col + (j - i), "JSC0106", "unknown escape \\" + e);
                         }
                         j += 2;
                         continue;
@@ -129,7 +129,7 @@ final class Lexer {
                     sb.append(d);
                     j++;
                 }
-                if (j >= src.length()) throw new JscException(sl, sc, "unterminated string");
+                if (j >= src.length()) throw new JscException(sl, sc, "JSC0105", "unterminated string");
                 out.add(new Tok(K.STRING, sb.toString(), sl, sc));
                 col += j + 1 - i; i = j + 1;
                 continue;
@@ -139,8 +139,8 @@ final class Lexer {
                 if (src.startsWith(q, i)) { p = q; break; }
             }
             if (p == null) {
-                if (c == '&' || c == '|') throw new JscException(sl, sc, "unexpected character '" + c + "': write " + c + c + " for the logical operator");
-                throw new JscException(sl, sc, "unexpected character '" + c + "'");
+                if (c == '&' || c == '|') throw new JscException(sl, sc, "JSC0107", "unexpected character '" + c + "': write " + c + c + " for the logical operator");
+                throw new JscException(sl, sc, "JSC0108", "unexpected character '" + c + "'");
             }
             out.add(new Tok(K.PUNCT, p, sl, sc));
             i += p.length(); col += p.length();

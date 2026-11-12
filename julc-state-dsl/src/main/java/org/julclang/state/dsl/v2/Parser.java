@@ -85,13 +85,13 @@ final class Parser {
     }
 
     private Tok expect(String s) {
-        if (!at(s)) throw peek().pos().error("expected '" + s + "' but found " + peek());
+        if (!at(s)) throw peek().pos().error("JSC0109", "expected '" + s + "' but found " + peek());
         return next();
     }
 
     private String ident(String what) {
         Tok t = peek();
-        if (t.kind() != K.IDENT) throw t.pos().error("expected " + what + " but found " + t);
+        if (t.kind() != K.IDENT) throw t.pos().error("JSC0110", "expected " + what + " but found " + t);
         i++;
         return t.text();
     }
@@ -107,7 +107,7 @@ final class Parser {
     private String packageSegment(String what) {
         Tok t = peek();
         String n = ident(what);
-        if (JAVA_KEYWORDS.contains(n)) throw t.pos().error("'" + n + "' is a Java keyword, so it cannot be a package segment");
+        if (JAVA_KEYWORDS.contains(n)) throw t.pos().error("JSC0111", "'" + n + "' is a Java keyword, so it cannot be a package segment");
         return n;
     }
 
@@ -119,10 +119,10 @@ final class Parser {
 
     private File file() {
         Tok j = peek();
-        if (!j.is("jsc")) throw j.pos().error("a .jsc 2 file starts with 'jsc 2'");
+        if (!j.is("jsc")) throw j.pos().error("JSC0112", "a .jsc 2 file starts with 'jsc 2'");
         next();
         Tok v = next();
-        if (v.kind() != K.INT || !v.text().equals("2")) throw v.pos().error("this compiler reads 'jsc 2' files");
+        if (v.kind() != K.INT || !v.text().equals("2")) throw v.pos().error("JSC0113", "this compiler reads 'jsc 2' files");
         semis();
         expect("package");
         var pkg = new StringBuilder(packageSegment("a package name"));
@@ -140,15 +140,15 @@ final class Parser {
             else if (t.is("enum")) enums.add(enumDecl());
             else if (t.is("fn")) fns.add(fn());
             else if (t.is("contract")) {
-                if (contract != null) throw t.pos().error("one contract per file");
+                if (contract != null) throw t.pos().error("JSC0114", "one contract per file");
                 contract = contract();
-            } else if (t.is("function")) throw t.pos().error("functions are written 'fn name(x: Int): Int = …' in .jsc");
-            else if (t.is("class")) throw t.pos().error("there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }'");
-            else if (t.is("const") || t.is("let") || t.is("var")) throw t.pos().error("a file holds imports, types, fns and one contract: put constants in a fn (fn limit(): Int = 10)");
-            else throw t.pos().error("expected import, type, enum, fn or contract but found " + t);
+            } else if (t.is("function")) throw t.pos().error("JSC0115", "functions are written 'fn name(x: Int): Int = …' in .jsc");
+            else if (t.is("class")) throw t.pos().error("JSC0116", "there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }'");
+            else if (t.is("const") || t.is("let") || t.is("var")) throw t.pos().error("JSC0117", "a file holds imports, types, fns and one contract: put constants in a fn (fn limit(): Int = 10)");
+            else throw t.pos().error("JSC0118", "expected import, type, enum, fn or contract but found " + t);
             semis();
         }
-        if (contract == null) throw peek().pos().error("the file declares no contract");
+        if (contract == null) throw peek().pos().error("JSC0119", "the file declares no contract");
         return new File(pkg.toString(), imports, types, enums, fns, contract);
     }
 
@@ -162,7 +162,7 @@ final class Parser {
         expect("}");
         expect("from");
         Tok s = next();
-        if (s.kind() != K.STRING) throw s.pos().error("expected a module string such as \"std/crypto\"");
+        if (s.kind() != K.STRING) throw s.pos().error("JSC0701", "expected a module string such as \"std/crypto\"");
         return new Import(names, s.text(), p);
     }
 
@@ -177,7 +177,7 @@ final class Parser {
     private EnumDecl enumDecl() {
         Pos p = next().pos();
         String name = ident("an enum name");
-        if (at("=")) throw peek().pos().error("an enum is written 'enum " + name + " { A, B { x: Int } }', without '='");
+        if (at("=")) throw peek().pos().error("JSC0901", "an enum is written 'enum " + name + " { A, B { x: Int } }', without '='");
         expect("{");
         var variants = new ArrayList<VariantDecl>();
         while (!at("}")) {
@@ -262,7 +262,7 @@ final class Parser {
                     String on = ident("a contract option");
                     expect("=");
                     Tok v = next();
-                    if (v.kind() != K.INT) throw v.pos().error("expected an integer");
+                    if (v.kind() != K.INT) throw v.pos().error("JSC0120", "expected an integer");
                     BigInteger value = new BigInteger(v.text());
                     if (eat("ada")) value = value.multiply(BigInteger.valueOf(1_000_000));
                     options.add(new Option(on, value, op));
@@ -279,9 +279,9 @@ final class Parser {
         while (!at("}")) {
             Tok t = peek();
             if (t.is("state")) {
-                if (state != null) throw t.pos().error("the state is declared once: state { … }");
+                if (state != null) throw t.pos().error("JSC0121", "the state is declared once: state { … }");
                 next();
-                if (!at("{")) throw peek().pos().error("the state is a block: state { count: Int, owner: Key }");
+                if (!at("{")) throw peek().pos().error("JSC0122", "the state is a block: state { count: Int, owner: Key }");
                 state = fieldBlock();
             } else if (t.is("init")) {
                 next();
@@ -315,18 +315,18 @@ final class Parser {
             } else if (t.is("enum")) {
                 enums.add(enumDecl());
             } else if (t.is("function")) {
-                throw t.pos().error("functions are written 'fn name(x: Int): Int = …' in .jsc");
+                throw t.pos().error("JSC0115", "functions are written 'fn name(x: Int): Int = …' in .jsc");
             } else if (t.is("async") || t.is("await")) {
-                throw t.pos().error("there is no '" + t.text() + "' in .jsc: a call runs in one transaction; write 'action name(…) { … }'");
+                throw t.pos().error("JSC0123", "there is no '" + t.text() + "' in .jsc: a call runs in one transaction; write 'action name(…) { … }'");
             } else if (t.is("let") || t.is("const") || t.is("var")) {
-                throw t.pos().error("a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10)");
+                throw t.pos().error("JSC0124", "a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10)");
             } else {
-                throw t.pos().error("expected state, init, action, destroy, view, fn, type or enum but found " + t);
+                throw t.pos().error("JSC0125", "expected state, init, action, destroy, view, fn, type or enum but found " + t);
             }
             semis();
         }
         expect("}");
-        if (state == null) throw p.error("the contract declares no state { … }");
+        if (state == null) throw p.error("JSC0126", "the contract declares no state { … }");
         return new Contract(name, options, state, methods, fns, types, enums, p);
     }
 
@@ -355,7 +355,7 @@ final class Parser {
         Expr result = null;
         Pos returnPos = null;
         while (!at("}")) {
-            if (result != null) throw result.pos().error("an expression's value is unused here: only the last one is the block's value");
+            if (result != null) throw result.pos().error("JSC0127", "an expression's value is unused here: only the last one is the block's value");
             Tok t = peek();
             if (t.is("const")) {
                 next();
@@ -365,7 +365,7 @@ final class Parser {
                 expect("=");
                 stmts.add(new Const(n, ty, expr(), cp));
             } else if (t.is("let") || t.is("var")) {
-                throw t.pos().error("values are immutable in .jsc: write 'const " + peek(1).text() + " = …'");
+                throw t.pos().error("JSC0128", "values are immutable in .jsc: write 'const " + peek(1).text() + " = …'");
             } else if (t.is("require")) {
                 stmts.add(requireStmt());
             } else if (t.is("pay")) {
@@ -373,16 +373,16 @@ final class Parser {
             } else if (t.is("for")) {
                 next();
                 expect("(");
-                if (!at("const")) throw peek().pos().error("loops are 'for (const x of xs) { … }'; accumulate with xs.fold(init, (acc, x) => …)");
+                if (!at("const")) throw peek().pos().error("JSC1001", "loops are 'for (const x of xs) { … }'; accumulate with xs.fold(init, (acc, x) => …)");
                 next();
                 String v = ident("a loop variable");
-                if (at("in")) throw peek().pos().error("'for … in' iterates keys in JavaScript; write 'for (const " + v + " of list)'");
+                if (at("in")) throw peek().pos().error("JSC1002", "'for … in' iterates keys in JavaScript; write 'for (const " + v + " of list)'");
                 expect("of");
                 Expr list = expr();
                 expect(")");
                 stmts.add(new For(v, list, block(), t.pos()));
             } else if (t.is("while") || t.is("do")) {
-                throw t.pos().error("there are no while loops in .jsc: use xs.fold(init, (acc, x) => …), range(a, b), or a recursive fn");
+                throw t.pos().error("JSC1003", "there are no while loops in .jsc: use xs.fold(init, (acc, x) => …), range(a, b), or a recursive fn");
             } else if (t.is("if")) {
                 IfStmt s = ifStmt();
                 // An if with an else whose arms both end in values is the block's value when nothing follows it.
@@ -406,14 +406,14 @@ final class Parser {
                 result = expr();
                 semis();
                 if (!at("}")) {
-                    throw t.pos().error("return is the last statement of a block: a block's value is its last expression, so there is no early return (write if c { … } else { … } as the last expression)");
+                    throw t.pos().error("JSC0129", "return is the last statement of a block: a block's value is its last expression, so there is no early return (write if c { … } else { … } as the last expression)");
                 }
             } else if (t.is("function")) {
-                throw t.pos().error("functions are written 'fn name(x: Int): Int = …' at the top of the file or in the contract; lambdas 'x => …' are only arguments of list methods");
+                throw t.pos().error("JSC1004", "functions are written 'fn name(x: Int): Int = …' at the top of the file or in the contract; lambdas 'x => …' are only arguments of list methods");
             } else {
                 Expr e = expr();
                 if (at("=") || at("+=") || at("-=") || at("++") || at("--")) {
-                    throw peek().pos().error("values are immutable in .jsc: build a new one, e.g. return { ...state, x: x + 1 }");
+                    throw peek().pos().error("JSC0130", "values are immutable in .jsc: build a new one, e.g. return { ...state, x: x + 1 }");
                 }
                 result = e;
             }
@@ -429,7 +429,7 @@ final class Parser {
         Expr c = expr();
         expect(",");
         Tok m = next();
-        if (m.kind() != K.STRING) throw m.pos().error("require's message is a string: require(cond, \"why\")");
+        if (m.kind() != K.STRING) throw m.pos().error("JSC0131", "require's message is a string: require(cond, \"why\")");
         expect(")");
         return new Require(c, m.text(), t.pos());
     }
@@ -453,11 +453,11 @@ final class Parser {
         while (!at("}")) {
             Pattern pat = pattern();
             Tok arrow = peek();
-            if (arrow.is("-") || arrow.is(":")) throw arrow.pos().error("a match arm is written 'Pattern => value'");
+            if (arrow.is("-") || arrow.is(":")) throw arrow.pos().error("JSC0902", "a match arm is written 'Pattern => value'");
             expect("=>");
             Block body;
             if (at("{") && peek(1).is("...")) {
-                throw peek().pos().error("an arm's '{' starts a block: write an object as its value in parentheses, A => ({ ...state, f: e })");
+                throw peek().pos().error("JSC0903", "an arm's '{' starts a block: write an object as its value in parentheses, A => ({ ...state, f: e })");
             }
             if (at("{")) {
                 body = block();
@@ -473,13 +473,13 @@ final class Parser {
             if (!eat(",")) eat(";");
         }
         expect("}");
-        if (arms.isEmpty()) throw p.error("a match needs at least one arm");
+        if (arms.isEmpty()) throw p.error("JSC0904", "a match needs at least one arm");
         return new Match(scrutinee, arms, p);
     }
 
     private Pattern pattern() {
         Tok t = peek();
-        if (t.kind() != K.IDENT) throw t.pos().error("expected a pattern (a variant, Some(x), None or _) but found " + t);
+        if (t.kind() != K.IDENT) throw t.pos().error("JSC0905", "expected a pattern (a variant, Some(x), None or _) but found " + t);
         next();
         var binds = new ArrayList<Bind>();
         if (t.text().equals("Some") && at("(")) {
@@ -498,7 +498,7 @@ final class Parser {
             }
             expect("}");
         } else if (at("(")) {
-            throw peek().pos().error("a variant's fields are matched by name: " + t.text() + " { field } or " + t.text() + " { field: name }");
+            throw peek().pos().error("JSC0906", "a variant's fields are matched by name: " + t.text() + " { field } or " + t.text() + " { field: name }");
         }
         return new Pattern(t.text(), binds, t.pos());
     }
@@ -566,7 +566,7 @@ final class Parser {
     /** As in JavaScript, {@code ??} is not mixed with {@code &&} or {@code ||} without parentheses (F14). */
     private void noMixedLogic(Expr e) {
         if (e instanceof Binary b && (b.op().equals("&&") || b.op().equals("||")) && !parenthesised.contains(e)) {
-            throw b.pos().error("?? cannot be mixed with " + b.op() + " without parentheses: write (a ?? b) " + b.op() + " c or a ?? (b " + b.op() + " c)");
+            throw b.pos().error("JSC0132", "?? cannot be mixed with " + b.op() + " without parentheses: write (a ?? b) " + b.op() + " c or a ?? (b " + b.op() + " c)");
         }
     }
 
@@ -592,7 +592,7 @@ final class Parser {
         Expr l = comparison();
         while (at("==") || at("!=") || at("===") || at("!==")) {
             Tok t = next();
-            if (t.text().length() == 3) throw t.pos().error("write " + t.text().substring(0, 2) + ": .jsc equality is always by value");
+            if (t.text().length() == 3) throw t.pos().error("JSC0133", "write " + t.text().substring(0, 2) + ": .jsc equality is always by value");
             l = new Binary(t.text(), l, comparison(), startOf(l));
         }
         return l;
@@ -603,7 +603,7 @@ final class Parser {
         if (at("<") || at("<=") || at(">") || at(">=")) {
             Tok t = next();
             l = new Binary(t.text(), l, additive(), startOf(l));
-            if (at("<") || at("<=") || at(">") || at(">=")) throw peek().pos().error("comparisons do not chain: use &&");
+            if (at("<") || at("<=") || at(">") || at(">=")) throw peek().pos().error("JSC0134", "comparisons do not chain: use &&");
         }
         return l;
     }
@@ -628,7 +628,7 @@ final class Parser {
 
     private Expr unary() {
         if (at("++") || at("--")) {
-            throw peek().pos().error("values are immutable in .jsc: there is no " + peek().text() + "; build a new value, e.g. return { ...state, x: x + 1 }");
+            throw peek().pos().error("JSC0135", "values are immutable in .jsc: there is no " + peek().text() + "; build a new value, e.g. return { ...state, x: x + 1 }");
         }
         if (at("!") || at("-")) {
             Tok t = next();
@@ -694,11 +694,11 @@ final class Parser {
 
     private Expr lambdaBody() {
         if (at("{") && peek(1).is("...")) {
-            throw peek().pos().error("a lambda's '{' starts a block: write an object as its value in parentheses, x => ({ ...x, f: e })");
+            throw peek().pos().error("JSC1005", "a lambda's '{' starts a block: write an object as its value in parentheses, x => ({ ...x, f: e })");
         }
         if (at("{")) {
             Block b = block();
-            if (b.result() == null) throw b.pos().error("a lambda's block must end in its value");
+            if (b.result() == null) throw b.pos().error("JSC1006", "a lambda's block must end in its value");
             if (b.stmts().isEmpty()) return b.result();
             return new BlockExpr(b, b.pos());
         }
@@ -734,7 +734,7 @@ final class Parser {
                 next();
                 return new StrLit(t.text(), t.pos());
             }
-            case EOF -> throw t.pos().error("unexpected end of file in an expression");
+            case EOF -> throw t.pos().error("JSC0136", "unexpected end of file in an expression");
             default -> { }
         }
         if (t.is("(")) {
@@ -746,42 +746,42 @@ final class Parser {
             return e;
         }
         if (t.is("[")) return listLit();
-        if (t.is("{")) return objLit(null);
+        if (t.is("{")) return objLit(null, null);
         if (t.is("if")) {
             IfStmt s = ifStmt();
-            if (!isValueIf(s)) throw t.pos().error("an if used as a value needs an else, and both arms must end in a value");
+            if (!isValueIf(s)) throw t.pos().error("JSC0137", "an if used as a value needs an else, and both arms must end in a value");
             return toIfExpr(s);
         }
         if (t.is("match")) {
             Match m = match();
             if (!isValueMatch(m)) {
                 for (Arm a : m.arms()) {
-                    if (a.body().result() == null) throw a.pos().error("a match used as a value needs a value in every arm");
+                    if (a.body().result() == null) throw a.pos().error("JSC0907", "a match used as a value needs a value in every arm");
                 }
             }
             return m;
         }
-        if (t.is("switch")) throw t.pos().error("there is no switch in .jsc: write match e { A => …, B { x } => … }");
+        if (t.is("switch")) throw t.pos().error("JSC0908", "there is no switch in .jsc: write match e { A => …, B { x } => … }");
         if (t.kind() == K.IDENT) {
             switch (t.text()) {
                 case "true", "false" -> {
                     next();
                     return new BoolLit(t.text().equals("true"), t.pos());
                 }
-                case "null", "undefined" -> throw t.pos().error("there is no " + t.text() + " in .jsc: use Option<T> with None and Some(x)");
-                case "this" -> throw t.pos().error("there is no 'this' in .jsc: a bare field name, or state.field, reads the state");
-                case "class" -> throw t.pos().error("there are no classes in .jsc: records are 'type Name = { f: T }', built with Name { f: e }");
-                case "async", "await" -> throw t.pos().error("there is no '" + t.text() + "' in .jsc: everything a call computes happens in its transaction");
-                case "new" -> throw t.pos().error("there is no 'new' in .jsc: build a record with Name { f: e }");
-                case "function" -> throw t.pos().error("there are no function values in .jsc: declare 'fn name(x: Int): Int = …', and write lambdas 'x => …' only as list-method arguments");
+                case "null", "undefined" -> throw t.pos().error("JSC0138", "there is no " + t.text() + " in .jsc: use Option<T> with None and Some(x)");
+                case "this" -> throw t.pos().error("JSC0139", "there is no 'this' in .jsc: a bare field name, or state.field, reads the state");
+                case "class" -> throw t.pos().error("JSC0140", "there are no classes in .jsc: records are 'type Name = { f: T }', built with Name { f: e }");
+                case "async", "await" -> throw t.pos().error("JSC0141", "there is no '" + t.text() + "' in .jsc: everything a call computes happens in its transaction");
+                case "new" -> throw t.pos().error("JSC0142", "there is no 'new' in .jsc: build a record with Name { f: e }");
+                case "function" -> throw t.pos().error("JSC1007", "there are no function values in .jsc: declare 'fn name(x: Int): Int = …', and write lambdas 'x => …' only as list-method arguments");
                 default -> { }
             }
             next();
             if (at("(")) return new Call(t.text(), args(), t.pos());
-            if (at("{") && typeNames.contains(t.text()) && looksLikeObject()) return objLit(t.text());
+            if (at("{") && typeNames.contains(t.text()) && looksLikeObject()) return objLit(t.text(), t.pos());
             return new Name(t.text(), t.pos());
         }
-        throw t.pos().error("unexpected " + t + " in an expression");
+        throw t.pos().error("JSC0143", "unexpected " + t + " in an expression");
     }
 
     /** After {@code Type}, a '{' starts a constructor if it is followed by '}', 'name:' 'name,' 'name }' or '...'. */
@@ -798,7 +798,7 @@ final class Parser {
         while (!at("]")) {
             if (eat("...")) {
                 rest = expr();
-                if (!at("]")) throw peek().pos().error("a spread '...rest' goes last in a list: [x, ...rest]");
+                if (!at("]")) throw peek().pos().error("JSC1008", "a spread '...rest' goes last in a list: [x, ...rest]");
                 break;
             }
             items.add(expr());
@@ -808,14 +808,16 @@ final class Parser {
         return new ListLit(items, rest, p);
     }
 
-    private Expr objLit(String type) {
+    /** {@code { … }} or {@code Type { … }}; the literal's position is where it starts: its type name, if any (J5). */
+    private Expr objLit(String type, Pos start) {
         Pos p = expect("{").pos();
+        if (start != null) p = start;
         Expr spread = null;
         var fields = new ArrayList<FieldInit>();
         boolean first = true;
         while (!at("}")) {
             if (eat("...")) {
-                if (!first) throw peek().pos().error("a spread goes first: { ...state, f: e }");
+                if (!first) throw peek().pos().error("JSC0144", "a spread goes first: { ...state, f: e }");
                 spread = expr();
             } else {
                 Pos fp = peek().pos();

@@ -13,11 +13,11 @@ import java.util.regex.Pattern;
 public final class JscV2 {
     private JscV2() {}
 
-    /** A located warning: line and column in the {@code .jsc} file (D12, F13). */
-    public record Warning(int line, int col, String message) {
-        /** {@code file:line:col: warning: message}. */
+    /** A located warning with its stable code: line and column in the {@code .jsc} file (D12, F13). */
+    public record Warning(int line, int col, String code, String message) {
+        /** {@code file:line:col: warning[CODE]: message}. */
         public String format(String file) {
-            return file + ":" + line + ":" + col + ": warning: " + message;
+            return file + ":" + line + ":" + col + ": warning[" + code + "]: " + message;
         }
     }
 
@@ -43,7 +43,7 @@ public final class JscV2 {
      */
     public static void checkFileName(String fileName) {
         if (fileName == null || !SAFE_FILE_NAME.matcher(fileName).matches()) {
-            throw new JscException(1, 1, "the file name " + (fileName == null ? "(none)" : "'" + printable(fileName) + "'")
+            throw new JscException(1, 1, "JSC0001", "the file name " + (fileName == null ? "(none)" : "'" + printable(fileName) + "'")
                     + " may contain only ASCII letters and digits, '.', '_' and '-', and must start with a letter or digit (it is embedded in the generated Java)");
         }
     }
@@ -63,7 +63,7 @@ public final class JscV2 {
     public static Lowered lower(String source, String fileName) {
         checkFileName(fileName);
         Ir.Program p = Checker.check(Parser.parse(source), fileName);
-        var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.message())).toList();
+        var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList();
         return new Lowered(JavaEmitter.emit(p), warnings, p.recursiveFns(), fileName);
     }
 

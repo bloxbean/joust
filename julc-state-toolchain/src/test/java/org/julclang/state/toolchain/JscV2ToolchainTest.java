@@ -60,6 +60,7 @@ class JscV2ToolchainTest {
         assertEquals(6, d.line());
         assertEquals(16, d.col());
         assertTrue(d.message().contains("immutable"), d.message());
+        assertTrue(d.code() != null && d.code().matches("JSC\\d{4}"), "a stable code on the npm path too (D12, J5): " + d.code());
     }
 
     /** D12, F13: warnings reach the npm path with their line and column. */
@@ -82,6 +83,7 @@ class JscV2ToolchainTest {
         assertTrue(w.get(0).message().contains("validity window in last"), w.get(0).message());
         assertEquals(List.of(7L, 43L), List.of(w.get(1).line(), w.get(1).col()));
         assertTrue(w.get(1).message().contains("payout"), w.get(1).message());
+        assertTrue(w.stream().allMatch(x -> x.code() != null && x.code().startsWith("JSC9")), w.toString());
     }
 
     /** Security S3 on the npm path: a file name that would rewrite the contract is refused at 1:1, nothing is built. */

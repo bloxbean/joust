@@ -13,8 +13,9 @@ final class Syntax {
     private Syntax() {}
 
     record Pos(int line, int col) {
-        JscException error(String msg) {
-            return new JscException(line, col, msg);
+        /** An error at this position with its stable code (D12: every diagnostic has one, J5). */
+        JscException error(String code, String msg) {
+            return new JscException(line, col, code, msg);
         }
 
         @Override

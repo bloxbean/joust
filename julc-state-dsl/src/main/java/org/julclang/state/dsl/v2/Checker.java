@@ -59,7 +59,13 @@ final class Checker {
      * })}, {@code (seed, ctx) ->}, {@code var result = …}: ClientGenerator): a parameter of the same name would not
      * compile, or would be captured (J10).
      */
-    static final Set<String> CLIENT_LOCALS = Set.of("s", "r", "seed", "result");
+    static Set<String> clientLocals(Kind k) {
+        return switch (k) {
+            case INIT -> Set.of("seed", "result");
+            case VIEW -> Set.of("s");
+            case ACTION, DESTROY -> Set.of("s", "r");
+        };
+    }
 
     // ------------------------------------------------------------------ state
 
@@ -132,7 +138,7 @@ final class Checker {
         }
         for (EnumDecl e : allEnums) {
             typeName(e.name(), e.pos(), "enum", c);
-            if (e.variants().isEmpty()) throw e.pos().error("the enum " + e.name() + " needs at least one variant");
+            if (e.variants().isEmpty()) throw e.pos().error("JSC0909", "the enum " + e.name() + " needs at least one variant");
             var vs = new LinkedHashMap<String, LinkedHashMap<String, Ty>>();
             enums.put(e.name(), vs);
             for (VariantDecl v : e.variants()) {
@@ -148,15 +154,15 @@ final class Checker {
         fillFields(stateFields, c.state(), "state", true);
         for (TypeDecl t : allTypes) {
             if (reaches(new Ty.Rec(t.name()), t.name(), new HashSet<>())) {
-                throw t.pos().error("the type " + t.name() + " contains itself; recursive types are not supported");
+                throw t.pos().error("JSC0301", "the type " + t.name() + " contains itself; recursive types are not supported");
             }
         }
         for (EnumDecl e : allEnums) {
             if (reaches(new Ty.EnumT(e.name()), e.name(), new HashSet<>())) {
-                throw e.pos().error("the enum " + e.name() + " contains itself; recursive types are not supported");
+                throw e.pos().error("JSC0302", "the enum " + e.name() + " contains itself; recursive types are not supported");
             }
         }
-        if (stateFields.isEmpty()) throw c.pos().error("the state needs at least one field");
+        if (stateFields.isEmpty()) throw c.pos().error("JSC0303", "the state needs at least one field");
 
         var methodNames = new HashSet<String>();
         for (Syntax.Method m : c.methods()) methodNames.add(m.name());
@@ -165,10 +171,10 @@ final class Checker {
         for (Syntax.Fn f : allFns) {
             checkUserName(f.name(), f.pos(), "function");
             if (fns.containsKey(f.name()) || PRELUDE.contains(f.name()) || Std.ROWS.containsKey(f.name())) {
-                throw f.pos().error("the function " + f.name() + " is declared twice or shadows a built-in");
+                throw f.pos().error("JSC0201", "the function " + f.name() + " is declared twice or shadows a built-in");
             }
             if (methodNames.contains(f.name())) {
-                throw f.pos().error("the fn " + f.name() + " has the name of a method of the contract; rename one (both become methods of one Java class)");
+                throw f.pos().error("JSC0202", "the fn " + f.name() + " has the name of a method of the contract; rename one (both become methods of one Java class)");
             }
             fns.put(f.name(), f);
         }
@@ -178,12 +184,12 @@ final class Checker {
                 String module = b != null ? b.module() : Std.ALSO_EXPORTED.get(n);
                 if (module == null || !module.equals(im.from())) {
                     if (im.from().equals("std/value") || im.from().equals("std/address")) {
-                        throw im.pos().error(im.from() + " comes with Value and Address in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
+                        throw im.pos().error("JSC0304", im.from() + " comes with Value and Address in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
                     }
-                    throw im.pos().error("'" + n + "' is not in " + im.from() + (module != null ? " (it is in " + module + ")" : ""));
+                    throw im.pos().error("JSC0702", "'" + n + "' is not in " + im.from() + (module != null ? " (it is in " + module + ")" : ""));
                 }
                 if (b == null) continue;   // after/before: the prelude's
-                if (fns.containsKey(n)) throw im.pos().error("'" + n + "' is imported and also declared as a fn; rename the fn");
+                if (fns.containsKey(n)) throw im.pos().error("JSC0703", "'" + n + "' is imported and also declared as a fn; rename the fn");
                 imported.add(n);
             }
         }
@@ -200,23 +206,23 @@ final class Checker {
             if (m.kind() != Kind.INIT) checkUserName(m.name(), m.pos(), "method");
             String variant = Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1);
             if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && !generated.add(variant)) {
-                throw m.pos().error("the method name " + m.name() + " would clash with the generated name " + variant + "; rename it");
+                throw m.pos().error("JSC0203", "the method name " + m.name() + " would clash with the generated name " + variant + "; rename it");
             }
-            if (!seen.add(m.name())) throw m.pos().error("the method " + m.name() + " is declared twice");
+            if (!seen.add(m.name())) throw m.pos().error("JSC0204", "the method " + m.name() + " is declared twice");
         }
-        if (c.methods().stream().noneMatch(m -> m.kind() == Kind.INIT)) throw c.pos().error("the contract needs an init(…)");
+        if (c.methods().stream().noneMatch(m -> m.kind() == Kind.INIT)) throw c.pos().error("JSC0401", "the contract needs an init(…)");
     }
 
     /** A declared type, enum or variant name: capitalised, without '_', not reserved, not taken (D5, J10). */
     private void typeName(String n, Pos p, String what, Contract c) {
-        if (!Character.isUpperCase(n.charAt(0))) throw p.error(what + " names start with a capital: " + n);
-        if (n.contains("_")) throw p.error(what + " names are written without '_' (e.g. " + n.replace("_", "") + ")");
+        if (!Character.isUpperCase(n.charAt(0))) throw p.error("JSC0205", what + " names start with a capital: " + n);
+        if (n.contains("_")) throw p.error("JSC0206", what + " names are written without '_' (e.g. " + n.replace("_", "") + ")");
         checkUserName(n, p, what);
         if (n.equals(c.name())) {
-            throw p.error("the " + what + " " + n + " has the contract's name; rename one (it is generated inside the contract's class)");
+            throw p.error("JSC0207", "the " + what + " " + n + " has the contract's name; rename one (it is generated inside the contract's class)");
         }
         if (records.containsKey(n) || enums.containsKey(n) || variantEnum.containsKey(n)) {
-            throw p.error("the name " + n + " is declared twice: types, enums and variants share one namespace (each becomes a Java class)");
+            throw p.error("JSC0910", "the name " + n + " is declared twice: types, enums and variants share one namespace (each becomes a Java class)");
         }
     }
 
@@ -226,9 +232,9 @@ final class Checker {
             // A state field is read by its bare name, so it must not take the name of a built-in: a field called
             // caller would replace the signed caller in every method (Codex C1, security S2).
             if (state && (BUILTINS.contains(f.name()) || PRELUDE.contains(f.name()))) {
-                throw f.pos().error("'" + f.name() + "' is a built-in name, so it cannot be a state field: choose another name");
+                throw f.pos().error("JSC0208", "'" + f.name() + "' is a built-in name, so it cannot be a state field: choose another name");
             }
-            if (into.put(f.name(), resolve(f.type(), state)) != null) throw f.pos().error(owner + " declares " + f.name() + " twice");
+            if (into.put(f.name(), resolve(f.type(), state)) != null) throw f.pos().error("JSC0209", owner + " declares " + f.name() + " twice");
         }
     }
 
@@ -249,35 +255,35 @@ final class Checker {
             case "Option" -> {
                 if (n != 1) yield null;
                 Ty e = resolve(t.args().get(0));
-                if (e instanceof Ty.OptT) throw t.pos().error("Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None");
+                if (e instanceof Ty.OptT) throw t.pos().error("JSC0305", "Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None");
                 yield new Ty.OptT(e);
             }
             case "Map" -> {
-                if (n != 2) throw t.pos().error("a Map has a key and a value type: Map<Key, Int>");
+                if (n != 2) throw t.pos().error("JSC0801", "a Map has a key and a value type: Map<Key, Int>");
                 yield new Ty.MapT(mapKey(t.args().get(0), "Map"), resolve(t.args().get(1)));
             }
             case "BigMap" -> {
-                if (n != 2) throw t.pos().error("a BigMap has a key and a value type: BigMap<Key, Int>");
+                if (n != 2) throw t.pos().error("JSC0802", "a BigMap has a key and a value type: BigMap<Key, Int>");
                 if (!stateField) {
-                    throw t.pos().error("a BigMap is a state field only: it cannot be a parameter, a record or enum field, an element"
+                    throw t.pos().error("JSC0803", "a BigMap is a state field only: it cannot be a parameter, a record or enum field, an element"
                             + " or a const (ADR-0018 D7)");
                 }
                 Ty k = mapKey(t.args().get(0), "BigMap");
                 Ty v = resolve(t.args().get(1));
                 if (!v.equals(Ty.INT) && !v.equals(Ty.BYTES)) {
-                    throw t.args().get(1).pos().error("a BigMap holds Int or Bytes values (ADR-0018 D5), not " + Ty.show(v));
+                    throw t.args().get(1).pos().error("JSC0804", "a BigMap holds Int or Bytes values (ADR-0018 D5), not " + Ty.show(v));
                 }
                 yield new Ty.BigMapT(k, v);
             }
             case "Value", "Address", "Credential" ->
-                    throw t.pos().error(t.name() + " comes in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
+                    throw t.pos().error("JSC0306", t.name() + " comes in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
             default -> records.containsKey(t.name()) ? new Ty.Rec(t.name()) : enums.containsKey(t.name()) ? new Ty.EnumT(t.name()) : null;
         };
         if (ty == null && variantEnum.containsKey(t.name())) {
-            throw t.pos().error(t.name() + " is a variant of " + variantEnum.get(t.name()) + ", not a type: write " + variantEnum.get(t.name()));
+            throw t.pos().error("JSC0911", t.name() + " is a variant of " + variantEnum.get(t.name()) + ", not a type: write " + variantEnum.get(t.name()));
         }
         if (ty == null || (n > 0 && !(ty instanceof Ty.ListT || ty instanceof Ty.OptT || ty instanceof Ty.MapT || ty instanceof Ty.BigMapT))) {
-            throw t.pos().error("unknown type '" + t.name() + "' (Int, Bool, Bytes, Key, Hash, List<T>, Option<T>, Map<K, V>, BigMap<K, V>,"
+            throw t.pos().error("JSC0307", "unknown type '" + t.name() + "' (Int, Bool, Bytes, Key, Hash, List<T>, Option<T>, Map<K, V>, BigMap<K, V>,"
                     + " or a declared type or enum)");
         }
         return ty;
@@ -287,7 +293,7 @@ final class Checker {
     private Ty mapKey(TypeRef k, String what) {
         Ty t = resolve(k);
         if (!Ty.isBytes(t)) {
-            throw k.pos().error("a " + what + "'s keys are Bytes, Key or Hash (at most 64 bytes, canonical order: ADR-0018 D5), not " + Ty.show(t));
+            throw k.pos().error("JSC0308", "a " + what + "'s keys are Bytes, Key or Hash (at most 64 bytes, canonical order: ADR-0018 D5), not " + Ty.show(t));
         }
         return t;
     }
@@ -334,8 +340,8 @@ final class Checker {
     }
 
     private static void checkUserName(String n, Pos p, String what) {
-        if (n.contains("__")) throw p.error("names cannot contain '__' (reserved for generated code): " + n);
-        if (RESERVED.contains(n)) throw p.error("'" + n + "' is reserved and cannot be a " + what + " name");
+        if (n.contains("__")) throw p.error("JSC0210", "names cannot contain '__' (reserved for generated code): " + n);
+        if (RESERVED.contains(n)) throw p.error("JSC0211", "'" + n + "' is reserved and cannot be a " + what + " name");
     }
 
     // ------------------------------------------------------------------ scopes
@@ -377,12 +383,12 @@ final class Checker {
 
         Ir.Local declare(String n, Ty t, int taint, Pos p, boolean isConst, Map<String, Integer> fieldTaints) {
             checkUserName(n, p, "local");
-            if (lookup(n) != null) throw p.error("'" + n + "' is already declared; names are never redeclared or shadowed");
+            if (lookup(n) != null) throw p.error("JSC0212", "'" + n + "' is already declared; names are never redeclared or shadowed");
             if (hasState && (stateFields.containsKey(n) || BUILTINS.contains(n))) {
-                throw p.error("'" + n + "' would hide the state field or built-in of the same name; choose another name (e.g. new"
+                throw p.error("JSC0213", "'" + n + "' would hide the state field or built-in of the same name; choose another name (e.g. new"
                         + Character.toUpperCase(n.charAt(0)) + n.substring(1) + ")");
             }
-            if (!hasState && BUILTINS.contains(n)) throw p.error("'" + n + "' is a built-in name");
+            if (!hasState && BUILTINS.contains(n)) throw p.error("JSC0214", "'" + n + "' is a built-in name");
             return put(n, t, taint, p, isConst, fieldTaints);
         }
 
@@ -397,7 +403,7 @@ final class Checker {
 
     private void unusedConsts(Sc sc) {
         for (Ir.Local v : sc.consts) {
-            if (!used.contains(v)) throw v.pos.error("'" + v.name + "' is never used (a const that is not a check must be used; use require(…) for checks)");
+            if (!used.contains(v)) throw v.pos.error("JSC0215", "'" + v.name + "' is never used (a const that is not a check must be used; use require(…) for checks)");
         }
     }
 
@@ -409,10 +415,10 @@ final class Checker {
         for (Syntax.Option o : c.options()) {
             switch (o.name()) {
                 case "minAda", "maxDatumBytes", "maxValidityMs" -> {
-                    if (o.value().signum() < 0 || o.value().bitLength() > 62) throw o.pos().error(o.name() + " is out of range");
+                    if (o.value().signum() < 0 || o.value().bitLength() > 62) throw o.pos().error("JSC0402", o.name() + " is out of range");
                     options.add(new Ir.ContractOption(o.name(), o.value()));
                 }
-                default -> throw o.pos().error("unknown contract option '" + o.name() + "' (minAda, maxDatumBytes, maxValidityMs)");
+                default -> throw o.pos().error("JSC0403", "unknown contract option '" + o.name() + "' (minAda, maxDatumBytes, maxValidityMs)");
             }
         }
         var methods = new ArrayList<Ir.Method>();
@@ -456,16 +462,16 @@ final class Checker {
         boolean ctx = usesCtx(m);
         boolean pays = paysIn(m.body());
         if (pays && (m.kind() == Kind.INIT || m.kind() == Kind.VIEW)) {
-            throw firstPay(m.body()).error((m.kind() == Kind.INIT ? "an init" : "a view") + " cannot pay (ADR-0018 D4)");
+            throw firstPay(m.body()).error("JSC0404", (m.kind() == Kind.INIT ? "an init" : "a view") + " cannot pay (ADR-0018 D4)");
         }
         var sc = new Sc(kind(m.kind()), m.name(), hasState, ctx, m.kind() == Kind.ACTION || m.kind() == Kind.DESTROY, false, 0, null);
         var mods = new ArrayList<Ir.Mod>();
         boolean audience = false;
         for (Mod mod : m.mods()) {
-            if (m.kind() == Kind.INIT && !mod.name().equals("payable")) throw mod.pos().error("an init takes only 'payable'");
+            if (m.kind() == Kind.INIT && !mod.name().equals("payable")) throw mod.pos().error("JSC0405", "an init takes only 'payable'");
             switch (mod.name()) {
                 case "payable" -> {
-                    if (m.kind() == Kind.DESTROY) throw mod.pos().error("a destroy cannot be payable");
+                    if (m.kind() == Kind.DESTROY) throw mod.pos().error("JSC0406", "a destroy cannot be payable");
                 }
                 case "open" -> audience = true;
                 case "only" -> {
@@ -473,30 +479,30 @@ final class Checker {
                     audience = true;
                 }
                 case "after", "before" -> stateField(mod.arg(), Ty.INT, mod.pos(), mod.name());
-                default -> throw mod.pos().error("unknown modifier " + mod.name());
+                default -> throw mod.pos().error("JSC0407", "unknown modifier " + mod.name());
             }
             mods.add(new Ir.Mod(mod.name(), mod.arg()));
         }
         if (pays && !audience) {
-            throw m.pos().error(m.name() + " can pay out, so it must say who may call it: add 'only <field>' or 'open' (ADR-0018 D4)");
+            throw m.pos().error("JSC0408", m.name() + " can pay out, so it must say who may call it: add 'only <field>' or 'open' (ADR-0018 D4)");
         }
         if (m.kind() == Kind.DESTROY && !pays) {
-            throw m.pos().error("a destroy ends the instance, so it must pay out what it holds: pay(…) at least once (ADR-0018 D4)");
+            throw m.pos().error("JSC0409", "a destroy ends the instance, so it must pay out what it holds: pay(…) at least once (ADR-0018 D4)");
         }
 
         var params = new ArrayList<Ir.Local>();
         var checked = new ArrayList<Ir.Local>();
         for (Param p : m.params()) {
-            if (CLIENT_LOCALS.contains(p.name())) {
-                throw p.pos().error("'" + p.name() + "' is a name the generated client uses for its own values; rename the parameter");
+            if (clientLocals(m.kind()).contains(p.name())) {
+                throw p.pos().error("JSC0216", "'" + p.name() + "' is a name the generated client uses for its own values; rename the parameter");
             }
             Ty t = resolve(p.type());
             Ir.Local l;
             if (m.kind() == Kind.INIT) {
                 // An init has no input state: its parameters may share the names of the fields it creates (D3).
                 checkUserName(p.name(), p.pos(), "parameter");
-                if (BUILTINS.contains(p.name())) throw p.pos().error("'" + p.name() + "' is a built-in name");
-                if (sc.lookup(p.name()) != null) throw p.pos().error("duplicate parameter " + p.name());
+                if (BUILTINS.contains(p.name())) throw p.pos().error("JSC0214", "'" + p.name() + "' is a built-in name");
+                if (sc.lookup(p.name()) != null) throw p.pos().error("JSC0309", "duplicate parameter " + p.name());
                 l = sc.put(p.name(), t, 0, p.pos(), false, null);
             } else {
                 l = sc.declare(p.name(), t, 0, p.pos(), false, null);
@@ -513,7 +519,7 @@ final class Checker {
         switch (m.kind()) {
             case INIT, ACTION -> {
                 if (b.result() == null) {
-                    throw b.pos().error(m.kind() == Kind.INIT ? "an init returns the first state: return { … }"
+                    throw b.pos().error("JSC0410", m.kind() == Kind.INIT ? "an init returns the first state: return { … }"
                             : "an action evaluates to the next state: return { ...state, … }");
                 }
                 result = expr(b.result(), sc, Ty.STATE);
@@ -522,14 +528,14 @@ final class Checker {
                 resultType = Ty.STATE;
             }
             case DESTROY -> {
-                if (b.result() != null) throw b.result().pos().error("a destroy ends the instance: it has no next state");
+                if (b.result() != null) throw b.result().pos().error("JSC0411", "a destroy ends the instance: it has no next state");
                 resultType = null;
                 if (!mentions(b, "balance")) {
-                    warn(m.pos(), m.name() + " never reads balance; a destroy must pay out everything the instance holds");
+                    warn(m.pos(), "JSC9001", m.name() + " never reads balance; a destroy must pay out everything the instance holds");
                 }
             }
             case VIEW -> {
-                if (b.result() == null) throw b.pos().error("a view evaluates to its value");
+                if (b.result() == null) throw b.pos().error("JSC0412", "a view evaluates to its value");
                 resultType = resolve(m.viewType());
                 result = expr(b.result(), sc, resultType);
                 expectType(resultType, result, b.result().pos());
@@ -543,12 +549,12 @@ final class Checker {
 
     private void stateField(String name, Ty want, Pos p, String mod) {
         Ty t = stateFields.get(name);
-        if (t == null) throw p.error("'" + mod + " " + name + "': no state field " + name);
-        if (!t.equals(want)) throw p.error("'" + mod + " " + name + "' needs a " + Ty.show(want) + " field; " + name + " is " + Ty.show(t));
+        if (t == null) throw p.error("JSC0310", "'" + mod + " " + name + "': no state field " + name);
+        if (!t.equals(want)) throw p.error("JSC0311", "'" + mod + " " + name + "' needs a " + Ty.show(want) + " field; " + name + " is " + Ty.show(t));
     }
 
-    private void warn(Pos p, String message) {
-        warnings.add(new Ir.Warning(p.line(), p.col(), null, message));
+    private void warn(Pos p, String code, String message) {
+        warnings.add(new Ir.Warning(p.line(), p.col(), code, message));
     }
 
     // ------------------------------------------------------------------ time fields (D11)
@@ -579,16 +585,16 @@ final class Checker {
             if (ft.whole()) {
                 if (!wholeWarned[0]) {
                     wholeWarned[0] = true;
-                    warn(ft.pos(), method + " builds its next state from a time value with an expression the checker follows as a"
+                    warn(ft.pos(), "JSC9002", method + " builds its next state from a time value with an expression the checker follows as a"
                             + " whole, not field by field, so every state field becomes a time field; build it as"
                             + " { ...state, f: … } to keep the others ordinary (ADR-0018 D11)");
                 }
             } else if ((ft.warn() & WINDOW) != 0) {
-                warn(ft.pos(), method + " stores a value of the validity window in " + f + ": whoever submits the transaction"
+                warn(ft.pos(), "JSC9003", method + " stores a value of the validity window in " + f + ": whoever submits the transaction"
                         + " chooses the window, so validFrom can be up to maxValidityMs early and validTo that much late"
                         + " (ADR-0018 D11)");
             } else {
-                warn(ft.pos(), method + " stores a value derived from a stored time in " + f + ": that time came from an earlier"
+                warn(ft.pos(), "JSC9004", method + " stores a value derived from a stored time in " + f + ": that time came from an earlier"
                         + " call's validity window, so its bias (up to maxValidityMs) carries into " + f + " (ADR-0018 D11)");
             }
         });
@@ -678,7 +684,7 @@ final class Checker {
         }
         Ty ret = resolve(f.ret());
         var stmts = stmts(f.body().stmts(), sc);
-        if (f.body().result() == null) throw f.body().pos().error("a fn ends in its value");
+        if (f.body().result() == null) throw f.body().pos().error("JSC0312", "a fn ends in its value");
         Ir.Expr r = expr(f.body().result(), sc, ret);
         expectType(ret, r, f.body().result().pos());
         unusedConsts(sc);
@@ -694,7 +700,7 @@ final class Checker {
         try {
             checkFn(f, taints);
         } catch (JscException e) {
-            throw new JscException(e.line, e.col, e.getMessage() + " (in " + f.name() + ", called with a time value at " + at + ")");
+            throw new JscException(e.line, e.col, e.code, e.getMessage() + " (in " + f.name() + ", called with a time value at " + at + ")");
         }
     }
 
@@ -712,9 +718,9 @@ final class Checker {
                     if (want != null) expectType(want, v, c.value().pos());
                     Ty t = want != null ? want : v.type();
                     noBigMap(t, c.value().pos(), "bound to a const");
-                    if (v instanceof Ir.Range) throw c.value().pos().error(RANGE_ONLY);
+                    if (v instanceof Ir.Range) throw c.value().pos().error("JSC1009", RANGE_ONLY);
                     var fts = t.equals(Ty.STATE) ? stateTaints(v) : null;
-                    if ("None".equals(c.name()) || "Some".equals(c.name())) throw c.pos().error("'" + c.name() + "' is a built-in name");
+                    if ("None".equals(c.name()) || "Some".equals(c.name())) throw c.pos().error("JSC0214", "'" + c.name() + "' is a built-in name");
                     Ir.Local local = sc.declare(c.name(), t, v.taint(), c.pos(), true, fts == null ? null : taintsOnly(fts));
                     if (fts != null) localFT.put(local, fts);
                     out.add(new Ir.Let(local, v, c.pos()));
@@ -722,7 +728,7 @@ final class Checker {
                 case Syntax.Require r -> out.add(new Ir.Require(requireCond(r.cond(), sc), r.message(), r.pos()));
                 case Syntax.Pay p -> {
                     if (!sc.effects) {
-                        throw p.pos().error("pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4)");
+                        throw p.pos().error("JSC0413", "pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4)");
                     }
                     Ir.Expr to = expr(p.to(), sc, Ty.KEY);
                     expectType(Ty.KEY, to, p.to().pos());
@@ -730,10 +736,10 @@ final class Checker {
                     expectType(Ty.INT, amount, p.amount().pos());
                     if ((amount.taint() & TIME) != 0) {
                         if (!isClampedAtZero(p.amount())) {
-                            throw p.amount().pos().error("a time value sets this payout: write pay(to, max(0, …)) so its sign cannot"
+                            throw p.amount().pos().error("JSC0501", "a time value sets this payout: write pay(to, max(0, …)) so its sign cannot"
                                     + " make the call fail (ADR-0018 D11)");
                         }
-                        warn(p.amount().pos(), "a time value sets this payout: whoever submits the transaction chooses the"
+                        warn(p.amount().pos(), "JSC9005", "a time value sets this payout: whoever submits the transaction chooses the"
                                 + " window, so validFrom can be up to maxValidityMs early and validTo that much late, and the"
                                 + " amount moves with it (ADR-0018 D11)");
                     }
@@ -749,8 +755,8 @@ final class Checker {
                 case MatchStmt ms -> out.add(matchStmt(ms.match(), sc));
                 case For f -> {
                     Ir.Expr list = isRange(f.list(), sc) ? range((Call) f.list(), sc) : expr(f.list(), sc, null);
-                    if (!(list.type() instanceof Ty.ListT lt)) throw f.list().pos().error("for (const x of …) needs a List, not " + Ty.show(list.type()));
-                    if (f.body().result() != null) throw f.body().result().pos().error("a for loop's body has no value; accumulate with fold");
+                    if (!(list.type() instanceof Ty.ListT lt)) throw f.list().pos().error("JSC1010", "for (const x of …) needs a List, not " + Ty.show(list.type()));
+                    if (f.body().result() != null) throw f.body().result().pos().error("JSC1011", "a for loop's body has no value; accumulate with fold");
                     Sc inner = sc.child(sc.effects, false);
                     Ir.Local var = inner.declare(f.var(), lt.elem(), list.taint(), f.pos(), false, null);
                     var body = stmts(f.body().stmts(), inner);
@@ -766,10 +772,10 @@ final class Checker {
     private Ir.Block armBlock(Syntax.Block b, Sc sc) {
         if (b.result() != null) {
             if (b.returnPos() != null) {
-                throw b.returnPos().error("there is no early return in .jsc: a block's value is its last expression; make this if"
+                throw b.returnPos().error("JSC0313", "there is no early return in .jsc: a block's value is its last expression; make this if"
                         + " the block's last expression, with an else (if c { … } else { … })");
             }
-            throw b.result().pos().error("this if is a statement (it is not the block's last expression, or it has no else),"
+            throw b.result().pos().error("JSC0314", "this if is a statement (it is not the block's last expression, or it has no else),"
                     + " so its arms end in statements, not a value");
         }
         Sc inner = sc.child(sc.effects, false);
@@ -782,7 +788,7 @@ final class Checker {
     private Ir.Block valueBlock(Syntax.Block b, Sc inner, Ty expected) {
         for (Stmt s : b.stmts()) {
             if (!(s instanceof Const) && !(s instanceof Syntax.Require)) {
-                throw s.pos().error("a block used as a value holds only const and require statements");
+                throw s.pos().error("JSC0315", "a block used as a value holds only const and require statements");
             }
         }
         var stmts = stmts(b.stmts(), inner);
@@ -812,7 +818,7 @@ final class Checker {
 
     private static void decides(Ir.Expr c, Pos p) {
         if ((c.taint() & TIME) != 0) {
-            throw p.error("a time value cannot decide here: compare times only with after(t) or before(t) in a require (ADR-0018 D11)");
+            throw p.error("JSC0502", "a time value cannot decide here: compare times only with after(t) or before(t) in a require (ADR-0018 D11)");
         }
     }
 
@@ -828,15 +834,15 @@ final class Checker {
     }
 
     private Ir.Expr timePredicate(Call c, Sc sc) {
-        if (!sc.hasCtx) throw c.pos().error(c.fn() + "(t) needs the transaction: not in a view or fn");
+        if (!sc.hasCtx) throw c.pos().error("JSC0503", c.fn() + "(t) needs the transaction: not in a view or fn");
         if (sc.inLambda) {
-            throw c.pos().error(c.fn() + "(t) is not used inside a lambda (ADR-0018 D11): require it outside the list method");
+            throw c.pos().error("JSC0504", c.fn() + "(t) is not used inside a lambda (ADR-0018 D11): require it outside the list method");
         }
-        if (c.args().size() != 1) throw c.pos().error(c.fn() + " takes one argument");
+        if (c.args().size() != 1) throw c.pos().error("JSC0316", c.fn() + " takes one argument");
         Ir.Expr t = expr(c.args().get(0), sc, Ty.INT);
         expectType(Ty.INT, t, c.args().get(0).pos());
         if ((t.taint() & WINDOW) != 0) {
-            throw c.args().get(0).pos().error("this threshold depends on the current call's validity window, which can invert "
+            throw c.args().get(0).pos().error("JSC0505", "this threshold depends on the current call's validity window, which can invert "
                     + c.fn() + "(t): use a stored or given time (ADR-0018 D11)");
         }
         return new Ir.TimePred(c.fn().equals("after"), t, Ty.BOOL, 0, c.pos());
@@ -855,12 +861,12 @@ final class Checker {
             case BoolLit b -> new Ir.Lit(b.value(), Ty.BOOL, b.pos());
             // A hex literal is Bytes; a key literal is asKey(#…), checked here (F15).
             case BytesLit b -> new Ir.Lit(hexBytes(b.hex()), Ty.BYTES, b.pos());
-            case StrLit s -> throw s.pos().error("strings are only require messages and utf8(\"…\") arguments");
+            case StrLit s -> throw s.pos().error("JSC0317", "strings are only require messages and utf8(\"…\") arguments");
             case Name n -> name(n, sc, expected);
             case Field f -> field(f, sc);
             case Call c -> call(c, sc, expected);
             case MethodCall m -> methodCall(m, sc, expected);
-            case Lambda l -> throw l.pos().error("a lambda is only an argument of a list method (fold, any, all, find, filter, map)");
+            case Lambda l -> throw l.pos().error("JSC1012", "a lambda is only an argument of a list method (fold, any, all, find, filter, map)");
             case ObjLit o -> objLit(o, sc, expected);
             case ListLit l -> listLit(l, sc, expected);
             case Unary u -> unary(u, sc);
@@ -893,13 +899,13 @@ final class Checker {
         if (variantEnum.containsKey(n.name())) {
             String e = variantEnum.get(n.name());
             if (!enums.get(e).get(n.name()).isEmpty()) {
-                throw n.pos().error(n.name() + " has fields: write " + n.name() + " { " + String.join(", ", enums.get(e).get(n.name()).keySet()) + " }");
+                throw n.pos().error("JSC0912", n.name() + " has fields: write " + n.name() + " { " + String.join(", ", enums.get(e).get(n.name()).keySet()) + " }");
             }
             return new Ir.Variant(e, n.name(), List.of(), new Ty.EnumT(e), 0, n.pos());
         }
         switch (n.name()) {
             case "state" -> {
-                if (!sc.hasState) throw n.pos().error("'state' is the input state of an action, destroy or view");
+                if (!sc.hasState) throw n.pos().error("JSC0414", "'state' is the input state of an action, destroy or view");
                 return new Ir.StateRef(Ty.STATE, timeFields.isEmpty() ? 0 : TIME, n.pos());
             }
             case "caller" -> {
@@ -916,28 +922,28 @@ final class Checker {
             }
             case "None" -> {
                 if (!(expected instanceof Ty.OptT)) {
-                    throw n.pos().error("the type of None is unknown here: give it one (const o: Option<Int> = None)");
+                    throw n.pos().error("JSC0318", "the type of None is unknown here: give it one (const o: Option<Int> = None)");
                 }
                 return new Ir.NoneLit(expected, n.pos());
             }
-            case "params", "funds" -> throw n.pos().error("'" + n.name() + "' comes in a later milestone of .jsc 2 (ADR-0018 §8)");
-            case "Map", "BigMap" -> throw n.pos().error("an empty map is " + n.name() + ".empty()");
+            case "params", "funds" -> throw n.pos().error("JSC0319", "'" + n.name() + "' comes in a later milestone of .jsc 2 (ADR-0018 §8)");
+            case "Map", "BigMap" -> throw n.pos().error("JSC0805", "an empty map is " + n.name() + ".empty()");
             default -> {
             }
         }
-        throw n.pos().error("unknown name '" + n.name() + "'");
+        throw n.pos().error("JSC0217", "unknown name '" + n.name() + "'");
     }
 
     private static void needCtx(Name n, Sc sc) {
         if (!sc.hasCtx) {
-            throw n.pos().error(n.name() + " is part of the transaction: it is not available in a view or fn (pass it as an argument)");
+            throw n.pos().error("JSC0415", n.name() + " is part of the transaction: it is not available in a view or fn (pass it as an argument)");
         }
     }
 
     /** {@code t.name}: a record field, or a list property; which one is decided by the target's type (C7). */
     private Ir.Expr field(Field f, Sc sc) {
         Ir.Expr target = expr(f.target(), sc, null);
-        if (target instanceof Ir.Range) throw f.target().pos().error(RANGE_ONLY);
+        if (target instanceof Ir.Range) throw f.target().pos().error("JSC1009", RANGE_ONLY);
         if (target.type() instanceof Ty.MapT mt) {
             return switch (f.name()) {
                 // The key set of a map never depends on a time value (every key position refuses one), so these are
@@ -946,38 +952,38 @@ final class Checker {
                 case "isEmpty" -> new Ir.MapOp("isEmpty", target, List.of(), Ty.BOOL, 0, f.pos());
                 case "keys" -> new Ir.MapOp("keys", target, List.of(), new Ty.ListT(mt.key()), 0, f.pos());
                 case "values" -> new Ir.MapOp("values", target, List.of(), new Ty.ListT(mt.val()), target.taint(), f.pos());
-                case "length" -> throw f.pos().error("a Map's size is m.size");
-                default -> throw f.pos().error("Map has no property '" + f.name() + "' (size, isEmpty, keys, values)");
+                case "length" -> throw f.pos().error("JSC0806", "a Map's size is m.size");
+                default -> throw f.pos().error("JSC0807", "Map has no property '" + f.name() + "' (size, isEmpty, keys, values)");
             };
         }
         if (target.type() instanceof Ty.BigMapT) {
             if (f.name().equals("isEmpty")) {
                 if (sc.kind != Ir.Kind.DESTROY) {
-                    throw f.pos().error("a BigMap's isEmpty means \"empty before this call\", so it is read only in a destroy (ADR-0018 D7)");
+                    throw f.pos().error("JSC0808", "a BigMap's isEmpty means \"empty before this call\", so it is read only in a destroy (ADR-0018 D7)");
                 }
                 return new Ir.BigOp("isEmpty", target, List.of(), Ty.BOOL, 0, f.pos());
             }
-            throw f.pos().error("a BigMap has no property '" + f.name() + "': read it with get(k), has(k) or m[k] (ADR-0018 D7)");
+            throw f.pos().error("JSC0809", "a BigMap has no property '" + f.name() + "': read it with get(k), has(k) or m[k] (ADR-0018 D7)");
         }
         if (target.type() instanceof Ty.ListT lt) {
             return switch (f.name()) {
                 case "length" -> new Ir.ListProp("length", target, Ty.INT, target.taint(), f.pos());
                 case "isEmpty" -> new Ir.ListProp("isEmpty", target, Ty.BOOL, target.taint(), f.pos());
                 case "head" -> new Ir.ListProp("head", target, option(lt.elem(), f.pos(), "xs.head"), target.taint(), f.pos());
-                case "size" -> throw f.pos().error("a List's size is xs.length");
-                default -> throw f.pos().error("List has no property '" + f.name() + "' (length, isEmpty, head)");
+                case "size" -> throw f.pos().error("JSC1013", "a List's size is xs.length");
+                default -> throw f.pos().error("JSC1014", "List has no property '" + f.name() + "' (length, isEmpty, head)");
             };
         }
         if (target.type() instanceof Ty.Rec r) {
             Ty ft = fieldsOf(r.name()).get(f.name());
-            if (ft == null) throw f.pos().error(r.name() + " has no field " + f.name());
+            if (ft == null) throw f.pos().error("JSC0320", r.name() + " has no field " + f.name());
             if (ft instanceof Ty.BigMapT) bigMapRead(f.pos(), sc);
             return new Ir.GetField(target, r.name(), f.name(), ft, fieldTaint(target, f.name()), f.pos());
         }
         if (target.type() instanceof Ty.EnumT e) {
-            throw f.pos().error(e.name() + " is an enum: read its fields with match (match v { A { " + f.name() + " } => … })");
+            throw f.pos().error("JSC0913", e.name() + " is an enum: read its fields with match (match v { A { " + f.name() + " } => … })");
         }
-        throw f.pos().error("." + f.name() + " needs a record, a List or a Map, not " + Ty.show(target.type()));
+        throw f.pos().error("JSC0321", "." + f.name() + " needs a record, a List or a Map, not " + Ty.show(target.type()));
     }
 
     private Ir.Expr call(Call c, Sc sc, Ty expected) {
@@ -986,22 +992,22 @@ final class Checker {
         if (user != null) return userCall(user, c, sc);
         Std.Binding b = Std.ROWS.get(fn);
         if (b != null) {
-            if (!imported.contains(fn)) throw c.pos().error(fn + " is in " + b.module() + ": import { " + fn + " } from \"" + b.module() + "\"");
+            if (!imported.contains(fn)) throw c.pos().error("JSC0704", fn + " is in " + b.module() + ": import { " + fn + " } from \"" + b.module() + "\"");
             return stdCall(b, c, sc);
         }
         switch (fn) {
-            case "after", "before" -> throw c.pos().error(fn + "(t) holds for the whole validity window: use it only at the top of a require, under && or ||");
-            case "range" -> throw c.pos().error(RANGE_ONLY);
+            case "after", "before" -> throw c.pos().error("JSC0506", fn + "(t) holds for the whole validity window: use it only at the top of a require, under && or ||");
+            case "range" -> throw c.pos().error("JSC1009", RANGE_ONLY);
             case "Some" -> {
                 arity(c, 1);
                 Expr a = c.args().get(0);
                 if (a instanceof Name n && n.name().equals("None")) {
-                    throw a.pos().error("Some(None) is not allowed: an Option holds a value, and JavaScript cannot tell Some(None) from None (ADR-0018 D5)");
+                    throw a.pos().error("JSC0322", "Some(None) is not allowed: an Option holds a value, and JavaScript cannot tell Some(None) from None (ADR-0018 D5)");
                 }
                 Ty inner = expected instanceof Ty.OptT o ? o.elem() : null;
                 Ir.Expr v = expr(a, sc, inner);
                 noBigMap(v.type(), a.pos(), "held in an Option");
-                if (v.type() instanceof Ty.OptT) throw c.pos().error("Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None");
+                if (v.type() instanceof Ty.OptT) throw c.pos().error("JSC0305", "Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None");
                 return new Ir.SomeOf(v, new Ty.OptT(v.type()), v.taint(), c.pos());
             }
             case "min", "max" -> {
@@ -1016,7 +1022,7 @@ final class Checker {
             }
             case "utf8" -> {
                 arity(c, 1);
-                if (!(c.args().get(0) instanceof StrLit s)) throw c.pos().error("utf8 takes a string literal");
+                if (!(c.args().get(0) instanceof StrLit s)) throw c.pos().error("JSC1015", "utf8 takes a string literal");
                 return new Ir.Lit(s.value().getBytes(StandardCharsets.UTF_8), Ty.BYTES, c.pos());
             }
             case "asKey", "asHash" -> {
@@ -1026,17 +1032,17 @@ final class Checker {
                 if (c.args().get(0) instanceof BytesLit lit) {
                     // A literal is checked here, once: no run-time check is needed.
                     byte[] k = hexBytes(lit.hex());
-                    if (k.length != 28) throw lit.pos().error(fn + ": this literal has " + k.length + " bytes; " + what + " has 28");
+                    if (k.length != 28) throw lit.pos().error("JSC0323", fn + ": this literal has " + k.length + " bytes; " + what + " has 28");
                     return new Ir.Lit(k, to, c.pos());
                 }
                 Ir.Expr a = expr(c.args().get(0), sc, Ty.BYTES);
                 expectType(Ty.BYTES, a, c.args().get(0).pos());
                 if ((a.taint() & TIME) != 0) {
-                    throw c.pos().error(fn + " can fail, so a time value cannot become " + (fn.equals("asKey") ? "a key" : "a hash") + " (ADR-0018 D11)");
+                    throw c.pos().error("JSC0507", fn + " can fail, so a time value cannot become " + (fn.equals("asKey") ? "a key" : "a hash") + " (ADR-0018 D11)");
                 }
                 return new Ir.Prelude(fn, List.of(a), to, a.taint(), c.pos());
             }
-            default -> throw c.pos().error("unknown function '" + fn + "'");
+            default -> throw c.pos().error("JSC0324", "unknown function '" + fn + "'");
         }
     }
 
@@ -1047,14 +1053,14 @@ final class Checker {
     }
 
     private static void arity(Call c, int n) {
-        if (c.args().size() != n) throw c.pos().error(c.fn() + " takes " + n + " argument" + (n == 1 ? "" : "s"));
+        if (c.args().size() != n) throw c.pos().error("JSC0325", c.fn() + " takes " + n + " argument" + (n == 1 ? "" : "s"));
     }
 
     private Ir.Expr userCall(Syntax.Fn f, Call c, Sc sc) {
-        if (c.args().size() != f.params().size()) throw c.pos().error(f.name() + " takes " + f.params().size() + " arguments");
+        if (c.args().size() != f.params().size()) throw c.pos().error("JSC0326", f.name() + " takes " + f.params().size() + " arguments");
         callGraph.computeIfAbsent(sc.kind == null ? sc.owner : "", k -> new TreeSet<>()).add(f.name());
         if (sc.kind == null && f.name().equals(sc.owner) && sc.helperDepth > 0) {
-            throw c.pos().error(f.name() + " calls itself from inside a lambda, block arm or ?? default: the generated helper would join"
+            throw c.pos().error("JSC0601", f.name() + " calls itself from inside a lambda, block arm or ?? default: the generated helper would join"
                     + " a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out");
         }
         var args = new ArrayList<Ir.Expr>();
@@ -1073,11 +1079,11 @@ final class Checker {
     }
 
     private Ir.Expr stdCall(Std.Binding b, Call c, Sc sc) {
-        if (c.args().size() != b.params().size()) throw c.pos().error(b.name() + " takes " + b.params().size() + " argument"
+        if (c.args().size() != b.params().size()) throw c.pos().error("JSC0325", b.name() + " takes " + b.params().size() + " argument"
                 + (b.params().size() == 1 ? "" : "s"));
         if (b.module().equals("std/time")) {
             // Sources of time values (D11): this call's window, with a bias the docs name.
-            if (!sc.hasCtx) throw c.pos().error(b.name() + " reads the validity window: it is not available in a view or fn (pass it as an argument)");
+            if (!sc.hasCtx) throw c.pos().error("JSC0508", b.name() + " reads the validity window: it is not available in a view or fn (pass it as an argument)");
             var args = new ArrayList<Ir.Expr>();
             for (int i = 0; i < c.args().size(); i++) args.add(intArg(c, i, sc));
             return new Ir.CallStd(b, args, Ty.INT, TIME | WINDOW | (args.isEmpty() ? 0 : args.get(0).taint()), c.pos());
@@ -1089,7 +1095,7 @@ final class Checker {
             Ir.Expr a = expr(c.args().get(i), sc, b.params().get(i));
             expectType(b.params().get(i), a, c.args().get(i).pos());
             if ((a.taint() & TIME) != 0 && !b.timeTotal()) {
-                throw c.args().get(i).pos().error(b.name() + " can fail for some arguments, so a time value cannot reach it (ADR-0018 D11)");
+                throw c.args().get(i).pos().error("JSC0509", b.name() + " can fail for some arguments, so a time value cannot reach it (ADR-0018 D11)");
             }
             args.add(a);
             taint |= a.taint();
@@ -1100,8 +1106,8 @@ final class Checker {
     /** std/list's generic functions: instantiated at the list's element type (D5). */
     private Ir.Expr listFn(Std.Binding b, Call c, Sc sc) {
         Ir.Expr xs = isRange(c.args().get(0), sc) ? null : expr(c.args().get(0), sc, null);
-        if (xs == null) throw c.args().get(0).pos().error(RANGE_ONLY);
-        if (!(xs.type() instanceof Ty.ListT lt)) throw c.args().get(0).pos().error(b.name() + " takes a List, not " + Ty.show(xs.type()));
+        if (xs == null) throw c.args().get(0).pos().error("JSC1009", RANGE_ONLY);
+        if (!(xs.type() instanceof Ty.ListT lt)) throw c.args().get(0).pos().error("JSC1016", b.name() + " takes a List, not " + Ty.show(xs.type()));
         Ty e = lt.elem();
         var args = new ArrayList<Ir.Expr>(List.of(xs));
         int taint = xs.taint();
@@ -1112,7 +1118,7 @@ final class Checker {
             case "nth" -> {
                 Ir.Expr i = intArg(c, 1, sc);
                 if ((i.taint() & TIME) != 0) {
-                    throw c.args().get(1).pos().error("nth fails for a negative index, so a time value cannot be its index (ADR-0018 D11)");
+                    throw c.args().get(1).pos().error("JSC0510", "nth fails for a negative index, so a time value cannot be its index (ADR-0018 D11)");
                 }
                 args.add(i);
                 return new Ir.CallStd(b, args, option(e, c.pos(), "nth"), taint, c.pos());
@@ -1120,7 +1126,7 @@ final class Checker {
             case "indexOf" -> {
                 Ir.Expr v = expr(c.args().get(1), sc, e);
                 expectType(e, v, c.args().get(1).pos());
-                if (((v.taint() | taint) & TIME) != 0) throw c.pos().error("a time value cannot decide here: indexOf compares it (ADR-0018 D11)");
+                if (((v.taint() | taint) & TIME) != 0) throw c.pos().error("JSC0511", "a time value cannot decide here: indexOf compares it (ADR-0018 D11)");
                 noBigMap(e, c.pos(), "compared");
                 args.add(v);
                 return new Ir.CallStd(b, args, new Ty.OptT(Ty.INT), 0, c.pos());
@@ -1139,62 +1145,62 @@ final class Checker {
         if (target.type() instanceof Ty.MapT mt) return mapMethod(m, target, mt, sc, expected);
         if (target.type() instanceof Ty.BigMapT bt) return bigMethod(m, target, bt, sc);
         if (!(target.type() instanceof Ty.ListT lt)) {
-            throw m.pos().error("." + m.method() + "(…) needs a List or a Map; " + Ty.show(target.type()) + " has no methods");
+            throw m.pos().error("JSC0327", "." + m.method() + "(…) needs a List or a Map; " + Ty.show(target.type()) + " has no methods");
         }
         if (target instanceof Ir.Range && !Set.of("any", "all", "fold", "filter", "map").contains(m.method())) {
-            throw m.target().pos().error(RANGE_ONLY);
+            throw m.target().pos().error("JSC1009", RANGE_ONLY);
         }
         Ty e = lt.elem();
         List<Expr> args = m.args();
         int t = target.taint();
         switch (m.method()) {
             case "take", "drop" -> {
-                if (args.size() != 1) throw m.pos().error(m.method() + " takes one Int: xs." + m.method() + "(n)");
+                if (args.size() != 1) throw m.pos().error("JSC1017", m.method() + " takes one Int: xs." + m.method() + "(n)");
                 Ir.Expr n = expr(args.get(0), sc, Ty.INT);
                 expectType(Ty.INT, n, args.get(0).pos());
                 if ((n.taint() & TIME) != 0) {
-                    throw args.get(0).pos().error(m.method() + " fails for a negative count, so a time value cannot be its count (ADR-0018 D11)");
+                    throw args.get(0).pos().error("JSC0512", m.method() + " fails for a negative count, so a time value cannot be its count (ADR-0018 D11)");
                 }
                 return new Ir.ListArg(m.method(), target, n, target.type(), t, m.pos());
             }
-            case "length", "isEmpty", "head" -> throw m.pos().error("xs." + m.method() + " is a property: write it without parentheses");
+            case "length", "isEmpty", "head" -> throw m.pos().error("JSC1018", "xs." + m.method() + " is a property: write it without parentheses");
             case "sum" -> {
-                if (!args.isEmpty()) throw m.pos().error("sum() takes no arguments");
-                if (!e.equals(Ty.INT)) throw m.pos().error("sum() needs a List<Int>");
+                if (!args.isEmpty()) throw m.pos().error("JSC1019", "sum() takes no arguments");
+                if (!e.equals(Ty.INT)) throw m.pos().error("JSC1020", "sum() needs a List<Int>");
                 return new Ir.ListProp("sum", target, Ty.INT, t, m.pos());
             }
             case "reverse" -> {
-                if (!args.isEmpty()) throw m.pos().error("reverse() takes no arguments");
+                if (!args.isEmpty()) throw m.pos().error("JSC1021", "reverse() takes no arguments");
                 return new Ir.ListProp("reverse", target, target.type(), t, m.pos());
             }
             case "contains" -> {
-                if (args.size() != 1) throw m.pos().error("contains takes one value");
+                if (args.size() != 1) throw m.pos().error("JSC1022", "contains takes one value");
                 Ir.Expr v = expr(args.get(0), sc, e);
                 expectType(e, v, args.get(0).pos());
                 if (((v.taint() | t) & TIME) != 0) {
-                    throw m.pos().error("a time value cannot decide here: contains compares it (ADR-0018 D11)");
+                    throw m.pos().error("JSC0513", "a time value cannot decide here: contains compares it (ADR-0018 D11)");
                 }
                 return new Ir.Contains(target, v, e, Ty.BOOL, 0, m.pos());
             }
             case "concat" -> {
-                if (args.size() != 1) throw m.pos().error("concat takes one list");
+                if (args.size() != 1) throw m.pos().error("JSC1023", "concat takes one list");
                 Ir.Expr o = expr(args.get(0), sc, target.type());
                 expectType(target.type(), o, args.get(0).pos());
                 return new Ir.Concat(target, o, target.type(), t | o.taint(), m.pos());
             }
             case "any", "all", "find", "filter", "map" -> {
                 if (args.size() != 1 || !(args.get(0) instanceof Lambda l) || l.params().size() != 1) {
-                    throw m.pos().error(m.method() + " takes a one-parameter lambda: xs." + m.method() + "(x => …)");
+                    throw m.pos().error("JSC1024", m.method() + " takes a one-parameter lambda: xs." + m.method() + "(x => …)");
                 }
                 return hof(m.method(), target, e, l, sc, expected, m.pos());
             }
             case "fold" -> {
                 if (args.size() != 2 || !(args.get(1) instanceof Lambda l) || l.params().size() != 2) {
-                    throw m.pos().error("fold takes an initial value and a two-parameter lambda: xs.fold(0, (acc, x) => acc + x)");
+                    throw m.pos().error("JSC1025", "fold takes an initial value and a two-parameter lambda: xs.fold(0, (acc, x) => acc + x)");
                 }
                 return fold(target, e, args.get(0), l, sc, expected, m.pos());
             }
-            default -> throw m.pos().error("List has no method '" + m.method() + "'");
+            default -> throw m.pos().error("JSC1026", "List has no method '" + m.method() + "'");
         }
     }
 
@@ -1215,7 +1221,7 @@ final class Checker {
         Ir.Expr r = body.result();
         if (!map) {
             expectType(Ty.BOOL, r, r.pos());
-            if ((r.taint() & TIME) != 0) throw l.pos().error("a time value cannot decide " + kind + "'s predicate (ADR-0018 D11)");
+            if ((r.taint() & TIME) != 0) throw l.pos().error("JSC0514", "a time value cannot decide " + kind + "'s predicate (ADR-0018 D11)");
         } else if (want != null) {
             expectType(want, r, r.pos());
         }
@@ -1230,7 +1236,7 @@ final class Checker {
     /** {@code Option<elem>}; an Option of an Option does not exist in .jsc (D5, F20), whatever builds it. */
     private static Ty option(Ty elem, Pos pos, String what) {
         if (elem instanceof Ty.OptT) {
-            throw pos.error(what + " on a List of Options would be an Option<Option<…>>, which .jsc does not have"
+            throw pos.error("JSC0328", what + " on a List of Options would be an Option<Option<…>>, which .jsc does not have"
                     + " (JavaScript cannot tell Some(None) from None): use xs.isEmpty or a fold");
         }
         return new Ty.OptT(elem);
@@ -1305,14 +1311,14 @@ final class Checker {
         String recName;
         if (o.type() != null) {
             if (variantEnum.containsKey(o.type())) return variantLit(o, sc);
-            if (!records.containsKey(o.type())) throw o.pos().error("unknown type " + o.type());
+            if (!records.containsKey(o.type())) throw o.pos().error("JSC0329", "unknown type " + o.type());
             recName = o.type();
         } else if (expected instanceof Ty.Rec r) {
             recName = r.name();
         } else if (expected instanceof Ty.EnumT e) {
-            throw o.pos().error("an " + e.name() + " is one of its variants: write " + String.join(" { … }, ", enums.get(e.name()).keySet()) + " { … }");
+            throw o.pos().error("JSC0914", "an " + e.name() + " is one of its variants: write " + String.join(" { … }, ", enums.get(e.name()).keySet()) + " { … }");
         } else {
-            throw o.pos().error("this object's type is unknown here: write Type { … }, or give the const a type");
+            throw o.pos().error("JSC0330", "this object's type is unknown here: write Type { … }, or give the const a type");
         }
         var fields = fieldsOf(recName);
         Ty type = new Ty.Rec(recName);
@@ -1321,14 +1327,14 @@ final class Checker {
             spread = expr(o.spread(), sc, type);
             expectType(type, spread, o.spread().pos());
             if (!(spread instanceof Ir.LocalRef) && !(spread instanceof Ir.StateRef)) {
-                throw o.spread().pos().error("spread a named value: { ...state, … } or { ...r, … }");
+                throw o.spread().pos().error("JSC0218", "spread a named value: { ...state, … } or { ...r, … }");
             }
         }
         var given = new LinkedHashMap<String, Ir.Expr>();
         for (FieldInit f : o.fields()) {
             Ty ft = fields.get(f.name());
-            if (ft == null) throw f.pos().error(recName + " has no field " + f.name());
-            if (given.containsKey(f.name())) throw f.pos().error(f.name() + " is given twice");
+            if (ft == null) throw f.pos().error("JSC0320", recName + " has no field " + f.name());
+            if (given.containsKey(f.name())) throw f.pos().error("JSC0219", f.name() + " is given twice");
             Expr ve = f.value() != null ? f.value() : new Name(f.name(), f.pos());
             Ir.Expr v = expr(ve, sc, ft);
             expectType(ft, v, ve.pos());
@@ -1339,7 +1345,7 @@ final class Checker {
         for (var en : fields.entrySet()) {
             Ir.Expr v = given.get(en.getKey());
             if (v == null) {
-                if (spread == null) throw o.pos().error(recName + " needs " + en.getKey() + " (or start with ...state)");
+                if (spread == null) throw o.pos().error("JSC0331", recName + " needs " + en.getKey() + " (or start with ...state)");
                 v = new Ir.GetField(spread, recName, en.getKey(), en.getValue(), fieldTaint(spread, en.getKey()), o.pos());
             }
             values.add(v);
@@ -1353,12 +1359,12 @@ final class Checker {
     private Ir.Expr variantLit(ObjLit o, Sc sc) {
         String e = variantEnum.get(o.type());
         var fields = enums.get(e).get(o.type());
-        if (o.spread() != null) throw o.spread().pos().error("a variant is built from its fields: " + o.type() + " { … } takes no spread");
+        if (o.spread() != null) throw o.spread().pos().error("JSC0915", "a variant is built from its fields: " + o.type() + " { … } takes no spread");
         var given = new LinkedHashMap<String, Ir.Expr>();
         for (FieldInit f : o.fields()) {
             Ty ft = fields.get(f.name());
-            if (ft == null) throw f.pos().error(o.type() + " has no field " + f.name());
-            if (given.containsKey(f.name())) throw f.pos().error(f.name() + " is given twice");
+            if (ft == null) throw f.pos().error("JSC0320", o.type() + " has no field " + f.name());
+            if (given.containsKey(f.name())) throw f.pos().error("JSC0219", f.name() + " is given twice");
             Expr ve = f.value() != null ? f.value() : new Name(f.name(), f.pos());
             Ir.Expr v = expr(ve, sc, ft);
             expectType(ft, v, ve.pos());
@@ -1368,7 +1374,7 @@ final class Checker {
         int taint = 0;
         for (String n : fields.keySet()) {
             Ir.Expr v = given.get(n);
-            if (v == null) throw o.pos().error(o.type() + " needs " + n);
+            if (v == null) throw o.pos().error("JSC0332", o.type() + " needs " + n);
             values.add(v);
             taint |= v.taint();
         }
@@ -1382,7 +1388,7 @@ final class Checker {
     private void bigMapField(String field, Ir.Expr v, Sc sc, Pos copied) {
         if (copied != null) return;
         if (v instanceof Ir.BigEmpty) {
-            if (sc.kind != Ir.Kind.INIT) throw v.pos().error("BigMap.empty() starts a map in an init; elsewhere a BigMap field keeps its own entries");
+            if (sc.kind != Ir.Kind.INIT) throw v.pos().error("JSC0810", "BigMap.empty() starts a map in an init; elsewhere a BigMap field keeps its own entries");
             return;
         }
         Ir.Expr root = v;
@@ -1390,7 +1396,7 @@ final class Checker {
         boolean own = root instanceof Ir.StateField f && f.field().equals(field)
                 || root instanceof Ir.GetField g && g.field().equals(field) && g.record().equals("State");
         if (!own) {
-            throw v.pos().error("the new value of the BigMap field " + field + " must be " + field + " itself, changed by set/delete"
+            throw v.pos().error("JSC0811", "the new value of the BigMap field " + field + " must be " + field + " itself, changed by set/delete"
                     + (sc.kind == Ir.Kind.INIT ? ", or BigMap.empty() in an init" : "") + " (ADR-0018 D7)");
         }
     }
@@ -1408,10 +1414,10 @@ final class Checker {
         Ir.Expr rest = null;
         if (elem == null && l.rest() != null) {
             rest = expr(l.rest(), sc, null);
-            if (!(rest.type() instanceof Ty.ListT rt)) throw l.rest().pos().error("...rest needs a List");
+            if (!(rest.type() instanceof Ty.ListT rt)) throw l.rest().pos().error("JSC1027", "...rest needs a List");
             elem = rt.elem();
         }
-        if (elem == null) throw l.pos().error("the type of this list is unknown here: give it one (const xs: List<Int> = [])");
+        if (elem == null) throw l.pos().error("JSC1028", "the type of this list is unknown here: give it one (const xs: List<Int> = [])");
         noBigMap(elem, l.pos(), "an element of a list");
         var items = new ArrayList<Ir.Expr>();
         int taint = 0;
@@ -1424,7 +1430,7 @@ final class Checker {
         Ty type = new Ty.ListT(elem);
         if (l.rest() != null) {
             if (rest == null) rest = expr(l.rest(), sc, type);
-            if (!(rest.type() instanceof Ty.ListT)) throw l.rest().pos().error("...rest needs a List");
+            if (!(rest.type() instanceof Ty.ListT)) throw l.rest().pos().error("JSC1027", "...rest needs a List");
             expectType(type, rest, l.rest().pos());
             taint |= rest.taint();
         }
@@ -1456,7 +1462,7 @@ final class Checker {
             r = expr(b.right(), sc, null);
             l = expr(b.left(), sc, r.type());
         } else if (needsContext(b.left())) {
-            throw b.pos().error("the type of this comparison is unknown: give one side a type (const none: Option<Int> = None)");
+            throw b.pos().error("JSC0333", "the type of this comparison is unknown: give one side a type (const none: Option<Int> = None)");
         } else {
             l = expr(b.left(), sc, null);
             r = expr(b.right(), sc, l.type());
@@ -1466,7 +1472,7 @@ final class Checker {
                 expectType(Ty.INT, l, b.left().pos());
                 expectType(Ty.INT, r, b.right().pos());
                 if ((op.equals("/") || op.equals("%")) && (r.taint() & TIME) != 0) {
-                    throw b.right().pos().error("a time value cannot be a divisor: it could make the call fail (ADR-0018 D11)");
+                    throw b.right().pos().error("JSC0515", "a time value cannot be a divisor: it could make the call fail (ADR-0018 D11)");
                 }
                 return new Ir.Arith(op, l, r, Ty.INT, l.taint() | r.taint(), b.pos());
             }
@@ -1475,7 +1481,7 @@ final class Checker {
                 boolean ints = l.type().equals(Ty.INT) && r.type().equals(Ty.INT);
                 boolean bytes = isBytes(l.type()) && isBytes(r.type());
                 if (!ints && !bytes) {
-                    throw b.pos().error(op + " compares two Ints or two Bytes, not " + Ty.show(l.type()) + " and " + Ty.show(r.type()));
+                    throw b.pos().error("JSC0334", op + " compares two Ints or two Bytes, not " + Ty.show(l.type()) + " and " + Ty.show(r.type()));
                 }
                 return new Ir.Compare(op, l, r, Ty.BOOL, 0, b.pos());
             }
@@ -1483,17 +1489,17 @@ final class Checker {
                 timeCompare(b, l, r);
                 Ty t = unify(l.type(), r.type(), b.pos());
                 if (Ty.hasBigMap(t, this::components) || t.equals(Ty.STATE) && stateFields.values().stream().anyMatch(x -> x instanceof Ty.BigMapT)) {
-                    throw b.pos().error("a BigMap is not comparable: it is a witness of a Merkle root, not its contents (ADR-0018 D6)");
+                    throw b.pos().error("JSC0812", "a BigMap is not comparable: it is a witness of a Merkle root, not its contents (ADR-0018 D6)");
                 }
                 return new Ir.Equals(op.equals("!="), l, r, t, Ty.BOOL, 0, b.pos());
             }
-            default -> throw b.pos().error("unknown operator " + op);
+            default -> throw b.pos().error("JSC0335", "unknown operator " + op);
         }
     }
 
     private static void timeCompare(Binary b, Ir.Expr l, Ir.Expr r) {
         if (((l.taint() | r.taint()) & TIME) != 0) {
-            throw b.pos().error("a time value cannot decide here: compare times only with after(t) or before(t) in a require (ADR-0018 D11)");
+            throw b.pos().error("JSC0502", "a time value cannot decide here: compare times only with after(t) or before(t) in a require (ADR-0018 D11)");
         }
     }
 
@@ -1504,14 +1510,14 @@ final class Checker {
     private static Ty unify(Ty a, Ty b, Pos p) {
         if (Ty.assignable(a, b)) return a;
         if (Ty.assignable(b, a)) return b;
-        throw p.error("cannot compare " + Ty.show(a) + " with " + Ty.show(b));
+        throw p.error("JSC0336", "cannot compare " + Ty.show(a) + " with " + Ty.show(b));
     }
 
     /** {@code o ?? d}: the default runs only when the option is empty (a helper, D6). */
     private Ir.Expr coalesce(Binary b, Sc sc, Ty expected) {
-        if (b.left() instanceof Name n && n.name().equals("None")) throw b.left().pos().error("None ?? d is always d: write d");
+        if (b.left() instanceof Name n && n.name().equals("None")) throw b.left().pos().error("JSC0337", "None ?? d is always d: write d");
         Ir.Expr o = expr(b.left(), sc, expected == null ? null : new Ty.OptT(expected));
-        if (!(o.type() instanceof Ty.OptT ot)) throw b.left().pos().error("?? needs an Option on its left, not " + Ty.show(o.type()));
+        if (!(o.type() instanceof Ty.OptT ot)) throw b.left().pos().error("JSC0338", "?? needs an Option on its left, not " + Ty.show(o.type()));
         Ty t = ot.elem();
         if (expected != null && Ty.assignable(expected, t)) t = expected;
         Ir.Expr d = expr(b.right(), sc.child(false, false), t);
@@ -1565,14 +1571,14 @@ final class Checker {
     /** A BigMap is never bound, chosen, compared, held or accumulated (D7). */
     private void noBigMap(Ty t, Pos p, String what) {
         if (t instanceof Ty.BigMapT || Ty.hasBigMap(t, this::components)) {
-            throw p.error("a BigMap cannot be " + what + ": it is read and changed only as its state field (ADR-0018 D7)");
+            throw p.error("JSC0813", "a BigMap cannot be " + what + ": it is read and changed only as its state field (ADR-0018 D7)");
         }
     }
 
     /** A BigMap is not captured by a lambda: a list method's body cannot read or change one (D7). */
     private static void bigMapRead(Pos p, Sc sc) {
         if (sc.inLambda) {
-            throw p.error("a BigMap cannot be captured by a lambda: read the keys you need before the list method (ADR-0018 D7)");
+            throw p.error("JSC0814", "a BigMap cannot be captured by a lambda: read the keys you need before the list method (ADR-0018 D7)");
         }
     }
 
@@ -1587,7 +1593,7 @@ final class Checker {
         Ir.Expr[] bounds = {a, b};
         for (int i = 0; i < 2; i++) {
             if ((bounds[i].taint() & TIME) != 0) {
-                throw c.args().get(i).pos().error("a time value cannot be a bound of range: the number of steps, and so the budget, would"
+                throw c.args().get(i).pos().error("JSC0516", "a time value cannot be a bound of range: the number of steps, and so the budget, would"
                         + " depend on the window (ADR-0018 D11)");
             }
         }
@@ -1595,14 +1601,14 @@ final class Checker {
     }
 
     private Ir.Expr emptyMap(String which, MethodCall m, Sc sc, Ty expected) {
-        if (!m.method().equals("empty") || !m.args().isEmpty()) throw m.pos().error(which + " has one function: " + which + ".empty()");
+        if (!m.method().equals("empty") || !m.args().isEmpty()) throw m.pos().error("JSC0815", which + " has one function: " + which + ".empty()");
         if (which.equals("Map")) {
             if (!(expected instanceof Ty.MapT)) {
-                throw m.pos().error("the type of this map is unknown here: give it one (const m: Map<Key, Int> = Map.empty())");
+                throw m.pos().error("JSC0816", "the type of this map is unknown here: give it one (const m: Map<Key, Int> = Map.empty())");
             }
             return new Ir.MapEmpty(expected, m.pos());
         }
-        if (!(expected instanceof Ty.BigMapT)) throw m.pos().error("BigMap.empty() is only the value of a BigMap state field in an init (ADR-0018 D7)");
+        if (!(expected instanceof Ty.BigMapT)) throw m.pos().error("JSC0817", "BigMap.empty() is only the value of a BigMap state field in an init (ADR-0018 D7)");
         return new Ir.BigEmpty(expected, m.pos());
     }
 
@@ -1611,7 +1617,7 @@ final class Checker {
         Ir.Expr v = expr(k, sc, keyType);
         expectType(keyType, v, k.pos());
         if ((v.taint() & TIME) != 0) {
-            throw k.pos().error("a time value cannot be a map key: " + what + " would depend on the validity window (ADR-0018 D11)");
+            throw k.pos().error("JSC0517", "a time value cannot be a map key: " + what + " would depend on the validity window (ADR-0018 D11)");
         }
         return v;
     }
@@ -1621,48 +1627,48 @@ final class Checker {
         int t = target.taint();
         switch (m.method()) {
             case "get" -> {
-                if (args.size() != 1) throw m.pos().error("get takes one key: m.get(k)");
+                if (args.size() != 1) throw m.pos().error("JSC0818", "get takes one key: m.get(k)");
                 Ir.Expr k = mapKeyArg(args.get(0), mt.key(), sc, "which entry is read");
                 return new Ir.MapOp("get", target, List.of(k), option(mt.val(), m.pos(), "m.get"), t, m.pos());
             }
             case "has" -> {
-                if (args.size() != 1) throw m.pos().error("has takes one key: m.has(k)");
+                if (args.size() != 1) throw m.pos().error("JSC0819", "has takes one key: m.has(k)");
                 Ir.Expr k = mapKeyArg(args.get(0), mt.key(), sc, "whether it is present");
                 return new Ir.MapOp("has", target, List.of(k), Ty.BOOL, 0, m.pos());
             }
             case "set" -> {
-                if (args.size() != 2) throw m.pos().error("set takes a key and a value: m.set(k, v)");
+                if (args.size() != 2) throw m.pos().error("JSC0820", "set takes a key and a value: m.set(k, v)");
                 Ir.Expr k = mapKeyArg(args.get(0), mt.key(), sc, "the map's keys");
                 Ir.Expr v = expr(args.get(1), sc, mt.val());
                 expectType(mt.val(), v, args.get(1).pos());
                 return new Ir.MapOp("set", target, List.of(k, v), mt, t | v.taint(), m.pos());
             }
             case "delete" -> {
-                if (args.size() != 1) throw m.pos().error("delete takes one key: m.delete(k)");
+                if (args.size() != 1) throw m.pos().error("JSC0821", "delete takes one key: m.delete(k)");
                 Ir.Expr k = mapKeyArg(args.get(0), mt.key(), sc, "the map's keys");
                 return new Ir.MapOp("delete", target, List.of(k), mt, t, m.pos());
             }
             case "any", "all" -> {
                 if (args.size() != 1 || !(args.get(0) instanceof Lambda l) || l.params().size() != 2) {
-                    throw m.pos().error(m.method() + " on a Map takes a two-parameter lambda: m." + m.method() + "((k, v) => …)");
+                    throw m.pos().error("JSC0822", m.method() + " on a Map takes a two-parameter lambda: m." + m.method() + "((k, v) => …)");
                 }
                 Sc inner = sc.child(false, true);
                 Ir.Local k = inner.declare(l.params().get(0), mt.key(), 0, l.pos(), false, null);
                 Ir.Local v = inner.declare(l.params().get(1), mt.val(), t, l.pos(), false, null);
                 Ir.Block body = lambdaBody(l, inner, Ty.BOOL);
                 expectType(Ty.BOOL, body.result(), body.result().pos());
-                if ((body.result().taint() & TIME) != 0) throw l.pos().error("a time value cannot decide " + m.method() + "'s predicate (ADR-0018 D11)");
+                if ((body.result().taint() & TIME) != 0) throw l.pos().error("JSC0514", "a time value cannot decide " + m.method() + "'s predicate (ADR-0018 D11)");
                 return new Ir.MapHof(m.method(), target, k, v, body, Ty.BOOL, 0, m.pos());
             }
             case "fold" -> {
                 if (args.size() != 2 || !(args.get(1) instanceof Lambda l) || l.params().size() != 3) {
-                    throw m.pos().error("fold on a Map takes an initial value and a three-parameter lambda: m.fold(0, (acc, k, v) => acc + v)");
+                    throw m.pos().error("JSC0823", "fold on a Map takes an initial value and a three-parameter lambda: m.fold(0, (acc, k, v) => acc + v)");
                 }
                 Ir.Expr start = expr(args.get(0), sc, expected);
                 Ty acc = expected != null && Ty.assignable(expected, start.type()) ? expected : start.type();
                 noBigMap(acc, args.get(0).pos(), "a fold accumulator");
                 if (acc.equals(Ty.STATE)) {
-                    throw args.get(0).pos().error("a Map fold does not accumulate the state: fold the values you need, then build the state");
+                    throw args.get(0).pos().error("JSC0824", "a Map fold does not accumulate the state: fold the values you need, then build the state");
                 }
                 int accTaint = start.taint() | t;
                 Ir.Local a, k, v;
@@ -1680,8 +1686,8 @@ final class Checker {
                 expectType(acc, body.result(), body.result().pos());
                 return new Ir.MapFold(target, start, a, k, v, body, acc, accTaint, m.pos());
             }
-            case "contains" -> throw m.pos().error("a Map's membership test is m.has(k)");
-            default -> throw m.pos().error("Map has no method '" + m.method() + "' (get, has, set, delete, any, all, fold)");
+            case "contains" -> throw m.pos().error("JSC0825", "a Map's membership test is m.has(k)");
+            default -> throw m.pos().error("JSC0826", "Map has no method '" + m.method() + "' (get, has, set, delete, any, all, fold)");
         }
     }
 
@@ -1689,35 +1695,35 @@ final class Checker {
         List<Expr> args = m.args();
         switch (m.method()) {
             case "get" -> {
-                if (args.size() != 1) throw m.pos().error("get takes one key: m.get(k)");
+                if (args.size() != 1) throw m.pos().error("JSC0818", "get takes one key: m.get(k)");
                 Ir.Expr k = mapKeyArg(args.get(0), bt.key(), sc, "which entry is read");
                 return new Ir.BigOp("get", target, List.of(k), new Ty.OptT(bt.val()), target.taint(), m.pos());
             }
             case "has" -> {
-                if (args.size() != 1) throw m.pos().error("has takes one key: m.has(k)");
+                if (args.size() != 1) throw m.pos().error("JSC0819", "has takes one key: m.has(k)");
                 Ir.Expr k = mapKeyArg(args.get(0), bt.key(), sc, "whether it is present");
                 return new Ir.BigOp("has", target, List.of(k), Ty.BOOL, 0, m.pos());
             }
             case "set" -> {
-                if (args.size() != 2) throw m.pos().error("set takes a key and a value: m.set(k, v)");
+                if (args.size() != 2) throw m.pos().error("JSC0820", "set takes a key and a value: m.set(k, v)");
                 if (!sc.effects && sc.kind != Ir.Kind.INIT) {
-                    throw m.pos().error("a BigMap is changed only where the next state is built: in an action's result (ADR-0018 D7)");
+                    throw m.pos().error("JSC0827", "a BigMap is changed only where the next state is built: in an action's result (ADR-0018 D7)");
                 }
                 Ir.Expr k = mapKeyArg(args.get(0), bt.key(), sc, "the map's keys");
                 Ir.Expr v = expr(args.get(1), sc, bt.val());
                 expectType(bt.val(), v, args.get(1).pos());
                 if (bt.val().equals(Ty.INT) && (v.taint() & TIME) != 0) {
-                    throw args.get(1).pos().error("a time value cannot be stored in a BigMap<…, Int>: storing it can fail (a negative value, or"
+                    throw args.get(1).pos().error("JSC0518", "a time value cannot be stored in a BigMap<…, Int>: storing it can fail (a negative value, or"
                             + " one too large to encode), so the window would decide whether the call fails (ADR-0018 D11)");
                 }
                 return new Ir.BigOp("set", target, List.of(k, v), bt, target.taint() | v.taint(), m.pos());
             }
             case "delete" -> {
-                if (args.size() != 1) throw m.pos().error("delete takes one key: m.delete(k)");
+                if (args.size() != 1) throw m.pos().error("JSC0821", "delete takes one key: m.delete(k)");
                 Ir.Expr k = mapKeyArg(args.get(0), bt.key(), sc, "the map's keys");
                 return new Ir.BigOp("delete", target, List.of(k), bt, target.taint(), m.pos());
             }
-            default -> throw m.pos().error("BigMap has no method '" + m.method() + "' (get, has, set, delete; m[k] on BigMap<K, Int>)");
+            default -> throw m.pos().error("JSC0828", "BigMap has no method '" + m.method() + "' (get, has, set, delete; m[k] on BigMap<K, Int>)");
         }
     }
 
@@ -1725,10 +1731,10 @@ final class Checker {
     private Ir.Expr index(Index ix, Sc sc) {
         Ir.Expr target = expr(ix.target(), sc, null);
         if (!(target.type() instanceof Ty.BigMapT bt)) {
-            throw ix.pos().error("m[k] reads a BigMap<K, Int>; " + (target.type() instanceof Ty.MapT ? "a Map is read with m.get(k)"
+            throw ix.pos().error("JSC0829", "m[k] reads a BigMap<K, Int>; " + (target.type() instanceof Ty.MapT ? "a Map is read with m.get(k)"
                     : target.type() instanceof Ty.ListT ? "a List has no index: use xs.head, find or fold" : Ty.show(target.type()) + " has no index"));
         }
-        if (!bt.val().equals(Ty.INT)) throw ix.pos().error("m[k] reads a BigMap<K, Int>; a BigMap<K, Bytes> is read with m.get(k)");
+        if (!bt.val().equals(Ty.INT)) throw ix.pos().error("JSC0830", "m[k] reads a BigMap<K, Int>; a BigMap<K, Bytes> is read with m.get(k)");
         Ir.Expr k = mapKeyArg(ix.key(), bt.key(), sc, "which entry is read");
         return new Ir.BigOp("at", target, List.of(k), Ty.INT, target.taint(), ix.pos());
     }
@@ -1739,7 +1745,7 @@ final class Checker {
     private List<String> constructors(Ty t, Pos p) {
         if (t instanceof Ty.EnumT e) return List.copyOf(enums.get(e.name()).keySet());
         if (t instanceof Ty.OptT) return List.of("Some", "None");
-        throw p.error("match needs an enum or an Option, not " + Ty.show(t));
+        throw p.error("JSC0916", "match needs an enum or an Option, not " + Ty.show(t));
     }
 
     /** The fields a constructor binds: a variant's, or Some's one value. */
@@ -1764,9 +1770,9 @@ final class Checker {
         var out = new ArrayList<ArmShape>();
         for (Syntax.Arm a : m.arms()) {
             Syntax.Pattern p = a.pattern();
-            if (covered.size() == all.size()) throw p.pos().error("this arm is unreachable: the arms before it cover every case");
+            if (covered.size() == all.size()) throw p.pos().error("JSC0917", "this arm is unreachable: the arms before it cover every case");
             if (p.ctor().equals("_")) {
-                if (!p.binds().isEmpty()) throw p.pos().error("_ binds nothing");
+                if (!p.binds().isEmpty()) throw p.pos().error("JSC0918", "_ binds nothing");
                 var rest = new ArrayList<String>();
                 for (String c : all) if (!covered.contains(c)) rest.add(c);
                 covered.addAll(rest);
@@ -1775,22 +1781,22 @@ final class Checker {
             }
             if (!all.contains(p.ctor())) {
                 String owner = variantEnum.get(p.ctor());
-                throw p.pos().error(p.ctor() + " is not a case of " + Ty.show(t) + (owner != null ? " (it is a variant of " + owner + ")" : "")
+                throw p.pos().error("JSC0919", p.ctor() + " is not a case of " + Ty.show(t) + (owner != null ? " (it is a variant of " + owner + ")" : "")
                         + ": the cases are " + String.join(", ", all));
             }
-            if (!covered.add(p.ctor())) throw p.pos().error(p.ctor() + " is matched twice");
+            if (!covered.add(p.ctor())) throw p.pos().error("JSC0920", p.ctor() + " is matched twice");
             var fields = ctorFields(t, p.ctor());
             if (t instanceof Ty.OptT && p.ctor().equals("Some") && p.binds().size() != 1) {
-                throw p.pos().error("Some binds its value: Some(x) => …");
+                throw p.pos().error("JSC0921", "Some binds its value: Some(x) => …");
             }
             var fs = new ArrayList<String>();
             var types = new ArrayList<Ty>();
             for (Bind b : p.binds()) {
                 String f = b.field() == null ? "value" : b.field();
-                if (t instanceof Ty.OptT && b.field() != null) throw b.pos().error("an Option's value is bound as Some(x)");
+                if (t instanceof Ty.OptT && b.field() != null) throw b.pos().error("JSC0922", "an Option's value is bound as Some(x)");
                 Ty ft = fields.get(f);
-                if (ft == null) throw b.pos().error(p.ctor() + " has no field " + f);
-                if (fs.contains(f)) throw b.pos().error(f + " is bound twice");
+                if (ft == null) throw b.pos().error("JSC0320", p.ctor() + " has no field " + f);
+                if (fs.contains(f)) throw b.pos().error("JSC0923", f + " is bound twice");
                 fs.add(f);
                 types.add(ft);
             }
@@ -1799,7 +1805,7 @@ final class Checker {
         if (covered.size() < all.size()) {
             var missing = new ArrayList<String>();
             for (String c : all) if (!covered.contains(c)) missing.add(c);
-            throw m.pos().error("this match is not exhaustive: add an arm for " + String.join(", ", missing) + " (or _ => …)");
+            throw m.pos().error("JSC0924", "this match is not exhaustive: add an arm for " + String.join(", ", missing) + " (or _ => …)");
         }
         return out;
     }
@@ -1811,7 +1817,7 @@ final class Checker {
      */
     private Ir.Expr scrutinee(Syntax.Match m, Sc sc) {
         Ir.Expr s = expr(m.scrutinee(), sc, null);
-        if (s instanceof Ir.Range) throw m.scrutinee().pos().error(RANGE_ONLY);
+        if (s instanceof Ir.Range) throw m.scrutinee().pos().error("JSC1009", RANGE_ONLY);
         constructors(s.type(), m.scrutinee().pos());
         return s;
     }
@@ -1820,15 +1826,17 @@ final class Checker {
         var out = new ArrayList<Ir.Local>();
         for (int i = 0; i < shape.binds().size(); i++) {
             Bind b = shape.binds().get(i);
-            if ("None".equals(b.name()) || "Some".equals(b.name())) throw b.pos().error("'" + b.name() + "' is a built-in name");
-            out.add(inner.declare(b.name(), shape.types().get(i), taint, b.pos(), false, null));
+            if ("None".equals(b.name()) || "Some".equals(b.name())) throw b.pos().error("JSC0214", "'" + b.name() + "' is a built-in name");
+            Ir.Local l = inner.declare(b.name(), shape.types().get(i), taint, b.pos(), false, null);
+            used.remove(l);   // a binding must be used: unusedBinds checks it after the arm
+            out.add(l);
         }
         return out;
     }
 
     private void unusedBinds(List<Ir.Local> binds) {
         for (Ir.Local l : binds) {
-            if (!used.contains(l)) throw l.pos.error("'" + l.name + "' is bound but never used: leave the field out of the pattern");
+            if (!used.contains(l)) throw l.pos.error("JSC0925", "'" + l.name + "' is bound but never used: leave the field out of the pattern");
         }
     }
 
@@ -1840,7 +1848,7 @@ final class Checker {
         int first = -1;
         if (t == null) {
             for (int i = 0; i < m.arms().size() && first < 0; i++) if (!needsContext(m.arms().get(i).body().result())) first = i;
-            if (first < 0) throw m.pos().error("the type of this match is unknown here: give it one (const o: Option<Int> = match …)");
+            if (first < 0) throw m.pos().error("JSC0926", "the type of this match is unknown here: give it one (const o: Option<Int> = match …)");
         }
         var order = new ArrayList<Integer>();
         if (first >= 0) order.add(first);
@@ -1872,7 +1880,7 @@ final class Checker {
             Sc inner = sc.child(sc.effects, false);
             var binds = bind(shapes.get(i), inner, s.taint());
             if (a.body().result() != null) {
-                throw a.body().result().pos().error("this match is a statement (it is not the block's last expression, or an arm has no"
+                throw a.body().result().pos().error("JSC0927", "this match is a statement (it is not the block's last expression, or an arm has no"
                         + " value), so its arms end in statements, not a value");
             }
             var stmts = stmts(a.body().stmts(), inner);
@@ -1896,7 +1904,7 @@ final class Checker {
             while (!stack.isEmpty()) {
                 String g = stack.pop();
                 if (g.equals(f)) {
-                    throw fns.get(f).pos().error(f + " is part of a mutual recursion: only direct self-recursion is allowed (ADR-0018 D7)");
+                    throw fns.get(f).pos().error("JSC0602", f + " is part of a mutual recursion: only direct self-recursion is allowed (ADR-0018 D7)");
                 }
                 if (seen.add(g)) for (String h : callGraph.getOrDefault(g, Set.of())) stack.push(h);
             }
@@ -1916,7 +1924,7 @@ final class Checker {
     private static void expectType(Ty want, Ir.Expr v, Pos p) {
         if (!Ty.assignable(want, v.type())) {
             String hint = want.equals(Ty.KEY) && v.type().equals(Ty.BYTES) ? " (Bytes is not a Key: use asKey(b))" : "";
-            throw p.error("expected " + Ty.show(want) + " but this is " + Ty.show(v.type()) + hint);
+            throw p.error("JSC0339", "expected " + Ty.show(want) + " but this is " + Ty.show(v.type()) + hint);
         }
     }
 

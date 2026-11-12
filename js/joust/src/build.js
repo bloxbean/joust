@@ -39,7 +39,8 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   const r = engine.joust.build({ files, options });
   for (const d of r.diagnostics) {
     const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
-    (d.severity === 'error' ? console.error : log)(`${d.severity}: ${where}${d.message}`);
+    // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
+    (d.severity === 'error' ? console.error : log)(`${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${where}${d.message}`);
   }
   if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics };
   const dir = resolve(root, out);

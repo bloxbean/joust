@@ -175,7 +175,7 @@ class JscV2CheckerTest {
         var pay = r.diagnostics().get(1);
         assertEquals(List.of(L + 1, 37), List.of(pay.line(), pay.col()));
         assertTrue(pay.message().contains("payout") && pay.message().contains("maxValidityMs"), pay.message());
-        assertTrue(r.warnings().get(0).startsWith("T.jsc:" + L + ":40: warning: "), r.warnings().get(0));
+        assertTrue(r.warnings().get(0).startsWith("T.jsc:" + L + ":40: warning[JSC"), r.warnings().get(0));
         // Through a conditional, once however many rounds the fixed point takes; a stored time copied into another
         // field warns too (security S8), a field kept as it was does not.
         var c = lowered("action a(c: Bool) { return c ? { ...state, stamp: validTo } : state }\n action b() { return { ...state, count: stamp + 1 } }");

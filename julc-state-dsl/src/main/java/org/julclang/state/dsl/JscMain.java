@@ -28,7 +28,7 @@ public final class JscMain {
     public static Lowered lowerWithWarnings(String source, String fileName) {
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
             var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName);
-            return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.message())).toList(),
+            return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
                     fileName);
         }
         // .jsc v1 (ADR-0005): compiled as before. Its deprecation warning arrives with M1, when the templates switch to
@@ -37,11 +37,15 @@ public final class JscMain {
         return new Lowered(r.java(), r.warnings(), fileName);
     }
 
-    /** A located warning: line and column in the .jsc file (D12). */
-    public record Warning(int line, int col, String message) {
-        /** {@code file:line:col: warning: message}. */
+    /** A located warning: line and column in the .jsc file, and its stable code ({@code .jsc} 2; null for v1) (D12). */
+    public record Warning(int line, int col, String code, String message) {
+        public Warning(int line, int col, String message) {
+            this(line, col, null, message);
+        }
+
+        /** {@code file:line:col: warning[CODE]: message} ({@code warning:} without a code). */
         public String format(String file) {
-            return file + ":" + line + ":" + col + ": warning: " + message;
+            return file + ":" + line + ":" + col + ": warning" + (code == null ? "" : "[" + code + "]") + ": " + message;
         }
     }
 
