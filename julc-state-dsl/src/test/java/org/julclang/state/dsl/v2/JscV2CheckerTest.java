@@ -175,7 +175,7 @@ class JscV2CheckerTest {
         var pay = r.diagnostics().get(1);
         assertEquals(List.of(L + 1, 37), List.of(pay.line(), pay.col()));
         assertTrue(pay.message().contains("payout") && pay.message().contains("maxValidityMs"), pay.message());
-        assertTrue(r.warnings().get(0).startsWith("T.jsc:" + L + ":40: warning: "), r.warnings().get(0));
+        assertTrue(r.warnings().get(0).startsWith("T.jsc:" + L + ":40: warning[JSC"), r.warnings().get(0));
         // Through a conditional, once however many rounds the fixed point takes; a stored time copied into another
         // field warns too (security S8), a field kept as it was does not.
         var c = lowered("action a(c: Bool) { return c ? { ...state, stamp: validTo } : state }\n action b() { return { ...state, count: stamp + 1 } }");
@@ -322,7 +322,7 @@ class JscV2CheckerTest {
         bad("action a(o: Option<Option<Int>>) { return state }", "Option<Option", 0, 13);
         bad("action a(b: Bytes) only owner { return { ...state, owner: b } }", "Bytes is not a Key", 0, 59);
         ok("action a(b: Bytes) only owner { return { ...state, owner: asKey(b) } }");
-        bad("action a(m: Map<Key, Int>) { return state }", "later milestone", 0, 13);
+        bad("action a(m: Value) { return state }", "later milestone", 0, 13);
         bad("action a() { const o: Option<Int> = Some(None)\n return { ...state, count: o ?? 0 } }", "Some(None) is not allowed", 0, 42);
         bad("action a() { require(None == None, \"x\")\n return state }", "type of this comparison is unknown", 0, 22);
         bad("action a() { require([] == [], \"x\")\n return state }", "type of this comparison is unknown", 0, 22);
@@ -356,7 +356,7 @@ class JscV2CheckerTest {
     @Test
     void checkedInputs_nestedKeys() {
         String java = ok("action a(ks: List<Key>) { return state }");
-        assertTrue(java.contains("check__List_Bytes(ks)"), java);
+        assertTrue(java.contains("check__List_Key(ks)"), java);
     }
 
     /** Design F6: a helper takes only what its body reads. */
@@ -400,7 +400,8 @@ class JscV2CheckerTest {
     /** Codex C8: control characters in strings are refused; escapes stay escaped in the Java. */
     @Test
     void strings_controlCharactersRefused_escapesKept() {
-        bad("action a() { require(true, \"a\rb\")\n return state }", "unterminated string", 0, 28);
+        // M1a r3 (security S8): a lone CR is refused anywhere, before the string is read.
+        bad("action a() { require(true, \"a\rb\")\n return state }", "breaks a line for some readers", 0, 30);
         bad("action a() { require(true, \"a\tb\")\n return state }", "control character U+0009", 0, 30);
         String java = ok("action a() { require(count >= 0, \"say \\\"no\\\" \\\\ then\\nstop\")\n return state }");
         assertTrue(java.contains("\"say \\\"no\\\" \\\\ then\\nstop\""), java);

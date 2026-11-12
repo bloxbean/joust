@@ -1,0 +1,25 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { pow } from "std/math"
+
+// ADR-0018 M1a vectors (review C4): a BigMap<K, Int> stores a value as its minimal big-endian bytes, at most 8,192 of
+// them (integerToByteString). A larger value fails where it is written, on every leg, even when that write is only read
+// through and then discarded.
+contract Bounds {
+  state { owner: Key, m: BigMap<Bytes, Int> }
+
+  init() {
+    return { owner: caller, m: BigMap.empty() }
+  }
+
+  // Stores (2^1024)^e - d under "k": e = 64, d = 1 is the largest value of 8,192 bytes; d = 0 is the first refused.
+  action write(e: Int, d: Int) {
+    return { ...state, m: m.set(utf8("k"), pow(pow(2, 1024), e) - d) }
+  }
+
+  // Writes the same value under "big", reads "k" through that write, and keeps only the write of "k".
+  action discarded(e: Int, d: Int) {
+    return { ...state, m: m.set(utf8("k"), m.set(utf8("big"), pow(pow(2, 1024), e) - d)[utf8("k")] + 1) }
+  }
+}

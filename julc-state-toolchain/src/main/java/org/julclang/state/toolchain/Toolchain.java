@@ -14,6 +14,7 @@ import org.julclang.compiler.OptimizationConfiguration;
 import org.julclang.compiler.OptimizationLevel;
 import org.julclang.compiler.frontend.javac.JavacFrontend;
 import org.julclang.state.dsl.JscMain;
+import org.julclang.state.dsl.v2.AbiCheck;
 import org.julclang.state.processor.JoustGenerators;
 import org.julclang.state.processor.SubsetLint;
 import org.julclang.stdlib.StdlibRegistry;
@@ -47,8 +48,15 @@ public final class Toolchain {
         }
     }
 
-    /** A finding, from javac, JOUST (reader and lint) or JuLC; {@code line} and {@code col} are 1-based, or -1 when unknown. */
-    public record Diagnostic(Severity severity, String message, String file, long line, long col, String source) {
+    /**
+     * A finding, from javac, JOUST (reader and lint) or JuLC; {@code line} and {@code col} are 1-based, or -1 when
+     * unknown; {@code code} is a {@code .jsc} 2 diagnostic's stable code (ADR-0018 D12), else null.
+     */
+    public record Diagnostic(Severity severity, String message, String file, long line, long col, String source, String code) {
+        public Diagnostic(Severity severity, String message, String file, long line, long col, String source) {
+            this(severity, message, file, line, col, source, null);
+        }
+
         public Diagnostic(Severity severity, String message, String file, long line, String source) {
             this(severity, message, file, line, -1, source);
         }
@@ -73,8 +81,22 @@ public final class Toolchain {
     public record Validator(String name, String packageName, String purpose, String scriptCborHex, String scriptHash,
                             int scriptSizeBytes, List<Param> params) {}
 
-    /** The build's result: the contracts, the plain validators, and every diagnostic; {@code ok} when there is no error. */
-    public record Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics) {
+    /**
+     * The Java a {@code .jsc} file lowered to (ADR-0018 D12: written to {@code build/joust/generated/} by the npm CLI),
+     * with its source map and ABI manifest ({@code .jsc} 2; null for v1). {@code javaFile} is {@code a/b/Name.java}.
+     */
+    public record Generated(String jscFile, String javaFile, String java, String sourceMapJson, String abiJson) {}
+
+    /**
+     * The build's result: the contracts, the plain validators, every diagnostic ({@code ok} when there is no error), and
+     * the Java lowered from each {@code .jsc} file.
+     */
+    public record Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics,
+                         List<Generated> generated) {
+        public Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics) {
+            this(ok, contracts, validators, diagnostics, List.of());
+        }
+
         public Result(boolean ok, List<Contract> contracts, List<Diagnostic> diagnostics) {
             this(ok, contracts, List.of(), diagnostics);
         }
@@ -95,6 +117,73 @@ public final class Toolchain {
      * {@code options} are JOUST's processor options ({@code joust.traces}, ...).
      */
     public static Result build(Map<String, String> files, Map<String, String> options) {
+        var generated = new ArrayList<Generated>();
+        Result r = build(files, options, generated);
+        var diagnostics = new ArrayList<>(remap(r.diagnostics(), generated, files.keySet()));
+        // ADR-0018 D12 (review F2): every .jsc 2 manifest agrees with the processor's description of the contract.
+        for (Contract c : r.contracts()) {
+            for (Generated g : generated) {
+                if (g.abiJson() == null || !g.javaFile().equals(c.packageName().replace('.', '/') + "/" + c.name() + ".java")) continue;
+                for (String problem : AbiCheck.compare(g.abiJson(), c.descriptionJson(), c.packageName(), c.name())) {
+                    diagnostics.add(new Diagnostic(Severity.ERROR, "the ABI manifest of " + c.name() + " disagrees with the processor's"
+                            + " encoding: " + problem + " (an internal error of the .jsc lowering: please report it)", g.jscFile(), 1, 1,
+                            "jsc", "JSC0004"));
+                }
+            }
+        }
+        boolean ok = r.ok() && diagnostics.stream().noneMatch(d -> d.severity() == Severity.ERROR);
+        return new Result(ok, r.contracts(), r.validators(), diagnostics, List.copyOf(generated));
+    }
+
+    /**
+     * ADR-0018 D12: a diagnostic on Java lowered from a {@code .jsc} file (javac's, the JOUST processor's or lint's) is
+     * reported at the {@code .jsc} line and column the source map gives, with the generated location as a note; on a
+     * generated helper with no source position, at the {@code .jsc} file.
+     */
+    static List<Diagnostic> remap(List<Diagnostic> diagnostics, List<Generated> generated, java.util.Collection<String> files) {
+        var byJava = new java.util.HashMap<String, Generated>();
+        for (Generated g : generated) byJava.put("/" + g.javaFile(), g);
+        // javac reports a unit by its simple file name (review F4): a generated file is found by it when no other source
+        // of the build has the same simple name.
+        var bySimple = new java.util.HashMap<String, Generated>();
+        var simpleCount = new java.util.HashMap<String, Integer>();
+        for (Generated g : generated) {
+            String n = g.javaFile().substring(g.javaFile().lastIndexOf('/') + 1);
+            bySimple.put(n, g);
+            simpleCount.merge(n, 1, Integer::sum);
+        }
+        for (String f : files) {
+            if (f.endsWith(".java")) simpleCount.merge(f.substring(Math.max(f.lastIndexOf('/'), f.lastIndexOf('\\')) + 1), 1, Integer::sum);
+        }
+        var out = new ArrayList<Diagnostic>();
+        for (Diagnostic d : diagnostics) {
+            String f = d.file() == null ? null : (d.file().startsWith("/") ? d.file() : "/" + d.file());
+            Generated g = f == null ? null : byJava.get(f);
+            // A unit named by its path (javac, the processor): its path ends with the generated file's.
+            if (g == null && f != null) {
+                for (Generated x : generated) if (f.endsWith("/" + x.javaFile())) g = x;
+            }
+            if (g == null && d.file() != null && !d.file().contains("/") && simpleCount.getOrDefault(d.file(), 0) == 1) g = bySimple.get(d.file());
+            if (g == null || "jsc".equals(d.source())) {
+                out.add(d);
+                continue;
+            }
+            long line = -1, col = -1;
+            if (g.sourceMapJson() != null && d.line() > 0) {
+                var m = java.util.regex.Pattern.compile("\\[" + d.line() + ", (\\d+), (\\d+)\\]").matcher(g.sourceMapJson());
+                if (m.find()) {
+                    line = Long.parseLong(m.group(1));
+                    col = Long.parseLong(m.group(2));
+                }
+            }
+            String note = " (in the Java generated from " + g.jscFile() + ": " + g.javaFile() + (d.line() > 0 ? ":" + d.line() : "")
+                    + (line < 0 && d.line() > 0 ? ", a generated helper" : "") + ")";
+            out.add(new Diagnostic(d.severity(), d.message() + note, g.jscFile(), line, col, d.source(), d.code()));
+        }
+        return out;
+    }
+
+    private static Result build(Map<String, String> files, Map<String, String> options, List<Generated> generatedOut) {
         var diagnostics = new ArrayList<Diagnostic>();
         // 1. .jsc → Java.
         var sources = new LinkedHashMap<String, String>();
@@ -106,12 +195,13 @@ public final class Toolchain {
                     String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
                     var lowered = JscMain.lowerWithWarnings(text, base);
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());
+                    generatedOut.add(new Generated(name, javaPath(lowered.java(), name), lowered.java(), lowered.sourceMapJson(), lowered.abiJson()));
                     // ADR-0018 D12: warnings reach the npm path with their line and column (F13).
                     for (var w : lowered.diagnostics()) {
-                        diagnostics.add(new Diagnostic(Severity.WARNING, w.message(), name, w.line(), w.col(), "jsc"));
+                        diagnostics.add(new Diagnostic(Severity.WARNING, w.message(), name, w.line(), w.col(), "jsc", w.code()));
                     }
                 } catch (org.julclang.state.dsl.JscException e) {
-                    diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), name, e.line, e.col, "jsc"));
+                    diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), name, e.line, e.col, "jsc", e.code));
                 } catch (RuntimeException e) {
                     diagnostics.add(new Diagnostic(Severity.ERROR, "internal error lowering this file: " + e, name, -1, "jsc"));
                 }
@@ -131,7 +221,19 @@ public final class Toolchain {
         //    model to one scoped query: the model is used only inside it, on this thread, and nothing of it (no
         //    Element, TypeMirror or Tree) is kept past it: the query returns plain values (JuLC ADR-068).
         var roots = new ArrayList<JavacFrontend.Unit>();
-        sources.values().forEach(t -> roots.add(JavacFrontend.Unit.of(t)));
+        // Java lowered from a .jsc file is named by its package path, so javac's diagnostics on it name it uniquely
+        // (review F13: two packages may each have a Foo.java) and can be remapped to the .jsc file.
+        var generatedPaths = new java.util.HashSet<String>();
+        for (Generated g : generatedOut) generatedPaths.add(g.javaFile());
+        // Hand-written Java is named by the path the build was given (review F15: other/Zed.java declaring Foo is
+        // reported as other/Zed.java, not Foo.java).
+        sources.forEach((name, t) -> {
+            String path = javaPath(t, name);
+            boolean lowered = name.endsWith(".java") && files.containsKey(name.replaceAll("\\.java$", ".jsc")) && generatedPaths.contains(path);
+            // A build may be given Windows separators; javac checks a public class against the unit's base name, so
+            // the path is always '/'-separated, whatever the host (review r4 C9).
+            roots.add(new JavacFrontend.Unit(t, java.nio.file.Path.of(lowered ? path : name.replace('\\', '/'))));
+        });
         var pool = new ArrayList<JavacFrontend.Unit>();
         classpathLibraries.values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
         var generated = new ArrayList<JoustGenerators.Generated>();
@@ -139,7 +241,7 @@ public final class Toolchain {
         boolean attributed = JavacFrontend.shared().attribute(roots, pool, attribution -> {
             for (var d : attribution.result().diagnostics()) {
                 diagnostics.add(new Diagnostic(d.message().startsWith("warning") ? Severity.WARNING : Severity.ERROR, d.message(),
-                        d.fileName(), d.line(), "javac"));
+                        d.fileName(), d.line(), d.column(), "javac"));
             }
             if (!attribution.result().isAccepted() || attribution.trees() == null) return false;
             var env = new AttributedEnvironment(attribution.elements(), attribution.types(), attribution.trees(), options, diagnostics);
@@ -258,6 +360,14 @@ public final class Toolchain {
                     List.copyOf(params)));
         }
         return new Result(!hasErrors(diagnostics), contracts, validators, diagnostics);
+    }
+
+    /** {@code a/b/Name.java} for generated Java: its package and its public class. */
+    static String javaPath(String text, String fallback) {
+        var pkg = java.util.regex.Pattern.compile("(?m)^package ([\\w.]+);").matcher(text);
+        var cls = java.util.regex.Pattern.compile("(?m)^public class (\\w+)").matcher(text);
+        if (!pkg.find() || !cls.find()) return fallback.replaceAll("\\.jsc$", ".java");
+        return pkg.group(1).replace('.', '/') + "/" + cls.group(1) + ".java";
     }
 
     /** The purpose of a plain JuLC validator (its annotation), or null for any other type. */

@@ -113,9 +113,35 @@ public class JoustPlugin implements Plugin<Project> {
             t.getOutputs().dir(out).withPropertyName("java");
             t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), out.get().getAsFile().getAbsolutePath()));
         });
+        // ADR-0018 D12 (review F1): generateJsc never accepts a .jsc 2 file's ABI manifest (Name.abi.json beside it); a
+        // missing or changed one fails it. Only this task accepts: it writes the manifests, to be reviewed and committed.
+        // No property switches the gate off.
+        Provider<Directory> scratch = project.getLayout().getBuildDirectory().dir("tmp/acceptJscAbi");
+        project.getTasks().register("acceptJscAbi", JavaExec.class, t -> {
+            t.setGroup("build");
+            t.setDescription("Writes the ABI manifests of " + MAIN_JSC + "/**/*.jsc, accepting new and changed ones");
+            t.setClasspath(tool);
+            t.getMainClass().set("org.julclang.state.dsl.JscMain");
+            t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), scratch.get().getAsFile().getAbsolutePath(), "--accept-abi"));
+        });
         SourceSet main = project.getExtensions().getByType(JavaPluginExtension.class).getSourceSets()
                 .getByName(SourceSet.MAIN_SOURCE_SET_NAME);
         main.getJava().srcDir(project.files(out).builtBy(generate));
+        // ADR-0018 D12 (review F12, S10): after compileJava, every .jsc 2 file's ABI manifest is checked against the
+        // processor's description of its contract (META-INF/joust/<package>.<Contract>.json), as the npm toolchain
+        // checks it at every build; part of check, so of build.
+        Provider<Directory> described = project.getLayout().getBuildDirectory().dir("classes/java/main/META-INF/joust");
+        TaskProvider<JavaExec> checkAbi = project.getTasks().register("checkJscAbi", JavaExec.class, t -> {
+            t.setGroup("verification");
+            t.setDescription("Checks the ABI manifests of " + MAIN_JSC + "/**/*.jsc against the processor's descriptions");
+            t.setClasspath(tool);
+            t.getMainClass().set("org.julclang.state.dsl.JscMain");
+            t.dependsOn("compileJava");
+            t.getInputs().dir(src).withPropertyName("jsc");
+            t.getInputs().dir(described).withPropertyName("descriptions");
+            t.getArgumentProviders().add(() -> List.of("--check-abi", src.getAbsolutePath(), described.get().getAsFile().getAbsolutePath()));
+        });
+        project.getTasks().named("check", c -> c.dependsOn(checkAbi));
     }
 
     /** The versions written by the build that produced this plugin. */

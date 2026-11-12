@@ -1,0 +1,69 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { length, concat } from "std/bytes"
+import { last, indexOf } from "std/list"
+
+// ADR-0018 M1a: a BigMap of Bytes, an inline Map of records, enums inside records, lists and Options, match on an
+// Option, ranges, take and drop.
+
+enum Kind { Book, Disc { minutes: Int }, Other }
+
+type Item = { title: Bytes, kind: Kind, tags: List<Bytes> }
+
+contract Shelf(maxDatumBytes = 2048) {
+  state { owner: Key, items: Map<Bytes, Item>, notes: BigMap<Bytes, Bytes>, last: Option<Kind> }
+
+  init() {
+    return { owner: caller, items: Map.empty(), notes: BigMap.empty(), last: None }
+  }
+
+  // An item is a checked input too: its Map key is at most 64 bytes, set keeps the canonical order.
+  action put(id: Bytes, item: Item) only owner {
+    require(length(item.title) > 0, "a title")
+    return { ...state, items: items.set(id, item), last: Some(item.kind) }
+  }
+
+  action remove(id: Bytes) only owner {
+    return match items.get(id) {
+      Some(it) => ({ ...state, items: items.delete(id), last: Some(it.kind) })
+      None => state
+    }
+  }
+
+  // A note is a BigMap<Bytes, Bytes> entry: absence differs from empty bytes.
+  action note(k: Bytes, v: Bytes) open {
+    const prior = notes.get(k) ?? utf8("")
+    return { ...state, notes: notes.set(k, concat(prior, v)) }
+  }
+
+  action forget(k: Bytes) only owner {
+    require(notes.has(k), "no such note")
+    return { ...state, notes: notes.delete(k) }
+  }
+
+  view minutes(): Int = items.fold(0, (acc, id, it) => acc + match it.kind {
+    Disc { minutes } => minutes
+    _ => 0
+  })
+
+  view titles(n: Int): List<Bytes> = items.values.map(it => it.title).drop(n).take(2)
+
+  view lastTag(id: Bytes): Option<Bytes> = match items.get(id) {
+    Some(it) => last(it.tags)
+    None => None
+  }
+
+  view position(id: Bytes): Option<Int> = indexOf(items.keys, id)
+
+  view squares(n: Int): Int = range(0, n).fold(0, (acc, i) => acc + i * i)
+
+  view evens(n: Int): List<Int> = range(0, n).filter(i => i % 2 == 0)
+
+  view noteOf(k: Bytes): Option<Bytes> = notes.get(k)
+
+  destroy close() only owner {
+    require(notes.isEmpty, "notes remain")
+    pay(owner, balance)
+  }
+}

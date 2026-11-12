@@ -1,0 +1,81 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Ledger",
+  "source": "Ledger.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "admin", "type": "Key", "data": "bytes28" },
+      { "name": "phase", "type": "Phase", "data": "Phase" },
+      { "name": "limits", "type": "Map<Key, Int>", "data": "map<bytes28, int>" },
+      { "name": "balances", "type": "BigMap<Key, Int>", "data": "merkleMap<int>" },
+      { "name": "supply", "type": "Int", "data": "int" }
+    ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Pause", "constr": 0, "fields": [
+          { "name": "reason", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Close", "constr": 1, "fields": [
+          { "name": "day", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "SetLimit", "constr": 2, "fields": [
+          { "name": "who", "type": "Key", "data": "bytes28" },
+          { "name": "limit", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Mint", "constr": 3, "fields": [
+          { "name": "to", "type": "Key", "data": "bytes28" },
+          { "name": "amount", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Transfer", "constr": 4, "fields": [
+          { "name": "to", "type": "Key", "data": "bytes28" },
+          { "name": "amount", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Settle", "constr": 5, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "limits", "type": "Map<Key, Int>", "data": "map<bytes28, int>" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "Phase": { "kind": "enum", "constructors": [
+      { "name": "Open", "constr": 0, "fields": [] },
+      { "name": "Paused", "constr": 1, "fields": [
+          { "name": "reason", "type": "Bytes", "data": "bytes" }
+        ] },
+      { "name": "Closed", "constr": 2, "fields": [
+          { "name": "day", "type": "Int", "data": "int" },
+          { "name": "by", "type": "Key", "data": "bytes28" }
+        ] }
+    ] },
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "MapEntry": { "kind": "api", "constructors": [{ "name": "MapEntry", "constr": 0, "fields": [
+        { "name": "key", "type": "Bytes", "data": "bytes" },
+        { "name": "present", "type": "Bool", "data": "bool" },
+        { "name": "value", "type": "Bytes", "data": "bytes" }
+      ] }] },
+    "MerkleMap": { "kind": "api", "constructors": [{ "name": "MerkleMap", "constr": 0, "fields": [
+        { "name": "root", "type": "Bytes", "data": "bytes" },
+        { "name": "reads", "type": "List<MapEntry>", "data": "list<MapEntry>" },
+        { "name": "writes", "type": "List<MapEntry>", "data": "list<MapEntry>" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

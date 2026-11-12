@@ -13,16 +13,26 @@ import java.util.regex.Pattern;
 public final class JscV2 {
     private JscV2() {}
 
-    /** A located warning: line and column in the {@code .jsc} file (D12, F13). */
-    public record Warning(int line, int col, String message) {
-        /** {@code file:line:col: warning: message}. */
+    /** A located warning with its stable code: line and column in the {@code .jsc} file (D12, F13). */
+    public record Warning(int line, int col, String code, String message) {
+        /** {@code file:line:col: warning[CODE]: message}. */
         public String format(String file) {
-            return file + ":" + line + ":" + col + ": warning: " + message;
+            return file + ":" + line + ":" + col + ": warning[" + code + "]: " + message;
         }
     }
 
-    /** Generated Java, warnings, and the functions that call themselves (reported, J9). */
-    public record Lowered(String java, List<Warning> diagnostics, Set<String> recursiveFns, String fileName) {
+    /**
+     * Generated Java, warnings, the functions that call themselves (reported, J9), the path of the Java file
+     * ({@code a/b/Name.java}), its source map (D12: JSON, generated line to {@code .jsc} line and column) and the ABI
+     * manifest (D12, J17: JSON, committed as {@code Name.abi.json}).
+     */
+    public record Lowered(String java, List<Warning> diagnostics, Set<String> recursiveFns, String fileName, String javaPath,
+                          String sourceMapJson, String abiJson) {
+        /** For each generated Java line (1-based) with a source: {@code [javaLine, jscLine, jscCol]}. */
+        public List<int[]> sourceMap() {
+            return Abi.sourceMap(java, fileName);
+        }
+
         /** The warnings, each formatted {@code file:line:col: warning: message}. */
         public List<String> warnings() {
             return diagnostics.stream().map(w -> w.format(fileName)).toList();
@@ -43,7 +53,7 @@ public final class JscV2 {
      */
     public static void checkFileName(String fileName) {
         if (fileName == null || !SAFE_FILE_NAME.matcher(fileName).matches()) {
-            throw new JscException(1, 1, "the file name " + (fileName == null ? "(none)" : "'" + printable(fileName) + "'")
+            throw new JscException(1, 1, "JSC0001", "the file name " + (fileName == null ? "(none)" : "'" + printable(fileName) + "'")
                     + " may contain only ASCII letters and digits, '.', '_' and '-', and must start with a letter or digit (it is embedded in the generated Java)");
         }
     }
@@ -63,8 +73,10 @@ public final class JscV2 {
     public static Lowered lower(String source, String fileName) {
         checkFileName(fileName);
         Ir.Program p = Checker.check(Parser.parse(source), fileName);
-        var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.message())).toList();
-        return new Lowered(JavaEmitter.emit(p), warnings, p.recursiveFns(), fileName);
+        var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList();
+        String java = JavaEmitter.emit(p);
+        String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";
+        return new Lowered(java, warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(java, fileName, javaPath), Abi.of(p));
     }
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */
@@ -79,17 +91,18 @@ public final class JscV2 {
      * the target must resolve to.
      */
     public record BindingRow(String module, String name, List<String> params, String result, String targetClass, String target,
-                             String policy, String domain, boolean timeTotal, String javaSignature) {}
+                             List<String> prefix, String policy, String domain, boolean timeTotal, String javaSignature) {}
 
     /** Every {@code std} binding row, for the binding test. */
     public static List<BindingRow> bindings() {
         return Std.ROWS.values().stream().map(b -> new BindingRow(b.module(), b.name(), b.params().stream().map(Ty::show).toList(),
-                Ty.show(b.result()), b.targetClass(), b.target(), b.policy().name(), b.domain(), b.timeTotal(), b.javaSignature())).toList();
+                Ty.show(b.result()), b.targetClass(), b.target(), b.prefix(), b.policy().name(), b.domain(), b.timeTotal(),
+                b.javaSignature())).toList();
     }
 
     /** The exact Java signature behind every {@code std} binding row (ADR-0018 D8). */
     public static List<String> bindingSignatures() {
-        return Std.ROWS.values().stream().map(Std.Binding::javaSignature).toList();
+        return Std.ROWS.values().stream().map(Std.Binding::javaSignature).filter(java.util.Objects::nonNull).toList();
     }
 
     /** {@code a/b/Name.java} for the contract a source declares. */

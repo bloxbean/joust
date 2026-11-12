@@ -35,13 +35,23 @@ class JscV2BindingTest {
     static final List<String> ADAPTER_CALLEES = List.of(
             "org.julclang.stdlib.lib.ByteStringLib.slice(byte[],long,long):byte[]",
             "org.julclang.stdlib.lib.ByteStringLib.at(byte[],long):long",
-            "org.julclang.stdlib.lib.ByteStringLib.length(byte[]):long");
+            "org.julclang.stdlib.lib.ByteStringLib.length(byte[]):long",
+            "org.julclang.stdlib.lib.ByteStringLib.take(byte[],long):byte[]",
+            "org.julclang.stdlib.lib.ByteStringLib.drop(byte[],long):byte[]",
+            "org.julclang.stdlib.lib.MathLib.floorDiv(java.math.BigInteger,java.math.BigInteger):java.math.BigInteger",
+            "org.julclang.stdlib.lib.MathLib.floorMod(java.math.BigInteger,java.math.BigInteger):java.math.BigInteger",
+            "org.julclang.stdlib.lib.MathLib.pow(java.math.BigInteger,java.math.BigInteger):java.math.BigInteger",
+            "org.julclang.stdlib.lib.MathLib.expMod(java.math.BigInteger,java.math.BigInteger,java.math.BigInteger):java.math.BigInteger",
+            "org.julclang.stdlib.lib.BitwiseLib.readBit(byte[],long):boolean",
+            "org.julclang.stdlib.lib.BitwiseLib.shiftByteString(byte[],long):byte[]",
+            "org.julclang.stdlib.lib.BitwiseLib.rotateByteString(byte[],long):byte[]",
+            "org.julclang.stdlib.lib.CryptoLib.verifyEd25519Signature(byte[],byte[],byte[]):boolean");
 
     static String java(String jscType) {
         return switch (jscType) {
             case "Int" -> "java.math.BigInteger";
             case "Bool" -> "boolean";
-            case "Bytes", "Key" -> "byte[]";
+            case "Bytes", "Key", "Hash" -> "byte[]";
             default -> throw new IllegalArgumentException(jscType);
         };
     }
@@ -56,6 +66,13 @@ class JscV2BindingTest {
     /** The problems with a set of rows: empty when every row is right. */
     static List<String> check(List<BindingRow> rows) {
         var problems = new ArrayList<String>();
+        // Generated rows have no library target: the lowering writes their code and the interpreter states them (D8).
+        for (BindingRow r : rows) {
+            if (!r.policy().equals("GENERATED")) continue;
+            if (r.target() != null || r.javaSignature() != null) problems.add(r.name() + ": a generated row names a library target");
+            if (r.domain() == null || r.domain().isBlank()) problems.add(r.name() + ": no domain");
+        }
+        rows = rows.stream().filter(r -> !r.policy().equals("GENERATED")).toList();
         var probe = new StringBuilder("package probe;\n");
         for (BindingRow r : rows) probe.append("import ").append(r.targetClass()).append(";\n");
         probe.append("class Probe {\n");
@@ -67,12 +84,22 @@ class JscV2BindingTest {
                 case "DIRECT", "ADAPTER" -> java(r.result());
                 default -> throw new IllegalArgumentException(r.policy());
             };
-            if (!r.policy().equals("ADAPTER") && (r.params().contains("Int") || r.result().equals("Int") && !r.policy().equals("LONG_RESULT"))) {
-                problems.add(r.name() + ": an Int crosses into Java without an adapter (policy " + r.policy() + ")");
+            // No Int reaches a fixed-width parameter, and a fixed-width result is only LONG_RESULT's (D8, F11).
+            String sig = r.javaSignature();
+            var javaParams = List.of(sig.substring(sig.indexOf('(') + 1, sig.indexOf(')')).split(","));
+            String javaResult = sig.substring(sig.indexOf("):") + 2);
+            if (javaParams.stream().anyMatch(t -> t.equals("long") || t.equals("int"))) {
+                problems.add(r.name() + ": an Int crosses into Java without an adapter (policy " + r.policy() + ", " + sig + ")");
+            }
+            if ((javaResult.equals("long") || javaResult.equals("int")) != r.policy().equals("LONG_RESULT")) {
+                problems.add(r.name() + ": a fixed-width result must be LONG_RESULT's, and only that (policy " + r.policy() + ")");
+            }
+            if (r.policy().equals("ADAPTER") && !r.targetClass().startsWith("org.julclang.state.api.")) {
+                problems.add(r.name() + ": an adapter is a JOUST API class");
             }
             if (r.domain() == null || r.domain().isBlank()) problems.add(r.name() + ": no domain");
             var ps = new ArrayList<String>();
-            var as = new ArrayList<String>();
+            var as = new ArrayList<String>(r.prefix());
             for (int k = 0; k < r.params().size(); k++) {
                 ps.add(java(r.params().get(k)) + " a" + k);
                 as.add("a" + k);
@@ -134,15 +161,33 @@ class JscV2BindingTest {
     void aWrongRowFails() {
         var length = JscV2.bindings().stream().filter(r -> r.name().equals("length")).findFirst().orElseThrow();
         var wrongSignature = new BindingRow(length.module(), "length", length.params(), length.result(), length.targetClass(), length.target(),
-                length.policy(), length.domain(), true, "org.julclang.stdlib.lib.ByteStringLib.length(byte[]):int");
+                List.of(), length.policy(), length.domain(), true, "org.julclang.stdlib.lib.ByteStringLib.length(byte[]):int");
         assertFalse(check(List.of(wrongSignature)).isEmpty(), "a mistyped signature");
         var wrongTarget = new BindingRow(length.module(), "length", length.params(), length.result(), length.targetClass(),
-                "ByteStringLib.at", length.policy(), length.domain(), true, length.javaSignature());
+                "ByteStringLib.at", List.of(), length.policy(), length.domain(), true, length.javaSignature());
         assertFalse(check(List.of(wrongTarget)).isEmpty(), "a template calling another method");
         var narrowing = new BindingRow("std/bytes", "at", List.of("Bytes", "Int"), "Int", "org.julclang.stdlib.lib.ByteStringLib",
-                "ByteStringLib.at", "LONG_RESULT", "index", false, "org.julclang.stdlib.lib.ByteStringLib.at(byte[],long):long");
+                "ByteStringLib.at", List.of(), "LONG_RESULT", "index", false, "org.julclang.stdlib.lib.ByteStringLib.at(byte[],long):long");
         var problems = check(List.of(narrowing));
         assertTrue(problems.stream().anyMatch(p -> p.contains("without an adapter")), problems.toString());
+        // M1a: a long result bound DIRECT (it would need LONG_RESULT), a wrong literal prefix (Bool where a byte[] goes),
+        // a generated row naming a target, and an adapter that is not in the JOUST API.
+        var count = JscV2.bindings().stream().filter(r -> r.name().equals("countSetBits")).findFirst().orElseThrow();
+        problems = check(List.of(new BindingRow(count.module(), count.name(), count.params(), count.result(), count.targetClass(), count.target(),
+                List.of(), "DIRECT", count.domain(), true, count.javaSignature())));
+        assertTrue(problems.stream().anyMatch(p -> p.contains("LONG_RESULT")), problems.toString());
+        var toInt = JscV2.bindings().stream().filter(r -> r.name().equals("toInt")).findFirst().orElseThrow();
+        assertFalse(check(List.of(new BindingRow(toInt.module(), toInt.name(), toInt.params(), toInt.result(), toInt.targetClass(), toInt.target(),
+                List.of(), toInt.policy(), toInt.domain(), true, toInt.javaSignature()))).isEmpty(), "toInt without its endianness literal");
+        var last = JscV2.bindings().stream().filter(r -> r.name().equals("last")).findFirst().orElseThrow();
+        problems = check(List.of(new BindingRow(last.module(), last.name(), last.params(), last.result(), "org.julclang.stdlib.lib.ListsLib",
+                "ListsLib.reverse", List.of(), "GENERATED", last.domain(), true, null)));
+        assertTrue(problems.stream().anyMatch(p -> p.contains("generated row names a library target")), problems.toString());
+        var div = JscV2.bindings().stream().filter(r -> r.name().equals("div")).findFirst().orElseThrow();
+        problems = check(List.of(new BindingRow(div.module(), div.name(), div.params(), div.result(), "org.julclang.stdlib.lib.MathLib",
+                "MathLib.floorDiv", List.of(), "ADAPTER", div.domain(), false,
+                "org.julclang.stdlib.lib.MathLib.floorDiv(java.math.BigInteger,java.math.BigInteger):java.math.BigInteger")));
+        assertTrue(problems.stream().anyMatch(p -> p.contains("JOUST API class")), problems.toString());
     }
 
     @Test

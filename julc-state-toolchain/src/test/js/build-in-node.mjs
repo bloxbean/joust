@@ -38,6 +38,20 @@ for (const m of modules) {
     console.log(`FAIL ${m}: ${JSON.stringify(r.diagnostics, (k, v) => (typeof v === "bigint" ? Number(v) : v)).slice(0, 1500)}`);
     continue;
   }
+  // ADR-0018 D12: the engine returns the Java each .jsc file lowered to (Gradle's, byte for byte) and its ABI manifest
+  // (the committed one).
+  for (const g of r.generated ?? []) {
+    const gradle = join(examples, m, 'build/generated/sources/jsc/java/main', g.javaFile);
+    const javaSame = existsSync(gradle) && readFileSync(gradle, 'utf8') === g.java;
+    const committed = join(examples, m, 'src/main/jsc', g.jscFile.replace(/[^/]+\.jsc$/, ''), g.javaFile.split('/').pop().replace(/\.java$/, '.abi.json'));
+    const abiSame = !g.abi || (existsSync(committed) && readFileSync(committed, 'utf8') === g.abi);
+    if (!javaSame || !abiSame) {
+      failures++;
+      console.log(`DIFF generated ${g.javaFile}: java:${javaSame} abi:${abiSame}`);
+    } else if (g.abi) {
+      console.log(`same generated ${g.javaFile} (source map, ABI manifest)`);
+    }
+  }
   for (const c of r.contracts) {
     const fq = `${c.packageName}.${c.name}`;
     const classes = join(examples, m, 'build/classes/java/main');

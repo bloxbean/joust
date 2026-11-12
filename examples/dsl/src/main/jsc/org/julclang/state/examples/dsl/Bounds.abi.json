@@ -1,0 +1,52 @@
+{
+  "abi": 2,
+  "contract": "org.julclang.state.examples.dsl.Bounds",
+  "source": "Bounds.jsc",
+  "datum": { "name": "State", "constr": 0, "fields": [
+      { "name": "owner", "type": "Key", "data": "bytes28" },
+      { "name": "m", "type": "BigMap<Bytes, Int>", "data": "merkleMap<int>" }
+    ] },
+  "redeemers": {
+    "spend": [
+      { "name": "Write", "constr": 0, "fields": [
+          { "name": "e", "type": "Int", "data": "int" },
+          { "name": "d", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Discarded", "constr": 1, "fields": [
+          { "name": "e", "type": "Int", "data": "int" },
+          { "name": "d", "type": "Int", "data": "int" }
+        ] }
+    ],
+    "mint": [
+      { "name": "CreateInstance", "constr": 0, "fields": [
+          { "name": "seed", "type": "TxOutRef", "data": "TxOutRef" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "BurnInstance", "constr": 1, "fields": [] }
+    ]
+  },
+  "types": {
+    "Ctx": { "kind": "api", "constructors": [{ "name": "Ctx", "constr": 0, "fields": [
+        { "name": "caller", "type": "Key", "data": "bytes28" },
+        { "name": "received", "type": "Int", "data": "int" },
+        { "name": "balance", "type": "Int", "data": "int" },
+        { "name": "validFrom", "type": "Int", "data": "int" },
+        { "name": "validTo", "type": "Int", "data": "int" }
+      ] }] },
+    "MapEntry": { "kind": "api", "constructors": [{ "name": "MapEntry", "constr": 0, "fields": [
+        { "name": "key", "type": "Bytes", "data": "bytes" },
+        { "name": "present", "type": "Bool", "data": "bool" },
+        { "name": "value", "type": "Bytes", "data": "bytes" }
+      ] }] },
+    "MerkleMap": { "kind": "api", "constructors": [{ "name": "MerkleMap", "constr": 0, "fields": [
+        { "name": "root", "type": "Bytes", "data": "bytes" },
+        { "name": "reads", "type": "List<MapEntry>", "data": "list<MapEntry>" },
+        { "name": "writes", "type": "List<MapEntry>", "data": "list<MapEntry>" }
+      ] }] },
+    "TxOutRef": { "kind": "ledger", "constructors": [{ "name": "TxOutRef", "constr": 0, "fields": [
+        { "name": "txId", "type": "Bytes", "data": "bytes" },
+        { "name": "index", "type": "Int", "data": "int" }
+      ] }] }
+  },
+  "timeFields": []
+}

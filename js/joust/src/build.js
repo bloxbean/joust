@@ -6,11 +6,16 @@
 //   validators.json       the plain JuLC validators (governors, ...): [{ name, purpose, script, params }]
 //   <Validator>.plutus    each one's compiled script (CBOR hex; parameters not applied)
 //   joust.lock.json       the versions that built it (I7)
+//   generated/            the Java each .jsc file lowered to, with its source map (ADR-0018 D12)
+// Beside each .jsc 2 file, <Contract>.abi.json: its ABI manifest, which the project commits; a build whose manifest
+// differs, or is missing, fails unless accepted (--accept-abi: src/abi.js), so an encoding change cannot strand
+// deployed instances.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, existsSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { loadToolchain } from './toolchain.js';
+import { abiGate } from './abi.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -31,7 +36,8 @@ function sources(dir, keep = () => true) {
 }
 
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
-export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep } = {}) {
+export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep,
+  acceptAbi = false } = {}) {
   const files = sources(resolve(root, src), keep);
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
   const t = Date.now();
@@ -39,10 +45,26 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   const r = engine.joust.build({ files, options });
   for (const d of r.diagnostics) {
     const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
-    (d.severity === 'error' ? console.error : log)(`${d.severity}: ${where}${d.message}`);
+    // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
+    (d.severity === 'error' ? console.error : log)(`${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${where}${d.message}`);
   }
-  if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics };
   const dir = resolve(root, out);
+  // ADR-0018 D12: the ABI gate first. Accepting is for a build that succeeded only.
+  const refused = new Set();
+  const abiErrors = abiGate({ generated: r.generated ?? [], srcDir: src, root, acceptAbi: r.ok && acceptAbi, log, refused });
+  for (const e of abiErrors) console.error(e);
+  // Then the generated Java and its source map, on disk as on the Gradle path (also when the build failed), from a
+  // clean directory. Java whose manifest was refused is not written, so nothing can compile it (security S9).
+  rmSync(join(dir, 'generated'), { recursive: true, force: true });
+  for (const g of r.generated ?? []) {
+    if (refused.has(g.javaFile)) continue;
+    const target = join(dir, 'generated', g.javaFile);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, g.java);
+    if (g.sourceMap) writeFileSync(target.replace(/\.java$/, '.jscmap.json'), g.sourceMap);
+  }
+  if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics, ...(abiErrors.length ? { abiErrors } : {}) };
+  if (abiErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, abiErrors };
   mkdirSync(dir, { recursive: true });
   const bundle = [];
   for (const c of r.contracts) {
