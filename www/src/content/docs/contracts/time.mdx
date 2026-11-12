@@ -103,21 +103,29 @@ public static Result withdraw(State s, BigInteger amount, Ctx ctx) {
 ```jsc
 // Modifiers name a state field (an Int): after <field>, before <field>.
 action withdraw(amount: Int) only owner after unlockAt {
-    require amount > 0 "amount must be positive"
-    require amount <= total "insufficient funds"
-    total -= amount
-    pay amount to owner
+  require(amount > 0, "amount must be positive")
+  require(amount <= total, "insufficient funds")
+  pay(owner, amount)
+  return { ...state, total: total - amount }
 }
 
 // Functions take any Int: after(t), before(t). validFrom and validTo are the window's bounds.
 action contribute() payable {
-    require before(deadline) "the campaign has ended"
-    total += received
+  require(before(deadline), "the campaign has ended")
+  return { ...state, total: total + received }
+}
+
+// The escrow's refund: the seller or the arbiter at any time, anyone after the deadline.
+destroy refund() open {
+  require(caller == seller || caller == arbiter || after(deadline), "only the seller or the arbiter can refund before the deadline")
+  pay(buyer, balance)
 }
 ```
 
-`after(t)` and `before(t)` hold for the whole window, so `.jsc` allows them only as requirements: in a `require`, or
-joined with `&&`. Not negated, not in `||`, not as an `if` condition. Write a rule like the escrow's refund in Java.
+`after(t)` and `before(t)` hold for the whole window, so `.jsc` allows them only at the top of a `require`, alone or
+as an operand of `&&` or `||`: never negated, in an `if` or a `?:`, in a `const`, a `fn` or a lambda. And `.jsc` 2
+goes further: a value computed from `validFrom` or `validTo` never decides anything and never makes an operation
+fail; it may only flow into amounts and state, with a warning ([the time rule](/languages/jsc-reference/#time-d11)).
 
 </TabItem>
 <TabItem label="JavaScript">

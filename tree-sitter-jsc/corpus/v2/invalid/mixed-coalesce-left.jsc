@@ -1,0 +1,5 @@
+jsc 2
+package corpus
+
+fn f(a: Bool, b: Option<Bool>): Bool = a || b ?? true
+contract C { state { n: Int } init() { return { n: 0 } } }

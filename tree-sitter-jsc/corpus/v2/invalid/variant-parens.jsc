@@ -1,0 +1,6 @@
+jsc 2
+package corpus
+
+enum E { A { x: Int } }
+fn f(e: E): Int = match e { A(x) => x }
+contract C { state { n: Int } init() { return { n: 0 } } }

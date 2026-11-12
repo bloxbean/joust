@@ -1,0 +1,6 @@
+jsc 2
+package corpus
+
+type R = { a: Int }
+fn f(): R = new R { a: 1 }
+contract C { state { n: Int } init() { return { n: 0 } } }

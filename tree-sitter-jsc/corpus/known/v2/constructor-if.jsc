@@ -1,0 +1,14 @@
+jsc 2
+package known
+
+type Ready = { x: Int }
+
+contract K {
+  state { n: Int }
+  init() {
+    return { n: 0 }
+  }
+  view v(x: Bool): Int {
+    if Ready { x }
+  }
+}

@@ -457,7 +457,7 @@ class JscV2CheckerTest {
     }
 
     @Test
-    void jscMainDispatchesOnTheVersionLine_andV1CompilesWithoutTheM1Warning() {
+    void jscMainDispatchesOnTheVersionLine_andV1WarnsThatItIsDeprecated() {
         var v2 = JscMain.lowerWithWarnings(contract(""), "T.jsc");
         assertTrue(v2.java().contains("ADR-0018"));
         String v1 = """
@@ -466,7 +466,8 @@ class JscV2CheckerTest {
                   init() { n = 1 } }
                 """;
         var lowered = JscMain.lowerWithWarnings(v1, "C.jsc");
-        // F9: v1's deprecation warning arrives with M1 (templates switched, `joust migrate` present).
-        assertTrue(lowered.warnings().isEmpty(), lowered.warnings().toString());
+        // F9, D16: v1's deprecation warning arrived with M1d (templates switched, `joust migrate` present).
+        assertEquals(1, lowered.warnings().size(), lowered.warnings().toString());
+        assertTrue(lowered.warnings().get(0).startsWith("C.jsc:1:1: warning[JSC9006]: "), lowered.warnings().toString());
     }
 }

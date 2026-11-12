@@ -1,1 +1,7 @@
 description = 'JOUST .jsc: a state-contract surface syntax that lowers to a Java @StateContract (ADR-0005)'
+
+// -Djsc.writeStdDoc=true: JscV2StdDocTest rewrites the std library tables of www's jsc-std.mdx instead of checking them.
+tasks.named('test') {
+    systemProperty 'jsc.writeStdDoc', System.getProperty('jsc.writeStdDoc', 'false')
+    systemProperty 'jsc.writeShapes', System.getProperty('jsc.writeShapes', 'false')
+}

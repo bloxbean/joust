@@ -1,0 +1,35 @@
+jsc 2
+package corpus
+
+// '[' on the next line starts a new expression: here the fn's value, a list.
+fn list(x: Int): List<Int> {
+  const y = x
+  [y, x]
+}
+
+// On the same line it is an index. A '(' on the next line starts a new expression too (review r2 F2): here f is the fn
+// digits as a name (a checker error, not a parse error), and (x) the block's value.
+fn index(m: BigMap<Bytes, Int>, k: Bytes): Int = m[k]
+
+fn call(x: Int): Int {
+  const f = digits
+  (x)
+}
+
+fn digits(n: Int): Int = n
+
+// On its own line, a call's '(' continues it.
+fn twice(x: Int): Int = digits(
+  x) + digits(x)
+
+// Operators continue across lines.
+fn sum(a: Int, b: Int): Int {
+  a
+    + b
+    - 1
+}
+
+contract Lines {
+  state { n: Int }
+  init() { return { n: list(1).length } }
+}

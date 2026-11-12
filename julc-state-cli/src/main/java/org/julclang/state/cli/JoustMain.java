@@ -165,6 +165,10 @@ public final class JoustMain {
         sys.out().println("  cd " + (shown.isEmpty() ? "." : shown));
         sys.out().println("  ./gradlew build     # the validator, the client, the description; and the tests");
         sys.out().println("  ./gradlew run       # the counter on Yaci DevKit: yaci-devkit up --enable-yaci-store");
+        if (Scaffold.lang(r).equals("jsc")) {
+            sys.out().println();
+            sys.out().println("Note: " + Scaffold.LANGUAGE_PREVIEW + ".");
+        }
         javaCheck();
         return 0;
     }

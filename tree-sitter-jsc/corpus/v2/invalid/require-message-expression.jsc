@@ -1,0 +1,4 @@
+jsc 2
+package corpus
+
+contract C { state { n: Int } init() { require(true, utf8("x")) return { n: 0 } } }

@@ -1,0 +1,3 @@
+package p
+contract A { state n: Int init() { } }
+contract B { state n: Int init() { } }

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "jsc",
+      "camelcase": "Jsc",
+      "title": ".jsc",
+      "scope": "source.jsc",
+      "path": ".",
+      "file-types": ["jsc"],
+      "highlights": "queries/highlights.scm",
+      "injection-regex": "^jsc$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "tree-sitter grammar for JOUST's contract language, .jsc 2 and .jsc v1",
+    "links": { "repository": "https://github.com/bloxbean/joust" }
+  }
+}

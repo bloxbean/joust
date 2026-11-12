@@ -1,11 +1,15 @@
 // @ts-check
 // The JOUST docsite: a custom landing page (src/pages/index.astro) and Starlight docs (src/content/docs). The llms
 // integration publishes the AI artifacts (/llms.txt, /llms-full.txt, /ai/starter-pack.md, /ai/catalog.json).
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import llmsIntegration from './scripts/llms-integration.mjs';
 import { SITE } from './site.config.mjs';
 import { SIDEBAR } from './sidebar.mjs';
+
+// .jsc is JOUST's contract language: its TextMate grammar (editors/vscode-jsc, ADR-0018 D13) highlights both versions.
+const jscGrammar = JSON.parse(readFileSync(new URL('../editors/vscode-jsc/syntaxes/jsc.tmLanguage.json', import.meta.url), 'utf8'));
 
 export default defineConfig({
   site: SITE.url,
@@ -23,8 +27,7 @@ export default defineConfig({
       components: { Head: './src/components/overrides/Head.astro' },
       expressiveCode: {
         themes: ['github-dark-default', 'github-light'],
-        // .jsc is JOUST's contract language; Kotlin's grammar highlights it closely (types, strings, comments).
-        shiki: { langAlias: { jsc: 'kotlin' } },
+        shiki: { langs: [jscGrammar] },
         styleOverrides: { borderRadius: '0.6rem' },
       },
       sidebar: SIDEBAR,

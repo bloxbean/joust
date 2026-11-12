@@ -1,0 +1,206 @@
+---
+title: "Migrating from .jsc v1"
+description: "Translate a .jsc v1 contract to .jsc 2 with joust migrate (or Gradle's migrateJsc): what it changes, what it refuses, and why the result is a new script."
+---
+
+import { Tabs, TabItem, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+`.jsc` v1 (ADR-0005) is deprecated. It is **frozen, not removed**: a v1 file still builds, unchanged, so a script
+deployed from it stays rebuildable. Every build of a v1 file warns:
+
+```text
+Counter.jsc:1:1: warning[JSC9006]: this file is .jsc v1, which is deprecated (ADR-0018 D16): it still builds, unchanged, but new code is .jsc 2; run `joust migrate` (Gradle: the migrateJsc task) to translate it, as a new script
+```
+
+`joust migrate` translates a v1 file into a [`.jsc` 2](/languages/jsc/) file with the same behaviour, or refuses with
+the reason.
+
+<Aside type="caution" title="A migrated contract is a new script">
+The `.jsc` 2 file lowers to different Java, so it compiles to a different validator: a new script hash, a new address
+and a new minting policy. Instances deployed from the v1 file stay on the v1 script, and only the v1 build can call
+them. Keep the v1 build's artifacts (its script, description and client) for as long as such instances exist, and
+deploy the migrated contract as a new one.
+</Aside>
+
+## Run it
+
+<Tabs syncKey="lang">
+<TabItem label="Java">
+
+```sh
+./gradlew migrateJsc              # every v1 file under src/main/jsc -> build/jsc-migrated/<same path>
+./gradlew migrateJsc --in-place   # replaces each v1 file; its text is kept beside it as <Name>.jsc.v1
+./gradlew acceptJscAbi            # then: write the new ABI manifests, review and commit them
+```
+
+</TabItem>
+<TabItem label="JavaScript">
+
+```sh
+npx joust migrate                            # every v1 file under contracts/ -> build/joust/migrated/<same path>
+npx joust migrate contracts/app/Counter.jsc  # only this file
+npx joust migrate --in-place                 # replaces each v1 file; its text is kept beside it as <Name>.jsc.v1
+npx joust build --accept-abi                 # then: write the new ABI manifests, review and commit them
+```
+
+</TabItem>
+</Tabs>
+
+By default nothing in your sources changes: each `.jsc` 2 file is written under the build directory, in the same
+relative path, for you to read, diff and move into place. With `--in-place` the v1 file is replaced and its text is
+kept as `<Name>.jsc.v1` beside it, which no build compiles; migrate refuses (`JSC1107`) when that backup already
+exists, even as a dangling link, and never replaces a symbolic link, a file with more than one hard link or a file
+under a linked directory (`JSC1109`); the new text goes to a temporary file renamed over the source. Without `--in-place`,
+an output directory that is the sources or inside them, or a target that is a source, is refused (`JSC1108`), and
+`joust migrate` writes only under `build/joust/migrated/` (a file given from outside `contracts/` by its base name).
+On npm, `--in-place` first copies the v1 build's artifacts of the contract (`build/joust/<Name>.json`, `.plutus`, `.js`,
+`.d.ts`, `contracts.json`, `joust.lock.json` and the deployments files) to `build/joust/v1/`, which no build writes. A
+`.jsc` 2 file has no ABI manifest yet, so its first build fails with `JSC0003` until you accept one. On the JVM the same
+is `JscMain --migrate <srcDir> <outDir> [--in-place]`.
+
+Each refusal prints at the v1 position, and each migrated file prints notes for what changed, then the new-script
+reminder. Gradle and `JscMain` print `File.jsc:line:col: error[JSC11xx]: …` and `File.jsc:line:col: note: …`;
+`joust migrate` prints `error[JSC11xx]: File.jsc:line:col: …` and `note: File.jsc:line:col: …`, as `joust build` does.
+
+## Before and after
+
+The counter `npm create joust` wrote in v1, and the `.jsc` 2 counter it writes now:
+
+<Tabs>
+<TabItem label="v1">
+
+```jsc title="Counter.jsc (v1)"
+package app
+
+contract Counter(maxDatumBytes = 128) {
+    state count: Int
+    state owner: Key
+
+    init() {
+        owner = caller
+    }
+
+    action increment(by: Int) {
+        require by > 0 "increment must be positive"
+        count += by
+    }
+
+    action reset() only owner {
+        count = 0
+    }
+
+    destroy close() only owner {
+        pay balance to owner
+    }
+
+    view count(): Int = count
+}
+```
+
+</TabItem>
+<TabItem label=".jsc 2">
+
+```jsc title="Counter.jsc (.jsc 2)"
+jsc 2
+package app
+
+contract Counter(maxDatumBytes = 128) {
+  state { count: Int, owner: Key }
+
+  init() {
+    return { count: 0, owner: caller }
+  }
+
+  action increment(by: Int) {
+    require(by > 0, "increment must be positive")
+    return { ...state, count: count + by }
+  }
+
+  action reset() only owner {
+    return { ...state, count: 0 }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+
+  view count(): Int = count
+}
+```
+
+</TabItem>
+</Tabs>
+
+The generated client is the same: `deploy`, `increment({ by })`, `reset`, `close` and `count`.
+
+## What it changes
+
+`joust migrate` works on the **checked v1 AST**, with v1's own dataflow (its single-assignment form and its branch
+merges), not on the text:
+
+| v1 | `.jsc` 2 |
+|---|---|
+| `package p` | `jsc 2` then `package p` |
+| `state f: T` lines | one `state { f: T, … }` |
+| `x = e`, `x += e`, `this.x = e` | a `const` per assignment, read by later code; the method returns `{ ...state, x: … }` with the latest values. `count += 1; let s = count; count += s` keeps v1's meaning |
+| `init` that assigns some fields | `return { … }` with every field; v1's defaults (`0`, `false`, an empty map) where it assigned none |
+| `let x = e` | `const x = e` |
+| `require c "m"`, `pay a to k` | `require(c, "m")`, `pay(k, a)` |
+| an `if` that assigns | an `if` statement for its checks and payouts, and an `if` expression per field it assigns: only the taken arm runs, as in v1 |
+| `Map<Key, Int>` | `BigMap<Key, Int>`: `m[k] += v` is `m.set(k, m[k] + v)` in the next state, `delete m[k]` is `set(k, 0)`, `has(m, k)` is `m.has(k)`, `isEmpty(m)` is `m.isEmpty` (read only in a destroy: after a write in the same method, as v1 allows, it is refused, `JSC1104`). A read after a write is resolved by key equality; a write in one arm of an `if` becomes a `set` whose value is the entry's current one when the other arm is taken |
+| a parameter named like a state field (in an action, destroy or view), or like a name the generated client binds (`s`, `r`; `seed`, `result` in an init) | renamed (`goal` becomes `newGoal`): `.jsc` 2 never lets a name hide a field. **The generated client's parameter name changes too** |
+| a 28-byte literal (a `Key` in v1) | `asKey(#…)` |
+| `//` comments | kept, beside the code they precede |
+
+Behaviour is preserved in this sense: for every call, the same next state and the same payouts. The **order** of
+payouts changes: v1 lists a method's payouts in reverse source order, `.jsc` 2 in source order. The validator checks
+each payout, so this matters only to code that reads the list by position; migrate's notes say where it applies.
+
+## What it refuses
+
+| Code | Refusal |
+|---|---|
+| `JSC1101` | The file is already `.jsc` 2 |
+| `JSC1102` | The file is not valid v1 (the v1 error follows) |
+| `JSC1103` | A `batched` action: batched intents are not in `.jsc` 2 before milestone M3 |
+| `JSC1104` | The translation breaks a `.jsc` 2 rule; the rule's own code and message follow. The common case is time: v1 lets `validFrom` or `validTo` decide a branch (`if validTo > deadline`), which `.jsc` 2 refuses ([the time rule](/languages/jsc-reference/#time-d11)) |
+| `JSC1105` | An `if` writes a map entry at a key computed inside one of its arms: the key must be known before the `if` |
+| `JSC1106` | A value that can fail (a division) is computed but never read: v1 evaluates it, `.jsc` 2 would not, so the failure would be lost |
+| `JSC1107` | `--in-place` would overwrite an existing `<Name>.jsc.v1` (a file or a link) |
+| `JSC1108` | The output would be or replace the sources, without `--in-place` |
+| `JSC1109` | `--in-place` on a file that is a symbolic link, has more than one hard link, or lies under a linked directory |
+| `JSC1110` | A state field, method or contract named with a word of `.jsc` 2 (`match`, `Some`, …): rename it in v1 first (its name is in the client and the ABI). A parameter or `let` so named is renamed `<name>Value`, with a note |
+
+A refused file stays v1 and keeps building. Rewrite the refused part by hand (the v1 file is short), or keep the
+contract in v1 until `.jsc` 2 has the feature: the example `examples/dsl/.../Jar.jsc` has a `batched` action, so it
+stays v1 until M3.
+
+## After migrating
+
+1. Read the migrated file and its notes. Rename the generated `const`s if you like: they are ordinary names.
+2. Accept its ABI manifest (`joust build --accept-abi`, or `./gradlew acceptJscAbi`), review it and commit it with the
+   file.
+3. Run your tests against the new contract, and update any client code for renamed parameters.
+4. Deploy it as a new contract. `joust deploy` keeps the v1 deployment under `superseded` in
+   `deployments.<network>.json`, and `joust build` warns while a recorded deployment's script is not the one it builds.
+
+## Reaching v1 instances after migrating
+
+Instances deployed from the v1 file hold funds on the v1 script until they are closed. To call them:
+
+- **npm.** The v1 artifacts are in `build/joust/v1/` (after `--in-place`), and the v1 deployment record is under
+  `superseded` in `deployments.<network>.json`. A client generated from `build/joust/v1/<Name>.json` with the v1
+  deployment reaches them.
+- **Any path.** Rebuild the v1 text (`<Name>.jsc.v1`, renamed back to `<Name>.jsc` in a separate checkout or
+  directory) with the JOUST version that built the deployed script (`joust.lock.json`, or the plugin's version): v1 is
+  frozen, so that build gives the same v1 script. Gradle records no deployments, so keep the v1 build's
+  `META-INF/joust` description and the generated client before the first build after `migrateJsc --in-place`; the task
+  says so.
+
+## Next steps
+
+<CardGrid>
+<LinkCard title=".jsc guide" description="The .jsc 2 language." href="/languages/jsc/" />
+<LinkCard title=".jsc v1 (deprecated)" description="The v1 language, for maintaining deployed contracts." href="/languages/jsc-v1/" />
+<LinkCard title=".jsc reference" description="The ABI manifest and the diagnostics." href="/languages/jsc-reference/" />
+</CardGrid>

@@ -149,7 +149,8 @@ The whole file, with its imports, is
 
 ## The same contract in .jsc
 
-If you prefer a shorter syntax, `.jsc` says the same thing and lowers to the same Java.
+If you prefer a syntax closer to TypeScript, `.jsc` 2 (a language preview) says the same thing and lowers to an equivalent Java
+class.
 
 <Tabs syncKey="lang">
 <TabItem label="Java">
@@ -191,35 +192,37 @@ public class Counter {
 <TabItem label=".jsc">
 
 ```jsc title="Counter.jsc"
+jsc 2
 package app
 
 contract Counter(maxDatumBytes = 128) {
-    state count: Int
-    state owner: Key
+  state { count: Int, owner: Key }
 
-    init() {
-        owner = caller
-    }
+  init() {
+    return { count: 0, owner: caller }
+  }
 
-    action increment(by: Int) {
-        require by > 0 "increment must be positive"
-        count += by
-    }
+  action increment(by: Int) {
+    require(by > 0, "increment must be positive")
+    return { ...state, count: count + by }
+  }
 
-    action reset() only owner {
-        count = 0
-    }
+  action reset() only owner {
+    return { ...state, count: 0 }
+  }
 
-    destroy close() only owner {
-        pay balance to owner
-    }
+  destroy close() only owner {
+    pay(owner, balance)
+  }
 
-    view count(): Int = count
+  view count(): Int = count
 }
 ```
 
-An `Int` field that `init` does not assign starts at zero (here `count`); `caller` and `balance` read `Ctx`, which the lowering adds where they are used;
-`only owner` becomes `@SignedBy("owner")`. See [.jsc](/languages/jsc/).
+`init` returns the first state and an action the next one: `{ ...state, count: count + by }` keeps every other field.
+Values never change, so there is no `count += by`. `caller` and `balance` read `Ctx`, which the lowering adds where they
+are used; `only owner` becomes `@SignedBy("owner")`. The build also writes `Counter.abi.json`, the contract's encoding,
+which you commit beside the file. See [.jsc](/languages/jsc/).
 
 </TabItem>
 </Tabs>

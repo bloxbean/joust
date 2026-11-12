@@ -16,7 +16,7 @@ npm create joust@latest my-app -- --template web --lang java
 |---|---|---|
 | `[dir]` | the directory to create, new or empty; the new `package.json` takes its `name` from it | `joust-app` |
 | `--template`, `-t` | `node`: a Node script (`index.js`) that deploys and calls the contract<br>`web`: a browser page with CIP-30 wallets | `node` |
-| `--lang`, `-l` | `jsc`: the contract in JOUST's `.jsc` language (`contracts/app/Counter.jsc`)<br>`java`: the contract in Java (`contracts/app/Counter.java`) | `jsc` |
+| `--lang`, `-l` | `jsc`: the contract in JOUST's `.jsc` 2 language, a preview (`contracts/app/Counter.jsc`, with its ABI manifest `Counter.abi.json`)<br>`java`: the contract in Java (`contracts/app/Counter.java`) | `jsc` |
 
 With `npm create`, options go after `--`. Both languages give the same contract: `joust build` generates the same
 description and the same JavaScript client from either, so `index.js`, the page and the test are the same too.
@@ -26,6 +26,7 @@ description and the same JavaScript client from either, so `index.js`, the page 
 ```
 my-app/                          --template node (the default)
 ├── contracts/app/Counter.jsc    a counter: anyone increments it, its owner resets or closes it (Counter.java with --lang java)
+├── contracts/app/Counter.abi.json  how its state and calls are encoded on chain (.jsc 2; commit it, review its changes)
 ├── index.js                     deploys a counter on a local Yaci DevKit and calls it, through the generated client
 ├── test/counter.test.js         the same calls as a test (node --test)
 ├── joust.config.json            the contracts directory, the build output (build/joust) and the networks

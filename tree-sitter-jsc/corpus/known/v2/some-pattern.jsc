@@ -1,0 +1,15 @@
+jsc 2
+package known
+
+enum Choice { Some, Other }
+
+contract K {
+  state { n: Int }
+  init() {
+    return { n: 0 }
+  }
+  view v(c: Choice): Int = match c {
+    Some => 1
+    Other => 2
+  }
+}

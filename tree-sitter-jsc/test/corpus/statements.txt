@@ -1,0 +1,244 @@
+================================================================================
+Statements
+================================================================================
+
+jsc 2
+package p
+contract C {
+  state { n: Int, xs: List<Int> }
+  init() { return { n: 0, xs: [] } }
+  action a(d: Int) only n {
+    const x: Int = d
+    if x > 0 { require(x < 9, "small") } else if x < 0 { require(false, "no") } else { }
+    for (const y of xs) { require(y > 0, "positive") }
+    return { ...state, n: if x > 0 { x } else { 0 } }
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)
+              (type
+                (identifier))))))
+      (init_declaration
+        (parameters)
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (number
+                  (integer)))
+              (field_initializer
+                (identifier)
+                (list_literal))))))
+      (action_declaration
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (type
+              (identifier))))
+        (modifier
+          (identifier))
+        (block
+          (const_declaration
+            (identifier)
+            (type
+              (identifier))
+            (identifier))
+          (if_statement
+            (binary_expression
+              (identifier)
+              (number
+                (integer)))
+            (block
+              (require_statement
+                (binary_expression
+                  (identifier)
+                  (number
+                    (integer)))
+                (string
+                  (string_content))))
+            (if_statement
+              (binary_expression
+                (identifier)
+                (number
+                  (integer)))
+              (block
+                (require_statement
+                  (boolean)
+                  (string
+                    (string_content))))
+              (block)))
+          (for_statement
+            (identifier)
+            (identifier)
+            (block
+              (require_statement
+                (binary_expression
+                  (identifier)
+                  (number
+                    (integer)))
+                (string
+                  (string_content)))))
+          (return_statement
+            (object_literal
+              (spread_element
+                (identifier))
+              (field_initializer
+                (identifier)
+                (if_expression
+                  (binary_expression
+                    (identifier)
+                    (number
+                      (integer)))
+                  (block
+                    (identifier))
+                  (block
+                    (number
+                      (integer))))))))))))
+
+================================================================================
+Match: statement and value
+================================================================================
+
+jsc 2
+package p
+enum Phase { Open, Closed { day: Int, by: Key } }
+contract C {
+  state { p: Phase, o: Option<Int> }
+  init() { return { p: Open, o: None } }
+  destroy d() only n {
+    match p {
+      Closed { by } => { pay(by, balance) }
+      _ => pay(caller, balance)
+    }
+  }
+  view v(): Int = match o { Some(x) => x, None => 0 }
+  view w(): Int = match p { Closed { day: d } => d; Open => 0 }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (enum_declaration
+    (identifier)
+    (variant_declaration
+      (identifier))
+    (variant_declaration
+      (identifier)
+      (field_list
+        (field_declaration
+          (identifier)
+          (type
+            (identifier)))
+        (field_declaration
+          (identifier)
+          (type
+            (identifier))))))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)
+              (type
+                (identifier))))))
+      (init_declaration
+        (parameters)
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (identifier))
+              (field_initializer
+                (identifier)
+                (identifier))))))
+      (destroy_declaration
+        (identifier)
+        (parameters)
+        (modifier
+          (identifier))
+        (block
+          (match_statement
+            (identifier)
+            (match_arm
+              (variant_pattern
+                (identifier)
+                (pattern_binding
+                  (identifier)))
+              (block
+                (pay_statement
+                  (identifier)
+                  (identifier))))
+            (match_arm
+              (variant_pattern
+                (identifier))
+              (pay_statement
+                (identifier)
+                (identifier))))))
+      (view_declaration
+        (identifier)
+        (parameters)
+        (type
+          (identifier))
+        (match_expression
+          (identifier)
+          (match_arm
+            (some_pattern
+              (identifier))
+            (identifier))
+          (match_arm
+            (variant_pattern
+              (identifier))
+            (number
+              (integer)))))
+      (view_declaration
+        (identifier)
+        (parameters)
+        (type
+          (identifier))
+        (match_expression
+          (identifier)
+          (match_arm
+            (variant_pattern
+              (identifier)
+              (pattern_binding
+                (identifier)
+                (identifier)))
+            (identifier))
+          (match_arm
+            (variant_pattern
+              (identifier))
+            (number
+              (integer))))))))

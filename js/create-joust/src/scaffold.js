@@ -10,7 +10,23 @@ export const TEMPLATES = ['node', 'web'];
 export const LANGS = ['jsc', 'java'];
 export const DEFAULTS = { template: 'node', lang: 'jsc' };
 
+/** What create-joust and the native joust say after a .jsc project (review r2 F4). */
+export const LANGUAGE_PREVIEW = '.jsc 2 is a language preview: the same file may compile to a different script hash in a later JOUST, so use it on DevKit and testnets and don\'t deploy it to hold value (README.md)';
+
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
+
+/** ADR-0018 D14: the .jsc template is .jsc 2, a preview, and ships its ABI manifest (a first build needs one: JSC0003). */
+const JSC_NOTE = `
+**\`.jsc\` 2 is a language preview** (ADR-0018), not to be confused with Cardano's preview network. The language and
+the compiler's output may change before it leaves preview, so the same \`Counter.jsc\` may compile to a different script
+hash in a later JOUST (milestone M1e changes every \`.jsc\` 2 script hash once). Use it on DevKit and testnets, and don't
+deploy it to hold value. A deployed preview contract is rebuilt with the JOUST version recorded for it: each record of
+\`build/joust/deployments.<network>.json\` states it (\`build/\` is ignored: commit that file if you need it later).
+
+\`contracts/app/Counter.abi.json\` beside the contract records how the state and the calls are encoded on chain:
+\`joust build\` fails when the encoding changes (JSC0002), until you accept the change with \`joust build --accept-abi\` and
+commit the new manifest. The Java the build generates from the contract is in \`build/joust/generated/\`.
+`;
 
 /** What the page needs, and a Node script does not. */
 const PAGE_ONLY = {
@@ -53,6 +69,7 @@ export function scaffold({ dir, template = DEFAULTS.template, lang = DEFAULTS.la
   const readme = join(dir, 'README.md');
   const contract = lang === 'jsc' ? 'Counter.jsc' : 'Counter.java';
   writeFileSync(readme, readFileSync(readme, 'utf8')
+    .replaceAll('{{jscNote}}', lang === 'jsc' ? JSC_NOTE : '')
     .replaceAll('{{contract}}', contract)
     .replaceAll('{{language}}', lang === 'jsc' ? "JOUST's .jsc language" : 'Java'));
   return list(dir);

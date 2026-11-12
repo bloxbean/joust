@@ -1,0 +1,10 @@
+jsc 2
+package known
+
+// a lone carriage return: here
+contract K {
+  state { n: Int }
+  init() {
+    return { n: 0 }
+  }
+}
