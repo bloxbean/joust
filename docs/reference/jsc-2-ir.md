@@ -48,7 +48,11 @@ load, before anything runs: an unknown node or statement kind, field, operator, 
 reader refuses every program that uses it, at load, rather than misreading it: a new node kind, a new modifier (M1c's
 `batched`), a new `std` row or a new type, each with fields of its own. The JavaScript reader also refuses a condition or a
 boolean operand that is not of type `Bool` (a `Branch`'s, `Require`'s or `Cond`'s condition; `Logic`'s and `Not`'s
-operands), and an empty `branches` list. Additive changes keep version 1. A change to
+operands), and an empty `branches` list. **Both readers** (the JavaScript one and the Java `IrJson.read`) take a
+method's modifiers only in the shapes the checker emits (#76 review S5): `payable` and `open` with no field; `only f`
+with `f` a `Key` field of the state; `after f` and `before f` with `f` an `Int` field; `batched` with no field or the
+field `"only"` (`batched only`), on an action only and never beside `only`, `after` or `before`; no modifier twice; an
+init with `payable` only, a view with none, and no `payable` destroy. Additive changes keep version 1. A change to
 an existing node's fields, to the meaning of an existing node, operator, modifier or row, or to the program's top-level
 fields gets a new version.
 
