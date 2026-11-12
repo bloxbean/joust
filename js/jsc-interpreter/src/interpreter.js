@@ -1,0 +1,539 @@
+// The reference interpreter of .jsc 2 (ADR-0018 D15): a direct evaluator of the checked IR (docs/reference/jsc-2-ir.md),
+// written from docs/reference/jsc-2-semantics.md. The section numbers below are that document's. It shares nothing
+// with the Java code but the IR file: its values, arithmetic, equality, map order, checked inputs, standard library,
+// hashes and Ed25519 are its own.
+
+import {
+  NONE, Some, some, Rec, MapV, BigMapV, Range, Refused, bytesEqual, bytesCompare, keyCompare, hex, unsignedBytes,
+} from './values.js';
+import { applyStd, ROWS } from './std.js';
+
+export const IR_VERSION = 1;
+
+const KINDS = new Set(['init', 'action', 'destroy', 'view']);
+
+/** Reads an IR export (its JSON text or the parsed object) and returns the program, ready to call. */
+export function load(ir) {
+  const p = typeof ir === 'string' ? JSON.parse(ir) : ir;
+  if (p.ir !== IR_VERSION) throw new Error(`not a version ${IR_VERSION} IR export: "ir": ${JSON.stringify(p.ir)}`);
+  if (p.language !== 'jsc 2') throw new Error(`not a .jsc 2 program: ${p.language}`);
+  return new Program(p);
+}
+
+/** A binding: locals are bound once, so an environment is a chain searched by id. */
+class Env {
+  constructor(id, value, next) {
+    this.id = id;
+    this.value = value;
+    this.next = next;
+  }
+}
+
+function lookup(env, id) {
+  for (let e = env; e; e = e.next) if (e.id === id) return e.value;
+  throw new Error(`unbound local ${id}`);
+}
+
+function bind(env, local, value) {
+  return new Env(local.id, value, env);
+}
+
+class Program {
+  constructor(p) {
+    this.ir = p;
+    // Field names and types of every record, the state and every variant (variant names are unique in a file).
+    this.shapes = new Map();
+    const add = (r) => this.shapes.set(r.name, { names: r.fields.map((f) => f.name), types: r.fields.map((f) => f.type) });
+    for (const r of p.records) add(r);
+    for (const e of p.enums) for (const v of e.variants) add(v);
+    add(p.state);
+    this.variantTag = new Map();
+    for (const e of p.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
+    this.fns = new Map(p.fns.map((f) => [f.name, f]));
+    this.methods = new Map(p.methods.map((m) => [m.name, m]));
+    for (const m of p.methods) if (!KINDS.has(m.kind)) throw new Error(`unknown method kind ${m.kind}`);
+    this.#checkRows(p);
+  }
+
+  /** Every std row the program calls is one this interpreter implements, in the module the IR names. */
+  #checkRows(node) {
+    if (Array.isArray(node)) {
+      for (const x of node) this.#checkRows(x);
+    } else if (node && typeof node === 'object') {
+      if (node.node === 'CallStd' && !(ROWS[node.module] ?? []).includes(node.name)) {
+        throw new Error(`unknown std row ${node.module}.${node.name}`);
+      }
+      for (const v of Object.values(node)) this.#checkRows(v);
+    }
+  }
+
+  get name() {
+    return this.ir.contract;
+  }
+
+  kind(method) {
+    return this.#method(method).kind;
+  }
+
+  usesTx(method) {
+    return this.#method(method).usesCtx;
+  }
+
+  stateFields() {
+    return this.shapes.get('State').names;
+  }
+
+  /** A variant's tag (its index in its enum, §1), or 0 for a record. */
+  tag(name) {
+    return this.variantTag.get(name) ?? 0;
+  }
+
+  #method(name) {
+    const m = this.methods.get(name);
+    if (!m) throw new Error(`no method ${name}`);
+    return m;
+  }
+
+  /**
+   * Calls a method (§2): `state` is the input state (null for an init), `args` the arguments in order, `tx` the
+   * transaction context { caller, received, balance, validFrom, validTo } (null where the method does not read it).
+   * Returns { value, payouts } or throws Refused.
+   */
+  call(name, state, args, tx) {
+    const m = this.#method(name);
+    if (args.length !== m.params.length) throw new Error(`${name} takes ${m.params.length} arguments`);
+    if ((m.kind === 'init') !== (state === null || state === undefined)) throw new Error('an init has no input state; others do');
+    return depthGuard(() => {
+      const frame = { state, tx, payouts: [] };
+      let env = null;
+      m.params.forEach((l, i) => (env = bind(env, l, args[i])));
+      // §4: every checked parameter is well formed before any statement runs.
+      for (const id of m.checked) {
+        const l = m.params.find((x) => x.id === id);
+        if (!this.wellFormed(lookup(env, id), l.type)) throw new Refused(`${l.name} is not a well-formed input`);
+      }
+      env = this.#exec(m.body.stmts, env, frame);
+      const value = m.body.result === null ? null : this.#eval(m.body.result, env, frame);
+      return { value, payouts: frame.payouts };
+    });
+  }
+
+  /** Calls a fn directly (§3.9). */
+  callFn(name, args) {
+    return depthGuard(() => this.#invoke(name, args));
+  }
+
+  /** Evaluates one expression node in an empty scope (for the hand-written vectors of §6). */
+  evalExpr(expr, { state = null, tx = null } = {}) {
+    return depthGuard(() => this.#eval(expr, null, { state, tx, payouts: [] }));
+  }
+
+  // ------------------------------------------------------------------ statements (§2.2, §2.3)
+
+  #exec(stmts, env, f) {
+    for (const s of stmts) {
+      switch (s.stmt) {
+        case 'Let':
+          env = bind(env, s.local, this.#eval(s.value, env, f));
+          break;
+        case 'Require':
+          if (this.#eval(s.cond, env, f) !== true) throw new Refused(s.message);
+          break;
+        case 'Pay': {
+          const to = this.#eval(s.to, env, f);
+          const amount = this.#eval(s.amount, env, f);
+          if (amount < 0n) throw new Refused('a payout cannot be negative');
+          if (amount > 0n) f.payouts.push({ to, lovelace: amount });
+          break;
+        }
+        case 'If':
+          if (this.#eval(s.cond, env, f)) this.#exec(s.then.stmts, env, f);
+          else if (s.otherwise) this.#exec(s.otherwise.stmts, env, f);
+          break;
+        case 'For':
+          for (const x of this.#seq(this.#eval(s.list, env, f))) this.#exec(s.body.stmts, bind(env, s.var, x), f);
+          break;
+        case 'Match': {
+          const v = this.#eval(s.scrutinee, env, f);
+          const arm = this.#arm(s.arms, v);
+          this.#exec(arm.body.stmts, this.#bindArm(arm, v, env), f);
+          break;
+        }
+        default:
+          throw new Error(`unknown statement ${s.stmt}`);
+      }
+    }
+    return env;
+  }
+
+  #block(b, env, f) {
+    return this.#eval(b.result, this.#exec(b.stmts, env, f), f);
+  }
+
+  // ------------------------------------------------------------------ expressions (§3)
+
+  #eval(e, env, f) {
+    switch (e.node) {
+      case 'Lit':
+        return typeof e.value === 'boolean' ? e.value : e.type === 'Int' ? BigInt(e.value) : fromHexLit(e.value);
+      case 'LocalRef': return lookup(env, e.local);
+      case 'StateRef': return f.state;
+      case 'StateField': return this.#field(f.state, e.field);
+      case 'CtxRef': {
+        if (!f.tx || !(e.name in f.tx)) throw new Error(`no transaction value ${e.name}`);
+        return f.tx[e.name];
+      }
+      case 'NoneLit': return NONE;
+      case 'SomeOf': return some(this.#eval(e.value, env, f));
+      case 'GetField': return this.#field(this.#eval(e.target, env, f), e.field);
+      case 'New': return new Rec(e.record, e.values.map((x) => this.#eval(x, env, f)));
+      case 'Variant': return new Rec(e.variant, e.values.map((x) => this.#eval(x, env, f)));
+      case 'CallFn': return this.#invoke(e.fn, e.args.map((x) => this.#eval(x, env, f)));
+      case 'CallStd': {
+        const args = e.args.map((x) => this.#eval(x, env, f));
+        const listType = e.args[0]?.type;
+        return applyStd(e.name, args, {
+          same: (a, b, t) => this.same(a, b, t),
+          elemType: listType && typeof listType === 'object' ? listType.list : undefined,
+          tx: f.tx,
+        });
+      }
+      case 'Prelude': return this.#prelude(e.op, e.args.map((x) => this.#eval(x, env, f)));
+      case 'TimePred': {
+        const t = this.#eval(e.threshold, env, f);
+        return e.after ? f.tx.validFrom >= t : f.tx.validTo <= t;
+      }
+      case 'ListLit': {
+        const items = e.items.map((x) => this.#eval(x, env, f));
+        if (e.rest) items.push(...this.#eval(e.rest, env, f));
+        return Object.freeze(items);
+      }
+      case 'Neg': return -this.#eval(e.operand, env, f);
+      case 'Not': return !this.#eval(e.operand, env, f);
+      case 'Arith': return arith(e.op, this.#eval(e.left, env, f), this.#eval(e.right, env, f));
+      case 'Compare': return compare(e.op, this.#eval(e.left, env, f), this.#eval(e.right, env, f));
+      case 'Equals': return this.same(this.#eval(e.left, env, f), this.#eval(e.right, env, f), e.operand) !== e.negate;
+      case 'Logic':
+        // §2.1: the right operand only when the left does not decide.
+        if (e.op === '&&') return this.#eval(e.left, env, f) ? this.#eval(e.right, env, f) : false;
+        if (e.op === '||') return this.#eval(e.left, env, f) ? true : this.#eval(e.right, env, f);
+        throw new Error(`unknown operator ${e.op}`);
+      case 'Cond': return this.#eval(e.cond, env, f) ? this.#eval(e.then, env, f) : this.#eval(e.otherwise, env, f);
+      case 'IfValue': return this.#eval(e.cond, env, f) ? this.#block(e.then, env, f) : this.#block(e.otherwise, env, f);
+      case 'BlockValue': return this.#block(e.block, env, f);
+      case 'Coalesce': {
+        const o = this.#eval(e.option, env, f);
+        return o instanceof Some ? o.value : this.#eval(e.default, env, f);
+      }
+      case 'Match': {
+        const v = this.#eval(e.scrutinee, env, f);
+        const arm = this.#arm(e.arms, v);
+        return this.#block(arm.body, this.#bindArm(arm, v, env), f);
+      }
+      case 'ListProp': return listProp(e.op, this.#eval(e.list, env, f));
+      case 'Concat': return Object.freeze([...this.#eval(e.left, env, f), ...this.#eval(e.right, env, f)]);
+      case 'Contains': {
+        const xs = this.#eval(e.list, env, f), v = this.#eval(e.value, env, f);
+        for (const x of xs) if (this.same(x, v, e.elem)) return true;
+        return false;
+      }
+      case 'Hof': return this.#hof(e, env, f);
+      case 'Fold': {
+        const xs = this.#eval(e.list, env, f);
+        let acc = this.#eval(e.init, env, f);
+        for (const x of this.#seq(xs)) acc = this.#block(e.body, bind(bind(env, e.acc, acc), e.x, x), f);
+        return acc;
+      }
+      case 'Range': {
+        const from = this.#eval(e.from, env, f);
+        return new Range(from, this.#eval(e.to, env, f));
+      }
+      case 'ListArg': {
+        const xs = this.#eval(e.list, env, f), n = this.#eval(e.arg, env, f);
+        if (n < 0n) throw new Refused(`${e.op}: a negative count`);
+        const k = n > BigInt(xs.length) ? xs.length : Number(n);
+        return Object.freeze(e.op === 'take' ? xs.slice(0, k) : xs.slice(k));
+      }
+      case 'MapEmpty': return MapV.EMPTY;
+      case 'MapOp': return this.#mapOp(e, env, f);
+      case 'MapHof': {
+        const m = this.#eval(e.map, env, f);
+        const any = e.kind === 'any';
+        for (let i = 0; i < m.keys.length; i++) {
+          const hit = this.#block(e.body, bind(bind(env, e.k, m.keys[i]), e.v, m.values[i]), f);
+          if (hit === any) return any;
+        }
+        return !any;
+      }
+      case 'MapFold': {
+        const m = this.#eval(e.map, env, f);
+        let acc = this.#eval(e.init, env, f);
+        for (let i = 0; i < m.keys.length; i++) acc = this.#block(e.body, bind(bind(bind(env, e.acc, acc), e.k, m.keys[i]), e.v, m.values[i]), f);
+        return acc;
+      }
+      case 'BigEmpty': return BigMapV.EMPTY;
+      case 'BigOp': return this.#bigOp(e, env, f);
+      default:
+        throw new Error(`unknown node ${e.node}`);
+    }
+  }
+
+  /** A list or a range, front to back (§3.6). */
+  #seq(v) {
+    return v;
+  }
+
+  #hof(e, env, f) {
+    const xs = this.#eval(e.list, env, f);
+    const test = (x) => this.#block(e.body, bind(env, e.x, x), f);
+    switch (e.kind) {
+      case 'any':
+        for (const x of xs) if (test(x)) return true;
+        return false;
+      case 'all':
+        for (const x of xs) if (!test(x)) return false;
+        return true;
+      case 'find':
+        for (const x of xs) if (test(x)) return some(x);
+        return NONE;
+      case 'filter': {
+        const out = [];
+        for (const x of xs) if (test(x)) out.push(x);
+        return Object.freeze(out);
+      }
+      case 'map': {
+        const out = [];
+        for (const x of xs) out.push(test(x));
+        return Object.freeze(out);
+      }
+      default:
+        throw new Error(`unknown list method ${e.kind}`);
+    }
+  }
+
+  /** §3.5: the first arm whose constructors include the value's. */
+  #arm(arms, v) {
+    const ctor = v === NONE ? 'None' : v instanceof Some ? 'Some' : v.type;
+    for (const a of arms) if (a.ctors.includes(ctor)) return a;
+    throw new Error(`no arm for ${ctor}`);
+  }
+
+  #bindArm(arm, v, env) {
+    arm.binds.forEach((l, i) => {
+      env = bind(env, l, v instanceof Some ? v.value : this.#field(v, arm.fields[i]));
+    });
+    return env;
+  }
+
+  #field(rec, name) {
+    const shape = this.shapes.get(rec.type);
+    const i = shape.names.indexOf(name);
+    if (i < 0) throw new Error(`${rec.type} has no field ${name}`);
+    return rec.fields[i];
+  }
+
+  /** §3.9: a fn sees only its parameters: no state, no transaction, no caller's locals. */
+  #invoke(name, args) {
+    const fn = this.fns.get(name);
+    if (!fn) throw new Error(`no fn ${name}`);
+    let env = null;
+    fn.params.forEach((l, i) => (env = bind(env, l, args[i])));
+    return this.#block(fn.body, env, { state: null, tx: null, payouts: [] });
+  }
+
+  #prelude(op, args) {
+    const [a, b] = args;
+    switch (op) {
+      case 'min': return a < b ? a : b;
+      case 'max': return a > b ? a : b;
+      case 'abs': return a < 0n ? -a : a;
+      case 'asKey':
+      case 'asHash':
+        if (a.length !== 28) throw new Refused(`${op}: not a 28-byte hash`);
+        return a;
+      default:
+        throw new Error(`unknown prelude function ${op}`);
+    }
+  }
+
+  // ------------------------------------------------------------------ maps (§3.7) and BigMaps (§3.8)
+
+  #mapOp(e, env, f) {
+    const m = this.#eval(e.map, env, f);
+    const args = e.args.map((x) => this.#eval(x, env, f));
+    switch (e.op) {
+      case 'get': {
+        const i = m.indexOf(args[0]);
+        return i < 0 ? NONE : some(m.values[i]);
+      }
+      case 'has': return m.indexOf(args[0]) >= 0;
+      case 'set':
+        if (args[0].length > 64) throw new Refused('Map.set: a key has at most 64 bytes');
+        return m.set(args[0], args[1]);
+      case 'delete': return m.delete(args[0]);
+      case 'size': return BigInt(m.keys.length);
+      case 'isEmpty': return m.keys.length === 0;
+      case 'keys': return m.keys;
+      case 'values': return m.values;
+      default:
+        throw new Error(`unknown map operation ${e.op}`);
+    }
+  }
+
+  #bigOp(e, env, f) {
+    const m = this.#eval(e.map, env, f);
+    const args = e.args.map((x) => this.#eval(x, env, f));
+    const ints = e.map.type.bigmap[1] === 'Int';
+    const k = args[0] && hex(args[0]);
+    switch (e.op) {
+      case 'at': return m.now.has(k) ? m.now.get(k) : 0n;
+      case 'get': return m.now.has(k) ? some(m.now.get(k)) : NONE;
+      case 'has': return m.now.has(k);
+      case 'isEmpty': return m.before.size === 0 && !m.written;
+      case 'delete': {
+        if (args[0].length > 64) throw new Refused('BigMap.delete: a key has at most 64 bytes');
+        const now = new Map(m.now);
+        now.delete(k);
+        return new BigMapV(m.before, now, true);
+      }
+      case 'set': {
+        if (args[0].length > 64) throw new Refused('BigMap.set: a key has at most 64 bytes');
+        const v = args[1];
+        const now = new Map(m.now);
+        if (ints) {
+          if (v < 0n) throw new Refused('BigMap.set: a value cannot be negative');
+          // Stored as its unsigned big-endian bytes, at most 8,192 of them; checked here, also for a write that is only
+          // read through and discarded (M1a review C4).
+          if (unsignedBytes(v).length > 8192) throw new Refused('integerToByteString: result exceeds 8192 bytes');
+          if (v === 0n) now.delete(k);   // 0 is absence
+          else now.set(k, v);
+        } else {
+          now.set(k, v);
+        }
+        return new BigMapV(m.before, now, true);
+      }
+      default:
+        throw new Error(`unknown BigMap operation ${e.op}`);
+    }
+  }
+
+  // ------------------------------------------------------------------ equality (§3.4) and checked inputs (§4)
+
+  /** Structural equality at a type. */
+  same(a, b, t) {
+    if (typeof t === 'string') {
+      switch (t) {
+        case 'Int':
+        case 'Bool':
+          return a === b;
+        case 'Bytes':
+        case 'Key':
+        case 'Hash':
+          return bytesEqual(a, b);
+        default:
+          throw new Error(`unknown type ${t}`);
+      }
+    }
+    if ('list' in t) return a.length === b.length && a.every((x, i) => this.same(x, b[i], t.list));
+    if ('option' in t) {
+      if (a === NONE || b === NONE) return a === b;
+      return this.same(a.value, b.value, t.option);
+    }
+    if ('record' in t) return this.#sameFields(a, b, t.record);
+    if ('enum' in t) return a.type === b.type && this.#sameFields(a, b, a.type);
+    if ('map' in t) {
+      if (a.keys.length !== b.keys.length) return false;
+      for (let i = 0; i < a.keys.length; i++) {
+        if (!bytesEqual(a.keys[i], b.keys[i]) || !this.same(a.values[i], b.values[i], t.map[1])) return false;
+      }
+      return true;
+    }
+    throw new Error(`not comparable: ${JSON.stringify(t)}`);
+  }
+
+  #sameFields(a, b, type) {
+    const { types } = this.shapes.get(type);
+    return types.every((ft, i) => this.same(a.fields[i], b.fields[i], ft));
+  }
+
+  /** Whether `v` is well formed at type `t` (§4). */
+  wellFormed(v, t) {
+    if (typeof t === 'string') return t === 'Key' || t === 'Hash' ? v.length === 28 : true;
+    if ('list' in t) return v.every((x) => this.wellFormed(x, t.list));
+    if ('option' in t) return v === NONE || this.wellFormed(v.value, t.option);
+    if ('record' in t) return this.#fieldsWellFormed(v, t.record);
+    if ('enum' in t) return this.#fieldsWellFormed(v, v.type);
+    if ('map' in t) {
+      for (let i = 0; i < v.keys.length; i++) {
+        const k = v.keys[i];
+        if (k.length > 64 || !this.wellFormed(k, t.map[0])) return false;
+        if (i > 0 && keyCompare(v.keys[i - 1], k) >= 0) return false;   // strictly ascending: ordered and unique
+        if (!this.wellFormed(v.values[i], t.map[1])) return false;
+      }
+      return true;
+    }
+    if ('bigmap' in t) return true;
+    throw new Error(`unknown type ${JSON.stringify(t)}`);
+  }
+
+  #fieldsWellFormed(v, type) {
+    const { types } = this.shapes.get(type);
+    return types.every((ft, i) => this.wellFormed(v.fields[i], ft));
+  }
+}
+
+// ------------------------------------------------------------------ operations
+
+/** §3.2: + - * exact; / and % truncate toward zero (BigInt's own rule); a zero divisor fails. */
+function arith(op, a, b) {
+  switch (op) {
+    case '+': return a + b;
+    case '-': return a - b;
+    case '*': return a * b;
+    case '/':
+    case '%':
+      if (b === 0n) throw new Refused('division by zero');
+      return op === '/' ? a / b : a % b;
+    default:
+      throw new Error(`unknown operator ${op}`);
+  }
+}
+
+/** §3.2, §3.3: integers by value; byte strings lexicographically, unsigned, a proper prefix first. */
+function compare(op, a, b) {
+  const c = typeof a === 'bigint' ? (a < b ? -1 : a > b ? 1 : 0) : bytesCompare(a, b);
+  switch (op) {
+    case '<': return c < 0;
+    case '<=': return c <= 0;
+    case '>': return c > 0;
+    case '>=': return c >= 0;
+    default: throw new Error(`unknown comparison ${op}`);
+  }
+}
+
+function listProp(op, xs) {
+  switch (op) {
+    case 'length': return BigInt(xs.length);
+    case 'isEmpty': return xs.length === 0;
+    case 'head': return xs.length === 0 ? NONE : some(xs[0]);
+    case 'sum': return xs.reduce((s, x) => s + x, 0n);
+    case 'reverse': return Object.freeze([...xs].reverse());
+    default: throw new Error(`unknown list property ${op}`);
+  }
+}
+
+function fromHexLit(s) {
+  const out = new Uint8Array(s.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(2 * i, 2 * i + 2), 16);
+  return out;
+}
+
+/** §2.4: recursion deeper than the JavaScript stack is a refusal, as the budget is on-chain. */
+function depthGuard(run) {
+  try {
+    return run();
+  } catch (e) {
+    if (e instanceof RangeError && /call stack/i.test(e.message)) throw new Refused('evaluation too deep');
+    throw e;
+  }
+}
