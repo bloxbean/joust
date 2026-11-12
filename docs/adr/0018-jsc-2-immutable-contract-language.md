@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r9)
+**Status:** Proposed (r10)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -595,6 +595,17 @@ beside it covers highlighters that need one (Shiki). A language server is later 
 - **Its scope grows with each milestone**: M1 the core language; M2 values, sends, mints, deposits, params, reads,
   events; M3 owned and keyed objects and batches. Each milestone's exit criteria include its constructs in the
   differential tests (J3).
+- **How it reads the program** (r10, M1b; M1a review F11). The interpreter evaluates the checker's IR, exported as
+  versioned JSON (`Name.ir.json`, written beside the generated Java on both build paths;
+  `docs/reference/jsc-2-ir.md`), not a second front end. The checker stays the one place that decides what a program
+  means statically. Independence is in evaluation: the interpreter (`js/jsc-interpreter`, plain ES2022, no
+  dependencies) shares nothing with the Java code but that file, and has its own values, equality, map order, checked
+  inputs, `std` rows, hashes and Ed25519. A checker defect that changes the IR reaches every leg alike; the semantics'
+  hand-written vectors and the hand-stated outcomes of the differential tests guard against it.
+- **M0's Java interpreter stays a leg** (r10; M0 review F17). From M1b the differential tests have five legs: both
+  interpreters, the JVM, the transition program and the validator. A disagreement between the two interpreters points
+  at an interpreter, not at the lowering, and the Java one costs nothing to keep. It is not the oracle D15 names: the
+  JavaScript one is.
 
 ### D16. Compatibility and migration
 
@@ -707,7 +718,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 |---|---|---|---|
 | J1 | `.jsc` 2 output is Java `@StateContract` and `@OnchainLibrary` classes that the unmodified JOUST processor and JuLC accept, and all of it passes `SubsetLint`'s rules; nothing else is emitted | D1, D9, D10 | every build; lint on generated libraries and helpers |
 | J2 | No `.jsc` name is rebound; generated Java has no reassigned locals, no loops and no mutable accumulators | D3, D7 | checker; a scan of generated Java |
-| J3 | **Four ways agree** for every construct of the milestone: the reference interpreter, the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
+| J3 | **Four ways agree** for every construct of the milestone: the reference interpreter (from M1b both, JavaScript and M0's Java one: five legs, D15), the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
 | J4 | Effects appear in each kind's result in source order (loops: list order), only from taken branches; mint and accepted are net sums | D4 | differential tests; on-chain fixtures |
 | J5 | Every diagnostic on either build path names a `.jsc` file, line and column, and a stable code | D12 | tests with errors from each layer (checker, processor, JuLC) |
 | J6 | No time value (including one read from another contract; a value's shape never is one) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities, `BigMap` int values, and send, accept and deposit values, including inside called `fn`s; accepted by `std` functions only where the binding row declares the parameter total and of window-independent cost, never by `java:` imports; only under an outermost `max(0, …)` in pay amounts); time values reaching amounts or state warn. Influence through transaction-level rules (balance, minimum per output) is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
@@ -964,3 +975,6 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   ABI), refuses a reached schema the description lacks, and does not write Java whose manifest is refused.
 - **r9** (2026-11-13, M1a review round r4 on #63: Codex C8; security S12): D5 refuses recursive types through any
   container, not only direct ones; D3 refuses every control character but TAB and the line ends; J10 covers it.
+- **r10** (2026-11-13, M1b): D15 says the interpreter evaluates the checker's IR, exported as versioned JSON beside
+  the generated Java (M1a review F11), and that M0's Java interpreter stays a leg (M0 review F17); J3 counts both
+  interpreters.

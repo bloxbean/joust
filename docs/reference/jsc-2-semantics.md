@@ -115,8 +115,8 @@ is evaluated only if the rule says so (D6).
 
 Expressions have no side effects, and every failure has the same outcome. So the order among strict operands
 (`f(a, b)`, `a + b`, a record's fields) cannot change an outcome. Only *whether* an operand is evaluated can change one.
-The lazy positions above are exactly where that is decided. The left-to-right order is still the reference order. It
-fixes which message a refused call reports.
+The lazy positions above are exactly where that is decided. The left-to-right order is still the reference order: it
+fixes which message the reference interpreter reports for a refused call. The other legs need not follow it.
 
 Payouts are made by statements only, so their order is the order in which statements run (§2.3).
 
@@ -149,9 +149,10 @@ a `const` value or a lambda.
 
 ### 2.4 Depth
 
-Lists, maps and ranges are finite, so only a recursive `fn` (D7) can make evaluation deep or endless. A call that recurses deeper than an implementation can follow is refused, and on-chain the
-execution budget refuses it (J18), as it refuses a call over a very long range. These limits are resources, not
-semantics: the vectors do not test where an implementation stops.
+Lists, maps and ranges are finite, so only a recursive `fn` (D7) can make evaluation deep or endless. A call that
+recurses deeper than an implementation can follow is refused, and on-chain the execution budget refuses it (J18), as
+it refuses a call over a very long range. These limits are resources, not semantics: the vectors do not test where an
+implementation stops.
 
 ## 3. Expressions
 
