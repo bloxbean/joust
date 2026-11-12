@@ -46,7 +46,6 @@ A `.jsc` contract is lowered to a Java `@StateContract` first, so it gets the sa
 | `<Contract>.plutus` | The compiled validator, CBOR hex |
 | `<Contract>.js`, `<Contract>.d.ts` | The typed client (`joust-gen`), with the description inlined |
 | `contracts.json` | What the runtime loads: `[{ description, script, transitions, manifest, built: { joust } }]` |
-| `<Contract>.manifest.json` | The transition programs' manifest, checked by the engine before it runs them (ADR-0020 D8) |
 | `joust.lock.json` | The versions that built it, including `descriptionVersion: 2` |
 
 </TabItem>

@@ -1,6 +1,6 @@
 # ADR-0020: UPLC transition programs as the off-chain meaning on every path — a spike (answers ADR-0015 Q6)
 
-**Status:** Proposed (r8: §11.4's answer taken as the outcome and its "adopt now" items implemented, §12; r7: spike
+**Status:** Proposed (r9: §12 revised after the implementation's review; r8: §11.4's answer taken as the outcome and its "adopt now" items implemented, §12; r7: spike
 implemented and reported, §11; design approved by review at `04ea067`), **spike**: design plus a proof of concept to
 measure. The answer to ADR-0015 Q6 stays a proposal until this ADR is accepted; §12's items change the engine's
 behaviour (a bundle without a program manifest is refused) and are listed there.
@@ -331,7 +331,8 @@ The manifest establishes consistency (§2), not integrity or equivalence; equiva
   `joust:` prefix cannot be made unforgeable by rejecting literals. The spike's rule makes forgery harmless instead:
   a `joust:read` need is only a request, answered with a verified proof against the map's root and counted against
   the cumulative limit (D11), so a forged need adds cost, never a result; a `require` classification only selects
-  which text a refusal shows and is never used for a decision, and the comparison counts a `require`/`error` split
+  which text a refusal shows (r9: the text must then never drive a decision; a keyed client's cooldown wait did, and
+  now reads a structured field, §12.1), and the comparison counts a `require`/`error` split
   between the sides as a mismatch to adjudicate (D10), not as agreement. Tests: a computed trace
   (`ContextsLib.trace` of decoded bytes) and a library-mediated one, each forging `joust:read` and `joust:require`.
   Q7 keeps the post-adoption rule.
@@ -648,10 +649,10 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
 | §11.4 item | Done | Where | Checked by |
 |---|---|---|---|
 | Shadow in CI | yes: the comparison mode, offline, in `./gradlew build` (about 11 s) | `julc-state-runtime-wasm` tests: `ReplayDifferentialTest`, `GeneratedVectorsTest`, with `JvmTransitions`, `DataCodec`, `ShadowTransitions` | themselves: 34 + 214 recordings byte-identical in three modes (68 + 523 comparisons); 4,024 reachable and 1,364 unreachable vectors agree; 300 malformed rejected |
-| The tagged `Require` | yes, in the programs the engine runs | `julc-state-api` `src/discovery/.../Require.java`; `UplcTransitions` | `OutcomeClassTest`, `ProgramVariantsTest` |
+| The tagged `Require` | yes, in the programs the engine runs | `julc-state-api` `src/discovery/.../Require.java`; `UplcTransitions` (classification from the VM's result) | `OutcomeClassTest`, `ProgramVariantsTest` |
 | The ABI check before every evaluation (S15) | yes | `TransitionInputs`, wrapped around every `DescribedContract`'s transitions | `TransitionInputsTest`, `GeneratedVectorsTest` |
-| Program manifests and the recompile check | yes | `Toolchain`/`Manifests` (written), `ProgramManifest` (format, check), `Prepare.load` (refuses before evaluating), `joust build` | `ProgramManifestTest`, `EngineFixturesTest` |
-| Thread-safe `UplcTransitions` | yes (the spike's `cb19dbb`) | `UplcTransitions` | `ReplayDifferentialTest`, `EngineFixturesTest` |
+| Program manifests and the recompile check | yes (format 2) | `Toolchain`/`Manifests` (written), `ProgramManifest` (format, check), `UplcTransitions.verified` (the only way to programs), `joust build` | `ProgramManifestTest`, `ManifestsTest`, `FixtureContractsTest`, `EngineFixturesTest` |
+| Thread-safe `UplcTransitions` | yes (the spike's `cb19dbb`; `Prepare`'s cache concurrent) | `UplcTransitions`, `Prepare` | `ConcurrencyTest` |
 | Retire `-Ajoust.portable` | **no**: still used (§12.3) | — | — |
 
 ### 12.1 Where the adopted design differs from the spike's
@@ -659,30 +660,56 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
 - **One program set in the engine.** D9 kept unmodified *primary* programs and classified their failures by rerunning
   an *auxiliary* tagged set, so that parity, units and budgets came from unmodified programs. The engine compares
   nothing and reports no units, so it now runs the tagged programs themselves: the toolchain compiles every transition
-  program with the tagged `Require`, and a failed run is the contract's refusal only when it carries the tag (the
-  last tagged message), otherwise an error with the VM's cause (`<method> failed: <cause>`). D8's r6 rule ("a primary
-  manifest that substitutes `Require` is refused") is replaced for the engine by its converse: a manifest whose
-  programs use `Require` must record the tagged variant. The cost is the size below; D9's forgery rule is unchanged
-  (a forged tag changes only the text a failure shows, never a step; Q7).
-- **Manifest format, minimal (version 1).** Documented on `ProgramManifest`: the JuLC version, the compiler options
-  (target, profile, optimiser, no source maps, traces), Blake2b-256 hashes of the unapplied script, the description,
-  every library source in the programs' pool and each program, the substitutions (allowlist: `MerkleMaps`, `Require`;
-  each required when used), the four program inputs, and each entry point's argument layout (from
-  `TransitionsGenerator`, checked against the description's `transitionArgs`). No diagnostic section (no source-mapped
-  programs are produced). The engine cannot read the variants' sources, so their pinned hashes are checked by the
-  recompile test, not at run time. D8's second step (the applied script is the spent credential) holds by
-  construction in the engine: it derives the address and policy from the script the manifest binds.
-- **A missing manifest is refused**, with "build the contracts again": every bundle `joust build` writes has one.
-  `fixtures/m3/contracts/*.json` were brought forward without DevKit: their descriptions and scripts are byte-identical
-  to today's toolchain output, so this build's programs and manifests were written into them (same file names); the
-  recorded calls, snapshots and transactions are untouched, and `EngineFixturesTest` replays all 214 byte-identical
-  through the new programs. A JuLC upgrade will make the engine refuse these manifests until they are rebuilt or
-  re-recorded.
+  program with the tagged `Require`. A run's class comes from the VM's result: over the budget is a budget failure
+  whatever it traced; a failure is the contract's refusal only when it carries the tag (the last tagged message),
+  otherwise an error with the VM's cause (`<method> failed: <cause>`). D8's r6 rule ("a primary manifest that
+  substitutes `Require` is refused") is replaced for the engine by its converse: a manifest whose programs use
+  `Require` must record the tagged variant. The cost is the size below.
+- **Forged tags and decisions (r9).** A forged tag makes a failure show text the contract chose; it never makes a
+  step. The review found one place where text did drive a decision: the keyed client parsed "prepare again at slot N"
+  from any refusal and waited. The engine now returns the slot as a field of its result (`retryAtSlot`, set only from
+  the runtime's own `NotYetException`), the JS runtime and HTTP service carry it as `Error.retryAtSlot`, and
+  `JoustContract` waits on that field only. No other decision reads a refusal's text.
+- **Manifest format 2 (r9; minimal).** Documented on `ProgramManifest`: exactly eleven members; the JuLC version; the
+  compiler block read from the `CompilerOptions` actually used (target, profile, cost profile, source maps, disabled
+  rules; version 1's `optimiser` and `traces` were constants and are gone: JuLC has no trace-stripping option, and
+  the optimiser follows from the profile and source maps); Blake2b-256 hashes of the unapplied script, the
+  description's **canonical JSON** (RFC 8785 restricted to integers within 2^53; duplicate members, non-integers and
+  text that is not well-formed Unicode are refused), every library source in the programs' pool and each program; the
+  substitutions (allowlist: `MerkleMaps`, `Require`; each required when used; the toolchain fails the build on any
+  other variant); the four program inputs; and each entry point's argument layout (from `TransitionsGenerator`,
+  checked against the description's `transitionArgs`, which must agree when several recipes name one transition).
+  Version 1 hashed the description's bytes, so a description given as an object (re-serialised) was refused. The
+  canonicaliser is the same code in the toolchain and the runtime (`CanonicalJson`; neither module depends on the
+  other). The engine cannot read the library sources: it checks their form and the substitutions, and CI checks their
+  hashes (the recompile test, against today's build and `fixtures/m3`, with the variants' hashes committed).
+- **Unavoidable (r9, U3).** `UplcTransitions` has no public constructor: `UplcTransitions.verified(manifest,
+  description, script, programs)` checks the manifest first, so U3 holds on every path that runs programs, the engine's
+  `Prepare` and a JVM caller's alike. A contract built without programs (`joust.transitions=false`) has no manifest
+  and loads; calling it says so. D8's second step (the applied script is the spent credential) holds by construction
+  in the engine: it derives the address and policy from the script the manifest binds.
+- **A missing manifest is refused**, with the remedy (build again with the matching `@julclang/joust`); the JS runtime
+  checks presence and format when it is created, and the JuLC version once the engine has loaded (`joust.info`).
+  `fixtures/m3/contracts/*.json` carry this build's programs and manifests: their descriptions and scripts are
+  byte-identical to today's toolchain output, so the files keep their names, and the recorded calls, snapshots and
+  transactions are untouched; `EngineFixturesTest` replays all 214 byte-identical through them.
+  `FixtureContractsTest` fails when they differ from today's build, and `-PjoustRefreshFixtures` brings them forward
+  (programs and manifests only, and only while descriptions and scripts are unchanged; otherwise re-record).
 - **The ABI check uses the description**, not Java types (the engine has no contract classes): `SchemaCodec`'s strict
   decoder on the target (the recipe's type), the shared state, each argument (`Constr 0` with exactly the recipe's
-  `transitionArgs`) and the Ctx. Not checked: inputs a transition does not take, `$funds` (built by the runtime), and a
-  `$read` (a foreign contract's state, whose schema the reading contract's description does not carry; its own
-  validator wrote it).
+  `transitionArgs`) and the Ctx (checked if any recipe of the transition declares one). It fails closed on what it
+  cannot resolve (no layout, an `$admitted` without an owned type, an argument without a schema, recipes that
+  disagree). Exempt by design: inputs a transition does not take, `$funds` (built by the runtime), and a `$read`
+  without a schema (a foreign contract's state, whose type the reading contract's description does not carry).
+- **Stored state is checked as strictly as arguments (r9).** A contract that stores a record argument without reading
+  its fields keeps a malformed argument verbatim (the validator runs the same code), so a caller with their own
+  transaction can leave a state the validator accepted but the description's types do not fit (`TransitionInputsTest`
+  shows the mechanism on a test contract; no example is exposed). The engine refuses to make such a state (the argument
+  is checked) and to act on one (the target is checked). Checking stored state leniently would not restore liveness:
+  the page verifier and `DescribedContract.state()` decode it strictly too, so every off-chain path fails closed on
+  that instance. The fix belongs on chain (§12.4).
+- **Concurrency.** One `UplcTransitions` and `Prepare`'s contract cache (now concurrent, keyed by the whole contract)
+  serve concurrent calls; the comparison tests choose their transitions per call, not through a static.
 
 ### 12.2 Measured
 
@@ -690,7 +717,8 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
   (CounterV1, CounterV2: no `Require` in their transitions) to +8.2 % (Oracle). §11.2 measured 2–8 % for the auxiliary
   set.
 - Engines (GraalVM Web Image 25.3, Binaryen 132, macOS aarch64): runtime `joust-runtime.js.wasm` 20,692,984 →
-  20,744,658 bytes (+0.25 %); toolchain `joust-toolchain.js.wasm` 30,214,403 → 30,332,603 bytes (+0.39 %).
+  20,759,997 bytes (+0.32 %); toolchain `joust-toolchain.js.wasm` 30,214,403 → 30,375,867 bytes (+0.53 %) (r9; r8 was
+  20,744,658 and 30,332,603).
 - Malformed Counter targets: 300/300 refused by the engine's input check; the raw programs run 145 (fresh seed in
   `TransitionInputsTest`) or 150 (`GeneratedVectorsTest`, the spike's sequence) of them to a step.
 
@@ -713,7 +741,19 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
 - **Q6:** amend ADR-0015 I2's "equal map read sets" to "equal final accesses; verified superset acquisition allowed".
 - **Q7:** lint trace calls in contract code whose message is not a constant without the `joust:` prefix (it can
   refuse existing contracts), or keep only D9's "forgery is harmless" rule.
-- **Accepting this ADR** (and so §11.4's answer to ADR-0015 Q6).
+- **Accepting this ADR** (and so §11.4's answer to ADR-0015 Q6). §12 changes the engine's behaviour (a bundle
+  without a matching manifest is refused), so acceptance should precede a release that ships it.
+- **The JuLC upgrade policy for deployed apps (r9, design review F3).** The engine accepts only programs compiled by
+  its own JuLC version; `joust build` recompiles the validator too, so if a newer JuLC compiles it differently the
+  script hash, address and policy change and live instances stay behind. Options: (a) keep the exact pin and document
+  it (done in the docs), redeploying on a JuLC change that alters codegen; (b) a "programs only" rebuild bound to an
+  existing script (the manifest already binds the script hash; the toolchain would take the deployed script as input);
+  (c) a compatibility range declared by JuLC for evaluation semantics. Lean: (a) now, (b) as a follow-up, since it keeps
+  the evaluation pin and needs no JuLC change.
+- **On-chain shape of stored arguments (r9).** Validators accept argument data they store without reading it, in any
+  shape; off chain that state is then refused everywhere. Options: generated validators check the arity and tags of
+  record arguments they store (a validator change, with a size cost), or accept the liveness risk as a contract
+  author's concern and lint for it. Lean: the validator check, measured first.
 
 ## Revision history
 
@@ -774,3 +814,10 @@ the spike module stays on its branch as the evidence) does with §11.4's list. N
   tagged program set in the engine, the minimal manifest format, a missing manifest refused, the `fixtures/m3`
   artifacts brought forward); the measured sizes; why `-Ajoust.portable` is not retired yet; Q6, Q7 and acceptance
   left to the maintainer. Status stays Proposed.
+- **r9** (2026-11-12, after the implementation's review on PR #62: Codex C1–C4, security S1–S7, design F1–F9; no spike
+  result changed): manifest format 2 (the description hashed in canonical JSON, the compiler block read from the
+  options used, a strict form), `UplcTransitions.verified` as the only way to programs (U3 on every path), the
+  cooldown slot as a structured field (D9's "never a decision" made true), run classes from the VM's result, the ABI
+  check failing closed and merging recipes, the toolchain refusing off-list variants, a concurrency test, the
+  `fixtures/m3` staleness test and refresh task, stored state checked strictly (with the reason); §12.4 adds the JuLC
+  upgrade policy and the on-chain shape of stored arguments. Status stays Proposed.

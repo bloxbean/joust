@@ -41,7 +41,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
-| [0020](#adr-0020-uplc-transition-programs-off-chain-a-spike) | UPLC transition programs as the off-chain meaning: a spike and its report | Proposed (r8); the spike's "adopt now" items implemented in the engine | [Pages](/apps/pages/) |
+| [0020](#adr-0020-uplc-transition-programs-off-chain-a-spike) | UPLC transition programs as the off-chain meaning: a spike and its report | Proposed (r9); the spike's "adopt now" items implemented in the engine | [Program manifests](/apps/cli-and-projects/#program-manifests) |
 
 ## The base
 
@@ -312,7 +312,7 @@ Covered in: [Quick start: Java & Gradle](/start/quick-start-java/#create-it-with
 ### ADR-0020: UPLC transition programs off chain, a spike
 
 [`0020-offchain-uplc-transitions.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0020-offchain-uplc-transitions.md)
-· Proposed (r8); the spike is reported (§11) and its "adopt now" items are implemented in the runtime engine
+· Proposed (r9); the spike is reported (§11) and its "adopt now" items are implemented in the runtime engine (§12)
 
 ADR-0015 left open which meaning of a contract's method is the reference off chain (Q6): the JVM method, or its
 transition program (the same Java compiled by JuLC, evaluated by JuLC's VM). The spike ran both on every recorded
@@ -322,7 +322,7 @@ check of each program's inputs against the contract's declared types, a tagged `
 its tag, not by its last trace), a program manifest per contract that the engine checks before it evaluates anything,
 and a thread-safe `UplcTransitions`.
 
-Covered in: [Pages](/apps/pages/), [Contract description](/reference/description-format/).
+Covered in: [Program manifests](/apps/cli-and-projects/#program-manifests), [Contract description](/reference/description-format/).
 
 ## Research behind the ADRs
 

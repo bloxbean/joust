@@ -79,7 +79,6 @@ and writes nothing.
 |---|---|
 | `contracts.json` | for the runtime engine: `[{ description, script, transitions, manifest, built: { joust } }]`, one per contract |
 | `<Contract>.json` | the contract's description (CIP-57 schemas plus `x-joust`, version 2) |
-| `<Contract>.manifest.json` | the transition programs' manifest ([below](#program-manifests)) |
 | `<Contract>.plutus` | the compiled validator, CBOR hex |
 | `<Contract>.js`, `<Contract>.d.ts` | the typed client and its types ([JavaScript clients](/apps/javascript-clients/)) |
 | `validators.json` | plain JuLC validators, if any: `[{ name, package, purpose, script, scriptHash, params, built }]` |
@@ -107,12 +106,26 @@ a contract can move between the npm path and the [Java path](/start/quick-start-
 #### Program manifests
 
 The runtime engine runs each contract method as its **transition program**: the same Java, compiled by JuLC, evaluated
-by JuLC's VM. Each contract's `manifest` records what its programs were compiled from and how: the JuLC version and
-compiler options, hashes of the validator script, the description, every library source and each program, and each
-program's argument layout ([ADR-0020](/project/architecture-decisions/) D8). The engine checks it before it runs any
-program, and refuses a contract whose programs do not match their script, description or manifest, or were compiled
-by another JuLC version or with other options, with `the transition programs do not match their manifest`. A
-`contracts.json` from before manifests is refused the same way: run `joust build` again.
+by JuLC's VM. Each contract's `manifest` in `contracts.json` records what its programs were compiled from and how: the
+JuLC version and compiler options, hashes of the validator script, the description (in canonical JSON, so a
+description given as an object matches too), every library source and each program, and each program's argument
+layout ([ADR-0020](/project/architecture-decisions/) D8). The engine checks it before it runs any program, and refuses
+a contract whose programs do not match their script, description or manifest, or were compiled by another JuLC version
+or with other options, with `the transition programs do not match their manifest` and the remedy: build the contracts
+again with the `@julclang/joust` that matches the runtime. The runtime checks a bundle's manifests when it is created,
+and their JuLC version once the engine has loaded, before any call. A `contracts.json` from before manifests is refused
+the same way.
+
+The manifest gives consistency, not integrity: whoever can change the programs can change the manifest too, and the
+validators still decide what the chain accepts. The engine cannot read the library sources, so their hashes are
+checked by JOUST's CI (a fresh compile must equal the manifest), not at run time.
+
+<Aside type="caution">
+The engine accepts programs compiled by its own JuLC version only. A runtime with a newer JuLC refuses an older build
+until you run `joust build` again; if the newer JuLC compiles your validator differently, its script hash (and so its
+address and policy) changes, and live instances stay at the old one. How to upgrade deployed apps across JuLC versions
+is an open decision (ADR-0020 §12.4).
+</Aside>
 
 The engine also checks each program's inputs (the state, the arguments, the `Ctx`) against the contract's declared
 types before it runs it, and refuses a malformed one by name: `Counter.increment: the argument by does not fit its

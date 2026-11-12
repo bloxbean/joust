@@ -340,9 +340,9 @@ These serve the runtime engine and the prepare service (ADR-0015). Applications 
 | `snapshot.Need` | What a call needs from the chain next (`kind()`, `key()`) |
 | `snapshot.SuppliedProver`, `snapshot.SnapshotNodeStore` | Map proofs and nodes supplied by the caller |
 | `described.DescribedContract` | A contract known by its description, compiled script and transitions; runs call requests through the runtime core |
-| `described.TransitionFn`, `described.UplcTransitions` | A transition's off-chain meaning, and its implementation by JuLC's VM over the toolchain's transition programs; a failed run is the contract's refusal only when it carries the `joust:require` tag |
+| `described.TransitionFn`, `described.UplcTransitions` | A transition's off-chain meaning, and its implementation by JuLC's VM over the toolchain's transition programs, obtained with `UplcTransitions.verified(manifest, description, script, programs)` (the manifest is checked first); a failed run is the contract's refusal only when it carries the `joust:require` tag |
 | `described.TransitionInputs` | Checks every evaluation's inputs against the description's declared types first (ADR-0020); `DescribedContract` wraps its transitions in it |
-| `described.ProgramManifest` | The program manifest's format (version 1) and its check (ADR-0020 D8); the engine runs it before loading a contract |
+| `described.ProgramManifest`, `described.CanonicalJson` | The program manifest's format (version 2) and its check (ADR-0020 D8), and the canonical JSON its description hash is over |
 | `described.SchemaCodec`, `described.DataFidelity` | JSON and Plutus data by a description's schema |
 
 ## julc-state-server: JoustServer

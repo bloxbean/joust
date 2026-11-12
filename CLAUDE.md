@@ -178,8 +178,13 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   traces `joust:require <message>`); `UplcTransitions` takes a refusal's message only from that tag (else
   `<method> failed: <VM cause>`). `DescribedContract` checks every evaluation's inputs against the description
   (`TransitionInputs`). `Prepare.load` refuses programs without a matching manifest (`ProgramManifest`; the toolchain
-  writes it, `contracts.json` carries it). `fixtures/m3/contracts/*.json` carry manifests too: a JuLC upgrade makes the
-  engine refuse them (re-record, or rebuild their programs and manifests while descriptions and scripts are unchanged).
+  writes it, `contracts.json` carries it; format 2 hashes the description's canonical JSON). `UplcTransitions` comes only
+  from `UplcTransitions.verified(...)`. `fixtures/m3/contracts/*.json` carry programs and manifests too, and
+  `FixtureContractsTest` fails when they differ from today's build. **After a JuLC bump** (or a change to a variant, a
+  library or the manifest format): run `./gradlew :julc-state-runtime-wasm:test --tests '*FixtureContractsTest'
+  -PjoustRefreshFixtures` (it rewrites only `transitions` and `manifest`, and only while description and script are
+  unchanged), then the full build; if a description or script changed, re-record on DevKit instead. Also update
+  `ProgramManifestTest`'s committed variant hashes when a variant changes on purpose.
   The comparison mode (`ReplayDifferentialTest`, `GeneratedVectorsTest`: programs vs JVM methods) is in
   `julc-state-runtime-wasm`'s tests.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
