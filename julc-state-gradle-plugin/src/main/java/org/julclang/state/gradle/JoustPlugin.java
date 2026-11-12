@@ -127,6 +127,10 @@ public class JoustPlugin implements Plugin<Project> {
         SourceSet main = project.getExtensions().getByType(JavaPluginExtension.class).getSourceSets()
                 .getByName(SourceSet.MAIN_SOURCE_SET_NAME);
         main.getJava().srcDir(project.files(out).builtBy(generate));
+        // ADR-0018 D12 (r12, review r1 F4): each .jsc 2 contract's message map (Name.jscmap.json, beside its generated
+        // Java) is a resource beside its classes, so the runtime names the .jsc sites of a refusal.
+        project.getTasks().named(main.getProcessResourcesTaskName(), org.gradle.language.jvm.tasks.ProcessResources.class,
+                t -> t.from(project.files(out).builtBy(generate), spec -> spec.include("**/*.jscmap.json")));
         // ADR-0018 D12 (review F12, S10): after compileJava, every .jsc 2 file's ABI manifest is checked against the
         // processor's description of its contract (META-INF/joust/<package>.<Contract>.json), as the npm toolchain
         // checks it at every build; part of check, so of build.
