@@ -94,6 +94,15 @@ public final class Toolchain {
      * {@code options} are JOUST's processor options ({@code joust.traces}, ...).
      */
     public static Result build(Map<String, String> files, Map<String, String> options) {
+        return build(files, options, null);
+    }
+
+    /**
+     * As {@link #build(Map, Map)}, with {@code compilerOptions} applied to JuLC's options before compiling (tests: a
+     * manifest records the options actually used, ADR-0020 D8).
+     */
+    static Result build(Map<String, String> files, Map<String, String> options,
+                        java.util.function.Consumer<CompilerOptions> compilerOptionsChange) {
         var diagnostics = new ArrayList<Diagnostic>();
         // 1. .jsc → Java.
         var sources = new LinkedHashMap<String, String>();
@@ -184,6 +193,7 @@ public final class Toolchain {
         var compilerOptions = OptimizationConfiguration.apply(new CompilerOptions().setTarget(CompilerTarget.PLUTUS_V3_PV11),
                 OptimizationLevel.DEFAULT_PROFILE_ID, null);
         compilerOptions.setJarLibrarySources(LibrarySourceResolver.jarSourceTexts(libraryPool, classpathLibraries));
+        if (compilerOptionsChange != null) compilerOptionsChange.accept(compilerOptions);
         var compiler = new JulcCompiler(StdlibRegistry.defaultRegistry(), compilerOptions);
         var contracts = new ArrayList<Contract>();
         for (var g : generated) {
@@ -206,6 +216,14 @@ public final class Toolchain {
             if (g.transitions() != null) {
                 transitionsSource = g.transitions().source();
                 libs = discovery(LibrarySourceResolver.resolveLibrarySources(transitionsSource, libraryPool), substituted);
+                var offList = substituted.stream().filter(f -> !Manifests.SUBSTITUTABLE.contains(f)).toList();
+                if (!offList.isEmpty()) {
+                    // ADR-0020 D8: only the allowlisted variants may replace a library in the programs.
+                    diagnostics.add(new Diagnostic(Severity.ERROR, "a transition-program variant of " + offList
+                            + " is on the class path (META-INF/joust/discovery/): only " + new java.util.TreeSet<>(Manifests.SUBSTITUTABLE)
+                            + " may be substituted", g.contractName(), -1, "joust"));
+                    continue;
+                }
                 for (String m : g.transitions().methods()) {
                     try {
                         var tr = compiler.compileMethod(transitionsSource, m, sources(libs));
@@ -223,7 +241,7 @@ public final class Toolchain {
             }
             String scriptCborHex = JulcScriptAdapter.fromProgram(program).getCborHex();
             String manifest = g.transitions() == null ? null : Manifests.write(g.packageName() + "." + g.contractName(),
-                    scriptCborHex, g.descriptionJson(), libs, substituted, transitions, g.transitions().args());
+                    scriptCborHex, g.descriptionJson(), libs, substituted, transitions, g.transitions().args(), compilerOptions);
             contracts.add(new Contract(g.contractName(), g.packageName(), g.validatorName(), g.validatorSource(),
                     scriptCborHex, result.isParameterized() ? "" : JulcScriptAdapter.scriptHash(program),
                     result.scriptSizeBytes(), g.descriptionJson(), transitionsSource, transitions, manifest));

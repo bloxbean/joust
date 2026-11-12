@@ -16,7 +16,16 @@ const compatibility = (v) => {
   return major === '0' ? `0.${minor}` : major;
 };
 
-/** I7: a contract's description format and the toolchain that built it must be ones this runtime reads. */
+/** The program manifest format this runtime's engine reads (ADR-0020 D8). */
+export const MANIFEST_VERSION = 2;
+
+const REBUILD = 'build the contracts again with joust build, with the @julclang/joust that matches this runtime';
+
+/**
+ * I7: a contract's description format and the toolchain that built it must be ones this runtime reads; a contract with
+ * transition programs must carry their manifest in the format this engine checks (ADR-0020 D8). Checked when the
+ * runtime is created, so a stale bundle fails before any call.
+ */
 export function checkCompatible(c) {
   const d = typeof c.description === 'string' ? JSON.parse(c.description) : c.description;
   const title = d?.preamble?.title ?? '(a contract)';
@@ -25,6 +34,40 @@ export function checkCompatible(c) {
   const built = c.built?.joust;
   if (built && compatibility(built) !== compatibility(RUNTIME_VERSION)) {
     throw new Error(`${title}: built by JOUST ${built}; this runtime is ${RUNTIME_VERSION} (rebuild with a matching @julclang/joust)`);
+  }
+  const programs = Object.keys(c.transitions ?? {}).length;
+  const m = typeof c.manifest === 'string' ? JSON.parse(c.manifest) : c.manifest;
+  if (programs && !m) throw new Error(`${title}: its transition programs have no manifest (ADR-0020 D8): ${REBUILD}`);
+  if (m && m.manifest !== MANIFEST_VERSION) {
+    throw new Error(`${title}: program manifest version ${m.manifest}; this runtime reads version ${MANIFEST_VERSION}: ${REBUILD}`);
+  }
+}
+
+/**
+ * The contracts as the engine takes them: the description as text (an object is serialised: the manifest binds the
+ * description's canonical JSON, so either form matches), the script, the programs and their manifest (text).
+ */
+export function engineContracts(list) {
+  return list.map((c) => ({
+    description: typeof c.description === 'string' ? c.description : JSON.stringify(c.description),
+    script: c.script, transitions: c.transitions ?? {},
+    manifest: c.manifest == null ? null : typeof c.manifest === 'string' ? c.manifest : JSON.stringify(c.manifest),
+  }));
+}
+
+/**
+ * The JuLC version the programs were compiled with must be the engine's (ADR-0020 D8): checked once the engine is
+ * loaded, for every contract at once, so the remedy comes before the first call fails.
+ */
+export function checkEngine(engine, list) {
+  const info = engine.joust.info ? engine.joust.info({}) : null;
+  if (!info) return;
+  for (const c of list) {
+    if (!c.manifest) continue;
+    const m = JSON.parse(c.manifest);
+    if (m.julc !== info.julc) {
+      throw new Error(`${m.contract}: transition programs compiled by JuLC ${m.julc}; this engine evaluates with JuLC ${info.julc}: ${REBUILD}`);
+    }
   }
 }
 
@@ -49,11 +92,8 @@ const big = (x) => BigInt(x);
  */
 export function engineService(o) {
   o.contracts.forEach(checkCompatible);
-  const contracts = o.contracts.map((c) => ({
-    description: typeof c.description === 'string' ? c.description : JSON.stringify(c.description),
-    script: c.script, transitions: c.transitions,
-    manifest: c.manifest == null ? null : typeof c.manifest === 'string' ? c.manifest : JSON.stringify(c.manifest),
-  }));
+  const contracts = engineContracts(o.contracts);
+  let checked = false;
   const rounds = [];
   // Map calls: proofs from the mirrors by default; the whole node store only when the caller gives one (earlier form).
   const maps = o.mapStore ?? null;
@@ -61,6 +101,10 @@ export function engineService(o) {
 
   async function run(call) {
     const engine = await loadEngine(o.engine);
+    if (!checked) {
+      checkEngine(engine, contracts);
+      checked = true;
+    }
     const snapshot = emptySnapshot();
     const mapProofs = {};
     // The wallet's own UTxOs at its funding address (CIP-30): the engine builds from exactly those (D5).
@@ -84,7 +128,12 @@ export function engineService(o) {
         else if (r.cbor) await mirror.stage(r.cbor);   // the map states this transaction leads to
         return r;
       }
-      if (!r.needKind) throw new Error(r.error);
+      if (!r.needKind) {
+        const e = new Error(r.error);
+        // A keyed call to prepare again later (ADR-0016 D9): the slot is a field of the result, never read from text.
+        if (r.retryAtSlot != null && Number(r.retryAtSlot) >= 0) e.retryAtSlot = Number(r.retryAtSlot);
+        throw e;
+      }
       if (r.needKind === 'mapProof') {
         // The mirror proves; the engine checks each proof against the chain's root (ADR-0015 §13.12 M1).
         mapProofs[r.needKey] = await mirror.answer(r.needKey, o.unitsOf ? o.unitsOf(call) : []);

@@ -15,7 +15,9 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>{@code MerkleMaps}: equal above the marker line (read discovery is below it);</li>
  *   <li>{@code Require}: equal except the traced text, {@code "joust:require " + message} for {@code message}.</li>
  * </ul>
- * Import and comment lines are not compared.
+ * Comment lines are not compared. Imports are compared as sets: a variant imports exactly what its on-chain source does,
+ * plus what its own branch needs and is listed here (MerkleMaps: {@code ContextsLib}, for the read trace), so a variant
+ * cannot bring in another library under a familiar name (PR #62 S5).
  */
 class ProgramVariantsTest {
 
@@ -32,6 +34,12 @@ class ProgramVariantsTest {
 
     static String variant(String fqcn) throws Exception {
         return resource("META-INF/joust/discovery/" + fqcn.replace('.', '/') + ".java");
+    }
+
+    static java.util.Set<String> imports(String src) {
+        var out = new java.util.TreeSet<String>();
+        for (String line : src.split("\n")) if (line.trim().startsWith("import ")) out.add(line.trim());
+        return out;
     }
 
     /** The code lines (no imports, comments or blank lines), up to the marker line if {@code toMarker}. */
@@ -51,6 +59,9 @@ class ProgramVariantsTest {
     void merkleMapsDiffersOnlyBelowTheMarker() throws Exception {
         String fqcn = "org.julclang.state.api.MerkleMaps";
         assertEquals(code(onchain(fqcn), true), code(variant(fqcn), true));
+        var expected = imports(onchain(fqcn));
+        expected.add("import org.julclang.stdlib.lib.ContextsLib;");
+        assertEquals(expected, imports(variant(fqcn)));
     }
 
     @Test
@@ -61,5 +72,6 @@ class ProgramVariantsTest {
         assertTrue(onchain.contains(plain), "the on-chain Require traces the message");
         assertEquals(code(onchain.replace(plain, "ContextsLib.trace(\"joust:require \" + message);"), false),
                 code(variant(fqcn), false));
+        assertEquals(imports(onchain), imports(variant(fqcn)));
     }
 }

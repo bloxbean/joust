@@ -21,6 +21,9 @@ dependencies {
 tasks.named('test') {
     dependsOn ':examples:counter:classes', ':examples:bank:classes'
     maxHeapSize = '2g'
+    // FixtureContractsTest: -PjoustRefreshFixtures brings fixtures/m3's programs and manifests forward (ADR-0020 §12.1).
+    systemProperty 'joust.refreshFixtures', providers.gradleProperty('joustRefreshFixtures').isPresent().toString()
+    if (providers.gradleProperty('joustRefreshFixtures').isPresent()) outputs.upToDateWhen { false }
 }
 
 // ---- The runtime engine: a GraalVM Web Image embedding julc-wasm (JuLC ADR-064).
