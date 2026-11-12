@@ -191,6 +191,10 @@ final class JavaEmitter {
                     imports.add("org.julclang.state.api.SignedBy");
                     code.append("    @SignedBy(\"").append(mod.field()).append("\")\n");
                 }
+                case "batched" -> {
+                    imports.add("org.julclang.state.api.Batched");
+                    code.append("    @Batched").append("only".equals(mod.field()) ? "(only = true)" : "").append("\n");
+                }
                 case "after", "before" -> {
                     String a = mod.name().equals("after") ? "ValidAfter" : "ValidBefore";
                     imports.add("org.julclang.state.api." + a);

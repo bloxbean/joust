@@ -30,6 +30,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -79,7 +80,7 @@ final class FourWay {
     final String irJson;
     /** Every call {@link #check} made, with the outcome the four legs agreed on, for the JavaScript leg. */
     final List<JsLeg.Call> jsCalls = new ArrayList<>();
-    int calls, refusals, validatorRuns, rounds;
+    int calls, refusals, validatorRuns, rounds, batchRuns, mutantsRejected, attacksRejected, modifierRefusals;
     StateHarness.Verdict lastVerdict;
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -133,34 +134,39 @@ final class FourWay {
 
     /** An interpreter value as the generated Java's value (records and variants by their generated classes). */
     Object java(Object v) {
+        return java(v, cls);
+    }
+
+    /** The same, with records and variants as nested classes of {@code c} (the port's, or its Java example's). */
+    Object java(Object v, Class<?> c) {
         try {
             return switch (v) {
                 case BigInteger i -> i;
                 case Boolean x -> x;
                 case Bytes x -> x.bytes();
-                case Opt o -> o.present() ? Optional.of(java(o.value())) : Optional.empty();
+                case Opt o -> o.present() ? Optional.of(java(o.value(), c)) : Optional.empty();
                 case List<?> l -> {
                     if (l.isEmpty()) yield JulcList.empty();
                     var xs = new ArrayList<Object>();
-                    for (Object x : l) xs.add(java(x));
+                    for (Object x : l) xs.add(java(x, c));
                     yield JulcList.of(xs.toArray());
                 }
                 case MapV m -> {
                     // JulcMap.insert prepends: insert from the last key, so the map keeps the canonical order.
                     JulcMap<Object, Object> out = JulcMap.empty();
-                    for (int i = m.keys().size() - 1; i >= 0; i--) out = out.insert(java(m.keys().get(i)), java(m.values().get(i)));
+                    for (int i = m.keys().size() - 1; i >= 0; i--) out = out.insert(java(m.keys().get(i), c), java(m.values().get(i), c));
                     yield out;
                 }
                 // The stored form: the root of the contents now, no reads or writes.
                 case BigMapV m -> new MerkleMap(root(m.now()), JulcList.empty(), JulcList.empty());
                 case Rec r -> {
-                    Class<?> rc = Class.forName(cls.getName() + "$" + r.type());
+                    Class<?> rc = Class.forName(c.getName() + "$" + r.type());
                     var comps = rc.getRecordComponents();
                     var types = new Class<?>[comps.length];
                     var vals = new Object[comps.length];
                     for (int i = 0; i < comps.length; i++) {
                         types[i] = comps[i].getType();
-                        vals[i] = java(r.fields().get(i));
+                        vals[i] = java(r.fields().get(i), c);
                     }
                     yield rc.getDeclaredConstructor(types).newInstance(vals);
                 }
@@ -388,8 +394,18 @@ final class FourWay {
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
         for (Object a : args) redeemerArgs.add(java(a));
         if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
-        Object redeemer = construct(kind.equals("init") ? "CreateInstance" : Character.toUpperCase(method.charAt(0)) + method.substring(1),
-                redeemerArgs);
+        String variant = kind.equals("init") ? "CreateInstance" : Character.toUpperCase(method.charAt(0)) + method.substring(1);
+        if (kind.equals("action") && batched(method) && !direct(method)) {
+            // A 'batched only' action has no direct redeemer: only the batch can run it.
+            Object before = java(state);
+            Object next = o != null ? java(o.value()) : before;
+            var v = harness.evaluate(batchTx(method, before, args, t, next, o != null ? payouts(o.payouts()) : JulcList.empty()));
+            validatorRuns++;
+            batchRuns++;
+            lastVerdict = v;
+            return v.accepted();
+        }
+        Object redeemer = construct(variant, redeemerArgs);
         // The arguments as an attacker may send them (raw, not re-encoded canonically): the redeemer's fields replaced.
         var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
         var fields = new ArrayList<>(encoded.fields());
@@ -414,7 +430,20 @@ final class FourWay {
                 // An action's Ctx balance is what it may allocate: the instance's lovelace less the deposit (Ctx).
                 Object before = java(state);
                 var live = harness.live(before, t == null ? BigInteger.ZERO : t.balance());
-                if (!hasMaps()) {
+                if (batched(method)) {
+                    // M1c: a batched action also runs as an intent, applied by a batch (both forms must agree).
+                    Object next = o != null ? java(o.value()) : before;
+                    JulcList<Payout> pays = o != null ? payouts(o.payouts()) : JulcList.empty();
+                    var b = harness.evaluate(batchTx(method, before, args, t, next, pays));
+                    if (!direct(method)) {
+                        v = b;
+                        break;
+                    }
+                    v = harness.evaluate(o != null ? harness.act(live, redeemer, next, pays, signer, c)
+                            : harness.act(live, redeemer, before, JulcList.empty(), signer, c));
+                    assertEquals(v.accepted(), b.accepted(), name + "." + method + ": the direct call and the intent disagree\n" + v + b);
+                    batchRuns++;
+                } else if (!hasMaps()) {
                     v = harness.evaluate(o != null ? harness.act(live, redeemer, java(o.value()), payouts(o.payouts()), signer, c)
                             : harness.act(live, redeemer, before, JulcList.empty(), signer, c));
                 } else {
@@ -445,12 +474,356 @@ final class FourWay {
         return v.accepted();
     }
 
+    // ------------------------------------------------------------------ batched actions (ADR-0004; M1c)
+
+    /** The intent's lovelace on top of its payment (the processor's intent deposit). */
+    static final BigInteger INTENT_DEPOSIT = BigInteger.valueOf(2_000_000);
+
+    private static String cap(String method) {
+        return Character.toUpperCase(method.charAt(0)) + method.substring(1);
+    }
+
+    private boolean exists(String cls) {
+        try {
+            Class.forName(cls);
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether the action is batched, from the {@code .jsc} source's checked IR (review F8), never from the generated code
+     * under test; the generated validator must agree (an intent variant {@code <M>Intent}, and a direct redeemer unless
+     * {@code batched only}).
+     */
+    boolean batched(String method) {
+        boolean source = interp.modifiers(method).stream().anyMatch(m -> m.startsWith("batched"));
+        assertEquals(source, exists(PKG + "." + name + "Validator$" + cap(method) + "Intent"), name + "." + method + ": batched in the source and the validator");
+        return source;
+    }
+
+    /** A direct call exists unless the action is {@code batched only} (from the source; the validator must agree). */
+    boolean direct(String method) {
+        boolean source = !interp.modifiers(method).contains("batched only");
+        assertEquals(source, exists(PKG + "." + name + "Validator$" + cap(method)), name + "." + method + ": a direct redeemer in the source and the validator");
+        return source;
+    }
+
+    @SuppressWarnings("unchecked")
+    private org.julclang.state.runtime.IntentCodec<Object> intents() throws Exception {
+        return (org.julclang.state.runtime.IntentCodec<Object>) Class.forName(PKG + "." + name + "Client").getField("INTENTS").get(null);
+    }
+
+    /**
+     * A batch of one intent: {@code t.caller()} asks for {@code method(args)} paying {@code t.received()}, and the batch
+     * proposes {@code next} and {@code pays} (the step's outcome as the test states it), over the harness's window. A
+     * refused step proposes the input state, so the validator re-runs the step and must refuse it.
+     */
+    org.julclang.state.testkit.TxModel batchTx(String method, Object before, List<Object> args, Tx t, Object next, JulcList<Payout> pays)
+            throws Exception {
+        var codec = intents();
+        var call = construct(cap(method) + "Intent", args.stream().map(this::java).toList(), "Validator$");
+        var intent = codec.intent(harness.instanceId(), t.caller().bytes(), StateHarness.pkhAddress(t.caller().bytes()),
+                StateHarness.T0.add(BigInteger.valueOf(3_600_000)), t.received(), call);
+        var it = harness.liveIntent(1, intent, t.received().add(INTENT_DEPOSIT));
+        var live = harness.live(before, t.balance());
+        var pending = new org.julclang.state.runtime.Batcher.Pending(it.ref(), codec.read(intent), it.lovelace(), HEX.formatHex(it.token()), null);
+        var stepPays = new ArrayList<Payout>();
+        for (Payout po : pays) stepPays.add(po);
+        var plan = new org.julclang.state.runtime.Batcher.Plan<>(next, t.balance().add(t.received()).subtract(StateHarness.total(pays)),
+                List.of(pending), List.<List<Payout>>of(stepPays), Map.of());
+        return harness.batch(live, codec, List.of(it), plan).tx();
+    }
+
+    // ------------------------------------------------------------------ mutation rejection (M1c)
+
+    /** Values one step away from {@code v}: an Int ±1, a byte string with its last byte flipped, a map with an entry changed, dropped or added. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    static List<Object> nearby(Object v) {
+        var out = new ArrayList<Object>();
+        switch (v) {
+            case BigInteger i -> {
+                out.add(i.add(BigInteger.ONE));
+                out.add(i.subtract(BigInteger.ONE));
+            }
+            case byte[] b -> {
+                byte[] c = b.length == 0 ? new byte[]{0} : b.clone();
+                if (b.length > 0) c[c.length - 1] ^= 1;
+                out.add(c);
+            }
+            case Boolean x -> out.add(!x);
+            case JulcMap m -> {
+                JulcMap<Object, Object> map = (JulcMap<Object, Object>) m;
+                byte[] extra = new byte[28];
+                Arrays.fill(extra, (byte) 0xEE);
+                if (map.isEmpty()) {
+                    out.add(map.insert(extra, BigInteger.ONE));
+                } else {
+                    Object k = map.keys().head();
+                    Object val = map.lookup(k).get();
+                    out.add(map.delete(k));
+                    for (Object w : nearby(val)) out.add(map.delete(k).insert(k, w));
+                }
+            }
+            default -> {
+            }
+        }
+        return out;
+    }
+
+    /** Each state that differs from {@code s} in one non-map component by one step. */
+    List<Object> nearbyStates(Object s) throws Exception {
+        var comps = stateClass.getRecordComponents();
+        var types = new Class<?>[comps.length];
+        for (int i = 0; i < comps.length; i++) types[i] = comps[i].getType();
+        var out = new ArrayList<Object>();
+        for (int i = 0; i < comps.length; i++) {
+            Object v = comps[i].getAccessor().invoke(s);
+            for (Object w : nearby(v)) {
+                var vals = new Object[comps.length];
+                for (int j = 0; j < comps.length; j++) vals[j] = j == i ? w : comps[j].getAccessor().invoke(s);
+                out.add(stateClass.getDeclaredConstructor(types).newInstance(vals));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Payout lists one step away from {@code pays}: an amount ±1, a recipient changed, one dropped, one more. In a
+     * destroy, paying more than owed (an amount +1, one more payout) comes from the submitter's own inputs and is not an
+     * attack (the validator requires each payout at least, as the attack suite's "under-paid by 1 lovelace"), so a
+     * destroy's mutants only underpay; in an action every extra lovelace leaves the state output short.
+     */
+    static List<JulcList<Payout>> nearbyPayouts(JulcList<Payout> pays, byte[] caller) {
+        return nearbyPayouts(pays, caller, true);
+    }
+
+    static List<JulcList<Payout>> nearbyPayouts(JulcList<Payout> pays, byte[] caller, boolean more) {
+        var ps = new ArrayList<Payout>();
+        for (Payout p : pays) ps.add(p);
+        var out = new ArrayList<JulcList<Payout>>();
+        for (int k = 0; k < ps.size(); k++) {
+            Payout p = ps.get(k);
+            byte[] other = new byte[28];
+            Arrays.fill(other, (byte) 0xBB);
+            for (Payout q : List.of(new Payout(p.to(), p.lovelace().add(BigInteger.ONE)), new Payout(p.to(), p.lovelace().subtract(BigInteger.ONE)),
+                    new Payout(other, p.lovelace()))) {
+                if (q.lovelace().signum() <= 0 || !more && q.lovelace().compareTo(p.lovelace()) > 0) continue;
+                var c = new ArrayList<>(ps);
+                c.set(k, q);
+                out.add(list(c));
+            }
+            var dropped = new ArrayList<>(ps);
+            dropped.remove(k);
+            out.add(list(dropped));
+        }
+        if (more) {
+            var extra = new ArrayList<>(ps);
+            extra.add(new Payout(caller, BigInteger.valueOf(1_000_000)));
+            out.add(list(extra));
+        }
+        return out;
+    }
+
+    private static JulcList<Payout> list(List<Payout> ps) {
+        JulcList<Payout> l = JulcList.empty();
+        for (int i = ps.size() - 1; i >= 0; i--) l = l.prepend(ps.get(i));
+        return l;
+    }
+
+    /**
+     * Mutation rejection: for a call the interpreter accepts, every transaction that proposes a next state one step
+     * away from the interpreter's (one component changed; with maps, one extra map write too) or payouts one step away
+     * (an amount ±1, another recipient, one dropped, one more) is rejected by the validator, and the accepted
+     * transaction passes the attack suite ({@link org.julclang.state.testkit.Attacks}). Returns the mutants rejected.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    int mutants(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        String kind = interp.kind(method);
+        var o = interp.call(method, state, args, t);
+        var redeemerArgs = new ArrayList<Object>();
+        if (kind.equals("init")) redeemerArgs.add(harness.seed());
+        for (Object a : args) redeemerArgs.add(java(a));
+        if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
+        Ctx c = interp.usesTx(method) ? ctx(t) : null;
+        byte[] caller = t == null ? signer : t.caller().bytes();
+        var txs = new ArrayList<org.julclang.state.testkit.TxModel>();
+        org.julclang.state.testkit.TxModel accepted;
+        var ms = new MerkleSupport(store);
+        switch (kind) {
+            case "init" -> {
+                Object redeemer = construct("CreateInstance", redeemerArgs);
+                Object first = java(o.value());
+                if (hasMaps()) {
+                    var p = ms.prepareCreation(harness.policy(), (Class) stateClass, first, harness.seed());
+                    accepted = harness.withClaims(harness.create(redeemer, p.stored(), c), p.claims());
+                    for (Object m : nearbyStates(p.stored())) txs.add(harness.withClaims(harness.create(redeemer, m, c), p.claims()));
+                } else {
+                    accepted = harness.create(redeemer, first, c);
+                    for (Object m : nearbyStates(first)) txs.add(harness.create(redeemer, m, c));
+                }
+            }
+            case "action" -> {
+                Object before = java(state);
+                JulcList<Payout> pays = payouts(o.payouts());
+                if (batched(method)) {
+                    Object next = java(o.value());
+                    accepted = batchTx(method, before, args, t, next, pays);
+                    for (Object m : nearbyStates(next)) txs.add(batchTx(method, before, args, t, m, pays));
+                    for (var q : nearbyPayouts(pays, caller)) txs.add(batchTx(method, before, args, t, next, q));
+                    break;
+                }
+                Object redeemer = construct(cap(method), redeemerArgs);
+                var live = harness.live(before, t == null ? BigInteger.ZERO : t.balance());
+                if (!hasMaps()) {
+                    Object next = java(o.value());
+                    accepted = harness.act(live, redeemer, next, pays, signer, c);
+                    for (Object m : nearbyStates(next)) txs.add(harness.act(live, redeemer, m, pays, signer, c));
+                    for (var q : nearbyPayouts(pays, caller)) txs.add(harness.act(live, redeemer, next, q, signer, c));
+                } else {
+                    Object after = nextState(run(ms, method, before, args, t));
+                    var p = ms.prepare(harness.policy(), (Class) stateClass, before, after, StateHarness.LIVE_REF);
+                    accepted = harness.withClaims(harness.act(live, redeemer, p.stored(), pays, signer, c), p.claims());
+                    for (Object m : nearbyStates(p.stored())) txs.add(harness.withClaims(harness.act(live, redeemer, m, pays, signer, c), p.claims()));
+                    for (var q : nearbyPayouts(pays, caller)) txs.add(harness.withClaims(harness.act(live, redeemer, p.stored(), q, signer, c), p.claims()));
+                    // One extra map write the method did not make (a stranger's balance set), with honest witnesses for it.
+                    var ms2 = new MerkleSupport(store);
+                    Object tampered = ms2.run(() -> {
+                        try {
+                            Object n = nextState(invoke(method, before, args, t));
+                            return extraWrite(n);
+                        } catch (Exception e) {
+                            throw new IllegalStateException(e);
+                        }
+                    });
+                    var p2 = ms2.prepare(harness.policy(), (Class) stateClass, before, tampered, StateHarness.LIVE_REF);
+                    txs.add(harness.withClaims(harness.act(live, redeemer, p2.stored(), pays, signer, c), p2.claims()));
+                }
+            }
+            case "destroy" -> {
+                Object before = java(state);
+                Object redeemer = construct(cap(method), redeemerArgs);
+                var live = harness.live(before, t.balance().subtract(BigInteger.valueOf(harness.minAda())));
+                Object burn = construct("BurnInstance", List.of());
+                JulcList<Payout> pays = payouts(o.payouts());
+                List<org.julclang.state.api.mpf.MapClaim> claims = null;
+                if (hasMaps()) {
+                    run(ms, method, before, args, t);
+                    claims = ms.prepare(harness.policy(), (Class) stateClass, before, null, StateHarness.LIVE_REF).claims();
+                }
+                accepted = harness.destroy(live, redeemer, burn, pays, signer, c);
+                if (claims != null) accepted = harness.withClaims(accepted, claims);
+                for (var q : nearbyPayouts(pays, caller, false)) {
+                    var tx = harness.destroy(live, redeemer, burn, q, signer, c);
+                    txs.add(claims != null ? harness.withClaims(tx, claims) : tx);
+                }
+            }
+            default -> {
+                return 0;
+            }
+        }
+        var ok = harness.evaluate(accepted);
+        assertTrue(ok.accepted(), name + "." + method + ": the unmutated transaction must be accepted\n" + ok);
+        attacksRejected += org.julclang.state.testkit.Attacks.assertAllRejected(harness, accepted);
+        int n = 0;
+        for (var tx : txs) {
+            var v = harness.evaluate(tx);
+            assertFalse(v.accepted(), name + "." + method + ": mutant #" + n + " accepted\n" + v);
+            n++;
+        }
+        assertTrue(n > 0, name + "." + method + ": no mutants");
+        mutantsRejected += n;
+        return n;
+    }
+
+    /** {@code next} with one more write to its first BigMap (a fresh key set to 1), as a cheating client would add. */
+    private Object extraWrite(Object next) throws Exception {
+        var comps = stateClass.getRecordComponents();
+        var types = new Class<?>[comps.length];
+        var vals = new Object[comps.length];
+        boolean done = false;
+        for (int i = 0; i < comps.length; i++) {
+            types[i] = comps[i].getType();
+            vals[i] = comps[i].getAccessor().invoke(next);
+            if (!done && vals[i] instanceof MerkleMap m) {
+                byte[] k = new byte[28];
+                Arrays.fill(k, (byte) 0xEE);
+                vals[i] = MerkleMaps.putInt(m, k, BigInteger.ONE);
+                done = true;
+            }
+        }
+        return stateClass.getDeclaredConstructor(types).newInstance(vals);
+    }
+
     private Object construct(String variant, List<Object> values) throws Exception {
-        Class<?> rc = Class.forName(PKG + "." + name + "Validator$" + variant);
+        return construct(variant, values, "Validator$");
+    }
+
+    private Object construct(String variant, List<Object> values, String in) throws Exception {
+        Class<?> rc = Class.forName(PKG + "." + name + in + variant);
         var comps = rc.getRecordComponents();
         var types = new Class<?>[comps.length];
         for (int i = 0; i < comps.length; i++) types[i] = comps[i].getType();
         return rc.getDeclaredConstructor(types).newInstance(values.toArray());
+    }
+
+    // ------------------------------------------------------------------ the Java example, as a reference (M1c review F8)
+
+    Class<?> reference;
+    String referenceInit;
+    /** Calls whose outcome on the Java example differs from the port's (each test states which it expects). */
+    final List<String> javaDiffs = new ArrayList<>();
+
+    /** Also runs every vector on the Java example {@code pkg.<name>}, whose init is {@code init}, and records differences. */
+    FourWay reference(String pkg, String init) throws Exception {
+        this.reference = Class.forName(pkg + "." + name);
+        this.referenceInit = init;
+        return this;
+    }
+
+    /** The Java example's JVM outcome, encoded as {@link #jvm} encodes the port's ("refused" when it fails). */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    String javaReference(String method, Rec state, List<Object> args, Tx t) throws Exception {
+        String kind = interp.kind(method);
+        Class<?> rs = Class.forName(reference.getName() + "$State");
+        Object before = state == null ? null : java(state, reference);
+        String m = kind.equals("init") ? referenceInit : method;
+        Method found = null;
+        for (Method x : reference.getDeclaredMethods()) if (x.getName().equals(m) && java.lang.reflect.Modifier.isStatic(x.getModifiers())) found = x;
+        assertNotNull(found, reference.getName() + "." + m);
+        var call = new ArrayList<Object>();
+        if (before != null) call.add(before);
+        for (Object a : args) call.add(java(a, reference));
+        if (found.getParameterCount() > call.size()) call.add(ctx(t));
+        final Method target = found;
+        var ms = new MerkleSupport(store);
+        Object[] out = new Object[1];
+        Throwable[] failed = new Throwable[1];
+        ms.run(() -> {
+            try {
+                out[0] = target.invoke(null, call.toArray());
+            } catch (InvocationTargetException e) {
+                failed[0] = e.getCause();
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(e);
+            }
+            return null;
+        });
+        if (failed[0] != null) {
+            if (failed[0] instanceof RequireException || failed[0] instanceof ArithmeticException) return "refused";
+            throw new IllegalStateException(reference.getName() + "." + m, failed[0]);
+        }
+        Object r = out[0];
+        if (kind.equals("view")) return "ok:" + data(r).serializeToHex();
+        if (r instanceof JulcList<?> l) return "ok:" + result(null, (JulcList<Payout>) l);
+        Object next = rs.isInstance(r) ? r : r.getClass().getMethod("state").invoke(r);
+        JulcList<Payout> pays = rs.isInstance(r) ? null : (JulcList<Payout>) r.getClass().getMethod("payouts").invoke(r);
+        if (hasMaps()) {
+            next = kind.equals("init") ? ms.prepareCreation(harness.policy(), (Class) rs, next, harness.seed()).stored()
+                    : ms.prepare(harness.policy(), (Class) rs, before, next, StateHarness.LIVE_REF).stored();
+        }
+        return "ok:" + result(next, pays);
     }
 
     /**
@@ -475,6 +848,11 @@ final class FourWay {
         if (o != null) JsLeg.canonical(o.value(), what);
         assertEquals(want, jvm(method, state, args, t), "JVM vs interpreter: " + what);
         jsCalls.add(JsLeg.call(method, state, args, t, want, o, refused, what));
+        if (reference != null) {
+            String ref = javaReference(method, state, args, t);
+            if (!ref.equals(want)) javaDiffs.add(what + ": the Java example " + (ref.equals("refused") ? "refuses" : "accepts") + ", the port "
+                    + (want.equals("refused") ? "refuses" : "accepts") + (ref.startsWith("ok:") && want.startsWith("ok:") ? " (different results)" : ""));
+        }
         if (!interp.kind(method).equals("view")) {
             assertEquals(want, transition(method, state, args, t), "transition program vs interpreter: " + what);
             Boolean accepted = validator(method, state, args, t, signer, candidate);
@@ -483,6 +861,25 @@ final class FourWay {
         calls++;
         if (want.equals("refused")) refusals++;
         return want;
+    }
+
+    /**
+     * A call that breaks one of the method's modifiers ({@code only f}: signed by a stranger who is the caller;
+     * {@code after f}/{@code before f}: a window on the wrong side of, or straddling, the bound), with its outcome stated
+     * (ADR-0018 M1c review S2/F2): the modifiers are checks on the transaction, which the interpreter, the JVM method and
+     * the transition program do not see, so those three accept it and agree; the validator must refuse it. Until M1b
+     * models the modifiers in the interpreter (ADR-0018 D15), this is how they are covered.
+     */
+    void modifierRefused(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        String what = name + "." + method + " " + args + " " + (t == null ? "" : t) + " signed by " + HEX.formatHex(signer).substring(0, 4);
+        String want = interpreted(method, state, args, t);
+        assertTrue(want.startsWith("ok:"), "the transition accepts it (stated): " + what + " " + want);
+        assertEquals(want, jvm(method, state, args, t), "JVM vs interpreter: " + what);
+        assertEquals(want, transition(method, state, args, t), "transition program vs interpreter: " + what);
+        Boolean accepted = validator(method, state, args, t, signer, null);
+        assertEquals(Boolean.FALSE, accepted, "the validator refuses a broken modifier: " + what + " " + lastVerdict);
+        modifierRefusals++;
+        calls++;
     }
 
     /** The interpreter's next state of a successful call (to chain calls). */

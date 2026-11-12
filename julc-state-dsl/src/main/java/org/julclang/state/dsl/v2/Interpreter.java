@@ -306,6 +306,20 @@ public final class Interpreter {
         return method(method).usesCtx();
     }
 
+    /** The method's modifiers in source order ({@code payable}, {@code open}, {@code only f}, {@code batched only}, …). */
+    public List<String> modifiers(String method) {
+        var out = new ArrayList<String>();
+        for (Ir.Mod m : method(method).mods()) out.add(m.field() == null ? m.name() : m.name() + " " + m.field());
+        return out;
+    }
+
+    /** The contract's methods by name, in source order, with their kinds. */
+    public java.util.LinkedHashMap<String, String> methods() {
+        var out = new java.util.LinkedHashMap<String, String>();
+        for (Ir.Method m : p.methods()) out.put(m.name(), kind(m.name()));
+        return out;
+    }
+
     private Ir.Method method(String name) {
         Ir.Method m = p.method(name);
         if (m == null) throw new IllegalArgumentException("no method " + name);

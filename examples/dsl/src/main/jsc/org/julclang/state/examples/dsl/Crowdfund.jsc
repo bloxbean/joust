@@ -1,0 +1,51 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/crowdfund in .jsc 2 (ADR-0018 M1c, J11): a crowdfunding campaign with its backers in an inline Map.
+// Backers contribute before the deadline. After it, if the goal was reached the creator claims everything; if not,
+// each backer takes their contribution back, and the creator closes the empty campaign. The map holds one entry per
+// backer (about 20 fit in maxDatumBytes); Map.set keeps it in canonical key order, as the datum is written.
+contract Crowdfund(maxDatumBytes = 1024) {
+  state { creator: Key, goal: Int, deadline: Int, minContribution: Int, raised: Int, backers: Map<Key, Int> }
+
+  init(goal: Int, deadline: Int, minContribution: Int) {
+    require(goal > 0, "goal must be positive")
+    require(minContribution >= 2 ada, "minimum contribution is at least 2 ADA")
+    require(before(deadline), "deadline must be in the future")
+    return { creator: caller, goal, deadline, minContribution, raised: 0, backers: Map.empty() }
+  }
+
+  action contribute() payable {
+    require(before(deadline), "the campaign has ended")
+    require(received >= minContribution, "below the minimum contribution")
+    const prior = backers.get(caller) ?? 0
+    return { ...state, raised: raised + received, backers: backers.set(caller, prior + received) }
+  }
+
+  // The goal was missed: a backer takes their contribution back.
+  action refund() open {
+    require(after(deadline), "the campaign is still running")
+    require(raised < goal, "the goal was reached: no refunds")
+    require(backers.has(caller), "nothing to refund")
+    const amount = backers.get(caller) ?? 0
+    pay(caller, amount)
+    return { ...state, raised: raised - amount, backers: backers.delete(caller) }
+  }
+
+  // The goal was reached: the creator takes everything.
+  destroy claim() only creator {
+    require(after(deadline), "the campaign is still running")
+    require(raised >= goal, "the goal was not reached")
+    pay(creator, balance)
+  }
+
+  // The goal was missed and every backer has been refunded: the creator closes the campaign.
+  destroy close() only creator {
+    require(after(deadline), "the campaign is still running")
+    require(backers.isEmpty, "backers still have funds in the campaign")
+    pay(creator, balance)
+  }
+
+  view raised(): Int = raised
+  view contributionOf(backer: Key): Int = backers.get(backer) ?? 0
+}
