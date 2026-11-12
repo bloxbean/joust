@@ -63,6 +63,10 @@ test('joust migrate --in-place keeps the v1 text, never overwrites it, and the r
     b = await build({ root, keep, acceptAbi: true, log: () => {} });
     assert.ok(b.ok);
     assert.ok(existsSync(join(root, 'contracts/app/Guards.abi.json')));
+    // Review r3 F9: the compiler that built each script, carried into each deployment record.
+    const built = JSON.parse(readFileSync(join(root, 'build/joust/contracts.json'), 'utf8'))[0].built;
+    assert.ok(built.joust && built.engine && built.julc, JSON.stringify(built));
+    assert.deepEqual(JSON.parse(readFileSync(join(root, 'build/joust/joust.lock.json'), 'utf8')).engine, { joust: built.engine, julc: built.julc });
   });
 
 // D16, review r2 S1: joust build warns about recorded deployments it does not produce, in every case.
@@ -153,4 +157,86 @@ test('migrate --in-place keeps the v1 build\'s artifacts in build/joust/v1/', { 
     assert.equal(readFileSync(join(root, 'build/joust/v1', f), 'utf8'), 'v1 ' + f);
   }
   assert.ok(q.lines.some((l) => /build\/joust\/v1/.test(l)));
+});
+
+// Review r3.
+test('r3 C2, S6: an output alias into the sources, existing or not yet, is refused before anything is written', { skip, timeout: 300_000 }, async () => {
+  const { symlinkSync } = await import('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'joust-migrate-r3-'));
+  mkdirSync(join(root, 'contracts/a'), { recursive: true });
+  mkdirSync(join(root, 'contracts/b'), { recursive: true });
+  writeFileSync(join(root, 'contracts/a/C.jsc'), 'package p\ncontract C { state n: Int init() {} action inc() { n += 1 } }\n');
+  const other = 'package q\ncontract Other { state n: Int init() {} action dec() { n -= 1 } }\n';
+  writeFileSync(join(root, 'contracts/b/C.jsc'), other);
+  mkdirSync(join(root, 'build/joust/migrated'), { recursive: true });
+  symlinkSync('../../../contracts/b', join(root, 'build/joust/migrated/a'));
+  const q = quiet();
+  let r = await migrate({ root, files: ['contracts/a/C.jsc'], log: q.log, error: q.error });
+  assert.equal(r.ok, false);
+  assert.ok(q.lines.some((l) => l.startsWith('error[JSC1108]: a/C.jsc') && /lies in the contracts directory/.test(l)), q.lines.join('\n'));
+  assert.equal(readFileSync(join(root, 'contracts/b/C.jsc'), 'utf8'), other);
+  // S6: build/joust is a link into the sources, and migrated/ does not exist yet.
+  const root2 = mkdtempSync(join(tmpdir(), 'joust-migrate-r3-'));
+  mkdirSync(join(root2, 'contracts/gen'), { recursive: true });
+  cpSync(join(DSL, 'Guards.jsc'), join(root2, 'contracts/Guards.jsc'));
+  mkdirSync(join(root2, 'build'));
+  symlinkSync('../contracts/gen', join(root2, 'build/joust'));
+  r = await migrate({ root: root2, log: q.log, error: q.error });
+  assert.equal(r.ok, false);
+  assert.ok(!existsSync(join(root2, 'contracts/gen/migrated')));
+});
+
+test('r3 S5: --in-place refuses a hard-linked source and a source under a linked directory', { skip, timeout: 300_000 }, async () => {
+  const { linkSync, symlinkSync } = await import('node:fs');
+  const root = project();
+  mkdirSync(join(root, 'shared'));
+  cpSync(join(DSL, 'Points.jsc'), join(root, 'shared/Points.jsc'));
+  linkSync(join(root, 'shared/Points.jsc'), join(root, 'contracts/app/Points.jsc'));
+  const q = quiet();
+  let r = await migrate({ root, files: ['contracts/app/Points.jsc'], inPlace: true, log: q.log, error: q.error });
+  assert.deepEqual(r.refused, ['app/Points.jsc']);
+  assert.ok(q.lines.some((l) => l.startsWith('error[JSC1109]: app/Points.jsc') && /hard links/.test(l)), q.lines.join('\n'));
+  assert.match(readFileSync(join(root, 'shared/Points.jsc'), 'utf8'), /^package/);
+  mkdirSync(join(root, 'sharedlib'));
+  cpSync(join(DSL, 'Guards.jsc'), join(root, 'sharedlib/Guards.jsc'));
+  symlinkSync('../sharedlib', join(root, 'contracts/lib'));
+  r = await migrate({ root, files: ['contracts/lib/Guards.jsc'], inPlace: true, log: q.log, error: q.error });
+  assert.deepEqual(r.refused, ['lib/Guards.jsc']);
+  assert.ok(q.lines.some((l) => l.startsWith('error[JSC1109]: lib/Guards.jsc') && /symbolic link/.test(l)), q.lines.join('\n'));
+  assert.match(readFileSync(join(root, 'sharedlib/Guards.jsc'), 'utf8'), /^package/);
+  assert.ok(!existsSync(join(root, 'sharedlib/Guards.jsc.v1')));
+});
+
+test('r3 C4: a contract declared on the package\'s line keeps its v1 artifacts, by the name the engine read', { skip, timeout: 300_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'joust-migrate-r3-'));
+  mkdirSync(join(root, 'contracts/a'), { recursive: true });
+  writeFileSync(join(root, 'contracts/a/C.jsc'), 'package p contract C { state n: Int init() {} action inc() { n += 1 } }\n');
+  mkdirSync(join(root, 'build/joust'), { recursive: true });
+  const files = ['C.json', 'C.plutus', 'C.js', 'C.d.ts', 'contracts.json', 'joust.lock.json', 'deployments.devkit.json'];
+  for (const f of files) writeFileSync(join(root, 'build/joust', f), 'v1 ' + f);
+  const q = quiet();
+  const r = await migrate({ root, inPlace: true, log: q.log, error: q.error });
+  assert.ok(r.ok, q.lines.join('\n'));
+  for (const f of files) assert.equal(readFileSync(join(root, 'build/joust/v1', f), 'utf8'), 'v1 ' + f, f);
+  assert.ok(q.lines.some((l) => /artifacts of C are kept in build\/joust\/v1/.test(l)), q.lines.join('\n'));
+});
+
+test('r3 S7: a deployments file of the wrong shape is unreadable, merging is null-safe, and the stale warning says so', async () => {
+  const { deploymentsShape, mergeDeployments } = await import('../src/deploy.js');
+  const { staleDeployments } = await import('../src/build.js');
+  for (const bad of [null, [], 'x', { contracts: null }, { contracts: [] }, { contracts: { a: null } }, { superseded: {} },
+    { superseded: [null] }]) {
+    assert.ok(deploymentsShape(bad), JSON.stringify(bad));
+  }
+  assert.equal(deploymentsShape({ contracts: { a: { policy: 'p' } }, superseded: [{ title: 'o' }] }), null);
+  assert.deepEqual(mergeDeployments({ contracts: { a: null, b: { policy: 'p' } } }, { contracts: {} }, 'T').superseded,
+    [{ title: 'b', policy: 'p', supersededAt: 'T', reason: 'not deployed by this build' }]);
+  const dir = mkdtempSync(join(tmpdir(), 'joust-stale-'));
+  const contracts = [{ packageName: 'app', name: 'Counter', scriptHash: 'aa', scriptCborHex: '4e01' }];
+  for (const bad of ['{ "contracts": null }', '{ "contracts": { "app.Counter": null } }', '{ "superseded": {} }', 'null']) {
+    writeFileSync(join(dir, 'deployments.devkit.json'), bad);
+    assert.match(staleDeployments(dir, contracts)[0] ?? '', /cannot be read/, bad);
+  }
+  writeFileSync(join(dir, 'deployments.devkit.json'), '{ "contracts": { "app.Counter": {} } }');
+  assert.match(staleDeployments(dir, contracts)[0], /neither a script digest nor a policy/);
 });

@@ -17,7 +17,8 @@ validator to UPLC.
 D14), not to be confused with Cardano's preview network. The language and the compiler's output may change before it
 leaves preview, so the same file may compile to a different script hash in a later JOUST (milestone M1e changes every
 `.jsc` 2 script hash once). Use it on DevKit and testnets, and don't deploy it to hold value; a deployed preview
-contract is rebuilt with the JOUST version recorded for it (`build/joust/joust.lock.json`, or the plugin's version).
+contract is rebuilt with the JOUST version recorded for it: each record of `build/joust/deployments.<network>.json` states
+it (commit those files if you must rebuild a deployed script later; `build/` is ignored), or the plugin's version.
 It covers the core language (milestone M1). Native assets, sends, mints, deploy parameters, events and reads of other
 contracts arrive in M2; owned and keyed objects, batched intents and script purposes in M3; `.jsc` libraries and
 offline tests in M4. Until then, write a contract that needs one of them in [Java](/languages/java/). `.jsc` becomes

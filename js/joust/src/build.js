@@ -16,7 +16,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { loadToolchain } from './toolchain.js';
 import { abiGate } from './abi.js';
-import { scriptDigest } from './deploy.js';
+import { deploymentsShape, scriptDigest } from './deploy.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -75,7 +75,9 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     const { js, dts } = generate(description);
     writeFileSync(join(dir, c.name + '.js'), js);
     writeFileSync(join(dir, c.name + '.d.ts'), dts);
-    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, built: { joust: VERSION } });
+    // Review r3 F9: the compiler that built each script (this package's version, the engine's JOUST and JuLC versions),
+    // carried into each deployment record.
+    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, built: { joust: VERSION, engine: r.joust ?? null, julc: r.julc ?? null } });
     log(`${c.packageName}.${c.name}: ${c.scriptSizeBytes} bytes, hash ${c.scriptHash || '(parameterised)'}, `
       + `${Object.keys(c.transitions).length} transitions`);
   }
@@ -90,7 +92,7 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   }
   if (validators.length) writeFileSync(join(dir, 'validators.json'), JSON.stringify(validators) + '\n');
   writeFileSync(join(dir, 'joust.lock.json'), JSON.stringify({
-    joust: VERSION, descriptionVersion: 2,
+    joust: VERSION, engine: { joust: r.joust ?? null, julc: r.julc ?? null }, descriptionVersion: 2,
     contracts: Object.fromEntries(r.contracts.map((c) => [`${c.packageName}.${c.name}`, { scriptHash: c.scriptHash }])),
     ...(validators.length ? { validators: Object.fromEntries(validators.map((v) => [`${v.package}.${v.name}`, { purpose: v.purpose, scriptHash: v.scriptHash }])) } : {}),
   }, null, 2) + '\n');
@@ -115,9 +117,11 @@ export function staleDeployments(dir, contracts) {
     let recorded;
     try {
       recorded = JSON.parse(readFileSync(join(dir, f), 'utf8'));
-      if (typeof recorded !== 'object' || recorded === null) throw new Error('not an object');
+      const problem = deploymentsShape(recorded);
+      if (problem) throw new Error(problem);
     } catch (e) {
-      out.push(`warning: ${f} cannot be read (${e.message}): its deployments are not checked against this build`);
+      out.push(`warning: ${f} cannot be read (${e.message}): its deployments are not checked against this build; joust deploy keeps it`
+        + ' beside the new file');
       continue;
     }
     for (const [title, d] of Object.entries(recorded.contracts ?? {})) {
@@ -127,13 +131,15 @@ export function staleDeployments(dir, contracts) {
         continue;
       }
       const digest = scriptDigest(c.scriptCborHex);
-      if (d?.scriptDigest) {
+      if (d.scriptDigest) {
         if (d.scriptDigest !== digest) out.push(`warning: ${f} records ${title} with another script than this build's: ${tail}`);
-      } else if (d?.params !== undefined) {
+      } else if (d.params !== undefined) {
         out.push(`warning: ${f} records ${title} with params but no script digest (deployed by an earlier JOUST): it cannot be`
           + ' checked against this build; deploy again to record one');
-      } else if (d?.policy && c.scriptHash && d.policy !== c.scriptHash) {
-        out.push(`warning: ${f} records ${title} at script ${d.policy}, which this build does not produce (it builds ${c.scriptHash}): ${tail}`);
+      } else if (d.policy && c.scriptHash) {
+        if (d.policy !== c.scriptHash) out.push(`warning: ${f} records ${title} at script ${d.policy}, which this build does not produce (it builds ${c.scriptHash}): ${tail}`);
+      } else {
+        out.push(`warning: ${f} records ${title} with neither a script digest nor a policy: it cannot be checked against this build`);
       }
     }
   }

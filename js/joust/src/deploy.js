@@ -55,28 +55,40 @@ export async function deploy({ root = process.cwd(), config, networkName, log = 
     const d = await rt.ensureDeployment(title, wallet, params);
     // The digest of the script before parameters are applied (ADR-0018 D16): joust build compares it with what it
     // builds, @Params contracts included.
-    out[title] = { ...d, scriptDigest: scriptDigest(c.script) };
+    // Review r3 F9: and the compiler that built it, so a preview script is rebuilt with the same one.
+    out[title] = { ...d, scriptDigest: scriptDigest(c.script), built: c.built ?? null };
     log(`${title}: ${d.address} (reference script ${d.referenceScripts[0]})`);
   }
   const file = join(root, config.out, `deployments.${net.name}.json`);
-  // Review r2 S1: merged, never rewritten from scratch: a record this deploy replaces or no longer makes is kept under
-  // "superseded", since instances deployed from it still hold funds. An unreadable file is kept beside it.
-  let previous = null;
+  // Review r2 S1, r3 S7: merged, never rewritten from scratch: a record this deploy replaces or no longer makes is kept
+  // under "superseded", since instances deployed from it still hold funds. A file that cannot be read, or whose shape is
+  // not a deployments file's, is kept beside the new one, with a warning; the new records are always written.
+  const current = { network: net.name, networkId: net.networkId, chain: net.chain, clock: net.clock, contracts: out };
+  let next = current;
   if (existsSync(file)) {
     const text = readFileSync(file, 'utf8');
+    let previous;
+    let problem = null;
     try {
       previous = JSON.parse(text);
-    } catch {
+      problem = deploymentsShape(previous);
+    } catch (e) {
+      problem = e.message;
+    }
+    if (problem) {
       const kept = file.replace(/\.json$/, `.unreadable-${Date.now()}.json`);
       writeFileSync(kept, text);
-      log(`warning: ${file} could not be read; kept as ${kept}`);
+      log(`warning: ${file} could not be read (${problem}); kept as ${kept}`);
+    } else {
+      try {
+        next = mergeDeployments(previous, current);
+      } catch (e) {
+        const kept = file.replace(/\.json$/, `.unmerged-${Date.now()}.json`);
+        writeFileSync(kept, text);
+        log(`warning: ${file} could not be merged (${e.message}); kept as ${kept}`);
+      }
     }
   }
-  const next = mergeDeployments(previous, { network: net.name, networkId: net.networkId, chain: net.chain, clock: net.clock, contracts: out });
-  for (const s of (next.superseded ?? []).slice((previous?.superseded ?? []).length)) {
-    log(`${s.title}: the deployment at ${s.address ?? s.policy} is superseded and kept in ${file} ("superseded"): its instances stay on that script`);
-  }
-  writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
   log(`wrote ${file}`);
   return out;
 }
@@ -87,13 +99,34 @@ export function scriptDigest(cborHex) {
 }
 
 /**
+ * Why a parsed deployments file does not have a deployments file's shape, or null (review r3 S7): an object, whose
+ * "contracts" (if any) is an object of object records, and whose "superseded" (if any) is an array of objects.
+ */
+export function deploymentsShape(d) {
+  const isObject = (x) => typeof x === 'object' && x !== null && !Array.isArray(x);
+  if (!isObject(d)) return 'not an object';
+  if (d.contracts !== undefined) {
+    if (!isObject(d.contracts)) return '"contracts" is not an object';
+    for (const [title, r] of Object.entries(d.contracts)) if (!isObject(r)) return `the record of ${title} is not an object`;
+  }
+  if (d.superseded !== undefined) {
+    if (!Array.isArray(d.superseded)) return '"superseded" is not a list';
+    if (d.superseded.some((r) => !isObject(r))) return 'a "superseded" entry is not an object';
+  }
+  return null;
+}
+
+/**
  * The deployments file after a deploy (review r2 S1): this deploy's records, and every earlier record it replaces (a
  * different script, address or params) or no longer makes, under "superseded" with the time, after the ones there.
+ * Null-safe: records that are not objects are skipped (deploymentsShape refuses them first).
  */
 export function mergeDeployments(previous, next, now = new Date().toISOString()) {
   const superseded = Array.isArray(previous?.superseded) ? [...previous.superseded] : [];
-  const same = (a, b) => a.policy === b.policy && a.address === b.address && JSON.stringify(a.params) === JSON.stringify(b.params);
-  for (const [title, d] of Object.entries(previous?.contracts ?? {})) {
+  const same = (a, b) => a?.policy === b?.policy && a?.address === b?.address && JSON.stringify(a?.params) === JSON.stringify(b?.params);
+  const records = previous?.contracts && typeof previous.contracts === 'object' ? previous.contracts : {};
+  for (const [title, d] of Object.entries(records)) {
+    if (!d || typeof d !== 'object') continue;
     const n = next.contracts[title];
     if (n && same(n, d)) continue;
     superseded.push({ title, ...d, supersededAt: now, reason: n ? 'redeployed as another script' : 'not deployed by this build' });

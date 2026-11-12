@@ -594,8 +594,10 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   (M1e, #71, changes every `.jsc` 2 script hash once), to use it on DevKit and testnets, and not to deploy it to hold
   value. Each template ships its ABI manifest, so a first build passes the gate (D12).
 - **Preview deployments stay rebuildable with the compiler recorded for them** (r13): a preview script deployed with
-  one JOUST version is rebuilt with that version (`joust.lock.json` records it on npm; the plugin's version on Gradle),
-  not promised to be reproduced by a later one. M1e's change and any later preview change are breaking for new builds
+  one JOUST version is rebuilt with that version, not promised to be reproduced by a later one. On npm each record of
+  `deployments.<network>.json` states it (`built`: the `@julclang/joust` version, the engine's JOUST version and its JuLC
+  version), and `build/` is not committed, so a project that must rebuild a deployed preview script commits its
+  deployments files; on Gradle the plugin's version in `build.gradle` is the record. M1e's change and any later preview change are breaking for new builds
   only; `joust build` warns when a recorded deployment's script is not what it builds (D16).
 - `.jsc` libraries and Java library sources ship in npm packages under `joust-lib/`, pinned by `joust.lock` (D9).
 - **Offline tests** (`@julclang/joust/test`): a contract's calls against an in-memory ledger, with the generated
@@ -633,9 +635,13 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
 - **In place and paths, as built** (r13, M1d review C2, S1–S3): by default `migrate` writes under the build directory
   (`build/joust/migrated/`, `build/jsc-migrated/`) and never changes the sources; an output that is or holds the
   sources, or a target that is a source, is refused (JSC1108). `--in-place` replaces the v1 file and keeps its text as
-  `Name.jsc.v1`, written create-new (an existing file or link is JSC1107); it never replaces a symbolic link (JSC1109).
-  On npm it first copies the v1 build's artifacts of the contract to `build/joust/v1/`, and `joust deploy` keeps each
-  record it replaces under `superseded` in `deployments.<network>.json`.
+  `Name.jsc.v1`, written create-new (an existing file or link is JSC1107); it never replaces a symbolic link, a file with
+  more than one hard link or a file whose path under the sources goes through a link (JSC1109), and writes the new text
+  to a temporary file renamed over the source. Every default-mode target is checked before anything is written: none may
+  lie in the sources or be a source through a link on its path, resolved at its nearest existing ancestor.
+  On npm it first copies the v1 build's artifacts to `build/joust/v1/` (the contract's, by the name the parser reads,
+  and the shared ones), and does not replace the file if that fails; `joust deploy` keeps each record it replaces under
+  `superseded` in `deployments.<network>.json`, and keeps a file of the wrong shape beside the new one.
 - **Recorded deployments** (r13, M1d review S1, F8): the npm CLI, which records deployments, warns at `joust build`
   when a recorded contract is built to another script (by the digest of its script before parameters, so `@Params`
   contracts too), is no longer built, or the record cannot be read. The Gradle path records no deployments: its

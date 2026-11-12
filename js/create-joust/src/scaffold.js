@@ -20,8 +20,8 @@ const JSC_NOTE = `
 **\`.jsc\` 2 is a language preview** (ADR-0018), not to be confused with Cardano's preview network. The language and
 the compiler's output may change before it leaves preview, so the same \`Counter.jsc\` may compile to a different script
 hash in a later JOUST (milestone M1e changes every \`.jsc\` 2 script hash once). Use it on DevKit and testnets, and don't
-deploy it to hold value. A deployed preview contract is rebuilt with the JOUST version recorded for it
-(\`build/joust/joust.lock.json\`).
+deploy it to hold value. A deployed preview contract is rebuilt with the JOUST version recorded for it: each record of
+\`build/joust/deployments.<network>.json\` states it (\`build/\` is ignored: commit that file if you need it later).
 
 \`contracts/app/Counter.abi.json\` beside the contract records how the state and the calls are encoded on chain:
 \`joust build\` fails when the encoding changes (JSC0002), until you accept the change with \`joust build --accept-abi\` and
