@@ -102,6 +102,8 @@ class JscV2AbiTest {
         assertEquals(1, r.code(), r.err());
         assertTrue(r.err().contains("app/Counter.jsc:1:1: error[JSC0003]: no ABI manifest Counter.abi.json"), r.err());
         assertFalse(Files.exists(manifest));
+        // Round r3, security S9: Java whose manifest is refused is not written, so nothing can compile it.
+        assertFalse(Files.exists(out.resolve("app/Counter.java")), "no generated Java for a refused manifest");
         // Accepted: created.
         r = run(src, out, true);
         assertEquals(0, r.code(), r.err());
@@ -116,6 +118,7 @@ class JscV2AbiTest {
         assertTrue(r.err().contains("error[JSC0002]: the ABI manifest Counter.abi.json differs from the committed one at line "), r.err());
         assertTrue(r.err().contains("\"name\": \"ctx\""), r.err());
         assertEquals(committed, Files.readString(manifest));
+        assertFalse(Files.exists(out.resolve("app/Counter.java")), "the stale Java is gone and the refused Java not written");
         // A system property does not accept (only --accept-abi does).
         System.setProperty("joust.acceptAbi", "true");
         try {

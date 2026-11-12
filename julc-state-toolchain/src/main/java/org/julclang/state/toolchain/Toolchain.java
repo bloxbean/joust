@@ -14,6 +14,7 @@ import org.julclang.compiler.OptimizationConfiguration;
 import org.julclang.compiler.OptimizationLevel;
 import org.julclang.compiler.frontend.javac.JavacFrontend;
 import org.julclang.state.dsl.JscMain;
+import org.julclang.state.dsl.v2.AbiCheck;
 import org.julclang.state.processor.JoustGenerators;
 import org.julclang.state.processor.SubsetLint;
 import org.julclang.stdlib.StdlibRegistry;
@@ -158,6 +159,10 @@ public final class Toolchain {
         for (Diagnostic d : diagnostics) {
             String f = d.file() == null ? null : (d.file().startsWith("/") ? d.file() : "/" + d.file());
             Generated g = f == null ? null : byJava.get(f);
+            // A unit named by its path (javac, the processor): its path ends with the generated file's.
+            if (g == null && f != null) {
+                for (Generated x : generated) if (f.endsWith("/" + x.javaFile())) g = x;
+            }
             if (g == null && d.file() != null && !d.file().contains("/") && simpleCount.getOrDefault(d.file(), 0) == 1) g = bySimple.get(d.file());
             if (g == null || "jsc".equals(d.source())) {
                 out.add(d);
@@ -216,7 +221,15 @@ public final class Toolchain {
         //    model to one scoped query: the model is used only inside it, on this thread, and nothing of it (no
         //    Element, TypeMirror or Tree) is kept past it: the query returns plain values (JuLC ADR-068).
         var roots = new ArrayList<JavacFrontend.Unit>();
-        sources.values().forEach(t -> roots.add(JavacFrontend.Unit.of(t)));
+        // Java lowered from a .jsc file is named by its package path, so javac's diagnostics on it name it uniquely
+        // (review F13: two packages may each have a Foo.java) and can be remapped to the .jsc file.
+        var generatedPaths = new java.util.HashSet<String>();
+        for (Generated g : generatedOut) generatedPaths.add(g.javaFile());
+        sources.forEach((name, t) -> {
+            String path = javaPath(t, name);
+            roots.add(name.endsWith(".java") && files.containsKey(name.replaceAll("\\.java$", ".jsc")) && generatedPaths.contains(path)
+                    ? new JavacFrontend.Unit(t, java.nio.file.Path.of(path)) : JavacFrontend.Unit.of(t));
+        });
         var pool = new ArrayList<JavacFrontend.Unit>();
         classpathLibraries.values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
         var generated = new ArrayList<JoustGenerators.Generated>();
@@ -224,7 +237,7 @@ public final class Toolchain {
         boolean attributed = JavacFrontend.shared().attribute(roots, pool, attribution -> {
             for (var d : attribution.result().diagnostics()) {
                 diagnostics.add(new Diagnostic(d.message().startsWith("warning") ? Severity.WARNING : Severity.ERROR, d.message(),
-                        d.fileName(), d.line(), "javac"));
+                        d.fileName(), d.line(), d.column(), "javac"));
             }
             if (!attribution.result().isAccepted() || attribution.trees() == null) return false;
             var env = new AttributedEnvironment(attribution.elements(), attribution.types(), attribution.trees(), options, diagnostics);

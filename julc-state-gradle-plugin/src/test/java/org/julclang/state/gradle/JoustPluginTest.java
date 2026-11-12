@@ -125,6 +125,15 @@ class JoustPluginTest {
         accept.getArgumentProviders().forEach(a -> a.asArguments().forEach(acceptArgs::add));
         assertThat(acceptArgs).endsWith("--accept-abi");
         assertThat(acceptArgs.get(0)).isEqualTo(genArgs.get(0));
+        // Review F12, S10: the manifests are checked against the processor's descriptions after compileJava, in check.
+        JavaExec checkAbi = (JavaExec) p.getTasks().getByName("checkJscAbi");
+        var checkArgs = new java.util.ArrayList<String>();
+        checkAbi.getArgumentProviders().forEach(a -> a.asArguments().forEach(checkArgs::add));
+        assertThat(checkArgs.get(0)).isEqualTo("--check-abi");
+        assertThat(checkArgs.get(1)).isEqualTo(genArgs.get(0));
+        assertThat(checkArgs.get(2).replace('\\', '/')).endsWith("classes/java/main/META-INF/joust");
+        assertThat(checkAbi.getDependsOn()).contains("compileJava");
+        assertThat(p.getTasks().getByName("check").getDependsOn().stream().map(String::valueOf).toList().toString()).contains("checkJscAbi");
     }
 
     // ---- TestKit: a real Gradle build of a project applying the plugin (no dependency resolution needed)

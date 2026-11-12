@@ -11,7 +11,7 @@
 // differs, or is missing, fails unless accepted (--accept-abi: src/abi.js), so an encoding change cannot strand
 // deployed instances.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
 import { loadToolchain } from './toolchain.js';
@@ -49,16 +49,21 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     (d.severity === 'error' ? console.error : log)(`${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${where}${d.message}`);
   }
   const dir = resolve(root, out);
-  // ADR-0018 D12: the generated Java and its source map, on disk as on the Gradle path (also when the build failed).
+  // ADR-0018 D12: the ABI gate first. Accepting is for a build that succeeded only.
+  const refused = new Set();
+  const abiErrors = abiGate({ generated: r.generated ?? [], srcDir: src, root, acceptAbi: r.ok && acceptAbi, log, refused });
+  for (const e of abiErrors) console.error(e);
+  // Then the generated Java and its source map, on disk as on the Gradle path (also when the build failed), from a
+  // clean directory. Java whose manifest was refused is not written, so nothing can compile it (security S9).
+  rmSync(join(dir, 'generated'), { recursive: true, force: true });
   for (const g of r.generated ?? []) {
+    if (refused.has(g.javaFile)) continue;
     const target = join(dir, 'generated', g.javaFile);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, g.java);
     if (g.sourceMap) writeFileSync(target.replace(/\.java$/, '.jscmap.json'), g.sourceMap);
   }
-  if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics };
-  const abiErrors = abiGate({ generated: r.generated ?? [], srcDir: src, root, acceptAbi, log });
-  for (const e of abiErrors) console.error(e);
+  if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics, ...(abiErrors.length ? { abiErrors } : {}) };
   if (abiErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, abiErrors };
   mkdirSync(dir, { recursive: true });
   const bundle = [];

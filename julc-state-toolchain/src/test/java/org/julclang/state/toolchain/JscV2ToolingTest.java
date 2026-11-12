@@ -1,6 +1,7 @@
 package org.julclang.state.toolchain;
 
 import org.julclang.core.types.JulcMap;
+import org.julclang.state.dsl.v2.AbiCheck;
 import org.julclang.state.dsl.v2.JscV2;
 import org.julclang.state.examples.dsl.Ledger;
 import org.junit.jupiter.api.Test;
@@ -85,6 +86,150 @@ class JscV2ToolingTest {
                 .orElseThrow(() -> new AssertionError(r.diagnostics().toString()));
         assertEquals(List.of("app/Counter.jsc", 4L, 1L), List.of(d.file(), d.line(), d.col()), d.toString());
         assertTrue(d.message().contains("(in the Java generated from app/Counter.jsc: app/Counter.java:"), d.message());
+    }
+
+    static Toolchain.Result jsc(String name, String body) {
+        return Toolchain.build(Map.of("probe/" + name + ".jsc", "jsc 2\npackage probe\n" + body + "\n"), Map.of());
+    }
+
+    static void builds(String name, String body) {
+        var r = jsc(name, body);
+        assertTrue(r.ok(), name + ": " + r.diagnostics());
+    }
+
+    /** Round r3, Codex C5: a type no datum or redeemer reaches is not part of the ABI, so the check does not need it. */
+    @Test
+    void typesUsedOnlyInsideMethods_doNotFailTheCheck() {
+        builds("LocalRecord", "type R = { x: Int }\ncontract LocalRecord {\n state { n: Int }\n init() { return { n: 0 } }\n"
+                + " action inc() {\n const v = R { x: n + 1 }\n return { n: v.x }\n }\n}");
+        builds("UnusedRecord", "type R = { x: Int }\ncontract UnusedRecord {\n state { n: Int }\n init() { return { n: 0 } }\n}");
+        builds("LocalEnum", "enum E { A, B { x: Int } }\ncontract LocalEnum {\n state { n: Int }\n init() { return { n: 0 } }\n"
+                + " action inc(k: Int) {\n const e: E = k > 0 ? B { x: k } : A\n return { n: match e { A => 0, B { x } => x } }\n }\n}");
+        builds("ViewRecord", "type R = { x: Int }\ncontract ViewRecord {\n state { n: Int }\n init() { return { n: 0 } }\n"
+                + " view v(): R = R { x: n }\n}");
+        // A reached schema the description lacks is still a difference: here the manifest names R, the description not.
+        var r = jsc("Reached", "type R = { x: Int }\ncontract Reached {\n state { r: R }\n init() { return { r: R { x: 0 } } }\n}");
+        assertTrue(r.ok(), r.diagnostics().toString());
+        String abi = r.generated().get(0).abiJson();
+        String desc = r.contracts().get(0).descriptionJson().replace("\"probe.Reached.R\"", "\"probe.Reached.Gone\"");
+        assertTrue(AbiCheck.compare(abi, desc, "probe", "Reached").stream().anyMatch(p -> p.contains("probe.Reached.R")),
+                AbiCheck.compare(abi, desc, "probe", "Reached").toString());
+        // And an API type the description lacks (security S10): refused, not skipped.
+        var withCtx = jsc("WithCtx", "contract WithCtx {\n state { owner: Key }\n init() { return { owner: caller } }\n}");
+        String noCtx = withCtx.contracts().get(0).descriptionJson().replace("\"org.julclang.state.api.Ctx\"", "\"org.julclang.state.api.Gone\"");
+        assertFalse(AbiCheck.compare(withCtx.generated().get(0).abiJson(), noCtx, "probe", "WithCtx").isEmpty());
+    }
+
+    /** Round r3, Codex C7: shapes are compared as structures, so a type name holding "bytes28" is left alone. */
+    @Test
+    void typeNamesAreNeverRewritten() {
+        builds("TypeNormalization", "type Wrapperbytes28 = { x: Int }\ncontract TypeNormalization {\n state { v: Wrapperbytes28,"
+                + " vs: List<Wrapperbytes28>, o: Option<Wrapperbytes28>, m: Map<Bytes, Wrapperbytes28> }\n"
+                + " init() { return { v: Wrapperbytes28 { x: 0 }, vs: [], o: None, m: Map.empty() } }\n"
+                + " action inc() { return { ...state, v: Wrapperbytes28 { x: v.x + 1 } } }\n}");
+    }
+
+    /** A JSON writer for the tests that mutate a description. */
+    @SuppressWarnings("unchecked")
+    static String json(Object v) {
+        if (v instanceof Map<?, ?> m) {
+            var parts = new java.util.ArrayList<String>();
+            ((Map<String, Object>) m).forEach((k, x) -> parts.add(json(k) + ":" + json(x)));
+            return "{" + String.join(",", parts) + "}";
+        }
+        if (v instanceof List<?> l) return "[" + String.join(",", l.stream().map(JscV2ToolingTest::json).toList()) + "]";
+        if (v instanceof String str) return "\"" + str.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+        return String.valueOf(v);
+    }
+
+    /** Applies {@code change} to every alternative list whose first alternative is titled {@code first}; returns how many. */
+    @SuppressWarnings("unchecked")
+    static int mutate(Object node, String first, java.util.function.Consumer<List<Object>> change) {
+        int n = 0;
+        if (node instanceof Map<?, ?> m) {
+            if (m.get("anyOf") instanceof List<?> any && !any.isEmpty() && any.get(0) instanceof Map<?, ?> a && first.equals(a.get("title"))) {
+                change.accept((List<Object>) any);
+                n++;
+            }
+            for (Object x : m.values()) n += mutate(x, first, change);
+        } else if (node instanceof List<?> l) {
+            for (Object x : l) n += mutate(x, first, change);
+        }
+        return n;
+    }
+
+    /** Round r3, Codex C6: a Bool or an Option is compared exactly (indices and layouts), nested ones included. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void boolAndOptionSchemas_areComparedExactly() {
+        var r = jsc("ShapeAbi", "type Box = { b: Bool, o: Option<Int> }\ncontract ShapeAbi {\n state { flag: Bool, n: Option<Int>,"
+                + " flags: List<Bool>, opts: Map<Bytes, Option<Bool>>, box: Box }\n"
+                + " init() { return { flag: false, n: None, flags: [], opts: Map.empty(), box: Box { b: true, o: None } } }\n"
+                + " action set(f: Bool, o: Option<Int>) { return { ...state, flag: f, n: o } }\n}");
+        assertTrue(r.ok(), r.diagnostics().toString());
+        String abi = r.generated().get(0).abiJson(), desc = r.contracts().get(0).descriptionJson();
+        assertEquals(List.of(), AbiCheck.compare(abi, desc, "probe", "ShapeAbi"));
+        java.util.function.Function<java.util.function.Consumer<List<Object>>, List<String>> after = (change) -> {
+            Object d = AbiCheck.Json.parse(desc);
+            mutate(d, "False", change);
+            mutate(d, "Some", change);
+            return AbiCheck.compare(abi, json(d), "probe", "ShapeAbi");
+        };
+        // Swapped indices.
+        var swapped = after.apply(any -> {
+            var a = (Map<String, Object>) any.get(0);
+            var b = (Map<String, Object>) any.get(1);
+            Object i = a.get("index");
+            a.put("index", b.get("index"));
+            b.put("index", i);
+        });
+        assertTrue(swapped.size() >= 6, "every Bool and Option, nested in lists, maps and records too: " + swapped);
+        // A field added to None / False.
+        var layout = after.apply(any -> ((Map<String, Object>) any.get(1)).put("fields", List.of(Map.of("dataType", "integer"))));
+        assertTrue(layout.size() >= 6, layout.toString());
+    }
+
+    /** Round r3, design F13: the remap tells two packages' Foo.java apart, and carries javac's column elsewhere. */
+    @Test
+    void javacErrors_inSameNamedFilesOfTwoPackages_landOnTheRightJscFile() {
+        var files = new LinkedHashMap<String, String>();
+        files.put("app/Dup.java", "package app;\nclass Foo {}\n");
+        files.put("app/Foo.jsc", "jsc 2\npackage app\n\ncontract Foo {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n");
+        files.put("other/Foo.jsc", "jsc 2\npackage other\n\ncontract Foo {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n");
+        var r = Toolchain.build(files, Map.of());
+        var d = r.diagnostics().stream().filter(x -> "javac".equals(x.source()) && x.message().contains("duplicate class")).findFirst()
+                .orElseThrow(() -> new AssertionError(r.diagnostics().toString()));
+        assertEquals(List.of("app/Foo.jsc", 4L, 1L), List.of(d.file(), d.line(), d.col()), d.toString());
+        // A javac error in hand-written Java keeps javac's column.
+        var bad = Toolchain.build(Map.of("app/Bad.java", "package app;\nclass Bad { int x = y; }\n"), Map.of());
+        var e = bad.diagnostics().stream().filter(x -> "javac".equals(x.source())).findFirst().orElseThrow(() -> new AssertionError(bad.diagnostics().toString()));
+        assertTrue(e.col() > 0, e.toString());
+    }
+
+    /** Round r3, design F12, security S10: the Gradle path's check (JscMain --check-abi), against Gradle's descriptions. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void theGradlePathsCheck_agreesWithGradlesDescriptions_andCatchesADifference(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        Path described = Path.of("../examples/dsl/build/classes/java/main/META-INF/joust");
+        Path src = Path.of("../examples/dsl/src/main/jsc");
+        assertEquals(0, org.julclang.state.dsl.JscMain.run(new String[]{"--check-abi", src.toString(), described.toString()}));
+        // A description whose Close redeemer lost its ctx: the check fails (JSC0004).
+        try (var s = Files.list(described)) {
+            for (Path f : s.toList()) Files.writeString(dir.resolve(f.getFileName()), Files.readString(f));
+        }
+        Path ledger = dir.resolve("org.julclang.state.examples.dsl.Ledger.json");
+        Object d = AbiCheck.Json.parse(Files.readString(ledger));
+        assertEquals(1, mutate(d, "Pause", any -> ((Map<String, Object>) any.get(5)).put("index", 6)), "the Calls schema, Settle at 5");
+        Files.writeString(ledger, json(d));
+        var err = new java.io.ByteArrayOutputStream();
+        var old = System.err;
+        System.setErr(new java.io.PrintStream(err, true));
+        try {
+            assertEquals(1, org.julclang.state.dsl.JscMain.run(new String[]{"--check-abi", src.toString(), dir.toString()}));
+        } finally {
+            System.setErr(old);
+        }
+        assertTrue(err.toString().contains("Ledger.jsc:1:1: error[JSC0004]"), err.toString());
     }
 
     /** Review F7: until J19's build report, each example stays below the runtime's 15,000-byte reference-script limit. */

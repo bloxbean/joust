@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { abiGate, firstDifference } from '../src/abi.js';
+import { build } from '../src/build.js';
 
 const abi = (n) => `{\n  "abi": 2,\n  "datum": { "name": "State", "constr": 0, "fields": [${'x'.repeat(n)}] }\n}\n`;
 
@@ -55,6 +56,49 @@ test('only a true acceptAbi accepts: a string "false", undefined or 0 does not',
     const root = project();
     writeFileSync(manifest(root), abi(1));
     assert.equal(abiGate({ generated: generated(abi(2)), srcDir: 'contracts', root, acceptAbi: flag, log: () => {} }).length, 1);
+  }
+});
+
+test('a refused manifest names its Java in `refused`; an accepted or equal one does not', () => {
+  const root = project();
+  const refused = new Set();
+  abiGate({ generated: generated(abi(1)), srcDir: 'contracts', root, log: () => {}, refused });
+  assert.deepEqual([...refused], ['app/Counter.java']);
+  const none = new Set();
+  abiGate({ generated: generated(abi(1)), srcDir: 'contracts', root, acceptAbi: true, log: () => {}, refused: none });
+  abiGate({ generated: generated(abi(1)), srcDir: 'contracts', root, log: () => {}, refused: none });
+  assert.deepEqual([...none], []);
+});
+
+// Security S9 (review r3): joust build writes no Java whose manifest was refused, and leaves none from an earlier build.
+test('joust build: Java whose manifest is refused is not on disk', async () => {
+  const root = project();
+  const pkg = join('org', 'julclang', 'state', 'examples', 'dsl');
+  const jsc = readFileSync(new URL('../../../examples/dsl/src/main/jsc/' + pkg + '/Counter2.jsc', import.meta.url), 'utf8');
+  mkdirSync(join(root, 'contracts', pkg), { recursive: true });
+  writeFileSync(join(root, 'contracts', pkg, 'Counter2.jsc'), jsc);
+  const java = join(root, 'build', 'joust', 'generated', pkg, 'Counter2.java');
+  mkdirSync(join(java, '..'), { recursive: true });
+  writeFileSync(java, '// from an earlier build');
+  const quiet = { root, log: () => {} };
+  const error = console.error;
+  console.error = () => {};
+  try {
+    const missing = await build(quiet);
+    assert.equal(missing.ok, false);
+    assert.match(missing.abiErrors[0], /^error\[JSC0003\]/);
+    assert.equal(existsSync(java), false, 'no Java for a missing manifest, not even an earlier build\'s');
+    const accepted = await build({ ...quiet, acceptAbi: true });   // the control: an accepted manifest writes the Java
+    assert.equal(accepted.ok, true);
+    assert.match(readFileSync(java, 'utf8'), /Counter2/);
+    const manifest = join(root, 'contracts', pkg, 'Counter2.abi.json');
+    writeFileSync(manifest, readFileSync(manifest, 'utf8').replace('"Increment"', '"Bump"'));
+    const changed = await build(quiet);
+    assert.equal(changed.ok, false);
+    assert.match(changed.abiErrors[0], /^error\[JSC0002\]/);
+    assert.equal(existsSync(java), false, 'no Java for a changed manifest');
+  } finally {
+    console.error = error;
   }
 });
 

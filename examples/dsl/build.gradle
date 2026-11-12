@@ -37,6 +37,18 @@ tasks.register('acceptJscAbi', JavaExec) {
     mainClass = 'org.julclang.state.dsl.JscMain'
     args jscSrc.path, layout.buildDirectory.dir('tmp/acceptJscAbi').get().asFile.path, '--accept-abi'
 }
+// Review F12, S10: after compileJava, every manifest is checked against the processor's description (JSC0004).
+def checkJscAbi = tasks.register('checkJscAbi', JavaExec) {
+    description = 'Checks the ABI manifests of src/main/jsc/**/*.jsc against the processor\'s descriptions'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    dependsOn 'compileJava'
+    def described = layout.buildDirectory.dir('classes/java/main/META-INF/joust')
+    inputs.dir(jscSrc)
+    inputs.dir(described)
+    args '--check-abi', jscSrc.path, described.get().asFile.path
+}
+tasks.named('check') { dependsOn checkJscAbi }
 sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
 
 // ADR-0018 M0: Option through the portable codecs (ADR-0013 D4, experimental) is checked on the .jsc 2 contracts.

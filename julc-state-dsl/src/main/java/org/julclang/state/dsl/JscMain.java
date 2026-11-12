@@ -107,6 +107,44 @@ public final class JscMain {
         return "(whitespace only)";
     }
 
+    /**
+     * {@code JscMain --check-abi <srcDir> <descriptionsDir>} (Gradle's {@code checkJscAbi}, after {@code compileJava};
+     * review F12, S10): every {@code .jsc} 2 file's ABI manifest checked against the processor's description of its
+     * contract ({@code <descriptionsDir>/<package>.<Contract>.json}), as the toolchain checks it at every build
+     * (JSC0004). 0 when all agree.
+     */
+    public static int checkAgainstDescriptions(Path src, Path descriptions) throws IOException {
+        List<Path> files = new ArrayList<>();
+        if (Files.isDirectory(src)) {
+            try (Stream<Path> s = Files.walk(src)) {
+                s.filter(p -> p.toString().endsWith(".jsc")).sorted().forEach(files::add);
+            }
+        }
+        int errors = 0, checked = 0;
+        for (Path f : files) {
+            String text = Files.readString(f);
+            if (!org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
+            String name = src.relativize(f).toString();
+            var lowered = org.julclang.state.dsl.v2.JscV2.lower(text, f.getFileName().toString());
+            String path = lowered.javaPath();
+            String pkg = path.contains("/") ? path.substring(0, path.lastIndexOf('/')).replace('/', '.') : "";
+            String contract = path.substring(path.lastIndexOf('/') + 1).replace(".java", "");
+            Path description = descriptions.resolve(pkg + "." + contract + ".json");
+            List<String> problems = Files.exists(description)
+                    ? org.julclang.state.dsl.v2.AbiCheck.compare(lowered.abiJson(), Files.readString(description), pkg, contract)
+                    : List.of("the processor wrote no description " + description.getFileName());
+            for (String p : problems) {
+                System.err.println(name + ":1:1: error[JSC0004]: the ABI manifest of " + contract + " disagrees with the processor's"
+                        + " encoding: " + p + " (an internal error of the .jsc lowering: please report it)");
+            }
+            if (!problems.isEmpty()) errors++;
+            checked++;
+        }
+        if (errors > 0) return 1;
+        System.out.println("jsc: " + checked + " ABI manifest(s) agree with the processor's descriptions");
+        return 0;
+    }
+
     public static void main(String[] args) throws IOException {
         int code = run(args);
         if (code != 0) System.exit(code);
@@ -117,6 +155,7 @@ public final class JscMain {
      * {@code .jsc} 2 manifest is accepted, 1 on an error, 2 on a usage error.
      */
     public static int run(String[] args) throws IOException {
+        if (args.length == 3 && args[0].equals("--check-abi")) return checkAgainstDescriptions(Path.of(args[1]), Path.of(args[2]));
         boolean accept = args.length == 3 && args[2].equals("--accept-abi");
         if (args.length != 2 && !accept) {
             System.err.println("usage: JscMain <srcDir> <outDir> [--accept-abi]");
@@ -150,19 +189,23 @@ public final class JscMain {
                     throw new JscException(1, 1, "another .jsc file already generates " + outputPath(text));
                 }
                 written.add(target);
-                Files.createDirectories(target.getParent());
-                Files.writeString(target, java);
-                if (lowered.sourceMapJson() != null) {
-                    // ADR-0018 D12: the source map beside the generated Java (javac compiles only *.java), and the ABI
-                    // manifest beside the .jsc file, where the project commits it.
-                    Files.writeString(target.resolveSibling(target.getFileName().toString().replace(".java", ".jscmap.json")),
-                            lowered.sourceMapJson());
+                if (lowered.abiJson() != null) {
+                    // ADR-0018 D12: the ABI manifest is committed beside the .jsc file. Checked first: Java whose
+                    // manifest is refused is not written, so nothing can compile it (security S9).
                     String refused = checkAbi(f.resolveSibling(target.getFileName().toString().replace(".java", ".abi.json")), lowered.abiJson(),
                             name, accept);
                     if (refused != null) {
                         System.err.println(refused);
                         errors++;
+                        continue;
                     }
+                }
+                Files.createDirectories(target.getParent());
+                Files.writeString(target, java);
+                if (lowered.sourceMapJson() != null) {
+                    // The source map beside the generated Java (javac compiles only *.java).
+                    Files.writeString(target.resolveSibling(target.getFileName().toString().replace(".java", ".jscmap.json")),
+                            lowered.sourceMapJson());
                 }
             } catch (JscException e) {
                 System.err.println(e.format(name));

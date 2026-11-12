@@ -19,9 +19,11 @@ export function firstDifference(committed, now) {
 
 /**
  * Checks (and with acceptAbi writes) the manifests of `generated` (the engine's: { jscFile, javaFile, abi }), the
- * .jsc files being under `srcDir`. Returns the errors, as lines; logs what it wrote.
+ * .jsc files being under `srcDir`. Returns the errors, as lines; logs what it wrote. Adds the javaFile of each refused
+ * manifest to `refused`: the build does not write that Java (security S9).
  */
-export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAbi = false, log = console.log }) {
+export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAbi = false, log = console.log,
+  refused = new Set() }) {
   const errors = [];
   for (const g of generated) {
     if (!g.abi) continue;   // .jsc v1: no manifest
@@ -34,6 +36,7 @@ export function abiGate({ generated = [], srcDir, root = process.cwd(), acceptAb
       log(`${relative(root, committed)}: ${exists ? 'accepted the changed' : 'created the'} ABI manifest; commit it beside the .jsc file`);
       continue;
     }
+    refused.add(g.javaFile);
     errors.push(exists
       ? `error[JSC0002]: ${g.jscFile}: the ABI manifest ${relative(root, committed)} differs from the committed one at `
         + `${firstDifference(old, g.abi)}: a datum or redeemer encoding changed, which strands deployed instances; if the change is `
