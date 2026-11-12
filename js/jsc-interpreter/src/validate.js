@@ -201,9 +201,14 @@ export function validate(p) {
     for (const b of bs) {
       keys(b, ['cond', 'then', 'at'], where);
       expr(b.cond, scope);
+      bool(b.cond, where, 'a branch condition');
       block(b.then, where, scope);
       at(b.at, where);
     }
+  };
+  /** A condition or a boolean operand is of type Bool (review S3 on #76): the interpreter never tests truthiness. */
+  const bool = (e, where, what) => {
+    if (e.type !== 'Bool') fail(where, `${what} is of type ${JSON.stringify(e.type)}, not Bool`);
   };
   /** A node's own fields; bindings it introduces (a loop variable, lambda parameters) are in scope in its blocks only. */
   const fields = (o, spec, where, scope) => {
@@ -250,6 +255,9 @@ export function validate(p) {
       else if (['Bytes', 'Key', 'Hash'].includes(e.type)) { if (typeof v !== 'string' || !HEX_RE.test(v)) fail(where, 'not lower-case hex'); }
       else fail(where, `a literal of type ${JSON.stringify(e.type)}`);
     }
+    if (e.node === 'Cond') bool(e.cond, where, 'a condition');
+    if (e.node === 'Logic') { bool(e.left, where, 'an operand'); bool(e.right, where, 'an operand'); }
+    if (e.node === 'Not') bool(e.operand, where, 'an operand');
     if (e.node === 'CallStd' && !(ROWS[e.module] ?? []).includes(e.name)) fail(where, `unknown std row ${e.module}.${e.name}`);
     if ((e.node === 'New' || e.node === 'GetField') && !shapes.has(e.record)) fail(where, `no record ${e.record}`);
     if (e.node === 'Variant' && !(enums.get(e.enum) ?? []).includes(e.variant)) fail(where, `no variant ${e.enum}.${e.variant}`);
@@ -272,6 +280,7 @@ export function validate(p) {
     const where = `${s.stmt} at ${s.at}`;
     keys(s, ['stmt', ...Object.keys(spec), 'at'], where);
     fields(s, spec, where, scope);
+    if (s.stmt === 'Require') bool(s.cond, where, 'a require condition');
     at(s.at, where);
   }
   const fnNames = new Set();
