@@ -206,6 +206,15 @@ class JscV2ToolingTest {
         assertTrue(e.col() > 0, e.toString());
     }
 
+    /** Round r4, design F15: an error in hand-written Java names the file it is in, not its class. */
+    @Test
+    void javacErrors_inHandWrittenJava_nameTheFileNotTheClass() {
+        var r = Toolchain.build(Map.of("other/Zed.java", "package other;\nclass Foo { int x = y; }\n"), Map.of());
+        var e = r.diagnostics().stream().filter(x -> "javac".equals(x.source())).findFirst().orElseThrow(() -> new AssertionError(r.diagnostics().toString()));
+        assertEquals(List.of("other/Zed.java", 2L), List.of(e.file(), e.line()), e.toString());
+        assertTrue(e.col() > 0, e.toString());
+    }
+
     /** Round r3, design F12, security S10: the Gradle path's check (JscMain --check-abi), against Gradle's descriptions. */
     @Test
     @SuppressWarnings("unchecked")

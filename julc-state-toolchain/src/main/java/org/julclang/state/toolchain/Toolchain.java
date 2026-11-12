@@ -225,10 +225,12 @@ public final class Toolchain {
         // (review F13: two packages may each have a Foo.java) and can be remapped to the .jsc file.
         var generatedPaths = new java.util.HashSet<String>();
         for (Generated g : generatedOut) generatedPaths.add(g.javaFile());
+        // Hand-written Java is named by the path the build was given (review F15: other/Zed.java declaring Foo is
+        // reported as other/Zed.java, not Foo.java).
         sources.forEach((name, t) -> {
             String path = javaPath(t, name);
-            roots.add(name.endsWith(".java") && files.containsKey(name.replaceAll("\\.java$", ".jsc")) && generatedPaths.contains(path)
-                    ? new JavacFrontend.Unit(t, java.nio.file.Path.of(path)) : JavacFrontend.Unit.of(t));
+            boolean lowered = name.endsWith(".java") && files.containsKey(name.replaceAll("\\.java$", ".jsc")) && generatedPaths.contains(path);
+            roots.add(new JavacFrontend.Unit(t, java.nio.file.Path.of(lowered ? path : name)));
         });
         var pool = new ArrayList<JavacFrontend.Unit>();
         classpathLibraries.values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
