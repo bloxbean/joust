@@ -132,6 +132,20 @@ Design and security approved r2 with P3s; Codex's C2–C4 were open. What change
 - **Differential coverage** (F11): 260 of 342 programs migrate (Gen1 160, Gen2 100; JSC1106 71), 26,000 calls agree,
   1,005 actions pay out; the eight mutants are still caught.
 
+## Review round r4
+
+Design and security approved r3; Codex's C5 (P2) and C6, S8, F12, F13 (P3):
+
+- **Outputs by rename** (Codex C5): default-mode outputs are written to a new file and renamed over the target on both
+  paths, so a target's inode is never written; an existing target that is a source by identity (a hard link), or has
+  more than one link, is refused before anything is written.
+- **Temporary files** (C6): npm's have a unique name, and only a file the call created is removed.
+- **A file argument in a linked directory** (security S8): refused in place on the JVM.
+- **The minus note** (design F12): the parser records each member's lines; the note looks within the failing member,
+  backward first, then forward (N1, a value block whose error is found at its start, gets it again).
+- **Engine versions** (F13): stamped into a generated class at build time; the Wasm test and the npm test check that a
+  built engine does not report `dev`.
+
 ## Not in M1d
 
 A deployments record on the Gradle path (it has none; ADR-0018 r13 D16 narrows the stale warning to npm); a language
