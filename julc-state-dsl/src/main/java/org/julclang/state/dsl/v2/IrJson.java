@@ -34,11 +34,26 @@ final class IrJson {
 
     // ------------------------------------------------------------------ writing
 
-    static String write(Ir.Program p) {
+    /** The lower-case hex SHA-256 of a {@code .jsc} source's UTF-8 text, which the export carries (review S3). */
+    static String sourceHash(String source) {
+        try {
+            return HEX.formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(source.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * The export of {@code p}, checked from the source whose SHA-256 is {@code sourceSha256} (so a consumer can tell
+     * which source an IR file belongs to, and refuse a stale one).
+     */
+    static String write(Ir.Program p, String sourceSha256) {
+        if (!sourceSha256.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("not a SHA-256: " + sourceSha256);
         var w = new Writer();
         var out = new LinkedHashMap<String, Object>();
         out.put("ir", VERSION);
         out.put("language", "jsc 2");
+        out.put("sourceSha256", sourceSha256);
         out.put("package", p.pkg());
         out.put("contract", p.name());
         out.put("source", p.fileName());
@@ -331,13 +346,22 @@ final class IrJson {
 
     // ------------------------------------------------------------------ reading
 
-    /** Rebuilds the program; refuses another format version and any node it does not know. */
+    /**
+     * Rebuilds the program. Strict, like the JavaScript reader (review S3): another format version, a duplicate key, a
+     * number that is not a plain integer, an unknown node, a reference to an undeclared local are all refused.
+     */
     @SuppressWarnings("unchecked")
     static Ir.Program read(String json) {
-        var root = (Map<String, Object>) AbiCheck.Json.parse(json);
+        var root = (Map<String, Object>) AbiCheck.Json.parseStrict(json);
         Object v = root.get("ir");
         if (!(v instanceof Long n) || n != VERSION) throw new IllegalArgumentException("not a version " + VERSION + " IR export: \"ir\": " + v);
         return new Reader().program(root);
+    }
+
+    /** The source hash an export carries. */
+    @SuppressWarnings("unchecked")
+    static String sourceHashOf(String json) {
+        return (String) ((Map<String, Object>) AbiCheck.Json.parseStrict(json)).get("sourceSha256");
     }
 
     @SuppressWarnings("unchecked")

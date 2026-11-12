@@ -1,6 +1,7 @@
 {
   "ir": 1,
   "language": "jsc 2",
+  "sourceSha256": "f8f16a7dcf11aa2802a91968697e75ffa6197d3834a45644c44f862438a48488",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Bounds",
   "source": "Bounds.jsc",

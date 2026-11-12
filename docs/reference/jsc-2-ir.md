@@ -25,13 +25,40 @@ shadowing, effect legality, time taints (D11) and the BigMap flow rules. A secon
 differential tests for every refusal, which is J5's territory, and the two would drift. Second, D15's independence
 concerns evaluation. The JavaScript interpreter shares nothing with the Java code except this file. It has its own
 values, arithmetic, equality, map order, checked inputs, standard library, hashes and Ed25519, all written from the
-semantics document. A defect of the checker that changes the IR is caught elsewhere, by the lowering's own legs (JVM,
-transition program, validator): all of them, and both interpreters, read the same checked program.
+semantics document. The cost: every leg reads the same checked program, so a defect of the checker that changes the IR
+reaches every leg alike, and no differential test can see it. The semantics' hand-written vectors and the hand-stated
+outcomes of the differential tests guard against that, as they do for M0's Java interpreter (review F17). And the
+JavaScript reader recomputes the two checker decisions it can state from the semantics alone, refusing an IR that
+disagrees (below).
 
 ## Stability
 
-`"ir"` is the format version. Version 1 is described here. A change to a node's fields or meaning gets a new version,
-and readers refuse versions they do not know (`IrJson.read`, and the JavaScript `load`). Output is deterministic:
+`"ir"` is the format version, exactly the integer 1 here. Readers refuse versions they do not know (`IrJson.read`,
+and the JavaScript `load`).
+
+**What a version-1 reader refuses, and so what may change without a new version.** Both readers are strict: a duplicate
+key, a number that is not a plain integer, an integer literal that is not decimal, bytes that are not lower-case hex, a
+local referenced before it is declared or declared twice. The JavaScript reader also validates the whole program at
+load, before anything runs: an unknown node or statement kind, field, operator, modifier name (`payable`, `open`,
+`only`, `after`, `before`), method kind, `std` row or type is refused there. So a change is **additive** when an old
+reader refuses every program that uses it, at load, rather than misreading it: a new node kind, a new modifier (M1c's
+`batched`), a new `std` row or a new type, each with fields of its own. Additive changes keep version 1. A change to
+an existing node's fields, to the meaning of an existing node, operator, modifier or row, or to the program's top-level
+fields gets a new version.
+
+**Two checker decisions are checked again.** The JavaScript reader recomputes each method's `checked` list (§4 of the
+semantics: the parameters, of an init, action or destroy, whose types hold a `Key`, a `Hash` or a `Map` anywhere) and
+its `usesCtx` (a destroy; a modifier other than `open` and `only`; or a `CtxRef`, `TimePred` or `std/time` call in the
+body), and refuses an IR that disagrees: a checker defect there becomes a refused load, not an agreement of every leg.
+
+**The source it came from.** `sourceSha256` is the SHA-256 of the `.jsc` file's UTF-8 text. A consumer that holds the
+source (M1d's `joust check`) should lower it in process or compare the hash, and refuse a stale export.
+
+**Not the language server's model.** The export is the checked program for evaluation. It is not ADR-0021's document
+model (its own `modelVersion`, spans and error recovery), which reads the IR in process; the two should not grow around
+one file.
+
+Output is deterministic:
 fields in a fixed order, sets sorted, and each local's id is the checker's sequence number, unique in a program. The
 export is lossless. `JscV2IrTest` reads every example back, writes it again and gets the same text. It also lowers
 the program read back to the same Java and the same ABI manifest, and checks that the examples use every node.
@@ -42,6 +69,7 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 {
   "ir": 1,
   "language": "jsc 2",
+  "sourceSha256": "<64 hex digits>",
   "package": "org.example",
   "contract": "Counter2",
   "source": "Counter2.jsc",
@@ -128,5 +156,7 @@ The differential tests pass calls to the JavaScript interpreter as JSON, in a ta
 | `BigMap` | `{ "bigmap": [[k, v]…] }`: its contents (*now*), in canonical order |
 
 A call is `{ "method", "state": v|null, "args": [v…], "tx": { "caller", "received", "balance", "validFrom",
-"validTo" }|null }`, with `caller` as hex and the other fields as decimal strings. An answer is `{ "refused": message }`
-or `{ "ok": { "value": v|null, "payouts": [{ "to": hex, "lovelace": "n" }…] } }`.
+"validTo" }|null }`, with `caller` as hex and the other fields as decimal strings. An answer is
+`{ "refused": message, "class": "kind:detail" }` (semantics §2.5),
+`{ "ok": { "value": v|null, "payouts": [{ "to": hex, "lovelace": "n" }…] } }`, or `{ "limit": message }` when the
+interpreter could not finish (semantics §2.4: no answer, a failure of that leg).

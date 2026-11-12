@@ -1,6 +1,9 @@
 // The std rows (docs/reference/jsc-2-semantics.md §3.10, ADR-0018 D8): each fails exactly outside its domain.
 
 import { NONE, Refused, some, hex, toUnsigned, unsignedBytes } from './values.js';
+
+/** A domain failure of a row (its class is domain:<row>). */
+const out = (row, message) => new Refused(message, 'domain', row);
 import { sha256 } from './crypto/sha2.js';
 import { sha3_256 } from './crypto/sha3.js';
 import { blake2b } from './crypto/blake2b.js';
@@ -10,7 +13,7 @@ const TWO_31 = 2n ** 31n;
 
 /** n in [0, 2^31), else a failure naming the row. */
 function index(row, what, n) {
-  if (n < 0n || n >= TWO_31) throw new Refused(`${row}: ${what} must be in [0, 2^31)`);
+  if (n < 0n || n >= TWO_31) throw out(row, `${row}: ${what} must be in [0, 2^31)`);
   return Number(n);
 }
 
@@ -73,8 +76,8 @@ export function applyStd(name, args, { same, elemType, tx }) {
     case 'blake2b_256': return blake2b(a, 32);
     case 'blake2b_224': return blake2b(a, 28);
     case 'verifyEd25519':
-      if (a.length !== 32) throw new Refused('verifyEd25519: the key must be 32 bytes');
-      if (c.length !== 64) throw new Refused('verifyEd25519: the signature must be 64 bytes');
+      if (a.length !== 32) throw out('verifyEd25519', 'verifyEd25519: the key must be 32 bytes');
+      if (c.length !== 64) throw out('verifyEd25519', 'verifyEd25519: the signature must be 64 bytes');
       return verifyEd25519(a, b, c);
     // std/bytes
     case 'length': return BigInt(a.length);
@@ -92,8 +95,8 @@ export function applyStd(name, args, { same, elemType, tx }) {
     case 'take': return a.slice(0, Math.min(index('take', 'n', b), a.length));
     case 'drop': return a.slice(Math.min(index('drop', 'n', b), a.length));
     case 'byteAt': {
-      const i = index('at', 'index', b);
-      if (i >= a.length) throw new Refused('at: index past the end');
+      const i = index('byteAt', 'index', b);
+      if (i >= a.length) throw out('byteAt', 'byteAt: index past the end');
       return BigInt(a[i]);
     }
     case 'toInt': return toUnsigned(a);
@@ -101,15 +104,15 @@ export function applyStd(name, args, { same, elemType, tx }) {
     // std/math
     case 'div':
     case 'mod': {
-      if (b === 0n) throw new Refused(`${name}: division by zero`);
+      if (b === 0n) throw out(name, `${name}: division by zero`);
       return floorDivMod(a, b)[name === 'div' ? 0 : 1];
     }
     case 'pow':
-      if (b < 0n || b > 1024n) throw new Refused('pow: the exponent must be in [0, 1024]');
+      if (b < 0n || b > 1024n) throw out('pow', 'pow: the exponent must be in [0, 1024]');
       return a ** b;
     case 'expMod': {
-      if (b < 0n) throw new Refused('expMod: the exponent must not be negative');
-      if (c <= 0n) throw new Refused('expMod: the modulus must be positive');
+      if (b < 0n) throw out('expMod', 'expMod: the exponent must not be negative');
+      if (c <= 0n) throw out('expMod', 'expMod: the modulus must be positive');
       let r = 1n % c, base = ((a % c) + c) % c, e = b;
       while (e > 0n) {
         if (e & 1n) r = (r * base) % c;
@@ -126,12 +129,12 @@ export function applyStd(name, args, { same, elemType, tx }) {
     case 'complement': return a.map((x) => ~x & 0xff);
     case 'readBit': {
       const i = index('readBit', 'index', b);
-      if (i >= 8 * a.length) throw new Refused('readBit: index past the end');
+      if (i >= 8 * a.length) throw out('readBit', 'readBit: index past the end');
       return ((a[a.length - 1 - (i >> 3)] >> (i & 7)) & 1) === 1;
     }
     case 'shift':
     case 'rotate':
-      if (b <= -TWO_31 || b >= TWO_31) throw new Refused(`${name}: n must be in (-2^31, 2^31)`);
+      if (b <= -TWO_31 || b >= TWO_31) throw out(name, `${name}: n must be in (-2^31, 2^31)`);
       return shiftOrRotate(a, b, name === 'rotate');
     case 'countSetBits': return BigInt(popcount(a));
     case 'findFirstSetBit': {
@@ -143,7 +146,7 @@ export function applyStd(name, args, { same, elemType, tx }) {
     // std/list
     case 'last': return a.length === 0 ? NONE : some(a[a.length - 1]);
     case 'nth':
-      if (b < 0n) throw new Refused('nth: a negative index');
+      if (b < 0n) throw out('nth', 'nth: a negative index');
       return b >= BigInt(a.length) ? NONE : some(a[Number(b)]);
     case 'indexOf': {
       for (let i = 0; i < a.length; i++) if (same(a[i], b, elemType)) return some(BigInt(i));

@@ -78,7 +78,7 @@ public final class JscV2 {
         String java = JavaEmitter.emit(p);
         String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";
         return new Lowered(java, warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(java, fileName, javaPath), Abi.of(p),
-                IrJson.write(p));
+                IrJson.write(p, IrJson.sourceHash(source)));
     }
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */

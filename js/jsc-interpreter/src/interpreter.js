@@ -4,19 +4,24 @@
 // hashes and Ed25519 are its own.
 
 import {
-  NONE, Some, some, Rec, MapV, BigMapV, Range, Refused, bytesEqual, bytesCompare, keyCompare, hex, unsignedBytes,
+  NONE, Some, some, Rec, MapV, BigMapV, Range, Refused, Limit, bytesEqual, bytesCompare, keyCompare, hex, unsignedBytes,
 } from './values.js';
-import { applyStd, ROWS } from './std.js';
+import { parseStrict } from './strict-json.js';
+import { validate } from './validate.js';
+import { applyStd } from './std.js';
 
 export const IR_VERSION = 1;
 
-const KINDS = new Set(['init', 'action', 'destroy', 'view']);
-
-/** Reads an IR export (its JSON text or the parsed object) and returns the program, ready to call. */
-export function load(ir) {
-  const p = typeof ir === 'string' ? JSON.parse(ir) : ir;
-  if (p.ir !== IR_VERSION) throw new Error(`not a version ${IR_VERSION} IR export: "ir": ${JSON.stringify(p.ir)}`);
-  if (p.language !== 'jsc 2') throw new Error(`not a .jsc 2 program: ${p.language}`);
+/**
+ * Reads an IR export from its JSON text and returns the program, ready to call. The text is read strictly (no
+ * duplicate keys, integers only, within the safe range) and validated whole before anything runs (validate.js): a
+ * version-1 reader refuses what it does not know, and an IR whose checked parameters or transaction use disagree with
+ * their definitions.
+ */
+export function load(text) {
+  if (typeof text !== 'string') throw new TypeError('load takes the IR export\'s JSON text');
+  const p = parseStrict(text);
+  validate(p);
   return new Program(p);
 }
 
@@ -51,20 +56,6 @@ class Program {
     for (const e of p.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
     this.fns = new Map(p.fns.map((f) => [f.name, f]));
     this.methods = new Map(p.methods.map((m) => [m.name, m]));
-    for (const m of p.methods) if (!KINDS.has(m.kind)) throw new Error(`unknown method kind ${m.kind}`);
-    this.#checkRows(p);
-  }
-
-  /** Every std row the program calls is one this interpreter implements, in the module the IR names. */
-  #checkRows(node) {
-    if (Array.isArray(node)) {
-      for (const x of node) this.#checkRows(x);
-    } else if (node && typeof node === 'object') {
-      if (node.node === 'CallStd' && !(ROWS[node.module] ?? []).includes(node.name)) {
-        throw new Error(`unknown std row ${node.module}.${node.name}`);
-      }
-      for (const v of Object.values(node)) this.#checkRows(v);
-    }
   }
 
   get name() {
@@ -110,7 +101,7 @@ class Program {
       // §4: every checked parameter is well formed before any statement runs.
       for (const id of m.checked) {
         const l = m.params.find((x) => x.id === id);
-        if (!this.wellFormed(lookup(env, id), l.type)) throw new Refused(`${l.name} is not a well-formed input`);
+        if (!this.wellFormed(lookup(env, id), l.type)) throw new Refused(`${l.name} is not a well-formed input`, 'input', l.name);
       }
       env = this.#exec(m.body.stmts, env, frame);
       const value = m.body.result === null ? null : this.#eval(m.body.result, env, frame);
@@ -137,12 +128,12 @@ class Program {
           env = bind(env, s.local, this.#eval(s.value, env, f));
           break;
         case 'Require':
-          if (this.#eval(s.cond, env, f) !== true) throw new Refused(s.message);
+          if (this.#eval(s.cond, env, f) !== true) throw new Refused(s.message, 'require', s.message);
           break;
         case 'Pay': {
           const to = this.#eval(s.to, env, f);
           const amount = this.#eval(s.amount, env, f);
-          if (amount < 0n) throw new Refused('a payout cannot be negative');
+          if (amount < 0n) throw new Refused('a payout cannot be negative', 'domain', 'pay');
           if (amount > 0n) f.payouts.push({ to, lovelace: amount });
           break;
         }
@@ -250,7 +241,7 @@ class Program {
       }
       case 'ListArg': {
         const xs = this.#eval(e.list, env, f), n = this.#eval(e.arg, env, f);
-        if (n < 0n) throw new Refused(`${e.op}: a negative count`);
+        if (n < 0n) throw new Refused(`${e.op}: a negative count`, 'domain', `List.${e.op}`);
         const k = n > BigInt(xs.length) ? xs.length : Number(n);
         return Object.freeze(e.op === 'take' ? xs.slice(0, k) : xs.slice(k));
       }
@@ -349,7 +340,7 @@ class Program {
       case 'abs': return a < 0n ? -a : a;
       case 'asKey':
       case 'asHash':
-        if (a.length !== 28) throw new Refused(`${op}: not a 28-byte hash`);
+        if (a.length !== 28) throw new Refused(`${op}: not a 28-byte hash`, 'domain', op);
         return a;
       default:
         throw new Error(`unknown prelude function ${op}`);
@@ -368,7 +359,7 @@ class Program {
       }
       case 'has': return m.indexOf(args[0]) >= 0;
       case 'set':
-        if (args[0].length > 64) throw new Refused('Map.set: a key has at most 64 bytes');
+        if (args[0].length > 64) throw new Refused('Map.set: a key has at most 64 bytes', 'domain', 'Map.set');
         return m.set(args[0], args[1]);
       case 'delete': return m.delete(args[0]);
       case 'size': return BigInt(m.keys.length);
@@ -391,20 +382,20 @@ class Program {
       case 'has': return m.now.has(k);
       case 'isEmpty': return m.before.size === 0 && !m.written;
       case 'delete': {
-        if (args[0].length > 64) throw new Refused('BigMap.delete: a key has at most 64 bytes');
+        if (args[0].length > 64) throw new Refused('BigMap.delete: a key has at most 64 bytes', 'domain', 'BigMap.delete');
         const now = new Map(m.now);
         now.delete(k);
         return new BigMapV(m.before, now, true);
       }
       case 'set': {
-        if (args[0].length > 64) throw new Refused('BigMap.set: a key has at most 64 bytes');
+        if (args[0].length > 64) throw new Refused('BigMap.set: a key has at most 64 bytes', 'domain', 'BigMap.set');
         const v = args[1];
         const now = new Map(m.now);
         if (ints) {
-          if (v < 0n) throw new Refused('BigMap.set: a value cannot be negative');
+          if (v < 0n) throw new Refused('BigMap.set: a value cannot be negative', 'domain', 'BigMap.set');
           // Stored as its unsigned big-endian bytes, at most 8,192 of them; checked here, also for a write that is only
           // read through and discarded (M1a review C4).
-          if (unsignedBytes(v).length > 8192) throw new Refused('integerToByteString: result exceeds 8192 bytes');
+          if (unsignedBytes(v).length > 8192) throw new Refused('BigMap.set: a value needs more than 8,192 bytes (integerToByteString)', 'domain', 'BigMap.set');
           if (v === 0n) now.delete(k);   // 0 is absence
           else now.set(k, v);
         } else {
@@ -492,7 +483,7 @@ function arith(op, a, b) {
     case '*': return a * b;
     case '/':
     case '%':
-      if (b === 0n) throw new Refused('division by zero');
+      if (b === 0n) throw new Refused('division by zero', 'domain', op);
       return op === '/' ? a / b : a % b;
     default:
       throw new Error(`unknown operator ${op}`);
@@ -528,12 +519,12 @@ function fromHexLit(s) {
   return out;
 }
 
-/** §2.4: recursion deeper than the JavaScript stack is a refusal, as the budget is on-chain. */
+/** §2.4: a call deeper than the JavaScript stack gets no answer (a Limit), never a refusal: the chain may accept it. */
 function depthGuard(run) {
   try {
     return run();
   } catch (e) {
-    if (e instanceof RangeError && /call stack/i.test(e.message)) throw new Refused('evaluation too deep');
+    if (e instanceof RangeError && /call stack/i.test(e.message)) throw new Limit('evaluation too deep for this interpreter\'s stack (no answer, §2.4)');
     throw e;
   }
 }

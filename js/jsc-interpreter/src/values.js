@@ -9,11 +9,33 @@
 //   BigMap     a BigMapV { before, now, written } (§1.2): before and now are Maps from key hex to value
 //   range      a Range { from, to }: never a value of the language, only a receiver (§3.6)
 
-/** A call is refused: every failure of §2 (a require, a checked input, a domain, a division by zero, depth). */
+/**
+ * A call is refused (§2): every failure of the semantics. Its class says which rule refused it (§2.5, review S4):
+ * `require` with the require's message, `input` with the parameter's name (§4), or `domain` with the operation whose
+ * domain the call left (`/`, `slice`, `Map.set`, …). The class is what implementations compare; the message is prose.
+ */
 export class Refused extends Error {
-  constructor(message) {
+  constructor(message, kind = 'domain', detail = '') {
     super(message);
     this.name = 'Refused';
+    this.kind = kind;
+    this.detail = detail;
+  }
+
+  /** `kind:detail`, as the differential tests compare it. */
+  get refusal() {
+    return `${this.kind}:${this.detail}`;
+  }
+}
+
+/**
+ * The implementation could not finish (§2.4): its stack ran out. This is no answer at all, never a refusal: the chain
+ * may well accept the call within its budget. The differential tests treat it as a failure of the leg.
+ */
+export class Limit extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'Limit';
   }
 }
 

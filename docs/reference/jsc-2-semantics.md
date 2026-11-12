@@ -78,9 +78,10 @@ IR says `usesCtx: false`, which then never reads it. τ holds five values:
 | any | **refused** |
 
 A call is *refused* when evaluation *fails* anywhere: a `require` that does not hold, a checked input that is not well
-formed, an operation outside its domain, or evaluation too deep (§2.4). Every failure has the same outcome. A failure
-carries a message, which is informative only: no two legs need to agree on messages. A failure stops the call. Nothing
-a refused call evaluated is kept, its payouts included.
+formed, or an operation outside its domain. Every failure has the same outcome on-chain. A failure also has a *class*
+(§2.5), which the two interpreters must agree on, and a message, which is prose: no two legs need to agree on messages.
+A failure stops the call. Nothing a refused call evaluated is kept, its payouts included. An implementation that cannot
+finish a call (its stack runs out) gives **no answer**, which is not a refusal (§2.4).
 
 **Steps of a call:**
 
@@ -92,10 +93,14 @@ a refused call evaluated is kept, its payouts included.
    result.
 5. The outcome is that value with the payouts collected in step 3, in the order they were made.
 
-**Modifiers are not evaluated by a call.** `payable`, `open`, `only f` (the transaction is signed by the key in state
-field `f`), `after f` and `before f` (the window against state field `f`) are transaction checks that the generated
-validator makes. The method's evaluation does not see them, and a call's outcome does not depend on them. The
-validator leg checks them with the rest of the transaction.
+**Transaction-level rules are not evaluated by a call.** Modifiers, `payable`, `open`, `only f` (the transaction is
+signed by the key in state field `f`), `after f` and `before f` (the window against state field `f`), are checks the
+generated validator makes. So is everything about the payouts as a whole: whether they total more than τ.`balance`, what
+a destroy leaves over, and the ledger's minimum per output. The method's evaluation does not see them, and a call's
+outcome does not depend on them. The validator leg checks them with the rest of the transaction.
+
+**Names.** Records, enum variants and the state (`State`) share one namespace in a file (D5, M1a decision #3), so a
+record or variant value is identified by its name alone, as both interpreters and the vectors' `{"rec": name}` do.
 
 ### 2.1 Evaluation order and laziness
 
@@ -113,10 +118,12 @@ is evaluated only if the rule says so (D6).
 | a lambda's body | once per element visited, in order |
 | a `fn`'s body | at each call |
 
-Expressions have no side effects, and every failure has the same outcome. So the order among strict operands
-(`f(a, b)`, `a + b`, a record's fields) cannot change an outcome. Only *whether* an operand is evaluated can change one.
-The lazy positions above are exactly where that is decided. The left-to-right order is still the reference order: it
-fixes which message the reference interpreter reports for a refused call. The other legs need not follow it.
+Expressions have no side effects, and every failure is a refusal on-chain. So the order among strict operands
+(`f(a, b)`, `a + b`, a record's fields) cannot change whether a call is accepted, nor what it returns. Only *whether*
+an operand is evaluated can, and the lazy positions above are exactly where that is decided. The order does decide
+*which* failure a call meets first when it has several, so it fixes the refusal's class (§2.5): both interpreters
+follow it exactly, receiver before arguments (`xs.contains(v)`, `xs.fold(init, …)` and `m.fold(init, …)` evaluate the
+collection first), arguments left to right, a record's fields in declaration order. The UPLC legs report no class.
 
 Payouts are made by statements only, so their order is the order in which statements run (§2.3).
 
@@ -147,16 +154,41 @@ A call's payouts are those it appended, in order: source order, list order withi
 `if` and `match`. `to` is a `Key`. Pays are statements, so they appear only in method bodies, never in a `fn`, a view,
 a `const` value or a lambda.
 
-### 2.4 Depth
+### 2.4 Depth and limits
 
-Lists, maps and ranges are finite, so only a recursive `fn` (D7) can make evaluation deep or endless. A call that
-recurses deeper than an implementation can follow is refused, and on-chain the execution budget refuses it (J18), as
-it refuses a call over a very long range. These limits are resources, not semantics: the vectors do not test where an
-implementation stops.
+Evaluation can be deep in two ways: a recursive `fn` (D7), and an expression nested deeply in the source. M1e's
+nesting cap (J18: at most 64 levels, with `+`/`-`, `*`, `&&`, `||` and else-if chains read without deeper recursion)
+bounds the second; until it lands, a long chain such as `a + a + … + a` is as deep as it is long. Lists, maps and
+ranges are finite, so only recursion can make evaluation endless.
+
+**The chain's limit is its budget, nothing else.** A transaction refuses a call that exceeds the protocol's execution
+budget (J18), and nothing short of it: `fn down(n) = n <= 0 ? 0 : 1 + down(n - 1)` at depth 3,000 costs about 20% of
+the budget's CPU and 56% of its memory, and the chain accepts it.
+
+**An implementation's limit is no answer.** When an implementation cannot finish a call (its stack runs out, or a time
+limit stops it), it gives *no answer*, which is never a refusal: the chain may well accept that call. The reference
+interpreters run calls on a stack deep enough for every recursion a transaction's budget allows (512 MiB: the
+JavaScript one in a worker, `bin/run-vectors.js`; the Java one on its own thread), and report a stack overflow even there
+as a *limit* (JavaScript `Limit`, Java `Interpreter.Limit`), which the differential tests treat as a failure of that
+leg, never as an agreement. The vectors include `down(3000)` on the transition program and both interpreters.
+
+### 2.5 Refusal classes
+
+A refusal's class names the rule that refused the call, as `kind:detail`:
+
+| Class | When |
+|---|---|
+| `require:<message>` | a `require` did not hold; the detail is its message, as written |
+| `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name |
+| `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; or `pay` (a negative amount) |
+
+The two interpreters must give the same class for every refused call (review S4), so a vector meant to reach one rule
+shows that both interpreters reach that rule. With several failures in one call, the first in evaluation order (§2.1)
+decides.
 
 ## 3. Expressions
 
-### 3.1 Names and literals
+### 3.1 Names, literals and blocks
 
 | Node | Value |
 |---|---|
@@ -165,6 +197,7 @@ implementation stops.
 | `StateRef` (`state`) | σ |
 | `StateField` (a bare field name) | σ's field. It always reads the input state, never a value being built |
 | `CtxRef` | the value of that name in τ (§2) |
+| `BlockValue` | its block's value: the statements in order, then the result (§2.2). The parser makes no such node at M1a (a lambda's block is the lambda's body), but the IR and both interpreters keep it |
 
 ### 3.2 Integers
 
@@ -347,8 +380,18 @@ failure. Let `R` be the first 32 bytes of `sig` and `S` the last 32 read little-
    (y = 4/5, x even): the encoding of `[S]B − [h]A` (y little-endian, the top bit the parity of x) differs from `R` as
    bytes.
 
-Otherwise the answer is `true`. Non-canonical encodings of `R` beyond the small-order list are an open item of §8's
-security review. Vectors: RFC 8032's test 1 is `true`. That signature with its last byte changed, with `S + L`, or with
+Otherwise the answer is `true`.
+
+**Non-canonical `R` is always `false`** (rule 5): the encoding of a point is always canonical (its y below `p`), so an
+`R` whose y is `p` or more never equals it, on or off the curve. This closed M1a's open item: the ledger's libsodium
+1.0.18 agrees on every such `R` (y = `p` … `p + 18` and `2^255 − 18` … `2^255 − 1`, both sign bits).
+
+The vectors (`test/fixtures/ed25519-libsodium.json`, 783 of them, answered by the ledger's libsodium 1.0.18 and checked
+on both interpreters, a subset also on the JVM, transition and validator legs) cover each rule on its own: every
+small-order encoding as the key, as `R` and as both; `R` the identity with `S = h·a`, which RFC 8032 accepts and rule 2
+refuses; mixed-order keys `aB + T`, accepted exactly when the equation holds (for `T` of order 8: `h ≡ 0 mod 8`);
+mixed-order `R`; non-canonical encodings; keys off the curve; `S` at `L − 1`, `L` and above. By hand: RFC 8032's test 1
+is `true`. That signature with its last byte changed, with `S + L`, or with
 the message `#00` is `false`. The identity key with `R` the identity and `S = 0` is `false`. A key encoding `p + 1` is
 `false`. A 31-byte key fails.
 
@@ -369,7 +412,12 @@ A value crossing a trust boundary is checked before the body sees it. At M1a thi
 | `Map<K, V>` | every key has at most 64 bytes and is well formed at `K`, the keys are **strictly** ascending in canonical order (§1.1; so unique), and every value is well formed at `V` |
 
 A map that is out of order or has a duplicate key cannot be a map value (§1). Such an argument is refused here, so the
-body never sees one. Views are not checked: their arguments come from the caller's own query.
+body never sees one.
+
+**Views are not checked**: their arguments come from the caller's own query, and nothing on-chain depends on them. A
+view given a non-canonical map (out of order, or with a duplicate key) has **no defined outcome**: the map operations of
+§3.7 are defined on canonical maps only, and the legs may answer differently. The differential tests never send one,
+and the runtime's codec writes maps canonically.
 
 ## 5. Time values (D11)
 
@@ -380,9 +428,11 @@ runs. A program the checker accepts has the same outcome for every window that g
 answers, apart from amounts. A time value can still set an amount, for example a clamped `pay`, and the checker warns
 about the bias that gives (J6).
 
-## 6. Hand-written vectors
+## 6. Vectors
 
-Each rule above has vectors in `js/jsc-interpreter/test/semantics.test.js`. They are written by hand from this
-document, not recorded from an implementation. They evaluate IR nodes built in the test, or call the example contracts
-through their IR fixtures. The differential tests (J3, §9 of the ADR) then run every recorded call of the four-way
-suites on all five legs.
+Each rule above has vectors in `js/jsc-interpreter/test/`. `semantics.test.js` holds hand-written ones, by section,
+written from this document, not recorded from an implementation: they evaluate IR nodes built in the test, or call the
+example contracts through their IR fixtures. `crypto.test.js` holds the recorded ones, each from an oracle named in its
+file: Ed25519 and the hashes as the ledger's libsodium 1.0.18 answers them, SHA3-256 from Python's hashlib. The
+differential tests (J3, §9 of the ADR) then run every recorded call of the differential suites on all five legs, and
+settle a disagreement by this document, not by any leg.

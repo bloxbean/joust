@@ -2,7 +2,7 @@
 // vectors"). It needs no types: { "int": "…" }, true/false, { "bytes": hex }, [ … ], { "none": true }, { "some": v },
 // { "rec": name, "fields": [ … ] }, { "map": [[k, v] …] } (in the given order), { "bigmap": [[k, v] …] }.
 
-import { NONE, Some, some, Rec, MapV, BigMapV, Refused, hex, fromHex, keyCompare } from './values.js';
+import { NONE, Some, some, Rec, MapV, BigMapV, Refused, Limit, hex, fromHex, keyCompare } from './values.js';
 
 export function fromJson(j) {
   if (j === true || j === false) return j;
@@ -46,7 +46,10 @@ export function txFromJson(t) {
   };
 }
 
-/** Runs one call in the JSON form; the answer is { ok: { value, payouts } } or { refused: message }. */
+/**
+ * Runs one call in the JSON form. The answer is { ok: { value, payouts } }, { refused: message, class: "kind:detail" }
+ * (semantics §2.5), or { limit: message } when this interpreter could not finish (§2.4: no answer).
+ */
 export function runCall(program, call) {
   try {
     const o = program.call(call.method, call.state == null ? null : fromJson(call.state), call.args.map(fromJson), txFromJson(call.tx));
@@ -57,7 +60,8 @@ export function runCall(program, call) {
       },
     };
   } catch (e) {
-    if (e instanceof Refused) return { refused: e.message };
+    if (e instanceof Refused) return { refused: e.message, class: e.refusal };
+    if (e instanceof Limit) return { limit: e.message };
     throw e;
   }
 }

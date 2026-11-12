@@ -86,7 +86,8 @@ class JscV2IrTest {
             String json = lowered.irJson();
             assertTrue(json.startsWith("{\n  \"ir\": " + IrJson.VERSION + ",\n"), json.substring(0, 40));
             Ir.Program back = IrJson.read(json);
-            assertEquals(json, IrJson.write(back), e.getKey() + ": written again");
+            assertEquals(IrJson.sourceHash(e.getValue()), IrJson.sourceHashOf(json), e.getKey() + ": the export names its source");
+            assertEquals(json, IrJson.write(back, IrJson.sourceHashOf(json)), e.getKey() + ": written again");
             assertEquals(lowered.java(), JavaEmitter.emit(back), e.getKey() + ": the Java lowered from the program read back");
             assertEquals(lowered.abiJson(), Abi.of(back), e.getKey() + ": the ABI manifest of the program read back");
             collect(AbiCheck.Json.parse(json), nodes);
@@ -125,6 +126,13 @@ class JscV2IrTest {
         assertTrue(e.getMessage().contains("unknown node Arith2"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"local\": (\\d+)", "\"local\": 9999")));
         assertTrue(e.getMessage().contains("undeclared local 9999"), e.getMessage());
+        // Review S3: the reader is strict, like the JavaScript one.
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 1.0,")));
+        assertTrue(e.getMessage().contains("not a plain integer"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 1, \"ir\": 1,")));
+        assertTrue(e.getMessage().contains("duplicate key"), e.getMessage());
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"value\": \"(\\d+)\"", "\"value\": \"0x10\"")));
+        assertTrue(e.getMessage().contains("x10"), e.getMessage());   // BigInteger refuses a hex literal
     }
 
     /** The Gradle path (generateJsc runs JscMain) writes Name.ir.json beside Name.java and its source map. */

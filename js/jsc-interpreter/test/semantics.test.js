@@ -6,7 +6,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { load, Refused, NONE, Some, some, Rec, MapV, BigMapV, hex, fromHex, toJson, runCall } from '../src/index.js';
+import { load, Refused, Limit, NONE, Some, some, Rec, MapV, BigMapV, hex, fromHex, toJson, runCall } from '../src/index.js';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const fixture = (name) => load(readFileSync(new URL(`./fixtures/${name}.ir.json`, import.meta.url), 'utf8'));
 
@@ -29,10 +33,10 @@ const none = (t) => node('NoneLit', {}, { option: t });
 
 /** A program with the given records, enums and fns, and no methods: for evaluating expressions. */
 function program({ records = [], enums = [], fns = [] } = {}) {
-  return load({
-    ir: 1, language: 'jsc 2', package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
+  return load(JSON.stringify({
+    ir: 1, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
     state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], fns, methods: [], warnings: [],
-  });
+  }));
 }
 
 const P = program();
@@ -261,7 +265,71 @@ test('§3.9 a fn sees only its parameters, and may call itself', () => {
   const p = program({ fns: [fact] });
   assert.equal(p.callFn('fact', [20n]), 2432902008176640000n);
   assert.equal(ev(node('CallFn', { fn: 'fact', args: [lit(25n)] }, INT), p), 15511210043330985984000000n);
-  assert.throws(() => p.callFn('fact', [10n ** 7n]), Refused, 'too deep is a refusal');
+  // §2.4: deeper than this thread's stack is no answer (a Limit), never a refusal.
+  assert.throws(() => p.callFn('fact', [10n ** 7n]), (e) => e instanceof Limit && !(e instanceof Refused));
+});
+
+/** A view go(n) = down(n), with fn down(n) = n <= 0 ? 0 : 1 + down(n - 1): the security review's S1 contract, as IR. */
+function deepProgram() {
+  const n = { id: 1, name: 'n', type: INT, taint: 0, at };
+  const ref = node('LocalRef', { local: 1 }, INT);
+  const down = {
+    name: 'down', params: [n], result: INT, at,
+    body: { stmts: [], at, result: node('Cond', { cond: cmp('<=', ref, lit(0n)), then: lit(0n),
+      otherwise: arith('+', lit(1n), node('CallFn', { fn: 'down', args: [arith('-', ref, lit(1n))] }, INT)) }, INT) },
+  };
+  const k = { id: 2, name: 'k', type: INT, taint: 0, at };
+  const go = { kind: 'view', name: 'go', params: [k], mods: [], checked: [], usesCtx: false, pays: false, result: INT, at,
+    body: { stmts: [], at, result: node('CallFn', { fn: 'down', args: [node('LocalRef', { local: 2 }, INT)] }, INT) } };
+  return JSON.stringify({
+    ir: 1, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'Deep', source: 'Deep.jsc', options: [], records: [],
+    enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], fns: [down], methods: [go], warnings: [],
+  });
+}
+
+test('§2.4 recursion the budget allows gets an answer: run-vectors evaluates on a deep stack', () => {
+  const text = deepProgram();
+  const p = load(text);
+  assert.equal(p.call('go', new Rec('State', []), [400n], null).value, 400n);
+  // The security review's repro: the chain accepts go(3000) (cpu 1,989,363,435, mem 7,827,245). Node's default stack
+  // does not reach it, which is a Limit here; the runner's 512 MiB worker stack does.
+  assert.throws(() => p.call('go', new Rec('State', []), [3000n], null), Limit);
+  const dir = mkdtempSync(join(tmpdir(), 'jsc-deep-'));
+  writeFileSync(join(dir, 'Deep.ir.json'), text);
+  const calls = [3000n, 20000n].map((v) => ({ method: 'go', state: { rec: 'State', fields: [] }, args: [{ int: v.toString() }], tx: null }));
+  writeFileSync(join(dir, 'calls.json'), JSON.stringify(calls));
+  execFileSync(process.execPath, [new URL('../bin/run-vectors.js', import.meta.url).pathname, join(dir, 'Deep.ir.json'), join(dir, 'calls.json'),
+    join(dir, 'answers.json')]);
+  const answers = JSON.parse(readFileSync(join(dir, 'answers.json'), 'utf8'));
+  assert.deepEqual(answers.map((a) => a.ok?.value), [{ int: '3000' }, { int: '20000' }]);
+});
+
+test('§2.5 a refusal has a class: require with its message, input with the parameter, domain with the operation', () => {
+  const classOf = (f) => {
+    try {
+      f();
+    } catch (e) {
+      if (e instanceof Refused) return e.refusal;
+      throw e;
+    }
+    return 'ok';
+  };
+  assert.equal(classOf(() => ev(arith('/', lit(1n), lit(0n)))), 'domain:/');
+  assert.equal(classOf(() => ev(arith('%', lit(1n), lit(0n)))), 'domain:%');
+  assert.equal(classOf(() => ev(std('std/bytes', 'slice', [b('01'), lit(-1n), lit(0n)], BYTES))), 'domain:slice');
+  assert.equal(classOf(() => ev(std('std/bytes', 'byteAt', [b('01'), lit(1n)], INT))), 'domain:byteAt');
+  assert.equal(classOf(() => ev(node('ListArg', { op: 'take', list: list([], INT), arg: lit(-1n) }, { list: INT }))), 'domain:List.take');
+  assert.equal(classOf(() => ev(node('Prelude', { op: 'asKey', args: [b('01')] }, 'Key'))), 'domain:asKey');
+  const counter = fixture('Counter2');
+  const s = new Rec('State', [1n, fromHex('0a'.repeat(28))]);
+  assert.equal(classOf(() => counter.call('increment', s, [0n], null)), 'require:increment must be positive');
+  const ledger = fixture('Ledger');
+  assert.equal(classOf(() => ledger.call('init', null, [MapV.raw([[fromHex('00'), 1n]])], TX)), 'input:limits');
+  const v = fixture('Vectors');
+  const vs = new Rec('State', [fromHex('0a'.repeat(28)), new Uint8Array(0), 0n, 0n, 0n, 0n, [], NONE]);
+  assert.equal(classOf(() => v.call('give', vs, [fromHex('a1'.repeat(28)), -1n], TX)), 'domain:pay');
+  assert.deepEqual(runCall(counter, { method: 'increment', state: { rec: 'State', fields: [{ int: '1' }, { bytes: '0a'.repeat(28) }] },
+    args: [{ int: '0' }], tx: null }), { refused: 'increment must be positive', class: 'require:increment must be positive' });
 });
 
 // ------------------------------------------------------------------ §3.10 std rows at their domain edges
@@ -367,7 +435,7 @@ test('§3.9 asKey and asHash: exactly 28 bytes', () => {
 
 test('a reader refuses another IR version, an unknown std row, and keeps answers in the vector form', () => {
   const text = readFileSync(new URL('./fixtures/Counter2.ir.json', import.meta.url), 'utf8');
-  assert.throws(() => load(text.replace('"ir": 1,', '"ir": 2,')), /not a version 1 IR export/);
+  assert.throws(() => load(text.replace('"ir": 1,', '"ir": 2,')), /"ir" must be exactly 1/);
   const stdBytes = readFileSync(new URL('./fixtures/StdBytes.ir.json', import.meta.url), 'utf8');
   assert.throws(() => load(stdBytes.replace('"name": "sha2_256"', '"name": "keccak_256"')), /unknown std row std\/crypto.keccak_256/);
   const counter = load(text);
@@ -375,6 +443,24 @@ test('a reader refuses another IR version, an unknown std row, and keeps answers
     args: [{ int: '2' }], tx: null });
   assert.deepEqual(answer, { ok: { value: { rec: 'State', fields: [{ int: '3' }, { bytes: '0a'.repeat(28) }] }, payouts: [] } });
   assert.deepEqual(runCall(counter, { method: 'increment', state: answer.ok.value, args: [{ int: '0' }], tx: null }),
-    { refused: 'increment must be positive' });
+    { refused: 'increment must be positive', class: 'require:increment must be positive' });
   assert.ok(new Some(1n) instanceof Some);
+});
+
+test('a reader refuses up front what it does not know or cannot trust (review S3, F6, F7)', () => {
+  const text = readFileSync(new URL('./fixtures/Pledges.ir.json', import.meta.url), 'utf8');
+  load(text);
+  const refuses = (edit, why) => assert.throws(() => load(edit(text)), why);
+  refuses((t) => t.replace('"ir": 1,', '"ir": 1.0,'), /not a plain integer/);
+  refuses((t) => t.replace('"ir": 1,', '"ir": 1, "ir": 1,'), /duplicate key "ir"/);
+  refuses((t) => t.replace('"checked": [3]', '"checked": [3], "checked": []'), /duplicate key "checked"/);
+  refuses((t) => t.replace('"checked": [3]', '"checked": []'), /checked is \[\], but the parameters whose types hold a Key, a Hash or a Map are \[3\]/);
+  refuses((t) => t.replace('"node": "Compare"', '"node": "Bogus"'), /unknown node "Bogus"/);
+  refuses((t) => t.replace('"local": 3,', '"local": 9007199254740993,'), /outside the safe range/);
+  refuses((t) => t.replace(/"node": "Lit", "value": "(\d+)", "type": "Int"/, '"node": "Lit", "value": "0x10", "type": "Int"'), /not a decimal integer/);
+  refuses((t) => t.replace(/"value": "(\d+)" }/, '"value": "0x10" }'), /option\): not an integer/);
+  refuses((t) => t.replace('"usesCtx": true', '"usesCtx": false'), /usesCtx is false, but the method reads the transaction/);
+  refuses((t) => t.replace('"name": "only"', '"name": "batched"'), /unknown modifier batched/);
+  refuses((t) => t.replace('"sourceSha256": "', '"sourceSha256": "x'), /sourceSha256/);
+  assert.throws(() => load(JSON.parse(text)), TypeError, 'load takes the text, so it can refuse duplicates');
 });
