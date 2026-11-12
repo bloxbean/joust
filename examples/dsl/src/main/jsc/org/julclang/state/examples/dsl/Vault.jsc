@@ -1,0 +1,36 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// examples/vault in .jsc 2 (ADR-0018 M1c, J11): a time-locked savings vault. Anyone deposits; only the owner
+// withdraws, and only once the whole validity window is after unlockAt.
+contract Vault(maxDatumBytes = 128) {
+  state { owner: Key, unlockAt: Int, total: Int }
+
+  // Opens a vault, optionally with a first deposit; the deployer owns it.
+  init(unlockAt: Int) payable {
+    require(before(unlockAt), "unlockAt must be in the future")
+    return { owner: caller, unlockAt, total: received }
+  }
+
+  // Anyone can add funds.
+  action deposit() payable {
+    require(received > 0, "deposit must be positive")
+    return { ...state, total: total + received }
+  }
+
+  // The owner takes funds out once the vault is unlocked.
+  action withdraw(amount: Int) only owner after unlockAt {
+    require(amount > 0, "amount must be positive")
+    require(amount <= total, "insufficient funds")
+    pay(owner, amount)
+    return { ...state, total: total - amount }
+  }
+
+  // The owner closes an unlocked vault and takes everything, deposit included.
+  destroy close() only owner after unlockAt {
+    pay(owner, balance)
+  }
+
+  view total(): Int = total
+  view unlockAt(): Int = unlockAt
+}
