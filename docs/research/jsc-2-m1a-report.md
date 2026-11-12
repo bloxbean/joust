@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M1a: report (ADR-0018 §8)
 
-Date 2026-11-13, review round r3. Branch `feat/jsc-2-m1a`, stacked on `feat/jsc-2-m0` (`cab7c5f`). JuLC `v0.1.0-pre21-rc1`,
+Date 2026-11-13, review round r4. Branch `feat/jsc-2-m1a`, stacked on `feat/jsc-2-m0` (`cab7c5f`). JuLC `v0.1.0-pre21-rc1`,
 cardano-client-lib `0.8.0-pre7`, JDK 25, macOS arm64. Every number below was measured at this branch's head; the test
 that prints it is named with each table.
 
@@ -173,14 +173,26 @@ The reviews of r2 (`5b760b2`) and what changed (each repro is a regression test)
 - ADR-0018 r8: D3 (state fields; the lexical identifier pattern; line ends), J10, D12 (the check on both paths, by
   structure); the file ends with a newline (F14).
 
-## Tests run at this head (r3)
+## Review round r4
+
+- **No type contains itself** (Codex C8): the checker refused a record or enum that held itself directly, but not
+  through a `List`, `Option` or `Map` (`enum E { End, Link { xs: List<E> } }` overflowed the stack in `Ty.hasBigMap`).
+  The cycle check now recognises the declared type before its visited-set shortcut, through every container and
+  through other records and enums (JSC0301, JSC0302 at the declaration), and `Ty.hasBigMap`/`Ty.needsCheck` keep a
+  visited set, so they end on a cycle too.
+- **No control characters** (security S12): only TAB, LF and the CR of a CRLF; any other C0, DEL or C1 character is
+  refused anywhere in a file (JSC0148).
+- **Hand-written Java names its file** (design F15): the toolchain names hand-written units by the path it was given,
+  so `other/Zed.java` declaring `class Foo` is reported as `other/Zed.java`.
+
+## Tests run at this head (r4)
 
 | Command | Result |
 |---|---|
-| `./gradlew :julc-state-dsl:test :examples:dsl:test :julc-state-toolchain:test :julc-state-gradle-plugin:test` (each after `cleanTest`) | green: dsl 63, toolchain 60, plugin 7, examples/dsl 18, none failed. Checker: M0 22, M1a 12, r2/r3 7; ABI 4; diagnostics 3; tooling 12 (r3: reachability, exact Bool/Option, no rewriting, same-named files of two packages, the Gradle path's check). Four-way: M1a 1,100 calls (Ledger 273, Shelf 88, StdBytes 552, StdMath 181, Bounds 6), all four legs agreeing; M0's still agree. `:examples:dsl:checkJscAbi`: `8 ABI manifest(s) agree with the processor's descriptions` |
-| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (GraalVM 25.3.4.1; image rebuilt from r3's sources) | green: `ALL SAME` (scripts, descriptions, validator sources), every `.jsc` file's generated Java equal to Gradle's and its manifest to the committed one; S2 in Wasm 1,393/1,393; S2b 43/43 |
-| `npm test` in `js/joust` (both Web Image engines rebuilt into `engine/`) | 26/26, including r3's two `abi.test.js` tests (`abiGate`'s `refused`; `joust build` leaves no refused Java, an earlier build's included, which fails against r2's `build.js`). `js/state-client` was not changed |
-| `./gradlew build --continue` | BUILD SUCCESSFUL in 9 m 18 s (11 tasks executed, 178 up to date from the runs above; `:examples:dsl:checkJscAbi` ran as part of `check`: 8 manifests agree) |
+| `./gradlew :julc-state-dsl:test :examples:dsl:test :julc-state-toolchain:test :julc-state-gradle-plugin:test` (each after `cleanTest`) | green: dsl 65, toolchain 61, plugin 7, examples/dsl 18, none failed. Checker: M0 22, M1a 12, r2–r4 9 (r4: type cycles through every container, the walks ending on a cycle, control characters); ABI 4; diagnostics 3; tooling 13 (r4: hand-written Java named by its path). Four-way: M1a 1,100 calls (Ledger 273, Shelf 88, StdBytes 552, StdMath 181, Bounds 6), all four legs agreeing; M0's still agree. `:examples:dsl:checkJscAbi`: `8 ABI manifest(s) agree with the processor's descriptions` |
+| `./gradlew :julc-state-toolchain:toolchainWasmTest -PgraalvmHome=…` (GraalVM 25.3.4.1; image rebuilt from r4's sources) | green: `ALL SAME` (scripts, descriptions, validator sources), every `.jsc` file's generated Java equal to Gradle's and its manifest to the committed one; S2 in Wasm 1,393/1,393; S2b 43/43 |
+| `npm test` in `js/joust` (both Web Image engines rebuilt into `engine/`) | 26/26 (no JavaScript changed in r4; the toolchain engine carries r4's checker and unit naming). `js/state-client` was not changed |
+| `./gradlew build --continue` (r3; r4 changes neither the plugin nor the processor paths) | BUILD SUCCESSFUL in 9 m 18 s at r3's head |
 
 ## Not in M1a
 

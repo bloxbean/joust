@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r8)
+**Status:** Proposed (r9)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -120,8 +120,9 @@ on an existing name, `+=`, `-=`, `++` or `--` (each reported with the fix, D12).
   no two names can look alike (no mixed scripts, no confusables); strings and comments may hold any other text. No
   Unicode format character (category Cf: the bidirectional controls U+202A–202E and U+2066–2069, zero-width
   characters) appears anywhere in a `.jsc` file, and a line ends only at LF or CRLF: a lone CR, NEL, U+2028, U+2029, VT
-  and FF are refused, since some editors break lines there and a `//` comment could hide the code after them. So the
-  text reads as it compiles.
+  and FF are refused, since some editors break lines there and a `//` comment could hide the code after them. No other
+  control character (C0, DEL, C1) appears either, in code, comments or strings: only TAB and the line ends (r9, S12).
+  So the text reads as it compiles.
 - **Object literals are typed by context**: the expected type (a method's result, a typed parameter or field, a typed
   `const x: Share = …`, a list or map element whose type is known). Where there is no context, the constructor form
   `Share { to, bps }` is required; it is allowed everywhere and is the only form for events (`Sold { price }`).
@@ -202,6 +203,8 @@ it and the body's checks would be the only guard (`action rescue(to: Address) { 
 | ledger types for handlers | JuLC ledger types | `TxCert`, `Voter`, `Vote`, `GovernanceAction` are sealed types the handler `match`es on; `GovernanceActionId` and `ProposalProcedure` are records read by projection. Fields whose JuLC type maps to a `.jsc` type are readable; fields typed `PlutusData` (e.g. `GovernanceAction.ParameterChange.parameters`) are **inaccessible**, so a guardrail that must inspect proposed parameter changes stays in Java until a typed protocol-parameter view exists. No construction |
 | `LedgerMap<K, V>` | `JulcMap<K, V>` from ledger data | read-only maps in ledger order (e.g. `GovernanceAction`'s withdrawals `LedgerMap<Credential, Int>`): `get`, `has`, `size`, `any`/`all`/`fold`; keys any comparable type; never stored, so no canonical-order rule applies |
 
+- **No recursive types** (r9, M1a review C8). No record or enum contains itself, directly or through other records,
+  enums, `List`, `Option` or `Map`: a cycle is refused at the declaration of a type on it (JSC0301, JSC0302).
 - **No generic user types** (F9). Built-in generics are instantiated with concrete types; per-instantiation helpers
   are generated into the class that needs them, and helpers shared across modules (`.jsc` libraries, D9) are generated
   once, in the library, under a deterministic name.
@@ -711,7 +714,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J7 | Every library call is type-checked against the exact Java signature; every `Int → long/int` conversion is checked against the row's domain on both sides; no unmappable signature is callable; JVM and UPLC agree on each binding's edge and malformed vectors | D8, D9 | the binding test; per-row differential vectors; import-refusal tests |
 | J8 | No `.jsc` equality or membership lowers to reference equality, Java `equals`, `JulcList.contains/find` or `JulcMap` lookup on a compound type containing bytes (a top-level byte-string key compares by content on both sides) | D6, D7 | lowering tests; generators with distinct-allocation bytes nested in records, enums, options, lists and maps |
 | J9 | Only direct self-recursion, checked after lowering; the build report lists recursive functions | D7 | checker tests (nested folds and branches) |
-| J10 | Generated names cannot collide with user names; no binding shadows a state field or a built-in name in methods with input state; no binding or state field replaces a declared type, enum, variant or `fn`; names are ASCII, and a file holds no format character and no line end other than LF or CRLF (r8) | D3, D7 | checker tests |
+| J10 | Generated names cannot collide with user names; no binding shadows a state field or a built-in name in methods with input state; no binding or state field replaces a declared type, enum, variant or `fn`; names are ASCII, and a file holds no format character, no line end other than LF or CRLF (r8) and no control character but TAB (r9) | D3, D7 | checker tests |
 | J11 | A D10 row is supported only once its gating port builds, passes its Java example's tests and attack suite, and stays within the size and budget bounds of §8 | D10 | milestone exit criteria |
 | J12 | The build names every library with its on-chain-source hash, and fails when it does not match `joust.lock` | D9 | build tests |
 | J13 | `joust migrate` preserves behaviour (equal next state, equal per-kind obligation multisets) or refuses with a reason; it never overwrites without a flag | D16 | migration tests over v1 vectors and generated v1 programs |
@@ -959,3 +962,5 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   restricted) and refuses line ends other than LF and CRLF; J10 covers both; D12 runs the manifest check on Gradle too
   (`checkJscAbi`), compares structures from the encoded roots (a type used only inside a method is not part of the
   ABI), refuses a reached schema the description lacks, and does not write Java whose manifest is refused.
+- **r9** (2026-11-13, M1a review round r4 on #63: Codex C8; security S12): D5 refuses recursive types through any
+  container, not only direct ones; D3 refuses every control character but TAB and the line ends; J10 covers it.
