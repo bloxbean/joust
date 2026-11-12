@@ -475,6 +475,25 @@ class MigrateTest {
         assertTrue(f.getMessage().contains("note: the line starting with '-' at 8:5"), f.getMessage());
     }
 
+    @Test
+    void issue75_theMinusNote_isScopedByMemberSpan_notByLine() {
+        String head = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n";
+        // Line 7 holds the end of w (a line starting with '-', w's) and all of v, whose error is on that line: the '-'
+        // is w's, so v's error has no note (by line, it named w's '-').
+        var e = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+                + "  view w(x: Int): Int = x\n    - 1; view v(): Int = nope\n}\n", "C.jsc"));
+        assertEquals(7, e.line);
+        assertFalse(e.getMessage().contains("note: the line starting with '-'"), e.getMessage());
+        // The same '-' with the error in w itself, after it on the same line: the note.
+        var f = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+                + "  view w(x: Int): Int = x\n    - nope; view v(): Int = 1\n}\n", "C.jsc"));
+        assertTrue(f.getMessage().contains("note: the line starting with '-' at 7:5"), f.getMessage());
+        // Two members on one line, the second one's own '-' on the next line: named for the second's error only.
+        var g = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+                + "  view a(): Int = nope; view b(x: Int): Int = x\n    - 1\n}\n", "C.jsc"));
+        assertFalse(g.getMessage().contains("note: the line starting with '-'"), g.getMessage());
+    }
+
     // ------------------------------------------------------------------ review r4
 
     @Test
@@ -520,6 +539,34 @@ class MigrateTest {
         assertTrue(err.contains("error[JSC1109]") && err.contains("symbolic link"), err);
         assertTrue(Files.readString(lib.resolve("Points.jsc")).startsWith("package"));
         assertFalse(Files.exists(lib.resolve("Points.jsc.v1")));
+    }
+
+    @Test
+    void issue75_inPlace_refusesALinkAboveTheSourcesBelowTheWorkingDirectory(@TempDir Path dir) throws Exception {
+        // src -> sharedsrc, and src/lib/Points.jsc migrated in place (by itself, or its directory): the shared file would
+        // be replaced through the link on src, above the source directory src/lib.
+        Path shared = Files.createDirectories(dir.resolve("sharedsrc/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        Files.createSymbolicLink(dir.resolve("src"), Path.of("sharedsrc"));
+        Path f = dir.resolve("src/lib/Points.jsc");
+        for (boolean fileArgument : List.of(true, false)) {
+            var e = assertThrows(JscException.class, () -> JscMain.inPlaceProblem(f, dir.resolve("src/lib"), fileArgument, dir));
+            assertEquals("JSC1109", e.code);
+            assertTrue(e.getMessage().contains("the directory src is a symbolic link"), e.getMessage());
+        }
+        // Links at or above the working directory are the user's file system (macOS's /var holds this test's directory):
+        // from elsewhere, the same file is not refused by this rule.
+        JscMain.inPlaceProblem(f, dir.resolve("src/lib"), true, Files.createDirectories(dir.resolve("elsewhere")));
+        JscMain.inPlaceProblem(f, dir.resolve("src/lib"), true, dir.resolve("src"));
+        // A plain tree below the working directory passes.
+        Path plain = Files.createDirectories(dir.resolve("plain/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), plain.resolve("Points.jsc"));
+        JscMain.inPlaceProblem(plain.resolve("Points.jsc"), plain, true, dir);
+        // End to end: nothing is replaced and no backup is written.
+        String err = stderr(() -> assertEquals(1, JscMain.migrate(f, dir.resolve("out"), true, dir)));
+        assertTrue(err.contains("error[JSC1109]") && err.contains("the directory src is a symbolic link"), err);
+        assertTrue(Files.readString(shared.resolve("Points.jsc")).startsWith("package"));
+        assertFalse(Files.exists(shared.resolve("Points.jsc.v1")));
     }
 
     @Test

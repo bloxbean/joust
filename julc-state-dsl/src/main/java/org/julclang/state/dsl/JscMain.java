@@ -172,6 +172,11 @@ public final class JscMain {
      * is replaced and its text kept beside it as {@code Name.jsc.v1}. 0 when every v1 file migrated, 1 on a refusal.
      */
     public static int migrate(Path src, Path out, boolean inPlace) throws IOException {
+        return migrate(src, out, inPlace, Path.of("").toAbsolutePath());
+    }
+
+    /** {@link #migrate(Path, Path, boolean)}, with links checked below {@code workingDir} (issue #75; a test's own). */
+    static int migrate(Path src, Path out, boolean inPlace, Path workingDir) throws IOException {
         List<Path> files = new ArrayList<>();
         boolean fileArgument = false;
         if (Files.isRegularFile(src, java.nio.file.LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(src)) {
@@ -211,7 +216,7 @@ public final class JscMain {
         for (Path f : files) {
             String name = src.relativize(f).toString();
             try {
-                if (inPlace) inPlaceProblem(f, src, fileArgument);
+                if (inPlace) inPlaceProblem(f, src, fileArgument, workingDir);
                 String text = Files.readString(f);
                 if (org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
                 var r = Migrate.migrate(text, f.getFileName().toString());
@@ -297,9 +302,10 @@ public final class JscMain {
     /**
      * Review r3 S5: a file migrated in place is a plain file of the sources: no symbolic link (JSC1109), no hard link
      * shared with another path, and no link on its path under the source directory (its real path lies under the source
-     * directory's, and no directory between them is a link).
+     * directory's, and no directory between them is a link), nor anywhere on its path below {@code workingDir} (issue
+     * #75).
      */
-    static void inPlaceProblem(Path f, Path src, boolean fileArgument) throws IOException {
+    static void inPlaceProblem(Path f, Path src, boolean fileArgument, Path workingDir) throws IOException {
         if (Files.isSymbolicLink(f)) {
             throw new JscException(1, 1, "JSC1109", "this file is a symbolic link: migrate --in-place never replaces a file through a"
                     + " link; migrate a copy, or the link's target in its own project");
@@ -324,6 +330,16 @@ public final class JscMain {
         for (Path p = abs.getParent(); p != null && p.startsWith(root) && !p.equals(root); p = p.getParent()) {
             if (Files.isSymbolicLink(p)) {
                 throw new JscException(1, 1, "JSC1109", "the directory " + root.relativize(p) + " is a symbolic link: migrate --in-place"
+                        + " never replaces a file through a link; migrate the link's target in its own project");
+            }
+        }
+        // Issue #75 (security S8): above the source directory too, every directory below the working directory (src in
+        // src/lib/Points.jsc, linked to ../sharedsrc, say). Links at or above the working directory (macOS's /tmp and
+        // /var, a linked home) are the user's file system, not a shared source, and are not refused.
+        Path cwd = workingDir.toAbsolutePath().normalize();
+        for (Path p = abs.getParent(); p != null && p.startsWith(cwd) && !p.equals(cwd); p = p.getParent()) {
+            if (Files.isSymbolicLink(p)) {
+                throw new JscException(1, 1, "JSC1109", "the directory " + cwd.relativize(p) + " is a symbolic link: migrate --in-place"
                         + " never replaces a file through a link; migrate the link's target in its own project");
             }
         }
@@ -432,6 +448,21 @@ public final class JscMain {
      * {@code .jsc} 2 manifest is accepted, 1 on an error, 2 on a usage error.
      */
     public static int run(String[] args) throws IOException {
+        return run(args, JscMain::lowerWithWarnings);
+    }
+
+    /** How {@link #run} lowers one file's text: {@link #lowerWithWarnings}, or a test's stand-in. */
+    @FunctionalInterface
+    public interface FrontEnd {
+        Lowered lower(String source, String fileName);
+    }
+
+    /**
+     * {@link #run(String[])} with {@code frontEnd} lowering each file. A test passes a front end that fails in a known
+     * way (a real StackOverflowError, say) to check that the build reports it as JSC0005 at the file and never crashes,
+     * whatever the stack size (M1 hardening: the depth test no longer depends on how much stack a nested input uses).
+     */
+    public static int run(String[] args, FrontEnd frontEnd) throws IOException {
         if (args.length == 3 && args[0].equals("--check-abi")) return checkAgainstDescriptions(Path.of(args[1]), Path.of(args[2]));
         if (args.length >= 3 && args[0].equals("--migrate")) {
             boolean inPlace = args.length == 4 && args[3].equals("--in-place");
@@ -467,7 +498,7 @@ public final class JscMain {
             String text = Files.readString(f);
             String name = src.relativize(f).toString();
             try {
-                var lowered = lowerWithWarnings(text, f.getFileName().toString());
+                var lowered = frontEnd.lower(text, f.getFileName().toString());
                 lowered.diagnostics().forEach(w -> System.err.println(w.format(name)));
                 String java = lowered.java();
                 Path target = out.resolve(outputPath(text));
