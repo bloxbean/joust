@@ -30,3 +30,6 @@ def generateJsc = tasks.register('generateJsc', JavaExec) {
     args jscSrc.path, jscOut.get().asFile.path
 }
 sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
+
+// ADR-0018 M0: Option through the portable codecs (ADR-0013 D4, experimental) is checked on the .jsc 2 contracts.
+tasks.named('compileJava') { options.compilerArgs += ['-Ajoust.portable=true'] }

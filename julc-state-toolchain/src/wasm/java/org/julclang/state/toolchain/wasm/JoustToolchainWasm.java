@@ -26,7 +26,7 @@ public final class JoustToolchainWasm {
     /** Sources by file name ({@code .java}, {@code .jsc}), and JOUST's processor options. */
     public record BuildRequest(Map<String, String> files, Map<String, String> options) {}
 
-    public record Diagnostic(String severity, String message, String file, long line, String source) {}
+    public record Diagnostic(String severity, String message, String file, long line, long col, String source) {}
 
     public record Contract(String name, String packageName, String validatorName, String validatorSource,
                            String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson,
@@ -86,6 +86,6 @@ public final class JoustToolchainWasm {
                 r.validators().stream().map(v -> new Validator(v.name(), v.packageName(), v.purpose(), v.scriptCborHex(),
                         v.scriptHash(), v.scriptSizeBytes(), v.params().stream().map(p -> new Param(p.name(), p.type())).toList())).toList(),
                 r.diagnostics().stream().map(d -> new Diagnostic(d.severity().name().toLowerCase(), d.message(), d.file(), d.line(),
-                        d.source())).toList()));
+                        d.col(), d.source())).toList()));
     }
 }

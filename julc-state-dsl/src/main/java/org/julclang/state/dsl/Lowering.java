@@ -26,8 +26,8 @@ import java.util.TreeSet;
  */
 final class Lowering {
 
-    /** The Java source and any warnings. */
-    record Result(String java, List<String> warnings) {}
+    /** The Java source and any warnings, located (D12). */
+    record Result(String java, List<JscMain.Warning> warnings) {}
 
     private static final String PAYOUTS_TYPE = "JulcList<Payout>";
     private static final Set<String> BUILTINS = Set.of("caller", "received", "balance", "validFrom", "validTo");
@@ -47,7 +47,7 @@ final class Lowering {
     private final Map<String, Field> fields = new LinkedHashMap<>();
     private final Set<String> imports = new TreeSet<>();
     private final StringBuilder helpers = new StringBuilder();
-    private final List<String> warnings = new ArrayList<>();
+    private final List<JscMain.Warning> warnings = new ArrayList<>();
     private boolean anyPays;
     private int ifCount;
 
@@ -57,6 +57,10 @@ final class Lowering {
     }
 
     static Result lower(Contract c, String file) {
+        // The file name is embedded in comments and require messages. v1 is frozen (ADR-0018 D16), so it is not refused
+        // (that would make some deployed v1 scripts unrebuildable, review F16): comments get a sanitised copy and messages
+        // an escaped one, so no name can end a comment or a string (security S3), and every name that lowered before
+        // still gives the same require messages.
         var l = new Lowering(c, file);
         String java = l.render();
         return new Result(java, List.copyOf(l.warnings));
@@ -102,7 +106,7 @@ final class Lowering {
 
         void require(String cond, String message) {
             imports.add("org.julclang.state.api.Require");
-            emit("Require.that(" + cond + ", \"" + message + "\");");
+            emit("Require.that(" + cond + ", " + org.julclang.state.dsl.v2.JscV2.javaString(message) + ");");
         }
 
         void emit(String line) {
@@ -162,7 +166,7 @@ final class Lowering {
         var sb = new StringBuilder();
         sb.append("package ").append(c.pkg()).append(";\n\n");
         for (String i : imports) sb.append("import ").append(i).append(";\n");
-        sb.append("\n/**\n * GENERATED from ").append(file).append(" by julc-state-dsl (ADR-0005). Do not edit: change the .jsc file.\n */\n");
+        sb.append("\n/**\n * GENERATED from ").append(commentSafe(file)).append(" by julc-state-dsl (ADR-0005). Do not edit: change the .jsc file.\n */\n");
         var opts = new ArrayList<String>();
         c.options().forEach((k, v) -> opts.add(k + " = " + v + (k.equals("minAda") || k.equals("maxValidityMs") ? "L" : "")));
         sb.append("@StateContract").append(opts.isEmpty() ? "" : "(" + String.join(", ", opts) + ")").append('\n');
@@ -193,6 +197,25 @@ final class Lowering {
 
     private String where(Pos pos) {
         return file + ":" + pos.line();
+    }
+
+    /** {@link #where} for a comment: see {@link #commentSafe}. */
+    private String commentWhere(Pos pos) {
+        return commentSafe(file) + ":" + pos.line();
+    }
+
+    /**
+     * Text that cannot leave a Java comment: line terminators become spaces, a backslash is doubled (so it cannot start
+     * a unicode escape, which javac reads before comments) and a closing comment marker is broken.
+     */
+    static String commentSafe(String s) {
+        var out = new StringBuilder();
+        for (char ch : s.toCharArray()) {
+            if (ch == '\\') out.append("\\\\");
+            else if (ch < 0x20 || ch == 0x7f || ch == '\u2028' || ch == '\u2029') out.append(' ');
+            else out.append(ch);
+        }
+        return out.toString().replace("*/", "*\\/");
     }
 
     // ------------------------------------------------------------------ methods
@@ -257,7 +280,7 @@ final class Lowering {
         Val v = expr(m.viewExpr(), env, scope, false);
         expect(v, m.viewType(), m.viewExpr().pos());
         var sb = new StringBuilder();
-        sb.append("    // ").append(where(m.pos())).append('\n');
+        sb.append("    // ").append(commentWhere(m.pos())).append('\n');
         sb.append("    @View\n    public static ").append(javaType(m.viewType())).append(' ').append(m.name()).append("(")
                 .append(signature(m, scope, true)).append(") {\n");
         for (String l : em.lines) sb.append("        ").append(l).append('\n');
@@ -316,8 +339,8 @@ final class Lowering {
             }
         }
         if (destroy && !scope.readsBalance) {
-            warnings.add(where(m.pos()) + ": warning: destroy " + m.name() + " never reads balance: it must pay out all"
-                    + " of it (deposit included), or every call is rejected");
+            warnings.add(new JscMain.Warning(m.pos().line(), m.pos().col(), "destroy " + m.name() + " never reads balance: it must"
+                    + " pay out all of it (deposit included), or every call is rejected"));
         }
 
         String result;
@@ -340,7 +363,7 @@ final class Lowering {
             result = pays ? "new Outcome(" + state + ", " + env.payouts.java() + ")" : state;
         }
         var sb = new StringBuilder();
-        sb.append("    // ").append(where(m.pos())).append('\n');
+        sb.append("    // ").append(commentWhere(m.pos())).append('\n');
         for (String a : annotations) sb.append("    @").append(a).append('\n');
         sb.append("    public static ").append(returns).append(' ').append(m.name()).append('(')
                 .append(signature(m, scope, !init)).append(") {\n");
@@ -439,7 +462,7 @@ final class Lowering {
 
     private void exec(List<Stmt> body, Env env, Scope scope, Emitter em, boolean init, boolean destroy) {
         for (Stmt s : body) {
-            em.pending = "// " + where(pos(s));
+            em.pending = "// " + commentWhere(pos(s));
             switch (s) {
                 case Let l -> {
                     checkName(l.name(), l.pos(), "let");
@@ -631,7 +654,7 @@ final class Lowering {
             }
             result = "new " + returns + "(" + String.join(", ", vals) + ")";
         }
-        helpers.append("    // ").append(where(ifPos)).append(name.endsWith("_then") ? " (then)" : " (else)").append('\n');
+        helpers.append("    // ").append(commentWhere(ifPos)).append(name.endsWith("_then") ? " (then)" : " (else)").append('\n');
         helpers.append("    static ").append(returns).append(' ').append(name).append('(').append(String.join(", ", decls))
                 .append(") {\n");
         for (String l : em.lines) helpers.append("        ").append(l).append('\n');

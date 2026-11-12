@@ -14,9 +14,11 @@ dependencies {
     testImplementation project(':examples:counter')
     testImplementation project(':examples:bank')
     testImplementation project(':examples:token')     // S2b: read discovery
+    testImplementation project(':examples:dsl')       // ADR-0018 M0: .jsc 2 transition programs vs the JVM
     testImplementation libs.julc.vm.java
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes
+    testImplementation project(':julc-state-testkit')     // ADR-0018 M0: the validator leg of the four-way vectors
 }
 
 // I1 compares with what the Gradle build of the examples wrote.
