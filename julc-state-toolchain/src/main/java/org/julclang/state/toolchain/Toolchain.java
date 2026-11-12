@@ -230,7 +230,9 @@ public final class Toolchain {
         sources.forEach((name, t) -> {
             String path = javaPath(t, name);
             boolean lowered = name.endsWith(".java") && files.containsKey(name.replaceAll("\\.java$", ".jsc")) && generatedPaths.contains(path);
-            roots.add(new JavacFrontend.Unit(t, java.nio.file.Path.of(lowered ? path : name)));
+            // A build may be given Windows separators; javac checks a public class against the unit's base name, so
+            // the path is always '/'-separated, whatever the host (review r4 C9).
+            roots.add(new JavacFrontend.Unit(t, java.nio.file.Path.of(lowered ? path : name.replace('\\', '/'))));
         });
         var pool = new ArrayList<JavacFrontend.Unit>();
         classpathLibraries.values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
