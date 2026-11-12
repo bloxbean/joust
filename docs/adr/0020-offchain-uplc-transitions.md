@@ -1,6 +1,7 @@
 # ADR-0020: UPLC transition programs as the off-chain meaning on every path — a spike (answers ADR-0015 Q6)
 
-**Status:** Proposed (r6; approved by review at `04ea067`), **spike**: design plus a proof of concept to measure. Not a commitment: nothing changes
+**Status:** Proposed (r7: spike implemented and reported, §11; design approved by review at `04ea067`), **spike**: design plus a
+proof of concept to measure. Not a commitment: nothing changes
 for users until the spike's report is reviewed and this ADR is accepted or rejected.
 **Date:** 2026-11-12
 **Builds on:** ADR-0015 D3 (transition programs, `TransitionFn`), D4 (one description-driven runtime core; typed
@@ -490,6 +491,153 @@ replayable recordings of D4a), ADR-0015 I2 is completed by D4, and Q6 is answere
 - `Prepare.LOADED` is a static `HashMap` (fine in single-threaded Wasm; a race if `Prepare` is used from a
   multi-threaded JVM service).
 
+## 11. Spike report (r7)
+
+The spike was implemented on this branch as ADR-0020 approved it at `04ea067` (r6 wording at `7efe999`): a test-only
+module, `julc-state-uplc-spike`, plus one production change (`UplcTransitions` decodes its programs at construction,
+D11). The reports are in `julc-state-uplc-spike/report/` (copies of `build/spike/*.json`), produced at commit
+`12c040f` on the maintainer's machine (macOS aarch64, 16 CPUs, Java 25.0.2), JuLC `v0.1.0-pre21-rc1`, `julc-vm-java`
+(`JulcVm.create`) at `pv11(PLUTUS_V3)`, per-evaluation cap 10,000,000,000 CPU / 14,000,000 memory. Command:
+`./gradlew :julc-state-uplc-spike:test -Dspike.reps=10` (all 15 tests pass), plus
+`node --experimental-wasm-exnref julc-state-toolchain/src/test/js/run-transitions.mjs julc-state-toolchain/build/wasm
+julc-state-uplc-spike/build/spike/node-vectors.json` with an engine built from the same commit
+(`./gradlew :julc-state-toolchain:toolchainWasm -PgraalvmHome=…/graalvm-25.3.4.1+1.1/Contents/Home`, 30.2 MB). The DevKit
+leg ran at `10e966b` against a running Yaci DevKit (`--tests '*ShadowDescribed*'`).
+
+### 11.1 What was built (against the plan)
+
+| Plan item | Built | Where |
+|---|---|---|
+| D3 `JvmTransitions` (javac's compilation of `<Name>Transitions`, strict record codec), `ShadowTransitions` (final runs only, union of needs, round-limit asymmetry), the per-call latch checked at the end of every prepare | yes | `JvmTransitions`, `DataCodec`, `ShadowTransitions`, `Latch`, `Spike.prepare` |
+| D1 no production seam: `Prepare`'s described-contract cache filled by reflection | yes | `Spike.install` |
+| D8 manifest, its check before evaluation, allowlist with pinned overrides, the mechanical variant check, CI recompile check | yes (21 contracts; committed manifests) | `Manifest`, `Programs`, `ManifestTest`, `src/test/resources/manifests` |
+| D9 outcome classes; the auxiliary (tagged `Require`) and diagnostic (source-mapped) sets; final-run comparison | yes | `Programs`, `UplcRunner`, `OutcomeClassTest` |
+| D9 access-set recorders (instrumented `MerkleMaps`, empty-read-set JVM run), U5 | **not built** | — |
+| D4(a) replays: 34 dapp call requests in three modes; 214 `m3` recordings through the JVM and shadow | yes | `ReplayDifferentialTest` |
+| D4(a) DevKit flows in shadow | yes (see 11.2) | `ShadowDescribed*DevnetTest` |
+| D4(a) other `m0` recordings rebuilt from recipes | **not built** | — |
+| D4(b) generated vectors in three classes | yes (Counter, Vault) | `GeneratedVectorsTest` |
+| D4(c) divergence corpus | yes | `Probe` contract, `OutcomeClassTest` |
+| D10 validator leg | through `Prepare`, which evaluates the real validators while building (F19): replays and wrong steps; **not** for generated vectors | `WrongStepTest` |
+| U9 and the seeded wrong steps, one per lower-bound row | yes | `WrongStepTest` |
+| D11 thread-safe `UplcTransitions`, cumulative per-call limit, concurrency tests | yes; caps from protocol parameters **not built** | `LatchTest`, `Latch` |
+| D5 measurements | yes; Node as an aggregate only | `MeasurementsTest`, `report/measurements.json`, `report/node.txt` |
+
+### 11.2 Results
+
+**Agreement (C1).**
+- `fixtures/m0/dapp`: all 34 call requests replay byte-identical to the recordings through programs, `JvmTransitions`
+  and shadow. The typed-client leg is `examples/dapp`'s `ReplayTest` (34/34 byte-identical through the typed
+  clients), so typed clients, `JvmTransitions` and programs give the same transactions on these inputs.
+- `fixtures/m3`: all 214 engine recordings (15 groups, 19 contracts) replay byte-identical through programs, the JVM
+  and shadow; 523 shadow comparisons over 68 methods (isolated run), every one agreeing. They cover creations, actions,
+  destroys, owned and keyed objects, batched intents (Pool), MerkleMaps with read discovery (Token, Locker), migration
+  (CounterV1 → CounterV2), staking (StakedVault), deposits (Pot, Stall), assets and sends (Dex).
+- Generated vectors (seed 20261112): 4,024 reachable calls (3,266 expected successes, 758 expected refusals) agree and
+  meet their written expectations; 1,364 well-typed unreachable states agree.
+- Node: the 244 distinct final evaluations of the replay pass, run through the engine's VM, are 244/244 identical to
+  the JVM's answers (160–243 ms for all 244 after the engine is ready, three runs; an aggregate, not a p95).
+- DevKit (shadow): the nine described DevKit flows of `julc-state-runtime-wasm`, copied with `ShadowTransitions` in
+  place of `UplcTransitions`, pass on a live DevKit (10 tests; Fees, Guild, Locker, Pool, Registry, Staking, Token,
+  Treasury, Upgrade): 112 shadow comparisons over 48 methods, 6 of them refusals, no mismatch; the chain accepted
+  every transaction built from the program's step (`report/devkit-shadow.json`).
+
+**The divergence corpus (D4c) found no reachable divergence at JuLC `v0.1.0-pre21-rc1`.** `byte[].equals` is refused
+by JuLC (JULC0087) before any program exists; `JulcMap.insert` of an existing key (ADR-0015 Q6's example) and
+`byte[]`-keyed `JulcList.contains` and `JulcMap.containsKey` give the same answer on the JVM and on-chain. The benefit
+UPLC mode exists for, removing JVM/chain divergences off-chain, has no instance in this corpus.
+
+**Cost (C2).** Whole prepares through the described core, 248 calls × 10 repetitions after a warm-up: programs p50
+11.41 ms, p95 20.42 ms; `JvmTransitions` p50 11.12 ms, p95 20.33 ms (about 0.3 ms per call). Per evaluation: VM p50
+0.035 ms, p95 0.199 ms; javac method p50 0.026 ms, p95 0.059 ms (6,630 evaluations each). C2 holds by a wide margin.
+
+**Units and sizes.** The largest transition evaluation was 50.0 M CPU, against 145 M (p50) and 959 M (max) for the
+validators of a recorded transaction. Programs per contract total 397 B (CounterV1) to 7.8 KB (Token), against
+validators of 5.6–14.7 KB. The auxiliary set (tagged `Require`) is 2–8 % larger; the diagnostic set (source maps,
+optimiser skipped) is 6–23 times larger (Counter 470 → 9,332 B; Token 7,778 → 52,036 B) and costs about twice the units
+(2.18 M → 4.39 M CPU for one failing evaluation).
+
+**Evaluations per call (map rounds).** 0 (36 calls), 2 (140), 3 (1), 4 (38), 6 (18), 8 (15): the most was a Token
+transfer with 8 evaluations.
+
+**Worst case (D5.7).** A budget-exhausting evaluation (`Probe.spin`, recursion until the cap) ends as `budget` after
+3.23 G CPU / 14.0 M memory (the memory cap is reached first) in 5.4 ms p50, 6.9 ms max (5 runs).
+
+**Wrong steps (U9, C6).** One seed per lower-bound row of §2:
+
+| Seed | Outcome |
+|---|---|
+| an extra payout recipient (Vault.withdraw) | refused by the validator while building |
+| an extra sub-min-UTxO payout | refused by the validator |
+| an extra payout in a destroy (Vault.close) | refused by the builder's own check (a destroy pays out everything) |
+| a larger send (Dex.swapAdaForToken) | refused by the builder (negative quantity in an output) |
+| a smaller migration successor (an extra payout from CounterV1.upgrade) | **built and accepted by the validators**, the wallet balancing the difference; caught only by U9 |
+
+The last row is S8's case: once the program is the only leg, nothing but a step-independent outflow bound (C7)
+would catch it.
+
+**Outcome classes (D9).** A `Require` message starting `joust:` is misread as `error` by the engine's last-trace rule
+and correctly kept by the auxiliary tag; a forged `joust:require` before a division by zero is classified `require`
+by the tag and flagged as a split with the JVM's `error`; a division by zero is `error` on both sides.
+
+**Lenient decoding (S15).** The ABI check rejected all 300 malformed targets; run raw, the program **succeeded on 150**
+of them (wrong constructor tags and extra fields are not checked by `compileMethod`'s wrapper).
+
+**Diagnostics (C4).** The source-mapped rerun reproduces the failure, but locates it at the generated wrapper's line
+(`ProbeTransitions.java:56`, the call to `Probe.divide`), not inside the contract method: the source map covers the
+wrapper, not the contract's library source.
+
+**Manifests (D8, U3).** The spike's rebuild of the programs (the toolchain's pool, options and discovery
+substitution) equals the toolchain's programs byte for byte for all 21 contracts; the committed manifests equal a fresh
+compile; the engine's `m3` artifacts are consistent with today's manifests; the check refuses all ten negative cases
+before evaluation. The discovery `MerkleMaps` equals the on-chain source above the marker.
+
+**Latch and concurrency (U8, D11).** On the 11 recorded Pool batches (each with several intents) a mismatch on the
+first intent, and on every intent, fails the call with no transaction; latched calls beside clean concurrent ones
+fail alone; production `UplcTransitions` shared by 16 threads over 400 calls gives the expected steps. Existing tests
+are unchanged by the production fix (U1): `ReplayTest` 34/34, `DescribedReplayTest` 2/2, `EngineFixturesTest`,
+`TransitionParityTest`, `ReadDiscoveryTest`.
+
+### 11.3 The criteria
+
+| Criterion | Status |
+|---|---|
+| C1 agreement | met on every corpus (zero semantic mismatches); the divergence half is vacuous (no reachable divergence) |
+| C2 latency | met (≈0.3 ms per call; threshold 25 ms) |
+| C3 coverage | met for the kinds the corpora reach; the `DescribedContract` gaps (F20) were not exercised: insufficient evidence |
+| C4 diagnostics | **not met**: locations stop at the generated wrapper |
+| C5 service bound | partly: thread safety done; a per-request bound is adoption work |
+| C6 U9 and wrong steps | met: every seed refused or flagged |
+| C7 outflow bound (at adoption) | **required**: the migration seed shows a wrong step the validators accept |
+
+Not done, and why: the access-set recorders and U5 (the read sets are equal on every replay because the final steps
+and transactions are; the finer access comparison was not needed to reach a recommendation); recipe-based
+reconstruction of the other 167 `m0` recordings; a validator leg for generated vectors (they have no transaction
+context); caps from protocol parameters; a Node p95.
+
+### 11.4 Proposed answer to ADR-0015 Q6
+
+**Keep the JVM methods on the typed Java path; keep programs in the engine; run shadow in CI.** The reasons:
+1. The benefit is not there today. Every corpus agrees, and no JVM/chain divergence is reachable at the pinned JuLC
+   (the compiler refuses one, the other no longer differs). JuLC's own consistency programme (ADR-062/063) is
+   closing this class of difference at its source.
+2. The cost is real. Moving the typed path onto `DescribedContract` means about fifteen call sites, the generated
+   client, and closing `DescribedContract`'s M3 gaps (F20); and C4 (diagnostics) is not met.
+3. Shadow is cheap and catches what UPLC mode would fix: if a divergence appears (a JuLC change, a new library), the
+   offline replays and generated vectors fail.
+
+Adopt now, independently of Q6:
+- **Shadow in CI** (Q4): `ReplayDifferentialTest` and `GeneratedVectorsTest` run offline in under two minutes.
+- **The tagged `Require` in the engine's programs** (+2–8 % size): the engine today misreads a `Require` message that
+  starts with `joust:`.
+- **The ABI check before every program evaluation** in the engine (S15): the program decodes leniently.
+- **Program manifests** for the engine's bundles, with the recompile check.
+- **The thread-safe `UplcTransitions`** (done in this spike).
+- **Retire `-Ajoust.portable`** once nothing uses it (ADR-0015 Q6's second half): the engine already runs programs.
+
+Revisit UPLC on the typed path if a divergence appears in shadow, or when JuLC source maps cover library code
+(C4) and `DescribedContract`'s gaps are closed (ADR-0015 M3); C7's outflow bound is then a precondition.
+
 ## Revision history
 
 - **r1** (2026-11-12): initial version. Research found ADR-0015 D3's transition programs in the npm engine, so the
@@ -536,3 +684,9 @@ replayable recordings of D4a), ADR-0015 I2 is completed by D4, and Q6 is answere
 - **r6** (2026-11-12, wording, after approval by all three reviewers at `04ea067`): `Require` allowlisted for the
   auxiliary set only, with a negative test (S17, F29); a non-reproducing auxiliary rerun stays `error`
   ("unclassified") (S17, F30); C7's fee cap is an explicit absolute maximum (C18).
+- **r7** (2026-11-12, the spike's report; no design decision changed): §11 added with what was built against the plan,
+  the results on every corpus (34 dapp and 214 `m3` replays byte-identical in all modes, 523 offline and 112 DevKit
+  shadow comparisons without a mismatch, 4,024 reachable and 1,364 unreachable generated vectors agreeing, 244/244 in
+  Node), no reachable divergence at JuLC `v0.1.0-pre21-rc1`, the costs (≈0.3 ms per call), the wrong-step and
+  diagnostics findings, the criteria's status, and a proposed answer to ADR-0015 Q6 (JVM on the typed path, programs
+  in the engine, shadow in CI; adopt the tagged `Require`, the ABI check and manifests in the engine now).
