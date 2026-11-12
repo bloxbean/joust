@@ -15,6 +15,7 @@ import org.julclang.state.runtime.SlotChainTime;
 import org.julclang.state.runtime.StateRuntime;
 import org.julclang.state.runtime.WalletAccount;
 import org.julclang.state.runtime.described.DescribedContract;
+import org.julclang.state.runtime.described.ProgramManifest;
 import org.julclang.state.runtime.described.UplcTransitions;
 import org.julclang.state.runtime.snapshot.Need;
 import org.julclang.state.runtime.snapshot.Snapshot;
@@ -37,8 +38,11 @@ public final class Prepare {
 
     static final ObjectMapper JSON = new ObjectMapper();
 
-    /** A contract as the toolchain builds it: the description (JSON), the script (CBOR hex), the transition programs. */
-    public record Contract(String description, String script, Map<String, String> transitions) {}
+    /**
+     * A contract as the toolchain builds it: the description (JSON), the script (CBOR hex), the transition programs, and
+     * their manifest (JSON, ADR-0020 D8), which must match the other three before any program runs.
+     */
+    public record Contract(String description, String script, Map<String, String> transitions, String manifest) {}
 
     /**
      * {@code call}: the request JSON, {@code { contract, kind, method, instance, object, args, pay: {lovelace}, address }};
@@ -99,16 +103,18 @@ public final class Prepare {
                          String plan, String needKind, String needKey, String error, Map<String, String> mapNodes) {}
 
     /**
-     * Described contracts, parsed once: by description, script and transition programs together (a rebuild can change
-     * the code and keep the description, as joust dev does on save).
+     * Described contracts, parsed once: by description, script, transition programs and manifest together (a rebuild
+     * can change the code and keep the description, as joust dev does on save). A contract is loaded only once its
+     * manifest matches (ADR-0020 D8): no program is evaluated before.
      */
     private static final Map<String, DescribedContract> LOADED = new HashMap<>();
 
     static DescribedContract load(Contract c) throws Exception {
         String key = c.description() + '\u0000' + c.script() + '\u0000'
-                + (c.transitions() == null ? "" : new java.util.TreeMap<>(c.transitions()).toString());
+                + (c.transitions() == null ? "" : new java.util.TreeMap<>(c.transitions()).toString()) + '\u0000' + c.manifest();
         DescribedContract d = LOADED.get(key);
         if (d == null) {
+            ProgramManifest.check(c.manifest(), c.description(), c.script(), c.transitions() == null ? Map.of() : c.transitions());
             d = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
             LOADED.put(key, d);
         }

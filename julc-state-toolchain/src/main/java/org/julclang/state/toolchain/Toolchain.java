@@ -50,10 +50,13 @@ public final class Toolchain {
     /** A finding, from javac, JOUST (reader and lint) or JuLC. */
     public record Diagnostic(Severity severity, String message, String file, long line, String source) {}
 
-    /** One compiled contract. */
+    /**
+     * One compiled contract. {@code manifestJson}: its transition programs' manifest (ADR-0020 D8; the format is
+     * {@code ProgramManifest}'s in julc-state-runtime), or null when no program was compiled.
+     */
     public record Contract(String name, String packageName, String validatorName, String validatorSource,
                            String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson,
-                           String transitionsSource, Map<String, String> transitions) {}
+                           String transitionsSource, Map<String, String> transitions, String manifestJson) {}
 
     /** A plain validator of the project, read inside the attribution query: plain strings, no javac model. */
     private record PlainValidator(String name, String packageName, String purpose, String source) {}
@@ -198,12 +201,14 @@ public final class Toolchain {
             // Transition programs (D3): each transition method compiled on its own over the same pool.
             var transitions = new LinkedHashMap<String, String>();
             String transitionsSource = null;
+            List<LibrarySource> libs = List.of();
+            var substituted = new ArrayList<String>();
             if (g.transitions() != null) {
                 transitionsSource = g.transitions().source();
-                var libs = discovery(LibrarySourceResolver.resolveLibrarySources(transitionsSource, libraryPool));
+                libs = discovery(LibrarySourceResolver.resolveLibrarySources(transitionsSource, libraryPool), substituted);
                 for (String m : g.transitions().methods()) {
                     try {
-                        var tr = compiler.compileMethod(transitionsSource, m, libs.stream().map(LibrarySource::source).toList());
+                        var tr = compiler.compileMethod(transitionsSource, m, sources(libs));
                         if (tr.hasErrors()) {
                             tr.diagnostics().forEach(d -> diagnostics.add(new Diagnostic(Severity.WARNING,
                                     "transition " + m + " not compiled: " + d, g.contractName(), -1, "julc")));
@@ -216,10 +221,12 @@ public final class Toolchain {
                     }
                 }
             }
+            String scriptCborHex = JulcScriptAdapter.fromProgram(program).getCborHex();
+            String manifest = g.transitions() == null ? null : Manifests.write(g.packageName() + "." + g.contractName(),
+                    scriptCborHex, g.descriptionJson(), libs, substituted, transitions, g.transitions().args());
             contracts.add(new Contract(g.contractName(), g.packageName(), g.validatorName(), g.validatorSource(),
-                    JulcScriptAdapter.fromProgram(program).getCborHex(),
-                    result.isParameterized() ? "" : JulcScriptAdapter.scriptHash(program),
-                    result.scriptSizeBytes(), g.descriptionJson(), transitionsSource, transitions));
+                    scriptCborHex, result.isParameterized() ? "" : JulcScriptAdapter.scriptHash(program),
+                    result.scriptSizeBytes(), g.descriptionJson(), transitionsSource, transitions, manifest));
         }
         // 6. The project's plain validators (governors, ...), compiled as JuLC's annotation processor does.
         var validators = new ArrayList<Validator>();
@@ -256,17 +263,22 @@ public final class Toolchain {
      * {@code META-INF/joust/discovery/} on the class path replaces the on-chain one (MerkleMaps' read discovery,
      * Require's {@code joust:require} tag).
      */
-    private static List<LibrarySource> discovery(List<LibrarySource> libs) {
+    private static List<LibrarySource> discovery(List<LibrarySource> libs, List<String> substituted) {
         var out = new ArrayList<LibrarySource>(libs.size());
         for (LibrarySource l : libs) {
             String path = "META-INF/joust/discovery/" + l.fqcn().replace('.', '/') + ".java";
             try (var in = Toolchain.class.getClassLoader().getResourceAsStream(path)) {
+                if (in != null) substituted.add(l.fqcn());
                 out.add(in == null ? l : LibrarySourceResolver.librarySource(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)));
             } catch (java.io.IOException e) {
                 throw new java.io.UncheckedIOException("cannot read " + path, e);
             }
         }
         return out;
+    }
+
+    private static List<String> sources(List<LibrarySource> libs) {
+        return libs.stream().map(LibrarySource::source).toList();
     }
 
     private static boolean isStateContract(TypeElement type) {

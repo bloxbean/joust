@@ -30,7 +30,7 @@ public final class JoustToolchainWasm {
 
     public record Contract(String name, String packageName, String validatorName, String validatorSource,
                            String scriptCborHex, String scriptHash, int scriptSizeBytes, String descriptionJson,
-                           String transitionsSource, Map<String, String> transitions) {}
+                           String transitionsSource, Map<String, String> transitions, String manifestJson) {}
 
     public record Param(String name, String type) {}
 
@@ -82,7 +82,7 @@ public final class JoustToolchainWasm {
         return ServiceResult.ok(new BuildResult(r.ok(),
                 r.contracts().stream().map(c -> new Contract(c.name(), c.packageName(), c.validatorName(), c.validatorSource(),
                         c.scriptCborHex(), c.scriptHash(), c.scriptSizeBytes(), c.descriptionJson(), c.transitionsSource(),
-                        c.transitions())).toList(),
+                        c.transitions(), c.manifestJson())).toList(),
                 r.validators().stream().map(v -> new Validator(v.name(), v.packageName(), v.purpose(), v.scriptCborHex(),
                         v.scriptHash(), v.scriptSizeBytes(), v.params().stream().map(p -> new Param(p.name(), p.type())).toList())).toList(),
                 r.diagnostics().stream().map(d -> new Diagnostic(d.severity().name().toLowerCase(), d.message(), d.file(), d.line(),

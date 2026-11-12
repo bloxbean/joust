@@ -17,6 +17,7 @@ import javax.lang.model.util.ElementFilter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * {@code <Name>Transitions} (ADR-0015 D3): the contract's transitions as on-chain Java, one static method per
@@ -52,8 +53,13 @@ public final class TransitionsGenerator {
         this.env = env;
     }
 
-    /** The source, and the transition methods it defines (name → the contract method it runs). */
-    public record Transitions(String className, String source, List<String> methods) {}
+    /**
+     * The source, the transition methods it defines (name → the contract method it runs), and each program's argument
+     * layout: the fields of its args record, in the description's vocabulary ({@code $params}, {@code $read:<name>},
+     * {@code $funds}, {@code $into}, {@code $admitted}, {@code $amount}, then the call's arguments by name), which the
+     * program manifest records and the engine checks against the description's {@code transitionArgs} (ADR-0020 D8).
+     */
+    public record Transitions(String className, String source, List<String> methods, Map<String, List<String>> args) {}
 
     public static Transitions generate(ContractIR c, TypeElement contract, ProcessingEnvironment env) {
         return new TransitionsGenerator(c, contract, env).source();
@@ -72,6 +78,7 @@ public final class TransitionsGenerator {
         String cls = X + "Transitions";
         var w = new SourceWriter();
         var methods = new ArrayList<String>();
+        var args = new LinkedHashMap<String, List<String>>();
         var stepTypes = new LinkedHashMap<String, String>();   // target type (source form) → step record name
         var body = new SourceWriter();
         var all = new ArrayList<TransitionIR>(c.spendTransitions());
@@ -88,6 +95,7 @@ public final class TransitionsGenerator {
             if (code == null) continue;
             body.line(code);
             methods.add(t.method());
+            args.put(t.method(), layout(t, m));
         }
         // Creations (@Init, @OwnedInit): no target; the step's next is what they make.
         var creations = new ArrayList<TransitionIR>();
@@ -104,6 +112,7 @@ public final class TransitionsGenerator {
             if (code == null) continue;
             body.line(code);
             methods.add(t.method());
+            args.put(t.method(), layout(t, m));
         }
         // @Withdraw (ADR-0010): its program gives the reward sends for an amount (ADR-0015 M3).
         boolean sendsImport = c.assetAware();
@@ -113,6 +122,9 @@ public final class TransitionsGenerator {
             if (code != null) {
                 body.line(code);
                 methods.add(withdraw.get().method());
+                var layout = new ArrayList<String>(List.of("$params", "$amount"));
+                for (ParamIR p : withdraw.get().args()) layout.add(p.name());
+                args.put(withdraw.get().method(), layout);
                 sendsImport = true;
             }
         }
@@ -145,7 +157,7 @@ public final class TransitionsGenerator {
         w.blank();
         w.line(body.toString().stripTrailing());
         w.close("}");
-        return new Transitions(c.packageName() + "." + cls, w.toString(), methods);
+        return new Transitions(c.packageName() + "." + cls, w.toString(), methods, args);
     }
 
     private static boolean unsupported(TransitionIR t) {
@@ -304,6 +316,20 @@ public final class TransitionsGenerator {
                 .append(c.assetAware() ? ", Sends.none(), Assets.none(), Assets.none(), JulcList.empty()" : "")
                 .append(eventsType() != null ? ", JulcList.empty()" : "").append(");\n    }\n");
         return sb.toString();
+    }
+
+    /** The args record's fields, by what fills each: {@link #leadingFields} and then the arguments (ADR-0020 D8). */
+    private List<String> layout(TransitionIR t, ExecutableElement m) {
+        var out = new ArrayList<String>();
+        if (t.takesParams()) out.add("$params");
+        for (var rd : t.reads()) out.add("$read:" + rd.name());
+        if (t.hasFunds()) out.add("$funds");
+        for (VariableElement p : m.getParameters()) {
+            if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Into"))) out.add("$into");
+        }
+        if (t.arriving() != null) out.add("$admitted");
+        for (ParamIR p : t.params()) out.add(p.name());
+        return out;
     }
 
     /** The args record's leading fields: the {@code @Params} record and the {@code @Reads} states, before the arguments. */

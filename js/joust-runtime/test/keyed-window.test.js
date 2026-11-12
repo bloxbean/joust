@@ -48,7 +48,8 @@ function chainOf(snapshot, tip) {
 
 async function prepareUnder(engine, x, clock) {
   const contracts = contractsOf(x).map((c) => ({ description: typeof c.description === 'string' ? c.description : JSON.stringify(c.description),
-    script: c.script, transitions: c.transitions }));
+    script: c.script, transitions: c.transitions,
+    manifest: typeof c.manifest === 'string' ? c.manifest : JSON.stringify(c.manifest) }));
   return engine.joust.prepare({ call: JSON.stringify(x.call), snapshot: JSON.stringify(x.snapshot), contracts,
     zeroSlot: BigInt(clock.zeroSlot), zeroTimeMs: BigInt(clock.zeroTimeMs), slotLengthMs: BigInt(clock.slotLengthMs),
     ttlMs: BigInt(clock.ttlMs), networkId: 0, mapNodes: {}, mapProofs: {} });

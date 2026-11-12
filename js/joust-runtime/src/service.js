@@ -32,7 +32,8 @@ const big = (x) => BigInt(x);
 
 /**
  * @param o.api        raw chain reads (blockfrostApi(url))
- * @param o.contracts  the contracts as `joust build` writes them: [{ description, script, transitions }]
+ * @param o.contracts  the contracts as `joust build` writes them: [{ description, script, transitions, manifest }]; the
+ *                     engine refuses programs whose manifest does not match (ADR-0020 D8)
  * @param o.clock      the chain's slot clock: { zeroSlot, zeroTimeMs, slotLengthMs }
  * @param o.networkId  0 (test networks) or 1 (mainnet)
  * @param o.ttlMs      how long a prepared transaction stays valid (default 120 s; a DevKit's horizon is minutes)
@@ -51,6 +52,7 @@ export function engineService(o) {
   const contracts = o.contracts.map((c) => ({
     description: typeof c.description === 'string' ? c.description : JSON.stringify(c.description),
     script: c.script, transitions: c.transitions,
+    manifest: c.manifest == null ? null : typeof c.manifest === 'string' ? c.manifest : JSON.stringify(c.manifest),
   }));
   const rounds = [];
   // Map calls: proofs from the mirrors by default; the whole node store only when the caller gives one (earlier form).

@@ -4,7 +4,11 @@ export { JoustContract, VerificationError, blockfrostChain, chainOf, blockfrostP
 
 export interface Clock { zeroSlot: number; zeroTimeMs: number; slotLengthMs: number }
 /** A contract as `joust build` writes it in build/joust/contracts.json. */
-export interface BuiltContract { description: string | object; script: string; transitions: Record<string, string> }
+export interface BuiltContract {
+  description: string | object; script: string; transitions: Record<string, string>;
+  /** The transition programs' manifest (ADR-0020 D8): the engine refuses programs without a matching one. */
+  manifest: string | object;
+}
 /** A plain JuLC validator as `joust build` writes it in build/joust/validators.json (a governor, ...). */
 export interface BuiltValidator { name: string; package: string; purpose: string; script: string; scriptHash: string; params: { name: string; type: string }[] }
 /** A governor with its parameters applied (ensureGovernor): give it to a call as opts.governor = { governor, signers }. */

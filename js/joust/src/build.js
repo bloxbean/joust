@@ -1,6 +1,7 @@
 // joust build: contracts/**/*.java and *.jsc -> build/joust/ (ADR-0015 D9)
-//   contracts.json        what the runtime needs: [{ description, script, transitions }]
+//   contracts.json        what the runtime needs: [{ description, script, transitions, manifest }]
 //   <Contract>.json       the description (CIP-57 + x-joust v2)
+//   <Contract>.manifest.json  the transition programs' manifest (ADR-0020 D8), checked by the engine before it runs them
 //   <Contract>.plutus     the compiled validator (CBOR hex)
 //   <Contract>.js/.d.ts   the typed client (joust-gen), importing @julclang/state-client
 //   validators.json       the plain JuLC validators (governors, ...): [{ name, purpose, script, params }]
@@ -52,7 +53,9 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     const { js, dts } = generate(description);
     writeFileSync(join(dir, c.name + '.js'), js);
     writeFileSync(join(dir, c.name + '.d.ts'), dts);
-    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, built: { joust: VERSION } });
+    const manifest = c.manifestJson ? JSON.parse(c.manifestJson) : null;
+    if (manifest) writeFileSync(join(dir, c.name + '.manifest.json'), c.manifestJson);
+    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, manifest, built: { joust: VERSION } });
     log(`${c.packageName}.${c.name}: ${c.scriptSizeBytes} bytes, hash ${c.scriptHash || '(parameterised)'}, `
       + `${Object.keys(c.transitions).length} transitions`);
   }
