@@ -1,0 +1,52 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { concat, take, drop, toInt, toHex, length } from "std/bytes"
+import { sha2_256, sha3_256, blake2b_256, verifyEd25519 } from "std/crypto"
+import { andBytes, orBytes, xorBytes, complement, readBit, shift, rotate, countSetBits, findFirstSetBit } from "std/bits"
+
+// ADR-0018 M1a vectors (D8, J3, J7): std/bytes, std/crypto and std/bits at their domain edges, on every leg.
+contract StdBytes {
+  state { owner: Key, b: Bytes, n: Int, r: Int, flag: Bool }
+
+  init() {
+    return { owner: caller, b: utf8(""), n: 0, r: 0, flag: false }
+  }
+
+  action cat(x: Bytes, y: Bytes) {
+    const c = concat(x, y)
+    return { ...state, b: c, n: length(c) }
+  }
+
+  action cut(x: Bytes, k: Int, front: Bool) {
+    return { ...state, b: front ? take(x, k) : drop(x, k) }
+  }
+
+  action num(x: Bytes) {
+    return { ...state, b: toHex(x), n: toInt(x) }
+  }
+
+  action hash(x: Bytes) {
+    return { ...state, b: concat(sha2_256(x), concat(sha3_256(x), blake2b_256(x))) }
+  }
+
+  action sig(key: Bytes, msg: Bytes, signature: Bytes) {
+    return { ...state, flag: verifyEd25519(key, msg, signature) }
+  }
+
+  action logic(pad: Bool, x: Bytes, y: Bytes, op: Int) {
+    return { ...state, b: op == 0 ? andBytes(pad, x, y) : op == 1 ? orBytes(pad, x, y) : xorBytes(pad, x, y) }
+  }
+
+  action count(x: Bytes) {
+    return { ...state, b: complement(x), n: countSetBits(x), r: findFirstSetBit(x) }
+  }
+
+  action bit(x: Bytes, i: Int) {
+    return { ...state, flag: readBit(x, i) }
+  }
+
+  action move(x: Bytes, k: Int, rot: Bool) {
+    return { ...state, b: rot ? rotate(x, k) : shift(x, k) }
+  }
+}

@@ -1,0 +1,45 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { div, mod, pow, expMod, sign } from "std/math"
+import { last, nth, indexOf } from "std/list"
+import { elapsedSince, elapsedSinceAtMost, windowStart, windowEnd } from "std/time"
+
+// ADR-0018 M1a vectors (D7, D8, J3, J7): std/math, std/list, std/time, ranges, take and drop, on every leg.
+contract StdMath {
+  state { owner: Key, n: Int, r: Int, o: Option<Int>, xs: List<Int>, since: Int, upTo: Int }
+
+  init() {
+    return { owner: caller, n: 0, r: 0, o: None, xs: [], since: 0, upTo: 0 }
+  }
+
+  action floor(a: Int, b: Int) {
+    return { ...state, n: div(a, b), r: mod(a, b) }
+  }
+
+  action power(a: Int, e: Int) {
+    return { ...state, n: pow(a, e), r: sign(a) }
+  }
+
+  action modPow(a: Int, e: Int, m: Int) {
+    return { ...state, n: expMod(a, e, m) }
+  }
+
+  action pick(ys: List<Int>, i: Int, which: Int) {
+    return { ...state, o: which == 0 ? last(ys) : which == 1 ? nth(ys, i) : indexOf(ys, i) }
+  }
+
+  action slices(ys: List<Int>, k: Int) {
+    return { ...state, xs: ys.take(k).concat(ys.drop(k).reverse()) }
+  }
+
+  action ranged(a: Int, b: Int) {
+    return { ...state, xs: range(a, b).filter(i => i % 3 == 0).map(i => i * 2), n: range(a, b).fold(0, (acc, i) => acc + i),
+             o: range(a, b).any(i => i == 7) ? Some(7) : None }
+  }
+
+  // The window's helpers are sources of time values: stored here (each store warns about the bias).
+  action stamp(t: Int) {
+    return { ...state, since: elapsedSince(t) + windowStart() * 0, upTo: elapsedSinceAtMost(t) + windowEnd() * 0 }
+  }
+}

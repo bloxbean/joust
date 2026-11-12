@@ -1,0 +1,89 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { length } from "std/bytes"
+
+// ADR-0018 M1a: an enum with exhaustive match, an inline Map (canonical, checked at the boundary) and a BigMap (a Merkle
+// map: each call proves only the keys it reads and writes, ADR-0002/0014).
+
+enum Phase {
+  Open,
+  Paused { reason: Bytes },
+  Closed { day: Int, by: Key }
+}
+
+contract Ledger(maxDatumBytes = 2048) {
+  state {
+    admin: Key,
+    phase: Phase,
+    limits: Map<Key, Int>,
+    balances: BigMap<Key, Int>,
+    supply: Int
+  }
+
+  // The limits are a checked input: canonical keys of 28 bytes, each limit positive.
+  init(limits: Map<Key, Int>) {
+    require(limits.all((k, v) => v > 0), "limits must be positive")
+    return { admin: caller, phase: Open, limits, balances: BigMap.empty(), supply: 0 }
+  }
+
+  action pause(reason: Bytes) only admin {
+    require(phase == Open, "not open")
+    require(length(reason) <= 32, "reason too long")
+    return { ...state, phase: Paused { reason } }
+  }
+
+  action close(day: Int) only admin {
+    match phase {
+      Closed => require(false, "already closed")
+      _ => { }
+    }
+    return { ...state, phase: Closed { day, by: caller } }
+  }
+
+  action setLimit(who: Key, limit: Int) only admin {
+    require(limit >= 0, "a limit is not negative")
+    return { ...state, limits: limit == 0 ? limits.delete(who) : limits.set(who, limit) }
+  }
+
+  // Minting is capped per holder by the limits map, and only while open.
+  action mint(to: Key, amount: Int) only admin {
+    require(phase == Open, "not open")
+    require(amount > 0, "amount must be positive")
+    const cap = limits.get(to) ?? 0
+    require(balances[to] + amount <= cap, "over the holder's limit")
+    return { ...state, balances: balances.set(to, balances[to] + amount), supply: supply + amount }
+  }
+
+  // A transfer reads the recipient through the debit, so a self-transfer keeps the balance.
+  action transfer(to: Key, amount: Int) {
+    require(amount > 0, "amount must be positive")
+    const left = balances[caller] - amount
+    require(left >= 0, "insufficient balance")
+    return { ...state, balances: balances.set(caller, left).set(to, balances.set(caller, left)[to] + amount) }
+  }
+
+  view balanceOf(who: Key): Int = balances[who]
+
+  view limitOf(who: Key): Int = limits.get(who) ?? 0
+
+  view phaseCode(): Int = match phase {
+    Open => 0
+    Paused { reason } => 1 + length(reason)
+    Closed { day } => 100 + day
+  }
+
+  // Closed and every token burned: a closer named in the phase takes half, the admin the rest.
+  destroy settle() only admin {
+    require(balances.isEmpty, "tokens remain")
+    match phase {
+      Closed { by } => {
+        pay(by, balance / 2)
+        pay(admin, balance - balance / 2)
+      }
+      _ => {
+        pay(admin, balance)
+      }
+    }
+  }
+}
