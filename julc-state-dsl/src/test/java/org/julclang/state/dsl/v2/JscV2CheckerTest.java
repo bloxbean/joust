@@ -228,6 +228,15 @@ class JscV2CheckerTest {
 
     /** Codex C1, security S2: a state field never takes a built-in's name, so caller is always the signed caller. */
     @Test
+    void names_packageSegmentsAreJavaIdentifiers() {
+        String body = "\ncontract Edge {\n state { n: Int }\n init() { return { n: 0 } }\n}\n";
+        badSource("jsc 2\npackage probe._" + body, "Java keyword", 2, 15);
+        badSource("jsc 2\npackage _.probe" + body, "Java keyword", 2, 9);
+        badSource("jsc 2\npackage probe.class" + body, "Java keyword", 2, 15);
+        assertDoesNotThrow(() -> JscV2.lower("jsc 2\npackage probe._ok" + body, "Edge.jsc"));
+    }
+
+    @Test
     void names_stateFieldsCannotReplaceBuiltIns() {
         for (String b : List.of("caller", "received", "balance", "validFrom", "validTo", "state", "params", "funds", "max", "Some", "None")) {
             String src = "jsc 2\npackage t\ncontract C {\n  state { owner: Key, " + b + ": Key }\n  init(k: Key) { return { owner: k } }\n}\n";

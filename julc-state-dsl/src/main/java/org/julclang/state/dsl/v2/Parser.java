@@ -82,6 +82,21 @@ final class Parser {
         return t.text();
     }
 
+    /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
+    private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
+            "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum",
+            "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int",
+            "interface", "long", "native", "new", "package", "private", "protected", "public", "return", "short", "static",
+            "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void", "volatile",
+            "while", "true", "false", "null");
+
+    private String packageSegment(String what) {
+        Tok t = peek();
+        String n = ident(what);
+        if (JAVA_KEYWORDS.contains(n)) throw t.pos().error("'" + n + "' is a Java keyword, so it cannot be a package segment");
+        return n;
+    }
+
     private void semis() {
         while (eat(";")) { /* optional separators */ }
     }
@@ -96,8 +111,8 @@ final class Parser {
         if (v.kind() != K.INT || !v.text().equals("2")) throw v.pos().error("this compiler reads 'jsc 2' files");
         semis();
         expect("package");
-        var pkg = new StringBuilder(ident("a package name"));
-        while (eat(".")) pkg.append('.').append(ident("a package segment"));
+        var pkg = new StringBuilder(packageSegment("a package name"));
+        while (eat(".")) pkg.append('.').append(packageSegment("a package segment"));
         semis();
         var imports = new ArrayList<Import>();
         var types = new ArrayList<TypeDecl>();
