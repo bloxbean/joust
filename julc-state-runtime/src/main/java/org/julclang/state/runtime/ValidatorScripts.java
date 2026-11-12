@@ -37,10 +37,12 @@ import java.util.stream.Stream;
  *   <li><b>Only when that location cannot be read</b> (no code source, a {@code jrt:} module, a nested jar the JDK cannot
  *   open) are the copies on the class path considered. A copy whose own location can be read counts only if that location
  *   holds this validator's class ({@code pkg/Name.class}) and no other class of that simple name; one such copy is
- *   used. A single copy whose location cannot be read is used too: <b>this is the remaining fallback</b>. If the
- *   validator's own copy is missing there and another validator's single copy sits somewhere unreadable, that copy is
- *   loaded; only a script hash recorded in bytecode (julc#326) closes it. Anything else, several candidates included,
- *   is refused.</li>
+ *   used. A single copy whose location cannot be read is used too, but
+ *   only when it sits under the validator's own location (its URL is that location followed by the resource, issue
+ *   #73): <b>this is the remaining fallback</b>. A lone copy elsewhere (another nested jar, or no location to compare
+ *   with) is refused. If the validator's own copy under its location is another validator's script (a merge kept the
+ *   wrong one), only a script hash recorded in bytecode (julc#326) catches it. Anything else, several candidates
+ *   included, is refused.</li>
  *   <li><b>JuLC's parameter checks</b> are kept (as {@code JulcScriptLoader.load}): a parameterized validator is never
  *   loaded without its parameters, an unparameterized one never with some, and the count must match. An unapplied
  *   script's address would accept funds no transaction can spend.</li>
@@ -96,9 +98,13 @@ public final class ValidatorScripts {
         return JulcScriptAdapter.fromProgram(JulcScriptAdapter.toProgram(out.cborHex()).applyParams(data));
     }
 
-    /** The {@code cborHex} of the script beside {@code validator} (unapplied). */
+    /**
+     * The {@code cborHex} of the script beside {@code validator}, which takes no parameters: refused, as {@link #load}
+     * refuses it, if it does (issue #73: an unapplied script is not the contract). For a parameterized validator, apply
+     * its parameters with {@link #load(Class, PlutusData...)}.
+     */
     public static String cborHex(Class<?> validator) {
-        return output(validator).cborHex();
+        return load(validator).getCborHex();
     }
 
     private static String find(Class<?> validator) {
@@ -157,7 +163,8 @@ public final class ValidatorScripts {
             }
         }
         URL chosen = ours.size() == 1 && unreadable == 0 ? ours.get(0)
-                : ours.isEmpty() && copies.size() == 1 && unreadable == 1 ? copies.get(0)   // the documented fallback
+                // The documented fallback: one unreadable copy, and it sits beside the class (#73: under its own location).
+                : ours.isEmpty() && copies.size() == 1 && unreadable == 1 && besideLocation(copies.get(0), where, resource) ? copies.get(0)
                 : null;
         if (chosen == null) {
             throw new JoustException(name + ": its code source (" + where + ") cannot be read, and the class path's copies of "
@@ -170,6 +177,17 @@ public final class ValidatorScripts {
         } catch (IOException e) {
             throw new JoustException(name + ": cannot read " + chosen, e);
         }
+    }
+
+    /**
+     * Whether {@code copy} is {@code resource} under the validator's own location {@code where} (issue #73, security S9):
+     * a lone copy elsewhere, in another nested jar say, is another validator's of the same simple name. No location: no.
+     */
+    static boolean besideLocation(URL copy, URL where, String resource) {
+        if (where == null) return false;
+        String base = where.toString();
+        if (!base.endsWith("/")) base += "/";
+        return copy.toString().equals(base + resource);
     }
 
     /**

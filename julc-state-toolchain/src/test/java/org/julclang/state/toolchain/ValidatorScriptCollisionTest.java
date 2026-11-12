@@ -96,7 +96,13 @@ class ValidatorScriptCollisionTest {
         var e = assertThrows(IllegalArgumentException.class, () -> ValidatorScripts.load(treasury));
         assertTrue(e.getMessage().contains("TreasuryValidator is parameterized and requires 1 param(s)"), e.getMessage());
         assertThrows(IllegalArgumentException.class, () -> StateContractHandle.scriptFor(spec, null));
-        assertThrows(RuntimeException.class, () -> StateContractHandle.policyIdFor(spec, null), "the policy id of an unapplied script");
+        // Issue #73: cborHex(Class) applies the same check (an unapplied script is not the contract).
+        e = assertThrows(IllegalArgumentException.class, () -> ValidatorScripts.cborHex(treasury));
+        assertTrue(e.getMessage().contains("TreasuryValidator is parameterized and requires 1 param(s)"), e.getMessage());
+        // Issue #73: the policy id's refusal says why (the cause's message), not only "cannot hash".
+        var p = assertThrows(RuntimeException.class, () -> StateContractHandle.policyIdFor(spec, null), "the policy id of an unapplied script");
+        assertTrue(p.getMessage().contains("cannot hash the") && p.getMessage().contains("TreasuryValidator is parameterized and requires 1 param(s)"),
+                p.getMessage());
         assertThrows(RuntimeException.class, () -> org.julclang.state.examples.treasury.TreasuryClient.policyIdFor(null));
         // The generated client's contract(runtime, params): the handle computes its script, policy and address first.
         assertThrows(IllegalArgumentException.class, () -> org.julclang.state.examples.treasury.TreasuryClient.contract(null, null));
@@ -129,6 +135,7 @@ class ValidatorScriptCollisionTest {
         var seen = new HashSet<String>();
         for (Class<?> verifier : List.of(org.julclang.state.verifier.MapVerifier.class, org.julclang.state.verifier.OutputVerifier.class)) {
             assertEquals(JulcScriptLoader.load(verifier).getCborHex(), ValidatorScripts.load(verifier).getCborHex());
+            assertEquals(ValidatorScripts.load(verifier).getCborHex(), ValidatorScripts.cborHex(verifier));
             assertTrue(seen.add(ValidatorScripts.load(verifier).getCborHex()));
         }
     }

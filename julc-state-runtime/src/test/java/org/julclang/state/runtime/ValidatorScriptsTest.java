@@ -181,6 +181,16 @@ class ValidatorScriptsTest {
         refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", nestedLocation, copies(foreignCopy)));
         // C'': a nested location and its own copy only (unreadable as a container): the documented fallback loads it.
         assertEquals("ee05", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", nestedLocation, copies(nestedOwn))));
+        // Issue #73 (security S9): a lone unreadable copy that is not under the class's own location (another nested
+        // jar's, say the Java vault's) is refused, not loaded as this validator's script.
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", nestedLocation, copies(nestedForeign)));
+        URL nestedPrefix = nested("jar:nested:/app.jar/!BOOT-INF/lib/dsl.jar!/x/" + RESOURCE, json("ee06"));
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", nestedLocation, copies(nestedPrefix)));
+        // ...and without a location to compare with, a lone unreadable copy is refused too.
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", null, copies(nestedOwn)));
+        // A location written without its trailing slash still matches its own copy.
+        URL noSlash = nested("jar:nested:/app.jar/!BOOT-INF/lib/dsl.jar!", "");
+        assertEquals("ee05", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", noSlash, copies(nestedOwn))));
         // D: a jrt: location, two copies: refused.
         URL jrt = new URL("jrt:/some.module");
         refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", jrt, copies(nestedOwn, nestedForeign)));
