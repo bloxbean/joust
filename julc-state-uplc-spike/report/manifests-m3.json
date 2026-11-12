@@ -1,0 +1,26 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "m3" : {
+    "org.julclang.state.examples.guild.Armory" : "consistent",
+    "org.julclang.state.examples.oracle.Shop" : "consistent",
+    "org.julclang.state.examples.registry.Registry" : "consistent",
+    "org.julclang.state.examples.dex.Dex" : "consistent",
+    "org.julclang.state.examples.fees.Pot" : "consistent",
+    "org.julclang.state.examples.escrow.Escrow" : "consistent",
+    "org.julclang.state.examples.guild.Guild" : "consistent",
+    "org.julclang.state.examples.oracle.Oracle" : "consistent",
+    "org.julclang.state.examples.pool.Pool" : "consistent",
+    "org.julclang.state.examples.upgrade.CounterV1" : "consistent",
+    "org.julclang.state.examples.staking.StakedVault" : "consistent",
+    "org.julclang.state.examples.locker.Locker" : "consistent",
+    "org.julclang.state.examples.treasury.Treasury" : "consistent",
+    "org.julclang.state.examples.locker.Safes" : "consistent",
+    "org.julclang.state.examples.upgrade.CounterV2" : "consistent",
+    "org.julclang.state.examples.vault.Vault" : "consistent",
+    "org.julclang.state.examples.token.Token" : "consistent",
+    "org.julclang.state.examples.fees.Stall" : "consistent",
+    "org.julclang.state.examples.crowdfund.Crowdfund" : "consistent"
+  }
+}

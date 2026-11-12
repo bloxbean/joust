@@ -1,0 +1,157 @@
+{
+  "commit" : "12c040f+uncommitted",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "mismatches" : 0,
+  "comparisons" : {
+    "CounterV1.increment" : {
+      "step" : 2
+    },
+    "CounterV1.open" : {
+      "step" : 1
+    },
+    "CounterV1.setSuccessor" : {
+      "step" : 1
+    },
+    "CounterV1.upgrade" : {
+      "step" : 2
+    },
+    "CounterV2.adopt" : {
+      "step" : 2
+    },
+    "CounterV2.increment" : {
+      "step" : 1
+    },
+    "Guild.admit" : {
+      "step" : 2
+    },
+    "Guild.init" : {
+      "step" : 2
+    },
+    "Guild.levelUp" : {
+      "step" : 2
+    },
+    "Guild.recruit" : {
+      "step" : 1
+    },
+    "Guild.retire" : {
+      "step" : 1
+    },
+    "Guild.transfer" : {
+      "step" : 2
+    },
+    "Locker.close" : {
+      "step" : 2
+    },
+    "Locker.init" : {
+      "step" : 1
+    },
+    "Locker.lock" : {
+      "step" : 2
+    },
+    "Locker.unlock" : {
+      "require" : 1,
+      "step" : 4
+    },
+    "Pool.buy" : {
+      "step" : 2
+    },
+    "Pool.donate" : {
+      "step" : 1
+    },
+    "Pool.init" : {
+      "step" : 1
+    },
+    "Pot.collect" : {
+      "require" : 1,
+      "step" : 6
+    },
+    "Pot.init" : {
+      "step" : 1
+    },
+    "Registry.cast" : {
+      "step" : 4
+    },
+    "Registry.change" : {
+      "step" : 2
+    },
+    "Registry.claim" : {
+      "step" : 6
+    },
+    "Registry.grant" : {
+      "step" : 2
+    },
+    "Registry.init" : {
+      "step" : 5
+    },
+    "Registry.leave" : {
+      "step" : 2
+    },
+    "Registry.recover" : {
+      "step" : 2
+    },
+    "Registry.release" : {
+      "step" : 2
+    },
+    "Registry.retire" : {
+      "step" : 2
+    },
+    "Registry.upgrade" : {
+      "step" : 2
+    },
+    "Registry.withdraw" : {
+      "step" : 2
+    },
+    "StakedVault.close" : {
+      "step" : 1
+    },
+    "StakedVault.collect" : {
+      "step" : 1
+    },
+    "StakedVault.deposit" : {
+      "step" : 1
+    },
+    "StakedVault.open" : {
+      "step" : 1
+    },
+    "Stall.init" : {
+      "step" : 1
+    },
+    "Stall.sell" : {
+      "step" : 7
+    },
+    "Token.burn" : {
+      "step" : 4
+    },
+    "Token.close" : {
+      "require" : 1,
+      "step" : 2
+    },
+    "Token.create" : {
+      "step" : 1
+    },
+    "Token.mint" : {
+      "step" : 4
+    },
+    "Token.transfer" : {
+      "require" : 1,
+      "step" : 4
+    },
+    "Treasury.close" : {
+      "step" : 1
+    },
+    "Treasury.freeze" : {
+      "step" : 4
+    },
+    "Treasury.open" : {
+      "step" : 2
+    },
+    "Treasury.pay" : {
+      "require" : 1,
+      "step" : 2
+    },
+    "Treasury.rotate" : {
+      "step" : 1
+    }
+  }
+}

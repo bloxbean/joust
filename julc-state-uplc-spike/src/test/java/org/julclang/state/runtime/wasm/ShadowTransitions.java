@@ -68,7 +68,9 @@ final class ShadowTransitions implements TransitionFn {
     }
 
     private void fail(String method, String why, Outcome p, Outcome j, PlutusData target, PlutusData args, PlutusData ctx) {
-        Latch.mismatch(contract + "." + method + ": " + why + "\n  target " + target + "\n  args " + args + "\n  ctx " + ctx);
+        String detail = contract + "." + method + ": " + why + "\n  target " + target + "\n  args " + args + "\n  ctx " + ctx;
+        Latch.mismatch(detail);
+        ShadowDevKit.MISMATCHES.add(detail);   // calls outside a latched prepare (the DevKit flows) check this list
         throw new Latch.Latched("shadow mismatch in " + contract + "." + method);
     }
 

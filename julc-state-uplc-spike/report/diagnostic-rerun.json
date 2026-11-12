@@ -1,0 +1,12 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "reproduced" : true,
+  "sourceMapEntries" : 170,
+  "failedTermLocation" : "none",
+  "lastTracedLocation" : "at .(ProbeTransitions.java:63) [Apply]  CPU: +3,751,343  return new Step1(Optional.of(Probe.divide(target, args.by())), Payouts.none());",
+  "location" : "FAIL: QuotientInteger: division by zero\n\n  Last builtins:\n    MkNilData(()) → [0 elems]\n    UnConstrData(<Data>) → <Pair>\n    SndPair(<Pair>) → [1 elems]\n    HeadList([1 elems]) → <Data>\n    UnIData(<Data>) → 0\n    UnConstrData(<Data>) → <Pair>\n    SndPair(<Pair>) → [2 elems]\n    HeadList([2 elems]) → <Data>\n    UnIData(<Data>) → 7\n    QuotientInteger(7, 0) → <ERROR: BuiltinException>\n\n  Budget: CPU=4,872,632  Mem=26,589\n",
+  "primaryUnits" : "2184632 cpu / 9789 mem",
+  "diagnosticUnits" : "4872632 cpu / 26589 mem"
+}

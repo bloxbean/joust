@@ -1,0 +1,10 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "payouts: an extra recipient" : "refused: composed transaction: could not build the transaction: Failed to compute script cost : Script evaluation failed for Spend[0]:\nFAIL: Error term encountered\n  LessThanInteger(4000000, 4000000) → False\n\n  Last builtins:\n    SndPair(<Pair>) → [4 elems]\n    TailList([4 elems]) → [3 elems]\n    TailList([3 elems]) → [2 elems]\n    HeadList([2 elems]) → <Data>\n    UnConstrData(<Data>) → <Pair>\n   ",
+  "payouts: an extra sub-min-UTxO payout" : "refused: composed transaction: could not build the transaction: Failed to compute script cost : Script evaluation failed for Spend[0]:\nFAIL: Error term encountered\n  LessThanInteger(4000000, 4000000) → False\n\n  Last builtins:\n    SndPair(<Pair>) → [4 elems]\n    TailList([4 elems]) → [3 elems]\n    TailList([3 elems]) → [2 elems]\n    HeadList([2 elems]) → <Data>\n    UnConstrData(<Data>) → <Pair>\n   ",
+  "payouts (destroy): an extra recipient" : "refused: Vault.close: a destroy must pay out everything the instance holds (13200000 lovelace, ctx.balance()), but pays 15200000",
+  "sends: a larger send" : "refused: negative quantity in an output value: 99dc2f5ccbb3d4fde5f37874292e24ebf502b554c32d31d68e3b4316.484f534b59",
+  "migration: a smaller successor (an extra payout from the migrating instance)" : "built, flagged by U9 (non-contract outputs differ)"
+}

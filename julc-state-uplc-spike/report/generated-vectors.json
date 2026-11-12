@@ -1,0 +1,29 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "seed" : 20261112,
+  "sequencesPerContract" : 300,
+  "classes" : {
+    "malformed" : {
+      "compared" : 300,
+      "rejectedByAbiCheck" : 300
+    },
+    "malformed (observations)" : {
+      "program error" : 150,
+      "program step" : 150
+    },
+    "reachable" : {
+      "agreed" : 4024,
+      "asExpected" : 4024,
+      "compared" : 4024,
+      "expectedRefusal" : 758,
+      "expectedSuccess" : 3266
+    },
+    "unreachable" : {
+      "agreed" : 1364,
+      "compared" : 1364
+    }
+  },
+  "problems" : [ ]
+}

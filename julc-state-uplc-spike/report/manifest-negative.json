@@ -1,0 +1,15 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "stale programs (v1 against a v2 deployment)" : "programs are not the manifest's",
+  "another unapplied script" : "the unapplied script is not the manifest's; script hash 6be7873b08d1485edc1a5956306663ea57d501cc25225f41175740ea is not the manifest's c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823",
+  "another deployment's script as the spent credential" : "the spent credential 6be7873b08d1485edc1a5956306663ea57d501cc25225f41175740ea is not the manifest's script c3dc11eb37fd2e76477a824a658f53f15e782d8bccd2477ad7e12823",
+  "a primary manifest substituting Require" : "substitution org.julclang.state.api.Require is not allowed in a PRIMARY set",
+  "an unexpected discovery override" : "substitution org.julclang.state.api.Payouts is not allowed in a PRIMARY set",
+  "a source-mapped program as primary" : "sourceMapEnabled true for a PRIMARY set",
+  "programs without traces" : "programs without traces (read discovery needs them)",
+  "another optimisation profile" : "profile pv11-aggressive",
+  "an override with another source" : "override org.julclang.state.api.MerkleMaps does not match its pinned hash",
+  "another JuLC version" : "JuLC 0.1.0-pre20 is not 0.1.0-pre21-rc1"
+}

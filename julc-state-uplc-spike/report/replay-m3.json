@@ -1,0 +1,257 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "cases" : 214,
+  "UPLC" : {
+    "ok" : 214
+  },
+  "JVM" : {
+    "ok" : 214
+  },
+  "SHADOW" : {
+    "ok" : 214
+  },
+  "notOk" : {
+    "UPLC" : [ ],
+    "JVM" : [ ],
+    "SHADOW" : [ ]
+  },
+  "comparisons" : {
+    "Bank.close" : {
+      "step" : 4
+    },
+    "Bank.deposit" : {
+      "step" : 6
+    },
+    "Bank.init" : {
+      "step" : 2
+    },
+    "Bank.open" : {
+      "step" : 4
+    },
+    "Bank.setPaused" : {
+      "step" : 2
+    },
+    "Bank.withdraw" : {
+      "step" : 8
+    },
+    "Counter.close" : {
+      "step" : 6
+    },
+    "Counter.increment" : {
+      "step" : 28
+    },
+    "Counter.init" : {
+      "step" : 6
+    },
+    "Counter.reset" : {
+      "step" : 2
+    },
+    "CounterV1.increment" : {
+      "step" : 4
+    },
+    "CounterV1.open" : {
+      "step" : 2
+    },
+    "CounterV1.setSuccessor" : {
+      "step" : 2
+    },
+    "CounterV1.upgrade" : {
+      "step" : 22
+    },
+    "CounterV2.adopt" : {
+      "step" : 22
+    },
+    "CounterV2.increment" : {
+      "step" : 2
+    },
+    "Crowdfund.claim" : {
+      "step" : 2
+    },
+    "Crowdfund.contribute" : {
+      "step" : 8
+    },
+    "Crowdfund.launch" : {
+      "step" : 2
+    },
+    "Dex.addLiquidity" : {
+      "step" : 2
+    },
+    "Dex.close" : {
+      "step" : 2
+    },
+    "Dex.open" : {
+      "step" : 2
+    },
+    "Dex.removeLiquidity" : {
+      "step" : 2
+    },
+    "Dex.swapAdaForToken" : {
+      "step" : 2
+    },
+    "Dex.swapTokenForAda" : {
+      "step" : 2
+    },
+    "Escrow.open" : {
+      "step" : 4
+    },
+    "Escrow.refund" : {
+      "step" : 2
+    },
+    "Escrow.release" : {
+      "step" : 2
+    },
+    "Guild.admit" : {
+      "step" : 22
+    },
+    "Guild.init" : {
+      "step" : 4
+    },
+    "Guild.levelUp" : {
+      "step" : 4
+    },
+    "Guild.recruit" : {
+      "step" : 2
+    },
+    "Guild.retire" : {
+      "step" : 2
+    },
+    "Guild.transfer" : {
+      "step" : 22
+    },
+    "Locker.close" : {
+      "step" : 4
+    },
+    "Locker.init" : {
+      "step" : 2
+    },
+    "Locker.lock" : {
+      "step" : 4
+    },
+    "Locker.unlock" : {
+      "step" : 8
+    },
+    "Oracle.close" : {
+      "step" : 2
+    },
+    "Oracle.open" : {
+      "step" : 2
+    },
+    "Oracle.post" : {
+      "step" : 2
+    },
+    "Pool.buy" : {
+      "step" : 250
+    },
+    "Pool.donate" : {
+      "step" : 125
+    },
+    "Pool.init" : {
+      "step" : 2
+    },
+    "Pot.collect" : {
+      "require" : 1,
+      "step" : 26
+    },
+    "Pot.init" : {
+      "step" : 2
+    },
+    "Registry.cast" : {
+      "step" : 2
+    },
+    "Registry.change" : {
+      "step" : 4
+    },
+    "Registry.claim" : {
+      "step" : 5
+    },
+    "Registry.init" : {
+      "step" : 2
+    },
+    "Registry.leave" : {
+      "step" : 2
+    },
+    "Registry.release" : {
+      "step" : 4
+    },
+    "Registry.retire" : {
+      "step" : 2
+    },
+    "Registry.upgrade" : {
+      "step" : 22
+    },
+    "Registry.withdraw" : {
+      "step" : 2
+    },
+    "Shop.buy" : {
+      "step" : 2
+    },
+    "Shop.close" : {
+      "step" : 2
+    },
+    "Shop.open" : {
+      "step" : 2
+    },
+    "StakedVault.close" : {
+      "step" : 2
+    },
+    "StakedVault.collect" : {
+      "step" : 24
+    },
+    "StakedVault.deposit" : {
+      "step" : 2
+    },
+    "StakedVault.open" : {
+      "step" : 2
+    },
+    "Stall.init" : {
+      "step" : 2
+    },
+    "Stall.sell" : {
+      "step" : 27
+    },
+    "Token.burn" : {
+      "step" : 8
+    },
+    "Token.close" : {
+      "step" : 4
+    },
+    "Token.create" : {
+      "step" : 2
+    },
+    "Token.mint" : {
+      "step" : 8
+    },
+    "Token.transfer" : {
+      "step" : 64
+    },
+    "Treasury.close" : {
+      "step" : 2
+    },
+    "Treasury.freeze" : {
+      "step" : 28
+    },
+    "Treasury.open" : {
+      "step" : 4
+    },
+    "Treasury.pay" : {
+      "step" : 20
+    },
+    "Treasury.rotate" : {
+      "step" : 2
+    },
+    "Vault.close" : {
+      "step" : 2
+    },
+    "Vault.deposit" : {
+      "step" : 2
+    },
+    "Vault.open" : {
+      "step" : 2
+    },
+    "Vault.withdraw" : {
+      "step" : 2
+    }
+  }
+}

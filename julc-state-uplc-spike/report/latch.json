@@ -1,0 +1,8 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "batches" : 11,
+  "batchesWithSeveralIntents" : 11,
+  "result" : "a mismatch on the first intent, and on every intent, failed the call with no transaction"
+}

@@ -1,0 +1,288 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "calls" : 248,
+  "reps" : 10,
+  "command" : "./gradlew :julc-state-uplc-spike:test --tests '*MeasurementsTest' -Dspike.reps=10",
+  "preparePerCall" : {
+    "UPLC" : {
+      "n" : 2480,
+      "p50ms" : 11.409,
+      "p95ms" : 20.415,
+      "maxms" : 24.601
+    },
+    "JVM" : {
+      "n" : 2480,
+      "p50ms" : 11.115,
+      "p95ms" : 20.329,
+      "maxms" : 24.576
+    }
+  },
+  "perEvaluation" : {
+    "UPLC (VM only)" : {
+      "n" : 6630,
+      "p50ms" : 0.035,
+      "p95ms" : 0.199,
+      "maxms" : 0.295
+    },
+    "JVM (javac method only)" : {
+      "n" : 6630,
+      "p50ms" : 0.026,
+      "p95ms" : 0.059,
+      "maxms" : 1.042
+    }
+  },
+  "unitsPerTransition (max over the corpus)" : {
+    "Bank.close" : "3269341 cpu / 13700 mem (40 evaluations)",
+    "Bank.deposit" : "4338362 cpu / 17432 mem (60 evaluations)",
+    "Bank.init" : "3363820 cpu / 14233 mem (20 evaluations)",
+    "Bank.open" : "4373936 cpu / 17362 mem (40 evaluations)",
+    "Bank.setPaused" : "4395692 cpu / 16958 mem (20 evaluations)",
+    "Bank.withdraw" : "9074600 cpu / 35465 mem (80 evaluations)",
+    "Counter.close" : "3399004 cpu / 14032 mem (60 evaluations)",
+    "Counter.increment" : "4160699 cpu / 16800 mem (280 evaluations)",
+    "Counter.init" : "2371541 cpu / 10608 mem (60 evaluations)",
+    "Counter.reset" : "2501204 cpu / 10940 mem (20 evaluations)",
+    "CounterV1.increment" : "4013629 cpu / 15226 mem (40 evaluations)",
+    "CounterV1.open" : "2567086 cpu / 11372 mem (20 evaluations)",
+    "CounterV1.setSuccessor" : "3766758 cpu / 14792 mem (20 evaluations)",
+    "CounterV1.upgrade" : "1300707 cpu / 6956 mem (220 evaluations)",
+    "CounterV2.adopt" : "4027545 cpu / 15524 mem (220 evaluations)",
+    "CounterV2.increment" : "4509567 cpu / 16754 mem (20 evaluations)",
+    "Crowdfund.claim" : "6859899 cpu / 26544 mem (20 evaluations)",
+    "Crowdfund.contribute" : "45281355 cpu / 144887 mem (80 evaluations)",
+    "Crowdfund.launch" : "7376011 cpu / 29710 mem (20 evaluations)",
+    "Dex.addLiquidity" : "23923683 cpu / 82915 mem (20 evaluations)",
+    "Dex.close" : "9339483 cpu / 35348 mem (20 evaluations)",
+    "Dex.open" : "6817627 cpu / 26016 mem (20 evaluations)",
+    "Dex.removeLiquidity" : "30153623 cpu / 95234 mem (20 evaluations)",
+    "Dex.swapAdaForToken" : "18414016 cpu / 62128 mem (20 evaluations)",
+    "Dex.swapTokenForAda" : "18547516 cpu / 62108 mem (20 evaluations)",
+    "Escrow.open" : "6932247 cpu / 27508 mem (40 evaluations)",
+    "Escrow.refund" : "6932211 cpu / 26808 mem (20 evaluations)",
+    "Escrow.release" : "4574692 cpu / 19562 mem (20 evaluations)",
+    "Guild.admit" : "8029587 cpu / 30203 mem (220 evaluations)",
+    "Guild.init" : "4406443 cpu / 18901 mem (40 evaluations)",
+    "Guild.levelUp" : "3112886 cpu / 12570 mem (40 evaluations)",
+    "Guild.recruit" : "3765799 cpu / 15602 mem (20 evaluations)",
+    "Guild.retire" : "3269341 cpu / 13700 mem (20 evaluations)",
+    "Guild.transfer" : "5168972 cpu / 21096 mem (220 evaluations)",
+    "Locker.close" : "6515504 cpu / 28084 mem (40 evaluations)",
+    "Locker.init" : "7952312 cpu / 29004 mem (20 evaluations)",
+    "Locker.lock" : "29858284 cpu / 104314 mem (40 evaluations)",
+    "Locker.unlock" : "33236673 cpu / 119772 mem (80 evaluations)",
+    "Oracle.close" : "3269341 cpu / 13700 mem (20 evaluations)",
+    "Oracle.open" : "4744101 cpu / 19028 mem (20 evaluations)",
+    "Oracle.post" : "4792101 cpu / 19328 mem (20 evaluations)",
+    "Pool.buy" : "11411096 cpu / 42003 mem (440 evaluations)",
+    "Pool.donate" : "7442281 cpu / 26396 mem (220 evaluations)",
+    "Pool.init" : "4567731 cpu / 19227 mem (20 evaluations)",
+    "Pot.collect" : "11851383 cpu / 43917 mem (260 evaluations)",
+    "Pot.init" : "3626477 cpu / 15492 mem (20 evaluations)",
+    "Registry.cast" : "5158155 cpu / 21603 mem (20 evaluations)",
+    "Registry.change" : "3848814 cpu / 16641 mem (40 evaluations)",
+    "Registry.claim" : "5781480 cpu / 21636 mem (50 evaluations)",
+    "Registry.init" : "2669685 cpu / 11941 mem (20 evaluations)",
+    "Registry.leave" : "2581420 cpu / 11551 mem (20 evaluations)",
+    "Registry.release" : "3399004 cpu / 14032 mem (40 evaluations)",
+    "Registry.retire" : "4013160 cpu / 16967 mem (20 evaluations)",
+    "Registry.upgrade" : "7814880 cpu / 26350 mem (220 evaluations)",
+    "Registry.withdraw" : "12674328 cpu / 43411 mem (20 evaluations)",
+    "Shop.buy" : "9685134 cpu / 34902 mem (20 evaluations)",
+    "Shop.close" : "3269341 cpu / 13700 mem (20 evaluations)",
+    "Shop.open" : "2813271 cpu / 11904 mem (20 evaluations)",
+    "StakedVault.close" : "5155335 cpu / 20112 mem (20 evaluations)",
+    "StakedVault.collect" : "6179639 cpu / 24532 mem (240 evaluations)",
+    "StakedVault.deposit" : "4960180 cpu / 20730 mem (20 evaluations)",
+    "StakedVault.open" : "3803266 cpu / 15592 mem (20 evaluations)",
+    "Stall.init" : "5524935 cpu / 22689 mem (20 evaluations)",
+    "Stall.sell" : "13212611 cpu / 47677 mem (270 evaluations)",
+    "Token.burn" : "22458404 cpu / 84804 mem (80 evaluations)",
+    "Token.close" : "8038132 cpu / 28187 mem (40 evaluations)",
+    "Token.create" : "5603120 cpu / 20332 mem (20 evaluations)",
+    "Token.mint" : "22451277 cpu / 84944 mem (80 evaluations)",
+    "Token.transfer" : "50032164 cpu / 178932 mem (640 evaluations)",
+    "Treasury.close" : "3574798 cpu / 14996 mem (20 evaluations)",
+    "Treasury.freeze" : "6894533 cpu / 26031 mem (280 evaluations)",
+    "Treasury.open" : "4051296 cpu / 16793 mem (40 evaluations)",
+    "Treasury.pay" : "11267127 cpu / 42209 mem (200 evaluations)",
+    "Treasury.rotate" : "9068137 cpu / 35190 mem (20 evaluations)",
+    "Vault.close" : "3269341 cpu / 13700 mem (20 evaluations)",
+    "Vault.deposit" : "5243823 cpu / 20088 mem (20 evaluations)",
+    "Vault.open" : "5302825 cpu / 20618 mem (20 evaluations)",
+    "Vault.withdraw" : "7708166 cpu / 30434 mem (20 evaluations)"
+  },
+  "maxTransitionCpu" : 50032164,
+  "validatorCpuPerTransaction p50" : 145053803,
+  "validatorCpuPerTransaction max" : 959363124,
+  "nodeVectors" : 244,
+  "evaluationsPerCall" : {
+    "0" : 36,
+    "2" : 140,
+    "3" : 1,
+    "4" : 38,
+    "6" : 18,
+    "8" : 15
+  },
+  "mostEvaluations" : "m3/token/004-transfer.json: 8",
+  "sizes (bytes)" : [ {
+    "contract" : "counter.Counter",
+    "validator" : 5639,
+    "programs" : 4,
+    "programsTotal" : 470,
+    "largestProgram" : 176
+  }, {
+    "contract" : "bank.Bank",
+    "validator" : 7928,
+    "programs" : 7,
+    "programsTotal" : 1301,
+    "largestProgram" : 367
+  }, {
+    "contract" : "crowdfund.Crowdfund",
+    "validator" : 7984,
+    "programs" : 5,
+    "programsTotal" : 2562,
+    "largestProgram" : 1050
+  }, {
+    "contract" : "dex.Dex",
+    "validator" : 12104,
+    "programs" : 6,
+    "programsTotal" : 3356,
+    "largestProgram" : 778
+  }, {
+    "contract" : "escrow.Escrow",
+    "validator" : 5696,
+    "programs" : 3,
+    "programsTotal" : 808,
+    "largestProgram" : 295
+  }, {
+    "contract" : "fees.Pot",
+    "validator" : 9009,
+    "programs" : 4,
+    "programsTotal" : 832,
+    "largestProgram" : 403
+  }, {
+    "contract" : "fees.Stall",
+    "validator" : 9464,
+    "programs" : 3,
+    "programsTotal" : 838,
+    "largestProgram" : 464
+  }, {
+    "contract" : "guild.Armory",
+    "validator" : 12525,
+    "programs" : 6,
+    "programsTotal" : 7499,
+    "largestProgram" : 2103
+  }, {
+    "contract" : "guild.Guild",
+    "validator" : 11497,
+    "programs" : 12,
+    "programsTotal" : 2077,
+    "largestProgram" : 319
+  }, {
+    "contract" : "locker.Locker",
+    "validator" : 14309,
+    "programs" : 4,
+    "programsTotal" : 6294,
+    "largestProgram" : 2298
+  }, {
+    "contract" : "locker.Safes",
+    "validator" : 14367,
+    "programs" : 4,
+    "programsTotal" : 4248,
+    "largestProgram" : 1270
+  }, {
+    "contract" : "oracle.Oracle",
+    "validator" : 5791,
+    "programs" : 3,
+    "programsTotal" : 512,
+    "largestProgram" : 201
+  }, {
+    "contract" : "oracle.Shop",
+    "validator" : 6319,
+    "programs" : 3,
+    "programsTotal" : 555,
+    "largestProgram" : 345
+  }, {
+    "contract" : "pool.Pool",
+    "validator" : 9595,
+    "programs" : 5,
+    "programsTotal" : 1182,
+    "largestProgram" : 419
+  }, {
+    "contract" : "registry.Registry",
+    "validator" : 14711,
+    "programs" : 12,
+    "programsTotal" : 2287,
+    "largestProgram" : 395
+  }, {
+    "contract" : "staking.StakedVault",
+    "validator" : 12121,
+    "programs" : 4,
+    "programsTotal" : 713,
+    "largestProgram" : 217
+  }, {
+    "contract" : "token.Token",
+    "validator" : 11815,
+    "programs" : 5,
+    "programsTotal" : 7778,
+    "largestProgram" : 2083
+  }, {
+    "contract" : "treasury.Treasury",
+    "validator" : 9297,
+    "programs" : 6,
+    "programsTotal" : 1333,
+    "largestProgram" : 412
+  }, {
+    "contract" : "upgrade.CounterV1",
+    "validator" : 5738,
+    "programs" : 4,
+    "programsTotal" : 397,
+    "largestProgram" : 124
+  }, {
+    "contract" : "upgrade.CounterV2",
+    "validator" : 6581,
+    "programs" : 5,
+    "programsTotal" : 595,
+    "largestProgram" : 135
+  }, {
+    "contract" : "vault.Vault",
+    "validator" : 6281,
+    "programs" : 4,
+    "programsTotal" : 816,
+    "largestProgram" : 297
+  } ],
+  "programSets (total bytes)" : {
+    "counter.Counter" : {
+      "primary" : 470,
+      "auxiliary" : 491,
+      "diagnostic" : 9332
+    },
+    "vault.Vault" : {
+      "primary" : 816,
+      "auxiliary" : 877,
+      "diagnostic" : 10684
+    },
+    "token.Token" : {
+      "primary" : 7778,
+      "auxiliary" : 7861,
+      "diagnostic" : 52036
+    },
+    "registry.Registry" : {
+      "primary" : 2287,
+      "auxiliary" : 2369,
+      "diagnostic" : 52015
+    }
+  },
+  "worstCase: a budget-exhausting evaluation (Probe.spin, 1e8 recursion steps)" : {
+    "outcome" : "BUDGET",
+    "units" : "3234072629 cpu / 14000005 mem",
+    "time" : {
+      "n" : 5,
+      "p50ms" : 5.429,
+      "p95ms" : 6.857,
+      "maxms" : 6.857
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "positive" : {
+    "jvm" : "REQUIRE(by must be positive)",
+    "program (engine rule: last trace)" : "REQUIRE(by must be positive)",
+    "program (auxiliary classification)" : "REQUIRE(by must be positive)",
+    "agree" : true
+  },
+  "prefixed" : {
+    "jvm" : "REQUIRE(joust:read 00 01)",
+    "program (engine rule: last trace)" : "ERROR(prefixed refused (Error term encountered))",
+    "program (auxiliary classification)" : "REQUIRE(joust:read 00 01)",
+    "agree" : true
+  },
+  "divide" : {
+    "jvm" : "ERROR(ArithmeticException: BigInteger divide by zero)",
+    "program (engine rule: last trace)" : "ERROR(divide refused (QuotientInteger: division by zero))",
+    "program (auxiliary classification)" : "ERROR(unclassified)",
+    "agree" : true
+  },
+  "forged" : {
+    "jvm" : "ERROR(ArithmeticException: BigInteger divide by zero)",
+    "program (engine rule: last trace)" : "ERROR(forged refused (QuotientInteger: division by zero))",
+    "program (auxiliary classification)" : "REQUIRE(fake)",
+    "agree" : false
+  },
+  "dupes" : {
+    "jvm" : "STEP d8799fd8799fd8799f02581c00000000000000000000000000000000000000000000000000000000ffff80ff",
+    "program (engine rule: last trace)" : "STEP d8799fd8799fd8799f02581c00000000000000000000000000000000000000000000000000000000ffff80ff",
+    "program (auxiliary classification)" : "STEP d8799fd8799fd8799f02581c00000000000000000000000000000000000000000000000000000000ffff80ff",
+    "agree" : true
+  },
+  "sameKey (byte[].equals)" : "rejected by JuLC:   ERROR[JULC0087] at .(Probe.java:65):26 - Object.equals compares byte[], whose equality on the JVM compares an array by identity (suggestion: Compare the bytes: Builtins.equalsByteString(a, b) for byte[] (ByteStringLib.equals(a, b) is equivalent, a few bytes larger), and Builtins.equalsByteString(a.value(), b.value()) on the component accessors of a @NewType byte wrapper. Where the type cannot be read, compare at the value's own declared type.)",
+  "listHas" : {
+    "jvm" : "STEP d8799fd8799fd8799f01581c00000000000000000000000000000000000000000000000000000000ffff80ff",
+    "program (engine rule: last trace)" : "STEP d8799fd8799fd8799f01581c00000000000000000000000000000000000000000000000000000000ffff80ff",
+    "program (auxiliary classification)" : "STEP d8799fd8799fd8799f01581c00000000000000000000000000000000000000000000000000000000ffff80ff",
+    "agree" : true
+  },
+  "mapHas" : {
+    "jvm" : "STEP d8799fd8799fd8799f01581c00000000000000000000000000000000000000000000000000000000ffff80ff",
+    "program (engine rule: last trace)" : "STEP d8799fd8799fd8799f01581c00000000000000000000000000000000000000000000000000000000ffff80ff",
+    "program (auxiliary classification)" : "STEP d8799fd8799fd8799f01581c00000000000000000000000000000000000000000000000000000000ffff80ff",
+    "agree" : true
+  }
+}

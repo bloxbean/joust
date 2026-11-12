@@ -1,0 +1,15 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "UPLC" : {
+    "ok" : 34
+  },
+  "JVM" : {
+    "ok" : 34
+  },
+  "SHADOW" : {
+    "ok" : 34
+  },
+  "cases" : 34
+}

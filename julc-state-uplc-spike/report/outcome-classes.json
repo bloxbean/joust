@@ -1,0 +1,29 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "positive" : {
+    "jvm" : "REQUIRE(by must be positive)",
+    "program (engine rule: last trace)" : "REQUIRE(by must be positive)",
+    "program (auxiliary classification)" : "REQUIRE(by must be positive)",
+    "agree" : true
+  },
+  "prefixed" : {
+    "jvm" : "REQUIRE(joust:read 00 01)",
+    "program (engine rule: last trace)" : "ERROR(prefixed refused (Error term encountered))",
+    "program (auxiliary classification)" : "REQUIRE(joust:read 00 01)",
+    "agree" : true
+  },
+  "divide" : {
+    "jvm" : "ERROR(ArithmeticException: BigInteger divide by zero)",
+    "program (engine rule: last trace)" : "ERROR(divide refused (QuotientInteger: division by zero))",
+    "program (auxiliary classification)" : "ERROR(unclassified)",
+    "agree" : true
+  },
+  "forged" : {
+    "jvm" : "ERROR(ArithmeticException: BigInteger divide by zero)",
+    "program (engine rule: last trace)" : "ERROR(forged refused (QuotientInteger: division by zero))",
+    "program (auxiliary classification)" : "REQUIRE(fake)",
+    "agree" : false
+  }
+}

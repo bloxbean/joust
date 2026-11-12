@@ -1,0 +1,111 @@
+{
+  "commit" : "12c040f",
+  "machine" : "Mac OS X aarch64, 16 cpus, java 25.0.2",
+  "vm" : "julc-vm-java (JulcVm.create), LedgerEvaluationTarget.pv11(PLUTUS_V3), cap 10000000000 cpu / 14000000 mem per evaluation",
+  "contracts" : [ {
+    "contract" : "counter.Counter",
+    "programs" : 4,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "bank.Bank",
+    "programs" : 7,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "crowdfund.Crowdfund",
+    "programs" : 5,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "dex.Dex",
+    "programs" : 6,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "escrow.Escrow",
+    "programs" : 3,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "fees.Pot",
+    "programs" : 4,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "fees.Stall",
+    "programs" : 3,
+    "substituted" : "",
+    "parameterised" : true
+  }, {
+    "contract" : "guild.Armory",
+    "programs" : 6,
+    "substituted" : "org.julclang.state.api.MerkleMaps",
+    "parameterised" : false
+  }, {
+    "contract" : "guild.Guild",
+    "programs" : 12,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "locker.Locker",
+    "programs" : 4,
+    "substituted" : "org.julclang.state.api.MerkleMaps",
+    "parameterised" : false
+  }, {
+    "contract" : "locker.Safes",
+    "programs" : 4,
+    "substituted" : "org.julclang.state.api.MerkleMaps",
+    "parameterised" : false
+  }, {
+    "contract" : "oracle.Oracle",
+    "programs" : 3,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "oracle.Shop",
+    "programs" : 3,
+    "substituted" : "",
+    "parameterised" : true
+  }, {
+    "contract" : "pool.Pool",
+    "programs" : 5,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "registry.Registry",
+    "programs" : 12,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "staking.StakedVault",
+    "programs" : 4,
+    "substituted" : "",
+    "parameterised" : true
+  }, {
+    "contract" : "token.Token",
+    "programs" : 5,
+    "substituted" : "org.julclang.state.api.MerkleMaps",
+    "parameterised" : false
+  }, {
+    "contract" : "treasury.Treasury",
+    "programs" : 6,
+    "substituted" : "",
+    "parameterised" : true
+  }, {
+    "contract" : "upgrade.CounterV1",
+    "programs" : 4,
+    "substituted" : "",
+    "parameterised" : false
+  }, {
+    "contract" : "upgrade.CounterV2",
+    "programs" : 5,
+    "substituted" : "",
+    "parameterised" : true
+  }, {
+    "contract" : "vault.Vault",
+    "programs" : 4,
+    "substituted" : "",
+    "parameterised" : false
+  } ]
+}
