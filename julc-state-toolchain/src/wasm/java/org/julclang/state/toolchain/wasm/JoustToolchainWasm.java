@@ -20,6 +20,9 @@ public final class JoustToolchainWasm {
     /** The engine's version; the CLI checks it against its own. */
     static final String VERSION = System.getProperty("joust.version", "dev");
 
+    /** The JuLC version the engine embeds (review r3 F9: recorded with each deployment). */
+    static final String JULC_VERSION = System.getProperty("julc.version", "dev");
+
     private JoustToolchainWasm() {
     }
 
@@ -42,8 +45,9 @@ public final class JoustToolchainWasm {
     /** The Java a {@code .jsc} file lowered to, its source map and its ABI manifest (ADR-0018 D12; null for v1). */
     public record Generated(String jscFile, String javaFile, String java, String sourceMap, String abi) {}
 
+    /** {@code joust}, {@code julc}: the versions that built it (review r3 F9). */
     public record BuildResult(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics,
-                              List<Generated> generated) {}
+                              List<Generated> generated, String joust, String julc) {}
 
     /** A transition program (script CBOR hex) and its Data arguments (CBOR hex). */
     public record RunRequest(String program, List<String> args) {}
@@ -58,7 +62,8 @@ public final class JoustToolchainWasm {
      * One file's migration: {@code source} the {@code .jsc} 2 text, or null when refused ({@code error}); {@code notes}
      * for the author. A {@code .jsc} 2 file is reported with {@code skipped} true.
      */
-    public record Migrated(String file, boolean ok, boolean skipped, String source, List<Diagnostic> notes, Diagnostic error) {}
+    public record Migrated(String file, boolean ok, boolean skipped, String source, List<Diagnostic> notes, Diagnostic error, String pkg,
+                           String contract) {}
 
     public record MigrateResult(List<Migrated> files, String newScript) {}
 
@@ -100,17 +105,17 @@ public final class JoustToolchainWasm {
         for (var e : files.entrySet()) {
             String name = e.getKey();
             if (org.julclang.state.dsl.v2.JscV2.isV2(e.getValue())) {
-                out.add(new Migrated(name, true, true, null, List.of(), null));
+                out.add(new Migrated(name, true, true, null, List.of(), null, null, null));
                 continue;
             }
             String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
             try {
                 var r = org.julclang.state.dsl.Migrate.migrate(e.getValue(), base);
                 out.add(new Migrated(name, true, false, r.source(), r.notes().stream().map(n -> new Diagnostic("note", n.message(), name,
-                        n.line(), n.col(), "migrate", null)).toList(), null));
+                        n.line(), n.col(), "migrate", null)).toList(), null, r.pkg(), r.contract()));
             } catch (org.julclang.state.dsl.JscException x) {
                 out.add(new Migrated(name, false, false, null, List.of(), new Diagnostic("error", x.getMessage(), name, x.line, x.col,
-                        "migrate", x.code)));
+                        "migrate", x.code), null, null));
             }
         }
         return ServiceResult.ok(new MigrateResult(out, org.julclang.state.dsl.Migrate.NEW_SCRIPT));
@@ -127,6 +132,7 @@ public final class JoustToolchainWasm {
                         v.scriptHash(), v.scriptSizeBytes(), v.params().stream().map(p -> new Param(p.name(), p.type())).toList())).toList(),
                 r.diagnostics().stream().map(d -> new Diagnostic(d.severity().name().toLowerCase(), d.message(), d.file(), d.line(),
                         d.col(), d.source(), d.code())).toList(),
-                r.generated().stream().map(g -> new Generated(g.jscFile(), g.javaFile(), g.java(), g.sourceMapJson(), g.abiJson())).toList()));
+                r.generated().stream().map(g -> new Generated(g.jscFile(), g.javaFile(), g.java(), g.sourceMapJson(), g.abiJson())).toList(),
+                VERSION, JULC_VERSION));
     }
 }

@@ -78,7 +78,7 @@ tasks.register('toolchainWasm', Exec) {
                 // The verifiers' compiled scripts, which the generators embed (MapVerifierInfo).
                 '-H:IncludeResources=META-INF/plutus/.*\\.plutus\\.json',
                 '-H:+UnlockExperimentalVMOptions', '-H:AbortOnTypeReachable=com.github.javaparser.*',
-                '-H:+ReportExceptionStackTraces', "-Djoust.version=${project.version}",
+                '-H:+ReportExceptionStackTraces', "-Djoust.version=${project.version}", "-Djulc.version=${libs.versions.julc.get()}",
                 '-o', new File(dir, 'joust-toolchain').absolutePath,
                 'org.julclang.state.toolchain.wasm.JoustToolchainWasm'
     }

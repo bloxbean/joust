@@ -393,6 +393,84 @@ class MigrateTest {
         assertTrue(out.get(0).startsWith(b + ":" + line + ": error: duplicate class: b.B (generated from Contract.jsc, but no single file"), out.toString());
     }
 
+    // ------------------------------------------------------------------ review r3
+
+    @Test
+    void r3C2_anOutputAliasIntoTheSources_isRefusedBeforeAnythingIsWritten(@TempDir Path dir) throws Exception {
+        Path a = Files.createDirectories(dir.resolve("src/a")), b = Files.createDirectories(dir.resolve("src/b"));
+        Files.writeString(a.resolve("C.jsc"), "package p\ncontract C { state n: Int init() {} action inc() { n += 1 } }\n");
+        String other = "package q\ncontract Other { state n: Int init() {} action dec() { n -= 1 } }\n";
+        Files.writeString(b.resolve("C.jsc"), other);
+        Files.createDirectories(dir.resolve("out"));
+        Files.createSymbolicLink(dir.resolve("out/a"), Path.of("../src/b"));
+        String err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", dir.resolve("src").toString(), dir.resolve("out").toString()})));
+        assertTrue(err.contains("error[JSC1108]") && err.contains("lies in the sources"), err);
+        assertEquals(other, Files.readString(b.resolve("C.jsc")), "the other source is untouched");
+        assertTrue(Files.readString(a.resolve("C.jsc")).startsWith("package p"));
+    }
+
+    @Test
+    void r3S5_inPlace_refusesHardLinksAndLinkedDirectories_andRenamesOverTheSource(@TempDir Path dir) throws Exception {
+        Path src = Files.createDirectories(dir.resolve("src/app"));
+        Path shared = Files.createDirectories(dir.resolve("shared"));
+        Files.copy(DSL.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        Files.createLink(src.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        String err = stderr(() -> assertEquals(1, JscMain.run(new String[]{"--migrate", dir.resolve("src").toString(), dir.resolve("out").toString(), "--in-place"})));
+        assertTrue(err.contains("error[JSC1109]") && err.contains("hard links"), err);
+        assertTrue(Files.readString(shared.resolve("Points.jsc")).startsWith("package"));
+        Files.delete(src.resolve("Points.jsc"));
+        // A file under a linked directory, given with its directory: the link is on its path.
+        Path lib = Files.createDirectories(dir.resolve("sharedlib"));
+        Files.copy(DSL.resolve("Guards.jsc"), lib.resolve("Guards.jsc"));
+        Files.createSymbolicLink(dir.resolve("src/lib"), lib);
+        Files.copy(DSL.resolve("Guards.jsc"), src.resolve("Guards.jsc"));
+        err = stderr(() -> JscMain.run(new String[]{"--migrate", dir.resolve("src").toString(), dir.resolve("out").toString(), "--in-place"}));
+        assertTrue(Files.readString(lib.resolve("Guards.jsc")).startsWith("package"), "Files.walk does not descend the link: " + err);
+        // A plain file is replaced by a rename: a new inode, the backup the old one.
+        Object before = Files.getAttribute(src.resolve("Guards.jsc.v1"), "unix:ino");
+        assertNotEquals(before, Files.getAttribute(src.resolve("Guards.jsc"), "unix:ino"));
+        assertTrue(Files.readString(src.resolve("Guards.jsc")).startsWith("jsc 2\n"));
+        try (var left = Files.list(src)) {
+            assertTrue(left.noneMatch(p -> p.getFileName().toString().endsWith(".migrating")), "no temporary file is left");
+        }
+    }
+
+    @Test
+    void r3C3_remap_declarationsInCommentsAreNotDeclarations(@TempDir Path dir) throws Exception {
+        Path src = dir.resolve("src");
+        for (String[] x : new String[][]{{"feature-a", "a", "A", "b", "B"}, {"feature-b", "b", "B", "a", "A"}}) {
+            Path d = Files.createDirectories(src.resolve(x[0]));
+            Files.writeString(d.resolve("Contract.jsc"), "jsc 2\n/*\npackage " + x[3] + "\ncontract " + x[4] + "\n*/\npackage " + x[1]
+                    + "\ncontract " + x[2] + " { state { n: Int } init() { return { n: 0 } } }\n");
+        }
+        Path gen = dir.resolve("gen");
+        assertEquals(0, JscMain.run(new String[]{src.toString(), gen.toString(), "--accept-abi"}));
+        Path b = gen.resolve("b/B.java");
+        int line = Files.readAllLines(b).indexOf("public class B {") + 1;
+        var out = JscMain.remapped(b + ":" + line + ": error: duplicate class: b.B\n", gen, src);
+        assertTrue(out.get(0).startsWith(src.resolve("feature-b/Contract.jsc") + ":"), out.toString());
+    }
+
+    @Test
+    void r3C4_theContractNameComesFromTheParser_evenOnOneLine() {
+        var r = Migrate.migrate("package p contract C { state n: Int init() {} action inc() { n += 1 } }\n", "C.jsc");
+        assertEquals("p", r.pkg());
+        assertEquals("C", r.contract());
+    }
+
+    @Test
+    void r3F10_theMinusNoteNamesOnlyALineOnOrBeforeTheError() {
+        String head = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n";
+        // The error (an unknown name) is on line 6; the leading '-' on line 9 is after it: no note.
+        var e = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+                + "  view v(): Int = nope\n  view w(x: Int): Int {\n    x\n    - 1\n  }\n}\n", "C.jsc"));
+        assertFalse(e.getMessage().contains("note: the line starting with '-'"), e.getMessage());
+        // Before it: the note.
+        var f = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+                + "  view w(x: Int): Int {\n    x\n    - 1\n  }\n  view v(): Int = nope\n}\n", "C.jsc"));
+        assertTrue(f.getMessage().contains("note: the line starting with '-' at 8:5"), f.getMessage());
+    }
+
     interface Body {
         void run() throws Exception;
     }

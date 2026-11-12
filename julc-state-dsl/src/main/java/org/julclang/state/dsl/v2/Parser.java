@@ -62,13 +62,13 @@ final class Parser {
     private final List<Pos> leadingMinus = new ArrayList<>();
 
     /**
-     * An error with a note when a line starting with '-' continued the expression above it: the cause is often there,
+     * An error with a note when a line starting with '-', on or before the error's line, continued the expression above it: the cause is often there,
      * not where the error is found (a block without its value, an unknown name).
      */
     static JscException hinted(JscException e, List<Pos> leadingMinus) {
         Pos near = null;
         for (Pos p : leadingMinus) if (p.line() <= e.line && (near == null || p.line() > near.line())) near = p;
-        if (near == null && !leadingMinus.isEmpty()) near = leadingMinus.get(0);
+        // Only a leading '-' on or before the error's line, the nearest: never one after it (review r3 F10).
         if (near == null) return e;
         return new JscException(e.line, e.col, e.code, e.getMessage() + " (note: the line starting with '-' at " + near
                 + " continues the expression above it, as newlines do not end statements in .jsc; if it is meant to stand alone, end"

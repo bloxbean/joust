@@ -172,7 +172,7 @@ public final class JscMain {
             }
         }
         // Review r2 C2: without --in-place, nothing under the sources is written: the output may not be the source
-        // directory or lie inside it (by path or by link), and no target may be a source file.
+        // directory or lie inside it (by path or by link), and no target may be a source.
         if (!inPlace && within(out, src)) {
             System.err.println(src + ":1:1: error[JSC1108]: the output directory " + out + " is the source directory or inside it: without"
                     + " --in-place, migrate writes outside the sources and never changes them; choose another output directory, or"
@@ -180,24 +180,30 @@ public final class JscMain {
             return 1;
         }
         int migrated = 0, refused = 0;
+        // Review r3 C2: every target checked before anything is written. A target is refused when, through any link on
+        // its path (resolved at its nearest existing ancestor), it lies in the sources, or is the same file as any source.
+        if (!inPlace) {
+            int bad = 0;
+            for (Path f : files) {
+                Path target = out.resolve(src.relativize(f).toString()).normalize();
+                String why = targetProblem(target, out, src, files);
+                if (why != null) {
+                    System.err.println(src.relativize(f) + ":1:1: error[JSC1108]: the output " + target + " " + why + ": without --in-place,"
+                            + " migrate never changes the sources; nothing was written");
+                    bad++;
+                }
+            }
+            if (bad > 0) return 1;
+        }
         for (Path f : files) {
             String name = src.relativize(f).toString();
             try {
-                if (inPlace && Files.isSymbolicLink(f)) {
-                    // Review r2 S2: a link's target may be shared with other projects (still on v1) or lie outside the sources.
-                    throw new JscException(1, 1, "JSC1109", "this file is a symbolic link: migrate --in-place never replaces a file"
-                            + " through a link; migrate a copy, or the link's target in its own project");
-                }
+                if (inPlace) inPlaceProblem(f, src);
                 String text = Files.readString(f);
                 if (org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
                 var r = Migrate.migrate(text, f.getFileName().toString());
                 Path backup = f.resolveSibling(f.getFileName() + ".v1");
                 Path target = inPlace ? f : out.resolve(name).normalize();
-                if (!inPlace && (!target.toAbsolutePath().normalize().startsWith(out.toAbsolutePath().normalize())
-                        || Files.exists(target) && Files.isSameFile(target, f))) {
-                    throw new JscException(1, 1, "JSC1108", "the output " + target + " would replace the source: without --in-place,"
-                            + " migrate never changes the sources");
-                }
                 if (inPlace) {
                     // Never through a link and never over an existing file, a dangling link included (review r2 S2).
                     try {
@@ -207,8 +213,15 @@ public final class JscMain {
                         throw new JscException(1, 1, "JSC1107", backup.getFileName() + " exists already: migrate --in-place keeps the v1"
                                 + " text there and never overwrites it; move it away first");
                     }
-                    Files.writeString(f, r.source(), java.nio.file.StandardOpenOption.TRUNCATE_EXISTING, java.nio.file.StandardOpenOption.WRITE,
-                            java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                    // Review r3 S5: a new file renamed over the source replaces the directory entry, never the contents of a
+                    // shared inode or a link's target.
+                    Path tmp = Files.createTempFile(f.getParent(), "." + f.getFileName(), ".migrating");
+                    try {
+                        Files.writeString(tmp, r.source());
+                        Files.move(tmp, f, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    } finally {
+                        Files.deleteIfExists(tmp);
+                    }
                 } else {
                     Files.createDirectories(target.getParent());
                     Files.writeString(target, r.source());
@@ -234,14 +247,64 @@ public final class JscMain {
         return refused > 0 ? 1 : 0;
     }
 
+    /** Why a default-mode target may not be written, or null (review r2 C2, r3 C2). */
+    static String targetProblem(Path target, Path out, Path src, List<Path> sources) throws IOException {
+        if (!target.toAbsolutePath().normalize().startsWith(out.toAbsolutePath().normalize())) return "is outside the output directory";
+        if (within(target, src)) return "lies in the sources (through a link on its path)";
+        Path real = resolved(target);
+        for (Path s : sources) {
+            if (Files.exists(s) && real.equals(s.toRealPath())) return "is the source " + s;
+        }
+        return null;
+    }
+
+    /**
+     * Review r3 S5: a file migrated in place is a plain file of the sources: no symbolic link (JSC1109), no hard link
+     * shared with another path, and no link on its path under the source directory (its real path lies under the source
+     * directory's, and no directory between them is a link).
+     */
+    static void inPlaceProblem(Path f, Path src) throws IOException {
+        if (Files.isSymbolicLink(f)) {
+            throw new JscException(1, 1, "JSC1109", "this file is a symbolic link: migrate --in-place never replaces a file through a"
+                    + " link; migrate a copy, or the link's target in its own project");
+        }
+        try {
+            Object links = Files.getAttribute(f, "unix:nlink", java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            if (links instanceof Integer n && n > 1) {
+                throw new JscException(1, 1, "JSC1109", "this file has " + n + " hard links: another path shares its contents (another"
+                        + " project, still on v1?), so migrate --in-place does not replace it; migrate a copy");
+            }
+        } catch (UnsupportedOperationException | IllegalArgumentException e) {
+            // No unix attributes (Windows): the real-path rule below still applies.
+        }
+        Path root = src.toAbsolutePath().normalize();
+        Path abs = f.toAbsolutePath().normalize();
+        for (Path p = abs.getParent(); p != null && p.startsWith(root) && !p.equals(root); p = p.getParent()) {
+            if (Files.isSymbolicLink(p)) {
+                throw new JscException(1, 1, "JSC1109", "the directory " + root.relativize(p) + " is a symbolic link: migrate --in-place"
+                        + " never replaces a file through a link; migrate the link's target in its own project");
+            }
+        }
+        if (!f.toRealPath().startsWith(src.toRealPath())) {
+            throw new JscException(1, 1, "JSC1109", "this file's real path " + f.toRealPath() + " is not under the source directory: migrate"
+                    + " --in-place replaces only files of the sources");
+        }
+    }
+
+    /** {@code p}'s real path, through its nearest existing ancestor (the rest appended as written). */
+    static Path resolved(Path p) throws IOException {
+        Path d = p.toAbsolutePath().normalize();
+        Path e = d;
+        while (e != null && !Files.exists(e)) e = e.getParent();
+        return e == null ? d : e.toRealPath().resolve(e.relativize(d)).normalize();
+    }
+
     /** Whether {@code dir} is {@code root} or inside it, by path or, where both exist, by their real paths. */
     static boolean within(Path dir, Path root) throws IOException {
         Path d = dir.toAbsolutePath().normalize(), r = root.toAbsolutePath().normalize();
         if (d.startsWith(r)) return true;
         // The nearest existing ancestor of dir, by its real path (a link into the sources counts).
-        Path e = d;
-        while (e != null && !Files.exists(e)) e = e.getParent();
-        return e != null && Files.exists(r) && e.toRealPath().resolve(e.relativize(d)).startsWith(r.toRealPath());
+        return Files.exists(r) && resolved(d).startsWith(r.toRealPath());
     }
 
     /**
@@ -300,16 +363,17 @@ public final class JscMain {
      * generated location.
      */
     static String jscPath(Path src, String bare, String javaRel) throws IOException {
-        String pkg = javaRel.contains("/") ? javaRel.substring(0, javaRel.lastIndexOf('/')).replace('/', '.') : "";
-        String contract = javaRel.substring(javaRel.lastIndexOf('/') + 1).replace(".java", "");
         var found = new ArrayList<Path>();
         if (Files.isDirectory(src)) {
             try (Stream<Path> s = Files.walk(src)) {
                 for (Path p : s.filter(x -> x.getFileName().toString().equals(bare) && Files.isRegularFile(x)).sorted().toList()) {
-                    String text = Files.readString(p);
-                    var pm = Pattern.compile("(?m)^\\s*package\\s+([A-Za-z0-9_.]+)").matcher(text);
-                    var cm = Pattern.compile("(?m)^\\s*contract\\s+([A-Za-z0-9_]+)").matcher(text);
-                    if (pm.find() && pm.group(1).equals(pkg) && cm.find() && cm.group(1).equals(contract)) found.add(p);
+                    // The unit a file declares, as the parser reads it: comments and strings are never declarations
+                    // (review r3 C3).
+                    try {
+                        if (outputPath(Files.readString(p)).equals(javaRel)) found.add(p);
+                    } catch (JscException | IOException e) {
+                        // A file that does not parse generated nothing.
+                    }
                 }
             }
         }

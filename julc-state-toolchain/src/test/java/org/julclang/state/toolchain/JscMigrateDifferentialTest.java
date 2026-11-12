@@ -66,7 +66,9 @@ class JscMigrateDifferentialTest {
     static final byte[][] KEYS = {fill(0x11, 28), fill(0x22, 28), fill(0x33, 28)};
     static final byte[][] BYTES = {new byte[0], fill(0x11, 28), fill(0xab, 3), fill(0x22, 28)};
     static final String PKG = "gen.migrate";
-    static final int CALLS = 40;
+    static final int CALLS = 100;
+    /** Review r3 F11: each generator is run until this many of its programs migrate (refused ones are kept as well). */
+    static final int GEN1_MIGRATED = 160, GEN2_MIGRATED = 100;
 
     static byte[] fill(int b, int n) {
         byte[] k = new byte[n];
@@ -165,6 +167,10 @@ class JscMigrateDifferentialTest {
                     else out.append(ind).append("m += 1\n");
                 }
                 case 7 -> {
+                    if (rnd.nextBoolean()) {
+                        out.append(ind).append(field("m")).append(" += ").append(intExpr(1)).append('\n');
+                        return;
+                    }
                     // Review r2 F1: a value that can fail, read once where it may not be evaluated, then overwritten.
                     String f = field("n");
                     out.append(ind).append(f).append(" = ").append(intExpr(1)).append(" / ").append(params.get(rnd.nextInt(params.size()))).append('\n');
@@ -176,13 +182,17 @@ class JscMigrateDifferentialTest {
                     out.append(ind).append(f).append(" = ").append(intExpr(1)).append('\n');
                 }
                 case 8 -> {
+                    if (rnd.nextBoolean()) {
+                        out.append(ind).append(field("n")).append(" -= ").append(intExpr(1)).append('\n');
+                        return;
+                    }
                     // Review r2 C1: same-named locals on one line, in sibling arms; the else arm's may be dead.
                     String x = "y" + (++lets);
                     String f = field("n");
                     out.append(ind).append("if ").append(boolExpr(1)).append(" { let ").append(x).append(" = ").append(intExpr(0)).append(" / ")
                             .append(params.get(rnd.nextInt(params.size()))).append(" ").append(f).append(" = ").append(x).append(" } else { let ")
                             .append(x).append(" = ").append(intExpr(0)).append(" / ").append(params.get(rnd.nextInt(params.size()))).append(" ")
-                            .append(f).append(" = ").append(x).append(rnd.nextBoolean() ? " " + f + " = 2" : "").append(" }\n");
+                            .append(f).append(" = ").append(x).append(rnd.nextInt(4) == 0 ? " " + f + " = 2" : "").append(" }\n");
                 }
                 case 9 -> out.append(ind).append("this.n = ").append(intExpr(1)).append('\n');
                 case 10 -> {
@@ -414,17 +424,25 @@ class JscMigrateDifferentialTest {
     record Prog(String name, String v1, List<F> fields, List<Call> calls, List<String> v1Results) {}
 
     static final List<Prog> PROGS = new ArrayList<>();
-    static int invalid, javacRefused, gen1, gen2;
+    static int invalid, javacRefused, gen1, gen2, gen1Refused, gen2Refused;
     static final InMemoryNodeStore STORE = new InMemoryNodeStore();
 
     @BeforeAll
     static void programs() throws Exception {
         var sources = new LinkedHashMap<String, String>();   // name -> v1 text
-        for (int seed = 1; gen1 < 160; seed++) {
-            if (add(sources, "G" + seed, Gen1.program(seed))) gen1++;
+        for (int seed = 1; gen1 < GEN1_MIGRATED; seed++) {
+            String v1 = Gen1.program(seed);
+            if (add(sources, "G" + seed, v1)) {
+                if (real(v1, "G" + seed + ".jsc").code() == null) gen1++;
+                else gen1Refused++;
+            }
         }
-        for (int seed = 1; gen2 < 100; seed++) {
-            if (add(sources, "H" + seed, Gen2.program(seed))) gen2++;
+        for (int seed = 1; gen2 < GEN2_MIGRATED; seed++) {
+            String v1 = Gen2.program(seed);
+            if (add(sources, "H" + seed, v1)) {
+                if (real(v1, "H" + seed + ".jsc").code() == null) gen2++;
+                else gen2Refused++;
+            }
         }
         for (int i = 0; i < REPROS.size(); i++) assertTrue(add(sources, "R" + (i + 1), REPROS.get(i)), "repro R" + (i + 1));
         var java = new LinkedHashMap<String, String>();
@@ -436,8 +454,9 @@ class JscMigrateDifferentialTest {
             if (skipped.contains(PKG.replace('.', '/') + "/" + e.getKey() + ".java")) continue;
             PROGS.add(prepare(e.getKey(), e.getValue(), loader.loadClass(PKG + "." + e.getKey())));
         }
-        System.out.println("[migrate differential] " + PROGS.size() + " programs (" + gen1 + " from Gen1, " + gen2 + " from Gen2, "
-                + REPROS.size() + " repros); " + invalid + " invalid v1 skipped, " + javacRefused + " lowerings javac refuses (a Map never written)");
+        System.out.println("[migrate differential] " + PROGS.size() + " programs: Gen1 " + gen1 + " migrated + " + gen1Refused + " refused, Gen2 "
+                + gen2 + " migrated + " + gen2Refused + " refused, " + REPROS.size() + " repros; " + invalid + " invalid v1 skipped, " + javacRefused
+                + " lowerings javac refuses (a Map never written)");
     }
 
     /** Adds a valid v1 program. */
@@ -464,7 +483,10 @@ class JscMigrateDifferentialTest {
         var calls = new ArrayList<Call>();
         var results = new ArrayList<String>();
         for (int i = 0; i < CALLS; i++) {
-            Method m = methods.get(rnd.nextInt(methods.size()));
+            // Actions three times as often as init, views and destroys (review r3 F11: more calls that pay).
+            var weighted = new ArrayList<Method>();
+            for (Method x : methods) for (int w = x.getName().startsWith("act") ? 3 : 1; w > 0; w--) weighted.add(x);
+            Method m = weighted.get(rnd.nextInt(weighted.size()));
             // The first calls of each method have every Int argument zero (the divisions), with either Bool.
             boolean zero = i < 2 * methods.size();
             if (zero) m = methods.get(i % methods.size());
@@ -702,10 +724,12 @@ class JscMigrateDifferentialTest {
                 Math.min(5, s.disagreements().size()))));
         // Only refusals that state a real limit (a key computed in an arm; a dead value that can fail).
         assertEquals(0, s.unexpectedRefusals(), s.refusals().toString());
-        // Most refusals are JSC1106: the generators write values that can fail and then overwrite them unread on purpose.
-        assertTrue(s.migrated() > s.programs() / 2, "migrated " + s.migrated() + " of " + s.programs());
+        // Review r3 F11: each generator reaches its migrated minimum (above), and refusals stay a minority. Most are JSC1106:
+        // the generators write values that can fail and overwrite them unread, on purpose.
+        assertTrue(gen1 >= GEN1_MIGRATED && gen2 >= GEN2_MIGRATED, "Gen1 " + gen1 + ", Gen2 " + gen2);
+        assertTrue(s.migrated() > s.programs() * 7 / 10, "migrated " + s.migrated() + " of " + s.programs());
         assertTrue(s.refusedByBoth() > s.calls() / 20 && s.refusedByBoth() < s.calls() * 3 / 4, "refusals " + s.refusedByBoth());
-        assertTrue(s.paid() > 100, "payouts " + s.paid());
+        assertTrue(s.paid() > 900, "actions with payouts: " + s.paid() + " (r1 had 1,013)");
         // The repros: R1 (C1) is refused, as its dead division would be lost; R2 and R3 (F1) migrate and agree.
         assertEquals("JSC1106", real(REPROS.get(0), "R1.jsc").code());
         assertNull(real(REPROS.get(1), "R2.jsc").code());

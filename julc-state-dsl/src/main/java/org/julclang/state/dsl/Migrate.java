@@ -41,7 +41,11 @@ public final class Migrate {
     }
 
     /** The {@code .jsc} 2 text and the notes. */
-    public record Result(String source, List<Note> notes) {}
+    /**
+     * The {@code .jsc} 2 text, the notes, and the contract the v1 file declares ({@code pkg} and {@code contract}, as the
+     * v1 parser reads them: the build's artifacts are named by them, review r3 C4).
+     */
+    public record Result(String source, List<Note> notes, String pkg, String contract) {}
 
     /** What every migrated contract needs said once: it is a new script. */
     public static final String NEW_SCRIPT = "a migrated contract is a new script (a new script hash, address and policy):"
@@ -78,7 +82,7 @@ public final class Migrate {
             throw new JscException(line, col, "JSC1104", ".jsc 2 refuses this code, so migrate cannot translate it"
                     + " (rewrite it by hand): " + (e.code == null ? "" : "[" + e.code + "] ") + e.getMessage());
         }
-        return new Result(v2, List.copyOf(m.notes));
+        return new Result(v2, List.copyOf(m.notes), c.pkg(), c.name());
     }
 
     /** The translation of a valid v1 file, before the {@code .jsc} 2 check (for diagnosing a refusal). */
