@@ -48,7 +48,8 @@ function chainOf(snapshot, tip) {
 
 async function prepareUnder(engine, x, clock) {
   const contracts = contractsOf(x).map((c) => ({ description: typeof c.description === 'string' ? c.description : JSON.stringify(c.description),
-    script: c.script, transitions: c.transitions }));
+    script: c.script, transitions: c.transitions,
+    manifest: typeof c.manifest === 'string' ? c.manifest : JSON.stringify(c.manifest) }));
   return engine.joust.prepare({ call: JSON.stringify(x.call), snapshot: JSON.stringify(x.snapshot), contracts,
     zeroSlot: BigInt(clock.zeroSlot), zeroTimeMs: BigInt(clock.zeroTimeMs), slotLengthMs: BigInt(clock.slotLengthMs),
     ttlMs: BigInt(clock.ttlMs), networkId: 0, mapNodes: {}, mapProofs: {} });
@@ -87,10 +88,11 @@ test('a cooling anchor\'s insert under 100 ms slots: the engine waits, then buil
     const r = await prepareUnder(engine, x, clock);
     if (before > 60 * slotLengthMs) {
       assert.equal(r.ok, false, `${what}: refused`);
-      const m = /prepare again at slot (\d+)/.exec(r.error);
-      assert.ok(m, `${what}: ${r.error}`);
-      assert.equal(Number(m[1]), S + Math.ceil(before / slotLengthMs) - 60, `${what}: the slot to prepare again at`);
-      console.log(`[window] ${what}: the engine waits: prepare again at slot ${m[1]} (tip ${S})`);
+      // ADR-0020 §12.1: the slot comes as a structured field (retryAtSlot); the text only says it for people.
+      const slot = Number(r.retryAtSlot);
+      assert.equal(slot, S + Math.ceil(before / slotLengthMs) - 60, `${what}: the slot to prepare again at (${r.error})`);
+      assert.ok(r.error.includes(`prepare again at slot ${slot}`), r.error);
+      console.log(`[window] ${what}: the engine waits: retryAtSlot ${slot} (tip ${S})`);
       continue;
     }
     assert.ok(r.ok, `${what}: ${r.error}`);

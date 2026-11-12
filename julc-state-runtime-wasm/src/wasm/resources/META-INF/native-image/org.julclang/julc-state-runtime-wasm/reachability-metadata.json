@@ -19,6 +19,18 @@
       "allDeclaredConstructors": true
     },
     {
+      "type": "org.julclang.state.runtime.wasm.JoustRuntimeWasm$Info",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.julclang.state.runtime.wasm.JoustRuntimeWasm$InfoRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
       "type": "com.bloxbean.cardano.client.api.model.Utxo",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,

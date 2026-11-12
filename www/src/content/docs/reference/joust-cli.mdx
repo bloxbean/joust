@@ -52,7 +52,7 @@ with `joust.config.json`, or a `package.json` that depends on `@julclang/joust`)
 
 | File | Content |
 |---|---|
-| `contracts.json` | `[{ description, script, transitions, built: { joust } }]` for the runtime |
+| `contracts.json` | `[{ description, script, transitions, manifest, built: { joust } }]` for the runtime |
 | `<Contract>.json` | the description (CIP-57 + `x-joust`, version 2) |
 | `<Contract>.plutus` | the validator, CBOR hex |
 | `<Contract>.js`, `<Contract>.d.ts` | the typed client and its types |

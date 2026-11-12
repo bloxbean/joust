@@ -42,7 +42,7 @@ class DescribedTreasuryDevnetTest {
     @Test
     void quorumAndEvents() throws Exception {
         var c = DescribedReplayTest.contract("treasury", "Treasury");
-        var treasury = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
+        var treasury = new DescribedContract(JSON.readTree(c.description()), c.script(), UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions()));
         var rt = DevKit.runtime();
         Account[] members = {DevKit.fundedAccount(300), DevKit.fundedAccount(300), DevKit.fundedAccount(300)};
         Arrays.sort(members, Comparator.comparing(m -> HexUtil.encodeHexString(Keys.pkh(m))));
@@ -95,7 +95,7 @@ class DescribedTreasuryDevnetTest {
         var r = Toolchain.build(files, Map.of());
         assertTrue(r.ok(), String.valueOf(r.diagnostics()));
         var c = r.contracts().get(0);
-        var treasury = new DescribedContract(JSON.readTree(c.descriptionJson()), c.scriptCborHex(), new UplcTransitions(c.transitions()));
+        var treasury = new DescribedContract(JSON.readTree(c.descriptionJson()), c.scriptCborHex(), UplcTransitions.verified(c.manifestJson(), c.descriptionJson(), c.scriptCborHex(), c.transitions()));
         var g = r.validators().stream().filter(v -> v.name().equals("Guardian")).findFirst().orElseThrow();
         assertEquals("withdraw", g.purpose());
         var rt = DevKit.runtime();

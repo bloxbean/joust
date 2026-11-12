@@ -77,7 +77,8 @@ public final class DescribedContract {
                 : ContractSpec.described(x.get("contract").asText(), scriptCborHex, x.get("minAda").asLong(),
                         x.get("maxDatumBytes").asInt(), 3_600_000L, x.path("stakeSelf").asBoolean(),
                         mapFields(refKey(x.get("state"))), List.copyOf(keyed.values()));
-        this.fn = fn;
+        // Every evaluation's inputs are checked against the declared types first (ADR-0020 S15).
+        this.fn = new TransitionInputs(description, fn);
     }
 
     /** The contract's fully qualified name (the description's title). */
@@ -642,15 +643,31 @@ public final class DescribedContract {
 
     /** The index of the generated validator's Lifecycle constructor {@code title} (CreateInstance, BurnInstance, ByAction…). */
     private int lifecycleIndex(String title) {
-        var it = description.path("definitions").fields();
-        while (it.hasNext()) {
-            var e = it.next();
-            if (!e.getKey().endsWith(".Lifecycle")) continue;
-            for (JsonNode alt : e.getValue().path("anyOf")) {
-                if (alt.path("title").asText().equals(title)) return alt.path("index").asInt();
-            }
+        for (JsonNode alt : description.path("definitions").path(lifecycleKey(description)).path("anyOf")) {
+            if (alt.path("title").asText().equals(title)) return alt.path("index").asInt();
         }
         throw new IllegalArgumentException(name + " has no " + title + " redeemer");
+    }
+
+    /**
+     * The generated validator's Lifecycle definition, by its exact name ({@code <package>.<validator>.Lifecycle}), never
+     * by document order (PR #62 S11: the manifest binds the description's canonical form, in which member order is not
+     * kept). A description without it, and with other than exactly one {@code *.Lifecycle}, is refused.
+     */
+    static String lifecycleKey(JsonNode description) {
+        JsonNode x = description.path("x-joust");
+        JsonNode defs = description.path("definitions");
+        String exact = x.path("package").asText() + "." + x.path("validator").asText() + ".Lifecycle";
+        if (defs.has(exact)) return exact;
+        var found = new java.util.ArrayList<String>();
+        defs.fieldNames().forEachRemaining(k -> {
+            if (k.endsWith(".Lifecycle")) found.add(k);
+        });
+        if (found.size() != 1) {
+            throw new IllegalArgumentException("the description has no " + exact + " and " + found.size()
+                    + " other Lifecycle definitions " + found + ": which is the validator's is ambiguous");
+        }
+        return found.get(0);
     }
 
     private static String refKey(JsonNode schema) {

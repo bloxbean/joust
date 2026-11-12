@@ -30,7 +30,7 @@ export function engineWorker(worker, options) {
     if (!p) return;
     pending.delete(data.id);
     if (data.ok) p.resolve(data.value);
-    else p.reject(new Error(data.error));
+    else p.reject(Object.assign(new Error(data.error), data.retryAtSlot != null ? { retryAtSlot: data.retryAtSlot } : {}));
   });
   // A worker that cannot start (its module fails to load, or it runs out of memory) fires error, not a message.
   worker.addEventListener('error', (e) => {

@@ -31,7 +31,7 @@ class DescribedGuildDevnetTest {
     @Test
     void heroMovesAndIsAdmitted() throws Exception {
         var c = DescribedReplayTest.contract("guild", "Guild");
-        var guild = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
+        var guild = new DescribedContract(JSON.readTree(c.description()), c.script(), UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions()));
         var rt = DevKit.runtime();
         var master = DevKit.fundedAccount(300);
         var ann = DevKit.fundedAccount(300);

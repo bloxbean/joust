@@ -10,11 +10,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.julclang.clientlib.eval.JulcTransactionEvaluator;
 import org.julclang.clientlib.eval.SlotConfig;
 import org.julclang.state.runtime.Compose;
+import org.julclang.state.runtime.NotYetException;
 import org.julclang.state.runtime.PreparedTx;
 import org.julclang.state.runtime.SlotChainTime;
 import org.julclang.state.runtime.StateRuntime;
 import org.julclang.state.runtime.WalletAccount;
 import org.julclang.state.runtime.described.DescribedContract;
+import org.julclang.state.runtime.described.TransitionFn;
 import org.julclang.state.runtime.described.UplcTransitions;
 import org.julclang.state.runtime.snapshot.Need;
 import org.julclang.state.runtime.snapshot.Snapshot;
@@ -22,9 +24,10 @@ import org.julclang.state.runtime.snapshot.SnapshotBackend;
 
 import java.math.BigInteger;
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 
 /**
  * The runtime engine's prepare (ADR-0015 D4, D5): a call request and a snapshot in; the unsigned transaction, the
@@ -37,8 +40,11 @@ public final class Prepare {
 
     static final ObjectMapper JSON = new ObjectMapper();
 
-    /** A contract as the toolchain builds it: the description (JSON), the script (CBOR hex), the transition programs. */
-    public record Contract(String description, String script, Map<String, String> transitions) {}
+    /**
+     * A contract as the toolchain builds it: the description (JSON), the script (CBOR hex), the transition programs, and
+     * their manifest (JSON, ADR-0020 D8), which must match the other three before any program runs.
+     */
+    public record Contract(String description, String script, Map<String, String> transitions, String manifest) {}
 
     /**
      * {@code call}: the request JSON, {@code { contract, kind, method, instance, object, args, pay: {lovelace}, address }};
@@ -93,24 +99,58 @@ public final class Prepare {
     /**
      * The unsigned transaction (hex CBOR), its hash, what a creation made, the end of its validity (slot, or -1), the key
      * hashes that must sign, and its plan (JSON, ADR-0013 D4); or a need; or the refusal. {@code publish} gives no
-     * transaction ({@code cbor} null) when the reference script is already on chain.
+     * transaction ({@code cbor} null) when the reference script is already on chain. {@code retryAtSlot}: for a keyed
+     * call refused because its link window cannot start yet (a cooldown, ADR-0016 D9), the slot from which to prepare
+     * again; else -1. A client waits on this field only, never on the error's text (ADR-0020 §12.1).
      */
     public record Result(boolean ok, String cbor, String txHash, String created, long validTo, List<String> signers,
-                         String plan, String needKind, String needKey, String error, Map<String, String> mapNodes) {}
+                         String plan, String needKind, String needKey, String error, Map<String, String> mapNodes,
+                         long retryAtSlot) {
+        public Result(boolean ok, String cbor, String txHash, String created, long validTo, List<String> signers,
+                      String plan, String needKind, String needKey, String error, Map<String, String> mapNodes) {
+            this(ok, cbor, txHash, created, validTo, signers, plan, needKind, needKey, error, mapNodes, -1);
+        }
+    }
 
     /**
-     * Described contracts, parsed once: by description, script and transition programs together (a rebuild can change
-     * the code and keep the description, as joust dev does on save).
+     * Described contracts, parsed once: by the whole contract (description, script, transition programs and manifest,
+     * compared by content; a rebuild can change the code and keep the description, as joust dev does on save). A
+     * contract is loaded only once its manifest matches ({@link UplcTransitions#verified}, ADR-0020 D8): no program is
+     * evaluated before. Thread-safe: a JVM service may prepare concurrently.
      */
-    private static final Map<String, DescribedContract> LOADED = new HashMap<>();
+    private static final Map<Contract, DescribedContract> LOADED = new ConcurrentHashMap<>();
+
+    /**
+     * The comparison tests' transitions for the calls of one thread (ADR-0020 §11.4): given the contract and its
+     * verified programs, what runs instead. Set only by {@link #prepare(Request, BiFunction)} for that call; production
+     * calls never see one.
+     */
+    private static final ThreadLocal<BiFunction<Contract, UplcTransitions, TransitionFn>> SUBSTITUTE = new ThreadLocal<>();
+
+    /** As {@link #prepare(Request)}, with each loaded contract's transitions given by {@code transitions} (tests only). */
+    static Result prepare(Request r, BiFunction<Contract, UplcTransitions, TransitionFn> transitions) {
+        SUBSTITUTE.set(transitions);
+        try {
+            return prepare(r);
+        } finally {
+            SUBSTITUTE.remove();
+        }
+    }
 
     static DescribedContract load(Contract c) throws Exception {
-        String key = c.description() + '\u0000' + c.script() + '\u0000'
-                + (c.transitions() == null ? "" : new java.util.TreeMap<>(c.transitions()).toString());
+        var substitute = SUBSTITUTE.get();
+        if (substitute != null) {
+            var programs = UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions());
+            return new DescribedContract(JSON.readTree(c.description()), c.script(), substitute.apply(c, programs));
+        }
+        // The cache key holds its own copy of the programs (PR #62 S10): the caller's map cannot change it.
+        var key = new Contract(c.description(), c.script(), c.transitions() == null ? null : Map.copyOf(c.transitions()), c.manifest());
         DescribedContract d = LOADED.get(key);
         if (d == null) {
-            d = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
-            LOADED.put(key, d);
+            var programs = UplcTransitions.verified(key.manifest(), key.description(), key.script(), key.transitions());
+            d = new DescribedContract(JSON.readTree(key.description()), key.script(), programs);
+            var earlier = LOADED.putIfAbsent(key, d);
+            if (earlier != null) d = earlier;
         }
         return d;
     }
@@ -237,10 +277,7 @@ public final class Prepare {
             return new Result(true, p.cbor(), p.txHash(), made[0], p.validTo(), p.requiredSigners(),
                     JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
         } catch (Throwable t) {
-            for (Throwable c = t; c != null; c = c.getCause()) {
-                if (c instanceof Need n) return new Result(false, null, null, null, -1, List.of(), null, n.kind(), n.key(), null, Map.of());
-            }
-            return refused(t.getMessage() != null ? t.getMessage() : t.toString());
+            return failed(t);
         }
     }
 
@@ -369,10 +406,7 @@ public final class Prepare {
             return new Result(true, p.cbor(), p.txHash(), JSON.writeValueAsString(made), p.validTo(), p.requiredSigners(),
                     JSON.writeValueAsString(p.plan()), null, null, null, nodes.written());
         } catch (Throwable t) {
-            for (Throwable c = t; c != null; c = c.getCause()) {
-                if (c instanceof Need n) return new Result(false, null, null, null, -1, List.of(), null, n.kind(), n.key(), null, Map.of());
-            }
-            return refused(t.getMessage() != null ? t.getMessage() : t.toString());
+            return failed(t);
         }
     }
 
@@ -409,5 +443,19 @@ public final class Prepare {
 
     private static Result refused(String message) {
         return new Result(false, null, null, null, -1, List.of(), null, null, null, message, Map.of());
+    }
+
+    /** A call that threw: a need, a keyed call to prepare again later (its slot, structured), or a refusal. */
+    static Result failed(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c instanceof Need n) return new Result(false, null, null, null, -1, List.of(), null, n.kind(), n.key(), null, Map.of());
+        }
+        String message = t.getMessage() != null ? t.getMessage() : t.toString();
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c instanceof NotYetException n) {
+                return new Result(false, null, null, null, -1, List.of(), null, null, null, message, Map.of(), n.prepareAt());
+            }
+        }
+        return refused(message);
     }
 }

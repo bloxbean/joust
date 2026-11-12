@@ -104,9 +104,11 @@ class DescribedRegistryDevnetTest {
                 p = Compose.of(rt, wallet).designate(designated).add(call).prepare();
                 break;
             } catch (RuntimeException e) {
-                String m = String.valueOf(e.getMessage());
-                if (!m.contains("prepare again at slot")) throw e;
-                long slot = Long.parseLong(m.replaceAll("(?s).*prepare again at slot (\\d+).*", "$1"));
+                // The cooldown's slot is structured (ADR-0020 §12.1), never read from the message.
+                org.julclang.state.runtime.NotYetException notYet = null;
+                for (Throwable c = e; c != null; c = c.getCause()) if (c instanceof org.julclang.state.runtime.NotYetException n) notYet = n;
+                if (notYet == null) throw e;
+                long slot = notYet.prepareAt();
                 long tip = rt.chainTime().tipSlot();
                 assertTrue(slot > tip && slot <= tip + 200, "a cooldown's wait: slot " + slot + " at tip " + tip);
                 waits++;
@@ -126,7 +128,7 @@ class DescribedRegistryDevnetTest {
     @Test
     void everyKeyedCallKind_preparedForAWallet() throws Exception {
         var c = DescribedReplayTest.contract("registry");
-        var registry = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
+        var registry = new DescribedContract(JSON.readTree(c.description()), c.script(), UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions()));
         var rt = pageRuntime();
         var admin = DevKit.fundedAccount(300);
         var ann = DevKit.fundedAccount(300);

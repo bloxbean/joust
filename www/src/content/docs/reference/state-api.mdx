@@ -74,6 +74,9 @@ public static void that(boolean condition, String message)
 `Require.that(cond, "message")` fails the call when `cond` is false. On the JVM it throws `RequireException` with the
 message, so the client reports why a call was rejected before submitting anything. On chain (the bundled source in
 `src/onchain/java`) it traces the message and fails the script. Both fail on exactly the same inputs (ADR-0001 D7).
+A third variant, `src/discovery/java`, is compiled only into the transition programs the runtime engine runs: it traces
+`joust:require <message>` before failing, so the engine tells the contract's refusal from any other failure by that tag
+(ADR-0020). Validators never use it.
 
 ```java title="RequireException.java"
 public class RequireException extends RuntimeException {
@@ -504,7 +507,7 @@ source in the bundle JuLC compiles; ADR-0001 D7 keeps that set tiny.
 
 | Class | JVM body (`src/main/java`) | On-chain body (`src/onchain/java`) |
 |---|---|---|
-| `Require` | Throws `RequireException(message)` | `ContextsLib.trace(message)`, then `Builtins.error()` |
+| `Require` | Throws `RequireException(message)` | `ContextsLib.trace(message)`, then `Builtins.error()`; transition programs (`src/discovery/java`): `ContextsLib.trace("joust:require " + message)`, then `Builtins.error()` |
 | `Assets` | `TreeMap` arithmetic that normalises; adds `check` and `read` | PV11 native Value builtins (`insertCoin`, `unionValue`, `scaleValue`, `lookupCoin`, ...) |
 | `MerkleMaps` | Reads missing keys from the bound `ReadSource` | A missing key fails the script |
 

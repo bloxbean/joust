@@ -38,7 +38,7 @@ class DescribedReplayTest {
         var r = Toolchain.build(files, Map.of());
         assertTrue(r.ok(), example + ": " + r.diagnostics());
         var c = r.contracts().get(0);
-        return new Prepare.Contract(c.descriptionJson(), c.scriptCborHex(), c.transitions());
+        return new Prepare.Contract(c.descriptionJson(), c.scriptCborHex(), c.transitions(), c.manifestJson());
     }
 
     /** The contract {@code simple} of {@code examples/<example>} (an example may hold several). */
@@ -54,7 +54,7 @@ class DescribedReplayTest {
         var r = Toolchain.build(files, Map.of());
         assertTrue(r.ok(), example + ": " + r.diagnostics());
         var c = r.contracts().stream().filter(x -> x.name().equals(simple)).findFirst().orElseThrow();
-        return new Prepare.Contract(c.descriptionJson(), c.scriptCborHex(), c.transitions());
+        return new Prepare.Contract(c.descriptionJson(), c.scriptCborHex(), c.transitions(), c.manifestJson());
     }
 
     @Test

@@ -1543,7 +1543,8 @@ unchanged; the deviations below are the conservative readings chosen where the t
   `Compose.designate(ref).prepare()` prepares a keyed call for a wallet: the built transaction must spend the page's
   designated input (checked after the build), and a creation's seed is that input. `prepare()` refuses a keyed call
   without a designated input, and one composed with any other call (D11). A link window that would start beyond the
-  page's start limit is refused with `prepare again at slot N` (an engine cannot wait; D7 step 5).
+  page's start limit is refused with `prepare again at slot N` (an engine cannot wait; D7 step 5). *(Since ADR-0020
+  §12.1 the slot travels as a structured field, `retryAtSlot`, and clients never read it from the text.)*
 - *Engine:* the request's `designated` and `pageLimits` (default 60 and 900 slots, validated) reach the runtime. Only
   keyed calls read `pageLimits`; `designated` is honoured for any prepared call that carries one (the JS client sends
   it only with keyed calls), and refused by `Compose.submit()` and nested compositions (R-G2).
