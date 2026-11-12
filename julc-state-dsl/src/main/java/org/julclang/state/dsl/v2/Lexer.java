@@ -85,6 +85,14 @@ final class Lexer {
                 throw new JscException(line, col, "JSC0147", String.format("U+%04X breaks a line for some readers but not for .jsc:"
                         + " end lines with LF (or CRLF), so that a comment cannot hide the code after it", (int) c));
             }
+            // Security S12: no other control character either (C0, DEL, C1), in code, comments or strings: only TAB,
+            // LF and the CR of a CRLF. A terminal or a viewer may act on one (U+001C..U+001E, ESC) and show text that
+            // differs from what compiles.
+            if (Character.getType(c) == Character.CONTROL && c != '\t' && c != '\r') {
+                throw new JscException(line, col, "JSC0148", String.format("control character U+%04X: .jsc files hold no control"
+                        + " characters but TAB and line ends (LF or CRLF), even in comments and strings, so that the text reads as"
+                        + " it compiles", (int) c));
+            }
             if (Character.getType(c) == Character.FORMAT && !(i == 0 && c == '\uFEFF')) {
                 throw new JscException(line, col, "JSC0145", String.format("invisible format character U+%04X: .jsc files may not hold"
                         + " bidirectional controls or other format characters, even in comments and strings, so that the text"
