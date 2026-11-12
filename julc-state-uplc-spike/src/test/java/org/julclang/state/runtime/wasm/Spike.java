@@ -92,6 +92,11 @@ final class Spike {
     }
 
     static Class<?> compile(String pkg, String simple, String source) {
+        return compile(Map.of(pkg + "." + simple, source)).apply(pkg + "." + simple);
+    }
+
+    /** Compiles {@code sources} (fqcn → text) together in memory; returns a class lookup over the result. */
+    static Function<String, Class<?>> compile(Map<String, String> sources) {
         var javac = ToolProvider.getSystemJavaCompiler();
         StandardJavaFileManager std = javac.getStandardFileManager(null, null, null);
         Map<String, ByteArrayOutputStream> out = new HashMap<>();
@@ -106,17 +111,18 @@ final class Spike {
                 };
             }
         };
-        var src = new SimpleJavaFileObject(URI.create("string:///" + (pkg + "." + simple).replace('.', '/') + ".java"),
+        var units = new java.util.ArrayList<JavaFileObject>();
+        sources.forEach((fqcn, text) -> units.add(new SimpleJavaFileObject(URI.create("string:///" + fqcn.replace('.', '/') + ".java"),
                 JavaFileObject.Kind.SOURCE) {
             @Override
             public CharSequence getCharContent(boolean ignore) {
-                return source;
+                return text;
             }
-        };
+        }));
         StringWriter log = new StringWriter();
         boolean ok = javac.getTask(log, fm, null, List.of("-proc:none", "-classpath", System.getProperty("java.class.path"),
-                "-nowarn"), null, List.of(src)).call();
-        if (!ok) throw new IllegalStateException("javac " + simple + ":\n" + log);
+                "-nowarn"), null, units).call();
+        if (!ok) throw new IllegalStateException("javac " + sources.keySet() + ":\n" + log);
         var loader = new ClassLoader(Spike.class.getClassLoader()) {
             @Override
             protected Class<?> findClass(String name) throws ClassNotFoundException {
@@ -126,11 +132,13 @@ final class Spike {
                 return defineClass(name, bytes, 0, bytes.length);
             }
         };
-        try {
-            return loader.loadClass(pkg + "." + simple);
-        } catch (ClassNotFoundException e) {
-            throw new IllegalStateException(e);
-        }
+        return name -> {
+            try {
+                return loader.loadClass(name);
+            } catch (ClassNotFoundException e) {
+                throw new IllegalStateException(e);
+            }
+        };
     }
 
     // ---------------------------------------------------------------- installing transition functions into Prepare

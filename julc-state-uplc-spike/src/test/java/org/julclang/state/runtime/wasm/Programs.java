@@ -58,8 +58,12 @@ final class Programs {
     }
 
     static Compiled compile(String example, Toolchain.Contract c, Set set) throws Exception {
+        return compile(Spike.sources(example), c, set);
+    }
+
+    static Compiled compile(Map<String, String> sources, Toolchain.Contract c, Set set) throws Exception {
         Map<String, LibrarySource> project = new LinkedHashMap<>();
-        for (String text : Spike.sources(example).values()) {
+        for (String text : sources.values()) {
             LibrarySource l = LibrarySourceResolver.librarySource(text);
             if (l != null) project.put(l.fqcn(), l);
         }
