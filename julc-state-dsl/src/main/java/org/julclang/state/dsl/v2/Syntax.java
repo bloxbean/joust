@@ -5,7 +5,10 @@ import org.julclang.state.dsl.JscException;
 import java.math.BigInteger;
 import java.util.List;
 
-/** The syntax tree of a {@code .jsc} 2 file (ADR-0018). Every node carries its source position. */
+/**
+ * The syntax tree of a {@code .jsc} 2 file (ADR-0018), as the parser reads it: names are not resolved and nothing is
+ * typed yet ({@link Checker} turns it into the checked {@link Ir}). Every node carries its source position.
+ */
 final class Syntax {
     private Syntax() {}
 
@@ -46,8 +49,15 @@ final class Syntax {
 
     record Fn(String name, List<Param> params, TypeRef ret, Block body, Pos pos) {}
 
-    /** Statements, then an optional result expression: the block's value. */
-    record Block(List<Stmt> stmts, Expr result, Pos pos) {}
+    /**
+     * Statements, then an optional result expression: the block's value. {@code returnPos} is the position of the
+     * {@code return} keyword when the result was written {@code return e}, else null.
+     */
+    record Block(List<Stmt> stmts, Expr result, Pos returnPos, Pos pos) {
+        Block(List<Stmt> stmts, Expr result, Pos pos) {
+            this(stmts, result, null, pos);
+        }
+    }
 
     sealed interface Stmt permits Const, Require, Pay, For, IfStmt {
         Pos pos();
@@ -64,7 +74,7 @@ final class Syntax {
     record IfStmt(Expr cond, Block then, Block otherwise, Pos pos) implements Stmt {}
 
     sealed interface Expr permits IntLit, BoolLit, BytesLit, StrLit, Name, Field, Call, MethodCall, Lambda, ObjLit,
-            ListLit, Unary, Binary, Cond, IfExpr {
+            ListLit, Unary, Binary, Cond, IfExpr, BlockExpr {
         Pos pos();
     }
 
@@ -78,12 +88,16 @@ final class Syntax {
 
     record Name(String name, Pos pos) implements Expr {}
 
+    /**
+     * {@code target.name} without parentheses: a record field or a collection property ({@code xs.length}); which one
+     * is decided by the checker from the target's type (Codex C7).
+     */
     record Field(Expr target, String name, Pos pos) implements Expr {}
 
     /** A call of a function by name: user {@code fn}s, the prelude, std imports, {@code Some}, {@code after}. */
     record Call(String fn, List<Expr> args, Pos pos) implements Expr {}
 
-    /** {@code target.method(args)}; {@code args} is null for a property ({@code xs.length}). */
+    /** {@code target.method(args)}. */
     record MethodCall(Expr target, String method, List<Expr> args, Pos pos) implements Expr {}
 
     record Lambda(List<String> params, Expr body, Pos pos) implements Expr {}
@@ -104,4 +118,7 @@ final class Syntax {
 
     /** {@code if c { … } else { … }} used as a value: both arms are blocks with results. */
     record IfExpr(Expr cond, Block then, Block otherwise, Pos pos) implements Expr {}
+
+    /** A block used as a value ({@code x => { const y = …; y > 1 }}): its statements, then its result. */
+    record BlockExpr(Block block, Pos pos) implements Expr {}
 }

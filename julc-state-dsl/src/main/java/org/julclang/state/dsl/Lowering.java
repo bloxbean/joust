@@ -26,8 +26,8 @@ import java.util.TreeSet;
  */
 final class Lowering {
 
-    /** The Java source and any warnings. */
-    record Result(String java, List<String> warnings) {}
+    /** The Java source and any warnings, located (D12). */
+    record Result(String java, List<JscMain.Warning> warnings) {}
 
     private static final String PAYOUTS_TYPE = "JulcList<Payout>";
     private static final Set<String> BUILTINS = Set.of("caller", "received", "balance", "validFrom", "validTo");
@@ -47,7 +47,7 @@ final class Lowering {
     private final Map<String, Field> fields = new LinkedHashMap<>();
     private final Set<String> imports = new TreeSet<>();
     private final StringBuilder helpers = new StringBuilder();
-    private final List<String> warnings = new ArrayList<>();
+    private final List<JscMain.Warning> warnings = new ArrayList<>();
     private boolean anyPays;
     private int ifCount;
 
@@ -57,6 +57,8 @@ final class Lowering {
     }
 
     static Result lower(Contract c, String file) {
+        // The file name is embedded in comments and messages: only a safe bare name may be (security S3).
+        org.julclang.state.dsl.v2.JscV2.checkFileName(file);
         var l = new Lowering(c, file);
         String java = l.render();
         return new Result(java, List.copyOf(l.warnings));
@@ -102,7 +104,7 @@ final class Lowering {
 
         void require(String cond, String message) {
             imports.add("org.julclang.state.api.Require");
-            emit("Require.that(" + cond + ", \"" + message + "\");");
+            emit("Require.that(" + cond + ", \"" + message.replace("\\", "\\\\").replace("\"", "\\\"") + "\");");
         }
 
         void emit(String line) {
@@ -316,8 +318,8 @@ final class Lowering {
             }
         }
         if (destroy && !scope.readsBalance) {
-            warnings.add(where(m.pos()) + ": warning: destroy " + m.name() + " never reads balance: it must pay out all"
-                    + " of it (deposit included), or every call is rejected");
+            warnings.add(new JscMain.Warning(m.pos().line(), m.pos().col(), "destroy " + m.name() + " never reads balance: it must"
+                    + " pay out all of it (deposit included), or every call is rejected"));
         }
 
         String result;

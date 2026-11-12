@@ -1,0 +1,1319 @@
+package org.julclang.state.dsl.v2;
+
+import org.julclang.state.dsl.JscException;
+import org.julclang.state.dsl.v2.Syntax.*;
+
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+import static org.julclang.state.dsl.v2.Ir.TIME;
+import static org.julclang.state.dsl.v2.Ir.WINDOW;
+
+/**
+ * Checks a {@code .jsc} 2 file and produces its typed, checked {@link Ir} (ADR-0018, milestone M0). Every rule of the
+ * language is enforced here, at a {@code .jsc} position: names and shadowing (D3, J10), types and checked inputs (D5),
+ * effects and audiences (D4), recursion (D7, J9) and time (D11, J6). No Java text is produced: the {@link JavaEmitter}
+ * lowers the IR, and the reference {@link Interpreter} evaluates it.
+ * <p>
+ * The time rule needs a fixed point over the state fields that hold time values: the contract is checked again while
+ * that set grows (at most once per field). The rule is monotone (more time fields only refuse more), so an error found
+ * in any round is an error of the program.
+ */
+final class Checker {
+
+    // ------------------------------------------------------------------ names
+
+    static final Set<String> BUILTINS = Set.of("caller", "received", "balance", "validFrom", "validTo", "state", "params",
+            "funds");
+    static final Set<String> PRELUDE = Set.of("min", "max", "abs", "utf8", "asKey", "Some", "after", "before");
+    /** Names no binding, field or declaration may take. */
+    static final Set<String> RESERVED = Set.of(
+            // Java keywords and literals
+            "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue",
+            "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if",
+            "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private",
+            "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this",
+            "throw", "throws", "transient", "try", "void", "volatile", "while", "var", "record", "yield", "sealed",
+            "permits", "null", "true", "false",
+            // members of Object: a record component of the same name is illegal Java
+            "clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait",
+            // names in the generated code
+            "ctx", "State", "Outcome", "Optional", "JulcList", "BigInteger", "Payout", "Payouts", "Require", "Clock",
+            // names the JOUST client generates (ClientGenerator.RESERVED_MEMBERS / RESERVED_PARAMS)
+            "deploy", "at", "contract", "instance", "instanceId", "lovelace", "SPEC", "callerAccount", "payLovelace",
+            "runtime", "INTENTS", "batch", "pendingIntents", "intent", "maps", "seed",
+            // classes the generated code names as static receivers or annotations: a value of the same name would
+            // obscure the class (JLS 6.4.2), a type of the same name would shadow it (Codex C6, F7, S6)
+            "ByteStringLib", "CryptoLib", "BytesAdapter", "Builtins", "Ctx", "Init", "Action", "Destroy", "View",
+            "Payable", "SignedBy", "ValidAfter", "ValidBefore", "StateContract", "String", "Object", "Boolean",
+            "Integer", "Long", "Byte", "Math", "System", "Record", "Override",
+            // .jsc 2 type names and helper-name fragments: a declared type of the same name would share a helper (C6)
+            "Int", "Bool", "Bytes", "Key", "List", "Option", "Opt", "Map", "BigMap", "Value", "Address", "Credential",
+            "Hash", "Some", "None");
+
+    // ------------------------------------------------------------------ state
+
+    private final File file;
+    private final String fileName;
+    private final LinkedHashMap<String, LinkedHashMap<String, Ty>> records = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Ty> stateFields = new LinkedHashMap<>();
+    private final Map<String, Syntax.Fn> fns = new LinkedHashMap<>();
+    private final Set<String> imported = new HashSet<>();
+
+    /** State fields that hold time values (D11), contract-wide; grown to a fixed point. */
+    private Set<String> timeFields = new TreeSet<>();
+    private Set<String> nextTimeFields = new TreeSet<>();
+
+    private final LinkedHashSet<Ir.Warning> warnings = new LinkedHashSet<>();
+    private final Map<String, Set<String>> callGraph = new TreeMap<>();
+    private final Set<String> analysed = new HashSet<>();
+    private final Set<Ir.Local> used = Collections.newSetFromMap(new IdentityHashMap<>());
+    private int seq;
+
+    private Checker(File file, String fileName) {
+        this.file = file;
+        this.fileName = fileName;
+    }
+
+    static Ir.Program check(File file, String fileName) {
+        var c = new Checker(file, fileName);
+        c.declare();
+        Ir.Program p;
+        int round = 0;
+        while (true) {
+            c.resetRound();
+            p = c.checkAll();
+            if (c.nextTimeFields.equals(c.timeFields)) break;
+            c.timeFields = new TreeSet<>(c.nextTimeFields);
+            if (++round > c.stateFields.size() + 1) throw new IllegalStateException("time fields did not converge");
+        }
+        c.checkRecursion();
+        return new Ir.Program(p.pkg(), p.fileName(), p.name(), p.options(), p.records(), p.state(), p.methods(), p.fns(),
+                Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings));
+    }
+
+    private void resetRound() {
+        warnings.clear();
+        callGraph.clear();
+        analysed.clear();
+        used.clear();
+        seq = 0;
+        nextTimeFields = new TreeSet<>(timeFields);
+    }
+
+    // ------------------------------------------------------------------ declarations
+
+    private void declare() {
+        Contract c = file.contract();
+        checkUserName(c.name(), c.pos(), "contract");
+        var allTypes = new ArrayList<TypeDecl>(file.types());
+        allTypes.addAll(c.types());
+        for (TypeDecl t : allTypes) {
+            if (!Character.isUpperCase(t.name().charAt(0))) throw t.pos().error("type names start with a capital: " + t.name());
+            if (t.name().contains("_")) {
+                throw t.pos().error("type names are written without '_' (e.g. " + t.name().replace("_", "") + ")");
+            }
+            checkUserName(t.name(), t.pos(), "type");
+            if (t.name().equals(c.name())) {
+                throw t.pos().error("the type " + t.name() + " has the contract's name; rename one (the type is generated inside the contract's class)");
+            }
+            if (records.containsKey(t.name())) throw t.pos().error("the type " + t.name() + " is declared twice");
+            records.put(t.name(), new LinkedHashMap<>());
+        }
+        for (TypeDecl t : allTypes) fillFields(records.get(t.name()), t.fields(), t.name(), false);
+        fillFields(stateFields, c.state(), "state", true);
+        for (TypeDecl t : allTypes) {
+            if (reaches(new Ty.Rec(t.name()), t.name(), new HashSet<>())) {
+                throw t.pos().error("the type " + t.name() + " contains itself; recursive types are not supported");
+            }
+        }
+        if (stateFields.isEmpty()) throw c.pos().error("the state needs at least one field");
+
+        var methodNames = new HashSet<String>();
+        for (Syntax.Method m : c.methods()) methodNames.add(m.name());
+        var allFns = new ArrayList<Syntax.Fn>(file.fns());
+        allFns.addAll(c.fns());
+        for (Syntax.Fn f : allFns) {
+            checkUserName(f.name(), f.pos(), "function");
+            if (fns.containsKey(f.name()) || PRELUDE.contains(f.name()) || Std.ROWS.containsKey(f.name())) {
+                throw f.pos().error("the function " + f.name() + " is declared twice or shadows a built-in");
+            }
+            if (methodNames.contains(f.name())) {
+                throw f.pos().error("the fn " + f.name() + " has the name of a method of the contract; rename one (both become methods of one Java class)");
+            }
+            fns.put(f.name(), f);
+        }
+        for (Import im : file.imports()) {
+            for (String n : im.names()) {
+                Std.Binding b = Std.ROWS.get(n);
+                if (b == null || !b.module().equals(im.from())) {
+                    throw im.pos().error("'" + n + "' is not in " + im.from() + (b != null ? " (it is in " + b.module() + ")" : ""));
+                }
+                imported.add(n);
+            }
+        }
+        var seen = new HashSet<String>();
+        // The processor names redeemer variants after methods (capitalised): they must not clash with generated or
+        // declared types.
+        var generated = new HashSet<>(Set.of("Payout", "State", "Outcome", "CreateInstance", "BurnInstance", "Batch", "InBatch",
+                "CancelIntent", "Adopt", "Calls", "Step"));
+        generated.addAll(records.keySet());
+        generated.add(c.name());   // the variant would shadow the contract's class in its validator
+        for (Syntax.Method m : c.methods()) {
+            if (m.kind() != Kind.INIT) checkUserName(m.name(), m.pos(), "method");
+            String variant = Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1);
+            if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && generated.contains(variant)) {
+                throw m.pos().error("the method name " + m.name() + " would clash with the generated name " + variant + "; rename it");
+            }
+            if (!seen.add(m.name())) throw m.pos().error("the method " + m.name() + " is declared twice");
+        }
+        if (c.methods().stream().noneMatch(m -> m.kind() == Kind.INIT)) throw c.pos().error("the contract needs an init(…)");
+    }
+
+    private void fillFields(LinkedHashMap<String, Ty> into, List<FieldDecl> fields, String owner, boolean state) {
+        for (FieldDecl f : fields) {
+            checkUserName(f.name(), f.pos(), "field");
+            // A state field is read by its bare name, so it must not take the name of a built-in: a field called
+            // caller would replace the signed caller in every method (Codex C1, security S2).
+            if (state && (BUILTINS.contains(f.name()) || PRELUDE.contains(f.name()))) {
+                throw f.pos().error("'" + f.name() + "' is a built-in name, so it cannot be a state field: choose another name");
+            }
+            if (into.put(f.name(), resolve(f.type())) != null) throw f.pos().error(owner + " declares " + f.name() + " twice");
+        }
+    }
+
+    Ty resolve(TypeRef t) {
+        int n = t.args().size();
+        Ty ty = switch (t.name()) {
+            case "Int" -> Ty.INT;
+            case "Bool" -> Ty.BOOL;
+            case "Bytes" -> Ty.BYTES;
+            case "Key" -> Ty.KEY;
+            case "List" -> n == 1 ? new Ty.ListT(resolve(t.args().get(0))) : null;
+            case "Option" -> {
+                if (n != 1) yield null;
+                Ty e = resolve(t.args().get(0));
+                if (e instanceof Ty.OptT) throw t.pos().error("Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None");
+                yield new Ty.OptT(e);
+            }
+            case "Map", "BigMap", "Value", "Address", "Credential", "Hash" ->
+                    throw t.pos().error(t.name() + " comes in a later milestone of .jsc 2 (ADR-0018 §8)");
+            default -> records.containsKey(t.name()) ? new Ty.Rec(t.name()) : null;
+        };
+        if (ty == null || (n > 0 && !(ty instanceof Ty.ListT || ty instanceof Ty.OptT))) {
+            throw t.pos().error("unknown type '" + t.name() + "' (Int, Bool, Bytes, Key, List<T>, Option<T>, or a declared type)");
+        }
+        return ty;
+    }
+
+    private boolean reaches(Ty t, String target, Set<String> seen) {
+        return switch (t) {
+            case Ty.Prim p -> false;
+            case Ty.ListT l -> reaches(l.elem(), target, seen);
+            case Ty.OptT o -> reaches(o.elem(), target, seen);
+            case Ty.Rec r -> seen.add(r.name()) && records.getOrDefault(r.name(), new LinkedHashMap<>()).values().stream()
+                    .anyMatch(f -> f instanceof Ty.Rec fr && fr.name().equals(target) || reaches(f, target, seen));
+        };
+    }
+
+    private LinkedHashMap<String, Ty> fieldsOf(String rec) {
+        return rec.equals("State") ? stateFields : records.get(rec);
+    }
+
+    private List<Ty> fieldTypes(String rec) {
+        var f = fieldsOf(rec);
+        return f == null ? List.of() : List.copyOf(f.values());
+    }
+
+    private static void checkUserName(String n, Pos p, String what) {
+        if (n.contains("__")) throw p.error("names cannot contain '__' (reserved for generated code): " + n);
+        if (RESERVED.contains(n)) throw p.error("'" + n + "' is reserved and cannot be a " + what + " name");
+    }
+
+    // ------------------------------------------------------------------ scopes
+
+    /** Where code is being checked. */
+    private final class Sc {
+        final Ir.Kind kind;            // null in fn bodies
+        final String owner;            // method or fn name
+        final boolean hasState, hasCtx, effects, inLambda;
+        /** Inside code the lowering extracts into a helper (lambda bodies, arms, loop bodies, ?? defaults, value blocks). */
+        final int helperDepth;
+        final Sc parent;
+        final LinkedHashMap<String, Ir.Local> vars = new LinkedHashMap<>();
+        final List<Ir.Local> consts = new ArrayList<>();
+
+        Sc(Ir.Kind kind, String owner, boolean hasState, boolean hasCtx, boolean effects, boolean inLambda, int helperDepth,
+           Sc parent) {
+            this.kind = kind;
+            this.owner = owner;
+            this.hasState = hasState;
+            this.hasCtx = hasCtx;
+            this.effects = effects;
+            this.inLambda = inLambda;
+            this.helperDepth = helperDepth;
+            this.parent = parent;
+        }
+
+        Sc child(boolean effects, boolean lambda) {
+            return new Sc(kind, owner, hasState, hasCtx, effects, inLambda || lambda, helperDepth + 1, this);
+        }
+
+        Ir.Local lookup(String n) {
+            for (Sc c = this; c != null; c = c.parent) {
+                Ir.Local v = c.vars.get(n);
+                if (v != null) return v;
+            }
+            return null;
+        }
+
+        Ir.Local declare(String n, Ty t, int taint, Pos p, boolean isConst, Map<String, Integer> fieldTaints) {
+            checkUserName(n, p, "local");
+            if (lookup(n) != null) throw p.error("'" + n + "' is already declared; names are never redeclared or shadowed");
+            if (hasState && (stateFields.containsKey(n) || BUILTINS.contains(n))) {
+                throw p.error("'" + n + "' would hide the state field or built-in of the same name; choose another name (e.g. new"
+                        + Character.toUpperCase(n.charAt(0)) + n.substring(1) + ")");
+            }
+            if (!hasState && BUILTINS.contains(n)) throw p.error("'" + n + "' is a built-in name");
+            return put(n, t, taint, p, isConst, fieldTaints);
+        }
+
+        Ir.Local put(String n, Ty t, int taint, Pos p, boolean isConst, Map<String, Integer> fieldTaints) {
+            var l = new Ir.Local(n, t, taint, p, ++seq, fieldTaints);
+            vars.put(n, l);
+            if (isConst) consts.add(l);
+            else used.add(l);
+            return l;
+        }
+    }
+
+    private void unusedConsts(Sc sc) {
+        for (Ir.Local v : sc.consts) {
+            if (!used.contains(v)) throw v.pos.error("'" + v.name + "' is never used (a const that is not a check must be used; use require(…) for checks)");
+        }
+    }
+
+    // ------------------------------------------------------------------ the contract
+
+    private Ir.Program checkAll() {
+        Contract c = file.contract();
+        var options = new ArrayList<Ir.ContractOption>();
+        for (Syntax.Option o : c.options()) {
+            switch (o.name()) {
+                case "minAda", "maxDatumBytes", "maxValidityMs" -> {
+                    if (o.value().signum() < 0 || o.value().bitLength() > 62) throw o.pos().error(o.name() + " is out of range");
+                    options.add(new Ir.ContractOption(o.name(), o.value()));
+                }
+                default -> throw o.pos().error("unknown contract option '" + o.name() + "' (minAda, maxDatumBytes, maxValidityMs)");
+            }
+        }
+        var methods = new ArrayList<Ir.Method>();
+        for (Syntax.Method m : c.methods()) methods.add(method(m));
+        var irFns = new ArrayList<Ir.Fn>();
+        for (Syntax.Fn f : fns.values()) irFns.add(checkFn(f, new int[f.params().size()]));
+        var recs = new LinkedHashMap<String, Ir.RecordType>();
+        var allTypes = new ArrayList<TypeDecl>(file.types());
+        allTypes.addAll(c.types());
+        for (TypeDecl t : allTypes) recs.put(t.name(), new Ir.RecordType(t.name(), records.get(t.name()), t.pos()));
+        return new Ir.Program(file.pkg(), fileName, c.name(), options, recs, new Ir.RecordType("State", stateFields, c.pos()),
+                methods, irFns, Set.of(), Set.of(), List.of());
+    }
+
+    private static Ir.Kind kind(Kind k) {
+        return switch (k) {
+            case INIT -> Ir.Kind.INIT;
+            case ACTION -> Ir.Kind.ACTION;
+            case DESTROY -> Ir.Kind.DESTROY;
+            case VIEW -> Ir.Kind.VIEW;
+        };
+    }
+
+    private boolean usesCtx(Syntax.Method m) {
+        if (m.kind() == Kind.DESTROY) return true;
+        if (m.kind() == Kind.VIEW) return false;
+        for (Mod mod : m.mods()) if (!mod.name().equals("open") && !mod.name().equals("only")) return true;
+        return mentionsCtx(m.body());
+    }
+
+    private Ir.Method method(Syntax.Method m) {
+        boolean hasState = m.kind() != Kind.INIT;
+        boolean ctx = usesCtx(m);
+        boolean pays = paysIn(m.body());
+        if (pays && (m.kind() == Kind.INIT || m.kind() == Kind.VIEW)) {
+            throw firstPay(m.body()).error((m.kind() == Kind.INIT ? "an init" : "a view") + " cannot pay (ADR-0018 D4)");
+        }
+        var sc = new Sc(kind(m.kind()), m.name(), hasState, ctx, m.kind() == Kind.ACTION || m.kind() == Kind.DESTROY, false, 0, null);
+        var mods = new ArrayList<Ir.Mod>();
+        boolean audience = false;
+        for (Mod mod : m.mods()) {
+            if (m.kind() == Kind.INIT && !mod.name().equals("payable")) throw mod.pos().error("an init takes only 'payable'");
+            switch (mod.name()) {
+                case "payable" -> {
+                    if (m.kind() == Kind.DESTROY) throw mod.pos().error("a destroy cannot be payable");
+                }
+                case "open" -> audience = true;
+                case "only" -> {
+                    stateField(mod.arg(), Ty.KEY, mod.pos(), "only");
+                    audience = true;
+                }
+                case "after", "before" -> stateField(mod.arg(), Ty.INT, mod.pos(), mod.name());
+                default -> throw mod.pos().error("unknown modifier " + mod.name());
+            }
+            mods.add(new Ir.Mod(mod.name(), mod.arg()));
+        }
+        if (pays && !audience) {
+            throw m.pos().error(m.name() + " can pay out, so it must say who may call it: add 'only <field>' or 'open' (ADR-0018 D4)");
+        }
+        if (m.kind() == Kind.DESTROY && !pays) {
+            throw m.pos().error("a destroy ends the instance, so it must pay out what it holds: pay(…) at least once (ADR-0018 D4)");
+        }
+
+        var params = new ArrayList<Ir.Local>();
+        var checked = new ArrayList<Ir.Local>();
+        for (Param p : m.params()) {
+            Ty t = resolve(p.type());
+            Ir.Local l;
+            if (m.kind() == Kind.INIT) {
+                // An init has no input state: its parameters may share the names of the fields it creates (D3).
+                checkUserName(p.name(), p.pos(), "parameter");
+                if (BUILTINS.contains(p.name())) throw p.pos().error("'" + p.name() + "' is a built-in name");
+                if (sc.lookup(p.name()) != null) throw p.pos().error("duplicate parameter " + p.name());
+                l = sc.put(p.name(), t, 0, p.pos(), false, null);
+            } else {
+                l = sc.declare(p.name(), t, 0, p.pos(), false, null);
+            }
+            params.add(l);
+            // Checked inputs (D5): every Key nested in a parameter is 28 bytes, before user code reads it.
+            if (m.kind() != Kind.VIEW && Ty.containsKey(t, this::fieldTypes)) checked.add(l);
+        }
+
+        Syntax.Block b = m.body();
+        var stmts = stmts(b.stmts(), sc);
+        Ir.Expr result = null;
+        Ty resultType;
+        switch (m.kind()) {
+            case INIT, ACTION -> {
+                if (b.result() == null) {
+                    throw b.pos().error(m.kind() == Kind.INIT ? "an init returns the first state: return { … }"
+                            : "an action evaluates to the next state: return { ...state, … }");
+                }
+                result = expr(b.result(), sc, Ty.STATE);
+                expectType(Ty.STATE, result, b.result().pos());
+                recordTimeFields(result, m.name());
+                resultType = Ty.STATE;
+            }
+            case DESTROY -> {
+                if (b.result() != null) throw b.result().pos().error("a destroy ends the instance: it has no next state");
+                resultType = null;
+                if (!mentions(b, "balance")) {
+                    warn(m.pos(), m.name() + " never reads balance; a destroy must pay out everything the instance holds");
+                }
+            }
+            case VIEW -> {
+                if (b.result() == null) throw b.pos().error("a view evaluates to its value");
+                resultType = resolve(m.viewType());
+                result = expr(b.result(), sc, resultType);
+                expectType(resultType, result, b.result().pos());
+            }
+            default -> throw new IllegalStateException();
+        }
+        unusedConsts(sc);
+        return new Ir.Method(kind(m.kind()), m.name(), params, mods, checked, ctx, pays, new Ir.Block(stmts, result, b.pos()),
+                resultType, m.pos());
+    }
+
+    private void stateField(String name, Ty want, Pos p, String mod) {
+        Ty t = stateFields.get(name);
+        if (t == null) throw p.error("'" + mod + " " + name + "': no state field " + name);
+        if (!t.equals(want)) throw p.error("'" + mod + " " + name + "' needs a " + Ty.show(want) + " field; " + name + " is " + Ty.show(t));
+    }
+
+    private void warn(Pos p, String message) {
+        warnings.add(new Ir.Warning(p.line(), p.col(), message));
+    }
+
+    // ------------------------------------------------------------------ time fields (D11)
+
+    /** A field's taint in a state value, and where it came from (for the warning). */
+    private record FT(int taint, Pos pos) {}
+
+    /**
+     * State fields the method's result sets to a time value become time fields (D11). The result's per-field taint is
+     * followed through every form a state value can take (Codex C2, F1, S1): object literals and their spread,
+     * conditionals, value ifs and blocks, and consts of the state type. Anything else marks every field with the
+     * value's taint. A value of this call's window reaching a field is warned about (C9, F4, S4).
+     */
+    private void recordTimeFields(Ir.Expr result, String method) {
+        stateTaints(result).forEach((f, ft) -> {
+            if ((ft.taint() & TIME) != 0) nextTimeFields.add(f);
+            if ((ft.taint() & WINDOW) != 0) {
+                warn(ft.pos(), method + " stores a value of the validity window in " + f + ": whoever submits the transaction"
+                        + " chooses the window, so validFrom can be up to maxValidityMs early and validTo that much late"
+                        + " (ADR-0018 D11)");
+            }
+        });
+    }
+
+    private Map<String, FT> stateTaints(Ir.Expr e) {
+        var out = new LinkedHashMap<String, FT>();
+        switch (e) {
+            case Ir.New n when n.record().equals("State") -> {
+                var names = List.copyOf(stateFields.keySet());
+                for (int i = 0; i < names.size(); i++) out.put(names.get(i), new FT(n.values().get(i).taint(), n.values().get(i).pos()));
+                return out;
+            }
+            case Ir.StateRef s -> {
+                for (String f : stateFields.keySet()) out.put(f, new FT(timeFields.contains(f) ? TIME : 0, s.pos()));
+                return out;
+            }
+            case Ir.LocalRef l when l.local().fieldTaints != null -> {
+                l.local().fieldTaints.forEach((f, t) -> out.put(f, new FT(t, l.pos())));
+                return out;
+            }
+            case Ir.Cond c -> {
+                return merge(stateTaints(c.then()), stateTaints(c.otherwise()));
+            }
+            case Ir.IfValue i -> {
+                return merge(stateTaints(i.then().result()), stateTaints(i.otherwise().result()));
+            }
+            case Ir.BlockValue b -> {
+                return stateTaints(b.block().result());
+            }
+            default -> {
+                for (String f : stateFields.keySet()) out.put(f, new FT(e.taint(), e.pos()));
+                return out;
+            }
+        }
+    }
+
+    private static Map<String, FT> merge(Map<String, FT> a, Map<String, FT> b) {
+        var out = new LinkedHashMap<String, FT>(a);
+        b.forEach((f, ft) -> out.merge(f, ft, (x, y) -> new FT(x.taint() | y.taint(),
+                (x.taint() & WINDOW) != 0 || (y.taint() & WINDOW) == 0 ? x.pos() : y.pos())));
+        return out;
+    }
+
+    private static Map<String, Integer> taintsOnly(Map<String, FT> m) {
+        var out = new LinkedHashMap<String, Integer>();
+        m.forEach((f, ft) -> out.put(f, ft.taint()));
+        return out;
+    }
+
+    private int fieldTaint(Ir.Expr target, String field) {
+        if (target instanceof Ir.StateRef) return timeFields.contains(field) ? TIME : 0;
+        if (target instanceof Ir.LocalRef l && l.local().fieldTaints != null) return l.local().fieldTaints.getOrDefault(field, l.taint());
+        return target.taint();
+    }
+
+    // ------------------------------------------------------------------ functions
+
+    private Ir.Fn checkFn(Syntax.Fn f, int[] taints) {
+        var sc = new Sc(null, f.name(), false, false, false, false, 0, null);
+        var params = new ArrayList<Ir.Local>();
+        for (int i = 0; i < f.params().size(); i++) {
+            Param p = f.params().get(i);
+            params.add(sc.declare(p.name(), resolve(p.type()), taints[i], p.pos(), false, null));
+        }
+        Ty ret = resolve(f.ret());
+        var stmts = stmts(f.body().stmts(), sc);
+        if (f.body().result() == null) throw f.body().pos().error("a fn ends in its value");
+        Ir.Expr r = expr(f.body().result(), sc, ret);
+        expectType(ret, r, f.body().result().pos());
+        unusedConsts(sc);
+        return new Ir.Fn(f.name(), params, ret, new Ir.Block(stmts, r, f.body().pos()), f.pos());
+    }
+
+    /** D11 through calls: a fn called with time arguments is checked again with those parameters marked (S25). */
+    private void analyseCall(Syntax.Fn f, int[] taints, Pos at) {
+        boolean any = false;
+        for (int t : taints) any |= t != 0;
+        if (!any) return;
+        if (!analysed.add(f.name() + "/" + Arrays.toString(taints))) return;
+        try {
+            checkFn(f, taints);
+        } catch (JscException e) {
+            throw new JscException(e.line, e.col, e.getMessage() + " (in " + f.name() + ", called with a time value at " + at + ")");
+        }
+    }
+
+    // ------------------------------------------------------------------ statements
+
+    private List<Ir.Stmt> stmts(List<Stmt> ss, Sc sc) {
+        var out = new ArrayList<Ir.Stmt>();
+        for (Stmt s : ss) {
+            switch (s) {
+                case Const c -> {
+                    // A const may be typed State (the next state, built in steps); elsewhere State is not written.
+                    boolean st = c.type() != null && c.type().name().equals("State") && c.type().args().isEmpty() && sc.kind != null;
+                    Ty want = c.type() == null ? null : st ? Ty.STATE : resolve(c.type());
+                    Ir.Expr v = expr(c.value(), sc, want);
+                    if (want != null) expectType(want, v, c.value().pos());
+                    Ty t = want != null ? want : v.type();
+                    var ft = t.equals(Ty.STATE) ? taintsOnly(stateTaints(v)) : null;
+                    if ("None".equals(c.name()) || "Some".equals(c.name())) throw c.pos().error("'" + c.name() + "' is a built-in name");
+                    out.add(new Ir.Let(sc.declare(c.name(), t, v.taint(), c.pos(), true, ft), v, c.pos()));
+                }
+                case Syntax.Require r -> out.add(new Ir.Require(requireCond(r.cond(), sc), r.message(), r.pos()));
+                case Syntax.Pay p -> {
+                    if (!sc.effects) {
+                        throw p.pos().error("pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4)");
+                    }
+                    Ir.Expr to = expr(p.to(), sc, Ty.KEY);
+                    expectType(Ty.KEY, to, p.to().pos());
+                    Ir.Expr amount = expr(p.amount(), sc, Ty.INT);
+                    expectType(Ty.INT, amount, p.amount().pos());
+                    if ((amount.taint() & TIME) != 0) {
+                        if (!isClampedAtZero(p.amount())) {
+                            throw p.amount().pos().error("a time value sets this payout: write pay(to, max(0, …)) so its sign cannot"
+                                    + " make the call fail (ADR-0018 D11)");
+                        }
+                        warn(p.amount().pos(), "a time value sets this payout: whoever submits the transaction chooses the"
+                                + " window, so validFrom can be up to maxValidityMs early and validTo that much late, and the"
+                                + " amount moves with it (ADR-0018 D11)");
+                    }
+                    out.add(new Ir.Pay(to, amount, p.pos()));
+                }
+                case IfStmt i -> {
+                    Ir.Expr cond = condition(i.cond(), sc);
+                    Ir.Block then = armBlock(i.then(), sc);
+                    Ir.Block other = i.otherwise() == null ? null : armBlock(i.otherwise(), sc);
+                    boolean pays = paysIn(i.then()) || (i.otherwise() != null && paysIn(i.otherwise()));
+                    out.add(new Ir.If(cond, then, other, pays, i.pos()));
+                }
+                case For f -> {
+                    Ir.Expr list = expr(f.list(), sc, null);
+                    if (!(list.type() instanceof Ty.ListT lt)) throw f.list().pos().error("for (const x of …) needs a List, not " + Ty.show(list.type()));
+                    if (f.body().result() != null) throw f.body().result().pos().error("a for loop's body has no value; accumulate with fold");
+                    Sc inner = sc.child(sc.effects, false);
+                    Ir.Local var = inner.declare(f.var(), lt.elem(), list.taint(), f.pos(), false, null);
+                    var body = stmts(f.body().stmts(), inner);
+                    unusedConsts(inner);
+                    out.add(new Ir.For(var, list, new Ir.Block(body, null, f.body().pos()), paysIn(f.body()), f.pos()));
+                }
+            }
+        }
+        return out;
+    }
+
+    /** An arm of an if statement: statements only, checked in their own scope. */
+    private Ir.Block armBlock(Syntax.Block b, Sc sc) {
+        if (b.result() != null) {
+            if (b.returnPos() != null) {
+                throw b.returnPos().error("there is no early return in .jsc: a block's value is its last expression; make this if"
+                        + " the block's last expression, with an else (if c { … } else { … })");
+            }
+            throw b.result().pos().error("this if is a statement (it is not the block's last expression, or it has no else),"
+                    + " so its arms end in statements, not a value");
+        }
+        Sc inner = sc.child(sc.effects, false);
+        var stmts = stmts(b.stmts(), inner);
+        unusedConsts(inner);
+        return new Ir.Block(stmts, null, b.pos());
+    }
+
+    /** A block used as a value: {@code const} and {@code require} statements, then its value. */
+    private Ir.Block valueBlock(Syntax.Block b, Sc inner, Ty expected) {
+        for (Stmt s : b.stmts()) {
+            if (!(s instanceof Const) && !(s instanceof Syntax.Require)) {
+                throw s.pos().error("a block used as a value holds only const and require statements");
+            }
+        }
+        var stmts = stmts(b.stmts(), inner);
+        Ir.Expr r = expr(b.result(), inner, expected);
+        unusedConsts(inner);
+        return new Ir.Block(stmts, r, b.pos());
+    }
+
+    private static boolean isClampedAtZero(Expr e) {
+        return e instanceof Call c && c.fn().equals("max") && c.args().size() == 2
+                && (isZero(c.args().get(0)) || isZero(c.args().get(1)));
+    }
+
+    private static boolean isZero(Expr e) {
+        return e instanceof IntLit i && i.value().signum() == 0;
+    }
+
+    // ------------------------------------------------------------------ conditions and time positions (D11)
+
+    /** A Bool that decides control flow: a time value may not (D11, S1's defence in depth). */
+    private Ir.Expr condition(Expr e, Sc sc) {
+        Ir.Expr c = expr(e, sc, Ty.BOOL);
+        expectType(Ty.BOOL, c, e.pos());
+        decides(c, e.pos());
+        return c;
+    }
+
+    private static void decides(Ir.Expr c, Pos p) {
+        if ((c.taint() & TIME) != 0) {
+            throw p.error("a time value cannot decide here: compare times only with after(t) or before(t) in a require (ADR-0018 D11)");
+        }
+    }
+
+    /** A require's condition: after/before allowed at its top and under && / || there (positive positions). */
+    private Ir.Expr requireCond(Expr e, Sc sc) {
+        if (e instanceof Binary b && (b.op().equals("&&") || b.op().equals("||"))) {
+            Ir.Expr l = requireCond(b.left(), sc);
+            Ir.Expr r = requireCond(b.right(), sc);
+            return new Ir.Logic(b.op(), l, r, Ty.BOOL, 0, b.pos());
+        }
+        if (e instanceof Call c && (c.fn().equals("after") || c.fn().equals("before"))) return timePredicate(c, sc);
+        return condition(e, sc);
+    }
+
+    private Ir.Expr timePredicate(Call c, Sc sc) {
+        if (!sc.hasCtx) throw c.pos().error(c.fn() + "(t) needs the transaction: not in a view or fn");
+        if (sc.inLambda) {
+            throw c.pos().error(c.fn() + "(t) is not used inside a lambda (ADR-0018 D11): require it outside the list method");
+        }
+        if (c.args().size() != 1) throw c.pos().error(c.fn() + " takes one argument");
+        Ir.Expr t = expr(c.args().get(0), sc, Ty.INT);
+        expectType(Ty.INT, t, c.args().get(0).pos());
+        if ((t.taint() & WINDOW) != 0) {
+            throw c.args().get(0).pos().error("this threshold depends on the current call's validity window, which can invert "
+                    + c.fn() + "(t): use a stored or given time (ADR-0018 D11)");
+        }
+        return new Ir.TimePred(c.fn().equals("after"), t, Ty.BOOL, 0, c.pos());
+    }
+
+    // ------------------------------------------------------------------ expressions
+
+    /** Literals whose type only a context gives: {@code None} and {@code []}. */
+    private static boolean needsContext(Expr e) {
+        return e instanceof Name n && n.name().equals("None") || e instanceof ListLit l && l.items().isEmpty() && l.rest() == null;
+    }
+
+    Ir.Expr expr(Expr e, Sc sc, Ty expected) {
+        return switch (e) {
+            case IntLit i -> new Ir.Lit(i.value(), Ty.INT, i.pos());
+            case BoolLit b -> new Ir.Lit(b.value(), Ty.BOOL, b.pos());
+            // A hex literal is Bytes; a key literal is asKey(#…), checked here (F15).
+            case BytesLit b -> new Ir.Lit(hexBytes(b.hex()), Ty.BYTES, b.pos());
+            case StrLit s -> throw s.pos().error("strings are only require messages and utf8(\"…\") arguments");
+            case Name n -> name(n, sc, expected);
+            case Field f -> field(f, sc);
+            case Call c -> call(c, sc, expected);
+            case MethodCall m -> methodCall(m, sc, expected);
+            case Lambda l -> throw l.pos().error("a lambda is only an argument of a list method (fold, any, all, find, filter, map)");
+            case ObjLit o -> objLit(o, sc, expected);
+            case ListLit l -> listLit(l, sc, expected);
+            case Unary u -> unary(u, sc);
+            case Binary b -> binary(b, sc, expected);
+            case Syntax.Cond c -> cond(c.cond(), c.then(), c.otherwise(), c.pos(), sc, expected);
+            case IfExpr i -> ifExpr(i, sc, expected);
+            case BlockExpr b -> {
+                Ir.Block blk = valueBlock(b.block(), sc.child(false, false), expected);
+                yield new Ir.BlockValue(blk, blk.result().type(), blk.result().taint(), b.pos());
+            }
+        };
+    }
+
+    private Ir.Expr name(Name n, Sc sc, Ty expected) {
+        Ir.Local v = sc.lookup(n.name());
+        if (v != null) {
+            used.add(v);
+            return new Ir.LocalRef(v, v.type, v.taint, n.pos());
+        }
+        if (sc.hasState) {
+            Ty ft = stateFields.get(n.name());
+            if (ft != null) return new Ir.StateField(n.name(), ft, timeFields.contains(n.name()) ? TIME : 0, n.pos());
+        }
+        switch (n.name()) {
+            case "state" -> {
+                if (!sc.hasState) throw n.pos().error("'state' is the input state of an action, destroy or view");
+                return new Ir.StateRef(Ty.STATE, timeFields.isEmpty() ? 0 : TIME, n.pos());
+            }
+            case "caller" -> {
+                needCtx(n, sc);
+                return new Ir.CtxRef("caller", Ty.KEY, 0, n.pos());
+            }
+            case "received", "balance" -> {
+                needCtx(n, sc);
+                return new Ir.CtxRef(n.name(), Ty.INT, 0, n.pos());
+            }
+            case "validFrom", "validTo" -> {
+                needCtx(n, sc);
+                return new Ir.CtxRef(n.name(), Ty.INT, TIME | WINDOW, n.pos());
+            }
+            case "None" -> {
+                if (!(expected instanceof Ty.OptT)) {
+                    throw n.pos().error("the type of None is unknown here: give it one (const o: Option<Int> = None)");
+                }
+                return new Ir.NoneLit(expected, n.pos());
+            }
+            case "params", "funds" -> throw n.pos().error("'" + n.name() + "' comes in a later milestone of .jsc 2 (ADR-0018 §8)");
+            default -> {
+            }
+        }
+        throw n.pos().error("unknown name '" + n.name() + "'");
+    }
+
+    private static void needCtx(Name n, Sc sc) {
+        if (!sc.hasCtx) {
+            throw n.pos().error(n.name() + " is part of the transaction: it is not available in a view or fn (pass it as an argument)");
+        }
+    }
+
+    /** {@code t.name}: a record field, or a list property; which one is decided by the target's type (C7). */
+    private Ir.Expr field(Field f, Sc sc) {
+        Ir.Expr target = expr(f.target(), sc, null);
+        if (target.type() instanceof Ty.ListT lt) {
+            return switch (f.name()) {
+                case "length" -> new Ir.ListProp("length", target, Ty.INT, target.taint(), f.pos());
+                case "isEmpty" -> new Ir.ListProp("isEmpty", target, Ty.BOOL, target.taint(), f.pos());
+                case "head" -> new Ir.ListProp("head", target, option(lt.elem(), f.pos(), "xs.head"), target.taint(), f.pos());
+                case "size" -> throw f.pos().error("a List's size is xs.length");
+                default -> throw f.pos().error("List has no property '" + f.name() + "' (length, isEmpty, head)");
+            };
+        }
+        if (target.type() instanceof Ty.Rec r) {
+            Ty ft = fieldsOf(r.name()).get(f.name());
+            if (ft == null) throw f.pos().error(r.name() + " has no field " + f.name());
+            return new Ir.GetField(target, r.name(), f.name(), ft, fieldTaint(target, f.name()), f.pos());
+        }
+        throw f.pos().error("." + f.name() + " needs a record or a List, not " + Ty.show(target.type()));
+    }
+
+    private Ir.Expr call(Call c, Sc sc, Ty expected) {
+        String fn = c.fn();
+        Syntax.Fn user = fns.get(fn);
+        if (user != null) return userCall(user, c, sc);
+        Std.Binding b = Std.ROWS.get(fn);
+        if (b != null) {
+            if (!imported.contains(fn)) throw c.pos().error(fn + " is in " + b.module() + ": import { " + fn + " } from \"" + b.module() + "\"");
+            return stdCall(b, c, sc);
+        }
+        switch (fn) {
+            case "after", "before" -> throw c.pos().error(fn + "(t) holds for the whole validity window: use it only at the top of a require, under && or ||");
+            case "Some" -> {
+                arity(c, 1);
+                Expr a = c.args().get(0);
+                if (a instanceof Name n && n.name().equals("None")) {
+                    throw a.pos().error("Some(None) is not allowed: an Option holds a value, and JavaScript cannot tell Some(None) from None (ADR-0018 D5)");
+                }
+                Ty inner = expected instanceof Ty.OptT o ? o.elem() : null;
+                Ir.Expr v = expr(a, sc, inner);
+                if (v.type() instanceof Ty.OptT) throw c.pos().error("Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None");
+                return new Ir.SomeOf(v, new Ty.OptT(v.type()), v.taint(), c.pos());
+            }
+            case "min", "max" -> {
+                arity(c, 2);
+                Ir.Expr a = intArg(c, 0, sc), d = intArg(c, 1, sc);
+                return new Ir.Prelude(fn, List.of(a, d), Ty.INT, a.taint() | d.taint(), c.pos());
+            }
+            case "abs" -> {
+                arity(c, 1);
+                Ir.Expr a = intArg(c, 0, sc);
+                return new Ir.Prelude("abs", List.of(a), Ty.INT, a.taint(), c.pos());
+            }
+            case "utf8" -> {
+                arity(c, 1);
+                if (!(c.args().get(0) instanceof StrLit s)) throw c.pos().error("utf8 takes a string literal");
+                return new Ir.Lit(s.value().getBytes(StandardCharsets.UTF_8), Ty.BYTES, c.pos());
+            }
+            case "asKey" -> {
+                arity(c, 1);
+                if (c.args().get(0) instanceof BytesLit lit) {
+                    // A literal key is checked here, once: no run-time check is needed.
+                    byte[] k = hexBytes(lit.hex());
+                    if (k.length != 28) throw lit.pos().error("asKey: this literal has " + k.length + " bytes; a key hash has 28");
+                    return new Ir.Lit(k, Ty.KEY, c.pos());
+                }
+                Ir.Expr a = expr(c.args().get(0), sc, Ty.BYTES);
+                expectType(Ty.BYTES, a, c.args().get(0).pos());
+                if ((a.taint() & TIME) != 0) {
+                    throw c.pos().error("asKey can fail, so a time value cannot become a key (ADR-0018 D11)");
+                }
+                return new Ir.Prelude("asKey", List.of(a), Ty.KEY, a.taint(), c.pos());
+            }
+            default -> throw c.pos().error("unknown function '" + fn + "'");
+        }
+    }
+
+    private Ir.Expr intArg(Call c, int i, Sc sc) {
+        Ir.Expr a = expr(c.args().get(i), sc, Ty.INT);
+        expectType(Ty.INT, a, c.args().get(i).pos());
+        return a;
+    }
+
+    private static void arity(Call c, int n) {
+        if (c.args().size() != n) throw c.pos().error(c.fn() + " takes " + n + " argument" + (n == 1 ? "" : "s"));
+    }
+
+    private Ir.Expr userCall(Syntax.Fn f, Call c, Sc sc) {
+        if (c.args().size() != f.params().size()) throw c.pos().error(f.name() + " takes " + f.params().size() + " arguments");
+        callGraph.computeIfAbsent(sc.kind == null ? sc.owner : "", k -> new TreeSet<>()).add(f.name());
+        if (sc.kind == null && f.name().equals(sc.owner) && sc.helperDepth > 0) {
+            throw c.pos().error(f.name() + " calls itself from inside a lambda, block arm or ?? default: the generated helper would join"
+                    + " a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out");
+        }
+        var args = new ArrayList<Ir.Expr>();
+        int taint = 0;
+        int[] taints = new int[c.args().size()];
+        for (int i = 0; i < c.args().size(); i++) {
+            Ty pt = resolve(f.params().get(i).type());
+            Ir.Expr a = expr(c.args().get(i), sc, pt);
+            expectType(pt, a, c.args().get(i).pos());
+            args.add(a);
+            taint |= a.taint();
+            taints[i] = a.taint();
+        }
+        analyseCall(f, taints, c.pos());
+        return new Ir.CallFn(f.name(), args, resolve(f.ret()), taint, c.pos());
+    }
+
+    private Ir.Expr stdCall(Std.Binding b, Call c, Sc sc) {
+        if (c.args().size() != b.params().size()) throw c.pos().error(b.name() + " takes " + b.params().size() + " arguments");
+        var args = new ArrayList<Ir.Expr>();
+        int taint = 0;
+        for (int i = 0; i < c.args().size(); i++) {
+            Ir.Expr a = expr(c.args().get(i), sc, b.params().get(i));
+            expectType(b.params().get(i), a, c.args().get(i).pos());
+            if ((a.taint() & TIME) != 0 && !b.timeTotal()) {
+                throw c.args().get(i).pos().error(b.name() + " can fail for some arguments, so a time value cannot reach it (ADR-0018 D11)");
+            }
+            args.add(a);
+            taint |= a.taint();
+        }
+        return new Ir.CallStd(b, args, b.result(), taint, c.pos());
+    }
+
+    // ------------------------------------------------------------------ list methods
+
+    private Ir.Expr methodCall(MethodCall m, Sc sc, Ty expected) {
+        Ir.Expr target = expr(m.target(), sc, null);
+        if (!(target.type() instanceof Ty.ListT lt)) {
+            throw m.pos().error("." + m.method() + "(…) needs a List; " + Ty.show(target.type()) + " has no methods");
+        }
+        Ty e = lt.elem();
+        List<Expr> args = m.args();
+        int t = target.taint();
+        switch (m.method()) {
+            case "length", "isEmpty", "head" -> throw m.pos().error("xs." + m.method() + " is a property: write it without parentheses");
+            case "sum" -> {
+                if (!args.isEmpty()) throw m.pos().error("sum() takes no arguments");
+                if (!e.equals(Ty.INT)) throw m.pos().error("sum() needs a List<Int>");
+                return new Ir.ListProp("sum", target, Ty.INT, t, m.pos());
+            }
+            case "reverse" -> {
+                if (!args.isEmpty()) throw m.pos().error("reverse() takes no arguments");
+                return new Ir.ListProp("reverse", target, target.type(), t, m.pos());
+            }
+            case "contains" -> {
+                if (args.size() != 1) throw m.pos().error("contains takes one value");
+                Ir.Expr v = expr(args.get(0), sc, e);
+                expectType(e, v, args.get(0).pos());
+                if (((v.taint() | t) & TIME) != 0) {
+                    throw m.pos().error("a time value cannot decide here: contains compares it (ADR-0018 D11)");
+                }
+                return new Ir.Contains(target, v, e, Ty.BOOL, 0, m.pos());
+            }
+            case "concat" -> {
+                if (args.size() != 1) throw m.pos().error("concat takes one list");
+                Ir.Expr o = expr(args.get(0), sc, target.type());
+                expectType(target.type(), o, args.get(0).pos());
+                return new Ir.Concat(target, o, target.type(), t | o.taint(), m.pos());
+            }
+            case "any", "all", "find", "filter", "map" -> {
+                if (args.size() != 1 || !(args.get(0) instanceof Lambda l) || l.params().size() != 1) {
+                    throw m.pos().error(m.method() + " takes a one-parameter lambda: xs." + m.method() + "(x => …)");
+                }
+                return hof(m.method(), target, e, l, sc, expected, m.pos());
+            }
+            case "fold" -> {
+                if (args.size() != 2 || !(args.get(1) instanceof Lambda l) || l.params().size() != 2) {
+                    throw m.pos().error("fold takes an initial value and a two-parameter lambda: xs.fold(0, (acc, x) => acc + x)");
+                }
+                return fold(target, e, args.get(0), l, sc, expected, m.pos());
+            }
+            default -> throw m.pos().error("List has no method '" + m.method() + "'");
+        }
+    }
+
+    /** A lambda's body in its scope: an expression, or a block of const and require statements ending in its value. */
+    private Ir.Block lambdaBody(Lambda l, Sc inner, Ty want) {
+        if (l.body() instanceof BlockExpr be) return valueBlock(be.block(), inner, want);
+        Ir.Expr r = expr(l.body(), inner, want);
+        unusedConsts(inner);
+        return new Ir.Block(List.of(), r, l.pos());
+    }
+
+    private Ir.Expr hof(String kind, Ir.Expr list, Ty e, Lambda l, Sc sc, Ty expected, Pos pos) {
+        Sc inner = sc.child(false, true);
+        Ir.Local x = inner.declare(l.params().get(0), e, list.taint(), l.pos(), false, null);
+        boolean map = kind.equals("map");
+        Ty want = map ? (expected instanceof Ty.ListT el ? el.elem() : null) : Ty.BOOL;
+        Ir.Block body = lambdaBody(l, inner, want);
+        Ir.Expr r = body.result();
+        if (!map) {
+            expectType(Ty.BOOL, r, r.pos());
+            if ((r.taint() & TIME) != 0) throw l.pos().error("a time value cannot decide " + kind + "'s predicate (ADR-0018 D11)");
+        } else if (want != null) {
+            expectType(want, r, r.pos());
+        }
+        return switch (kind) {
+            case "any", "all" -> new Ir.Hof(kind, list, x, body, Ty.BOOL, 0, pos);
+            case "find" -> new Ir.Hof(kind, list, x, body, option(e, pos, "xs.find"), list.taint(), pos);
+            case "filter" -> new Ir.Hof(kind, list, x, body, list.type(), list.taint(), pos);
+            default -> new Ir.Hof(kind, list, x, body, new Ty.ListT(want != null ? want : r.type()), list.taint() | r.taint(), pos);
+        };
+    }
+
+    /** {@code Option<elem>}; an Option of an Option does not exist in .jsc (D5, F20), whatever builds it. */
+    private static Ty option(Ty elem, Pos pos, String what) {
+        if (elem instanceof Ty.OptT) {
+            throw pos.error(what + " on a List of Options would be an Option<Option<…>>, which .jsc does not have"
+                    + " (JavaScript cannot tell Some(None) from None): use xs.isEmpty or a fold");
+        }
+        return new Ty.OptT(elem);
+    }
+
+    private Ir.Expr fold(Ir.Expr list, Ty e, Expr init, Lambda l, Sc sc, Ty expected, Pos pos) {
+        Ir.Expr start = expr(init, sc, expected);
+        Ty acc = expected != null && Ty.assignable(expected, start.type()) ? expected : start.type();
+        // The accumulator carries whatever the body returns into the next iteration: its taint is a fixed point over the
+        // body (Codex C3). Two bits, so at most three rounds.
+        int accTaint = start.taint() | list.taint();
+        FoldBody fb;
+        while (true) {
+            fb = foldBody(l, sc, acc, e, accTaint, list.taint());
+            int out = fb.body().result().taint();
+            if ((out | accTaint) == accTaint) break;
+            accTaint |= out;
+        }
+        expectType(acc, fb.body().result(), fb.body().result().pos());
+        return new Ir.Fold(list, start, fb.acc(), fb.x(), fb.body(), acc, accTaint | fb.body().result().taint(), pos);
+    }
+
+    private record FoldBody(Ir.Local acc, Ir.Local x, Ir.Block body) {}
+
+    private FoldBody foldBody(Lambda l, Sc sc, Ty acc, Ty e, int accTaint, int elemTaint) {
+        Sc inner = sc.child(false, true);
+        Ir.Local a = inner.declare(l.params().get(0), acc, accTaint, l.pos(), false, null);
+        Ir.Local x = inner.declare(l.params().get(1), e, elemTaint, l.pos(), false, null);
+        return new FoldBody(a, x, lambdaBody(l, inner, acc));
+    }
+
+    // ------------------------------------------------------------------ literals
+
+    private Ir.Expr objLit(ObjLit o, Sc sc, Ty expected) {
+        String recName;
+        if (o.type() != null) {
+            if (!records.containsKey(o.type())) throw o.pos().error("unknown type " + o.type());
+            recName = o.type();
+        } else if (expected instanceof Ty.Rec r) {
+            recName = r.name();
+        } else {
+            throw o.pos().error("this object's type is unknown here: write Type { … }, or give the const a type");
+        }
+        var fields = fieldsOf(recName);
+        Ty type = new Ty.Rec(recName);
+        Ir.Expr spread = null;
+        if (o.spread() != null) {
+            spread = expr(o.spread(), sc, type);
+            expectType(type, spread, o.spread().pos());
+            if (!(spread instanceof Ir.LocalRef) && !(spread instanceof Ir.StateRef)) {
+                throw o.spread().pos().error("spread a named value: { ...state, … } or { ...r, … }");
+            }
+        }
+        var given = new LinkedHashMap<String, Ir.Expr>();
+        for (FieldInit f : o.fields()) {
+            Ty ft = fields.get(f.name());
+            if (ft == null) throw f.pos().error(recName + " has no field " + f.name());
+            if (given.containsKey(f.name())) throw f.pos().error(f.name() + " is given twice");
+            Expr ve = f.value() != null ? f.value() : new Name(f.name(), f.pos());
+            Ir.Expr v = expr(ve, sc, ft);
+            expectType(ft, v, ve.pos());
+            given.put(f.name(), v);
+        }
+        var values = new ArrayList<Ir.Expr>();
+        int taint = 0;
+        for (var en : fields.entrySet()) {
+            Ir.Expr v = given.get(en.getKey());
+            if (v == null) {
+                if (spread == null) throw o.pos().error(recName + " needs " + en.getKey() + " (or start with ...state)");
+                v = new Ir.GetField(spread, recName, en.getKey(), en.getValue(), fieldTaint(spread, en.getKey()), o.pos());
+            }
+            values.add(v);
+            taint |= v.taint();
+        }
+        return new Ir.New(recName, values, type, taint, o.pos());
+    }
+
+    private Ir.Expr listLit(ListLit l, Sc sc, Ty expected) {
+        Ty elem = expected instanceof Ty.ListT lt ? lt.elem() : null;
+        if (elem == null) {
+            for (Expr x : l.items()) {
+                if (!needsContext(x)) {
+                    elem = expr(x, sc, null).type();
+                    break;
+                }
+            }
+        }
+        Ir.Expr rest = null;
+        if (elem == null && l.rest() != null) {
+            rest = expr(l.rest(), sc, null);
+            if (!(rest.type() instanceof Ty.ListT rt)) throw l.rest().pos().error("...rest needs a List");
+            elem = rt.elem();
+        }
+        if (elem == null) throw l.pos().error("the type of this list is unknown here: give it one (const xs: List<Int> = [])");
+        var items = new ArrayList<Ir.Expr>();
+        int taint = 0;
+        for (Expr x : l.items()) {
+            Ir.Expr v = expr(x, sc, elem);
+            expectType(elem, v, x.pos());
+            items.add(v);
+            taint |= v.taint();
+        }
+        Ty type = new Ty.ListT(elem);
+        if (l.rest() != null) {
+            if (rest == null) rest = expr(l.rest(), sc, type);
+            if (!(rest.type() instanceof Ty.ListT)) throw l.rest().pos().error("...rest needs a List");
+            expectType(type, rest, l.rest().pos());
+            taint |= rest.taint();
+        }
+        return new Ir.ListLit(items, rest, type, taint, l.pos());
+    }
+
+    // ------------------------------------------------------------------ operators
+
+    private Ir.Expr unary(Unary u, Sc sc) {
+        if (u.op().equals("!")) {
+            Ir.Expr v = condition(u.operand(), sc);
+            return new Ir.Not(v, Ty.BOOL, 0, u.pos());
+        }
+        Ir.Expr v = expr(u.operand(), sc, Ty.INT);
+        expectType(Ty.INT, v, u.operand().pos());
+        return new Ir.Neg(v, Ty.INT, v.taint(), u.pos());
+    }
+
+    private Ir.Expr binary(Binary b, Sc sc, Ty expected) {
+        String op = b.op();
+        if (op.equals("&&") || op.equals("||")) {
+            Ir.Expr l = condition(b.left(), sc);
+            Ir.Expr r = condition(b.right(), sc);
+            return new Ir.Logic(op, l, r, Ty.BOOL, 0, b.pos());
+        }
+        if (op.equals("??")) return coalesce(b, sc, expected);
+        Ir.Expr l, r;
+        if (needsContext(b.left()) && !needsContext(b.right())) {
+            r = expr(b.right(), sc, null);
+            l = expr(b.left(), sc, r.type());
+        } else if (needsContext(b.left())) {
+            throw b.pos().error("the type of this comparison is unknown: give one side a type (const none: Option<Int> = None)");
+        } else {
+            l = expr(b.left(), sc, null);
+            r = expr(b.right(), sc, l.type());
+        }
+        switch (op) {
+            case "+", "-", "*", "/", "%" -> {
+                expectType(Ty.INT, l, b.left().pos());
+                expectType(Ty.INT, r, b.right().pos());
+                if ((op.equals("/") || op.equals("%")) && (r.taint() & TIME) != 0) {
+                    throw b.right().pos().error("a time value cannot be a divisor: it could make the call fail (ADR-0018 D11)");
+                }
+                return new Ir.Arith(op, l, r, Ty.INT, l.taint() | r.taint(), b.pos());
+            }
+            case "<", "<=", ">", ">=" -> {
+                timeCompare(b, l, r);
+                boolean ints = l.type().equals(Ty.INT) && r.type().equals(Ty.INT);
+                boolean bytes = isBytes(l.type()) && isBytes(r.type());
+                if (!ints && !bytes) {
+                    throw b.pos().error(op + " compares two Ints or two Bytes, not " + Ty.show(l.type()) + " and " + Ty.show(r.type()));
+                }
+                return new Ir.Compare(op, l, r, Ty.BOOL, 0, b.pos());
+            }
+            case "==", "!=" -> {
+                timeCompare(b, l, r);
+                Ty t = unify(l.type(), r.type(), b.pos());
+                return new Ir.Equals(op.equals("!="), l, r, t, Ty.BOOL, 0, b.pos());
+            }
+            default -> throw b.pos().error("unknown operator " + op);
+        }
+    }
+
+    private static void timeCompare(Binary b, Ir.Expr l, Ir.Expr r) {
+        if (((l.taint() | r.taint()) & TIME) != 0) {
+            throw b.pos().error("a time value cannot decide here: compare times only with after(t) or before(t) in a require (ADR-0018 D11)");
+        }
+    }
+
+    private static boolean isBytes(Ty t) {
+        return t.equals(Ty.BYTES) || t.equals(Ty.KEY);
+    }
+
+    private static Ty unify(Ty a, Ty b, Pos p) {
+        if (Ty.assignable(a, b)) return a;
+        if (Ty.assignable(b, a)) return b;
+        throw p.error("cannot compare " + Ty.show(a) + " with " + Ty.show(b));
+    }
+
+    /** {@code o ?? d}: the default runs only when the option is empty (a helper, D6). */
+    private Ir.Expr coalesce(Binary b, Sc sc, Ty expected) {
+        if (b.left() instanceof Name n && n.name().equals("None")) throw b.left().pos().error("None ?? d is always d: write d");
+        Ir.Expr o = expr(b.left(), sc, expected == null ? null : new Ty.OptT(expected));
+        if (!(o.type() instanceof Ty.OptT ot)) throw b.left().pos().error("?? needs an Option on its left, not " + Ty.show(o.type()));
+        Ty t = ot.elem();
+        if (expected != null && Ty.assignable(expected, t)) t = expected;
+        Ir.Expr d = expr(b.right(), sc.child(false, false), t);
+        expectType(t, d, b.right().pos());
+        return new Ir.Coalesce(o, d, t, o.taint() | d.taint(), b.pos());
+    }
+
+    private Ir.Expr cond(Expr ce, Expr te, Expr oe, Pos pos, Sc sc, Ty expected) {
+        Ir.Expr k = condition(ce, sc);
+        Ir.Expr a, d;
+        if (expected == null && needsContext(te) && !needsContext(oe)) {
+            d = expr(oe, sc, null);
+            a = expr(te, sc, d.type());
+        } else {
+            a = expr(te, sc, expected);
+            d = expr(oe, sc, expected != null ? expected : a.type());
+        }
+        Ty t = expected != null ? expected : unify(a.type(), d.type(), pos);
+        expectType(t, a, te.pos());
+        expectType(t, d, oe.pos());
+        return new Ir.Cond(k, a, d, t, a.taint() | d.taint(), pos);
+    }
+
+    /** An if used as a value. Arms without statements are a {@link Ir.Cond}; arms with statements, an {@link Ir.IfValue}. */
+    private Ir.Expr ifExpr(IfExpr i, Sc sc, Ty expected) {
+        if (i.then().stmts().isEmpty() && i.otherwise().stmts().isEmpty()) {
+            return cond(i.cond(), i.then().result(), i.otherwise().result(), i.pos(), sc, expected);
+        }
+        Ir.Expr k = condition(i.cond(), sc);
+        Ir.Block a, d;
+        if (expected == null && needsContext(i.then().result()) && !needsContext(i.otherwise().result())) {
+            d = valueBlock(i.otherwise(), sc.child(false, false), null);
+            a = valueBlock(i.then(), sc.child(false, false), d.result().type());
+        } else {
+            a = valueBlock(i.then(), sc.child(false, false), expected);
+            d = valueBlock(i.otherwise(), sc.child(false, false), expected != null ? expected : a.result().type());
+        }
+        Ty t = expected != null ? expected : unify(a.result().type(), d.result().type(), i.pos());
+        expectType(t, a.result(), a.result().pos());
+        expectType(t, d.result(), d.result().pos());
+        return new Ir.IfValue(k, a, d, t, a.result().taint() | d.result().taint(), i.pos());
+    }
+
+    // ------------------------------------------------------------------ recursion (D7, J9)
+
+    private void checkRecursion() {
+        // Any cycle through more than one function is refused (direct self-recursion is allowed).
+        for (String f : callGraph.keySet()) {
+            if (f.isEmpty()) continue;
+            var seen = new HashSet<String>();
+            var stack = new ArrayDeque<String>();
+            for (String g : callGraph.getOrDefault(f, Set.of())) if (!g.equals(f)) stack.push(g);
+            while (!stack.isEmpty()) {
+                String g = stack.pop();
+                if (g.equals(f)) {
+                    throw fns.get(f).pos().error(f + " is part of a mutual recursion: only direct self-recursion is allowed (ADR-0018 D7)");
+                }
+                if (seen.add(g)) for (String h : callGraph.getOrDefault(g, Set.of())) stack.push(h);
+            }
+        }
+    }
+
+    private Set<String> recursive() {
+        var out = new TreeSet<String>();
+        callGraph.forEach((f, gs) -> {
+            if (!f.isEmpty() && gs.contains(f)) out.add(f);
+        });
+        return out;
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    private static void expectType(Ty want, Ir.Expr v, Pos p) {
+        if (!Ty.assignable(want, v.type())) {
+            String hint = want.equals(Ty.KEY) && v.type().equals(Ty.BYTES) ? " (Bytes is not a Key: use asKey(b))" : "";
+            throw p.error("expected " + Ty.show(want) + " but this is " + Ty.show(v.type()) + hint);
+        }
+    }
+
+    static byte[] hexBytes(String hex) {
+        byte[] b = new byte[hex.length() / 2];
+        for (int i = 0; i < b.length; i++) b[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
+        return b;
+    }
+
+    // ------------------------------------------------------------------ syntax queries
+
+    private static boolean paysIn(Syntax.Block b) {
+        for (Stmt s : b.stmts()) {
+            switch (s) {
+                case Syntax.Pay p -> {
+                    return true;
+                }
+                case IfStmt i -> {
+                    if (paysIn(i.then()) || (i.otherwise() != null && paysIn(i.otherwise()))) return true;
+                }
+                case For f -> {
+                    if (paysIn(f.body())) return true;
+                }
+                default -> {
+                }
+            }
+        }
+        return false;
+    }
+
+    private static Pos firstPay(Syntax.Block b) {
+        for (Stmt s : b.stmts()) {
+            if (s instanceof Syntax.Pay p) return p.pos();
+            if (s instanceof IfStmt i) {
+                if (paysIn(i.then())) return firstPay(i.then());
+                if (i.otherwise() != null && paysIn(i.otherwise())) return firstPay(i.otherwise());
+            }
+            if (s instanceof For f && paysIn(f.body())) return firstPay(f.body());
+        }
+        return b.pos();
+    }
+
+    private static boolean mentionsCtx(Syntax.Block b) {
+        return mentions(b, "caller") || mentions(b, "received") || mentions(b, "balance") || mentions(b, "validFrom")
+                || mentions(b, "validTo") || mentionsCall(b, "after") || mentionsCall(b, "before");
+    }
+
+    private static boolean mentions(Syntax.Block b, String name) {
+        return walk(b, e -> e instanceof Name n && n.name().equals(name));
+    }
+
+    private static boolean mentionsCall(Syntax.Block b, String fn) {
+        return walk(b, e -> e instanceof Call c && c.fn().equals(fn));
+    }
+
+    private static boolean walk(Syntax.Block b, java.util.function.Predicate<Expr> p) {
+        for (Stmt s : b.stmts()) {
+            boolean hit = switch (s) {
+                case Const c -> walk(c.value(), p);
+                case Syntax.Require r -> walk(r.cond(), p);
+                case Syntax.Pay y -> walk(y.to(), p) || walk(y.amount(), p);
+                case For f -> walk(f.list(), p) || walk(f.body(), p);
+                case IfStmt i -> walk(i.cond(), p) || walk(i.then(), p) || (i.otherwise() != null && walk(i.otherwise(), p));
+            };
+            if (hit) return true;
+        }
+        return b.result() != null && walk(b.result(), p);
+    }
+
+    private static boolean walk(Expr e, java.util.function.Predicate<Expr> p) {
+        if (p.test(e)) return true;
+        return switch (e) {
+            case Field f -> walk(f.target(), p);
+            case Call c -> c.args().stream().anyMatch(a -> walk(a, p));
+            case MethodCall m -> walk(m.target(), p) || m.args().stream().anyMatch(a -> walk(a, p));
+            case Lambda l -> walk(l.body(), p);
+            case ObjLit o -> (o.spread() != null && walk(o.spread(), p))
+                    || o.fields().stream().anyMatch(f -> f.value() != null ? walk(f.value(), p) : p.test(new Name(f.name(), f.pos())));
+            case ListLit l -> l.items().stream().anyMatch(a -> walk(a, p)) || (l.rest() != null && walk(l.rest(), p));
+            case Unary u -> walk(u.operand(), p);
+            case Binary b -> walk(b.left(), p) || walk(b.right(), p);
+            case Syntax.Cond c -> walk(c.cond(), p) || walk(c.then(), p) || walk(c.otherwise(), p);
+            case IfExpr i -> walk(i.cond(), p) || walk(i.then(), p) || walk(i.otherwise(), p);
+            case BlockExpr be -> walk(be.block(), p);
+            default -> false;
+        };
+    }
+}

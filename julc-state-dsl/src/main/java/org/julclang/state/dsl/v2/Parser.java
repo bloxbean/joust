@@ -7,29 +7,44 @@ import org.julclang.state.dsl.v2.Syntax.*;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 
 /** Parses a {@code .jsc} 2 file (ADR-0018 D2–D7). The file starts with {@code jsc 2}. */
 final class Parser {
     private final List<Tok> toks;
     private int i;
+    /** The type names the file declares: only these start a constructor {@code Name { … }} (F14). */
+    private final Set<String> typeNames = new HashSet<>();
+    /** Expressions written in parentheses: {@code ??} may not be mixed with {@code &&}/{@code ||} without them (F14). */
+    private final Set<Expr> parenthesised = Collections.newSetFromMap(new IdentityHashMap<>());
+    /** Where a parenthesised expression starts: its '('. Every expression's position is where it starts (J5). */
+    private final IdentityHashMap<Expr, Pos> parenStart = new IdentityHashMap<>();
+
+    private Pos startOf(Expr e) {
+        return parenStart.getOrDefault(e, e.pos());
+    }
 
     private Parser(List<Tok> toks) {
         this.toks = toks;
+        for (int k = 0; k + 1 < toks.size(); k++) {
+            if (toks.get(k).is("type") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
+        }
     }
 
     static File parse(String src) {
         return new Parser(Lexer.lex(src)).file();
     }
 
-    /** Whether a source is {@code .jsc} 2: its first token is {@code jsc}. */
+    /**
+     * Whether a source is {@code .jsc} 2: its first word, after whitespace and comments, is {@code jsc}. Only the head is
+     * read: a lexical error further down is reported by the {@code .jsc} 2 front end, at its position (F8).
+     */
     static boolean isV2(String src) {
-        try {
-            var t = Lexer.lex(src);
-            return !t.isEmpty() && t.get(0).is("jsc");
-        } catch (JscException e) {
-            return false;
-        }
+        return "jsc".equals(Lexer.firstWord(src));
     }
 
     // ------------------------------------------------------------------ tokens
@@ -97,6 +112,8 @@ final class Parser {
                 if (contract != null) throw t.pos().error("one contract per file");
                 contract = contract();
             } else if (t.is("function")) throw t.pos().error("functions are written 'fn name(x: Int): Int = …' in .jsc");
+            else if (t.is("class")) throw t.pos().error("there are no classes in .jsc: declare records with 'type Name = { f: T }' and the contract with 'contract Name { … }'");
+            else if (t.is("const") || t.is("let") || t.is("var")) throw t.pos().error("a file holds imports, types, fns and one contract: put constants in a fn (fn limit(): Int = 10)");
             else throw t.pos().error("expected import, type, fn or contract but found " + t);
             semis();
         }
@@ -247,6 +264,10 @@ final class Parser {
                 types.add(typeDecl());
             } else if (t.is("function")) {
                 throw t.pos().error("functions are written 'fn name(x: Int): Int = …' in .jsc");
+            } else if (t.is("async") || t.is("await")) {
+                throw t.pos().error("there is no '" + t.text() + "' in .jsc: a call runs in one transaction; write 'action name(…) { … }'");
+            } else if (t.is("let") || t.is("const") || t.is("var")) {
+                throw t.pos().error("a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10)");
             } else {
                 throw t.pos().error("expected state, init, action, destroy, view, fn or type but found " + t);
             }
@@ -280,6 +301,7 @@ final class Parser {
         Pos p = expect("{").pos();
         var stmts = new ArrayList<Stmt>();
         Expr result = null;
+        Pos returnPos = null;
         while (!at("}")) {
             if (result != null) throw result.pos().error("an expression's value is unused here: only the last one is the block's value");
             Tok t = peek();
@@ -332,9 +354,14 @@ final class Parser {
                 }
             } else if (t.is("return")) {
                 next();
+                returnPos = t.pos();
                 result = expr();
                 semis();
-                if (!at("}")) throw peek().pos().error("return is the last statement of a block");
+                if (!at("}")) {
+                    throw t.pos().error("return is the last statement of a block: a block's value is its last expression, so there is no early return (write if c { … } else { … } as the last expression)");
+                }
+            } else if (t.is("function")) {
+                throw t.pos().error("functions are written 'fn name(x: Int): Int = …' at the top of the file or in the contract; lambdas 'x => …' are only arguments of list methods");
             } else {
                 Expr e = expr();
                 if (at("=") || at("+=") || at("-=") || at("++") || at("--")) {
@@ -345,7 +372,7 @@ final class Parser {
             semis();
         }
         expect("}");
-        return new Block(stmts, result, p);
+        return new Block(stmts, result, returnPos, p);
     }
 
     private IfStmt ifStmt() {
@@ -386,7 +413,7 @@ final class Parser {
             Expr a = expr();
             expect(":");
             Expr b = expr();
-            return new Cond(c, a, b, p);
+            return new Cond(c, a, b, startOf(c));
         }
         return c;
     }
@@ -395,16 +422,26 @@ final class Parser {
         Expr l = or();
         while (at("??")) {
             Pos p = next().pos();
-            l = new Binary("??", l, or(), p);
+            noMixedLogic(l);
+            Expr r = or();
+            noMixedLogic(r);
+            l = new Binary("??", l, r, startOf(l));
         }
         return l;
+    }
+
+    /** As in JavaScript, {@code ??} is not mixed with {@code &&} or {@code ||} without parentheses (F14). */
+    private void noMixedLogic(Expr e) {
+        if (e instanceof Binary b && (b.op().equals("&&") || b.op().equals("||")) && !parenthesised.contains(e)) {
+            throw b.pos().error("?? cannot be mixed with " + b.op() + " without parentheses: write (a ?? b) " + b.op() + " c or a ?? (b " + b.op() + " c)");
+        }
     }
 
     private Expr or() {
         Expr l = and();
         while (at("||")) {
             Pos p = next().pos();
-            l = new Binary("||", l, and(), p);
+            l = new Binary("||", l, and(), startOf(l));
         }
         return l;
     }
@@ -413,7 +450,7 @@ final class Parser {
         Expr l = equality();
         while (at("&&")) {
             Pos p = next().pos();
-            l = new Binary("&&", l, equality(), p);
+            l = new Binary("&&", l, equality(), startOf(l));
         }
         return l;
     }
@@ -423,7 +460,7 @@ final class Parser {
         while (at("==") || at("!=") || at("===") || at("!==")) {
             Tok t = next();
             if (t.text().length() == 3) throw t.pos().error("write " + t.text().substring(0, 2) + ": .jsc equality is always by value");
-            l = new Binary(t.text(), l, comparison(), t.pos());
+            l = new Binary(t.text(), l, comparison(), startOf(l));
         }
         return l;
     }
@@ -432,7 +469,7 @@ final class Parser {
         Expr l = additive();
         if (at("<") || at("<=") || at(">") || at(">=")) {
             Tok t = next();
-            l = new Binary(t.text(), l, additive(), t.pos());
+            l = new Binary(t.text(), l, additive(), startOf(l));
             if (at("<") || at("<=") || at(">") || at(">=")) throw peek().pos().error("comparisons do not chain: use &&");
         }
         return l;
@@ -442,7 +479,7 @@ final class Parser {
         Expr l = multiplicative();
         while (at("+") || at("-")) {
             Tok t = next();
-            l = new Binary(t.text(), l, multiplicative(), t.pos());
+            l = new Binary(t.text(), l, multiplicative(), startOf(l));
         }
         return l;
     }
@@ -451,12 +488,15 @@ final class Parser {
         Expr l = unary();
         while (at("*") || at("/") || at("%")) {
             Tok t = next();
-            l = new Binary(t.text(), l, unary(), t.pos());
+            l = new Binary(t.text(), l, unary(), startOf(l));
         }
         return l;
     }
 
     private Expr unary() {
+        if (at("++") || at("--")) {
+            throw peek().pos().error("values are immutable in .jsc: there is no " + peek().text() + "; build a new value, e.g. return { ...state, x: x + 1 }");
+        }
         if (at("!") || at("-")) {
             Tok t = next();
             return new Unary(t.text(), unary(), t.pos());
@@ -469,21 +509,10 @@ final class Parser {
         while (at(".")) {
             Pos p = next().pos();
             String n = ident("a field or method name");
-            if (at("(")) {
-                e = new MethodCall(e, n, args(), p);
-            } else if (isProperty(n)) {
-                e = new MethodCall(e, n, null, p);
-            } else {
-                e = new Field(e, n, p);
-            }
+            // A property (xs.length) and a record field (r.length) are both Field: the checker decides by type (C7).
+            e = at("(") ? new MethodCall(e, n, args(), startOf(e)) : new Field(e, n, startOf(e));
         }
         return e;
-    }
-
-    /** Collection properties read without parentheses. */
-    private static boolean isProperty(String n) {
-        return n.equals("length") || n.equals("isEmpty") || n.equals("head") || n.equals("size") || n.equals("keys")
-                || n.equals("values");
     }
 
     private List<Expr> args() {
@@ -526,14 +555,9 @@ final class Parser {
             Block b = block();
             if (b.result() == null) throw b.pos().error("a lambda's block must end in its value");
             if (b.stmts().isEmpty()) return b.result();
-            return blockExpr(b);
+            return new BlockExpr(b, b.pos());
         }
         return expr();
-    }
-
-    /** A block used as a value: represented as {@code if true { b } else { b }}, lowered to one helper. */
-    private static Expr blockExpr(Block b) {
-        return new IfExpr(new BoolLit(true, b.pos()), b, b, b.pos());
     }
 
     private boolean isLambdaParams() {
@@ -572,6 +596,8 @@ final class Parser {
             next();
             Expr e = expr();
             expect(")");
+            parenthesised.add(e);
+            parenStart.put(e, t.pos());
             return e;
         }
         if (t.is("[")) return listLit();
@@ -589,12 +615,15 @@ final class Parser {
                 }
                 case "null", "undefined" -> throw t.pos().error("there is no " + t.text() + " in .jsc: use Option<T> with None and Some(x)");
                 case "this" -> throw t.pos().error("there is no 'this' in .jsc: a bare field name, or state.field, reads the state");
-                case "class", "async", "await", "new" -> throw t.pos().error("'" + t.text() + "' is not part of .jsc");
+                case "class" -> throw t.pos().error("there are no classes in .jsc: records are 'type Name = { f: T }', built with Name { f: e }");
+                case "async", "await" -> throw t.pos().error("there is no '" + t.text() + "' in .jsc: everything a call computes happens in its transaction");
+                case "new" -> throw t.pos().error("there is no 'new' in .jsc: build a record with Name { f: e }");
+                case "function" -> throw t.pos().error("there are no function values in .jsc: declare 'fn name(x: Int): Int = …', and write lambdas 'x => …' only as list-method arguments");
                 default -> { }
             }
             next();
             if (at("(")) return new Call(t.text(), args(), t.pos());
-            if (at("{") && Character.isUpperCase(t.text().charAt(0)) && looksLikeObject()) return objLit(t.text());
+            if (at("{") && typeNames.contains(t.text()) && looksLikeObject()) return objLit(t.text());
             return new Name(t.text(), t.pos());
         }
         throw t.pos().error("unexpected " + t + " in an expression");

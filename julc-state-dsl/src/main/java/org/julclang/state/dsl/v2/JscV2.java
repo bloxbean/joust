@@ -1,29 +1,90 @@
 package org.julclang.state.dsl.v2;
 
+import org.julclang.state.dsl.JscException;
+
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
-/** The {@code .jsc} 2 front end (ADR-0018): files that start with {@code jsc 2}. */
+/**
+ * The {@code .jsc} 2 front end (ADR-0018): files that start with {@code jsc 2}. Parse ({@link Parser}), check into the
+ * typed IR ({@link Checker}), then lower it to Java ({@link JavaEmitter}) or evaluate it ({@link Interpreter}).
+ */
 public final class JscV2 {
     private JscV2() {}
 
-    /** Generated Java, warnings, and the functions that call themselves (reported, J9). */
-    public record Lowered(String java, List<String> warnings, Set<String> recursiveFns) {}
+    /** A located warning: line and column in the {@code .jsc} file (D12, F13). */
+    public record Warning(int line, int col, String message) {
+        /** {@code file:line:col: warning: message}. */
+        public String format(String file) {
+            return file + ":" + line + ":" + col + ": warning: " + message;
+        }
+    }
 
-    /** Whether a source is {@code .jsc} 2 (its first token is {@code jsc}). */
+    /** Generated Java, warnings, and the functions that call themselves (reported, J9). */
+    public record Lowered(String java, List<Warning> diagnostics, Set<String> recursiveFns, String fileName) {
+        /** The warnings, each formatted {@code file:line:col: warning: message}. */
+        public List<String> warnings() {
+            return diagnostics.stream().map(w -> w.format(fileName)).toList();
+        }
+    }
+
+    /** Whether a source is {@code .jsc} 2: its first word, after whitespace and comments, is {@code jsc}. */
     public static boolean isV2(String source) {
         return Parser.isV2(source);
     }
 
-    /** Checks and lowers a {@code .jsc} 2 source to a Java {@code @StateContract}. */
-    public static Lowered lower(String source, String fileName) {
-        var r = Compiler.compile(Parser.parse(source), fileName);
-        return new Lowered(r.java(), r.warnings(), r.recursiveFns());
+    private static final Pattern SAFE_FILE_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
+
+    /**
+     * The file name a lowering embeds (in comments and require messages) must be a bare name of letters, digits,
+     * {@code .}, {@code _} and {@code -}: anything else could close a Java comment or string and change the contract
+     * (security S3). Checked at every boundary: {@link #lower}, {@code JscMain} and the toolchain.
+     */
+    public static void checkFileName(String fileName) {
+        if (fileName == null || !SAFE_FILE_NAME.matcher(fileName).matches()) {
+            throw new JscException(1, 1, "the file name " + (fileName == null ? "(none)" : "'" + printable(fileName) + "'")
+                    + " may contain only letters, digits, '.', '_' and '-' (it is embedded in the generated Java)");
+        }
     }
 
-    /** The exact Java signature behind every {@code std} binding row (ADR-0018 D8), for the binding test. */
+    private static String printable(String s) {
+        var out = new StringBuilder();
+        for (char c : s.toCharArray()) out.append(c < 0x20 || c > 0x7e ? String.format("\\u%04x", (int) c) : String.valueOf(c));
+        return out.toString();
+    }
+
+    /** Checks and lowers a {@code .jsc} 2 source to a Java {@code @StateContract}. */
+    public static Lowered lower(String source, String fileName) {
+        checkFileName(fileName);
+        Ir.Program p = Checker.check(Parser.parse(source), fileName);
+        var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.message())).toList();
+        return new Lowered(JavaEmitter.emit(p), warnings, p.recursiveFns(), fileName);
+    }
+
+    /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */
+    public static Interpreter interpreter(String source, String fileName, Interpreter.Hashes hashes) {
+        checkFileName(fileName);
+        return new Interpreter(Checker.check(Parser.parse(source), fileName), hashes);
+    }
+
+    /**
+     * A {@code std} binding row (D8): the {@code .jsc} signature, the Java target and the qualified class it is called
+     * through, the conversion policy, the domain, whether a time value may be an argument, and the exact Java signature
+     * the target must resolve to.
+     */
+    public record BindingRow(String module, String name, List<String> params, String result, String targetClass, String target,
+                             String policy, String domain, boolean timeTotal, String javaSignature) {}
+
+    /** Every {@code std} binding row, for the binding test. */
+    public static List<BindingRow> bindings() {
+        return Std.ROWS.values().stream().map(b -> new BindingRow(b.module(), b.name(), b.params().stream().map(Ty::show).toList(),
+                Ty.show(b.result()), b.targetClass(), b.target(), b.policy().name(), b.domain(), b.timeTotal(), b.javaSignature())).toList();
+    }
+
+    /** The exact Java signature behind every {@code std} binding row (ADR-0018 D8). */
     public static List<String> bindingSignatures() {
-        return Compiler.STD.values().stream().map(Compiler.Binding::javaSignature).toList();
+        return Std.ROWS.values().stream().map(Std.Binding::javaSignature).toList();
     }
 
     /** {@code a/b/Name.java} for the contract a source declares. */

@@ -1,21 +1,22 @@
 package org.julclang.state.dsl.v2;
 
-/** {@code .jsc} 2 types (ADR-0018 D5), as far as M0 implements them. */
+import java.util.List;
+import java.util.function.Function;
+
+/**
+ * {@code .jsc} 2 types (ADR-0018 D5), as far as M0 implements them. Every type in the checked {@link Ir} is fully known:
+ * a literal without context ({@code []}, {@code None}) is given its type by the checker or refused, so no placeholder
+ * type reaches the emitter or the interpreter (F5).
+ */
 sealed interface Ty {
 
     Ty INT = new Prim("Int");
     Ty BOOL = new Prim("Bool");
     Ty BYTES = new Prim("Bytes");
     Ty KEY = new Prim("Key");
-    /** The element type of {@code []} and {@code None} before a context gives it one. */
-    Ty ANY = new Prim("?");
+    Ty STATE = new Rec("State");
 
     record Prim(String name) implements Ty {}
-
-    /** The contract's state record. */
-    static Ty STATE() {
-        return new Rec("State");
-    }
 
     record ListT(Ty elem) implements Ty {}
 
@@ -33,26 +34,12 @@ sealed interface Ty {
         };
     }
 
-    /** The Java type; {@code boxed} in generic positions. */
-    static String java(Ty t, boolean boxed) {
-        return switch (t) {
-            case Prim p -> switch (p.name()) {
-                case "Int" -> "BigInteger";
-                case "Bool" -> boxed ? "Boolean" : "boolean";
-                case "Bytes", "Key" -> "byte[]";
-                default -> "Object";
-            };
-            case ListT l -> "JulcList<" + java(l.elem(), true) + ">";
-            case OptT o -> "Optional<" + java(o.elem(), true) + ">";
-            case Rec r -> r.name();
-        };
-    }
-
-    static String java(Ty t) {
-        return java(t, false);
-    }
-
-    /** A name fragment for generated helpers: {@code List_Bytes}. A Key is Bytes at run time. */
+    /**
+     * A name fragment for generated helpers: {@code List_Bytes}. A Key is Bytes at run time. Injective over the types a
+     * contract can declare: {@code List} and {@code Opt} take one fragment after them and the primitives none, and a
+     * declared type's name has no {@code _} and is none of {@code Int Bool Bytes Key List Opt …} (both refused at the
+     * declaration), so every fragment reads back as exactly one type (Codex C6, F7).
+     */
     static String mangle(Ty t) {
         return switch (t) {
             case Prim p -> p.name().equals("Key") ? "Bytes" : p.name();
@@ -66,30 +53,18 @@ sealed interface Ty {
     static boolean assignable(Ty to, Ty from) {
         if (to.equals(from)) return true;
         if (to.equals(BYTES) && from.equals(KEY)) return true;
-        if (to instanceof ListT a && from instanceof ListT b) return b.elem().equals(ANY) || assignable(a.elem(), b.elem()) && sameRuntime(a.elem(), b.elem());
-        if (to instanceof OptT a && from instanceof OptT b) return b.elem().equals(ANY) || assignable(a.elem(), b.elem()) && sameRuntime(a.elem(), b.elem());
+        // Immutable containers are covariant: a List<Key> is a List<Bytes> (same run-time form); not the reverse.
+        if (to instanceof ListT a && from instanceof ListT b) return assignable(a.elem(), b.elem());
+        if (to instanceof OptT a && from instanceof OptT b) return assignable(a.elem(), b.elem());
         return false;
     }
 
-    private static boolean sameRuntime(Ty a, Ty b) {
-        return java(a, true).equals(java(b, true));
-    }
-
-    static boolean containsKey(Ty t, java.util.function.Function<String, java.util.List<Ty>> recordFields) {
+    static boolean containsKey(Ty t, Function<String, List<Ty>> recordFields) {
         return switch (t) {
             case Prim p -> p.equals(KEY);
             case ListT l -> containsKey(l.elem(), recordFields);
             case OptT o -> containsKey(o.elem(), recordFields);
             case Rec r -> recordFields.apply(r.name()).stream().anyMatch(f -> containsKey(f, recordFields));
-        };
-    }
-
-    static boolean containsBytes(Ty t, java.util.function.Function<String, java.util.List<Ty>> recordFields) {
-        return switch (t) {
-            case Prim p -> p.equals(KEY) || p.equals(BYTES);
-            case ListT l -> containsBytes(l.elem(), recordFields);
-            case OptT o -> containsBytes(o.elem(), recordFields);
-            case Rec r -> recordFields.apply(r.name()).stream().anyMatch(f -> containsBytes(f, recordFields));
         };
     }
 }

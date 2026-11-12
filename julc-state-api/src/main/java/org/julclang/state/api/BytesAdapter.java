@@ -23,10 +23,14 @@ public class BytesAdapter {
         return ByteStringLib.slice(bs, start.longValue(), length.longValue());
     }
 
-    /** The byte at {@code index} (0–255); {@code index} in {@code [0, 2^31)}, and it fails past the end on both sides. */
+    /**
+     * The byte at {@code index} (0–255); {@code index} in {@code [0, 2^31)} and below the length. Past the end it fails
+     * with this adapter's {@code require} on both sides (the JVM's stdlib would throw an index exception instead).
+     */
     public static BigInteger at(byte[] bs, BigInteger index) {
         Require.that(index.compareTo(BigInteger.ZERO) >= 0 && index.compareTo(BigInteger.valueOf(2147483648L)) < 0,
                 "at: index must be in [0, 2^31)");
+        Require.that(index.compareTo(BigInteger.valueOf(ByteStringLib.length(bs))) < 0, "at: index past the end");
         return BigInteger.valueOf(ByteStringLib.at(bs, index.longValue()));
     }
 }

@@ -47,8 +47,7 @@ public final class Toolchain {
         }
     }
 
-    /** A finding, from javac, JOUST (reader and lint) or JuLC. */
-    /** A build message; {@code line} and {@code col} are 1-based, or -1 when unknown. */
+    /** A finding, from javac, JOUST (reader and lint) or JuLC; {@code line} and {@code col} are 1-based, or -1 when unknown. */
     public record Diagnostic(Severity severity, String message, String file, long line, long col, String source) {
         public Diagnostic(Severity severity, String message, String file, long line, String source) {
             this(severity, message, file, line, -1, source);
@@ -102,16 +101,19 @@ public final class Toolchain {
         files.forEach((name, text) -> {
             if (name.endsWith(".jsc")) {
                 try {
-                    // The bare file name, as Gradle's generateJsc passes it: the lowering embeds it.
+                    // The bare file name, as Gradle's generateJsc passes it: the lowering embeds it, so JscMain accepts
+                    // only a safe name ([A-Za-z0-9._-], security S3) and refuses any other at 1:1.
                     String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
                     var lowered = JscMain.lowerWithWarnings(text, base);
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());
-                    // ADR-0018 D12: warnings and positions reach the npm path too.
-                    for (String w : lowered.warnings()) diagnostics.add(new Diagnostic(Severity.WARNING, w, name, -1, "jsc"));
+                    // ADR-0018 D12: warnings reach the npm path with their line and column (F13).
+                    for (var w : lowered.diagnostics()) {
+                        diagnostics.add(new Diagnostic(Severity.WARNING, w.message(), name, w.line(), w.col(), "jsc"));
+                    }
                 } catch (org.julclang.state.dsl.JscException e) {
                     diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), name, e.line, e.col, "jsc"));
                 } catch (RuntimeException e) {
-                    diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), name, -1, "jsc"));
+                    diagnostics.add(new Diagnostic(Severity.ERROR, "internal error lowering this file: " + e, name, -1, "jsc"));
                 }
             } else if (name.endsWith(".java")) {
                 sources.put(name, text);
@@ -198,8 +200,16 @@ public final class Toolchain {
             if (Boolean.getBoolean("joust.toolchain.debug")) {
                 System.err.println("[toolchain] " + g.validatorName() + " libraries: " + resolved.stream().map(LibrarySource::fqcn).toList());
             }
-            var result = compiler.compileContract(g.validatorSource(), resolved.stream().map(LibrarySource::source).toList())
-                    .compileResult();
+            org.julclang.compiler.CompileResult result;
+            try {
+                result = compiler.compileContract(g.validatorSource(), resolved.stream().map(LibrarySource::source).toList())
+                        .compileResult();
+            } catch (RuntimeException e) {
+                // JuLC reports some problems by throwing (a method declared twice, F7): a diagnostic, not a crash.
+                diagnostics.add(new Diagnostic(Severity.ERROR, "JuLC could not compile " + g.validatorName() + ": " + e.getMessage(),
+                        g.validatorName(), -1, "julc"));
+                continue;
+            }
             if (result.hasErrors()) {
                 result.diagnostics().forEach(d -> diagnostics.add(new Diagnostic(Severity.ERROR, String.valueOf(d), g.validatorName(), -1, "julc")));
                 continue;

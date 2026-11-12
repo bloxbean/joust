@@ -20,21 +20,38 @@ public final class JscMain {
         return lowerWithWarnings(source, fileName).java();
     }
 
-    /** The Java source and warnings for one .jsc file's text. */
+    /**
+     * The Java source and warnings for one .jsc file's text. {@code fileName} is the bare file name; it is embedded in
+     * the generated Java, so it may contain only letters, digits, '.', '_' and '-' (security S3).
+     */
     public static Lowered lowerWithWarnings(String source, String fileName) {
+        org.julclang.state.dsl.v2.JscV2.checkFileName(fileName);
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
             var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName);
-            return new Lowered(r.java(), r.warnings());
+            return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.message())).toList(),
+                    fileName);
         }
-        // .jsc v1 (ADR-0005): still compiled, deprecated in favour of .jsc 2 (ADR-0018 D2, D16).
+        // .jsc v1 (ADR-0005): compiled as before. Its deprecation warning arrives with M1, when the templates switch to
+        // .jsc 2 and `joust migrate` exists (ADR-0018 Q5, D14, D16; review F9).
         var r = Lowering.lower(Parser.parse(source), fileName);
-        var warnings = new java.util.ArrayList<String>(r.warnings());
-        warnings.add(fileName + ":1:1: warning: .jsc v1 is deprecated; start the file with 'jsc 2' (joust migrate rewrites it)");
-        return new Lowered(r.java(), warnings);
+        return new Lowered(r.java(), r.warnings(), fileName);
     }
 
-    /** Lowered Java and warnings. */
-    public record Lowered(String java, java.util.List<String> warnings) {}
+    /** A located warning: line and column in the .jsc file (D12). */
+    public record Warning(int line, int col, String message) {
+        /** {@code file:line:col: warning: message}. */
+        public String format(String file) {
+            return file + ":" + line + ":" + col + ": warning: " + message;
+        }
+    }
+
+    /** Lowered Java and located warnings. */
+    public record Lowered(String java, java.util.List<Warning> diagnostics, String fileName) {
+        /** The warnings, each formatted {@code file:line:col: warning: message}. */
+        public java.util.List<String> warnings() {
+            return diagnostics.stream().map(w -> w.format(fileName)).toList();
+        }
+    }
 
     /** The package and class name the .jsc text declares, as a relative path {@code a/b/Name.java}. */
     static String outputPath(String source) {
@@ -69,7 +86,7 @@ public final class JscMain {
             String name = src.relativize(f).toString();
             try {
                 var lowered = lowerWithWarnings(text, f.getFileName().toString());
-                lowered.warnings().forEach(System.err::println);
+                lowered.diagnostics().forEach(w -> System.err.println(w.format(name)));
                 String java = lowered.java();
                 Path target = out.resolve(outputPath(text));
                 if (Files.exists(target) && written.contains(target)) {
@@ -80,6 +97,10 @@ public final class JscMain {
                 Files.writeString(target, java);
             } catch (JscException e) {
                 System.err.println(e.format(name));
+                errors++;
+            } catch (RuntimeException e) {
+                // A defect of the front end, not of the file: still reported against the file, and the build fails.
+                System.err.println(name + ":1:1: error: internal error lowering this file: " + e);
                 errors++;
             }
         }
