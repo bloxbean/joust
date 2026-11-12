@@ -1,6 +1,6 @@
 # ADR-0020: UPLC transition programs as the off-chain meaning on every path — a spike (answers ADR-0015 Q6)
 
-**Status:** Proposed (r5), **spike**: design plus a proof of concept to measure. Not a commitment: nothing changes
+**Status:** Proposed (r6; approved by review at `04ea067`), **spike**: design plus a proof of concept to measure. Not a commitment: nothing changes
 for users until the spike's report is reviewed and this ADR is accepted or rejected.
 **Date:** 2026-11-12
 **Builds on:** ADR-0015 D3 (transition programs, `TransitionFn`), D4 (one description-driven runtime core; typed
@@ -237,8 +237,9 @@ Adoption criteria (all must hold):
 - **C5:** the service's per-request evaluation is bounded (D11) and concurrent calls are safe.
 - **C7** (r4, at adoption): the JVM builder enforces a **step-independent bound** on the wallet's net outflow for
   local-`Account` callers: at most what the call itself declares (`received` and deposits), plus a **caller-declared
-  maximum** for min-UTxO top-ups of contract-initiated outputs (payouts, sends) and a caller-declared maximum fee (or
-  the network's maximum), mirroring the ADR-0013 page verifier, because once UPLC is the only leg U9 is no longer
+  maximum** for min-UTxO top-ups of contract-initiated outputs (payouts, sends) and an explicit caller-declared or
+  configured **absolute** maximum fee, independent of the candidate step and transaction (r6: no fee computed from
+  the transaction, which follows the step; the page verifier's `maxFee = 3_000_000` is such a configured bound), mirroring the ADR-0013 page verifier, because once UPLC is the only leg U9 is no longer
   checked and a preview comes from the same step (r5, F28: top-ups and the fee grow with the step, so they cannot be
   allowed as computed; paying top-ups from the contract's value is not possible, since its continuing value is exact,
   ADR-0001 I3). Test (§8): a wrong step with an extra sub-min-UTxO payout is refused by the bound. The alternative is to record this as an accepted risk; the report recommends one.
@@ -274,7 +275,8 @@ programs; and typed Java clients of a `.jsc` contract still need its records. Th
 - **Diagnostic artifacts** (r4, F23): a second, source-mapped compile of each program is a separate artifact with its
   own hash and options (`sourceMapEnabled = true`, optimiser skipped) in a separate manifest section. It is never
   compared, used or measured; it only locates a failure the optimised program already produced (D9).
-- **Allowed substitutions** are an allowlist: `org.julclang.state.api.MerkleMaps` (discovery) and `Require` (D9),
+- **Allowed substitutions** are an allowlist: `org.julclang.state.api.MerkleMaps` (discovery) and `Require` (D9; the
+  **auxiliary set only**: a primary manifest that lists it is refused, r6),
   read from `julc-state-api`'s own artifact and pinned by hash; any other override fails the build. A mechanical
   check requires each variant to equal its on-chain source except the marked branch. **Spike-only:** an
   access-recording `MerkleMaps` variant (D9) is allowlisted for the instrumented program set only; D2's claim that
@@ -299,7 +301,8 @@ programs; and typed Java clients of a `.jsc` contract still need its records. Th
   call for init, withdraw and migrate, refused before evaluation.
 - Programs must keep traces (read discovery depends on them, F12); a manifest without traces is refused.
 - Negative tests (§8): a stale program (v1 programs against a v2 deployment), programs bound to a different
-  unapplied script, a correct manifest with another deployment's reference script, a program compiled with a
+  unapplied script, a correct manifest with another deployment's reference script, a primary manifest substituting
+  `Require` (r6), a program compiled with a
   user-overridden profile or with source maps, an unexpected discovery override, a stripped-trace program. Each is refused before evaluation, in `UplcTransitions` as in `ShadowTransitions`.
 - **Recompile check (CI):** as ADR-0015 I1 does for validators, CI recompiles each example's programs from source and
   requires the manifest's program hashes to match.
@@ -316,7 +319,9 @@ The manifest establishes consistency (§2), not integrity or equivalence; equiva
   catches `RequireException`. A failure of the primary (unmodified) program is classified by rerunning the inputs on
   the auxiliary program, which must reproduce the failure; parity, latency, units and budget outcomes always come from
   the primary program, and the auxiliary set's size and units are reported separately as the cost of the proposed
-  format. Vector: `Counter.increment` with `by = 0` (a reachable refusal). Message parity is compared only
+  format. Vector: `Counter.increment` with `by = 0` (a reachable refusal). If the auxiliary rerun does not reproduce
+  the failure, the outcome stays `error` with the cause "unclassified", is recorded as a finding, and never counts as
+  `require` agreement (r6). Message parity is compared only
   for `require`. A last trace is never taken as a refusal message; `error` keeps the VM's cause and the source-mapped
   location. (The validator's `Require` is unchanged.) Tests include a message starting `joust:` and a non-Require VM
   error.
@@ -528,3 +533,6 @@ replayable recordings of D4a), ADR-0015 I2 is completed by D4, and Q6 is answere
   and stay off a multi-tenant request path (S16); C7's allowances for top-ups and fee become caller-declared maxima,
   with a sub-min-UTxO test (F28); the tagged `Require` moves to an auxiliary program set, the primary programs stay
   unmodified (C16); the manifest's script-credential check gets a per-kind binding table (C17).
+- **r6** (2026-11-12, wording, after approval by all three reviewers at `04ea067`): `Require` allowlisted for the
+  auxiliary set only, with a negative test (S17, F29); a non-reproducing auxiliary rerun stays `error`
+  ("unclassified") (S17, F30); C7's fee cap is an explicit absolute maximum (C18).
