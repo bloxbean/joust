@@ -10,7 +10,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | Code | Severity | Message | Raised by |
 |---|---|---|---|
 | JSC0001 | error | the file name … (none) … ' … ' … may contain only ASCII letters and digits, '.', '_' and '-', and must start with a letter or digit (it is embedded in the generated Java) | JscV2 |
-| JSC0002 | error | the ABI manifest … differs from the committed one: a datum or redeemer encoding changed, which strands deployed instances; if the change is intended, build with -Pjoust.acceptAbi (npm: joust build --accept-abi) and commit the new manifest | JscMain, joust build |
+| JSC0002 | error | the ABI manifest … differs from the committed one at line …: a datum or redeemer encoding changed, which strands deployed instances; accept it with the acceptJscAbi task (npm: joust build --accept-abi) and commit it | JscMain, joust build |
 
 ## Syntax and JavaScript habits (ADR-0018 D2, D3, D12)
 
@@ -56,8 +56,8 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0138 | error | there is no … in .jsc: use Option<T> with None and Some(x) | Parser |
 | JSC0139 | error | there is no 'this' in .jsc: a bare field name, or state.field, reads the state | Parser |
 | JSC0140 | error | there are no classes in .jsc: records are 'type Name = { f: T }', built with Name { f: e } | Parser |
-| JSC0141 | error | there is no ' … ' in .jsc: everything a call computes happens in its transaction | Parser |
-| JSC0142 | error | there is no 'new' in .jsc: build a record with Name { f: e } | Parser |
+| JSC0141 | error | invisible format character U+…: .jsc files may not hold bidirectional controls or other format characters, even in comments and strings, so that the text reads as it compiles | Lexer |
+| JSC0142 | error | ' … ' (U+…) is not an ASCII letter (or digit): names in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike | Lexer |
 | JSC0143 | error | unexpected … in an expression | Parser |
 | JSC0144 | error | a spread goes first: { ...state, f: e } | Parser |
 
@@ -67,7 +67,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 |---|---|---|---|
 | JSC0201 | error | the function … is declared twice or shadows a built-in | Checker |
 | JSC0202 | error | the fn … has the name of a method of the contract; rename one (both become methods of one Java class) | Checker |
-| JSC0203 | error | the method name … would clash with the generated name … ; rename it | Checker |
+| JSC0203 | error | the method name … would clash with the generated name … (a declared type or variant: a method's redeemer is a Java class named after it, beside the contract's types and variants); rename it | Checker |
 | JSC0204 | error | the method … is declared twice | Checker |
 | JSC0205 | error | names start with a capital: | Checker |
 | JSC0206 | error | names are written without '_' (e.g. … _ … ) | Checker |
@@ -85,6 +85,8 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0218 | error | spread a named value: { ...state, … } or { ...r, … } | Checker |
 | JSC0219 | error | is given twice | Checker |
 | JSC0220 | error | ' … ' is a name the generated validator or client uses for its own types; choose another … name | Checker |
+| JSC0221 | error | the fn … has the name of a declared type or variant; rename one | Checker |
+| JSC0222 | error | ' … ' would hide the type / enum / variant / fn …; a name is bound once and never replaces a declaration | Checker |
 
 ## Types and values (ADR-0018 D5, D6)
 
@@ -117,7 +119,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0325 | error | takes … argument … s | Checker |
 | JSC0326 | error | takes … arguments | Checker |
 | JSC0327 | error | . … (…) needs a List or a Map; … has no methods | Checker |
-| JSC0328 | error | on a List of Options would be an Option<Option<…>>, which .jsc does not have … (JavaScript cannot tell Some(None) from None): use xs.isEmpty or a fold | Checker |
+| JSC0328 | error | … on a List (or Map) of Options would be an Option<Option<…>>, which .jsc does not have (JavaScript cannot tell Some(None) from None): use xs.isEmpty or a fold (a Map: test m.has(k)) | Checker |
 | JSC0329 | error | unknown type | Checker |
 | JSC0330 | error | this object's type is unknown here: write Type { … }, or give the const a type | Checker |
 | JSC0331 | error | needs … (or start with ...state) | Checker |
@@ -177,7 +179,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 
 | Code | Severity | Message | Raised by |
 |---|---|---|---|
-| JSC0601 | error | calls itself from inside a lambda, block arm or ?? default: the generated helper would join … a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out | Checker |
+| JSC0601 | error | … calls itself from inside a lambda, an if or match arm, a value block or a ?? default: the generated helper would join a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out | Checker |
 | JSC0602 | error | is part of a mutual recursion: only direct self-recursion is allowed (ADR-0018 D7) | Checker |
 
 ## Imports and the standard library (ADR-0018 D8, D9, J7)
@@ -205,7 +207,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0810 | error | BigMap.empty() starts a map in an init; elsewhere a BigMap field keeps its own entries | Checker |
 | JSC0811 | error | the new value of the BigMap field … must be … itself, changed by set/delete … , or BigMap.empty() in an init … (ADR-0018 D7) | Checker |
 | JSC0812 | error | a BigMap is not comparable: it is a witness of a Merkle root, not its contents (ADR-0018 D6) | Checker |
-| JSC0813 | error | a BigMap cannot be … : it is read and changed only as its state field (ADR-0018 D7) | Checker |
+| JSC0813 | error | a BigMap cannot be … (a value holding one, the state's type included, when its BigMap is written): it is read and changed only as its state field (ADR-0018 D7) | Checker |
 | JSC0814 | error | a BigMap cannot be captured by a lambda: read the keys you need before the list method (ADR-0018 D7) | Checker |
 | JSC0815 | error | has one function: … .empty() | Checker |
 | JSC0816 | error | the type of this map is unknown here: give it one (const m: Map<Key, Int> = Map.empty()) | Checker |
@@ -219,7 +221,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0824 | error | a Map fold does not accumulate the state: fold the values you need, then build the state | Checker |
 | JSC0825 | error | a Map's membership test is m.has(k) | Checker |
 | JSC0826 | error | Map has no method ' … ' (get, has, set, delete, any, all, fold) | Checker |
-| JSC0827 | error | a BigMap is changed only where the next state is built: in an action's result (ADR-0018 D7) | Checker |
+| JSC0827 | error | a BigMap is changed only in the value of its own field in the next state, { ...state, f: f.set(k, v) }, not in a require, a condition or a view (ADR-0018 D7) | Checker |
 | JSC0828 | error | BigMap has no method ' … ' (get, has, set, delete; m[k] on BigMap<K, Int>) | Checker |
 | JSC0829 | error | m[k] reads a BigMap<K, Int>; … a Map is read with m.get(k) … a List has no index: use xs.head, find or fold … has no index | Checker |
 | JSC0830 | error | m[k] reads a BigMap<K, Int>; a BigMap<K, Bytes> is read with m.get(k) | Checker |
@@ -255,6 +257,7 @@ positions). This catalogue is checked against the front end's sources (`JscV2Dia
 | JSC0925 | error | ' … ' is bound but never used: leave the field out of the pattern | Checker |
 | JSC0926 | error | the type of this match is unknown here: give it one (const o: Option<Int> = match …) | Checker |
 | JSC0927 | error | this match is a statement (it is not the block's last expression, or an arm has no … value), so its arms end in statements, not a value | Checker |
+| JSC0930 | error | nested patterns are not supported: bind the value, Some(v), and match v again | Parser, Checker |
 
 ## Lists, lambdas and ranges (ADR-0018 D7)
 

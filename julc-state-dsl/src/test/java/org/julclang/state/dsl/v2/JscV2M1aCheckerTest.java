@@ -215,7 +215,7 @@ class JscV2M1aCheckerTest {
         bad("action a() { require(bal.isEmpty, \"x\")\n return state }", "read only in a destroy", 0, 22);
         bad("view v(k: Bytes): Int = notes[k]", "BigMap<K, Bytes> is read with m.get(k)", 0, 25);
         bad("view v(): Int = bal.size", "no property 'size'", 0, 17);
-        bad("view v(k: Key): Bool = bal.set(k, 1).has(k)", "changed only where the next state is built", 0, 24);
+        bad("view v(k: Key): Bool = bal.set(k, 1).has(k)", "changed only in the value of its own field", 0, 24);
         ok("action a(k: Key) only owner { return { ...state, bal: bal.set(k, bal[k] + 1).delete(owner), notes: notes.set(#01, #02) } }");
         ok("view v(k: Key): Int = bal[k] + (bal.get(k) ?? 0) + (bal.has(k) ? 1 : 0)");
         ok("destroy d() only owner { require(bal.isEmpty && notes.isEmpty, \"x\")\n pay(owner, balance) }");

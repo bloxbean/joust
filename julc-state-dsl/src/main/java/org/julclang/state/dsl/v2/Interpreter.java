@@ -203,31 +203,13 @@ public final class Interpreter {
 
     /**
      * Ed25519 as the ledger's builtin: a key that is not 32 bytes or a signature that is not 64 fails the call; any
-     * other input is answered true or false, by the JDK's verifier: a key that is no curve point, or a malformed
-     * signature, is false (as the builtin answers; the four-way vectors check it on every leg).
+     * other input is answered true or false by libsodium's rules ({@link Ed25519}), not the JDK's: a small-order key or
+     * R, a non-canonical key or S, a key off the curve are all false (review C3, S5).
      */
     static boolean verifyEd25519(byte[] key, byte[] msg, byte[] sig) {
         if (key.length != 32) throw new Refused("verifyEd25519: the key must be 32 bytes");
         if (sig.length != 64) throw new Refused("verifyEd25519: the signature must be 64 bytes");
-        try {
-            byte[] y = key.clone();
-            boolean xOdd = (y[31] & 0x80) != 0;
-            y[31] &= 0x7f;
-            for (int i = 0; i < 16; i++) {
-                byte t = y[i];
-                y[i] = y[31 - i];
-                y[31 - i] = t;
-            }
-            var point = new java.security.spec.EdECPoint(xOdd, new BigInteger(1, y));
-            var spec = new java.security.spec.EdECPublicKeySpec(java.security.spec.NamedParameterSpec.ED25519, point);
-            var pk = java.security.KeyFactory.getInstance("Ed25519").generatePublic(spec);
-            var v = java.security.Signature.getInstance("Ed25519");
-            v.initVerify(pk);
-            v.update(msg);
-            return v.verify(sig);
-        } catch (java.security.GeneralSecurityException | RuntimeException e) {
-            return false;
-        }
+        return Ed25519.verify(key, msg, sig);
     }
 
     // ------------------------------------------------------------------ the program
@@ -564,6 +546,7 @@ public final class Interpreter {
             case "has" -> m.now().containsKey((Bytes) a.get(0));
             case "isEmpty" -> m.before().isEmpty() && !m.written();
             case "delete" -> {
+                if (((Bytes) a.get(0)).value.length > 64) throw new Refused("BigMap.delete: a key has at most 64 bytes");
                 var now = new java.util.HashMap<>(m.now());
                 now.remove((Bytes) a.get(0));
                 yield new BigMapV(m.before(), now, true);
@@ -575,6 +558,9 @@ public final class Interpreter {
                 if (ints) {
                     BigInteger v = integer(a.get(1));
                     if (v.signum() < 0) throw new Refused("BigMap.set: a value cannot be negative");
+                    // Stored as its minimal big-endian bytes (MerkleMaps.putInt: integerToByteString), at most 8,192 of
+                    // them; a larger value fails where it is written, even if the write is later discarded (Codex C4).
+                    if ((v.bitLength() + 7) / 8 > 8192) throw new Refused("integerToByteString: result exceeds 8192 bytes");
                     if (v.signum() == 0) now.remove(k);   // 0 is absence (D7)
                     else now.put(k, v);
                 } else {

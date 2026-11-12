@@ -485,6 +485,9 @@ final class Parser {
         if (t.text().equals("Some") && at("(")) {
             next();
             Pos bp = peek().pos();
+            if (peek().kind() == K.IDENT && (peek(1).is("{") || peek(1).is("("))) {
+                throw bp.error("JSC0930", "nested patterns are not supported: bind the value, Some(v), and match v again");
+            }
             binds.add(new Bind(null, ident("a name for the value"), bp));
             expect(")");
         } else if (at("{")) {

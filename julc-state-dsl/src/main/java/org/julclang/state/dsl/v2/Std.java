@@ -67,7 +67,8 @@ final class Std {
         }
         add(new Binding("std/crypto", "verifyEd25519", List.of(Ty.BYTES, Ty.BYTES, Ty.BYTES), Ty.BOOL, API + "CryptoAdapter",
                 "CryptoAdapter.verifyEd25519", List.of(), Policy.ADAPTER,
-                "key of 32 bytes and signature of 64 bytes, else a failure (where the builtin fails); then true or false",
+                "key of 32 bytes and signature of 64 bytes, else a failure (where the builtin fails); then true or false by"
+                + " libsodium's rules: a small-order key or R, a non-canonical key or S, a key off the curve are false",
                 false, API + "CryptoAdapter.verifyEd25519(byte[],byte[],byte[]):boolean"));
 
         // ---- std/bytes
@@ -105,7 +106,8 @@ final class Std {
                 Policy.ADAPTER, "exponent in [0, 1024], else a failure (the cost grows with it)", false,
                 API + "MathAdapter.pow(" + BI + "," + BI + "):" + BI));
         add(new Binding("std/math", "expMod", List.of(Ty.INT, Ty.INT, Ty.INT), Ty.INT, API + "MathAdapter", "MathAdapter.expMod",
-                List.of(), Policy.ADAPTER, "exponent >= 0 and modulus > 0, else a failure; the result is in [0, modulus)", false,
+                List.of(), Policy.ADAPTER, "exponent >= 0 and modulus > 0, else a failure; the result is in [0, modulus); the ExpModInteger builtin"
+                + " of protocol version 11 (CIP-109), which the toolchain's PLUTUS_V3_PV11 target provides", false,
                 API + "MathAdapter.expMod(" + BI + "," + BI + "," + BI + "):" + BI));
         add(new Binding("std/math", "sign", List.of(Ty.INT), Ty.INT, STDLIB + "MathLib", "MathLib.sign", List.of(), Policy.DIRECT,
                 "any Int; -1, 0 or 1", true, STDLIB + "MathLib.sign(" + BI + "):" + BI));

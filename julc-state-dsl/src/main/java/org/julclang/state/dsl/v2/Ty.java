@@ -93,7 +93,8 @@ sealed interface Ty {
             case ListT l -> hasBigMap(l.elem(), components);
             case OptT o -> hasBigMap(o.elem(), components);
             case MapT m -> hasBigMap(m.val(), components);
-            case Rec r -> !r.name().equals("State") && components.apply(r.name()).stream().anyMatch(f -> hasBigMap(f, components));
+            // The state too (security S4): a value of the state's type holds its BigMaps.
+            case Rec r -> components.apply(r.name()).stream().anyMatch(f -> hasBigMap(f, components));
             case EnumT e -> components.apply(e.name()).stream().anyMatch(f -> hasBigMap(f, components));
         };
     }

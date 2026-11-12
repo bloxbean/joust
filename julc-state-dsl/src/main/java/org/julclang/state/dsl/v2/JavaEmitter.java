@@ -13,6 +13,16 @@ import java.util.*;
  */
 final class JavaEmitter {
 
+    /** Library types generated code may name, by simple name: imported when the final text names them. */
+    static final Map<String, String> TYPES = Map.ofEntries(
+            Map.entry("BigInteger", "java.math.BigInteger"), Map.entry("Optional", "java.util.Optional"),
+            Map.entry("JulcList", "org.julclang.core.types.JulcList"), Map.entry("JulcMap", "org.julclang.core.types.JulcMap"),
+            Map.entry("Payout", "org.julclang.state.api.Payout"), Map.entry("Payouts", "org.julclang.state.api.Payouts"),
+            Map.entry("Require", "org.julclang.state.api.Require"), Map.entry("Clock", "org.julclang.state.api.Clock"),
+            Map.entry("Ctx", "org.julclang.state.api.Ctx"), Map.entry("MerkleMap", "org.julclang.state.api.MerkleMap"),
+            Map.entry("MerkleMaps", "org.julclang.state.api.MerkleMaps"), Map.entry("MapEntry", "org.julclang.state.api.MapEntry"),
+            Map.entry("SortedMaps", "org.julclang.state.api.SortedMaps"), Map.entry("ByteStringLib", "org.julclang.stdlib.lib.ByteStringLib"));
+
     private final Ir.Program p;
     private final Set<String> imports = new TreeSet<>();
     private final LinkedHashMap<String, String> helpers = new LinkedHashMap<>();
@@ -64,6 +74,12 @@ final class JavaEmitter {
         }
         imports.add("java.math.BigInteger");
         imports.add("org.julclang.state.api.StateContract");
+        // Every library type the generated text names is imported, whichever helper wrote it (F3, C1: a Map helper
+        // names JulcList without having added it). Declared names cannot take these (Checker.RESERVED).
+        String text = records + "\n" + body + "\n" + String.join("", helpers.values());
+        for (var t : TYPES.entrySet()) {
+            if (java.util.regex.Pattern.compile("\\b" + t.getKey() + "\\b").matcher(text).find()) imports.add(t.getValue());
+        }
 
         var out = new StringBuilder();
         out.append("package ").append(p.pkg()).append(";\n\n");
@@ -1131,7 +1147,14 @@ final class JavaEmitter {
                 return "MerkleMaps.isEmpty(" + m + ")";
             }
             case "delete" -> {
-                return "MerkleMaps.remove(" + m + ", " + ex(o.args().get(0)) + ")";
+                // The key's length is checked as set checks it (security S4).
+                imports.add("org.julclang.state.api.MerkleMap");
+                imports.add("org.julclang.state.api.Require");
+                imports.add("org.julclang.stdlib.lib.ByteStringLib");
+                addHelper("bigDelete__", "    static MerkleMap bigDelete__(MerkleMap m__, byte[] k__) {\n"
+                        + "        Require.that(ByteStringLib.length(k__) <= 64, \"BigMap.delete: a key has at most 64 bytes\");\n"
+                        + "        return MerkleMaps.remove(m__, k__);\n    }\n\n");
+                return "bigDelete__(" + m + ", " + ex(o.args().get(0)) + ")";
             }
             case "get" -> {
                 imports.add("org.julclang.state.api.MapEntry");

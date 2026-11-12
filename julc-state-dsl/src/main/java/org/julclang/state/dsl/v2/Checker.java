@@ -55,7 +55,7 @@ final class Checker {
             "Hash", "Some", "None", "Pair", "Tuple2", "Enum");
 
     /**
-     * Names the generated client binds where a method's parameters are in scope ({@code .run((s, ctx) -> { var r = …
+     * A stopgap until bloxbean/joust#64 renames them: names the generated client binds where a method's parameters are in scope ({@code .run((s, ctx) -> { var r = …
      * })}, {@code (seed, ctx) ->}, {@code var result = …}: ClientGenerator): a parameter of the same name would not
      * compile, or would be captured (J10).
      */
@@ -183,6 +183,9 @@ final class Checker {
         allFns.addAll(c.fns());
         for (Syntax.Fn f : allFns) {
             checkUserName(f.name(), f.pos(), "function");
+            if (records.containsKey(f.name()) || enums.containsKey(f.name()) || variantEnum.containsKey(f.name())) {
+                throw f.pos().error("JSC0221", "the fn " + f.name() + " has the name of a declared type or variant; rename one");
+            }
             if (fns.containsKey(f.name()) || PRELUDE.contains(f.name()) || Std.ROWS.containsKey(f.name())) {
                 throw f.pos().error("JSC0201", "the function " + f.name() + " is declared twice or shadows a built-in");
             }
@@ -219,7 +222,10 @@ final class Checker {
             if (m.kind() != Kind.INIT) checkUserName(m.name(), m.pos(), "method");
             String variant = Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1);
             if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && !generated.add(variant)) {
-                throw m.pos().error("JSC0203", "the method name " + m.name() + " would clash with the generated name " + variant + "; rename it");
+                boolean declared = records.containsKey(variant) || enums.containsKey(variant) || variantEnum.containsKey(variant);
+                throw m.pos().error("JSC0203", "the method name " + m.name() + " would clash with the generated name " + variant
+                        + (declared ? " (a declared type or variant): a method's redeemer is a Java class named after it, beside the"
+                        + " contract's types and variants" : "") + "; rename it");
             }
             if (!seen.add(m.name())) throw m.pos().error("JSC0204", "the method " + m.name() + " is declared twice");
         }
@@ -409,12 +415,27 @@ final class Checker {
         }
 
         Ir.Local put(String n, Ty t, int taint, Pos p, boolean isConst, Map<String, Integer> fieldTaints) {
+            declaredName(n, p);
             var l = new Ir.Local(n, t, taint, p, ++seq, fieldTaints);
             vars.put(n, l);
             if (isConst) consts.add(l);
             else used.add(l);
             return l;
         }
+    }
+
+    /**
+     * Security S2 (D3): a binding (a parameter, const, lambda or loop variable, or match binding) never takes the name of
+     * a declared type, enum, variant or fn, which it would silently replace: {@code const Open: Phase = phase} would turn
+     * {@code phase == Open} into a check that always holds.
+     */
+    private void declaredName(String n, Pos p) {
+        String what = records.containsKey(n) ? "the type" : enums.containsKey(n) ? "the enum" : variantEnum.containsKey(n)
+                ? "the variant " + n + " of " + variantEnum.get(n) + "," : fns.containsKey(n) ? "the fn" : null;
+        if (what == null) return;
+        if (what.startsWith("the variant")) what = what.substring(0, what.length() - 1);
+        else what = what + " " + n;
+        throw p.error("JSC0222", "'" + n + "' would hide " + what + "; a name is bound once and never replaces a declaration");
     }
 
     private void unusedConsts(Sc sc) {
@@ -733,7 +754,7 @@ final class Checker {
                     Ir.Expr v = expr(c.value(), sc, want);
                     if (want != null) expectType(want, v, c.value().pos());
                     Ty t = want != null ? want : v.type();
-                    noBigMap(t, c.value().pos(), "bound to a const");
+                    noBigWrite(t, v, c.value().pos(), "bound to a const");
                     if (v instanceof Ir.Range) throw c.value().pos().error("JSC1009", RANGE_ONLY);
                     var fts = t.equals(Ty.STATE) ? stateTaints(v) : null;
                     if ("None".equals(c.name()) || "Some".equals(c.name())) throw c.pos().error("JSC0214", "'" + c.name() + "' is a built-in name");
@@ -891,7 +912,7 @@ final class Checker {
             case IfExpr i -> ifExpr(i, sc, expected);
             case BlockExpr b -> {
                 Ir.Block blk = valueBlock(b.block(), sc.child(false, false), expected);
-                noBigMap(blk.result().type(), b.pos(), "the value of a block");
+                noBigWrite(blk.result().type(), blk.result(), b.pos(), "the value of a block");
                 yield new Ir.BlockValue(blk, blk.result().type(), blk.result().taint(), b.pos());
             }
             case Syntax.Match mt -> match(mt, sc, expected);
@@ -983,8 +1004,9 @@ final class Checker {
         }
         if (target.type() instanceof Ty.ListT lt) {
             return switch (f.name()) {
-                case "length" -> new Ir.ListProp("length", target, Ty.INT, target.taint(), f.pos());
-                case "isEmpty" -> new Ir.ListProp("isEmpty", target, Ty.BOOL, target.taint(), f.pos());
+                // A list's shape (its length) is never a time value (D11, as amended in r7): no construct makes it depend on one.
+                case "length" -> new Ir.ListProp("length", target, Ty.INT, 0, f.pos());
+                case "isEmpty" -> new Ir.ListProp("isEmpty", target, Ty.BOOL, 0, f.pos());
                 case "head" -> new Ir.ListProp("head", target, option(lt.elem(), f.pos(), "xs.head"), target.taint(), f.pos());
                 case "size" -> throw f.pos().error("JSC1013", "a List's size is xs.length");
                 default -> throw f.pos().error("JSC1014", "List has no property '" + f.name() + "' (length, isEmpty, head)");
@@ -1076,7 +1098,7 @@ final class Checker {
         if (c.args().size() != f.params().size()) throw c.pos().error("JSC0326", f.name() + " takes " + f.params().size() + " arguments");
         callGraph.computeIfAbsent(sc.kind == null ? sc.owner : "", k -> new TreeSet<>()).add(f.name());
         if (sc.kind == null && f.name().equals(sc.owner) && sc.helperDepth > 0) {
-            throw c.pos().error("JSC0601", f.name() + " calls itself from inside a lambda, block arm or ?? default: the generated helper would join"
+            throw c.pos().error("JSC0601", f.name() + " calls itself from inside a lambda, an if or match arm, a value block or a ?? default: the generated helper would join"
                     + " a cycle that is not a self-cycle (ADR-0018 D7, J9); move the recursive call out");
         }
         var args = new ArrayList<Ir.Expr>();
@@ -1252,8 +1274,10 @@ final class Checker {
     /** {@code Option<elem>}; an Option of an Option does not exist in .jsc (D5, F20), whatever builds it. */
     private static Ty option(Ty elem, Pos pos, String what) {
         if (elem instanceof Ty.OptT) {
-            throw pos.error("JSC0328", what + " on a List of Options would be an Option<Option<…>>, which .jsc does not have"
-                    + " (JavaScript cannot tell Some(None) from None): use xs.isEmpty or a fold");
+            boolean map = what.startsWith("m.");
+            throw pos.error("JSC0328", what + " on a " + (map ? "Map" : "List") + " of Options would be an Option<Option<…>>, which .jsc"
+                    + " does not have (JavaScript cannot tell Some(None) from None): " + (map ? "test m.has(k), or store values that are not Options"
+                    : "use xs.isEmpty or a fold"));
         }
         return new Ty.OptT(elem);
     }
@@ -1261,7 +1285,7 @@ final class Checker {
     private Ir.Expr fold(Ir.Expr list, Ty e, Expr init, Lambda l, Sc sc, Ty expected, Pos pos) {
         Ir.Expr start = expr(init, sc, expected);
         Ty acc = expected != null && Ty.assignable(expected, start.type()) ? expected : start.type();
-        noBigMap(acc, init.pos(), "a fold accumulator");
+        noBigWrite(acc, start, init.pos(), "a fold accumulator");
         // The accumulator carries whatever the body returns into the next iteration: its taint is a fixed point over the
         // body (Codex C3). Two bits, so at most three rounds.
         int accTaint = start.taint() | list.taint();
@@ -1352,7 +1376,15 @@ final class Checker {
             if (ft == null) throw f.pos().error("JSC0320", recName + " has no field " + f.name());
             if (given.containsKey(f.name())) throw f.pos().error("JSC0219", f.name() + " is given twice");
             Expr ve = f.value() != null ? f.value() : new Name(f.name(), f.pos());
-            Ir.Expr v = expr(ve, sc, ft);
+            // A BigMap is written only here: in the value of its own field in a state (D7, security S4).
+            boolean bigField = ft instanceof Ty.BigMapT && recName.equals("State");
+            if (bigField) bigWriteOk++;
+            Ir.Expr v;
+            try {
+                v = expr(ve, sc, ft);
+            } finally {
+                if (bigField) bigWriteOk--;
+            }
             expectType(ft, v, ve.pos());
             given.put(f.name(), v);
         }
@@ -1514,6 +1546,9 @@ final class Checker {
     }
 
     private static void timeCompare(Binary b, Ir.Expr l, Ir.Expr r) {
+        // Comparing with a constructor that has no payload (a variant without fields, None, [], Map.empty()) decides on
+        // the other side's shape only, and a shape is never a time value (D11, as amended in r7).
+        if ((b.op().equals("==") || b.op().equals("!=")) && (shapeOnly(l) || shapeOnly(r))) return;
         if (((l.taint() | r.taint()) & TIME) != 0) {
             throw b.pos().error("JSC0502", "a time value cannot decide here: compare times only with after(t) or before(t) in a require (ADR-0018 D11)");
         }
@@ -1521,6 +1556,12 @@ final class Checker {
 
     private static boolean isBytes(Ty t) {
         return t.equals(Ty.BYTES) || t.equals(Ty.KEY);
+    }
+
+    /** A constructor with no payload: comparing with it compares shapes only. */
+    static boolean shapeOnly(Ir.Expr e) {
+        return e instanceof Ir.Variant v && v.values().isEmpty() || e instanceof Ir.NoneLit
+                || e instanceof Ir.ListLit l && l.items().isEmpty() && l.rest() == null || e instanceof Ir.MapEmpty;
     }
 
     private static Ty unify(Ty a, Ty b, Pos p) {
@@ -1554,7 +1595,8 @@ final class Checker {
         Ty t = expected != null ? expected : unify(a.type(), d.type(), pos);
         expectType(t, a, te.pos());
         expectType(t, d, oe.pos());
-        noBigMap(t, pos, "chosen by a condition");
+        noBigWrite(t, a, pos, "chosen by a condition");
+        noBigWrite(t, d, pos, "chosen by a condition");
         return new Ir.Cond(k, a, d, t, a.taint() | d.taint(), pos);
     }
 
@@ -1575,7 +1617,8 @@ final class Checker {
         Ty t = expected != null ? expected : unify(a.result().type(), d.result().type(), i.pos());
         expectType(t, a.result(), a.result().pos());
         expectType(t, d.result(), d.result().pos());
-        noBigMap(t, i.pos(), "chosen by a condition");
+        noBigWrite(t, a.result(), i.pos(), "chosen by a condition");
+        noBigWrite(t, d.result(), i.pos(), "chosen by a condition");
         return new Ir.IfValue(k, a, d, t, a.result().taint() | d.result().taint(), i.pos());
     }
 
@@ -1589,6 +1632,46 @@ final class Checker {
         if (t instanceof Ty.BigMapT || Ty.hasBigMap(t, this::components)) {
             throw p.error("JSC0813", "a BigMap cannot be " + what + ": it is read and changed only as its state field (ADR-0018 D7)");
         }
+    }
+
+    /**
+     * A value of the state's type may be bound, chosen or accumulated only if none of its BigMaps is written: a BigMap
+     * is changed only in the next state's own field value (D7, security S4). Any other type holding a BigMap is refused.
+     */
+    private void noBigWrite(Ty t, Ir.Expr v, Pos p, String what) {
+        if (!t.equals(Ty.STATE)) {
+            noBigMap(t, p, what);
+            return;
+        }
+        if (writesBigMap(v)) {
+            throw p.error("JSC0813", "a state whose BigMap is written cannot be " + what + ": write a BigMap only in the next state's own"
+                    + " field, { ...state, f: f.set(k, v) } (ADR-0018 D7)");
+        }
+    }
+
+    /** Whether a value of the state's type holds a BigMap other than the input's field, unchanged. */
+    private boolean writesBigMap(Ir.Expr e) {
+        return switch (e) {
+            case Ir.StateRef s -> false;
+            case Ir.LocalRef l -> false;   // a bound state was checked when it was bound
+            case Ir.New n -> {
+                var names = List.copyOf(stateFields.keySet());
+                for (int i = 0; i < names.size(); i++) {
+                    if (!(stateFields.get(names.get(i)) instanceof Ty.BigMapT)) continue;
+                    Ir.Expr f = n.values().get(i);
+                    boolean copy = f instanceof Ir.StateField sf && sf.field().equals(names.get(i))
+                            || f instanceof Ir.GetField g && g.field().equals(names.get(i)) && !writesBigMap(g.target());
+                    if (!copy) yield true;
+                }
+                yield false;
+            }
+            case Ir.Cond c -> writesBigMap(c.then()) || writesBigMap(c.otherwise());
+            case Ir.IfValue i -> writesBigMap(i.then().result()) || writesBigMap(i.otherwise().result());
+            case Ir.Match m -> m.arms().stream().anyMatch(a -> writesBigMap(a.body().result()));
+            case Ir.BlockValue b -> writesBigMap(b.block().result());
+            case Ir.Fold f -> writesBigMap(f.init()) || writesBigMap(f.body().result());
+            default -> stateFields.values().stream().anyMatch(t -> t instanceof Ty.BigMapT);
+        };
     }
 
     /** A BigMap is not captured by a lambda: a list method's body cannot read or change one (D7). */
@@ -1682,10 +1765,10 @@ final class Checker {
                 }
                 Ir.Expr start = expr(args.get(0), sc, expected);
                 Ty acc = expected != null && Ty.assignable(expected, start.type()) ? expected : start.type();
-                noBigMap(acc, args.get(0).pos(), "a fold accumulator");
                 if (acc.equals(Ty.STATE)) {
                     throw args.get(0).pos().error("JSC0824", "a Map fold does not accumulate the state: fold the values you need, then build the state");
                 }
+                noBigMap(acc, args.get(0).pos(), "a fold accumulator");
                 int accTaint = start.taint() | t;
                 Ir.Local a, k, v;
                 Ir.Block body;
@@ -1722,9 +1805,7 @@ final class Checker {
             }
             case "set" -> {
                 if (args.size() != 2) throw m.pos().error("JSC0820", "set takes a key and a value: m.set(k, v)");
-                if (!sc.effects && sc.kind != Ir.Kind.INIT) {
-                    throw m.pos().error("JSC0827", "a BigMap is changed only where the next state is built: in an action's result (ADR-0018 D7)");
-                }
+                bigWriteHere(m.pos());
                 Ir.Expr k = mapKeyArg(args.get(0), bt.key(), sc, "the map's keys");
                 Ir.Expr v = expr(args.get(1), sc, bt.val());
                 expectType(bt.val(), v, args.get(1).pos());
@@ -1736,10 +1817,21 @@ final class Checker {
             }
             case "delete" -> {
                 if (args.size() != 1) throw m.pos().error("JSC0821", "delete takes one key: m.delete(k)");
+                bigWriteHere(m.pos());
                 Ir.Expr k = mapKeyArg(args.get(0), bt.key(), sc, "the map's keys");
                 return new Ir.BigOp("delete", target, List.of(k), bt, target.taint(), m.pos());
             }
             default -> throw m.pos().error("JSC0828", "BigMap has no method '" + m.method() + "' (get, has, set, delete; m[k] on BigMap<K, Int>)");
+        }
+    }
+
+    /** Inside the value of a BigMap field of a state literal: where a BigMap may be written (D7). */
+    private int bigWriteOk;
+
+    private void bigWriteHere(Pos p) {
+        if (bigWriteOk == 0) {
+            throw p.error("JSC0827", "a BigMap is changed only in the value of its own field in the next state, { ...state, f: f.set(k, v) },"
+                    + " not in a require, a condition or a view (ADR-0018 D7)");
         }
     }
 
@@ -1843,6 +1935,9 @@ final class Checker {
         for (int i = 0; i < shape.binds().size(); i++) {
             Bind b = shape.binds().get(i);
             if ("None".equals(b.name()) || "Some".equals(b.name())) throw b.pos().error("JSC0214", "'" + b.name() + "' is a built-in name");
+            if (b.field() == null && (variantEnum.containsKey(b.name()) || records.containsKey(b.name()))) {
+                throw b.pos().error("JSC0930", "nested patterns are not supported: bind the value, Some(v), and match v again");
+            }
             Ir.Local l = inner.declare(b.name(), shape.types().get(i), taint, b.pos(), false, null);
             used.remove(l);   // a binding must be used: unusedBinds checks it after the arm
             out.add(l);
@@ -1882,7 +1977,7 @@ final class Checker {
             taint |= body.result().taint();
             arms[i] = new Ir.Arm(shapes.get(i).ctors(), shapes.get(i).fields(), binds, body, a.pos());
         }
-        noBigMap(t, m.pos(), "chosen by a match");
+        for (Ir.Arm a : arms) noBigWrite(t, a.body().result(), m.pos(), "chosen by a match");
         return new Ir.Match(s, List.of(arms), t, taint, m.pos());
     }
 

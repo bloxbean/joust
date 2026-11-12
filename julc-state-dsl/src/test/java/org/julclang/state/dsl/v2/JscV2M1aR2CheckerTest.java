@@ -1,0 +1,143 @@
+package org.julclang.state.dsl.v2;
+
+import org.junit.jupiter.api.Test;
+
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+import static org.julclang.state.dsl.v2.JscV2M1aCheckerTest.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * The rules added in M1a's review round r2, each refused at an exact {@code .jsc} position next to its accepted form:
+ * no binding replaces a declaration (security S2); a BigMap is written only in its own field's new value, and no value
+ * holding the state's BigMaps is compared or held (S4); the shape of a value is never a time value, applied the same
+ * way to {@code isEmpty}, {@code ==} on a constructor without payload and {@code match} (design F5); ASCII names and no
+ * format characters (S6); and the messages of design F8 and F9.
+ */
+class JscV2M1aR2CheckerTest {
+
+    // ------------------------------------------------------------------ S2: bindings never replace declarations
+
+    @Test
+    void bindingsNeverReplaceATypeAVariantOrAFn() {
+        // The attack: a const named like the variant turns a phase guard into a check that always holds.
+        bad("action reopen() only owner {\n const Open: Phase = phase\n require(phase == Open, \"only while open\")\n return { ...state, stamp: 1 } }",
+                "'Open' would hide the variant Open of Phase", 1, 2);
+        bad("action a(Open: Int) { return state }", "would hide the variant Open", 0, 10);
+        bad("view v(): Int = xs.fold(0, (Open, x) => Open + x)", "would hide the variant Open", 0, 28);
+        bad("view v(): Int = match o { Some(n) => n, None => 0 }\n fn f(R: Int): Int = R + 1", "would hide the type R", 1, 7);
+        bad("action a() { for (const Phase of xs) { require(Phase > 0, \"x\") }\n return state }", "would hide the enum Phase", 0, 14);
+        bad("view v(): Int = match phase { Closed { day: Closed } => Closed, _ => 0 }", "would hide the variant Closed", 0, 40);
+        bad("view v(): Int = g(1)\n fn g(n: Int): Int = n\n fn h(g: Int): Int = g", "would hide the fn g", 2, 7);
+        badSource(file("enum A { X }\nfn X(): Int = 1"), "has the name of a declared type or variant", 4, 1);
+        badSource(file("type R = { a: Int }\nfn R(): Int = 1"), "has the name of a declared type or variant", 4, 1);
+        badSource(file("enum A { X }").replace("init() {", "init(X: Int) {"), "would hide the variant X", 6, 8);
+        ok("action reopen() only owner { const open: Phase = phase\n require(open == Open, \"only while open\")\n return state }");
+    }
+
+    // ------------------------------------------------------------------ S4: BigMaps through the state
+
+    @Test
+    void aStateWhoseBigMapIsWritten_isNeverBoundChosenOrCompared() {
+        bad("action a(k: Key) only owner { const s1: State = { ...state, bal: bal.set(k, 1) }\n return s1 }",
+                "a state whose BigMap is written cannot be bound to a const", 0, 49);
+        bad("action a(c: Bool, x: Key, y: Key) only owner { return c ? { ...state, bal: bal.set(x, 1) } : { ...state, bal: bal.set(y, 2) } }",
+                "cannot be chosen by a condition", 0, 55);
+        bad("action a(c: Bool, x: Key) only owner { return if c { { ...state, bal: bal.set(x, 1) } } else { state } }",
+                "cannot be chosen by a condition", 0, 47);
+        bad("action a(x: Key) only owner { return match o { Some(n) => ({ ...state, bal: bal.set(x, n) }), None => state } }",
+                "cannot be chosen by a match", 0, 38);
+        // States that keep their BigMaps unchanged are bound and chosen freely.
+        ok("action a(c: Bool) { const s1: State = { ...state, stamp: 1 }\n return c ? s1 : { ...state, stamp: 2 } }");
+        // A write is only the field's new value: not in a require, a condition or a view.
+        bad("action a(k: Key) { require(bal.set(k, 5)[k] == 5, \"x\")\n return state }", "changed only in the value of its own field", 0, 28);
+        bad("action a(k: Key) { require(bal.delete(k)[k] == 0, \"x\")\n return state }", "changed only in the value of its own field", 0, 28);
+        bad("action a(k: Key) { return { ...state, stamp: bal.set(k, 5)[k] } }", "changed only in the value of its own field", 0, 46);
+        ok("action a(k: Key, to: Key) open { return { ...state, bal: bal.set(k, 0).set(to, bal.set(k, 0)[to] + bal[k]) } }");
+        // Nothing holding the state is compared, held or searched (these crashed the emitter at r1).
+        bad("action a() { require(Some(state) == Some(state), \"x\")\n return state }", "held in an Option", 0, 27);
+        bad("action a() { require([state] != [state], \"x\")\n return state }", "an element of a list", 0, 22);
+        bad("action a() { require([state].contains(state), \"x\")\n return state }", "an element of a list", 0, 22);
+        String noBigMaps = "jsc 2\npackage t\nimport { indexOf } from \"std/list\"\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n"
+                + "  view v(): Bool = [state].contains(state) && (indexOf([state], state) ?? 0) == 0\n}\n";
+        assertDoesNotThrow(() -> JscV2.lower(noBigMaps, "C.jsc"), "a state without BigMaps is an ordinary record");
+    }
+
+    // ------------------------------------------------------------------ F5: the shape of a value is never a time value
+
+    @Test
+    void shapesAreNeverTimeValues_isEmptyEqualityToAConstructorAndMatchAlike() {
+        String time = "action tick() { return { ...state, xs: [validFrom], phase: Closed { day: validFrom, by: caller }, o: Some(validFrom) } }\n ";
+        // isEmpty, length, == on a constructor without payload, and match: each decides on a shape, which no window sets.
+        ok(time + "action a() { require(!xs.isEmpty && xs.length == 1, \"x\")\n return state }");
+        ok(time + "action a() { require(phase != Open && o != None && xs != [], \"x\")\n return state }");
+        ok(time + "action a() { match phase { Open => require(false, \"x\")\n _ => { } }\n return state }");
+        ok(time + "action a() { match xs.head { None => require(false, \"x\")\n _ => { } }\n return state }");
+        // A payload is still a time value: comparing it, or deciding on it, is refused.
+        bad(time + "action a() { require(phase != Closed { day: 1, by: owner }, \"x\")\n return state }", "time value cannot decide", 1, 23);
+        bad(time + "action a() { require(o == Some(5), \"x\")\n return state }", "time value cannot decide", 1, 23);
+        bad(time + "action a() { match phase { Closed { day } => require(day > 0, \"x\")\n _ => { } }\n return state }",
+                "time value cannot decide", 1, 55);
+    }
+
+    /**
+     * F5: the closed-world argument behind the shape rule, checked: for every built-in and std row that returns an
+     * Option, a time value in its deciding argument is refused, so the Option's presence cannot depend on one. A new row
+     * returning an Option fails this test until it gets a case.
+     */
+    @Test
+    void everyRowReturningAnOption_refusesATimeValueWhereItWouldDecidePresence() {
+        Map<String, String[]> cases = new TreeMap<>();
+        // name -> { program, fragment }; each program is a member of the test contract importing nth and indexOf.
+        cases.put("Map.get", new String[]{"action a() { const r = R { k: #01, t: validFrom }\n return { ...state, o: tags.get(r.k) } }", "map key"});
+        cases.put("BigMap.get", new String[]{"action a() { const r = R { k: #01, t: validFrom }\n require(notes.get(r.k) == None, \"x\")\n return state }",
+                "map key"});
+        cases.put("xs.find", new String[]{"action a() { return { ...state, o: xs.find(x => x < validFrom) } }", "cannot decide"});
+        cases.put("xs.head", new String[]{"action a() { return { ...state, o: xs.take(validFrom - deadline).head } }", "count"});
+        cases.put("nth", new String[]{"action a() { return { ...state, o: nth(xs, validFrom - deadline) } }", "index"});
+        cases.put("indexOf", new String[]{"action a() { return { ...state, o: indexOf(xs, validFrom) } }", "cannot decide"});
+        cases.put("last", new String[]{"action a() { return { ...state, o: last(range(0, validTo - deadline).filter(i => i > 0)) } }", "range"});
+        for (var c : cases.entrySet()) {
+            var e = assertThrows(org.julclang.state.dsl.JscException.class,
+                    () -> JscV2.lower(withImports("import { nth, indexOf, last } from \"std/list\"", c.getValue()[0]), "T.jsc"), c.getKey());
+            assertTrue(e.getMessage().contains(c.getValue()[1]), c.getKey() + ": " + e.getMessage());
+        }
+        // Every std row returning an Option is covered (the built-in methods above: Map.get, BigMap.get, find, head).
+        var optionRows = new TreeSet<String>();
+        for (var r : JscV2.bindings()) if (r.result().startsWith("Option<")) optionRows.add(r.name());
+        assertEquals(new TreeSet<>(java.util.List.of("indexOf", "last", "nth")), optionRows,
+                "a std row returning an Option needs a case here showing that a time value cannot decide its presence");
+    }
+
+    // ------------------------------------------------------------------ F8, F9: messages
+
+    @Test
+    void messages() {
+        bad("view v(): Int = match o { Some(Closed { day }) => day, None => 0 }", "nested patterns are not supported", 0, 32);
+        bad("view v(): Int = match o { Some(Open) => 1, None => 0 }", "nested patterns are not supported", 0, 32);
+        badSource(file("").replace("init() { return { n: 0 } }", "init() { return { n: 0 } }\n  view v(m: Map<Bytes, Option<Int>>, k: Bytes): Int = m.get(k) ?? 0"),
+                "m.get on a Map of Options", 7, 55);
+        badSource(file("enum A { X }").replace("init() { return { n: 0 } }", "init() { return { n: 0 } }\n  action x() { return state }"),
+                "a method's redeemer is a Java class named after it", 7, 3);
+        bad("view v(): Int = f(3)\n fn f(n: Int): Int = match Some(n) { Some(m) => m <= 0 ? 0 : f(m - 1), None => 0 }",
+                "an if or match arm", 1, 62);
+    }
+
+    // ------------------------------------------------------------------ S6: names and invisible characters
+
+    @Test
+    void namesAreAscii_andNoFormatCharactersAnywhere() {
+        bad("action a() { const сaller = owner\n require(сaller == owner, \"only the owner\")\n return state }", "not an ASCII letter", 0, 20);
+        bad("action a(kéy: Key) { return state }", "not an ASCII letter or digit", 0, 11);
+        bad("view v(): Int = ١", "unexpected character", 0, 17);
+        bad("action a() { /* ‮ } ⁦ */ return state }", "invisible format character U+202E", 0, 17);
+        bad("action a() { require(true, \"a ‮ b\")\n return state }", "invisible format character U+202E", 0, 31);
+        bad("// ⁧ a comment\n action a() { return state }", "U+2067", 0, 4);
+        bad("action a() { require(true, \"zero​width\")\n return state }", "U+200B", 0, 33);
+        // Any other text is fine in strings and comments; a leading byte-order mark too.
+        ok("action a() { /* Zähler, 計数 */ require(true, \"Zähler: 計数 ✓\")\n return state }");
+        assertDoesNotThrow(() -> JscV2.lower("﻿" + contract(""), "T.jsc"));
+    }
+}

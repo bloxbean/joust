@@ -55,9 +55,42 @@ final class Lexer {
         return null;
     }
 
+    private static boolean identStart(char c) {
+        return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '_';
+    }
+
+    private static boolean identPart(char c) {
+        return identStart(c) || c >= '0' && c <= '9';
+    }
+
+    /**
+     * Security S6: a {@code .jsc} 2 file holds no Unicode format character (category Cf: the bidirectional controls
+     * U+202A–202E and U+2066–2069, zero-width characters, …) anywhere, comments and strings included, so its text reads
+     * as it compiles (Trojan Source). A leading byte-order mark is allowed.
+     */
+    static void noFormatCharacters(String src) {
+        int line = 1, col = 1;
+        for (int i = 0; i < src.length(); i++) {
+            char c = src.charAt(i);
+            if (c == '\n') {
+                line++;
+                col = 1;
+                continue;
+            }
+            if (Character.getType(c) == Character.FORMAT && !(i == 0 && c == '\uFEFF')) {
+                throw new JscException(line, col, "JSC0141", String.format("invisible format character U+%04X: .jsc files may not hold"
+                        + " bidirectional controls or other format characters, even in comments and strings, so that the text"
+                        + " reads as it compiles", (int) c));
+            }
+            col++;
+        }
+    }
+
     static List<Tok> lex(String src) {
+        noFormatCharacters(src);
         var out = new ArrayList<Tok>();
         int i = 0, line = 1, col = 1;
+        if (src.startsWith("\uFEFF")) i = 1;
         while (i < src.length()) {
             char c = src.charAt(i);
             if (c == '\n') { i++; line++; col = 1; continue; }
@@ -76,17 +109,28 @@ final class Lexer {
                 continue;
             }
             int sl = line, sc = col;
-            if (Character.isLetter(c) || c == '_') {
+            // Security S6: identifiers are ASCII, so no two names can look alike (no mixed scripts or confusables:
+            // a Cyrillic 'с' in 'сaller' is not 'caller'); strings and comments may hold any other text.
+            if (Character.isLetter(c) && !identStart(c)) {
+                throw new JscException(sl, sc, "JSC0142", String.format("'%c' (U+%04X) is not an ASCII letter: names in .jsc are"
+                        + " written with ASCII letters, digits and '_', so that no two names can look alike", c, (int) c));
+            }
+            if (identStart(c)) {
                 int j = i;
-                while (j < src.length() && (Character.isLetterOrDigit(src.charAt(j)) || src.charAt(j) == '_')) j++;
+                while (j < src.length() && identPart(src.charAt(j))) j++;
+                if (j < src.length() && Character.isLetterOrDigit(src.charAt(j))) {
+                    char d = src.charAt(j);
+                    throw new JscException(sl, sc + (j - i), "JSC0142", String.format("'%c' (U+%04X) is not an ASCII letter or digit: names"
+                            + " in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike", d, (int) d));
+                }
                 out.add(new Tok(K.IDENT, src.substring(i, j), sl, sc));
                 col += j - i; i = j;
                 continue;
             }
-            if (Character.isDigit(c)) {
+            if (c >= '0' && c <= '9') {
                 int j = i;
                 var sb = new StringBuilder();
-                while (j < src.length() && (Character.isDigit(src.charAt(j)) || src.charAt(j) == '_')) {
+                while (j < src.length() && (src.charAt(j) >= '0' && src.charAt(j) <= '9' || src.charAt(j) == '_')) {
                     if (src.charAt(j) != '_') sb.append(src.charAt(j));
                     j++;
                 }

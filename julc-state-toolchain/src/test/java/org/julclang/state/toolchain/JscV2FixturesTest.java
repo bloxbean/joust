@@ -82,6 +82,37 @@ class JscV2FixturesTest {
                 + " action a(x: Bool, y: Bool) { return { n: x == y ? 1 : 0 } }\n"
                 + " action lists(x: List<Bool>, y: List<Bool>) { return { n: x == y ? 1 : 0 } }\n"
                 + " action options(x: Option<Bool>, y: Option<Bool>) { return { n: x == y ? 1 : 0 } }\n}");
+        // Review F3, C1: each Map and BigMap operation alone, with no list, pay or other construct that would import
+        // what its helpers name. Every one must compile with javac and JuLC.
+        String k = "#" + "ab".repeat(4);
+        fixture("MapSetOnly", "contract MapSetOnly {\n state { m: Map<Bytes, Int> }\n init() { return { m: Map.empty() } }\n"
+                + " action a(k: Bytes, v: Int) { return { m: m.set(k, v) } }\n}");
+        fixture("MapInputOnly", "contract MapInputOnly {\n state { n: Int }\n init() { return { n: 0 } }\n"
+                + " action a(m: Map<Bytes, Int>) { return { n: m.size } }\n}");
+        fixture("MapKeyInputOnly", "contract MapKeyInputOnly {\n state { n: Int }\n init() { return { n: 0 } }\n"
+                + " action a(m: Map<Key, Bool>) { return { n: m.size } }\n}");
+        fixture("MapBoolOnly", "contract MapBoolOnly {\n state { m: Map<Bytes, Bool> }\n init() { return { m: Map.empty() } }\n"
+                + " action a(k: Bytes) { return { m: m.set(k, !(m.get(k) ?? false)) } }\n}");
+        fixture("MapGetOnly", "contract MapGetOnly {\n state { m: Map<Bytes, Int>, n: Int }\n init() { return { m: Map.empty(), n: 0 } }\n"
+                + " action a(k: Bytes) { return { ...state, n: m.get(k) ?? 0 } }\n}");
+        fixture("MapHasOnly", "contract MapHasOnly {\n state { m: Map<Bytes, Int> }\n init() { return { m: Map.empty() } }\n"
+                + " action a(k: Bytes) { require(m.has(k), \"x\")\n return state }\n}");
+        fixture("MapDeleteOnly", "contract MapDeleteOnly {\n state { m: Map<Bytes, Int> }\n init() { return { m: Map.empty() } }\n"
+                + " action a(k: Bytes) { return { m: m.delete(k) } }\n}");
+        fixture("MapAnyOnly", "contract MapAnyOnly {\n state { m: Map<Bytes, Int> }\n init() { return { m: Map.empty() } }\n"
+                + " action a() { require(m.any((k, v) => v > 0), \"x\")\n return state }\n}");
+        fixture("MapFoldOnly", "contract MapFoldOnly {\n state { m: Map<Bytes, Int>, n: Int }\n init() { return { m: Map.empty(), n: 0 } }\n"
+                + " action a() { return { ...state, n: m.fold(0, (acc, k, v) => acc + v) } }\n}");
+        fixture("MapEqOnly", "contract MapEqOnly {\n state { m: Map<Bytes, Int> }\n init() { return { m: Map.empty() } }\n"
+                + " action a(o: Map<Bytes, Int>) { require(o == m, \"x\")\n return state }\n}");
+        fixture("BigSetOnly", "contract BigSetOnly {\n state { b: BigMap<Bytes, Int> }\n init() { return { b: BigMap.empty() } }\n"
+                + " action a(k: Bytes) { return { b: b.set(k, b[k] + 1) } }\n}");
+        fixture("BigBytesOnly", "contract BigBytesOnly {\n state { b: BigMap<Bytes, Bytes> }\n init() { return { b: BigMap.empty() } }\n"
+                + " action a(k: Bytes) { return { b: b.set(k, b.get(k) ?? " + k + ") } }\n}");
+        fixture("BigHasOnly", "contract BigHasOnly {\n state { b: BigMap<Bytes, Int> }\n init() { return { b: BigMap.empty() } }\n"
+                + " action a(k: Bytes) { require(!b.has(k), \"x\")\n return state }\n}");
+        fixture("BigDeleteOnly", "contract BigDeleteOnly {\n state { b: BigMap<Bytes, Int> }\n init() { return { b: BigMap.empty() } }\n"
+                + " action a(k: Bytes) { return { b: b.delete(k) } }\n}");
         // A view reads a nested record field through an accessor helper.
         fixture("Nested", "type In = { k: Key, v: Int }\ntype Out = { i: In, tag: Bytes }\ncontract Nested {\n state { o: Option<Out> }\n"
                 + " init(o: Option<Out>) { return { o } }\n"
