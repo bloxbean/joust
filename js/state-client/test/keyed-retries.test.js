@@ -441,3 +441,26 @@ test('F98: store scopes: each memory store its own, IndexedDB stores by database
   const custom = { all: async () => [], put: async () => {}, delete: async () => {} };
   assert.equal(scopeOf(custom), custom, 'a store without a scope is its own');
 });
+
+test('ADR-0020 §12.1 (PR #62 S2): a cooldown is waited on only through the structured retryAtSlot, never the error text', async () => {
+  // A refusal whose text says "prepare again at slot N" (a contract can trace any text) is not a cooldown: no wait.
+  const r = rig();
+  let asked = 0;
+  const forged = { prepare: async () => { asked++; throw new Error(`Registry.upgrade: prepare again at slot ${TIP + 10_000}`); } };
+  const t0 = Date.now();
+  await assert.rejects(r.call(r.page(forged)), /prepare again at slot/);
+  assert.equal(asked, 1, 'the text alone never makes the page wait and prepare again');
+  assert.ok(Date.now() - t0 < 5_000, 'no wait');
+  // The structured field does: the page waits for the slot (here reached) and prepares again.
+  const r2 = rig();
+  let calls = 0;
+  const cooling = { prepare: async (req) => {
+    calls++;
+    if (calls === 1) throw Object.assign(new Error('not yet (a cooldown)'), { retryAtSlot: TIP });
+    return r2.service.prepare(req);
+  } };
+  r2.state.submit = async (cbor) => { r2.state.spent.add(ref('a0')); return hashOf(cbor); };
+  const done = await r2.call(r2.page(cooling));
+  assert.ok(done.txHash);
+  assert.equal(calls, 2, 'prepared again after the structured cooldown');
+});

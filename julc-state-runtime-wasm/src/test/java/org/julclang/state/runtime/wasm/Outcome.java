@@ -17,14 +17,19 @@ record Outcome(Kind kind, PlutusData step, String message, List<String> traces) 
 
     enum Kind { STEP, REQUIRE, ERROR, BUDGET, ABI }
 
-    /** A program run, classified as the engine classifies it ({@link UplcTransitions}: by the require tag). */
-    static Outcome of(TransitionFn.Run r) {
-        if (r.step() != null) return new Outcome(Kind.STEP, r.step(), null, r.traces());
-        if (r.traces().stream().anyMatch(t -> t.startsWith(UplcTransitions.REQUIRE_TAG))) {
-            return new Outcome(Kind.REQUIRE, null, r.refusal(), r.traces());
-        }
-        if (r.refusal().endsWith(": over the execution budget")) return new Outcome(Kind.BUDGET, null, r.refusal(), r.traces());
-        return new Outcome(Kind.ERROR, null, r.refusal(), r.traces());
+    /**
+     * A program run, classified as the engine classifies it: from the VM's result ({@link UplcTransitions.Kind}), so a
+     * budget exhaustion stays {@code BUDGET} whatever was traced before it (PR #62 C4), and a refusal is {@code REQUIRE}
+     * only by the require tag.
+     */
+    static Outcome of(UplcTransitions.Evaluation e) {
+        TransitionFn.Run r = e.run();
+        return switch (e.kind()) {
+            case STEP -> new Outcome(Kind.STEP, r.step(), null, r.traces());
+            case REFUSAL -> new Outcome(Kind.REQUIRE, null, r.refusal(), r.traces());
+            case BUDGET -> new Outcome(Kind.BUDGET, null, r.refusal(), r.traces());
+            case ERROR -> new Outcome(Kind.ERROR, null, r.refusal(), r.traces());
+        };
     }
 
     /** The {@code joust:read} needs of this run. */

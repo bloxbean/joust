@@ -38,7 +38,7 @@ class DescribedStakingDevnetTest {
     @Test
     void delegateCollectClose() throws Exception {
         var c = DescribedReplayTest.contract("staking", "StakedVault");
-        var vault = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
+        var vault = new DescribedContract(JSON.readTree(c.description()), c.script(), UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions()));
         var rt = DevKit.runtime();
         Account[] council = {DevKit.fundedAccount(300), DevKit.fundedAccount(300), DevKit.fundedAccount(300)};
         Arrays.sort(council, Comparator.comparing(a -> HexUtil.encodeHexString(Keys.pkh(a))));

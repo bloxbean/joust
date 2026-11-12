@@ -37,7 +37,7 @@ class DescribedPoolDevnetTest {
     @Test
     void intentsCancelAndBatch() throws Exception {
         var c = DescribedReplayTest.contract("pool", "Pool");
-        var pool = new DescribedContract(JSON.readTree(c.description()), c.script(), new UplcTransitions(c.transitions()));
+        var pool = new DescribedContract(JSON.readTree(c.description()), c.script(), UplcTransitions.verified(c.manifest(), c.description(), c.script(), c.transitions()));
         var rt = DevKit.runtime();
         var admin = DevKit.fundedAccount(200);
         var batcher = DevKit.fundedAccount(50);

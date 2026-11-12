@@ -33,8 +33,8 @@ class DescribedFeesDevnetTest {
     void depositsInOneComposedTransaction() throws Exception {
         var p = DescribedReplayTest.contract("fees", "Pot");
         var s = DescribedReplayTest.contract("fees", "Stall");
-        var pot = new DescribedContract(JSON.readTree(p.description()), p.script(), new UplcTransitions(p.transitions()));
-        var stall = new DescribedContract(JSON.readTree(s.description()), s.script(), new UplcTransitions(s.transitions()));
+        var pot = new DescribedContract(JSON.readTree(p.description()), p.script(), UplcTransitions.verified(p.manifest(), p.description(), p.script(), p.transitions()));
+        var stall = new DescribedContract(JSON.readTree(s.description()), s.script(), UplcTransitions.verified(s.manifest(), s.description(), s.script(), s.transitions()));
         var rt = DevKit.runtime();
         var owner = DevKit.fundedAccount(300);
         var buyer = DevKit.fundedAccount(300);

@@ -52,6 +52,28 @@ public class Probe {
         return new State(s.n().divide(by), s.key());
     }
 
+    /** A forged tag, then over the budget: a budget failure, not a refusal (PR #62 C4). */
+    @Action
+    public static State forgedSpin(State s, BigInteger n) {
+        ContextsLib.trace("joust:" + "require forged");
+        return new State(loop(n), s.key());
+    }
+
+    /** A forged tag carrying a keyed client's retry text, then a division by zero (PR #62 S2). */
+    @Action
+    public static State cooldown(State s, BigInteger by) {
+        ContextsLib.trace("joust:" + "require prepare again at slot 99999999999");
+        return new State(s.n().divide(by), s.key());
+    }
+
+    /** A forged tag, then a real Require: the real one is the refusal. */
+    @Action
+    public static State forgedThenReal(State s, BigInteger by) {
+        ContextsLib.trace("joust:" + "require forged");
+        Require.that(by.compareTo(BigInteger.ZERO) > 0, "real refusal");
+        return new State(s.n().add(by), s.key());
+    }
+
     /** n steps of self-recursion: over the budget for a large n. */
     @Action
     public static State spin(State s, BigInteger n) {

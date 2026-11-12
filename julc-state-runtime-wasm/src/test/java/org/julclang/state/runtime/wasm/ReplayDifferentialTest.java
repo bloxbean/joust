@@ -2,7 +2,6 @@ package org.julclang.state.runtime.wasm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.julclang.state.examples.devkit.Fixtures;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -27,11 +26,6 @@ import static org.junit.jupiter.api.Assertions.*;
  * A divergence between the JVM and the chain's meaning of a contract method (a JuLC change, a new library) fails here.
  */
 class ReplayDifferentialTest {
-
-    @AfterEach
-    void restore() {
-        Comparison.restore();
-    }
 
     record Case(String name, Prepare.Request request, String expected) {}
 
@@ -87,10 +81,9 @@ class ReplayDifferentialTest {
 
     /** Replays {@code cases} in {@code mode}; returns each case that did not give the recorded bytes, with why. */
     static List<String> replay(List<Case> cases, Comparison.Mode mode) {
-        Comparison.use(mode);
         var bad = new ArrayList<String>();
         for (Case c : cases) {
-            var r = Prepare.prepare(c.request());
+            var r = Comparison.prepare(c.request(), mode);
             if (!r.ok()) bad.add(c.name() + ": " + (r.needKind() != null ? "needs " + r.needKind() + " " + r.needKey() : "refused: " + r.error()));
             else if (!r.cbor().equals(c.expected())) bad.add(c.name() + ": different bytes");
         }

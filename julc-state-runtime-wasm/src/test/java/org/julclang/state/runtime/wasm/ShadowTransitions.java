@@ -30,7 +30,7 @@ final class ShadowTransitions implements TransitionFn {
     record Programs(UplcTransitions programs) implements Side {
         @Override
         public Outcome outcome(String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx) {
-            return Outcome.of(programs.run(method, target, shared, args, ctx));
+            return Outcome.of(programs.evaluate(method, target, shared, args, ctx));
         }
     }
 

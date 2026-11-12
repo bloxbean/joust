@@ -25,7 +25,8 @@ import java.util.function.Function;
 /**
  * ADR-0020 §11.4, the comparison mode in CI: the engine's path ({@link Prepare}) with each loaded contract's
  * transitions run as the programs (the engine), the contract's JVM methods, or both compared ({@link ShadowTransitions}).
- * The manifest is checked before any of them (Prepare.load).
+ * The manifest is checked before any of them ({@code UplcTransitions.verified} in Prepare.load); the mode is given per
+ * call ({@code Prepare.prepare(request, transitions)}), never installed globally.
  */
 final class Comparison {
     private Comparison() {}
@@ -35,23 +36,16 @@ final class Comparison {
     static final ObjectMapper JSON = new ObjectMapper();
     private static final Map<String, Class<?>> TRANSITIONS = new ConcurrentHashMap<>();
 
-    /** Loads contracts through {@code mode} from now on (until {@link #restore}). */
-    static void use(Mode mode) {
-        Prepare.unload();
-        Prepare.transitions = c -> fn(mode, c);
+    /** A call prepared with each loaded contract's transitions as {@code mode} runs them. */
+    static Prepare.Result prepare(Prepare.Request r, Mode mode) {
+        return Prepare.prepare(r, (c, programs) -> fn(mode, c, programs));
     }
 
-    static void restore() {
-        Prepare.unload();
-        Prepare.transitions = c -> new UplcTransitions(c.transitions());
-    }
-
-    /** The transitions of {@code mode} for a loaded contract (its programs, and its JVM methods from the examples). */
-    static TransitionFn fn(Mode mode, Prepare.Contract c) {
+    /** The transitions of {@code mode} for a loaded contract (its verified programs, its JVM methods from the examples). */
+    static TransitionFn fn(Mode mode, Prepare.Contract c, UplcTransitions programs) {
         try {
             String fqcn = JSON.readTree(c.description()).path("preamble").path("title").asText();
             var built = Builds.contract(fqcn);
-            var programs = new UplcTransitions(c.transitions());
             return switch (mode) {
                 case UPLC -> programs;
                 case JVM -> new JvmTransitions(transitionsClass(built));

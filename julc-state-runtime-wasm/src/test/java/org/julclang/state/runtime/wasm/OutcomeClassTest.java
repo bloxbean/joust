@@ -34,7 +34,8 @@ class OutcomeClassTest {
         String path = "org/julclang/state/probe/Probe.java";
         var r = Toolchain.build(Map.of(path, Files.readString(Path.of("src/test/resources/probe").resolve(path))), Map.of());
         assertTrue(r.ok(), "Probe: " + r.diagnostics());
-        programs = new UplcTransitions(r.contracts().get(0).transitions());
+        var c = r.contracts().get(0);
+        programs = UplcTransitions.verified(c.manifestJson(), c.descriptionJson(), c.scriptCborHex(), c.transitions());
     }
 
     static final PlutusData NONE = PlutusData.constr(0);
@@ -75,6 +76,35 @@ class OutcomeClassTest {
         assertNull(r.step(), "a forged tag never makes a step");
         assertEquals("fake", r.refusal());
         assertNotNull(run("forged", 1).step());
+    }
+
+    @Test
+    void aForgedTagThenTheBudgetIsABudgetFailure() {
+        // PR #62 C4: the VM's result decides the class, so a tag traced before running out is not a refusal.
+        var state = PlutusData.constr(0, PlutusData.integer(7), PlutusData.bytes(new byte[28]));
+        var e = ((UplcTransitions) programs).evaluate("forgedSpin", state, NONE, PlutusData.constr(0, PlutusData.integer(1_000_000_000L)), NONE);
+        assertEquals(UplcTransitions.Kind.BUDGET, e.kind());
+        assertEquals("forgedSpin: over the execution budget", e.run().refusal());
+        assertTrue(e.run().traces().contains(UplcTransitions.REQUIRE_TAG + "forged"), String.valueOf(e.run().traces()));
+        assertEquals(Outcome.Kind.BUDGET, Outcome.of(e).kind(), "the comparison mode classifies it as the engine does");
+        // A forged tag, then a real Require: the real requirement is the refusal.
+        var real = ((UplcTransitions) programs).evaluate("forgedThenReal", state, NONE, PlutusData.constr(0, PlutusData.integer(0)), NONE);
+        assertEquals(UplcTransitions.Kind.REFUSAL, real.kind());
+        assertEquals("real refusal", real.run().refusal());
+    }
+
+    @Test
+    void aForgedRetryTextIsNotACooldown() throws Exception {
+        // PR #62 S2: a contract can make a failure read "prepare again at slot N"; the engine's result carries no retry
+        // slot for it (retryAtSlot is set only from the runtime's own NotYetException), and clients wait on that field.
+        var r = run("cooldown", 0);
+        assertEquals("prepare again at slot 99999999999", r.refusal());
+        var failed = Prepare.failed(new org.julclang.state.api.RequireException(r.refusal()));
+        assertFalse(failed.ok());
+        assertEquals(-1, failed.retryAtSlot());
+        var cooling = Prepare.failed(new RuntimeException("prepare failed",
+                org.julclang.state.runtime.KeyedObjectsAccess.notYet("Registry.change", 1240)));
+        assertEquals(1240, cooling.retryAtSlot());
     }
 
     @Test

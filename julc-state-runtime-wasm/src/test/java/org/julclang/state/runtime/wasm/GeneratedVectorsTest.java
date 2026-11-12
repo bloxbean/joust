@@ -36,7 +36,7 @@ class GeneratedVectorsTest {
 
     static Sides sides(String fqcn) throws Exception {
         var c = Builds.contract(fqcn);
-        var programs = new UplcTransitions(c.transitions());
+        var programs = UplcTransitions.verified(c.manifestJson(), c.descriptionJson(), c.scriptCborHex(), c.transitions());
         return new Sides(new ShadowTransitions.Programs(programs), new JvmTransitions(Comparison.transitionsClass(c)),
                 new TransitionInputs(Comparison.JSON.readTree(c.descriptionJson()), programs), programs);
     }
@@ -200,7 +200,7 @@ class GeneratedVectorsTest {
             } catch (TransitionInputs.Malformed e) {
                 count("malformed", "rejectedByTheEngine");
             }
-            Outcome p = Outcome.of(s.raw().run("increment", bad, NONE, args(i(1)), NONE));
+            Outcome p = Outcome.of(s.raw().evaluate("increment", bad, NONE, args(i(1)), NONE));
             observations.merge("raw program " + p.kind().name().toLowerCase(), 1, Integer::sum);
         }
         tally.put("malformed (observations)", observations);

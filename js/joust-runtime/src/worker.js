@@ -85,7 +85,7 @@ if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScop
     try {
       self.postMessage({ id, ok: true, value: await ops[op](args) });
     } catch (e) {
-      self.postMessage({ id, ok: false, error: String(e?.message ?? e) });
+      self.postMessage({ id, ok: false, error: String(e?.message ?? e), ...(e?.retryAtSlot != null ? { retryAtSlot: e.retryAtSlot } : {}) });
     }
   });
   // A module worker starts taking messages before a module with top-level await (libsodium's, through
