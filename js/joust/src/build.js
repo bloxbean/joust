@@ -6,7 +6,8 @@
 //   validators.json       the plain JuLC validators (governors, ...): [{ name, purpose, script, params }]
 //   <Validator>.plutus    each one's compiled script (CBOR hex; parameters not applied)
 //   joust.lock.json       the versions that built it (I7)
-//   generated/            the Java each .jsc file lowered to, with its source map (ADR-0018 D12)
+//   generated/            the Java each .jsc file lowered to, with its source map (ADR-0018 D12) and its checked IR
+//                         (<Contract>.ir.json, D15: what the JavaScript reference interpreter evaluates)
 // Beside each .jsc 2 file, <Contract>.abi.json: its ABI manifest, which the project commits; a build whose manifest
 // differs, or is missing, fails unless accepted (--accept-abi: src/abi.js), so an encoding change cannot strand
 // deployed instances.
@@ -62,6 +63,8 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, g.java);
     if (g.sourceMap) writeFileSync(target.replace(/\.java$/, '.jscmap.json'), g.sourceMap);
+    // ADR-0018 D15 (M1b): the checked IR, which the JavaScript reference interpreter evaluates.
+    if (g.ir) writeFileSync(target.replace(/\.java$/, '.ir.json'), g.ir);
   }
   if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics, ...(abiErrors.length ? { abiErrors } : {}) };
   if (abiErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, abiErrors };

@@ -83,9 +83,10 @@ public final class Toolchain {
 
     /**
      * The Java a {@code .jsc} file lowered to (ADR-0018 D12: written to {@code build/joust/generated/} by the npm CLI),
-     * with its source map and ABI manifest ({@code .jsc} 2; null for v1). {@code javaFile} is {@code a/b/Name.java}.
+     * with its source map, ABI manifest and checked IR ({@code .jsc} 2, ADR-0018 D12, D15; null for v1). {@code javaFile} is
+     * {@code a/b/Name.java}.
      */
-    public record Generated(String jscFile, String javaFile, String java, String sourceMapJson, String abiJson) {}
+    public record Generated(String jscFile, String javaFile, String java, String sourceMapJson, String abiJson, String irJson) {}
 
     /**
      * The build's result: the contracts, the plain validators, every diagnostic ({@code ok} when there is no error), and
@@ -195,7 +196,8 @@ public final class Toolchain {
                     String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
                     var lowered = JscMain.lowerWithWarnings(text, base);
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());
-                    generatedOut.add(new Generated(name, javaPath(lowered.java(), name), lowered.java(), lowered.sourceMapJson(), lowered.abiJson()));
+                    generatedOut.add(new Generated(name, javaPath(lowered.java(), name), lowered.java(), lowered.sourceMapJson(), lowered.abiJson(),
+                            lowered.irJson()));
                     // ADR-0018 D12: warnings reach the npm path with their line and column (F13).
                     for (var w : lowered.diagnostics()) {
                         diagnostics.add(new Diagnostic(Severity.WARNING, w.message(), name, w.line(), w.col(), "jsc", w.code()));

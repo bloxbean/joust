@@ -1,0 +1,861 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "StdBytes",
+  "source": "StdBytes.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "owner", "type": "Key" },
+      { "name": "b", "type": "Bytes" },
+      { "name": "n", "type": "Int" },
+      { "name": "r", "type": "Int" },
+      { "name": "flag", "type": "Bool" }
+    ],
+    "at": [9, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [13, 21] },
+            { "node": "Lit", "value": "", "type": "Bytes", "taint": 0, "at": [13, 32] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [13, 45] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [13, 51] },
+            { "node": "Lit", "value": false, "type": "Bool", "taint": 0, "at": [13, 60] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [13, 12]
+        },
+        "at": [12, 10]
+      },
+      "at": [12, 3]
+    },
+    {
+      "kind": "action",
+      "name": "cat",
+      "params": [
+        { "id": 1, "name": "x", "type": "Bytes", "taint": 0, "at": [16, 14] },
+        { "id": 2, "name": "y", "type": "Bytes", "taint": 0, "at": [16, 24] }
+      ],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 3, "name": "c", "type": "Bytes", "taint": 0, "at": [17, 5] },
+            "value": {
+              "node": "CallStd",
+              "module": "std/bytes",
+              "name": "concat",
+              "args": [
+                { "node": "LocalRef", "local": 1, "type": "Bytes", "taint": 0, "at": [17, 22] },
+                { "node": "LocalRef", "local": 2, "type": "Bytes", "taint": 0, "at": [17, 25] }
+              ],
+              "type": "Bytes",
+              "taint": 0,
+              "at": [17, 15]
+            },
+            "at": [17, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [18, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [18, 12]
+            },
+            { "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [18, 27] },
+            {
+              "node": "CallStd",
+              "module": "std/bytes",
+              "name": "length",
+              "args": [{ "node": "LocalRef", "local": 3, "type": "Bytes", "taint": 0, "at": [18, 40] }],
+              "type": "Int",
+              "taint": 0,
+              "at": [18, 33]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [18, 17] },
+              "record": "State",
+              "field": "r",
+              "type": "Int",
+              "taint": 0,
+              "at": [18, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [18, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [18, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [18, 12]
+        },
+        "at": [16, 34]
+      },
+      "at": [16, 3]
+    },
+    {
+      "kind": "action",
+      "name": "cut",
+      "params": [
+        { "id": 4, "name": "x", "type": "Bytes", "taint": 0, "at": [21, 14] },
+        { "id": 5, "name": "k", "type": "Int", "taint": 0, "at": [21, 24] },
+        { "id": 6, "name": "front", "type": "Bool", "taint": 0, "at": [21, 32] }
+      ],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [22, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [22, 12]
+            },
+            {
+              "node": "Cond",
+              "cond": { "node": "LocalRef", "local": 6, "type": "Bool", "taint": 0, "at": [22, 27] },
+              "then": {
+                "node": "CallStd",
+                "module": "std/bytes",
+                "name": "take",
+                "args": [
+                  { "node": "LocalRef", "local": 4, "type": "Bytes", "taint": 0, "at": [22, 40] },
+                  { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [22, 43] }
+                ],
+                "type": "Bytes",
+                "taint": 0,
+                "at": [22, 35]
+              },
+              "otherwise": {
+                "node": "CallStd",
+                "module": "std/bytes",
+                "name": "drop",
+                "args": [
+                  { "node": "LocalRef", "local": 4, "type": "Bytes", "taint": 0, "at": [22, 53] },
+                  { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [22, 56] }
+                ],
+                "type": "Bytes",
+                "taint": 0,
+                "at": [22, 48]
+              },
+              "type": "Bytes",
+              "taint": 0,
+              "at": [22, 27]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [22, 17] },
+              "record": "State",
+              "field": "n",
+              "type": "Int",
+              "taint": 0,
+              "at": [22, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [22, 17] },
+              "record": "State",
+              "field": "r",
+              "type": "Int",
+              "taint": 0,
+              "at": [22, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [22, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [22, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [22, 12]
+        },
+        "at": [21, 45]
+      },
+      "at": [21, 3]
+    },
+    {
+      "kind": "action",
+      "name": "num",
+      "params": [{ "id": 7, "name": "x", "type": "Bytes", "taint": 0, "at": [25, 14] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [26, 12]
+            },
+            {
+              "node": "CallStd",
+              "module": "std/bytes",
+              "name": "toHex",
+              "args": [{ "node": "LocalRef", "local": 7, "type": "Bytes", "taint": 0, "at": [26, 33] }],
+              "type": "Bytes",
+              "taint": 0,
+              "at": [26, 27]
+            },
+            {
+              "node": "CallStd",
+              "module": "std/bytes",
+              "name": "toInt",
+              "args": [{ "node": "LocalRef", "local": 7, "type": "Bytes", "taint": 0, "at": [26, 46] }],
+              "type": "Int",
+              "taint": 0,
+              "at": [26, 40]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
+              "record": "State",
+              "field": "r",
+              "type": "Int",
+              "taint": 0,
+              "at": [26, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [26, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [26, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [26, 12]
+        },
+        "at": [25, 24]
+      },
+      "at": [25, 3]
+    },
+    {
+      "kind": "action",
+      "name": "hash",
+      "params": [{ "id": 8, "name": "x", "type": "Bytes", "taint": 0, "at": [29, 15] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [30, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [30, 12]
+            },
+            {
+              "node": "CallStd",
+              "module": "std/bytes",
+              "name": "concat",
+              "args": [
+                {
+                  "node": "CallStd",
+                  "module": "std/crypto",
+                  "name": "sha2_256",
+                  "args": [{ "node": "LocalRef", "local": 8, "type": "Bytes", "taint": 0, "at": [30, 43] }],
+                  "type": "Bytes",
+                  "taint": 0,
+                  "at": [30, 34]
+                },
+                {
+                  "node": "CallStd",
+                  "module": "std/bytes",
+                  "name": "concat",
+                  "args": [
+                    {
+                      "node": "CallStd",
+                      "module": "std/crypto",
+                      "name": "sha3_256",
+                      "args": [{ "node": "LocalRef", "local": 8, "type": "Bytes", "taint": 0, "at": [30, 63] }],
+                      "type": "Bytes",
+                      "taint": 0,
+                      "at": [30, 54]
+                    },
+                    {
+                      "node": "CallStd",
+                      "module": "std/crypto",
+                      "name": "blake2b_256",
+                      "args": [{ "node": "LocalRef", "local": 8, "type": "Bytes", "taint": 0, "at": [30, 79] }],
+                      "type": "Bytes",
+                      "taint": 0,
+                      "at": [30, 67]
+                    }
+                  ],
+                  "type": "Bytes",
+                  "taint": 0,
+                  "at": [30, 47]
+                }
+              ],
+              "type": "Bytes",
+              "taint": 0,
+              "at": [30, 27]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [30, 17] },
+              "record": "State",
+              "field": "n",
+              "type": "Int",
+              "taint": 0,
+              "at": [30, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [30, 17] },
+              "record": "State",
+              "field": "r",
+              "type": "Int",
+              "taint": 0,
+              "at": [30, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [30, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [30, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [30, 12]
+        },
+        "at": [29, 25]
+      },
+      "at": [29, 3]
+    },
+    {
+      "kind": "action",
+      "name": "sig",
+      "params": [
+        { "id": 9, "name": "key", "type": "Bytes", "taint": 0, "at": [33, 14] },
+        { "id": 10, "name": "msg", "type": "Bytes", "taint": 0, "at": [33, 26] },
+        { "id": 11, "name": "signature", "type": "Bytes", "taint": 0, "at": [33, 38] }
+      ],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [34, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 17] },
+              "record": "State",
+              "field": "b",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [34, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 17] },
+              "record": "State",
+              "field": "n",
+              "type": "Int",
+              "taint": 0,
+              "at": [34, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 17] },
+              "record": "State",
+              "field": "r",
+              "type": "Int",
+              "taint": 0,
+              "at": [34, 12]
+            },
+            {
+              "node": "CallStd",
+              "module": "std/crypto",
+              "name": "verifyEd25519",
+              "args": [
+                { "node": "LocalRef", "local": 9, "type": "Bytes", "taint": 0, "at": [34, 44] },
+                { "node": "LocalRef", "local": 10, "type": "Bytes", "taint": 0, "at": [34, 49] },
+                { "node": "LocalRef", "local": 11, "type": "Bytes", "taint": 0, "at": [34, 54] }
+              ],
+              "type": "Bool",
+              "taint": 0,
+              "at": [34, 30]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [34, 12]
+        },
+        "at": [33, 56]
+      },
+      "at": [33, 3]
+    },
+    {
+      "kind": "action",
+      "name": "logic",
+      "params": [
+        { "id": 12, "name": "pad", "type": "Bool", "taint": 0, "at": [37, 16] },
+        { "id": 13, "name": "x", "type": "Bytes", "taint": 0, "at": [37, 27] },
+        { "id": 14, "name": "y", "type": "Bytes", "taint": 0, "at": [37, 37] },
+        { "id": 15, "name": "op", "type": "Int", "taint": 0, "at": [37, 47] }
+      ],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [38, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [38, 12]
+            },
+            {
+              "node": "Cond",
+              "cond": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "LocalRef", "local": 15, "type": "Int", "taint": 0, "at": [38, 27] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [38, 33] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [38, 27]
+              },
+              "then": {
+                "node": "CallStd",
+                "module": "std/bits",
+                "name": "andBytes",
+                "args": [
+                  { "node": "LocalRef", "local": 12, "type": "Bool", "taint": 0, "at": [38, 46] },
+                  { "node": "LocalRef", "local": 13, "type": "Bytes", "taint": 0, "at": [38, 51] },
+                  { "node": "LocalRef", "local": 14, "type": "Bytes", "taint": 0, "at": [38, 54] }
+                ],
+                "type": "Bytes",
+                "taint": 0,
+                "at": [38, 37]
+              },
+              "otherwise": {
+                "node": "Cond",
+                "cond": {
+                  "node": "Equals",
+                  "negate": false,
+                  "left": { "node": "LocalRef", "local": 15, "type": "Int", "taint": 0, "at": [38, 59] },
+                  "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [38, 65] },
+                  "operand": "Int",
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [38, 59]
+                },
+                "then": {
+                  "node": "CallStd",
+                  "module": "std/bits",
+                  "name": "orBytes",
+                  "args": [
+                    { "node": "LocalRef", "local": 12, "type": "Bool", "taint": 0, "at": [38, 77] },
+                    { "node": "LocalRef", "local": 13, "type": "Bytes", "taint": 0, "at": [38, 82] },
+                    { "node": "LocalRef", "local": 14, "type": "Bytes", "taint": 0, "at": [38, 85] }
+                  ],
+                  "type": "Bytes",
+                  "taint": 0,
+                  "at": [38, 69]
+                },
+                "otherwise": {
+                  "node": "CallStd",
+                  "module": "std/bits",
+                  "name": "xorBytes",
+                  "args": [
+                    { "node": "LocalRef", "local": 12, "type": "Bool", "taint": 0, "at": [38, 99] },
+                    { "node": "LocalRef", "local": 13, "type": "Bytes", "taint": 0, "at": [38, 104] },
+                    { "node": "LocalRef", "local": 14, "type": "Bytes", "taint": 0, "at": [38, 107] }
+                  ],
+                  "type": "Bytes",
+                  "taint": 0,
+                  "at": [38, 90]
+                },
+                "type": "Bytes",
+                "taint": 0,
+                "at": [38, 59]
+              },
+              "type": "Bytes",
+              "taint": 0,
+              "at": [38, 27]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [38, 17] },
+              "record": "State",
+              "field": "n",
+              "type": "Int",
+              "taint": 0,
+              "at": [38, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [38, 17] },
+              "record": "State",
+              "field": "r",
+              "type": "Int",
+              "taint": 0,
+              "at": [38, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [38, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [38, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [38, 12]
+        },
+        "at": [37, 56]
+      },
+      "at": [37, 3]
+    },
+    {
+      "kind": "action",
+      "name": "count",
+      "params": [{ "id": 16, "name": "x", "type": "Bytes", "taint": 0, "at": [41, 16] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [42, 12]
+            },
+            {
+              "node": "CallStd",
+              "module": "std/bits",
+              "name": "complement",
+              "args": [{ "node": "LocalRef", "local": 16, "type": "Bytes", "taint": 0, "at": [42, 38] }],
+              "type": "Bytes",
+              "taint": 0,
+              "at": [42, 27]
+            },
+            {
+              "node": "CallStd",
+              "module": "std/bits",
+              "name": "countSetBits",
+              "args": [{ "node": "LocalRef", "local": 16, "type": "Bytes", "taint": 0, "at": [42, 58] }],
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 45]
+            },
+            {
+              "node": "CallStd",
+              "module": "std/bits",
+              "name": "findFirstSetBit",
+              "args": [{ "node": "LocalRef", "local": 16, "type": "Bytes", "taint": 0, "at": [42, 81] }],
+              "type": "Int",
+              "taint": 0,
+              "at": [42, 65]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [42, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [42, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [42, 12]
+        },
+        "at": [41, 26]
+      },
+      "at": [41, 3]
+    },
+    {
+      "kind": "action",
+      "name": "bit",
+      "params": [
+        { "id": 17, "name": "x", "type": "Bytes", "taint": 0, "at": [45, 14] },
+        { "id": 18, "name": "i", "type": "Int", "taint": 0, "at": [45, 24] }
+      ],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "b",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "n",
+              "type": "Int",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "r",
+              "type": "Int",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "CallStd",
+              "module": "std/bits",
+              "name": "readBit",
+              "args": [
+                { "node": "LocalRef", "local": 17, "type": "Bytes", "taint": 0, "at": [46, 38] },
+                { "node": "LocalRef", "local": 18, "type": "Int", "taint": 0, "at": [46, 41] }
+              ],
+              "type": "Bool",
+              "taint": 0,
+              "at": [46, 30]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [46, 12]
+        },
+        "at": [45, 32]
+      },
+      "at": [45, 3]
+    },
+    {
+      "kind": "action",
+      "name": "move",
+      "params": [
+        { "id": 19, "name": "x", "type": "Bytes", "taint": 0, "at": [49, 15] },
+        { "id": 20, "name": "k", "type": "Int", "taint": 0, "at": [49, 25] },
+        { "id": 21, "name": "rot", "type": "Bool", "taint": 0, "at": [49, 33] }
+      ],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [50, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [50, 12]
+            },
+            {
+              "node": "Cond",
+              "cond": { "node": "LocalRef", "local": 21, "type": "Bool", "taint": 0, "at": [50, 27] },
+              "then": {
+                "node": "CallStd",
+                "module": "std/bits",
+                "name": "rotate",
+                "args": [
+                  { "node": "LocalRef", "local": 19, "type": "Bytes", "taint": 0, "at": [50, 40] },
+                  { "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [50, 43] }
+                ],
+                "type": "Bytes",
+                "taint": 0,
+                "at": [50, 33]
+              },
+              "otherwise": {
+                "node": "CallStd",
+                "module": "std/bits",
+                "name": "shift",
+                "args": [
+                  { "node": "LocalRef", "local": 19, "type": "Bytes", "taint": 0, "at": [50, 54] },
+                  { "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [50, 57] }
+                ],
+                "type": "Bytes",
+                "taint": 0,
+                "at": [50, 48]
+              },
+              "type": "Bytes",
+              "taint": 0,
+              "at": [50, 27]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [50, 17] },
+              "record": "State",
+              "field": "n",
+              "type": "Int",
+              "taint": 0,
+              "at": [50, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [50, 17] },
+              "record": "State",
+              "field": "r",
+              "type": "Int",
+              "taint": 0,
+              "at": [50, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [50, 17] },
+              "record": "State",
+              "field": "flag",
+              "type": "Bool",
+              "taint": 0,
+              "at": [50, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [50, 12]
+        },
+        "at": [49, 44]
+      },
+      "at": [49, 3]
+    }
+  ],
+  "warnings": []
+}

@@ -29,12 +29,12 @@ public final class JscMain {
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
             var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName);
             return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
-                    fileName, r.sourceMapJson(), r.abiJson());
+                    fileName, r.sourceMapJson(), r.abiJson(), r.irJson());
         }
         // .jsc v1 (ADR-0005): compiled as before. Its deprecation warning arrives with M1, when the templates switch to
         // .jsc 2 and `joust migrate` exists (ADR-0018 Q5, D14, D16; review F9).
         var r = Lowering.lower(Parser.parse(source), fileName);
-        return new Lowered(r.java(), r.warnings(), fileName, null, null);
+        return new Lowered(r.java(), r.warnings(), fileName, null, null, null);
     }
 
     /** A located warning: line and column in the .jsc file, and its stable code ({@code .jsc} 2; null for v1) (D12). */
@@ -50,10 +50,11 @@ public final class JscMain {
     }
 
     /**
-     * Lowered Java and located warnings; for {@code .jsc} 2 also the source map and the ABI manifest (ADR-0018 D12),
-     * null for v1.
+     * Lowered Java and located warnings; for {@code .jsc} 2 also the source map and the ABI manifest (ADR-0018 D12) and
+     * the checked IR as JSON (D15, M1b), null for v1.
      */
-    public record Lowered(String java, java.util.List<Warning> diagnostics, String fileName, String sourceMapJson, String abiJson) {
+    public record Lowered(String java, java.util.List<Warning> diagnostics, String fileName, String sourceMapJson, String abiJson,
+                          String irJson) {
         /** The warnings, each formatted {@code file:line:col: warning: message}. */
         public java.util.List<String> warnings() {
             return diagnostics.stream().map(w -> w.format(fileName)).toList();
@@ -206,6 +207,10 @@ public final class JscMain {
                     // The source map beside the generated Java (javac compiles only *.java).
                     Files.writeString(target.resolveSibling(target.getFileName().toString().replace(".java", ".jscmap.json")),
                             lowered.sourceMapJson());
+                }
+                if (lowered.irJson() != null) {
+                    // ADR-0018 D15 (M1b): the checked IR, which the JavaScript reference interpreter evaluates.
+                    Files.writeString(target.resolveSibling(target.getFileName().toString().replace(".java", ".ir.json")), lowered.irJson());
                 }
             } catch (JscException e) {
                 System.err.println(e.format(name));
