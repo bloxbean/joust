@@ -42,7 +42,17 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
   const t = Date.now();
   const engine = await loadToolchain();
-  const r = engine.joust.build({ files, options });
+  let r;
+  try {
+    r = engine.joust.build({ files, options });
+  } catch (e) {
+    // The engine's stack ran out past the front end (whose nesting cap keeps it within the stack, ADR-0018 J18): in
+    // JuLC's passes, on a very large contract. Web Image surfaces that as a TypeError; the build reports it and fails,
+    // and the engine stays usable.
+    r = { ok: false, contracts: [], diagnostics: [{ severity: 'error', source: 'toolchain', message: 'internal error: the'
+      + ` toolchain engine failed (${e?.message ?? e}); a contract this large may exhaust the engine's stack: build it on`
+      + ' Gradle, or split it (please report it, with the file)' }], generated: [] };
+  }
   for (const d of r.diagnostics) {
     const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
     // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
@@ -67,6 +77,14 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   if (abiErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, abiErrors };
   mkdirSync(dir, { recursive: true });
   const bundle = [];
+  // ADR-0018 D12 (r12): each .jsc 2 contract's message map (the source map's `messages`): what every message its script
+  // can trace means, at which File.jsc:line:col. The runtime names the position when it shows a refusal.
+  const messagesOf = {};
+  for (const g of r.generated ?? []) {
+    if (!g.sourceMap) continue;
+    const m = JSON.parse(g.sourceMap);
+    if (m.messages) messagesOf[g.javaFile] = { source: g.jscFile, messages: m.messages };
+  }
   for (const c of r.contracts) {
     const description = JSON.parse(c.descriptionJson);
     writeFileSync(join(dir, c.name + '.json'), JSON.stringify(description, null, 2) + '\n');
@@ -74,7 +92,9 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     const { js, dts } = generate(description);
     writeFileSync(join(dir, c.name + '.js'), js);
     writeFileSync(join(dir, c.name + '.d.ts'), dts);
-    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, built: { joust: VERSION } });
+    const messages = messagesOf[`${c.packageName.replaceAll('.', '/')}/${c.name}.java`];
+    bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, built: { joust: VERSION },
+      ...(messages ? { messages } : {}) });
     log(`${c.packageName}.${c.name}: ${c.scriptSizeBytes} bytes, hash ${c.scriptHash || '(parameterised)'}, `
       + `${Object.keys(c.transitions).length} transitions`);
   }

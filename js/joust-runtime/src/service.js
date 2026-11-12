@@ -5,6 +5,7 @@
 import { loadEngine } from '#engine';
 import { emptySnapshot, fetchNeed, utxoJson } from './snapshot.js';
 import { mapMirror } from './mirror.js';
+import { explainRefusal } from './messages.js';
 import pkg from '../package.json' with { type: 'json' };
 
 /** This runtime's version: contracts built by an incompatible toolchain are refused (ADR-0015 I7). */
@@ -82,7 +83,7 @@ export function engineService(o) {
         else if (r.cbor) await mirror.stage(r.cbor);   // the map states this transaction leads to
         return r;
       }
-      if (!r.needKind) throw new Error(r.error);
+      if (!r.needKind) throw new Error(explainRefusal(r.error, o.contracts));
       if (r.needKind === 'mapProof') {
         // The mirror proves; the engine checks each proof against the chain's root (ADR-0015 §13.12 M1).
         mapProofs[r.needKey] = await mirror.answer(r.needKey, o.unitsOf ? o.unitsOf(call) : []);
