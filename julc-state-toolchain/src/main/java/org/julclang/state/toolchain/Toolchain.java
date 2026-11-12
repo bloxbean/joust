@@ -252,8 +252,9 @@ public final class Toolchain {
     }
 
     /**
-     * The transition programs' library variants (ADR-0015 D3): a library with a source under
-     * {@code META-INF/joust/discovery/} on the class path replaces the on-chain one (MerkleMaps' read discovery).
+     * The transition programs' library variants (ADR-0015 D3, ADR-0020 §11.4): a library with a source under
+     * {@code META-INF/joust/discovery/} on the class path replaces the on-chain one (MerkleMaps' read discovery,
+     * Require's {@code joust:require} tag).
      */
     private static List<LibrarySource> discovery(List<LibrarySource> libs) {
         var out = new ArrayList<LibrarySource>(libs.size());

@@ -50,8 +50,9 @@ def bundleOnchainSources = tasks.register('bundleOnchainSources') {
             out.text = file.getText('UTF-8')
         }
         new File(target, 'index.txt').text = sources.keySet().join('\n') + '\n'
-        // ADR-0015 D3: variants compiled only into transition programs (MerkleMaps' read discovery), never into
-        // validators; the toolchain swaps them in. Not under plutus-sources, so JuLC's source scan never sees them.
+        // ADR-0015 D3, ADR-0020 §11.4: variants compiled only into transition programs (MerkleMaps' read discovery,
+        // Require's joust:require tag), never into validators; the toolchain swaps them in and records each in the
+        // program manifest. Not under plutus-sources, so JuLC's source scan never sees them.
         if (discoveryOverrides.exists()) {
             fileTree(discoveryOverrides).matching { include '**/*.java' }.visit { d ->
                 if (!d.directory) {
