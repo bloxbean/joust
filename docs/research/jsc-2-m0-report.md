@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M0: report (ADR-0018 §8)
 
-Date 2026-11-12, review round r2. Branch `feat/jsc-2-m0`, on ADR-0018 r6 (`5f399ca`). JuLC `v0.1.0-pre21-rc1`,
+Date 2026-11-12, review round r3. Branch `feat/jsc-2-m0`, on ADR-0018 r6 (`5f399ca`). JuLC `v0.1.0-pre21-rc1`,
 cardano-client-lib `0.8.0-pre7`, JDK 25 (Temurin), macOS arm64. Every number below was measured at this round's
 head; the commands are given with each table.
 
@@ -32,16 +32,17 @@ The front end has four stages, each a function of the previous one's output (rev
 | `std/crypto` (`blake2b_224`, `blake2b_256`, `sha2_256`), `std/bytes` (`length`, `slice`, `byteAt`), each row with a policy and a domain (D8) | `Std`; `julc-state-api` `BytesAdapter` | done; `byteAt` past the end now fails with the adapter's `require` on both sides |
 | Binding test via javac attribution (D8, J7) | `JscV2BindingTest` | done: each row's target call is attributed and must resolve to the row's signature under its policy; wrong rows fail (tested) |
 | Positions on the npm path, errors and warnings (D12) | `Toolchain`, `JscMain.Warning`, `js/joust/src/build.js` | done |
-| Time dataflow (D11, J6): taints through every expression, per-field taint of state values (literals, spreads, `?:`, value `if`s, blocks, `const`s, `init`), a fixed point over time fields, a fixed point over fold accumulators, `fn`s re-checked with time parameters, time values never deciding (comparisons, conditions, `&&`/`||`/`!` operands, predicates, `contains`), never failing (divisors, `slice`/`byteAt`, `asKey`, unclamped pays), `after`/`before` only in positive `require` positions and not in lambdas, bias warnings at state fields and payouts | `Checker` | done |
+| Time dataflow (D11, J6): taints through every expression, per-field taint of state values (literals, spreads, `?:`, value `if`s, blocks, `const`s, `init`, and folds whose accumulator is the state: each field its own fixed point, so a fold that writes one field leaves the others ordinary; any other form marks every field and its warning says so), a fixed point over time fields, a fixed point over fold accumulators, `fn`s re-checked with time parameters, time values never deciding (comparisons, conditions, `&&`/`||`/`!` operands, predicates, `contains`), never failing (divisors, `slice`/`byteAt`, `asKey`, unclamped pays), `after`/`before` only in positive `require` positions and not in lambdas, bias warnings at state fields (this call's window, or a stored time copied into another field; a field kept as it was does not warn) and payouts | `Checker` | done |
 | Audience for paying methods; a destroy pays (D4, J16) | `Checker.method` | done (`pay`; `send`/`mint`/`deposit` arrive in M2) |
-| File names (security S3): only `[A-Za-z0-9._-]` names are lowered, on both paths and for v1 too; strings in generated Java are escaped completely | `JscV2.checkFileName`, `JscMain`, `Lowering`, `JavaEmitter.str` | done |
+| File names (security S3): a `.jsc` 2 file's name is `[A-Za-z0-9][A-Za-z0-9._-]*` (ASCII), on both paths; a v1 file's name is escaped instead of refused (D16: v1 files keep rebuilding with the same script, review F16): sanitised in comments, escaped in require messages. Strings in generated Java are escaped completely | `JscV2.checkFileName`, `JscMain`, `Lowering.commentSafe`, `JavaEmitter.str` | done |
+| `pay(to, amount)` evaluates both arguments, left to right, like any call (it is not one of D6's lazy positions); then a negative amount fails and 0 is skipped. A recipient that fails therefore fails the call even with amount 0 (review C12). The emitter binds a recipient that can fail before the amount; a name or field read is used in place, which is the same | `Interpreter`, `JavaEmitter` (`Pay`) | done; four-way `vectors_payEvaluatesItsRecipient_evenForZero` |
 
 ## Exit criteria
 
 | Criterion | Evidence |
 |---|---|
 | Builds on both paths | Gradle `examples:dsl` (`Counter2.jsc`, `Pledges.jsc`, `Vectors.jsc`); the npm toolchain (`JscV2ToolchainTest`, `JscV2FixturesTest`); `ToolchainParityTest`: the toolchain's scripts equal Gradle's for all 19 examples, the three `.jsc` 2 contracts included (19/19) |
-| Four-way agreement (J3) on hand vectors | `JscV2FourWayTest`: 416 calls on `Counter2`, `Pledges` and `Vectors`, each run by the reference interpreter, the generated Java on the JVM, the transition program and the validator (`StateHarness`), all agreeing (views: interpreter and JVM). Some outcomes are also stated by hand (below) |
+| Four-way agreement (J3) on hand vectors | `JscV2FourWayTest`: 422 calls on `Counter2`, `Pledges` and `Vectors`, each run by the reference interpreter, the generated Java on the JVM, the transition program and the validator (`StateHarness`), all agreeing (views: interpreter and JVM). Some outcomes are also stated by hand (below) |
 | Size, budget and check-cost numbers recorded | below |
 | javac attribution of library sources inside the Web Image toolchain | `toolchainWasmTest` (below) |
 
@@ -53,7 +54,7 @@ The front end has four stages, each a function of the previous one's output (rev
 |---|---|---|---|---|
 | `Counter2` | 22 | 6 | 19 | init, increment (sign, 2^70), reset, view, close |
 | `Pledges` | 117 | 41 | 77 | init (checked `List<Share>`, blake2b, `slice`; bad totals, zero share, 27-byte nested key), pledge (`before`, `received`, `Option` written), distribute (pays in a loop and a branch, `fold`, `after … \|\|`), setBacker (`Option<Key>` redeemer: Some, None, a 27-byte key), reassign (record equality over bytes, `map`, `contains`), views (`find ?? default`, `map`+`contains`, recursion) |
-| `Vectors` | 277 | 128 | 277 | `slice(b, i, n)` and `byteAt(b, i)` for b of 0, 3 and 70 bytes and i, n ∈ {-1, 0, len-1, len, 2^31-1, 2^31, 2^64+1} (F2); `/` and `%` for every sign pair, a zero divisor and 131-bit operands; `List<Bool>` / `Option<Bool>` equality and `contains` (C4); destroy |
+| `Vectors` | 283 | 132 | 283 | `pay` with a failing recipient at amounts 0, positive and negative (C12); `slice(b, i, n)` and `byteAt(b, i)` for b of 0, 3 and 70 bytes and i, n ∈ {-1, 0, len-1, len, 2^31-1, 2^31, 2^64+1} (F2); `/` and `%` for every sign pair, a zero divisor and 131-bit operands; `List<Bool>` / `Option<Bool>` equality and `contains` (C4); destroy |
 
 Stated by hand (independently of every leg): `increment` adds positive amounts and refuses others; Pledges' first
 state with the tag `slice(blake2b_224(label), 0, 8)` computed with cardano-client-lib; `distribute` pays 15,000,001,
@@ -80,7 +81,7 @@ Script sizes (the toolchain's, equal to Gradle's; `JscV2ToolchainTest`):
 | `Counter` (Java, `examples/counter`) | 5,639 | |
 | `Counter2` (`.jsc` 2, same contract) | 5,760 (+2.1%) | 5,760 (the same script: hash `7baf4785…`) |
 | `Pledges` (records, lists, `Option`, std, time, loops) | 8,454 | 8,495 (-41 B: helpers take their free variables only) |
-| `Vectors` (the vector contract above) | 7,487 | new |
+| `Vectors` (the vector contract above) | 7,883 | new (7,487 at r2, before the `give` action) |
 
 Execution units, on-chain (`Dsl2Test`, harness evaluation of the generated validator):
 
@@ -141,8 +142,12 @@ Tested:
 
 Not tested, or not done, at M0:
 - the interpreter is written in Java over the checked IR. D15 asks for a JavaScript interpreter with the written
-  semantics; M1 adds both. The Java interpreter is independent of the emitter (it shares only the IR), so it serves as
-  J3's fourth leg for M0's constructs;
+  semantics. The Java interpreter is independent of the emitter (it shares only the IR), so it serves as J3's fourth
+  leg for M0's constructs (accepted for M0, review F17). **M1's exit must include the JavaScript reference interpreter
+  (D15)** and the written semantics. It plugs into the four-way harness at one place: `FourWay.interpreted(method,
+  state, args, tx)` returns the interpreter's outcome as the runtime's encoded result (`ok:<hex>` or `refused`), and
+  `FourWay.check` compares every other leg with it; a second interpreter (for example the JavaScript one run in Node
+  over the same vectors) is a further leg there, compared with the same string;
 - vectors are hand-written, not generated (§9's generators are M1);
 - J17's independent CBOR goldens: the JS test compares with the JVM's CBOR and the portable test with data written by
   hand from D5; the ABI manifest is M1;
@@ -163,11 +168,12 @@ rebuilt from this head):
 ```
 same org.julclang.state.examples.dsl.Counter2 5760 bytes 7baf4785e1d2c32b4ede5fcb3b4743c75c490da7bc6e4b68140351f9
 same org.julclang.state.examples.dsl.Pledges 8454 bytes 4b2d347a4a30cf0346d96bac652b872527e871b8efa2e1cd8579f5b7
-same org.julclang.state.examples.dsl.Vectors 7487 bytes d37f7c6a5457c99384d93eeb6ba26aeed6a12a9c3c260064de9f0615
-S2 in Wasm: 634/634 identical to the JVM in 227 ms
-S2b in Wasm: 43/43 token calls as on the JVM (round 1 reads, final result) in 1576 ms
+same org.julclang.state.examples.dsl.Vectors 7883 bytes 93dcd7b255be9571035ab1511a1c8c5a241fe64c85b5cce77d72219e
+S2 in Wasm: 650/650 identical to the JVM in 237 ms
+S2b in Wasm: 43/43 token calls as on the JVM (round 1 reads, final result) in 1581 ms
 ```
 
 The engine, in Node with no JDK, lowers the three `.jsc` 2 contracts with this front end and compiles them and their
-library pool (`BytesAdapter` and the stdlib included) to the same scripts as Gradle. The 634 transition vectors include
+library pool (`BytesAdapter` and the stdlib included) to the same scripts as Gradle. The v1 contracts (Guards, Jar,
+Points) keep the script hashes they had before the v1 file-name escaping (F16). The 650 transition vectors include
 the four-way test's transition calls.
