@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r9)
+**Status:** Proposed (r11)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -180,6 +180,11 @@ final locals; an `if`/`match` arm or a loop helper that may produce effects retu
 **Audience (v1 rule, extended):** a method that can reach `pay`, `send`, `mint`/`burn` or `deposit` in any arm or loop
 must state who may call it: `only f`, `authorized f`, `quorum …` or an explicit `open`. Otherwise anyone could call
 it and the body's checks would be the only guard (`action rescue(to: Address) { send(to, funds.held - …) … }`).
+**A paying `batched` action says `open`** (r11, M1c review F4, JSC0420): it cannot say `only f`, since any intent's
+owner is its caller and the batcher, not the caller, signs the batch, so its audience is everyone. A check of the caller
+in its body (`require(caller == admin, …)`) is not `only admin` either: an intent authorises its action until the
+intent's deadline, against whatever state the batch reaches it at, in the order the batcher chooses (ADR-0004 §3), so
+deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxPrice)`). The diagnostics say so.
 
 ### D5. Types, encodings and checked inputs
 
@@ -433,6 +438,27 @@ positions. Each row names the example whose port gates it (J11).
 The exact grammar for each row, including the full parameter and result types of each handler kind, is fixed in
 the milestone that implements it, reviewed against the processor's rules, and documented in `jsc-reference.mdx`. The
 "every feature" claim holds row by row, as each port passes (J11).
+
+**The method modifiers** (r11, fixed in M1c; gated by vault, escrow and pool, which pass): an `init`, `action` or
+`destroy` header is followed by modifiers, in any order, each at most once (JSC0416): `payable` (not on a destroy),
+`open`, `only f` (`@SignedBy("f")`, `f` a `Key` state field), `after f` and `before f` (`@ValidAfter`/`@ValidBefore`,
+`f` an `Int` state field), `batched` (`@Batched`) and `batched only` (`@Batched(only = true)`: the action runs only as
+an intent and has no direct redeemer). An `init` takes only `payable`. `batched` is an action's only (JSC0418), never
+with `only`, `after` or `before` (JSC0417: the batcher signs a batch and sets its window), not in a contract with
+`BigMap` state (JSC0419, D7), and frees the names of its intent form (`<m>Intent`, `<M>Intent`: JSC0223) and of the
+intent method's own parameters (`deadline`: JSC0216). `only` directly after `batched` is intent-only unless an
+identifier that is not a modifier follows (`batched only owner` is `batched` with `only owner`, then refused), and the
+six modifier words are no field or binding name (JSC0211), so a header means the same whatever the state declares. The
+ABI manifest of a contract with batched actions states the intent's datum and refund tag and the batch's redeemers
+(D12), bound to the processor's description.
+
+**Modifiers are transaction preconditions** (r11, M1c review S2/F2): `only`, `after` and `before` check the signers
+and the validity window, which the JVM method and the transition program do not see, and which the M1 reference
+interpreter does not model either. Until it does, J3's legs agree on calls that satisfy them, and every modifier site of
+every port also has vectors that break it with their outcome stated (the interpreter, the JVM and the transition
+program accept; the validator refuses), plus attack-suite entries read from the description (a stranger who signs as
+the caller; windows on the wrong side of, or straddling, the bound). **By M1b's exit the interpreter models them**
+(its transaction carries the signers and the window), so that their refusals are four-way too.
 
 **ADR-0005 rules kept, changed and dropped:**
 
@@ -779,7 +805,7 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 | # | Scope | Entry gate | Exit criteria |
 |---|---|---|---|
 | M0 | Spike: version line, `const`, spread updates, shadowing rule, `fn` with direct recursion and the after-lowering recursion check (nested folds), a `fold`/`find`/`contains` helper and both `filter` lowerings, `Option` as `Optional` end to end (datum, redeemer, portable codec, JS; `Some(None)` rejected), one generated equality helper over a record with bytes, one checked input, one `std/crypto` and one `std/bytes` binding with domains, the binding test via javac attribution, positions on the npm path, the time dataflow pass | ADR accepted | builds on both paths; four-way agreement (J3) on hand vectors; size, budget and check-cost numbers recorded; javac attribution of library sources works inside the Web Image toolchain |
-| M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; four-way differential tests and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten |
+| M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; four-way differential tests and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten. M1c's thresholds (r11): "below 14 KB" is below 14,000 bytes; "the protocol maximum" is 10,000,000,000 CPU steps and 14,000,000 memory units (the pre-Plomin memory limit, the stricter one), summed over every script of the transaction, with a warning above 80%; the saturated state is the largest one the Java example accepts (its stored datum within `maxDatumBytes`), which the port must then accept; a batched action is measured at `Batcher.DEFAULT_MAX` intents too |
 | M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); interpreter and four-way tests extended (D15); attack suites and mutation-rejection tests green |
 | M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green |
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12; a `.jsc` library called from Java and a Java library from `.jsc`; the template's tests run offline |
@@ -964,3 +990,8 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   ABI), refuses a reached schema the description lacks, and does not write Java whose manifest is refused.
 - **r9** (2026-11-13, M1a review round r4 on #63: Codex C8; security S12): D5 refuses recursive types through any
   container, not only direct ones; D3 refuses every control character but TAB and the line ends; J10 covers it.
+- **r11** (2026-11-13, M1c review round r1 on #67: design F2, F4, F6; security S2, S6; Codex C1): D4 says a paying
+  batched action says `open`, and that a caller check in its body is not `only` (ADR-0004 §3); D10 fixes the modifier
+  grammar (`batched [only]` and its parse rule, the modifier words reserved as names, the refusals) and says the
+  modifiers are transaction preconditions the interpreter models by M1b's exit, covered until then by vectors with stated
+  outcomes; §8's M1 row states M1c's thresholds. (r10 is M1b's.)

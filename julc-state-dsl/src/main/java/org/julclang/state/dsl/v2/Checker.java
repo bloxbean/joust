@@ -48,7 +48,7 @@ final class Checker {
             "ByteStringLib", "CryptoLib", "BytesAdapter", "Builtins", "Ctx", "Init", "Action", "Destroy", "View",
             "MathLib", "BitwiseLib", "MathAdapter", "BitsAdapter", "CryptoAdapter", "JulcMap", "SortedMaps", "MerkleMap",
             "MerkleMaps", "MapEntry",
-            "Payable", "SignedBy", "ValidAfter", "ValidBefore", "StateContract", "String", "Object", "Boolean",
+            "Payable", "SignedBy", "ValidAfter", "ValidBefore", "Batched", "StateContract", "String", "Object", "Boolean",
             "Integer", "Long", "Byte", "Math", "System", "Record", "Override",
             // .jsc 2 type names and helper-name fragments: a declared type of the same name would share a helper (C6)
             "Int", "Bool", "Bytes", "Key", "List", "Option", "Opt", "Map", "BigMap", "Value", "Address", "Credential",
@@ -70,7 +70,17 @@ final class Checker {
             "StateRuntime", "StateInstance", "TxResult", "Transition", "Lifecycle", "Calls", "Call", "MapWitness", "MapWitnesses",
             "Mpf", "Deploy", "ContractSpec", "StateContractHandle", "Utxo", "Arrays", "Holding", "ScriptPurpose", "Intent",
             "IntentCall", "Step", "IntentRefund", "Batch", "InBatch", "CancelIntent", "CreateIntent", "IntentCodec", "IntentData",
-            "IntentHandle", "Batcher", "List");
+            "IntentHandle", "Batcher", "List",
+            // M1c review C4: the ledger schemas a batched contract's ABI manifest states beside the contract's types
+            // (an intent's refund Address); a declared type of the same name would be overwritten there.
+            "StakingCredential", "PubKeyCredential", "ScriptCredential", "StakingHash", "StakingPtr");
+
+    /**
+     * Security review S6 (ADR-0004 §3): in a batched action a check on the caller is not 'only f'. An intent authorises
+     * its action until its deadline, against whatever state the batch finds, in the order the batcher chooses.
+     */
+    static final String INTENT_CAVEAT = "Note: an intent authorises its action until its deadline, against the state a batcher applies it"
+            + " to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments";
 
     static Set<String> clientLocals(Kind k) {
         return switch (k) {
@@ -232,6 +242,17 @@ final class Checker {
             }
             if (!seen.add(m.name())) throw m.pos().error("JSC0204", "the method " + m.name() + " is declared twice");
         }
+        // M1c: a batched action's intent form is the client's method <m>Intent and the validator's record <M>Intent
+        // (ADR-0004; ContractReader refuses the clash), so neither name may be taken.
+        for (Syntax.Method m : c.methods()) {
+            if (m.kind() != Kind.ACTION || m.mods().stream().noneMatch(x -> x.name().equals("batched"))) continue;
+            String variant = Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1) + "Intent";
+            if (seen.contains(m.name() + "Intent") || !generated.add(variant)) {
+                throw m.pos().error("JSC0223", "the batched action " + m.name() + " has an intent form named " + m.name()
+                        + "Intent (the client's method) and " + variant + " (the validator's record); a method or type of"
+                        + " that name would clash with it: rename one of them");
+            }
+        }
         if (c.methods().stream().noneMatch(m -> m.kind() == Kind.INIT)) throw c.pos().error("JSC0401", "the contract needs an init(…)");
     }
 
@@ -375,6 +396,12 @@ final class Checker {
     private static void checkUserName(String n, Pos p, String what) {
         if (n.contains("__")) throw p.error("JSC0210", "names cannot contain '__' (reserved for generated code): " + n);
         if (RESERVED.contains(n)) throw p.error("JSC0211", "'" + n + "' is reserved and cannot be a " + what + " name");
+        // M1c review F4: 'only f', 'after f' and 'before f' name a state field after a modifier, and 'batched only' is
+        // intent-only before another modifier, so a field named like a modifier would change what a header means
+        // ('batched only open'). The modifier words are no field or binding name (methods and fns may use them).
+        if (Parser.MODIFIERS.contains(n) && !what.equals("method") && !what.equals("function") && !what.equals("contract")) {
+            throw p.error("JSC0211", "'" + n + "' is reserved and cannot be a " + what + " name: it is a method modifier");
+        }
     }
 
     // ------------------------------------------------------------------ scopes
@@ -515,8 +542,18 @@ final class Checker {
         var sc = new Sc(kind(m.kind()), m.name(), hasState, ctx, m.kind() == Kind.ACTION || m.kind() == Kind.DESTROY, false, 0, null);
         var mods = new ArrayList<Ir.Mod>();
         boolean audience = false;
+        boolean batched = m.mods().stream().anyMatch(x -> x.name().equals("batched"));
+        var modNames = new HashSet<String>();
         for (Mod mod : m.mods()) {
+            if (!modNames.add(mod.name())) throw mod.pos().error("JSC0416", "the modifier '" + mod.name() + "' is given twice");
             if (m.kind() == Kind.INIT && !mod.name().equals("payable")) throw mod.pos().error("JSC0405", "an init takes only 'payable'");
+            if (batched && (mod.name().equals("only") || mod.name().equals("after") || mod.name().equals("before"))) {
+                // Review F4: the hint names the check that replaces this modifier; S6: with ADR-0004's caveat.
+                String instead = mod.name().equals("only")
+                        ? "the batcher, not the caller, signs a batch: check the caller in the body with require(caller == " + mod.arg() + ", …)"
+                        : "the batcher sets a batch's window: check time in the body with require(" + mod.name() + "(" + mod.arg() + "), …)";
+                throw mod.pos().error("JSC0417", "a batched action cannot use '" + mod.name() + "': " + instead + " (ADR-0004 D1). " + INTENT_CAVEAT);
+            }
             switch (mod.name()) {
                 case "payable" -> {
                     if (m.kind() == Kind.DESTROY) throw mod.pos().error("JSC0406", "a destroy cannot be payable");
@@ -527,9 +564,21 @@ final class Checker {
                     audience = true;
                 }
                 case "after", "before" -> stateField(mod.arg(), Ty.INT, mod.pos(), mod.name());
+                case "batched" -> {
+                    // ADR-0018 D10 (gated by pool, M1c): @Batched, or @Batched(only = true) for 'batched only'.
+                    if (m.kind() != Kind.ACTION) throw mod.pos().error("JSC0418", "only an action can be batched (ADR-0004 D1)");
+                    if (stateFields.values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                        throw mod.pos().error("JSC0419", "a contract with BigMap state cannot have batched actions: each step of a batch"
+                                + " would need its own map proofs (ADR-0004 D1, ADR-0018 D7)");
+                    }
+                }
                 default -> throw mod.pos().error("JSC0407", "unknown modifier " + mod.name());
             }
             mods.add(new Ir.Mod(mod.name(), mod.arg()));
+        }
+        if (pays && !audience && batched) {
+            throw m.pos().error("JSC0420", m.name() + " can pay out, so it must say who may call it; a batched action cannot use"
+                    + " 'only' (any intent's owner is its caller), so write 'open' and check the caller in the body (ADR-0018 D4). " + INTENT_CAVEAT);
         }
         if (pays && !audience) {
             throw m.pos().error("JSC0408", m.name() + " can pay out, so it must say who may call it: add 'only <field>' or 'open' (ADR-0018 D4)");
@@ -543,6 +592,12 @@ final class Checker {
         for (Param p : m.params()) {
             if (clientLocals(m.kind()).contains(p.name())) {
                 throw p.pos().error("JSC0216", "'" + p.name() + "' is a name the generated client uses for its own values; rename the parameter");
+            }
+            // M1c review C1: a batched action's intent method (ClientGenerator: <m>Intent(callerAccount, args…,
+            // [payLovelace,] deadline)) takes the intent's deadline after the arguments.
+            if (batched && p.name().equals("deadline")) {
+                throw p.pos().error("JSC0216", "'deadline' is a name the generated client uses for its own values (the intent's deadline in "
+                        + m.name() + "Intent(…, deadline)); rename the parameter");
             }
             Ty t = resolve(p.type());
             Ir.Local l;

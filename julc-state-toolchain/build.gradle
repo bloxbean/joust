@@ -15,6 +15,12 @@ dependencies {
     testImplementation project(':examples:bank')
     testImplementation project(':examples:token')     // S2b: read discovery
     testImplementation project(':examples:dsl')       // ADR-0018 M0: .jsc 2 transition programs vs the JVM
+    // ADR-0018 M1c (J11): the Java examples the .jsc 2 ports are measured against (size, budget, behaviour).
+    testImplementation project(':examples:vault')
+    testImplementation project(':examples:escrow')
+    testImplementation project(':examples:crowdfund')
+    testImplementation project(':examples:pool')
+    testImplementation project(':examples:treasury')  // M1c review S1: a parameterised script, read beside its class
     testImplementation libs.julc.vm.java
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes
