@@ -1,6 +1,6 @@
 # ADR-0021: A language server and VS Code extension for `.jsc` 2
 
-**Status:** Proposed (r2)
+**Status:** Proposed (r3)
 **Date:** 2026-11-13
 **Builds on:** ADR-0018 (`.jsc` 2), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
 D3 (names), D9 (libraries and `java:` imports, built in M4), D12 (stable codes, source maps, generated Java, ABI
@@ -8,17 +8,18 @@ manifest), D13 (tree-sitter and TextMate grammars), D14 (npm projects), D16 (dep
 (M5 is named there but not designed). ADR-0015 (the toolchain engine: JOUST's processor and JuLC in a GraalVM Web
 Image, run in Node). ADR-0017 D4, D9 (the native `joust` defers project commands to the project's own
 `@julclang/joust`), D6 (release assets) and its threat model.
-**Depends on:** ADR-0018 being accepted (it is Proposed, r9, on #59/#63), and on ADR-0018's milestone **M1e**
-(`feat/jsc-2-m1e`, in progress): a catalogued nesting limit, identical on the JVM and in Wasm, and on-chain messages
-that do not depend on layout or names (§3a). §3a lists the amendments to ADR-0018 that this ADR needs; they land in
-ADR-0018's own revision history.
+**Depends on:** ADR-0018 being accepted (it is Proposed, r9, on #59/#63), and on ADR-0018's milestone **M1e**, which
+ADR-0018 is to define (r10, pending) and no PR implements yet: a catalogued nesting limit, identical on the JVM and in
+Wasm, and on-chain messages that do not depend on layout, comments, the file name or any name (§3a). This ADR treats
+M1e as **one atomic gate** of M5a. §3a lists what ADR-0018 is asked to adopt; if ADR-0018 declines an item, this ADR is
+revised.
 **Design only:** no implementation in this PR. Every snippet is illustrative.
 **Risk:** medium. Nothing here changes a validator, a wire format or what the build accepts: the build stays the
 authority (D1). But the extension runs code inside the developer's editor on every repository they open, including
 hostile clones, so trust and the choice of which code runs are security decisions (D3b, D10). And editor operations
 can change what the build produces without the author meaning to: a rename can change the ABI manifest (D7), an
-accepted ABI change strands deployed instances if it is not the one the author reviewed (D7a), and, until M1e lands,
-any edit that moves a line changes the script hash (F12, D8).
+accepted ABI change strands deployed instances if it is not the one the author reviewed (D7a), and at the pinned
+revision any edit that moves a line changes the script hash (F12), which is why ADR-0018's M1e gates M5a (D8, §3a).
 
 ## 1. Context
 
@@ -42,8 +43,8 @@ hostile input, and how much of the front end it needs to change. Facts this desi
 | F9 | The two build paths **print diagnostics in different shapes**: Gradle's `JscMain` prints `org/acme/File.jsc:12:5: error[JSC0502]: …` (as the catalogue says for both paths), `joust build` prints `error[JSC0502]: app/File.jsc:12:5: …`; each names the file relative to its source directory (`src/main/jsc/`, `contracts/`) | `JscException.format`; `JscMain.java:181-185`, `:211`; `js/joust/src/build.js:49` |
 | F10 | On Gradle, javac's and the processor's messages on generated Java are not yet remapped to `.jsc` positions (the npm path remaps them, `Toolchain.java:143`); the toolchain reports an internal lowering failure at line −1 and catches only `JscException` and `RuntimeException` (as does `JscMain`) | M1a report, "Not in M1a"; `Toolchain.java:203-206`; `JscMain.java:210-216` |
 | F11 | The npm CLI finds its project and the project's own `@julclang/joust` by ADR-0017 D4's rules, walking up to ancestors of the working directory; and **every project command of the npm launcher dispatches to the project's package before command dispatch** (ADR-0017 D5): run from a workspace with a planted package, the launcher executed the planted `bin` for `lsp --stdio` | `js/joust/src/project.js:1-30`; `js/joust/bin/joust.js:68-104`, `:112`; ADR-0017 D4, D5, I1, I5; review C2 probe |
-| F12 | **The script hash depends on line numbers, the file name and some parameter names** at this pin. Generated `Require` messages embed `File.jsc:<line>` (`JavaEmitter.where`) and, for a `Key` parameter, its name; `Require` messages stay on-chain (ADR-0008). On `Ledger.jsc`: a blank line after `package`, an added `import` line, renaming the file, or renaming the `Key` parameters `to`/`who` each change the hash; re-indenting, CRLF line ends, a trailing comment, and renaming locals, state fields, actions, enums or variants do not. **M1e removes this** (§3a) | `JavaEmitter.java:161-163`, `:212-215`, `:497`, `:543`, `:594`, `:1027`; §1 measurements; review F4, S5, S6 (reproduced on the JVM at `dfa7025` and in Wasm) |
-| F13 | **The front end has no nesting limit**: 1,000 nested parentheses overflow the JVM stack in the parser; in the Web Image `joust.lower` fails at 252 levels and `joust.build` at about 250, as a `TypeError`, and the outcome depends on the engine's warmth; the Gradle path accepts 500. **M1e adds a catalogued limit**, identical on both paths and well below the Web Image's depth, and handles operator chains iteratively | review S2, F8 (probes at `03c594b` and `dfa7025`) |
+| F12 | **The script hash depends on line numbers, the file name and some parameter names** at this pin. Generated `Require` messages embed `File.jsc:<line>` (`JavaEmitter.where`) and, for a `Key` parameter, its name; `Require` messages stay on-chain (ADR-0008). On `Ledger.jsc`: a blank line after `package`, an added `import` line, renaming the file, or renaming the `Key` parameters `to`/`who` each change the hash; re-indenting, CRLF line ends, a trailing comment, and renaming locals, state fields, actions, enums, variants, the contract or the package do not. **ADR-0018's M1e is to remove this** (§3a, pending) | `JavaEmitter.java:161-163`, `:212-215`, `:497`, `:543`, `:594`, `:1027`; §1 measurements; review F4, S5, S6 (reproduced on the JVM at `dfa7025` and in Wasm) |
+| F13 | **The front end has no nesting limit**: 1,000 nested parentheses overflow the JVM stack in the parser; in the Web Image `joust.lower` fails at 252 levels and `joust.build` at about 250, as a `TypeError`, and the outcome depends on the engine's warmth and on the thread's stack (§1, r3: a worker with a 1 MB stack lowers 232 levels, 4 MB 2,000); the Gradle path accepts 500. **ADR-0018's M1e is to add a catalogued limit**, identical on both paths and well below the smallest stack's depth, and to handle operator chains iteratively (§3a, pending) | review S2, F8 (probes at `03c594b` and `dfa7025`) |
 | F14 | Elci (same organisation) ships a tree-sitter grammar with highlight, locals, fold and indent queries, a corpus and CI, not published to npm; it has **no language server or VS Code extension**. Its ADR keeps "editor services separate from the compiler core: the CLI and later language server call the same parser, resolver, and type checker" | `github.com/bloxbean/elci-lang` at `a3ec190`: `README.md:62-63`, `tree-sitter-elci/README.md`, `adr/elci-language-syntax-compiler-design-adr.md` §8 |
 | F15 | No editor files exist in the repository or the templates; the docs highlight `.jsc` with Kotlin's grammar. M1d (in progress) adds the tree-sitter and TextMate grammars; their paths are not fixed yet | `www/astro.config.mjs:26-27`; `js/create-joust/template/`; ADR-0018 D13 |
 | F16 | VS Code: the Marketplace accepts only `major.minor.patch` extension versions ("semver pre-release tags are not supported"); pre-releases use `vsce publish --pre-release`; extensions can be platform-specific (`--target`) or universal. Workspace Trust offers `capabilities.untrustedWorkspaces: { supported: "limited", restrictedConfigurations }`, and Restricted Mode disables workspace tasks; settings of scope `machine` or `application` cannot be set by a workspace. `editor.codeActionsOnSave` and `editor.formatOnSave` are editor settings a workspace can set. Current stable is 1.146.0 | code.visualstudio.com: "Publishing extensions", "Workspace Trust", "Contribution points" (fetched 2026-11-13); `update.code.visualstudio.com/api/releases/stable` (2026-11-13) |
@@ -86,6 +87,14 @@ committed).
 | Two engines, one per thread (r1: checks on the main thread, builds in a worker) | 504–505 MB with both loaded, 725 MB after three builds; a main-thread lowering every 20 ms during the builds: median 2.7 ms, max 193–250 ms (the stall r2's design removes) |
 | A minimal server payload: the engine files plus `vscode-languageserver` 11.0.0 and `vscode-languageserver-textdocument` 1.0.16, zipped at `-9` (a `.vsix` is a zip) | 11,537,164 B; no `.node` file |
 
+**r3: stacks and the largest configuration** (same image and machine):
+
+| | Result |
+|---|---|
+| Deepest nesting `joust.lower` handles in a worker, by `resourceLimits.stackSizeMb` (binary search up to 4,000 levels) | 1 MB: 232; 2 MB: 536; 4 MB (Node's default for workers): 2,000; 8 MB: ≥ 4,000. The stack, not only the engine, decides where Wasm overflows |
+| D4's largest configuration, two analysis workers and one build worker, with D2a's heap limits (256, 256, 384 MB), the protocol thread holding no engine (two runs) | 815–822 MB with all three loaded; 1,003–1,012 MB after three `Ledger` builds (2.1 / 1.6 / 1.6 s); every call succeeded under the limits. The design review measured 635 / 851 MB with its own driver; L10 bounds the larger figure |
+| What the toolchain image's JavaScript loader `require`s | only Node built-ins (`fs/promises`, `https`, `process`, by feature detection), which Node always loads in preference to a file of the same name |
+
 What follows from them: re-checking a whole file on every edit is cheap (milliseconds even at 1,889 lines, about 20
 times the size of the largest example), so the server needs **no incremental checker** (D4). Running the engine in a
 worker costs almost nothing and makes it killable and memory-bounded (D2a). Memory, not speed, is the cost of the Wasm
@@ -102,14 +111,17 @@ engine: about 360–390 MB for analysis, and about 365 MB more while a build wor
   compiled), never code to run, until the user trusts the folder that contains them.
 - **Trusted:** the extension as installed from the marketplace (its own code and bundled engine), the editor itself,
   the user's own settings (user scope, not workspace scope), a server the user installed and names by absolute path
-  (other editors, D3b), and, **once the user trusts the workspace**, a project's own `@julclang/joust` whose real path
-  lies inside a trusted folder (the code `npm run build` would run anyway: ADR-0017's argument), and the commands the
-  user explicitly invokes.
-- **What the language tooling must not do:** run workspace code in an untrusted workspace, or code from outside the
-  trusted folders in a trusted one (no `node_modules` code, no Gradle, no executable named by a workspace setting);
-  write to the workspace on its own (only edits the user applies and commands the user invokes, D10); open the network
-  (no telemetry, no downloads; Q3(b) is the one open exception, and only on explicit consent); read outside the
-  workspace in restricted mode (D4b); let a hostile file hang, crash or exhaust the server (D2a, D4b); change a deployed
+  (other editors, D3b), and, **once the user trusts the workspace**, the project's own compiler engine files when their
+  real paths lie inside one of the workspace's folders (D3b; what `npm run build` would run anyway: ADR-0017's
+  argument), and the commands the user explicitly invokes. VS Code exposes only whether the whole workspace is trusted
+  (`workspace.isTrusted`), not which folders are, so "trusted folder" in this ADR means a folder of a trusted workspace,
+  with D3b's further limits.
+- **What the language tooling must not do:** run workspace code in an untrusted workspace, or, in a trusted one, any
+  workspace code but the project's engine files confined to a workspace folder (D3b) (no `node_modules` code, no Gradle, no executable named by a workspace setting);
+  write to the workspace on its own (only edits the user applies and commands the user invokes, D10); open the network,
+  including by touching a path that names a network location (no telemetry, no downloads; Q3(b) is the one open
+  exception, and only on explicit consent); read outside the workspace in restricted mode (D4b); apply any edit on save
+  (D7); let a hostile file hang, crash or exhaust the server (D2a, D4b); change a deployed
   script by an edit the user did not mean as a code change (L12); let an ABI change be accepted that the user did not
   review (D7a).
 - **The build remains the authority.** An editor diagnostic is advice. A false "no error" in the editor never
@@ -147,8 +159,8 @@ from running the build (D4). When the server runs the project's own compiler ove
   cardano-js-sdk). It keeps open buffers, debounces, and answers most requests (hover, definition, references,
   symbols, semantic tokens, completion lists) by lookups in the document model. **It holds no engine**: every engine
   runs in a worker (D2a).
-- **Editors** talk LSP to the server. The VS Code extension is a thin client that finds and starts the right server
-  (D3, D3b); Neovim and Helix start a server the user installed (D3b, D9).
+- **Editors** talk LSP to the server. The VS Code extension is a thin client that starts its own server, which chooses
+  the engine (D3, D3b); Neovim and Helix start a server the user installed (D3b, D9).
 
 **Alternatives considered:**
 - **(a) A Java server with LSP4J, reusing the checker on the JVM.** The fastest analysis (§1: about 2–5 times the
@@ -169,89 +181,127 @@ from running the build (D4). When the server runs the project's own compiler ove
   names). ADR-0018 M1b's JavaScript interpreter is deliberately independent as a test oracle; an editor needs the
   opposite, identity with the build.
 
-### D2a. Engine hosting: workers, a watchdog, memory bounds, quarantine (new in r2)
+### D2a. Engine hosting: workers, a watchdog, memory bounds, quarantine (new in r2; revised in r3)
 
 A synchronous engine call cannot be interrupted on its own thread (F7), and an engine cannot be re-loaded in the
 thread that loaded it (F8). So:
 
 - **Every engine runs in its own `worker_thread`**: one analysis worker per project root and compiler version, and a
   build worker started on demand (D4). The protocol thread holds no engine and stays responsive (§1: 0.1–0.3 ms per
-  round trip).
+  round trip). **Engine workers do no file I/O**: the protocol thread reads files (D4b) with asynchronous `fs` (libuv's
+  thread pool, so a slow file never blocks it) and hands engines contents only; a worker blocked in a system call is
+  therefore never a case the watchdog must handle.
+- **Resource limits, set explicitly on every engine worker:** `stackSizeMb` 4 (Node's default for workers, stated so it
+  cannot drift; §1: the stack decides where Wasm overflows, and M1e's limit is tested against the smallest stack of
+  every host, §8), and `maxOldGenerationSizeMb` 256 for an analysis worker and 384 for a build worker (§1: three
+  `Ledger` builds succeed at 256 MB; a worker over its limit ends with `ERR_WORKER_OUT_OF_MEMORY` and the process
+  survives). With D4's largest configuration these limits keep the process within L10 (§1: 1,003–1,012 MB measured).
 - **A watchdog on the protocol thread** gives each call a time cap (illustrative: 2 s for analysis and edit
-  operations, 120 s for a build; tuned in M5a) and terminates the worker when it is exceeded (§1: 9 ms). `$/cancelRequest`
-  for a request in an engine call terminates that worker too when the call is still running after a grace period. A
-  **restart is always a new worker**, never a re-load in an existing thread.
-- **Memory:** each worker gets `resourceLimits` (`maxOldGenerationSizeMb`, illustrative 512 for analysis and 768 for a
-  build), which bounds the engine's heap (§1: the image's objects live in V8's heap; a worker over its limit ends with
-  `ERR_WORKER_OUT_OF_MEMORY` and the process survives). M5a measures the worst-case total against L10's bounds.
+  operations, 120 s for a build; tuned in M5a) and terminates the worker when it is exceeded (§1: 9 ms). A **restart is
+  always a new worker**, never a re-load in an existing thread.
+- **Cancellation is not failure.** `$/cancelRequest` for a request whose engine call is still running after a grace
+  period longer than a normal call (illustrative: 1 s, against calls of milliseconds) terminates the worker and starts
+  a new one; that termination does not count toward the restart limits and does not quarantine the input. Requests
+  answered from the model (hover, semantic tokens, completion lists) involve no engine call and are simply dropped.
 - **Quarantine:** a call that times out, exceeds memory or fails internally reports one internal-error diagnostic on
   the file (code `JSC-INTERNAL`, not a catalogue code, with "analysis stopped: time/memory limit" or the failure's
   class), and the **input that caused it** (the SHA-256 of the snapshot's contents plus the compiler version) is
   quarantined: the same input is not analysed again; the next edit is analysed after a backoff (illustrative: 1 s,
   doubling to 30 s while failures repeat).
-- **Restart limits and "analysis unavailable":** after three worker failures within five minutes for one project, the
-  server stops analysing it, keeps the last diagnostics marked stale, shows "JOUST analysis unavailable" (status bar
-  and one notification) with a **Restart analysis** command, and keeps answering requests from the last model. If the
-  server process itself exits, `vscode-languageclient`'s restart policy applies; when it gives up, the extension shows
-  the same state with a **Restart server** command.
+- **The model is bounded:** a file's document model has a size cap (illustrative: 200,000 entries and 16 MiB
+  serialised), checked in the worker before it posts; over the cap the worker sends a "model too large" result instead,
+  reported as one diagnostic, so a hostile file cannot inflate the protocol thread, which has no `resourceLimits`.
+- **Restart limits and "analysis unavailable":** after three worker failures (cancellations excluded) within five
+  minutes for one project, the server stops analysing it, keeps the last diagnostics marked stale, shows "JOUST analysis
+  unavailable" (status bar and one notification) with a **Restart analysis** command, and keeps answering requests
+  from the last model. If the server process itself exits, `vscode-languageclient`'s restart policy applies; when it
+  gives up, the extension shows the same state with a **Restart server** command. Both commands are M5a (§8).
 
-### D3. Which compiler runs: the project's own, else the extension's, said aloud
+### D3. Which compiler runs: the project's own, else the extension's, said aloud (revised in r3)
 
-- **npm project, trusted workspace:** the extension finds the project and its `@julclang/joust` by ADR-0017 D4's
-  rules (F11), then applies D3b's confinement. If the package is eligible, it starts that package's **LSP entry** (D3b)
-  with the editor's Node runtime. The server's compiler is then the project's compiler, by construction. A package that
-  predates the LSP entry (any release before M5a's) is not eligible.
-- **Otherwise** (untrusted workspace; npm project not installed or not eligible; Gradle project; a loose `.jsc` file):
-  the extension starts its **bundled** server (the extension pins one exact `@julclang/joust` version). The status bar
-  and the server's `serverInfo` show which compiler is running ("JOUST 0.1.0-pre1-rc9, bundled, advisory"), and each
-  diagnostic's `source` says so. For a Gradle project the extension reads the `org.julclang.joust` plugin version from
-  the build files **as text** (never by running Gradle) and says when it differs. It does not download a matching
-  engine (Q3).
+- **The protocol layer is always the extension's own** (or, in other editors, the user-installed server's, D3b). What
+  can come from the project is only the **compiler**: its toolchain engine files.
+- **npm project, trusted workspace:** the server finds the project and its `@julclang/joust` by ADR-0017 D4's rules
+  (F11), then applies D3b's confinement to the package's two engine files (`engine/joust-toolchain.js` and its
+  `.wasm`). If they are eligible, its analysis and build workers load **the project's engine** instead of the bundled
+  one. The analysis then uses the project's compiler, by construction. An engine is eligible only if it exposes the
+  `joust.lang` entries at a protocol version the server supports (the engine reports its version and features when it
+  loads); an engine that predates them (any release before M5a's) is not.
+- **Otherwise** (untrusted workspace; a window with no folder; npm project not installed or not eligible; Gradle
+  project; a loose `.jsc` file): the workers load the extension's **bundled** engine (the extension pins one exact
+  `@julclang/joust` version). The status bar and the server's `serverInfo` show which compiler is running ("JOUST
+  0.1.0-pre1-rc9, bundled, advisory"), and each diagnostic's `source` says so. For a Gradle project the extension reads
+  the `org.julclang.joust` plugin version from the build files **as text** (never by running Gradle) and says when it
+  differs. It does not download a matching engine (Q3).
 - ADR-0017 I1 says the CLI never falls back to an implementation of its own. The editor's fallback differs on purpose:
-  it only reads and reports (no artifacts, no commands, no ABI acceptance, D7a), and it is labelled as advisory
-  wherever it speaks. Commands that act on a project (D7) always go through the project's own CLI or Gradle.
-- **Trust granted mid-session:** on `onDidGrantWorkspaceTrust` the extension re-runs selection and restarts into the
-  project's server when it is now eligible.
-- The extension's own version is separate from JOUST's: the Marketplace accepts only `major.minor.patch` (F16), and
-  the extension is a thin client. Compatibility is the LSP capabilities plus an `experimental.joust` capability that
-  carries a protocol version for the custom requests (generated Java, ABI diff, mode); the extension refuses a server
-  whose protocol version it does not support and falls back to the bundled one, saying why.
+  it only reads and reports (no artifacts, no commands), and it is labelled as advisory wherever it speaks. Commands
+  that act on a project (D7, D7a) always go through the project's own CLI or Gradle.
+- **Trust granted mid-session:** on `onDidGrantWorkspaceTrust` the server re-runs selection and restarts its workers on
+  the project's engine when it is now eligible.
+- The extension's own version is separate from JOUST's: the Marketplace accepts only `major.minor.patch` (F16).
+  Compatibility between the server and an engine is the `joust.lang` protocol version; between the extension and a
+  user-installed server (other editors) it is the LSP capabilities plus an `experimental.joust` capability carrying a
+  protocol version for the custom requests (generated Java, ABI diff, mode).
 
 ### D3a. Two modes: project-matched and advisory (new in r2)
 
 - **Project-matched:** the server runs the project's own compiler (D3), and the analysis of the file is complete for
   its snapshot (D4a): every file and library the compiler resolves for it is in the snapshot, the configuration is the
   project's, and the file uses only what the server's milestone supports. The front-end diagnostics then equal the
-  build's (L1), and quick fixes, renames and **Accept ABI** (D7a) are offered.
-- **Advisory:** everything else, including the bundled server in any project, a Gradle project, restricted mode, and a
+  build's (L1), and edits are validated against the project's compiler (L6).
+- **Advisory:** everything else, including the bundled engine in any project, a Gradle project, restricted mode, and a
   project-matched server whose analysis of a file is incomplete (a `java:` import it cannot resolve, D4b). Diagnostics
   carry an "advisory" label (in `source` and the status bar); edit validation is still done (L6) but never presented as
-  evidence that the project's build accepts the result; Accept ABI is not offered.
+  evidence that the project's build accepts the result.
+- **Accept ABI does not depend on the mode** (r3): it runs the project's own tool, which produces the diff it accepts
+  (D7a).
 - **Imports before M5c:** at the pinned revision the compiler accepts only `std/*` imports; from ADR-0018 M4 on, it
   resolves `.jsc` libraries, contracts and `java:` libraries itself, and the snapshot includes them (D4a). So
   project-matched analysis of an importing file is available as soon as the compiler supports the import; M5c adds
   navigation and rename **across** files, not correctness of single-file analysis.
 
-### D3b. Launch paths: never through the CLI's dispatch, never from outside the trusted folder (new in r2)
+### D3b. Launch paths and confinement (new in r2; revised in r3)
 
-- **The bundled server** has its own entry module inside the extension, a single bundled file (the server code and
-  its dependencies resolved at build time, so no `require` resolves from the workspace), started by the extension with
-  an absolute path and the extension host's Node (`process.execPath`). It never calls project discovery or the npm
-  CLI's launcher (F11), so a planted or old project package cannot be reached through it, in any case: untrusted,
-  uninstalled, Gradle, loose file.
-- **A project's server** is started through the package's **LSP entry**, a module exported for that purpose
-  (illustrative: `@julclang/joust/lsp`, also installed as a second bin `joust-lsp`), never through `bin/joust.js`, so
-  no second project dispatch happens. It is eligible only if the workspace is trusted, the package's `package.json` (a
-  regular file of at most 64 KiB) declares the LSP entry, and **the real paths of the package directory and of the
-  entry file lie inside a folder VS Code reports as trusted**. A package found in an ancestor of the trusted folders
-  (a hostile monorepo root), or through a symlink leaving them, is not started; the extension uses the bundled server
-  and says "compiler found outside the trusted folder".
+- **The server** (protocol layer and worker host) has its own entry module inside the extension, a single bundled
+  file (the server code and its dependencies resolved at build time, so no `require` resolves from the workspace),
+  started by the extension with an absolute path and the extension host's Node (`process.execPath`). It never calls
+  the npm CLI's launcher (F11), so a planted or old project package cannot be reached through dispatch.
+- **No project JavaScript runs except the engine file, so confinement covers everything that loads** (S13). In r2 the
+  extension started the project's own server entry; but that entry's dependencies would resolve through ancestor
+  `node_modules` directories, outside any confinement of the entry itself (a planted ancestor
+  `@julclang/joust-runtime` ran in the review's probe). Of the three ways to confine a module graph, r3 picks the one
+  whose closure is known:
+  - (a) a module resolve hook would have to cover every loader path (ESM, CommonJS, `createRequire`) on the extension
+    host's Node, and is easy to get partly wrong;
+  - (b) Node's permission model restricting file reads is not relied on: its status on the extension host's Node is
+    not verified, and it would also restrict the server's own legitimate reads;
+  - **(c) chosen: a closure of exactly two files.** The project contributes only `engine/joust-toolchain.js` and
+    `engine/joust-toolchain.js.wasm`. The loader file `require`s only Node built-ins (§1), which Node always loads in
+    preference to a file of the same name; the server's own code is the extension's. Both files' real paths are
+    checked, then loaded by absolute path in an engine worker, which does no other I/O (D2a).
+- **Eligibility of the project's engine:** the workspace is trusted, the window has at least one folder, and the real
+  paths of the package directory and of both engine files lie inside the real path of **one folder of
+  `workspace.workspaceFolders`** (each folder of a multi-root workspace is its own boundary; a package in another
+  folder of the window serves only that folder's files).
+  - **Comparison:** both sides are real paths from `fs.realpath.native` (a folder may itself be a symlink, as macOS
+    `/tmp` → `/private/tmp`; on Windows it resolves junctions and `subst` drives); the comparison is by path segment,
+    never by string prefix (`/u/repo` does not contain `/u/repo-evil`), and exact on the canonical case those real
+    paths return. Any failure to resolve fails closed: the bundled engine runs, with a notice.
+  - **Workspace files:** a `.code-workspace` file may list folders outside its own directory, including `..`. Such a
+    folder still bounds files *for analysis*, but a project engine found in it is **not eligible** unless the folder's
+    real path is inside the workspace file's directory, or the user lists it in a `machine`-scoped setting of allowed
+    roots. So a repository cannot make its ancestor eligible by shipping a workspace file.
+  - A package found above every workspace folder (an ancestor monorepo root), or reached through a symlinked
+    `node_modules` that leaves the folder, is not eligible; the bundled engine runs and the status bar says "compiler
+    found outside the workspace folder".
 - **Other editors** have no workspace trust, so the documented default is a **user-installed server named by absolute
-  path**: a global `@julclang/joust` at a pinned version, started as `<prefix>/bin/joust-lsp --stdio` (advisory unless
-  the project's version matches). The project-local variant (`./node_modules/.bin/joust-lsp --stdio`) is documented
-  with a warning that it runs the repository's code. **`npx joust` is never documented** (F18); a docs test refuses it
-  in the editor configurations. The native `joust` of ADR-0017 does not serve as a language server: it would dispatch
-  `lsp` to the project's package (ADR-0017 D9).
+  path**: a global `@julclang/joust` at a pinned version, started as `<prefix>/bin/joust-lsp --stdio` (the same server
+  code, with its own engine; advisory unless the project's version matches). It loads a project's engine only with an
+  explicit flag (`--project-engine`), under the same two-file confinement against the client's workspace folders. The
+  project-local variant (`./node_modules/.bin/joust-lsp --stdio`, which runs the repository's whole package) is
+  documented with a warning. **`npx joust` is never documented** (F18); a docs test refuses it in the editor
+  configurations. The native `joust` of ADR-0017 does not serve as a language server: it would dispatch `lsp` to the
+  project's package (ADR-0017 D9).
 - Every executable is spawned by absolute path, never a bare name.
 
 ### D4. Checking model: whole files on every edit, builds in a worker
@@ -274,13 +324,14 @@ thread that loaded it (F8). So:
   the Problems panel through a task (D9).
 - **How many servers and workers:** one server process per VS Code window; inside it, one analysis worker per (project
   root, compiler version) with open `.jsc` files, at most two alive at once (least recently used stopped first), each
-  stopped after 10 minutes without an open file of its project; at most one build worker per window. Other editors
-  start one server per editor session.
+  stopped after 10 minutes without an open file of its project; at most one build worker per window. That maximum
+  (two analysis workers and one build worker) is what L10 bounds (§1: 1,003–1,012 MB). Other editors start one server
+  per editor session.
 - **Limits:** a per-file size cap (illustrative: 1 MiB), the watchdog caps (D2a), a cap on files per snapshot, and
   M1e's nesting limit (F13), which turns deep input into a catalogued error on every path. The toolchain's internal
   error at line −1 (F10) is reported at 1:1.
 
-### D4a. Snapshots and versioned edits (new in r2)
+### D4a. Snapshots and validated edits (new in r2; revised in r3)
 
 - **A snapshot** is a generation number over everything an analysis or build reads: the open buffers with their LSP
   versions, the contents of every other file read (by hash), `joust.config.json`, dependency contents (libraries,
@@ -288,24 +339,42 @@ thread that loaded it (F8). So:
 - **Results are discarded when stale:** an asynchronous analysis or build result is published only if no input it read
   has changed since; otherwise it is dropped and the analysis re-run. A library edit therefore invalidates a pending
   build of its importers even when their buffers did not change.
-- **Diagnostics carry versions:** `publishDiagnostics` includes the document's `version`; the server never publishes for
-  a version older than one it already published for that document. Between an edit and its analysis the editor shows
-  the previous version's diagnostics, as LSP intends; build diagnostics for a saved generation are withdrawn as soon as
-  a newer generation exists (L8).
-- **Edits are bound to versions:** rename and quick-fix edits are `WorkspaceEdit.documentChanges` with the
-  `OptionalVersionedTextDocumentIdentifier` versions the server validated, so the client refuses an edit whose
-  document changed in between. A client without `documentChanges` support gets only single-document edits computed at
-  `codeAction/resolve` (or rename) time on the current text, and no cross-file rename. Completion uses the last model
-  only to decide what kind of item to offer (D5); every text edit a completion item carries is computed against the
-  current text.
+- **Diagnostics carry versions:** `publishDiagnostics` includes the document's `version`, and the server never publishes
+  for a version older than one it already published for that document. `vscode-languageclient` 11.0.0 does not use that
+  version (it declares `publishDiagnostics.versionSupport: false`), so freshness is enforced on the server's side. Build
+  diagnostics for a saved generation are withdrawn as soon as a newer generation exists (L8).
+- **Edits are bound to the text they were validated on, or not offered.** Every rename and quick-fix edit is a
+  `WorkspaceEdit.documentChanges` whose every entry names a non-null document version the server validated, so the
+  client refuses the edit if any of those documents changed in between.
+  - **Closed files:** an edit never targets a closed document (LSP allows a `null` version for one, which binds
+    nothing). Before validating a cross-file rename, the VS Code client opens every affected file
+    (`workspace.openTextDocument`, which sends `didOpen` with a version); in other editors a cross-file rename that
+    touches a closed file is refused with the list of files to open.
+  - **Atomicity:** a multi-file edit is offered only to a client whose `workspace.workspaceEdit.failureHandling` is
+    `transactional` or `textOnlyTransactional` (`vscode-languageclient` 11.0.0 declares the latter, and rename edits are
+    text-only), so a failure on one file leaves none applied; for any other client, edits are single-file only.
+  - **Clients without versioned `documentChanges`** get no rename and no quick fixes at all: an unversioned edit cannot
+    be bound to its text, and re-validating at application time is impossible without a client-side apply step.
+  - **In VS Code, quick fixes are applied by the extension's command** (D7), which asks the server to re-validate the fix
+    against the current versions immediately before applying it with `workspace.applyEdit`.
+- **Completion** uses the last model only to decide what kind of item to offer (D5); every text edit a completion item
+  carries is computed against the current text.
 
-### D4b. One input policy for every file the server reads (new in r2)
+### D4b. One input policy for every file the server reads (new in r2; revised in r3)
 
-- Every path is resolved by real path. Only regular files are read (never a FIFO, device or socket), at most cap + 1
-  bytes (anything longer is "too large"). Directory symlinks are not followed when enumerating; file symlinks are
-  followed only to a real path inside the workspace folders.
-- From `joust.config.json` the server takes only `contracts` (where the sources are), confined to the workspace folder
-  (otherwise ignored, with a diagnostic on the config); it never reads `networks`, URLs or `out`.
+- **Lexical confinement first, before any filesystem call** (S14). A path taken from configuration or a symlink target
+  is first checked as text against the workspace folder: absolute paths, UNC paths (`\\host\share`), device and
+  extended paths (`\\.\…`, `\\?\…`), drive-relative paths (`C:x`) and any path whose `..` segments leave the folder are
+  rejected **without touching them** (on Windows, merely opening or `stat`ing a UNC path can open an SMB connection and
+  send the user's credentials, as the security review notes; not reproduced here). A symlink's target is read with
+  `readlink` and checked the same way before it is followed.
+- **Then real paths and file checks:** a path that passes is resolved by real path and must still lie inside the
+  folder (segment comparison, D3b). Files are opened non-blocking (`O_NONBLOCK`, so a FIFO cannot block the open), then
+  checked with `fstat` **on the descriptor** (regular files only: never a FIFO, device or socket, even one swapped in
+  after a check by name), and read at most cap + 1 bytes (anything longer is "too large"). Directory symlinks are not
+  followed when enumerating. All of this happens on the protocol thread with asynchronous `fs` (D2a).
+- From `joust.config.json` the server takes only `contracts` (where the sources are), under these rules; it never reads
+  `networks`, URLs or `out`.
 - Library roots are enumerated explicitly by the toolchain's resolution rules (ADR-0018 D9), never from import text.
   In restricted mode a library root must have its real path inside the workspace folders; in trusted mode a linked
   package outside them (`npm link`) is read under the same file rules.
@@ -363,47 +432,50 @@ errors at once, and a tree to complete in while the user is half way through a l
 | Document symbols, outline, folding | from the parse and D6's M5a spans: contract, state fields, `init`/actions/destroys/views, `fn`s, `type`s, `enum`s and variants | M5a |
 | Hover | the type of a name or expression; "time value (D11)" when tainted, and why; a `std` row's `.jsc` signature, domain and Java target (D8); a method's audience and effects. Plain text or untrusted markdown with workspace text escaped (D10) | M5b |
 | Go to definition, find references | within a file from D6's reference mapping: locals, parameters, state fields, `fn`s, types, enums, variants, built-ins (to their docs); across `.jsc` files and libraries, `import contract`; into `java:` imports as **read-only** documents of the library's on-chain sources (a `joust-lib:` URI; positions from javac attribution) | M5b (file), M5c (across) |
-| Completion | in scope: locals, parameters, state fields, built-ins (`caller`, `received`, `balance`, `validFrom`, `validTo`, `state`, `params`, `funds`), `fn`s and the prelude; `std` rows inside `import { … } from "std/…"`; a record's fields and a `List`/`Map`/`BigMap`/`Option`'s operations after `.`; enum variants and `Some`/`None` where a value of that type is expected; **all arms** of a `match` on an enum or `Option`, as a snippet; modifiers (`only`, `authorized`, `after`, `before`, `payable`, `open`) after a method's parameters; types in type positions. **Completion elsewhere that adds an import line is held back until M1e** (F12; review S6). Items are filtered so that no name is offered that the checker refuses at that position (D3's shadowing rules); M5b's tests insert every offered item at the corpus positions and re-check | M5b |
-| Rename | of a local, parameter, `fn`, type, enum, variant or field, within the file (M5b) and the project (M5c). The new name is checked against every D3 and J10 rule (no shadowing of state fields or built-ins, no binding named like a declaration, ASCII, not a Java keyword or a processor-generated name), and the renamed snapshot is re-analysed: the rename is offered only if no new diagnostic appears and **every other reference still resolves to the same declaration** (L6). A name the ABI manifest records (state fields, fields reachable from the datum or a redeemer, action and destroy names and their parameters) is renamed only after a warning that the manifest, the generated client and the description change, and that the ABI gate will ask for acceptance at the next build; after M1e the warning also says that the script does not change (L12). **Before M1e, a rename that would change the script hash (F12: a `Key` parameter, which reaches a message) is not offered.** Never edits `.java` files, library packages, or files outside the project's contracts | M5b, M5c |
+| Completion | in scope: locals, parameters, state fields, built-ins (`caller`, `received`, `balance`, `validFrom`, `validTo`, `state`, `params`, `funds`), `fn`s and the prelude; `std` rows inside `import { … } from "std/…"`, and elsewhere with an edit that adds the import; a record's fields and a `List`/`Map`/`BigMap`/`Option`'s operations after `.`; enum variants and `Some`/`None` where a value of that type is expected; **all arms** of a `match` on an enum or `Option`, as a snippet; modifiers (`only`, `authorized`, `after`, `before`, `payable`, `open`) after a method's parameters; types in type positions. Inserting an item is the user's **code change** (it may change the program and its hash, L12); an import-adding edit is **hash-preserving** (L12, after M1e). Items are filtered so that no name is offered that the checker refuses at that position (D3's shadowing rules); M5b's tests insert every offered item at the corpus positions and re-check | M5b |
+| Rename | of a local, parameter, `fn`, type, enum, variant or field, within the file (M5b) and the project (M5c). The new name is checked against every D3 and J10 rule (no shadowing of state fields or built-ins, no binding named like a declaration, ASCII, not a Java keyword or a processor-generated name), and the renamed snapshot is re-analysed: the rename is offered only if no new diagnostic appears and **every other reference still resolves to the same declaration** (L6). A rename is **hash-preserving** (L12). A name the ABI manifest records (state fields, fields reachable from the datum or a redeemer, action and destroy names and their parameters) is renamed only after a warning that the manifest, the generated client and the description change (the script does not), and that the ABI gate will ask for acceptance at the next build. Versioned, transactional, open files only (D4a). Never edits `.java` files, library packages, or files outside the project's contracts | M5b, M5c |
 | Semantic tokens | from the IR: state field vs local vs parameter vs `fn` vs `std` function vs type, enum, variant; modifiers for `readonly` (every binding), `defaultLibrary` (prelude, `std`), and a custom `timeValue` modifier for D11-tainted expressions | M5b |
-| Code actions | kind **`quickfix` only**, never `source.*` (so `editor.codeActionsOnSave` cannot apply them; F16), and only **machine-applicable fixes**, each re-checked before it is offered (L6): `let`/`var` → `const` (JSC0128), `===`/`!==` → `==`/`!=` (JSC0133), delete an invisible format or control character (JSC0145, JSC0148; never `isPreferred`, since it can change a string's content), and, **after M1e**, add the missing `std` import (JSC0704; it inserts a line, F12). No fix moves lines before M1e. Diagnostics whose fix needs restructuring (JSC0115's `function` → a typed `fn`, JSC0130's spread update, JSC0129's early return) link to the catalogue instead of guessing | M5b |
+| Code actions | **Never applied on save, and never applied without the user choosing them** (r3). Kind and preference are not a consent boundary: VS Code's save participant requests every kind a workspace lists in `editor.codeActionsOnSave` (including `quickfix`) and applies every action returned (`saveParticipants.ts` at 1.146.0, `:481-485`; at 1.109.0, `:419-440`). So: (1) the server answers a code-action request whose `triggerKind` is `Automatic` **and** whose `only` filter is set, which is how save and other filtered automatic requests arrive, with no actions; VS Code's light bulb asks `Automatic` **without** a filter (`codeActionModel.ts:66` at 1.146.0), and an explicit request is `Invoked`, so both still see fixes; (2) actions carry no `edit`, only the extension's `joust.applyFix` command, which re-validates against the current versions and applies (D4a); (3) the kind is `quickfix`, never `source.*`, and no action is `isPreferred`. Fixes are **machine-applicable** and each is re-checked before it is offered (L6): `let`/`var` → `const` (JSC0128), `===`/`!==` → `==`/`!=` (JSC0133), add the missing `std` import (JSC0704). Deleting invisible or control characters (JSC0145, JSC0148), which can change a string's content, is **not a code action**: it is the explicit command **Remove invisible characters…**, which lists every occurrence in a modal before changing anything. Diagnostics whose fix needs restructuring (JSC0115's `function` → a typed `fn`, JSC0130's spread update, JSC0129's early return) link to the catalogue instead of guessing | M5b |
 | Generated Java | "Show generated Java" opens the lowering as a read-only virtual document at the line the source map gives for the cursor; "peek" shows it inline. From the model's source map (the as-you-type lowering produces it, F1) | M5b |
 | ABI manifest | D7a | M5b |
-| Commands | **JOUST: Build** (the project's `joust build` or `./gradlew build`), **Accept ABI…** (D7a), **Migrate to .jsc 2** (`joust migrate`, ADR-0018 D16, once M1d ships it), **Show generated Java**, **Check build (in memory)** (D4), **Restart analysis**, **Show compiler and mode**. Commands that run anything run it as a VS Code task through the project's own CLI or `gradlew`, only in a trusted workspace. Commands are reachable from the command palette and code lenses, never from links inside markdown (D10) | M5a (Build), M5b (rest) |
+| Commands | **Restart analysis** and **Restart server** (D2a), **JOUST: Build** (the project's `joust build` or `./gradlew build`), **Show compiler and mode**: M5a. **Accept ABI…** (D7a), **Migrate to .jsc 2** (`joust migrate`, ADR-0018 D16, once M1d ships it), **Show generated Java**, **Check build (in memory)** (D4), **Remove invisible characters…**: M5b. Commands that run anything run it as a VS Code task through the project's own CLI or `gradlew`, only in a trusted workspace and only when that CLI's package (or `gradlew`) is inside a workspace folder (D3b's comparison). Such a task runs what typing the command in a terminal would run, by the user's choice; D3b's two-file confinement governs what the extension loads by itself. Commands are reachable from the command palette and code lenses, never from links inside markdown (D10) | M5a, M5b |
 | Formatting | D8 | M5d |
 
 Not in M5: inlay hints, signature help beyond hover, call hierarchy, workspace symbols across libraries,
 debugging (traces are `joust build --traces`), budget figures in hovers (ADR-0018 J19's build report could feed
 them later), VS Code for the Web (D9).
 
-### D7a. Accept ABI: one contract, the manifest the user saw, the compiler that accepts (new in r2)
+### D7a. Accept ABI: one contract, the manifests the user saw, the tool that accepts (new in r2; revised in r3)
 
 Acceptance tells ADR-0018 D12's gate that a datum or redeemer change is intended, so the accepted manifest must be the
-reviewed one.
+reviewed one, against the reviewed baseline.
 
-- **The diff comes from the tool that accepts.** **Accept ABI…** runs, as a visible task, the project's own
-  `joust abi diff <Contract>` (npm) or `gradlew jscAbiDiff --contract <C>` (Gradle; illustrative names), which prints
-  the committed and the new manifest and the SHA-256 of the new one; the extension shows that output as a diff. The
-  server's on-save comparison only *raises* JSC0002/JSC0003; it is never the diff that is accepted.
-- **Acceptance is per contract and bound to the hash shown:** after a modal confirmation naming the one contract and
-  its change, the extension runs `joust build --accept-abi=<Contract>@<sha256>` (Gradle: `acceptJscAbi --contract <C>
-  --sha256 <h>`, task options, never a property), which accepts only that contract and **refuses** when the manifest it
-  computes now differs from `<sha256>` (the file changed between the diff and the acceptance). Today `--accept-abi`
+- **Offered whenever the accepting tool is the project's own and the workspace is trusted**, whatever the server's mode
+  (r3): in an npm project, the project's `joust` CLI from a package inside a workspace folder; in a Gradle build,
+  `gradlew` inside a workspace folder. Never in restricted mode, as a code action, or through a markdown link (D10).
+  The server's on-save comparison only *raises* JSC0002/JSC0003; it is never the diff that is accepted.
+- **The diff comes from the tool that accepts.** **Accept ABI…** runs, as a visible task, `joust abi diff <Contract>`
+  (npm) or `gradlew jscAbiDiff --contract <C>` (Gradle; illustrative names), which prints the committed manifest, the new
+  one, and the SHA-256 of each (`none` when nothing is committed); the extension shows that output as a diff.
+- **Acceptance is per contract and bound to both manifests:** after a modal confirmation naming the one contract and
+  its change, the extension runs `joust build --accept-abi=<Contract>@<committed-sha256>..<new-sha256>` (Gradle:
+  `acceptJscAbi --contract <C> --committed-sha256 <h1> --sha256 <h2>`, task options, never a property). It accepts
+  only that contract and **refuses** when the committed manifest is no longer `<committed-sha256>` (a `git pull`
+  changed the baseline) or the manifest it computes now is not `<new-sha256>` (a source changed). Today `--accept-abi`
   accepts every changed manifest in the build (`js/joust/src/abi.js:28-46`) and Gradle's task the whole source
-  directory; narrowing it is an ADR-0018 D12 amendment (§3a).
-- **Never offered** in advisory mode, in restricted mode, as a code action, or through a markdown link (D10).
+  directory; narrowing and binding it is an ADR-0018 D12 amendment (§3a).
 
 ### D8. A formatter, and the hash-stability contract (revised in r2)
 
 `.jsc` 2 has no formatter, and one cannot be written over today's tree (comments are dropped, F4). At the pinned
 revision it also could not be safe: a moved line, a file name and some parameter names reach the script hash (F12).
 
-- **M1e decides it in ADR-0018** (§3a): generated on-chain messages become independent of layout, comments, file
-  names and **all** names, using name-free keys (for example the constructor index of the method plus a fixed ordinal
+- **ADR-0018's M1e is to decide it** (§3a, pending ADR-0018 r10): generated on-chain messages become independent of
+  layout, comments, file names and **all** names, using name-free keys (for example the constructor index of the method plus a fixed ordinal
   of the construct in source order, not the emitter's helper counter), unique within a script, with a source map from
-  each key back to `File.jsc:line` for traces, JVM `RequireException`s and audits. **Gate:** M5d starts after M1e is
-  merged.
-- **The hash-stability contract** this ADR relies on, once M1e lands: the script hash, the ABI manifest's encodings
+  each key back to `File.jsc:line` for traces, JVM `RequireException`s and audits. **Gate:** M1e gates M5a, so every
+  edit feature, the formatter included, comes after it (§8).
+- **The hash-stability contract** this ADR relies on, once M1e lands (and which L12 tests): the script hash, the ABI manifest's encodings
   and the description's data shapes depend only on the checked program, never on layout, comments, blank lines, line
   ends, the file's name or any name. Names reach the ABI manifest, the description and the generated client (so an
   ABI-recorded rename changes those, D7), never the script. Reordering declarations changes the checked program and
@@ -463,14 +535,15 @@ revision it also could not be safe: a moved line, a file name and some parameter
   settings only); every other setting the extension reads that could change what runs or what is read is listed in
   `restrictedConfigurations` (F16). No setting changes the docs base of `codeDescription` links or turns off the ABI
   gate.
-- **Settings the extension cannot restrict:** `editor.codeActionsOnSave` and `editor.formatOnSave` are the editor's.
-  So the server offers no code action of a `source.*` kind, and nothing it would apply on save may change meaning:
-  quick fixes are `quickfix` only (D7); formatting exists only after M1e and is meaning- and hash-preserving (L7, L12).
+- **Settings the extension cannot restrict:** `editor.codeActionsOnSave` and `editor.formatOnSave` are the editor's,
+  and a workspace can set them. So no code action is ever applicable on save (D7: filtered automatic requests get none,
+  actions carry only a re-validating command, the meaning-changing fix is a confirmed command), and formatting, the
+  one edit that may run on save, is meaning- and hash-preserving (L7, L12).
 - **Markdown:** hovers and diagnostics contain workspace text (names, `require` messages, library names). No
   `MarkdownString` is ever trusted (`isTrusted`), workspace text is escaped, and commands appear only in code lenses
   and the command palette, never as links.
-- **Project discovery and launch:** D3b (confinement to trusted folders by real path; no CLI dispatch; absolute paths;
-  the bundled server resolves no module from the workspace).
+- **Project discovery and launch:** D3b (only the project's two engine files, confined to a workspace folder by
+  segment-compared real paths; no CLI dispatch; absolute paths; the server resolves no module from the workspace).
 - **Library sources and inputs:** D4b.
 - **No network, no telemetry.** The extension and the server open no connection (Q3(b) is the only open exception).
 - **No writes by the server.** Everything the server changes is a versioned `WorkspaceEdit` the editor applies
@@ -510,7 +583,7 @@ revision it also could not be safe: a moved line, a file name and some parameter
   `toolchainWasmTest` checks the build today).
 - **Modes (L1, L2):** a project-matched server against `joust build` of the same project; a bundled server of another
   version labelled advisory; a dependency-only change (a library edited, the importer unchanged) during a build,
-  whose result is dropped; a project package outside the trusted folder; a pre-M5a package.
+  whose result is dropped; a project package outside the workspace folder; an engine that predates `joust.lang`.
 - **M5a errors and warnings:** a file with a warning before and after its fatal error returns the error only; the same
   file fixed returns the warning.
 - **Recovery (L5, L13):** for every corpus file the build accepts, the recovering mode and the span-carrying tree give
@@ -526,18 +599,40 @@ revision it also could not be safe: a moved line, a file name and some parameter
   over its memory limit; cancellation during a long call.
 - **Edits (L6, L12):** rename refusals for each D3/J10 rule; resolution preservation over generated renames of every
   binding in the corpus; each quick fix's output re-checked; ABI-visible renames warn; an edit made between computing
-  and applying a rename or quick fix is refused by version; **for every server-proposed edit to a corpus file that
-  builds before and after, the script hash is unchanged** (layout and rename mutations, imports, fixes), and, before
-  M1e, no line-moving edit or hash-changing rename is offered.
-- **Accept ABI (D7a):** the file edited between the diff and the acceptance is refused; acceptance of contract A leaves
-  B's changed manifest unaccepted; not offered in advisory or restricted mode.
+  and applying a rename or quick fix is refused by version. **Hash fixtures in two classes:** every hash-preserving
+  edit (formatting, renames, import-adding edits, layout mutations) to a corpus file that builds before and after leaves
+  the script hash unchanged; and a deliberate code-changing completion (replacing `count` with `by` in `count + by` in
+  `Counter2.increment`) is offered and changes the program, which L12 allows.
+- **Recovery precision (L13):** besides the mutation corpus, a namespace fixture: two independent `fn`s `f` and `g`,
+  then `f` renamed to `g`, keeps the strict checker's JSC0201 at the second declaration's code and position.
+- **Accept ABI (D7a):** a source edited between the diff and the acceptance is refused; a committed manifest changed in
+  between (a simulated `git pull`) is refused; acceptance of contract A leaves B's changed manifest unaccepted; offered
+  in a trusted Gradle build through `gradlew` and in a trusted npm project, never in restricted mode.
+- **Save (C8):** with the packaged extension and a workspace setting `"editor.codeActionsOnSave": {"quickfix":
+  "explicit", "source.fixAll": "explicit"}` (and `"always"`), a file with a `let`, an `===`, a missing import and a
+  forbidden character inside a string: saving changes nothing; invoking each fix explicitly works; **Remove invisible
+  characters…** changes the string only after its confirmation.
+- **Validated edits (C9):** a client without versioned `documentChanges` gets no rename or fix; a delayed response
+  applied after an edit is refused; a cross-file rename touching a closed file opens it first (VS Code) or is refused;
+  a client whose second file edit fails leaves the first unapplied (transactional).
+- **Confinement (S13, F13):** a package in an ancestor of the opened folder; a dependency of a trusted-subfolder
+  package planted in an ancestor `node_modules` (sentinel; only the two engine files load); a symlinked `node_modules`
+  that leaves the folder; a sibling folder sharing the folder's name prefix (`repo` and `repo-evil`); a multi-root
+  window whose package is in another folder; a `.code-workspace` listing `..`; a window with no folder; on the Windows
+  CI runner, a junction and a `subst` drive.
+- **Lexical rejection (S14):** with an instrumented filesystem layer recording every call, `contracts` set to an
+  absolute, UNC, `\\?\`, `\\.\`, drive-relative or `..`-escaping path, and symlinks to such targets: the path is rejected
+  and **no** `stat`, `realpath`, `open` or `readlink` beyond the link itself is issued for it.
+- **Watchdog details (S15):** cancellations during long calls never reach "analysis unavailable" and quarantine
+  nothing; a model over its cap gives one diagnostic; M1e's nesting limit is exercised on the smallest stack of every
+  host (§8).
 - **Formatter (L7, M5d):** idempotence, comment preservation, identical script hash, manifest, description and Java
   modulo position comments, over the corpus and generated layouts.
 - **Extension smoke tests** with `@vscode/test-electron` on the minimum and the current VS Code: install the `.vsix`,
   open the `npm create joust` template, wait for diagnostics on a seeded error, hover, run "Show generated Java".
 - **Hostile workspace** (the packaged launch path, restricted and trusted): planted `node_modules/@julclang/joust`
-  (whose code would create a sentinel file), `@julclang/joust-runtime` and `vscode-languageserver`; a planted package
-  in an ancestor of a trusted subfolder (S3); a pre-M5a project package; workspace settings naming an executable and
+  (whose code would create a sentinel file), `@julclang/joust-runtime`, `vscode-languageserver`, and a `fs` or `https`
+  file beside the engine (built-ins win); the confinement cases above; a pre-M5a project package; workspace settings naming an executable and
   setting `editor.codeActionsOnSave`; a `joust.config.json` pointing `contracts` at `/` or `..`; a `contracts/x -> /`
   symlink, a `.jsc` symlink to `/dev/zero` and a FIFO; a `joust.lock` with planted hashes. Expected: the sentinel never
   appears, the running compiler is the expected one (asserted through `serverInfo`), settings are ignored, nothing is
@@ -546,24 +641,28 @@ revision it also could not be safe: a moved line, a file name and some parameter
 - **Other editors:** the protocol tests cover the server; the Neovim and Helix configurations are checked by hand per
   release from a checklist.
 
-### §3a. What this ADR needs from ADR-0018 (new in r2)
+### §3a. What this ADR needs from ADR-0018 (new in r2; revised in r3)
 
-These are amendments to ADR-0018 or its milestones. They land in ADR-0018's own revision history; this list is the
-request.
+These are requests to ADR-0018, **pending**: ADR-0018 is at r9 and does not contain them yet, and no M1e pull request
+exists. They are to land in ADR-0018's own revision history (r10); if ADR-0018 declines one, this ADR is revised.
 
-1. **§8 (M5's gate).** Q1 is adopted as (b) with conditions (§10): M5a after M1 exits; M5b may start then too; M5c
-   after M4. From M5b on, L5's corpus test is required in every M2 and M3 front-end PR, and recovery and spans are in
-   the scope of ADR-0018's independent security review.
-2. **D12 and M1e (on-chain messages).** Messages independent of layout, comments, file names and all names, with
+1. **§8 (M5's gate).** Q1 adopted here as (b) with conditions (§10): M5a after M1 and M1e exit; M5b may start then
+   too; M5c after M4. From M5b on, L5's corpus test is required in every M2 and M3 front-end PR, and recovery and spans
+   are in the scope of ADR-0018's independent security review.
+2. **M1e (on-chain messages; D12).** Messages independent of layout, comments, file names and all names, with
    name-free keys unique within a script, a source map from key to `File.jsc:line`, and a build-report map from message
-   to construct (so a trace from a deployed script is attributable without rebuilding it). Changing the scheme
-   changes every `.jsc` 2 script hash once; whether a preview deployment needs the old scheme to stay rebuildable
-   (ADR-0018 D16) is ADR-0018's to state.
+   to construct (so a trace from a deployed script is attributable without rebuilding it). Changing the scheme changes
+   every `.jsc` 2 script hash once; whether a preview deployment needs the old scheme to stay rebuildable (ADR-0018 D16)
+   is ADR-0018's to state.
 3. **M1e (nesting limit).** A catalogued limit on expression and block depth and chain length, identical on the JVM
-   and in Wasm, well below the Web Image's depth, with operator chains handled iteratively (F13). M5a's entry gate.
-4. **D12 (ABI acceptance).** Per-contract acceptance bound to a manifest hash (`--accept-abi=<Contract>@<sha256>`; the
-   Gradle task's options), and a diff command (D7a).
-5. **D13.** Tree-sitter serves editors, not the language server's syntax layer (D5).
+   and in Wasm, with margin below the depth the smallest stack of every host allows (the CLI's main thread, an engine
+   worker at D2a's `stackSizeMb`, the extension host's runtime; §1 measured 232 levels at 1 MB), and operator chains
+   handled iteratively (F13).
+4. **M1e is one gate.** This ADR gates M5a on M1e as a whole (items 2 and 3), so no "before M1e" behaviour is needed.
+   If M1e is split, M5a waits for both parts.
+5. **D12 (ABI acceptance).** Per-contract acceptance bound to the committed and the new manifest's hashes
+   (`--accept-abi=<Contract>@<committed>..<new>`; the Gradle task's options), and a diff command (D7a).
+6. **D13.** Tree-sitter serves editors, not the language server's syntax layer (D5).
 
 ## 4. Invariants
 
@@ -572,18 +671,18 @@ Numbered L… so they are not confused with the validator invariants I1–I55, A
 | # | Invariant | Constrains | Checked by |
 |---|---|---|---|
 | L1 | **In project-matched mode** (D3a), for a completed analysis of a snapshot equal to what the build reads (same compiler, sources, dependencies and configuration), the server's front-end errors include every front-end error the build reports (same code, line, column), and a file with no front-end error from the server passes the build's front end. In advisory mode no equivalence is claimed and every diagnostic is labelled advisory | D1, D2, D3a, D5 | mode tests; corpus and mutation tests against `JscV2.lower` / `joust build` |
-| L2 | The server reports its mode and the compiler it analyses with (`serverInfo`, status bar, diagnostic `source`). It is project-matched only when D3's eligibility holds (trusted, eligible package, confined real path); every other case, including a package that predates the LSP entry, is the bundled server in advisory mode | D3, D3a, D3b | protocol and smoke tests with two versions |
+| L2 | The server reports its mode and the compiler it analyses with (`serverInfo`, status bar, diagnostic `source`). It is project-matched only when D3's eligibility holds (trusted workspace, an engine with a supported `joust.lang` version, both engine files confined to a workspace folder, D3b); every other case, including an engine that predates `joust.lang` and a window with no folder, uses the bundled engine in advisory mode | D3, D3a, D3b | protocol and smoke tests with two versions |
 | L3 | The server writes no file. Changes reach the workspace only as edits the editor applies or as commands the user invokes, through the project's CLI or `gradlew` | D4, D7, D10 | protocol tests watch the workspace; smoke tests |
-| L4 | In an untrusted workspace no workspace file is executed or loaded as code, and in a trusted one no code is loaded from outside the trusted folders (no `node_modules` code, no Gradle, no executable from a workspace setting, no module resolved from the workspace by the bundled server) | D3b, D10 | hostile-workspace smoke tests with sentinels |
+| L4 | In an untrusted workspace no workspace file is executed or loaded as code. In a trusted one, the only workspace code loaded is the project's two engine files, and only when their real paths are inside a workspace folder by D3b's comparison: no other `node_modules` code and no Gradle except in a task the user invokes (D7), no executable from a workspace setting, no module resolved from the workspace | D3b, D10 | hostile-workspace and confinement smoke tests with sentinels |
 | L5 | Recovery and spans never change the build: on every file the build accepts, the recovering mode and the span-carrying tree give byte-identical generated Java and ABI manifest | D5, D6 | corpus tests, in M5 and in every M2/M3 front-end PR (§3a) |
-| L6 | Every edit the server proposes is re-analysed on the snapshot it is bound to: a quick fix removes its diagnostic and adds none; a rename adds no diagnostic, keeps every other reference resolving to the same declaration, breaks no D3/J10 rule, and warns when it changes an ABI-recorded name; the edit carries the document versions it was validated on | D4a, D7 | rename, fix and version tests |
+| L6 | Every edit the server proposes is re-analysed on the snapshot it is bound to: a quick fix removes its diagnostic and adds none; a rename adds no diagnostic, keeps every other reference resolving to the same declaration, breaks no D3/J10 rule, and warns when it changes an ABI-recorded name. Every edit names a non-null version for each document it changes, multi-file edits only to transactional clients, and none is offered to a client without versioned `documentChanges`; no code action is applicable on save | D4a, D7 | rename, fix, version and save tests |
 | L7 | Formatting is idempotent, keeps every comment, and leaves the script hash, ABI manifest and description unchanged (generated Java differs only in position comments) | D8 | formatter corpus tests (M5d) |
-| L8 | `publishDiagnostics` carries the document version, and the server never publishes for a version older than one already published; results computed for an older snapshot generation are dropped, and build diagnostics are withdrawn when a newer generation exists | D4, D4a | protocol tests with interleaved edits, saves and dependency changes |
-| L9 | No input (hostile, huge, deeply nested, binary, a FIFO) hangs or crashes the server: every engine call runs in a worker under a time cap and a memory limit; a failure yields one internal-error diagnostic, a new worker, a quarantined input and backoff; repeated failures lead to "analysis unavailable", while the protocol thread keeps answering | D2a, D4, D4b | watchdog protocol tests; hostile-workspace tests |
-| L10 | On the reference corpus: analysis p95 latency, **including the model's export** across the engine boundary, at most 50 ms for the 1,889-line file; server process RSS at most 600 MB with one analysis worker and no build worker, and at most 1.1 GB with a build worker. CI enforces looser regression bounds on its own hardware | D2a, D4 | M5a measurement job (the export is measured at M5a's exit) |
+| L8 | `publishDiagnostics` carries the document version, and the server never publishes for a version older than one already published (enforced by the server, since `vscode-languageclient` ignores the version); results computed for an older snapshot generation are dropped, and build diagnostics are withdrawn when a newer generation exists | D4, D4a | protocol tests with interleaved edits, saves and dependency changes |
+| L9 | No input (hostile, huge, deeply nested, binary, a FIFO, a network path) hangs or crashes the server: engine workers do no I/O and run under a time cap, a heap limit and an explicit stack size; models are size-capped; a failure yields one internal-error diagnostic, a new worker, a quarantined input and backoff; repeated failures (cancellations excluded) lead to "analysis unavailable", while the protocol thread keeps answering | D2a, D4, D4b | watchdog protocol tests; hostile-workspace tests |
+| L10 | On the reference corpus: analysis p95 latency, **including the model's export** across the engine boundary, at most 50 ms for the 1,889-line file; server process RSS at most 600 MB with one analysis worker, at most 1.1 GB with one analysis worker and a build worker, and **at most 1.2 GB in D4's largest configuration** (two analysis workers and a build worker, after builds; §1: 1,003–1,012 MB). D2a's heap limits are set so these hold. CI enforces looser regression bounds on its own hardware | D2a, D4 | M5a measurement job (the export is measured at M5a's exit) |
 | L11 | Positions are UTF-16 code units, correct with non-BMP characters before the position on the same line | D6 | protocol tests |
-| L12 | **No server-proposed edit changes a script hash except as a code change:** for every rename, quick fix, completion edit or formatting of a file that builds before and after, the script hash is unchanged; before M1e, edits that would change it (line-moving edits, renames of names that reach messages) are not offered | D7, D8 | hash tests over the corpus with layout and rename mutations (D12) |
-| L13 | Recovery is precise: for a single-token mutation inside one declaration, no error is reported in a declaration that neither contains the mutation nor references it | D5 | mutation corpus (M5b) |
+| L12 | **Hash-preserving edits keep the script hash.** Formatting, renames, import-adding edits and any edit the server labels hash-preserving leave the script hash (and, except for ABI-recorded renames, the ABI manifest and description) unchanged on every file that builds before and after. Edits the user chooses to change the program (inserting a completion item, accepting a quick fix that turns an invalid file into a valid one) are code changes and may change it. The server never labels a code change hash-preserving | D7, D8 | hash fixtures in both classes over the corpus (D12) |
+| L13 | Recovery adds no cascades: for a single-token mutation inside one declaration, every error the recovering mode reports outside that declaration is one the strict checker reports for the same text (a genuine non-local error, e.g. a duplicate name, at its code and position), or lies in a declaration that references the mutated one or depends on a name or signature the mutation changed | D5 | mutation corpus and the namespace fixture (M5b) |
 
 ## 5. Alternatives considered
 
@@ -614,19 +713,19 @@ Beyond D2's hosts (a)–(e):
 **Positive:** the build's own front end in the editor, so a project-matched editor and the build cannot disagree about
 the language; no JDK for anyone, and one universal `.vsix` without native code; versioning by construction in npm
 projects; the stable codes and ABI gate surface where the author works; a server that survives hostile input; the
-formatter question exposed F12, which M1e now removes for every edit, not only formatting.
+formatter question exposed F12, which ADR-0018's M1e is to remove for every edit, not only formatting.
 
 **Negative:** memory (about 390 MB with one analysis worker, about 365 MB more while a build worker lives); a protocol
 layer in JavaScript and a core in Java, so features cross a boundary and need parity tests; the compiler front end
 must grow recovery, spans, trivia and a model export, all inside the trusted toolchain (L5 guards the build against
 them, and they join ADR-0018's security review); Gradle projects get an advisory bundled compiler that may differ
 from theirs and does not resolve their `java:` libraries (Q3, D4b); the extension adds a release artifact and a
-manual publishing step with token custody; some M5b edits wait for M1e.
+manual publishing step with token custody; M5a waits for ADR-0018's M1e.
 
 ## 7. Compatibility
 
-ADR-0021 itself changes no contract, script, datum, redeemer, description or ABI manifest. Its prerequisite M1e
-(ADR-0018) changes every `.jsc` 2 script hash once, by its own decision (§3a). `joust build`'s diagnostic lines change
+ADR-0021 itself changes no contract, script, datum, redeemer, description or ABI manifest. Its prerequisite M1e (pending)
+(ADR-0018) would change every `.jsc` 2 script hash once, by ADR-0018's own decision (§3a). `joust build`'s diagnostic lines change
 shape (D9), which scripts parsing them would notice; the npm CLI is pre-1.0. `--accept-abi` gains a per-contract,
 hash-bound form (D7a, §3a). The `JscV2` API and its positions are unchanged; new entries and span data are added beside
 it. The Web Image gains entries and reachability metadata for the model's records.
@@ -635,10 +734,10 @@ it. The Web Image gains entries and reachability metadata for the model's record
 
 | # | Scope | Entry gate | Exit criteria |
 |---|---|---|---|
-| M5a | The server with diagnostics as you type (the first fatal error, or the warnings; codes and links), document symbols, selection ranges and folding (D6's M5a spans); engine hosting (D2a); modes (D3a); launch paths (D3b); snapshots and versioned diagnostics (D4a); input policy (D4b); `joust.lang.analyze`; the VS Code extension (M1d's TextMate grammar, language configuration, snippets, status bar, trust model, **JOUST: Build** task and the `$joust` problem matcher); `joust build` prints the catalogue's diagnostic shape (D9); the `.vsix` built and smoke-tested in CI | ADR-0018 accepted and M1 exited (M1d's grammars and catalogue in place; Q1(b)); **M1e merged** (nesting limit); this ADR accepted | L1 (first error), L2, L3, L4, L8, L9, L10, L11 tested; the model's export measured and within L10; the `.vsix` has no `.node` file and is under 16 MB; smoke tests green on the minimum and current VS Code; hostile-workspace tests green |
-| M5b | Recovery (lexer, parser, checker) and the remaining spans and reference mapping; hover, definition and references within a file, semantic tokens, completion, rename within a file, quick fixes, generated-Java view, ABI diff and **Accept ABI…** (D7a, with ADR-0018's D12 acceptance change), build diagnostics on save (worker) | M5a exit (Q1(b): may run alongside ADR-0018 M2/M3, with L5's corpus test in their front-end PRs). Import-adding edits and fixes, and renames that reach messages, only once M1e's message scheme is merged | L1 (recovered), L5, L6, L12, L13 tested; the recovery mutation corpus green; latency still within L10 |
+| M5a | The server with diagnostics as you type (the first fatal error, or the warnings; codes and links), document symbols, selection ranges and folding (D6's M5a spans); engine hosting (D2a) with **Restart analysis** and **Restart server**; modes (D3a); engine selection and confinement (D3, D3b); snapshots and versioned diagnostics (D4a); input policy (D4b); `joust.lang.analyze`; the VS Code extension (M1d's TextMate grammar, language configuration, snippets, status bar, trust model, **JOUST: Build** task and the `$joust` problem matcher); `joust build` prints the catalogue's diagnostic shape (D9); the `.vsix` built and smoke-tested in CI | ADR-0018 accepted, M1 exited (M1d's grammars and catalogue in place; Q1(b)) and **M1e exited as a whole** (§3a items 2–4); this ADR accepted | L1 (first error), L2, L3, L4, L8, L9, L10, L11 tested; the model's export measured and within L10; M1e's limit passes with margin on the smallest stack of each host (CLI main thread, engine worker at `stackSizeMb` 4, the extension host's runtime); both restart commands restore analysis after their unavailable states; the `.vsix` has no `.node` file and is under 16 MB; smoke tests green on the minimum and current VS Code; hostile-workspace and confinement tests green |
+| M5b | Recovery (lexer, parser, checker) and the remaining spans and reference mapping; hover, definition and references within a file, semantic tokens, completion, rename within a file, quick fixes and **Remove invisible characters…**, generated-Java view, ABI diff and **Accept ABI…** (D7a, with ADR-0018's D12 acceptance change), build diagnostics on save (worker) | M5a exit (Q1(b): may run alongside ADR-0018 M2/M3, with L5's corpus test in their front-end PRs) | L1 (recovered), L5, L6, L12, L13 tested; the recovery mutation corpus and the save tests green; latency still within L10 |
 | M5c | Across files: `.jsc` libraries, `import contract`, `java:` imports (read-only library documents), project-wide references and rename, library signature cache | M5b exit; ADR-0018 M4 exited; javac attribution cost in the engine measured | definition and references across a `.jsc` library and into a Java library in the template's tests; L6 and L12 across files |
-| M5d | Formatter: trivia-preserving lexing, `joust fmt`, `textDocument/formatting` | M5b exit; **M1e's message scheme merged** (D8) | L7 and L12 over the corpus and generated layouts |
+| M5d | Formatter: trivia-preserving lexing, `joust fmt`, `textDocument/formatting` | M5b exit (M1e's message scheme is in place since M5a) | L7 and L12 over the corpus and generated layouts |
 | M5e | Other editors: Neovim and Helix configurations (a user-installed `joust-lsp`), the tree-sitter grammar packaged with its queries, docs; the `.vsix` attached to a release for maintainers to publish (D11) | M5a exit (configurations), M5c exit (docs complete); the namespaces claimed and Q4 decided (D11) | the release checklist run by hand on each editor; the docs test refusing `npx joust` green |
 
 Recommendation: ADR-0018's recommendation gate (`.jsc` 2 recommended once M2 and M4 exit and the security review
@@ -654,10 +753,12 @@ formatter invariants including the script hash. None of these certify the compil
 
 ## 10. Open questions
 
-1. *(Closed in r2.)* **When M5 starts.** Adopted: (b) with the design review's conditions; see §3a item 1 and §8.
-   It amends ADR-0018 §8.
-2. *(Closed in r2.)* **Formatter and script hashes (F12).** Decided in ADR-0018 through M1e: name-free, layout-free
-   message keys (§3a item 2, D8). M5d is gated on it; import-adding edits and hash-changing renames wait for it (D7).
+1. **When M5 starts.** Adopted here as (b) with the design review's conditions (§3a item 1, §8); **delegated to
+   ADR-0018 r10, pending** until ADR-0018 records it.
+2. **Formatter and script hashes (F12).** **Delegated to ADR-0018 r10 / M1e, pending:** name-free, layout-free message
+   keys (§3a item 2, D8). M1e gates M5a as a whole, so every edit feature comes after it. If ADR-0018 chooses
+   otherwise, this ADR is revised before M5b (the r2 hold-backs of line-moving edits and of renames that reach messages
+   would return).
 3. **The compiler for Gradle projects.** Options: (a) the bundled one, advisory, with a version notice (lean, M5a);
    (b) on consent, download the `@julclang/joust` matching the Gradle plugin's version, accepted only with npm
    provenance or signature verification, or a digest pinned in the extension (registry integrity alone is not
@@ -731,3 +832,26 @@ formatter invariants including the script hash. None of these certify the compil
     incident procedure, and claiming the Open VSX namespaces as a maintainer action.
   - Citations (C7, F10): re-pinned to ADR-0018 r9 (`3de519d`, code `dfa7025`): 243 codes, 14 lexer throws,
     `JoustToolchainWasm.java:57-58`, JSC0148 present; VS Code current stable named; D13's supersession recorded (§3a).
+- **r3** (2026-11-13; responds to the round-2 reviews of `adfa0a7`: Codex C8–C12 and C6 (partly open), design F13–F16,
+  security S13–S16):
+  - Save (C8): no code action is applicable on save: filtered automatic requests (how VS Code's save participant asks,
+    `saveParticipants.ts:481-485` at 1.146.0) get none, actions carry only a re-validating command, and deleting
+    invisible characters is a confirmed command, not a code action; a save test with a hostile `codeActionsOnSave`.
+  - Validated edits (C6, C9): non-null versions for every edited document; closed files opened first or the rename
+    refused; multi-file edits only to transactional clients; no edits for clients without versioned `documentChanges`;
+    re-validation when the fix command applies; tests for each.
+  - L12 (C10) separates hash-preserving edits from code changes the user chooses, with fixtures for both; L13 (C11)
+    allows the strict checker's genuine non-local errors, with a namespace fixture; restart commands in M5a (C12).
+  - Confinement (F13, S13): eligibility bound by the real paths of `workspace.workspaceFolders` (no per-folder trust
+    API), no folder means bundled, multi-root folders separate, `.code-workspace` folders outside the file's directory
+    not eligible; **the extension now loads only the project's two engine files** (the protocol layer is always its
+    own), so nothing else resolves from the workspace; segment comparison of `fs.realpath.native` paths; tests.
+  - Inputs (S14): lexical rejection before any filesystem call, `readlink` before following, `O_NONBLOCK` and `fstat`
+    on the descriptor; an instrumented-filesystem test.
+  - Watchdog (S15, F16): cancellations neither count nor quarantine; no I/O in engine workers; explicit `stackSizeMb`
+    (§1: 232 levels at 1 MB, 2,000 at 4 MB) with M1e's limit tested on the smallest stack; model size cap; heap limits
+    256/256/384 MB and L10's bound for the largest configuration (§1: 1,003–1,012 MB).
+  - Accept ABI (F14, S16): offered whenever the accepting tool is the project's own in a trusted workspace (Gradle
+    included), bound to the committed and the new manifest's hashes.
+  - M1e (F15, S16): one atomic gate of M5a; Q1 and Q2 "delegated to ADR-0018 r10 / M1e, pending"; the "before M1e"
+    rules removed (they return if ADR-0018 declines); referred to by milestone, not branch.
