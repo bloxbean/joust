@@ -33,10 +33,10 @@ class JscV2ToolchainTest {
 
     @Test
     void jsc2ContractsBuild_onTheNpmPath() throws Exception {
-        var r = build("Counter2.jsc", "Pledges.jsc");
+        var r = build("Counter2.jsc", "Pledges.jsc", "Vectors.jsc");
         assertTrue(r.ok(), r.diagnostics().toString());
         var names = r.contracts().stream().map(Toolchain.Contract::name).toList();
-        assertTrue(names.contains("Counter2") && names.contains("Pledges"), names.toString());
+        assertTrue(names.contains("Counter2") && names.contains("Pledges") && names.contains("Vectors"), names.toString());
         for (var c : r.contracts()) {
             System.out.println("[jsc2 npm] " + c.name() + ": " + c.scriptSizeBytes() + " bytes, transitions " + c.transitions().keySet());
         }
@@ -60,6 +60,43 @@ class JscV2ToolchainTest {
         assertEquals(6, d.line());
         assertEquals(16, d.col());
         assertTrue(d.message().contains("immutable"), d.message());
+    }
+
+    /** D12, F13: warnings reach the npm path with their line and column. */
+    @Test
+    void warningsKeepTheirJscLineAndColumn() {
+        var r = Toolchain.build(Map.of("t/Warn.jsc", """
+                jsc 2
+                package t
+                contract Warn {
+                  state { owner: Key, last: Int }
+                  init() { return { owner: caller, last: 0 } }
+                  action seen() { return { ...state, last: validFrom } }
+                  destroy close() only owner { pay(owner, max(0, balance - (validTo - last))) }
+                }
+                """), Map.of());
+        assertTrue(r.ok(), r.diagnostics().toString());
+        var w = r.diagnostics().stream().filter(x -> x.severity() == Toolchain.Severity.WARNING && "jsc".equals(x.source())).toList();
+        assertEquals(2, w.size(), w.toString());
+        assertEquals(List.of("t/Warn.jsc", 6L, 44L), List.of(w.get(0).file(), w.get(0).line(), w.get(0).col()));
+        assertTrue(w.get(0).message().contains("validity window in last"), w.get(0).message());
+        assertEquals(List.of(7L, 43L), List.of(w.get(1).line(), w.get(1).col()));
+        assertTrue(w.get(1).message().contains("payout"), w.get(1).message());
+    }
+
+    /** Security S3 on the npm path: a file name that would rewrite the contract is refused at 1:1, nothing is built. */
+    @Test
+    void unsafeFileNamesAreRefused() {
+        String gate = "jsc 2\npackage t\ncontract Gate {\n  state { owner: Key }\n  init() { return { owner: caller } }\n"
+                + "  action claim(k: Key) {\n    require(false, \"nobody may claim\")\n    return { ...state, owner: k }\n  }\n}\n";
+        String name = "t/x\"); if (true) return new State(k); Require.that(true, \".jsc";
+        var r = Toolchain.build(Map.of(name, gate), Map.of());
+        assertFalse(r.ok());
+        assertTrue(r.contracts().isEmpty());
+        var d = r.diagnostics().get(0);
+        assertEquals(List.of(name, 1L, 1L), List.of(d.file(), d.line(), d.col()));
+        assertTrue(d.message().contains("may contain only letters"), d.message());
+        assertTrue(Toolchain.build(Map.of("t/Gate.jsc", gate), Map.of()).ok());
     }
 
     @Test

@@ -1,0 +1,38 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { slice, byteAt, length } from "std/bytes"
+
+// ADR-0018 M0 vectors (D6, D8, J3, J7): the std/bytes bindings at their domain edges, and the signs of / and %, on
+// every leg: the reference interpreter, the JVM, the transition program and the validator.
+contract Vectors {
+  state { owner: Key, cut: Bytes, octet: Int, size: Int, q: Int, r: Int, flags: List<Bool>, seen: Option<Bool> }
+
+  init() {
+    return { owner: caller, cut: utf8(""), octet: 0, size: 0, q: 0, r: 0, flags: [], seen: None }
+  }
+
+  // slice(b, start, n): start and n in [0, 2^31), else refused; the result is clamped to b.
+  action cut(b: Bytes, start: Int, n: Int) {
+    return { ...state, cut: slice(b, start, n), size: length(b) }
+  }
+
+  // byteAt(b, i): i in [0, length(b)) and below 2^31, else refused; 0..255.
+  action pick(b: Bytes, i: Int) {
+    return { ...state, octet: byteAt(b, i) }
+  }
+
+  // / and % truncate toward zero (JS BigInt); a zero divisor is refused.
+  action divide(a: Int, d: Int) {
+    return { ...state, q: a / d, r: a % d }
+  }
+
+  // Booleans in a list and an option, compared by value (C4).
+  action flag(fs: List<Bool>, f: Bool) {
+    return { ...state, flags: fs, seen: Some(fs.contains(f) && fs == flags && Some(f) != seen) }
+  }
+
+  destroy close() open {
+    pay(owner, balance)
+  }
+}

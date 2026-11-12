@@ -184,11 +184,14 @@ class Dsl2Test {
         assertThrows(RequireException.class, () -> Pledges.setBacker(s, Optional.of(new byte[27])), "a present key must be 28 bytes");
         var live = pl.live(s, BigInteger.ZERO);
         for (Optional<byte[]> who : java.util.List.of(Optional.of(BEN), Optional.<byte[]>empty())) {
-            var tx = pl.act(live, new PledgesValidator.SetBacker(who), Pledges.setBacker(s, who), OWNER, null);
+            // The expected next state is written here, not taken from the lowering (§9, review F12).
+            var next = new Pledges.State(OWNER, ada(10), T0, BigInteger.ZERO, shares(), s.tag(), who);
+            var tx = pl.act(live, new PledgesValidator.SetBacker(who), next, OWNER, null);
             System.out.println("[pledges setBacker " + (who.isPresent() ? "Some" : "None") + "] " + pl.assertAccepted(tx)
                     + "  attacks rejected: " + Attacks.assertAllRejected(pl, tx));
         }
-        pl.assertRejected(pl.act(live, new PledgesValidator.SetBacker(Optional.of(BEN)), Pledges.setBacker(s, Optional.empty()), OWNER, null),
+        pl.assertRejected(pl.act(live, new PledgesValidator.SetBacker(Optional.of(BEN)),
+                new Pledges.State(OWNER, ada(10), T0, BigInteger.ZERO, shares(), s.tag(), Optional.empty()), OWNER, null),
                 "Some(BEN) asked, None stored");
         pl.assertRejected(pl.act(live, new PledgesValidator.SetBacker(Optional.of(new byte[27])),
                 new Pledges.State(OWNER, ada(10), T0, BigInteger.ZERO, shares(), s.tag(), Optional.of(new byte[27])), OWNER, null),
@@ -212,7 +215,11 @@ class Dsl2Test {
 
         var live = pl.live(s, balance.subtract(BigInteger.valueOf(pl.minAda())));
         Ctx dc = pl.ctx(OWNER, BigInteger.ZERO, live.lovelace());
-        var tx = pl.destroy(live, new PledgesValidator.Distribute(dc), new PledgesValidator.BurnInstance(), Pledges.distribute(s, dc), OWNER, dc);
+        // The payouts the validator must accept, by hand (§9, review F12): 60% and 40% of 25,000,003, rounded down, and
+        // the remainder to the owner.
+        assertEquals(balance, live.lovelace());
+        JulcList<Payout> stated = JulcList.of(new Payout(ANN, n(15_000_001)), new Payout(BEN, n(10_000_001)), new Payout(OWNER, n(1)));
+        var tx = pl.destroy(live, new PledgesValidator.Distribute(dc), new PledgesValidator.BurnInstance(), stated, OWNER, dc);
         System.out.println("[pledges distribute] " + pl.assertAccepted(tx) + "  attacks rejected: " + Attacks.assertAllRejected(pl, tx));
         pl.assertRejected(pl.destroy(live, new PledgesValidator.Distribute(dc), new PledgesValidator.BurnInstance(),
                 Payouts.of(OWNER, live.lovelace()), OWNER, dc), "everything to the owner although the goal was reached");
