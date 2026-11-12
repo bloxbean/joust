@@ -385,13 +385,21 @@ final class JavaEmitter {
                     out.append(ind).append("Require.that(").append(ex(r.cond())).append(", ").append(str(r.message())).append(");\n");
                 }
                 case Ir.Pay y -> {
+                    // Both arguments are evaluated, left to right (pay is not a lazy position, D6; C12). A recipient
+                    // that cannot fail is read where it is used, which is the same; any other is bound first.
+                    String to = ex(y.to());
+                    if (!total(y.to())) {
+                        String t = fresh("to");
+                        out.append(ind).append("byte[] ").append(t).append(" = ").append(to).append(";\n");
+                        to = t;
+                    }
                     String a = fresh("amount"), np = fresh("payouts");
                     imports.add("org.julclang.state.api.Require");
                     out.append(ind).append("BigInteger ").append(a).append(" = ").append(ex(y.amount())).append(";\n");
                     out.append(ind).append("Require.that(").append(a).append(".compareTo(BigInteger.ZERO) >= 0, ")
                             .append(str(where(y.pos()) + ": a payout cannot be negative")).append(");\n");
                     out.append(ind).append("JulcList<Payout> ").append(np).append(" = ").append(a).append(".compareTo(BigInteger.ZERO) == 0 ? ")
-                            .append(payouts[0]).append(" : Payouts.add(").append(payouts[0]).append(", ").append(ex(y.to())).append(", ")
+                            .append(payouts[0]).append(" : Payouts.add(").append(payouts[0]).append(", ").append(to).append(", ")
                             .append(a).append(");\n");
                     payouts[0] = np;
                 }
@@ -399,6 +407,18 @@ final class JavaEmitter {
                 case Ir.For f -> forStmt(f, out, ind, payouts);
             }
         }
+    }
+
+    /** Whether evaluating an expression cannot fail and costs nothing to repeat: a name, a field read, a literal. */
+    private static boolean total(Ir.Expr e) {
+        return switch (e) {
+            case Ir.Lit l -> true;
+            case Ir.LocalRef r -> true;
+            case Ir.StateField f -> true;
+            case Ir.CtxRef c -> true;
+            case Ir.GetField g -> total(g.target());
+            default -> false;
+        };
     }
 
     /**
@@ -739,7 +759,7 @@ final class JavaEmitter {
             case Ty.Rec r -> {
                 var parts = new ArrayList<String>();
                 p.record(r.name()).fields().forEach((n, ft) -> parts.add(elemEq(ft, "a__." + n + "()", "b__." + n + "()", false)));
-                body = "return " + String.join(" && ", parts) + ";";
+                body = "return " + (parts.isEmpty() ? "true" : String.join(" && ", parts)) + ";";   // an empty record: C13
             }
         }
         addHelper(h, "    static boolean " + h + "(" + jt + " a__, " + jt + " b__) {\n        " + body + "\n    }\n\n");

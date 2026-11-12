@@ -32,6 +32,12 @@ contract Vectors {
     return { ...state, flags: fs, seen: Some(fs.contains(f) && fs == flags && Some(f) != seen) }
   }
 
+  // pay(to, amount) evaluates both arguments, left to right; then 0 is skipped and a negative amount refused (C12).
+  action give(b: Bytes, amount: Int) open {
+    pay(asKey(b), amount)
+    return state
+  }
+
   destroy close() open {
     pay(owner, balance)
   }

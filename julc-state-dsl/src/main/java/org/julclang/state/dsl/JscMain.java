@@ -21,11 +21,11 @@ public final class JscMain {
     }
 
     /**
-     * The Java source and warnings for one .jsc file's text. {@code fileName} is the bare file name; it is embedded in
-     * the generated Java, so it may contain only letters, digits, '.', '_' and '-' (security S3).
+     * The Java source and warnings for one .jsc file's text. {@code fileName} is the bare file name, embedded in the
+     * generated Java: a {@code .jsc} 2 file's name may contain only ASCII letters, digits, '.', '_' and '-' (security S3);
+     * a v1 file's name is escaped instead, so existing v1 files keep rebuilding (ADR-0018 D16, review F16).
      */
     public static Lowered lowerWithWarnings(String source, String fileName) {
-        org.julclang.state.dsl.v2.JscV2.checkFileName(fileName);
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
             var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName);
             return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.message())).toList(),

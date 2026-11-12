@@ -229,6 +229,21 @@ class JscV2FourWayTest {
         System.out.println("[J3 four-way] Vectors (Booleans, destroy): " + f.calls + " calls so far");
     }
 
+    /** Codex C12: a payout's recipient is evaluated even when the amount is zero, on every leg. */
+    @Test
+    void vectors_payEvaluatesItsRecipient_evenForZero() throws Exception {
+        var f = LEGS.get("Vectors");
+        for (byte[] key : List.of(new byte[]{0}, ANN)) {
+            for (long amount : List.of(0L, 1_000_000L, -1L)) {
+                String got = f.check("give", vectors(), List.of(Bytes.of(key), n(amount)), at(OWNER, 0, 10_000_000), OWNER);
+                // By hand: a short key is refused whatever the amount; a valid key pays a positive amount, skips 0,
+                // and a negative amount is refused.
+                if (key.length != 28 || amount < 0) assertEquals("refused", got, key.length + " " + amount);
+                else assertTrue(got.startsWith("ok:"), key.length + " " + amount);
+            }
+        }
+    }
+
     static String ok(Object state) {
         return "ok:" + result(state, null);
     }

@@ -75,6 +75,13 @@ class JscV2FixturesTest {
         fixture("Recursion", "fn fact(n: Int): Int = n <= 1 ? 1 : n * fact(n - 1)\n"
                 + "fn digits(n: Int): Int = if n < 10 { 1 } else { 1 + digits(n / 10) }\n"
                 + "contract Recursion {\n state { n: Int }\n init() { return { n: 0 } }\n action a(k: Int) { return { n: fact(k) + digits(k) } }\n}");
+        // Codex C13: equality of an empty record; C11: Booleans compared by value in the interpreter too.
+        fixture("EmptyRecord", "type E = {}\ntype H = { e: E, n: Int }\ncontract EmptyRecord {\n state { n: Int }\n init() { return { n: 0 } }\n"
+                + " action a(h: H) { const r = E {}\n return { n: r == r && h == H { e: r, n: 1 } ? 1 : 0 } }\n}");
+        fixture("BoolIdentity", "contract BoolIdentity {\n state { n: Int }\n init() { return { n: 0 } }\n"
+                + " action a(x: Bool, y: Bool) { return { n: x == y ? 1 : 0 } }\n"
+                + " action lists(x: List<Bool>, y: List<Bool>) { return { n: x == y ? 1 : 0 } }\n"
+                + " action options(x: Option<Bool>, y: Option<Bool>) { return { n: x == y ? 1 : 0 } }\n}");
         // A view reads a nested record field through an accessor helper.
         fixture("Nested", "type In = { k: Key, v: Int }\ntype Out = { i: In, tag: Bytes }\ncontract Nested {\n state { o: Option<Out> }\n"
                 + " init(o: Option<Out>) { return { o } }\n"
@@ -186,6 +193,32 @@ class JscV2FixturesTest {
     static String result(Rec next) {
         return com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0, com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0,
                 data(next)), com.bloxbean.cardano.client.plutus.spec.ListPlutusData.builder().build()).serializeToHex();
+    }
+
+    /** Codex C11 and C13: distinct Boolean objects of equal value, and empty records, compare equal on both legs. */
+    @Test
+    @SuppressWarnings("removal")
+    void booleansByValue_andEmptyRecords() {
+        var in = interp("BoolIdentity");
+        var t = transitions("BoolIdentity");
+        Rec s = new Rec("State", List.of(BigInteger.ZERO));
+        Boolean a = new Boolean(true), b = new Boolean(true);
+        assertNotSame(a, b);
+        var calls = Map.<String, List<Object>>of("a", List.of(a, b), "lists", List.of(List.of(a, false), List.of(b, new Boolean(false))),
+                "options", List.of(Opt.some(a), Opt.some(b)));
+        for (var c : calls.entrySet()) {
+            String want = "ok:" + result(new Rec("State", List.of(BigInteger.ONE)));
+            assertEquals(want, interpreted(in, c.getKey(), s, c.getValue()), "interpreter: " + c.getKey());
+            assertEquals(want, evaluate(t.get(c.getKey()), data(s), NONE, argsOf(c.getValue()), NONE), "transition: " + c.getKey());
+        }
+        var e = interp("EmptyRecord");
+        var et = transitions("EmptyRecord");
+        for (long n : List.of(1L, 2L)) {
+            var h = new Rec("H", List.of(new Rec("E", List.of()), BigInteger.valueOf(n)));
+            String want = "ok:" + result(new Rec("State", List.of(BigInteger.valueOf(n == 1 ? 1 : 0))));
+            assertEquals(want, interpreted(e, "a", s, List.of(h)));
+            assertEquals(want, evaluate(et.get("a"), data(s), NONE, argsOf(List.of(h)), NONE));
+        }
     }
 
     /** Recursion, nested records through accessor helpers, asKey at run time: interpreter against the transition programs. */

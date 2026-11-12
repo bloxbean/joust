@@ -35,7 +35,7 @@ final class Checker {
             "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private",
             "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this",
             "throw", "throws", "transient", "try", "void", "volatile", "while", "var", "record", "yield", "sealed",
-            "permits", "null", "true", "false",
+            "permits", "null", "true", "false", "_",
             // members of Object: a record component of the same name is illegal Java
             "clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait",
             // names in the generated code
@@ -94,6 +94,8 @@ final class Checker {
     }
 
     private void resetRound() {
+        localFT.clear();
+        foldFT.clear();
         warnings.clear();
         callGraph.clear();
         analysed.clear();
@@ -163,7 +165,7 @@ final class Checker {
         for (Syntax.Method m : c.methods()) {
             if (m.kind() != Kind.INIT) checkUserName(m.name(), m.pos(), "method");
             String variant = Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1);
-            if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && generated.contains(variant)) {
+            if (m.kind() != Kind.INIT && m.kind() != Kind.VIEW && !generated.add(variant)) {
                 throw m.pos().error("the method name " + m.name() + " would clash with the generated name " + variant + "; rename it");
             }
             if (!seen.add(m.name())) throw m.pos().error("the method " + m.name() + " is declared twice");
@@ -435,22 +437,43 @@ final class Checker {
 
     // ------------------------------------------------------------------ time fields (D11)
 
-    /** A field's taint in a state value, and where it came from (for the warning). */
-    private record FT(int taint, Pos pos) {}
+    /**
+     * A field's taint in a state value; {@code warn}, the part that is not a plain copy of the same field (what the
+     * bias warning is about); where it came from; and whether the value was followed as a whole rather than per field.
+     */
+    private record FT(int taint, int warn, Pos pos, boolean whole) {}
+
+    /** Per-field taints of state-typed locals (consts, fold accumulators) and of folds over the state (S7, S8). */
+    private final Map<Ir.Local, Map<String, FT>> localFT = new IdentityHashMap<>();
+    private final Map<Ir.Expr, Map<String, FT>> foldFT = new IdentityHashMap<>();
 
     /**
      * State fields the method's result sets to a time value become time fields (D11). The result's per-field taint is
      * followed through every form a state value can take (Codex C2, F1, S1): object literals and their spread,
-     * conditionals, value ifs and blocks, and consts of the state type. Anything else marks every field with the
-     * value's taint. A value of this call's window reaching a field is warned about (C9, F4, S4).
+     * conditionals, value ifs and blocks, consts of the state type, and folds whose accumulator is the state (S7).
+     * Anything else marks every field with the value's taint, and the warning says so. A time value reaching a field
+     * other than as a copy of that same field is warned about: this call's window (C9, F4, S4), or a stored time copied
+     * into another field (S8).
      */
     private void recordTimeFields(Ir.Expr result, String method) {
+        var wholeWarned = new boolean[1];
         stateTaints(result).forEach((f, ft) -> {
             if ((ft.taint() & TIME) != 0) nextTimeFields.add(f);
-            if ((ft.taint() & WINDOW) != 0) {
+            if ((ft.warn() & TIME) == 0) return;
+            if (ft.whole()) {
+                if (!wholeWarned[0]) {
+                    wholeWarned[0] = true;
+                    warn(ft.pos(), method + " builds its next state from a time value with an expression the checker follows as a"
+                            + " whole, not field by field, so every state field becomes a time field; build it as"
+                            + " { ...state, f: … } to keep the others ordinary (ADR-0018 D11)");
+                }
+            } else if ((ft.warn() & WINDOW) != 0) {
                 warn(ft.pos(), method + " stores a value of the validity window in " + f + ": whoever submits the transaction"
                         + " chooses the window, so validFrom can be up to maxValidityMs early and validTo that much late"
                         + " (ADR-0018 D11)");
+            } else {
+                warn(ft.pos(), method + " stores a value derived from a stored time in " + f + ": that time came from an earlier"
+                        + " call's validity window, so its bias (up to maxValidityMs) carries into " + f + " (ADR-0018 D11)");
             }
         });
     }
@@ -460,15 +483,15 @@ final class Checker {
         switch (e) {
             case Ir.New n when n.record().equals("State") -> {
                 var names = List.copyOf(stateFields.keySet());
-                for (int i = 0; i < names.size(); i++) out.put(names.get(i), new FT(n.values().get(i).taint(), n.values().get(i).pos()));
+                for (int i = 0; i < names.size(); i++) out.put(names.get(i), fieldFT(names.get(i), n.values().get(i)));
                 return out;
             }
             case Ir.StateRef s -> {
-                for (String f : stateFields.keySet()) out.put(f, new FT(timeFields.contains(f) ? TIME : 0, s.pos()));
+                for (String f : stateFields.keySet()) out.put(f, new FT(timeFields.contains(f) ? TIME : 0, 0, s.pos(), false));
                 return out;
             }
-            case Ir.LocalRef l when l.local().fieldTaints != null -> {
-                l.local().fieldTaints.forEach((f, t) -> out.put(f, new FT(t, l.pos())));
+            case Ir.LocalRef l when localFT.containsKey(l.local()) -> {
+                localFT.get(l.local()).forEach((f, ft) -> out.put(f, new FT(ft.taint(), ft.warn(), ft.pos(), ft.whole())));
                 return out;
             }
             case Ir.Cond c -> {
@@ -480,17 +503,34 @@ final class Checker {
             case Ir.BlockValue b -> {
                 return stateTaints(b.block().result());
             }
+            case Ir.Fold f when foldFT.containsKey(f) -> {
+                return new LinkedHashMap<>(foldFT.get(f));
+            }
             default -> {
-                for (String f : stateFields.keySet()) out.put(f, new FT(e.taint(), e.pos()));
+                for (String f : stateFields.keySet()) out.put(f, new FT(e.taint(), e.taint(), e.pos(), true));
                 return out;
             }
         }
     }
 
+    /** One field of a state literal: a copy of the same field keeps that field's taint and warns about nothing new. */
+    private FT fieldFT(String field, Ir.Expr v) {
+        if (v instanceof Ir.StateField sf && sf.field().equals(field)) return new FT(v.taint(), 0, v.pos(), false);
+        if (v instanceof Ir.GetField g && g.field().equals(field) && g.record().equals("State")) {
+            if (g.target() instanceof Ir.StateRef) return new FT(v.taint(), 0, v.pos(), false);
+            if (g.target() instanceof Ir.LocalRef l && localFT.containsKey(l.local())) {
+                FT ft = localFT.get(l.local()).get(field);
+                return new FT(ft.taint(), ft.warn(), ft.pos(), ft.whole());
+            }
+        }
+        return new FT(v.taint(), v.taint(), v.pos(), false);
+    }
+
     private static Map<String, FT> merge(Map<String, FT> a, Map<String, FT> b) {
         var out = new LinkedHashMap<String, FT>(a);
-        b.forEach((f, ft) -> out.merge(f, ft, (x, y) -> new FT(x.taint() | y.taint(),
-                (x.taint() & WINDOW) != 0 || (y.taint() & WINDOW) == 0 ? x.pos() : y.pos())));
+        b.forEach((f, ft) -> out.merge(f, ft, (x, y) -> new FT(x.taint() | y.taint(), x.warn() | y.warn(),
+                (x.warn() & WINDOW) != 0 || (x.warn() != 0 && (y.warn() & WINDOW) == 0) || y.warn() == 0 ? x.pos() : y.pos(),
+                x.whole() || y.whole())));
         return out;
     }
 
@@ -550,9 +590,11 @@ final class Checker {
                     Ir.Expr v = expr(c.value(), sc, want);
                     if (want != null) expectType(want, v, c.value().pos());
                     Ty t = want != null ? want : v.type();
-                    var ft = t.equals(Ty.STATE) ? taintsOnly(stateTaints(v)) : null;
+                    var fts = t.equals(Ty.STATE) ? stateTaints(v) : null;
                     if ("None".equals(c.name()) || "Some".equals(c.name())) throw c.pos().error("'" + c.name() + "' is a built-in name");
-                    out.add(new Ir.Let(sc.declare(c.name(), t, v.taint(), c.pos(), true, ft), v, c.pos()));
+                    Ir.Local local = sc.declare(c.name(), t, v.taint(), c.pos(), true, fts == null ? null : taintsOnly(fts));
+                    if (fts != null) localFT.put(local, fts);
+                    out.add(new Ir.Let(local, v, c.pos()));
                 }
                 case Syntax.Require r -> out.add(new Ir.Require(requireCond(r.cond(), sc), r.message(), r.pos()));
                 case Syntax.Pay p -> {
@@ -975,6 +1017,23 @@ final class Checker {
         // body (Codex C3). Two bits, so at most three rounds.
         int accTaint = start.taint() | list.taint();
         FoldBody fb;
+        if (acc.equals(Ty.STATE)) {
+            // A fold over the state: each field's taint is its own fixed point, so a body that writes one field leaves
+            // the others ordinary (S7). The elements reach a field only through the body, which the per-field taint sees.
+            Map<String, FT> accFT = stateTaints(start);
+            while (true) {
+                fb = foldBody(l, sc, acc, e, accFT, list.taint());
+                var next = merge(accFT, stateTaints(fb.body().result()));
+                if (sameTaints(next, accFT)) break;
+                accFT = next;
+            }
+            expectType(acc, fb.body().result(), fb.body().result().pos());
+            int t = 0;
+            for (FT ft : accFT.values()) t |= ft.taint();
+            var fold = new Ir.Fold(list, start, fb.acc(), fb.x(), fb.body(), acc, t, pos);
+            foldFT.put(fold, accFT);
+            return fold;
+        }
         while (true) {
             fb = foldBody(l, sc, acc, e, accTaint, list.taint());
             int out = fb.body().result().taint();
@@ -985,11 +1044,30 @@ final class Checker {
         return new Ir.Fold(list, start, fb.acc(), fb.x(), fb.body(), acc, accTaint | fb.body().result().taint(), pos);
     }
 
+    private static boolean sameTaints(Map<String, FT> a, Map<String, FT> b) {
+        for (var en : a.entrySet()) {
+            FT y = b.get(en.getKey());
+            if (y == null || y.taint() != en.getValue().taint() || y.warn() != en.getValue().warn() || y.whole() != en.getValue().whole()) return false;
+        }
+        return a.size() == b.size();
+    }
+
     private record FoldBody(Ir.Local acc, Ir.Local x, Ir.Block body) {}
 
     private FoldBody foldBody(Lambda l, Sc sc, Ty acc, Ty e, int accTaint, int elemTaint) {
         Sc inner = sc.child(false, true);
         Ir.Local a = inner.declare(l.params().get(0), acc, accTaint, l.pos(), false, null);
+        Ir.Local x = inner.declare(l.params().get(1), e, elemTaint, l.pos(), false, null);
+        return new FoldBody(a, x, lambdaBody(l, inner, acc));
+    }
+
+    /** A fold body whose accumulator is the state, with the accumulator's per-field taints. */
+    private FoldBody foldBody(Lambda l, Sc sc, Ty acc, Ty e, Map<String, FT> accFT, int elemTaint) {
+        Sc inner = sc.child(false, true);
+        int t = 0;
+        for (FT ft : accFT.values()) t |= ft.taint();
+        Ir.Local a = inner.declare(l.params().get(0), acc, t, l.pos(), false, taintsOnly(accFT));
+        localFT.put(a, accFT);
         Ir.Local x = inner.declare(l.params().get(1), e, elemTaint, l.pos(), false, null);
         return new FoldBody(a, x, lambdaBody(l, inner, acc));
     }

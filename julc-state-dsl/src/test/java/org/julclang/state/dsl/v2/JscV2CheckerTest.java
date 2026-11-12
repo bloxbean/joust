@@ -176,10 +176,35 @@ class JscV2CheckerTest {
         assertEquals(List.of(L + 1, 37), List.of(pay.line(), pay.col()));
         assertTrue(pay.message().contains("payout") && pay.message().contains("maxValidityMs"), pay.message());
         assertTrue(r.warnings().get(0).startsWith("T.jsc:" + L + ":40: warning: "), r.warnings().get(0));
-        // Through a conditional, and only once however many rounds the fixed point takes.
+        // Through a conditional, once however many rounds the fixed point takes; a stored time copied into another
+        // field warns too (security S8), a field kept as it was does not.
         var c = lowered("action a(c: Bool) { return c ? { ...state, stamp: validTo } : state }\n action b() { return { ...state, count: stamp + 1 } }");
-        assertEquals(1, c.diagnostics().size(), c.warnings().toString());
+        assertEquals(2, c.diagnostics().size(), c.warnings().toString());
+        assertTrue(c.diagnostics().get(0).message().contains("validity window in stamp"), c.warnings().toString());
+        var copy = c.diagnostics().get(1);
+        assertEquals(List.of(L + 1, 41), List.of(copy.line(), copy.col()));
+        assertTrue(copy.message().contains("b stores a value derived from a stored time in count"), copy.message());
         assertTrue(lowered("action a() { return { ...state, count: count + 1 } }").diagnostics().isEmpty());
+        assertEquals(1, lowered("action a() { return { ...state, stamp: validFrom } }\n action b(c: Bool) { return c ? { ...state, count: 1 } : state }")
+                .diagnostics().size(), "copies of the time field itself are not new");
+    }
+
+    /** Security S7: a state built by a fold over the state keeps per-field taints; a whole-value form says so. */
+    @Test
+    void time_stateBuiltByAFold_isFollowedPerField() {
+        var r = lowered("action a() { const n: State = xs.fold(state, (acc, x) => ({ ...acc, stamp: validFrom }))\n return n }\n"
+                + " action b() { require(caller == owner && count > 0, \"x\")\n return state }");
+        assertEquals(1, r.diagnostics().size(), r.warnings().toString());
+        assertTrue(r.diagnostics().get(0).message().contains("validity window in stamp"), r.warnings().toString());
+        bad("action a() { const n: State = xs.fold(state, (acc, x) => ({ ...acc, stamp: validFrom }))\n return n }\n"
+                + " action b() { require(stamp > 0, \"x\")\n return state }", "time value cannot decide", 2, 23);
+        // A form the checker follows only as a whole marks every field, and the warning names that cause.
+        bad("action a() { return xs.fold(state, (acc, x) => { ...acc })\n }", "in parentheses", 0, 48);
+        var w = lowered("action a() { return [state, { ...state, stamp: validFrom }].head ?? state }");
+        assertEquals(1, w.diagnostics().size(), w.warnings().toString());
+        assertTrue(w.diagnostics().get(0).message().contains("follows as a whole"), w.warnings().toString());
+        bad("action a() { return [state, { ...state, stamp: validFrom }].head ?? state }\n action b() { require(caller == owner, \"x\")\n return state }",
+                "time value cannot decide", 1, 23);
     }
 
     // ------------------------------------------------------------------ names (D3, J10)
@@ -228,6 +253,9 @@ class JscV2CheckerTest {
     void names_generatedAndImportedJavaNamesAreRefused() {
         bad("destroy payout() only owner { pay(owner, balance) }", "clash with the generated name Payout", 0, 1);
         bad("action ab__c() { return state }", "'__'", 0, 1);
+        // Codex C14: '_' is a Java keyword; C15: two methods with one redeemer variant.
+        bad("action a(_: Int) { return { ...state, count: _ } }", "reserved", 0, 10);
+        bad("action foo() { return state }\n action Foo() { return state }", "clash with the generated name Foo", 1, 2);
         badSource("jsc 2\npackage t\ncontract Keep {\n  state { n: Int }\n  init() { return { n: 0 } }\n  action keep() { return state }\n}\n",
                 "clash with the generated name Keep", 6, 3);
         bad("action a(ByteStringLib: Bytes) { require(ByteStringLib == #00, \"bytes\")\n return state }", "reserved", 0, 10);
@@ -409,11 +437,10 @@ class JscV2CheckerTest {
         for (String name : List.of(attack, "a*/b.jsc", "a\nb.jsc", "a\\u000a.jsc", "a b.jsc", "../T.jsc", "")) {
             var e = assertThrows(JscException.class, () -> JscMain.lowerWithWarnings(gate, name), name);
             assertEquals("1:1", e.line + ":" + e.col);
-            assertTrue(e.getMessage().contains("may contain only letters"), e.getMessage());
+            assertTrue(e.getMessage().contains("may contain only ASCII letters and digits"), e.getMessage());
             assertThrows(JscException.class, () -> JscV2.lower(gate, name));
         }
-        String v1 = "package t\ncontract C { state n: Int\n  init() { n = 1 } }\n";
-        assertThrows(JscException.class, () -> JscMain.lowerWithWarnings(v1, attack), "v1 too");
+        assertThrows(JscException.class, () -> JscV2.lower(gate, "Zähler.jsc"), "ASCII only");
         String java = JscMain.lowerWithWarnings(gate, "Gate-1_v2.jsc").java();
         assertTrue(java.contains("Require.that(false, \"nobody may claim\");"), java);
         assertTrue(java.contains("\"Gate-1_v2.jsc:7: k must hold 28-byte key hashes\""), java);

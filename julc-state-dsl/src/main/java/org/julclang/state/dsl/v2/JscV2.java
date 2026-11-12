@@ -44,7 +44,7 @@ public final class JscV2 {
     public static void checkFileName(String fileName) {
         if (fileName == null || !SAFE_FILE_NAME.matcher(fileName).matches()) {
             throw new JscException(1, 1, "the file name " + (fileName == null ? "(none)" : "'" + printable(fileName) + "'")
-                    + " may contain only letters, digits, '.', '_' and '-' (it is embedded in the generated Java)");
+                    + " may contain only ASCII letters and digits, '.', '_' and '-', and must start with a letter or digit (it is embedded in the generated Java)");
         }
     }
 
@@ -52,6 +52,11 @@ public final class JscV2 {
         var out = new StringBuilder();
         for (char c : s.toCharArray()) out.append(c < 0x20 || c > 0x7e ? String.format("\\u%04x", (int) c) : String.valueOf(c));
         return out.toString();
+    }
+
+    /** A Java string literal for any text (quotes, backslashes and control characters escaped). */
+    public static String javaString(String text) {
+        return JavaEmitter.str(text);
     }
 
     /** Checks and lowers a {@code .jsc} 2 source to a Java {@code @StateContract}. */

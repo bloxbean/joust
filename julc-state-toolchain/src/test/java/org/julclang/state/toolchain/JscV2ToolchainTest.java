@@ -95,8 +95,26 @@ class JscV2ToolchainTest {
         assertTrue(r.contracts().isEmpty());
         var d = r.diagnostics().get(0);
         assertEquals(List.of(name, 1L, 1L), List.of(d.file(), d.line(), d.col()));
-        assertTrue(d.message().contains("may contain only letters"), d.message());
+        assertTrue(d.message().contains("may contain only ASCII letters and digits"), d.message());
         assertTrue(Toolchain.build(Map.of("t/Gate.jsc", gate), Map.of()).ok());
+    }
+
+    /**
+     * Review F16: a v1 file keeps building under any name (D16: deployed v1 scripts stay rebuildable); the name is
+     * escaped, so the attack name of S3 changes nothing: claim is still refused by the transition program.
+     */
+    @Test
+    void v1FilesBuildUnderAnyName_andTheNameCannotChangeTheContract() {
+        String v1 = "package t\ncontract Gate {\n  state owner: Key\n  init() { owner = caller }\n"
+                + "  action claim(k: Key) {\n    require false \"nobody may claim\"\n    owner = k\n  }\n}\n";
+        for (String name : List.of("t/My Gate.jsc", "t/Zähler.jsc", "t/_g.jsc", "t/x\"); if (true) return new State(k); Require.that(true, \".jsc",
+                "t/a\\u000a\\u0022 */.jsc")) {
+            var r = Toolchain.build(Map.of(name, v1), Map.of());
+            assertTrue(r.ok(), name + ": " + r.diagnostics());
+            var gate = r.contracts().get(0);
+            var state = com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData.of(0, data(fill(0x0A)));
+            assertEquals("refused", evaluate(gate.transitions().get("claim"), state, NONE, args(fill(0xEE)), NONE), name);
+        }
     }
 
     @Test

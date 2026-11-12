@@ -206,6 +206,8 @@ public final class Interpreter {
                     if (!bool(eval(r.cond(), env, f))) throw new Refused(r.message());
                 }
                 case Ir.Pay y -> {
+                    // pay(to, amount) evaluates both arguments, left to right, like any call: pay is not one of D6's lazy
+                    // positions. Then a negative amount fails and a zero amount is skipped (C12).
                     Bytes to = (Bytes) eval(y.to(), env, f);
                     BigInteger amount = integer(eval(y.amount(), env, f));
                     if (amount.signum() < 0) throw new Refused("a payout cannot be negative");
@@ -406,7 +408,7 @@ public final class Interpreter {
         return switch (t) {
             case Ty.Prim pr -> switch (pr.name()) {
                 case "Int" -> ((BigInteger) a).compareTo((BigInteger) b) == 0;
-                case "Bool" -> (Boolean) a == (Boolean) b;
+                case "Bool" -> ((Boolean) a).booleanValue() == ((Boolean) b).booleanValue();   // by value (C11)
                 default -> Arrays.equals(((Bytes) a).value, ((Bytes) b).value);
             };
             case Ty.ListT l -> {

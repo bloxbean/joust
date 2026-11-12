@@ -101,8 +101,8 @@ public final class Toolchain {
         files.forEach((name, text) -> {
             if (name.endsWith(".jsc")) {
                 try {
-                    // The bare file name, as Gradle's generateJsc passes it: the lowering embeds it, so JscMain accepts
-                    // only a safe name ([A-Za-z0-9._-], security S3) and refuses any other at 1:1.
+                    // The bare file name, as Gradle's generateJsc passes it: the lowering embeds it. A .jsc 2 file's name
+                    // must be [A-Za-z0-9][A-Za-z0-9._-]* (else a 1:1 error, security S3); a v1 file's name is escaped.
                     String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
                     var lowered = JscMain.lowerWithWarnings(text, base);
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());

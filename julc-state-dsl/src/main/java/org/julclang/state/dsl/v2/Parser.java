@@ -551,6 +551,9 @@ final class Parser {
     }
 
     private Expr lambdaBody() {
+        if (at("{") && peek(1).is("...")) {
+            throw peek().pos().error("a lambda's '{' starts a block: write an object as its value in parentheses, x => ({ ...x, f: e })");
+        }
         if (at("{")) {
             Block b = block();
             if (b.result() == null) throw b.pos().error("a lambda's block must end in its value");

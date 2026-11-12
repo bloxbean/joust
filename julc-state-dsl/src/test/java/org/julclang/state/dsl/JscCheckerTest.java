@@ -145,4 +145,24 @@ class JscCheckerTest {
         var r = JscMain.lowerWithWarnings(HEAD + "destroy d() only owner { pay 1 ada to owner }\n}\n", "C.jsc");
         assertTrue(r.warnings().stream().anyMatch(w -> w.contains("never reads balance")));
     }
+
+    /**
+     * ADR-0018 review F16: v1 is frozen (D16), so its file names are escaped, not refused. Only the name differs in the
+     * Java, and no name can leave the comments and strings it is written into (security S3).
+     */
+    @Test
+    void v1FileNamesAreEscaped_notRefused() {
+        String v1 = "package t\ncontract C {\n  state owner: Key\n  init() { owner = caller }\n"
+                + "  action claim(k: Key) {\n    require false \"nobody may claim\"\n    owner = k\n  }\n}\n";
+        String plain = JscMain.lowerWithWarnings(v1, "C.jsc").java();
+        assertTrue(plain.contains("\"C.jsc:5: k"), plain);
+        for (String name : java.util.List.of("My Counter.jsc", "Zähler.jsc", "_c.jsc", "x\"); if (true) return new State(k); Require.that(true, \".jsc",
+                "a*/b.jsc", "a\nb.jsc", "a\\u000a\\u0022.jsc")) {
+            String java = JscMain.lowerWithWarnings(v1, name).java();
+            String inString = org.julclang.state.dsl.v2.JscV2.javaString(name).replaceAll("^\"|\"$", "");
+            String masked = java.replace(inString, "@").replace(Lowering.commentSafe(name), "@");
+            assertEquals(plain.replace("C.jsc", "@"), masked, "only the escaped name differs: " + name);
+            assertFalse(Lowering.commentSafe(name).contains("*/") || Lowering.commentSafe(name).contains("\n"), name);
+        }
+    }
 }
