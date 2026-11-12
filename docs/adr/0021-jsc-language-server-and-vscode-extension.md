@@ -1,6 +1,6 @@
 # ADR-0021: A language server and VS Code extension for `.jsc` 2
 
-**Status:** Proposed (r4)
+**Status:** Proposed (r5)
 **Date:** 2026-11-13
 **Builds on:** ADR-0018 (`.jsc` 2), **r9 as amended on `feat/jsc-2-m1a`** (ADR text at `3de519d`, code at `dfa7025`):
 D3 (names), D9 (libraries and `java:` imports, built in M4), D12 (stable codes, source maps, generated Java, ABI
@@ -355,10 +355,20 @@ thread that loaded it (F8). So:
   Rename and quick-fix edits are never returned for the client to apply by itself; the server applies them with a
   server-initiated `workspace/applyEdit` whose `WorkspaceEdit.documentChanges` names, for every changed document, the
   non-null version the server validated.
-  - **Why this path:** `vscode-languageclient` 11.0.0 handles `workspace/applyEdit` by converting the edit, then
-    comparing every versioned target with the open document's version, then calling `workspace.applyEdit` with no
-    asynchronous step in between (`lib/common/client.js:1805-1822`, its comment: "CRITICAL: make sure that after this
-    check has run no async operation happens"); a mismatch refuses the whole edit. The standard rename response is not
+  - **Why this path, and the extension's own check (r5):** `vscode-languageclient` 11.0.0 handles
+    `workspace/applyEdit` by converting the edit, then comparing every versioned target with the open document's
+    version, then calling `workspace.applyEdit` with no asynchronous step in between (`lib/common/client.js:1805-1823`,
+    its comment: "CRITICAL: make sure that after this check has run no async operation happens"). But its check skips a
+    target that is **not open** (`:1825-1839`: `if (textDocument && textDocument.version !== …)`), and VS Code then
+    applies to it without a version (review C9). So the extension does not rely on that check: it installs the
+    client's **`middleware.workspace.handleApplyEdit`** hook (`client.js:1792-1797`), which replaces the default
+    handler without calling it. The extension's handler (1) converts the edit (`client.protocol2CodeConverter`,
+    asynchronous), then, **synchronously, with no `await` until the call**: (2) looks up every `TextDocumentEdit`
+    target in `workspace.textDocuments` and **refuses the whole edit** (`{ applied: false }`) if any target is absent or
+    its `version` differs from the validated one, and (3) calls `workspace.applyEdit(converted)`, which captures the
+    current, just-checked versions of all targets at the call (`extHostBulkEdits.ts:25-33` at VS Code 1.146.0) and has
+    them checked again before anything is applied (`bulkTextEdits.ts:87-91`, `:294-329`). A target that closed while
+    the edit was pending is therefore refused, never reopened and stamped with a new version. The standard rename response is not
     safe in VS Code: the client checks the versions while converting the result to a VS Code `WorkspaceEdit`, which
     carries no versions, and VS Code then applies it asynchronously without them (review C9, traced in
     `vscode-languageserver-node` 11.0.0 and VS Code 1.146.0 sources). So in VS Code the server **does not advertise
@@ -367,7 +377,8 @@ thread that loaded it (F8). So:
     `workspace/applyEdit`. Quick fixes take the same path (D7).
   - **Closed files:** an edit never targets a closed document (LSP allows a `null` version for one, which binds
     nothing). Before validating a rename that touches other files, the extension opens every affected file
-    (`workspace.openTextDocument`, which sends `didOpen` with a version), so every target is versioned and checked.
+    (`workspace.openTextDocument`, which sends `didOpen` with a version), so every target is versioned; a target that
+    closes before the edit is applied makes the extension's handler refuse the whole edit (above).
   - **Atomicity:** one `workspace/applyEdit` carries the whole rename or fix; a version mismatch on any target refuses
     all of it, and a multi-file edit is sent only to a client whose `workspace.workspaceEdit.failureHandling` is
     `transactional` or `textOnlyTransactional` (`vscode-languageclient` 11.0.0 declares the latter, and these edits are
@@ -379,13 +390,21 @@ thread that loaded it (F8). So:
     completion item's `textEdit`, which carry no document version, so L6's version rule does not apply to them; instead:
     - the server computes each response against the document version it holds when the request arrives, and returns
       nothing (`null`, or an empty list) if a newer version has arrived before it answers;
-    - **formatting** (M5d): VS Code also discards a formatting result if the editor's text changes while the request is
-      in flight (`format.ts:144`, `:325` at 1.146.0: an `EditorStateCancellationTokenSource` on `CodeEditorStateFlag.Value`);
-      formatting is meaning- and hash-preserving (L7, L12), so a client that applied a stale result would still change
-      only layout, and the next analysis would show any damage;
+    - that server-side check cannot cover a change made **after** the response is sent, and a stale formatting edit is
+      **not** harmless: formatting preserves the meaning of the text it formatted, not of a later buffer (a full-line
+      edit computed for `const n=1` restores `1` if applied after the user typed `2`, and the result may still check).
+      So the client must reject stale results itself. **VS Code does:** document and range formatting, on request, on
+      save and on paste, run through functions that cancel when the text changes and check that cancellation after the
+      asynchronous work and before applying (`format.ts:144-147`, `:251-264`, `:325-355`; `editorState.ts:116-118`,
+      `:131-137`; the save participant calls them, `saveParticipants.ts:299-313`, all at 1.146.0); and its suggest
+      widget re-checks the completion context before inserting (`suggestModel.ts:618-637`, `:726-745`);
+    - **other clients:** formatting and completion are **off** for clients the docs do not list as tested, like rename
+      and fixes; a client is listed only after a test shows it rejects a result when the text changed after the
+      response was sent;
     - **completion:** an item's `textEdit` replaces only the word being completed on the cursor's line, and items carry
       **no `additionalTextEdits`**: an import an item needs is added by the item's `command` (`joust.addImport` with an
-      opaque id, D7), which goes through the verified `workspace/applyEdit` path. Inserting the item is the user's own
+      opaque, single-use id issued by the server, refused when unknown, used or stale, hidden from the palette, exactly as
+      `joust.applyFix`; D7), which goes through the verified `workspace/applyEdit` path. Inserting the item is the user's own
       code change (L12).
 - **Completion** uses the last model only to decide what kind of item to offer (D5); every text edit a completion item
   carries is computed against the current text.
@@ -584,9 +603,11 @@ revision it also could not be safe: a moved line, a file name and some parameter
   segment-compared real paths; no CLI dispatch; absolute paths; the server resolves no module from the workspace).
 - **Library sources and inputs:** D4b.
 - **No network, no telemetry.** The extension and the server open no connection (Q3(b) is the only open exception).
-- **No writes by the server.** Everything the server changes reaches the editor as an edit the editor applies:
-  renames and quick fixes as versioned `workspace/applyEdit` requests after the user chose them, completion and
-  formatting as their standard responses (D4a); everything else is a user-invoked command through the project's CLI (L3).
+- **No writes into the project by the server.** Everything the server changes in the workspace reaches the editor as an
+  edit the editor applies: renames and quick fixes as versioned `workspace/applyEdit` requests after the user chose
+  them, completion and formatting as their standard responses (D4a); everything else is a user-invoked command through
+  the project's CLI (L3). The server's only own file writes are D3b's checked engine copy, in the extension's (or the
+  user-installed server's) private storage, outside every workspace folder.
 
 ### D11. Publishing is human-only, and the supply chain (revised in r2)
 
@@ -666,12 +687,16 @@ revision it also could not be safe: a moved line, a file name and some parameter
 - **Validated edits (C9):** in VS Code, a rename and a quick fix are applied only through `workspace/applyEdit`; a
   change to the edited document **or to a second open target** made (a) before the server's `workspace/applyEdit` is
   sent and (b) after the client has received and converted it, before it applies, refuses the whole edit; a
-  cross-file rename opens closed targets first; `textDocument/rename` is not advertised to the VS Code client; in
-  other editors rename and fixes are off unless enabled.
+  cross-file rename opens closed targets first; **a second target B that closes while the edit is pending** (during the
+  handler's conversion) refuses the whole edit with no `workspace.applyEdit` call, and **B changed on disk after closing
+  is not overwritten**; `textDocument/rename` is not advertised to the VS Code client; in other editors rename and
+  fixes are off unless enabled.
 - **Completion and formatting (C13):** a completion or formatting request answered after a newer version arrived
   returns nothing; no completion item carries `additionalTextEdits`; an import added by `joust.addImport` after the
-  document changed is refused by version; a formatting response delayed past an edit is discarded by VS Code
-  (M5d).
+  document changed is refused by version; `joust.addImport` refuses an unknown, used or stale id and is not in the
+  palette; **a change made after the formatting response was sent** (document and range formatting, on request, on save
+  and on paste; M5d) leaves the response unapplied in VS Code; formatting and completion are not advertised to a client
+  that is not listed as tested.
 - **Confinement (S13, F13):** a package in an ancestor of the opened folder; a dependency of a trusted-subfolder
   package planted in an ancestor `node_modules` (sentinel; only the two engine files load); a symlinked `node_modules`
   that leaves the folder; a sibling folder sharing the folder's name prefix (`repo` and `repo-evil`); a multi-root
@@ -729,10 +754,10 @@ Numbered L… so they are not confused with the validator invariants I1–I55, A
 |---|---|---|---|
 | L1 | **In project-matched mode** (D3a), for a completed analysis of a snapshot equal to what the build reads (same compiler, sources, dependencies and configuration), the server's front-end errors include every front-end error the build reports (same code, line, column), and a file with no front-end error from the server passes the build's front end. In advisory mode no equivalence is claimed and every diagnostic is labelled advisory | D1, D2, D3a, D5 | mode tests; corpus and mutation tests against `JscV2.lower` / `joust build` |
 | L2 | The server reports its mode and the compiler it analyses with (`serverInfo`, status bar, diagnostic `source`). It is project-matched only when D3's eligibility holds (trusted workspace, an engine with a supported `joust.lang` version, both engine files confined to a workspace folder, D3b); every other case, including an engine that predates `joust.lang` and a window with no folder, uses the bundled engine in advisory mode | D3, D3a, D3b | protocol and smoke tests with two versions |
-| L3 | The server writes no file. Changes reach the workspace only as edits the editor applies or as commands the user invokes, through the project's CLI or `gradlew` | D4, D7, D10 | protocol tests watch the workspace; smoke tests |
+| L3 | The server writes no file into the workspace or the project. Its only file writes are the checked copies of engine files (D3b), into the extension's (or the user-installed server's) private storage, which lies outside every workspace folder. Changes reach the workspace only as edits the editor applies or as commands the user invokes, through the project's CLI or `gradlew` | D3b, D4, D7, D10 | protocol tests watch the workspace (no write) and the private storage (only engine copies named by their SHA-256); smoke tests |
 | L4 | In an untrusted workspace no workspace file is executed or loaded as code. In a trusted one, the only workspace code loaded is the project's two engine files, and only when their real paths are inside a workspace folder by D3b's comparison: no other `node_modules` code and no Gradle except in a task the user invokes (D7), no executable from a workspace setting, no module resolved from the workspace | D3b, D10 | hostile-workspace and confinement smoke tests with sentinels |
 | L5 | Recovery and spans never change the build: on every file the build accepts, the recovering mode and the span-carrying tree give byte-identical generated Java and ABI manifest | D5, D6 | corpus tests, in M5 and in every M2/M3 front-end PR (§3a) |
-| L6 | Every rename and quick fix is re-analysed on the snapshot it is bound to (a quick fix removes its diagnostic and adds none; a rename adds no diagnostic, keeps every other reference resolving to the same declaration, breaks no D3/J10 rule, and warns when it changes an ABI-recorded name), and is applied only through a server-initiated `workspace/applyEdit` naming a non-null validated version for every changed document, so a change to any target in between refuses all of it; multi-file edits only to transactional clients. Completion and formatting responses (`TextEdit[]`, no version) are computed for the version the server holds when the request arrives and dropped if a newer one has arrived; completion items carry no `additionalTextEdits`. No code action is applicable on save, and code actions are offered only to `Invoked` requests | D4a, D7, D10 | rename, fix, version, completion, formatting and save tests |
+| L6 | Every rename and quick fix is re-analysed on the snapshot it is bound to (a quick fix removes its diagnostic and adds none; a rename adds no diagnostic, keeps every other reference resolving to the same declaration, breaks no D3/J10 rule, and warns when it changes an ABI-recorded name), and is applied only through a server-initiated `workspace/applyEdit` naming a non-null validated version for every changed document, so a change to, or the closing of, any target in between refuses all of it; multi-file edits only to transactional clients. Completion and formatting responses (`TextEdit[]`, no version) are computed for the version the server holds when the request arrives and dropped if a newer one has arrived, and are offered only to clients shown to reject a result when the text changed after the response was sent (VS Code; others when listed as tested); completion items carry no `additionalTextEdits`. In VS Code every rename and fix is applied by the extension's own `handleApplyEdit`, which refuses the edit if any target is closed or changed No code action is applicable on save, and code actions are offered only to `Invoked` requests | D4a, D7, D10 | rename, fix, version, completion, formatting and save tests |
 | L7 | Formatting is idempotent, keeps every comment, and leaves the script hash, ABI manifest and description unchanged (generated Java differs only in position comments) | D8 | formatter corpus tests (M5d) |
 | L8 | `publishDiagnostics` carries the document version, and the server never publishes for a version older than one already published (enforced by the server, since `vscode-languageclient` ignores the version); results computed for an older snapshot generation are dropped, and build diagnostics are withdrawn when a newer generation exists | D4, D4a | protocol tests with interleaved edits, saves and dependency changes |
 | L9 | No input (hostile, huge, deeply nested, binary, a FIFO, a network path) hangs or crashes the server: engine workers do no I/O and run under a time cap, a heap limit and an explicit stack size; models are size-capped; a failure yields one internal-error diagnostic, a new worker, a quarantined input and backoff; repeated failures (cancellations excluded) lead to "analysis unavailable", while the protocol thread keeps answering | D2a, D4, D4b | watchdog protocol tests; hostile-workspace tests |
@@ -930,3 +955,14 @@ formatter invariants including the script hash. None of these certify the compil
     allow-list (no `willSaveWaitUntil`, `onTypeFormatting`, `linkedEditingRange`); the hostile workspace sets
     `formatOnType`, `formatOnPaste` and `linkedEditing`. S19: `--project-engine` gets the project-local warning; the
     engine files are copied by their checked bytes into private storage and loaded from there.
+- **r5** (2026-11-13; responds to the Codex review of `2ddaec8` (C9, C13, C15) and the security approval's S20):
+  - Versioned edits (C9, C6): the extension replaces the client's `workspace/applyEdit` handler through
+    `middleware.workspace.handleApplyEdit`; after conversion it refuses the whole edit if any target is not open or has
+    another version, then calls `workspace.applyEdit` with no `await` in between; a test closes a second target while
+    the edit is pending.
+  - Formatting and completion (C13): the claim that stale formatting is harmless is removed; VS Code's rejection of
+    stale formatting and completion results is cited; other clients get neither until a test shows they reject a result
+    after the response was sent.
+  - L3 (C15): the server writes nothing into the workspace or project; its only writes are the checked engine copies in
+    private storage, and the tests watch both.
+  - S20: `joust.addImport` follows `joust.applyFix`'s rules (opaque, single-use, refused when stale, hidden).
