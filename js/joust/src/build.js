@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { generate } from '@julclang/state-client/codegen';
-import { loadToolchain } from './toolchain.js';
+import { buildInWorker, ENGINE_STACK_MB } from './toolchain.js';
 import { abiGate } from './abi.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -41,17 +41,18 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   const files = sources(resolve(root, src), keep);
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
   const t = Date.now();
-  const engine = await loadToolchain();
   let r;
   try {
-    r = engine.joust.build({ files, options });
+    // On a worker with a set stack (ENGINE_STACK_MB), so a cold engine builds what the JVM builds (ADR-0018 J18, r12).
+    r = await buildInWorker({ files, options });
   } catch (e) {
     // The engine's stack ran out past the front end (whose nesting cap keeps it within the stack, ADR-0018 J18): in
-    // JuLC's passes, on a very large contract. Web Image surfaces that as a TypeError; the build reports it and fails,
-    // and the engine stays usable.
+    // JuLC's passes, on a contract far larger than a script can be. Web Image surfaces that as a TypeError; the build
+    // reports it and fails.
     r = { ok: false, contracts: [], diagnostics: [{ severity: 'error', source: 'toolchain', message: 'internal error: the'
-      + ` toolchain engine failed (${e?.message ?? e}); a contract this large may exhaust the engine's stack: build it on`
-      + ' Gradle, or split it (please report it, with the file)' }], generated: [] };
+      + ` toolchain engine failed (${e?.message ?? e}); a contract this large may exhaust the engine's stack`
+      + ` (JOUST_ENGINE_STACK_MB=${ENGINE_STACK_MB}): build it on Gradle, or split it (please report it, with the file)` }],
+      generated: [] };
   }
   for (const d of r.diagnostics) {
     const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
@@ -92,7 +93,9 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     const { js, dts } = generate(description);
     writeFileSync(join(dir, c.name + '.js'), js);
     writeFileSync(join(dir, c.name + '.d.ts'), dts);
-    const messages = messagesOf[`${c.packageName.replaceAll('.', '/')}/${c.name}.java`];
+    const map = messagesOf[`${c.packageName.replaceAll('.', '/')}/${c.name}.java`];
+    // The script it explains: a map read from an audit file names its script (review r1 S1).
+    const messages = map ? { ...map, scriptHash: c.scriptHash } : undefined;
     bundle.push({ description: c.descriptionJson, script: c.scriptCborHex, transitions: c.transitions, built: { joust: VERSION },
       ...(messages ? { messages } : {}) });
     log(`${c.packageName}.${c.name}: ${c.scriptSizeBytes} bytes, hash ${c.scriptHash || '(parameterised)'}, `

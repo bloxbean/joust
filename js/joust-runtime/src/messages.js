@@ -1,7 +1,8 @@
 // ADR-0018 D12 (r12): a .jsc 2 script's messages hold no file name, line or name. A generated check traces a key built
-// from ABI facts (#input:spend1.0, #pay:spend2.1); an author's require traces their text. `joust build` ships each
-// contract's message map ({ source, messages: { message: [{ line, col, kind, in, what? }] } }) in contracts.json, and a
-// refusal is shown with the .jsc position(s) that raise it.
+// from ABI facts (#input:spend1.0, #pay:spend2.1); an author's require traces their text (which never contains a key's
+// form, JSC0430). `joust build` ships each contract's message map in contracts.json ({ source, scriptHash, messages:
+// { message: [{ line, col, kind, in, what? }] } }), and a refusal is shown with the .jsc position(s) that raise it, from
+// the map of the contract that refused only: a key is unique within its script, not across scripts.
 
 const describe = (s) => {
   switch (s.kind) {
@@ -13,28 +14,50 @@ const describe = (s) => {
 };
 
 /**
- * The sites of a traced message in the contracts' message maps: `File.jsc:line:col (what)`. A key matches anywhere in
- * the text (it cannot be an author's message: JSC0430); an author's or an operation's message matches the whole text or
- * its end, after a runtime's `context: ` prefix.
+ * D12's matching rule, the same as the JVM's (JscV2.matching): of the messages the trace is, or ends with after ': '
+ * (a runtime's context), the longest. So #pay:spend0.1 never matches #pay:spend0.10, and an author's whole message
+ * wins over an operation's that it ends with. Null when none matches.
  */
-export function messageSites(text, contracts) {
-  const t = String(text ?? '');
-  const out = [];
-  for (const c of contracts ?? []) {
-    const m = c?.messages;
-    if (!m?.messages) continue;
-    for (const [msg, sites] of Object.entries(m.messages)) {
-      if (!msg) continue;
-      const hit = t === msg || t.endsWith(': ' + msg) || (/^#[a-z]+:/.test(msg) && t.includes(msg));
-      if (!hit) continue;
-      for (const s of sites) out.push(`${m.source}:${s.line}:${s.col} (${describe(s)})`);
-    }
+export function matchingMessage(trace, messages) {
+  const t = String(trace ?? '');
+  let best = null;
+  for (const m of messages) {
+    if (!m || !(t === m || t.endsWith(': ' + m))) continue;
+    if (best === null || m.length > best.length) best = m;
   }
-  return [...new Set(out)];
+  return best;
 }
 
-/** A refusal's text with the .jsc position(s) of its message, when a contract's message map knows it. */
-export function explainRefusal(text, contracts) {
-  const sites = messageSites(text, contracts);
+const titleOf = (c) => {
+  try {
+    const d = typeof c.description === 'string' ? JSON.parse(c.description) : c.description;
+    return d?.preamble?.title ?? null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The bundle entry of the contract that refused: by script hash when given, else by title (the engine's `refusedBy`
+ * or the call's `contract`). Null when it is not one entry: a key is never looked up across contracts.
+ */
+export function refusingContract(contracts, { scriptHash, title } = {}) {
+  const all = contracts ?? [];
+  const found = all.filter((c) => (scriptHash ? c.messages?.scriptHash === scriptHash : title != null && titleOf(c) === title));
+  return found.length === 1 ? found[0] : null;
+}
+
+/** The sites of a traced message in one contract's message map: `File.jsc:line:col (what)`. */
+export function messageSites(text, contract) {
+  const m = contract?.messages;
+  if (!m?.messages) return [];
+  const best = matchingMessage(text, Object.keys(m.messages));
+  if (best === null) return [];
+  return [...new Set(m.messages[best].map((s) => `${m.source}:${s.line}:${s.col} (${describe(s)})`))];
+}
+
+/** A refusal's text with the .jsc position(s) of its message, from the refusing contract's map when it has one. */
+export function explainRefusal(text, contract) {
+  const sites = messageSites(text, contract);
   return sites.length ? `${text} [${sites.join('; ')}]` : String(text);
 }
