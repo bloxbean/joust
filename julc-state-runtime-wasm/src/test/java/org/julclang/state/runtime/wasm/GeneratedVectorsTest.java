@@ -75,8 +75,14 @@ class GeneratedVectorsTest {
 
     /** Compares one vector; {@code expect}: null (no expectation), "step", or "require:<message>". */
     Outcome compare(String cls, Sides s, String method, PlutusData target, PlutusData args, PlutusData ctx, String expect) {
-        Outcome p = s.uplc().outcome(method, target, NONE, args, ctx);
-        Outcome j = s.jvm().outcome(method, target, NONE, args, ctx);
+        return compare(cls, s, method, target, NONE, args, ctx, expect);
+    }
+
+    /** As above, with the {@code @Shared} state the transition reads. */
+    Outcome compare(String cls, Sides s, String method, PlutusData target, PlutusData shared, PlutusData args, PlutusData ctx,
+                    String expect) {
+        Outcome p = s.uplc().outcome(method, target, shared, args, ctx);
+        Outcome j = s.jvm().outcome(method, target, shared, args, ctx);
         count(cls, "compared");
         if (p.comparable().equals(j.comparable())) count(cls, "agreed");
         else problems.add(cls + " " + method + ": program " + p + " vs JVM " + j + " on " + target + " " + args + " " + ctx);
@@ -104,6 +110,7 @@ class GeneratedVectorsTest {
         var r = new Random(SEED);
         counter(r);
         vault(r);
+        edges();
         malformed(r);
         System.out.println("[comparison] generated vectors (seed " + SEED + ", " + N + " sequences per contract): " + tally);
         assertEquals(List.of(), problems);
@@ -175,6 +182,45 @@ class GeneratedVectorsTest {
             PlutusData odd = PlutusData.constr(0, b(key(r)), i(big(r)), i(big(r)));
             compare("unreachable", s, "withdraw", odd, args(i(big(r))), ctx(key(r), big(r), big(r), r.nextLong(), r.nextLong()), null);
             compare("unreachable", s, "deposit", odd, args(), ctx(key(r), big(r), big(r), r.nextLong(), r.nextLong()), null);
+        }
+    }
+
+    /**
+     * The edge vectors of the retired {@code WasmParityTest} (ADR-0020 §12.3): 100-byte owners (chunked CBOR byte
+     * strings), integers past 64 bits, and Bank: its {@code @Shared} {@code withdraw} with each refusal, setPaused, setLimit.
+     */
+    void edges() throws Exception {
+        Sides c = sides("org.julclang.state.examples.counter.Counter");
+        Sides s = sides("org.julclang.state.examples.bank.Bank");
+        byte[] admin = new byte[28];
+        byte[] longOwner = new byte[100];
+        for (int k = 0; k < longOwner.length; k++) longOwner[k] = (byte) k;
+        BigInteger huge = BigInteger.TWO.pow(200).add(BigInteger.valueOf(7));
+        BigInteger limit = BigInteger.valueOf(50_000_000);
+        for (BigInteger count : List.of(BigInteger.ZERO, BigInteger.TWO.pow(64), huge.negate())) {
+            PlutusData st = PlutusData.constr(0, i(count), b(longOwner));
+            assertEquals(count.add(huge), field(next(compare("edge", c, "increment", st, args(i(huge)), NONE, "step")), 0));
+            compare("edge", c, "reset", st, args(), NONE, "step");
+            compare("edge", c, "close", st, args(), ctx(longOwner, BigInteger.ZERO, BigInteger.valueOf(2_200_000), 0, 1000), "step");
+        }
+        for (boolean paused : List.of(false, true)) {
+            PlutusData bank = PlutusData.constr(0, b(admin), PlutusData.constr(paused ? 1 : 0), i(limit));
+            compare("edge", s, "setPaused", bank, args(PlutusData.constr(paused ? 0 : 1)), NONE, "step");
+            compare("edge", s, "setLimit", bank, args(i(huge)), NONE, "step");
+            compare("edge", s, "setLimit", bank, args(i(0)), NONE, "require:limit must be positive");
+            for (BigInteger balance : List.of(BigInteger.ZERO, BigInteger.valueOf(30_000_000), huge)) {
+                PlutusData acct = PlutusData.constr(0, b(longOwner), i(balance));
+                PlutusData ctx = ctx(longOwner, BigInteger.ZERO, balance.add(BigInteger.valueOf(2_300_000)),
+                        1_700_000_000_000L, 1_700_000_600_000L);
+                for (BigInteger amount : List.of(BigInteger.ZERO, BigInteger.ONE, BigInteger.valueOf(10_000_000), BigInteger.valueOf(60_000_000))) {
+                    String expect = paused ? "require:the bank is paused"
+                            : amount.signum() <= 0 || amount.compareTo(limit) > 0 ? "require:amount outside the withdrawal limit"
+                            : amount.compareTo(balance) > 0 ? "require:insufficient balance" : "step";
+                    compare("edge", s, "withdraw", acct, bank, args(i(amount)), ctx, expect);
+                }
+                compare("edge", s, "deposit", acct, args(), ctx, "require:deposit must be positive");
+                compare("edge", s, "close", acct, args(), ctx, "step");
+            }
         }
     }
 
