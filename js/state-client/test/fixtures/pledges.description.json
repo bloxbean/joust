@@ -1,0 +1,738 @@
+{
+  "preamble": {
+    "title": "org.julclang.state.examples.dsl.Pledges",
+    "description": "JOUST contract Pledges (ADR-0013 D3)",
+    "version": "0.0.0",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "joust"
+    }
+  },
+  "validators": [
+    {
+      "title": "PledgesValidator.mint",
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/org.julclang.state.examples.dsl.PledgesValidator.Lifecycle"
+        }
+      }
+    },
+    {
+      "title": "PledgesValidator.spend",
+      "datum": {
+        "title": "datum",
+        "schema": {
+          "$ref": "#/definitions/org.julclang.state.examples.dsl.Pledges.State"
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/org.julclang.state.examples.dsl.PledgesValidator.Calls"
+        }
+      }
+    }
+  ],
+  "x-joust": {
+    "version": 2,
+    "contract": "Pledges",
+    "package": "org.julclang.state.examples.dsl",
+    "validator": "PledgesValidator",
+    "client": "PledgesClient",
+    "state": {
+      "$ref": "#/definitions/org.julclang.state.examples.dsl.Pledges.State"
+    },
+    "stakeSelf": false,
+    "minAda": 6000000,
+    "maxDatumBytes": 1024,
+    "assetAware": false,
+    "owned": [],
+    "creations": [
+      {
+        "name": "init",
+        "kind": "init",
+        "redeemer": {
+          "purpose": "mint",
+          "constructor": "CreateInstance",
+          "index": 0
+        },
+        "args": [
+          {
+            "name": "goal",
+            "type": "BigInteger",
+            "schema": {
+              "dataType": "integer"
+            }
+          },
+          {
+            "name": "deadline",
+            "type": "BigInteger",
+            "schema": {
+              "dataType": "integer"
+            }
+          },
+          {
+            "name": "shares",
+            "type": "JulcList<Pledges.Share>",
+            "schema": {
+              "dataType": "list",
+              "items": {
+                "$ref": "#/definitions/org.julclang.state.examples.dsl.Pledges.Share"
+              }
+            }
+          },
+          {
+            "name": "label",
+            "type": "byte[]",
+            "schema": {
+              "dataType": "bytes"
+            }
+          }
+        ],
+        "ctx": true,
+        "payable": false,
+        "takesAssets": false,
+        "needsService": false,
+        "recipe": {
+          "transition": "init",
+          "redeemerFields": [
+            "seed",
+            "goal",
+            "deadline",
+            "shares",
+            "label",
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.dsl.Pledges.State",
+          "shared": false,
+          "signers": [],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "goal",
+            "deadline",
+            "shares",
+            "label"
+          ],
+          "stepEvents": false
+        }
+      }
+    ],
+    "actions": [
+      {
+        "name": "pledge",
+        "kind": "action",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Pledge",
+          "index": 0
+        },
+        "fields": [
+          "ctx"
+        ],
+        "args": [],
+        "ctx": true,
+        "payable": true,
+        "takesAssets": false,
+        "policies": {
+          "signedBy": [],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": true,
+          "payouts": false,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "pledge",
+          "redeemerFields": [
+            "ctx"
+          ],
+          "target": "org.julclang.state.examples.dsl.Pledges.State",
+          "shared": false,
+          "signers": [],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "reassign",
+        "kind": "action",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Reassign",
+          "index": 1
+        },
+        "fields": [
+          "from",
+          "to"
+        ],
+        "args": [
+          {
+            "name": "from",
+            "type": "Pledges.Share",
+            "schema": {
+              "$ref": "#/definitions/org.julclang.state.examples.dsl.Pledges.Share"
+            }
+          },
+          {
+            "name": "to",
+            "type": "byte[]",
+            "schema": {
+              "dataType": "bytes"
+            }
+          }
+        ],
+        "ctx": false,
+        "payable": false,
+        "takesAssets": false,
+        "policies": {
+          "signedBy": [
+            "owner"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": true,
+          "payouts": false,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "reassign",
+          "redeemerFields": [
+            "from",
+            "to"
+          ],
+          "target": "org.julclang.state.examples.dsl.Pledges.State",
+          "shared": false,
+          "signers": [
+            {
+              "field": "owner",
+              "index": 0
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "from",
+            "to"
+          ],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "setBacker",
+        "kind": "action",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "SetBacker",
+          "index": 2
+        },
+        "fields": [
+          "who"
+        ],
+        "args": [
+          {
+            "name": "who",
+            "type": "Optional<byte[]>",
+            "schema": {
+              "title": "Optional",
+              "anyOf": [
+                {
+                  "title": "Some",
+                  "dataType": "constructor",
+                  "index": 0,
+                  "fields": [
+                    {
+                      "title": "value",
+                      "dataType": "bytes"
+                    }
+                  ]
+                },
+                {
+                  "title": "None",
+                  "dataType": "constructor",
+                  "index": 1,
+                  "fields": []
+                }
+              ]
+            }
+          }
+        ],
+        "ctx": false,
+        "payable": false,
+        "takesAssets": false,
+        "policies": {
+          "signedBy": [
+            "owner"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": true,
+          "payouts": false,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "setBacker",
+          "redeemerFields": [
+            "who"
+          ],
+          "target": "org.julclang.state.examples.dsl.Pledges.State",
+          "shared": false,
+          "signers": [
+            {
+              "field": "owner",
+              "index": 0
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [
+            "who"
+          ],
+          "stepEvents": false
+        }
+      },
+      {
+        "name": "distribute",
+        "kind": "destroy",
+        "redeemer": {
+          "purpose": "spend",
+          "constructor": "Distribute",
+          "index": 3
+        },
+        "fields": [
+          "ctx"
+        ],
+        "args": [],
+        "ctx": true,
+        "payable": false,
+        "takesAssets": false,
+        "policies": {
+          "signedBy": [
+            "owner"
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "quorum": null,
+          "authorizedBy": [],
+          "shared": false,
+          "into": false,
+          "admits": null,
+          "receives": false,
+          "batched": false,
+          "migrateTo": null
+        },
+        "returns": {
+          "state": false,
+          "payouts": true,
+          "sends": false,
+          "mint": false,
+          "accepted": false,
+          "events": false,
+          "deposits": false
+        },
+        "needsService": false,
+        "recipe": {
+          "transition": "distribute",
+          "redeemerFields": [
+            "ctx"
+          ],
+          "burn": {
+            "constructor": "BurnInstance",
+            "index": 1
+          },
+          "target": "org.julclang.state.examples.dsl.Pledges.State",
+          "shared": false,
+          "signers": [
+            {
+              "field": "owner",
+              "index": 0
+            }
+          ],
+          "validAfter": [],
+          "validBefore": [],
+          "params": false,
+          "reads": [],
+          "transitionArgs": [],
+          "stepEvents": false
+        }
+      }
+    ],
+    "views": [
+      {
+        "name": "shareOf",
+        "returns": {
+          "dataType": "integer"
+        },
+        "args": [
+          {
+            "name": "who",
+            "schema": {
+              "dataType": "bytes"
+            }
+          }
+        ]
+      },
+      {
+        "name": "isShareholder",
+        "returns": {
+          "title": "Bool",
+          "anyOf": [
+            {
+              "title": "False",
+              "dataType": "constructor",
+              "index": 0,
+              "fields": []
+            },
+            {
+              "title": "True",
+              "dataType": "constructor",
+              "index": 1,
+              "fields": []
+            }
+          ]
+        },
+        "args": [
+          {
+            "name": "who",
+            "schema": {
+              "dataType": "bytes"
+            }
+          }
+        ]
+      },
+      {
+        "name": "digitsRaised",
+        "returns": {
+          "dataType": "integer"
+        },
+        "args": []
+      }
+    ],
+    "tokens": {
+      "instance": "blake2b_256(seed txId ++ I2OSP(seed index, 2)), 32 bytes",
+      "object": "0x4f ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes",
+      "intent": "0x49 ++ blake2b_224(seed txId ++ I2OSP(seed index, 2)), 29 bytes"
+    },
+    "encoding": {
+      "canonicalMaps": true,
+      "note": "inline datums are canonical CBOR: map keys sorted (SortedMaps); records are constructor 0",
+      "json": {
+        "integer": "a decimal string (or a safe JavaScript integer)",
+        "bytes": "lowercase hex",
+        "constructor": "an object by field title; a sum type adds \"$variant\" (its constructor title)",
+        "Bool": "true or false",
+        "Optional": "null for None, else the value",
+        "list": "an array",
+        "map": "an array of [key, value] pairs, in canonical key order",
+        "Data": "hex CBOR of any Plutus data"
+      }
+    }
+  },
+  "definitions": {
+    "org.julclang.state.api.Ctx": {
+      "title": "Ctx",
+      "anyOf": [
+        {
+          "title": "Ctx",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "caller",
+              "dataType": "bytes"
+            },
+            {
+              "title": "received",
+              "dataType": "integer"
+            },
+            {
+              "title": "balance",
+              "dataType": "integer"
+            },
+            {
+              "title": "validFrom",
+              "dataType": "integer"
+            },
+            {
+              "title": "validTo",
+              "dataType": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.dsl.Pledges.Share": {
+      "title": "Share",
+      "anyOf": [
+        {
+          "title": "Share",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "to",
+              "dataType": "bytes"
+            },
+            {
+              "title": "bps",
+              "dataType": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.dsl.PledgesValidator.Calls": {
+      "title": "Calls",
+      "anyOf": [
+        {
+          "title": "Pledge",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "Reassign",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": [
+            {
+              "title": "from",
+              "$ref": "#/definitions/org.julclang.state.examples.dsl.Pledges.Share"
+            },
+            {
+              "title": "to",
+              "dataType": "bytes"
+            }
+          ]
+        },
+        {
+          "title": "SetBacker",
+          "dataType": "constructor",
+          "index": 2,
+          "fields": [
+            {
+              "title": "who",
+              "anyOf": [
+                {
+                  "title": "Some",
+                  "dataType": "constructor",
+                  "index": 0,
+                  "fields": [
+                    {
+                      "title": "value",
+                      "dataType": "bytes"
+                    }
+                  ]
+                },
+                {
+                  "title": "None",
+                  "dataType": "constructor",
+                  "index": 1,
+                  "fields": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Distribute",
+          "dataType": "constructor",
+          "index": 3,
+          "fields": [
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.ledger.TxOutRef": {
+      "title": "TxOutRef",
+      "anyOf": [
+        {
+          "title": "TxOutRef",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "txId",
+              "dataType": "bytes"
+            },
+            {
+              "title": "index",
+              "dataType": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    "org.julclang.state.examples.dsl.PledgesValidator.Lifecycle": {
+      "title": "Lifecycle",
+      "anyOf": [
+        {
+          "title": "CreateInstance",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "seed",
+              "$ref": "#/definitions/org.julclang.ledger.TxOutRef"
+            },
+            {
+              "title": "goal",
+              "dataType": "integer"
+            },
+            {
+              "title": "deadline",
+              "dataType": "integer"
+            },
+            {
+              "title": "shares",
+              "dataType": "list",
+              "items": {
+                "$ref": "#/definitions/org.julclang.state.examples.dsl.Pledges.Share"
+              }
+            },
+            {
+              "title": "label",
+              "dataType": "bytes"
+            },
+            {
+              "title": "ctx",
+              "$ref": "#/definitions/org.julclang.state.api.Ctx"
+            }
+          ]
+        },
+        {
+          "title": "BurnInstance",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "org.julclang.state.examples.dsl.Pledges.State": {
+      "title": "State",
+      "anyOf": [
+        {
+          "title": "State",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "owner",
+              "dataType": "bytes"
+            },
+            {
+              "title": "goal",
+              "dataType": "integer"
+            },
+            {
+              "title": "deadline",
+              "dataType": "integer"
+            },
+            {
+              "title": "raised",
+              "dataType": "integer"
+            },
+            {
+              "title": "shares",
+              "dataType": "list",
+              "items": {
+                "$ref": "#/definitions/org.julclang.state.examples.dsl.Pledges.Share"
+              }
+            },
+            {
+              "title": "tag",
+              "dataType": "bytes"
+            },
+            {
+              "title": "lastBacker",
+              "anyOf": [
+                {
+                  "title": "Some",
+                  "dataType": "constructor",
+                  "index": 0,
+                  "fields": [
+                    {
+                      "title": "value",
+                      "dataType": "bytes"
+                    }
+                  ]
+                },
+                {
+                  "title": "None",
+                  "dataType": "constructor",
+                  "index": 1,
+                  "fields": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
