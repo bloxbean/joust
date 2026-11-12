@@ -41,7 +41,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0014](#adr-0014-merklemap-claims-v2) | MerkleMap claims v2 | Accepted, implemented | [MerkleMaps](/contracts/merklemaps/) |
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
-| [0019](#adr-0019-programmable-tokens-cip-113) | Programmable tokens (CIP-113): issuers, holders, contracts paid in them | Proposed (r2) | – |
+| [0019](#adr-0019-programmable-tokens-cip-113) | Programmable tokens (CIP-113): issuers, holders, contracts paid in them | Proposed (r3) | – |
 
 ## The base
 
@@ -260,7 +260,7 @@ Covered in: [MerkleMaps](/contracts/merklemaps/).
 ### ADR-0019: Programmable tokens (CIP-113)
 
 [`0019-programmable-tokens-cip113.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0019-programmable-tokens-cip113.md)
-· Proposed (r2), design only
+· Proposed (r3), design only
 
 CIP-113 tokens live at shared "smart wallet" addresses and move only through the issuer's rules. ADR-0019 pins the
 identity of a CIP-113 core v0.0.1 deployment and builds through cardano-client-lib's `programmable-token` module. It
