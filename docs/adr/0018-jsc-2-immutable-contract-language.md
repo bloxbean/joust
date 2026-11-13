@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r15)
+**Status:** Proposed (r17)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -343,7 +343,7 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
     1,000 value branches, as the JVM does. In the Web Image such an exhaustion is not JSC0005: it is an engine failure,
     which `joust build` reports as a diagnostic. The worker also has a heap limit (`JOUST_ENGINE_MEMORY_MB`, 4,096 by
     default) and a time limit per build (`JOUST_ENGINE_TIMEOUT_S`, 600 s), after which it is stopped; an invalid
-    setting is refused with its name (r15, #74). `buildInWorker` is exported beside `loadToolchain`, whose builds run on
+    setting is refused with its name (r17, #74). `buildInWorker` is exported beside `loadToolchain`, whose builds run on
     the caller's thread and need a stack of at least 8 MB.
 - **Off-chain depth.** On the JVM, generated recursion is Java recursion without tail calls: the runtime runs
   transitions on a thread whose stack fits the deepest recursion the per-transaction budget allows, and the prepare
@@ -507,7 +507,7 @@ the bound). M2's `authorized` and `quorum` are further preconditions on the same
 modifiers only in the checker's shapes (`only f` on a Key field, `after f`/`before f` on an Int field, `batched` on an
 action without them, none twice, an init with `payable` only), and the interpreters never skip a modifier without its
 field; a transaction whose caller is not among its signers is the caller's error in both interpreters, as the
-validator never accepts it (r15, #76 review S5, S6).
+validator never accepts it (r17, #76 review S5, S6).
 
 **ADR-0005 rules kept, changed and dropped:**
 
@@ -1204,7 +1204,7 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   M1b's exit and M1b had not done; the modifier vectors are five-way. §9 and the M2 row say five-way. D14 and r13's
   entry: M1e changed the hashes of scripts with generated checks only. D16 states the JSC1103 refusal of v1
   `batched`. The header no longer says design only.
-- **r15** (2026-11-13, the M1 hardening after #76: security S5, S6; issues #73, #74, #75): D10: both IR readers
+- **r17** (2026-11-13, the M1 hardening after #76: security S5, S6; issues #73, #74, #75): D10: both IR readers
   validate a method's modifiers against the checker's rules, the interpreters refuse a modifier without its field
   instead of skipping it, and a transaction whose caller is not among its signers is the caller's error (semantics §2,
   §2.6; IR reference). D7: the build worker's stack, heap and time limits are validated settings, and `buildInWorker`
