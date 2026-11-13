@@ -93,7 +93,8 @@ const DEREGISTER = new Set(['StakeDeregistration', 'UnRegistration']);
  *   views), the declared units within max_tx_ex_mem/steps and at least what each script consumes;
  * - spending and reference inputs are disjoint at protocol versions 9 and 10 (the ledger's disjointRefInputs; 11 lifts
  *   it), and the collateral return holds its minimum; witness datums are needed or named by an output or reference input;
- * - certificates: stake registration (once) and deregistration (when registered), with their deposits;
+ * - certificates: stake registration (once, paying key_deposit) and deregistration (when registered, refunding the deposit
+ *   held); a certificate stating another amount is refused;
  * - concurrent submissions are applied one at a time, each checked against the ledger as the previous one left it.
  * Not modelled, and refused (`NotModelled`, review r3, r4): votes, proposals, treasury donations and values, and every
  * certificate but stake registration and deregistration (delegation, pools, DReps, the committee, genesis, MIR). Not modelled otherwise: rewards (withdrawals take 0), PlutusV1's integrity hash, and the
@@ -109,7 +110,7 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
   const scripts = new Map();        // hash -> cbor
   const scriptViews = new Map();    // hash -> { kind, size, native? } (reference scripts, for phase 1)
   let queue = Promise.resolve();    // submissions, one at a time (review r2 C9)
-  const registered = new Set();     // stake addresses
+  const registered = new Map();     // stake address -> the deposit it holds (review r5, C26)
   const history = new Map();        // unit -> [txHash]
   const attackLog = [];             // { tx, name, refused, detail }
   const clock = { zeroSlot: 0, zeroTimeMs, slotLengthMs };
@@ -180,20 +181,28 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     for (const [unit, q] of v.mint) addValue(balance, unit, q);
     for (const o of v.outputs) for (const [unit, q] of o.value) addValue(balance, unit, -q);
     addValue(balance, 'lovelace', -v.fee);
-    // Registration pays the key deposit, deregistration refunds it; a credential registers once and deregisters only when
-    // registered (r4: r3's patterns missed UnRegistration, cardano-js-sdk's spelling).
-    const accounts = new Set(registered);
+    // Registration pays the protocol's key deposit, deregistration refunds the deposit the account holds; a credential
+    // registers once and deregisters only when registered. Review r5 (C26): the amounts are the ledger's, never the
+    // certificate's: an explicit amount that differs is refused, as Conway's DELEG rule does.
+    const keyDeposit = BigInt(p.key_deposit);
+    const accounts = new Map(registered);
     for (const c of v.certificates) {
-      const deposit = c.deposit ?? BigInt(p.key_deposit);
       const stake = rewardAddress(c.credential, 0);
       if (REGISTER.has(c.kind)) {
         if (accounts.has(stake)) throw new LedgerRefusal('StakeKeyRegisteredDELEG', `${stake} is already registered`);
-        accounts.add(stake);
-        addValue(balance, 'lovelace', -deposit);
+        if (c.deposit !== null && c.deposit !== undefined && c.deposit !== keyDeposit) {
+          throw new LedgerRefusal('IncorrectDepositDELEG', `the certificate states a deposit of ${c.deposit}; the key deposit is ${keyDeposit}`);
+        }
+        accounts.set(stake, keyDeposit);
+        addValue(balance, 'lovelace', -keyDeposit);
       } else if (DEREGISTER.has(c.kind)) {
         if (!accounts.has(stake)) throw new LedgerRefusal('StakeKeyNotRegisteredDELEG', `${stake} is not registered`);
+        const held = accounts.get(stake);
+        if (c.deposit !== null && c.deposit !== undefined && c.deposit !== held) {
+          throw new LedgerRefusal('RefundIncorrectDELEG', `the certificate states a refund of ${c.deposit}; the account holds ${held}`);
+        }
         accounts.delete(stake);
-        addValue(balance, 'lovelace', deposit);
+        addValue(balance, 'lovelace', held);
       }
     }
     for (const [unit, q] of balance) if (q !== 0n) throw new LedgerRefusal('ValueNotConservedUTxO', `${unit} is off by ${q}`);
@@ -282,6 +291,7 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     const allowedDatums = new Set();
     for (const x of plutus) if (x.tag === 'spend' && out(spent[x.index]).datumHash) allowedDatums.add(out(spent[x.index]).datumHash);
     for (const o of v.outputs) if (o.datumHash) allowedDatums.add(o.datumHash);
+    if (v.collateralReturn?.datumHash) allowedDatums.add(v.collateralReturn.datumHash);   // every new output (review r5, C27)
     for (const r of v.referenceInputs) if (out(r).datumHash) allowedDatums.add(out(r).datumHash);
     for (const h of v.witnessDatums) {
       if (!allowedDatums.has(h)) throw new LedgerRefusal('NotAllowedSupplementalDatums', `the witness datum ${h} is neither needed nor named by an output`);
@@ -363,7 +373,7 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     for (const [unit] of v.mint) if (!history.get(unit)?.includes(v.hash)) (history.get(unit) ?? history.set(unit, []).get(unit)).push(v.hash);
     for (const c of v.certificates) {
       const stake = rewardAddress(c.credential, 0);
-      if (REGISTER.has(c.kind)) registered.add(stake);
+      if (REGISTER.has(c.kind)) registered.set(stake, BigInt(protocolParams.key_deposit));
       if (DEREGISTER.has(c.kind)) registered.delete(stake);
     }
     txs.set(v.hash, cbor);
