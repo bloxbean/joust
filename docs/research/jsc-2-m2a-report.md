@@ -151,4 +151,11 @@ port's method refuses them itself, so its JVM leg and transition program agree w
 
 ## Tests run at this head
 
-See the PR description for the commands and their output.
+| Command | Result |
+|---|---|
+| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL (227 tasks, 172 executed), none failed: julc-state-dsl 139, julc-state-toolchain 107 (`JscV2M2FourWayTest` 4, `JscV2M2GateTest` 3), julc-state-api 10, julc-state-runtime 76, examples/dsl 74 (with `DexPortTest` 5, `DexDescriptionPortTest` 1), examples/dex 6. `checkJscAbi`: `19 ABI manifest(s) agree with the processor's descriptions` |
+| `./gradlew :julc-state-toolchain:toolchainWasmTest :julc-state-runtime-wasm:runtimeWasm -PgraalvmHome=…/graalvm-25.3.4.1+1.1/Contents/Home` (images rebuilt) | BUILD SUCCESSFUL: `ALL SAME` (every `.jsc` file's Java, source map, manifest and IR equal to Gradle's, Coins, Wards and Dex included); S2 in Wasm 1905/1905; 21 depth cases on a cold engine; S2b 43/43 |
+| `npm test` in `js/jsc-interpreter` | 34/34 |
+| `npm test` in `js/joust` (with the engines just built) | 39/39 |
+| `npm test` in `tree-sitter-jsc` | 14/14 parses; the shared corpus agrees on every file |
+| DevKit port tests | not run: Yaci Store (`localhost:8080`) was not reachable (the admin API was) |
