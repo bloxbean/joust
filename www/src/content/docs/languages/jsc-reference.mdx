@@ -211,6 +211,14 @@ staleness with `require(before(p.updatedAt + maxAge))`. An action that `receives
 output, `funds.deposits` (`JSC0448` elsewhere), each with `d.value` and, for `receives T`, `d.memo` (each memo decoded and
 checked where the action starts: `#memo:`). It also takes `Ctx`.
 
+**What composition trusts.** Nothing on chain binds an `Instance<C>` to `C`: the deployer who sets the params must point
+it at an instance of `C` (for a deposit, one whose contract receives), and a deposit into a script that ignores deposit
+claims is value the transaction's builder can take. A read state is the datum of any script at that instance's policy
+whose outer shape is `C.State`'s; its nested `Bool`, `Option` and enum tags are taken as `C` wrote them, which holds when
+`C` is a `.jsc` build (its validator refuses malformed tags in what it stores). A deposit may come from any input of the
+transaction, a wallet's included, and its memo is the depositor's claim, not proof of who deposited: credit by `d.value`,
+never grant anything by the memo alone.
+
 ## Statements
 
 | Statement | Meaning | Rules |

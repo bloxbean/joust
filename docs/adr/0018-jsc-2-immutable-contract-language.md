@@ -267,7 +267,7 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
 | `Hash` | `byte[]` | a 28-byte script hash or policy id, same rules |
 | `Credential` | `Credential` | `keyCred(k)`, `scriptCred(h)`; `match` on `KeyCred { key }` / `ScriptCred { hash }`. Needed by `authorized` (ADR-0009 D3). As built (M2a): comparable, storable, a checked input (a 28-byte hash) |
 | `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`). As built (M2a): comparable, storable, a checked input: the ledger's encoding, every constructor tag and field count (decided on the data by `AddressAdapter`, one body on the JVM and on-chain), a 28-byte payment credential and staking hash, and **no staking pointer** (r15, review r1 S1: Conway gives pointers no staking meaning and the ledger bounds their parts by era, so a stored pointer could make every send to the address undeliverable; `wallet`/`script` never build one). It may be the contract's own script, to which every send fails (`#send:`): a contract that stores an address it sends to later refuses that where it takes it (semantics §5.1's guard idiom; review r2 S6), since the checked-input rule knows no policy |
-| `Value` | `Value` | **As built in M2c (r21):** a field of the state, the params, a record or a variant may be a `Value`, stored in its wire form (the generated code converts with `ValueAdapter.toWire` where a record is built and `ValueAdapter.fromWire` where a field is read, so the datum the method returns is the one the runtime writes); it is still never an element of a `List`, an `Option` or a `Map` (wrap it in a record), nor a method parameter (JSC0341: a redeemer field typed `Value` is not decoded alike on every leg; what a caller offers is `funds.received`). `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`; as built, the API's `ValueAdapter`, whose JVM body fails where the PV11 builtins fail: a quantity outside the signed 128-bit range, a token name over 32 bytes, `covers` on a negative quantity). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos. M2a converts the one wire `Value` it has, what the caller offers (and a transition program's funds), with `ValueAdapter.fromWire` at the boundary (review r1 C1) |
+| `Value` | `Value` | **As built in M2c (r21):** a field of the state, the params, a record or a variant may be a `Value`, stored in its wire form (the generated code converts with `ValueAdapter.toWire` where a record is built and `ValueAdapter.fromWire` where a field is read, so the datum the method returns is the one the runtime writes); it is still never an element of a `List`, an `Option` or a `Map` (wrap it in a record), nor a method parameter (JSC0341: a redeemer field typed `Value` is not decoded alike on every leg; what a caller offers is `funds.received`). `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`; as built, the API's `ValueAdapter`, whose JVM body fails where the PV11 builtins fail: a quantity outside the signed 128-bit range, a token name over 32 bytes, `covers` on a negative quantity). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). (Superseded in M2c by the as-built text at the start of this cell: before M2c, `Value` appeared only in effects, `funds` and locals.) M2a converts the one wire `Value` it has, what the caller offers (and a transition program's funds), with `ValueAdapter.fromWire` at the boundary (review r1 C1) |
 | `List<T>` | `JulcList<T>` | literals `[a, b]`, `[x, ...xs]`; D7 |
 | `Map<K, V>` | `JulcMap<K, V>`, canonical | an inline map in the datum. `K` is `Bytes`, `Key` or `Hash`, at most 64 bytes (F19); keys strictly ascending in canonical order, unique. `Map.empty()`. D7 |
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | a Merkle map (ADR-0002/0014), state fields only; `K` as for `Map` (F14). Rules in D7 |
@@ -302,13 +302,19 @@ before the method runs), 28-byte credentials and no staking pointer (r15). A fai
   located `require` failure. From M2, `Value` parameters are carried in the redeemer as data and decoded by the
   generated wire-to-native conversion plus this check (CLAUDE.md: redeemer fields typed `Value` mis-decode in JuLC; M2c
   keeps `Value` out of method parameters, so this is not built). **As built in M2c (r21):** a `reads` state is a checked
-  input at `C.State` (`#read:`), after the arguments; the validator checks its outer shape (ADR-0011 D2), and its nested
-  constructor tags are taken as its contract wrote them (a JOUST contract's validator checks every state it writes); a
-  `receives T` memo is decoded by a generated decoder that decides every tag and field count on the data (`#memo:`). The on-chain cost of the
-  checks is measured in M0 and budgeted in each milestone (J15, J16). A foreign datum that fails the checks makes that
-  instance unreadable by this contract: for JOUST contracts, whose validators fix their datum's shape, this can only
-  happen if the foreign contract itself accepted a non-canonical value, and the reader's author is warned at build time
-  that strict reads mean the foreign contract's state shape decides whether `reads` calls can run.
+  input at `C.State` (`#read:`), after the arguments, but not a deep one: the validator checks its outer shape (ADR-0011
+  D2), and the generated check covers every nested `Key`/`Hash` length, every `Map`'s canonical order, every `Address`
+  and `Credential`'s hashes, and every stored `Value`'s wire form (used or not; review r1, C4), but **not the constructor
+  tags and field counts of its nested `Bool`s, `Option`s, enums and records**, which are taken as `C` wrote them. That
+  trust rests on `params.f` naming a `.jsc` build of `C`, whose validator refuses a malformed tag in any argument it
+  stores (pinned by `JscV2M2cHostileInputTest`, `Inbox.set`); it holds for `.jsc` contract imports only and **must be
+  decided again before M4b's `java:` contract imports** (a Java contract may hold raw `PlutusData`), for example by
+  decoding the read datum with the memo decoders, which needs the raw datum in the method (the `@Reads` parameter is
+  typed by the processor today). A `receives T` memo is decoded by a generated decoder that decides every tag and field
+  count on the data (`#memo:`); a memo is a checked input in full. The on-chain cost of the checks is measured in M0 and
+  budgeted in each milestone (J15, J16). A foreign datum that fails the checks makes that instance unreadable by this
+  contract: for JOUST contracts, whose validators fix their datum's shape, this can only happen if the foreign contract
+  itself accepted a non-canonical value. (No build-time warning says so: none is built, M2c review r1, F7.)
 
 ### D6. Expressions, equality, `match`, laziness
 
@@ -512,7 +518,8 @@ import { concat, slice, length } from "std/bytes"
     `Require` and `Assets` do, under `src/onchain/java`) is refused, except the JOUST API itself, whose variants are
     part of the trusted base and covered by its own differential tests (M2a's `ValueAdapter`:
     `ValueAdapterDifferentialTest`, every public function, JVM body against on-chain body, on canonical arguments, its
-    stated precondition; `AddressAdapter` keeps one body).
+    stated precondition, and on wires and raw data for the functions that take them; since M2c the test finds the public
+    functions by reflection, so a new one without vectors fails; `AddressAdapter` keeps one body).
   - Library records map to `.jsc` records with read-only fields where the projection is representation-verified;
     otherwise they are opaque.
 - **No `extern` declarations**: a `.jsc` author never writes a signature for Java code.
@@ -524,7 +531,8 @@ import { concat, slice, length } from "std/bytes"
   files), by a path relative to the importing file, through M4a's `JscModules` (the same interface, so the integration
   joins one). Each imported contract is parsed and checked on its own (its time fields its own fixed point); its state,
   types, time fields and receiving actions' memo types reach the importer's IR (`contracts`). A cycle is refused
-  (JSC0743). `java:` contracts wait for M4b's attribution of `java:` sources (JSC0741).
+  (JSC0743). `java:` contracts wait for M4b's attribution of `java:` sources (JSC0741); M4b's gate for them includes a
+  strict decode of a `java:` contract's read state (D5: the nested tags a `.jsc` reader trusts today).
 - **Supply chain.** A committed `joust.lock` pins every library (`.jsc` and Java) by the hash of its on-chain sources;
   the build fails on a mismatch, and the build report lists every library with its hash (J12).
 
@@ -1315,4 +1323,8 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   never in a container or a method parameter), `Instance<C>` as built, read states and memos as checked inputs. D9:
   `import contract` of `.jsc` contracts through M4a's `JscModules`; `java:` contracts deferred (JSC0741). D10: the
   `@Reads` and `@Receives` rows gated by oracle and fees (M2c). D11 at the new positions (read states' time fields,
-  deposit values, datums and memos). §8: M2c's gates.
+  deposit values, datums and memos). §8: M2c's gates. Review round r2 (#90): memo decoders hold tags as `Int`s (S1) and
+  are named by the checked type (C1); both interpreters check an arriving `Value`'s domain (C2); the JVM `fromData` checks
+  the data as it came (C3); a read state's stored `Value`s are checked, used or not (C4); D5's read-state trust is scoped
+  to `.jsc` imports and re-decided before M4b (F4); D9's differential test covers M2c's `ValueAdapter` functions and is
+  checked by reflection (F3); stale D5 text removed (F7).

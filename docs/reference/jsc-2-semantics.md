@@ -552,7 +552,8 @@ A value crossing a trust boundary is checked before the body sees it. At M1a thi
 | `Credential` (M2) | it is the ledger's encoding (a key `Constr 0 [h]` or a script `Constr 1 [h]`: no other tag, no other field count) and `h` has exactly 28 bytes |
 | `Address` (M2) | it is the ledger's encoding (`Constr 0 [payment, staking]`, staking `Constr 1 []` or `Constr 0 [s]`), its payment credential is well formed, and its staking part is none or a staking hash (`Constr 0 [c]`) with `c` a well-formed credential. **A staking pointer is never well formed** (r15, review r1 S1: whatever its parts; Conway gives pointers no staking meaning, and a stored pointer no output can carry would make every send to the address fail) |
 
-A `Value` never crosses as an argument (it is not a parameter type, D5), so it has no rule here; the IR lists a
+A `Value` never crosses as an argument (it is not a parameter type, D5); it crosses stored, in a read state or a memo
+(M2c, below). The IR lists a
 parameter whose type holds an `Address` or a `Credential` in `checked`. The interpreters' values cannot hold a wrong
 constructor tag or field count, so for them the encoding clauses are always true; the generated code decides them on the
 data (`AddressAdapter.addressOk`/`credentialOk`), where a transition program, which decodes nothing before the method
@@ -564,9 +565,12 @@ deposit's memo are checked inputs too (§2, step 3), by the same rules at `C.Sta
 record's `Value` field) is well formed when its data is a value's: no repeated token name, no zero quantity, no empty
 token map, policies in order (§5.4a's rules; any token order). The generated decoder of a memo decides every constructor
 tag and field count on the data, as for addresses; the validator checks a read state's outer shape (its constructor and
-field count, ADR-0011 D2) and the checked-input rule its keys, maps and addresses. A read state's nested constructor tags
-are taken as its contract wrote them: a JOUST contract's validator checks every state it writes, so one it accepted is
-well formed (D5).
+field count, ADR-0011 D2) and the checked-input rule its keys, maps, addresses and stored values, used or not (review
+r1, C4). A read state's nested constructor tags (its `Bool`s, `Option`s and enums) are taken as its contract wrote them:
+a `.jsc` contract's validator refuses a malformed tag in any argument it stores, so a state it accepted is well formed
+(D5; `JscV2M2cHostileInputTest`). This holds for `.jsc` imports only and is decided again for `java:` contract imports
+(M4b). The interpreters check an arriving `Value` (a memo's, a read state's) by the decoder's domain too: every policy
+and token name at most 32 bytes, every quantity in the signed 128-bit range (review r1, C2).
 
 A map that is out of order or has a duplicate key cannot be a map value (§1). Such an argument is refused here, so the
 body never sees one.
@@ -660,6 +664,12 @@ registry's order, each its value and, for `receives T`, its memo (a checked inpu
 credit; the validator adds exactly the claimed deposits to the instance's value (ADR-0011 I40). Any other method takes
 none: a deposit claimed on its output fails its transaction. A deposit is not comparable; read its `value` and `memo`.
 
+**Deposits are unauthenticated** (review r1, S5). A deposit may come from any input of the transaction, a wallet's
+included: the registry names an input as its depositor, not a contract, and `.jsc` does not expose who it was. Its memo
+is whatever the depositor wrote, decoded and checked but not proof of anything: credit by `d.value`, and never grant
+anything by a memo alone (a grant per memo can be farmed with minimum deposits). When a receiver has several receiving
+actions, the transaction's builder picks the one that decodes the memos.
+
 ### 5.9 Read states (M2c)
 
 A parameter `p: reads params.f` (an action's or a destroy's) is the state of the instance `params.f` names (an
@@ -667,6 +677,12 @@ A parameter `p: reads params.f` (an action's or a destroy's) is the state of the
 fields are read like any record's. A field `C` sets from its own window (a time field of `C`, which `C`'s checked IR lists)
 is a time value here (§6). Staleness is the reader's rule: a reference input runs no validator, so the reader checks a
 time field with `before`/`after` (`require(before(p.updatedAt + maxAge))`: the whole window ends in time).
+
+**Deployer trust** (review r1, S3). Nothing on chain binds an `Instance<C>` to `C`. The validator authenticates a read
+state as the datum of a reference input holding the instance's token at its policy's script address, with `C.State`'s
+outer shape; a deposit goes to whatever script that policy is. The deployer who sets the params must point the field at
+an instance of `C` (for a deposit, of a contract that receives): a deposit into a script that ignores deposit claims is
+value the transaction's builder can take (ADR-0011's deployer-trust model).
 
 ## 6. Time values (D11)
 
