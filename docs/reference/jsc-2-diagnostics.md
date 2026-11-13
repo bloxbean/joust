@@ -237,7 +237,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0724 | error | … is a record of java: … : read-only in .jsc (ADR-0018 D9); build it with the library's fns | Checker |
 | JSC0725 | error | … is an opaque record of java: … : never written as a type, stored, compared or read (or: an opaque Java library record is not comparable) | Checker |
 | JSC0726 | error | … is a Java library's (java: … ): a time value never reaches one, since its body is not checked for the time rule (ADR-0018 D11) | Checker |
-| JSC0727 | error | … is on the runtime class path here, and is also compiled from the java: library's sources (ADR-0018 D9) | JscMain (checkJoustLibraries) |
+| JSC0727 | error | … is on the class path here, and is also compiled from the java: library's sources (ADR-0018 D9); also: a listed library class was not compiled (recordJoustLibraries) | JscMain (checkJoustLibraries, recordJoustLibraries) |
 
 ## Map and BigMap (ADR-0018 D5, D7, J14)
 

@@ -443,6 +443,9 @@ public final class JscMain {
         return found.size() == 1 ? found.get(0).toString() : null;
     }
 
+    /** The texts of the Java libraries' sources of this run, by path. */
+    static java.util.Map<String, String> javaSourceTexts = java.util.Map.of();
+
     /** The Java libraries of this run ({@code --java-libraries}); none unless given. */
     static org.julclang.state.dsl.v2.JavaLibraries javaLibraries = org.julclang.state.dsl.v2.JavaLibraries.NONE;
 
@@ -451,8 +454,10 @@ public final class JscMain {
      * build without {@code java:} imports never runs the certifier (ADR-0018 D9, M4b).
      */
     static org.julclang.state.dsl.v2.JavaLibraries javaLibraries(Path dir) throws IOException {
+        javaSourceTexts = java.util.Map.of();
         if (dir == null || !Files.isDirectory(dir)) return org.julclang.state.dsl.v2.JavaLibraries.NONE;
         var sources = librarySources(dir);
+        javaSourceTexts = sources;
         var certified = new org.julclang.state.dsl.v2.JavaLibraries[1];
         return fqcn -> {
             if (certified[0] == null) certified[0] = org.julclang.state.dsl.v2.JavaLibraries.certify(sources);
@@ -472,34 +477,45 @@ public final class JscMain {
         return out;
     }
 
-    /** The top-level classes the library sources under {@code dir} declare, as class-file paths ({@code a/b/C}). */
-    static List<String> libraryClassPaths(Path dir) throws IOException {
-        var out = new ArrayList<String>();
-        var pkg = Pattern.compile("(?m)^\\s*package\\s+([\\w.]+)\\s*;");
-        for (var e : librarySources(dir).entrySet()) {
-            String name = e.getKey().substring(e.getKey().lastIndexOf('/') + 1).replace(".java", "");
-            var m = pkg.matcher(e.getValue());
-            out.add((m.find() ? m.group(1).replace('.', '/') + "/" : "") + name);
+    /** The suffix of the file generateJsc writes beside a contract's Java: the classes of its java: libraries, one per line. */
+    public static final String LIBRARY_CLASSES = ".java-libraries";
+
+    /**
+     * The classes of the {@code java:} libraries each contract lowered into {@code generated} uses, by contract (its
+     * fully qualified name): binary names from javac, through the certifier, nested classes too (review r2, S2, F5).
+     */
+    static java.util.Map<String, List<String>> libraryClasses(Path generated) throws IOException {
+        var out = new java.util.TreeMap<String, List<String>>();
+        if (generated == null || !Files.isDirectory(generated)) return out;
+        try (Stream<Path> s = Files.walk(generated)) {
+            for (Path f : s.filter(x -> x.toString().endsWith(LIBRARY_CLASSES) && Files.isRegularFile(x)).sorted().toList()) {
+                String rel = generated.relativize(f).toString().replace('\\', '/');
+                String contract = rel.substring(0, rel.length() - LIBRARY_CLASSES.length()).replace('/', '.');
+                out.put(contract, Files.readAllLines(f).stream().map(String::strip).filter(l -> !l.isEmpty()).toList());
+            }
         }
         return out;
     }
 
     /**
-     * {@code JscMain --check-library-classes <sourcesDir> <classpath>} (ADR-0018 D9, M4b; the Gradle plugin's
-     * {@code checkJoustLibraries}): a class compiled from a {@code java:} library's sources must not also reach the runtime
-     * class path from a jar or directory, where it could shadow the compiled one: the JVM side runs the certified sources,
-     * never a jar's classes. {@code classpath} is the runtime class path without the project's own outputs. 0 when none does.
+     * {@code JscMain --check-library-classes <generatedDir> <classpath>} (ADR-0018 D9, M4b; the Gradle plugin's
+     * {@code checkJoustLibraries}, before {@code compileJava}): a class compiled from a {@code java:} library's certified
+     * sources must not also reach the compile or runtime class path from a jar or directory, where it could shadow the
+     * compiled one: the JVM side runs the certified sources, never a jar's classes. {@code classpath} is the class path
+     * without the project's own outputs. The classes are those generateJsc listed (javac's binary names, nested ones too).
+     * 0 when none does.
      */
-    public static int checkLibraryClasses(Path sources, String classpath) throws IOException {
-        var classes = libraryClassPaths(sources);
+    public static int checkLibraryClasses(Path generated, String classpath) throws IOException {
+        var classes = new java.util.TreeSet<String>();
+        libraryClasses(generated).values().forEach(classes::addAll);
         int found = 0;
         for (String entry : classpath.split(java.io.File.pathSeparator)) {
             if (entry.isBlank()) continue;
             Path p = Path.of(entry);
             if (Files.isDirectory(p)) {
                 for (String c : classes) {
-                    if (Files.exists(p.resolve(c + ".class"))) {
-                        System.err.println(p + ": error[JSC0727]: " + c.replace('/', '.') + " is on the runtime class path here, and is also compiled"
+                    if (Files.exists(p.resolve(c.replace('.', '/') + ".class"))) {
+                        System.err.println(p + ": error[JSC0727]: " + c + " is on the class path here, and is also compiled"
                                 + " from the java: library's sources: the JVM side must run those (ADR-0018 D9); remove this dependency, or use the"
                                 + " library through the joustLibrary configuration only");
                         found++;
@@ -508,8 +524,10 @@ public final class JscMain {
             } else if (Files.isRegularFile(p) && p.toString().endsWith(".jar")) {
                 try (var jar = new java.util.jar.JarFile(p.toFile())) {
                     for (String c : classes) {
-                        if (jar.getEntry(c + ".class") != null) {
-                            System.err.println(p + ": error[JSC0727]: " + c.replace('/', '.') + " is in this jar on the runtime class path, and is also"
+                        String name = c.replace('.', '/') + ".class";
+                        boolean versioned = jar.stream().anyMatch(e -> e.getName().startsWith("META-INF/versions/") && e.getName().endsWith("/" + name));
+                        if (jar.getEntry(name) != null || versioned) {
+                            System.err.println(p + ": error[JSC0727]: " + c + " is in this jar on the class path, and is also"
                                     + " compiled from the java: library's sources: the jar's class could shadow the certified one (ADR-0018 D9);"
                                     + " take the library only through the joustLibrary configuration");
                             found++;
@@ -519,39 +537,53 @@ public final class JscMain {
             }
         }
         if (found > 0) return 1;
-        System.out.println("jsc: no class of the " + classes.size() + " java: library class(es) reaches the runtime class path from elsewhere");
+        System.out.println("jsc: no class of the " + classes.size() + " java: library class(es) reaches the class path from elsewhere");
         return 0;
     }
 
+    /** Where a contract's record of its java: library classes is, in its classes (one resource per contract). */
+    public static String libraryRecord(String contract) {
+        return "META-INF/joust/java-libraries/" + contract + ".json";
+    }
+
     /**
-     * {@code JscMain --library-manifest <sourcesDir> <classesDir>} (ADR-0018 D9, M4b; after {@code compileJava}): the
-     * SHA-256 of every class file compiled from the {@code java:} libraries' sources (each top-level class and its nested
-     * ones), into {@code <classesDir>/META-INF/joust/java-libraries.json}. A contract's runtime checks the bytes that define
-     * each such class against it when the contract is loaded ({@code JavaLibraryCheck}), and refuses to run on a mismatch.
+     * {@code JscMain --library-manifest <generatedDir> <classesDir>} (ADR-0018 D9, M4b; after {@code compileJava}): for
+     * each contract built with {@code java:} libraries, the SHA-256 of every class file compiled from their certified
+     * sources, into {@code <classesDir>/META-INF/joust/java-libraries/<contract>.json} (a resource per contract, so that a
+     * merged jar keeps each; review r2 F2). The contract's client checks the bytes that define each class against it when the
+     * contract is loaded ({@code JavaLibraryCheck}), and refuses to run on a mismatch or when its record is missing. A
+     * project whose contracts use no {@code java:} library gets no record. 1 when a listed class was not compiled.
      */
-    public static int libraryManifest(Path sources, Path classes) throws IOException {
-        var hashes = new java.util.TreeMap<String, String>();
-        for (String c : libraryClassPaths(sources)) {
-            Path dir = classes.resolve(c).getParent();
-            String simple = c.substring(c.lastIndexOf('/') + 1);
-            if (dir == null || !Files.isDirectory(dir)) continue;
-            try (Stream<Path> s = Files.list(dir)) {
-                for (Path f : s.sorted().toList()) {
-                    String n = f.getFileName().toString();
-                    if (!n.endsWith(".class") || !(n.equals(simple + ".class") || n.startsWith(simple + "$"))) continue;
-                    String cls = (c.contains("/") ? c.substring(0, c.lastIndexOf('/') + 1).replace('/', '.') : "") + n.replace(".class", "");
-                    hashes.put(cls, sha256(Files.readAllBytes(f)));
-                }
+    public static int libraryManifest(Path generated, Path classes) throws IOException {
+        Path dir = classes.resolve("META-INF/joust/java-libraries");
+        if (Files.isDirectory(dir)) {
+            try (Stream<Path> s = Files.walk(dir)) {
+                s.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
             }
         }
-        Path out = classes.resolve("META-INF/joust/java-libraries.json");
-        Files.createDirectories(out.getParent());
-        var json = new StringBuilder("{\n  \"version\": 1,\n  \"classes\": {");
-        int i = 0;
-        for (var e : hashes.entrySet()) json.append(i++ == 0 ? "\n" : ",\n").append("    \"").append(e.getKey()).append("\": \"").append(e.getValue()).append('"');
-        json.append(hashes.isEmpty() ? "}\n}\n" : "\n  }\n}\n");
-        Files.writeString(out, json.toString());
-        System.out.println("jsc: recorded the class files of " + hashes.size() + " java: library class(es) in " + out);
+        Files.deleteIfExists(classes.resolve("META-INF/joust/java-libraries.json"));   // the r1 form: one file per output
+        int n = 0;
+        for (var e : libraryClasses(generated).entrySet()) {
+            var hashes = new java.util.TreeMap<String, String>();
+            for (String c : e.getValue()) {
+                Path f = classes.resolve(c.replace('.', '/') + ".class");
+                if (!Files.isRegularFile(f)) {
+                    System.err.println(f + ": error[JSC0727]: " + c + ", a class of a java: library " + e.getKey() + " uses, was not compiled"
+                            + " into this project's classes (ADR-0018 D9)");
+                    return 1;
+                }
+                hashes.put(c, sha256(Files.readAllBytes(f)));
+            }
+            Path out = classes.resolve(libraryRecord(e.getKey()));
+            Files.createDirectories(out.getParent());
+            var json = new StringBuilder("{\n  \"version\": 2,\n  \"contract\": \"").append(e.getKey()).append("\",\n  \"classes\": {");
+            int i = 0;
+            for (var h : hashes.entrySet()) json.append(i++ == 0 ? "\n" : ",\n").append("    \"").append(h.getKey()).append("\": \"").append(h.getValue()).append('"');
+            json.append(hashes.isEmpty() ? "}\n}\n" : "\n  }\n}\n");
+            Files.writeString(out, json.toString());
+            n += hashes.size();
+        }
+        System.out.println("jsc: recorded the class files of " + n + " java: library class(es) for " + libraryClasses(generated).size() + " contract(s)");
         return 0;
     }
 
@@ -630,16 +662,26 @@ public final class JscMain {
                 s.sorted(java.util.Comparator.reverseOrder()).filter(p -> !p.equals(out)).forEach(p -> p.toFile().delete());
             }
         }
+        // ADR-0018 D9 (review r2: S2, S3, F5): the certified sources of the java: libraries the contracts use are written
+        // beside the generated Java, and only they are compiled into the project (never a library jar's other sources).
+        var librarySourcesWritten = new java.util.HashMap<Path, String>();
         for (Path f : files) {
             String text = Files.readString(f);
             String name = src.relativize(f).toString();
             try {
-                var lowered = lowerWithWarnings(text, f.getFileName().toString(), id(src, f), modules, javaLibraries);
+                var used = new java.util.TreeSet<String>();
+                var all = javaLibraries;
+                org.julclang.state.dsl.v2.JavaLibraries tracked = fqcn -> {
+                    var l = all.describe(fqcn);
+                    if (l != null) used.add(fqcn);
+                    return l;
+                };
+                var lowered = lowerWithWarnings(text, f.getFileName().toString(), id(src, f), modules, tracked);
                 lowered.diagnostics().forEach(w -> System.err.println(w.format(name)));
                 String java = lowered.java();
                 String rel = outputPath(text, f.getFileName().toString());
                 Path target = out.resolve(rel);
-                if (Files.exists(target) && written.contains(target)) {
+                if (Files.exists(target) && (written.contains(target) || librarySourcesWritten.containsKey(target))) {
                     throw new JscException(1, 1, "another .jsc file already generates " + rel);
                 }
                 written.add(target);
@@ -656,6 +698,25 @@ public final class JscMain {
                 }
                 Files.createDirectories(target.getParent());
                 Files.writeString(target, java);
+                if (!used.isEmpty()) {
+                    var classes = new java.util.TreeSet<String>();
+                    for (String fqcn : used) {
+                        var lib = all.describe(fqcn);
+                        classes.addAll(lib.classes());
+                        for (String path : lib.sources()) {
+                            Path t = out.resolve(path).normalize();
+                            String body = javaSourceTexts.get(path);
+                            if (!t.startsWith(out) || body == null) throw new JscException(1, 1, "the java: library source " + path + " is not under the library path");
+                            if (written.contains(t)) throw new JscException(1, 1, "the java: library source " + path + " is also a contract's generated Java");
+                            if (librarySourcesWritten.putIfAbsent(t, body) == null) {
+                                Files.createDirectories(t.getParent());
+                                Files.writeString(t, body);
+                            }
+                        }
+                    }
+                    Files.writeString(target.resolveSibling(target.getFileName().toString().replace(".java", LIBRARY_CLASSES)),
+                            String.join("\n", classes) + "\n");
+                }
                 if (lowered.sourceMapJson() != null) {
                     // The source map beside the generated Java (javac compiles only *.java).
                     Files.writeString(target.resolveSibling(target.getFileName().toString().replace(".java", ".jscmap.json")),

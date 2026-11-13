@@ -182,6 +182,12 @@ public final class JavaLibraryCertifier {
         final Map<String, String> classPath = new LinkedHashMap<>();
         /** Classes declared in more than one source (a second variant of one class, D9). */
         final Set<String> duplicated = new TreeSet<>();
+        /** Each class the sources declare, by binary name. */
+        final Map<String, TypeElement> types = new LinkedHashMap<>();
+        /** Each source's compilation unit, by its path. */
+        final Map<String, CompilationUnitTree> unitByPath = new LinkedHashMap<>();
+        /** Classes the sources declare in a package of the trusted base or the platform (security S3, r2). */
+        final Set<String> reserved = new TreeSet<>();
 
         Certification(Trees trees, Elements elements, List<? extends CompilationUnitTree> units, Map<String, String> paths,
                       Set<String> bindings) {
@@ -196,12 +202,15 @@ public final class JavaLibraryCertifier {
             var libraries = new ArrayList<TypeElement>();
             for (CompilationUnitTree unit : units) {
                 String path = pathOf(unit);
+                unitByPath.put(path, unit);
                 new TreePathScanner<Void, Void>() {
                     @Override
                     public Void visitClass(ClassTree node, Void unused) {
                         if (trees.getElement(getCurrentPath()) instanceof TypeElement t) {
                             String bin = elements.getBinaryName(t).toString();
                             if (classPath.put(bin, path) != null) duplicated.add(bin);
+                            if (reservedPackage(bin)) reserved.add(bin);
+                            types.put(bin, t);
                             if (t.getNestingKind().isNested() == false && annotated(t, ONCHAIN_LIBRARY)) libraries.add(t);
                         }
                         return super.visitClass(node, unused);
@@ -272,6 +281,12 @@ public final class JavaLibraryCertifier {
                 certified.add(elements.getBinaryName((TypeElement) m.getEnclosingElement()).toString());
                 body(path, problems, work);
             }
+            // Security S3 (r2): a library's sources never declare a class of JOUST, JuLC, cardano-client-lib or the JDK. The
+            // build compiles a library's sources into the consumer, ahead of those jars (a no-op JavaLibraryCheck, say).
+            for (String r : reserved) {
+                problems.add(classPath.get(r) + " declares " + r + ", in a package of JOUST, JuLC, cardano-client-lib or the JDK: a"
+                        + " library's sources never declare those (they would be compiled into the build, ahead of the real classes)");
+            }
             for (TypeElement c : classes) {
                 SubsetLint.lint(trees, c, (t, node, cu, message) -> {
                     long pos = t.getSourcePositions().getStartPosition(cu, node);
@@ -284,17 +299,133 @@ public final class JavaLibraryCertifier {
                             + " sides (no second variant, ADR-0018 D9)");
                 }
             }
-            // The sources it was certified from: the files declaring the classes it reaches, and its records'.
-            var files = new TreeSet<String>();
-            var bins = new ArrayList<String>();
-            for (TypeElement c : classes) bins.add(elements.getBinaryName(c).toString());
-            bins.add(elements.getBinaryName(lib).toString());
-            for (JavaLibraries.Rec r : records.values()) bins.add(r.binaryName());
-            for (String b : bins) if (classPath.get(b) != null) files.add(classPath.get(b));
+            // The sources it is built from (security S2, S3; #82 S1, r2): every source file its class's file names, through any
+            // name javac resolves (a type, a call, a field, an import), transitively. That closure is what the build compiles
+            // into the consumer, what the lock pins (a record's field order lives in the record's own file), and its classes
+            // (binary names from javac, nested ones too) are what the runtime and the duplicate-class check look at.
+            var files = closure(classPath.get(elements.getBinaryName(lib).toString()));
+            for (JavaLibraries.Rec r : records.values()) if (classPath.get(r.binaryName()) != null) files.addAll(closure(classPath.get(r.binaryName())));
             var texts = new TreeMap<String, String>();
             for (String f : files) if (paths.containsKey(f)) texts.put(f, paths.get(f));
+            var closureClasses = new TreeSet<String>();
+            classPath.forEach((bin, f) -> { if (files.contains(f)) closureClasses.add(bin); });
+            for (String bin : closureClasses) {
+                TypeElement t = types.get(bin);
+                if (t != null && t.getNestingKind() == javax.lang.model.element.NestingKind.TOP_LEVEL) classLevel(t, problems);
+            }
             return new JavaLibraries.Library(fqcn, hash(texts), List.copyOf(fns), List.copyOf(records.values()), List.copyOf(new LinkedHashSet<>(problems)),
-                    List.copyOf(certified), List.copyOf(new LinkedHashSet<>(messages)));
+                    List.copyOf(certified), List.copyOf(new LinkedHashSet<>(messages)), List.copyOf(texts.keySet()), List.copyOf(closureClasses));
+        }
+
+        /** The library source files {@code start} needs, transitively: each file a resolved name in it is declared in. */
+        TreeSet<String> closure(String start) {
+            var out = new TreeSet<String>();
+            if (start == null) return out;
+            var work = new ArrayDeque<String>(List.of(start));
+            while (!work.isEmpty()) {
+                String f = work.poll();
+                if (!out.add(f)) continue;
+                CompilationUnitTree unit = unitByPath.get(f);
+                if (unit == null) continue;
+                new TreePathScanner<Void, Void>() {
+                    void note() {
+                        Element el = trees.getElement(getCurrentPath());
+                        TypeElement top = el == null ? null : topLevel(el);
+                        if (top == null) return;
+                        String file = classPath.get(elements.getBinaryName(top).toString());
+                        if (file != null && !out.contains(file)) work.add(file);
+                    }
+
+                    @Override
+                    public Void visitIdentifier(com.sun.source.tree.IdentifierTree node, Void unused) {
+                        note();
+                        return super.visitIdentifier(node, unused);
+                    }
+
+                    @Override
+                    public Void visitMemberSelect(com.sun.source.tree.MemberSelectTree node, Void unused) {
+                        note();
+                        return super.visitMemberSelect(node, unused);
+                    }
+                }.scan(unit, null);
+            }
+            return out;
+        }
+
+        /** The top-level type {@code e} is in, or null (a package, a module). */
+        static TypeElement topLevel(Element e) {
+            Element c = e;
+            while (c != null && !(c instanceof TypeElement t && t.getNestingKind() == javax.lang.model.element.NestingKind.TOP_LEVEL)) {
+                if (c instanceof PackageElement) return null;
+                c = c.getEnclosingElement();
+            }
+            return (TypeElement) c;
+        }
+
+        /**
+         * Security S4 (r2): what JuLC refuses later, refused by the certifier itself, so that "certified" does not depend on
+         * the JuLC version: overloads of any name, initialiser blocks, static fields not initialised by a literal,
+         * constructors and explicit accessors of a library record.
+         */
+        void classLevel(TypeElement c, List<String> problems) {
+            var names = new java.util.HashMap<String, Integer>();
+            for (Element m : c.getEnclosedElements()) {
+                if (m.getKind() == ElementKind.METHOD) names.merge(m.getSimpleName().toString(), 1, Integer::sum);
+            }
+            names.forEach((n, k) -> {
+                if (k > 1) problems.add(c.getQualifiedName() + "." + n + " is overloaded (JuLC calls a method by name: one method per name)");
+            });
+            // javac's element model has no initialiser blocks: the class's tree does.
+            if (trees.getTree(c) instanceof ClassTree ct) {
+                for (Tree member : ct.getMembers()) {
+                    if (member instanceof com.sun.source.tree.BlockTree) problems.add(c.getQualifiedName() + " has an initialiser block (not lowered on-chain)");
+                }
+            }
+            var components = c.getKind() == ElementKind.RECORD ? Records.components(c).stream().map(x -> x.getSimpleName().toString()).toList()
+                    : List.<String>of();
+            for (Element m : c.getEnclosedElements()) {
+                switch (m.getKind()) {
+                    case FIELD -> {
+                        if (!m.getModifiers().contains(Modifier.STATIC)) break;
+                        var tree = trees.getTree(m);
+                        Tree init = tree instanceof com.sun.source.tree.VariableTree v ? v.getInitializer() : null;
+                        boolean literal = literal(init) || init instanceof NewArrayTree a && a.getDimensions().isEmpty()
+                                && a.getInitializers() != null && a.getInitializers().stream().allMatch(JavaLibraryCertifier.Certification::literal);
+                        if (!literal || !m.getModifiers().contains(Modifier.FINAL)) {
+                            problems.add(c.getQualifiedName() + "." + m.getSimpleName() + ": a static field is final and initialised by a literal"
+                                    + " (its initialiser runs on the JVM only)");
+                        }
+                    }
+                    case CONSTRUCTOR -> {
+                        if (c.getKind() == ElementKind.RECORD && elements.getOrigin(m) == Elements.Origin.EXPLICIT) {
+                            problems.add(c.getQualifiedName() + " declares a constructor: its checks would run on the JVM, while JuLC builds a"
+                                    + " record as Constr 0 of its fields (catalogue: record constructors)");
+                        }
+                    }
+                    case METHOD -> {
+                        if (components.contains(m.getSimpleName().toString()) && ((ExecutableElement) m).getParameters().isEmpty()
+                                && declared.containsKey((ExecutableElement) m)) {   // a method written in the source (javac's own has no tree)
+                            problems.add(c.getQualifiedName() + "." + m.getSimpleName() + "() overrides a record accessor (JuLC reads the field)");
+                        }
+                    }
+                    case RECORD, CLASS, INTERFACE, ENUM -> classLevel((TypeElement) m, problems);
+                    default -> { }
+                }
+            }
+        }
+
+        /** A literal other than null (a negative number is a unary minus of one). */
+        static boolean literal(Tree t) {
+            if (t instanceof com.sun.source.tree.UnaryTree u && u.getKind() == Tree.Kind.UNARY_MINUS) t = u.getExpression();
+            return t instanceof com.sun.source.tree.LiteralTree && t.getKind() != Tree.Kind.NULL_LITERAL;
+        }
+
+        /** A class of the JDK, cardano-client-lib, JuLC or JOUST (this repo's examples excepted). */
+        static boolean reservedPackage(String bin) {
+            for (String p : List.of("java.", "javax.", "jdk.", "sun.", "com.sun.", "com.bloxbean.", "org.julclang.")) {
+                if (bin.startsWith(p)) return !bin.startsWith("org.julclang.state.examples.");
+            }
+            return false;
         }
 
         static boolean annotated(Element e, String annotation) {
@@ -353,10 +484,13 @@ public final class JavaLibraryCertifier {
                 case "java.lang.Boolean":
                     return JavaLibraries.JType.BOOL;
                 case "org.julclang.core.types.JulcList": {
+                    // Codex C6 (r2): a raw type has no argument; it is unmappable, per fn, never a crash of the whole library.
+                    if (d.getTypeArguments().isEmpty()) return JavaLibraries.JType.unmappable("a raw JulcList (no element type)");
                     JavaLibraries.JType el = map(d.getTypeArguments().get(0), records, problems);
                     return JavaLibraries.JType.list(el);
                 }
                 case "java.util.Optional": {
+                    if (d.getTypeArguments().isEmpty()) return JavaLibraries.JType.unmappable("a raw Optional (no element type)");
                     TypeMirror arg = d.getTypeArguments().get(0);
                     if (arg instanceof DeclaredType ad && ((TypeElement) ad.asElement()).getQualifiedName().contentEquals("java.util.Optional")) {
                         return JavaLibraries.JType.unmappable("Optional<Optional<…>> (JavaScript cannot tell Some(None) from None, D5)");
@@ -469,6 +603,13 @@ public final class JavaLibraryCertifier {
 
                 @Override
                 public Void visitBinary(BinaryTree node, Void unused) {
+                    if (node.getKind() == Tree.Kind.AND || node.getKind() == Tree.Kind.OR || node.getKind() == Tree.Kind.XOR) {
+                        TypeMirror l = trees.getTypeMirror(new TreePath(getCurrentPath(), node.getLeftOperand()));
+                        if (l != null && (l.getKind() == TypeKind.BOOLEAN || l.toString().equals("java.lang.Boolean"))) {
+                            problems.add(where(getCurrentPath()) + ": a non-short-circuit boolean operator (" + node.getKind().name().toLowerCase()
+                                    + "); use && or ||");
+                        }
+                    }
                     if (node.getKind() == Tree.Kind.EQUAL_TO || node.getKind() == Tree.Kind.NOT_EQUAL_TO) {
                         TypeMirror l = trees.getTypeMirror(new TreePath(getCurrentPath(), node.getLeftOperand()));
                         TypeMirror r = trees.getTypeMirror(new TreePath(getCurrentPath(), node.getRightOperand()));
@@ -481,9 +622,53 @@ public final class JavaLibraryCertifier {
                     return super.visitBinary(node, unused);
                 }
 
+                /** For-each loops around the code being scanned (a lambda body starts again at 0). */
+                int forEach;
+
                 @Override
                 public Void visitLambdaExpression(LambdaExpressionTree node, Void unused) {
-                    return super.visitLambdaExpression(node, unused);
+                    int outer = forEach;
+                    forEach = 0;
+                    try {
+                        return super.visitLambdaExpression(node, unused);
+                    } finally {
+                        forEach = outer;
+                    }
+                }
+
+                // Security S4 (r2): refused by the certifier itself, not left to JuLC.
+                @Override
+                public Void visitMemberReference(com.sun.source.tree.MemberReferenceTree node, Void unused) {
+                    problems.add(where(getCurrentPath()) + ": a method reference (" + node + "): its target is not followed; write a lambda");
+                    return super.visitMemberReference(node, unused);
+                }
+
+                @Override
+                public Void visitLiteral(com.sun.source.tree.LiteralTree node, Void unused) {
+                    if (node.getKind() == Tree.Kind.NULL_LITERAL) problems.add(where(getCurrentPath()) + ": null (no null on-chain; use Optional)");
+                    return super.visitLiteral(node, unused);
+                }
+
+                @Override
+                public Void visitContinue(com.sun.source.tree.ContinueTree node, Void unused) {
+                    problems.add(where(getCurrentPath()) + ": continue (not lowered on-chain)");
+                    return super.visitContinue(node, unused);
+                }
+
+                @Override
+                public Void visitEnhancedForLoop(com.sun.source.tree.EnhancedForLoopTree node, Void unused) {
+                    forEach++;
+                    try {
+                        return super.visitEnhancedForLoop(node, unused);
+                    } finally {
+                        forEach--;
+                    }
+                }
+
+                @Override
+                public Void visitReturn(com.sun.source.tree.ReturnTree node, Void unused) {
+                    if (forEach > 0) problems.add(where(getCurrentPath()) + ": a return inside a for-each loop (not lowered on-chain)");
+                    return super.visitReturn(node, unused);
                 }
 
                 @Override
@@ -540,6 +725,12 @@ public final class JavaLibraryCertifier {
                 return;
             }
             if (classPath.containsKey(elements.getBinaryName(owner).toString())) {
+                // Security S4 (r2): an abstract method (an interface's) dispatches to a body the certifier does not follow.
+                if (callee.getModifiers().contains(Modifier.ABSTRACT)) {
+                    problems.add(where(at) + ": calls the abstract " + ownerName + "." + name + " (dynamic dispatch: the body that runs is not"
+                            + " certified); call a static method");
+                    return;
+                }
                 work.add(callee);
                 return;
             }
@@ -563,7 +754,8 @@ public final class JavaLibraryCertifier {
                     if (name.equals("get")) {
                         problems.add(where(at) + ": JulcMap.get (null on the JVM on a miss, a failure on-chain, for every key and value type:"
                                 + " use lookup, an Optional on both sides; catalogue)");
-                    } else if (MEMBERSHIP.contains(name)) {
+                    } else if (MEMBERSHIP.contains(name) || name.equals("lookup") || name.equals("delete") || name.equals("insert")) {
+                        // Security S4 (r2): a lookup, delete or insert compares keys too.
                         membership(at, node, "JulcMap." + name, problems);
                     } else if (!JULC_MAP.contains(name)) {
                         problems.add(where(at) + ": JulcMap." + name + " (not in the allow-list " + new TreeSet<>(JULC_MAP) + ")");

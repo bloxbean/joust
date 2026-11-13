@@ -166,7 +166,17 @@ class JoustPluginTest {
     @org.junit.jupiter.api.Test
     void javaLibrariesAreSourcesOnly() throws IOException {
         Files.createDirectories(dir.resolve("src/main/jsc/app"));
-        Project p = ProjectBuilder.builder().withProjectDir(dir.toFile()).build();
+        // Design F3 (r2): julc-state-toolchain is not published, so a joustLibrary dependency fails fast, with the reason.
+        Project failing = ProjectBuilder.builder().withProjectDir(dir.toFile()).build();
+        failing.getPluginManager().apply(JoustPlugin.ID);
+        failing.getDependencies().add("joustLibrary", "com.acme:allow-list:1.0");
+        var e = org.assertj.core.api.Assertions.catchThrowable(() -> ((ProjectInternal) failing).evaluate());
+        assertThat(String.valueOf(e) + (e == null ? "" : String.valueOf(e.getCause())))
+                .contains("not available through the JOUST Gradle plugin yet").contains("julc-state-toolchain");
+        // The wiring, for a build that supplies the toolchain itself.
+        Files.createDirectories(dir.resolve("experimental/src/main/jsc/app"));
+        Project p = ProjectBuilder.builder().withProjectDir(dir.resolve("experimental").toFile()).build();
+        p.getExtensions().getExtraProperties().set("joust.javaLibraries", "experimental");
         p.getPluginManager().apply(JoustPlugin.ID);
         p.getDependencies().add("joustLibrary", "com.acme:allow-list:1.0");
         ((ProjectInternal) p).evaluate();
@@ -181,11 +191,15 @@ class JoustPluginTest {
         assertThat(genArgs).hasSize(4);
         assertThat(genArgs.get(2)).isEqualTo("--java-libraries");
         assertThat(genArgs.get(3).replace('\\', '/')).endsWith("build/joust/library-sources");
+        // Review r2 S3: the extracted sources are no source directory; only the certified closure generateJsc writes is.
         var main = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets().getByName("main");
-        assertThat(main.getJava().getSrcDirs()).contains(p.getLayout().getBuildDirectory().dir("joust/library-sources").get().getAsFile());
+        assertThat(main.getJava().getSrcDirs()).doesNotContain(p.getLayout().getBuildDirectory().dir("joust/library-sources").get().getAsFile());
         JavaExec check = (JavaExec) p.getTasks().getByName("checkJoustLibraries");
         assertThat(check.getMainClass().get()).isEqualTo("org.julclang.state.dsl.JscMain");
         assertThat(p.getTasks().getByName("check").getDependsOn().stream().map(String::valueOf).toList().toString()).contains("checkJoustLibraries");
+        // Review r2 F5, S3: the duplicate-class check runs before compileJava, so for test, jar and run too.
+        assertThat(p.getTasks().getByName("compileJava").getTaskDependencies().getDependencies(null).stream().map(org.gradle.api.Task::getName).toList())
+                .contains("checkJoustLibraries");
         assertThat(p.getTasks().getByName("compileJava").getFinalizedBy().getDependencies(null).stream().map(org.gradle.api.Task::getName).toList())
                 .contains("recordJoustLibraries");
         // Without such a dependency, nothing changes: the lowering is not given --java-libraries, nor the certifier.

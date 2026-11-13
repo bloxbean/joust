@@ -62,6 +62,11 @@ final class JavaEmitter {
      * lowering; design F2, r2).
      */
     static final String LIBRARY_MARKER = "by julc-state-dsl (ADR-0018, a .jsc 2 library)";
+    /**
+     * The words before the {@code java:} libraries of a contract, in its Javadoc ({@code ContractReader.JAVA_LIBRARIES_MARKER},
+     * kept equal by {@code JscV2JavaLibraryTest}, which reads a real client).
+     */
+    static final String JAVA_LIBRARIES_MARKER = "Built with the java: libraries (ADR-0018 D9):";
     private final Set<String> imports = new TreeSet<>();
     private final LinkedHashMap<String, String> helpers = new LinkedHashMap<>();
     private int counter;
@@ -142,7 +147,14 @@ final class JavaEmitter {
         for (String im : imports) out.append("import ").append(im).append(";\n");
         // The file name was checked to [A-Za-z0-9._-] at the boundary (JscV2.checkFileName), so it is safe in comments.
         out.append("\n/**\n * GENERATED from ").append(p.fileName())
-                .append(" by julc-state-dsl (ADR-0018, .jsc 2). Do not edit: change the .jsc file.\n */\n");
+                .append(" by julc-state-dsl (ADR-0018, .jsc 2). Do not edit: change the .jsc file.\n");
+        // ADR-0018 D9 (review r2: F1, F2, S1): the java: libraries the contract is built with, for its client, which checks
+        // their classes' bytes when it loads and refuses to run without its record of them (JoustProcessor reads this line).
+        if (!p.javaLibraries().isEmpty()) {
+            out.append(" * ").append(JAVA_LIBRARIES_MARKER).append(" ").append(String.join(" ",
+                    p.javaLibraries().stream().map(Ir.JavaLib::fqcn).sorted().toList())).append("\n");
+        }
+        out.append(" */\n");
         out.append("// ").append(mark(p.state().pos())).append("\n");
         out.append("@StateContract").append(options()).append("\n");
         out.append("public class ").append(p.name()).append(" {\n\n");

@@ -185,6 +185,8 @@ final class Checker {
     private final Map<String, String> javaFnLib = new HashMap<>();
     /** Each Java library record's library (by its simple name). */
     private final Map<String, String> javaRecLib = new HashMap<>();
+    /** Each Java library record's binary name, by its {@code .jsc} name: one record shared by two libraries is one type. */
+    private final Map<String, String> javaRecBinary = new HashMap<>();
     /** The Java library records that are opaque: no fields to read, no equality, never written as a type. */
     private final Set<String> javaOpaque = new HashSet<>();
 
@@ -694,9 +696,16 @@ final class Checker {
             throw at.error("JSC0709", "the Java library " + fqcn + " is the class " + cls + ", the name of a declaration, library or contract of this"
                     + " build (or of the generated code); rename one");
         }
+        // Codex C3 (r2): the generated Java calls the library through its class (AllowList.isAllowed(…)), which a value of
+        // the class's name would obscure, as for a .jsc library (C1): no binding takes it (declaredName).
+        libraryClasses.add(cls);
         var recs = new LinkedHashMap<String, Ir.JavaRec>();
+        var fresh = new ArrayList<JavaLibraries.Rec>();
         for (JavaLibraries.Rec r : lib.records()) {
             String n = r.simpleName();
+            // Codex C5 (r2): a record two libraries' signatures share (lib.A$R, made by A and read by B) is one type of the
+            // build, registered once, by its binary name; only a different record of the same name is a clash.
+            if (r.binaryName().equals(javaRecBinary.get(n))) continue;
             if (records.containsKey(n) || enums.containsKey(n) || variantEnum.containsKey(n) || fns.containsKey(n) || javaRecLib.containsKey(n)
                     || RESERVED.contains(n) || PROCESSOR_TYPES.contains(n) || n.equals(cls) || n.contains("_")) {
                 throw at.error("JSC0709", "the record " + r.binaryName() + " of java:" + fqcn + " is named " + n + ", the name of a declaration of this"
@@ -704,9 +713,11 @@ final class Checker {
             }
             records.put(n, new LinkedHashMap<>());
             javaRecLib.put(n, fqcn);
+            javaRecBinary.put(n, r.binaryName());
             if (!r.verified()) javaOpaque.add(n);
+            fresh.add(r);
         }
-        for (JavaLibraries.Rec r : lib.records()) {
+        for (JavaLibraries.Rec r : fresh) {
             var fields = records.get(r.simpleName());
             if (r.verified()) for (int i = 0; i < r.fieldNames().size(); i++) fields.put(r.fieldNames().get(i), javaTy(lib, r.fieldTypes().get(i)));
             recs.put(r.simpleName(), new Ir.JavaRec(new Ir.RecordType(r.simpleName(), fields, at), r.canonicalOwner(), r.importClass(),

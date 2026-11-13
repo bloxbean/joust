@@ -168,7 +168,6 @@ public class JoustPlugin implements Plugin<Project> {
         SourceSet main = project.getExtensions().getByType(JavaPluginExtension.class).getSourceSets()
                 .getByName(SourceSet.MAIN_SOURCE_SET_NAME);
         main.getJava().srcDir(project.files(out).builtBy(generate));
-        main.getJava().srcDir(project.files(librarySources).builtBy(extract));
         // ADR-0018 D12 (r12, review r1 F4): each .jsc 2 contract's message map (Name.jscmap.json, beside its generated
         // Java) is a resource beside its classes, so the runtime names the .jsc sites of a refusal.
         project.getTasks().named(main.getProcessResourcesTaskName(), org.gradle.language.jvm.tasks.ProcessResources.class,
@@ -189,29 +188,45 @@ public class JoustPlugin implements Plugin<Project> {
             t.getArgumentProviders().add(javaLibraries);
         });
         project.getTasks().named("check", c -> c.dependsOn(checkAbi));
-        // ADR-0018 D9 (M4b): no class compiled from a java: library's sources also reaches the runtime class path from a
-        // jar or a directory (where it could shadow the certified one); and each such class file is recorded.
+        // ADR-0018 D9 (M4b; review r2): generateJsc writes the certified sources of the java: libraries the contracts use
+        // (each library's closure, nothing else of its jar) beside the generated Java, which compiles them. No class of them
+        // also reaches the compile or runtime class path from a jar or a directory, checked before compileJava (so test,
+        // jar and run never build a shadowed class); and each one's class file is recorded per contract for its client.
         TaskProvider<JavaExec> checkLibraries = project.getTasks().register("checkJoustLibraries", JavaExec.class, t -> {
             t.setGroup("verification");
-            t.setDescription("Fails when a class of a java: library also reaches the runtime class path from a jar or directory");
+            t.setDescription("Fails when a class of a java: library also reaches the class path from a jar or directory");
             t.setClasspath(tool);
             t.getMainClass().set("org.julclang.state.dsl.JscMain");
-            t.dependsOn(extract);
-            var runtime = main.getRuntimeClasspath();
-            var own = main.getOutput();
-            t.getInputs().files(runtime).withPropertyName("runtimeClasspath");
-            t.getArgumentProviders().add(() -> List.of("--check-library-classes", librarySources.get().getAsFile().getAbsolutePath(),
-                    String.join(File.pathSeparator, runtime.minus(own).getFiles().stream().map(File::getAbsolutePath).toList())));
+            t.dependsOn(generate);
+            var classPath = project.getConfigurations().getByName(main.getCompileClasspathConfigurationName())
+                    .plus(project.getConfigurations().getByName(main.getRuntimeClasspathConfigurationName()));
+            t.getInputs().files(classPath).withPropertyName("classPath");
+            t.getArgumentProviders().add(() -> List.of("--check-library-classes", out.get().getAsFile().getAbsolutePath(),
+                    String.join(File.pathSeparator, classPath.getFiles().stream().map(File::getAbsolutePath).toList())));
         });
         project.getTasks().named("check", c -> c.dependsOn(checkLibraries));
+        project.getTasks().named(JavaPlugin.COMPILE_JAVA_TASK_NAME, t -> t.dependsOn(checkLibraries));
         TaskProvider<JavaExec> recordLibraries = project.getTasks().register("recordJoustLibraries", JavaExec.class, t -> {
             t.setGroup("build");
-            t.setDescription("Records the SHA-256 of each class compiled from a java: library's sources (META-INF/joust/java-libraries.json)");
+            t.setDescription("Records the SHA-256 of each class compiled from a java: library's sources (META-INF/joust/java-libraries/<contract>.json)");
             t.setClasspath(tool);
             t.getMainClass().set("org.julclang.state.dsl.JscMain");
             var classes = main.getJava().getDestinationDirectory();
-            t.getArgumentProviders().add(() -> List.of("--library-manifest", librarySources.get().getAsFile().getAbsolutePath(),
+            t.getArgumentProviders().add(() -> List.of("--library-manifest", out.get().getAsFile().getAbsolutePath(),
                     classes.get().getAsFile().getAbsolutePath()));
+        });
+        // Design F3 (r2): the certifier is julc-state-toolchain, which is not published yet, and the certifier's pool needs
+        // JOUST's on-chain API sources, which no published artifact carries (an onchain classifier is a follow-up). Until
+        // then a joustLibrary dependency fails fast, here, rather than as an unresolvable dependency or as every library
+        // refused for "sources that do not compile". -Pjoust.javaLibraries=experimental keeps the wiring for a build that
+        // supplies the toolchain itself (this repository's examples/dsl does so by hand).
+        project.afterEvaluate(p -> {
+            if (!libraries.getDependencies().isEmpty() && !"experimental".equals(p.findProperty("joust.javaLibraries"))) {
+                throw new org.gradle.api.GradleException("joustLibrary (java: imports in .jsc, ADR-0018 D9) is not available through the"
+                        + " JOUST Gradle plugin yet: its certifier, julc-state-toolchain, and JOUST's on-chain API sources are not"
+                        + " published. Remove the joustLibrary dependencies (a Java contract can still use a JuLC library from the"
+                        + " processor path), or set -Pjoust.javaLibraries=experimental if your build supplies the toolchain itself.");
+            }
         });
         project.getTasks().named(JavaPlugin.COMPILE_JAVA_TASK_NAME, t -> t.finalizedBy(recordLibraries));
         project.getTasks().named(main.getClassesTaskName(), t -> t.dependsOn(recordLibraries));
