@@ -8,7 +8,7 @@ Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
 **Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76),
-M4a (`.jsc` libraries, r15) and M4b (`java:` imports, r19) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+M4a (`.jsc` libraries, r16) and M4b (`java:` imports, r19) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -443,7 +443,7 @@ import { concat, slice, length } from "std/bytes"
     part of the trusted base and covered by its own differential tests.
   - Library records map to `.jsc` records with read-only fields where the projection is representation-verified;
     otherwise they are opaque.
-- **`.jsc` libraries as built (r15, M4a).**
+- **`.jsc` libraries as built (r16, M4a).**
   - **The file and its class.** `library <package>` replaces `package`; the file holds imports, types, enums and fns
     (a contract is JSC0711). Its class is its file name capitalised (`fees.jsc` is `<package>.Fees`; JSC0705 when that
     is no class name), so a library's package and file name are its identity, named by every importer and by Java
@@ -1256,7 +1256,7 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   M1b's exit and M1b had not done; the modifier vectors are five-way. §9 and the M2 row say five-way. D14 and r13's
   entry: M1e changed the hashes of scripts with generated checks only. D16 states the JSC1103 refusal of v1
   `batched`. The header no longer says design only.
-- **r15** (2026-11-13, M4a: `.jsc` libraries): D9 records the libraries as built (the `library` header and the class
+- **r16** (2026-11-13, M4a: `.jsc` libraries): D9 records the libraries as built (the `library` header and the class
   named by the file, relative imports, scope and one namespace per build, D11 through library calls, errors at the
   import, the lowering to `@OnchainLibrary`, helpers per class rather than shared, the artifacts: manifest kind `library`,
   IR format 2, message-map files). The M4 entry gate was verified first (`runtimeWasmTest`, M4a report §0).

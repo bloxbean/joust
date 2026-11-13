@@ -1,4 +1,4 @@
-# `.jsc` 2, milestone M4a: report (ADR-0018 r15)
+# `.jsc` 2, milestone M4a: report (ADR-0018 r16)
 
 Date 2026-11-13. Branch `feat/jsc-2-m4`, on `feat/jsc-2-m1` (`ee47460`, ADR-0018 r14). JuLC `v0.1.0-pre21-rc1`, JDK
 25.0.2, GraalVM 25.3.4.1, Node 22.12.0, macOS arm64. M4 is split into stacked parts: M4a (`.jsc` libraries, both
@@ -36,7 +36,7 @@ library's record and enum are in its state and redeemers, its fns in requires, v
 `match` and a recursion. `JavaShop.java` is a hand-written Java contract calling the same generated class (`Fees.fee`,
 `Fees.Line`, `new Fees.Gold(…)`).
 
-| Rule (ADR-0018 r15) | Where | Code |
+| Rule (ADR-0018 r16) | Where | Code |
 |---|---|---|
 | `library <package>` heads a library; it holds imports, types, enums and fns | `Parser.file`, `Parser.header` | JSC0711 |
 | The class is the capitalised file name | `Checker.libraryClass` | JSC0705 |
