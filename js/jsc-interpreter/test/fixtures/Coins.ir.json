@@ -1,7 +1,7 @@
 {
   "ir": 1,
   "language": "jsc 2",
-  "sourceSha256": "ff0d1b90bb31bcdb14aef9ce6148dcdc8c05b3852f79ce5b1dd1f777145c2dc5",
+  "sourceSha256": "b1c1c2fc7f3c16ee0ae7780e938a9103273f865867e72ebe70f078384bd931c1",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Coins",
   "source": "Coins.jsc",
@@ -24,9 +24,9 @@
     {
       "name": "tokens",
       "params": [
-        { "id": 14, "name": "policy", "type": "Hash", "taint": 0, "at": [18, 13] },
-        { "id": 15, "name": "name", "type": "Bytes", "taint": 0, "at": [18, 27] },
-        { "id": 16, "name": "n", "type": "Int", "taint": 0, "at": [18, 40] }
+        { "id": 19, "name": "policy", "type": "Hash", "taint": 0, "at": [18, 13] },
+        { "id": 20, "name": "name", "type": "Bytes", "taint": 0, "at": [18, 27] },
+        { "id": 21, "name": "n", "type": "Int", "taint": 0, "at": [18, 40] }
       ],
       "result": "Value",
       "body": {
@@ -35,9 +35,9 @@
           "node": "LedgerOp",
           "op": "asset",
           "args": [
-            { "node": "LocalRef", "local": 14, "type": "Hash", "taint": 0, "at": [18, 69] },
-            { "node": "LocalRef", "local": 15, "type": "Bytes", "taint": 0, "at": [18, 77] },
-            { "node": "LocalRef", "local": 16, "type": "Int", "taint": 0, "at": [18, 83] }
+            { "node": "LocalRef", "local": 19, "type": "Hash", "taint": 0, "at": [18, 69] },
+            { "node": "LocalRef", "local": 20, "type": "Bytes", "taint": 0, "at": [18, 77] },
+            { "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [18, 83] }
           ],
           "type": "Value",
           "taint": 0,
@@ -50,9 +50,9 @@
     {
       "name": "total",
       "params": [
-        { "id": 17, "name": "v", "type": "Value", "taint": 0, "at": [20, 12] },
-        { "id": 18, "name": "policy", "type": "Hash", "taint": 0, "at": [20, 22] },
-        { "id": 19, "name": "name", "type": "Bytes", "taint": 0, "at": [20, 36] }
+        { "id": 22, "name": "v", "type": "Value", "taint": 0, "at": [20, 12] },
+        { "id": 23, "name": "policy", "type": "Hash", "taint": 0, "at": [20, 22] },
+        { "id": 24, "name": "name", "type": "Bytes", "taint": 0, "at": [20, 36] }
       ],
       "result": "Int",
       "body": {
@@ -63,7 +63,7 @@
           "left": {
             "node": "LedgerOp",
             "op": "lovelaceOf",
-            "args": [{ "node": "LocalRef", "local": 17, "type": "Value", "taint": 0, "at": [20, 56] }],
+            "args": [{ "node": "LocalRef", "local": 22, "type": "Value", "taint": 0, "at": [20, 56] }],
             "type": "Int",
             "taint": 0,
             "at": [20, 56]
@@ -72,9 +72,9 @@
             "node": "LedgerOp",
             "op": "of",
             "args": [
-              { "node": "LocalRef", "local": 17, "type": "Value", "taint": 0, "at": [20, 69] },
-              { "node": "LocalRef", "local": 18, "type": "Hash", "taint": 0, "at": [20, 74] },
-              { "node": "LocalRef", "local": 19, "type": "Bytes", "taint": 0, "at": [20, 82] }
+              { "node": "LocalRef", "local": 22, "type": "Value", "taint": 0, "at": [20, 69] },
+              { "node": "LocalRef", "local": 23, "type": "Hash", "taint": 0, "at": [20, 74] },
+              { "node": "LocalRef", "local": 24, "type": "Bytes", "taint": 0, "at": [20, 82] }
             ],
             "type": "Int",
             "taint": 0,
@@ -913,6 +913,85 @@
         "at": [57, 30]
       },
       "at": [57, 3]
+    },
+    {
+      "kind": "action",
+      "name": "forge",
+      "params": [
+        { "id": 14, "name": "name", "type": "Bytes", "taint": 0, "at": [67, 16] },
+        { "id": 15, "name": "n", "type": "Int", "taint": 0, "at": [67, 29] },
+        { "id": 16, "name": "m", "type": "Int", "taint": 0, "at": [67, 37] }
+      ],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Mint",
+            "burn": false,
+            "name": { "node": "LocalRef", "local": 14, "type": "Bytes", "taint": 0, "at": [68, 10] },
+            "qty": { "node": "LocalRef", "local": 15, "type": "Int", "taint": 0, "at": [68, 16] },
+            "at": [68, 5]
+          },
+          {
+            "stmt": "Mint",
+            "burn": true,
+            "name": { "node": "LocalRef", "local": 14, "type": "Bytes", "taint": 0, "at": [69, 10] },
+            "qty": { "node": "LocalRef", "local": 16, "type": "Int", "taint": 0, "at": [69, 16] },
+            "at": [69, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [70, 12] },
+        "at": [67, 50]
+      },
+      "at": [67, 3]
+    },
+    {
+      "kind": "action",
+      "name": "give",
+      "params": [
+        { "id": 17, "name": "name", "type": "Bytes", "taint": 0, "at": [74, 15] },
+        { "id": 18, "name": "k", "type": "Int", "taint": 0, "at": [74, 28] }
+      ],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Send",
+            "to": {
+              "node": "LedgerOp",
+              "op": "wallet",
+              "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [75, 17] }],
+              "type": "Address",
+              "taint": 0,
+              "at": [75, 10]
+            },
+            "value": {
+              "node": "LedgerOp",
+              "op": "asset",
+              "args": [
+                { "node": "FundsRef", "field": "policy", "type": "Hash", "taint": 0, "at": [75, 38] },
+                { "node": "LocalRef", "local": 17, "type": "Bytes", "taint": 0, "at": [75, 52] },
+                { "node": "LocalRef", "local": 18, "type": "Int", "taint": 0, "at": [75, 58] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [75, 26]
+            },
+            "at": [75, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [76, 12] },
+        "at": [74, 41]
+      },
+      "at": [74, 3]
     }
   ],
   "warnings": []

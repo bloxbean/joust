@@ -21,7 +21,19 @@
           { "name": "to", "type": "Address", "data": "Address" },
           { "name": "g", "type": "Credential", "data": "Credential" }
         ] },
-      { "name": "Close", "constr": 3, "fields": [
+      { "name": "Pair", "constr": 3, "fields": [
+          { "name": "policy", "type": "Hash", "data": "bytes28" },
+          { "name": "a", "type": "Bytes", "data": "bytes" },
+          { "name": "b", "type": "Bytes", "data": "bytes" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" },
+          { "name": "assetsIn", "type": "Value", "data": "map<bytes, map<bytes, int>>" }
+        ] },
+      { "name": "Edges", "constr": 4, "fields": [
+          { "name": "add", "type": "Bool", "data": "bool" },
+          { "name": "n", "type": "Int", "data": "int" },
+          { "name": "m", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Close", "constr": 5, "fields": [
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] }
     ],

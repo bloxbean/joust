@@ -46,7 +46,7 @@ class JscV2M2FourWayTest {
     static final BigInteger ADA = BigInteger.valueOf(1_000_000);
     static final byte[] TOKEN_POLICY = fill(0x70), OTHER_POLICY = fill(0x71), STRANGER = fill(0x77), TRADER = fill(0x7E), LP = fill(0x1A);
     static final Bytes TOKEN = Bytes.of("HOSKY".getBytes(StandardCharsets.UTF_8));
-    static final BigInteger MAX_Q = BigInteger.ONE.shiftLeft(127).subtract(BigInteger.ONE);
+    static final BigInteger MAX_Q = BigInteger.ONE.shiftLeft(127).subtract(BigInteger.ONE), MIN_Q = BigInteger.ONE.shiftLeft(127).negate();
 
     static BigInteger ada(long v) {
         return ADA.multiply(BigInteger.valueOf(v));
@@ -83,7 +83,18 @@ class JscV2M2FourWayTest {
     }
 
     static ValueV tokens(long n) {
-        return vv(TOKEN_POLICY, TOKEN, BigInteger.valueOf(n));
+        return tokens(BigInteger.valueOf(n));
+    }
+
+    static ValueV tokens(BigInteger n) {
+        return vv(TOKEN_POLICY, TOKEN, n);
+    }
+
+    /** {@code n} bytes of 0x33 starting with {@code first}: a 29-byte name of a reserved kind (0x4F, 0x49) or not (0x4B). */
+    static byte[] prefixed(int n, int first) {
+        byte[] x = bytes(n, 0x33);
+        x[0] = (byte) first;
+        return x;
     }
 
     static CredV keyCred(byte[] k) {
@@ -111,8 +122,8 @@ class JscV2M2FourWayTest {
 
     static void report(FourWay f) {
         System.out.println("[M2 five-way] " + f.name + ": " + f.calls + " calls, interpreter = JVM = transition program = validator (" + f.refusals
-                + " refusals, " + f.validatorRuns + " validator runs); mutants rejected: " + f.mutantsRejected + ", attacks rejected: "
-                + f.attacksRejected + ", modifier refusals: " + f.modifierRefusals);
+                + " refusals, " + f.validatorRuns + " validator runs, " + f.transactionLevelRefusals + " transaction-level); mutants rejected: "
+                + f.mutantsRejected + ", attacks rejected: " + f.attacksRejected + ", modifier refusals: " + f.modifierRefusals);
         assertTrue(f.refusals > 0 && f.refusals < f.calls, "accepted and refused calls");
         assertTrue(f.mutantsRejected > 0 && f.attacksRejected > 0, "mutation and attack coverage");
     }
@@ -192,10 +203,57 @@ class JscV2M2FourWayTest {
         assertEquals("refused", f.check("probe", s0, List.of(Bytes.of(TOKEN_POLICY), TOKEN, n(1), n(1)), with(f, ANN, 0, 0, vv(own, bytes(29, 0x4F), n(1)), none), ANN));
         ok(f.check("probe", s0, List.of(Bytes.of(TOKEN_POLICY), TOKEN, n(1), n(1)), with(f, ANN, 0, 0, vv(own, bytes(29, 0x4B), n(1)), none), ANN));
 
+        // Subtraction at the bottom of the range (review F2): scale(1, v) - v negates v's -2^127 (2^127: out of range), and
+        // scale(-1, v) - v of 2^126 + 1 reaches -2^127 - 2.
+        BigInteger two126 = BigInteger.TWO.pow(126);
+        assertEquals("refused", f.check("probe", s0, List.of(Bytes.of(TOKEN_POLICY), TOKEN, MIN_Q, n(1)), with(f, ANN, 0, 0, none, none), ANN));
+        assertEquals("domain:Value -", f.lastRefusal);
+        assertEquals("refused", f.check("probe", s0, List.of(Bytes.of(TOKEN_POLICY), TOKEN, two126.add(BigInteger.ONE), n(-1)), with(f, ANN, 0, 0, none, none), ANN));
+        assertEquals("domain:Value -", f.lastRefusal);
+        // The accepted sum overflows: two halves of 2^127 (review F2).
+        assertEquals("refused", f.check("lodge", s0, List.of(Bytes.of(TOKEN_POLICY), TOKEN, MAX_Q.add(BigInteger.ONE)),
+                with(f, ANN, 0, 0, tokens(MAX_Q.add(BigInteger.ONE)), none), ANN));
+        assertEquals("domain:accept", f.lastRefusal);
+
+        // Review C1: names of unequal length (00ff before 01 in the ledger's order, after it in the wire's), offered through
+        // the redeemer and the transition program's funds as the runtime encodes them, accepted as offered and as built.
+        Bytes n00ff = Bytes.of(new byte[]{0, (byte) 0xFF}), n01 = Bytes.of(new byte[]{1});
+        ValueV twoNames = vv(TOKEN_POLICY, n00ff, n(1), TOKEN_POLICY, n01, n(1));
+        ok(f.check("probe", s0, List.of(Bytes.of(TOKEN_POLICY), n01, n(1), n(1)), with(f, ANN, 0, 0, twoNames, none), ANN));
+
+        // Review F2: the generated mint check, refusing on every leg (forge has no guard of its own).
+        Bytes coin = Bytes.of("coin".getBytes(StandardCharsets.UTF_8));
+        ok(f.check("forge", s0, List.of(coin, n(5), n(2)), with(f, ANN, 0, 0, none, none), ANN));
+        ok(f.check("forge", s0, List.of(coin, n(2), n(2)), with(f, ANN, 0, 0, none, none), ANN));
+        ok(f.check("forge", s0, List.of(Bytes.of(prefixed(29, 0x4B)), n(2), n(1)), with(f, ANN, 0, 0, none, none), ANN));
+        for (List<Object> bad : List.<List<Object>>of(List.of(coin, n(0), n(1)), List.of(coin, n(-1), n(1)), List.of(coin, n(2), n(0)),
+                List.of(coin, n(2), n(-1)), List.of(Bytes.of(bytes(33, 3)), n(1), n(1)), List.of(Bytes.of(bytes(32, 3)), n(1), n(1)),
+                List.of(Bytes.of(prefixed(29, 0x4F)), n(1), n(1)), List.of(Bytes.of(prefixed(29, 0x49)), n(1), n(1)),
+                List.of(coin, MAX_Q.add(BigInteger.ONE), n(1)), List.of(coin, n(1), MAX_Q.add(n(3))))) {
+            assertEquals("refused", f.check("forge", s0, bad, with(f, ANN, 0, 0, none, none), ANN), bad.toString());
+            assertEquals("domain:mint", f.lastRefusal, bad.toString());
+        }
+        // The generated send check: a reserved name of the own policy (the instance's id; an owned object's), a negative.
+        ValueV ownHeld = vv(own, coin, n(5));
+        ok(f.check("give", s0, List.of(coin, n(3)), with(f, ANN, 0, 3_000_000, none, ownHeld), ANN));
+        for (List<Object> bad : List.<List<Object>>of(List.of(Bytes.of(f.harness.instanceId()), n(1)), List.of(Bytes.of(prefixed(29, 0x4F)), n(1)),
+                List.of(coin, n(-1)))) {
+            assertEquals("refused", f.check("give", s0, bad, with(f, ANN, 0, 3_000_000, none, ownHeld), ANN), bad.toString());
+            assertEquals("domain:send", f.lastRefusal, bad.toString());
+        }
+        // Transaction-level failures (semantics §2, the transaction-level rules; review F1, S2): every leg but the validator accepts, and the ledger
+        // refuses the transaction: a burn of what the instance does not hold, a send of more than it holds, a net mint
+        // outside Int64, an accepted quantity no output can hold.
+        f.transactionLevel("forge", s0, List.of(coin, n(1), n(3)), with(f, ANN, 0, 0, none, none), ANN);
+        f.transactionLevel("give", s0, List.of(coin, n(6)), with(f, ANN, 0, 3_000_000, none, ownHeld), ANN);
+        f.transactionLevel("forge", s0, List.of(coin, BigInteger.TWO.pow(64), n(1)), with(f, ANN, 0, 0, none, none), ANN);
+        f.transactionLevel("probe", s0, List.of(Bytes.of(TOKEN_POLICY), TOKEN, n(1), n(1)), with(f, ANN, 0, 0, tokens(MAX_Q), tokens(10)), ANN);
+
         // close: every receipt burned; the held assets go to the beneficiary.
         long minAda = f.harness.minAda();
         ok(f.check("close", s0, List.of(), with(f, OWNER, 0, 4_000_000 + minAda, none, tokens(3)), OWNER));
         ok(f.check("close", s0, List.of(), with(f, OWNER, 0, minAda, none, none), OWNER));
+        ok(f.check("close", s0, List.of(), with(f, OWNER, 0, minAda, none, twoNames), OWNER));   // C1: held in the wire's order too
         assertEquals("refused", f.check("close", s5, List.of(), with(f, OWNER, 0, minAda, none, tokens(3)), OWNER));
         f.modifierRefused("close", s0, List.of(), with(f, STRANGER, 0, minAda, none, none), STRANGER);
 
@@ -204,6 +262,9 @@ class JscV2M2FourWayTest {
         f.mutants("lodge", s0, List.of(Bytes.of(TOKEN_POLICY), TOKEN, n(4)), with(f, ANN, 0, 0, tokens(4), none), ANN);
         f.mutants("redeem", s5, List.of(Bytes.of(TOKEN_POLICY), TOKEN, n(2)), with(f, ANN, 0, 3_000_000, vv(own, label, n(2)), held), ANN);
         f.mutants("probe", s0, List.of(Bytes.of(TOKEN_POLICY), TOKEN, n(5), n(3)), with(f, ANN, 0, 0, tokens(2), none), ANN);
+        // forge reads no caller: its transaction needs no signer (the attack suite's "signer missing" is no attack on it).
+        f.mutants("forge", s0, List.of(coin, n(5), n(2)), with(f, ANN, 0, 0, none, none), null);
+        f.mutants("give", s0, List.of(coin, n(3)), with(f, ANN, 0, 3_000_000, none, ownHeld), ANN);
         f.mutants("close", s0, List.of(), with(f, OWNER, 0, 4_000_000 + minAda, none, tokens(3)), OWNER);
         report(f);
     }
@@ -223,10 +284,16 @@ class JscV2M2FourWayTest {
         Rec s0 = wards(ben, guard);
         ValueV none = ValueV.NONE;
 
-        // init: checked inputs (D5, J15): a 28-byte payment credential, a 28-byte staking hash (a pointer is fine).
+        // init: checked inputs (D5, J15): a 28-byte payment credential, a 28-byte staking hash, and never a pointer (review
+        // S1: whatever its parts, negative or over the ledger's widths included).
         ok(f.check("init", null, List.of(ben, guard), at(OWNER, 0, 0), OWNER));
         ok(f.check("init", null, List.of(new AddrV(scriptCred(fill(0x5C)), Opt.some(new StakeHash(keyCred(BEN)))), scriptCred(fill(0x5C))), at(OWNER, 0, 0), OWNER));
-        ok(f.check("init", null, List.of(new AddrV(keyCred(BEN), Opt.some(new StakePtr(n(7), n(2), n(0)))), guard), at(OWNER, 0, 0), OWNER));
+        BigInteger huge = BigInteger.TWO.pow(200);
+        for (StakePtr ptr : List.of(new StakePtr(n(7), n(2), n(0)), new StakePtr(n(-1), n(-1), n(-1)), new StakePtr(huge, huge, huge),
+                new StakePtr(n(0), n(-5), n(0)))) {
+            assertEquals("refused", f.check("init", null, List.of(new AddrV(keyCred(BEN), Opt.some(ptr)), guard), at(OWNER, 0, 0), OWNER, s0), ptr.toString());
+            assertEquals("input:beneficiary", f.lastRefusal);
+        }
         assertEquals("refused", f.check("init", null, List.of(new AddrV(keyCred(bytes(27, 0xB1)), Opt.NONE), guard), at(OWNER, 0, 0), OWNER, s0));
         assertEquals("input:beneficiary", f.lastRefusal);
         assertEquals("refused", f.check("init", null, List.of(new AddrV(keyCred(BEN), Opt.some(new StakeHash(keyCred(bytes(29, 1))))), guard),
@@ -239,6 +306,10 @@ class JscV2M2FourWayTest {
         Rec scripted = wards(ben, scriptCred(fill(0x5C)));
         for (long amount : List.of(0L, 5_000_000L)) ok(f.check("tip", scripted, List.of(n(amount)), f.funds(at(OWNER, 0, 10_000_000), none, none), OWNER));
         assertEquals("refused", f.check("tip", scripted, List.of(n(-1)), f.funds(at(OWNER, 0, 10_000_000), none, none), OWNER));
+        assertEquals("domain:send", f.lastRefusal);
+        // A send to the contract's own script is refused in the method, as the validator refuses it (I30; review F1).
+        Rec ownScript = wards(ben, scriptCred(f.harness.policy()));
+        assertEquals("refused", f.check("tip", ownScript, List.of(n(5_000_000)), f.funds(at(OWNER, 0, 10_000_000), none, none), OWNER));
         assertEquals("domain:send", f.lastRefusal);
         f.modifierRefused("tip", s0, List.of(n(5_000_000)), f.funds(at(STRANGER, 0, 10_000_000), none, none), STRANGER);
 
@@ -253,19 +324,49 @@ class JscV2M2FourWayTest {
         assertEquals("refused", f.check("spread", s0, List.of(List.of(rec("Share", new AddrV(keyCred(bytes(27, 1)), Opt.NONE), n(1))), Bytes.of(TOKEN_POLICY), TOKEN),
                 f.funds(at(OWNER, 0, 10_000_000), none, tokens(9)), OWNER));
         assertEquals("input:shares", f.lastRefusal);
+        // Review F1: sending 5 of a token the instance holds 1 of: every leg but the ledger accepts (a negative output).
+        f.transactionLevel("spread", s0, List.of(List.of(rec("Share", wallet(ANN), n(5))), Bytes.of(TOKEN_POLICY), TOKEN),
+                f.funds(at(OWNER, 0, 10_000_000), none, tokens(1)), OWNER);
 
         // rotate: structural equality of addresses and credentials, std/address.
         assertEquals("refused", f.check("rotate", s0, List.of(ben, guard), null, OWNER));
         ok(f.check("rotate", s0, List.of(ben, keyCred(ANN)), null, OWNER));
         ok(f.check("rotate", s0, List.of(new AddrV(scriptCred(fill(0x5C)), Opt.NONE), scriptCred(fill(0x5C))), null, OWNER));
         assertEquals("refused", f.check("rotate", s0, List.of(new AddrV(scriptCred(fill(0x5C)), Opt.NONE), keyCred(fill(0x5C))), null, OWNER));
-        ok(f.check("rotate", s0, List.of(new AddrV(keyCred(BEN), Opt.some(new StakePtr(n(1), n(2), n(3)))), guard), null, OWNER));
+        assertEquals("refused", f.check("rotate", s0, List.of(new AddrV(keyCred(BEN), Opt.some(new StakePtr(n(1), n(2), n(3)))), guard), null, OWNER));
+        assertEquals("input:to", f.lastRefusal);
         ok(f.check("rotate", s0, List.of(new AddrV(keyCred(BEN), Opt.some(new StakeHash(keyCred(CAT)))), guard), null, OWNER));
         ok(f.check("rotate", wards(new AddrV(keyCred(BEN), Opt.some(new StakeHash(keyCred(CAT)))), guard), List.of(ben, guard), null, OWNER));
 
         long minAda = f.harness.minAda();
         ok(f.check("close", s0, List.of(), f.funds(at(OWNER, 0, 4_000_000 + minAda), none, tokens(3)), OWNER));
         ok(f.check("close", s0, List.of(), f.funds(at(OWNER, 0, minAda), none, none), OWNER));
+
+        // Coins' vectors on Wards (the size of a reference script): review C1, names of unequal length (00ff before 01 in
+        // the ledger's order, after it in the wire's) offered through the redeemer and the transition program's funds as
+        // the runtime encodes them, accepted as built natively.
+        Bytes n00ff = Bytes.of(new byte[]{0, (byte) 0xFF}), n01 = Bytes.of(new byte[]{1});
+        ValueV twoNames = vv(TOKEN_POLICY, n00ff, n(1), TOKEN_POLICY, n01, n(1));
+        ok(f.check("pair", s0, List.of(Bytes.of(TOKEN_POLICY), n00ff, n01), f.funds(at(ANN, 0, 0), twoNames, none), ANN));
+        ok(f.check("pair", s0, List.of(Bytes.of(TOKEN_POLICY), n01, n00ff), f.funds(at(ANN, 0, 0), twoNames, none), ANN));
+        assertEquals("refused", f.check("pair", s0, List.of(Bytes.of(TOKEN_POLICY), n00ff, n01), f.funds(at(ANN, 0, 0), vv(TOKEN_POLICY, n01, n(1)), none), ANN));
+        assertEquals("domain:accepted", f.lastRefusal);
+        // Value + and - and Value.lovelace at the edges of the range (review F2).
+        ok(f.check("edges", s0, List.of(true, MAX_Q.subtract(BigInteger.ONE), n(1)), null, ANN));
+        ok(f.check("edges", s0, List.of(false, MIN_Q.add(BigInteger.ONE), n(1)), null, ANN));
+        assertEquals("refused", f.check("edges", s0, List.of(true, MAX_Q, n(1)), null, ANN));
+        assertEquals("domain:Value +", f.lastRefusal);
+        assertEquals("refused", f.check("edges", s0, List.of(true, MIN_Q, n(-1)), null, ANN));
+        assertEquals("domain:Value +", f.lastRefusal);
+        assertEquals("refused", f.check("edges", s0, List.of(false, n(0), MIN_Q), null, ANN));
+        assertEquals("domain:Value -", f.lastRefusal);
+        assertEquals("refused", f.check("edges", s0, List.of(false, MIN_Q, n(1)), null, ANN));
+        assertEquals("domain:Value -", f.lastRefusal);
+        for (BigInteger bad : List.of(MAX_Q.add(BigInteger.ONE), MIN_Q.subtract(BigInteger.ONE))) {
+            assertEquals("refused", f.check("edges", s0, List.of(true, bad, n(0)), null, ANN));
+            assertEquals("domain:Value.lovelace", f.lastRefusal);
+        }
+
 
         // Views: std/address, a credential's hash, an address with a staking key.
         f.check("beneficiaryKey", s0, List.of(), null, null);
@@ -278,6 +379,7 @@ class JscV2M2FourWayTest {
         f.mutants("tip", s0, List.of(n(5_000_000)), f.funds(at(OWNER, 0, 10_000_000), none, none), OWNER);
         f.mutants("spread", s0, List.of(List.of(share1, share2), Bytes.of(TOKEN_POLICY), TOKEN), f.funds(at(OWNER, 0, 10_000_000), none, tokens(9)), OWNER);
         f.mutants("rotate", s0, List.of(ben, keyCred(ANN)), null, OWNER);
+        f.mutants("pair", s0, List.of(Bytes.of(TOKEN_POLICY), n00ff, n01), f.funds(at(ANN, 0, 0), twoNames, none), ANN);
         f.mutants("close", s0, List.of(), f.funds(at(OWNER, 0, 4_000_000 + minAda), none, tokens(3)), OWNER);
         report(f);
     }
@@ -336,6 +438,10 @@ class JscV2M2FourWayTest {
         ok(f.check("swapTokenForAda", funded, List.of(n(100), ada(8)), f.funds(at(TRADER, 0, 100_000_000), tokens(100), tokens(1000)), TRADER));
         assertEquals("refused", f.check("swapTokenForAda", funded, List.of(n(100), ada(10)), f.funds(at(TRADER, 0, 100_000_000), tokens(100), tokens(1000)), TRADER));
         assertEquals("refused", f.check("swapTokenForAda", funded, List.of(n(100), ada(8)), f.funds(at(TRADER, 1, 100_000_000), tokens(100), tokens(1000)), TRADER));
+        // A negative tokenIn (review F2): a negative denominator makes the output positive, and the Java method accepts;
+        // the port refuses it, accepting a negative quantity (domain:accept), as Java's validator refuses it (I31).
+        assertEquals("refused", f.check("swapTokenForAda", funded, List.of(n(-2000), n(0)), f.funds(at(TRADER, 0, 100_000_000), none, tokens(1000)), TRADER));
+        assertEquals("domain:accept", f.lastRefusal);
 
         // close: an empty pool; the dust goes to the admin with the deposit.
         ok(f.check("close", empty, List.of(), f.funds(at(OWNER, 0, minAda + 2_000_000), none, tokens(3)), OWNER));
@@ -352,10 +458,12 @@ class JscV2M2FourWayTest {
         f.mutants("close", empty, List.of(), f.funds(at(OWNER, 0, minAda + 2_000_000), none, tokens(3)), OWNER);
 
         // Every vector also ran on examples/dex's JVM method: the outcomes differ exactly where the port checks what the
-        // Java method leaves to its validator (what is offered must be what is accepted).
+        // Java method leaves to its validator (what is offered must be what is accepted; nothing negative is accepted):
+        // the three offers of decision #3 and the negative tokenIn (review F2), a known difference from Java.
         f.javaDiffs.forEach(d -> System.out.println("[M2 vs Java] " + d));
         assertEquals(List.of(), f.javaDiffs.stream().filter(d -> !d.contains("the Java example accepts, the port refuses")).toList());
-        assertEquals(3, f.javaDiffs.size(), f.javaDiffs.toString());
+        assertEquals(4, f.javaDiffs.size(), f.javaDiffs.toString());
+        assertEquals(1, f.javaDiffs.stream().filter(d -> d.contains("swapTokenForAda [-2000, 0]")).count(), f.javaDiffs.toString());
         report(f);
     }
 

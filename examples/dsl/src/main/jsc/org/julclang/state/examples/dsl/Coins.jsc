@@ -61,4 +61,18 @@ contract Coins(maxDatumBytes = 512, assetSlots = 4) {
       send(beneficiary, funds.held)
     }
   }
+
+  // The effects' generated checks at their edges (review F2): a mint and a burn of any quantity and name, netted into
+  // what the instance holds; no guard, so each refusal is the generated check's.
+  action forge(name: Bytes, n: Int, m: Int) open {
+    mint(name, n)
+    burn(name, m)
+    return state
+  }
+
+  // Sends the caller k of the own policy's token `name` from what the instance holds (a reserved name is refused).
+  action give(name: Bytes, k: Int) open {
+    send(wallet(caller), Value.asset(funds.policy, name, k))
+    return state
+  }
 }

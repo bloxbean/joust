@@ -42,6 +42,35 @@ class JscV2M2CheckerTest {
 
     static final String TOKENS = "Value.asset(asHash(#00000000000000000000000000000000000000000000000000000000), #01, 5)";
 
+    /** The code a source is refused with. */
+    static String code(String src) {
+        return assertThrows(JscException.class, () -> JscV2.lower(src, "C.jsc"), src).code;
+    }
+
+    /**
+     * Review F9: the names M2a reserves in every contract, which M1 accepted (docs/reference/jsc-2-diagnostics.md, "Names
+     * M2a reserves"), each refused with the catalogued code, in a contract that uses no values at all.
+     */
+    @Test
+    void m2aReservedNames_refusedInEveryContract() {
+        String plain = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n%s\n}\n";
+        for (String t : java.util.List.of("Received", "Settled", "ValueAdapter", "AddressAdapter", "Assets", "Funds", "Send", "Sends", "Datum",
+                "PubKeyHash", "ScriptHash", "KeyCred", "ScriptCred")) {
+            assertEquals("JSC0211", code(plain.formatted("").replace("contract C {", "type " + t + " = { x: Int }\ncontract C {")), t);
+        }
+        for (String m : java.util.List.of("received", "settled", "byAction")) {
+            assertEquals("JSC0203", code(plain.formatted("  action " + m + "() { return state }")), m);
+        }
+        for (String f : java.util.List.of("wallet", "script", "keyCred", "scriptCred")) {
+            assertEquals("JSC0208", code(plain.formatted("").replace("state { n: Int }", "state { n: Int, " + f + ": Int }")
+                    .replace("{ n: 0 }", "{ n: 0, " + f + ": 0 }")), f);
+            assertEquals("JSC0201", code(plain.formatted("  fn " + f + "(x: Int): Int = x")), f);
+        }
+        for (String f : java.util.List.of("pay", "send", "mint", "burn", "accept", "deposit", "emit")) {
+            assertEquals("JSC0201", code(plain.formatted("  fn " + f + "(x: Int): Int = x")), f);
+        }
+    }
+
     @Test
     void whereAValueMayBe() {
         // Locals, fn parameters and results: yes.

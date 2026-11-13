@@ -278,10 +278,13 @@ final class FourWay {
         return new Funds(f.policy().bytes(), f.self().bytes(), value(f.received()), value(f.held()), JulcList.empty());
     }
 
-    /** Funds as data, in ledger order (CCL's canonical writer would sort a value's keys by their encoding, not the ledger's way). */
-    static org.julclang.core.PlutusData fundsData(FundsV f) {
-        return org.julclang.core.PlutusData.constr(0, org.julclang.core.PlutusData.bytes(f.policy().bytes()), org.julclang.core.PlutusData.bytes(f.self().bytes()),
-                value(f.received()).toPlutusData(), value(f.held()).toPlutusData(), new org.julclang.core.PlutusData.ListData(List.of()));
+    /**
+     * Funds as data, as the runtime writes them: cardano-client-lib's canonical CBOR, which orders a policy's token names
+     * by their encoding (shorter first), not the ledger's way ({@code 01} before {@code 00ff}). The transition program
+     * converts them back (ValueAdapter.fundsFromWire), as the validator converts the offered assets (review r1, C1).
+     */
+    static org.julclang.core.PlutusData fundsData(Tx t) {
+        return StateHarness.data(javaFunds(t));
     }
 
     /** Whether a method of the generated contract takes Funds. */
@@ -472,7 +475,7 @@ final class FourWay {
             // M2: a method with Funds takes them first in its arguments' record (the transition generator's leading fields).
             var in = rawArgs(args);
             if (takesFunds(method)) {
-                var fs = new ArrayList<org.julclang.core.PlutusData>(List.of(fundsData(t.funds())));
+                var fs = new ArrayList<org.julclang.core.PlutusData>(List.of(fundsData(t)));
                 fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
                 in = new org.julclang.core.PlutusData.ConstrData(0, fs);
             }
@@ -719,6 +722,43 @@ final class FourWay {
         return v.accepted();
     }
 
+    // ------------------------------------------------------------------ hostile inputs as raw data (J15; M2a review r1)
+
+    /**
+     * The transition program on arguments given as raw data, in place of {@code honest}'s (a value the interpreters'
+     * vector form cannot express: an unknown constructor tag, a missing or an extra field): "refused", or its result.
+     */
+    String transitionRaw(String method, Rec state, List<org.julclang.core.PlutusData> raw, Tx t) {
+        String program = transitions.get(method);
+        assertNotNull(program, name + " has no transition program " + method);
+        PlutusData ctxData = interp.usesTx(method) ? data(ctx(t)) : NONE;
+        var fields = new ArrayList<org.julclang.core.PlutusData>();
+        if (takesFunds(method)) fields.add(fundsData(t));
+        fields.addAll(raw);
+        return evaluateRaw(program, List.of(julc(state == null ? NONE : data(java(state))), julc(NONE),
+                new org.julclang.core.PlutusData.ConstrData(0, fields), julc(ctxData)));
+    }
+
+    /**
+     * The validator of an asset-aware contract on a redeemer whose arguments are raw data ({@code raw}, in place of
+     * {@code honest}'s), in the transaction built from {@code next} (the next state as data, nothing moved) or, when it
+     * is null, from the interpreter's outcome of the honest call. True when every script accepts.
+     */
+    boolean validatorRaw(String method, Rec state, List<Object> honest, List<org.julclang.core.PlutusData> raw, Tx t, byte[] signer,
+            org.julclang.core.PlutusData next) throws Exception {
+        String kind = interp.kind(method);
+        var encoded = (org.julclang.core.PlutusData.ConstrData) assetRedeemer(method, honest, t);
+        var fields = new ArrayList<>(encoded.fields());
+        int offset = kind.equals("init") ? 1 : 0;
+        for (int i = 0; i < raw.size(); i++) fields.set(offset + i, raw.get(i));
+        var redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
+        Transition<Object> tr = next != null ? Transition.full(next, JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none())
+                : transitionOf(kind, interp.transition(method, state, honest, interpreterTx(t, signer)));
+        var v = harness.evaluate(assetTx(method, redeemer, state, t, signer, tr));
+        lastVerdict = v;
+        return v.accepted();
+    }
+
     /** Values one step away: each entry ±1 (a zero result drops it), and one entry added (a token named 0x6d under the own policy). */
     List<Value> nearbyValues(Value v, boolean grow) {
         var out = new ArrayList<Value>();
@@ -733,8 +773,14 @@ final class FourWay {
         return out;
     }
 
-    /** Send lists one step away: one dropped, one sending one unit less of its first entry, one to another address. */
-    static List<JulcList<Send>> nearbySends(JulcList<Send> sends) {
+    /**
+     * Send lists one step away: one dropped, one sending one unit less of its first entry, one to another address, and
+     * with {@code more}, one sending one unit more (what the one receiving it would want: taken from the instance, it
+     * leaves the continuing output one short). Not for a destroy: there the instance's value is accounted exactly by its
+     * payouts, sends and burn, so a send output holding more holds the submitter's own assets (a send is "at least its
+     * value", I30), which the ledger's balance refuses to take from the instance.
+     */
+    static List<JulcList<Send>> nearbySends(JulcList<Send> sends, boolean more) {
         var ss = new ArrayList<Send>();
         for (Send x : sends) ss.add(x);
         var out = new ArrayList<JulcList<Send>>();
@@ -755,6 +801,11 @@ final class FourWay {
                 var less = new ArrayList<>(ss);
                 less.set(k, new Send(x.to(), Assets.subtract(x.value(), Assets.of(HEX.parseHex(p.getKey()), HEX.parseHex(tk.getKey()), BigInteger.ONE)), x.datum()));
                 out.add(sendList(less));
+                if (more) {
+                    var plus = new ArrayList<>(ss);
+                    plus.set(k, new Send(x.to(), Assets.add(x.value(), Assets.of(HEX.parseHex(p.getKey()), HEX.parseHex(tk.getKey()), BigInteger.ONE)), x.datum()));
+                    out.add(sendList(plus));
+                }
             }
         }
         return out;
@@ -785,7 +836,7 @@ final class FourWay {
             for (var q : nearbyPayouts(tr.payouts(), caller, kind.equals("action"))) {
                 txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), q, tr.sends(), tr.mint(), tr.accepted())));
             }
-            for (var q : nearbySends(tr.sends())) {
+            for (var q : nearbySends(tr.sends(), kind.equals("action"))) {
                 txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), tr.payouts(), q, tr.mint(), tr.accepted())));
             }
             // A contract that never mints has no ByAction: its mint mutants are those of a contract that mints (Coins, Dex).
@@ -1189,7 +1240,7 @@ final class FourWay {
         // method that reads nothing else of the transaction is called without one on the other legs (usesCtx: false).
         Tx ti = interpreterTx(t, signer);
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
-        // The Java interpreter's outcome; a Limit (its stack ran out) propagates and fails the test (semantics §2.4).
+        // The Java interpreter's outcome; a Limit (its stack ran out) propagates and fails the test (semantics §2, the transaction-level rules).
         Interpreter.Outcome o = null;
         Interpreter.Refused refused = null;
         try {
@@ -1214,12 +1265,40 @@ final class FourWay {
         if (!interp.kind(method).equals("view")) {
             assertEquals(body, transition(method, state, args, t), "transition program vs interpreter: " + what);
             Boolean accepted = validator(method, state, args, t, signer, candidate);
-            if (accepted != null) assertEquals(!want.equals("refused"), accepted, "validator vs interpreter: " + what + " " + lastVerdict);
+            if (transactionLevel) {
+                assertEquals(Boolean.FALSE, accepted, "a transaction-level failure: the validator (or the ledger) refuses " + what + " " + lastVerdict);
+            } else if (accepted != null) {
+                assertEquals(!want.equals("refused"), accepted, "validator vs interpreter: " + what + " " + lastVerdict);
+            }
         }
         calls++;
         if (want.equals("refused")) refusals++;
         return want;
     }
+
+    /** Set while {@link #transactionLevel} runs a call. */
+    private boolean transactionLevel;
+
+    /**
+     * A call that fails only at the transaction (semantics §2, the transaction-level rules): both interpreters, the JVM
+     * method and the transition program accept it and agree, and the transaction built from their outcome is refused, by
+     * the validator or by the ledger (StateHarness.ledgerProblem). Returns the agreed outcome; {@link #lastVerdict} says
+     * which refused.
+     */
+    String transactionLevel(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        transactionLevel = true;
+        try {
+            String out = check(method, state, args, t, signer);
+            assertTrue(out.startsWith("ok:"), "the call itself succeeds: " + name + "." + method + " " + args);
+            transactionLevelRefusals++;
+            return out;
+        } finally {
+            transactionLevel = false;
+        }
+    }
+
+    /** Calls that fail only at the transaction ({@link #transactionLevel}). */
+    int transactionLevelRefusals;
 
     /** The transaction the interpreters see: {@code t} signed by {@code signer}, or the signer's alone when {@code t} is null. */
     static Tx interpreterTx(Tx t, byte[] signer) {

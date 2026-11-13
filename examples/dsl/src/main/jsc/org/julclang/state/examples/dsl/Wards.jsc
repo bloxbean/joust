@@ -6,7 +6,8 @@ import { paymentKey, paymentScript } from "std/address"
 
 // ADR-0018 M2's fixture for addresses and credentials (J3): construction, structural equality, a match on a credential,
 // std/address, checked inputs, and sends to addresses in loops, branches and match arms, on all five legs. Not an
-// example to deploy. Coins.jsc covers values and the effects on native assets.
+// example to deploy. Coins.jsc covers values and the effects on native assets; pair and edges below are Coins' too (review
+// r1 C1 and F2), here because Coins with them is over the size a reference script may have.
 type Share = { to: Address, weight: Int }
 
 contract Wards(maxDatumBytes = 512, assetSlots = 4) {
@@ -59,4 +60,17 @@ contract Wards(maxDatumBytes = 512, assetSlots = 4) {
     ScriptCred { hash } => hash
   }
   view walletOf(k: Key): Address = wallet(k, k)
+
+  // Accepts one each of two token names of one policy, built natively: the offer arrives in the wire's order (review C1).
+  action pair(policy: Hash, a: Bytes, b: Bytes) payable {
+    accept(Value.asset(policy, a, 1) + Value.asset(policy, b, 1))
+    return state
+  }
+
+  // Value + and - at the edges of the 128-bit range (review F2), on lovelace alone.
+  action edges(add: Bool, n: Int, m: Int) {
+    const r = if add { Value.lovelace(n) + Value.lovelace(m) } else { Value.lovelace(n) - Value.lovelace(m) }
+    require(r.lovelace == (if add { n + m } else { n - m }), "the sum or difference")
+    return state
+  }
 }
