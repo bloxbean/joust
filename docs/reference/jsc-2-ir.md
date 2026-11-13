@@ -51,8 +51,12 @@ boolean operand that is not of type `Bool` (a `Branch`'s, `Require`'s or `Cond`'
 operands), and an empty `branches` list. **Both readers** (the JavaScript one and the Java `IrJson.read`) take a
 method's modifiers only in the shapes the checker emits (#76 review S5): `payable` and `open` with no field; `only f`
 with `f` a `Key` field of the state; `after f` and `before f` with `f` an `Int` field; `batched` with no field or the
-field `"only"` (`batched only`), on an action only and never beside `only`, `after` or `before`; no modifier twice; an
-init with `payable` only, a view with none, and no `payable` destroy. Additive changes keep version 1. A change to
+field `"only"` (`batched only`), on an action only, never beside `only`, `after` or `before` and never in a contract with
+`BigMap` state; no modifier twice; an init with `payable` only, a view with none, and no `payable` destroy. They
+recompute `pays` (a method's, and each `If`'s, `For`'s and `Match`'s) from the `Pay` statements in its blocks, and
+refuse a paying method without `only f` or `open` (#80 review S3). These checks keep a reader from deciding what the
+checker did not; they do not authenticate an IR (swapping `only admin` for `open` is well formed). What binds an IR to
+its contract is the build that produced it: `sourceSha256` and the build's own outputs. Additive changes keep version 1. A change to
 an existing node's fields, to the meaning of an existing node, operator, modifier or row, or to the program's top-level
 fields gets a new version.
 

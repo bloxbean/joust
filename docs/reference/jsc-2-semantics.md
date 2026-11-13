@@ -71,9 +71,12 @@ IR says `usesCtx: false` and that has no `only f` modifier, which then never rea
 | `validTo` | `Int` | its end |
 | `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, §2.6; the caller alone when a vector does not say) |
 
-The caller signs (the validator requires the caller's signature whenever it reads τ). A τ whose `caller` is not among
-its `signers` is not a transaction: a call given one is the caller's error, as a call of a method with a modifier
-without τ is (§2.6), not a refusal, and neither interpreter answers it (M1 hardening, #76 review S6).
+The caller signs. On a direct call, the validator requires the caller's signature on the transaction whenever it reads
+τ. In a batch (ADR-0004) the batcher signs the transaction, not the users: a batch step's caller is the intent's owner,
+who signed the intent when creating it, so a batch step's τ.`signers` are the intent's signers, its owner (#80 review
+S5); a batched action cannot use `only`, so its body never reads them. Either way, a τ whose `caller` is not among its
+`signers` is not a call: a call given one is the caller's error, as a call of a method with a modifier without τ is
+(§2.6), not a refusal, and neither interpreter answers it (M1 hardening, #76 review S6).
 
 **The outcome** is one of the following:
 

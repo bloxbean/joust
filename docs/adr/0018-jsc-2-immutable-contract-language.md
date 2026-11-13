@@ -341,10 +341,17 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
     a warm engine went further. So `joust build` runs the engine on a worker with an 8 MB stack
     (`js/joust/src/toolchain.js`, `JOUST_ENGINE_STACK_MB`). There, a cold engine builds 2,000 statement branches and
     1,000 value branches, as the JVM does. In the Web Image such an exhaustion is not JSC0005: it is an engine failure,
-    which `joust build` reports as a diagnostic. The worker also has a heap limit (`JOUST_ENGINE_MEMORY_MB`, 4,096 by
-    default) and a time limit per build (`JOUST_ENGINE_TIMEOUT_S`, 600 s), after which it is stopped; an invalid
-    setting is refused with its name (r17, #74). `buildInWorker` is exported beside `loadToolchain`, whose builds run on
-    the caller's thread and need a stack of at least 8 MB.
+    which `joust build` reports as a diagnostic. The worker's limits (r17, #74; #80 review C2, S4, F3) are
+    `JOUST_ENGINE_STACK_MB` (8–1024, default 8), `JOUST_ENGINE_MEMORY_MB` (the heap, 256–65536, default 4,096) and
+    `JOUST_ENGINE_TIMEOUT_S` (per build, 1–86400, default 600), or a caller's `limits` in the same ranges; an invalid
+    one is refused with its name. The heap limit is enforced, not best-effort: the engine (WasmGC) allocates on the
+    worker's JS heap, and the worker reports its effective heap limit before any build runs, so an inherited
+    `--max-old-space-size` (`execArgv`, `NODE_OPTIONS`), which overrides `resourceLimits`, is refused unless it matches.
+    A build's time counts from when the worker starts it, not its wait behind another build; past it, the worker is
+    stopped. `buildInWorker` is exported beside `loadToolchain`, whose builds run on the caller's thread and need a
+    stack of at least 8 MB. The engines enable Wasm exnref themselves, setting `--experimental-wasm-exnref` only where
+    a probe module does not validate (newer Node has it on, and only prints a warning for the flag: hardening against
+    stderr noise).
 - **Off-chain depth.** On the JVM, generated recursion is Java recursion without tail calls: the runtime runs
   transitions on a thread whose stack fits the deepest recursion the per-transaction budget allows, and the prepare
   service and the batcher evaluate under a step or depth cap. In the npm engine, transitions are UPLC programs (F21)
@@ -681,7 +688,9 @@ validator never accepts it (r17, #76 review S5, S6).
     `require`, `operation`; the method or `fn`; an input's parameter). "Every" is tested on the linked scripts: each
     string constant a compiled validator or transition program holds is in its map (the read discovery's own trace
     aside). The map is written beside the generated Java (`Name.jscmap.json`) on both paths, into `contracts.json` by
-    `joust build` (with the script's hash), and on Gradle as a resource beside the contract's classes. The JS runtime
+    `joust build` (with the script's hash, which the JS runtime does not trust: it derives the hash from the entry's own
+    script when it reads the map, and a `@Params` contract, whose deployed script is not the bundle's, has none and is
+    found by title only; r17, #74), and on Gradle as a resource beside the contract's classes. The JS runtime
     adds the sites to a refusal (`#pay:spend1.2 [Pay.jsc:9:17 (a payout in split is negative)]`); so does the JVM
     runtime to a `RequireException` its contract method raises (`JscMessages`), and build tooling reads
     `Lowered.explain`. It is the build's record of what each message means, kept with the script it describes:
@@ -798,7 +807,11 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   sources, or a target that is a source, is refused (JSC1108). `--in-place` replaces the v1 file and keeps its text as
   `Name.jsc.v1`, written create-new (an existing file or link is JSC1107); it never replaces a symbolic link, a file with
   more than one hard link or a file whose path under the sources goes through a link (JSC1109), and writes the new text
-  to a temporary file renamed over the source. Every default-mode target is checked before anything is written: none may
+  to a temporary file renamed over the source. Since r17 (#75; #80 review C1, F1, S2) it also refuses a path with `..`,
+  and a link anywhere on the path below the working directory, which it finds among the file's ancestors by identity
+  (so `/tmp/…` and `/private/tmp/…` are one) and checks on the physical path (a directory whose real path is not itself:
+  a symbolic link, or a Windows junction). Links at or above the working directory are the user's file system. On
+  Windows a junction outside the working directory, and hard links, are not detected. Every default-mode target is checked before anything is written: none may
   lie in the sources or be a source through a link on its path, resolved at its nearest existing ancestor.
   On npm it first copies the v1 build's artifacts to `build/joust/v1/` (the contract's, by the name the parser reads,
   and the shared ones), and does not replace the file if that fails; `joust deploy` keeps each record it replaces under
@@ -1209,4 +1222,10 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   instead of skipping it, and a transaction whose caller is not among its signers is the caller's error (semantics §2,
   §2.6; IR reference). D7: the build worker's stack, heap and time limits are validated settings, and `buildInWorker`
   is exported. D12: the runtime derives a message map's script hash from the script (#74). The depth test's JSC0005
-  check no longer depends on the stack size.
+  check no longer depends on the stack size. After #80's review round r1: the readers also recompute `pays` and
+  require `only f` or `open` on a paying method, and refuse `batched` with BigMap state; semantics §2 states the
+  caller-signature rule for batch steps; D7 states the worker's limits, ranges and checks (an inherited heap flag is
+  refused); D12 says a `@Params` contract is found by title only; D16 states the in-place checks by identity and `..`;
+  `ValidatorScripts` takes an image's one `resource:` copy unverified inside an image only, with the image builds'
+  `checkImageScripts` behind it (#73); the engines set the exnref flag only where exnref is off (no stderr noise on
+  newer Node).
