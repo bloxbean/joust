@@ -201,6 +201,15 @@ class ValidatorScriptsTest {
             refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", w, copies(image), false));
         }
         assertFalse(ValidatorScripts.inImage(), "a JVM is not an image");
+        // #80 review C6: a resource: code source does not let a resource: copy through the location rule outside an image,
+        // and inside one a resource: root with a malformed copy is refused too.
+        URL resourceRoot = nested("resource:/0!/", "");
+        URL atRoot = nested("resource:/0!/" + RESOURCE, json("ab0a"));
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", resourceRoot, copies(atRoot), false));
+        URL odd0 = nested("resource:/x/" + RESOURCE, json("ab0b"));
+        URL oddRoot = nested("resource:/x/", "");
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", oddRoot, copies(odd0), true));
+        assertEquals("ab0a", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", resourceRoot, copies(atRoot), true)));
         // Inside one, only the image's exact form: not a resource: URL that names another path, nor another resource.
         for (String spec : new String[]{"resource:/somewhere/else/b.jar/" + RESOURCE, "resource:/2!/x/" + RESOURCE, "resource:2!/" + RESOURCE,
                 "resource:/2!/META-INF/plutus/Other.plutus.json"}) {

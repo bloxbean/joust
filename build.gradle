@@ -73,6 +73,7 @@ subprojects {
             group = 'verification'
             inputs.files(runtime)
             inputs.files(classes)
+            inputs.file(rootProject.file('gradle/plutus-scripts.gradle'))
             doLast {
                 def problems = rootProject.ext.plutusScriptProblems(classes.files + runtime.get().files)
                 if (!problems.isEmpty()) {

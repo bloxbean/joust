@@ -4,41 +4,52 @@
 // <Name>.plutus.json, while another location ships it, would lend that validator another's script: in a GraalVM image,
 // whose resources no longer say which jar they came from, the runtime cannot tell (ValidatorScripts takes the image's
 // one copy unverified), so this check is what closes it there. Returns the problems, one line each.
+// #80 review C5, S9: classes are counted per simple name per location (as ValidatorScripts.classesNamed counts them),
+// nested ones by the name after their last '$', so one location holding two classes named after the script it ships
+// (two packages, or an outer and a nested class) is flagged too: the JVM refuses it, and an image could not tell them
+// apart. Only JOUST's own engine images run this (checkImageScripts); any other GraalVM image that bundles
+// julc-state-runtime must run it over its class path itself until bloxbean/julc#326 (#80 review F8).
 ext.plutusScriptProblems = { Collection<File> files ->
     def scripts = new TreeMap<String, List<String>>()   // Name -> locations shipping Name.plutus.json
-    def classesOf = [:]                                  // location -> top-level class simple names
+    def classesOf = [:]                                  // location -> simple name -> how many classes have it
+    def simpleOf = { String file ->
+        def n = file.substring(file.lastIndexOf('/') + 1)[0..-7]
+        def inner = n.substring(n.lastIndexOf('$') + 1)
+        inner.isEmpty() || inner ==~ /[0-9].*/ ? null : inner   // anonymous and local classes have no simple name of use
+    }
     files.findAll { it.exists() }.unique().each { f ->
         def names = []
-        def simple = new HashSet<String>()
+        def count = new HashMap<String, Integer>()
+        def add = { String file -> def n = simpleOf(file); if (n != null) count.merge(n, 1, Integer::sum) }
         if (f.isDirectory()) {
             def dir = new File(f, 'META-INF/plutus')
             if (dir.isDirectory()) dir.eachFileMatch(~/.*\.plutus\.json/) { names << it.name }
             f.eachFileRecurse(groovy.io.FileType.FILES) { c ->
-                if (c.name.endsWith('.class') && !c.name.contains('$')) simple << c.name[0..-7]
+                if (c.name.endsWith('.class') && !f.toPath().relativize(c.toPath()).toString().startsWith('META-INF')) add(c.name)
             }
         } else if (f.name.endsWith('.jar')) {
             new java.util.zip.ZipFile(f).withCloseable { z ->
                 z.entries().each { e ->
                     def m = e.name =~ /^META-INF\/plutus\/([^\/]+\.plutus\.json)$/
                     if (m.matches()) names << m.group(1)
-                    if (e.name.endsWith('.class') && !e.name.startsWith('META-INF/')) {
-                        def n = e.name.substring(e.name.lastIndexOf('/') + 1)
-                        if (!n.contains('$')) simple << n[0..-7]
-                    }
+                    if (e.name.endsWith('.class') && !e.name.startsWith('META-INF/')) add(e.name)
                 }
             }
         }
         names.unique().each { n -> scripts.computeIfAbsent(n) { [] } << f.path }
-        classesOf[f.path] = simple
+        classesOf[f.path] = count
     }
     def problems = []
     scripts.each { n, ls ->
         if (n == 'plutus.json') return
         if (ls.size() > 1) problems << "META-INF/plutus/${n}: ${ls.join(', ')}"
         def validator = n[0..-('.plutus.json'.length() + 1)]
-        classesOf.each { loc, simple ->
-            if (simple.contains(validator) && !ls.contains(loc)) {
+        classesOf.each { loc, count ->
+            int k = count.getOrDefault(validator, 0)
+            if (k > 0 && !ls.contains(loc)) {
                 problems << "${loc} holds a class ${validator} but not META-INF/plutus/${n}, which ${ls.join(', ')} ships: the runtime could load that script for it"
+            } else if (k > 1 && ls.contains(loc)) {
+                problems << "${loc} holds ${k} classes named ${validator} and one META-INF/plutus/${n}: the script cannot be told apart"
             }
         }
     }
@@ -68,5 +79,28 @@ ext.plutusScriptSelfTest = { File dir ->
     if (!rootProject.ext.plutusScriptProblems([b]).isEmpty()) throw new GradleException('plutusScriptProblems flagged a validator beside its script')
     if (!rootProject.ext.plutusScriptProblems([b, c]).any { it.startsWith('META-INF/plutus/Foo.plutus.json: ') }) {
         throw new GradleException('plutusScriptProblems missed a script shipped twice')
+    }
+    // #80 review C5, S9: two classes named Foo in one location that ships Foo's script, as a directory and as a jar;
+    // and a nested Outer$Foo in a location without the script.
+    def two = make('d', 'Foo', true)
+    new File(two, 'q/d').mkdirs()
+    new File(two, 'q/d/Foo.class').bytes = [0xCA, 0xFE] as byte[]
+    def jar = new File(dir, 'two.jar')
+    new java.util.zip.ZipOutputStream(new FileOutputStream(jar)).withCloseable { z ->
+        ['p/x/Foo.class', 'q/x/Foo.class', 'META-INF/plutus/Foo.plutus.json'].each { n ->
+            z.putNextEntry(new java.util.zip.ZipEntry(n))
+            z.write(n.endsWith('.json') ? '{}'.bytes : ([0xCA, 0xFE] as byte[]))
+            z.closeEntry()
+        }
+    }
+    [two, jar].each { loc ->
+        def p = rootProject.ext.plutusScriptProblems([loc])
+        if (!p.any { it.contains('holds 2 classes named Foo') }) throw new GradleException("plutusScriptProblems missed two classes named Foo in ${loc.name}: ${p}")
+    }
+    def nested = new File(dir, 'n')
+    new File(nested, 'p/n').mkdirs()
+    new File(nested, 'p/n/Outer$Foo.class').bytes = [0xCA, 0xFE] as byte[]
+    if (!rootProject.ext.plutusScriptProblems([nested, b]).any { it.contains('holds a class Foo but not') }) {
+        throw new GradleException('plutusScriptProblems missed a nested class Foo without its script')
     }
 }

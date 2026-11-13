@@ -95,6 +95,7 @@ def checkImageScripts = tasks.register('checkImageScripts') {
     description = 'Checks the image class path\'s META-INF/plutus scripts: one location per name, each beside its validator'
     def cp = sourceSets.wasm.runtimeClasspath
     inputs.files(cp)
+    inputs.file(rootProject.file('gradle/plutus-scripts.gradle'))
     doLast {
         rootProject.ext.plutusScriptSelfTest(layout.buildDirectory.dir('tmp/plutusScriptSelfTest').get().asFile)
         def problems = rootProject.ext.plutusScriptProblems(cp.files)

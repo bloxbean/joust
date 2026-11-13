@@ -42,10 +42,11 @@ import java.util.stream.Stream;
  *   #73): <b>this is the remaining fallback</b>. A lone copy elsewhere (another nested jar, or no location to compare
  *   with) is refused. <b>Inside a GraalVM native or Web Image</b> (the {@code org.graalvm.nativeimage.imagecode}
  *   property is set), whose resources are {@code resource:/<n>!/…} URLs that no longer say which jar they came from,
- *   the image's one copy, in exactly that form, is <b>accepted unverified</b> (#80 review S1): the image builds check
- *   instead that no script name is shipped twice and that every location holding a validator class also holds its
- *   script ({@code checkImageScripts}, the root build's {@code plutusScriptProblems}), and julc#326's recorded hash would
- *   close it at run time. Outside an image a {@code resource:} URL is never taken. If the validator's own copy under
+ *   the image's one copy, in exactly that form, is <b>accepted unverified</b> (#80 review S1). JOUST's own engine images
+ *   ({@code toolchainWasm}, {@code runtimeWasm}) check instead, at build time, that no script name is shipped twice and
+ *   that every location holding a class named after a script holds it, once ({@code checkImageScripts}, the root build's
+ *   {@code plutusScriptProblems}); <b>any other image that bundles this runtime must run the same check over its class
+ *   path</b> until julc#326's recorded hash closes it at run time (#80 review F8). Outside an image a {@code resource:} URL is never taken. If the validator's own copy under
  *   its location is another validator's script (a merge kept the wrong one), only a script hash recorded in bytecode
  *   (julc#326) catches it. Anything else, several candidates included, is refused.</li>
  *   <li><b>JuLC's parameter checks</b> are kept (as {@code JulcScriptLoader.load}): a parameterized validator is never
@@ -201,7 +202,12 @@ public final class ValidatorScripts {
      * unverified: the image builds' {@code checkImageScripts} is what stands behind it (#80 review S1).
      */
     static boolean besideLocation(URL copy, URL where, String resource, boolean inImage) {
-        if (inImage && IMAGE_RESOURCE.matcher(copy.toString()).matches() && copy.toString().endsWith("!/" + resource)) return true;
+        // #80 review C6: a resource: URL (the copy's or the location's) is decided here alone, never by the location rule
+        // below: inside an image and in the image's exact form, or not at all.
+        if ("resource".equals(copy.getProtocol())) {
+            return inImage && IMAGE_RESOURCE.matcher(copy.toString()).matches() && copy.toString().endsWith("!/" + resource);
+        }
+        if (where != null && "resource".equals(where.getProtocol())) return false;
         if (where == null) return false;
         String base = where.toString();
         if (!base.endsWith("/")) base += "/";
