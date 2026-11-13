@@ -2,6 +2,8 @@ package org.julclang.state.api;
 
 import org.julclang.state.api.Assets;
 import org.julclang.state.api.Funds;
+import org.julclang.state.api.DepositClaim;
+import org.julclang.core.types.JulcList;
 import org.julclang.core.PlutusData;
 import org.julclang.core.types.JulcValue;
 import org.julclang.ledger.Value;
@@ -62,7 +64,92 @@ public class ValueAdapter {
     }
 
     public static Funds fundsFromWire(Funds f) {
-        return new Funds(f.policy(), f.self(), fromWire(f.received()), fromWire(f.held()), f.deposits());
+        return new Funds(f.policy(), f.self(), fromWire(f.received()), fromWire(f.held()), claimsFromWire(f.deposits()));
+    }
+
+    /** See the JVM body: each deposit claim's value from the wire (M2c, #85). */
+    public static JulcList<DepositClaim> claimsFromWire(JulcList<DepositClaim> ds) {
+        if (ds.isEmpty()) {
+            return ds;
+        } else {
+            DepositClaim d = ds.head();
+            JulcList<DepositClaim> rest = claimsFromWire(ds.tail());
+            return rest.prepend(new DepositClaim(d.output(), d.by(), fromWire(d.value()), d.memo()));
+        }
+    }
+
+    /** See the JVM body: each policy's token names sorted into the wire's order (a shorter name first, then bytewise). */
+    public static Value toWire(Value v) {
+        return (Value) (Object) Builtins.mapData(wireSorted(Builtins.unMapData((PlutusData) (Object) v)));
+    }
+
+    static PlutusData wireSorted(PlutusData ps) {
+        if (Builtins.nullList(ps)) {
+            return ps;
+        }
+        PlutusData pair = Builtins.headList(ps);
+        PlutusData.MapData tokens = Builtins.mapData(sortTokens(Builtins.unMapData(Builtins.sndPair(pair))));
+        return Builtins.mkCons(Builtins.mkPairData(Builtins.fstPair(pair), tokens), wireSorted(Builtins.tailList(ps)));
+    }
+
+    /** Insertion sort (a value's token map is short): the sorted rest, with the head inserted (the empty list is its own). */
+    static PlutusData sortTokens(PlutusData ts) {
+        if (Builtins.nullList(ts)) {
+            return ts;
+        }
+        return insertToken(Builtins.headList(ts), sortTokens(Builtins.tailList(ts)));
+    }
+
+    static PlutusData insertToken(PlutusData t, PlutusData sorted) {
+        if (Builtins.nullList(sorted)) {
+            return Builtins.mkCons(t, sorted);
+        }
+        PlutusData h = Builtins.headList(sorted);
+        if (wireBefore(Builtins.unBData(Builtins.fstPair(t)), Builtins.unBData(Builtins.fstPair(h)))) {
+            return Builtins.mkCons(t, sorted);
+        }
+        return Builtins.mkCons(h, insertToken(t, Builtins.tailList(sorted)));
+    }
+
+    /** The wire's order of two token names: a shorter one first, then bytewise. */
+    static boolean wireBefore(byte[] a, byte[] b) {
+        long la = ByteStringLib.length(a);
+        long lb = ByteStringLib.length(b);
+        return la < lb || (la == lb && Builtins.lessThanByteString(a, b));
+    }
+
+    public static PlutusData data(Value v) {
+        return (PlutusData) (Object) v;
+    }
+
+    public static Value fromData(PlutusData d) {
+        return fromWire((Value) (Object) d);
+    }
+
+    public static boolean depositable(Value v) {
+        PlutusData ps = Builtins.unMapData((PlutusData) (Object) v);
+        return !Builtins.nullList(ps) && depositPolicies(ps);
+    }
+
+    static boolean depositPolicies(PlutusData ps) {
+        if (Builtins.nullList(ps)) {
+            return true;
+        } else {
+            PlutusData pair = Builtins.headList(ps);
+            boolean ada = ByteStringLib.length(Builtins.unBData(Builtins.fstPair(pair))) == 0;
+            return depositTokens(Builtins.unMapData(Builtins.sndPair(pair)), ada) && depositPolicies(Builtins.tailList(ps));
+        }
+    }
+
+    static boolean depositTokens(PlutusData ts, boolean ada) {
+        if (Builtins.nullList(ts)) {
+            return true;
+        } else {
+            PlutusData pair = Builtins.headList(ts);
+            byte[] n = Builtins.unBData(Builtins.fstPair(pair));
+            BigInteger q = Builtins.unIData(Builtins.sndPair(pair));
+            return q.compareTo(BigInteger.ZERO) > 0 && (ada || !reserved(n)) && depositTokens(Builtins.tailList(ts), ada);
+        }
     }
 
     public static Value none() {

@@ -74,9 +74,66 @@ public class ValueAdapter {
         return Assets.build(Assets.read(v));
     }
 
-    /** {@code f} with its offered and held values {@link #fromWire from the wire}: what a transition program hands a method. */
+    /**
+     * {@code f} with its offered and held values, and (M2c, #85) each deposit's value, {@link #fromWire from the wire}: what a
+     * transition program hands a method, as the validator does.
+     */
     public static Funds fundsFromWire(Funds f) {
-        return new Funds(f.policy(), f.self(), fromWire(f.received()), fromWire(f.held()), f.deposits());
+        return new Funds(f.policy(), f.self(), fromWire(f.received()), fromWire(f.held()), claimsFromWire(f.deposits()));
+    }
+
+    /** Deposit claims with canonical values (M2c, #85): a claim's value is the registry's, in the wire's order. */
+    public static org.julclang.core.types.JulcList<DepositClaim> claimsFromWire(org.julclang.core.types.JulcList<DepositClaim> ds) {
+        if (ds.isEmpty()) return ds;
+        DepositClaim d = ds.head();
+        return claimsFromWire(ds.tail()).prepend(new DepositClaim(d.output(), d.by(), fromWire(d.value()), d.memo()));
+    }
+
+    // ------------------------------------------------------------------ stored values (M2c, ADR-0018 D5)
+
+    /**
+     * {@code v} in its wire form (M2c): the order cardano-client-lib's canonical CBOR writes a value as data, each policy's
+     * token names by their encoding (a shorter name first, then bytewise; policies keep the ledger's order, which agrees).
+     * A value stored in a datum (a field of the state, a record, a memo, a datum) is held so, so that the data a method
+     * returns equals the data the runtime writes. Precondition: {@code v} canonical.
+     */
+    public static Value toWire(Value v) {
+        var ps = new java.util.ArrayList<PlutusData.Pair>();
+        for (var p : Assets.read(v).entrySet()) {
+            var names = new java.util.ArrayList<>(p.getValue().keySet());
+            names.sort(java.util.Comparator.comparingInt(String::length).thenComparing(java.util.Comparator.naturalOrder()));
+            var ts = new java.util.ArrayList<PlutusData.Pair>();
+            for (String n : names) ts.add(new PlutusData.Pair(PlutusData.bytes(HEX.parseHex(n)), PlutusData.integer(p.getValue().get(n))));
+            ps.add(new PlutusData.Pair(PlutusData.bytes(HEX.parseHex(p.getKey())), new PlutusData.MapData(ts)));
+        }
+        return Value.fromPlutusData(new PlutusData.MapData(ps));
+    }
+
+    /** A value as data (M2c): the generated encoders' Value (on-chain a value is its data). */
+    public static PlutusData data(Value v) {
+        return v.toPlutusData();
+    }
+
+    /** A value decoded from data (a memo's, M2c): {@link #fromWire}'s rules, so a malformed one fails. */
+    public static Value fromData(PlutusData d) {
+        return fromWire(Value.fromPlutusData(d));
+    }
+
+    /**
+     * Whether {@code v} may be deposited (M2c, ADR-0011 D3, §5.7): not empty, every quantity strictly positive, and no token
+     * name of a reserved kind (32 bytes; 29 starting 0x4F or 0x49) under any policy but lovelace's, as the output verifier
+     * requires of every deposit claim.
+     */
+    public static boolean depositable(Value v) {
+        var m = Assets.read(v);
+        if (m.isEmpty()) return false;
+        for (var p : m.entrySet()) {
+            for (var t : p.getValue().entrySet()) {
+                if (t.getValue().signum() <= 0) return false;
+                if (!p.getKey().isEmpty() && reserved(HEX.parseHex(t.getKey()))) return false;
+            }
+        }
+        return true;
     }
 
     /** The empty value. */

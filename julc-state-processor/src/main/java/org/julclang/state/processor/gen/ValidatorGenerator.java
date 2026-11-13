@@ -1826,7 +1826,9 @@ public final class ValidatorGenerator {
             w.line("ScriptPurpose purpose = new ScriptPurpose.Rewarding(new Credential.ScriptCredential(new ScriptHash(OUTPUT_VERIFIER)));");
             w.open("if (tx.redeemers().containsKey(purpose)) {");
             w.line("OutputClaims oc = outputClaims(tx);");
-            w.line("return keepAt(oc.deposits(), at);");
+            // #85: the method sees each claim's value canonical (the registry carries it in the wire's order), as it sees the
+            // offered assets (C1).
+            w.line("return ValueAdapter.claimsFromWire(keepAt(oc.deposits(), at));");
             w.close("} else {");
             w.indent();
             w.line("JulcList<DepositClaim> none = JulcList.empty();");
@@ -1915,9 +1917,11 @@ public final class ValidatorGenerator {
             w.close("}");
             w.line("BigInteger at = indexWith(tx, d.policy(), d.instance());");
             w.line("PlutusData v = Builtins.valueData(methodValue(d.value(), policy, 0L));");
+            // #85: a claim's value is the registry's, in the wire's order (cardano-client-lib orders a policy's token names by
+            // their encoding): compared as a value, folded the same way, not as data.;
             w.line("boolean claimed = false;");
             w.open("for (var cl : claims) {");
-            w.open("if (Builtins.equalsData(cl.by(), by) && cl.output().compareTo(at) == 0 && Builtins.equalsData((PlutusData) (Object) cl.value(), v)"
+            w.open("if (Builtins.equalsData(cl.by(), by) && cl.output().compareTo(at) == 0 && Builtins.equalsData(Builtins.valueData(methodValue(cl.value(), policy, 0L)), v)"
                     + " && Builtins.equalsData(cl.memo(), d.memo())) {");
             w.line("claimed = true;");
             w.close("}");

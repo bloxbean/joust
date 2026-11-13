@@ -6,6 +6,7 @@ import org.julclang.ledger.PubKeyHash;
 import org.julclang.ledger.ScriptHash;
 import org.julclang.ledger.StakingCredential;
 import org.julclang.core.PlutusData;
+import org.julclang.state.api.Require;
 import org.julclang.stdlib.Builtins;
 import org.julclang.stdlib.annotation.OnchainLibrary;
 import org.julclang.stdlib.lib.ByteStringLib;
@@ -221,6 +222,42 @@ public class AddressAdapter {
             return Builtins.lengthOfByteString(Builtins.unBData(Builtins.headList(fields))) == 28L;
         } else {
             return false;
+        }
+    }
+
+    // ------------------------------------------------------------------ decoded from data (M2c, ADR-0018 D5)
+
+    /**
+     * An address decoded from data (a deposit's memo, M2c): the checked-input rule ({@link #addressOk}'s, decided on the data:
+     * tags, field counts, 28-byte hashes, no pointer), failing with {@code k}; then the address it encodes.
+     */
+    public static Address addressFromData(PlutusData d, String k) {
+        Require.that(addressData(Builtins.constrTag(d), Builtins.constrFields(d)), k);
+        PlutusData fs = Builtins.constrFields(d);
+        Credential pay = credentialOf(Builtins.headList(fs));
+        PlutusData stake = Builtins.headList(Builtins.tailList(fs));
+        if (Builtins.constrTag(stake) == 1L) {
+            return new Address(pay, Optional.empty());
+        } else {
+            PlutusData hash = Builtins.headList(Builtins.constrFields(stake));
+            StakingCredential sc = new StakingCredential.StakingHash(credentialOf(Builtins.headList(Builtins.constrFields(hash))));
+            return new Address(pay, Optional.of(sc));
+        }
+    }
+
+    /** A credential decoded from data (M2c): {@link #credentialOk}'s rule, failing with {@code k}; then the credential. */
+    public static Credential credentialFromData(PlutusData d, String k) {
+        Require.that(credentialData(Builtins.constrTag(d), Builtins.constrFields(d)), k);
+        return credentialOf(d);
+    }
+
+    /** A checked credential's data as the credential. */
+    static Credential credentialOf(PlutusData c) {
+        byte[] h = Builtins.unBData(Builtins.headList(Builtins.constrFields(c)));
+        if (Builtins.constrTag(c) == 0L) {
+            return keyCred(h);
+        } else {
+            return scriptCred(h);
         }
     }
 }
