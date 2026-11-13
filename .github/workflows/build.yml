@@ -253,13 +253,25 @@ jobs:
           node --test test/*.test.js 2>&1 | tee "$RUNNER_TEMP/create-joust.tap"
           if grep -q '# SKIP' "$RUNNER_TEMP/create-joust.tap"; then echo "::error::the template build was skipped"; exit 1; fi
 
+      # ADR-0021 M5a: the language core in this commit's engine. JscLangTest writes the JVM's document models; the
+      # engine's must be byte-identical, its diagnostics must be joust.build's (L1, on the path the server runs), and the
+      # nesting cap must hold on the main thread and the server's 4 MB worker, cold (M5a's exit).
+      - name: Test the language core in the engine
+        run: |
+          ./gradlew :julc-state-dsl:test --tests '*JscLangTest' --stacktrace
+          node --experimental-wasm-exnref julc-state-toolchain/src/test/js/lang-in-node.mjs julc-state-toolchain/build/wasm julc-state-dsl/build/lang-parity.json
+
       # ADR-0021 M5a: the language server's protocol, watchdog, confinement, input and edit tests on this commit's
-      # engine, then L10's figures with CI's looser bounds. Its two pinned dependencies beside the linked packages.
+      # engine, then L10's figures with CI's looser bounds. Its two pinned dependencies go into js/node_modules, where
+      # npm prunes what it did not install: the linked packages are linked again after it (#83 review F1).
       - name: Test the language server
         shell: bash
         run: |
           set -euo pipefail
           npm install --no-save --no-package-lock --ignore-scripts --prefix js vscode-languageserver@11.0.0 vscode-languageserver-textdocument@1.0.16
+          mkdir -p js/node_modules/@julclang
+          ln -sfn ../../state-client js/node_modules/@julclang/state-client
+          ln -sfn ../../joust-runtime js/node_modules/@julclang/joust-runtime
           cd js/joust
           node --test --test-concurrency=1 test/lsp/*.test.js
           node test/lsp/measure-l10.mjs --check
@@ -369,9 +381,10 @@ jobs:
           npm ci --ignore-scripts
           npm run package
 
-      - name: Test the packaged extension in VS Code 1.109.0 and stable
+      # Recorded and uploaded BEFORE the tests open hostile workspaces in VS Code (#83 review S6).
+      - name: Record and upload the .vsix
         working-directory: js/vscode-joust
-        run: xvfb-run -a node test/electron/run.mjs --versions 1.109.0,stable
+        run: sha256sum vscode-joust.vsix | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the .vsix
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -380,6 +393,10 @@ jobs:
           path: js/vscode-joust/vscode-joust.vsix
           if-no-files-found: error
           retention-days: 7
+
+      - name: Test the packaged extension in VS Code 1.109.0 and stable
+        working-directory: js/vscode-joust
+        run: xvfb-run -a node test/electron/run.mjs --versions 1.109.0,stable
 
   devnet:
     needs: plan
