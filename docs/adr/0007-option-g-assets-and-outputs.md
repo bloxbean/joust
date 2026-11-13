@@ -407,6 +407,9 @@ changes even where its size does not):
 | locker `Safes` | 14,564 | 14,564 (another hash) |
 | fees `Pot` (receives) | 9,009 | 9,336 |
 | fees `Stall` (deposits) | 9,464 | 9,475 |
+| treasury `Treasury` (sends) | 9,297 | 9,297 (another hash) |
+| `.jsc` 2 `Treasury` (examples/dsl, the port) | 9,801 | 9,801 (another hash) |
+| `.jsc` 2 `Council` (examples/dsl) | 10,333 | 10,333 (another hash) |
 
 Execution units, per script, from the examples' harness tests (`DexTest`, `MarketTest`, `LockerTest`, `FeesTest`) at both
 heads:
@@ -426,8 +429,13 @@ heads:
 | locker lock | −3,935,693 (−1.7%) | −10,709 (−1.4%) |
 | locker unlock | −6,057,214 (−2.1%) | −14,738 (−1.6%) |
 | dex (every call), mint validators, map verifier | 0 | 0 |
+| treasury `Treasury` and its `.jsc` port, each of the 12 calls of `JscV2M2bGateTest` (init, fund, pay, rotate, freeze, close, each also at the council's maximum) | 0 | 0 |
 
 The verifier's conversion costs a deposit claim about 3.3M CPU (the sends' claims pay +0.5M for the code's layout); the
-receiver's conversion about 10M per collect. Market and locker do not deposit: their deltas are JuLC's layout of the
-changed scripts, as §8 saw (the numbers are what was measured). The fixtures of the ADR-0015 oracle that run the verifier
-(`fixtures/m0`, `fixtures/m3`: dex, market, fees, locker, staking) are re-recorded on DevKit at this head.
+receiver's conversion about 10M per collect. Market, locker and treasury do not deposit, and their scripts are
+byte-identical at both heads apart from the verifier's 28-byte hash (review r1 on #90, F6): their deltas come from
+evaluation paths that depend on that hash's bytes (for instance where the verifier's credential falls in an ordered map
+or list the script walks), not from any change in their code; treasury's measured calls happen to take none. The
+fixtures of the ADR-0015 oracle that hold the verifier's hash are recorded again on DevKit at this head, each group
+holding one recording (`FixturesTest` and `EngineFixtureScriptsTest` check it): `fixtures/m0` dex, fees, locker,
+market, staking and treasury; `fixtures/m3` dex, fees, locker, staking, treasury and treasury-governor.

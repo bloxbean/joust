@@ -32,7 +32,7 @@ issue #85 (deposit claims read from the wire). ADR-0018's amendment is r21 (r19 
 Every earlier `.jsc` file of examples/dsl (25) lowers to byte-identical Java, IR, source maps and ABI manifests:
 `generateJsc`'s output with this branch's front end diffed against `d12d080`'s (`diff -r`: identical); the committed IR
 fixtures and manifests did not change. Their scripts change only where they embed the output verifier (Coins, Wards,
-Dex: #85, below).
+Dex, Treasury, Council: #85, below; Treasury and Council were missing from this list in round r1, review F1).
 
 ## The ports (J11)
 
@@ -108,7 +108,8 @@ and the claims in its `Funds`.
 | Stall (port) | 7 | 3 | 7 | 1 | 7 | 15 | sales at 10 ADA and at the 2 ADA floor, a short payment, a price under the floor; the deposit names the params' pot |
 | Tips (coverage) | 11 | 4 | 10 | 1 | 22 | 60 | typed memos (`receives Note`) crediting an inline map, native assets (`00ff`/`01`) into a stored value, an `Option` of a record holding a value, a 27-byte memo key (`input:deposits`), claims, a close sending the stored value with a datum holding it, a view |
 | Tipper (coverage) | 12 | 6 | 12 | 1 | 27 | 45 | a tip of lovelace and native assets accepted and deposited with a record memo, reading Tips' state (a map, values); a cap, a short payment, a full jar, a read map out of order (`input:jar`); refunds sending a record datum and an enum datum |
-| **Total** | **54** | 25 | 53 | 7 | **84** | **212** | |
+| Inbox (coverage, round r2) | 21 | 12 | 21 | 2 | 57 | 41 | memos of every decoder shape: a record holding a `Bool`, an `Option`, an enum, a `List`, a `Map`, a `Value` and an `Address`; `Key` and `Bytes` memos in one contract; an unread `Value` memo; nine malformed memos (`input:deposits`: short and long keys, a 27-byte map key and address hash, `Value`s out of the decoder's domain, used or not); `set` storing `Bool`, `Option` and enum arguments |
+| **Total** | **75** | 37 | 74 | 9 | **141** | **253** | |
 
 **Mutation rejection** (`FourWay.mutantsAssets`, and `mutantsPlain` for Oracle and Kiosk): for an accepted call of
 every method, the validator rejects every transaction proposing a next state, payouts, sends, a mint or an accepted
@@ -118,7 +119,17 @@ step away (a deposit dropped, one lovelace less, its memo other data).
 **Hostile data** (`JscV2M2cHostileInputTest`; the interpreters' vectors cannot express it): six memos that are not a
 `Note` (tag 1, one field, three fields, no field, a 27- and a 29-byte key) are refused by the transition program and the
 validator (the generated decoder), the honest memo accepted by both; four read states (tag 1, two fields, four fields, a
-27-byte key) are refused by the validator (the processor's shape check, and `#read:`), the honest one accepted.
+27-byte key) are refused by the validator (the processor's shape check, and `#read:`), the honest one accepted. Round r2
+adds: 49 malformed memos on Inbox, one or more per decoder branch (the record's tag and arity; a `Bool` of tag 2 or 7 or
+with a field; an `Option` of tag 3, `Some` with no or two fields, `None` with a field, `Some` of bytes; an enum of tag 2
+or 5, a variant with too many or too few fields; a `List` that is no list or holds an integer; a `Map` with a 27-byte or
+an integer key, a bytes value, a list for a map; seven malformed `Value`s, in the slip and as an unread `Value` memo; an
+`Address` of tag 1, with a 27-byte hash, a credential of tag 2, a pointer, a stake of tag 3, one field; `Key` and `Bytes`
+memos of the wrong kind), each refused by the transition program and the validator; eight malformed tags in
+`Inbox.set`'s redeemer, which the next state would store, refused by the validator (D5's premise; the transition program
+accepts them, #91); seven read states of Tips holding a malformed `Value` that Tipper never reads, refused by the
+validator (C4). Order and repetition attacks (a map's keys out of order or repeated, lovelace after a policy) cannot be
+carried by the harness, which writes the registry as canonical CBOR; `ValueAdapterDifferentialTest` covers a value's.
 
 **Against the Java examples**: every Oracle, Kiosk, Pot and Stall vector also ran on examples/oracle's and
 examples/fees' JVM methods. They differ in exactly two Kiosk calls, both where the Java shop accepts and the port
@@ -132,10 +143,13 @@ depositor compares claim and deposit as values; a receiver's method and its tran
 `FeesTest.aClaimOfTokenNamesOfUnequalLength_passesTheVerifierAndTheReceiver` fails at `d12d080` and passes here; the
 five-way suite deposits and receives such values on every leg. Measured cost: the verifier 1,365 → 1,572 B and +3.9M CPU
 on a sale's claim; Pot 9,009 → 9,336 B and +10.4M CPU per collect; Stall 9,464 → 9,475 B, +7.0M CPU per sale. Every
-contract embedding the verifier changes its hash (dex, market, locker's two, fees' two, staking's StakedVault, and the
-`.jsc` Coins, Wards, Dex, Pot, Stall, Tips, Tipper). ADR-0007 §9 has every delta. The ADR-0015 oracle is re-recorded on
-DevKit for the Java examples that run the verifier: `fixtures/m0/{dex,fees,locker,market,staking}` and `fixtures/m3`
-(below); blobs only the old recordings used are removed.
+contract embedding the verifier changes its hash (dex, market, locker's two, fees' two, staking's StakedVault,
+treasury's Treasury, and the `.jsc` Coins, Wards, Dex, Pot, Stall, Tips, Tipper, Treasury, Council). ADR-0007 §9 has every
+delta (Treasury and Council: same sizes, another hash, no budget change in `JscV2M2bGateTest`'s 12 calls). The ADR-0015
+oracle is recorded again on DevKit for the Java examples that hold the verifier's hash: `fixtures/m0/{dex,fees,locker,
+market,staking,treasury}` and `fixtures/m3/{dex,fees,locker,staking,treasury,treasury-governor}`, each group holding one
+recording, and every blob no recording reads removed (round r2; round r1 had missed treasury and left the older
+recordings of four m0 groups in place: see "Round r2" below).
 
 It belongs in M2c: M2c is the part that makes deposits writable in `.jsc` (`deposit` of native assets), and without the
 fix a `.jsc` deposit of tokens with unequal-length names would fail on chain while every other leg accepted it.
@@ -143,10 +157,14 @@ fix a `.jsc` deposit of tokens with unequal-length names would fail on chain whi
 ## Found on the way
 
 - **A read state's nested constructor tags are not checked on chain.** The validator checks a read state's outer shape
-  (ADR-0011 D2: constructor 0 and the field count) and the generated check its keys, maps and addresses; a nested
-  `Option` or enum with an unknown tag reaches the accessors as is (JuLC reads an `Option` by "tag 0"). A JOUST contract's
-  own validator checks every state it writes, so a state it accepted is well formed (D5 says so); a strict decode on both
-  sides would need the raw datum on the JVM too. Recorded in the semantics (§4) and below.
+  (ADR-0011 D2: constructor 0 and the field count) and the generated check its keys, maps, addresses and (round r2)
+  stored values; a nested `Option` or enum with an unknown tag reaches the accessors as is (JuLC reads an `Option` by
+  "tag 0"). A `.jsc` contract's validator refuses a malformed tag in what it stores, so a state it accepted is well
+  formed (D5; pinned in round r2 by `Inbox.set`); a strict decode would need the raw datum in the method, since the
+  processor types the `@Reads` parameter. Scoped to `.jsc` imports and re-decided for M4b's `java:` contracts (D5, D9).
+- **A transition program accepts malformed nested tags in its arguments** (round r2, found by the reviewers' probe and
+  pinned by `Inbox.set`): it decodes nothing before the method runs, so a `Bool` of tag 2 reaches the method, while the
+  validator refuses the redeemer. It predates M2c and only proposes a transaction the chain refuses; #91.
 - **`JsLeg`'s canonical check compared value entries as `policy:name` strings**, which put lovelace (`:`) after a policy
   starting with a digit; it never mattered before a state held a value with lovelace. It compares policy, then name.
 - **The transition program's step** carries deposits in the ledger's order as the method returns them, while the runtime
@@ -172,11 +190,35 @@ fix a `.jsc` deposit of tokens with unequal-length names would fail on chain whi
    same shape fits; a `Key` fits `Bytes`, not the reverse.
 4. **A memo is not a time value in its receiver**: whoever writes the depositing contract chooses it, as a caller chooses
    an argument; it is a checked input. A depositor putting a time value in a memo or a datum gets a warning (`JSC9009`).
-5. **Read states' nested tags** (above): trusted as their contract wrote them; the alternative is a stricter processor
-   check of foreign datums (a JOUST change for Java contracts too).
+5. **Read states' nested tags** (above): trusted as their contract wrote them, for `.jsc` imports only (pinned by
+   `Inbox.set`), and decided again before M4b's `java:` contract imports; the alternative is a stricter decode of foreign
+   datums (the memo decoders over the raw datum, which the method does not have today).
 6. **`receives` keeps `Ctx`** in its redeemer (as examples/fees' `Pot.collect`); dropping it would save a few bytes and
    change the redeemer.
 7. **#85 here**, with the verifier's hash change and the re-recorded fixtures (above).
+8. **Joining M4a at integration**: `JscModules` is M4a's, copied as is.
+9. (Round r1's decision 9, no differential vectors for the new `ValueAdapter` functions, is withdrawn: round r2 adds
+   them, review F3.)
+
+## Round r2 (the r1 reviews of #90)
+
+| Finding | What changed | Evidence |
+|---|---|---|
+| F1 (P1) Treasury's fixtures and deltas | `fixtures/m0/treasury`, `fixtures/m3/treasury` and `treasury-governor` recorded again (old contract file removed); Treasury and Council in ADR-0007 §9, this report and the PR body; `EngineFixtureScriptsTest` checks every `fixtures/m3` contract file against this head's `Toolchain.build` of its example | `EngineFixtureScriptsTest`: 19 files, 0 differ (it failed on Treasury's before); `EngineFixturesTest`: treasury 16, treasury-governor 17 calls byte-identical |
+| F2 (P1) mixed m0 groups | dex, fees, locker, market (and treasury) cleared and recorded again; 595 orphaned blobs removed (113 of them orphaned before M2c); `FixturesTest` requires each group numbered 1..n and every blob read | `FixturesTest`: 209 transactions, 4,028 chain reads |
+| S1 (P2) tagged memo decoders did not build | tags held as `BigInteger` | `aReceiverOfEveryMemoTypeBuilds` (16 memo types in one contract); Inbox five-way and 49 hostile memos |
+| F5 (P2) hostile vectors per decoder branch | Inbox; the hostile test's Javadoc lists what it tests | as above |
+| C1 (P2) helpers collide | `depositsIn__` named by the checked type | Inbox (`Key` and `Bytes` memos); the 16-type receiver |
+| C2 (P2) interpreters accepted out-of-domain `Value` memos | both interpreters check an arriving `Value` (names and policies ≤ 32 bytes, quantities in range) | Inbox: five refusals on all five legs (used and unread memos) |
+| C3/S4 (P2) JVM `fromData` normalised first | it checks `fromWire`'s rules on the data as it came | `ValueAdapterDifferentialTest` (`fromData` on every wire, lovelace after a policy included) |
+| C4 (P2) unused stored `Value`s in read states | `Ty.needsCheck` includes `Value`; `check__Value` (fromWire) in `#read:` | seven read states refused (`readStates_holdingMalformedValues_…`) |
+| F3 (P2) D9's differential vectors | `toWire`, `data`, `depositable`, `fromData`, `claimsFromWire`, `fundsFromWire`; completeness by reflection | 3,651 cases, 0 disagreements |
+| F4/S2 (P2) decision 5 | its premise committed as a test; D5 scoped to `.jsc` imports and re-decided before M4b (D5, D9); the "deep / recursive" wording fixed; the transition program's gap filed as #91. The strict check with the memo decoders was not taken: the method gets the read state typed by the processor's `@Reads`, not as data, and on the JVM a record cannot be read back as data | `inboxSet_storedTags_…`: 8 refused by the validator |
+| F6 (P3) ADR-0007 §9's explanation | the scripts are byte-identical apart from the hash; the deltas come from hash-dependent evaluation paths | ADR-0007 §9 |
+| F7 (P3) stale D5 text | the `Value` row's old sentence marked superseded; the promised warning removed | ADR-0018 D5 |
+| S3 (P3) `Instance<C>` is deployer trust | semantics §5.9, the reference | |
+| S5 (P3) deposits are unauthenticated | semantics §5.8, the reference | |
+| C5 (P3) the gate compared a constant | `collect @ max` compares the pot's next state; the composed sale includes it | `JscV2M2cGateTest` (same budgets) |
 
 ## Tests run at this head
 
