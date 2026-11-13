@@ -40,18 +40,21 @@ export const DEFAULTS = {
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 /**
- * Whether a failed load is the engine's own files missing (a store copy evicted or not yet republished), from the load
- * failure itself (review C18 on #83): `MODULE_NOT_FOUND` for the loader, `ENOENT` for its .wasm, naming those files;
- * or the file absent now. Never from the path's existence alone: another window may republish the copy before the
- * failure arrives, and an engine that fails on its own is still an engine fault.
+ * Whether a failed load is the engine's own files missing (a store copy evicted or not yet republished), from the failing
+ * request itself (reviews C18, C22, S12 on #83): `MODULE_NOT_FOUND` whose REQUESTED module is the loader (the first line
+ * of Node's message, `Cannot find module '<request>'`; never the "Require stack" after it, which names the engine when a
+ * dependency of it is missing), or `ENOENT` whose path is exactly the loader or its .wasm. Nothing else, and never the
+ * path's existence when the failure arrives: a missing dependency, or any other error, is an engine fault.
  */
 export function isMissingEngine(r, engine) {
   if (r.ready) return false;
-  const msg = String(r.error ?? '');
   const files = [engine.file, `${engine.file}.wasm`];
-  if (r.code === 'MODULE_NOT_FOUND' && files.some((f) => msg.includes(f))) return true;
-  if (r.code === 'ENOENT' && files.some((f) => r.path === f || msg.includes(f))) return true;
-  return !existsSync(engine.file);
+  if (r.code === 'MODULE_NOT_FOUND') {
+    const m = /^Cannot find module '([^'\n]*)'/.exec(String(r.error ?? ''));
+    return !!m && files.includes(m[1]);
+  }
+  if (r.code === 'ENOENT') return files.includes(r.path);
+  return false;
 }
 
 /** One engine worker: load, then one call at a time (the protocol thread serialises per key). */
@@ -157,6 +160,7 @@ export class EngineHost {
     this.health = new Map();     // key|scope -> { failures: [], backoffUntil, backoffMs, unavailable }
     this.quarantine = new Map(); // sha256(source) + engine id -> the failure
     this.waiters = [];
+    this.starting = 0;           // acquisitions holding a reserved place while they await their lease (C21)
     this.stats = { started: 0, terminated: 0, calls: 0, cancelled: 0, failures: 0, displaced: 0 };
     this.now = this.opts.now ?? (() => Date.now());
     this.idleTimer = setInterval(() => this.reapIdle(), Math.min(60_000, this.opts.idleMs)).unref();
@@ -203,9 +207,10 @@ export class EngineHost {
       if (s.worker && !s.worker.dead) return s.worker;
       if (!existsSync(s.engine.file)) return { missing: true };
       const alive = [...this.slots.values()].filter((o) => o !== s && o.worker && !o.worker.dead);
-      if (alive.length >= this.opts.maxWorkers) {
+      // C21 on #83: starts in progress (awaiting their lease) count against the bound too.
+      if (alive.length + this.starting >= this.opts.maxWorkers) {
         const idle = alive.filter((o) => o.busy === 0 && o.worker.booted && o.worker.pending.size === 0).sort((a, b) => a.lastUsed - b.lastUsed);
-        if (!idle.length) {
+        if (!idle.length || alive.length - 1 + this.starting >= this.opts.maxWorkers) {
           await new Promise((r) => this.waiters.push(r));
           continue;
         }
@@ -213,12 +218,24 @@ export class EngineHost {
       }
       // C18: a lease on the engine's store copy, held until the worker has loaded it; the collector never removes a
       // leased copy. No lease (null): the copy is gone, select again.
-      const release = this.opts.lease ? await this.opts.lease(s.engine) : () => {};
-      if (!release) return { missing: true };
+      // The place is reserved before the await (C21): no other acquisition can take it meanwhile.
+      this.starting++;
+      let release;
+      try {
+        release = this.opts.lease ? await this.opts.lease(s.engine) : () => {};
+      } finally {
+        this.starting--;
+      }
+      if (!release) {
+        this.wake();
+        return { missing: true };
+      }
       if (s.worker && !s.worker.dead) {
         release();
+        this.wake();
         return s.worker;
       }
+      // The reservation ended at the await's end; with no await since, the place is still ours: start now.
       if (process.env.JOUST_LSP_DEBUG) process.stderr.write(`[joust-lsp] starting a worker for ${s.key}\n`);
       s.worker = new EngineWorker(s.engine, this.opts);
       s.worker.ready.then(() => {

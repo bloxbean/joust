@@ -30,6 +30,18 @@ const hex = (b) => createHash('sha256').update(b).digest('hex');
 /** How long a lease protects a copy: a load takes seconds; a crashed holder's lease stops protecting after this. */
 const LEASE_MS = 10 * 60 * 1000;
 
+/** A collector's claim older than this is abandoned (C23): claims are held for milliseconds. */
+const CLAIM_MS = 60 * 1000;
+
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+};
+
 /** The id of an engine: the SHA-256 of its two files' SHA-256s. */
 export const engineId = (jsHash, wasmHash) => hex(`${jsHash}\n${wasmHash}\n`);
 
@@ -62,7 +74,72 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       return 0;
     }
   };
+  /** Whether a claimed copy is still wanted: a live lease, a fresh use, or this server's own use. */
+  async function wanted(aside, n, inUse = () => new Set()) {
+    try {
+      for (const f of await fs.readdir(aside)) {
+        if (!f.startsWith('.lease-')) continue;
+        const st = await fs.stat(join(aside, f)).catch(() => null);
+        if (st && Date.now() - st.mtimeMs < LEASE_MS) return true;
+      }
+    } catch {
+      return true;
+    }
+    let usedNow = 0;
+    try {
+      usedNow = (await fs.stat(join(aside, '.used'))).mtimeMs;
+    } catch {
+      usedNow = 0;
+    }
+    return inUse().has(n) || Date.now() - usedNow < recentMs;
+  }
+
+  /**
+   * Puts a claimed copy back. Review C24 on #83: a failed rename deletes the claimed copy only when a valid copy of the
+   * same digest is in place (another window republished it); on any other failure the claim is left for the sweep below
+   * to put back later, never deleted.
+   */
+  async function putBack(aside, n) {
+    try {
+      await fs.rename(aside, join(root, n));
+      return;
+    } catch {
+      // fall through
+    }
+    const [jsHash, wasmHash] = await Promise.all([fs.readFile(join(aside, ENGINE_JS)), fs.readFile(join(aside, ENGINE_WASM))])
+      .then(([a, b]) => [hex(a), hex(b)]).catch(() => [null, null]);
+    if (jsHash && engineId(jsHash, wasmHash) === n && await valid(join(root, n), jsHash, wasmHash)) {
+      await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * Review C23 on #83: a claim a collector left behind (it crashed between its rename and its decision, or could not put
+   * a copy back) is recovered once older than CLAIM_MS (a claim is normally held for milliseconds), unless its owner is a
+   * live process on this machine and the claim is younger than LEASE_MS: put back when still wanted and no copy of its
+   * digest is in place, removed otherwise.
+   */
+  async function sweep(names, inUse) {
+    for (const c of names) {
+      const m = /^\.evicted-([0-9a-f]{64})-(\d+)-(\d+)$/.exec(c);
+      if (!m) continue;
+      const [, n, pid, at] = m;
+      const age = Date.now() - Number(at);
+      if (age < CLAIM_MS) continue;
+      if (age < LEASE_MS && Number(pid) !== process.pid && alive(Number(pid))) continue;
+      const aside = join(root, c);
+      const present = await fs.stat(join(root, n)).then(() => true, () => false);
+      if (!present && await wanted(aside, n, inUse)) await putBack(aside, n);
+      else await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
   async function evict(keep, inUse) {
+    try {
+      await sweep((await fs.readdir(root)).filter((n) => n.startsWith('.evicted-')), inUse);
+    } catch {
+      // no store yet
+    }
     let names;
     try {
       names = (await fs.readdir(root)).filter((n) => /^[0-9a-f]{64}$/.test(n));
@@ -95,26 +172,9 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       } catch {
         continue;
       }
-      let leased = false;
-      try {
-        for (const f of await fs.readdir(aside)) {
-          if (!f.startsWith('.lease-')) continue;
-          const st = await fs.stat(join(aside, f)).catch(() => null);
-          if (st && Date.now() - st.mtimeMs < LEASE_MS) leased = true;
-        }
-      } catch {
-        leased = true;
-      }
-      let usedNow = 0;
-      try {
-        usedNow = (await fs.stat(join(aside, '.used'))).mtimeMs;
-      } catch {
-        usedNow = 0;
-      }
-      if (leased || inUse().has(n) || Date.now() - usedNow < recentMs) {
+      if (await wanted(aside, n)) {
         kept++;
-        // Back in place; if another window republished the copy meanwhile, its copy stays and this one goes.
-        await fs.rename(aside, join(root, n)).catch(() => fs.rm(aside, { recursive: true, force: true }).catch(() => {}));
+        await putBack(aside, n);
         continue;
       }
       await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
