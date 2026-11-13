@@ -168,6 +168,62 @@ class JscV2LibraryTest {
         assertTrue(e.getMessage().contains("error[JSC0705]"), e.getMessage());
     }
 
+    /**
+     * Codex C1 (r2): the generated Java calls a library fn through its class ({@code Fees.fee()}); a value named like the
+     * class would obscure it (JLS 6.4.2). With {@code init(Fees: Item)} and a record field {@code fee}, javac compiled
+     * {@code Fees.fee()} as the parameter's accessor, so the JVM, the transition and the validator agreed on 9 where the
+     * interpreter said 1. Every kind of binding that would take a library's class name is refused, in a contract and in a
+     * library.
+     */
+    @Test
+    void aBinding_neverTakesALibrarysClassName() {
+        String lib = "jsc 2\nlibrary lib\nfn fee(): Int = 1\n";
+        String c = "jsc 2\npackage app\nimport { fee } from \"../lib/fees.jsc\"\ntype Item = { fee: Int }\n"
+                + "contract C {\n  state { n: Int }\n  init(%s) { return { n: fee() } }\n%s\n}\n";
+        // Codex's case: an init parameter whose record has an accessor of the fn's name.
+        var e = refused(build("lib/fees.jsc", lib, "app/C.jsc", String.format(c, "Fees: Item", "")), "app/C.jsc", "JSC0709");
+        assertTrue(e.getMessage().contains("'Fees' is the class of a library"), e.getMessage());
+        // An action or view parameter, a const, a lambda parameter and a match binding.
+        for (String member : List.of(
+                "  view v(Fees: Int): Int = fee() + Fees",
+                "  action a() { const Fees = fee()\n return { n: Fees } }",
+                "  view v(xs: List<Int>): List<Int> = xs.filter(Fees => Fees > fee())",
+                "  view v(o: Option<Int>): Int = match o { Some(Fees) => Fees, None => fee() }")) {
+            refused(build("lib/fees.jsc", lib, "app/C.jsc", String.format(c, "", member)), "app/C.jsc", "JSC0709");
+        }
+        // In a library that imports another library, and in a library naming its own class.
+        String mid = "jsc 2\nlibrary lib\nimport { fee } from \"./fees.jsc\"\nfn twice(Fees: Int): Int = fee() + Fees\n";
+        String top = "jsc 2\npackage app\nimport { twice } from \"../lib/mid.jsc\"\ncontract C {\n  state { n: Int }\n"
+                + "  init() { return { n: twice(1) } }\n}\n";
+        e = refused(build("lib/fees.jsc", lib, "lib/mid.jsc", mid, "app/C.jsc", top), "app/C.jsc", "JSC0712");
+        assertTrue(e.getMessage().contains("error[JSC0709]"), e.getMessage());
+        String self = "jsc 2\nlibrary lib\nfn fee(Fees: Int): Int = Fees\n";
+        var own = assertThrows(JscException.class, () -> JscV2.lower(self, "fees.jsc", "lib/fees.jsc", JscModules.of(build("lib/fees.jsc", self))));
+        assertEquals("JSC0709", own.code, own.getMessage());
+        // Control: the same contract with a parameter of another name lowers, and calls the library.
+        var ok = lower(build("lib/fees.jsc", lib, "app/C.jsc", String.format(c, "item: Item", "")), "app/C.jsc");
+        assertTrue(ok.java().contains("Fees.fee()"), ok.java());
+    }
+
+    /**
+     * Codex C2 (r2): the generated Java imports a library's class and names it by its simple name, so two libraries of one
+     * file name in different packages ({@code aa.Fees}, {@code bb.Fees}) made an ambiguous import that javac refused. The
+     * front end refuses them at the import, transitively too.
+     */
+    @Test
+    void twoLibrariesOfOneClassName_areRefusedAtTheImport() {
+        String a = "jsc 2\nlibrary aa\nfn a(): Int = 1\n", b = "jsc 2\nlibrary bb\nfn b(): Int = 2\n";
+        String c = "jsc 2\npackage app\nimport { a } from \"../a/fees.jsc\"\nimport { b } from \"../b/fees.jsc\"\n"
+                + "contract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  view v(): Int = a() + b()\n}\n";
+        var e = refused(build("a/fees.jsc", a, "b/fees.jsc", b, "app/C.jsc", c), "app/C.jsc", "JSC0709");
+        assertTrue(e.getMessage().contains("both classes named Fees"), e.getMessage());
+        // Through a library: the contract imports aa.Fees, and bb.Fees arrives with another library.
+        String via = "jsc 2\nlibrary cc\nimport { b } from \"../b/fees.jsc\"\nfn viaB(): Int = b()\n";
+        String c2 = "jsc 2\npackage app\nimport { a } from \"../a/fees.jsc\"\nimport { viaB } from \"../c/via.jsc\"\n"
+                + "contract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  view v(): Int = a() + viaB()\n}\n";
+        refused(build("a/fees.jsc", a, "b/fees.jsc", b, "c/via.jsc", via, "app/C.jsc", c2), "app/C.jsc", "JSC0709");
+    }
+
     @Test
     void imports_resolveRelativePaths_refuseCyclesContractsAndOutsideTheRoot() {
         // A missing module, a bare specifier, a path out of the sources.
