@@ -21,6 +21,7 @@ dependencies {
     testImplementation project(':examples:crowdfund')
     testImplementation project(':examples:pool')
     testImplementation project(':examples:treasury')  // M1c review S1: a parameterised script, read beside its class
+    testImplementation project(':examples:dex')       // ADR-0018 M2 (J11): the Java example the dex port is measured against
     testImplementation libs.julc.vm.java
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes

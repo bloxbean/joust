@@ -148,6 +148,64 @@ public final class Interpreter {
         }
     }
 
+    /**
+     * A multi-asset value (M2, semantics §1.3): policy → token name → quantity, both keys as lower-case hex, in the
+     * ledger's order (unsigned bytewise, a proper prefix first: what lower-case hex orders as), with no zero quantity and
+     * no empty token map. Every operation keeps it so; quantities are within [-2^127, 2^127 - 1].
+     */
+    public record ValueV(java.util.TreeMap<String, java.util.TreeMap<String, BigInteger>> entries) {
+        public static final ValueV NONE = new ValueV(new java.util.TreeMap<>());
+
+        public ValueV {
+            var copy = new java.util.TreeMap<String, java.util.TreeMap<String, BigInteger>>();
+            entries.forEach((p, ts) -> {
+                var t = new java.util.TreeMap<String, BigInteger>();
+                ts.forEach((n, q) -> {
+                    if (q.signum() != 0) t.put(n, q);
+                });
+                if (!t.isEmpty()) copy.put(p, t);
+            });
+            entries = copy;
+        }
+
+        /** One entry (zero: the empty value). */
+        public static ValueV of(Bytes policy, Bytes name, BigInteger q) {
+            var m = new java.util.TreeMap<String, java.util.TreeMap<String, BigInteger>>();
+            m.computeIfAbsent(HexFormat.of().formatHex(policy.value), k -> new java.util.TreeMap<>()).put(HexFormat.of().formatHex(name.value), q);
+            return new ValueV(m);
+        }
+
+        public BigInteger quantity(Bytes policy, Bytes name) {
+            var ts = entries.get(HexFormat.of().formatHex(policy.value));
+            return ts == null ? BigInteger.ZERO : ts.getOrDefault(HexFormat.of().formatHex(name.value), BigInteger.ZERO);
+        }
+
+        /** Entry-wise {@code this + k * w}; the caller checks the range. */
+        ValueV plus(ValueV w, BigInteger k) {
+            var m = new java.util.TreeMap<String, java.util.TreeMap<String, BigInteger>>();
+            entries.forEach((p, ts) -> m.put(p, new java.util.TreeMap<>(ts)));
+            w.entries.forEach((p, ts) -> ts.forEach((n, q) -> m.computeIfAbsent(p, x -> new java.util.TreeMap<>()).merge(n, q.multiply(k), BigInteger::add)));
+            return new ValueV(m);
+        }
+
+        java.util.List<BigInteger> quantities() {
+            var out = new ArrayList<BigInteger>();
+            entries.values().forEach(ts -> out.addAll(ts.values()));
+            return out;
+        }
+    }
+
+    /** A credential (M2): a key's ({@code KeyCred}) or a script's ({@code ScriptCred}) 28-byte hash. */
+    public record CredV(boolean script, Bytes hash) {}
+
+    /** A staking credential: a hash ({@code StakeHash}) or a pointer ({@code StakePtr}). */
+    public record StakeHash(CredV credential) {}
+
+    public record StakePtr(BigInteger slot, BigInteger txIndex, BigInteger certIndex) {}
+
+    /** An address: a payment credential and an optional staking credential ({@link Opt} of a {@link StakeHash} or {@link StakePtr}). */
+    public record AddrV(CredV payment, Opt stake) {}
+
     /** {@code range(a, b)}: a to b, exclusive (D7); never materialised. */
     record RangeV(BigInteger from, BigInteger to) implements Iterable<Object> {
         public java.util.Iterator<Object> iterator() {
@@ -171,9 +229,14 @@ public final class Interpreter {
      * The transaction a call sees: {@code caller}, {@code received}, {@code balance}, the validity window, and the keys
      * that signed it ({@code signers}, the caller among them), which the {@code only} modifier reads (semantics §2.6).
      */
-    public record Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers) {
+    public record Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
+                     FundsV funds) {
         public Tx {
             signers = List.copyOf(signers);
+        }
+
+        public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers) {
+            this(caller, received, balance, validFrom, validTo, signers, null);
         }
 
         /** Signed by the caller alone. */
@@ -183,15 +246,36 @@ public final class Interpreter {
 
         /** The same transaction, signed by {@code keys}. */
         public Tx signedBy(List<Bytes> keys) {
-            return new Tx(caller, received, balance, validFrom, validTo, keys);
+            return new Tx(caller, received, balance, validFrom, validTo, keys, funds);
+        }
+
+        /** The same transaction, with the native assets the call sees (M2). */
+        public Tx withFunds(FundsV f) {
+            return new Tx(caller, received, balance, validFrom, validTo, signers, f);
         }
     }
+
+    /**
+     * The native assets a call sees (M2, ADR-0007 D1): what the caller offers ({@code received}), what the UTxO holds
+     * besides lovelace and its own token ({@code held}), the contract's policy and the token name it acts on ({@code self}).
+     */
+    public record FundsV(ValueV received, ValueV held, Bytes policy, Bytes self) {}
+
+    /** A send (M2), in source order. */
+    public record SendV(AddrV to, ValueV value) {}
 
     /** A payout, in source order. */
     public record Payment(Bytes to, BigInteger lovelace) {}
 
-    /** A call's result: the next state (init, action), the view's value, or null (destroy); and the payouts. */
-    public record Outcome(Object value, List<Payment> payouts) {}
+    /**
+     * A call's result: the next state (init, action), the view's value, or null (destroy); the payouts and sends in
+     * source order; the net mint and the sum of what was accepted (M2).
+     */
+    public record Outcome(Object value, List<Payment> payouts, List<SendV> sends, ValueV mint, ValueV accepted) {
+        public Outcome(Object value, List<Payment> payouts) {
+            this(value, payouts, List.of(), ValueV.NONE, ValueV.NONE);
+        }
+    }
 
     /**
      * The call fails (a require, a checked input, a binding's domain, a division by zero, a negative payout). Its class
@@ -455,7 +539,32 @@ public final class Interpreter {
         }
         env = exec(m.body().stmts(), env, f);
         Object value = m.body().result() == null ? null : eval(m.body().result(), env, f);
-        return new Outcome(value, List.copyOf(f.payouts));
+        // Semantics §5.4: a method that accepts takes in exactly what the caller offers (ADR-0007 r2), checked last.
+        if (accepts(m.body()) && !f.accepted.equals(funds(f).received())) {
+            throw Refused.domain("accepted", "the method accepts other native assets than the caller offers");
+        }
+        return new Outcome(value, List.copyOf(f.payouts), List.copyOf(f.sends), f.mint, f.accepted);
+    }
+
+    /** Whether a block holds an accept statement, in any arm or loop. */
+    private static boolean accepts(Ir.Block b) {
+        if (b == null) return false;
+        for (Ir.Stmt s : b.stmts()) {
+            boolean hit = switch (s) {
+                case Ir.Accept a -> true;
+                case Ir.If i -> i.branches().stream().anyMatch(br -> accepts(br.then())) || accepts(i.otherwise());
+                case Ir.For fo -> accepts(fo.body());
+                case Ir.MatchStmt ms -> ms.arms().stream().anyMatch(a -> accepts(a.body()));
+                default -> false;
+            };
+            if (hit) return true;
+        }
+        return false;
+    }
+
+    private static FundsV funds(Frame f) {
+        if (f.tx == null || f.tx.funds() == null) throw new IllegalArgumentException("this call reads funds: its transaction needs them");
+        return f.tx.funds();
     }
 
     /** Calls a {@code fn} directly. */
@@ -469,6 +578,8 @@ public final class Interpreter {
         final Rec state;
         final Tx tx;
         final List<Payment> payouts = new ArrayList<>();
+        final List<SendV> sends = new ArrayList<>();
+        ValueV mint = ValueV.NONE, accepted = ValueV.NONE;
 
         Frame(Rec state, Tx tx) {
             this.state = state;
@@ -499,6 +610,38 @@ public final class Interpreter {
                     BigInteger amount = integer(eval(y.amount(), env, f));
                     if (amount.signum() < 0) throw Refused.domain("pay", "a payout cannot be negative");
                     if (amount.signum() > 0) f.payouts.add(new Payment(to, amount));
+                }
+                case Ir.Send sd -> {
+                    // §5.1: both arguments, left to right; a value with a negative quantity, or a reserved token name
+                    // under the contract's own policy, cannot be sent; nor can anything to the contract's own script (I30).
+                    AddrV to = (AddrV) eval(sd.to(), env, f);
+                    ValueV v = (ValueV) eval(sd.value(), env, f);
+                    if (!sendable(v, funds(f).policy(), false)) throw Refused.domain("send", "this value cannot be sent");
+                    if (to.payment().script() && Arrays.equals(to.payment().hash().value, funds(f).policy().value)) {
+                        throw Refused.domain("send", "a send cannot go to the contract's own script");
+                    }
+                    f.sends.add(new SendV(to, v));
+                }
+                case Ir.Mint mt -> {
+                    // §5.2: the quantity is positive, the name a user token's (at most 32 bytes, not a reserved kind); the
+                    // net mint stays within the quantity range.
+                    Bytes name = (Bytes) eval(mt.name(), env, f);
+                    BigInteger q = integer(eval(mt.qty(), env, f));
+                    if (q.signum() <= 0 || name.value.length > 32 || reserved(name.value)) {
+                        throw Refused.domain("mint", (mt.burn() ? "burn" : "mint") + ": a positive quantity of a user token name");
+                    }
+                    Bytes policy = funds(f).policy();
+                    BigInteger total = f.mint.quantity(policy, name).add(mt.burn() ? q.negate() : q);
+                    if (total.signum() != 0 && !inRange(total)) throw Refused.domain("mint", "mint: a quantity out of the 128-bit range");
+                    f.mint = f.mint.plus(ValueV.of(policy, name, mt.burn() ? q.negate() : q), BigInteger.ONE);
+                }
+                case Ir.Accept ac -> {
+                    // §5.3: native assets only, every quantity positive, no reserved name of the own policy; summed.
+                    ValueV v = (ValueV) eval(ac.value(), env, f);
+                    if (!sendable(v, funds(f).policy(), true)) throw Refused.domain("accept", "this value cannot be accepted");
+                    ValueV sum = f.accepted.plus(v, BigInteger.ONE);
+                    if (!sum.quantities().stream().allMatch(Interpreter::inRange)) throw Refused.domain("accept", "accept: a quantity out of the 128-bit range");
+                    f.accepted = sum;
                 }
                 case Ir.If i -> {
                     Ir.Block taken = i.otherwise();
@@ -674,19 +817,114 @@ public final class Interpreter {
                 int k = n.min(BigInteger.valueOf(xs.size())).intValue();
                 yield l.op().equals("take") ? List.copyOf(xs.subList(0, k)) : List.copyOf(xs.subList(k, xs.size()));
             }
+            case Ir.FundsRef fr -> switch (fr.field()) {
+                case "received" -> funds(f).received();
+                case "held" -> funds(f).held();
+                case "policy" -> funds(f).policy();
+                case "self" -> funds(f).self();
+                default -> throw new IllegalStateException(fr.field());
+            };
+            case Ir.LedgerOp o -> ledger(o, env, f);
+        };
+    }
+
+    // ------------------------------------------------------------------ values, credentials, addresses (M2, §1.3)
+
+    private static final BigInteger MAX_Q = BigInteger.ONE.shiftLeft(127).subtract(BigInteger.ONE), MIN_Q = BigInteger.ONE.shiftLeft(127).negate();
+
+    static boolean inRange(BigInteger q) {
+        return q.compareTo(MAX_Q) <= 0 && q.compareTo(MIN_Q) >= 0;
+    }
+
+    /** A reserved token kind under a contract's policy (ADR-0007 D3): 32 bytes, or 29 bytes starting 0x4F or 0x49. */
+    static boolean reserved(byte[] n) {
+        return n.length == 32 || (n.length == 29 && ((n[0] & 0xff) == 0x4F || (n[0] & 0xff) == 0x49));
+    }
+
+    /**
+     * §5.1, §5.3: every quantity positive (a canonical value has no zero), no reserved name under the own policy, and,
+     * when accepting, no lovelace.
+     */
+    private static boolean sendable(ValueV v, Bytes policy, boolean accepting) {
+        String own = HexFormat.of().formatHex(policy.value);
+        for (var p : v.entries().entrySet()) {
+            if (accepting && p.getKey().isEmpty()) return false;
+            for (var t : p.getValue().entrySet()) {
+                if (t.getValue().signum() <= 0) return false;
+                if (p.getKey().equals(own) && reserved(HexFormat.of().parseHex(t.getKey()))) return false;
+            }
+        }
+        return true;
+    }
+
+    private static ValueV checkedValue(ValueV v, String op) {
+        if (!v.quantities().stream().allMatch(Interpreter::inRange)) throw Refused.domain(op, op + ": a quantity out of the 128-bit range");
+        return v;
+    }
+
+    private Object ledger(Ir.LedgerOp o, Env env, Frame f) {
+        var a = new ArrayList<Object>();
+        for (Ir.Expr x : o.args()) a.add(eval(x, env, f));
+        return switch (o.op()) {
+            case "none" -> ValueV.NONE;
+            case "lovelace" -> {
+                BigInteger q = integer(a.get(0));
+                if (q.signum() != 0 && !inRange(q)) throw Refused.domain("Value.lovelace", "Value.lovelace: a quantity out of the 128-bit range");
+                yield ValueV.of(new Bytes(new byte[0]), new Bytes(new byte[0]), q);
+            }
+            case "asset" -> {
+                Bytes policy = (Bytes) a.get(0), name = (Bytes) a.get(1);
+                BigInteger q = integer(a.get(2));
+                if (q.signum() != 0 && (name.value.length > 32 || !inRange(q))) {
+                    throw Refused.domain("Value.asset", "Value.asset: a token name over 32 bytes, or a quantity out of the 128-bit range");
+                }
+                yield ValueV.of(policy, name, q);
+            }
+            case "add" -> checkedValue(((ValueV) a.get(0)).plus((ValueV) a.get(1), BigInteger.ONE), "Value +");
+            case "sub" -> {
+                ValueV w = (ValueV) a.get(1);
+                // a - b is a + (-1)·b: every negated quantity of b must be in range too.
+                if (!w.quantities().stream().allMatch(q -> inRange(q.negate()))) throw Refused.domain("Value -", "Value -: a quantity out of the 128-bit range");
+                yield checkedValue(((ValueV) a.get(0)).plus(w, BigInteger.ONE.negate()), "Value -");
+            }
+            case "lovelaceOf" -> ((ValueV) a.get(0)).quantity(new Bytes(new byte[0]), new Bytes(new byte[0]));
+            case "of" -> ((ValueV) a.get(0)).quantity((Bytes) a.get(1), (Bytes) a.get(2));
+            case "covers" -> {
+                ValueV x = (ValueV) a.get(0), y = (ValueV) a.get(1);
+                if (x.quantities().stream().anyMatch(q -> q.signum() < 0) || y.quantities().stream().anyMatch(q -> q.signum() < 0)) {
+                    throw Refused.domain("covers", "covers: a negative quantity");
+                }
+                boolean all = true;
+                for (var p : y.entries().entrySet()) {
+                    for (var t : p.getValue().entrySet()) {
+                        var have = x.entries().getOrDefault(p.getKey(), new java.util.TreeMap<>()).getOrDefault(t.getKey(), BigInteger.ZERO);
+                        if (have.compareTo(t.getValue()) < 0) all = false;
+                    }
+                }
+                yield all;
+            }
+            case "keyCred" -> new CredV(false, (Bytes) a.get(0));
+            case "scriptCred" -> new CredV(true, (Bytes) a.get(0));
+            case "wallet" -> new AddrV(new CredV(false, (Bytes) a.get(0)), Opt.NONE);
+            case "script" -> new AddrV(new CredV(true, (Bytes) a.get(0)), Opt.NONE);
+            case "walletStaked" -> new AddrV(new CredV(false, (Bytes) a.get(0)), Opt.some(new StakeHash(new CredV(false, (Bytes) a.get(1)))));
+            case "scriptStaked" -> new AddrV(new CredV(true, (Bytes) a.get(0)), Opt.some(new StakeHash(new CredV(false, (Bytes) a.get(1)))));
+            case "payment" -> ((AddrV) a.get(0)).payment();
+            default -> throw new IllegalStateException(o.op());
         };
     }
 
     /** The arm whose constructors include the value's: an Option's Some/None, a variant's name. */
     private static Ir.Arm arm(List<Ir.Arm> arms, Object v) {
-        String ctor = v instanceof Opt o ? (o.present() ? "Some" : "None") : ((Rec) v).type();
+        String ctor = v instanceof Opt o ? (o.present() ? "Some" : "None") : v instanceof CredV c ? (c.script() ? "ScriptCred" : "KeyCred")
+                : ((Rec) v).type();
         for (Ir.Arm a : arms) if (a.ctors().contains(ctor)) return a;
         throw new IllegalStateException("no arm for " + ctor);
     }
 
     private Env bindArm(Ir.Arm a, Object v, Env env) {
         for (int i = 0; i < a.binds().size(); i++) {
-            Object x = v instanceof Opt o ? o.value() : field((Rec) v, a.fields().get(i));
+            Object x = v instanceof Opt o ? o.value() : v instanceof CredV c ? c.hash() : field((Rec) v, a.fields().get(i));
             env = new Env(a.binds().get(i), x, env);
         }
         return env;
@@ -865,6 +1103,8 @@ public final class Interpreter {
                 yield true;
             }
             case Ty.BigMapT bm -> throw new IllegalStateException("a BigMap is not comparable");
+            // Values are canonical, so equal values have equal entries; addresses and credentials compare as data.
+            case Ty.Ledger l -> a.equals(b);
         };
     }
 
@@ -891,6 +1131,17 @@ public final class Interpreter {
                 yield true;
             }
             case Ty.BigMapT b -> true;
+            // §4: every hash in a credential or an address (its payment credential, a staking hash) is 28 bytes, and an
+            // address's staking part is none or a hash: a pointer is refused (review S1).
+            case Ty.Ledger l -> switch (l.name()) {
+                case "Credential" -> ((CredV) v).hash().value.length == 28;
+                case "Address" -> {
+                    AddrV x = (AddrV) v;
+                    yield x.payment().hash().value.length == 28
+                            && (!x.stake().present() || x.stake().value() instanceof StakeHash h && h.credential().hash().value.length == 28);
+                }
+                default -> true;
+            };
         };
     }
 
@@ -957,6 +1208,25 @@ public final class Interpreter {
                 Ty e = ((Ty.ListT) c.args().get(0).type()).elem();
                 for (int i = 0; i < xs.size(); i++) if (same(xs.get(i), a.get(1), e)) return Opt.some(BigInteger.valueOf(i));
                 return Opt.NONE;
+            }
+            case "isEmpty" -> {
+                return ((ValueV) a.get(0)).entries().isEmpty();
+            }
+            case "withoutLovelace" -> {
+                var m = new java.util.TreeMap<>(((ValueV) a.get(0)).entries());
+                m.remove("");
+                return new ValueV(m);
+            }
+            case "scale" -> {
+                BigInteger k = integer(a.get(0));
+                ValueV v = (ValueV) a.get(1);
+                if (k.signum() == 0) return ValueV.NONE;
+                if (!v.quantities().stream().allMatch(q -> inRange(q.multiply(k)))) throw Refused.domain("scale", "scale: a quantity out of the 128-bit range");
+                return ValueV.NONE.plus(v, k);
+            }
+            case "paymentKey", "paymentScript" -> {
+                CredV pay = ((AddrV) a.get(0)).payment();
+                return pay.script() == c.binding().name().equals("paymentScript") ? Opt.some(pay.hash()) : Opt.NONE;
             }
             case "andBytes", "orBytes", "xorBytes" -> {
                 return bitwise(c.binding().name(), bool(a.get(0)), ((Bytes) a.get(1)).value, ((Bytes) a.get(2)).value);

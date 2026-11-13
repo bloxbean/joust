@@ -20,6 +20,23 @@ import org.julclang.state.dsl.v2.Interpreter.MapV;
 import org.julclang.state.dsl.v2.Interpreter.Opt;
 import org.julclang.state.dsl.v2.Interpreter.Rec;
 import org.julclang.state.dsl.v2.Interpreter.Tx;
+import org.julclang.state.dsl.v2.Interpreter.AddrV;
+import org.julclang.state.dsl.v2.Interpreter.CredV;
+import org.julclang.state.dsl.v2.Interpreter.FundsV;
+import org.julclang.state.dsl.v2.Interpreter.StakeHash;
+import org.julclang.state.dsl.v2.Interpreter.StakePtr;
+import org.julclang.state.dsl.v2.Interpreter.ValueV;
+import org.julclang.ledger.Address;
+import org.julclang.ledger.Credential;
+import org.julclang.ledger.OutputDatum;
+import org.julclang.ledger.PubKeyHash;
+import org.julclang.ledger.ScriptHash;
+import org.julclang.ledger.StakingCredential;
+import org.julclang.ledger.Value;
+import org.julclang.state.api.Assets;
+import org.julclang.state.api.Funds;
+import org.julclang.state.api.Send;
+import org.julclang.state.runtime.Transition;
 import org.julclang.state.dsl.v2.JscV2;
 import org.julclang.state.runtime.InMemoryNodeStore;
 import org.julclang.state.runtime.MerkleSupport;
@@ -95,7 +112,17 @@ final class FourWay {
         this.harness = (StateHarness<Object>) StateHarness.of(spec);
         this.bigMaps = interp.bigMaps();
         contents.put(HEX.formatHex(Mpf.emptyRoot()), Map.of());
+        // M2: an asset-aware contract (a method takes Funds) carries sends, its mint and what it accepted on every leg.
+        boolean a = false;
+        for (Method m : cls.getDeclaredMethods()) {
+            var ps = m.getParameterTypes();
+            a |= ps.length > 0 && ps[ps.length - 1] == Funds.class;
+        }
+        this.assets = a;
     }
+
+    /** Whether a method takes Funds (M2): an asset-aware contract's legs carry its native assets. */
+    final boolean assets;
 
     boolean hasMaps() {
         return !bigMaps.isEmpty();
@@ -159,8 +186,13 @@ final class FourWay {
                 }
                 // The stored form: the root of the contents now, no reads or writes.
                 case BigMapV m -> new MerkleMap(root(m.now()), JulcList.empty(), JulcList.empty());
+                case ValueV x -> value(x);
+                case CredV x -> credential(x);
+                case AddrV x -> new Address(credential(x.payment()), x.stake().present() ? Optional.of(staking(x.stake().value())) : Optional.empty());
                 case Rec r -> {
-                    Class<?> rc = Class.forName(c.getName() + "$" + r.type());
+                    // The Java example's state record may have another name (dex's Pool; M2).
+                    String type = c == reference && r.type().equals("State") ? referenceState : r.type();
+                    Class<?> rc = Class.forName(c.getName() + "$" + type);
                     var comps = rc.getRecordComponents();
                     var types = new Class<?>[comps.length];
                     var vals = new Object[comps.length];
@@ -196,8 +228,110 @@ final class FourWay {
                 yield new org.julclang.core.PlutusData.MapData(pairs);
             }
             case Rec r -> new org.julclang.core.PlutusData.ConstrData(interp.tag(r.type()), r.fields().stream().map(this::raw).toList());
+            case ValueV x -> value(x).toPlutusData();
+            case CredV x -> org.julclang.core.PlutusData.constr(x.script() ? 1 : 0, org.julclang.core.PlutusData.bytes(x.hash().bytes()));
+            case AddrV x -> org.julclang.core.PlutusData.constr(0, raw(x.payment()), x.stake().present()
+                    ? org.julclang.core.PlutusData.constr(0, x.stake().value() instanceof StakeHash h ? org.julclang.core.PlutusData.constr(0, raw(h.credential()))
+                    : org.julclang.core.PlutusData.constr(1, org.julclang.core.PlutusData.integer(((StakePtr) x.stake().value()).slot()),
+                            org.julclang.core.PlutusData.integer(((StakePtr) x.stake().value()).txIndex()),
+                            org.julclang.core.PlutusData.integer(((StakePtr) x.stake().value()).certIndex())))
+                    : org.julclang.core.PlutusData.constr(1));
             default -> throw new IllegalArgumentException("no argument form for " + v);
         };
+    }
+
+    // ------------------------------------------------------------------ native assets (M2)
+
+    /** An interpreter value as the ledger's (canonical, in ledger order: Assets builds it so). */
+    static Value value(ValueV v) {
+        Value out = Assets.none();
+        for (var p : v.entries().entrySet()) {
+            for (var t : p.getValue().entrySet()) out = Assets.add(out, Assets.of(HEX.parseHex(p.getKey()), HEX.parseHex(t.getKey()), t.getValue()));
+        }
+        return out;
+    }
+
+    /** A ledger value as the interpreter's. */
+    static ValueV valueV(Value v) {
+        var m = new TreeMap<String, TreeMap<String, BigInteger>>();
+        Assets.read(v).forEach((p, ts) -> m.put(p, new TreeMap<>(ts)));
+        return new ValueV(m);
+    }
+
+    static Credential credential(CredV c) {
+        return c.script() ? new Credential.ScriptCredential(new ScriptHash(c.hash().bytes())) : new Credential.PubKeyCredential(new PubKeyHash(c.hash().bytes()));
+    }
+
+    static StakingCredential staking(Object s) {
+        return s instanceof StakeHash h ? new StakingCredential.StakingHash(credential(h.credential()))
+                : new StakingCredential.StakingPtr(((StakePtr) s).slot(), ((StakePtr) s).txIndex(), ((StakePtr) s).certIndex());
+    }
+
+    /** The transaction with the native assets the call sees: offered and held, under this harness's policy and instance. */
+    Tx funds(Tx t, ValueV received, ValueV held) {
+        return t.withFunds(new FundsV(received, held, Bytes.of(harness.policy()), Bytes.of(harness.instanceId())));
+    }
+
+    /** The Funds a JVM method gets for a transaction (none offered and none held when it does not say). */
+    static Funds javaFunds(Tx t) {
+        FundsV f = t.funds();
+        return new Funds(f.policy().bytes(), f.self().bytes(), value(f.received()), value(f.held()), JulcList.empty());
+    }
+
+    /**
+     * Funds as data, as the runtime writes them: cardano-client-lib's canonical CBOR, which orders a policy's token names
+     * by their encoding (shorter first), not the ledger's way ({@code 01} before {@code 00ff}). The transition program
+     * converts them back (ValueAdapter.fundsFromWire), as the validator converts the offered assets (review r1, C1).
+     */
+    static org.julclang.core.PlutusData fundsData(Tx t) {
+        return StateHarness.data(javaFunds(t));
+    }
+
+    /** Whether a method of the generated contract takes Funds. */
+    boolean takesFunds(String method) {
+        var ps = method(method).getParameterTypes();
+        return ps.length > 0 && ps[ps.length - 1] == Funds.class;
+    }
+
+    static JulcList<Send> sends(List<Interpreter.SendV> ss) {
+        if (ss.isEmpty()) return JulcList.empty();
+        var xs = new ArrayList<Send>();
+        for (var x : ss) {
+            AddrV a = x.to();
+            xs.add(new Send(new Address(credential(a.payment()), a.stake().present() ? Optional.of(staking(a.stake().value())) : Optional.empty()),
+                    value(x.value()), new OutputDatum.NoOutputDatum()));
+        }
+        return JulcList.of(xs.toArray(new Send[0]));
+    }
+
+    /**
+     * An asset-aware transition's result, as its transition program returns it (a step): Constr 0 [next as an option,
+     * payouts, sends, mint, accepted, deposits], encoded by JuLC's writer, which keeps a value's ledger order.
+     */
+    static String step(Object next, JulcList<Payout> payouts, JulcList<Send> sends, Value mint, Value accepted) {
+        var P = org.julclang.core.PlutusData.class;
+        var ps = new ArrayList<org.julclang.core.PlutusData>();
+        if (payouts != null) for (Payout p : payouts) ps.add(StateHarness.data(p));
+        var ss = new ArrayList<org.julclang.core.PlutusData>();
+        if (sends != null) {
+            for (Send x : sends) ss.add(org.julclang.core.PlutusData.constr(0, x.to().toPlutusData(), x.value().toPlutusData(), x.datum().toPlutusData()));
+        }
+        var n = next == null ? org.julclang.core.PlutusData.constr(1) : org.julclang.core.PlutusData.constr(0, StateHarness.data(next));
+        var d = org.julclang.core.PlutusData.constr(0, n, new org.julclang.core.PlutusData.ListData(ps), new org.julclang.core.PlutusData.ListData(ss),
+                (mint == null ? Assets.none() : mint).toPlutusData(), (accepted == null ? Assets.none() : accepted).toPlutusData(),
+                new org.julclang.core.PlutusData.ListData(List.of()));
+        return HEX.formatHex(org.julclang.core.cbor.PlutusDataCborEncoder.encode(d));
+    }
+
+    /** A component of a result record, or null when the record has none. */
+    static Object component(Object r, String name) {
+        try {
+            return r.getClass().getMethod(name).invoke(r);
+        } catch (NoSuchMethodException e) {
+            return null;
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private org.julclang.core.PlutusData rawArgs(List<Object> args) {
@@ -233,6 +367,10 @@ final class FourWay {
 
     /** An interpreter's outcome (either interpreter's: {@link JsLeg}) encoded as the runtime encodes a transition's result. */
     String encode(String method, Interpreter.Outcome o) {
+        if (assets && !interp.kind(method).equals("view")) {
+            return "ok:" + step(interp.kind(method).equals("destroy") ? null : java(o.value()), payouts(o.payouts()), sends(o.sends()),
+                    value(o.mint()), value(o.accepted()));
+        }
         return switch (interp.kind(method)) {
             case "view" -> "ok:" + data(java(o.value())).serializeToHex();
             case "destroy" -> "ok:" + result(null, payouts(o.payouts()));
@@ -253,6 +391,7 @@ final class FourWay {
         if (state != null) call.add(state);
         for (Object a : args) call.add(java(a));
         if (interp.usesTx(method)) call.add(ctx(t));
+        if (takesFunds(method)) call.add(javaFunds(t));
         try {
             return method(method).invoke(null, call.toArray());
         } catch (InvocationTargetException e) {
@@ -300,6 +439,7 @@ final class FourWay {
         Object r = run(ms, method, before, args, t);
         if (r == null) return "refused";
         if (kind.equals("view")) return "ok:" + data(r).serializeToHex();
+        if (assets) return "ok:" + jvmStep(r, kind, stateClass);
         if (r instanceof JulcList<?> l) return "ok:" + result(null, (JulcList<Payout>) l);
         Object next = nextState(r);
         if (hasMaps()) {
@@ -308,6 +448,16 @@ final class FourWay {
                     : ms.prepare(harness.policy(), (Class) stateClass, before, next, StateHarness.LIVE_REF).stored();
         }
         return "ok:" + result(next, outcomePayouts(r));
+    }
+
+    /** An asset-aware method's JVM result as a step (M2): the next state, payouts, sends, mint and accepted, read by name. */
+    @SuppressWarnings("unchecked")
+    static String jvmStep(Object r, String kind, Class<?> stateClass) {
+        if (r instanceof JulcList<?> l) return step(null, (JulcList<Payout>) l, null, null, null);
+        Object next = kind.equals("destroy") ? null : stateClass.isInstance(r) ? r : component(r, "state");
+        if (stateClass.isInstance(r)) return step(next, null, null, null, null);
+        return step(next, (JulcList<Payout>) component(r, "payouts"), (JulcList<Send>) component(r, "sends"), (Value) component(r, "mint"),
+                (Value) component(r, "accepted"));
     }
 
     /**
@@ -322,7 +472,14 @@ final class FourWay {
         var javaArgs = args.stream().map(this::java).toArray();
         PlutusData ctxData = interp.usesTx(method) ? data(ctx(t)) : NONE;
         if (!hasMaps() || state == null) {
-            return evaluateRaw(program, List.of(julc(state == null ? NONE : data(java(state))), julc(NONE), rawArgs(args), julc(ctxData)));
+            // M2: a method with Funds takes them first in its arguments' record (the transition generator's leading fields).
+            var in = rawArgs(args);
+            if (takesFunds(method)) {
+                var fs = new ArrayList<org.julclang.core.PlutusData>(List.of(fundsData(t)));
+                fs.addAll(((org.julclang.core.PlutusData.ConstrData) in).fields());
+                in = new org.julclang.core.PlutusData.ConstrData(0, fs);
+            }
+            return evaluateRaw(program, List.of(julc(state == null ? NONE : data(java(state))), julc(NONE), in, julc(ctxData)));
         }
         Object before = java(state);
         var proven = new LinkedHashMap<String, List<MapEntry>>();   // root hex -> proven entries, in discovery order
@@ -394,6 +551,7 @@ final class FourWay {
         } catch (Interpreter.Refused e) {
             o = null;
         }
+        if (assets) return validatorAssets(method, state, args, t, signer, candidate, o);
         var redeemerArgs = new ArrayList<Object>();
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
         for (Object a : args) redeemerArgs.add(java(a));
@@ -476,6 +634,233 @@ final class FourWay {
         validatorRuns++;
         lastVerdict = v;
         return v.accepted();
+    }
+
+    // ------------------------------------------------------------------ asset-aware contracts (M2)
+
+    /**
+     * The redeemer of a call of an asset-aware contract, with the arguments as an attacker may send them (raw), and the
+     * native assets offered ({@code assetsIn}, a payable method with Funds) in ledger order.
+     */
+    private Object assetRedeemer(String method, List<Object> args, Tx t) throws Exception {
+        String kind = interp.kind(method);
+        String variant = kind.equals("init") ? "CreateInstance" : cap(method);
+        var redeemerArgs = new ArrayList<Object>();
+        if (kind.equals("init")) redeemerArgs.add(harness.seed());
+        for (Object a : args) redeemerArgs.add(java(a));
+        if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
+        Class<?> rc = Class.forName(PKG + "." + name + "Validator$" + variant);
+        var comps = rc.getRecordComponents();
+        boolean assetsIn = comps.length > 0 && comps[comps.length - 1].getName().equals("assetsIn");
+        if (assetsIn) redeemerArgs.add(value(t.funds() == null ? ValueV.NONE : t.funds().received()).toPlutusData());
+        var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(construct(variant, redeemerArgs));
+        var fields = new ArrayList<>(encoded.fields());
+        int offset = kind.equals("init") ? 1 : 0;
+        for (int i = 0; i < args.size(); i++) fields.set(offset + i, raw(args.get(i)));
+        return new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
+    }
+
+    /** What the instance holds besides lovelace and its token, as the call's funds say (none when they do not). */
+    private static Value heldOf(Tx t) {
+        return t == null || t.funds() == null ? Assets.none() : value(t.funds().held());
+    }
+
+    /** The instance as the transaction spends it: an action's balance is what it may allocate; a destroy's everything. */
+    private StateHarness.Held held(String kind, Object before, Tx t) {
+        BigInteger funds = t == null ? BigInteger.ZERO : kind.equals("destroy") ? t.balance().subtract(BigInteger.valueOf(harness.minAda())) : t.balance();
+        return harness.held(before, funds, heldOf(t));
+    }
+
+    /** The mint redeemer: ByAction(own) when the transition mints user tokens, else BurnInstance for a destroy, else none. */
+    private Object mintRedeemer(String kind, StateHarness.Held h, Value mint) throws Exception {
+        if (!Assets.isEmpty(mint)) return construct("ByAction", List.of(h.ref()));
+        return kind.equals("destroy") ? construct("BurnInstance", List.of()) : null;
+    }
+
+    /** One transaction of an asset-aware call proposing {@code tr} (next is null for a destroy). */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private org.julclang.state.testkit.TxModel assetTx(String method, Object redeemer, Rec state, Tx t, byte[] signer, Transition tr)
+            throws Exception {
+        String kind = interp.kind(method);
+        Ctx c = interp.usesTx(method) ? ctx(t) : null;
+        if (kind.equals("init")) return harness.createWith(redeemer, tr.next(), c, tr.accepted(), false, null);
+        var h = held(kind, java(state), t);
+        return harness.stepWith(h, redeemer, mintRedeemer(kind, h, tr.mint()), tr, kind.equals("destroy") ? null : tr.next(), signer, c, null);
+    }
+
+    /** The interpreter's outcome as a transition. */
+    private Transition<Object> transitionOf(String kind, Interpreter.Outcome o) {
+        return Transition.full(kind.equals("destroy") ? null : java(o.value()), payouts(o.payouts()), sends(o.sends()), value(o.mint()),
+                value(o.accepted()));
+    }
+
+    /**
+     * The validator of an asset-aware contract (M2): the transaction is built as the runtime builds it ({@code createWith},
+     * {@code stepWith}): the state output holds what came in, plus what was received and accepted and the mint, less the
+     * payouts and sends, each send an output claimed in the registry; a refused call proposes the input state again with
+     * no effects (an action), everything to the caller (a destroy) or {@code candidate} (an init).
+     */
+    Boolean validatorAssets(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate, Interpreter.Outcome o) throws Exception {
+        String kind = interp.kind(method);
+        Object redeemer = assetRedeemer(method, args, t);
+        Transition<Object> tr;
+        if (o != null) {
+            tr = transitionOf(kind, o);
+        } else {
+            switch (kind) {
+                case "init" -> {
+                    if (candidate == null) return null;
+                    tr = Transition.full(java(candidate), JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none());
+                }
+                case "action" -> tr = Transition.full(java(state), JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none());
+                default -> tr = Transition.full(null, Payouts.of(signer, t.balance()), JulcList.empty(), Assets.none(), Assets.none());
+            }
+        }
+        var v = harness.evaluate(assetTx(method, redeemer, state, t, signer, tr));
+        validatorRuns++;
+        lastVerdict = v;
+        return v.accepted();
+    }
+
+    // ------------------------------------------------------------------ hostile inputs as raw data (J15; M2a review r1)
+
+    /**
+     * The transition program on arguments given as raw data, in place of {@code honest}'s (a value the interpreters'
+     * vector form cannot express: an unknown constructor tag, a missing or an extra field): "refused", or its result.
+     */
+    String transitionRaw(String method, Rec state, List<org.julclang.core.PlutusData> raw, Tx t) {
+        String program = transitions.get(method);
+        assertNotNull(program, name + " has no transition program " + method);
+        PlutusData ctxData = interp.usesTx(method) ? data(ctx(t)) : NONE;
+        var fields = new ArrayList<org.julclang.core.PlutusData>();
+        if (takesFunds(method)) fields.add(fundsData(t));
+        fields.addAll(raw);
+        return evaluateRaw(program, List.of(julc(state == null ? NONE : data(java(state))), julc(NONE),
+                new org.julclang.core.PlutusData.ConstrData(0, fields), julc(ctxData)));
+    }
+
+    /**
+     * The validator of an asset-aware contract on a redeemer whose arguments are raw data ({@code raw}, in place of
+     * {@code honest}'s), in the transaction built from {@code next} (the next state as data, nothing moved) or, when it
+     * is null, from the interpreter's outcome of the honest call. True when every script accepts.
+     */
+    boolean validatorRaw(String method, Rec state, List<Object> honest, List<org.julclang.core.PlutusData> raw, Tx t, byte[] signer,
+            org.julclang.core.PlutusData next) throws Exception {
+        String kind = interp.kind(method);
+        var encoded = (org.julclang.core.PlutusData.ConstrData) assetRedeemer(method, honest, t);
+        var fields = new ArrayList<>(encoded.fields());
+        int offset = kind.equals("init") ? 1 : 0;
+        for (int i = 0; i < raw.size(); i++) fields.set(offset + i, raw.get(i));
+        var redeemer = new org.julclang.core.PlutusData.ConstrData(encoded.constructorTag(), fields);
+        Transition<Object> tr = next != null ? Transition.full(next, JulcList.empty(), JulcList.empty(), Assets.none(), Assets.none())
+                : transitionOf(kind, interp.transition(method, state, honest, interpreterTx(t, signer)));
+        var v = harness.evaluate(assetTx(method, redeemer, state, t, signer, tr));
+        lastVerdict = v;
+        return v.accepted();
+    }
+
+    /** Values one step away: each entry ±1 (a zero result drops it), and one entry added (a token named 0x6d under the own policy). */
+    List<Value> nearbyValues(Value v, boolean grow) {
+        var out = new ArrayList<Value>();
+        for (var p : Assets.read(v).entrySet()) {
+            for (var tk : p.getValue().entrySet()) {
+                for (BigInteger d : grow ? List.of(BigInteger.ONE, BigInteger.ONE.negate()) : List.of(BigInteger.ONE.negate())) {
+                    out.add(Assets.add(v, Assets.of(HEX.parseHex(p.getKey()), HEX.parseHex(tk.getKey()), d)));
+                }
+            }
+        }
+        if (grow) out.add(Assets.add(v, Assets.of(harness.policy(), new byte[]{0x6d}, BigInteger.ONE)));
+        return out;
+    }
+
+    /**
+     * Send lists one step away: one dropped, one sending one unit less of its first entry, one to another address, and
+     * with {@code more}, one sending one unit more (what the one receiving it would want: taken from the instance, it
+     * leaves the continuing output one short). Not for a destroy: there the instance's value is accounted exactly by its
+     * payouts, sends and burn, so a send output holding more holds the submitter's own assets (a send is "at least its
+     * value", I30), which the ledger's balance refuses to take from the instance.
+     */
+    static List<JulcList<Send>> nearbySends(JulcList<Send> sends, boolean more) {
+        var ss = new ArrayList<Send>();
+        for (Send x : sends) ss.add(x);
+        var out = new ArrayList<JulcList<Send>>();
+        byte[] other = new byte[28];
+        Arrays.fill(other, (byte) 0xBB);
+        for (int k = 0; k < ss.size(); k++) {
+            Send x = ss.get(k);
+            var dropped = new ArrayList<>(ss);
+            dropped.remove(k);
+            out.add(sendList(dropped));
+            var moved = new ArrayList<>(ss);
+            moved.set(k, new Send(new Address(new Credential.PubKeyCredential(new PubKeyHash(other)), Optional.empty()), x.value(), x.datum()));
+            out.add(sendList(moved));
+            var r = Assets.read(x.value());
+            if (!r.isEmpty()) {
+                var p = r.firstEntry();
+                var tk = p.getValue().firstEntry();
+                var less = new ArrayList<>(ss);
+                less.set(k, new Send(x.to(), Assets.subtract(x.value(), Assets.of(HEX.parseHex(p.getKey()), HEX.parseHex(tk.getKey()), BigInteger.ONE)), x.datum()));
+                out.add(sendList(less));
+                if (more) {
+                    var plus = new ArrayList<>(ss);
+                    plus.set(k, new Send(x.to(), Assets.add(x.value(), Assets.of(HEX.parseHex(p.getKey()), HEX.parseHex(tk.getKey()), BigInteger.ONE)), x.datum()));
+                    out.add(sendList(plus));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static JulcList<Send> sendList(List<Send> ss) {
+        JulcList<Send> l = JulcList.empty();
+        for (int i = ss.size() - 1; i >= 0; i--) l = l.prepend(ss.get(i));
+        return l;
+    }
+
+    /**
+     * Mutation rejection for an asset-aware call (M2): every transaction proposing a next state, payouts, sends, mint or
+     * accepted value one step away from the interpreter's is rejected, and the accepted one passes the attack suite.
+     */
+    int mutantsAssets(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        String kind = interp.kind(method);
+        var o = interp.transition(method, state, args, t);
+        Object redeemer = assetRedeemer(method, args, t);
+        var tr = transitionOf(kind, o);
+        byte[] caller = t == null ? signer : t.caller().bytes();
+        var txs = new ArrayList<org.julclang.state.testkit.TxModel>();
+        var accepted = assetTx(method, redeemer, state, t, signer, tr);
+        if (!kind.equals("destroy")) {
+            for (Object m : nearbyStates(tr.next())) txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(m, tr.payouts(), tr.sends(), tr.mint(), tr.accepted())));
+        }
+        if (!kind.equals("init")) {
+            for (var q : nearbyPayouts(tr.payouts(), caller, kind.equals("action"))) {
+                txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), q, tr.sends(), tr.mint(), tr.accepted())));
+            }
+            for (var q : nearbySends(tr.sends(), kind.equals("action"))) {
+                txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), tr.payouts(), q, tr.mint(), tr.accepted())));
+            }
+            // A contract that never mints has no ByAction: its mint mutants are those of a contract that mints (Coins, Dex).
+            if (exists(PKG + "." + name + "Validator$ByAction")) {
+                for (var q : nearbyValues(tr.mint(), true)) {
+                    txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), tr.payouts(), tr.sends(), q, tr.accepted())));
+                }
+            }
+            for (var q : nearbyValues(tr.accepted(), false)) {
+                txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), tr.payouts(), tr.sends(), tr.mint(), q)));
+            }
+        }
+        var ok = harness.evaluate(accepted);
+        assertTrue(ok.accepted(), name + "." + method + ": the unmutated transaction must be accepted\n" + ok);
+        attacksRejected += org.julclang.state.testkit.Attacks.assertAllRejected(harness, accepted);
+        int n = 0;
+        for (var tx : txs) {
+            var v = harness.evaluate(tx);
+            assertFalse(v.accepted(), name + "." + method + ": mutant #" + n + " accepted\n" + v);
+            n++;
+        }
+        assertTrue(n > 0, name + "." + method + ": no mutants");
+        mutantsRejected += n;
+        return n;
     }
 
     // ------------------------------------------------------------------ batched actions (ADR-0004; M1c)
@@ -644,6 +1029,7 @@ final class FourWay {
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     int mutants(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        if (assets) return mutantsAssets(method, state, args, t, signer);
         String kind = interp.kind(method);
         var o = interp.transition(method, state, args, t);
         var redeemerArgs = new ArrayList<Object>();
@@ -779,6 +1165,9 @@ final class FourWay {
     /** Calls whose outcome on the Java example differs from the port's (each test states which it expects). */
     final List<String> javaDiffs = new ArrayList<>();
 
+    /** The Java example's state record (dex's is Pool; M2). */
+    String referenceState = "State";
+
     /** Also runs every vector on the Java example {@code pkg.<name>}, whose init is {@code init}, and records differences. */
     FourWay reference(String pkg, String init) throws Exception {
         this.reference = Class.forName(pkg + "." + name);
@@ -786,11 +1175,17 @@ final class FourWay {
         return this;
     }
 
+    /** As {@link #reference(String, String)}, the Java example's state record named {@code state}. */
+    FourWay reference(String pkg, String init, String state) throws Exception {
+        this.referenceState = state;
+        return reference(pkg, init);
+    }
+
     /** The Java example's JVM outcome, encoded as {@link #jvm} encodes the port's ("refused" when it fails). */
     @SuppressWarnings({"unchecked", "rawtypes"})
     String javaReference(String method, Rec state, List<Object> args, Tx t) throws Exception {
         String kind = interp.kind(method);
-        Class<?> rs = Class.forName(reference.getName() + "$State");
+        Class<?> rs = Class.forName(reference.getName() + "$" + referenceState);
         Object before = state == null ? null : java(state, reference);
         String m = kind.equals("init") ? referenceInit : method;
         Method found = null;
@@ -799,7 +1194,8 @@ final class FourWay {
         var call = new ArrayList<Object>();
         if (before != null) call.add(before);
         for (Object a : args) call.add(java(a, reference));
-        if (found.getParameterCount() > call.size()) call.add(ctx(t));
+        // The Ctx and the Funds (M2) the Java method takes after its arguments, by type.
+        for (int i = call.size(); i < found.getParameterCount(); i++) call.add(found.getParameterTypes()[i] == Funds.class ? javaFunds(t) : ctx(t));
         final Method target = found;
         var ms = new MerkleSupport(store);
         Object[] out = new Object[1];
@@ -820,6 +1216,7 @@ final class FourWay {
         }
         Object r = out[0];
         if (kind.equals("view")) return "ok:" + data(r).serializeToHex();
+        if (assets) return "ok:" + jvmStep(r, kind, rs);
         if (r instanceof JulcList<?> l) return "ok:" + result(null, (JulcList<Payout>) l);
         Object next = rs.isInstance(r) ? r : r.getClass().getMethod("state").invoke(r);
         JulcList<Payout> pays = rs.isInstance(r) ? null : (JulcList<Payout>) r.getClass().getMethod("payouts").invoke(r);
@@ -843,7 +1240,7 @@ final class FourWay {
         // method that reads nothing else of the transaction is called without one on the other legs (usesCtx: false).
         Tx ti = interpreterTx(t, signer);
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
-        // The Java interpreter's outcome; a Limit (its stack ran out) propagates and fails the test (semantics §2.4).
+        // The Java interpreter's outcome; a Limit (its stack ran out) propagates and fails the test (semantics §2, the transaction-level rules).
         Interpreter.Outcome o = null;
         Interpreter.Refused refused = null;
         try {
@@ -868,12 +1265,40 @@ final class FourWay {
         if (!interp.kind(method).equals("view")) {
             assertEquals(body, transition(method, state, args, t), "transition program vs interpreter: " + what);
             Boolean accepted = validator(method, state, args, t, signer, candidate);
-            if (accepted != null) assertEquals(!want.equals("refused"), accepted, "validator vs interpreter: " + what + " " + lastVerdict);
+            if (transactionLevel) {
+                assertEquals(Boolean.FALSE, accepted, "a transaction-level failure: the validator (or the ledger) refuses " + what + " " + lastVerdict);
+            } else if (accepted != null) {
+                assertEquals(!want.equals("refused"), accepted, "validator vs interpreter: " + what + " " + lastVerdict);
+            }
         }
         calls++;
         if (want.equals("refused")) refusals++;
         return want;
     }
+
+    /** Set while {@link #transactionLevel} runs a call. */
+    private boolean transactionLevel;
+
+    /**
+     * A call that fails only at the transaction (semantics §2, the transaction-level rules): both interpreters, the JVM
+     * method and the transition program accept it and agree, and the transaction built from their outcome is refused, by
+     * the validator or by the ledger (StateHarness.ledgerProblem). Returns the agreed outcome; {@link #lastVerdict} says
+     * which refused.
+     */
+    String transactionLevel(String method, Rec state, List<Object> args, Tx t, byte[] signer) throws Exception {
+        transactionLevel = true;
+        try {
+            String out = check(method, state, args, t, signer);
+            assertTrue(out.startsWith("ok:"), "the call itself succeeds: " + name + "." + method + " " + args);
+            transactionLevelRefusals++;
+            return out;
+        } finally {
+            transactionLevel = false;
+        }
+    }
+
+    /** Calls that fail only at the transaction ({@link #transactionLevel}). */
+    int transactionLevelRefusals;
 
     /** The transaction the interpreters see: {@code t} signed by {@code signer}, or the signer's alone when {@code t} is null. */
     static Tx interpreterTx(Tx t, byte[] signer) {

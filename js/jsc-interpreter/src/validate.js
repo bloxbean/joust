@@ -9,7 +9,7 @@
 
 import { ROWS } from './std.js';
 
-const PRIMS = new Set(['Int', 'Bool', 'Bytes', 'Key', 'Hash']);
+const PRIMS = new Set(['Int', 'Bool', 'Bytes', 'Key', 'Hash', 'Value', 'Address', 'Credential']);
 const INT_RE = /^-?(0|[1-9][0-9]*)$/;
 const HEX_RE = /^(?:[0-9a-f]{2})*$/;
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -57,12 +57,19 @@ export const NODES = {
   BigOp: { op: set('get', 'has', 'at', 'set', 'delete', 'isEmpty'), map: 'e', args: 'es' },
   Range: { from: 'e', to: 'e' },
   ListArg: { op: set('take', 'drop'), list: 'e', arg: 'e' },
+  // M2: funds, and the operations on values, credentials and addresses (additive in version 1).
+  FundsRef: { field: set('received', 'held', 'policy', 'self') },
+  LedgerOp: { op: set('none', 'lovelace', 'asset', 'add', 'sub', 'lovelaceOf', 'of', 'covers', 'keyCred', 'scriptCred', 'wallet',
+    'walletStaked', 'script', 'scriptStaked', 'payment'), args: 'es' },
 };
 // Fields are validated in this order: an initializer or collection before the binding it introduces (review C4).
 export const STMTS = {
   Let: { value: 'e', local: 'let' },
   Require: { cond: 'e', message: 's' },
   Pay: { to: 'e', amount: 'e' },
+  Send: { to: 'e', value: 'e' },
+  Mint: { burn: 'z', name: 'e', qty: 'e' },
+  Accept: { value: 'e' },
   If: { branches: 'branches', otherwise: 'b?', pays: 'z' },
   For: { list: 'e', var: 'l', body: 'b', pays: 'z' },
   Match: { scrutinee: 'e', arms: 'arms', pays: 'z' },
@@ -75,8 +82,14 @@ const STD_ARITY = {
   sha2_256: 1, sha3_256: 1, blake2b_256: 1, blake2b_224: 1, verifyEd25519: 3, length: 1, concat: 2, slice: 3, take: 2, drop: 2,
   byteAt: 2, toInt: 1, toHex: 1, div: 2, mod: 2, pow: 2, expMod: 3, sign: 1, andBytes: 3, orBytes: 3, xorBytes: 3, complement: 1,
   readBit: 2, shift: 2, rotate: 2, countSetBits: 1, findFirstSetBit: 1, last: 1, nth: 2, indexOf: 2, elapsedSince: 1,
-  elapsedSinceAtMost: 1, windowStart: 0, windowEnd: 0,
+  elapsedSinceAtMost: 1, windowStart: 0, windowEnd: 0, isEmpty: 1, withoutLovelace: 1, scale: 2, paymentKey: 1, paymentScript: 1,
 };
+const LEDGER_ARITY = {
+  none: 0, lovelace: 1, asset: 3, add: 2, sub: 2, lovelaceOf: 1, of: 3, covers: 2, keyCred: 1, scriptCred: 1, wallet: 1, walletStaked: 2,
+  script: 1, scriptStaked: 2, payment: 1,
+};
+// A credential's constructors (M2), matched like an enum's variants: KeyCred { key }, ScriptCred { hash }.
+const CRED_FIELDS = { KeyCred: 'key', ScriptCred: 'hash' };
 const PRELUDE_ARITY = { min: 2, max: 2, abs: 1, asKey: 1, asHash: 1 };
 const MAP_ARITY = { get: 1, has: 1, set: 2, delete: 1, size: 0, keys: 0, values: 0, isEmpty: 0, at: 1 };
 const KINDS = set('init', 'action', 'destroy', 'view');
@@ -182,12 +195,12 @@ export function validate(p) {
       if (a.binds.length !== a.fields.length) fail(where, 'binds and fields differ in length');
       if (a.binds.length > 0 && a.ctors.length !== 1) fail(where, 'only a single-constructor arm binds');
       for (const c of a.ctors) {
-        if (c === 'Some' || c === 'None') continue;
+        if (c === 'Some' || c === 'None' || c in CRED_FIELDS) continue;
         if (!(shapes.has(c) && [...enums.values()].some((vs) => vs.includes(c)))) fail(where, `no variant ${c}`);
       }
       for (const f of a.fields) {
         const c = a.ctors[0];
-        const known = c === 'Some' ? f === 'value' : (shapes.get(c) ?? []).some((x) => x.name === f);
+        const known = c === 'Some' ? f === 'value' : c in CRED_FIELDS ? f === CRED_FIELDS[c] : (shapes.get(c) ?? []).some((x) => x.name === f);
         if (!known) fail(where, `${c} has no field ${f}`);
       }
       const inner = new Set(scope);
@@ -267,6 +280,7 @@ export function validate(p) {
       arity(where, `fn ${e.fn}`, e.args.length, fnArity.get(e.fn));
     }
     if (e.node === 'CallStd') arity(where, e.name, e.args.length, STD_ARITY[e.name]);
+    if (e.node === 'LedgerOp') arity(where, e.op, e.args.length, LEDGER_ARITY[e.op]);
     if (e.node === 'Prelude') arity(where, e.op, e.args.length, PRELUDE_ARITY[e.op]);
     if (e.node === 'MapOp' || e.node === 'BigOp') arity(where, `${e.node}.${e.op}`, e.args.length, MAP_ARITY[e.op]);
     if (e.node === 'New') arity(where, `the record ${e.record}`, e.values.length, shapes.get(e.record).length);
@@ -322,7 +336,7 @@ export function validate(p) {
 
 /** §4: a type holds a Key, a Hash or a Map somewhere (records and variants through their fields). */
 function needsCheck(t, shapes, enums) {
-  if (typeof t === 'string') return t === 'Key' || t === 'Hash';
+  if (typeof t === 'string') return t === 'Key' || t === 'Hash' || t === 'Address' || t === 'Credential';
   const [k, v] = Object.entries(t)[0];
   if (k === 'list' || k === 'option') return needsCheck(v, shapes, enums);
   if (k === 'map') return true;

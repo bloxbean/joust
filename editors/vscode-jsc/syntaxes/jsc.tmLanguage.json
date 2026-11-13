@@ -202,7 +202,7 @@
         },
         {
           "name": "keyword.other.effect.jsc",
-          "match": "\\b(require|pay|delete)\\b"
+          "match": "\\b(require|pay|send|mint|burn|accept|delete)\\b"
         },
         {
           "name": "keyword.other.to.jsc",
@@ -245,7 +245,7 @@
           }
         },
         {
-          "match": "\\b(min|max|abs|utf8|asKey|asHash|range|after|before|has|isEmpty)\\s*(?=\\()",
+          "match": "\\b(min|max|abs|utf8|asKey|asHash|range|after|before|has|isEmpty|keyCred|scriptCred|wallet|script)\\s*(?=\\()",
           "captures": {
             "1": {
               "name": "support.function.builtin.jsc"
@@ -253,7 +253,7 @@
           }
         },
         {
-          "match": "\\b(sha2_256|sha3_256|blake2b_256|blake2b_224|verifyEd25519|length|concat|slice|take|drop|byteAt|toInt|toHex|div|mod|pow|expMod|sign|andBytes|orBytes|xorBytes|complement|readBit|shift|rotate|countSetBits|findFirstSetBit|last|nth|indexOf|elapsedSince|elapsedSinceAtMost|windowStart|windowEnd)\\s*(?=\\()",
+          "match": "\\b(sha2_256|sha3_256|blake2b_256|blake2b_224|verifyEd25519|length|concat|slice|take|drop|byteAt|toInt|toHex|div|mod|pow|expMod|sign|andBytes|orBytes|xorBytes|complement|readBit|shift|rotate|countSetBits|findFirstSetBit|last|nth|indexOf|elapsedSince|elapsedSinceAtMost|windowStart|windowEnd|withoutLovelace|scale|paymentKey|paymentScript)\\s*(?=\\()",
           "captures": {
             "1": {
               "name": "support.function.std.jsc"

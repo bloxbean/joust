@@ -503,6 +503,8 @@ final class Parser {
                 stmts.add(requireStmt());
             } else if (t.is("pay")) {
                 stmts.add(payStmt());
+            } else if (isEffect(t)) {
+                stmts.add(effectStmt());
             } else if (t.is("for")) {
                 next();
                 expect("(");
@@ -567,6 +569,38 @@ final class Parser {
         return new Require(c, m.text(), t.pos());
     }
 
+    /** An effect statement of M2 (D4): {@code send}, {@code mint}, {@code burn} or {@code accept}, followed by '('. */
+    private boolean isEffect(Tok t) {
+        return (t.is("send") || t.is("mint") || t.is("burn") || t.is("accept")) && peek(1).is("(") && peek(1).line() == t.line();
+    }
+
+    private Stmt effectStmt() {
+        Tok t = next();
+        expect("(");
+        Stmt s;
+        switch (t.text()) {
+            case "send" -> {
+                Expr to = expr();
+                expect(",");
+                Expr value = expr();
+                if (at(",")) {
+                    throw peek().pos().error("JSC0429", "send(to, value, datum) comes with datum encoders in a later part of M2: send(to, value)"
+                            + " sends without a datum");
+                }
+                s = new Send(to, value, t.pos());
+            }
+            case "mint", "burn" -> {
+                Expr name = expr();
+                expect(",");
+                Expr qty = expr();
+                s = new Mint(t.is("burn"), name, qty, t.pos());
+            }
+            default -> s = new Accept(expr(), t.pos());
+        }
+        expect(")");
+        return s;
+    }
+
     private Pay payStmt() {
         Tok t = next();
         expect("(");
@@ -594,9 +628,9 @@ final class Parser {
             }
             if (at("{")) {
                 body = block();
-            } else if (at("require") || at("pay")) {
-                // A statement arm: A => require(…) or A => pay(…).
-                Stmt st = at("require") ? requireStmt() : payStmt();
+            } else if (at("require") || at("pay") || isEffect(peek())) {
+                // A statement arm: A => require(…), A => pay(…), or another effect.
+                Stmt st = at("require") ? requireStmt() : at("pay") ? payStmt() : effectStmt();
                 body = new Block(List.of(st), null, st.pos());
             } else {
                 Expr e = expr();

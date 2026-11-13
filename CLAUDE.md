@@ -183,7 +183,18 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   resource-only plant would replace a contract's script).
 - ADR-0018 M1c: the Java examples vault, escrow, crowdfund, token and pool also run against their `.jsc` 2 ports
   (`examples/dsl`'s `copyPortTests` copies their `*Test.java`; `:examples:dsl:test` runs them). Keep those tests in their
-  package directory (the copy fails on subpackages or resources), and call the init as `<Contract>.<init>(`.
+  package directory (the copy fails on subpackages or resources), and call the init as `<Contract>.<init>(`. M2a adds dex,
+  whose records the copy renames (`Dex.Pool` → `Dex.State`, `Moved` → `Received`, `Closed` → `Settled`).
+- ADR-0018 M2a (values): generated `.jsc` code computes values only through `ValueAdapter` (JVM body fails where the PV11
+  Value builtins fail: a quantity out of the 128-bit range, a token name over 32 bytes, `covers` on negatives; on-chain
+  variant in `src/onchain/java`), never `Assets` directly. A value's entries are in the ledger's order (bytewise, a prefix
+  first), not CCL's canonical order: build value data with `Value.toPlutusData()`, never through CCL's canonical writer.
+  Under the own policy a 32-byte name (an instance id) is reserved: name minted tokens `blake2b_224(funds.self)`.
+  Offered assets arrive in CCL's order (a redeemer is canonical CBOR): validators and transition programs convert them
+  with `ValueAdapter.fromWire` (Java contracts too) before a method or I31 sees them. `Address`/`Credential` checked
+  inputs are decided on the data (`AddressAdapter`: tags, field counts; a staking pointer refused), since a transition
+  program decodes nothing. `StateHarness` refuses what the ledger would (negative or > 2^64 - 1 output quantities, a mint
+  outside Int64; `ledgerRules(false)` only for worst-case budgets). `ValueAdapterDifferentialTest` covers both bodies.
 - ADR-0018 `.jsc` 2 generated artifacts: after changing the IR, the lowering or an example, rewrite the JS
   interpreter's IR fixtures (`./gradlew :julc-state-dsl:test -Pjoust.writeIrFixtures`; `JscV2IrTest` fails when stale)
   and tree-sitter's shapes (`... --tests '*JscCorpusTest*' -Djsc.writeShapes=true`), and run `npm test` in

@@ -46,7 +46,31 @@ final class Abi {
             case Ty.BigMapT b -> "merkleMap<" + shape(b.val()) + ">";
             case Ty.Rec r -> r.name();
             case Ty.EnumT e -> e.name();
+            // M2: the ledger's schemas; a Value only as the native assets a redeemer carries (assetsIn).
+            case Ty.Ledger l -> l.equals(Ty.VALUE) ? VALUE_SHAPE : l.name();
         };
+    }
+
+    /** A value as data: policy → token name → quantity (ADR-0007; the redeemer's {@code assetsIn}). */
+    static final String VALUE_SHAPE = "map<bytes, map<bytes, int>>";
+
+    /** Whether a type names an address or a credential anywhere (the ledger schemas are then stated). */
+    private static boolean ledger(Ty t) {
+        return switch (t) {
+            case Ty.Ledger l -> !l.equals(Ty.VALUE);
+            case Ty.ListT l -> ledger(l.elem());
+            case Ty.OptT o -> ledger(o.elem());
+            case Ty.MapT m -> ledger(m.val());
+            default -> false;
+        };
+    }
+
+    private static boolean usesLedger(Ir.Program p) {
+        var all = new ArrayList<Ty>(p.state().fields().values());
+        p.records().values().forEach(r -> all.addAll(r.fields().values()));
+        p.enums().values().forEach(e -> e.variants().values().forEach(v -> all.addAll(v.fields().values())));
+        for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) all.add(l.type);
+        return all.stream().anyMatch(Abi::ledger);
     }
 
     private static String field(String name, String type, String data, String ind) {
@@ -80,6 +104,8 @@ final class Abi {
             var fs = new ArrayList<String>();
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            // M2: a payable method with Funds carries the native assets the caller offers (ADR-0007 r2).
+            if (Effects.takesAssets(m)) fs.add(field("assetsIn", "Value", VALUE_SHAPE, ind));
             ctx |= m.usesCtx();
             spend.add("      " + ctor(Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1), spend.size(), fs, "        "));
         }
@@ -97,10 +123,13 @@ final class Abi {
             fs.add(field("seed", "TxOutRef", "TxOutRef", ind));
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            if (Effects.takesAssets(m)) fs.add(field("assetsIn", "Value", VALUE_SHAPE, ind));
             ctx |= m.usesCtx();
             mint.add("      " + ctor("CreateInstance", 0, fs, "        "));
         }
         mint.add("      " + ctor("BurnInstance", 1, List.of(), "        "));
+        // M2: methods that mint user tokens; the mint validator's ByAction names the input whose spend checks it (ADR-0007 D4).
+        if (Effects.mints(p)) mint.add("      " + ctor("ByAction", 2, List.of(field("by", "TxOutRef", "TxOutRef", ind)), "        "));
         if (!batched.isEmpty()) {
             mint.add("      " + ctor("CreateIntent", 2, List.of(field("seed", "TxOutRef", "TxOutRef", ind), field("intent", "Intent", "Intent", ind)),
                     "        "));
@@ -134,6 +163,8 @@ final class Abi {
             types.add("    \"IntentCall\": { \"kind\": \"validator\", \"constructors\": [\n" + String.join(",\n", calls) + "\n    ] }");
             types.add("    \"IntentRefund\": { \"kind\": \"validator\", \"constructors\": [" + ctor("IntentRefund", 0, List.of(
                     field("intent", "TxOutRef", "TxOutRef", "        ")), "      ") + "] }");
+        }
+        if (!batched.isEmpty() || usesLedger(p)) {
             types.add("    \"Address\": { \"kind\": \"ledger\", \"constructors\": [" + ctor("Address", 0, List.of(
                     field("credential", "Credential", "Credential", "        "),
                     field("stakingCredential", "Option<StakingCredential>", "option<StakingCredential>", "        ")), "      ") + "] }");

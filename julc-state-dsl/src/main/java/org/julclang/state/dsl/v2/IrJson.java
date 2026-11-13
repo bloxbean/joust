@@ -124,6 +124,7 @@ final class IrJson {
             case Ty.EnumT e -> obj("enum", e.name());
             case Ty.MapT m -> obj("map", List.of(type(m.key()), type(m.val())));
             case Ty.BigMapT b -> obj("bigmap", List.of(type(b.key()), type(b.val())));
+            case Ty.Ledger l -> l.name();
         };
     }
 
@@ -175,6 +176,9 @@ final class IrJson {
                 }
                 case Ir.Require r -> obj("stmt", "Require", "cond", expr(r.cond()), "message", r.message(), "at", at(r.pos()));
                 case Ir.Pay y -> obj("stmt", "Pay", "to", expr(y.to()), "amount", expr(y.amount()), "at", at(y.pos()));
+                case Ir.Send y -> obj("stmt", "Send", "to", expr(y.to()), "value", expr(y.value()), "at", at(y.pos()));
+                case Ir.Mint y -> obj("stmt", "Mint", "burn", y.burn(), "name", expr(y.name()), "qty", expr(y.qty()), "at", at(y.pos()));
+                case Ir.Accept y -> obj("stmt", "Accept", "value", expr(y.value()), "at", at(y.pos()));
                 case Ir.If i -> {
                     Object branches = branches(i.branches());
                     yield obj("stmt", "If", "branches", branches, "otherwise", i.otherwise() == null ? null : block(i.otherwise()),
@@ -283,6 +287,8 @@ final class IrJson {
                 case Ir.BigOp o -> obj("node", "BigOp", "op", o.op(), "map", expr(o.map()), "args", exprs(o.args()));
                 case Ir.Range r -> obj("node", "Range", "from", expr(r.from()), "to", expr(r.to()));
                 case Ir.ListArg l -> obj("node", "ListArg", "op", l.op(), "list", expr(l.list()), "arg", expr(l.arg()));
+                case Ir.FundsRef f -> obj("node", "FundsRef", "field", f.field());
+                case Ir.LedgerOp o -> obj("node", "LedgerOp", "op", o.op(), "args", exprs(o.args()));
             };
             node.put("type", type(e.type()));
             node.put("taint", (long) e.taint());
@@ -466,6 +472,9 @@ final class IrJson {
                     case "Bytes" -> Ty.BYTES;
                     case "Key" -> Ty.KEY;
                     case "Hash" -> Ty.HASH;
+                    case "Value" -> Ty.VALUE;
+                    case "Address" -> Ty.ADDRESS;
+                    case "Credential" -> Ty.CREDENTIAL;
                     default -> throw new IllegalArgumentException("unknown type " + p);
                 };
             }
@@ -523,6 +532,12 @@ final class IrJson {
                 }
                 case "Require" -> new Ir.Require(expr(x.get("cond")), s(x.get("message")), at);
                 case "Pay" -> new Ir.Pay(expr(x.get("to")), expr(x.get("amount")), at);
+                case "Send" -> new Ir.Send(expr(x.get("to")), expr(x.get("value")), at);
+                case "Mint" -> {
+                    if (!(x.get("burn") instanceof Boolean burn)) throw new IllegalArgumentException("Mint's burn is a boolean");
+                    yield new Ir.Mint(burn, expr(x.get("name")), expr(x.get("qty")), at);
+                }
+                case "Accept" -> new Ir.Accept(expr(x.get("value")), at);
                 case "If" -> {
                     var branches = branches(x.get("branches"));
                     yield new Ir.If(branches, x.get("otherwise") == null ? null : block(x.get("otherwise")), (Boolean) x.get("pays"), at);
@@ -647,6 +662,18 @@ final class IrJson {
                 case "BigOp" -> new Ir.BigOp(s(x.get("op")), expr(x.get("map")), exprs(x.get("args")), t, taint, at);
                 case "Range" -> new Ir.Range(expr(x.get("from")), expr(x.get("to")), t, taint, at);
                 case "ListArg" -> new Ir.ListArg(s(x.get("op")), expr(x.get("list")), expr(x.get("arg")), t, taint, at);
+                case "FundsRef" -> {
+                    String f = s(x.get("field"));
+                    if (!Set.of("received", "held", "policy", "self").contains(f)) throw new IllegalArgumentException("unknown funds field " + f);
+                    yield new Ir.FundsRef(f, t, at);
+                }
+                case "LedgerOp" -> {
+                    String op = s(x.get("op"));
+                    var args = exprs(x.get("args"));
+                    Integer n = Ir.LEDGER_OPS.get(op);
+                    if (n == null || n != args.size()) throw new IllegalArgumentException("unknown ledger op " + op + "/" + args.size());
+                    yield new Ir.LedgerOp(op, args, t, taint, at);
+                }
                 default -> throw new IllegalArgumentException("unknown node " + x.get("node"));
             };
         }

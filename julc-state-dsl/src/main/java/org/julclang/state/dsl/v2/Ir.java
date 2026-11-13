@@ -121,7 +121,7 @@ final class Ir {
 
     // ------------------------------------------------------------------ statements
 
-    sealed interface Stmt permits Let, Require, Pay, If, For, MatchStmt {
+    sealed interface Stmt permits Let, Require, Pay, Send, Mint, Accept, If, For, MatchStmt {
         Pos pos();
     }
 
@@ -130,6 +130,15 @@ final class Ir {
     record Require(Expr cond, String message, Pos pos) implements Stmt {}
 
     record Pay(Expr to, Expr amount, Pos pos) implements Stmt {}
+
+    /** {@code send(to, value)} (M2): an output of {@code value} to {@code to}, in source order. */
+    record Send(Expr to, Expr value, Pos pos) implements Stmt {}
+
+    /** {@code mint(name, qty)} / {@code burn(name, qty)} (M2): {@code qty} more (or fewer) of the own policy's {@code name}. */
+    record Mint(boolean burn, Expr name, Expr qty, Pos pos) implements Stmt {}
+
+    /** {@code accept(value)} (M2): native assets the method takes in, summed. */
+    record Accept(Expr value, Pos pos) implements Stmt {}
 
     /** One test of an if or else-if chain: its condition and its arm. */
     record Branch(Expr cond, Block then, Pos pos) {}
@@ -157,7 +166,7 @@ final class Ir {
     sealed interface Expr permits Lit, LocalRef, StateRef, StateField, CtxRef, NoneLit, SomeOf, GetField, New, CallFn,
             CallStd, Prelude, TimePred, ListLit, Neg, Not, Arith, Compare, Equals, Logic, Cond, Coalesce, BlockValue,
             IfValue, ListProp, Concat, Contains, Hof, Fold, Variant, Match, MapEmpty, MapOp, MapHof, MapFold, BigEmpty, BigOp,
-            Range, ListArg {
+            Range, ListArg, FundsRef, LedgerOp {
         Ty type();
 
         int taint();
@@ -296,4 +305,28 @@ final class Ir {
 
     /** {@code xs.take(n)} / {@code xs.drop(n)}: {@code n} negative fails on both sides (D7). */
     record ListArg(String op, Expr list, Expr arg, Ty type, int taint, Pos pos) implements Expr {}
+
+    /**
+     * {@code funds.received}, {@code funds.held} (Values), {@code funds.policy} (a Hash) or {@code funds.self} (Bytes): the
+     * native assets a call sees (M2, ADR-0007 D1). Never a time value.
+     */
+    record FundsRef(String field, Ty type, Pos pos) implements Expr {
+        public int taint() {
+            return 0;
+        }
+    }
+
+    /**
+     * An operation on the ledger types of M2 (D5). Values: {@code none}, {@code lovelace} (Int), {@code asset} (Hash,
+     * Bytes, Int), {@code add}, {@code sub}, {@code lovelaceOf}, {@code of} (Value, Hash, Bytes), {@code covers}.
+     * Credentials and addresses: {@code keyCred} (Key), {@code scriptCred} (Hash), {@code wallet} (Key),
+     * {@code walletStaked} (Key, Key), {@code script} (Hash), {@code scriptStaked} (Hash, Key), {@code payment} (Address).
+     */
+    record LedgerOp(String op, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** The ops of {@link LedgerOp} with their argument counts. */
+    static final Map<String, Integer> LEDGER_OPS = Map.ofEntries(Map.entry("none", 0), Map.entry("lovelace", 1), Map.entry("asset", 3),
+            Map.entry("add", 2), Map.entry("sub", 2), Map.entry("lovelaceOf", 1), Map.entry("of", 3), Map.entry("covers", 2),
+            Map.entry("keyCred", 1), Map.entry("scriptCred", 1), Map.entry("wallet", 1), Map.entry("walletStaked", 2),
+            Map.entry("script", 1), Map.entry("scriptStaked", 2), Map.entry("payment", 1));
 }

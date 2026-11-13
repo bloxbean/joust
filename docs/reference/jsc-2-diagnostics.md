@@ -113,6 +113,22 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0222 | error | ' … ' would hide the type / enum / variant / fn …; a name is bound once and never replaces a declaration | Checker |
 | JSC0223 | error | the batched action … has an intent form named …Intent (the client's method) and …Intent (the validator's record); a method or type of that name would clash with it: rename one of them | Checker |
 
+### Names M2a reserves: a source change for preview users (ADR-0018 D16; M2a review F9)
+
+M2a reserves names **in every contract**, whether it uses values and assets or not, so some sources that M1 accepted are
+now refused. Rename the declaration; nothing else changes (no script of a contract that does not use these names
+changes).
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Received`, `Settled` (the generated result records), `ValueAdapter`, `AddressAdapter`, `Assets`, `Funds`, `Send`, `Sends`, `Datum`, `PubKeyHash`, `ScriptHash`, `KeyCred`, `ScriptCred` (the API classes and ledger constructors the lowering names) | a type, enum or variant name (`type Send = { … }`, `enum E { Received }`) | JSC0211 |
+| `Received`, `Settled`, `ByAction` (the mint redeemer) | a method whose capitalised name is one of them (`action received()`, `action byAction()`) | JSC0203 |
+| `wallet`, `script`, `keyCred`, `scriptCred` (the prelude's constructors, D8) | a state field (`state { wallet: Key }`) | JSC0208 |
+| the same four | a `fn` name | JSC0201 |
+| `pay`, `send`, `mint`, `burn`, `accept`, `deposit`, `emit` (the effect statements, D4) | a `fn` name (`fn send(…)` would read like the statement) | JSC0201 |
+
+`Value`, `Address` and `Credential` were reserved type names in M1 already.
+
 ## Types and values (ADR-0018 D5, D6)
 
 | Code | Severity | Message | Raised by |
@@ -120,10 +136,8 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0301 | error | the type … contains itself; recursive types are not supported | Checker |
 | JSC0302 | error | the enum … contains itself; recursive types are not supported | Checker |
 | JSC0303 | error | the state needs at least one field | Checker |
-| JSC0304 | error | comes with Value and Address in a later milestone of .jsc 2 (ADR-0018 §8: M2) | Checker |
 | JSC0305 | error | Option<Option<…>> is not allowed: JavaScript cannot tell Some(None) from None | Checker |
-| JSC0306 | error | comes in a later milestone of .jsc 2 (ADR-0018 §8: M2) | Checker |
-| JSC0307 | error | unknown type ' … ' (Int, Bool, Bytes, Key, Hash, List<T>, Option<T>, Map<K, V>, BigMap<K, V>, … or a declared type or enum) | Checker |
+| JSC0307 | error | unknown type ' … ' (Int, Bool, Bytes, Key, Hash, Value, Address, Credential, List<T>, … Option<T>, Map<K, V>, BigMap<K, V>, or a declared type or enum) | Checker |
 | JSC0308 | error | a … 's keys are Bytes, Key or Hash (at most 64 bytes, canonical order: ADR-0018 D5), not | Checker |
 | JSC0309 | error | duplicate parameter | Checker |
 | JSC0310 | error | ' … ': no state field | Checker |
@@ -135,7 +149,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0316 | error | takes one argument | Checker |
 | JSC0317 | error | strings are only require messages and utf8("…") arguments | Checker |
 | JSC0318 | error | the type of None is unknown here: give it one (const o: Option<Int> = None) | Checker |
-| JSC0319 | error | ' … ' comes in a later milestone of .jsc 2 (ADR-0018 §8) | Checker |
+| JSC0319 | error | ' … ' comes in a later part of M2 of .jsc 2 (ADR-0018 §8) | Checker |
 | JSC0320 | error | has no field | Checker |
 | JSC0321 | error | . … needs a record, a List or a Map, not | Checker |
 | JSC0322 | error | Some(None) is not allowed: an Option holds a value, and JavaScript cannot tell Some(None) from None (ADR-0018 D5) | Checker |
@@ -157,6 +171,10 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0338 | error | ?? needs an Option on its left, not | Checker |
 | JSC0339 | error | expected … but this is | Checker |
 | JSC0340 | error | the type … this type … nests more than … levels deep, counting each List, Option and Map layer and each type it contains (ADR-0018 J18): flatten it | Checker |
+| JSC0341 | error | a Value cannot be … : it is a local's, a fn parameter's or a fn result's type, and reaches the chain only through send, mint, burn and accept (ADR-0018 D5, M2) | Checker |
+| JSC0342 | error | … has no property … / has no methods / has no method … (Value: v.lovelace, v.of(policy, name), v.covers(w); Address: a.payment; Credential: match it) | Checker |
+| JSC0343 | error | funds is read by its fields: funds.received, funds.held (Values), funds.policy (a Hash) and funds.self (Bytes) / funds.deposits comes with deposits (receives) in a later part of M2 / funds has no field … | Checker |
+| JSC0344 | error | a Value is built with Value.none(), Value.lovelace(n) or Value.asset(policy, name, n) / … takes … | Checker |
 
 ## Methods, effects and audiences (ADR-0018 D4, D10)
 
@@ -164,17 +182,17 @@ that still happens in the front end is JSC0005, never a crash.
 |---|---|---|---|
 | JSC0401 | error | the contract needs an init(…) | Checker |
 | JSC0402 | error | is out of range | Checker |
-| JSC0403 | error | unknown contract option ' … ' (minAda, maxDatumBytes, maxValidityMs) | Checker |
-| JSC0404 | error | an init … a view … cannot pay (ADR-0018 D4) | Checker |
+| JSC0403 | error | unknown contract option ' … ' (minAda, maxDatumBytes, maxValidityMs, assetSlots) | Checker |
+| JSC0404 | error | an init … a view … cannot pay, send, mint or burn (ADR-0018 D4, ADR-0007 D1) | Checker |
 | JSC0405 | error | an init takes only 'payable' | Checker |
 | JSC0406 | error | a destroy cannot be payable | Checker |
 | JSC0407 | error | unknown modifier | Checker |
-| JSC0408 | error | can pay out, so it must say who may call it: add 'only <field>' or 'open' (ADR-0018 D4) | Checker |
-| JSC0409 | error | a destroy ends the instance, so it must pay out what it holds: pay(…) at least once (ADR-0018 D4) | Checker |
+| JSC0408 | error | can pay out, send, mint or burn, so it must say who may call it: add 'only <field>' or 'open' (ADR-0018 D4) | Checker |
+| JSC0409 | error | a destroy ends the instance, so it must pay out what it holds: pay(…), send(…), mint(…) or burn(…) at least once (ADR-0018 D4) | Checker |
 | JSC0410 | error | an init returns the first state: return { … } … an action evaluates to the next state: return { ...state, … } | Checker |
 | JSC0411 | error | a destroy ends the instance: it has no next state | Checker |
 | JSC0412 | error | a view evaluates to its value | Checker |
-| JSC0413 | error | pay(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4) | Checker |
+| JSC0413 | error | pay(…) / send(…) / mint(…) / burn(…) / accept(…) is allowed only in an action or destroy, not in a fn, view, lambda or value block (ADR-0018 D4) | Checker |
 | JSC0414 | error | 'state' is the input state of an action, destroy or view | Checker |
 | JSC0415 | error | is part of the transaction: it is not available in a view or fn (pass it as an argument) | Checker |
 | JSC0416 | error | the modifier ' … ' is given twice | Checker |
@@ -182,6 +200,12 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0418 | error | only an action can be batched (ADR-0004 D1) | Checker |
 | JSC0419 | error | a contract with BigMap state cannot have batched actions: each step of a batch would need its own map proofs (ADR-0004 D1, ADR-0018 D7) | Checker |
 | JSC0420 | error | … can pay out, so it must say who may call it; a batched action cannot use 'only' (any intent's owner is its caller), so write 'open' and check the caller in the body (ADR-0018 D4). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
+| JSC0422 | error | accept states the native assets a method takes in, so the method must be payable (ADR-0007 D1) | Checker |
+| JSC0423 | error | … is payable and uses funds, send, mint or burn, so it can take native assets: state exactly which with accept(…), or accept(Value.none()) for none (ADR-0007 r2, ADR-0018 D4) | Checker |
+| JSC0424 | error | a contract with native assets (a method uses funds, send, mint, burn or accept) cannot have batched actions: intents carry only lovelace (ADR-0007 r2, ADR-0018 D4) | Checker |
+| JSC0426 | error | accept in an init is not supported yet … / a payable init that uses funds would take native assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred). Both: `accept` in an init, and any payable init that reads `funds`. The processor's creation transition program is wrong for an init returning `(state, accepted)`, Java contracts included: [#81](https://github.com/bloxbean/joust/issues/81); lifted in M2b or M2c once it is fixed | Checker |
+| JSC0427 | error | funds is part of the transaction: it is not available in a view or fn (pass what you need as an argument) | Checker |
+| JSC0429 | error | send(to, value, datum) comes with datum encoders in a later part of M2: send(to, value) sends without a datum | Parser |
 | JSC0430 | error | a require message may not contain '#word:', the form of the checks the lowering generates (ADR-0018 D12): reword it | Checker |
 
 ## Time (ADR-0018 D11, J6)
@@ -206,6 +230,11 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0516 | error | a time value cannot be a bound of range: the number of steps, and so the budget, would … depend on the window (ADR-0018 D11) | Checker |
 | JSC0517 | error | a time value cannot be a map key: … would depend on the validity window (ADR-0018 D11) | Checker |
 | JSC0518 | error | a time value cannot be stored in a BigMap<…, Int>: storing it can fail (a negative value, or … one too large to encode), so the window would decide whether the call fails (ADR-0018 D11) | Checker |
+| JSC0519 | error | a time value cannot be a Value's quantity: building a value fails outside the 128-bit range, so the window would decide whether the call fails (ADR-0018 D11) | Checker |
+| JSC0520 | error | a time value cannot be any part of a send's value: a send must hold a non-negative value, so its sign would decide whether the call fails (ADR-0018 D11) | Checker |
+| JSC0521 | error | a time value cannot be a … mint / burn quantity: it must be positive, so its sign would decide whether the call fails (ADR-0018 D11) / a time value cannot decide a mint's / burn's token name: a name over 32 bytes or of a reserved kind fails the call (M2a review S5) | Checker |
+| JSC0522 | error | a time value cannot be any part of an accepted value: it must equal exactly the native assets the call receives (ADR-0018 D11) | Checker |
+| JSC0523 | error | a time value cannot decide whether … is Some or None (ADR-0018 D11) | Checker |
 
 ## Functions and recursion (ADR-0018 D7, J9)
 

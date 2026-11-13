@@ -5,6 +5,7 @@
 
 import {
   NONE, Some, some, Rec, MapV, BigMapV, Range, Refused, Limit, bytesEqual, bytesCompare, keyCompare, hex, unsignedBytes,
+  ValueV, CredV, AddrV, StakeHash, StakePtr, inRange, reserved,
 } from './values.js';
 import { parseStrict } from './strict-json.js';
 import { validate } from './validate.js';
@@ -106,7 +107,7 @@ class Program {
     if ((m.kind === 'init') !== (state === null || state === undefined)) throw new Error('an init has no input state; others do');
     return depthGuard(() => {
       if (modifiers) this.#modifiers(m, state, tx);
-      const frame = { state, tx, payouts: [] };
+      const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE };
       let env = null;
       m.params.forEach((l, i) => (env = bind(env, l, args[i])));
       // §4: every checked parameter is well formed before any statement runs.
@@ -116,7 +117,11 @@ class Program {
       }
       env = this.#exec(m.body.stmts, env, frame);
       const value = m.body.result === null ? null : this.#eval(m.body.result, env, frame);
-      return { value, payouts: frame.payouts };
+      // §5.4: a method that accepts takes in exactly what the caller offers, checked last.
+      if (accepts(m.body) && !frame.accepted.equals(funds(frame).received)) {
+        throw new Refused('the method accepts other native assets than the caller offers', 'domain', 'accepted');
+      }
+      return { value, payouts: frame.payouts, sends: frame.sends, mint: frame.mint, accepted: frame.accepted };
     });
   }
 
@@ -148,7 +153,7 @@ class Program {
 
   /** Evaluates one expression node in an empty scope (for the hand-written vectors of §6). */
   evalExpr(expr, { state = null, tx = null } = {}) {
-    return depthGuard(() => this.#eval(expr, null, { state, tx, payouts: [] }));
+    return depthGuard(() => this.#eval(expr, null, { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE }));
   }
 
   // ------------------------------------------------------------------ statements (§2.2, §2.3)
@@ -167,6 +172,40 @@ class Program {
           const amount = this.#eval(s.amount, env, f);
           if (amount < 0n) throw new Refused('a payout cannot be negative', 'domain', 'pay');
           if (amount > 0n) f.payouts.push({ to, lovelace: amount });
+          break;
+        }
+        case 'Send': {
+          // §5.1: both arguments, left to right; no negative quantity, no reserved name of the own policy; never to the
+          // contract's own script (I30).
+          const to = this.#eval(s.to, env, f);
+          const value = this.#eval(s.value, env, f);
+          if (!sendable(value, funds(f).policy, false)) throw new Refused('this value cannot be sent', 'domain', 'send');
+          if (to.payment.script && bytesEqual(to.payment.hash, funds(f).policy)) {
+            throw new Refused("a send cannot go to the contract's own script", 'domain', 'send');
+          }
+          f.sends.push({ to, value });
+          break;
+        }
+        case 'Mint': {
+          // §5.2: a positive quantity of a user token name (at most 32 bytes, not a reserved kind); the net stays in range.
+          const name = this.#eval(s.name, env, f);
+          const q = this.#eval(s.qty, env, f);
+          if (q <= 0n || name.length > 32 || reserved(name)) {
+            throw new Refused(`${s.burn ? 'burn' : 'mint'}: a positive quantity of a user token name`, 'domain', 'mint');
+          }
+          const policy = funds(f).policy, d = s.burn ? -q : q;
+          const total = f.mint.quantity(policy, name) + d;
+          if (total !== 0n && !inRange(total)) throw new Refused('mint: a quantity out of the 128-bit range', 'domain', 'mint');
+          f.mint = f.mint.plus(ValueV.of(policy, name, d), 1n);
+          break;
+        }
+        case 'Accept': {
+          // §5.3: native assets only, every quantity positive, no reserved name of the own policy; summed.
+          const v = this.#eval(s.value, env, f);
+          if (!sendable(v, funds(f).policy, true)) throw new Refused('this value cannot be accepted', 'domain', 'accept');
+          const sum = f.accepted.plus(v, 1n);
+          if (!sum.quantities().every(inRange)) throw new Refused('accept: a quantity out of the 128-bit range', 'domain', 'accept');
+          f.accepted = sum;
           break;
         }
         case 'If': {
@@ -304,6 +343,8 @@ class Program {
       }
       case 'BigEmpty': return BigMapV.EMPTY;
       case 'BigOp': return this.#bigOp(e, env, f);
+      case 'FundsRef': return funds(f)[e.field];
+      case 'LedgerOp': return ledger(e.op, e.args.map((x) => this.#eval(x, env, f)));
       default:
         throw new Error(`unknown node ${e.node}`);
     }
@@ -344,14 +385,14 @@ class Program {
 
   /** §3.5: the first arm whose constructors include the value's. */
   #arm(arms, v) {
-    const ctor = v === NONE ? 'None' : v instanceof Some ? 'Some' : v.type;
+    const ctor = v === NONE ? 'None' : v instanceof Some ? 'Some' : v instanceof CredV ? (v.script ? 'ScriptCred' : 'KeyCred') : v.type;
     for (const a of arms) if (a.ctors.includes(ctor)) return a;
     throw new Error(`no arm for ${ctor}`);
   }
 
   #bindArm(arm, v, env) {
     arm.binds.forEach((l, i) => {
-      env = bind(env, l, v instanceof Some ? v.value : this.#field(v, arm.fields[i]));
+      env = bind(env, l, v instanceof Some ? v.value : v instanceof CredV ? v.hash : this.#field(v, arm.fields[i]));
     });
     return env;
   }
@@ -369,7 +410,7 @@ class Program {
     if (!fn) throw new Error(`no fn ${name}`);
     let env = null;
     fn.params.forEach((l, i) => (env = bind(env, l, args[i])));
-    return this.#block(fn.body, env, { state: null, tx: null, payouts: [] });
+    return this.#block(fn.body, env, { state: null, tx: null, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE });
   }
 
   #prelude(op, args) {
@@ -461,6 +502,13 @@ class Program {
         case 'Key':
         case 'Hash':
           return bytesEqual(a, b);
+        // §3.4 (M2): values are canonical, so equal values have equal entries; credentials and addresses by structure.
+        case 'Value':
+          return a.equals(b);
+        case 'Credential':
+          return sameCred(a, b);
+        case 'Address':
+          return sameCred(a.payment, b.payment) && sameStake(a.stake, b.stake);
         default:
           throw new Error(`unknown type ${t}`);
       }
@@ -489,7 +537,14 @@ class Program {
 
   /** Whether `v` is well formed at type `t` (§4). */
   wellFormed(v, t) {
-    if (typeof t === 'string') return t === 'Key' || t === 'Hash' ? v.length === 28 : true;
+    if (typeof t === 'string') {
+      if (t === 'Key' || t === 'Hash') return v.length === 28;
+      // §4 (M2): every hash of a credential or an address (its payment credential, a staking hash) is 28 bytes.
+      if (t === 'Credential') return v.hash.length === 28;
+      // A staking part is none or a hash: a pointer is refused (review S1).
+      if (t === 'Address') return v.payment.hash.length === 28 && (v.stake === NONE || (v.stake.value instanceof StakeHash && v.stake.value.credential.hash.length === 28));
+      return true;
+    }
     if ('list' in t) return v.every((x) => this.wellFormed(x, t.list));
     if ('option' in t) return v === NONE || this.wellFormed(v.value, t.option);
     if ('record' in t) return this.#fieldsWellFormed(v, t.record);
@@ -511,6 +566,93 @@ class Program {
     const { types } = this.shapes.get(type);
     return types.every((ft, i) => this.wellFormed(v.fields[i], ft));
   }
+}
+
+// ------------------------------------------------------------------ values, credentials, addresses (M2, §1.3, §5)
+
+function funds(f) {
+  if (!f.tx || !f.tx.funds) throw new Error('this call reads funds: its transaction needs them');
+  return f.tx.funds;
+}
+
+/** Whether a block holds an accept statement, in any arm or loop. */
+function accepts(b) {
+  if (!b) return false;
+  return b.stmts.some((s) => s.stmt === 'Accept'
+    || (s.stmt === 'If' && (s.branches.some((br) => accepts(br.then)) || accepts(s.otherwise)))
+    || (s.stmt === 'For' && accepts(s.body))
+    || (s.stmt === 'Match' && s.arms.some((a) => accepts(a.body))));
+}
+
+/** §5.1, §5.3: every quantity positive, no reserved name under the own policy, and, accepting, no lovelace. */
+function sendable(v, policy, accepting) {
+  const own = hex(policy);
+  for (const [p, n, q] of v.entries) {
+    if (accepting && p === '') return false;
+    if (q <= 0n) return false;
+    if (p === own && reserved(fromHexBytes(n))) return false;
+  }
+  return true;
+}
+
+function fromHexBytes(s) {
+  const out = new Uint8Array(s.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(2 * i, 2 * i + 2), 16);
+  return out;
+}
+
+function inRangeValue(v, op) {
+  if (!v.quantities().every(inRange)) throw new Refused(`${op}: a quantity out of the 128-bit range`, 'domain', op);
+  return v;
+}
+
+const EMPTY = new Uint8Array(0);
+
+/** §1.3: the operations on values, credentials and addresses, each failing exactly outside its domain. */
+function ledger(op, a) {
+  switch (op) {
+    case 'none': return ValueV.NONE;
+    case 'lovelace':
+      if (a[0] !== 0n && !inRange(a[0])) throw new Refused('Value.lovelace: a quantity out of the 128-bit range', 'domain', 'Value.lovelace');
+      return ValueV.of(EMPTY, EMPTY, a[0]);
+    case 'asset':
+      if (a[2] !== 0n && (a[1].length > 32 || !inRange(a[2]))) {
+        throw new Refused('Value.asset: a token name over 32 bytes, or a quantity out of the 128-bit range', 'domain', 'Value.asset');
+      }
+      return ValueV.of(a[0], a[1], a[2]);
+    case 'add': return inRangeValue(a[0].plus(a[1], 1n), 'Value +');
+    case 'sub':
+      // a - b is a + (-1)·b: every negated quantity of b is in range too.
+      if (!a[1].quantities().every((q) => inRange(-q))) throw new Refused('Value -: a quantity out of the 128-bit range', 'domain', 'Value -');
+      return inRangeValue(a[0].plus(a[1], -1n), 'Value -');
+    case 'lovelaceOf': return a[0].quantity(EMPTY, EMPTY);
+    case 'of': return a[0].quantity(a[1], a[2]);
+    case 'covers': {
+      if (a[0].quantities().some((q) => q < 0n) || a[1].quantities().some((q) => q < 0n)) {
+        throw new Refused('covers: a negative quantity', 'domain', 'covers');
+      }
+      return a[1].entries.every(([p, n, q]) => a[0].quantity(fromHexBytes(p), fromHexBytes(n)) >= q);
+    }
+    case 'keyCred': return new CredV(false, a[0]);
+    case 'scriptCred': return new CredV(true, a[0]);
+    case 'wallet': return new AddrV(new CredV(false, a[0]), NONE);
+    case 'script': return new AddrV(new CredV(true, a[0]), NONE);
+    case 'walletStaked': return new AddrV(new CredV(false, a[0]), some(new StakeHash(new CredV(false, a[1]))));
+    case 'scriptStaked': return new AddrV(new CredV(true, a[0]), some(new StakeHash(new CredV(false, a[1]))));
+    case 'payment': return a[0].payment;
+    default: throw new Error(`unknown ledger operation ${op}`);
+  }
+}
+
+function sameCred(a, b) {
+  return a.script === b.script && bytesEqual(a.hash, b.hash);
+}
+
+function sameStake(a, b) {
+  if (a === NONE || b === NONE) return a === b;
+  const x = a.value, y = b.value;
+  if (x instanceof StakeHash) return y instanceof StakeHash && sameCred(x.credential, y.credential);
+  return y instanceof StakePtr && x.slot === y.slot && x.txIndex === y.txIndex && x.certIndex === y.certIndex;
 }
 
 // ------------------------------------------------------------------ operations

@@ -432,6 +432,21 @@ public final class JscMain {
      * {@code .jsc} 2 manifest is accepted, 1 on an error, 2 on a usage error.
      */
     public static int run(String[] args) throws IOException {
+        return run(args, JscMain::lowerWithWarnings);
+    }
+
+    /** How {@link #run} lowers one file's text: {@link #lowerWithWarnings}, or a test's stand-in. */
+    @FunctionalInterface
+    public interface FrontEnd {
+        Lowered lower(String source, String fileName);
+    }
+
+    /**
+     * {@link #run(String[])} with {@code frontEnd} lowering each file. A test passes a front end that fails in a known
+     * way (a real StackOverflowError, say) to check that the build reports it as JSC0005 at the file and never crashes,
+     * whatever the stack size (M1 hardening: the depth test no longer depends on how much stack a nested input uses).
+     */
+    public static int run(String[] args, FrontEnd frontEnd) throws IOException {
         if (args.length == 3 && args[0].equals("--check-abi")) return checkAgainstDescriptions(Path.of(args[1]), Path.of(args[2]));
         if (args.length >= 3 && args[0].equals("--migrate")) {
             boolean inPlace = args.length == 4 && args[3].equals("--in-place");
@@ -467,7 +482,7 @@ public final class JscMain {
             String text = Files.readString(f);
             String name = src.relativize(f).toString();
             try {
-                var lowered = lowerWithWarnings(text, f.getFileName().toString());
+                var lowered = frontEnd.lower(text, f.getFileName().toString());
                 lowered.diagnostics().forEach(w -> System.err.println(w.format(name)));
                 String java = lowered.java();
                 Path target = out.resolve(outputPath(text));

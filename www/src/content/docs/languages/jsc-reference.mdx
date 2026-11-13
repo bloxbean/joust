@@ -15,8 +15,10 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 [standard library](/languages/jsc-std/). A file without `jsc 2` is [.jsc v1](/languages/jsc-v1/).
 
 <Aside type="caution" title="A preview">
-`.jsc` 2 is a preview: the core language of milestone M1. The features of M2 to M4 (values and assets, owned and keyed
-objects, purposes, libraries) still need [Java](/languages/java/).
+`.jsc` 2 is a preview: the core language of milestone M1, and M2a's values and native assets (`Value`, `Address`,
+`Credential`, `funds`, `send`, `mint`, `burn`, `accept`). The rest of M2 (params, invariants, events, quorum, authorized
+actions, reads, deposits, other contracts) and M3 to M4 (owned and keyed objects, purposes, libraries) still need
+[Java](/languages/java/).
 </Aside>
 
 ## Lexical rules
@@ -76,6 +78,7 @@ Members may come in any order. A block's last expression is its value; a stateme
 | `minAda` | `long minAda()` | derived from `maxDatumBytes` | Lovelace locked as the state UTxO's min-ADA deposit; below the derived value is a compile error |
 | `maxDatumBytes` | `int maxDatumBytes()` | `512` | Largest serialised state the validator accepts |
 | `maxValidityMs` | `long maxValidityMs()` | `3600000` | Widest validity interval a call that reads the transaction may use |
+| `assetSlots` | `int assetSlots()` | `4` when a method moves native assets, else `0` | Native assets the state UTxO's deposit is sized for (ADR-0007 D2); 0 to 64 |
 
 Values are non-negative integer literals (`ada` allowed); anything else is `JSC0402` or `JSC0403`.
 
@@ -97,6 +100,9 @@ Java, so a `.jsc` contract and a Java contract with the same state agree on chai
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | the `MerkleMap` record: its root, and the reads and writes of the call (`merkleMap<…>`) | a state field only (`JSC0803`) |
 | `type R = { f: T, … }` | a generated record | `Constr 0` with the fields in declaration order | no generic records |
 | `enum E { A, B { x: Int } }` | a generated sealed interface and one record per variant | `Constr i`, `i` the variant's declaration index, then its fields | |
+| `Credential` | the ledger's `Credential` | `Constr 0 [key hash]` (`KeyCred`) / `Constr 1 [script hash]` (`ScriptCred`) | built with `keyCred(k)`, `scriptCred(h)`; read with `match c { KeyCred { key } => …, ScriptCred { hash } => … }` |
+| `Address` | the ledger's `Address` | `Constr 0 [credential, staking option]` | built with `wallet(k)`, `wallet(k, stakeKey)`, `script(h)`, `script(h, stakeKey)`; `a.payment` is its credential |
+| `Value` | the ledger's `Value` | never stored or passed | a local's, a `fn`'s parameter or result, `funds`' and the effects' only (`JSC0341`) |
 
 There are no strings at run time, no implicit conversions, no `null` and no generic user types. Type, enum and variant
 names start with a capital (`JSC0205`), have no `_` (`JSC0206`), share one namespace (`JSC0910`), and may not be a
@@ -106,8 +112,8 @@ name the processor generates (`Lifecycle`, `Calls`, `Step`, `Funds`, … : `JSC0
 
 Every `init` argument and every action and destroy parameter (the redeemer) is checked by generated code before the
 method's body runs, recursively through records, enums, lists and options: every `Key` and `Hash` is 28 bytes, and
-every `Map` has unique keys of at most 64 bytes in strictly ascending canonical order. A failure is a located
-`require` failure. View parameters are not checked: a view runs off chain on your own inputs.
+every `Map` has unique keys of at most 64 bytes in strictly ascending canonical order; every `Credential` holds a 28-byte
+hash, and every `Address` the ledger's encoding with a well-formed payment credential and, if it has one, a staking hash (an address with a staking pointer is refused). A checked address may still be your contract's own script, and `send` to it always fails (`#send:`). If you store an address you will send to later (a refund list, a beneficiary), refuse it when you take it: `require(paymentScript(a) == None || asHash(paymentScript(a) ?? #00) != funds.policy, "not this contract")`. A failure is a located `require` failure. View parameters are not checked: a view runs off chain on your own inputs.
 
 ## Names and scope
 
@@ -219,11 +225,42 @@ never happens.
 Lambdas are only direct arguments of these methods: `x => e`, `(acc, x) => e`, or a value block. They capture
 `const`s and cannot be stored or returned.
 
+## Values and funds
+
+A `Value` is a multi-asset value: quantities by (policy, token name), lovelace under the empty policy and name. It is
+canonical in the ledger's order, and every quantity stays within the signed 128-bit range; an operation that would
+leave it fails, as the ledger's builtins do on-chain.
+
+| Expression | Meaning |
+|---|---|
+| `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, n)` | the empty value; lovelace; a token (`policy` a `Hash`, `name` at most 32 bytes) |
+| `v + w`, `v - w`, `v == w`, `v != w` | entry by entry; equality of entries |
+| `v.lovelace`, `v.of(policy, name)` | a quantity, 0 when absent |
+| `v.covers(w)` | `v` holds at least `w` of every entry (fails on a negative quantity) |
+| `isEmpty(v)`, `withoutLovelace(v)`, `scale(k, v)` | from [`std/value`](/languages/jsc-std/) |
+| `paymentKey(a)`, `paymentScript(a)` | from [`std/address`](/languages/jsc-std/): the key or script an address pays to, as an `Option` |
+
+`funds` is the native assets a call sees, in an `init`, action or destroy: `funds.received` (what the caller offers,
+no lovelace: that is `received`), `funds.held` (what the instance holds besides lovelace and its own token),
+`funds.policy` (the contract's policy) and `funds.self` (the instance's token name). A method that reads `funds`, or
+sends, mints, burns or accepts, is lowered with the processor's `Funds` parameter.
+
 ## Effects and audiences
 
-`pay` is the only effect in `.jsc` 2 today; `send`, `mint`/`burn`, `deposit`, `accept` and `emit` arrive in M2.
-Payouts accumulate **in source order** (in a `for`, in list order; an effect in an untaken branch does not happen).
-An action that can reach a `pay` in any arm or loop must have `only <field>` or `open` (`JSC0408`).
+| Statement | Effect | Generated check (key) |
+|---|---|---|
+| `pay(to, n)` | a payout of `n` lovelace to the key `to`; 0 is skipped | `n` is not negative (`#pay:`) |
+| `send(to, v)` | an output of `v` to the address `to`, without a datum | every quantity positive, no reserved name of the own policy, never to the contract's own script (`#send:`) |
+| `mint(name, n)`, `burn(name, n)` | `n` more, or fewer, of the own policy's `name`; the net is what the transaction mints | `n` positive, `name` a user token of at most 32 bytes (`#mint:`) |
+| `accept(v)` | the method takes in `v` | native assets only, every quantity positive (`#accept:`); at the end, the sum accepted equals `funds.received` (`#funds:`) |
+
+Each kind accumulates **in source order** (in a `for`, in list order; an effect in an untaken branch does not happen);
+`mint` and `accept` are net sums. An `init` takes no effect but may read `funds` (`JSC0404`; `accept` in an init is
+not supported yet, `JSC0426`). `accept` needs `payable` (`JSC0422`), and a payable method that reads `funds`, sends,
+mints or burns must state what it takes in, `accept(Value.none())` for nothing (`JSC0423`). A method that can reach a
+`pay`, `send`, `mint` or `burn` in any arm or loop must have `only <field>` or `open` (`JSC0408`). A contract with native
+assets has no `batched` actions (`JSC0424`). An action with effects returns `Outcome`, or `Received` when it takes native
+assets; a destroy that sends, mints or burns returns `Settled` (the processor's result records).
 
 ## Time (D11)
 
@@ -243,8 +280,10 @@ manifest lists them as `timeFields`).
   `m.has(k)` and `== None` are ordinary.
 - **Failing.** A time value may not be a divisor (`JSC0515`), a domain-checked `std` argument (`JSC0509`), a map key
   (`JSC0517`), a range bound (`JSC0516`), a `take`/`drop` count (`JSC0512`), an `nth` index (`JSC0510`), a `Key` or
-  `Hash` conversion (`JSC0507`) or a `BigMap<K, Int>` value (`JSC0518`). A `fn` called with a time argument is checked
-  with that parameter as a time value.
+  `Hash` conversion (`JSC0507`), a `BigMap<K, Int>` value (`JSC0518`), a `Value`'s quantity (`JSC0519`), any part of a
+  sent or accepted value (`JSC0520`, `JSC0522`) or a mint or burn quantity (`JSC0521`), and it never decides whether
+  `paymentKey` or `paymentScript` is `Some` (`JSC0523`). A `fn` called with a time argument is checked with that
+  parameter as a time value.
 - **Flowing.** Arithmetic on time values is allowed, and they may set state and amounts. A payout set by one must be
   exactly `pay(to, max(0, …))` (`JSC0501`). Warnings name the bias: a stored window value (`JSC9003`), a value derived
   from a stored time (`JSC9004`), a payout (`JSC9005`).
