@@ -68,5 +68,41 @@ class ParamsAuthDiagnosticsTest {
                 @Action @Batched public static S a(S s, Ctx ctx) { return s; }
                 @Invariant public static boolean inv(S s) { return true; }"""));
         assertTrue(r2.hasError("@Invariant cannot be combined with @Batched"), r2.errors().toString());
+        // ADR-0009 r3 (#84 review S1/C1): a state quorum's shape is checked on every output but not on a batch's states,
+        // so a batched action (here one that raises the threshold) could lock the contract: refused.
+        var r3 = compile(contract("""
+                @Action @Batched public static S bump(S s, Ctx ctx) { return new S(s.keys(), s.k().add(BigInteger.ONE), s.owner()); }
+                @Action @Quorum(keys = "keys", threshold = "k") public static S a(S s) { return s; }"""));
+        assertTrue(r3.hasError("@Quorum over state fields cannot be combined with @Batched"), r3.errors().toString());
+    }
+
+    /** #84 review F9: a client's destroy that emits without native assets compiles (Transition.<S>end, a type witness). */
+    @Test
+    void aDestroyThatEmits_withoutAssets_compiles() {
+        var r = compile("""
+                @StateContract
+                public class C {
+                    public record S(byte[] owner) {}
+                    public sealed interface Ev permits Gone {}
+                    public record Gone() implements Ev {}
+                    public record Settled(JulcList<Payout> payouts, JulcList<Ev> events) {}
+                    @Init public static S init(Ctx ctx) { return new S(ctx.caller()); }
+                    @Destroy @SignedBy("owner")
+                    public static Settled close(S s, Ctx ctx) {
+                        JulcList<Ev> none = JulcList.empty();
+                        return new Settled(Payouts.of(s.owner(), ctx.balance()), none.prepend(new Gone()));
+                    }
+                }""");
+        assertTrue(r.success(), r.errors().toString());
+    }
+
+    /** #84 review C3: a view that takes the params gets the client's deployment params, never a caller's. */
+    @Test
+    void aViewThatTakesTheParams_getsTheDeployments() throws Exception {
+        var r = compile(contract("@View public static BigInteger cap(S s, P p) { return p.cap(); }"));
+        assertTrue(r.success(), r.errors().toString());
+        String client = java.nio.file.Files.readString(r.out().toPath().resolve("t/CClient.java"));
+        assertTrue(client.contains("public BigInteger cap() {"), client);
+        assertTrue(client.contains("return instance.view(s -> C.cap(s, this.params));"), client);
     }
 }

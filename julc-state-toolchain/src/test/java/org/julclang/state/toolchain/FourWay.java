@@ -882,7 +882,7 @@ final class FourWay {
     boolean validatorRaw(String method, Rec state, List<Object> honest, List<org.julclang.core.PlutusData> raw, Tx t, byte[] signer,
             org.julclang.core.PlutusData next) throws Exception {
         String kind = interp.kind(method);
-        var encoded = (org.julclang.core.PlutusData.ConstrData) assetRedeemer(method, honest, t);
+        var encoded = (org.julclang.core.PlutusData.ConstrData) assetRedeemer(method, honest, t, null);
         var fields = new ArrayList<>(encoded.fields());
         int offset = kind.equals("init") ? 1 : 0;
         for (int i = 0; i < raw.size(); i++) fields.set(offset + i, raw.get(i));

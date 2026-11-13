@@ -28,7 +28,7 @@ final class IrJson {
     private IrJson() {}
 
     /** The version of this format. A change to the IR's shape or meaning gets a new version. */
-    static final int VERSION = 1;
+    static final int VERSION = 2;
 
     private static final HexFormat HEX = HexFormat.of();
 
@@ -426,7 +426,17 @@ final class IrJson {
             return new Pos(i(l(o).get(0)), i(l(o).get(1)));
         }
 
+        /**
+         * #84 review C2: like the JavaScript reader, a field this reader does not know is refused, so a later addition to
+         * the format is refused rather than dropped (version 1's Java reader ignored unknown top-level fields).
+         */
+        static void known(Map<String, Object> o, Set<String> allowed, String where) {
+            for (String k : o.keySet()) if (!allowed.contains(k)) throw new IllegalArgumentException("unknown field \"" + k + "\" in " + where);
+        }
+
         Ir.Program program(Map<String, Object> r) {
+            known(r, Set.of("ir", "language", "sourceSha256", "package", "contract", "source", "options", "records", "enums", "state", "params",
+                    "timeFields", "recursiveFns", "fns", "methods", "invariants", "warnings"), "the program");
             var options = new ArrayList<Ir.ContractOption>();
             for (Object o : l(r.get("options"))) options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
             var records = new LinkedHashMap<String, Ir.RecordType>();
@@ -452,10 +462,15 @@ final class IrJson {
             var methods = new ArrayList<Ir.Method>();
             for (Object o : l(r.get("methods"))) {
                 var x = m(o);
+                known(x, Set.of("kind", "name", "params", "mods", "checked", "usesCtx", "pays", "result", "body", "at"), "a method");
                 var params = decls(x.get("params"));
                 var mods = new ArrayList<Ir.Mod>();
                 for (Object mo : l(x.get("mods"))) {
                     var md = m(mo);
+                    known(md, Set.of("name", "field", "keys", "threshold"), "a modifier");
+                    if (!Set.of("payable", "open", "only", "after", "before", "batched", "quorum", "authorized").contains(s(md.get("name")))) {
+                        throw new IllegalArgumentException("unknown modifier " + md.get("name"));
+                    }
                     mods.add(new Ir.Mod(s(md.get("name")), s(md.get("name")).equals("quorum") ? s(md.get("keys")) + " " + s(md.get("threshold"))
                             : (String) md.get("field")));
                 }
@@ -479,6 +494,7 @@ final class IrJson {
             if (r.get("invariants") != null) {
                 for (Object o : l(r.get("invariants"))) {
                     var x = m(o);
+                    known(x, Set.of("name", "body", "at"), "an invariant");
                     invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at"))));
                 }
             }

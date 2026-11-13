@@ -125,7 +125,7 @@ export function validate(p) {
   const optional = ['params', 'invariants'].filter((k) => k in p);
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
     'recursiveFns', 'fns', 'methods', 'warnings', ...optional], 'program');
-  if (p.ir !== 1 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 1, not ${JSON.stringify(p.ir)}`);
+  if (p.ir !== 2 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 2, not ${JSON.stringify(p.ir)}`);
   if (p.language !== 'jsc 2') fail('program', `not a .jsc 2 program: ${p.language}`);
   if (typeof p.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(p.sourceSha256)) fail('program', 'sourceSha256 must be 64 hex digits');
   for (const k of ['package', 'contract', 'source']) str(p[k], k);

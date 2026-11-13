@@ -120,16 +120,16 @@ class JscV2IrTest {
     @Test
     void aReader_refusesAnotherVersion_anUnknownNode_andAnUndeclaredLocal() {
         String json = JscV2.lower(FORMS, "Forms.jsc").irJson();
-        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 2,")));
-        assertTrue(e.getMessage().contains("not a version 1"), e.getMessage());
+        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 2,", "\"ir\": 1,")));
+        assertTrue(e.getMessage().contains("not a version 2"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"node\": \"Arith\"", "\"node\": \"Arith2\"")));
         assertTrue(e.getMessage().contains("unknown node Arith2"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"local\": (\\d+)", "\"local\": 9999")));
         assertTrue(e.getMessage().contains("undeclared local 9999"), e.getMessage());
         // Review S3: the reader is strict, like the JavaScript one.
-        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 1.0,")));
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 2,", "\"ir\": 2.0,")));
         assertTrue(e.getMessage().contains("not a plain integer"), e.getMessage());
-        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 1, \"ir\": 1,")));
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 2,", "\"ir\": 2, \"ir\": 2,")));
         assertTrue(e.getMessage().contains("duplicate key"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"value\": \"(\\d+)\"", "\"value\": \"0x10\"")));
         assertTrue(e.getMessage().contains("not a decimal integer: 0x10"), e.getMessage());

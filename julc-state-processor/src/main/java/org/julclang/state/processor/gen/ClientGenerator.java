@@ -176,6 +176,8 @@ public final class ClientGenerator {
         // ---- views
         for (ViewIR v : c.views()) {
             var args = new ArrayList<String>(List.of("s"));
+            // ADR-0009 D1 (#84 review C3): a view that takes the params gets this deployment's.
+            if (v.takesParams()) args.add("this.params");
             for (ParamIR p : v.params()) args.add(p.name());
             w.line("/** {@link " + X + "#" + v.method() + "} on the current state (off-chain, no transaction). */");
             w.open("public " + v.returnType() + " " + v.method() + "(" + String.join(", ", decls(v.params())) + ") {");

@@ -34,7 +34,7 @@ const none = (t) => node('NoneLit', {}, { option: t });
 /** A program with the given records, enums and fns, and no methods: for evaluating expressions. */
 function program({ records = [], enums = [], fns = [] } = {}) {
   return load(JSON.stringify({
-    ir: 1, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
+    ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
     state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], fns, methods: [], warnings: [],
   }));
 }
@@ -282,7 +282,7 @@ function deepProgram() {
   const go = { kind: 'view', name: 'go', params: [k], mods: [], checked: [], usesCtx: false, pays: false, result: INT, at,
     body: { stmts: [], at, result: node('CallFn', { fn: 'down', args: [node('LocalRef', { local: 2 }, INT)] }, INT) } };
   return JSON.stringify({
-    ir: 1, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'Deep', source: 'Deep.jsc', options: [], records: [],
+    ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'Deep', source: 'Deep.jsc', options: [], records: [],
     enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], fns: [down], methods: [go], warnings: [],
   });
 }
@@ -435,7 +435,7 @@ test('§3.9 asKey and asHash: exactly 28 bytes', () => {
 
 test('a reader refuses another IR version, an unknown std row, and keeps answers in the vector form', () => {
   const text = readFileSync(new URL('./fixtures/Counter2.ir.json', import.meta.url), 'utf8');
-  assert.throws(() => load(text.replace('"ir": 1,', '"ir": 2,')), /"ir" must be exactly 1/);
+  assert.throws(() => load(text.replace('"ir": 2,', '"ir": 1,')), /"ir" must be exactly 2/);
   const stdBytes = readFileSync(new URL('./fixtures/StdBytes.ir.json', import.meta.url), 'utf8');
   assert.throws(() => load(stdBytes.replace('"name": "sha2_256"', '"name": "keccak_256"')), /unknown std row std\/crypto.keccak_256/);
   const counter = load(text);
@@ -451,8 +451,8 @@ test('a reader refuses up front what it does not know or cannot trust (review S3
   const text = readFileSync(new URL('./fixtures/Pledges.ir.json', import.meta.url), 'utf8');
   load(text);
   const refuses = (edit, why) => assert.throws(() => load(edit(text)), why);
-  refuses((t) => t.replace('"ir": 1,', '"ir": 1.0,'), /not a plain integer/);
-  refuses((t) => t.replace('"ir": 1,', '"ir": 1, "ir": 1,'), /duplicate key "ir"/);
+  refuses((t) => t.replace('"ir": 2,', '"ir": 2.0,'), /not a plain integer/);
+  refuses((t) => t.replace('"ir": 2,', '"ir": 2, "ir": 2,'), /duplicate key "ir"/);
   refuses((t) => t.replace('"checked": [3]', '"checked": [3], "checked": []'), /duplicate key "checked"/);
   refuses((t) => t.replace('"checked": [3]', '"checked": []'), /checked is \[\], but the parameters whose types hold a Key, a Hash or a Map are \[3\]/);
   refuses((t) => t.replace('"node": "Compare"', '"node": "Bogus"'), /unknown node "Bogus"/);
@@ -658,7 +658,7 @@ test('§5 effects: sends in order, the net mint, the accepted sum, and what was 
     tx: { caller, received: '0', balance: '0', validFrom: '0', validTo: '1' } }), /needs them/);
 });
 
-test('§2.6 quorum and authorized, §2.7 the output checks, §5.5 events and params (Treasury)', () => {
+test('§2.6 quorum and authorized, §2.7 the output checks, §5.6 events and params (Treasury)', () => {
   const treasury = fixture('Treasury');
   const A = '11'.repeat(28), B = '22'.repeat(28), C = '33'.repeat(28), BOB = 'b0'.repeat(28), G = '6a'.repeat(28);
   const keys = (...ks) => ks.map((k) => ({ bytes: k }));
@@ -693,4 +693,28 @@ test('§2.6 quorum and authorized, §2.7 the output checks, §5.5 events and par
   const init = (council, q) => runCall(treasury, { method: 'init', state: null, args: [keys(...council), { int: String(q) }], tx: tx([A]), params });
   assert.ok('ok' in init([A, B, C], 2));
   assert.equal(init([A, B], 3).class, 'invariant:quorum council quorum');
+});
+
+test('§2.7 step 1: a params quorum is checked at creation; a failing invariant is the invariant\'s refusal (#84 review F3, S2)', () => {
+  const council = fixture('Council');
+  const K1 = '41'.repeat(28), K2 = '42'.repeat(28), K3 = '43'.repeat(28), A = '11'.repeat(28), B = '22'.repeat(28);
+  const keys = (...ks) => ks.map((k) => ({ bytes: k }));
+  const tx = { caller: A, received: '0', balance: '0', validFrom: '0', validTo: '1' };
+  const init = (board, q) => runCall(council, { method: 'init', state: null, args: [keys(A, B), { int: '1' }, { keyCred: '4e'.repeat(28) }], tx,
+    params: { rec: 'Config', fields: [board, { int: String(q) }, { keyCred: 'ad'.repeat(28) }, { int: '50000000' }] } });
+  assert.ok('ok' in init(keys(K1, K2, K3), 2));
+  const cls = 'invariant:quorum params.board params.boardQuorum';
+  for (const [board, q] of [[keys(K2, K1, K3), 2], [keys(K1, K1, K3), 2], [keys(K1, K2, K3), 0], [keys(K1, K2, K3), -1],
+    [keys(K1, K2, K3), 4], [keys('00'.repeat(27), K2, K3), 2], [[], 1]]) {
+    assert.equal(init(board, q).class, cls, JSON.stringify([board, q]));
+  }
+  // The transition alone (§2.6) computes the creation; the output check is the validator's.
+  assert.ok('ok' in runCall(council, { method: 'init', state: null, args: [keys(A, B), { int: '1' }, { keyCred: '4e'.repeat(28) }], tx,
+    params: { rec: 'Config', fields: [keys(K2, K1, K3), { int: '2' }, { keyCred: 'ad'.repeat(28) }, { int: '50000000' }] }, transition: true }));
+  // An invariant that fails (a division by zero) refuses with its own class, not domain:/.
+  const ratio = fixture('Ratio');
+  const s = { rec: 'State', fields: [{ int: '0' }, { int: '1' }] };
+  assert.equal(runCall(ratio, { method: 'set', state: s, args: [{ int: '5' }, { int: '0' }], tx: null }).class, 'invariant:ratio');
+  assert.ok('ok' in runCall(ratio, { method: 'set', state: s, args: [{ int: '5' }, { int: '0' }], tx: null, transition: true }));
+  assert.ok('ok' in runCall(ratio, { method: 'set', state: s, args: [{ int: '5' }, { int: '2' }], tx: null }));
 });

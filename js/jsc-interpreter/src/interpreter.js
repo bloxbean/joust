@@ -11,7 +11,7 @@ import { parseStrict } from './strict-json.js';
 import { validate } from './validate.js';
 import { applyStd } from './std.js';
 
-export const IR_VERSION = 1;
+export const IR_VERSION = 2;
 
 /**
  * Reads an IR export from its JSON text and returns the program, ready to call. The text is read strictly (no
@@ -179,7 +179,15 @@ class Program {
     }
     for (const inv of this.invariants) {
       const frame = { state: next, tx: null, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [] };
-      if (this.#block(inv.body, null, frame) !== true) throw new Refused(`the invariant ${inv.name} does not hold`, 'invariant', inv.name);
+      let holds;
+      try {
+        holds = this.#block(inv.body, null, frame);
+      } catch (e) {
+        // #84 review S2: an invariant that fails (a domain error) does not hold; the refusal is the validator's (§2.7).
+        if (e instanceof Refused) throw new Refused(`the invariant ${inv.name} fails: ${e.message}`, 'invariant', inv.name);
+        throw e;
+      }
+      if (holds !== true) throw new Refused(`the invariant ${inv.name} does not hold`, 'invariant', inv.name);
     }
   }
 
@@ -284,7 +292,7 @@ class Program {
           break;
         }
         case 'Emit':
-          // §5.5 (M2b): an event joins the call's events, in source order.
+          // §5.6 (M2b): an event joins the call's events, in source order.
           f.events.push(this.#eval(s.event, env, f));
           break;
         case 'If': {

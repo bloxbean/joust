@@ -63,17 +63,31 @@ final class Effects {
         return payable(m) && takesFunds(m);
     }
 
-    /** The record an action returns ({@code Outcome}, {@code Received}), or null when it returns the state. */
-    static String actionRecord(Ir.Method m) {
+    /**
+     * The record an action returns ({@code Outcome}, {@code Received}, {@code Stepped}), or null when it returns the state.
+     * A batched action never returns events (ADR-0009: not on {@code @Batched}): when a direct action's {@code Outcome}
+     * would hold events, a batched action with effects (it can only pay) returns {@code Stepped(state, payouts)} instead
+     * (#84 review F1, C4). Otherwise it shares {@code Outcome}, so earlier lowerings are unchanged.
+     */
+    static String actionRecord(Ir.Program p, Ir.Method m) {
         if (kinds(m).isEmpty()) return null;
-        return takesAssets(m) ? "Received" : "Outcome";
+        if (takesAssets(m)) return "Received";
+        return Abi.batched(m) && directEvents(p) ? "Stepped" : "Outcome";
+    }
+
+    /** Whether a direct (not batched) action returning {@code Outcome} emits: its record then holds events. */
+    private static boolean directEvents(Ir.Program p) {
+        for (Ir.Method m : p.methods()) {
+            if (m.kind() == Ir.Kind.ACTION && !Abi.batched(m) && !takesAssets(m) && kinds(m).contains("emit")) return true;
+        }
+        return false;
     }
 
     /** The kinds a record holds: every kind any of its methods produces, in {@link #ORDER}. */
     static List<String> recordKinds(Ir.Program p, String record) {
         var all = new TreeSet<String>();
         for (Ir.Method m : p.methods()) {
-            if (m.kind() == Ir.Kind.ACTION && record.equals(actionRecord(m))) all.addAll(kinds(m));
+            if (m.kind() == Ir.Kind.ACTION && record.equals(actionRecord(p, m))) all.addAll(kinds(m));
             if (m.kind() == Ir.Kind.DESTROY && record.equals("Settled")) all.addAll(kinds(m));
         }
         if (record.equals("Received")) all.add("accept");
@@ -105,7 +119,7 @@ final class Effects {
     /** Whether the method's result carries events (M2b): its redeemer then carries them last (ADR-0009 D5). */
     static boolean events(Ir.Program p, Ir.Method m) {
         return switch (m.kind()) {
-            case ACTION -> actionRecord(m) != null && recordKinds(p, actionRecord(m)).contains("emit");
+            case ACTION -> actionRecord(p, m) != null && recordKinds(p, actionRecord(p, m)).contains("emit");
             case DESTROY -> settled(p) && recordKinds(p, "Settled").contains("emit");
             default -> false;
         };

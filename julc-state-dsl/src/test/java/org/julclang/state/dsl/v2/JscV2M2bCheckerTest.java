@@ -138,7 +138,14 @@ class JscV2M2bCheckerTest {
         // Not in an init; not in a batched action.
         badSource(council("").replace("init(members: List<Key>, quorum: Int) {", "init(members: List<Key>, quorum: Int) @@quorum members quorum {"),
                 "an init takes only 'payable'");
-        bad("action b() batched @@quorum members quorum { return state }", "a batched action cannot use 'quorum'");
+        bad("action b() batched @@quorum params.board params.need { return state }", "a batched action cannot use 'quorum'");
+        // #84 review S1/C1 (ADR-0009 r3): a quorum over state fields, on any method, with a batched action anywhere: the
+        // batch's states are not checked, so the batched action could break the quorum's shape and lock the contract
+        // (the security review's SecQBatch). A params quorum cannot change: allowed.
+        bad("action p(to: Key) quorum members quorum { pay(to, 1)\n return state }\n action bump() @@batched open { return { ...state, quorum: quorum + 1 } }",
+                "a contract with a quorum over state fields ('quorum members quorum' in p) cannot have batched actions");
+        bad("action b() @@batched quorum members quorum { return state }", "cannot have batched actions");
+        java("action p(to: Key) quorum params.board params.need { pay(to, 1)\n return state }\n action bump() batched open { return state }");
         bad("action b() batched @@authorized keeper { return state }", "a batched action cannot use 'authorized'");
         bad("action b() batched open { @@emit(Paid { to: owner, amount: 1 })\n return state }", "a batched action cannot emit events");
         bad("action b() @@batched open { require(params.cap > 0, \"x\")\n return state }", "a batched action cannot read params");
@@ -168,4 +175,44 @@ class JscV2M2bCheckerTest {
         int b = abi.indexOf("{ \"name\": \"B\"");
         assertTrue(b > 0 && abi.indexOf("\"fields\": []", b) == abi.indexOf("\"fields\"", b), abi);
     }
+    // ------------------------------------------------------------------ #84 review r1
+
+    /** S2: an invariant is a Bool, so it holds no require (its failure is the validator's, class invariant). */
+    @Test
+    void anInvariant_holdsNoRequire() {
+        bad("invariant small { @@require(quorum < 3, \"too big\")\n true }", "an invariant is a Bool, so it holds no require");
+        bad("invariant small = if quorum > 0 { @@require(quorum < 3, \"x\")\n true } else { false }", "an invariant is a Bool, so it holds no require");
+    }
+
+    /**
+     * F1/C4: a batched action never returns events. When a direct action's Outcome holds events, a batched action that
+     * pays returns Stepped(state, payouts); with no emitting action it shares Outcome, as before.
+     */
+    @Test
+    void aBatchedAction_returnsNoEvents() {
+        String j = java("action tip(to: Key) batched open { pay(to, 1)\n return state }\n action announce() { emit(Paid { to: owner, amount: 1 })\n return state }");
+        assertTrue(j.contains("public record Stepped(State state, JulcList<Payout> payouts) {}"), j);
+        assertTrue(j.contains("public record Outcome(State state, JulcList<Event> events) {}"), j);
+        assertTrue(j.contains("public static Stepped tip("), j);
+        String k = java("action tip(to: Key) batched open { pay(to, 1)\n return state }\n destroy d() only owner { emit(Paid { to: owner, amount: 1 })\n pay(owner, balance) }");
+        assertTrue(k.contains("public static Outcome tip(") && !k.contains("record Stepped"), k);
+        bad("@@type Stepped = { x: Int }", "'Stepped' is reserved");
+    }
+
+    /** C6: the annotations the lowering imports are reserved names, so no declared type shadows them. */
+    @Test
+    void theAnnotationNames_areReserved() {
+        for (String n : java.util.List.of("Invariant", "Params", "Quorum", "AuthorizedBy")) bad("@@type " + n + " = { x: Int }", "'" + n + "' is reserved");
+    }
+
+    /** C5: invariants and emitted events are under the depth cap (J18), as every other expression. */
+    @Test
+    void invariantsAndEvents_areUnderTheDepthCap() {
+        String deep = "quorum" + " / 1".repeat(70);
+        bad("invariant x = " + deep.replaceFirst("quorum", "@@quorum") + " > 0", "nests deeper than");
+        bad("action a() { emit(Paid { to: owner, amount: " + deep.replaceFirst("quorum", "@@quorum") + " })\n return state }", "nests deeper than");
+        String fine = "quorum" + " / 1".repeat(20);
+        java("invariant x = " + fine + " >= 0\n action a() { emit(Paid { to: owner, amount: " + fine + " })\n return state }");
+    }
 }
+

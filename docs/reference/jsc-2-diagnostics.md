@@ -219,6 +219,8 @@ changes).
 | JSC0437 | error | a batched action cannot read params yet (ADR-0009 D1): pass the value as an argument | Checker (M2b) |
 | JSC0438 | error | the contract declares no events: declare one with event Name { field: Type } (ADR-0009 D5) | Checker (M2b) |
 | JSC0439 | error | 'quorum … ': the keys and the threshold are both state fields or both params fields (ADR-0009 D2) | Checker (M2b) |
+| JSC0440 | error | a contract with a quorum over state fields (' … ' in … ) cannot have batched actions: a batch's states are not checked, so a batched action could make the quorum unreachable (ADR-0009 r3); use a params quorum, or no batched actions | Checker (M2b) |
+| JSC0441 | error | an invariant is a Bool, so it holds no require (ADR-0009 D4): write the condition into its value (invariant ok = a && b) | Checker (M2b) |
 
 ## Time (ADR-0018 D11, J6)
 

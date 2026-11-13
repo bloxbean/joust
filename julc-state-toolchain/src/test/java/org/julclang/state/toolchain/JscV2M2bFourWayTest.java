@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * ADR-0018 M2b (J3, J11): params, invariants, events, quorum and authorized on all five legs: both reference interpreters
- * (semantics §2.6, §2.7, §5.5), the generated Java on the JVM, the transition program and the validator, which gets each
+ * (semantics §2.6, §2.7, §5.6), the generated Java on the JVM, the transition program and the validator, which gets each
  * transaction signed by the keys a quorum counts and with each approving script's zero withdrawal (an Approvals redeemer
  * naming the contract, instance and action, as examples/treasury's Guardian approves). A broken quorum or authorized is
  * refused by both interpreters with its modifier's class and by the validator, while the JVM method and the transition
@@ -37,6 +37,8 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2M2bFourWayTest {
 
     static final Map<String, FourWay> LEGS = new LinkedHashMap<>();
+    /** Council deployed with a malformed board quorum (#84 review F3), by what is wrong with it. */
+    static final Map<String, FourWay> BAD_PARAMS = new LinkedHashMap<>();
     static final BigInteger ADA = BigInteger.valueOf(1_000_000);
     static final byte[] A = fill(0x11), B = fill(0x22), C = fill(0x33), BOB = fill(0xB0), GUARDIAN = fill(0x6A), STRANGER = fill(0x77),
             K1 = fill(0x41), K2 = fill(0x42), K3 = fill(0x43), AUDITOR = fill(0xAD), KEEPER = fill(0x4E), KEEPER_SCRIPT = fill(0x5C);
@@ -67,7 +69,7 @@ class JscV2M2bFourWayTest {
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         if (!LEGS.isEmpty()) return;
         Map<String, String> files = new LinkedHashMap<>();
-        for (String c : List.of("Treasury", "Council")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
+        for (String c : List.of("Treasury", "Council", "Ratio")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
         var r = Toolchain.build(files, Map.of());
         assertTrue(r.ok(), r.diagnostics().toString());
         var params = Map.of(
@@ -77,6 +79,22 @@ class JscV2M2bFourWayTest {
             System.out.println("[M2b] " + c.name() + ": " + c.scriptSizeBytes() + " bytes");
             LEGS.put(c.name(), new FourWay(c.name(), files.get("org/julclang/state/examples/dsl/" + c.name() + ".jsc"), c.transitions(),
                     params.get(c.name())));
+        }
+        // #84 review F3 (and the security review's hostile params): Council deployed with params whose board quorum is
+        // not well formed, each its own script. Semantics §2.7 step 1: every creation is refused.
+        String council = files.get("org/julclang/state/examples/dsl/Council.jsc");
+        var transitions = LEGS.get("Council").transitions;
+        var bad = new LinkedHashMap<String, List<Object>>();
+        bad.put("unsorted", List.of(keys(K2, K1, K3), n(2)));
+        bad.put("duplicates", List.of(keys(K1, K1, K3), n(2)));
+        bad.put("threshold 0", List.of(keys(K1, K2, K3), n(0)));
+        bad.put("threshold -1", List.of(keys(K1, K2, K3), n(-1)));
+        bad.put("threshold 4 of 3", List.of(keys(K1, K2, K3), n(4)));
+        bad.put("a 27-byte key", List.of(keys(new byte[27], K2, K3), n(2)));
+        bad.put("no keys", List.of(List.of(), n(1)));
+        for (var e : bad.entrySet()) {
+            BAD_PARAMS.put(e.getKey(), new FourWay("Council", council, transitions,
+                    rec("Config", e.getValue().get(0), e.getValue().get(1), keyCred(AUDITOR), ada(50))));
         }
     }
 
@@ -221,11 +239,40 @@ class JscV2M2bFourWayTest {
         report(f);
     }
 
+    /** #84 review F3: semantics §2.7 step 1, a params quorum checked at creation, on all five legs. */
     @Test
     @Order(3)
+    void paramsQuorums_areCheckedAtCreation() throws Exception {
+        for (var e : BAD_PARAMS.entrySet()) {
+            var f = e.getValue();
+            f.invariantRefused("invariant:quorum params.board params.boardQuorum", "init", null, List.of(keys(A, B), n(1), keyCred(KEEPER)),
+                    at(OWNER, 0, 0), OWNER);
+            System.out.println("[M2b five-way] Council deployed with a board quorum of " + e.getKey() + ": init refused on all legs ("
+                    + f.validatorRuns + " validator run)");
+        }
+    }
+
+    /** #84 review S2: an invariant that fails (here a division by zero) refuses the call as the invariant's. */
+    @Test
+    @Order(4)
+    void anInvariantThatFails_isTheInvariantsRefusal() throws Exception {
+        var f = LEGS.get("Ratio");
+        Rec s = rec("State", n(0), n(1));
+        ok(f.check("init", null, List.of(), null, OWNER));
+        ok(f.check("set", s, List.of(n(5), n(2)), null, OWNER));
+        f.invariantRefused("invariant:ratio", "set", s, List.of(n(5), n(0)), null, OWNER);
+        f.as(List.of(), null).mutants("set", s, List.of(n(5), n(2)), null, OWNER);   // no key need sign: set reads no Ctx
+        System.out.println("[M2b five-way] Ratio: " + f.calls + " calls (" + f.refusals + " refusals, " + f.validatorRuns + " validator runs), invariant"
+                + " refusals: " + f.invariantRefusals + ", mutants rejected: " + f.mutantsRejected + ", attacks rejected: " + f.attacksRejected);
+    }
+
+    @Test
+    @Order(5)
     void fiveWay_theJavaScriptInterpreterAgrees() throws Exception {
         int total = 0;
-        for (FourWay f : LEGS.values()) {
+        var all = new java.util.ArrayList<>(LEGS.values());
+        all.addAll(BAD_PARAMS.values());
+        for (FourWay f : all) {
             int n = JsLeg.check(f);
             System.out.println("[M2b five-way] " + f.name + ": " + n + " calls, JavaScript interpreter = Java interpreter = JVM = transition"
                     + " program = validator");

@@ -55,6 +55,9 @@ final class Checker {
             // M2: the API classes values, addresses and effects lower to, and the generated result records
             "ValueAdapter", "AddressAdapter", "Assets", "Funds", "Send", "Sends", "Datum", "PubKeyHash", "ScriptHash",
             "KeyCred", "ScriptCred", "Received", "Settled",
+            // M2b: the batched actions' result record (beside a direct action's that holds events), the annotations
+            // invariants, params, quorum and authorized lower to (#84 review C6: a type of the name would shadow them)
+            "Stepped", "Invariant", "Params", "Quorum", "AuthorizedBy",
             "Payable", "SignedBy", "ValidAfter", "ValidBefore", "Batched", "StateContract", "String", "Object", "Boolean",
             "Integer", "Long", "Byte", "Math", "System", "Record", "Override",
             // .jsc 2 type names and helper-name fragments: a declared type of the same name would share a helper (C6)
@@ -283,7 +286,7 @@ final class Checker {
         var generated = new HashSet<>(Set.of("Payout", "State", "Outcome", "CreateInstance", "BurnInstance", "Batch", "InBatch",
                 "CancelIntent", "Adopt", "Calls", "Step",
                 // M2: the result records of methods with sends, mints or accepted assets, and the mint redeemer ByAction
-                "Received", "Settled", "ByAction"));
+                "Received", "Settled", "ByAction", "Stepped"));
         generated.addAll(records.keySet());
         generated.addAll(enums.keySet());
         generated.addAll(variantEnum.keySet());
@@ -613,8 +616,13 @@ final class Checker {
             this.parent = parent;
         }
 
+        /** In an invariant's body (M2b): a Bool, so no require (JSC0441). */
+        boolean invariant;
+
         Sc child(boolean effects, boolean lambda) {
-            return new Sc(kind, owner, hasState, hasCtx, effects, inLambda || lambda, helperDepth + 1, this);
+            Sc c = new Sc(kind, owner, hasState, hasCtx, effects, inLambda || lambda, helperDepth + 1, this);
+            c.invariant = invariant;
+            return c;
         }
 
         Ir.Local lookup(String n) {
@@ -722,6 +730,7 @@ final class Checker {
                     + " visible, so the JVM and the chain would disagree (ADR-0009 D4)");
         }
         var sc = new Sc(Ir.Kind.VIEW, inv.name(), true, false, false, false, 0, null);
+        sc.invariant = true;
         Syntax.Block b = inv.body();
         var stmts = stmts(b.stmts(), sc);
         if (b.result() == null) throw b.pos().error("JSC0412", "an invariant evaluates to a Bool");
@@ -854,6 +863,18 @@ final class Checker {
                     if (!file.contract().invariants().isEmpty()) {
                         throw mod.pos().error("JSC0436", "a contract with invariants cannot have batched actions: a batch passes through"
                                 + " intermediate states the validator does not check (ADR-0009 D4)");
+                    }
+                    // #84 review S1/C1 (ADR-0009 r3): a quorum over state fields has its shape checked on every output
+                    // (as an invariant is), but a batch's states are not checked, so a batched action could make the
+                    // quorum unreachable and lock the contract. A params quorum cannot change.
+                    for (Syntax.Method x : file.contract().methods()) {
+                        for (Mod q : x.mods()) {
+                            if (q.name().equals("quorum") && !q.arg().startsWith("params.")) {
+                                throw mod.pos().error("JSC0440", "a contract with a quorum over state fields ('quorum " + q.arg() + "' in "
+                                        + x.name() + ") cannot have batched actions: a batch's states are not checked, so a batched"
+                                        + " action could make the quorum unreachable (ADR-0009 r3); use a params quorum, or no batched actions");
+                            }
+                        }
                     }
                     if (mentions(m.body(), "params")) {
                         throw mod.pos().error("JSC0437", "a batched action cannot read params yet (ADR-0009 D1): pass the value as an argument");
@@ -1174,6 +1195,10 @@ final class Checker {
                     out.add(new Ir.Let(local, v, c.pos()));
                 }
                 case Syntax.Require r -> {
+                    if (sc.invariant) {
+                        throw r.pos().error("JSC0441", "an invariant is a Bool, so it holds no require (ADR-0009 D4): write the condition into"
+                                + " its value (invariant ok = a && b)");
+                    }
                     // A generated check's key ("#input:spend2.1", D12) names one construct: an author's message never
                     // holds that form, anywhere, so no trace of it can be taken for a generated check (review r1 S2, C3).
                     if (GENERATED_KEY.matcher(r.message()).find()) {

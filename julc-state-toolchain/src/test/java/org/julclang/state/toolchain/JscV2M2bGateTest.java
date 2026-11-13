@@ -47,8 +47,8 @@ import static org.junit.jupiter.api.Assertions.*;
  *   example's.</li>
  *   <li><b>Budget:</b> each transaction, signed and approved as the runtime builds it (the quorum's co-signers; the
  *   guardian's zero withdrawal), costs within +15% of the Java example's in CPU and memory.</li>
- *   <li><b>The budget gate:</b> every method at a saturated state (the largest council the datum bound allows, a quorum
- *   of half of it signing) within the per-transaction maximum, warning above 80%.</li>
+ *   <li><b>The budget gate:</b> every method at a saturated state (the largest council the datum bound allows, 21 keys,
+ *   a majority of it signing) within the per-transaction maximum, warning above 80%.</li>
  * </ul>
  */
 class JscV2M2bGateTest {
@@ -274,11 +274,13 @@ class JscV2M2bGateTest {
 
     @Test
     void budgets() throws Exception {
-        // Ordinary: a council of three, two signing. Saturated: the largest council the 640-byte datum bound holds
-        // (18 keys), half of it signing.
+        // Ordinary: a council of three, two signing. Saturated (#84 review F2): the largest council both the Java example
+        // and the port accept under the 640-byte datum bound (a key is 30 bytes of datum: 21 keys; 22 are refused at init),
+        // a majority of it (11) signing.
+        assertEquals(21, (640 - 10) / 30, "the saturated council");
         for (boolean max : List.of(false, true)) {
-            var c = council(max ? 18 : 3);
-            int q = max ? 9 : 2;
+            var c = council(max ? 21 : 3);
+            int q = max ? 11 : 2;
             for (String m : List.of("init", "fund", "pay", "rotate", "freeze", "close")) compare(m, c, q, max);
         }
         System.out.println("[M2b budget] | Contract | Call | Java CPU | .jsc 2 CPU | Δ CPU | Java memory | .jsc 2 memory (Δ) | % of max (CPU / mem) |");

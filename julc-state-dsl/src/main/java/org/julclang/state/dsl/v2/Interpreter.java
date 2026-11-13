@@ -527,9 +527,15 @@ public final class Interpreter {
             }
         }
         for (Ir.Invariant inv : p.invariants()) {
-            if (!bool(block(inv.body(), null, new Frame(next, null)))) {
-                throw new Refused("the invariant " + inv.name() + " does not hold", "invariant", inv.name());
+            boolean holds;
+            try {
+                holds = bool(block(inv.body(), null, new Frame(next, null)));
+            } catch (Refused e) {
+                // #84 review S2: an invariant that fails (a division by zero, a std row's domain) does not hold; the
+                // refusal is the validator's, as one that evaluates to false (semantics §2.7).
+                throw new Refused("the invariant " + inv.name() + " fails: " + e.getMessage(), "invariant", inv.name());
             }
+            if (!holds) throw new Refused("the invariant " + inv.name() + " does not hold", "invariant", inv.name());
         }
     }
 
@@ -764,7 +770,7 @@ public final class Interpreter {
                     if (!sum.quantities().stream().allMatch(Interpreter::inRange)) throw Refused.domain("accept", "accept: a quantity out of the 128-bit range");
                     f.accepted = sum;
                 }
-                // §5.5 (M2b): an event joins the call's events, in source order.
+                // §5.6 (M2b): an event joins the call's events, in source order.
                 case Ir.Emit em -> f.events.add(eval(em.event(), env, f));
                 case Ir.If i -> {
                     Ir.Block taken = i.otherwise();

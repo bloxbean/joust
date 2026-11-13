@@ -79,7 +79,7 @@ final class JavaEmitter {
         var results = new TreeSet<String>();
         for (Ir.Method m : p.methods()) {
             body.append(method(m));
-            if (m.kind() == Ir.Kind.ACTION && Effects.actionRecord(m) != null) results.add(Effects.actionRecord(m));
+            if (m.kind() == Ir.Kind.ACTION && Effects.actionRecord(p, m) != null) results.add(Effects.actionRecord(p, m));
         }
         if (Effects.settled(p)) results.add("Settled");
         for (Ir.Fn f : p.fns()) body.append(fn(f));
@@ -111,7 +111,7 @@ final class JavaEmitter {
         }
         // The result records (D4; Effects): Outcome and Received hold the next state, then each kind of effect their actions
         // produce; Settled a destroy's. A contract that only pays keeps M1's Outcome(state, payouts).
-        for (String r : List.of("Outcome", "Received", "Settled")) {
+        for (String r : List.of("Outcome", "Stepped", "Received", "Settled")) {
             if (!results.contains(r)) continue;
             var comps = new ArrayList<String>();
             if (!r.equals("Settled")) comps.add("State state");
@@ -367,7 +367,7 @@ final class JavaEmitter {
                 stmts.append("        return ").append(ex(m.body().result())).append(";\n");
             }
             case ACTION -> {
-                String record = Effects.actionRecord(m);
+                String record = Effects.actionRecord(p, m);
                 if (record == null) {
                     ret = "State";
                     stmts.append("        return ").append(ex(m.body().result())).append(";\n");
