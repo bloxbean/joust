@@ -183,8 +183,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   resource-only plant would replace a contract's script). When a validator's location can't be read, a lone class-path
   copy is taken only from under that location (#73). Inside a GraalVM native or Web Image (`imagecode` property set) the
   image's one `resource:/<n>!/…` copy is taken **unverified** (an image doesn't record which jar a resource came from):
-  the image builds' `checkImageScripts` (no name twice; every location with a validator class holds its script) is what
-  stands behind it, until julc#326's recorded hash (#80 review S1).
+  JOUST's own engine images run `checkImageScripts` (no name twice; every location with a class named after a script
+  holds it, once) to stand behind it. **Any other GraalVM image that bundles `julc-state-runtime` gets no such check**:
+  it must run `plutusScriptProblems` (`gradle/plutus-scripts.gradle`) over its class path, until julc#326's recorded
+  hash (#80 review S1, F8).
 - ADR-0018 M1c: the Java examples vault, escrow, crowdfund, token and pool also run against their `.jsc` 2 ports
   (`examples/dsl`'s `copyPortTests` copies their `*Test.java`; `:examples:dsl:test` runs them). Keep those tests in their
   package directory (the copy fails on subpackages or resources), and call the init as `<Contract>.<init>(`.

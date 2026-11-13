@@ -345,8 +345,11 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
     `JOUST_ENGINE_STACK_MB` (8–1024, default 8), `JOUST_ENGINE_MEMORY_MB` (the heap, 256–65536, default 4,096) and
     `JOUST_ENGINE_TIMEOUT_S` (per build, 1–86400, default 600), or a caller's `limits` in the same ranges; an invalid
     one is refused with its name. The heap limit is enforced, not best-effort: the engine (WasmGC) allocates on the
-    worker's JS heap, and the worker reports its effective heap limit before any build runs, so an inherited
-    `--max-old-space-size` (`execArgv`, `NODE_OPTIONS`), which overrides `resourceLimits`, is refused unless it matches.
+    worker's JS heap, and before any build runs the old generation is measured (#80 review C2, F5). The build worker
+    and a probe worker whose old generation is 64 MB larger each report V8's `heap_size_limit`; under `resourceLimits`
+    they differ by exactly 64 MB, whatever the young generation (`--max-semi-space-size` is fine), while an inherited
+    `--max-old-space-size` or `--max-heap-size` (`execArgv`, `NODE_OPTIONS`) makes them equal and is refused, unless
+    it is `--max-old-space-size` equal to `JOUST_ENGINE_MEMORY_MB`. Builds wait in the worker's queue without a limit.
     A build's time counts from when the worker starts it, not its wait behind another build; past it, the worker is
     stopped. `buildInWorker` is exported beside `loadToolchain`, whose builds run on the caller's thread and need a
     stack of at least 8 MB. The engines enable Wasm exnref themselves, setting `--experimental-wasm-exnref` only where
@@ -810,8 +813,12 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   to a temporary file renamed over the source. Since r17 (#75; #80 review C1, F1, S2) it also refuses a path with `..`,
   and a link anywhere on the path below the working directory, which it finds among the file's ancestors by identity
   (so `/tmp/…` and `/private/tmp/…` are one) and checks on the physical path (a directory whose real path is not itself:
-  a symbolic link, or a Windows junction). Links at or above the working directory are the user's file system. On
-  Windows a junction outside the working directory, and hard links, are not detected. Every default-mode target is checked before anything is written: none may
+  a symbolic link, or a Windows junction; a spelling that differs from the stored one only in case, on a
+  case-insensitive file system, is the same directory, not a link). Links at or above the working directory are the
+  user's file system, and a file outside the working directory is checked from its source directory down only. Both
+  CLIs do this (`JscMain` and the npm `joust migrate`, whose working directory is the project root; #80 review F6). On
+  Windows a junction outside the working directory, and hard links, are not detected. The checks and the writes are
+  separate steps: they assume no concurrent writer changes the tree during the run (#80 review S8). Every default-mode target is checked before anything is written: none may
   lie in the sources or be a source through a link on its path, resolved at its nearest existing ancestor.
   On npm it first copies the v1 build's artifacts to `build/joust/v1/` (the contract's, by the name the parser reads,
   and the shared ones), and does not replace the file if that fails; `joust deploy` keeps each record it replaces under
@@ -1228,4 +1235,7 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   refused); D12 says a `@Params` contract is found by title only; D16 states the in-place checks by identity and `..`;
   `ValidatorScripts` takes an image's one `resource:` copy unverified inside an image only, with the image builds'
   `checkImageScripts` behind it (#73); the engines set the exnref flag only where exnref is off (no stderr noise on
-  newer Node).
+  newer Node). After round r2: the readers refuse a `pay` under an expression or in a fn (JSC0413) and a destroy
+  without one (JSC0409); D7 measures the worker's old generation (a young-generation flag passes); D16 compares names
+  ignoring case, covers the npm CLI, files outside the working directory and concurrent writers; `checkImageScripts`
+  counts classes per name per location, and covers JOUST's own images only (any other image must run it).
