@@ -103,16 +103,24 @@ public interface JavaLibraries {
     record Message(String text, String kind, String file, int line, String in) {}
 
     /**
-     * A library: its class, the SHA-256 of its on-chain sources (every source certified with it, sorted by path), its
-     * functions and records, and the certification problems of its bodies (transitively; empty when certified). A library
-     * with problems is refused at the import, with them.
+     * A library: its class, the SHA-256 of its on-chain sources, its functions and records, and the certification problems
+     * of its bodies (transitively; empty when certified). A library with problems is refused at the import, with them.
+     * {@code sources}: the source files it is built from (by path), every file its class's file names through a name javac
+     * resolves, transitively (review r2: #79 S2, S3, #82 S1); the hash is theirs, sorted by path, and a build compiles exactly
+     * these. {@code classes}: the binary names of every class those files declare (nested ones too), from javac.
      */
     record Library(String fqcn, String sourceSha256, List<Fn> fns, List<Rec> records, List<String> problems,
-                   List<String> certifiedClasses, List<Message> messages) {
+                   List<String> certifiedClasses, List<Message> messages, List<String> sources, List<String> classes) {
         /** A library whose bodies trace no message. */
         public Library(String fqcn, String sourceSha256, List<Fn> fns, List<Rec> records, List<String> problems,
                        List<String> certifiedClasses) {
             this(fqcn, sourceSha256, fns, records, problems, certifiedClasses, List.of());
+        }
+
+        /** A library without its source closure (a description read back, a test's). */
+        public Library(String fqcn, String sourceSha256, List<Fn> fns, List<Rec> records, List<String> problems,
+                       List<String> certifiedClasses, List<Message> messages) {
+            this(fqcn, sourceSha256, fns, records, problems, certifiedClasses, messages, List.of(), List.of());
         }
 
         public String simpleName() {

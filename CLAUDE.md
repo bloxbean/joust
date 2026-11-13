@@ -197,8 +197,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `v2/Examples`), never alone, or its imports are JSC0706.
 - ADR-0018 M4b (`java:` imports): a Java library is certified from its on-chain sources (`JavaLibraryCertifier`, in
   julc-state-toolchain; the dsl finds it through `ServiceLoader`, so a `jsc` tool class path needs the toolchain).
-  Gradle takes it through `joustLibrary` (sources only, compiled into the project; `checkJoustLibraries`,
-  `recordJoustLibraries`); `examples/dsl` imports `examples/compliance`. Interpreters give no answer for `CallJava`
+  Gradle takes it through `joustLibrary` (sources only: `generateJsc` writes each used library's source closure beside
+  the generated Java; `checkJoustLibraries` before `compileJava`; `recordJoustLibraries` writes a record per contract,
+  which the generated client checks, failing closed); `examples/dsl` imports `examples/compliance`. The plugin fails
+  fast on `joustLibrary` (the toolchain is unpublished; `-Pjoust.javaLibraries=experimental` keeps the wiring). Interpreters give no answer for `CallJava`
   (three legs in `FourWay.threeLegs`). Rules and catalogue: `docs/reference/jsc-2-java-libraries.md`.
 - ADR-0018 M4c: npm packages ship libraries under `joust-lib/` (`"@acme/fees/fees.jsc"`; module ids `pkg:…`);
   `joust.lock` (root, committed) pins only external libraries (`--accept-lock`, Gradle `acceptJoustLock`; `examples/dsl`

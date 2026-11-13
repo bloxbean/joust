@@ -45,9 +45,16 @@ public class JoustProcessor extends AbstractProcessor {
      * ("GENERATED from fees.jsc by julc-state-dsl (ADR-0018, a .jsc 2 library)"). Hand-written libraries are not linted
      * here: their projects chose them, and a {@code java:} import certifies the ones {@code .jsc} calls (D9).
      */
+    /**
+     * The words julc-state-dsl writes in the Javadoc of a library class it generates ({@code JavaEmitter.LIBRARY_MARKER}).
+     * The processor does not depend on the dsl, so the two constants are kept equal by a test that lints a real lowering
+     * ({@code ProcessorDiagnosticsTest.aJscLibrary_isLinted_aHandWrittenOneIsNot}; design F2, r2).
+     */
+    static final String JSC_LIBRARY_MARKER = "by julc-state-dsl (ADR-0018, a .jsc 2 library)";
+
     private boolean isJscLibrary(TypeElement type) {
         String doc = processingEnv.getElementUtils().getDocComment(type);
-        return doc != null && doc.strip().startsWith("GENERATED from ") && doc.contains("by julc-state-dsl (ADR-0018, a .jsc 2 library)");
+        return doc != null && doc.strip().startsWith("GENERATED from ") && doc.contains(JSC_LIBRARY_MARKER);
     }
 
     @Override

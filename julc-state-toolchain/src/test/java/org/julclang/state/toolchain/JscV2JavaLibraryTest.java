@@ -300,7 +300,7 @@ class JscV2JavaLibraryTest {
         // An opaque record is never written as a type.
         var opaque = JavaLibraryCertifier.certify(lib("import org.julclang.core.PlutusData;", "public record Entry(PlutusData d) {}\n"
                 + "public static boolean isAllowed(JulcList<Entry> l, byte[] w) { return true; }\n"
-                + "public static Entry entry(byte[] w, BigInteger l) { return new Entry(null); }"));
+                + "public static Entry entry(byte[] w, BigInteger l) { return entry(w, l); }"));   // no null (S4, r2)
         refusedAt("com.acme.L", "", opaque, "JSC0725");
     }
 

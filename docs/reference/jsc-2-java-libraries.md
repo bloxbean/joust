@@ -15,7 +15,7 @@ it; `JscV2JavaLibraryTest` tests every entry.
 
 | Path | The library's sources | The JVM side |
 |---|---|---|
-| Gradle (plugin `org.julclang.joust`, or `examples/dsl`'s build) | the `joustLibrary` configuration: each jar's `META-INF/plutus-sources/**/*.java`, extracted to `build/joust/library-sources` | compiled from those sources into the project (they are a source directory of `main`); the jar's own classes are never used |
+| Gradle (`examples/dsl`'s build; the plugin `org.julclang.joust` fails fast on `joustLibrary` until julc-state-toolchain and the API's on-chain sources are published) | the `joustLibrary` configuration: each jar's `META-INF/plutus-sources/**/*.java`, extracted to `build/joust/library-sources` | `generateJsc` writes the certified sources of the libraries the contracts use (each library's closure) beside the generated Java, which compiles them; no other file of a jar is compiled, and the jar's own classes are never used |
 | npm (M4c) | an npm package's `joust-lib/<package path>/<Class>.java` (`joust build` collects every package's `joust-lib/`) | the npm engine runs transitions as UPLC programs (ADR-0015 D3), compiled from the same sources; there are no JVM classes to substitute |
 
 Either way, `joust.lock` (npm) or the `--lock` of `generateJsc` (Gradle) pins each imported Java library by the
@@ -24,15 +24,25 @@ SHA-256 of its certified sources (J12; `JSC0731`, `JSC0732`).
 **One body on both sides.** On Gradle the JVM runs classes compiled from the certified sources, and JuLC compiles the
 same sources into the validator and the transition programs.
 
-- `checkJoustLibraries` (part of `check`) fails (JSC0727) when a class of the library also reaches the runtime class path
-  from a jar or a directory, where it could shadow the compiled one.
-- `recordJoustLibraries` (after `compileJava`) writes `META-INF/joust/java-libraries.json`: the SHA-256 of each class file
-  compiled from the library's sources.
-- When a contract is loaded (its `ContractSpec`), `JavaLibraryCheck` hashes the bytes at the code source that defined each
-  such class, as the contract's class loader resolves it. It refuses to run on a mismatch: an application jar that puts a
-  class of the same name first on the class path, with the same constants and another body, is refused
-  (`JavaLibraryLoadingTest`). On-chain safety never depends on this, since the validator was compiled from the certified
-  sources.
+- **The closure.** A library is built from every source file its class's file names through a name javac resolves (a
+  type, a call, a field, an import), transitively. That set is what compiles into the project, and its hash is the
+  library's (the lock's pin, M4c): a record in its own file is in it. A library set that declares a class in a package
+  of JOUST, JuLC, cardano-client-lib or the JDK is refused (JSC0721).
+- `checkJoustLibraries` (before `compileJava`, and part of `check`) fails (JSC0727) when a class of the library also
+  reaches the compile or runtime class path from a jar (a multi-release variant included) or a directory, where it could
+  shadow the compiled one. It checks javac's binary names, nested classes too, as `generateJsc` lists them per contract
+  (`<Contract>.java-libraries` beside the generated Java).
+- `recordJoustLibraries` (after `compileJava`) writes `META-INF/joust/java-libraries/<contract>.json` for each contract
+  built with `java:` libraries: the SHA-256 of each class file compiled from their sources. A project whose contracts use
+  none writes nothing.
+- The contract's generated Java names its `java:` libraries in its Javadoc, and its **client** checks them before
+  anything else of it (`JavaLibraryCheck.verify`). It refuses to load when the record is missing (a jar that dropped
+  it), when the contract, its validator or its client come from different code sources, when a library class's defining
+  bytes are not the recorded ones (an application jar that puts a class of the same name first on the class path, with
+  the same constants and another body), or when a multi-release jar holds a versioned variant of one
+  (`JavaLibraryLoadingTest`). Code sources are read through their URLs, so jars, `jar:` and `nested:` locations work.
+  A contract without `java:` libraries checks nothing. On-chain safety never depends on this, since the validator was
+  compiled from the certified sources.
 
 **No second variant.** A library ships one on-chain source per class, and that source is compiled for both sides. Two
 sources of one class are refused (a duplicate class). A jar's own classes, which could be another variant, never reach
@@ -83,6 +93,8 @@ import, with every problem and its file and line (JSC0721).
 | No unchecked representation casts | every cast: `(R) (Object) Builtins.constrData(…)` holds on-chain and throws on the JVM (`Datum.java:10-12`) |
 | The trusted base | every call outside the library and the trusted base |
 | Objects | `new` of anything but the library's records and `new BigInteger("…")` literals; arrays; local classes |
+| What JuLC would refuse later (review r2, S4), refused here so certification does not depend on the JuLC version | method references; calls to an abstract method (dynamic dispatch to an uncertified body); initialiser blocks; static fields not final or not initialised by a literal (a `byte[]` of literals included); overloads of any name, private ones too; constructors and accessor overrides in any library record; `null`; `&`, `\|` and `^` on booleans; `continue`; `return` inside a for-each; `JulcMap.lookup`, `delete`, `insert` on keys not compared by content |
+| Packages (review r2, S3) | a source declaring a class in a package of JOUST, JuLC, cardano-client-lib or the JDK (`org.julclang.`, except this repository's examples, `com.bloxbean.`, `java.`, `javax.`, `jdk.`, `sun.`, `com.sun.`): the whole set is refused |
 
 ### The catalogue of known JVM/on-chain differences
 
@@ -109,7 +121,9 @@ may use such maps inside, but no map crosses into `.jsc` in M4b (`JulcMap` does 
 ## Per-function vectors
 
 D9 says certification also needs per-function JVM-vs-UPLC vectors, generated over each exported function's domain with
-its edges, before J3 counts the library as covered. `JscV2JavaLibraryTest.perFunctionVectors_jvmAndUplcAgree` runs every
+its edges, before J3 counts the library as covered. **They are the library's own obligation**, run by its tests: a build
+certifies statically (the rules above), and its report says "statically certified". A testkit utility to generate them
+for any library is a follow-up. `JscV2JavaLibraryTest.perFunctionVectors_jvmAndUplcAgree` runs every
 admitted fn of `examples/compliance`'s `AllowList`:
 
 - **JVM:** the class compiled from the sources.

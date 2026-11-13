@@ -430,12 +430,15 @@ import { concat, slice, length } from "std/bytes"
     Certification also needs **per-function JVM-vs-UPLC vectors** (generated over each exported function's domain,
     including edges) before J3 counts the library as covered. Certification stops at the trusted base: the pinned JuLC
     stdlib through D8's table, and the JOUST API with its adapters. The build report marks every library certified.
+    *(r19, amended in review r2: the build certifies statically; the per-function vectors are the library's own
+    obligation, run by its own tests, and the build report says "statically certified", design F4.)*
   - **Downstream class loading.** The duplicate-class check covers the contract's own build. For applications that
     depend on the contract, the build records the hash of each class file compiled from a certified library's sources,
     in a manifest generated into the contract's client code, and the runtime verifies the **bytes that define** each
-    such class and its transitive library dependencies when it loads the contract's clients: it defines them itself
-    through an isolated loader from the verified bytes, so an application jar cannot supply those names, and refuses to
-    run on a mismatch. A constant inside the class would not do: a jar could carry the right constant with a different
+    such class and its transitive library dependencies when it loads the contract's clients: ~~it defines them itself
+    through an isolated loader from the verified bytes, so an application jar cannot supply those names,~~ *(superseded
+    by r19: a check of the defining bytes, not an isolated loader; see "as built" below)* and refuses to run on a
+    mismatch. A constant inside the class would not do: a jar could carry the right constant with a different
     body; a test substitutes such a class (same constant, changed body) and expects refusal. This protects JVM-side computation (views, prepared steps);
     on-chain safety never depends on it.
   - **No second variant.** A library that ships an on-chain variant different from its JVM source (as JOUST's own
@@ -456,7 +459,19 @@ import { concat, slice, length } from "std/bytes"
     variants; JSC0710 otherwise); a library's values flow without an import (a fn may return a record whose type the
     caller did not import). The declarations of a build (a contract and every library it imports, transitively) share
     one namespace (JSC0709), so every name in the IR means one declaration; a binding may take the name of a library
-    declaration the file does not import. `std` imports are per file.
+    declaration the file does not import. `std` imports are per file. *(r16, amended in review r2.)* The generated Java
+    names a library by its simple class name, so no binding (parameter, const, lambda parameter, match binding, state
+    field) takes a library's class name, where it would obscure the class (JLS 6.4.2) and could turn `Fees.fee()` into
+    a record accessor (Codex C1), and the libraries of one build have distinct class names, whatever their packages
+    (Codex C2): both JSC0709. *Known limit:* with one namespace per build, two third-party libraries that declare the
+    same name (or share a file name) cannot be used together, and the user cannot rename either; there is no aliasing.
+    The planned fix is qualified names in the IR (a format 3) and qualified references in the generated Java (design
+    F3, recorded for M4c's packages too).
+  - **Java callers (r16, amended).** A `.jsc` library's fns are checked on the assumption that D5's ingress checks
+    have run (a `Key` is 28 bytes, a `Hash` 28 or 32, a map canonical). Only `.jsc` callers guarantee that: a Java
+    contract builds `new Fees.Line(anyBytes, …)` unchecked. Both sides run the same code, so this is no JVM/on-chain
+    divergence, but it is a precondition a Java caller must meet itself (security S1; checked factories are a
+    follow-up).
   - **Checking.** A library is checked on its own and again in each importer. D11 runs through library calls: a
     library fn called with a time value is checked with that parameter marked, in its own scope, and refused at the
     call. An error in a library is reported at the import that brings it into the build, naming the library's position
@@ -485,20 +500,50 @@ import { concat, slice, length } from "std/bytes"
     library; `BigInteger.mod` (its sign).
   - **Records.** Verified, read-only and comparable when every field maps and the record declares no constructor;
     opaque (never written as a type, read or compared) when a field does not map.
-  - **One body.** Gradle's `joustLibrary` configuration (non-transitive) is extracted and compiled into the project;
-    `checkJoustLibraries` refuses a library class on the runtime class path from a jar or a directory (JSC0727). Two
-    sources of one class are refused, which, with the jar's classes never used, is how no second variant can run.
-  - **Downstream class loading.** The build records each library class file's SHA-256 (`recordJoustLibraries`,
-    `META-INF/joust/java-libraries.json`); a contract's `ContractSpec` checks, when it is loaded, the bytes at the code
-    source that defined each such class (as the contract's loader resolves it), and refuses to run on a mismatch
-    (`JavaLibraryCheck`; a substituted class with the same constants and another body is refused). Not an isolated
-    loader: the generated client's typed API names the library's records (`AllowList.Entry`), which an isolated loader
-    would make a different class from the application's; a loader that reports a code source other than the one that
-    defined the class is already arbitrary code in the JVM. On-chain safety never depends on it.
+  - **One body.** Gradle's `joustLibrary` configuration (non-transitive) is extracted, and `generateJsc` writes the
+    certified sources of the libraries the contracts use beside the generated Java, which compiles them. *(r19 amended,
+    review r2, S3.)* Only a library's **closure** compiles: every source file its class's file names through a name javac
+    resolves (a type, a call, a field, an import), transitively; no other file of a jar. The certifier refuses a library
+    set that declares a class in a package of JOUST, JuLC, cardano-client-lib or the JDK (a no-op `JavaLibraryCheck`,
+    say). `checkJoustLibraries` refuses a library class on the compile or runtime class path from a jar or a directory
+    (JSC0727); it runs **before `compileJava`**, so `test`, `jar` and `run` never build a shadowed class, and it checks the
+    classes by javac's binary names, nested ones too (r1 took names from the source text by regex: S2, F5). Two sources
+    of one class are refused, which, with the jar's classes never used, is how no second variant can run.
+  - **Downstream class loading** *(r19 amended, review r2: F1, F2, S1, C4)*. The build records each library class
+    file's SHA-256 **per contract** (`recordJoustLibraries`, `META-INF/joust/java-libraries/<contract>.json`; a merged
+    jar keeps each; a project whose contracts use no `java:` library writes none). The contract's Java, generated from
+    `.jsc`, names its `java:` libraries in its Javadoc, and the processor generates into the **client** a check that runs
+    before anything else of it (`JavaLibraryCheck.verify(client, validator, contract, libraries)`), so a contract built
+    with libraries **fails closed**: it refuses to run when its record is missing, when the contract, its validator or its
+    client come from different code sources (a byte-identical copy of the validator ahead on the class path, S1), when a
+    library class's defining bytes differ from the record, or when a multi-release jar holds a versioned variant of one
+    (a loader may define that instead, C4). Code sources are read through their URLs, so `jar:` and `nested:` locations
+    (Spring Boot) work; contracts without `java:` libraries check nothing (F1). The hashes are in a resource beside the
+    client, not in the client's bytes: they are known only after the compilation that generates the client; a class path
+    that can replace the client's own code source can replace the client too, so anchoring the check on the client's code
+    source is what a constant in the client would give. Not an isolated loader: the generated client's typed API names
+    the library's records (`AllowList.Entry`), which an isolated loader would make a different class from the
+    application's; a loader that reports a code source other than the one that defined the class is already arbitrary
+    code in the JVM. On-chain safety never depends on it.
+  - **The Gradle plugin (r19 amended, design F3).** The certifier is julc-state-toolchain, which is not published, and
+    its pool needs JOUST's on-chain API sources, which no published artifact carries. Until both are published (an
+    `onchain` classifier of julc-state-api), the plugin fails fast on a `joustLibrary` dependency with the reason;
+    `examples/dsl` wires the same tasks by hand in this repository. M4's exit row "a Java library from `.jsc`" is met
+    there, not through the plugin.
+  - **Certification, review r2 (Codex C3, C5, C6; security S4).** No binding takes a Java library's class name (as for
+    `.jsc` libraries, JSC0709); a record that two libraries' signatures share is one type of the build, by its binary
+    name; a raw `JulcList` or `Optional` in a signature is unmappable per fn (JSC0722), never a crash. The certifier
+    refuses on its own, independently of the JuLC version, what JuLC refuses later: method references, calls to abstract
+    methods (dynamic dispatch to an uncertified body), initialiser blocks, static fields not final or not initialised by
+    a literal, overloads of any name (private ones too), constructors and accessor overrides in any library record,
+    `null`, non-short-circuit boolean operators, `continue`, a `return` inside a for-each, and `JulcMap.lookup`,
+    `delete` and `insert` on keys not compared by content.
   - **In the interpreters.** A Java body has no reference semantics there: a `CallJava` gets no answer (a `Limit`, never
     a refusal). A contract that imports a Java library is differential-tested on three legs (the JVM, the transition
     program, the validator) for the calls that reach it, five for the others; the library is covered by its certification
     and its per-function JVM-vs-UPLC vectors, which J3 requires before it counts the library (865 for the example).
+    The vectors are the library's own obligation (its tests); the build runs the static half only, and says so
+    ("statically certified"; a testkit utility for them is a follow-up).
     Evaluating a Java body through recorded results would make one leg the oracle of another (D15).
   - **D11.** A time value never reaches a Java fn (JSC0726), as the bullet above says ("a `java:` import never accepts
     one").
@@ -981,7 +1026,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 |---|---|---|---|
 | J1 | `.jsc` 2 output is Java `@StateContract` and `@OnchainLibrary` classes that the unmodified JOUST processor and JuLC accept, and all of it passes `SubsetLint`'s rules; nothing else is emitted | D1, D9, D10 | every build; lint on generated libraries and helpers |
 | J2 | No `.jsc` name is rebound; generated Java has no reassigned locals, no loops and no mutable accumulators | D3, D7 | checker; a scan of generated Java |
-| J3 | **All legs agree** (four to M1a, five from M1b) for every construct of the milestone: the reference interpreters (JavaScript, and M0's Java one: D15), the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
+| J3 | **All legs agree** (four to M1a, five from M1b) for every construct of the milestone: the reference interpreters (JavaScript, and M0's Java one: D15), the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings; a call into a `java:` library has three legs (the JVM, the transition program, the validator), the interpreters giving no answer, and the library's per-function vectors cover its bodies (r19 amended) | D5–D7, D15 | differential tests (§9), in every milestone |
 | J4 | Effects appear in each kind's result in source order (loops: list order), only from taken branches; mint and accepted are net sums | D4 | differential tests; on-chain fixtures |
 | J5 | Every diagnostic on either build path names a `.jsc` file, line and column, and a stable code | D12 | tests with errors from each layer (checker, processor, JuLC) |
 | J6 | No time value (including one read from another contract; a value's shape never is one) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities, `BigMap` int values, and send, accept and deposit values, including inside called `fn`s; accepted by `std` functions only where the binding row declares the parameter total and of window-independent cost, never by `java:` imports; only under an outermost `max(0, …)` in pay amounts); time values reaching amounts or state warn. Influence through transaction-level rules (balance, minimum per output) is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
@@ -998,7 +1043,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J17 | Data built from `.jsc` values (state, redeemers, `send` datums, memos) equals JuLC's encoding of the generated Java and the committed ABI manifest, and matches independent CBOR golden vectors | D5, D12 | encoder tests on the JVM, JS and on-chain; manifest comparison |
 | J18 | Off-chain evaluation of a transition is bounded (step or depth cap) in the prepare service and the batcher, and engines' stacks fit the deepest recursion the budget allows; the front end nests at most 64 levels on every path (JSC0149, JSC0150, JSC0340), reads `+`/`-`, `*`, `&&`, `\|\|` chains and else-if chains of any length without deeper recursion, and reports any stack exhaustion as JSC0005 (on the JVM) or an engine failure `joust build` reports (in the Web Image, whose `joust build` engine runs on an 8 MB worker), never a crash (r12) | D7, D12 | depth tests on the JVM and on a cold Web Image engine (Node's main thread; `joust build`'s worker) |
 | J19 | Every build reports each method's execution units and script size over measured scenarios (empty, small, saturated states; branch-covering inputs), names uncovered paths and unbounded arguments, warns above 80% of the protocol maximum, and calls a figure a bound only for an enumerated bounded domain | D12 | build-report tests |
-| J20 | Every generated check's message is a key of ABI facts and source order, unique within the script and mapped to exactly one `.jsc` construct by the message map; every string the linked script holds is in that map; no message holds a file name, line, column or name the author did not write in a `require` message, and no author's message contains a key's form; a trace is matched whole, and only against the refusing contract's map; layout, comments, the file's name and renames (in any order) leave the script hash unchanged, the package excepted (bloxbean/julc#328) (r12) | D12 | uniqueness and message-map tests; hash invariance under layout, comment, file-name and rename edits for every example; a changed condition changes the hash |
+| J20 | Every generated check's message is a key of ABI facts and source order, unique within the script and mapped to exactly one `.jsc` construct by the message map; every string the linked script holds is in that map; no message holds a file name, line, column or name the author did not write in a `require` message, and no author's message contains a key's form; a trace is matched whole, and only against the refusing contract's map; layout, comments, the file's name and renames (in any order) leave the script hash unchanged, the package excepted (bloxbean/julc#328), and a library's file name excepted, which is its class (D9; r12, r16 amended) | D12 | uniqueness and message-map tests; hash invariance under layout, comment, file-name and rename edits for every example; a changed condition changes the hash |
 
 ## 6. Alternatives considered
 
@@ -1286,12 +1331,28 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   named by the file, relative imports, scope and one namespace per build, D11 through library calls, errors at the
   import, the lowering to `@OnchainLibrary`, helpers per class rather than shared, the artifacts: manifest kind `library`,
   IR format 2, message-map files). The M4 entry gate was verified first (`runtimeWasmTest`, M4a report §0).
+- **r16 (amended)** (2026-11-13, M4a review round r2: Codex C1–C2, design F1–F3, security S1): D9 refuses a binding
+  named like a library's class (it obscured the class in the generated Java, and a record parameter's accessor ran in
+  place of the library fn on all three compiled legs) and two libraries of one class name in different packages (an
+  ambiguous Java import), both JSC0709. J20 excepts a library's file name, which is its class. D9 records one namespace
+  per build as a known limit with its planned fix (qualified IR names), and that Java callers of a `.jsc` library must
+  meet D5's ingress checks themselves.
 - **r19** (2026-11-13, M4b: `java:` imports): D9 records the Java imports as built: `byte[]` as `Bytes` and no maps in
   M4b; overloads refused; the trusted base made concrete (D8's table, `Require` and the adapters, an allow-list); three
   catalogue entries added (`equals`/`hashCode`/`toString`, record constructors, `BigInteger.mod`); verified and opaque
   records; the `joustLibrary` configuration, the duplicate-class check and two sources of a class refused; downstream
   class loading as a check of the defining bytes, not an isolated loader (the typed client API); no answer in the
   interpreters, three legs for Java calls, per-function vectors.
+- **r19 (amended)** (2026-11-13, M4b review round r2: design F1–F6, security S1–S4, Codex C3–C6): D9's downstream class
+  loading is per contract and fails closed (a record per contract; the client, which knows its contract's `java:`
+  libraries from the generated Javadoc, checks before anything else that the contract, validator and client share a
+  code source, that the record is there, that each class's bytes match, and that no multi-release variant exists; code
+  sources read through URLs). Only a library's source closure compiles into the consumer, and the certifier refuses
+  sources in packages of JOUST, JuLC, CCL or the JDK; the duplicate-class check runs before `compileJava`, on javac's
+  binary names. The plugin fails fast on `joustLibrary` until julc-state-toolchain and the API's on-chain sources are
+  published. The certifier refuses the constructs JuLC would refuse later, binding hygiene covers Java calls, a shared
+  record is one type, raw signatures are per-fn refusals. The r2 isolated-loader sentence is marked superseded, J3
+  states the three legs of a Java call, and the build certifies statically (vectors are the library's obligation).
 - **r20** (2026-11-13, M4c: packages, the lock, offline tests): D14 records the library packages (`joust-lib/`, package
   specifiers, relative imports kept inside a package, Java sources from packages certified as on Gradle), `joust.lock`
   as built (only libraries from outside the sources; JSC0731/JSC0732; `--accept-lock`, `acceptJoustLock`), the offline

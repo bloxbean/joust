@@ -226,7 +226,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0706 | error | ' … ' is not a module: a .jsc library is imported by its path relative to this file, ending in .jsc; or: no .jsc library … beside … under the sources | Checker |
 | JSC0707 | error | these libraries import each other: … -> …; a library's imports form no cycle (move what both need into a third library) | Checker |
 | JSC0708 | error | ' … ' is not declared in … : a library exports its types, enums and fns; or: … is a contract, not a library | Checker |
-| JSC0709 | error | the … is also declared in …: the declarations of a build (a contract and the libraries it imports) share one namespace; rename one (also: two libraries with one class, a name taking a library's class) | Checker |
+| JSC0709 | error | the … is also declared in …: the declarations of a build (a contract and the libraries it imports) share one namespace; rename one (also: two libraries with one class or one class name, a declaration or binding taking a library's class name) | Checker |
 | JSC0710 | error | ' … ' is declared in … : import { … } from it to use it here (a library's declarations are seen only where they are imported) | Checker |
 | JSC0711 | error | a library holds imports, types, enums and fns, not a contract: write the contract in its own file and import the library there | Parser |
 | JSC0712 | error | in the imported library …: error[…]: … (an error in a library, reported at the import that brings it into this build) | Checker |
@@ -239,7 +239,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0726 | error | … is a Java library's (java: … ): a time value never reaches one, since its body is not checked for the time rule (ADR-0018 D11) | Checker |
 | JSC0731 | error | the library … (sha256 …) is not pinned in joust.lock: a library from outside the sources is pinned by the hash of its on-chain sources (ADR-0018 J12) | JscMain, joust build |
 | JSC0732 | error | the library … has other on-chain sources than joust.lock pins (sha256 …, pinned …): its code changed | JscMain, joust build |
-| JSC0727 | error | … is on the runtime class path here, and is also compiled from the java: library's sources (ADR-0018 D9) | JscMain (checkJoustLibraries) |
+| JSC0727 | error | … is on the class path here, and is also compiled from the java: library's sources (ADR-0018 D9); also: a listed library class was not compiled (recordJoustLibraries) | JscMain (checkJoustLibraries, recordJoustLibraries) |
 
 ## Map and BigMap (ADR-0018 D5, D7, J14)
 
