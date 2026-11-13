@@ -1960,11 +1960,12 @@ final class JavaEmitter {
         // M2 (D5): every hash in a credential or an address is 28 bytes (AddressAdapter, one body on both sides).
         if (t instanceof Ty.Ledger l) {
             if (l.equals(Ty.VALUE)) {
-                // M2c (review r1, C4): a stored Value in a read state is well formed in its wire form (fromWire's rules: policies
-                // ascending, no empty token map, no repeated name, no zero, names at most 32 bytes, quantities in range), used
-                // or not. fromWire fails on any other; the disjunction is then always true (a non-empty wire is a non-empty value).
-                addHelper("check__Value", "    static boolean check__Value(Value v__) {\n        return !ValueAdapter.isEmpty(ValueAdapter.fromWire(v__))"
-                        + " || ValueAdapter.isEmpty(v__);\n    }\n\n");
+                // M2c (review r1, C4; r2, C6): a stored Value in a read state is well formed in its wire form, used or not:
+                // fromData's rules (policies ascending, each lovelace's or 28 bytes, no empty token map, no repeated name, no
+                // zero, names at most 32 bytes, quantities in range), as a memo's. fromData fails on any other; the
+                // disjunction is then always true (a non-empty wire is a non-empty value).
+                addHelper("check__Value", "    static boolean check__Value(Value v__) {\n        return !ValueAdapter.isEmpty(ValueAdapter.fromData("
+                        + "ValueAdapter.data(v__))) || ValueAdapter.isEmpty(v__);\n    }\n\n");
                 return "check__Value(" + v + ")";
             }
             return "AddressAdapter." + (l.equals(Ty.CREDENTIAL) ? "credentialOk" : "addressOk") + "(" + v + ")";

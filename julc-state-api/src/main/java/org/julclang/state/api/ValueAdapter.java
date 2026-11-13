@@ -103,7 +103,8 @@ public class ValueAdapter {
      * {@code v} in its wire form (M2c): the order cardano-client-lib's canonical CBOR writes a value as data, each policy's
      * token names by their encoding (a shorter name first, then bytewise; policies keep the ledger's order, which agrees).
      * A value stored in a datum (a field of the state, a record, a memo, a datum) is held so, so that the data a method
-     * returns equals the data the runtime writes. Precondition: {@code v} canonical.
+     * returns equals the data the runtime writes. Precondition: {@code v} canonical, every policy lovelace's or 28 bytes
+     * (then the ledger's policy order is canonical CBOR's too: review r2, C6; {@link #fromData} refuses other policies).
      */
     public static Value toWire(Value v) {
         var ps = new java.util.ArrayList<PlutusData.Pair>();
@@ -123,12 +124,20 @@ public class ValueAdapter {
     }
 
     /**
-     * A value decoded from data (a memo's, M2c): {@link #fromWire}'s rules, so a malformed one fails. They are checked on the
-     * data as it came, before a {@code Value} is built from it, since that build normalises (it puts lovelace first, as the
-     * on-chain body does not: review r1, C3).
+     * A value decoded from data (a memo's or a read state's, M2c): {@link #fromWire}'s rules, so a malformed one fails. They
+     * are checked on the data as it came, before a {@code Value} is built from it, since that build normalises (it puts
+     * lovelace first, as the on-chain body does not: review r1, C3). And every policy is the ledger's: lovelace's (empty)
+     * or 28 bytes (review r2, C6). Data that crosses is written as canonical CBOR, whose map order (a shorter key first)
+     * agrees with the ledger's only for such policies; a value of policies of other lengths (both up to 32 bytes) could
+     * not come back in the order {@link #fromWire} requires. No value .jsc builds has another policy (Value.asset takes a
+     * Hash).
      */
     public static Value fromData(PlutusData d) {
         wire(d, "fromData");
+        for (var e : ((PlutusData.MapData) d).entries()) {
+            int n = ((PlutusData.BytesData) e.key()).value().length;
+            Require.that(n == 0 || n == 28, "fromData: a policy id that is neither lovelace's nor 28 bytes");
+        }
         return fromWire(Value.fromPlutusData(d));
     }
 

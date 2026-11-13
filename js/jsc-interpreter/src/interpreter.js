@@ -677,9 +677,10 @@ class Program {
       if (t === 'Credential') return v.hash.length === 28;
       // A staking part is none or a hash: a pointer is refused (review S1).
       if (t === 'Address') return v.payment.hash.length === 28 && (v.stake === NONE || (v.stake.value instanceof StakeHash && v.stake.value.credential.hash.length === 28));
-      // §4 (M2c, review r1 C2): a Value that arrives (a memo, a read state) is in the decoder's domain: every policy and
-      // token name at most 32 bytes, every quantity in the signed 128-bit range (a ValueV keeps no zero).
-      if (t === 'Value') return v.entries.every(([p, n, q]) => p.length <= 64 && n.length <= 64 && inRange(q));
+      // §4 (M2c, review r1 C2, r2 C6): a Value that arrives (a memo, a read state) is in the decoder's domain: every
+      // policy lovelace's (empty) or 28 bytes, every token name at most 32 bytes, every quantity in the signed 128-bit
+      // range (a ValueV keeps no zero).
+      if (t === 'Value') return v.entries.every(([p, n, q]) => (p.length === 0 || p.length === 56) && n.length <= 64 && inRange(q));
       return true;
     }
     if ('list' in t) return v.every((x) => this.wellFormed(x, t.list));

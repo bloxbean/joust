@@ -429,7 +429,15 @@ class ValueAdapterDifferentialTest {
                 map(pair(bd(P), tokens(h, one)), pair(bd(ADA), tokens(new byte[0], one))),        // lovelace after a policy
                 map(pair(bd(P), tokens(fill(33, 7), one))),                                       // a 33-byte name
                 map(pair(bd(P33), tokens(h, one))),                                               // a 33-byte policy
-                map(pair(bd(P), tokens(fill(32, 7), one, a01, one)))));
+                map(pair(bd(P), tokens(fill(32, 7), one, a01, one))),
+                // Review r2, C6: policies of other lengths than lovelace's and 28 bytes (fromWire takes them in the ledger's
+                // order; fromData refuses them in any order: canonical CBOR would write #ff before #0000).
+                map(pair(bd(new byte[]{0, 0}), tokens(a01, one)), pair(bd(new byte[]{(byte) 0xFF}), tokens(a01, one))),
+                map(pair(bd(new byte[]{(byte) 0xFF}), tokens(a01, one)), pair(bd(new byte[]{0, 0}), tokens(a01, one))),
+                map(pair(bd(new byte[]{1}), tokens(a01, one))),
+                map(pair(bd(fill(29, 0x70)), tokens(a01, one))),
+                map(pair(bd(ADA), tokens(new byte[0], one)), pair(bd(fill(27, 0x70)), tokens(a01, one))),
+                map(pair(bd(fill(32, 0x70)), tokens(a01, one)))));
         for (BigInteger q : QS) {
             wires.add(map(pair(bd(P), tokens(a01, one, a00ff, q))));
             wires.add(map(pair(bd(ADA), tokens(new byte[0], q))));

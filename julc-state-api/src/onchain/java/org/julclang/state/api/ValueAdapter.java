@@ -122,8 +122,23 @@ public class ValueAdapter {
         return (PlutusData) (Object) v;
     }
 
+    /** See the JVM body: fromWire's rules, and every policy lovelace's (empty) or 28 bytes (review r2, C6). */
     public static Value fromData(PlutusData d) {
-        return fromWire((Value) (Object) d);
+        if (ledgerPolicies(Builtins.unMapData(d))) {
+            return fromWire((Value) (Object) d);
+        } else {
+            Builtins.error();
+            return fromWire((Value) (Object) d);
+        }
+    }
+
+    static boolean ledgerPolicies(PlutusData ps) {
+        if (Builtins.nullList(ps)) {
+            return true;
+        } else {
+            long n = ByteStringLib.length(Builtins.unBData(Builtins.fstPair(Builtins.headList(ps))));
+            return (n == 0 || n == 28) && ledgerPolicies(Builtins.tailList(ps));
+        }
     }
 
     public static boolean depositable(Value v) {

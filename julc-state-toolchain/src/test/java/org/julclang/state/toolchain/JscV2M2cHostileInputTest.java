@@ -136,6 +136,10 @@ class JscV2M2cHostileInputTest {
         m.put("a Value with a 33-byte name", pmap(bytes(TP), pmap(bytes(new byte[33]), integer(1))));
         m.put("a Value with a quantity of 2^127", pmap(bytes(TP), pmap(bytes(new byte[]{1}), integer(BigInteger.ONE.shiftLeft(127)))));
         m.put("a Value whose quantity is bytes", pmap(bytes(TP), pmap(bytes(new byte[]{1}), bytes(new byte[]{1}))));
+        // Review r2, C6: policies neither lovelace's nor 28 bytes (the harness writes canonical CBOR: #ff before #0000).
+        m.put("a Value of policies #0000 and #ff", pmap(bytes(new byte[]{0, 0}), pmap(bytes(new byte[]{1}), integer(1)), bytes(new byte[]{(byte) 0xFF}),
+                pmap(bytes(new byte[]{1}), integer(1))));
+        m.put("a Value with a 29-byte policy", pmap(bytes(JscV2M2FourWayTest.bytes(29, 0x70)), pmap(bytes(new byte[]{1}), integer(1))));
         return m;
     }
 

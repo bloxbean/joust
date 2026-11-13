@@ -413,6 +413,11 @@ class JscV2M2cFourWayTest {
         bad.put("an unread Value memo of quantity 2^127", new Object[]{"valued", vv(TOKEN_POLICY, N01, over)});
         bad.put("an unread Value memo with a 33-byte name", new Object[]{"valued", vv(TOKEN_POLICY, Bytes.of(new byte[33]), n(1))});
         bad.put("an unread Value memo with a 33-byte policy", new Object[]{"valued", vv(new byte[33], N01, n(1))});
+        // Review r2, C6: policies of other lengths than lovelace's and 28 bytes, within 32 (canonical CBOR would reorder them).
+        bad.put("an unread Value memo of policies #0000 and #ff", new Object[]{"valued", vv(new byte[]{0, 0}, N01, n(1), new byte[]{(byte) 0xFF}, N01, n(1))});
+        bad.put("an unread Value memo with a 29-byte policy", new Object[]{"valued", vv(JscV2M2FourWayTest.bytes(29, 0x70), N01, n(1))});
+        bad.put("a slip whose Value has a 1-byte policy", new Object[]{"post", slip(false, Opt.NONE, PLAIN, List.of(), MapV.EMPTY,
+                vv(new byte[]{1}, N01, n(1)), STAKED)});
         bad.put("a slip whose Value has quantity -2^127 - 1", new Object[]{"post", slip(false, Opt.NONE, PLAIN, List.of(), MapV.EMPTY,
                 vv(TOKEN_POLICY, N01, over.negate().subtract(BigInteger.ONE)), STAKED)});
         bad.put("a slip whose Value has a 33-byte name", new Object[]{"post", slip(false, Opt.NONE, PLAIN, List.of(), MapV.EMPTY,

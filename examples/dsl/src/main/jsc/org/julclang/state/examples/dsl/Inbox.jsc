@@ -22,17 +22,19 @@ contract Inbox(maxDatumBytes = 512) {
   // Each slip's fields, folded into the counters: every part of the memo is read.
   action post() receives Slip {
     require(!funds.deposits.isEmpty, "nothing deposited")
-    const u = funds.deposits.fold(urgent, (a, d) => a + if d.memo.urgent { 1 } else { 0 })
-    const r = funds.deposits.fold(refs, (a, d) => a + (d.memo.ref ?? 0))
-    const b = funds.deposits.fold(bonus, (a, d) => a + match d.memo.kind {
-      Bonus { factor } => factor
-      Plain => 0
-    })
-    const t = funds.deposits.fold(tags, (a, d) => a + d.memo.tags.length)
-    const s = funds.deposits.fold(shares, (a, d) => d.memo.shares.fold(a, (x, k, v) => x + v))
-    const e = funds.deposits.fold(extra, (a, d) => a + d.memo.extra.lovelace)
-    const last = funds.deposits.fold(reply, (a, d) => Some(d.memo.reply))
-    return { ...state, urgent: u, refs: r, bonus: b, tags: t, shares: s, extra: e, reply: last }
+    return funds.deposits.fold(state, (st, d) => ({
+      ...st,
+      urgent: st.urgent + if d.memo.urgent { 1 } else { 0 },
+      refs: st.refs + (d.memo.ref ?? 0),
+      bonus: st.bonus + match d.memo.kind {
+        Bonus { factor } => factor
+        Plain => 0
+      },
+      tags: st.tags + d.memo.tags.length,
+      shares: d.memo.shares.fold(st.shares, (x, k, v) => x + v),
+      extra: st.extra + d.memo.extra.lovelace,
+      reply: Some(d.memo.reply)
+    }))
   }
 
   // A Key memo: 28 bytes, checked (#memo:).
