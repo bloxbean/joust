@@ -994,8 +994,15 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
     before applying. A worker loading a store copy holds a lease on it (a file in the copy) until the copy has loaded;
     the collector claims a copy by an atomic rename, then reads its leases and its use from the claimed directory and
     puts back any copy leased or freshly used (a lease cannot be taken on a claimed copy: its taker selects again). A
-    load failure counts as a missing copy from the failure itself (`MODULE_NOT_FOUND` or `ENOENT` naming the engine's
-    files), not from whether the path exists when the failure arrives (round r3, C18). Windows device names are refused in absolute paths on Windows only (a POSIX `aux` directory is a directory);
+    load failure counts as a missing copy only from the failing request itself (round r4, C22 and S12): a
+    `MODULE_NOT_FOUND` whose requested module (the first line of Node's message, not its require stack) is the loader,
+    or an `ENOENT` whose path is exactly the loader or its `.wasm`; a missing dependency, or any other error, is an
+    engine fault, and the path's existence is never consulted for it (the host checks that the loader exists before it
+    starts a worker, which is a separate, earlier question). A start awaiting its lease holds a place against the worker
+    bound (C21). A claim a crashed collector left behind is recovered after a minute (unless its owner is alive and
+    the claim younger than a lease): put back when still wanted and nothing of its digest is in place, removed
+    otherwise (C23); a put-back that fails deletes the claimed copy only when a valid copy of its digest is already in
+    place, else it is left for that recovery (C24). Windows device names are refused in absolute paths on Windows only (a POSIX `aux` directory is a directory);
     repository-relative text refuses them everywhere.
 
 ## Revision history
@@ -1094,4 +1101,5 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
   Generated Java's on-demand lowering, the Build task's runtime and scope) and the M5a row (the quick fixes and M5a's
   weaker L6); §12 holds the implementation notes. Status stays Proposed; #83 merges after #76 and ADR-0018's
   acceptance. After #83's round r2 (design F9, security S9–S11, Codex C11–C17): L10 names its reference machine and
-  CI's figures; §12 notes 16–18. After round r3 (design F10, Codex C18–C20): notes 17 and 18 extended.
+  CI's figures; §12 notes 16–18. After round r3 (design F10, Codex C18–C20): notes 17 and 18 extended. After round r4 (security S12, Codex
+  C21–C24): note 18 corrected and extended.
