@@ -9,6 +9,7 @@ import { Counter } from '../src/generated/Counter.js';
 import { Bank } from '../src/generated/Bank.js';
 import { tamperings } from '../src/tamper.js';
 import { serverlessCall, runInWasm } from '../src/serverless.js';
+import { enableExnref } from '../../../../js/joust-runtime/src/exnref.js';
 
 const env = process.env;
 const deployment = JSON.parse(env.DEPLOYMENT);
@@ -139,6 +140,7 @@ ok('own bank: admin pauses it; opening an account is refused');
 // ---- EXPERIMENTAL (phase 4): the contract's Java in Wasm (GraalVM Web Image), when it is built (WASM=dir)
 if (env.WASM) {
   const ready = new Promise((r) => { globalThis.onJoustWasm = r; });
+  enableExnref();   // a flag on Node 22, on by default on newer Node (which only warns about the flag)
   (await import('node:module')).createRequire(import.meta.url)(env.WASM + '/joust.js');
   const wasm = await ready;
   // The same next state as the JVM and the chain: recompute an increment the service prepared and submitted.

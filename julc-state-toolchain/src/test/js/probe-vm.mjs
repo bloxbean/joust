@@ -2,6 +2,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { enableExnref } from '../../../../js/joust-runtime/src/exnref.js';
+// Wasm exception references: a flag on Node 22, on by default on newer Node (which only warns about the flag).
+enableExnref();
 
 const [engineDir, counterJava] = process.argv.slice(2);
 const ready = new Promise((r) => { globalThis.onJulcReady = r; });

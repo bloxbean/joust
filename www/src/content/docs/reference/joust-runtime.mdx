@@ -18,7 +18,7 @@ MerkleMap mirrors, and hands the result to `@julclang/state-client`, which verif
 <Aside type="caution" title="Pre-release: from a local registry">
 Version `0.1.0-pre1-snapshot`, not on npmjs.org yet: install it from a local registry, as the
 [npm quick start](/start/quick-start-npm/#prerequisites) shows. Node 22 or newer; on Node 22 the package enables Wasm
-exception references itself (`--experimental-wasm-exnref`), so you pass no flag.
+exception references itself (`--experimental-wasm-exnref`, set only where exnref is off, so newer Node prints no warning), so you pass no flag.
 </Aside>
 
 | Entry point | Contents |
