@@ -246,7 +246,7 @@ class JscLangTest {
 
     /** L1 and L5: the analysis's front end is the build's: the same error, or the same warnings and the same lowering. */
     static void sameAsTheBuild(String src, String file) {
-        JscLang.Analysis a = JscLang.analysis(src, file);
+        JscLang.Analysis a = JscLang.analysis(src, file, true);
         if (!JscV2.isV2(src)) {
             // What the build does with it: the v1 front end (a deletion of 'jsc' makes a file v1).
             try {

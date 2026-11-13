@@ -167,30 +167,44 @@ public final class JscLang {
         return analysis(source, fileName).model();
     }
 
-    /** The model and, when the front end accepted the file, the lowering it made on the way (for L5's tests). */
+    /** The model and, when asked and the front end accepted the file, the lowering (for L5's tests). */
     record Analysis(Model model, JscV2.Lowered lowered) {}
 
+    /**
+     * As you type the analysis runs the front end alone (parse and check, {@link JscV2#check}), where every coded
+     * diagnostic of the build comes from; the emitter, the ABI manifest and the IR export only raise internal errors, and
+     * are what made a whole lowering too slow for L10 (about 18 ms of a 1,889-line file's 18 ms on the JVM, five times that
+     * in the engine). {@code lower}: also lower (the tests' L5 comparison), through the same steps as the build.
+     */
     static Analysis analysis(String source, String fileName) {
+        return analysis(source, fileName, false);
+    }
+
+    static Analysis analysis(String source, String fileName, boolean lower) {
         if (source == null) source = "";
         if (!JscV2.isV2(source)) return analyseV1(source, fileName);
         var spans = new Spans();
         var diagnostics = new ArrayList<Diagnostic>();
         JscV2.Lowered lowered = null;
+        String contract = null;
         try {
-            lowered = JscV2.lower(source, fileName, spans);
-            for (JscV2.Warning w : lowered.diagnostics()) {
-                diagnostics.add(diagnostic("warning", w.code(), w.message(), w.line(), w.col(), source, spans));
+            List<Ir.Warning> warnings;
+            if (lower) {
+                lowered = JscV2.lower(source, fileName, spans);
+                String path = lowered.javaPath();
+                contract = path.substring(0, path.length() - ".java".length()).replace('/', '.');
+                warnings = lowered.diagnostics().stream().map(w -> new Ir.Warning(w.line(), w.col(), w.code(), w.message())).toList();
+            } else {
+                Ir.Program p = JscV2.check(source, fileName, spans);
+                contract = p.pkg() + "." + p.name();
+                warnings = p.warnings();
             }
+            for (Ir.Warning w : warnings) diagnostics.add(diagnostic("warning", w.code(), w.message(), w.line(), w.col(), source, spans));
         } catch (JscException e) {
             diagnostics.add(diagnostic("error", e.code, e.getMessage(), e.line, e.col, source, spans));
         } catch (RuntimeException | Error e) {
             // As the toolchain reports it (Toolchain.build): a coded internal error at 1:1, never a crash (ADR-0018 J18).
             diagnostics.add(diagnostic("error", "JSC0005", JscMain.internalError(e), 1, 1, source, spans));
-        }
-        String contract = null;
-        if (lowered != null) {
-            String path = lowered.javaPath();
-            contract = path.substring(0, path.length() - ".java".length()).replace('/', '.');
         }
         var decls = new ArrayList<Declaration>();
         for (Spans.Decl d : spans.decls) {

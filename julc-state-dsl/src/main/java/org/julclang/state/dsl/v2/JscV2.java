@@ -143,8 +143,7 @@ public final class JscV2 {
      * steps, so the lowering and every error are the same with or without (L5).
      */
     static Lowered lower(String source, String fileName, Spans spans) {
-        checkFileName(fileName);
-        Ir.Program p = Checker.check(Parser.parse(source, spans), fileName);
+        Ir.Program p = check(source, fileName, spans);
         var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList();
         JavaEmitter.Emitted e = JavaEmitter.emit(p);
         String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";
@@ -152,6 +151,16 @@ public final class JscV2 {
         for (JavaEmitter.Check c : e.checks()) sites.add(new Site(c.message(), c.kind(), c.pos().line(), c.pos().col(), c.in(), c.what()));
         return new Lowered(e.java(), warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(e.java(), fileName, javaPath, e.checks()),
                 Abi.of(p), IrJson.write(p, IrJson.sourceHash(source)), List.copyOf(sites));
+    }
+
+    /**
+     * The front end alone: the file name's check, parse and check (with the language core's spans when {@code spans} is
+     * not null). Every coded diagnostic of {@link #lower} comes from here: the emitter, the ABI manifest and the IR
+     * export raise only internal errors (JSC0005 on the build paths).
+     */
+    static Ir.Program check(String source, String fileName, Spans spans) {
+        checkFileName(fileName);
+        return Checker.check(Parser.parse(source, spans), fileName);
     }
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */
