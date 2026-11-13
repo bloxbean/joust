@@ -33,7 +33,6 @@ function smallJson(p) {
   }
 }
 
-/** How to build the project at the folder's root: `{ kind, command, args, cwd, env }`, or null. */
 /** A local absolute path as text (S4 on #83): no UNC, device or extended form, before any filesystem call. */
 function localPath(p) {
   if (typeof p !== 'string' || !p || /^[\\/]{2}/.test(p)) return null;
@@ -41,7 +40,8 @@ function localPath(p) {
 }
 
 /**
- * The project at the folder's ROOT only (a monorepo's nested projects get diagnostics, not this task: README, §12).
+ * How to build the project at the folder's ROOT: `{ kind, command, args, cwd, env }`, or null (a monorepo's nested projects
+ * get diagnostics, not this task: README, ADR-0021 §12 note 13).
  */
 function buildCommand(folderPath, platform = process.platform, execPath = process.execPath) {
   const folder = localPath(folderPath) && realOrNull(folderPath);

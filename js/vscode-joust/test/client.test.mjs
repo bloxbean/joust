@@ -30,10 +30,11 @@ function fakeVscode(docs) {
   return { vscode, calls };
 }
 
-const doc = (uri, version) => ({ uri: { toString: () => uri }, version, isClosed: false });
+const doc = (uri, version, text = 'let') => ({ uri: { toString: () => uri }, version, isClosed: false, getText: () => text });
 const client = (onConvert) => ({
   protocol2CodeConverter: {
     asUri: (u) => ({ toString: () => u }),
+    asRange: (r) => r,
     asWorkspaceEdit: async (e) => {
       await new Promise((r) => setTimeout(r, 5));
       if (onConvert) onConvert();
@@ -41,7 +42,11 @@ const client = (onConvert) => ({
     },
   },
 });
-const edit = (...targets) => ({ edit: { documentChanges: targets.map(([uri, version]) => ({ textDocument: { uri, version }, edits: [] })) } });
+const R = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+const edit = (...targets) => ({
+  edit: { documentChanges: targets.map(([uri, version]) => ({ textDocument: { uri, version }, edits: [{ range: R, newText: 'const' }] })) },
+  joustExpected: targets.map(([uri]) => ({ uri, range: R, text: 'let' })),
+});
 
 test('applyEdit: applied when every target is open at its validated version', async () => {
   const a = doc('file:///a.jsc', 3);
@@ -187,4 +192,19 @@ test('the task provider offers nothing in Restricted Mode, and resolves only its
   const r = p.resolveTask({ definition: { type: 'joust', task: 'build', command: '/evil' }, scope: folder, execution: { process: '/evil' } });
   assert.equal(r.execution.process, process.execPath);
   assert.equal(p.resolveTask({ definition: { type: 'joust', task: 'deploy' }, scope: folder }), undefined);
+});
+
+test('applyEdit: a document whose text at the edit is not the checked text is refused (S9: a reopen before the handler)', async () => {
+  const a = doc('file:///a.jsc', 1, 'new');   // reopened before the handler ran: version 1 again, other text
+  const { vscode, calls } = fakeVscode([a]);
+  const r = await createHandleApplyEdit(vscode, () => client())(edit(['file:///a.jsc', 1]));
+  assert.equal(r.applied, false);
+  assert.match(r.failureReason, /no longer has the text/);
+  assert.equal(calls.length, 0);
+  // And an edit that carries no expected text is not the server's.
+  const b = doc('file:///b.jsc', 1);
+  const f2 = fakeVscode([b]);
+  const p = edit(['file:///b.jsc', 1]);
+  delete p.joustExpected;
+  assert.equal((await createHandleApplyEdit(f2.vscode, () => client())(p)).applied, false);
 });

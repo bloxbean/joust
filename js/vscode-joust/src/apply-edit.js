@@ -23,6 +23,11 @@ function createHandleApplyEdit(vscode, getClient) {
         return { applied: false, failureReason: 'JOUST applies only versioned edits of open documents' };
       }
     }
+    // S9 on #83: the server sends the text every edit replaces; an edit without it is not the server's checked edit.
+    const expected = params.joustExpected;
+    if (!Array.isArray(expected) || expected.length !== changes.reduce((n, c) => n + c.edits.length, 0)) {
+      return { applied: false, failureReason: 'JOUST applies only edits that carry the text they replace' };
+    }
     const client = getClient();
     // Review C2 on #83: a version identifies text only within one open lifetime. The target documents are captured now,
     // before the conversion's await, and the very same documents must still be open afterwards: a target closed and
@@ -48,6 +53,15 @@ function createHandleApplyEdit(vscode, getClient) {
       if (doc !== before.get(c)) return { applied: false, failureReason: `${uri} was closed and reopened: the edit is refused` };
       if (doc.version !== c.textDocument.version) {
         return { applied: false, failureReason: `${uri} changed since the edit was checked: the edit is refused` };
+      }
+    }
+    // Still synchronous: the text each edit replaces is the text the server checked (a reopen at a reused version that
+    // happened before this handler started has other text there).
+    for (const x of expected) {
+      const uri = client.protocol2CodeConverter.asUri(x.uri).toString();
+      const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri);
+      if (!doc || typeof x.text !== 'string' || doc.getText(client.protocol2CodeConverter.asRange(x.range)) !== x.text) {
+        return { applied: false, failureReason: `${uri} no longer has the text the edit was checked on: the edit is refused` };
       }
     }
     return vscode.workspace.applyEdit(converted).then((applied) => ({ applied: applied === true }));
