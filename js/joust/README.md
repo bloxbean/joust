@@ -26,9 +26,10 @@ limits as `{ stackMb, memoryMb, timeoutS }`, in the same ranges.
 | `JOUST_ENGINE_MEMORY_MB` | 256–65536 | 4096 | the worker's heap; a build that needs more fails with an out-of-memory error |
 | `JOUST_ENGINE_TIMEOUT_S` | 1–86400 | 600 | one build's time, from when the worker starts it; past it the worker is stopped |
 
-A Node heap flag inherited by the worker (`--max-old-space-size` on the command line or in `NODE_OPTIONS`) overrides
-the worker's heap limit, so the build refuses to run under one that differs from `JOUST_ENGINE_MEMORY_MB`: remove the
-flag, or set the variable to its value. `loadToolchain()` runs builds on the caller's thread, which needs a stack of at
+A Node old-generation flag inherited by the worker (`--max-old-space-size` or `--max-heap-size`, on the command line or
+in `NODE_OPTIONS`) overrides the worker's heap limit. The build measures the worker's old generation before it runs and
+refuses one that is not `JOUST_ENGINE_MEMORY_MB`: remove the flag, or set the variable to the flag's value. A
+young-generation flag (`--max-semi-space-size`) is fine. `loadToolchain()` runs builds on the caller's thread, which needs a stack of at
 least 8 MB; `buildInWorker` provides one. On Node 22 the engines turn on Wasm exception references
 (`--experimental-wasm-exnref`) themselves; newer Node has them on by default, and the flag is not set there (it would only print a warning).
 

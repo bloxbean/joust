@@ -68,22 +68,50 @@ export function engineLimits(env = process.env, overrides = {}) {
   return out;
 }
 
-/** The Node heap flags this process passes to its workers (execArgv, NODE_OPTIONS), which override resourceLimits. */
+/**
+ * The Node flags this process passes to its workers (execArgv, NODE_OPTIONS) that set the old generation's limit, which
+ * override resourceLimits.maxOldGenerationSizeMb: --max-old-space-size and --max-heap-size, in either spelling. (A
+ * young-generation flag such as --max-semi-space-size does not: #80 review F5.)
+ */
 export function inheritedHeapFlags(execArgv = process.execArgv, nodeOptions = process.env.NODE_OPTIONS ?? '') {
-  const flag = /^--max[-_](old|semi)[-_]space[-_]size(=|$)|^--max[-_]heap[-_]size(=|$)/;
+  const flag = /^--max[-_]old[-_]space[-_]size(=|$)|^--max[-_]heap[-_]size(=|$)/;
   return [...execArgv, ...nodeOptions.split(/\s+/)].filter((a) => flag.test(a));
 }
 
+/** How much the probe worker's old generation differs from the build worker's (see heapProblem). */
+export const HEAP_PROBE_DELTA_MB = 64;
+
 /**
- * Why a worker whose heap limit is `heapLimitMb` does not have the configured `memoryMb`, or null. V8 adds the young
- * generation (48 MB on Node 22) to the old generation's limit; an inherited --max-old-space-size replaces both
- * (#80 review C2). Allowed: memoryMb up to memoryMb + 128.
+ * Why the build worker's old generation is not the configured `memoryMb`, or null (#80 review C2, F5). Measured, not
+ * parsed: the build worker (old generation memoryMb) and a probe worker (memoryMb + HEAP_PROBE_DELTA_MB) each report
+ * V8's heap_size_limit. When resourceLimits holds, the two differ by exactly the delta, whatever the young generation
+ * (a --max-semi-space-size changes both alike); when an inherited flag sets the old generation, both report the same
+ * limit. One exception: an inherited --max-old-space-size equal to memoryMb sets the very limit configured.
  */
-export function heapProblem(heapLimitMb, memoryMb, flags = inheritedHeapFlags()) {
-  if (heapLimitMb >= memoryMb && heapLimitMb <= memoryMb + 128) return null;
-  return `the toolchain engine's worker has a heap limit of ${Math.round(heapLimitMb)} MB, not the configured`
-    + ` JOUST_ENGINE_MEMORY_MB=${memoryMb}` + (flags.length ? `: the inherited Node flag ${flags.join(' ')} (execArgv or NODE_OPTIONS)`
-    + ' overrides it; remove the flag, or set JOUST_ENGINE_MEMORY_MB to its value' : '');
+export function heapProblem(heapLimitMb, probeLimitMb, memoryMb, flags = inheritedHeapFlags()) {
+  if (Math.abs(probeLimitMb - heapLimitMb - HEAP_PROBE_DELTA_MB) <= 1) return null;
+  const old = flags.map((f) => /^--max[-_]old[-_]space[-_]size=([0-9]+)$/.exec(f)).filter(Boolean).map((m) => Number(m[1]));
+  if (old.length && old.every((v) => v === memoryMb) && flags.length === old.length) return null;
+  const value = old.length ? old[old.length - 1] : null;
+  const fix = value !== null && value >= 256 && value <= 65536 && flags.length === old.length
+    ? `remove the flag, or set JOUST_ENGINE_MEMORY_MB=${value}` : 'remove the flag';
+  return `the toolchain engine's worker does not have the configured heap (JOUST_ENGINE_MEMORY_MB=${memoryMb}): its old`
+    + ` generation is set elsewhere (heap limit ${Math.round(heapLimitMb)} MB)`
+    + (flags.length ? `, by the inherited Node flag ${flags.join(' ')} (execArgv or NODE_OPTIONS); ${fix}` : '');
+}
+
+/** The heap_size_limit, in MB, of a worker whose old generation is `oldMb` (a probe: it reports and exits). */
+function probeHeapLimit(oldMb) {
+  return new Promise((resolve, reject) => {
+    const w = new Worker("require('node:worker_threads').parentPort.postMessage(require('node:v8').getHeapStatistics().heap_size_limit / 1048576)",
+      { eval: true, resourceLimits: { maxOldGenerationSizeMb: oldMb } });
+    w.unref();
+    w.once('message', (v) => {
+      resolve(v);
+      w.terminate();
+    });
+    w.once('error', reject);
+  });
 }
 
 let current = null;
@@ -128,11 +156,16 @@ function spawn(limits) {
   worker.on('message', (m) => {
     if (m.ready) {
       clearTimeout(startup);
-      const why = heapProblem(m.heapLimitMb, limits.memoryMb);
-      if (why) {
-        ready.reject(new Error(why));
-        failAll(new Error(why));
-      } else ready.resolve();
+      probeHeapLimit(limits.memoryMb + HEAP_PROBE_DELTA_MB).then((probe) => {
+        const why = heapProblem(m.heapLimitMb, probe, limits.memoryMb);
+        if (why) {
+          ready.reject(new Error(why));
+          failAll(new Error(why));
+        } else ready.resolve();
+      }, (e) => {
+        ready.reject(e);
+        failAll(new Error(`the toolchain engine's heap probe failed: ${e?.message ?? e}`));
+      });
       return;
     }
     const p = pending.get(m.id);
