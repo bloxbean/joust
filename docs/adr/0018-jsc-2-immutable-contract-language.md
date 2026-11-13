@@ -472,6 +472,7 @@ import { concat, slice, length } from "std/bytes"
     processor's description. Each contract's IR carries the libraries it imports (format 2, `libraries`), so both
     reference interpreters evaluate library fns (five-way, J3); each contract's message map lists a library's messages
     with the library's file (D12, J20).
+- **No `extern` declarations**: a `.jsc` author never writes a signature for Java code.
 - **Other contracts.** `import contract { Oracle } from "./Oracle.jsc"` (or `from "java:org.example.Oracle"`) makes
   the contract's state type `Oracle.State` and `Instance<Oracle>` available, for `reads`, `deposit` and params. On
   Gradle the contract is in the same project or a dependency on the processor path; on npm, in `contracts/` or a
