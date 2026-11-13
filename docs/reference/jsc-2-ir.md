@@ -46,7 +46,9 @@ local referenced before it is declared or declared twice. The JavaScript reader 
 load, before anything runs: an unknown node or statement kind, field, operator, modifier name (`payable`, `open`,
 `only`, `after`, `before`, `batched`), method kind, `std` row or type is refused there. So a change is **additive** when an old
 reader refuses every program that uses it, at load, rather than misreading it: a new node kind, a new modifier (M1c's
-`batched`), a new `std` row or a new type, each with fields of its own. The JavaScript reader also refuses a condition or a
+`batched`), a new `std` row or a new type, each with fields of its own. **M2a's additions are of this kind**: the types
+`Value`, `Address` and `Credential`, the nodes `FundsRef` and `LedgerOp`, the statements `Send`, `Mint` and `Accept`, the
+`std/value` and `std/address` rows, and the arms `KeyCred`/`ScriptCred` of a match on a credential; they keep version 1. The JavaScript reader also refuses a condition or a
 boolean operand that is not of type `Bool` (a `Branch`'s, `Require`'s or `Cond`'s condition; `Logic`'s and `Not`'s
 operands), and an empty `branches` list. Additive changes keep version 1. A change to
 an existing node's fields, to the meaning of an existing node, operator, modifier or row, or to the program's top-level
@@ -94,8 +96,9 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 
 - **Record:** `{ "name", "fields": [{ "name", "type": Type }], "at" }`, with the fields in declaration order. An enum's
   variants are records in declaration order, so a variant's tag is its index.
-- **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `{ "list": T }`, `{ "option": T }`, `{ "record": name }`
-  (`"State"` for the state), `{ "enum": name }`, `{ "map": [K, V] }`, `{ "bigmap": [K, V] }`.
+- **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),
+  `{ "list": T }`, `{ "option": T }`, `{ "record": name }` (`"State"` for the state), `{ "enum": name }`,
+  `{ "map": [K, V] }`, `{ "bigmap": [K, V] }`.
 - **Local** (where it is bound): `{ "id", "name", "type", "taint", "at", "fieldTaints"? }`. A reference to it is
   `{ "node": "LocalRef", "local": id, … }`. `fieldTaints` is present only for a value of the state's type: each field's
   taint.
@@ -110,6 +113,9 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `Let` | `local` (Local), `value` |
   | `Require` | `cond`, `message` |
   | `Pay` | `to`, `amount` |
+  | `Send` (M2) | `to`, `value` |
+  | `Mint` (M2) | `burn` (boolean: `burn(…)`), `name`, `qty` |
+  | `Accept` (M2) | `value` |
   | `If` | `branches` (Branch…, at least one), `otherwise` (Block or null), `pays` |
   | `For` | `var` (Local), `list`, `body` (Block), `pays` |
   | `Match` | `scrutinee`, `arms`, `pays` |
@@ -117,8 +123,8 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 - **Branch:** `{ "cond": Expr, "then": Block, "at" }`, one test of an `if` and its else-if chain (`If`, `IfValue`).
   An else-if chain is one node with a branch per test (ADR-0018 J18, M1e), so its depth does not grow with its length.
 - **Arm:** `{ "ctors": [name…], "fields": [name…], "binds": [Local…], "body": Block, "at" }`. `ctors` lists the
-  variants it covers (`Some`/`None` for an option), and `fields[i]` is the field that `binds[i]` takes (`value` for
-  `Some(x)`).
+  variants it covers (`Some`/`None` for an option, `KeyCred`/`ScriptCred` for a credential), and `fields[i]` is the
+  field that `binds[i]` takes (`value` for `Some(x)`; `key` or `hash` for a credential).
 - **Expr:** `{ "node": kind, …, "type": Type, "taint": n, "at" }`. `taint` is a bit set: 1 means the value depends on
   time, 2 on the current call's window (D11). Evaluation ignores it. The kinds and their own fields:
 
@@ -143,6 +149,11 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `Compare` | `op` (`< <= > >=`), `left`, `right` | | `Coalesce` | `option`, `default` |
   | `Equals` | `negate`, `left`, `right`, `operand` (Type) | | `BlockValue` | `block` |
   | `Logic` | `op` (`&& \|\|`), `left`, `right` | | `IfValue` | `branches`, `otherwise` (Block) |
+  | `FundsRef` (M2) | `field` (`received held policy self`) | | `LedgerOp` (M2) | `op`, `args` (below) |
+
+  `LedgerOp`'s ops and argument counts: `none` 0, `lovelace` 1, `asset` 3 (policy, name, quantity), `add` 2, `sub` 2,
+  `lovelaceOf` 1, `of` 3 (value, policy, name), `covers` 2; `keyCred` 1, `scriptCred` 1, `wallet` 1, `walletStaked` 2,
+  `script` 1, `scriptStaked` 2, `payment` 1.
 
 A local is always bound before it is referenced in document order. That holds for a method's or `fn`'s parameters
 before its body, a `Let`'s local after its value, and lambda and arm bindings after the collection or scrutinee and
@@ -162,11 +173,17 @@ The differential tests pass calls to the JavaScript interpreter as JSON, in a ta
 | record or variant | `{ "rec": "Name", "fields": [v…] }` (the state is `"State"`) |
 | `Map` | `{ "map": [[k, v]…] }`, in the value's own order. An input may be out of order; the checked-input rule refuses it |
 | `BigMap` | `{ "bigmap": [[k, v]…] }`: its contents (*now*), in canonical order |
+| `Value` (M2) | `{ "value": [[policy, name, "q"]…] }`: policy and name as hex, the quantity as a decimal string, in the ledger's order (semantics §1.3) |
+| `Credential` (M2) | `{ "keyCred": hex }`, `{ "scriptCred": hex }` |
+| `Address` (M2) | `{ "address": [credential, stake] }`, `stake` `null`, `{ "stakeHash": credential }` or `{ "stakePtr": ["slot", "tx", "cert"] }` |
 
 A call is `{ "method", "state": v|null, "args": [v…], "tx": { "caller", "received", "balance", "validFrom",
-"validTo", "signers" }|null, "transition"? }`, with `caller` and each of `signers` as hex and the other fields as
-decimal strings. `signers` (semantics §2.6) may be left out: the caller alone signs. `"transition": true` runs the
+"validTo", "signers", "funds"? }|null, "transition"? }`, with `caller` and each of `signers` as hex and the other fields as
+decimal strings. `signers` (semantics §2.6) may be left out: the caller alone signs. `funds` (M2) is
+`{ "received": Value, "held": Value, "policy": hex, "self": hex }`, for a call that reads funds or moves native assets. `"transition": true` runs the
 transition alone, without the modifiers (§2.6). An answer is
 `{ "refused": message, "class": "kind:detail" }` (semantics §2.5),
-`{ "ok": { "value": v|null, "payouts": [{ "to": hex, "lovelace": "n" }…] } }`, or `{ "limit": message }` when the
+`{ "ok": { "value": v|null, "payouts": [{ "to": hex, "lovelace": "n" }…], "sends"?, "mint"?, "accepted"? } }` (M2: the
+sends `[{ "to": Address, "value": Value }…]`, the net mint and the accepted sum, each present only when not empty), or
+`{ "limit": message }` when the
 interpreter could not finish (semantics §2.4: no answer, a failure of that leg).

@@ -583,3 +583,77 @@ test('the reader refuses a malformed branches list and a condition that is not a
   }
   assert.throws(edit((p) => { firstIf(p, 'IfValue').otherwise = null; }), Error);
 });
+
+// ------------------------------------------------------------------ M2a: values, credentials, addresses, effects
+
+const VALUE = 'Value';
+const ledger = (op, args, type) => node('LedgerOp', { op, args }, type);
+const POL = '70'.repeat(28), Q = '71'.repeat(28);
+const vjson = (...entries) => ({ value: entries.map(([p, n, q]) => [p, n, String(q)]) });
+
+test('§1.3 a value keeps the ledger order (a prefix first, then bytewise) and drops zero sums; §3.12 its operations', () => {
+  const p = program();
+  // (POL, "b") and (POL, "aa"): bytewise "aa" < "b", although "b" is shorter (the ledger's order, not §1.1's).
+  const v = p.evalExpr(ledger('add', [ledger('asset', [b(POL), b('62'), lit(1n)], VALUE), ledger('asset', [b(POL), b('6161'), lit(2n)], VALUE)], VALUE));
+  assert.deepEqual(toJson(v), vjson([POL, '6161', 2n], [POL, '62', 1n]));
+  // A zero sum leaves no entry; 0 builds the empty value.
+  const z = p.evalExpr(ledger('sub', [ledger('asset', [b(POL), b('62'), lit(3n)], VALUE), ledger('asset', [b(POL), b('62'), lit(3n)], VALUE)], VALUE));
+  assert.deepEqual(toJson(z), vjson());
+  assert.deepEqual(toJson(p.evalExpr(ledger('lovelace', [lit(0n)], VALUE))), vjson());
+  // Quantities stay in [-2^127, 2^127 - 1]: building, adding, subtracting (−(−2^127) is out) and scaling fail outside it.
+  const MAX = (1n << 127n) - 1n, MIN = -(1n << 127n);
+  const fails = (e, cls) => assert.throws(() => p.evalExpr(e), (x) => x instanceof Refused && x.refusal === cls);
+  fails(ledger('lovelace', [lit(MAX + 1n)], VALUE), 'domain:Value.lovelace');
+  fails(ledger('asset', [b(POL), b('00'.repeat(33)), lit(1n)], VALUE), 'domain:Value.asset');
+  assert.deepEqual(toJson(p.evalExpr(ledger('asset', [b(POL), b('00'.repeat(33)), lit(0n)], VALUE))), vjson());   // 0: no check, as insertCoin
+  fails(ledger('add', [ledger('lovelace', [lit(MAX)], VALUE), ledger('lovelace', [lit(1n)], VALUE)], VALUE), 'domain:Value +');
+  fails(ledger('sub', [ledger('none', [], VALUE), ledger('lovelace', [lit(MIN)], VALUE)], VALUE), 'domain:Value -');
+  fails(std('std/value', 'scale', [lit(2n), ledger('lovelace', [lit(MAX)], VALUE)], VALUE), 'domain:scale');
+  assert.deepEqual(toJson(p.evalExpr(std('std/value', 'scale', [lit(0n), ledger('lovelace', [lit(MAX)], VALUE)], VALUE))), vjson());
+  // covers fails on a negative quantity, either side; of and lovelace read 0 when absent.
+  fails(ledger('covers', [ledger('lovelace', [lit(-1n)], VALUE), ledger('none', [], VALUE)], BOOL), 'domain:covers');
+  assert.equal(p.evalExpr(ledger('covers', [ledger('asset', [b(POL), b('01'), lit(5n)], VALUE), ledger('asset', [b(POL), b('01'), lit(5n)], VALUE)], BOOL)), true);
+  assert.equal(p.evalExpr(ledger('covers', [ledger('asset', [b(POL), b('01'), lit(5n)], VALUE), ledger('asset', [b(Q), b('01'), lit(1n)], VALUE)], BOOL)), false);
+  assert.equal(p.evalExpr(ledger('of', [ledger('none', [], VALUE), b(POL), b('01')], INT)), 0n);
+  assert.equal(p.evalExpr(eq(ledger('asset', [b(POL), b('01'), lit(1n)], VALUE), ledger('asset', [b(POL), b('01'), lit(1n)], VALUE), VALUE)), true);
+});
+
+test('§1.4 credentials and addresses compare by kind and bytes; §4 a 28-byte hash wherever one crosses', () => {
+  const p = program();
+  const k = 'aa'.repeat(28);
+  const addr = (op, ...args) => ledger(op, args, 'Address');
+  assert.equal(p.evalExpr(eq(addr('wallet', b(k)), addr('wallet', b(k)), 'Address')), true);
+  assert.equal(p.evalExpr(eq(addr('wallet', b(k)), addr('script', b(k)), 'Address')), false);   // the kind differs
+  assert.equal(p.evalExpr(eq(addr('wallet', b(k)), addr('walletStaked', b(k), b(k)), 'Address')), false);   // the staking part differs
+  assert.equal(p.evalExpr(eq(ledger('payment', [addr('scriptStaked', b(k), b(k))], 'Credential'), ledger('scriptCred', [b(k)], 'Credential'),
+    'Credential')), true);
+  assert.equal(p.wellFormed(p.evalExpr(addr('wallet', b('aa'.repeat(27)))), 'Address'), false);
+  assert.equal(p.wellFormed(p.evalExpr(addr('walletStaked', b(k), b('aa'.repeat(29)))), 'Address'), false);
+  assert.equal(p.wellFormed(p.evalExpr(ledger('keyCred', [b(k)], 'Credential')), 'Credential'), true);
+  assert.deepEqual(toJson(p.evalExpr(std('std/address', 'paymentScript', [addr('script', b(k))], { option: 'Hash' }))), { some: { bytes: k } });
+  assert.deepEqual(toJson(p.evalExpr(std('std/address', 'paymentKey', [addr('script', b(k))], { option: 'Key' }))), { none: true });
+});
+
+test('§5 effects: sends in order, the net mint, the accepted sum, and what was accepted checked last (Coins)', () => {
+  const coins = fixture('Coins');
+  const policy = '52'.repeat(28), label = '0d'.repeat(28), self = '03'.repeat(32), caller = '0a'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: caller }, { address: [{ keyCred: 'b1'.repeat(28) }, null] }, { int: '5' }, { bytes: label }] };
+  const tx = (received, held) => ({ caller, received: '0', balance: '3000000', validFrom: '0', validTo: '1', funds: { received, held, policy, self } });
+  const call = (method, args, t) => runCall(coins, { method, state, args, tx: t });
+  // redeem: accept 2 receipts, burn 3 then mint 1 (net −2), send 2 tokens to the beneficiary.
+  const ok = call('redeem', [{ bytes: POL }, { bytes: '484f534b59' }, { int: '2' }], tx(vjson([policy, label, 2n]), vjson([POL, '484f534b59', 9n])));
+  assert.deepEqual(ok.ok.mint, vjson([policy, label, -2n]));
+  assert.deepEqual(ok.ok.accepted, vjson([policy, label, 2n]));
+  assert.deepEqual(ok.ok.sends, [{ to: { address: [{ keyCred: 'b1'.repeat(28) }, null] }, value: vjson([POL, '484f534b59', 2n]) }]);
+  // Offering other assets than those accepted: refused last, with the class domain:accepted.
+  const off = call('redeem', [{ bytes: POL }, { bytes: '484f534b59' }, { int: '2' }], tx(vjson([policy, label, 1n]), vjson([POL, '484f534b59', 9n])));
+  assert.equal(off.class, 'domain:accepted');
+  // A reserved name of the own policy cannot be accepted (§5.5); another policy's 32-byte name can.
+  const reserved = call('probe', [{ bytes: POL }, { bytes: '01' }, { int: '1' }, { int: '1' }], tx(vjson([policy, '4f' + '00'.repeat(28), 1n]), vjson()));
+  assert.equal(reserved.class, 'domain:accept');
+  const foreign = call('probe', [{ bytes: POL }, { bytes: '01' }, { int: '1' }, { int: '1' }], tx(vjson([Q, '00'.repeat(32), 1n]), vjson()));
+  assert.ok('ok' in foreign, JSON.stringify(foreign));
+  // A method that moves native assets needs the funds in its transaction (a caller's error, not a refusal).
+  assert.throws(() => runCall(coins, { method: 'probe', state, args: [{ bytes: POL }, { bytes: '01' }, { int: '1' }, { int: '1' }],
+    tx: { caller, received: '0', balance: '0', validFrom: '0', validTo: '1' } }), /needs them/);
+});
