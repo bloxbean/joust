@@ -49,12 +49,18 @@ export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
  */
 export function isMissingEngine(r, engine) {
   if (r.ready) return false;
+  // C29 on #83: the worker resolves the loader's own request before loading it; its failure is the structural answer.
+  if (r.rootMissing === true && r.code === 'MODULE_NOT_FOUND') return true;
   const files = [engine.file, `${engine.file}.wasm`];
   if (r.code === 'MODULE_NOT_FOUND') {
-    // The message's whole first line against the exact header Node writes for the loader's request (C26 on #83: a
-    // request is not parsed out of the quotes, since a path may hold quotes and spaces; Node escapes neither).
-    const first = String(r.error ?? '').split('\n', 1)[0];
-    return files.some((f) => first === `Cannot find module '${f}'`);
+    // Otherwise (the loader vanished between resolving and loading it): Node's exact header for the loader's request,
+    // compared whole and followed by the end of the message or by the require stack. A path may hold quotes, spaces
+    // and newlines (C26, C29); nothing is split or parsed out of it.
+    const msg = String(r.error ?? '');
+    return files.some((f) => {
+      const header = `Cannot find module '${f}'`;
+      return msg === header || msg.startsWith(`${header}\nRequire stack:`);
+    });
   }
   if (r.code === 'ENOENT' || r.code === 'ENOTDIR') {
     if (files.includes(r.path)) return true;

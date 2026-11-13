@@ -27,8 +27,18 @@ function load(engineFile) {
       delete globalThis.onJulcReady;
       resolve(api);
     };
+    const req = createRequire(engineFile);
+    // C29 on #83: the root request is resolved on its own first, so its failure says, structurally, that the loader
+    // itself is not there; no message text is read for it (a path may hold quotes, spaces or newlines).
     try {
-      createRequire(engineFile)(engineFile);
+      req.resolve(engineFile);
+    } catch (e) {
+      e.rootMissing = true;
+      reject(e);
+      return;
+    }
+    try {
+      req(engineFile);
     } catch (e) {
       reject(e);
     }
@@ -41,7 +51,7 @@ export async function runEngineWorker({ engineFile }) {
     api = await load(engineFile);
   } catch (e) {
     // The code and path go along: a copy that vanished is told from an engine fault by them (review C18 on #83).
-    parentPort.postMessage({ ready: false, error: String(e?.message ?? e), code: e?.code, path: e?.path });
+    parentPort.postMessage({ ready: false, error: String(e?.message ?? e), code: e?.code, path: e?.path, rootMissing: e?.rootMissing === true });
     return;
   }
   let info = null;

@@ -74,6 +74,16 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       return 0;
     }
   };
+  /** Whether a directory holds a copy whose bytes are digest `n`. */
+  async function validCopy(dir, n) {
+    try {
+      const [a, b] = await Promise.all([fs.readFile(join(dir, ENGINE_JS)), fs.readFile(join(dir, ENGINE_WASM))]);
+      return engineId(hex(a), hex(b)) === n;
+    } catch {
+      return false;
+    }
+  }
+
   /** Whether a claimed copy is still wanted: a live lease, a fresh use, or this server's own use. */
   async function wanted(aside, n, inUse = () => new Set()) {
     try {
@@ -101,9 +111,17 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
    */
   async function putBack(aside, n) {
     // S14 on #83: a claim goes back under its digest name only if its bytes ARE that digest; one that is not is removed.
-    const [jsHash, wasmHash] = await Promise.all([fs.readFile(join(aside, ENGINE_JS)), fs.readFile(join(aside, ENGINE_WASM))])
-      .then(([a, b]) => [hex(a), hex(b)]).catch(() => [null, null]);
-    if (!jsHash || engineId(jsHash, wasmHash) !== n) {
+    let hashes;
+    try {
+      const [a, b] = await Promise.all([fs.readFile(join(aside, ENGINE_JS)), fs.readFile(join(aside, ENGINE_WASM))]);
+      hashes = [hex(a), hex(b)];
+    } catch {
+      // C30 on #83: bytes that cannot be read now (EPERM, EACCES, EMFILE…) are not shown to be wrong: the claim is
+      // kept, for a later sweep.
+      return;
+    }
+    const [jsHash, wasmHash] = hashes;
+    if (engineId(jsHash, wasmHash) !== n) {
       await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
       return;
     }
@@ -125,6 +143,17 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
     } catch {
       return;
     }
+    // C31 on #83: what was moved aside is checked, not assumed damaged: another collector may have restored a valid copy
+    // since the check above. A valid one goes straight back, and this claim, now redundant, goes.
+    if (await valid(damaged, jsHash, wasmHash)) {
+      try {
+        await fs.rename(damaged, join(root, n));
+        await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
+      } catch {
+        // left for the sweep, which restores a valid moved-aside copy
+      }
+      return;
+    }
     try {
       await fs.rename(aside, join(root, n));
     } catch {
@@ -141,13 +170,20 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
    */
   async function sweep(names, inUse) {
     for (const c of names) {
-      const m = /^\.evicted-([0-9a-f]{64})-(\d+)-(\d+)$/.exec(c);
+      const m = /^\.evicted-([0-9a-f]{64})-(\d+)-(\d+)(?:-r[0-9a-z]+)?$/.exec(c);
       if (!m) continue;
       const [, n, pid, at] = m;
       const age = Date.now() - Number(at);
       if (age < CLAIM_MS) continue;
       if (age < LEASE_MS && Number(pid) !== process.pid && alive(Number(pid))) continue;
-      const aside = join(root, c);
+      // C31 on #83: the recovering collector first makes the claim its own, by an atomic rename to its own claim name;
+      // of two collectors recovering one claim, one rename succeeds and the other skips it.
+      const aside = join(root, `.evicted-${n}-${process.pid}-${Date.now()}-r${Math.random().toString(36).slice(2, 8)}`);
+      try {
+        await fs.rename(join(root, c), aside);
+      } catch {
+        continue;
+      }
       // A wanted claim always goes through putBack, which keeps its good bytes unless a valid copy is in place (C27); an
       // unwanted one is removed.
       if (await wanted(aside, n, inUse)) await putBack(aside, n);
@@ -161,8 +197,12 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       await sweep(all.filter((n) => n.startsWith('.evicted-')), inUse);
       // A damaged destination moved aside (C27) and left by a crash: removed once past the claim bound.
       for (const d of all) {
-        const m = /^\.damaged-[0-9a-f]{64}-\d+-(\d+)$/.exec(d);
-        if (m && Date.now() - Number(m[1]) > CLAIM_MS) await fs.rm(join(root, d), { recursive: true, force: true }).catch(() => {});
+        const m = /^\.damaged-([0-9a-f]{64})-\d+-(\d+)$/.exec(d);
+        if (!m || Date.now() - Number(m[2]) <= CLAIM_MS) continue;
+        // C31: a moved-aside copy that is in fact valid goes back if nothing of its digest is in place; else removed.
+        const present = await fs.stat(join(root, m[1])).then(() => true, () => false);
+        if (!present && await validCopy(join(root, d), m[1])) await fs.rename(join(root, d), join(root, m[1])).catch(() => {});
+        else await fs.rm(join(root, d), { recursive: true, force: true }).catch(() => {});
       }
     } catch {
       // no store yet
