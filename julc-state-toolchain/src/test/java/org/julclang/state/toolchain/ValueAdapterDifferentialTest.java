@@ -49,6 +49,12 @@ import static org.junit.jupiter.api.Assertions.*;
  * policies out of order or repeated, names over 32 bytes, quantities out of range. Three wires never reach the JVM body
  * as written, because JuLC's JVM {@code Value} rewrites them (lovelace's entry first; a non-adjacent repeated key read
  * back wrong): lovelace after a policy, a repeated name, a repeated policy. The on-chain body refuses all three.
+ * <p>
+ * M2c (review r1, F3, C3): {@code toWire}, {@code data}, {@code depositable} and {@code fromData} on every canonical value;
+ * {@code fromWire} and {@code fromData} on each value's wire form ({@code fromWire(toWire(v))} is v); {@code fromData} on
+ * every wire above, the three the JVM's {@code Value} rewrites included (it decides on the data as it came), and on data
+ * that is no value; {@code claimsFromWire} and {@code fundsFromWire} over lists of claims holding canonical values and
+ * wires. Which functions are covered is checked by reflection: every public static method of {@code ValueAdapter}.
  */
 class ValueAdapterDifferentialTest {
 
@@ -64,8 +70,11 @@ class ValueAdapterDifferentialTest {
 
             import java.math.BigInteger;
             import org.julclang.core.PlutusData;
+            import org.julclang.core.types.JulcList;
             import org.julclang.ledger.Value;
             import org.julclang.stdlib.Builtins;
+            import org.julclang.state.api.DepositClaim;
+            import org.julclang.state.api.Funds;
             import org.julclang.state.api.ValueAdapter;
 
             public class VaProbe {
@@ -121,6 +130,35 @@ class ValueAdapterDifferentialTest {
                 public static PlutusData fromWire(PlutusData v) {
                     return (PlutusData) (Object) ValueAdapter.fromWire((Value) (Object) v);
                 }
+                public static PlutusData toWire(PlutusData v) {
+                    return (PlutusData) (Object) ValueAdapter.toWire((Value) (Object) v);
+                }
+                public static PlutusData data(PlutusData v) {
+                    return ValueAdapter.data((Value) (Object) v);
+                }
+                public static PlutusData fromData(PlutusData d) {
+                    return (PlutusData) (Object) ValueAdapter.fromData(d);
+                }
+                public static PlutusData depositable(PlutusData v) {
+                    return ValueAdapter.depositable((Value) (Object) v) ? Builtins.iData(1L) : Builtins.iData(0L);
+                }
+                static PlutusData claimValues(JulcList<DepositClaim> cs) {
+                    if (cs.isEmpty()) {
+                        return Builtins.mkNilData();
+                    } else {
+                        DepositClaim c = cs.head();
+                        return Builtins.mkCons((PlutusData) (Object) c.value(), claimValues(cs.tail()));
+                    }
+                }
+                public static PlutusData claimsFromWire(PlutusData ds) {
+                    JulcList<DepositClaim> cs = (JulcList<DepositClaim>) (Object) Builtins.unListData(ds);
+                    return Builtins.listData(claimValues(ValueAdapter.claimsFromWire(cs)));
+                }
+                public static PlutusData fundsFromWire(PlutusData fd) {
+                    Funds f = ValueAdapter.fundsFromWire((Funds) (Object) fd);
+                    return Builtins.listData(Builtins.mkCons((PlutusData) (Object) f.received(), Builtins.mkCons((PlutusData) (Object) f.held(),
+                            claimValues(f.deposits()))));
+                }
             }
             """;
 
@@ -145,6 +183,47 @@ class ValueAdapterDifferentialTest {
         JVM.put("mintable", a -> ValueAdapter.mintable(b(a.get(0))));
         JVM.put("mintAdd", a -> ValueAdapter.mintAdd(v(a.get(0)), b(a.get(1)), b(a.get(2)), i(a.get(3))));
         JVM.put("fromWire", a -> ValueAdapter.fromWire(v(a.get(0))));
+        // M2c (review r1, F3): the stored-value, memo and deposit functions.
+        JVM.put("toWire", a -> ValueAdapter.toWire(v(a.get(0))));
+        JVM.put("data", a -> ValueAdapter.data(v(a.get(0))));
+        JVM.put("fromData", a -> ValueAdapter.fromData(a.get(0)));
+        JVM.put("depositable", a -> ValueAdapter.depositable(v(a.get(0))));
+        JVM.put("claimsFromWire", a -> values(ValueAdapter.claimsFromWire(claims(((PlutusData.ListData) a.get(0)).items()))));
+        JVM.put("fundsFromWire", a -> {
+            var fs = ((PlutusData.ConstrData) a.get(0)).fields();
+            var f = ValueAdapter.fundsFromWire(new org.julclang.state.api.Funds(b(fs.get(0)), b(fs.get(1)), v(fs.get(2)), v(fs.get(3)),
+                    claims(((PlutusData.ListData) fs.get(4)).items())));
+            var out = new ArrayList<PlutusData>(List.of(f.received().toPlutusData(), f.held().toPlutusData()));
+            out.addAll(((PlutusData.ListData) values(f.deposits())).items());
+            return new PlutusData.ListData(out);
+        });
+    }
+
+    /** Deposit claims (JVM) from their data: {@code Constr 0 [output, by, value, memo]}. */
+    static org.julclang.core.types.JulcList<org.julclang.state.api.DepositClaim> claims(List<PlutusData> ds) {
+        org.julclang.core.types.JulcList<org.julclang.state.api.DepositClaim> out = org.julclang.core.types.JulcList.empty();
+        for (int k = ds.size() - 1; k >= 0; k--) {
+            var fs = ((PlutusData.ConstrData) ds.get(k)).fields();
+            var by = ((PlutusData.ConstrData) fs.get(1)).fields();
+            out = out.prepend(new org.julclang.state.api.DepositClaim(i(fs.get(0)), new org.julclang.ledger.TxOutRef(
+                    new org.julclang.ledger.TxId(b(by.get(0))), i(by.get(1))), v(fs.get(2)), fs.get(3)));
+        }
+        return out;
+    }
+
+    static PlutusData values(org.julclang.core.types.JulcList<org.julclang.state.api.DepositClaim> cs) {
+        var out = new ArrayList<PlutusData>();
+        for (var c = cs; !c.isEmpty(); c = c.tail()) out.add(c.head().value().toPlutusData());
+        return new PlutusData.ListData(out);
+    }
+
+    static PlutusData claim(PlutusData value) {
+        return PlutusData.constr(0, PlutusData.integer(1), PlutusData.constr(0, PlutusData.bytes(fill(32, 9)), PlutusData.integer(0)), value,
+                PlutusData.constr(0));
+    }
+
+    static PlutusData listOf(List<PlutusData> xs) {
+        return new PlutusData.ListData(xs);
     }
 
     static final Map<String, Program> PROGRAMS = new LinkedHashMap<>();
@@ -184,6 +263,7 @@ class ValueAdapterDifferentialTest {
         if (r instanceof Value x) return x.toPlutusData();
         if (r instanceof BigInteger x) return PlutusData.integer(x);
         if (r instanceof Boolean x) return PlutusData.integer(x ? 1 : 0);
+        if (r instanceof PlutusData x) return x;
         throw new IllegalStateException("unexpected result " + r);
     }
 
@@ -215,6 +295,15 @@ class ValueAdapterDifferentialTest {
         perFunction.merge(fn, 1, Integer::sum);
         if (j.equals("refused") && u.equals("refused")) refusedBoth++;
         if (!j.equals(u)) disagreements.add(fn + a + ": JVM " + j + ", on-chain " + u);
+    }
+
+    /** Whether JuLC's JVM {@code Value} rewrites this data (so a JVM claim or funds cannot hold it as written). */
+    static boolean rewritten(PlutusData w) {
+        try {
+            return !Value.fromPlutusData(w).toPlutusData().equals(w);
+        } catch (RuntimeException e) {
+            return true;
+        }
     }
 
     // ------------------------------------------------------------------ inputs
@@ -299,7 +388,9 @@ class ValueAdapterDifferentialTest {
             for (BigInteger k : List.of(BigInteger.ZERO, BigInteger.valueOf(-1), BigInteger.TWO, BigInteger.TWO.pow(200), MAX, MIN)) {
                 check("scale", in(k), a);
             }
-            for (String fn : List.of("lovelaceOf", "isEmpty", "withoutLovelace", "fromWire")) check(fn, a);
+            for (String fn : List.of("lovelaceOf", "isEmpty", "withoutLovelace", "fromWire", "toWire", "data", "depositable", "fromData")) {
+                check(fn, a);
+            }
             for (byte[] p : List.of(ADA, P, Q, OWN, P33)) {
                 for (byte[] n : List.of(new byte[0], "HOSKY".getBytes(), fill(32, 7), fill(33, 7))) check("quantity", a, bd(p), bd(n));
             }
@@ -357,9 +448,54 @@ class ValueAdapterDifferentialTest {
         }
         assertEquals(3, jvmUnrepresentable, "lovelace after a policy, a repeated name, a repeated policy: the wires the JVM's Value rewrites");
 
+        // M2c (review r1, C3, F3): fromData decides on the data as it came, so it agrees on every wire, the three the JVM's
+        // Value rewrites included (lovelace after a policy is refused on both), and on data that is no value at all.
+        for (PlutusData w : wires) check("fromData", w);
+        for (PlutusData d : List.<PlutusData>of(PlutusData.integer(5), PlutusData.bytes(P), PlutusData.constr(0), new PlutusData.ListData(List.of()),
+                map(pair(in(BigInteger.ONE), tokens(h, one))), map(pair(bd(P), in(one))), map(pair(bd(P), map(pair(in(one), in(one))))),
+                map(pair(bd(P), map(pair(bd(h), bd(h))))))) {
+            check("fromData", d);
+        }
+        // A stored value's wire form and back, on every canonical value: fromWire(toWire(v)) is v.
+        for (var x : pool) {
+            PlutusData a = x.get().toPlutusData();
+            String wire = onChain("toWire", List.of(a));
+            if (wire.startsWith("ok:")) {
+                PlutusData w = org.julclang.core.cbor.PlutusDataCborDecoder.decode(HEX.parseHex(wire.substring(3)));
+                check("fromWire", w);
+                check("fromData", w);
+                assertEquals("ok:" + HEX.formatHex(PlutusDataCborEncoder.encode(a)), onChain("fromWire", List.of(w)), "fromWire(toWire(v)) is v");
+            }
+        }
+        // Deposit claims and funds: no claim, one, several; each claim's value canonical or a wire (in the wire's order,
+        // malformed); a wire the JVM's Value rewrites must be refused on-chain (as for fromWire above).
+        List<PlutusData> claimValues = new ArrayList<>();
+        for (var x : pool) claimValues.add(x.get().toPlutusData());
+        claimValues.addAll(wires);
+        check("claimsFromWire", listOf(List.of()));
+        for (PlutusData c : claimValues) {
+            for (PlutusData lists : List.of(listOf(List.of(claim(c))), listOf(List.of(claim(claimValues.get(5)), claim(c))))) {
+                if (rewritten(c)) {
+                    assertEquals("refused", onChain("claimsFromWire", List.of(lists)), "a claim the JVM's Value cannot hold: " + c);
+                    continue;
+                }
+                check("claimsFromWire", lists);
+            }
+            if (rewritten(c)) continue;
+            for (PlutusData held : List.of(claimValues.get(0), claimValues.get(5), c)) {
+                check("fundsFromWire", PlutusData.constr(0, bd(OWN), bd(fill(28, 0x5E)), c, held, listOf(List.of(claim(claimValues.get(5)), claim(c)))));
+            }
+        }
+
 
         perFunction.forEach((fn, n) -> assertTrue(n > 0, fn));
-        assertEquals(JVM.keySet(), perFunction.keySet(), "every function is covered");
+        // Every public function of ValueAdapter (by reflection, so a new one without vectors fails here: review r1, F3).
+        var publicFunctions = new java.util.TreeSet<String>();
+        for (var m : ValueAdapter.class.getDeclaredMethods()) {
+            if (java.lang.reflect.Modifier.isPublic(m.getModifiers()) && java.lang.reflect.Modifier.isStatic(m.getModifiers())) publicFunctions.add(m.getName());
+        }
+        assertEquals(publicFunctions, new java.util.TreeSet<>(perFunction.keySet()), "every public function of ValueAdapter has vectors");
+        assertEquals(publicFunctions, new java.util.TreeSet<>(JVM.keySet()), "every public function of ValueAdapter has a JVM body here");
         System.out.println("[ValueAdapter differential] " + cases + " cases, " + refusedBoth + " refused on both, " + disagreements.size()
                 + " disagree (" + jvmUnrepresentable
                 + " wire the JVM's Value cannot hold, refused on-chain); per function " + perFunction);
