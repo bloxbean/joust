@@ -1,7 +1,7 @@
 # `.jsc` 2 semantics
 
 What a checked `.jsc` 2 program evaluates to (ADR-0018 D15), for the constructs of milestone M1 (M0, M1a, and M1c's
-modifiers and batched actions). It is
+modifiers and batched actions) and of M2a (values, addresses, credentials, funds, and the effects on native assets). It is
 written so that an interpreter can be built from it alone. The JavaScript reference interpreter
 (`js/jsc-interpreter`) is built from this document, and its tests hold the hand-written vectors cited here
 (`test/semantics.test.js`). Five implementations must agree on every outcome defined here (J3): the JavaScript
@@ -14,8 +14,8 @@ types, shadowing, effect legality, the time rule (D11) and the BigMap flow rules
 except where a rule is what makes an evaluation well defined. Every node name below (`Arith`, `MapOp`, …) is the IR's.
 The encodings of values as Plutus data (D5) are in the ADR and in the ABI manifest. They are not part of evaluation.
 
-**Not yet covered:** `Value`, `Address`, `Credential`, `send`, `mint`, `deposit`, `accept`, `emit`, `params` and
-other contracts (M2), owned and keyed objects (M3), libraries (M4). A `batched` action (M1c) is covered: its transition
+**Not yet covered:** `deposit`, `emit`, `params`, `invariant`, `quorum`, `authorized`, `reads` and other contracts (M2b,
+M2c), owned and keyed objects (M3), libraries (M4). A `batched` action (M1c) is covered: its transition
 is an ordinary action's, the same in a batch and in a direct call; batch execution itself (the batcher's order, the
 fold over intents, refunds) is the validator's and the batcher's, not a call's.
 
@@ -33,9 +33,12 @@ fold over intents, refunds) is the validator's and the batcher's, not a call's.
 | enum `E` | a variant `V` of `E` and a tuple of `V`'s field values | a variant's *tag* is its index in `E`'s declaration, from 0 |
 | `Map<K, V>` | a finite sequence of entries `(k, v)`, keys unique and in canonical order | §1.1 |
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | a triple *(before, now, written)* | §1.2; a state field only |
+| `Value` (M2) | a finite map from (policy, token name) to a non-zero quantity | §1.3; a local's, a fn's or an effect's only |
+| `Credential` (M2) | `KeyCred { key }` or `ScriptCred { hash }` | §1.4 |
+| `Address` (M2) | a payment credential and a staking part: none, a staking hash (a credential) or a pointer (three integers) | §1.4; `a.payment` is its credential |
 
-Two internal values have no type of their own: the **range** `range(a, b)` (§3.6) and the **payout** `(to, lovelace)`
-(§2.3).
+Internal values have no type of their own: the **range** `range(a, b)` (§3.6), the **payout** `(to, lovelace)` (§2.3)
+and the **send** `(to, value)` (§5.1).
 
 ### 1.1 Canonical key order
 
@@ -56,6 +59,24 @@ input state. `BigMap.empty()` is *({}, {}, false)*. A write (§3.8) changes *now
 In a `BigMap<K, Int>`, no entry of *now* holds 0, because 0 means absence. A BigMap is never compared, bound, passed or
 captured (D7, a static rule), so its value is visible only through the operations in §3.8 and in the next state.
 
+### 1.3 Values (M2)
+
+A value is a finite map from a pair *(policy, token name)* of byte strings to a **non-zero** integer, its quantity.
+Lovelace is the pair *(empty, empty)*. Entries are in the **ledger's order**: by policy, then by token name, each compared
+lexicographically, unsigned, a proper prefix first (the order of `<` on `Bytes`, §3.3; *not* the canonical key order of
+§1.1). Every operation keeps a value so: a sum that reaches zero removes the entry. Every quantity of every value lies in
+the signed 128-bit range **[−2^127, 2^127 − 1]** (the ledger's native values, CIP-153); an operation whose result would
+leave it fails (§3.12). Two values are equal when they hold the same entries.
+
+### 1.4 Credentials and addresses (M2)
+
+A credential is a key's (`KeyCred`, its 28-byte hash `key`) or a script's (`ScriptCred`, its hash `hash`). An address
+is a payment credential and a staking part: none, a staking hash (a credential), or a pointer (slot, transaction index,
+certificate index). `wallet(k)` is *(KeyCred k, none)*, `wallet(k, s)` is *(KeyCred k, StakeHash (KeyCred s))*;
+`script(h)` and `script(h, s)` likewise with `ScriptCred h`. A pointer arrives only as an input. Two credentials are
+equal when they are of the same kind with equal bytes; two addresses when their payment credentials and staking parts are
+equal (a pointer's three integers by value).
+
 ## 2. Calls
 
 A call evaluates one method. Its inputs are the method's name, the input state σ (a `State` record, absent for an
@@ -70,14 +91,15 @@ IR says `usesCtx: false` and that has no `only f` modifier, which then never rea
 | `validFrom` | `Int` | the start of the transaction's validity window (POSIX ms) |
 | `validTo` | `Int` | its end |
 | `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, §2.6; the caller alone when a vector does not say) |
+| `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns or accepts: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token), `policy` (a `Hash`: the contract's policy) and `self` (`Bytes`: the instance's token name) |
 
 **The outcome** is one of the following:
 
 | Kind | Outcome |
 |---|---|
 | `init` | the first state |
-| `action` | the next state and the payouts |
-| `destroy` | the payouts |
+| `action` | the next state and the effects |
+| `destroy` | the effects |
 | `view` | the view's value |
 | any | **refused** |
 
@@ -96,7 +118,10 @@ finish a call (its stack runs out) gives **no answer**, which is not a refusal (
 4. Run the body's statements in order (§2.2).
 5. Evaluate the body's result expression, if any: the next state (init, action) or the value (view). A destroy has no
    result.
-6. The outcome is that value with the payouts collected in step 4, in the order they were made.
+6. **What was accepted** (§5.4): if the method's body holds an `accept` statement (in any arm or loop), the sum of what
+   it accepted must equal τ.`funds`.`received`; otherwise the call fails.
+7. The outcome is that value with the **effects** collected in step 4: the payouts and the sends, each in the order
+   they were made, the net mint and the sum of what was accepted (§5).
 
 **The modifiers are preconditions of a call** (§2.6): `only f`, `after f` and `before f` are evaluated against τ before
 the body. `payable`, `open` and `batched` refuse nothing in a call. **Other transaction-level rules are not evaluated by
@@ -187,7 +212,7 @@ A refusal's class names the rule that refused the call, as `kind:detail`:
 | `require:<line>:<col>:<message>` | a `require` did not hold; the detail is its position in the `.jsc` file (the IR's `at`) and its message, as written, so two `require`s with one message are told apart (review S6) |
 | `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name |
 | `modifier:<word> <field>` | a modifier did not hold (§2.6): `only owner`, `after deadline`, `before deadline` |
-| `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; or `pay` (a negative amount) |
+| `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`, `scale`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; `pay` (a negative amount); M2's `Value.lovelace`, `Value.asset`, `Value +`, `Value -`, `covers` (§3.12), `send`, `mint`, `accept` (§5.1–5.3), or `accepted` (§5.4) |
 
 The two interpreters must give the same class for every refused call (review S4), so a vector meant to reach one rule
 shows that both interpreters reach that rule. With several failures in one call, the first in evaluation order (§2.1)
@@ -420,6 +445,32 @@ is `true`. That signature with its last byte changed, with `S + L`, or with
 the message `#00` is `false`. The identity key with `R` the identity and `S = 0` is `false`. A key encoding `p + 1` is
 `false`. A 31-byte key fails.
 
+### 3.12 Values, credentials and addresses (M2)
+
+Every operation evaluates its arguments left to right (receiver first), then:
+
+| Expression | Value | Fails when |
+|---|---|---|
+| `Value.none()` | the empty value | never |
+| `Value.lovelace(n)` | *{(empty, empty) ↦ n}*, empty when `n` = 0 | `n` ≠ 0 is out of the 128-bit range |
+| `Value.asset(p, t, n)` | *{(p, t) ↦ n}*, empty when `n` = 0 | `n` ≠ 0 and (`t` has more than 32 bytes, or `n` is out of range) |
+| `v + w` | entry by entry sum, zero sums removed | a sum is out of range |
+| `v - w` | `v + (−1)·w` | a negated quantity of `w` (that is, −2^127) or a difference is out of range |
+| `v.lovelace` | the quantity of *(empty, empty)*, 0 when absent | never |
+| `v.of(p, t)` | the quantity of *(p, t)*, 0 when absent | never |
+| `v.covers(w)` | every quantity of `w` is at most `v`'s at that pair (0 when absent) | `v` or `w` holds a negative quantity |
+| `v == w`, `v != w` | equality of entries (§1.3) | never |
+| `scale(k, v)` (`std/value`) | each quantity times `k`; empty when `k` = 0 | `k` ≠ 0 and a product is out of range |
+| `isEmpty(v)`, `withoutLovelace(v)` (`std/value`) | whether `v` has no entry; `v` without *(empty, empty)* | never |
+| `keyCred(k)`, `scriptCred(h)`, `wallet(…)`, `script(…)` | §1.4 | never |
+| `a.payment` | the payment credential | never |
+| `paymentKey(a)`, `paymentScript(a)` (`std/address`) | `Some` of the payment credential's hash when it is a key's (a script's), else `None` | never |
+| `match c { KeyCred { key } => …, ScriptCred { hash } => … }` | the arm of `c`'s kind, `key` or `hash` bound to its hash | never |
+
+These are exactly the failure conditions of the ledger's native value builtins (`insertCoin`, `unionValue`,
+`scaleValue`, `valueContains`), which run on-chain; the generated Java's API adapter (`ValueAdapter`) fails on the JVM
+under the same conditions.
+
 ## 4. Checked inputs (D5, J15)
 
 A value crossing a trust boundary is checked before the body sees it. At M1a this means the arguments of `init`,
@@ -435,6 +486,11 @@ A value crossing a trust boundary is checked before the body sees it. At M1a thi
 | record `R` | every field is well formed at its declared type |
 | enum `E` | every field of its variant is well formed at the variant's declared field type |
 | `Map<K, V>` | every key has at most 64 bytes and is well formed at `K`, the keys are **strictly** ascending in canonical order (§1.1; so unique), and every value is well formed at `V` |
+| `Credential` (M2) | its hash has exactly 28 bytes |
+| `Address` (M2) | its payment credential is well formed, and a staking hash, if any, is a well-formed credential (a pointer always is) |
+
+A `Value` never crosses as an argument (it is not a parameter type, D5), so it has no rule here; the IR lists a
+parameter whose type holds an `Address` or a `Credential` in `checked`.
 
 A map that is out of order or has a duplicate key cannot be a map value (§1). Such an argument is refused here, so the
 body never sees one.
@@ -444,16 +500,57 @@ view given a non-canonical map (out of order, or with a duplicate key) has **no 
 §3.7 are defined on canonical maps only, and the legs may answer differently. The differential tests never send one,
 and the runtime's codec writes maps canonically.
 
-## 5. Time values (D11)
+## 5. Effects on native assets (M2, D4)
+
+Effects are statements (D4): an action's or a destroy's, in any arm or loop, never in a `fn`, a view, a `const` value or
+a lambda. Each kind accumulates on its own; no order across kinds is defined. Each needs τ.`funds` (§2).
+
+### 5.1 Sends
+
+`send(to, v)` evaluates `to` (an `Address`), then `v` (a `Value`). It fails when `v` holds a quantity that is not
+positive, or a reserved token name (§5.5) under the contract's own policy (τ.`funds`.`policy`). Otherwise it appends the
+send *(to, v)*: a call's sends are in the order they were made. An empty value may be sent (the transaction's builder
+adds the ledger's minimum). A send has no datum (a datum comes with M2c).
+
+### 5.2 Mints and burns
+
+`mint(t, n)` and `burn(t, n)` evaluate `t` (`Bytes`), then `n` (`Int`). Each fails unless `n` > 0, `t` has at most 32
+bytes, and `t` is not a reserved token name (§5.5). Then the call's **net mint** (a value, empty at first) gains `n`
+(`mint`) or −`n` (`burn`) of *(τ.`funds`.`policy`, t)*; it fails when that pair's new total is non-zero and out of the
+128-bit range. A total that reaches zero leaves no entry: `mint(t, 2)` then `burn(t, 2)` mints nothing.
+
+### 5.3 Accepted assets
+
+`accept(v)` evaluates `v` and fails when `v` holds lovelace, a quantity that is not positive, or a reserved token name
+under the own policy. Otherwise the sum of what the call accepted (a value, empty at first) gains `v`; it fails when a
+sum is out of range. `accept(Value.none())` accepts nothing.
+
+### 5.4 What was accepted, checked last
+
+A method whose body holds an `accept` statement takes in exactly what the caller offers (ADR-0007 r2): after its
+result is evaluated (step 6 of §2), the sum of what it accepted must equal τ.`funds`.`received`, or the call fails
+(class `domain:accepted`). Only a payable method may accept, and a payable method that reads `funds`, sends, mints or
+burns must accept (static rules, D4). A method without `accept` has nothing to check: the validator requires that it is
+offered no native assets.
+
+### 5.5 Reserved token names
+
+Under a contract's own policy, a token name of 32 bytes (an instance), or of 29 bytes starting with 0x4F (an owned
+object) or 0x49 (an intent), is reserved (ADR-0007 D3): it is never minted, burned, sent or accepted by a call. Another
+policy's names are not reserved.
+
+## 6. Time values (D11)
 
 Time taint is a static property. The checker marks every expression that depends on `validFrom` or `validTo` and
-refuses the programs whose outcome a time value could decide or make fail, except through `after`/`before`. Evaluation
+refuses the programs whose outcome a time value could decide or make fail, except through `after`/`before`. M2: a time
+value is never a `Value`'s quantity, any part of a sent or accepted value, or a mint quantity, and never decides whether
+`paymentKey` or `paymentScript` is `Some`. Evaluation
 ignores the `taint` fields of the IR. `validFrom`, `validTo` and the `std/time` rows are ordinary integers when a call
 runs. A program the checker accepts has the same outcome for every window that gives `after` and `before` the same
 answers, apart from amounts. A time value can still set an amount, for example a clamped `pay`, and the checker warns
 about the bias that gives (J6).
 
-## 6. Vectors
+## 7. Vectors
 
 Each rule above has vectors in `js/jsc-interpreter/test/`. `semantics.test.js` holds hand-written ones, by section,
 written from this document, not recorded from an implementation: they evaluate IR nodes built in the test, or call the

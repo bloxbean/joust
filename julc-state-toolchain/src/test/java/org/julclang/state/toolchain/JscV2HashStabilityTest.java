@@ -144,6 +144,7 @@ class JscV2HashStabilityTest {
         }
         declared.removeAll(fields);
         declared.removeAll(Set.of("caller", "received", "balance", "validFrom", "validTo", "state", "from", "of", "in"));
+        declared.removeAll(LANGUAGE);
         var out = new LinkedHashMap<String, String>();
         for (String n : declared) out.put(n, n + "Rn");
         return out;
@@ -156,7 +157,13 @@ class JscV2HashStabilityTest {
             "ada", "Int", "Bool", "Bytes", "Key", "Hash", "List", "Option", "Map", "BigMap", "State", "maxDatumBytes", "minAda",
             "maxValidityMs", "min", "max", "abs", "asKey", "asHash", "range", "length", "isEmpty", "head", "sum", "reverse", "contains",
             "any", "all", "find", "filter", "map", "fold", "concat", "take", "drop", "get", "has", "set", "delete", "size", "keys",
-            "values", "empty", "_", "utf8"));
+            "values", "empty", "_", "utf8",
+            // M2: funds' fields, the members of Value and Address, a credential's patterns and their fields, the effects,
+            // the prelude's constructors and the option assetSlots. A parameter may share a member's name (a Coins
+            // parameter is called policy, as funds.policy is): such a name is not renamed, since a member is not.
+            "funds", "held", "policy", "self", "lovelace", "covers", "payment", "none", "asset", "send", "mint", "burn", "accept",
+            "keyCred", "scriptCred", "wallet", "script", "Value", "Address", "Credential", "KeyCred", "ScriptCred", "key", "hash",
+            "assetSlots"));
 
     static {
         for (var b : org.julclang.state.dsl.v2.JscV2.bindings()) LANGUAGE.add(b.name());

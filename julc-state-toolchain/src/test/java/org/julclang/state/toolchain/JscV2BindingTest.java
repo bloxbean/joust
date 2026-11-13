@@ -52,6 +52,10 @@ class JscV2BindingTest {
             case "Int" -> "java.math.BigInteger";
             case "Bool" -> "boolean";
             case "Bytes", "Key", "Hash" -> "byte[]";
+            // M2: the ledger's types, and std/address's options of a hash.
+            case "Value" -> "org.julclang.ledger.Value";
+            case "Address" -> "org.julclang.ledger.Address";
+            case "Option<Key>", "Option<Hash>" -> "java.util.Optional<byte[]>";
             default -> throw new IllegalArgumentException(jscType);
         };
     }
