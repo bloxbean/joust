@@ -196,7 +196,7 @@ final class Parser {
     }
 
     /** The method modifiers (D4, D10); none is a field or binding name (M1c review F4). */
-    static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched");
+    static final java.util.Set<String> MODIFIERS = java.util.Set.of("payable", "open", "only", "after", "before", "batched", "receives");
 
     /** Java keywords, literals and {@code _}: none can be a package segment (JLS 3.9, 7.4.1; Codex C16). */
     private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of("_", "abstract", "assert", "boolean", "break",
@@ -258,6 +258,9 @@ final class Parser {
 
     private Import importDecl() {
         Pos p = next().pos();
+        // M2c (ADR-0018 D9): import contract { C } from "./C.jsc": another contract's state type and instances.
+        boolean contract = at("contract") && peek(1).is("{");
+        if (contract) next();
         expect("{");
         var names = new ArrayList<String>();
         do {
@@ -267,7 +270,10 @@ final class Parser {
         expect("from");
         Tok s = next();
         if (s.kind() != K.STRING) throw s.pos().error("JSC0701", "expected a module string such as \"std/crypto\"");
-        return new Import(names, s.text(), p);
+        if (contract && names.size() != 1) {
+            throw p.error("JSC0740", "import contract names one contract, the one its file declares: import contract { Oracle } from \"./Oracle.jsc\"");
+        }
+        return new Import(names, s.text(), p, contract);
     }
 
     private TypeDecl typeDecl() {
@@ -319,6 +325,11 @@ final class Parser {
 
     private TypeRef typeRef(Pos p) {
         String n = ident("a type");
+        // M2c: a type of an imported contract, qualified by the contract: Oracle.State.
+        if (at(".") && peek(1).kind() == K.IDENT && peek(1).line() == peek().line()) {
+            next();
+            n = n + "." + ident("a type of " + n);
+        }
         var args = new ArrayList<TypeRef>();
         if (eat("<")) {
             do {
@@ -353,7 +364,15 @@ final class Parser {
                 Pos p = peek().pos();
                 String n = ident("a parameter name");
                 expect(":");
-                ps.add(new Param(n, type(), p));
+                if (at("reads") && peek(1).is("params")) {
+                    // M2c (ADR-0011 D2): name: reads params.f, the state of the instance params.f names.
+                    next();
+                    next();
+                    expect(".");
+                    ps.add(new Param(n, null, p, ident("a params field after 'reads params.'")));
+                } else {
+                    ps.add(new Param(n, type(), p));
+                }
             } while (eat(","));
         }
         expect(")");
@@ -487,6 +506,12 @@ final class Parser {
                 String keys = fieldRef("the keys after 'quorum' (a List<Key> field)");
                 String threshold = fieldRef("the threshold after 'quorum " + keys + "' (an Int field)");
                 mods.add(new Mod("quorum", keys + " " + threshold, t.pos()));
+            } else if (t.is("receives")) {
+                // M2c (ADR-0011 D3): the action takes deposits; receives T: their memos are T (checked inputs).
+                next();
+                TypeRef memo = null;
+                if (peek().kind() == K.IDENT && !MODIFIERS.contains(peek().text()) && Character.isUpperCase(peek().text().charAt(0))) memo = type();
+                mods.add(new Mod("receives", null, t.pos(), memo));
             } else if (t.is("authorized")) {
                 // M2b (ADR-0009 D3): authorized <credential>, a state field or params.f.
                 next();
@@ -621,7 +646,8 @@ final class Parser {
 
     /** An effect statement of M2 (D4): {@code send}, {@code mint}, {@code burn} or {@code accept}, followed by '('. */
     private boolean isEffect(Tok t) {
-        return (t.is("send") || t.is("mint") || t.is("burn") || t.is("accept") || t.is("emit")) && peek(1).is("(") && peek(1).line() == t.line();
+        return (t.is("send") || t.is("mint") || t.is("burn") || t.is("accept") || t.is("emit") || t.is("deposit")) && peek(1).is("(")
+                && peek(1).line() == t.line();
     }
 
     private Stmt effectStmt() {
@@ -633,11 +659,21 @@ final class Parser {
                 Expr to = expr();
                 expect(",");
                 Expr value = expr();
-                if (at(",")) {
-                    throw peek().pos().error("JSC0429", "send(to, value, datum) comes with datum encoders in a later part of M2: send(to, value)"
-                            + " sends without a datum");
+                // M2c: send(to, value, datum), the datum an inline datum built by a generated encoder (D5).
+                Expr datum = eat(",") ? expr() : null;
+                s = new Send(to, value, datum, t.pos());
+            }
+            case "deposit" -> {
+                // M2c (ADR-0011 D3): deposit(target, value, memo).
+                Expr target = expr();
+                expect(",");
+                Expr value = expr();
+                if (!at(",")) {
+                    throw peek().pos().error("JSC0442", "a deposit names its memo too: deposit(target, value, memo); the memo is any value the"
+                            + " receiver reads (a beneficiary, an order id)");
                 }
-                s = new Send(to, value, t.pos());
+                next();
+                s = new Deposit(target, value, expr(), t.pos());
             }
             case "mint", "burn" -> {
                 Expr name = expr();

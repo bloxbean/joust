@@ -90,6 +90,12 @@ final class Depth {
             case Syntax.Send s -> {
                 out.add(s.to());
                 out.add(s.value());
+                if (s.datum() != null) out.add(s.datum());
+            }
+            case Syntax.Deposit d -> {
+                out.add(d.target());
+                out.add(d.value());
+                out.add(d.memo());
             }
             case Syntax.Mint mt -> {
                 out.add(mt.name());

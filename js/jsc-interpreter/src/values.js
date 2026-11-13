@@ -280,6 +280,18 @@ export class AddrV {
   }
 }
 
+/**
+ * Another contract's instance (M2c, Instance<C>, ADR-0011 D2): its policy (script hash) and its 32-byte id. It appears in
+ * the params; a deposit names it as its target.
+ */
+export class InstV {
+  constructor(policy, id) {
+    this.policy = policy;
+    this.id = id;
+    Object.freeze(this);
+  }
+}
+
 /** A reserved token kind under a contract's policy (ADR-0007 D3): 32 bytes, or 29 bytes starting 0x4F or 0x49. */
 export function reserved(n) {
   return n.length === 32 || (n.length === 29 && (n[0] === 0x4f || n[0] === 0x49));

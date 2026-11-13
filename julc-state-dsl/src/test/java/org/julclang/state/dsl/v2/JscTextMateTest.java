@@ -63,7 +63,7 @@ class JscTextMateTest {
         // Back: the grammar names nothing else (the std calls, builtins, keywords and modifiers alike); type names aside.
         var extra = new TreeSet<String>(grammar);
         extra.removeAll(known);
-        extra.removeAll(Set.of("Int", "Bool", "Bytes", "Key", "Hash", "List", "Option", "Map", "BigMap", "Value", "Address", "None",
+        extra.removeAll(Set.of("Int", "Bool", "Bytes", "Key", "Hash", "List", "Option", "Map", "BigMap", "Value", "Address", "None", "Credential", "Instance",
                 "has", "isEmpty"));   // has and isEmpty: v1's calls (Lowering.FUNCTIONS)
         assertEquals(Set.of(), extra, "words the TextMate grammar names that no front end knows");
         System.out.println("[textmate] " + grammar.size() + " grammar words; " + std.size() + " std bindings, " + Checker.PRELUDE.size()

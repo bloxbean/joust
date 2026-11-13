@@ -145,6 +145,20 @@ As M2a's, these are refused **in every contract**, whether it uses params, event
 `quorum`, `authorized`, `event`, `invariant` and `emit` are not reserved: they are words only where they start a
 modifier, a member or a statement, so a field may be called `quorum` (treasury's is).
 
+### Names M2c reserves (ADR-0018 D16)
+
+As M2a's and M2b's, these are refused **in every contract**, whether it composes with others or not.
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `ForeignInstance`, `Deposit`, `Deposits`, `Reads`, `Receives`, `Instance` (the API names composition lowers to, and the type `Instance<C>`) | a type, enum, variant, field, binding or method name | JSC0211 |
+| `receives` (a method modifier, like `payable` and `only`) | a field or binding name | JSC0211 |
+| an imported contract's name (`Oracle` after `import contract { Oracle }`) | a type, enum, variant or binding name in the importing file | JSC0744, JSC0222 |
+
+`reads` and `deposit` are not reserved: `reads` is a word only after a parameter's `:`, and `deposit` was an effect
+word (a `fn` name refused, JSC0201) since M2a. `JSC0429` (M2a: `send` with a datum, deferred) is retired: M2c's
+`send(to, value, datum)` takes it, and the code is not reused.
+
 ## Types and values (ADR-0018 D5, D6)
 
 | Code | Severity | Message | Raised by |
@@ -222,7 +236,6 @@ modifier, a member or a statement, so a field may be called `quorum` (treasury's
 | JSC0425 | error | a batched action cannot emit events: an intent's owner is its caller, not an authenticated signer of the batch (ADR-0009 D5) | Checker (M2b) |
 | JSC0426 | error | accept in an init is not supported yet … / a payable init that uses funds would take native assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred). Both: `accept` in an init, and any payable init that reads `funds`. The processor's creation transition program is wrong for an init returning `(state, accepted)`, Java contracts included: [#81](https://github.com/bloxbean/joust/issues/81); lifted in M2b or M2c once it is fixed | Checker |
 | JSC0427 | error | funds is part of the transaction: it is not available in a view or fn (pass what you need as an argument) | Checker |
-| JSC0429 | error | send(to, value, datum) comes with datum encoders in a later part of M2: send(to, value) sends without a datum | Parser |
 | JSC0430 | error | a require message may not contain '#word:', the form of the checks the lowering generates (ADR-0018 D12): reword it | Checker |
 | JSC0431 | error | the params are declared once: params { … } | Parser (M2b) |
 | JSC0432 | error | the params need at least one field: params { fee: Int } | Checker (M2b) |
@@ -235,6 +248,17 @@ modifier, a member or a statement, so a field may be called `quorum` (treasury's
 | JSC0439 | error | 'quorum … ': the keys and the threshold are both state fields or both params fields (ADR-0009 D2) | Checker (M2b) |
 | JSC0440 | error | a contract with a quorum over state fields (' … ' in … ) cannot have batched actions: a batch's states are not checked, so a batched action could make the quorum unreachable (ADR-0009 r3); use a params quorum, or no batched actions | Checker (M2b) |
 | JSC0441 | error | an invariant is a Bool, so it holds no require (ADR-0009 D4): write the condition into its value (invariant ok = a && b) | Checker (M2b) |
+| JSC0442 | error | a deposit names its memo too: deposit(target, value, memo); the memo is any value the receiver reads (a beneficiary, an order id) | Parser (M2c) |
+| JSC0443 | error | reads is for an action or destroy: an init, a view or a fn reads no other contract (ADR-0011 D2) / a batched action cannot read another contract yet | Checker (M2c) |
+| JSC0444 | error | reads params. … : the contract declares no params { … } / … ; reads names a params field Instance<C> | Checker (M2c) |
+| JSC0445 | error | Instance<C> names an imported contract C … / an Instance<C> is a params field only … / an Instance<C> is used whole, as a deposit's target or by reads, and has no field ' … ' | Checker (M2c) |
+| JSC0446 | error | … is another contract's type: it can be read (from reads) and passed to fns, but not be … / … is another contract's enum: compare it with == … matching on it is not supported yet | Checker (M2c) |
+| JSC0447 | error | only an action receives deposits: it continues, and its output takes them (ADR-0011 D3) / a batched action cannot receive deposits … | Checker (M2c) |
+| JSC0448 | error | funds.deposits is read in a receiving action … / this action reads no memos: say which type they are, action name(…) receives T … / a deposit has value and memo, not ' … ' | Checker (M2c) |
+| JSC0449 | error | a deposit's target is another contract's instance: a params field Instance<C> … / the contract … has no receiving action (receives), so nothing could take this deposit … | Checker (M2c) |
+| JSC0450 | error | the memo is … , but … 's receiving actions read memos of … : no receiver could decode it, so the transaction would always fail | Checker (M2c) |
+| JSC0451 | error | the contract … keeps BigMap state, which cannot be read (no proof path for its maps: ADR-0011 r2) | Checker (M2c) |
+| JSC0452 | error | … cannot be … : it is encoded as data, and only this contract's own values without BigMaps are (ADR-0018 D5) | Checker (M2c) |
 
 ## Time (ADR-0018 D11, J6)
 
@@ -265,6 +289,7 @@ modifier, a member or a statement, so a field may be called `quorum` (treasury's
 | JSC0523 | error | a time value cannot decide whether … is Some or None (ADR-0018 D11) | Checker |
 | JSC0524 | error | ' … ': … holds a time value, so who may call would depend on a validity window; a quorum or authorized field is never a time value (ADR-0018 D11) | Checker (M2b) |
 | JSC0525 | error | an invariant cannot depend on a time value: whether a state is accepted would then move with a validity window (ADR-0018 D11) | Checker (M2b) |
+| JSC0526 | error | a time value cannot be any part of a deposit's value: a deposit must be non-empty and strictly positive, so even a clamped 0 would fail (ADR-0018 D11) | Checker (M2c) |
 
 ## Functions and recursion (ADR-0018 D7, J9)
 
@@ -281,6 +306,12 @@ modifier, a member or a statement, so a field may be called `quorum` (treasury's
 | JSC0702 | error | ' … ' is not in … (it is in … ) | Checker |
 | JSC0703 | error | ' … ' is imported and also declared as a fn; rename the fn | Checker |
 | JSC0704 | error | is in … : import { … } from " … " | Checker |
+| JSC0740 | error | import contract names one contract, the one its file declares: import contract { Oracle } from "./Oracle.jsc" | Parser (M2c) |
+| JSC0741 | error | import contract from a Java contract ( … ) is not supported yet: it needs the attribution of its source that java: library imports bring (ADR-0018 M4b) … | Checker (M2c) |
+| JSC0742 | error | ' … ' is not a contract file … / no contract … beside … under the sources / … declares the contract … , not … | Checker (M2c) |
+| JSC0743 | error | the contract imports form a cycle ( … ): a contract may read or deposit into another only one way | Checker (M2c) |
+| JSC0744 | error | the contract … is imported twice / the imported contract … has this contract's name … / the … has the name of an imported contract; rename it … | Checker (M2c) |
+| JSC0745 | error | the contract … does not check: … | Checker (M2c) |
 
 ## Map and BigMap (ADR-0018 D5, D7, J14)
 
@@ -412,3 +443,4 @@ modifier, a member or a statement, so a field may be called `quorum` (treasury's
 | JSC9006 | warning | this file is .jsc v1, which is deprecated (ADR-0018 D16): it still builds, unchanged, but new code is .jsc 2; run `joust migrate` (Gradle: the migrateJsc task) to translate it, as a new script | JscMain (every v1 file, both paths) |
 | JSC9007 | warning | this line starts with '-', which continues the expression on the line above (a subtraction): newlines do not end statements in .jsc; if that is meant, join the lines or put the expression in parentheses; if the line is meant to stand alone, end the line above with ';' | Checker |
 | JSC9008 | warning | this event carries a time value: whoever submits the transaction chooses the window, so a value of it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2b) |
+| JSC9009 | warning | … carries a time value: whoever submits the transaction chooses the window, so it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2c) |

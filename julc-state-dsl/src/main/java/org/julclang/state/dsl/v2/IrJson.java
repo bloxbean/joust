@@ -73,6 +73,25 @@ final class IrJson {
         out.put("state", w.record(p.state()));
         // M2b (additive): the params record and the invariants, present only when the contract declares them.
         if (p.params() != null) out.put("params", w.record(p.params()));
+        // M2c (additive): the contracts this one imports, present only when it imports any.
+        if (!p.contracts().isEmpty()) {
+            var cs = new ArrayList<Object>();
+            for (Ir.Foreign f : new java.util.TreeMap<>(p.contracts()).values()) {
+                var rs = new ArrayList<Object>();
+                for (Ir.RecordType r : f.records().values()) rs.add(w.record(r));
+                var es = new ArrayList<Object>();
+                for (Ir.EnumType e : f.enums().values()) {
+                    var vs = new ArrayList<Object>();
+                    for (Ir.RecordType v : e.variants().values()) vs.add(w.record(v));
+                    es.add(obj("name", e.name(), "variants", vs, "at", at(e.pos())));
+                }
+                var rv = new ArrayList<Object>();
+                for (Ty t : f.receives()) rv.add(t == null ? null : type(t));
+                cs.add(obj("name", f.name(), "package", f.pkg(), "state", w.record(f.state()), "records", rs, "enums", es,
+                        "timeFields", List.copyOf(new TreeSet<>(f.timeFields())), "receives", rv, "bigMaps", f.bigMaps()));
+            }
+            out.put("contracts", cs);
+        }
         out.put("timeFields", List.copyOf(new TreeSet<>(p.timeFields())));
         out.put("recursiveFns", List.copyOf(new TreeSet<>(p.recursiveFns())));
         var fns = new ArrayList<Object>();
@@ -87,6 +106,8 @@ final class IrJson {
                 if (mod.name().equals("quorum")) {
                     String[] kt = mod.field().split(" ");
                     mods.add(obj("name", mod.name(), "keys", kt[0], "threshold", kt[1]));
+                } else if (mod.type() != null) {
+                    mods.add(obj("name", mod.name(), "type", type(mod.type())));   // M2c: receives T
                 } else {
                     mods.add(mod.field() == null ? obj("name", mod.name()) : obj("name", mod.name(), "field", mod.field()));
                 }
@@ -97,6 +118,12 @@ final class IrJson {
             m2.put("params", w.decls(m.params()));
             m2.put("mods", mods);
             m2.put("checked", m.checked().stream().<Object>map(l -> (long) w.ref(l)).toList());
+            // M2c (additive): the reads parameters, present only when the method reads another contract.
+            if (!m.reads().isEmpty()) {
+                var rs = new ArrayList<Object>();
+                for (Ir.Read r : m.reads()) rs.add(obj("local", w.decl(r.local()), "field", r.field()));
+                m2.put("reads", rs);
+            }
             m2.put("usesCtx", m.usesCtx());
             m2.put("pays", m.pays());
             m2.put("result", m.resultType() == null ? null : type(m.resultType()));
@@ -139,6 +166,8 @@ final class IrJson {
             case Ty.MapT m -> obj("map", List.of(type(m.key()), type(m.val())));
             case Ty.BigMapT b -> obj("bigmap", List.of(type(b.key()), type(b.val())));
             case Ty.Ledger l -> l.name();
+            case Ty.Instance i -> obj("instance", i.contract());
+            case Ty.DepositT d -> obj("deposit", d.memo() == null ? null : type(d.memo()));
         };
     }
 
@@ -190,7 +219,9 @@ final class IrJson {
                 }
                 case Ir.Require r -> obj("stmt", "Require", "cond", expr(r.cond()), "message", r.message(), "at", at(r.pos()));
                 case Ir.Pay y -> obj("stmt", "Pay", "to", expr(y.to()), "amount", expr(y.amount()), "at", at(y.pos()));
-                case Ir.Send y -> obj("stmt", "Send", "to", expr(y.to()), "value", expr(y.value()), "at", at(y.pos()));
+                case Ir.Send y -> y.datum() == null ? obj("stmt", "Send", "to", expr(y.to()), "value", expr(y.value()), "at", at(y.pos()))
+                        : obj("stmt", "Send", "to", expr(y.to()), "value", expr(y.value()), "datum", expr(y.datum()), "at", at(y.pos()));
+                case Ir.Deposit y -> obj("stmt", "Deposit", "target", expr(y.target()), "value", expr(y.value()), "memo", expr(y.memo()), "at", at(y.pos()));
                 case Ir.Mint y -> obj("stmt", "Mint", "burn", y.burn(), "name", expr(y.name()), "qty", expr(y.qty()), "at", at(y.pos()));
                 case Ir.Accept y -> obj("stmt", "Accept", "value", expr(y.value()), "at", at(y.pos()));
                 case Ir.Emit y -> obj("stmt", "Emit", "event", expr(y.event()), "at", at(y.pos()));
@@ -305,6 +336,7 @@ final class IrJson {
                 case Ir.FundsRef f -> obj("node", "FundsRef", "field", f.field());
                 case Ir.LedgerOp o -> obj("node", "LedgerOp", "op", o.op(), "args", exprs(o.args()));
                 case Ir.ParamsRef r -> obj("node", "ParamsRef", "field", r.field());
+                case Ir.DepositField d -> obj("node", "DepositField", "target", expr(d.target()), "field", d.field());
             };
             node.put("type", type(e.type()));
             node.put("taint", (long) e.taint());
@@ -437,7 +469,8 @@ final class IrJson {
 
         /** Each statement's fields (beside "stmt" and "at"), as {@link Writer#stmt} writes them (#84 review C8, F10). */
         static final Map<String, Set<String>> STMT_FIELDS = Map.ofEntries(Map.entry("Let", Set.of("local", "value")),
-                Map.entry("Require", Set.of("cond", "message")), Map.entry("Pay", Set.of("to", "amount")), Map.entry("Send", Set.of("to", "value")),
+                Map.entry("Require", Set.of("cond", "message")), Map.entry("Pay", Set.of("to", "amount")), Map.entry("Send", Set.of("to", "value", "datum")),
+                Map.entry("Deposit", Set.of("target", "value", "memo")),
                 Map.entry("Mint", Set.of("burn", "name", "qty")), Map.entry("Accept", Set.of("value")), Map.entry("Emit", Set.of("event")),
                 Map.entry("If", Set.of("branches", "otherwise", "pays")), Map.entry("For", Set.of("var", "list", "body", "pays")),
                 Map.entry("Match", Set.of("scrutinee", "arms", "pays")));
@@ -458,7 +491,8 @@ final class IrJson {
                 Map.entry("MapOp", Set.of("op", "map", "args")), Map.entry("MapHof", Set.of("kind", "map", "k", "v", "body")),
                 Map.entry("MapFold", Set.of("map", "init", "acc", "k", "v", "body")), Map.entry("BigEmpty", Set.of()), Map.entry("BigOp", Set.of("op", "map", "args")),
                 Map.entry("Range", Set.of("from", "to")), Map.entry("ListArg", Set.of("op", "list", "arg")), Map.entry("FundsRef", Set.of("field")),
-                Map.entry("LedgerOp", Set.of("op", "args")), Map.entry("ParamsRef", Set.of("field")));
+                Map.entry("LedgerOp", Set.of("op", "args")), Map.entry("ParamsRef", Set.of("field")),
+                Map.entry("DepositField", Set.of("target", "field")));
 
         static Set<String> with(Set<String> a, String... more) {
             var out = new java.util.HashSet<>(a);
@@ -468,7 +502,37 @@ final class IrJson {
 
         Ir.Program program(Map<String, Object> r) {
             known(r, Set.of("ir", "language", "sourceSha256", "package", "contract", "source", "options", "records", "enums", "state", "params",
-                    "timeFields", "recursiveFns", "fns", "methods", "invariants", "warnings"), "the program");
+                    "timeFields", "recursiveFns", "fns", "methods", "invariants", "warnings", "contracts"), "the program");
+            // M2c: the imported contracts first (their types are named by the program's).
+            var contracts = new LinkedHashMap<String, Ir.Foreign>();
+            if (r.get("contracts") != null) {
+                for (Object o : l(r.get("contracts"))) {
+                    var c = m(o);
+                    known(c, Set.of("name", "package", "state", "records", "enums", "timeFields", "receives", "bigMaps"), "an imported contract");
+                    var rs = new LinkedHashMap<String, Ir.RecordType>();
+                    for (Object x : l(c.get("records"))) {
+                        Ir.RecordType t = record(m(x));
+                        rs.put(t.name(), t);
+                    }
+                    var es = new LinkedHashMap<String, Ir.EnumType>();
+                    for (Object x : l(c.get("enums"))) {
+                        known(m(x), Set.of("name", "variants", "at"), "an enum");
+                        var vs = new LinkedHashMap<String, Ir.RecordType>();
+                        for (Object y : l(m(x).get("variants"))) {
+                            Ir.RecordType t = record(m(y));
+                            vs.put(t.name(), t);
+                        }
+                        es.put(s(m(x).get("name")), new Ir.EnumType(s(m(x).get("name")), vs, pos(m(x).get("at"))));
+                    }
+                    var tf = new LinkedHashSet<String>();
+                    for (Object x : l(c.get("timeFields"))) tf.add(s(x));
+                    var rv = new ArrayList<Ty>();
+                    for (Object x : l(c.get("receives"))) rv.add(x == null ? null : type(x));
+                    if (!(c.get("bigMaps") instanceof Boolean big)) throw new IllegalArgumentException("an imported contract's bigMaps is a boolean");
+                    contracts.put(s(c.get("name")), new Ir.Foreign(s(c.get("name")), s(c.get("package")), record(m(c.get("state"))), rs, es,
+                            Set.copyOf(tf), java.util.Collections.unmodifiableList(rv), big));
+                }
+            }
             var options = new ArrayList<Ir.ContractOption>();
             for (Object o : l(r.get("options"))) {
                 known(m(o), Set.of("name", "value"), "an option");
@@ -499,23 +563,30 @@ final class IrJson {
             var methods = new ArrayList<Ir.Method>();
             for (Object o : l(r.get("methods"))) {
                 var x = m(o);
-                known(x, Set.of("kind", "name", "params", "mods", "checked", "usesCtx", "pays", "result", "body", "at"), "a method");
+                known(x, Set.of("kind", "name", "params", "mods", "checked", "usesCtx", "pays", "result", "body", "at", "reads"), "a method");
                 var params = decls(x.get("params"));
+                var reads = new ArrayList<Ir.Read>();
+                if (x.get("reads") != null) {
+                    for (Object ro : l(x.get("reads"))) {
+                        known(m(ro), Set.of("local", "field"), "a read");
+                        reads.add(new Ir.Read(decl(m(ro).get("local")), s(m(ro).get("field"))));
+                    }
+                }
                 var mods = new ArrayList<Ir.Mod>();
                 for (Object mo : l(x.get("mods"))) {
                     var md = m(mo);
-                    known(md, Set.of("name", "field", "keys", "threshold"), "a modifier");
-                    if (!Set.of("payable", "open", "only", "after", "before", "batched", "quorum", "authorized").contains(s(md.get("name")))) {
+                    known(md, Set.of("name", "field", "keys", "threshold", "type"), "a modifier");
+                    if (!Set.of("payable", "open", "only", "after", "before", "batched", "quorum", "authorized", "receives").contains(s(md.get("name")))) {
                         throw new IllegalArgumentException("unknown modifier " + md.get("name"));
                     }
                     mods.add(new Ir.Mod(s(md.get("name")), s(md.get("name")).equals("quorum") ? s(md.get("keys")) + " " + s(md.get("threshold"))
-                            : (String) md.get("field")));
+                            : (String) md.get("field"), md.get("type") == null ? null : type(md.get("type"))));
                 }
                 var checked = new ArrayList<Ir.Local>();
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
                 methods.add(new Ir.Method(Ir.Kind.valueOf(s(x.get("kind")).toUpperCase()), s(x.get("name")), params, mods, checked,
                         (Boolean) x.get("usesCtx"), (Boolean) x.get("pays"), block(x.get("body")),
-                        x.get("result") == null ? null : type(x.get("result")), pos(x.get("at"))));
+                        x.get("result") == null ? null : type(x.get("result")), pos(x.get("at")), List.copyOf(reads)));
             }
             var timeFields = new LinkedHashSet<String>();
             for (Object o : l(r.get("timeFields"))) timeFields.add(s(o));
@@ -537,7 +608,7 @@ final class IrJson {
                 }
             }
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
-                    Set.copyOf(timeFields), recursive, warnings, params, invariants);
+                    Set.copyOf(timeFields), recursive, warnings, params, invariants, contracts);
         }
 
         Ir.RecordType record(Map<String, Object> r) {
@@ -574,6 +645,8 @@ final class IrJson {
                 case "enum" -> new Ty.EnumT(s(e.getValue()));
                 case "map" -> new Ty.MapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
                 case "bigmap" -> new Ty.BigMapT(type(l(e.getValue()).get(0)), type(l(e.getValue()).get(1)));
+                case "instance" -> new Ty.Instance(s(e.getValue()));
+                case "deposit" -> new Ty.DepositT(e.getValue() == null ? null : type(e.getValue()));
                 default -> throw new IllegalArgumentException("unknown type " + e.getKey());
             };
         }
@@ -623,7 +696,8 @@ final class IrJson {
                 }
                 case "Require" -> new Ir.Require(expr(x.get("cond")), s(x.get("message")), at);
                 case "Pay" -> new Ir.Pay(expr(x.get("to")), expr(x.get("amount")), at);
-                case "Send" -> new Ir.Send(expr(x.get("to")), expr(x.get("value")), at);
+                case "Send" -> new Ir.Send(expr(x.get("to")), expr(x.get("value")), x.get("datum") == null ? null : expr(x.get("datum")), at);
+                case "Deposit" -> new Ir.Deposit(expr(x.get("target")), expr(x.get("value")), expr(x.get("memo")), at);
                 case "Mint" -> {
                     if (!(x.get("burn") instanceof Boolean burn)) throw new IllegalArgumentException("Mint's burn is a boolean");
                     yield new Ir.Mint(burn, expr(x.get("name")), expr(x.get("qty")), at);
@@ -760,9 +834,14 @@ final class IrJson {
                 case "Range" -> new Ir.Range(expr(x.get("from")), expr(x.get("to")), t, taint, at);
                 case "ListArg" -> new Ir.ListArg(s(x.get("op")), expr(x.get("list")), expr(x.get("arg")), t, taint, at);
                 case "ParamsRef" -> new Ir.ParamsRef(s(x.get("field")), t, at);
+                case "DepositField" -> {
+                    String f = s(x.get("field"));
+                    if (!Set.of("value", "memo").contains(f)) throw new IllegalArgumentException("unknown deposit field " + f);
+                    yield new Ir.DepositField(expr(x.get("target")), f, t, taint, at);
+                }
                 case "FundsRef" -> {
                     String f = s(x.get("field"));
-                    if (!Set.of("received", "held", "policy", "self").contains(f)) throw new IllegalArgumentException("unknown funds field " + f);
+                    if (!Set.of("received", "held", "policy", "self", "deposits").contains(f)) throw new IllegalArgumentException("unknown funds field " + f);
                     yield new Ir.FundsRef(f, t, at);
                 }
                 case "LedgerOp" -> {

@@ -1,0 +1,14 @@
+jsc 2
+package app
+
+contract R {
+  state { owner: Key }
+
+  init() {
+    return { owner: caller }
+  }
+
+  action look(price: reads oracle) {
+    return state
+  }
+}

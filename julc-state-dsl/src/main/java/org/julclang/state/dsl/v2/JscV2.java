@@ -133,10 +133,18 @@ public final class JscV2 {
         return JavaEmitter.str(text);
     }
 
-    /** Checks and lowers a {@code .jsc} 2 source to a Java {@code @StateContract}. */
+    /** Checks and lowers a {@code .jsc} 2 source to a Java {@code @StateContract}, on its own (it imports no other contract). */
     public static Lowered lower(String source, String fileName) {
+        return lower(source, fileName, null, JscModules.NONE);
+    }
+
+    /**
+     * Checks and lowers {@code source}, the module {@code id} of a build whose other {@code .jsc} files {@code modules}
+     * finds (M2c, ADR-0018 D9): its {@code import contract { C } from "./C.jsc"} imports resolve there, each checked on its own.
+     */
+    public static Lowered lower(String source, String fileName, String id, JscModules modules) {
         checkFileName(fileName);
-        Ir.Program p = Checker.check(Parser.parse(source), fileName);
+        Ir.Program p = Checker.check(Parser.parse(source), fileName, id, modules);
         var warnings = p.warnings().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList();
         JavaEmitter.Emitted e = JavaEmitter.emit(p);
         String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";
@@ -148,8 +156,13 @@ public final class JscV2 {
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */
     public static Interpreter interpreter(String source, String fileName, Interpreter.Hashes hashes) {
+        return interpreter(source, fileName, null, JscModules.NONE, hashes);
+    }
+
+    /** The reference interpreter of the module {@code id} of a build, with the contracts it imports (M2c). */
+    public static Interpreter interpreter(String source, String fileName, String id, JscModules modules, Interpreter.Hashes hashes) {
         checkFileName(fileName);
-        return new Interpreter(Checker.check(Parser.parse(source), fileName), hashes);
+        return new Interpreter(Checker.check(Parser.parse(source), fileName, id, modules), hashes);
     }
 
     /**

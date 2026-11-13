@@ -52,7 +52,7 @@ class JscV2MessagesTest {
         int keys = 0;
         for (Path f : examples()) {
             String name = f.getFileName().toString();
-            var lowered = JscV2.lower(Files.readString(f), name);
+            var lowered = DslExamples.lower(Files.readString(f), name);
             var counts = new HashMap<String, Integer>();
             for (String lit : messages(lowered.java())) {
                 assertFalse(lit.contains(".jsc"), name + ": a message names a file: " + lit);
@@ -95,7 +95,7 @@ class JscV2MessagesTest {
         sources.put("Order.jsc", ORDER);
         int checked = 0, intents = 0;
         for (var e : sources.entrySet()) {
-            var lowered = JscV2.lower(e.getValue(), e.getKey());
+            var lowered = DslExamples.lower(e.getValue(), e.getKey());
             @SuppressWarnings("unchecked")
             var abi = (Map<String, Object>) AbiCheck.Json.parse(lowered.abiJson());
             @SuppressWarnings("unchecked")

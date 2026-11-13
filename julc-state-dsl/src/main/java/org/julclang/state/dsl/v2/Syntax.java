@@ -31,7 +31,15 @@ final class Syntax {
     record File(String pkg, List<Import> imports, List<TypeDecl> types, List<EnumDecl> enums, List<Fn> fns, Contract contract,
                 List<Pos> leadingMinus, List<int[]> members) {}
 
-    record Import(List<String> names, String from, Pos pos) {}
+    /**
+     * {@code import { a, b } from "std/x"}; or (M2c, ADR-0018 D9) {@code import contract { C } from "./C.jsc"} ({@code contract}
+     * true, one name): another contract's state type {@code C.State} and its instances {@code Instance<C>}.
+     */
+    record Import(List<String> names, String from, Pos pos, boolean contract) {
+        Import(List<String> names, String from, Pos pos) {
+            this(names, from, pos, false);
+        }
+    }
 
     record TypeDecl(String name, List<FieldDecl> fields, Pos pos) {}
 
@@ -61,9 +69,19 @@ final class Syntax {
 
     enum Kind { INIT, ACTION, DESTROY, VIEW }
 
-    record Param(String name, TypeRef type, Pos pos) {}
+    /** A parameter; {@code reads} (M2c): {@code name: reads params.f}, the params field it reads (its type is then null). */
+    record Param(String name, TypeRef type, Pos pos, String reads) {
+        Param(String name, TypeRef type, Pos pos) {
+            this(name, type, pos, null);
+        }
+    }
 
-    record Mod(String name, String arg, Pos pos) {}
+    /** A modifier; {@code type} (M2c): the memo type of {@code receives T}, else null. */
+    record Mod(String name, String arg, Pos pos, TypeRef type) {
+        Mod(String name, String arg, Pos pos) {
+            this(name, arg, pos, null);
+        }
+    }
 
     record Method(Kind kind, String name, List<Param> params, List<Mod> mods, Block body, TypeRef viewType, Pos pos) {}
 
@@ -79,7 +97,7 @@ final class Syntax {
         }
     }
 
-    sealed interface Stmt permits Const, Require, Pay, Send, Mint, Accept, Emit, For, IfStmt, MatchStmt {
+    sealed interface Stmt permits Const, Require, Pay, Send, Mint, Accept, Emit, Deposit, For, IfStmt, MatchStmt {
         Pos pos();
     }
 
@@ -89,8 +107,15 @@ final class Syntax {
 
     record Pay(Expr to, Expr amount, Pos pos) implements Stmt {}
 
-    /** {@code send(to, value)}: an output of {@code value} to the address {@code to} (D4, M2). */
-    record Send(Expr to, Expr value, Pos pos) implements Stmt {}
+    /** {@code send(to, value[, datum])}: an output of {@code value} to the address {@code to} (D4, M2); M2c: with an inline datum. */
+    record Send(Expr to, Expr value, Expr datum, Pos pos) implements Stmt {
+        Send(Expr to, Expr value, Pos pos) {
+            this(to, value, null, pos);
+        }
+    }
+
+    /** {@code deposit(target, value, memo)} (M2c, ADR-0011 D3): {@code value} into another contract's instance. */
+    record Deposit(Expr target, Expr value, Expr memo, Pos pos) implements Stmt {}
 
     /** {@code mint(name, qty)} or {@code burn(name, qty)}: the own policy's tokens (D4, M2). */
     record Mint(boolean burn, Expr name, Expr qty, Pos pos) implements Stmt {}

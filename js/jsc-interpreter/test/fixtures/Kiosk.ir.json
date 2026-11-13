@@ -1,0 +1,222 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "014fc6c4ab8ecddb92698e27531faa7aa0deba96d1dc18bfe6ffdaf242b78fc8",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Kiosk",
+  "source": "Kiosk.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": { "name": "State", "fields": [{ "name": "owner", "type": "Key" }, { "name": "sold", "type": "Int" }], "at": [10, 1] },
+  "params": {
+    "name": "Config",
+    "fields": [{ "name": "oracle", "type": { "instance": "Oracle" } }, { "name": "maxAgeMs", "type": "Int" }],
+    "at": [11, 3]
+  },
+  "contracts": [
+    {
+      "name": "Oracle",
+      "package": "org.julclang.state.examples.dsl",
+      "state": {
+        "name": "Oracle.State",
+        "fields": [
+          { "name": "publisher", "type": "Key" },
+          { "name": "price", "type": "Int" },
+          { "name": "updatedAt", "type": "Int" }
+        ],
+        "at": [7, 1]
+      },
+      "records": [],
+      "enums": [],
+      "timeFields": ["updatedAt"],
+      "receives": [],
+      "bigMaps": false
+    }
+  ],
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [15, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 35] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [15, 12]
+        },
+        "at": [14, 10]
+      },
+      "at": [14, 3]
+    },
+    {
+      "kind": "action",
+      "name": "buy",
+      "params": [{ "id": 2, "name": "qty", "type": "Int", "taint": 0, "at": [19, 42] }],
+      "mods": [{ "name": "payable" }],
+      "checked": [],
+      "reads": [
+        {
+          "local": {
+            "id": 1,
+            "name": "price",
+            "type": { "record": "Oracle.State" },
+            "taint": 1,
+            "at": [19, 14],
+            "fieldTaints": { "price": 0, "publisher": 0, "updatedAt": 1 }
+          },
+          "field": "oracle"
+        }
+      ],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [20, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [20, 19] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [20, 13]
+            },
+            "message": "buy at least one credit",
+            "at": [20, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "TimePred",
+              "after": false,
+              "threshold": {
+                "node": "Arith",
+                "op": "+",
+                "left": {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "Oracle.State" }, "taint": 1, "at": [21, 20] },
+                  "record": "Oracle.State",
+                  "field": "updatedAt",
+                  "type": "Int",
+                  "taint": 1,
+                  "at": [21, 20]
+                },
+                "right": { "node": "ParamsRef", "field": "maxAgeMs", "type": "Int", "taint": 0, "at": [21, 38] },
+                "type": "Int",
+                "taint": 1,
+                "at": [21, 20]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [21, 13]
+            },
+            "message": "stale price",
+            "at": [21, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [22, 13] },
+              "right": {
+                "node": "Arith",
+                "op": "*",
+                "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [22, 25] },
+                "right": {
+                  "node": "GetField",
+                  "target": { "node": "LocalRef", "local": 1, "type": { "record": "Oracle.State" }, "taint": 1, "at": [22, 31] },
+                  "record": "Oracle.State",
+                  "field": "price",
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [22, 31]
+                },
+                "type": "Int",
+                "taint": 0,
+                "at": [22, 25]
+              },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [22, 13]
+            },
+            "message": "pay exactly qty * price",
+            "at": [22, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [23, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [23, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "sold", "type": "Int", "taint": 0, "at": [23, 30] },
+              "right": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [23, 37] },
+              "type": "Int",
+              "taint": 0,
+              "at": [23, 30]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [23, 12]
+        },
+        "at": [19, 60]
+      },
+      "at": [19, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [27, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [27, 16] },
+            "at": [27, 5]
+          }
+        ],
+        "result": null,
+        "at": [26, 30]
+      },
+      "at": [26, 3]
+    }
+  ],
+  "warnings": []
+}

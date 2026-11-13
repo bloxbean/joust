@@ -233,10 +233,16 @@ public final class Interpreter {
      * transaction whose approval names this contract, instance and action, ADR-0009 D3), which {@code authorized} reads.
      */
     public record Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
-                     FundsV funds, List<Bytes> approvers) {
+                     FundsV funds, List<Bytes> approvers, java.util.Map<String, Object> reads) {
         public Tx {
             signers = List.copyOf(signers);
             approvers = List.copyOf(approvers);
+            reads = java.util.Map.copyOf(reads);
+        }
+
+        public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
+                  FundsV funds, List<Bytes> approvers) {
+            this(caller, received, balance, validFrom, validTo, signers, funds, approvers, java.util.Map.of());
         }
 
         public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
@@ -255,17 +261,25 @@ public final class Interpreter {
 
         /** The same transaction, signed by {@code keys}. */
         public Tx signedBy(List<Bytes> keys) {
-            return new Tx(caller, received, balance, validFrom, validTo, keys, funds, approvers);
+            return new Tx(caller, received, balance, validFrom, validTo, keys, funds, approvers, reads);
         }
 
         /** The same transaction, with the native assets the call sees (M2). */
         public Tx withFunds(FundsV f) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, f, approvers);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, f, approvers, reads);
         }
 
         /** The same transaction, approved by these scripts (M2b, ADR-0009 D3). */
         public Tx approvedBy(List<Bytes> scripts) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, scripts);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, scripts, reads);
+        }
+
+        /**
+         * The same transaction, with the states of other contracts' instances it references (M2c, ADR-0011 D2), by the
+         * params field naming each instance ({@code oracle} for {@code reads params.oracle}).
+         */
+        public Tx withReads(java.util.Map<String, Object> states) {
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, states);
         }
     }
 
@@ -273,10 +287,39 @@ public final class Interpreter {
      * The native assets a call sees (M2, ADR-0007 D1): what the caller offers ({@code received}), what the UTxO holds
      * besides lovelace and its own token ({@code held}), the contract's policy and the token name it acts on ({@code self}).
      */
-    public record FundsV(ValueV received, ValueV held, Bytes policy, Bytes self) {}
+    public record FundsV(ValueV received, ValueV held, Bytes policy, Bytes self, List<DepositV> deposits) {
+        public FundsV {
+            deposits = List.copyOf(deposits);
+        }
 
-    /** A send (M2), in source order. */
-    public record SendV(AddrV to, ValueV value) {}
+        public FundsV(ValueV received, ValueV held, Bytes policy, Bytes self) {
+            this(received, held, policy, self, List.of());
+        }
+
+        /** The same funds, with the deposits claimed on the call's output (M2c, a receiving action's). */
+        public FundsV withDeposits(List<DepositV> ds) {
+            return new FundsV(received, held, policy, self, ds);
+        }
+    }
+
+    /**
+     * A deposit a receiving action sees (M2c, ADR-0011 D3): its value and its memo, a value of the action's memo type
+     * ({@code receives T}), or null when the action reads none.
+     */
+    public record DepositV(ValueV value, Object memo) {}
+
+    /** Another contract's instance (M2c, {@code Instance<C>}): its policy and its 32-byte id. */
+    public record InstV(Bytes policy, Bytes id) {}
+
+    /** A deposit a call makes (M2c), in source order: into {@code target}, {@code value}, with {@code memo} (a {@code .jsc} value). */
+    public record DepositOut(InstV target, ValueV value, Object memo, Ty memoType) {}
+
+    /** A send (M2), in source order; M2c: with its datum (a {@code .jsc} value, null for none) and the datum's type. */
+    public record SendV(AddrV to, ValueV value, Object datum, Ty datumType) {
+        public SendV(AddrV to, ValueV value) {
+            this(to, value, null, null);
+        }
+    }
 
     /** A payout, in source order. */
     public record Payment(Bytes to, BigInteger lovelace) {}
@@ -285,7 +328,12 @@ public final class Interpreter {
      * A call's result: the next state (init, action), the view's value, or null (destroy); the payouts and sends in
      * source order; the net mint and the sum of what was accepted (M2); the events in source order (M2b).
      */
-    public record Outcome(Object value, List<Payment> payouts, List<SendV> sends, ValueV mint, ValueV accepted, List<Object> events) {
+    public record Outcome(Object value, List<Payment> payouts, List<SendV> sends, ValueV mint, ValueV accepted, List<Object> events,
+                          List<DepositOut> deposits) {
+        public Outcome(Object value, List<Payment> payouts, List<SendV> sends, ValueV mint, ValueV accepted, List<Object> events) {
+            this(value, payouts, sends, mint, accepted, events, List.of());
+        }
+
         public Outcome(Object value, List<Payment> payouts, List<SendV> sends, ValueV mint, ValueV accepted) {
             this(value, payouts, sends, mint, accepted, List.of());
         }
@@ -415,6 +463,28 @@ public final class Interpreter {
     /** Whether the method's redeemer carries its events (M2b: its result record has events, ADR-0009 D5). */
     public boolean carriesEvents(String method) {
         return Effects.events(p, method(method));
+    }
+
+    /** M2c: the params fields a method reads other contracts' states by ({@code reads params.f}), in its parameters' order. */
+    public List<String> reads(String method) {
+        return method(method).reads().stream().map(Ir.Read::field).toList();
+    }
+
+    /** M2c: whether a method receives deposits ({@code receives}), and whether it reads their memos ({@code receives T}). */
+    public boolean receives(String method) {
+        return method(method).receives() != null;
+    }
+
+    public boolean readsMemos(String method) {
+        Ir.Mod r = method(method).receives();
+        return r != null && r.type() != null;
+    }
+
+    /** M2c: the contracts this one imports, by name, with their packages (for the legs that build their states). */
+    public java.util.Map<String, String> importedPackages() {
+        var out = new java.util.TreeMap<String, String>();
+        p.contracts().forEach((n, f) -> out.put(n, f.pkg()));
+        return out;
     }
 
     /** The contract's state fields, in order. */
@@ -659,9 +729,29 @@ public final class Interpreter {
         var f = new Frame(state, tx);
         Env env = null;
         for (int i = 0; i < args.size(); i++) env = new Env(m.params().get(i), args.get(i), env);
+        // M2c (ADR-0011 D2): each read state, from the transaction's reference inputs by the params field naming it; a
+        // checked input like an argument (§4), after them.
+        for (Ir.Read r : m.reads()) {
+            if (tx == null || !tx.reads().containsKey(r.field())) {
+                throw new IllegalArgumentException(m.name() + " reads params." + r.field() + ": its transaction needs that state (withReads)");
+            }
+            env = new Env(r.local(), tx.reads().get(r.field()), env);
+        }
         // Checked inputs (D5): every nested key is 28 bytes, before the body runs.
         for (Ir.Local l : m.checked()) {
             if (!checked(lookup(env, l), l.type)) throw new Refused(l.name + " is not a well-formed input", "input", l.name);
+        }
+        for (Ir.Read r : m.reads()) {
+            if (!checked(lookup(env, r.local()), r.local().type)) {
+                throw new Refused(r.local().name + " is not a well-formed state of " + r.field(), "input", r.local().name);
+            }
+        }
+        // M2c (§4, ADR-0011 D3): receives T: every deposit's memo is a checked input of type T, before the body runs.
+        Ir.Mod rv = m.receives();
+        if (rv != null && rv.type() != null) {
+            for (DepositV d : funds(f).deposits()) {
+                if (d.memo() == null || !checked(d.memo(), rv.type())) throw new Refused("a deposit's memo is not a well-formed " + Ty.show(rv.type()), "input", "deposits");
+            }
         }
         env = exec(m.body().stmts(), env, f);
         Object value = m.body().result() == null ? null : eval(m.body().result(), env, f);
@@ -669,7 +759,8 @@ public final class Interpreter {
         if (accepts(m.body()) && !f.accepted.equals(funds(f).received())) {
             throw Refused.domain("accepted", "the method accepts other native assets than the caller offers");
         }
-        return new Outcome(value, List.copyOf(f.payouts), List.copyOf(f.sends), f.mint, f.accepted, List.copyOf(f.events));
+        return new Outcome(value, List.copyOf(f.payouts), List.copyOf(f.sends), f.mint, f.accepted, List.copyOf(f.events),
+                List.copyOf(f.deposits));
     }
 
     /** Whether a block holds an accept statement, in any arm or loop. */
@@ -706,6 +797,7 @@ public final class Interpreter {
         final List<Payment> payouts = new ArrayList<>();
         final List<SendV> sends = new ArrayList<>();
         final List<Object> events = new ArrayList<>();
+        final List<DepositOut> deposits = new ArrayList<>();
         ValueV mint = ValueV.NONE, accepted = ValueV.NONE;
 
         Frame(Rec state, Tx tx) {
@@ -747,7 +839,18 @@ public final class Interpreter {
                     if (to.payment().script() && Arrays.equals(to.payment().hash().value, funds(f).policy().value)) {
                         throw Refused.domain("send", "a send cannot go to the contract's own script");
                     }
-                    f.sends.add(new SendV(to, v));
+                    // M2c: the datum, evaluated after the value (§5.1).
+                    Object datum = sd.datum() == null ? null : eval(sd.datum(), env, f);
+                    f.sends.add(new SendV(to, v, datum, sd.datum() == null ? null : sd.datum().type()));
+                }
+                case Ir.Deposit dp -> {
+                    // §5.7 (M2c): target, value and memo, left to right; the value is not empty, every quantity strictly
+                    // positive, and no token name of a reserved kind under any policy (the output verifier's rule).
+                    InstV target = (InstV) eval(dp.target(), env, f);
+                    ValueV v = (ValueV) eval(dp.value(), env, f);
+                    Object memo = eval(dp.memo(), env, f);
+                    if (!depositable(v)) throw Refused.domain("deposit", "this value cannot be deposited");
+                    f.deposits.add(new DepositOut(target, v, memo, dp.memo().type()));
                 }
                 case Ir.Mint mt -> {
                     // §5.2: the quantity is positive, the name a user token's (at most 32 bytes, not a reserved kind); the
@@ -951,8 +1054,13 @@ public final class Interpreter {
                 case "held" -> funds(f).held();
                 case "policy" -> funds(f).policy();
                 case "self" -> funds(f).self();
+                case "deposits" -> List.<Object>copyOf(funds(f).deposits());
                 default -> throw new IllegalStateException(fr.field());
             };
+            case Ir.DepositField d -> {
+                DepositV x = (DepositV) eval(d.target(), env, f);
+                yield d.field().equals("value") ? x.value() : x.memo();
+            }
             case Ir.LedgerOp o -> ledger(o, env, f);
             case Ir.ParamsRef pr -> paramsField(pr.field());
         };
@@ -1235,7 +1343,21 @@ public final class Interpreter {
             case Ty.BigMapT bm -> throw new IllegalStateException("a BigMap is not comparable");
             // Values are canonical, so equal values have equal entries; addresses and credentials compare as data.
             case Ty.Ledger l -> a.equals(b);
+            case Ty.Instance i -> throw new IllegalStateException("an instance is not comparable");
+            case Ty.DepositT d -> throw new IllegalStateException("a deposit is not comparable");
         };
+    }
+
+    /** §5.7 (M2c): a deposit's value is not empty, and every quantity is strictly positive under a name of no reserved kind. */
+    private static boolean depositable(ValueV v) {
+        if (v.entries().isEmpty()) return false;
+        for (var p : v.entries().entrySet()) {
+            for (var t : p.getValue().entrySet()) {
+                if (t.getValue().signum() <= 0) return false;
+                if (!p.getKey().isEmpty() && reserved(HexFormat.of().parseHex(t.getKey()))) return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -1272,6 +1394,8 @@ public final class Interpreter {
                 }
                 default -> true;
             };
+            case Ty.Instance i -> true;
+            case Ty.DepositT d -> true;
         };
     }
 

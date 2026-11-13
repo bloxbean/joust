@@ -75,11 +75,12 @@ class JscV2M2CheckerTest {
     void whereAValueMayBe() {
         // Locals, fn parameters and results: yes.
         java("fn twice(v: Value): Value = v + v\n action a() payable open { const v: Value = twice(funds.received)\n accept(v - funds.received)\n return state }");
-        // Stored or passed: no (D5: until the wire conversion exists).
-        badSource(coins("").replace("n: Int, deadline: Int }", "n: Int, deadline: Int, v: Value }"), "a Value cannot be a state field", 4, 81);
+        // Stored: since M2c, a field of the state, a record or a variant (its wire form, D5); passed: not yet.
+        assertTrue(JscV2.lower(coins("").replace("n: Int, deadline: Int }", "n: Int, deadline: Int, v: Value }")
+                .replace("n: 0, deadline: 0 }", "n: 0, deadline: 0, v: Value.none() }"), "T.jsc").java().contains("Value v"));
         bad("action a(v: Value) { return state }", "a Value cannot be a method parameter", 0, 13);
         bad("view v(): Value = Value.none()", "a Value cannot be a view's result", 0, 11);
-        bad("type R = { v: Value }", "a Value cannot be a field of R", 0, 15);
+        java("type R = { v: Value }\n fn f(r: R): Value = r.v");
         bad("fn f(xs: List<Value>): Int = 0", "a Value cannot be an element of a List", 0, 15);
         bad("fn f(o: Option<Value>): Int = 0", "a Value cannot be held in an Option", 0, 16);
         bad("fn f(m: Map<Bytes, Value>): Int = 0", "a Value cannot be a Map's value", 0, 20);
@@ -107,7 +108,7 @@ class JscV2M2CheckerTest {
         bad("view v(): Bytes = funds.self", "funds is part of the transaction", 0, 19);
         bad("fn f(): Bytes = funds.self", "funds is part of the transaction", 0, 17);
         bad("action a() { require(funds == funds, \"x\")\n return state }", "funds is read by its fields", 0, 22);
-        bad("action a() { require(funds.deposits == [], \"x\")\n return state }", "funds.deposits comes with deposits", 0, 22);
+        bad("action a() { require(funds.deposits == [], \"x\")\n return state }", "funds.deposits is read in a receiving action", 0, 22);
         bad("action a() { require(funds.owner == caller, \"x\")\n return state }", "funds has no field 'owner'", 0, 22);
         // Reading funds lowers the method with Funds, last.
         String j = java("action a() { require(isEmptyHeld(), \"x\")\n return state }\n fn isEmptyHeld(): Bool = true\n"
@@ -119,7 +120,7 @@ class JscV2M2CheckerTest {
     void effects_whereTheProcessorAllowsThem() {
         // An init moves nothing (ADR-0007 D1); a view and a fn have no effects (D4).
         badSource(coins("").replace("{ return { owner: caller, to, guard, n: 0, deadline: 0 } }",
-                "{ send(to, Value.none())\n return { owner: caller, to, guard, n: 0, deadline: 0 } }"), "an init cannot pay, send, mint or burn", 5, 42);
+                "{ send(to, Value.none())\n return { owner: caller, to, guard, n: 0, deadline: 0 } }"), "an init cannot pay, send, mint, burn or deposit", 5, 42);
         bad("fn f(): Int { mint(#01, 1)\n 0 }", "mint(…) is allowed only in an action or destroy", 0, 15);
         bad("action a() open { const ys = [1].map(x => { accept(Value.none())\n x })\n require(ys.length == 1, \"x\")\n return state }",
                 "a block used as a value holds only const and require", 0, 45);
@@ -136,16 +137,16 @@ class JscV2M2CheckerTest {
                 .replace("{ return { owner: caller,", "{ accept(funds.received)\n return { owner: caller,"), "accept in an init is not supported yet", 5, 50);
         // A destroy may not be payable, so it cannot accept either; it must move value out.
         bad("destroy d() only owner { accept(Value.none())\n pay(owner, balance) }", "the method must be payable", 0, 26);
-        bad("destroy d() only owner { require(n == 0, \"x\") }", "pay(…), send(…), mint(…) or burn(…) at least once", 0, 1);
+        bad("destroy d() only owner { require(n == 0, \"x\") }", "pay(…), send(…), mint(…), burn(…) or deposit(…) at least once", 0, 1);
         java("destroy d() only owner { send(to, funds.held)\n pay(owner, balance) }");
         java("destroy d() only owner { burn(#01, n + 1) }");
         // send takes no datum yet (M2c).
-        bad("action a() open { send(to, Value.none(), 1)\n return state }", "send(to, value, datum) comes with datum encoders", 0, 40);
+        java("action a() open { send(to, Value.none(), 1)\n return state }");   // M2c: a datum
     }
 
     @Test
     void audience_coversSendMintAndBurn() {
-        bad("action a() { send(to, Value.none())\n return state }", "can pay out, send, mint or burn, so it must say who may call it", 0, 1);
+        bad("action a() { send(to, Value.none())\n return state }", "can pay out, send, mint, burn or deposit, so it must say who may call it", 0, 1);
         bad("action a() { mint(#01, 1)\n return state }", "so it must say who may call it", 0, 1);
         bad("action a() { burn(#01, 1)\n return state }", "so it must say who may call it", 0, 1);
         // accept moves nothing out: no audience needed.

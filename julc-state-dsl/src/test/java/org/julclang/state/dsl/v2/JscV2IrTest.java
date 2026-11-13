@@ -82,7 +82,7 @@ class JscV2IrTest {
     void theExport_roundTrips_toTheSameTextJavaAndManifest() throws Exception {
         var nodes = new TreeSet<String>();
         for (var e : sources().entrySet()) {
-            var lowered = JscV2.lower(e.getValue(), e.getKey());
+            var lowered = DslExamples.lower(e.getValue(), e.getKey());
             String json = lowered.irJson();
             assertTrue(json.startsWith("{\n  \"ir\": " + IrJson.VERSION + ",\n"), json.substring(0, 40));
             Ir.Program back = IrJson.read(json);
@@ -191,7 +191,7 @@ class JscV2IrTest {
             String name = e.getKey().replace(".jsc", ".ir.json");
             names.add(name);
             Path f = JS_FIXTURES.resolve(name);
-            String now = JscV2.lower(e.getValue(), e.getKey()).irJson();
+            String now = DslExamples.lower(e.getValue(), e.getKey()).irJson();
             if (write) Files.writeString(f, now);
             else if (!Files.exists(f) || !Files.readString(f).equals(now)) stale.add(name);
         }

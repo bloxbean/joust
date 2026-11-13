@@ -60,8 +60,15 @@
           }
         },
         {
-          "match": "\\b(import)\\b",
-          "name": "keyword.control.import.jsc"
+          "match": "\\b(import)\\b(?:\\s+(contract)\\b)?",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.jsc"
+            },
+            "2": {
+              "name": "keyword.control.import.jsc"
+            }
+          }
         },
         {
           "match": "\\b(from)\\b",
@@ -202,7 +209,7 @@
         },
         {
           "name": "keyword.other.effect.jsc",
-          "match": "\\b(require|pay|send|mint|burn|accept|emit|delete)\\b"
+          "match": "\\b(require|pay|send|mint|burn|accept|emit|deposit|delete)\\b"
         },
         {
           "name": "keyword.other.to.jsc",
@@ -210,7 +217,7 @@
         },
         {
           "name": "storage.modifier.jsc",
-          "match": "\\b(payable|open|only|batched|quorum|authorized)\\b"
+          "match": "\\b(payable|open|only|batched|quorum|authorized|receives|reads)\\b"
         },
         {
           "name": "storage.modifier.jsc",
@@ -290,7 +297,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.jsc",
-          "match": "\\b(Int|Bool|Bytes|Key|Hash|List|Option|Map|BigMap|Value|Address)\\b"
+          "match": "\\b(Int|Bool|Bytes|Key|Hash|List|Option|Map|BigMap|Value|Address|Credential|Instance)\\b"
         },
         {
           "name": "entity.name.type.jsc",

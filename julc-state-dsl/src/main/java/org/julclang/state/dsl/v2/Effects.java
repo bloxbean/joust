@@ -26,7 +26,7 @@ final class Effects {
     private Effects() {}
 
     /** The record components of each kind, in their order. */
-    static final List<String> ORDER = List.of("pay", "send", "mint", "accept", "emit");
+    static final List<String> ORDER = List.of("pay", "send", "mint", "accept", "deposit", "emit");
 
     static String component(String kind) {
         return switch (kind) {
@@ -34,6 +34,7 @@ final class Effects {
             case "send" -> "sends";
             case "mint" -> "mint";
             case "emit" -> "events";
+            case "deposit" -> "deposits";
             default -> "accepted";
         };
     }
@@ -51,7 +52,8 @@ final class Effects {
     static boolean takesFunds(Ir.Method m) {
         if (m.kind() == Ir.Kind.VIEW) return false;
         var u = usage(m);
-        return u.funds || u.kinds.contains("send") || u.kinds.contains("mint") || u.kinds.contains("accept");
+        // M2c: a receiving action takes Funds (its deposits are funds.deposits; ADR-0011 D3), a depositing one does not.
+        return u.funds || u.kinds.contains("send") || u.kinds.contains("mint") || u.kinds.contains("accept") || m.receives() != null;
     }
 
     static boolean payable(Ir.Method m) {
@@ -101,7 +103,7 @@ final class Effects {
         for (Ir.Method m : p.methods()) {
             if (m.kind() != Ir.Kind.DESTROY) continue;
             var k = kinds(m);
-            if (k.contains("send") || k.contains("mint") || k.contains("emit")) return true;
+            if (k.contains("send") || k.contains("mint") || k.contains("emit") || k.contains("deposit")) return true;
         }
         return false;
     }
@@ -113,7 +115,8 @@ final class Effects {
      */
     static boolean takesParams(Ir.Program p, Ir.Method m) {
         if (p.params() == null) return false;
-        return m.kind() == Ir.Kind.INIT || usage(m).params;
+        // M2c: a method that reads another contract takes the params (its reads name a params field, ADR-0011 D2).
+        return m.kind() == Ir.Kind.INIT || usage(m).params || !m.reads().isEmpty();
     }
 
     /** Whether the method's result carries events (M2b): its redeemer then carries them last (ADR-0009 D5). */

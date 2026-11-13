@@ -718,3 +718,159 @@ test('§2.7 step 1: a params quorum is checked at creation; a failing invariant 
   assert.ok('ok' in runCall(ratio, { method: 'set', state: s, args: [{ int: '5' }, { int: '0' }], tx: null, transition: true }));
   assert.ok('ok' in runCall(ratio, { method: 'set', state: s, args: [{ int: '5' }, { int: '2' }], tx: null }));
 });
+
+// ------------------------------------------------------------------ M2c: composition (§4, §5.1, §5.7; ADR-0011)
+
+test('M2c reads: a Kiosk buy reads the oracle state; stale refused by its require (before), a malformed state input:price', () => {
+  const kiosk = fixture('Kiosk');
+  const ORACLE = { instance: ['0c'.repeat(28), '0d'.repeat(32)] };
+  const params = { rec: 'Config', fields: [ORACLE, { int: '600000' }] };
+  const owner = '0a'.repeat(28), buyer = 'b0'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { int: '0' }] };
+  const oracle = (publisher, price, at) => ({ rec: 'Oracle.State', fields: [{ bytes: publisher }, { int: String(price) }, { int: String(at) }] });
+  const tx = (received, read) => ({ caller: buyer, received: String(received), balance: '0', validFrom: '1000000', validTo: '1120000',
+    reads: { oracle: read } });
+  const buy = (qty, received, read) => runCall(kiosk, { method: 'buy', state, args: [{ int: String(qty) }], tx: tx(received, read), params });
+  // Fresh: posted 60 s before the window; the whole window ends within 600 s of it. Paid exactly qty * price.
+  const fresh = oracle('9b'.repeat(28), 3000000, 940000);
+  assert.deepEqual(buy(2, 6000000, fresh).ok.value, { rec: 'State', fields: [{ bytes: owner }, { int: '2' }] });
+  assert.equal(buy(2, 5999999, fresh).class, 'require:22:5:pay exactly qty * price');
+  // Stale: posted 700 s before; before(updatedAt + maxAge) does not hold for the window.
+  assert.equal(buy(2, 6000000, oracle('9b'.repeat(28), 3000000, 300000)).class, 'require:21:5:stale price');
+  // A read state is a checked input (§4): a 27-byte publisher key is refused before the body.
+  assert.equal(buy(0, 0, oracle('9b'.repeat(27), 3000000, 940000)).class, 'input:price');
+  // No state for the read: no answer from the vector (an error of the call, not a refusal).
+  assert.throws(() => runCall(kiosk, { method: 'buy', state, args: [{ int: '1' }], tx: { ...tx(0, fresh), reads: {} }, params }), /reads params.oracle/);
+});
+
+test('M2c deposits: a Stall sell deposits its fee into params.pot, the memo the caller; Pot collect sums what it receives', () => {
+  const stall = fixture('Stall');
+  const POT = { instance: ['70'.repeat(28), '71'.repeat(32)] };
+  const params = { rec: 'Config', fields: [POT, { int: '500' }] };
+  const owner = '0a'.repeat(28), buyer = 'b1'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { int: '0' }] };
+  const sell = (price, received) => runCall(stall, { method: 'sell', state, args: [{ int: String(price) }],
+    tx: { caller: buyer, received: String(received), balance: '0', validFrom: '0', validTo: '1' }, params });
+  const ok = sell(10000000, 10000000).ok;
+  assert.deepEqual(ok.value, { rec: 'State', fields: [{ bytes: owner }, { int: '9500000' }] });
+  assert.deepEqual(ok.deposits, [{ target: POT, value: { value: [['', '', '500000']] }, memo: { bytes: buyer } }]);
+  assert.equal(sell(1000, 1000).class, 'require:20:5:pay exactly the price, at least 2 ADA');
+
+  const pot = fixture('Pot');
+  const potState = { rec: 'State', fields: [{ bytes: owner }, { int: '0' }, { int: '0' }] };
+  const funds = (deposits) => ({ received: { value: [] }, held: { value: [] }, policy: '70'.repeat(28), self: '71'.repeat(32), deposits });
+  const collect = (deposits) => runCall(pot, { method: 'collect', state: potState, args: [],
+    tx: { caller: buyer, received: '0', balance: '0', validFrom: '0', validTo: '1', funds: funds(deposits) } });
+  const two = [{ value: { value: [['', '', '500000']] }, memo: null }, { value: { value: [['', '', '250000'], ['ab'.repeat(28), '01', '3']] }, memo: null }];
+  assert.deepEqual(collect(two).ok.value, { rec: 'State', fields: [{ bytes: owner }, { int: '750000' }, { int: '2' }] });
+  assert.equal(collect([]).class, 'require:17:5:nothing deposited');
+});
+
+test('M2c deposits: a deposit is not empty, strictly positive, and holds no reserved-kind name (domain:deposit)', () => {
+  const tipper = fixture('Tipper');
+  const JAR = { instance: ['70'.repeat(28), '71'.repeat(32)] };
+  const params = { rec: 'Config', fields: [JAR, { int: '100000000' }] };
+  const owner = '0a'.repeat(28), alice = 'a1'.repeat(28), policy = '5e'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { int: '0' }, { bytes: '00' }] };
+  const jar = { rec: 'Tips.State', fields: [{ bytes: owner }, { map: [] }, { value: [] }, { none: true }] };
+  const tip = (amount, received, offered) => runCall(tipper, { method: 'tip', state, args: [{ bytes: alice }, { bytes: '7a' }, { int: String(amount) }],
+    tx: { caller: alice, received: String(received), balance: '0', validFrom: '0', validTo: '1', reads: { jar },
+      funds: { received: { value: offered }, held: { value: [] }, policy, self: '5f'.repeat(32) } }, params });
+  // Lovelace and native assets offered: both deposited, with a Note memo; the assets accepted first.
+  const P = 'cc'.repeat(28);
+  const ok = tip(1000000, 1000000, [[P, '00ff', '1'], [P, '01', '2']]).ok;
+  assert.deepEqual(ok.accepted, { value: [[P, '00ff', '1'], [P, '01', '2']] });
+  assert.deepEqual(ok.deposits, [{ target: JAR, value: { value: [['', '', '1000000'], [P, '00ff', '1'], [P, '01', '2']] },
+    memo: { rec: 'Note', fields: [{ bytes: alice }, { bytes: '7a' }] } }]);
+  // A reserved-kind token name (32 bytes) under any policy cannot be deposited.
+  assert.equal(tip(1000000, 1000000, [[P, '11'.repeat(32), '1']]).class, 'domain:deposit');
+  assert.equal(tip(1000000, 1000000, [[P, '4f' + '11'.repeat(28), '1']]).class, 'domain:deposit');
+  // A 29-byte name not starting 0x4F or 0x49 is fine.
+  assert.ok('ok' in tip(1000000, 1000000, [[P, '4b' + '11'.repeat(28), '1']]));
+  // The jar read: a credits map out of canonical order is a malformed read (§4).
+  const bad = { rec: 'Tips.State', fields: [{ bytes: owner }, { map: [[{ bytes: 'b2'.repeat(28) }, { int: '1' }], [{ bytes: 'a2'.repeat(28) }, { int: '1' }]] },
+    { value: [] }, { none: true }] };
+  assert.equal(runCall(tipper, { method: 'tip', state, args: [{ bytes: alice }, { bytes: '7a' }, { int: '1' }],
+    tx: { caller: alice, received: '1', balance: '0', validFrom: '0', validTo: '1', reads: { jar: bad },
+      funds: { received: { value: [] }, held: { value: [] }, policy, self: '5f'.repeat(32) } }, params }).class, 'input:jar');
+});
+
+test('M2c deposits: an empty or a negative deposit value is refused (domain:deposit), on a hand-built program', () => {
+  const POL = 'ab'.repeat(28);
+  const inst = { name: 'Other', package: 't', state: { name: 'Other.State', fields: [{ name: 'n', type: 'Int' }], at }, records: [], enums: [],
+    timeFields: [], receives: [null], bigMaps: false };
+  const p = (valueExpr) => load(JSON.stringify({
+    ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records: [], enums: [],
+    state: { name: 'State', fields: [{ name: 'n', type: 'Int' }], at },
+    params: { name: 'Config', fields: [{ name: 'other', type: { instance: 'Other' } }], at },
+    contracts: [inst], timeFields: [], recursiveFns: [], fns: [], warnings: [],
+    methods: [{ kind: 'action', name: 'give', params: [], mods: [{ name: 'open' }], checked: [], usesCtx: false, pays: false, result: { record: 'State' },
+      body: { stmts: [{ stmt: 'Deposit', target: node('ParamsRef', { field: 'other' }, { instance: 'Other' }), value: valueExpr, memo: lit(1n), at }],
+        result: node('StateRef', {}, { record: 'State' }), at }, at }],
+  }));
+  const params = { rec: 'Config', fields: [{ instance: [POL, 'cd'.repeat(32)] }] };
+  const give = (prog) => runCall(prog, { method: 'give', state: { rec: 'State', fields: [{ int: '0' }] }, args: [], tx: null, params });
+  const none = node('LedgerOp', { op: 'none', args: [] }, 'Value');
+  const lovelace = (q) => node('LedgerOp', { op: 'lovelace', args: [lit(q)] }, 'Value');
+  assert.equal(give(p(none)).class, 'domain:deposit');
+  assert.equal(give(p(lovelace(-1n))).class, 'domain:deposit');
+  assert.deepEqual(give(p(lovelace(5n))).ok.deposits, [{ target: { instance: [POL, 'cd'.repeat(32)] }, value: { value: [['', '', '5']] }, memo: { int: '1' } }]);
+});
+
+test('M2c receives T: Tips credit decodes Note memos and credits each beneficiary; a malformed memo is input:deposits', () => {
+  const tips = fixture('Tips');
+  const owner = '0a'.repeat(28), alice = 'a1'.repeat(28), bob = 'b2'.repeat(28), P = 'cc'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { map: [] }, { value: [] }, { none: true }] };
+  const note = (to, tag) => ({ rec: 'Note', fields: [{ bytes: to }, { bytes: tag }] });
+  const credit = (deposits) => runCall(tips, { method: 'credit', state, args: [],
+    tx: { caller: owner, received: '0', balance: '0', validFrom: '0', validTo: '1',
+      funds: { received: { value: [] }, held: { value: [] }, policy: '70'.repeat(28), self: '71'.repeat(32), deposits } } });
+  const ok = credit([
+    { value: { value: [['', '', '3000000'], [P, '01', '1']] }, memo: note(bob, '01') },
+    { value: { value: [['', '', '2000000']] }, memo: note(alice, '02') },
+    { value: { value: [['', '', '1000000']] }, memo: note(bob, '03') },
+  ]).ok;
+  // Keys in canonical order; bob credited twice; the assets taken; the last tip records the caller and the total.
+  assert.deepEqual(ok.value, { rec: 'State', fields: [
+    { bytes: owner },
+    { map: [[{ bytes: alice }, { int: '2000000' }], [{ bytes: bob }, { int: '4000000' }]] },
+    { value: [[P, '01', '1']] },
+    { some: { rec: 'Last', fields: [{ bytes: owner }, { value: [['', '', '6000000'], [P, '01', '1']] }] } },
+  ] });
+  assert.equal(credit([{ value: { value: [['', '', '1']] }, memo: note('a1'.repeat(27), '01') }]).class, 'input:deposits');
+  assert.equal(credit([{ value: { value: [['', '', '1']] }, memo: null }]).class, 'input:deposits');
+  assert.equal(credit([]).class, 'require:21:5:nothing deposited');
+});
+
+test('M2c send datums: Tipper refund sends a record datum, and an enum datum for a bonus', () => {
+  const tipper = fixture('Tipper');
+  const params = { rec: 'Config', fields: [{ instance: ['70'.repeat(28), '71'.repeat(32)] }, { int: '100' }] };
+  const owner = '0a'.repeat(28), alice = 'a1'.repeat(28), policy = '5e'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { int: '10000000' }, { bytes: '00' }] };
+  const refund = (amount, bonus) => runCall(tipper, { method: 'refund', state, args: [{ bytes: alice }, { int: String(amount) }, bonus],
+    tx: { caller: owner, received: '0', balance: '0', validFrom: '0', validTo: '1',
+      funds: { received: { value: [] }, held: { value: [] }, policy, self: '5f'.repeat(32) } }, params });
+  const to = { address: [{ keyCred: alice }, null] };
+  const ok = refund(3000000, true).ok;
+  assert.deepEqual(ok.sends, [
+    { to, value: { value: [['', '', '3000000']] }, datum: { rec: 'Receipt', fields: [{ bytes: alice }, { int: '3000000' }] } },
+    { to, value: { value: [['', '', '2000000']] }, datum: { rec: 'Bonus', fields: [{ int: '2' }] } },
+  ]);
+  assert.deepEqual(ok.value.fields[1], { int: '7000000' });
+  assert.equal(refund(3000000, false).ok.sends.length, 1);
+  assert.equal(refund(0, false).class, 'require:34:5:refund out of range');
+});
+
+test('M2c IR: the reader refuses an unknown field of an imported contract, a read and a receives modifier', () => {
+  const text = readFileSync(new URL('./fixtures/Tipper.ir.json', import.meta.url), 'utf8');
+  const j = JSON.parse(text);
+  const bad1 = structuredClone(j);
+  bad1.contracts[0].extra = 1;
+  assert.throws(() => load(JSON.stringify(bad1)), /unknown field "extra"/);
+  const bad2 = structuredClone(j);
+  bad2.methods.find((m) => m.reads).reads[0].extra = 1;
+  assert.throws(() => load(JSON.stringify(bad2)), /unknown field "extra"/);
+  const tips = JSON.parse(readFileSync(new URL('./fixtures/Tips.ir.json', import.meta.url), 'utf8'));
+  tips.methods.find((m) => m.name === 'credit').mods[0].field = 'x';
+  assert.throws(() => load(JSON.stringify(tips)), /unknown field "field"/);
+});
