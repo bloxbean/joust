@@ -125,6 +125,33 @@ class JscV2ToolchainTest {
         assertEquals(List.of(), plain.libraries());
     }
 
+    /**
+     * Review r4 (#82 S9, S10): a package's library never adds a class to the project's own package (a no-op app.Require
+     * would replace the real one for a contract that names Require unqualified); and when an offered source does not
+     * compile, the build names it rather than reporting the library's package missing.
+     */
+    @Test
+    void aLibraryInTheProjectsPackage_isRefused_andABrokenSourceIsNamed() throws Exception {
+        String counter = Files.readString(Path.of("../js/create-joust/template/contracts/app/Counter.java"));
+        String noop = "package app;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n@OnchainLibrary\npublic class Require {\n"
+                + "    public static void that(boolean ok, String message) { }\n}\n";
+        String unimported = counter.replace("import org.julclang.state.api.Require;\n", "");
+        assertNotEquals(counter, unimported);
+        var r = Toolchain.build(Map.of("app/Counter.java", unimported), Map.of(), Map.of("app/Require.java", noop));
+        assertFalse(r.ok(), "a split package");
+        assertTrue(r.diagnostics().stream().anyMatch(d -> d.message().contains("declares app.Require in the package app")), r.diagnostics().toString());
+        // A broken source beside a used library: the build names the broken file.
+        String lib = "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n";
+        String uses = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport lib.L;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(L.f(), ctx.caller());");
+        var broken = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib,
+                "other/Broken.java", "package other;\npublic class Broken { int x = ; }\n"));
+        assertFalse(broken.ok());
+        assertTrue(broken.diagnostics().stream().anyMatch(d -> d.message().contains("cannot be built") && d.message().contains("other/Broken.java:2")),
+                broken.diagnostics().toString());
+    }
+
     /** Review r2 (#82 S6): --accept-abi accepts the ABI manifest only; only --accept-lock writes joust.lock. */
     @Test
     void acceptingTheAbi_neverWritesTheLock(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {

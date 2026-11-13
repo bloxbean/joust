@@ -181,17 +181,33 @@ public final class Toolchain {
      * offered, only to find which of them the sources reach (an import in any form, a qualified name); the build itself
      * then compiles only those libraries' closures. Empty when the sources do not attribute (their build fails anyway).
      */
-    static java.util.Set<String> referencedClasses(Map<String, String> javaFiles, Map<String, String> javaLibrarySources) {
+    /**
+     * What javac found in the build's sources: the top-level classes they name, the packages they declare, and (review r4,
+     * security S10) the errors of the offered library sources when the attribution failed because of them.
+     */
+    record Discovery(java.util.Set<String> classes, java.util.Set<String> packages, List<String> libraryErrors) {}
+
+    static Discovery referencedClasses(Map<String, String> javaFiles, Map<String, String> javaLibrarySources) {
         var roots = new ArrayList<JavacFrontend.Unit>();
         javaFiles.forEach((name, text) -> roots.add(new JavacFrontend.Unit(text, java.nio.file.Path.of(name))));
         var pool = new ArrayList<JavacFrontend.Unit>();
         LibrarySourceResolver.scanClasspathSources(Toolchain.class.getClassLoader(), problem -> {})
                 .values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
         javaLibrarySources.values().forEach(t -> pool.add(JavacFrontend.Unit.jar(t)));
-        java.util.Set<String> found = JavacFrontend.shared().attribute(roots, pool, a -> {
+        Discovery found = JavacFrontend.shared().attribute(roots, pool, a -> {
             var out = new java.util.TreeSet<String>();
-            if (a.trees() == null) return out;
+            var packages = new java.util.TreeSet<String>();
+            var errors = new ArrayList<String>();
+            if (!a.result().isAccepted()) {
+                for (var d : a.result().diagnostics()) {
+                    String f = d.fileName() == null ? "" : d.fileName().replace('\\', '/');
+                    boolean project = javaFiles.keySet().stream().anyMatch(n -> f.equals(n) || f.endsWith("/" + n) || n.endsWith("/" + f));
+                    if (!project && !d.message().startsWith("warning")) errors.add((f.isEmpty() ? "" : f + ":" + d.line() + ": ") + d.message());
+                }
+            }
+            if (a.trees() == null) return new Discovery(out, packages, errors);
             for (var unit : a.roots()) {
+                if (unit.getPackageName() != null) packages.add(unit.getPackageName().toString());
                 new com.sun.source.util.TreePathScanner<Void, Void>() {
                     void note() {
                         javax.lang.model.element.Element e = a.trees().getElement(getCurrentPath());
@@ -216,9 +232,9 @@ public final class Toolchain {
                     }
                 }.scan(unit, null);
             }
-            return out;
+            return new Discovery(out, packages, errors);
         });
-        return found == null ? java.util.Set.of() : found;
+        return found == null ? new Discovery(java.util.Set.of(), java.util.Set.of(), List.of()) : found;
     }
 
     /**
@@ -342,9 +358,29 @@ public final class Toolchain {
             var wanted = new java.util.TreeSet<String>();
             for (Generated g : generatedOut) for (var u : g.libraries()) if (u.kind().equals("java")) wanted.add(u.name().substring("java:".length()));
             // The build's Java (hand-written, and lowered from .jsc, which hand-written code may name) as javac reads it.
+            // The project's own packages (security S9, r4): a package's library may not declare a class in one of them, where
+            // it would take the place of a class the project's code names unqualified (a no-op app.Require).
+            var projectPackages = new java.util.TreeSet<String>();
+            for (Generated g : generatedOut) {
+                int slash = g.javaFile().lastIndexOf('/');
+                projectPackages.add(slash < 0 ? "" : g.javaFile().substring(0, slash).replace('/', '.'));
+            }
             if (files.keySet().stream().anyMatch(n -> n.endsWith(".java"))) {
-                for (String fqcn : referencedClasses(sources, javaLibrarySources)) {
+                Discovery found = referencedClasses(sources, javaLibrarySources);
+                projectPackages.addAll(found.packages());
+                for (String e : found.libraryErrors()) {
+                    diagnostics.add(new Diagnostic(Severity.ERROR, "a Java library source offered to the build (an npm package's joust-lib/)"
+                            + " does not compile, so the build cannot tell which libraries its Java contracts use: " + e, null, -1, "toolchain"));
+                }
+                for (String fqcn : found.classes()) {
                     var lib = javaLibraries.describe(fqcn);
+                    if (lib != null && lib.sources().isEmpty() && !lib.problems().isEmpty()) {
+                        // Security S10 (r4): the contract uses this library, but the offered sources do not compile: say so,
+                        // naming the files at fault, rather than leaving javac to report the library's package missing.
+                        diagnostics.add(new Diagnostic(Severity.ERROR, "the Java library " + fqcn + ", which a Java contract uses, cannot be"
+                                + " built: " + String.join("; ", lib.problems()), null, -1, "toolchain"));
+                        continue;
+                    }
                     if (lib == null || lib.sources().isEmpty()) continue;
                     wanted.add(fqcn);
                     javaUses.put("java:" + fqcn, new org.julclang.state.dsl.v2.JscV2.LibraryUse(org.julclang.state.dsl.v2.JscV2.LibraryUse.JAVA_SOURCE, "java:" + fqcn,
@@ -353,6 +389,18 @@ public final class Toolchain {
             }
             for (String fqcn : wanted) {
                 var lib = javaLibraries.describe(fqcn);
+                if (lib != null) {
+                    for (String bin : lib.classes()) {
+                        String top = bin.contains("$") ? bin.substring(0, bin.indexOf('$')) : bin;
+                        String pkg = top.contains(".") ? top.substring(0, top.lastIndexOf('.')) : "";
+                        if (projectPackages.contains(pkg)) {
+                            diagnostics.add(new Diagnostic(Severity.ERROR, "the Java library " + fqcn + " declares " + bin + " in the package "
+                                    + (pkg.isEmpty() ? "(the unnamed package)" : pkg) + ", which the project's own sources declare: a library"
+                                    + " never adds classes to the project's packages (it would take the place of a class the project names"
+                                    + " unqualified, review r4)", null, -1, "toolchain"));
+                        }
+                    }
+                }
                 if (lib != null) for (String path : lib.sources()) pooledJava.put(path, javaLibrarySources.get(path));
             }
         }

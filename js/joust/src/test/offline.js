@@ -61,6 +61,11 @@ const refScriptFee = (bytes, perByte) => {
   return tn / td;
 };
 const addValue = (m, unit, q) => m.set(unit, (m.get(unit) ?? 0n) + q);
+// The certificates the ledger models (review r4, #82 C22, S8): stake registration and deregistration, by the kinds
+// ledgerTx gives (cardano-js-sdk's names). Every other kind (delegation to a pool or a DRep, DRep and committee
+// certificates, pools, genesis, MIR) is refused as NotModelled: pools and DReps are not modelled.
+const REGISTER = new Set(['StakeRegistration', 'Registration']);
+const DEREGISTER = new Set(['StakeDeregistration', 'UnRegistration']);
 
 /**
  * An in-memory ledger: a chain provider (ADR-0015 §13.9: tip, protocolParams, utxos, assetUtxos, output, scriptCbor,
@@ -86,10 +91,12 @@ const addValue = (m, unit, q) => m.set(unit, (m.get(unit) ?? 0n) + q);
  * - with Plutus scripts: collateral (key-locked, at most max_collateral_inputs, ADA only unless returned, at least
  *   collateral_percent of the fee, total_collateral if declared), the script integrity hash (PlutusV2/V3 language
  *   views), the declared units within max_tx_ex_mem/steps and at least what each script consumes;
- * - spending and reference inputs are disjoint (protocol version 11 on), and the collateral return holds its minimum;
+ * - spending and reference inputs are disjoint at protocol versions 9 and 10 (the ledger's disjointRefInputs; 11 lifts
+ *   it), and the collateral return holds its minimum; witness datums are needed or named by an output or reference input;
+ * - certificates: stake registration (once) and deregistration (when registered), with their deposits;
  * - concurrent submissions are applied one at a time, each checked against the ledger as the previous one left it.
- * Not modelled, and refused (`NotModelled`, review r3): votes, proposals, treasury donations and values, pool, DRep and
- * committee certificates. Not modelled otherwise: rewards (withdrawals take 0), PlutusV1's integrity hash, and the
+ * Not modelled, and refused (`NotModelled`, review r3, r4): votes, proposals, treasury donations and values, and every
+ * certificate but stake registration and deregistration (delegation, pools, DReps, the committee, genesis, MIR). Not modelled otherwise: rewards (withdrawals take 0), PlutusV1's integrity hash, and the
  * collateral loss of a phase-2 failure (a failing script refuses the whole transaction here).
  */
 export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000) * 1000, slotLengthMs = 1000, attacks = true,
@@ -141,7 +148,7 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     // Review r3 (#82 F9, S7): what the ledger does not model is refused, not applied as if it were not there.
     const unmodelled = [v.hasDonation && 'a treasury donation', v.hasTreasuryValue && 'a treasury value', v.hasVotes && 'votes',
       v.hasProposals && 'proposals',
-      ...v.certificates.filter((c) => !c.credential || /Pool|DRep|Committee|Genesis|MoveInstantaneous/.test(c.kind)).map((c) => `a ${c.kind} certificate`)]
+      ...v.certificates.filter((c) => !c.credential || !(REGISTER.has(c.kind) || DEREGISTER.has(c.kind))).map((c) => `a ${c.kind} certificate`)]
       .filter(Boolean);
     if (unmodelled.length) {
       throw new LedgerRefusal('NotModelled', `the in-memory ledger does not model ${unmodelled.join(', ')}: test this on DevKit`);
@@ -151,9 +158,11 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
       if (!utxos.has(r)) throw new LedgerRefusal('BadInputsUTxO', `${r} is not an unspent output`);
     }
     if (!v.inputs.length) throw new LedgerRefusal('InputSetEmptyUTxO', 'no inputs');
-    // Review r3 (#82 C19): from protocol version 11 (Conway), an output is spent or referenced, not both.
+    // Review r4 (#82 C23): the ledger's disjointRefInputs holds for protocol versions after Babbage's (8) and before 11,
+    // that is 9 and 10: an output is spent or referenced, not both. PV 11 lifts it, as Babbage never had it.
     const both = v.inputs.filter((r) => v.referenceInputs.includes(r));
-    if (both.length && Number(p.protocol_major_ver ?? 11) >= 11) {
+    const pv = Number(p.protocol_major_ver ?? 11);
+    if (both.length && pv > 8 && pv < 11) {
       throw new LedgerRefusal('BabbageNonDisjointRefInputs', `${both.join(', ')} is both spent and referenced`);
     }
     // The validity window holds the current slot.
@@ -171,10 +180,21 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     for (const [unit, q] of v.mint) addValue(balance, unit, q);
     for (const o of v.outputs) for (const [unit, q] of o.value) addValue(balance, unit, -q);
     addValue(balance, 'lovelace', -v.fee);
+    // Registration pays the key deposit, deregistration refunds it; a credential registers once and deregisters only when
+    // registered (r4: r3's patterns missed UnRegistration, cardano-js-sdk's spelling).
+    const accounts = new Set(registered);
     for (const c of v.certificates) {
       const deposit = c.deposit ?? BigInt(p.key_deposit);
-      if (/Registration$/.test(c.kind) && !/Unregistration|Deregistration/.test(c.kind) && c.kind !== 'PoolRegistration') addValue(balance, 'lovelace', -deposit);
-      if (/Unregistration|Deregistration/.test(c.kind)) addValue(balance, 'lovelace', deposit);
+      const stake = rewardAddress(c.credential, 0);
+      if (REGISTER.has(c.kind)) {
+        if (accounts.has(stake)) throw new LedgerRefusal('StakeKeyRegisteredDELEG', `${stake} is already registered`);
+        accounts.add(stake);
+        addValue(balance, 'lovelace', -deposit);
+      } else if (DEREGISTER.has(c.kind)) {
+        if (!accounts.has(stake)) throw new LedgerRefusal('StakeKeyNotRegisteredDELEG', `${stake} is not registered`);
+        accounts.delete(stake);
+        addValue(balance, 'lovelace', deposit);
+      }
     }
     for (const [unit, q] of balance) if (q !== 0n) throw new LedgerRefusal('ValueNotConservedUTxO', `${unit} is off by ${q}`);
     // Each output carries its minimum (Babbage: coinsPerUTxOByte x (160 + its size)).
@@ -257,6 +277,15 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
       const h = out(r).datumHash;
       if (h && !v.witnessDatums.includes(h)) throw new LedgerRefusal('MissingRequiredDatums', `no datum for ${r}'s datum hash ${h}`);
     }
+    // Review r4 (#82 C24): a witness datum is one a Plutus input needs, or a supplemental one an output or a reference
+    // input names by its hash; any other is refused.
+    const allowedDatums = new Set();
+    for (const x of plutus) if (x.tag === 'spend' && out(spent[x.index]).datumHash) allowedDatums.add(out(spent[x.index]).datumHash);
+    for (const o of v.outputs) if (o.datumHash) allowedDatums.add(o.datumHash);
+    for (const r of v.referenceInputs) if (out(r).datumHash) allowedDatums.add(out(r).datumHash);
+    for (const h of v.witnessDatums) {
+      if (!allowedDatums.has(h)) throw new LedgerRefusal('NotAllowedSupplementalDatums', `the witness datum ${h} is neither needed nor named by an output`);
+    }
     for (const k of needed) if (!signed.has(k)) throw new LedgerRefusal('MissingVKeyWitnessesUTXOW', `no signature by ${k}`);
     // The declared units: within the per-transaction maximum (review r2 F1e).
     let mem = 0n;
@@ -333,10 +362,9 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     });
     for (const [unit] of v.mint) if (!history.get(unit)?.includes(v.hash)) (history.get(unit) ?? history.set(unit, []).get(unit)).push(v.hash);
     for (const c of v.certificates) {
-      if (!c.credential) continue;
       const stake = rewardAddress(c.credential, 0);
-      if (/Registration$/.test(c.kind) && !/Unregistration|Deregistration/.test(c.kind)) registered.add(stake);
-      if (/Unregistration|Deregistration/.test(c.kind)) registered.delete(stake);
+      if (REGISTER.has(c.kind)) registered.add(stake);
+      if (DEREGISTER.has(c.kind)) registered.delete(stake);
     }
     txs.set(v.hash, cbor);
     slot += 1;

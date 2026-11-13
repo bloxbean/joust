@@ -1407,3 +1407,10 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   refuses what it does not model (`NotModelled`); each new ledger rule has a refusal test. One bad package source no
   longer refuses every `java:` import (the reserved-package rule is per library, #79 r3); a set that does not compile
   still does (#88).
+  *Review round r4 (Codex C22–C24; security S8–S10):* the ledger models only stake registration (once) and
+  deregistration (when registered) among certificates and refuses every other kind as `NotModelled` (r3's pattern missed
+  cardano-js-sdk's DRep and `UnRegistration` names, and delegation went unchecked); spending and reference inputs are
+  disjoint at protocol versions 9 and 10, as the ledger's `disjointRefInputs` (r3 had it at 11); a witness datum must be
+  needed or named by an output or reference input (`NotAllowedSupplementalDatums`). On npm, a library may not declare a
+  class in a package the project's sources declare (a no-op `app.Require` would replace the real one for code naming it
+  unqualified), and a used library whose offered sources do not compile is reported with the failing file.

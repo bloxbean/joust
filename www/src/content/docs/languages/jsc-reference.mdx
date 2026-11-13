@@ -330,7 +330,7 @@ A package library's own relative imports stay inside its package (`JSC0706`). A 
 certified like one from Gradle's `joustLibrary`, and the same codes apply. Of a package's Java sources, a build compiles
 only the source closure of each library a `.jsc` file imports with `java:` or a hand-written Java contract imports; no
 other package source reaches the build. Links under `joust-lib/` are not followed, and two packages that ship one Java
-path are refused.
+path are refused, as is a library that declares a class in one of the project's own packages.
 
 **`joust.lock`** (committed at the project's root) pins every library that comes from **outside the project's sources**
 by the SHA-256 of its on-chain sources: a package's `.jsc` library (with the libraries it imports), or a Java library's

@@ -22,7 +22,7 @@ function setup() {
 
 /** A transaction built with cardano-js-sdk (an implementation independent of the runtime's). */
 function rawTx({ inputs, outputs, fee, withdrawals = [], mint = null, nativeScripts = [], collateral = [], redeemers = [], plutusScripts = [],
-  referenceInputs = [], collateralReturn = null, totalCollateral, integrity, donation }) {
+  referenceInputs = [], collateralReturn = null, totalCollateral, integrity, donation, certificates = [], datums = [] }) {
   const ref = (r) => ({ txId: Cardano.TransactionId(r.split('#')[0]), index: Number(r.split('#')[1]) });
   const txOut = (o) => ({ address: Cardano.PaymentAddress(o.address), value: { coins: o.lovelace, ...(o.assets ? { assets: o.assets } : {}) },
     ...(o.datumHash ? { datumHash: o.datumHash } : {}) });
@@ -36,6 +36,7 @@ function rawTx({ inputs, outputs, fee, withdrawals = [], mint = null, nativeScri
     ...(totalCollateral !== undefined ? { totalCollateral } : {}),
     ...(integrity ? { scriptIntegrityHash: integrity } : {}),
     ...(donation ? { donation } : {}),
+    ...(certificates.length ? { certificates } : {}),
     ...(withdrawals.length ? { withdrawals: withdrawals.map((w) => ({ stakeAddress: Cardano.RewardAccount(w.address), quantity: w.amount })) } : {}),
     ...(mint ? { mint } : {}),
   };
@@ -43,6 +44,7 @@ function rawTx({ inputs, outputs, fee, withdrawals = [], mint = null, nativeScri
   const ws = tx.witnessSet();
   if (nativeScripts.length) ws.setNativeScripts(Serialization.CborSet.fromCore(nativeScripts.map((s) => s.toCore()), Serialization.NativeScript.fromCore));
   if (redeemers.length) ws.setRedeemers(Serialization.Redeemers.fromCore(redeemers));
+  if (datums.length) ws.setPlutusData(Serialization.CborSet.fromCore(datums, Serialization.PlutusData.fromCore));
   if (plutusScripts.length) ws.setPlutusV3Scripts(Serialization.CborSet.fromCore(plutusScripts.map((c) => Serialization.Script.fromCore(c).asPlutusV3().toCore()),
     Serialization.PlutusV3Script.fromCore));
   tx.setWitnessSet(ws);
@@ -189,6 +191,7 @@ async function scriptSpend(ledger, a, { locked, collateral, mem = 1_000n, steps 
   return signed(a, rawTx({ ...base, integrity: hash }));
 }
 
+// PARAMS is declared below (the Plutus spend helpers).
 test('a valid Plutus spend applies (the control of the rules below)', async () => {
   const { ledger, a, scriptAddr } = scriptSetup();
   const locked = ledger.fund(scriptAddr, 10n * ADA);
@@ -240,12 +243,20 @@ test('datums: a Plutus input with a datum hash needs its datum; a key-locked one
   await ledger.submit(await signed(a, rawTx({ inputs: [`${h}#1`], outputs: [{ address: a.address, lovelace: 9_800_000n }], fee: 200_000n })));
 });
 
-test('an output is spent or referenced, not both (C19)', async () => {
-  const { ledger, a } = setup();
-  const ref = ledger.fund(a.address, 10n * ADA);
-  await refused(ledger, await signed(a, rawTx({ inputs: [ref], referenceInputs: [ref], outputs: [{ address: a.address, lovelace: 9_800_000n }],
-    fee: 200_000n })), 'BabbageNonDisjointRefInputs');
-  assert.ok(await ledger.output(ref), 'the output is still unspent');
+test('spent and referenced at once: refused at protocol versions 9 and 10 only (C19, C23)', async () => {
+  for (const [pv, refusedAt] of [[8, false], [9, true], [10, true], [11, false]]) {
+    const ledger = memoryLedger({ engine: stub, attacks: false, protocolParams: { ...PARAMS, protocol_major_ver: pv } });
+    const a = devWallet({ chain: { utxos: (x) => ledger.utxos(x), submit: (c) => ledger.submit(c) }, mnemonic: DEVKIT_MNEMONIC, index: 7 });
+    const ref = ledger.fund(a.address, 10n * ADA);
+    const tx = await signed(a, rawTx({ inputs: [ref], referenceInputs: [ref], outputs: [{ address: a.address, lovelace: 9_800_000n }], fee: 200_000n }));
+    if (refusedAt) {
+      await refused(ledger, tx, 'BabbageNonDisjointRefInputs');
+      assert.ok(await ledger.output(ref), `PV ${pv}: the output is still unspent`);
+    } else {
+      await ledger.submit(tx);
+      assert.equal(await ledger.output(ref), null, `PV ${pv}`);
+    }
+  }
 });
 
 test('what the ledger does not model is refused (F9, S7)', async () => {
@@ -253,4 +264,53 @@ test('what the ledger does not model is refused (F9, S7)', async () => {
   const ref = ledger.fund(a.address, 5n * ADA);
   await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 4_700_000n }], fee: 300_000n,
     donation: 1000n * ADA })), 'NotModelled');
+});
+
+test('certificates: only stake registration and deregistration are modelled (C22, S8)', async () => {
+  const { ledger, a } = setup();
+  const cred = { type: Cardano.CredentialType.KeyHash, hash: a.keyHash };
+  const certs = [
+    { __typename: Cardano.CertificateType.RegisterDelegateRepresentative, dRepCredential: cred, deposit: 500_000_000n, anchor: null },
+    { __typename: Cardano.CertificateType.UpdateDelegateRepresentative, dRepCredential: cred, anchor: null },
+    { __typename: Cardano.CertificateType.UnregisterDelegateRepresentative, dRepCredential: cred, deposit: 500_000_000n },
+    { __typename: Cardano.CertificateType.StakeDelegation, stakeCredential: cred, poolId: Cardano.PoolId.fromKeyHash('ee'.repeat(28)) },
+  ];
+  for (const c of certs) {
+    const ref = ledger.fund(a.address, 10n * ADA);
+    await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 9_800_000n }], fee: 200_000n,
+      certificates: [c] })), 'NotModelled');
+    assert.ok(await ledger.output(ref), `${c.__typename}: the UTxO is unchanged`);
+  }
+  // Registration pays the deposit once; deregistration refunds it, only when registered.
+  const deposit = BigInt(PARAMS.key_deposit);
+  const reg = { __typename: Cardano.CertificateType.Registration, stakeCredential: cred, deposit };
+  const unreg = { __typename: Cardano.CertificateType.Unregistration, stakeCredential: cred, deposit };
+  let ref = ledger.fund(a.address, 10n * ADA);
+  await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n + deposit }], fee: 300_000n,
+    certificates: [unreg] })), 'StakeKeyNotRegisteredDELEG');
+  await ledger.submit(await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n - deposit }], fee: 300_000n,
+    certificates: [reg] })));
+  assert.equal((await ledger.account(L.rewardAddress({ type: 'key', hash: a.keyHash }, 0))).registered, true);
+  ref = ledger.fund(a.address, 10n * ADA);
+  await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n - deposit }], fee: 300_000n,
+    certificates: [reg] })), 'StakeKeyRegisteredDELEG');
+  await ledger.submit(await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 10n * ADA - 300_000n + deposit }], fee: 300_000n,
+    certificates: [unreg] })));
+  assert.equal((await ledger.account(L.rewardAddress({ type: 'key', hash: a.keyHash }, 0))).registered, false);
+});
+
+test('a witness datum is needed or named by an output (C24)', async () => {
+  const { ledger, a } = setup();
+  const datum = Serialization.PlutusData.fromCore(0n);
+  const withDatum = async (outputs, ref) => {
+    const base = { inputs: [ref], outputs, fee: 300_000n, datums: [0n] };
+    const { hash } = await L.scriptIntegrityHash(L.ledgerTx(rawTx(base)).integrityParts, [], {});
+    return signed(a, rawTx({ ...base, integrity: hash }));
+  };
+  let ref = ledger.fund(a.address, 10n * ADA);
+  await refused(ledger, await withDatum([{ address: a.address, lovelace: 9_700_000n }], ref), 'NotAllowedSupplementalDatums');
+  assert.ok(await ledger.output(ref));
+  // Control: an output names the datum's hash, a supplemental datum the ledger allows.
+  ref = ledger.fund(a.address, 10n * ADA);
+  await ledger.submit(await withDatum([{ address: a.address, lovelace: 9_700_000n, datumHash: datum.hash() }], ref));
 });
