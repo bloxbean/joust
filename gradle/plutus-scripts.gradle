@@ -4,35 +4,102 @@
 // <Name>.plutus.json, while another location ships it, would lend that validator another's script: in a GraalVM image,
 // whose resources no longer say which jar they came from, the runtime cannot tell (ValidatorScripts takes the image's
 // one copy unverified), so this check is what closes it there. Returns the problems, one line each.
-// #80 review C5, S9: classes are counted per simple name per location (as ValidatorScripts.classesNamed counts them),
-// nested ones by the name after their last '$', so one location holding two classes named after the script it ships
+// #80 review C5, S9, C11: classes are counted per simple name per location (as ValidatorScripts.classesNamed counts them),
+// each by its real simple name, read from the class file (classSimpleName: '$' is legal in a Java name), so one location holding two classes named after the script it ships
 // (two packages, or an outer and a nested class) is flagged too: the JVM refuses it, and an image could not tell them
 // apart. Only JOUST's own engine images run this (checkImageScripts); any other GraalVM image that bundles
 // julc-state-runtime must run it over its class path itself until bloxbean/julc#326 (#80 review F8).
+// #80 review C11: a class's simple name, as Class.getSimpleName gives it, read from the class file: its own entry in the
+// InnerClasses attribute names a member class (null for an anonymous or local one), and a class without one is top
+// level, named by its binary name after the package ('$' included: it is legal in a Java name). A file that cannot be
+// read as a class file counts under its file name.
+ext.classSimpleName = { String file, byte[] b ->
+    def fallback = file.substring(file.lastIndexOf('/') + 1)[0..-7]
+    try {
+        def in_ = new DataInputStream(new ByteArrayInputStream(b))
+        if ((in_.readInt() & 0xFFFFFFFFL) != 0xCAFEBABEL) return fallback
+        in_.readUnsignedShort(); in_.readUnsignedShort()
+        int n = in_.readUnsignedShort()
+        def utf8 = new String[n]
+        def classIdx = new int[n]
+        for (int i = 1; i < n; i++) {
+            int tag = in_.readUnsignedByte()
+            switch (tag) {
+                case 1: utf8[i] = in_.readUTF(); break
+                case 7: classIdx[i] = in_.readUnsignedShort(); break
+                case 8: case 16: case 19: case 20: in_.readUnsignedShort(); break
+                case 3: case 4: case 9: case 10: case 11: case 12: case 17: case 18: in_.readInt(); break
+                case 5: case 6: in_.readLong(); i++; break
+                case 15: in_.readUnsignedByte(); in_.readUnsignedShort(); break
+                default: return fallback
+            }
+        }
+        in_.readUnsignedShort()
+        int thisClass = in_.readUnsignedShort()
+        in_.readUnsignedShort()
+        int interfaces = in_.readUnsignedShort()
+        in_.skipBytes(2 * interfaces)
+        2.times {   // fields, then methods
+            int count = in_.readUnsignedShort()
+            count.times {
+                in_.skipBytes(6)
+                int attrs = in_.readUnsignedShort()
+                attrs.times { in_.readUnsignedShort(); in_.skipBytes(in_.readInt()) }
+            }
+        }
+        String binary = utf8[classIdx[thisClass]]
+        int attrs = in_.readUnsignedShort()
+        for (int a = 0; a < attrs; a++) {
+            String name = utf8[in_.readUnsignedShort()]
+            int len = in_.readInt()
+            if (name != 'InnerClasses') { in_.skipBytes(len); continue }
+            int k = in_.readUnsignedShort()
+            for (int j = 0; j < k; j++) {
+                int inner = in_.readUnsignedShort(); in_.readUnsignedShort(); int innerName = in_.readUnsignedShort(); in_.readUnsignedShort()
+                if (inner == thisClass) return innerName == 0 ? null : utf8[innerName]
+            }
+        }
+        return binary.substring(binary.lastIndexOf('/') + 1)
+    } catch (IOException | RuntimeException e) {
+        return fallback
+    }
+}
+
+// A minimal class file for the self-test: binary name `binary`; with `simple`, a member class of that simple name.
+ext.classFileBytes = { String binary, String simple ->
+    def out = new ByteArrayOutputStream()
+    def d = new DataOutputStream(out)
+    d.writeInt((int) 0xCAFEBABEL); d.writeShort(0); d.writeShort(65)
+    def pool = [[1, binary], [7, 1], [1, 'java/lang/Object'], [7, 3], [1, 'InnerClasses']]
+    if (simple != null) pool += [[1, simple], [1, binary.substring(0, binary.lastIndexOf('$'))], [7, 7]]
+    d.writeShort(pool.size() + 1)
+    pool.each { e -> d.writeByte(e[0]); if (e[0] == 1) d.writeUTF(e[1]) else d.writeShort(e[1]) }
+    d.writeShort(0x21); d.writeShort(2); d.writeShort(4); d.writeShort(0); d.writeShort(0); d.writeShort(0)
+    if (simple == null) { d.writeShort(0) }
+    else { d.writeShort(1); d.writeShort(5); d.writeInt(10); d.writeShort(1); d.writeShort(2); d.writeShort(8); d.writeShort(6); d.writeShort(0x9) }
+    out.toByteArray()
+}
+
 ext.plutusScriptProblems = { Collection<File> files ->
     def scripts = new TreeMap<String, List<String>>()   // Name -> locations shipping Name.plutus.json
     def classesOf = [:]                                  // location -> simple name -> how many classes have it
-    def simpleOf = { String file ->
-        def n = file.substring(file.lastIndexOf('/') + 1)[0..-7]
-        def inner = n.substring(n.lastIndexOf('$') + 1)
-        inner.isEmpty() || inner ==~ /[0-9].*/ ? null : inner   // anonymous and local classes have no simple name of use
-    }
+    def simpleOf = { String file, byte[] bytes -> rootProject.ext.classSimpleName(file, bytes) }
     files.findAll { it.exists() }.unique().each { f ->
         def names = []
         def count = new HashMap<String, Integer>()
-        def add = { String file -> def n = simpleOf(file); if (n != null) count.merge(n, 1, Integer::sum) }
+        def add = { String file, byte[] bytes -> def n = simpleOf(file, bytes); if (n != null) count.merge(n, 1, Integer::sum) }
         if (f.isDirectory()) {
             def dir = new File(f, 'META-INF/plutus')
             if (dir.isDirectory()) dir.eachFileMatch(~/.*\.plutus\.json/) { names << it.name }
             f.eachFileRecurse(groovy.io.FileType.FILES) { c ->
-                if (c.name.endsWith('.class') && !f.toPath().relativize(c.toPath()).toString().startsWith('META-INF')) add(c.name)
+                if (c.name.endsWith('.class') && !f.toPath().relativize(c.toPath()).toString().startsWith('META-INF')) add(c.name, c.bytes)
             }
         } else if (f.name.endsWith('.jar')) {
             new java.util.zip.ZipFile(f).withCloseable { z ->
                 z.entries().each { e ->
                     def m = e.name =~ /^META-INF\/plutus\/([^\/]+\.plutus\.json)$/
                     if (m.matches()) names << m.group(1)
-                    if (e.name.endsWith('.class') && !e.name.startsWith('META-INF/')) add(e.name)
+                    if (e.name.endsWith('.class') && !e.name.startsWith('META-INF/')) add(e.name, z.getInputStream(e).bytes)
                 }
             }
         }
@@ -61,46 +128,44 @@ ext.plutusScriptProblems = { Collection<File> files ->
 // two locations shipping one name are flagged.
 ext.plutusScriptSelfTest = { File dir ->
     project.delete(dir)
-    def make = { String loc, String cls, boolean script ->
-        def d = new File(dir, loc)
-        new File(d, "p/${loc}").mkdirs()
-        new File(d, "p/${loc}/${cls}.class").bytes = [0xCA, 0xFE] as byte[]
-        if (script) {
-            new File(d, 'META-INF/plutus').mkdirs()
-            new File(d, "META-INF/plutus/${cls}.plutus.json").text = '{}'
-        }
-        d
+    def cls = { String binary, String simple = null -> rootProject.ext.classFileBytes(binary, simple) }
+    def put = { File d, String path, byte[] bytes -> def f = new File(d, path); f.parentFile.mkdirs(); f.bytes = bytes; d }
+    def script = { File d, String name -> new File(d, 'META-INF/plutus').mkdirs(); new File(d, "META-INF/plutus/${name}.plutus.json").text = '{}'; d }
+    def make = { String loc, String name, boolean withScript ->
+        def d = put(new File(dir, loc), "p/${loc}/${name}.class", cls("p/${loc}/${name}"))
+        withScript ? script(d, name) : d
+    }
+    def expect = { List<File> locs, String fragment, String what ->
+        def p = rootProject.ext.plutusScriptProblems(locs)
+        if (fragment == null ? !p.isEmpty() : !p.any { it.contains(fragment) }) throw new GradleException("plutusScriptProblems: ${what}: ${p}")
+    }
+    // The parser reads the real simple name: top level, '$' in a top-level name, a member class, an anonymous one.
+    [['p/A', null, 'A'], ['p/Foo$Bar', null, 'Foo$Bar'], ['p/Outer$Foo', 'Foo', 'Foo']].each { b, sn, want ->
+        def got = rootProject.ext.classSimpleName(b + '.class', cls(b, sn))
+        if (got != want) throw new GradleException("classSimpleName(${b}) is ${got}, not ${want}")
     }
     def a = make('a', 'Foo', false), b = make('b', 'Foo', true), c = make('c', 'Foo', true)
-    def s9 = rootProject.ext.plutusScriptProblems([a, b])
-    if (s9.size() != 1 || !s9[0].contains('holds a class Foo but not META-INF/plutus/Foo.plutus.json')) {
-        throw new GradleException("plutusScriptProblems missed the S9 shape: ${s9}")
-    }
-    if (!rootProject.ext.plutusScriptProblems([b]).isEmpty()) throw new GradleException('plutusScriptProblems flagged a validator beside its script')
-    if (!rootProject.ext.plutusScriptProblems([b, c]).any { it.startsWith('META-INF/plutus/Foo.plutus.json: ') }) {
-        throw new GradleException('plutusScriptProblems missed a script shipped twice')
-    }
-    // #80 review C5, S9: two classes named Foo in one location that ships Foo's script, as a directory and as a jar;
-    // and a nested Outer$Foo in a location without the script.
-    def two = make('d', 'Foo', true)
-    new File(two, 'q/d').mkdirs()
-    new File(two, 'q/d/Foo.class').bytes = [0xCA, 0xFE] as byte[]
+    expect([a, b], 'holds a class Foo but not META-INF/plutus/Foo.plutus.json', "missed the S9 shape")
+    expect([b], null, 'flagged a validator beside its script')
+    expect([b, c], 'META-INF/plutus/Foo.plutus.json: ', 'missed a script shipped twice')
+    // #80 review C5, S9: two classes named Foo in one location that ships Foo's script, as a directory and as a jar.
+    def two = put(make('d', 'Foo', true), 'q/d/Foo.class', cls('q/d/Foo'))
     def jar = new File(dir, 'two.jar')
     new java.util.zip.ZipOutputStream(new FileOutputStream(jar)).withCloseable { z ->
-        ['p/x/Foo.class', 'q/x/Foo.class', 'META-INF/plutus/Foo.plutus.json'].each { n ->
+        [['p/x/Foo.class', cls('p/x/Foo')], ['q/x/Foo.class', cls('q/x/Foo')], ['META-INF/plutus/Foo.plutus.json', '{}'.bytes]].each { n, bytes ->
             z.putNextEntry(new java.util.zip.ZipEntry(n))
-            z.write(n.endsWith('.json') ? '{}'.bytes : ([0xCA, 0xFE] as byte[]))
+            z.write(bytes)
             z.closeEntry()
         }
     }
-    [two, jar].each { loc ->
-        def p = rootProject.ext.plutusScriptProblems([loc])
-        if (!p.any { it.contains('holds 2 classes named Foo') }) throw new GradleException("plutusScriptProblems missed two classes named Foo in ${loc.name}: ${p}")
-    }
-    def nested = new File(dir, 'n')
-    new File(nested, 'p/n').mkdirs()
-    new File(nested, 'p/n/Outer$Foo.class').bytes = [0xCA, 0xFE] as byte[]
-    if (!rootProject.ext.plutusScriptProblems([nested, b]).any { it.contains('holds a class Foo but not') }) {
-        throw new GradleException('plutusScriptProblems missed a nested class Foo without its script')
-    }
+    expect([two], 'holds 2 classes named Foo', 'missed two classes named Foo in a directory')
+    expect([jar], 'holds 2 classes named Foo', 'missed two classes named Foo in a jar')
+    // A member class Outer$Foo (simple name Foo) without the script that another location ships.
+    expect([put(new File(dir, 'n'), 'p/n/Outer$Foo.class', cls('p/n/Outer$Foo', 'Foo')), b], 'holds a class Foo but not', 'missed a member class Foo')
+    // #80 review C11: '$' is legal in a top-level name. Two top-level Foo$Bar beside one Foo$Bar script collide; a
+    // top-level Foo$Bar beside a Bar and Bar's script does not.
+    def dollar = script(put(put(new File(dir, 'dollar'), 'a/Foo$Bar.class', cls('a/Foo$Bar')), 'b/Foo$Bar.class', cls('b/Foo$Bar')), 'Foo$Bar')
+    expect([dollar], 'holds 2 classes named Foo$Bar', 'missed two top-level classes named Foo$Bar')
+    def notNested = script(put(put(new File(dir, 'notnested'), 'a/Foo$Bar.class', cls('a/Foo$Bar')), 'q/Bar.class', cls('q/Bar')), 'Bar')
+    expect([notNested], null, 'counted a top-level Foo$Bar as a Bar')
 }
