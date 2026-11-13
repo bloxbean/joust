@@ -312,8 +312,10 @@ class JscV2M2cGateTest {
                 var claim = new DepositClaim(BigInteger.valueOf(tx.outputs.size()), StateHarness.LIVE_REF, fee, Builtins.bData(BUYER));
                 var merged = merge(tx, collect(i, pot, potHeld, potState, List.of(claim)));
                 merged.depositClaims = new ArrayList<>(List.of(claim));
-                // The deposit names each implementation's own pot (its policy): compared without it.
-                String result = (StateHarness.data(next) + "|" + StateHarness.data(deposits)).replace(java.util.HexFormat.of().formatHex(pot.policy()), "<pot>");
+                // The deposit names each implementation's own pot (its policy): compared without it. The pot's next state too
+                // (review r1, C5).
+                String result = (StateHarness.data(next) + "|" + StateHarness.data(deposits) + "|" + StateHarness.data(collected))
+                        .replace(java.util.HexFormat.of().formatHex(pot.policy()), "<pot>");
                 return run(result, stall.evaluate(merged), pot.evaluate(merged));
             }
             case "collect @ max" -> {
@@ -339,7 +341,8 @@ class JscV2M2cGateTest {
                 }
                 tx.inputs.addAll(inputs);
                 tx.depositClaims = claims;
-                return run("collect", pot.evaluate(tx));
+                // The pot's next state, compared between the implementations (review r1, C5: not a constant).
+                return run(StateHarness.data(collected).toString(), pot.evaluate(tx));
             }
             default -> {
                 // pot close / stall close
@@ -356,12 +359,16 @@ class JscV2M2cGateTest {
         }
     }
 
+    /** The pot's next state of the last {@link #collect}. */
+    Object collected;
+
     /** The pot's collect of {@code claims}, its output holding them (its value equation adds the claimed deposits). */
     TxModel collect(Impl i, StateHarness<Object> pot, StateHarness.Held potHeld, Object potState, List<DepositClaim> claims) throws Exception {
         Ctx potCtx = pot.ctx(BUYER, BigInteger.ZERO, BigInteger.ZERO);
         JulcList<DepositClaim> cs = JulcList.empty();
         for (int k = claims.size() - 1; k >= 0; k--) cs = cs.prepend(claims.get(k));
         Object next = i.invoke("Pot", "collect", potState, potCtx, pot.funds(potHeld, Assets.none(), cs));
+        collected = next;
         var potTx = pot.stepWith(potHeld, i.make("PotValidator$Collect", potCtx), null, Transition.full(next, null, null, null, null), next, BUYER,
                 potCtx, null);
         TxOut o = potTx.outputs.get(potTx.stateOutput);
