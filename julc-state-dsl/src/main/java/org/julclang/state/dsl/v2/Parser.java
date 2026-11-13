@@ -52,6 +52,8 @@ final class Parser {
         this.toks = toks;
         for (int k = 0; k + 1 < toks.size(); k++) {
             if (toks.get(k).is("type") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
+            // M2b: an event is a variant of the contract's Event, so it starts a constructor too: Paid { to, amount }.
+            if (toks.get(k).is("event") && toks.get(k + 1).kind() == K.IDENT) typeNames.add(toks.get(k + 1).text());
             // An enum's variants start constructors too: Closed { at: t } (D5).
             if (toks.get(k).is("enum") && toks.get(k + 1).kind() == K.IDENT && toks.get(Math.min(k + 2, toks.size() - 1)).is("{")) {
                 int depth = 0;
@@ -381,6 +383,10 @@ final class Parser {
         }
         expect("{");
         List<FieldDecl> state = null;
+        List<FieldDecl> params = null;
+        Pos paramsPos = null;
+        var events = new ArrayList<VariantDecl>();
+        var invariants = new ArrayList<InvariantDecl>();
         var methods = new ArrayList<Method>();
         var fns = new ArrayList<Fn>();
         var types = new ArrayList<TypeDecl>();
@@ -393,6 +399,30 @@ final class Parser {
                 next();
                 if (!at("{")) throw peek().pos().error("JSC0122", "the state is a block: state { count: Int, owner: Key }");
                 state = fieldBlock();
+            } else if (t.is("params") && peek(1).is("{")) {
+                // M2b (ADR-0009 D1): the deploy-time parameters, read as params.f.
+                if (params != null) throw t.pos().error("JSC0431", "the params are declared once: params { … }");
+                next();
+                paramsPos = t.pos();
+                params = fieldBlock();
+            } else if (t.is("event")) {
+                // M2b (ADR-0009 D5): an event, a variant of the contract's Event.
+                next();
+                Pos vp = peek().pos();
+                String n = ident("an event name");
+                events.add(new VariantDecl(n, at("{") ? fieldBlock() : List.of(), vp));
+            } else if (t.is("invariant")) {
+                // M2b (ADR-0009 D4): invariant name = e, or invariant name { … e }.
+                next();
+                String n = ident("an invariant name");
+                Block body;
+                if (eat("=")) {
+                    Expr e = expr();
+                    body = new Block(List.of(), e, e.pos());
+                } else {
+                    body = block();
+                }
+                invariants.add(new InvariantDecl(n, body, t.pos()));
             } else if (t.is("init")) {
                 next();
                 var ps = params();
@@ -431,14 +461,14 @@ final class Parser {
             } else if (t.is("let") || t.is("const") || t.is("var")) {
                 throw t.pos().error("JSC0124", "a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10)");
             } else {
-                throw t.pos().error("JSC0125", "expected state, init, action, destroy, view, fn, type or enum but found " + t);
+                throw t.pos().error("JSC0125", "expected state, params, event, invariant, init, action, destroy, view, fn, type or enum but found " + t);
             }
             endMember(member);
             semis();
         }
         expect("}");
         if (state == null) throw p.error("JSC0126", "the contract declares no state { … }");
-        return new Contract(name, options, state, methods, fns, types, enums, p);
+        return new Contract(name, options, state, methods, fns, types, enums, p, params, paramsPos, events, invariants);
     }
 
     private List<Mod> mods() {
@@ -451,6 +481,16 @@ final class Parser {
             } else if (t.is("only") || t.is("after") || t.is("before")) {
                 next();
                 mods.add(new Mod(t.text(), ident("a state field after '" + t.text() + "'"), t.pos()));
+            } else if (t.is("quorum")) {
+                // M2b (ADR-0009 D2): quorum <keys> <threshold>, each a state field or params.f.
+                next();
+                String keys = fieldRef("the keys after 'quorum' (a List<Key> field)");
+                String threshold = fieldRef("the threshold after 'quorum " + keys + "' (an Int field)");
+                mods.add(new Mod("quorum", keys + " " + threshold, t.pos()));
+            } else if (t.is("authorized")) {
+                // M2b (ADR-0009 D3): authorized <credential>, a state field or params.f.
+                next();
+                mods.add(new Mod("authorized", fieldRef("a Credential field after 'authorized'"), t.pos()));
             } else if (t.is("batched")) {
                 // ADR-0018 D10 (M1c): 'batched' runs the action as an intent too; 'batched only' only as an intent
                 // (@Batched(only = true)). 'only' after 'batched' names a field when an identifier other than a modifier
@@ -470,6 +510,16 @@ final class Parser {
                 return mods;
             }
         }
+    }
+
+    /** A modifier's field: {@code f} (a state field) or {@code params.f}. */
+    private String fieldRef(String what) {
+        if (at("params") && peek(1).is(".")) {
+            next();
+            next();
+            return "params." + ident(what);
+        }
+        return ident(what);
     }
 
     // ------------------------------------------------------------------ statements
@@ -571,7 +621,7 @@ final class Parser {
 
     /** An effect statement of M2 (D4): {@code send}, {@code mint}, {@code burn} or {@code accept}, followed by '('. */
     private boolean isEffect(Tok t) {
-        return (t.is("send") || t.is("mint") || t.is("burn") || t.is("accept")) && peek(1).is("(") && peek(1).line() == t.line();
+        return (t.is("send") || t.is("mint") || t.is("burn") || t.is("accept") || t.is("emit")) && peek(1).is("(") && peek(1).line() == t.line();
     }
 
     private Stmt effectStmt() {
@@ -595,6 +645,7 @@ final class Parser {
                 Expr qty = expr();
                 s = new Mint(t.is("burn"), name, qty, t.pos());
             }
+            case "emit" -> s = new Emit(expr(), t.pos());
             default -> s = new Accept(expr(), t.pos());
         }
         expect(")");

@@ -71,6 +71,8 @@ final class IrJson {
         }
         out.put("enums", enums);
         out.put("state", w.record(p.state()));
+        // M2b (additive): the params record and the invariants, present only when the contract declares them.
+        if (p.params() != null) out.put("params", w.record(p.params()));
         out.put("timeFields", List.copyOf(new TreeSet<>(p.timeFields())));
         out.put("recursiveFns", List.copyOf(new TreeSet<>(p.recursiveFns())));
         var fns = new ArrayList<Object>();
@@ -81,7 +83,14 @@ final class IrJson {
         var methods = new ArrayList<Object>();
         for (Ir.Method m : p.methods()) {
             var mods = new ArrayList<Object>();
-            for (Ir.Mod mod : m.mods()) mods.add(mod.field() == null ? obj("name", mod.name()) : obj("name", mod.name(), "field", mod.field()));
+            for (Ir.Mod mod : m.mods()) {
+                if (mod.name().equals("quorum")) {
+                    String[] kt = mod.field().split(" ");
+                    mods.add(obj("name", mod.name(), "keys", kt[0], "threshold", kt[1]));
+                } else {
+                    mods.add(mod.field() == null ? obj("name", mod.name()) : obj("name", mod.name(), "field", mod.field()));
+                }
+            }
             var m2 = new LinkedHashMap<String, Object>();
             m2.put("kind", m.kind().name().toLowerCase());
             m2.put("name", m.name());
@@ -96,6 +105,11 @@ final class IrJson {
             methods.add(m2);
         }
         out.put("methods", methods);
+        if (!p.invariants().isEmpty()) {
+            var invariants = new ArrayList<Object>();
+            for (Ir.Invariant inv : p.invariants()) invariants.add(obj("name", inv.name(), "body", w.block(inv.body()), "at", at(inv.pos())));
+            out.put("invariants", invariants);
+        }
         var warnings = new ArrayList<Object>();
         for (Ir.Warning x : p.warnings()) warnings.add(obj("line", (long) x.line(), "col", (long) x.col(), "code", x.code(), "message", x.message()));
         out.put("warnings", warnings);
@@ -179,6 +193,7 @@ final class IrJson {
                 case Ir.Send y -> obj("stmt", "Send", "to", expr(y.to()), "value", expr(y.value()), "at", at(y.pos()));
                 case Ir.Mint y -> obj("stmt", "Mint", "burn", y.burn(), "name", expr(y.name()), "qty", expr(y.qty()), "at", at(y.pos()));
                 case Ir.Accept y -> obj("stmt", "Accept", "value", expr(y.value()), "at", at(y.pos()));
+                case Ir.Emit y -> obj("stmt", "Emit", "event", expr(y.event()), "at", at(y.pos()));
                 case Ir.If i -> {
                     Object branches = branches(i.branches());
                     yield obj("stmt", "If", "branches", branches, "otherwise", i.otherwise() == null ? null : block(i.otherwise()),
@@ -289,6 +304,7 @@ final class IrJson {
                 case Ir.ListArg l -> obj("node", "ListArg", "op", l.op(), "list", expr(l.list()), "arg", expr(l.arg()));
                 case Ir.FundsRef f -> obj("node", "FundsRef", "field", f.field());
                 case Ir.LedgerOp o -> obj("node", "LedgerOp", "op", o.op(), "args", exprs(o.args()));
+                case Ir.ParamsRef r -> obj("node", "ParamsRef", "field", r.field());
             };
             node.put("type", type(e.type()));
             node.put("taint", (long) e.taint());
@@ -438,7 +454,11 @@ final class IrJson {
                 var x = m(o);
                 var params = decls(x.get("params"));
                 var mods = new ArrayList<Ir.Mod>();
-                for (Object mo : l(x.get("mods"))) mods.add(new Ir.Mod(s(m(mo).get("name")), (String) m(mo).get("field")));
+                for (Object mo : l(x.get("mods"))) {
+                    var md = m(mo);
+                    mods.add(new Ir.Mod(s(md.get("name")), s(md.get("name")).equals("quorum") ? s(md.get("keys")) + " " + s(md.get("threshold"))
+                            : (String) md.get("field")));
+                }
                 var checked = new ArrayList<Ir.Local>();
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
                 methods.add(new Ir.Method(Ir.Kind.valueOf(s(x.get("kind")).toUpperCase()), s(x.get("name")), params, mods, checked,
@@ -454,8 +474,16 @@ final class IrJson {
                 var w = m(o);
                 warnings.add(new Ir.Warning(i(w.get("line")), i(w.get("col")), s(w.get("code")), s(w.get("message"))));
             }
+            Ir.RecordType params = r.get("params") == null ? null : record(m(r.get("params")));
+            var invariants = new ArrayList<Ir.Invariant>();
+            if (r.get("invariants") != null) {
+                for (Object o : l(r.get("invariants"))) {
+                    var x = m(o);
+                    invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at"))));
+                }
+            }
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
-                    Set.copyOf(timeFields), recursive, warnings);
+                    Set.copyOf(timeFields), recursive, warnings, params, invariants);
         }
 
         Ir.RecordType record(Map<String, Object> r) {
@@ -538,6 +566,7 @@ final class IrJson {
                     yield new Ir.Mint(burn, expr(x.get("name")), expr(x.get("qty")), at);
                 }
                 case "Accept" -> new Ir.Accept(expr(x.get("value")), at);
+                case "Emit" -> new Ir.Emit(expr(x.get("event")), at);
                 case "If" -> {
                     var branches = branches(x.get("branches"));
                     yield new Ir.If(branches, x.get("otherwise") == null ? null : block(x.get("otherwise")), (Boolean) x.get("pays"), at);
@@ -662,6 +691,7 @@ final class IrJson {
                 case "BigOp" -> new Ir.BigOp(s(x.get("op")), expr(x.get("map")), exprs(x.get("args")), t, taint, at);
                 case "Range" -> new Ir.Range(expr(x.get("from")), expr(x.get("to")), t, taint, at);
                 case "ListArg" -> new Ir.ListArg(s(x.get("op")), expr(x.get("list")), expr(x.get("arg")), t, taint, at);
+                case "ParamsRef" -> new Ir.ParamsRef(s(x.get("field")), t, at);
                 case "FundsRef" -> {
                     String f = s(x.get("field"));
                     if (!Set.of("received", "held", "policy", "self").contains(f)) throw new IllegalArgumentException("unknown funds field " + f);

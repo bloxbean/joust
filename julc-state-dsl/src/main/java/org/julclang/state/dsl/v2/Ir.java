@@ -23,11 +23,20 @@ final class Ir {
 
     record Program(String pkg, String fileName, String name, List<ContractOption> options,
                    Map<String, RecordType> records, Map<String, EnumType> enums, RecordType state, List<Method> methods,
-                   List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings) {
+                   List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings, RecordType params,
+                   List<Invariant> invariants) {
 
-        /** A record type, the state, or an enum variant (variant names are unique in a file). */
+        /** M1's shape: no params and no invariants. */
+        Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
+                Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
+                Set<String> recursiveFns, List<Warning> warnings) {
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, null, List.of());
+        }
+
+        /** A record type, the state, the params ({@code Config}), or an enum variant (variant names are unique in a file). */
         RecordType record(String name) {
             if (name.equals("State")) return state;
+            if (name.equals(PARAMS) && params != null) return params;
             RecordType r = records.get(name);
             if (r != null) return r;
             for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return e.variants().get(name);
@@ -52,6 +61,15 @@ final class Ir {
     }
 
     record ContractOption(String name, BigInteger value) {}
+
+    /** The params record's name (M2b, ADR-0009 D1): reserved, so no declared type takes it. */
+    static final String PARAMS = "Config";
+
+    /** The events' sum type (M2b, ADR-0009 D5): its variants are the contract's {@code event} declarations. */
+    static final String EVENT = "Event";
+
+    /** {@code invariant name = body} (ADR-0009 D4): a Bool over the state ({@code StateRef}/{@code StateField}) and the params. */
+    record Invariant(String name, Block body, Pos pos) {}
 
     /** A record type: a {@code type} declaration or the state; fields in declaration order. */
     record RecordType(String name, LinkedHashMap<String, Ty> fields, Pos pos) {
@@ -121,7 +139,7 @@ final class Ir {
 
     // ------------------------------------------------------------------ statements
 
-    sealed interface Stmt permits Let, Require, Pay, Send, Mint, Accept, If, For, MatchStmt {
+    sealed interface Stmt permits Let, Require, Pay, Send, Mint, Accept, Emit, If, For, MatchStmt {
         Pos pos();
     }
 
@@ -139,6 +157,9 @@ final class Ir {
 
     /** {@code accept(value)} (M2): native assets the method takes in, summed. */
     record Accept(Expr value, Pos pos) implements Stmt {}
+
+    /** {@code emit(e)} (M2b): an event (a value of the contract's {@code Event}), in source order. */
+    record Emit(Expr event, Pos pos) implements Stmt {}
 
     /** One test of an if or else-if chain: its condition and its arm. */
     record Branch(Expr cond, Block then, Pos pos) {}
@@ -166,7 +187,7 @@ final class Ir {
     sealed interface Expr permits Lit, LocalRef, StateRef, StateField, CtxRef, NoneLit, SomeOf, GetField, New, CallFn,
             CallStd, Prelude, TimePred, ListLit, Neg, Not, Arith, Compare, Equals, Logic, Cond, Coalesce, BlockValue,
             IfValue, ListProp, Concat, Contains, Hof, Fold, Variant, Match, MapEmpty, MapOp, MapHof, MapFold, BigEmpty, BigOp,
-            Range, ListArg, FundsRef, LedgerOp {
+            Range, ListArg, FundsRef, LedgerOp, ParamsRef {
         Ty type();
 
         int taint();
@@ -323,6 +344,13 @@ final class Ir {
      * {@code walletStaked} (Key, Key), {@code script} (Hash), {@code scriptStaked} (Hash, Key), {@code payment} (Address).
      */
     record LedgerOp(String op, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
+
+    /** {@code params.f} (M2b, ADR-0009 D1): a field of the deploy-time parameters. Never a time value. */
+    record ParamsRef(String field, Ty type, Pos pos) implements Expr {
+        public int taint() {
+            return 0;
+        }
+    }
 
     /** The ops of {@link LedgerOp} with their argument counts. */
     static final Map<String, Integer> LEDGER_OPS = Map.ofEntries(Map.entry("none", 0), Map.entry("lovelace", 1), Map.entry("asset", 3),

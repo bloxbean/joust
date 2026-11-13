@@ -65,9 +65,11 @@ class JscV2MessagesTest {
                 // J20: a generated key is written once in the script and names one construct.
                 assertEquals(1, counts.getOrDefault("\"" + s.message() + "\"", 0), name + ": " + s.message());
                 assertEquals(1, lowered.messages().stream().filter(x -> x.message().equals(s.message())).count(), name + ": " + s.message());
-                // No parameter, method or fn name is in it.
-                assertFalse(s.message().contains(s.in()), s.message());
-                if (s.what() != null) assertFalse(s.message().contains(s.what()), s.message());
+                // No parameter, method or fn name is in it: after its fixed words (the kind, "#pay:", and the redeemer's,
+                // "spend", which methods named pay and spend share: treasury's, Council's; M2b), only numbers.
+                String rest = s.message().replaceFirst("^#[a-z]+:(spend|mint|intent)", "");
+                assertFalse(rest.contains(s.in()), s.message());
+                if (s.what() != null) assertFalse(rest.contains(s.what()), s.message());
             }
             // Every message the Java can trace is recorded in the source map (generated, the author's, an operation's),
             // except the empty one of a require that keeps an arm's call and cannot fail.

@@ -264,3 +264,148 @@ contract Pool {
         (block
           (return_statement
             (identifier)))))))
+
+================================================================================
+Params, events, invariants, quorum and authorized (M2b)
+================================================================================
+
+jsc 2
+package t
+contract C {
+  params { guardian: Credential, cap: Int }
+  state { council: List<Key>, quorum: Int, on: Bool }
+  event Paid { to: Key, amount: Int }
+  event Reset
+  action pay(to: Key, amount: Int) quorum council quorum {
+    require(amount <= params.cap, "too much")
+    pay(to, amount)
+    emit(Paid { to, amount })
+    return state
+  }
+  action stop() authorized params.guardian {
+    emit(Reset)
+    return { ...state, on: false }
+  }
+  invariant reachable = quorum > 0 && quorum <= council.length
+  invariant positive { quorum > 0 }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (params_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)
+              (type
+                (identifier))))
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (event_declaration
+        (identifier)
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (event_declaration
+        (identifier))
+      (action_declaration
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (type
+              (identifier)))
+          (parameter
+            (identifier)
+            (type
+              (identifier))))
+        (modifier
+          (identifier)
+          (identifier))
+        (block
+          (require_statement
+            (binary_expression
+              (identifier)
+              (field_expression
+                (identifier)
+                (identifier)))
+            (string
+              (string_content)))
+          (pay_statement
+            (identifier)
+            (identifier))
+          (emit_statement
+            (record_literal
+              (identifier)
+              (field_initializer
+                (identifier))
+              (field_initializer
+                (identifier))))
+          (return_statement
+            (identifier))))
+      (action_declaration
+        (identifier)
+        (parameters)
+        (modifier
+          (params_field
+            (identifier)))
+        (block
+          (emit_statement
+            (identifier))
+          (return_statement
+            (object_literal
+              (spread_element
+                (identifier))
+              (field_initializer
+                (identifier)
+                (boolean))))))
+      (invariant_declaration
+        (identifier)
+        (binary_expression
+          (binary_expression
+            (identifier)
+            (number
+              (integer)))
+          (binary_expression
+            (identifier)
+            (field_expression
+              (identifier)
+              (identifier)))))
+      (invariant_declaration
+        (identifier)
+        (block
+          (binary_expression
+            (identifier)
+            (number
+              (integer))))))))

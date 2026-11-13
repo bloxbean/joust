@@ -657,3 +657,40 @@ test('§5 effects: sends in order, the net mint, the accepted sum, and what was 
   assert.throws(() => runCall(coins, { method: 'probe', state, args: [{ bytes: POL }, { bytes: '01' }, { int: '1' }, { int: '1' }],
     tx: { caller, received: '0', balance: '0', validFrom: '0', validTo: '1' } }), /needs them/);
 });
+
+test('§2.6 quorum and authorized, §2.7 the output checks, §5.5 events and params (Treasury)', () => {
+  const treasury = fixture('Treasury');
+  const A = '11'.repeat(28), B = '22'.repeat(28), C = '33'.repeat(28), BOB = 'b0'.repeat(28), G = '6a'.repeat(28);
+  const keys = (...ks) => ks.map((k) => ({ bytes: k }));
+  const params = { rec: 'Config', fields: [{ scriptCred: G }, { int: '100000000' }] };
+  const state = (council, q, frozen = false) => ({ rec: 'State', fields: [keys(...council), { int: String(q) }, frozen] });
+  const tx = (signers, approvers = []) => ({ caller: signers[0] ?? A, received: '0', balance: '500000000', validFrom: '0', validTo: '1', signers, approvers });
+  const call = (method, s, args, t, transition = false) => runCall(treasury, { method, state: s, args, tx: t, params, transition });
+  const council = state([A, B, C], 2);
+  // quorum: two distinct members of three sign; one does not reach it, nor does a stranger, nor one key signing twice.
+  const paid = call('pay', council, [{ bytes: BOB }, { int: '10000000' }], tx([A, C]));
+  assert.deepEqual(paid.ok.payouts, [{ to: BOB, lovelace: '10000000' }]);
+  assert.deepEqual(paid.ok.events, [{ rec: 'Paid', fields: [{ bytes: BOB }, { int: '10000000' }] }]);
+  for (const signers of [[A], [A, BOB], [A, A]]) {
+    assert.equal(call('pay', council, [{ bytes: BOB }, { int: '1' }], tx(signers)).class, 'modifier:quorum council quorum');
+  }
+  // The transition alone (§2.6) leaves the modifier to the validator.
+  assert.ok('ok' in call('pay', council, [{ bytes: BOB }, { int: '1' }], tx([A]), true));
+  // params.maxPayout bounds a payment; a call needs the params when the contract reads them.
+  assert.match(call('pay', council, [{ bytes: BOB }, { int: '100000001' }], tx([A, B])).class, /^require:/);
+  assert.throws(() => runCall(treasury, { method: 'pay', state: council, args: [{ bytes: BOB }, { int: '1' }], tx: tx([A, B]) }), /supply them/);
+  // authorized params.guardian: the guardian script approves (a key signing with its hash does not).
+  assert.deepEqual(call('freeze', council, [true], tx([A], [G])).ok.value, state([A, B, C], 2, true));
+  assert.equal(call('freeze', council, [true], tx([G])).class, 'modifier:authorized params.guardian');
+  // §2.7: the next state's quorum is well formed (sorted, distinct, 28-byte keys; 1 <= threshold <= keys), then the
+  // invariants hold; the transition alone computes the state anyway.
+  assert.equal(call('rotate', council, [keys(A, A, B), { int: '3' }], tx([A, B])).class, 'invariant:quorum council quorum');
+  assert.equal(call('rotate', council, [keys(B, A), { int: '1' }], tx([A, B])).class, 'invariant:quorum council quorum');
+  assert.ok('ok' in call('rotate', council, [keys(B, A), { int: '1' }], tx([A, B]), true));
+  assert.deepEqual(call('rotate', council, [keys(A, B), { int: '2' }], tx([A, B])).ok.events,
+    [{ rec: 'CouncilChanged', fields: [{ int: '2' }, { int: '2' }] }]);
+  // At creation too: an init whose council is malformed is refused.
+  const init = (council, q) => runCall(treasury, { method: 'init', state: null, args: [keys(...council), { int: String(q) }], tx: tx([A]), params });
+  assert.ok('ok' in init([A, B, C], 2));
+  assert.equal(init([A, B], 3).class, 'invariant:quorum council quorum');
+});

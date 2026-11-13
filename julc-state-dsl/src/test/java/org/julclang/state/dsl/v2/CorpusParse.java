@@ -15,8 +15,8 @@ public final class CorpusParse {
     /**
      * The file's declarations, as one line both parsers must give alike (review r2 F5; tree-sitter-jsc's
      * test/shared-corpus.mjs builds the same line from its tree): package, imports, top-level types, enums and fns, then
-     * the contract's options, state fields, methods (kind, name, parameters, modifiers, in source order) and its own
-     * fns, types and enums.
+     * the contract's options, state fields, params, events and invariants (M2b: each only when declared), methods (kind,
+     * name, parameters, modifiers, in source order) and its own fns, types and enums.
      */
     public static String shape(String source) {
         Syntax.File f = Parser.parse(source);
@@ -27,6 +27,12 @@ public final class CorpusParse {
         types(out, "", f.types(), f.enums(), f.fns());
         out.add("contract " + c.name() + "(" + join(c.options().stream().map(Syntax.Option::name).toList()) + ")");
         out.add("state: " + join(c.state().stream().map(Syntax.FieldDecl::name).toList()));
+        // M2b: the params, events and invariants, each only when the contract declares some.
+        if (c.params() != null) out.add("params: " + join(c.params().stream().map(Syntax.FieldDecl::name).toList()));
+        if (!c.events().isEmpty()) {
+            out.add("events: " + join(c.events().stream().map(e -> e.name() + "(" + join(e.fields().stream().map(Syntax.FieldDecl::name).toList()) + ")").toList()));
+        }
+        if (!c.invariants().isEmpty()) out.add("invariants: " + join(c.invariants().stream().map(Syntax.InvariantDecl::name).toList()));
         out.add("methods: " + String.join("; ", c.methods().stream().map(m -> {
             String kind = m.kind().name().toLowerCase();
             String mods = String.join(" ", m.mods().stream().map(x -> x.arg() == null ? x.name() : x.name() + " " + x.arg()).toList());

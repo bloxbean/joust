@@ -70,6 +70,7 @@ final class Abi {
         p.records().values().forEach(r -> all.addAll(r.fields().values()));
         p.enums().values().forEach(e -> e.variants().values().forEach(v -> all.addAll(v.fields().values())));
         for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) all.add(l.type);
+        if (p.params() != null) all.addAll(p.params().fields().values());
         return all.stream().anyMatch(Abi::ledger);
     }
 
@@ -97,6 +98,8 @@ final class Abi {
         w.append("  \"contract\": ").append(str(p.pkg() + "." + p.name())).append(",\n");
         w.append("  \"source\": ").append(str(p.fileName())).append(",\n");
         w.append("  \"datum\": ").append(ctor("State", 0, fields(p.state(), "      "), "    ")).append(",\n");
+        // M2b (ADR-0009 D1): the params the script is applied to (not in any redeemer).
+        if (p.params() != null) w.append("  \"params\": ").append(ctor(Ir.PARAMS, 0, fields(p.params(), "      "), "    ")).append(",\n");
         // Redeemers, as the processor lays them out (ContractIR.spendTransitions; the Lifecycle of the mint validator).
         boolean ctx = false;
         var spend = new ArrayList<String>();
@@ -106,6 +109,8 @@ final class Abi {
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
             // M2: a payable method with Funds carries the native assets the caller offers (ADR-0007 r2).
             if (Effects.takesAssets(m)) fs.add(field("assetsIn", "Value", VALUE_SHAPE, ind));
+            // M2b (ADR-0009 D5): a method whose result record has events carries them last.
+            if (Effects.events(p, m)) fs.add(field("events", "List<" + Ir.EVENT + ">", "list<" + Ir.EVENT + ">", ind));
             ctx |= m.usesCtx();
             spend.add("      " + ctor(Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1), spend.size(), fs, "        "));
         }

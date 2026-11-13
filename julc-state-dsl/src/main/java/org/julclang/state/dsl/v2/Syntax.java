@@ -47,8 +47,17 @@ final class Syntax {
 
     record Option(String name, BigInteger value, Pos pos) {}
 
+    /**
+     * A contract. M2b: {@code params} (the deploy-time parameters' fields, null when none: ADR-0009 D1), {@code events}
+     * (each {@code event Name { … }}, in declaration order: the variants of the contract's {@code Event}) and
+     * {@code invariants}.
+     */
     record Contract(String name, List<Option> options, List<FieldDecl> state, List<Method> methods, List<Fn> fns,
-                    List<TypeDecl> types, List<EnumDecl> enums, Pos pos) {}
+                    List<TypeDecl> types, List<EnumDecl> enums, Pos pos, List<FieldDecl> params, Pos paramsPos,
+                    List<VariantDecl> events, List<InvariantDecl> invariants) {}
+
+    /** {@code invariant name = e} (ADR-0009 D4): a Bool over the state and the params, checked on every new state. */
+    record InvariantDecl(String name, Block body, Pos pos) {}
 
     enum Kind { INIT, ACTION, DESTROY, VIEW }
 
@@ -70,7 +79,7 @@ final class Syntax {
         }
     }
 
-    sealed interface Stmt permits Const, Require, Pay, Send, Mint, Accept, For, IfStmt, MatchStmt {
+    sealed interface Stmt permits Const, Require, Pay, Send, Mint, Accept, Emit, For, IfStmt, MatchStmt {
         Pos pos();
     }
 
@@ -88,6 +97,9 @@ final class Syntax {
 
     /** {@code accept(value)}: native assets the method takes in (D4, M2). */
     record Accept(Expr value, Pos pos) implements Stmt {}
+
+    /** {@code emit(Ev { … })}: an event of the call (D4, M2b; ADR-0009 D5). */
+    record Emit(Expr event, Pos pos) implements Stmt {}
 
     record For(String var, Expr list, Block body, Pos pos) implements Stmt {}
 

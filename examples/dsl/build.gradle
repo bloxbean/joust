@@ -15,6 +15,8 @@ dependencies {
     annotationProcessor project(path: ':julc-state-api', configuration: 'onchainSources')
 
     testImplementation project(':julc-state-testkit')
+    // ADR-0018 M2b: the treasury port's tests use examples/treasury's Guardian (a withdraw script, not a contract to port).
+    testImplementation project(':examples:treasury')
 }
 
 // .jsc -> Java @StateContract, before compileJava (ADR-0005 D5). The generated Java is ordinary source: the JOUST
@@ -61,15 +63,17 @@ tasks.named('processResources') { from(files(jscOut).builtBy(generateJsc)) { inc
 // an example's src/test holding anything the rule does not copy (a subpackage, a helper class, resources) stops the build.
 // ADR-0018 M2: dex too. A .jsc 2 contract's records have fixed names where the Java example chose its own: dex's state
 // record Pool is State, its result records Moved and Closed are Received and Settled (the port's ABI is the same).
+// ADR-0018 M2b: treasury too; its tests import the example's Guardian (the governor script), which is not ported.
 def ports = [vault: ['Vault', 'open'], escrow: ['Escrow', 'open'], crowdfund: ['Crowdfund', 'launch'],
              token: ['Token', 'create'], pool: ['Pool', null],
-             dex: ['Dex', 'open', [Pool: 'State', Moved: 'Received', Closed: 'Settled']]]
+             dex: ['Dex', 'open', [Pool: 'State', Moved: 'Received', Closed: 'Settled']],
+             treasury: ['Treasury', 'open', [:], ['org.julclang.state.examples.treasury.Guardian']]]
 def portTestsOut = layout.buildDirectory.dir('generated/sources/portTests/java')
 def copyPortTests = tasks.register('copyPortTests', Sync) {
     description = 'Copies the Java examples\' tests (run by :examples:dsl:test) to test their .jsc 2 ports; fails on anything it cannot copy'
     // The rewrite below is code, not a file: state it as an input, so a changed rule re-runs the copy.
     inputs.property('ports', ports.collect { k, v -> "${k}=${v}" }.join(','))
-    inputs.property('rules', 'package; class <X>Test -> <X>PortTest; DescriptionTest -> <Contract>DescriptionPortTest; <Contract>.<init>( -> <Contract>.init(; <Contract>.<Record> -> <Contract>.<renamed>')
+    inputs.property('rules', 'package; class <X>Test -> <X>PortTest; DescriptionTest -> <Contract>DescriptionPortTest; <Contract>.<init>( -> <Contract>.init(; <Contract>.<Record> -> <Contract>.<renamed>; imports after the package')
     ports.keySet().each { example -> inputs.dir(rootProject.file("examples/${example}/src/test")) }
     into portTestsOut
     doFirst {
@@ -88,12 +92,14 @@ def copyPortTests = tasks.register('copyPortTests', Sync) {
         String contract = port[0]
         String init = port[1]
         Map<String, String> records = port.size() > 2 ? port[2] : [:]
+        List<String> imports = port.size() > 3 ? port[3] : []
         from(rootProject.file("examples/${example}/src/test/java/org/julclang/state/examples/${example}")) {
             include '*Test.java'
             into 'org/julclang/state/examples/dsl'
             rename { String f -> f == 'DescriptionTest.java' ? "${contract}DescriptionPortTest.java" : f.replace('Test.java', 'PortTest.java') }
             filter { String line ->
-                String out = line.replace("package org.julclang.state.examples.${example};", 'package org.julclang.state.examples.dsl;')
+                String pkgLine = 'package org.julclang.state.examples.dsl;' + imports.collect { "\nimport ${it};" }.join('')
+                String out = line.replace("package org.julclang.state.examples.${example};", pkgLine)
                         .replaceAll(/\bclass (\w+)Test\b/, 'class $1PortTest')
                         .replace('class DescriptionPortTest', "class ${contract}DescriptionPortTest")
                 if (init != null) out = out.replace("${contract}.${init}(", "${contract}.init(")

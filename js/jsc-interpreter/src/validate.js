@@ -61,6 +61,8 @@ export const NODES = {
   FundsRef: { field: set('received', 'held', 'policy', 'self') },
   LedgerOp: { op: set('none', 'lovelace', 'asset', 'add', 'sub', 'lovelaceOf', 'of', 'covers', 'keyCred', 'scriptCred', 'wallet',
     'walletStaked', 'script', 'scriptStaked', 'payment'), args: 'es' },
+  // M2b: a field of the deploy-time params (additive in version 1).
+  ParamsRef: { field: 's' },
 };
 // Fields are validated in this order: an initializer or collection before the binding it introduces (review C4).
 export const STMTS = {
@@ -70,13 +72,17 @@ export const STMTS = {
   Send: { to: 'e', value: 'e' },
   Mint: { burn: 'z', name: 'e', qty: 'e' },
   Accept: { value: 'e' },
+  Emit: { event: 'e' },
   If: { branches: 'branches', otherwise: 'b?', pays: 'z' },
   For: { list: 'e', var: 'l', body: 'b', pays: 'z' },
   Match: { scrutinee: 'e', arms: 'arms', pays: 'z' },
 };
 // batched is M1c's (#67): known here so that its IR loads; like every modifier but open and only, it makes a method
 // read the transaction (review F11).
-const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched');
+const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched', 'quorum', 'authorized');
+// M2b: quorum and authorized read the signatories and withdrawals in the validator, so like open and only they do not
+// make a method read the transaction (Ctx).
+const NO_CTX = set('open', 'only', 'quorum', 'authorized');
 // Argument counts of the std rows, the prelude and the map operations (review S7).
 const STD_ARITY = {
   sha2_256: 1, sha3_256: 1, blake2b_256: 1, blake2b_224: 1, verifyEd25519: 3, length: 1, concat: 2, slice: 3, take: 2, drop: 2,
@@ -115,8 +121,10 @@ export function validate(p) {
   };
 
   // ---- top level and declarations
+  // M2b (additive): "params" and "invariants" appear only when the contract declares them.
+  const optional = ['params', 'invariants'].filter((k) => k in p);
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
-    'recursiveFns', 'fns', 'methods', 'warnings'], 'program');
+    'recursiveFns', 'fns', 'methods', 'warnings', ...optional], 'program');
   if (p.ir !== 1 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 1, not ${JSON.stringify(p.ir)}`);
   if (p.language !== 'jsc 2') fail('program', `not a .jsc 2 program: ${p.language}`);
   if (typeof p.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(p.sourceSha256)) fail('program', 'sourceSha256 must be 64 hex digits');
@@ -144,6 +152,10 @@ export function validate(p) {
   }
   if (p.state.name !== 'State') fail('state', 'the state record is named State');
   record(p.state, 'state');
+  if ('params' in p) {
+    if (p.params.name !== 'Config') fail('params', 'the params record is named Config');
+    record(p.params, 'params');
+  }
   const type = (t, where) => {
     if (typeof t === 'string') {
       if (!PRIMS.has(t)) fail(where, `unknown type ${t}`);
@@ -219,6 +231,14 @@ export function validate(p) {
       at(b.at, where);
     }
   };
+  /** M2b: a quorum's or authorized's field, a state field or params.f, of the type its check reads. */
+  const modField = (ref, want, where) => {
+    const params = typeof ref === 'string' && ref.startsWith('params.');
+    const fs = shapes.get(params ? 'Config' : 'State') ?? [];
+    const f = fs.find((x) => x.name === (params ? ref.slice(7) : ref));
+    if (!f) fail(where, `no field ${JSON.stringify(ref)}`);
+    if (JSON.stringify(f.type) !== JSON.stringify(want)) fail(where, `${ref} is not ${JSON.stringify(want)}`);
+  };
   /** A condition or a boolean operand is of type Bool (review S3 on #76): the interpreter never tests truthiness. */
   const bool = (e, where, what) => {
     if (e.type !== 'Bool') fail(where, `${what} is of type ${JSON.stringify(e.type)}, not Bool`);
@@ -287,6 +307,7 @@ export function validate(p) {
     if (e.node === 'Variant') arity(where, `the variant ${e.variant}`, e.values.length, shapes.get(e.variant).length);
     if (e.node === 'GetField' && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${e.record} has no field ${e.field}`);
     if (e.node === 'StateField' && !shapes.get('State').some((f) => f.name === e.field)) fail(where, `the state has no field ${e.field}`);
+    if (e.node === 'ParamsRef' && !(shapes.get('Config') ?? []).some((f) => f.name === e.field)) fail(where, `the params have no field ${e.field}`);
   }
   function stmt(s, scope) {
     const spec = s && STMTS[s.stmt];
@@ -295,6 +316,7 @@ export function validate(p) {
     keys(s, ['stmt', ...Object.keys(spec), 'at'], where);
     fields(s, spec, where, scope);
     if (s.stmt === 'Require') bool(s.cond, where, 'a require condition');
+    if (s.stmt === 'Emit' && JSON.stringify(s.event.type) !== JSON.stringify({ enum: 'Event' })) fail(where, 'an emitted value is an Event');
     at(s.at, where);
   }
   const fnNames = new Set();
@@ -317,7 +339,14 @@ export function validate(p) {
     const scope = new Set();
     m.params.forEach((l) => decl(l, where, scope));
     for (const mod of m.mods) {
-      keys(mod, ['name', 'field'], where);
+      if (mod.name === 'quorum') {
+        keys(mod, ['name', 'keys', 'threshold'], where);
+        modField(mod.keys, { list: 'Key' }, where);
+        modField(mod.threshold, 'Int', where);
+      } else {
+        keys(mod, ['name', 'field'], where);
+        if (mod.name === 'authorized') modField(mod.field, 'Credential', where);
+      }
       if (!MODS.has(mod.name)) fail(where, `unknown modifier ${mod.name}`);
     }
     if (m.result !== null) type(m.result, where);
@@ -328,10 +357,24 @@ export function validate(p) {
       fail(where, `checked is ${JSON.stringify(m.checked)}, but the parameters whose types hold a Key, a Hash or a Map are ${JSON.stringify(checked)}`);
     }
     const usesCtx = m.kind === 'destroy' || (m.kind !== 'view'
-      && (m.mods.some((x) => x.name !== 'open' && x.name !== 'only') || readsTx(m.body)));
+      && (m.mods.some((x) => !NO_CTX.has(x.name)) || readsTx(m.body)));
     if (usesCtx !== m.usesCtx) fail(where, `usesCtx is ${m.usesCtx}, but the method ${usesCtx ? 'reads' : 'does not read'} the transaction`);
   }
   for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${n}`);
+  // M2b: invariants, each a Bool over the state and the params, with names of their own.
+  if ('invariants' in p) {
+    const names = new Set();
+    for (const inv of p.invariants) {
+      const where = `invariant ${inv.name}`;
+      keys(inv, ['name', 'body', 'at'], where);
+      if (names.has(inv.name) || methodNames.has(inv.name) || fnNames.has(inv.name)) fail(where, 'a name taken by another method, fn or invariant');
+      names.add(inv.name);
+      block(inv.body, where, new Set());
+      if (inv.body.result === null) fail(where, 'an invariant has a value');
+      bool(inv.body.result, where, 'an invariant');
+      at(inv.at, where);
+    }
+  }
 }
 
 /** §4: a type holds a Key, a Hash or a Map somewhere (records and variants through their fields). */

@@ -83,9 +83,16 @@ final class JavaEmitter {
         }
         if (Effects.settled(p)) results.add("Settled");
         for (Ir.Fn f : p.fns()) body.append(fn(f));
+        for (Ir.Invariant inv : p.invariants()) body.append(invariant(inv));
         var records = new StringBuilder();
         records.append("    // ").append(mark(p.state().pos())).append("\n");
         records.append("    public record State(").append(components(p.state())).append(") {}\n\n");
+        if (p.params() != null) {
+            // M2b (ADR-0009 D1): the deploy-time parameters; the script is applied to them, so they are not in a redeemer.
+            imports.add("org.julclang.state.api.Params");
+            records.append("    // ").append(mark(p.params().pos())).append("\n");
+            records.append("    @Params\n    public record ").append(Ir.PARAMS).append("(").append(components(p.params())).append(") {}\n\n");
+        }
         for (Ir.RecordType r : p.records().values()) {
             records.append("    // ").append(mark(r.pos())).append("\n");
             records.append("    public record ").append(r.name()).append("(").append(components(r)).append(") {}\n\n");
@@ -308,6 +315,16 @@ final class JavaEmitter {
                     imports.add("org.julclang.state.api." + a);
                     code.append("    @").append(a).append("(\"").append(mod.field()).append("\")\n");
                 }
+                case "quorum" -> {
+                    // M2b (ADR-0009 D2): the field is "keys threshold".
+                    String[] kt = mod.field().split(" ");
+                    imports.add("org.julclang.state.api.Quorum");
+                    code.append("    @Quorum(keys = \"").append(kt[0]).append("\", threshold = \"").append(kt[1]).append("\")\n");
+                }
+                case "authorized" -> {
+                    imports.add("org.julclang.state.api.AuthorizedBy");
+                    code.append("    @AuthorizedBy(\"").append(mod.field()).append("\")\n");
+                }
                 default -> {
                 }
             }
@@ -315,6 +332,8 @@ final class JavaEmitter {
         boolean funds = Effects.takesFunds(m);
         var params = new ArrayList<String>();
         if (m.kind() != Ir.Kind.INIT) params.add("State s__");
+        // M2b (ADR-0009 D1): an init, and a method that reads params, takes them directly after the state (first in an init).
+        if (Effects.takesParams(p, m)) params.add(Ir.PARAMS + " params__");
         for (Ir.Local l : m.params()) params.add(jt(l.type) + " " + l.name);
         if (m.usesCtx()) {
             imports.add("org.julclang.state.api.Ctx");
@@ -395,7 +414,7 @@ final class JavaEmitter {
         for (String k : Effects.recordKinds(p, record)) {
             String v = acc.cur.containsKey(k) ? acc.cur.get(k) : empty(k);
             // Lists accumulate by prepending: reversed into source order, unless still empty.
-            parts.add((k.equals("pay") || k.equals("send")) && !v.equals(empty(k)) ? v + ".reverse()" : v);
+            parts.add((k.equals("pay") || k.equals("send") || k.equals("emit")) && !v.equals(empty(k)) ? v + ".reverse()" : v);
         }
         return String.join(", ", parts);
     }
@@ -413,6 +432,13 @@ final class JavaEmitter {
                 imports.add("org.julclang.state.api.Send");
                 yield "Sends.none()";
             }
+            case "emit" -> {
+                // M2b: no events yet. A typed local gives JuLC the list's element type (as examples/treasury writes it).
+                imports.add("org.julclang.core.types.JulcList");
+                addHelper("events__none", "    static JulcList<" + Ir.EVENT + "> events__none() {\n        JulcList<" + Ir.EVENT
+                        + "> none = JulcList.empty();\n        return none;\n    }\n\n");
+                yield "events__none()";
+            }
             default -> "ValueAdapter.none()";
         };
     }
@@ -429,6 +455,10 @@ final class JavaEmitter {
                 imports.add("org.julclang.state.api.Send");
                 yield "JulcList<Send>";
             }
+            case "emit" -> {
+                imports.add("org.julclang.core.types.JulcList");
+                yield "JulcList<" + Ir.EVENT + ">";
+            }
             default -> "Value";
         };
     }
@@ -438,6 +468,7 @@ final class JavaEmitter {
             case "pay" -> "payouts";
             case "send" -> "sends";
             case "mint" -> "mint";
+            case "emit" -> "events";
             default -> "accepted";
         };
     }
@@ -518,6 +549,23 @@ final class JavaEmitter {
         return new Acc(List.of());
     }
 
+    /**
+     * An invariant (M2b, ADR-0009 D4): {@code @Invariant public static boolean name(State s__[, Config params])}, which the
+     * validator checks on every state it accepts as an output.
+     */
+    private String invariant(Ir.Invariant inv) {
+        owner = inv.name();
+        redeemer = null;
+        ordinals = Map.of();
+        imports.add("org.julclang.state.api.Invariant");
+        var u = new Free().block(inv.body());
+        String params = "State s__" + (u.params ? ", " + Ir.PARAMS + " params__" : "");
+        var stmts = new StringBuilder();
+        stmts(inv.body().stmts(), stmts, "        ", none());
+        return "    // " + mark(inv.pos()) + "\n    @Invariant\n    public static boolean " + inv.name() + "(" + params + ") {\n" + stmts
+                + "        return " + ex(inv.body().result()) + ";\n    }\n\n";
+    }
+
     private String fn(Ir.Fn f) {
         owner = f.name();
         redeemer = null;
@@ -541,7 +589,7 @@ final class JavaEmitter {
         final TreeMap<Integer, Ir.Local> refs = new TreeMap<>();
         final Set<Ir.Local> declared = Collections.newSetFromMap(new IdentityHashMap<>());
         final Set<String> kinds = new TreeSet<>();
-        boolean state, ctx, funds;
+        boolean state, ctx, funds, params;
 
         List<Ir.Local> locals() {
             var out = new ArrayList<Ir.Local>();
@@ -557,6 +605,7 @@ final class JavaEmitter {
             state |= o.state;
             ctx |= o.ctx;
             funds |= o.funds;
+            params |= o.params;
             return this;
         }
 
@@ -600,6 +649,10 @@ final class JavaEmitter {
                     kinds.add("accept");
                     funds = true;
                     expr(y.value());
+                }
+                case Ir.Emit y -> {
+                    kinds.add("emit");
+                    expr(y.event());
                 }
                 case Ir.If i -> {
                     for (Ir.Branch b : i.branches()) {
@@ -747,6 +800,7 @@ final class JavaEmitter {
                 }
                 case Ir.FundsRef fr -> funds = true;
                 case Ir.LedgerOp o -> o.args().forEach(this::expr);
+                case Ir.ParamsRef pr -> params = true;
             }
             return this;
         }
@@ -755,6 +809,7 @@ final class JavaEmitter {
     private String capParams(Free f) {
         var ps = new ArrayList<String>();
         if (f.state) ps.add("State s__");
+        if (f.params) ps.add(Ir.PARAMS + " params__");
         for (Ir.Local l : f.locals()) ps.add(jt(l.type) + " " + l.name);
         if (f.ctx) ps.add("Ctx ctx");
         if (f.funds) {
@@ -767,6 +822,7 @@ final class JavaEmitter {
     private static String capArgs(Free f) {
         var as = new ArrayList<String>();
         if (f.state) as.add("s__");
+        if (f.params) as.add("params__");
         for (Ir.Local l : f.locals()) as.add(l.name);
         if (f.ctx) as.add("ctx");
         if (f.funds) as.add("funds");
@@ -854,6 +910,13 @@ final class JavaEmitter {
                     out.append(ind).append("Value ").append(na).append(" = ").append(prior.equals(empty("accept")) ? v
                             : "ValueAdapter.add(" + prior + ", " + v + ")").append(";\n");
                     acc.cur.put("accept", na);
+                }
+                case Ir.Emit y -> {
+                    // emit(e) (M2b): the event joins the call's events, in source order (prepended, reversed at the end).
+                    String ne = fresh("events");
+                    out.append(ind).append("JulcList<").append(Ir.EVENT).append("> ").append(ne).append(" = ").append(acc.cur.get("emit"))
+                            .append(".prepend(").append(ex(y.event())).append(");\n");
+                    acc.cur.put("emit", ne);
                 }
                 case Ir.If i -> ifStmt(i, out, ind, acc);
                 case Ir.For f -> forStmt(f, out, ind, acc);
@@ -1070,6 +1133,7 @@ final class JavaEmitter {
             case Ir.ListArg l -> listArg(l);
             case Ir.FundsRef f -> "funds." + f.field() + "()";
             case Ir.LedgerOp o -> ledger(o);
+            case Ir.ParamsRef r -> "params__." + r.field() + "()";
         };
     }
 

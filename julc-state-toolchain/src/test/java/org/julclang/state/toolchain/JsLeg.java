@@ -61,7 +61,13 @@ final class JsLeg {
     /** A call, recorded from the Java interpreter's outcome (a refusal when {@code refused} is not null). */
     static Call call(String method, Rec state, List<Object> args, Tx t, String want, Interpreter.Outcome o, Interpreter.Refused refused,
                      String what) {
-        return new Call(method, call(method, state, args, t), want, refused != null ? refusedForm(refused.refusal()) : form(o), what);
+        return call(method, state, args, t, null, want, o, refused, what);
+    }
+
+    /** The same, for a contract deployed with {@code params} (M2b; null: none). */
+    static Call call(String method, Rec state, List<Object> args, Tx t, Rec params, String want, Interpreter.Outcome o,
+                     Interpreter.Refused refused, String what) {
+        return new Call(method, call(method, state, args, t, params), want, refused != null ? refusedForm(refused.refusal()) : form(o), what);
     }
 
     /** A call of the transition alone (semantics §2.6: no modifiers), recorded from the Java interpreter's {@code transition}. */
@@ -204,6 +210,7 @@ final class JsLeg {
         }
         if (!o.mint().entries().isEmpty()) out += " mints " + json(o.mint());
         if (!o.accepted().entries().isEmpty()) out += " accepts " + json(o.accepted());
+        if (!o.events().isEmpty()) out += " emits " + json(o.events());
         return out;
     }
 
@@ -225,8 +232,10 @@ final class JsLeg {
         }
         ValueV mint = ok.containsKey("mint") ? (ValueV) value(ok.get("mint"), true) : ValueV.NONE;
         ValueV accepted = ok.containsKey("accepted") ? (ValueV) value(ok.get("accepted"), true) : ValueV.NONE;
+        var events = new ArrayList<Object>();
+        if (ok.get("events") instanceof List<?> l) for (Object x : l) events.add(value(x, true));
         return new Interpreter.Outcome(ok.get("value") == null ? null : value(ok.get("value"), true), List.copyOf(payouts), List.copyOf(sends),
-                mint, accepted);
+                mint, accepted, List.copyOf(events));
     }
 
     // ------------------------------------------------------------------ values as tagged JSON
@@ -343,6 +352,11 @@ final class JsLeg {
     }
 
     static String call(String method, Rec state, List<Object> args, Tx t) {
+        return call(method, state, args, t, null);
+    }
+
+    /** A call's JSON; M2b: the params it is deployed with (top level), the scripts approving it (in the transaction). */
+    static String call(String method, Rec state, List<Object> args, Tx t, Rec params) {
         var parts = new ArrayList<String>();
         for (Object a : args) parts.add(json(a));
         String tx = t == null ? "null" : "{\"caller\": \"" + HEX.formatHex(t.caller().bytes()) + "\", \"received\": \"" + t.received()
@@ -351,7 +365,9 @@ final class JsLeg {
                 // M2: the native assets the call sees.
                 + (t.funds() == null ? "" : ", \"funds\": {\"received\": " + json(t.funds().received()) + ", \"held\": " + json(t.funds().held())
                         + ", \"policy\": \"" + HEX.formatHex(t.funds().policy().bytes()) + "\", \"self\": \"" + HEX.formatHex(t.funds().self().bytes()) + "\"}")
+                + (t.approvers().isEmpty() ? "" : ", \"approvers\": [" + String.join(", ", t.approvers().stream().map(k -> "\"" + HEX.formatHex(k.bytes()) + "\"").toList()) + "]")
                 + "}";
-        return "{\"method\": \"" + method + "\", \"state\": " + json(state) + ", \"args\": [" + String.join(", ", parts) + "], \"tx\": " + tx + "}";
+        return "{\"method\": \"" + method + "\", \"state\": " + json(state) + ", \"args\": [" + String.join(", ", parts) + "], \"tx\": " + tx
+                + (params == null ? "" : ", \"params\": " + json(params)) + "}";
     }
 }

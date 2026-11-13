@@ -53,6 +53,9 @@ class Program {
     for (const r of p.records) add(r);
     for (const e of p.enums) for (const v of e.variants) add(v);
     add(p.state);
+    if (p.params) add(p.params);   // M2b: the params record, Config
+    this.invariants = p.invariants ?? [];
+    this.params = null;
     this.variantTag = new Map();
     for (const e of p.enums) e.variants.forEach((v, i) => this.variantTag.set(v.name, i));
     this.fns = new Map(p.fns.map((f) => [f.name, f]));
@@ -73,6 +76,20 @@ class Program {
 
   stateFields() {
     return this.shapes.get('State').names;
+  }
+
+  /**
+   * M2b (§2.7): the same contract deployed with these params (a Config record), which params.f reads: a new program
+   * over the same IR.
+   */
+  withParams(params) {
+    if (!this.ir.params) throw new Error('the contract declares no params');
+    if (!(params instanceof Rec) || params.type !== 'Config' || params.fields.length !== this.ir.params.fields.length) {
+      throw new Error(`params are a Config record of ${this.ir.params.fields.length} fields`);
+    }
+    const d = new Program(this.ir);
+    d.params = params;
+    return d;
   }
 
   /** A variant's tag (its index in its enum, §1), or 0 for a record. */
@@ -101,13 +118,23 @@ class Program {
     return this.#call(name, state, args, tx, false);
   }
 
+  #paramsField(name) {
+    if (!this.params) throw new Error('this contract reads its params: supply them (withParams)');
+    return this.#field(this.params, name);
+  }
+
+  /** A modifier's field: f of the state, or params.f. */
+  #modField(state, ref) {
+    return ref.startsWith('params.') ? this.#paramsField(ref.slice(7)) : this.#field(state, ref);
+  }
+
   #call(name, state, args, tx, modifiers) {
     const m = this.#method(name);
     if (args.length !== m.params.length) throw new Error(`${name} takes ${m.params.length} arguments`);
     if ((m.kind === 'init') !== (state === null || state === undefined)) throw new Error('an init has no input state; others do');
     return depthGuard(() => {
       if (modifiers) this.#modifiers(m, state, tx);
-      const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE };
+      const frame = { state, tx, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [] };
       let env = null;
       m.params.forEach((l, i) => (env = bind(env, l, args[i])));
       // §4: every checked parameter is well formed before any statement runs.
@@ -121,8 +148,39 @@ class Program {
       if (accepts(m.body) && !frame.accepted.equals(funds(frame).received)) {
         throw new Refused('the method accepts other native assets than the caller offers', 'domain', 'accepted');
       }
-      return { value, payouts: frame.payouts, sends: frame.sends, mint: frame.mint, accepted: frame.accepted };
+      const out = { value, payouts: frame.payouts, sends: frame.sends, mint: frame.mint, accepted: frame.accepted, events: frame.events };
+      if (modifiers) this.#outputs(m, value);
+      return out;
     });
+  }
+
+  /**
+   * §2.7 (M2b): what the validator checks of every state it accepts as an output, after the body. At a creation, each
+   * quorum naming params is well formed; then for an init's or action's next state each quorum naming state fields
+   * (every pair any method's quorum names, once, in source order) is well formed, class invariant:quorum <keys>
+   * <threshold>; then each invariant holds, in declaration order, class invariant:<name>.
+   */
+  #outputs(m, next) {
+    if (m.kind !== 'init' && m.kind !== 'action') return;
+    const pairs = [];
+    for (const x of this.ir.methods) {
+      for (const mod of x.mods) {
+        if (mod.name !== 'quorum') continue;
+        const pair = `${mod.keys} ${mod.threshold}`;
+        if (!pairs.includes(pair)) pairs.push(pair);
+      }
+    }
+    for (const pair of pairs) {
+      const [k, t] = pair.split(' ');
+      if (k.startsWith('params.') && m.kind !== 'init') continue;
+      if (!wellFormedQuorum(this.#modField(next, k), this.#modField(next, t))) {
+        throw new Refused(`the quorum ${pair} is not well formed`, 'invariant', `quorum ${pair}`);
+      }
+    }
+    for (const inv of this.invariants) {
+      const frame = { state: next, tx: null, payouts: [], sends: [], mint: ValueV.NONE, accepted: ValueV.NONE, events: [] };
+      if (this.#block(inv.body, null, frame) !== true) throw new Refused(`the invariant ${inv.name} does not hold`, 'invariant', inv.name);
+    }
   }
 
   /**
@@ -133,15 +191,32 @@ class Program {
   #modifiers(m, state, tx) {
     for (const mod of m.mods) {
       const w = mod.name;
-      if ((w !== 'only' && w !== 'after' && w !== 'before') || mod.field === null) continue;
-      if (!tx) throw new Error(`${m.name} has '${w} ${mod.field}': its call needs the transaction`);
-      const v = this.#field(state, mod.field);
+      const field = w === 'quorum' ? `${mod.keys} ${mod.threshold}` : mod.field;
+      if (!['only', 'after', 'before', 'quorum', 'authorized'].includes(w) || field === null || field === undefined) continue;
+      if (!tx) throw new Error(`${m.name} has '${w} ${field}': its call needs the transaction`);
       const signers = tx.signers ?? [tx.caller];
-      const holds = w === 'only' ? signers.some((k) => bytesEqual(k, v)) : w === 'after' ? tx.validFrom >= v : tx.validTo <= v;
+      const signed = (k) => signers.some((x) => bytesEqual(x, k));
+      let holds;
+      if (w === 'only') holds = signed(this.#field(state, field));
+      else if (w === 'after') holds = tx.validFrom >= this.#field(state, field);
+      else if (w === 'before') holds = tx.validTo <= this.#field(state, field);
+      else if (w === 'quorum') {
+        // M2b: at least threshold >= 1 distinct signers among the keys (each read from the input state or the params).
+        const keys = this.#modField(state, mod.keys), t = this.#modField(state, mod.threshold);
+        const distinct = signers.filter((x, i) => signers.findIndex((y) => bytesEqual(x, y)) === i);
+        const n = distinct.filter((x) => keys.some((k) => bytesEqual(k, x))).length;
+        holds = t >= 1n && BigInt(n) >= t;
+      } else {
+        // M2b: a key credential signed; a script credential is among the transaction's approvers.
+        const c = this.#modField(state, field);
+        holds = c.script ? (tx.approvers ?? []).some((h) => bytesEqual(h, c.hash)) : signed(c.hash);
+      }
       if (!holds) {
-        const what = w === 'only' ? `the transaction is not signed by ${mod.field}`
-          : w === 'after' ? `the validity window starts before ${mod.field}` : `the validity window ends after ${mod.field}`;
-        throw new Refused(what, 'modifier', `${w} ${mod.field}`);
+        const what = w === 'only' ? `the transaction is not signed by ${field}`
+          : w === 'after' ? `the validity window starts before ${field}`
+            : w === 'before' ? `the validity window ends after ${field}`
+              : w === 'quorum' ? `too few of ${mod.keys} signed the transaction` : `${field} did not authorize the transaction`;
+        throw new Refused(what, 'modifier', `${w} ${field}`);
       }
     }
   }
@@ -204,6 +279,10 @@ class Program {
           f.accepted = sum;
           break;
         }
+        case 'Emit':
+          // §5.5 (M2b): an event joins the call's events, in source order.
+          f.events.push(this.#eval(s.event, env, f));
+          break;
         case 'If': {
           // §3: the first branch whose condition holds runs, else the otherwise block (an else-if chain is one node).
           const taken = this.#branch(s.branches, s.otherwise, env, f);
@@ -340,6 +419,7 @@ class Program {
       case 'BigEmpty': return BigMapV.EMPTY;
       case 'BigOp': return this.#bigOp(e, env, f);
       case 'FundsRef': return funds(f)[e.field];
+      case 'ParamsRef': return this.#paramsField(e.field);
       case 'LedgerOp': return ledger(e.op, e.args.map((x) => this.#eval(x, env, f)));
       default:
         throw new Error(`unknown node ${e.node}`);
@@ -568,6 +648,15 @@ class Program {
 function funds(f) {
   if (!f.tx || !f.tx.funds) throw new Error('this call reads funds: its transaction needs them');
   return f.tx.funds;
+}
+
+/** ADR-0009 D2: keys strictly ascending (so distinct), each 28 bytes, and 1 <= threshold <= their number. */
+function wellFormedQuorum(keys, threshold) {
+  for (let i = 0; i < keys.length; i++) {
+    if (keys[i].length !== 28) return false;
+    if (i > 0 && bytesCompare(keys[i - 1], keys[i]) >= 0) return false;
+  }
+  return threshold >= 1n && threshold <= BigInt(keys.length);
 }
 
 /** Whether a block holds an accept statement, in any arm or loop. */

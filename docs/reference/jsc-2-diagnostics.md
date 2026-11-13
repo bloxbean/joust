@@ -58,7 +58,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0122 | error | the state is a block: state { count: Int, owner: Key } | Parser |
 | JSC0123 | error | there is no ' … ' in .jsc: a call runs in one transaction; write 'action name(…) { … }' | Parser |
 | JSC0124 | error | a contract holds state, init, actions, destroys, views, fns and types: put a constant in a fn (fn limit(): Int = 10) | Parser |
-| JSC0125 | error | expected state, init, action, destroy, view, fn, type or enum but found | Parser |
+| JSC0125 | error | expected state, params, event, invariant, init, action, destroy, view, fn, type or enum but found | Parser |
 | JSC0126 | error | the contract declares no state { … } | Parser |
 | JSC0127 | error | an expression's value is unused here: only the last one is the block's value | Parser |
 | JSC0128 | error | values are immutable in .jsc: write 'const … = …' | Parser |
@@ -112,6 +112,8 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0221 | error | the fn … has the name of a declared type or variant; rename one | Checker |
 | JSC0222 | error | ' … ' would hide the type / enum / variant / fn …; a name is bound once and never replaces a declaration | Checker |
 | JSC0223 | error | the batched action … has an intent form named …Intent (the client's method) and …Intent (the validator's record); a method or type of that name would clash with it: rename one of them | Checker |
+| JSC0224 | error | the invariant … has the name of a method, fn or other invariant; rename it (each becomes a method of one Java class) / … has the name of a declared type, variant or built-in; rename it | Checker (M2b) |
+| JSC0225 | error | 'Config' is the name of the params record (ADR-0009 D1): a contract with params cannot declare a type, enum, variant or event named Config / 'Event' is the type of the contract's events (each 'event X { … }' is one of its variants, ADR-0009 D5): … cannot declare … named Event; rename it | Checker (M2b) |
 
 ## Types and values (ADR-0018 D5, D6)
 
@@ -133,7 +135,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0316 | error | takes one argument | Checker |
 | JSC0317 | error | strings are only require messages and utf8("…") arguments | Checker |
 | JSC0318 | error | the type of None is unknown here: give it one (const o: Option<Int> = None) | Checker |
-| JSC0319 | error | ' … ' comes in a later part of M2 of .jsc 2 (ADR-0018 §8) | Checker |
+| JSC0319 | error | params is read by its fields: params.f (ADR-0009 D1) | Checker |
 | JSC0320 | error | has no field | Checker |
 | JSC0321 | error | . … needs a record, a List or a Map, not | Checker |
 | JSC0322 | error | Some(None) is not allowed: an Option holds a value, and JavaScript cannot tell Some(None) from None (ADR-0018 D5) | Checker |
@@ -180,17 +182,27 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0414 | error | 'state' is the input state of an action, destroy or view | Checker |
 | JSC0415 | error | is part of the transaction: it is not available in a view or fn (pass it as an argument) | Checker |
 | JSC0416 | error | the modifier ' … ' is given twice | Checker |
-| JSC0417 | error | a batched action cannot use ' … ': the batcher, not the caller, signs a batch: check the caller in the body with require(caller == …, …) / the batcher sets a batch's window: check time in the body with require(after(…), …) or require(before(…), …) (ADR-0004 D1). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
+| JSC0417 | error | a batched action cannot use ' … ': the batcher, not the caller, signs a batch: check the caller in the body with require(caller == …, …) / the batcher sets a batch's window: check time in the body with require(after(…), …) or require(before(…), …) (ADR-0004 D1) / (quorum, authorized, M2b) an intent's owner is its caller, and the batcher, not the caller, signs a batch (ADR-0009, ADR-0004 D1). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
 | JSC0418 | error | only an action can be batched (ADR-0004 D1) | Checker |
 | JSC0419 | error | a contract with BigMap state cannot have batched actions: each step of a batch would need its own map proofs (ADR-0004 D1, ADR-0018 D7) | Checker |
 | JSC0420 | error | … can pay out, so it must say who may call it; a batched action cannot use 'only' (any intent's owner is its caller), so write 'open' and check the caller in the body (ADR-0018 D4). Note: an intent authorises its action until its deadline, against the state a batcher applies it to, in the batcher's order (ADR-0004 §3): keep deadlines short and bound order-sensitive arguments | Checker |
 | JSC0422 | error | accept states the native assets a method takes in, so the method must be payable (ADR-0007 D1) | Checker |
 | JSC0423 | error | … is payable and uses funds, send, mint or burn, so it can take native assets: state exactly which with accept(…), or accept(Value.none()) for none (ADR-0007 r2, ADR-0018 D4) | Checker |
 | JSC0424 | error | a contract with native assets (a method uses funds, send, mint, burn or accept) cannot have batched actions: intents carry only lovelace (ADR-0007 r2, ADR-0018 D4) | Checker |
+| JSC0425 | error | a batched action cannot emit events: an intent's owner is its caller, not an authenticated signer of the batch (ADR-0009 D5) | Checker (M2b) |
 | JSC0426 | error | accept in an init is not supported yet … / a payable init that uses funds would take native assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred) | Checker |
 | JSC0427 | error | funds is part of the transaction: it is not available in a view or fn (pass what you need as an argument) | Checker |
 | JSC0429 | error | send(to, value, datum) comes with datum encoders in a later part of M2: send(to, value) sends without a datum | Parser |
 | JSC0430 | error | a require message may not contain '#word:', the form of the checks the lowering generates (ADR-0018 D12): reword it | Checker |
+| JSC0431 | error | the params are declared once: params { … } | Parser (M2b) |
+| JSC0432 | error | the params need at least one field: params { fee: Int } | Checker (M2b) |
+| JSC0433 | error | params is not available in a fn: pass params.… as an argument | Checker (M2b) |
+| JSC0434 | error | the contract declares no params { … }, so there is no params.… / ' … params.…': the contract declares no params { … } | Checker (M2b) |
+| JSC0435 | error | a contract with BigMap state cannot have invariants: on chain only the opened reads are visible, so the JVM and the chain would disagree (ADR-0009 D4) | Checker (M2b) |
+| JSC0436 | error | a contract with invariants cannot have batched actions: a batch passes through intermediate states the validator does not check (ADR-0009 D4) | Checker (M2b) |
+| JSC0437 | error | a batched action cannot read params yet (ADR-0009 D1): pass the value as an argument | Checker (M2b) |
+| JSC0438 | error | the contract declares no events: declare one with event Name { field: Type } (ADR-0009 D5) | Checker (M2b) |
+| JSC0439 | error | 'quorum … ': the keys and the threshold are both state fields or both params fields (ADR-0009 D2) | Checker (M2b) |
 
 ## Time (ADR-0018 D11, J6)
 
@@ -219,6 +231,8 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0521 | error | a time value cannot be a … mint / burn quantity: it must be positive, so its sign would decide whether the call fails (ADR-0018 D11) | Checker |
 | JSC0522 | error | a time value cannot be any part of an accepted value: it must equal exactly the native assets the call receives (ADR-0018 D11) | Checker |
 | JSC0523 | error | a time value cannot decide whether … is Some or None (ADR-0018 D11) | Checker |
+| JSC0524 | error | ' … ': … holds a time value, so who may call would depend on a validity window; a quorum or authorized field is never a time value (ADR-0018 D11) | Checker (M2b) |
+| JSC0525 | error | an invariant cannot depend on a time value: whether a state is accepted would then move with a validity window (ADR-0018 D11) | Checker (M2b) |
 
 ## Functions and recursion (ADR-0018 D7, J9)
 
@@ -365,3 +379,4 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC9005 | warning | a time value sets this payout: whoever submits the transaction chooses the … window, so validFrom can be up to maxValidityMs early and validTo that much late, and the … amount moves with it (ADR-0018 D11) | Checker |
 | JSC9006 | warning | this file is .jsc v1, which is deprecated (ADR-0018 D16): it still builds, unchanged, but new code is .jsc 2; run `joust migrate` (Gradle: the migrateJsc task) to translate it, as a new script | JscMain (every v1 file, both paths) |
 | JSC9007 | warning | this line starts with '-', which continues the expression on the line above (a subtraction): newlines do not end statements in .jsc; if that is meant, join the lines or put the expression in parentheses; if the line is meant to stand alone, end the line above with ';' | Checker |
+| JSC9008 | warning | this event carries a time value: whoever submits the transaction chooses the window, so a value of it can be up to maxValidityMs early or late (ADR-0018 D11) | Checker (M2b) |
