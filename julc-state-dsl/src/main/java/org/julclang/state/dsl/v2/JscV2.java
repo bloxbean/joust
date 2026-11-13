@@ -29,7 +29,7 @@ public final class JscV2 {
      * and the sites of the generated checks (D12, M1e: each on-chain message key with its {@code .jsc} position).
      */
     public record Lowered(String java, List<Warning> diagnostics, Set<String> recursiveFns, String fileName, String javaPath,
-                          String sourceMapJson, String abiJson, String irJson, List<Site> messages) {
+                          String sourceMapJson, String abiJson, String irJson, List<Site> messages, List<LibraryUse> libraries) {
         /** For each generated Java line (1-based) with a source: {@code [javaLine, jscLine, jscCol]}. */
         public List<int[]> sourceMap() {
             return Abi.sourceMap(java, fileName);
@@ -56,6 +56,19 @@ public final class JscV2 {
         /** The warnings, each formatted {@code file:line:col: warning: message}. */
         public List<String> warnings() {
             return diagnostics.stream().map(w -> w.format(fileName)).toList();
+        }
+    }
+
+    /**
+     * A library a lowering used (ADR-0018 D9, J12), for {@code joust.lock} and the build report: {@code kind} {@code jsc}
+     * or {@code java}; {@code name} the module id of a {@code .jsc} library ({@code app/fees.jsc}, or
+     * {@code pkg:@acme/fees/fees.jsc} from an npm package) or {@code java:<class>}; the SHA-256 of its on-chain sources
+     * (a {@code .jsc} library's text; a Java library's certified sources, {@code JavaLibraryCertifier.hash}).
+     */
+    public record LibraryUse(String kind, String name, String sha256) {
+        /** Whether it comes from outside the project's sources (an npm package, a Java library): what joust.lock pins. */
+        public boolean external() {
+            return kind.equals("java") || name.startsWith(JscModules.PACKAGE);
         }
     }
 
@@ -171,8 +184,12 @@ public final class JscV2 {
         String javaPath = p.pkg().replace('.', '/') + "/" + p.name() + ".java";
         var sites = new java.util.ArrayList<Site>();
         for (JavaEmitter.Check c : e.checks()) sites.add(new Site(c.message(), c.kind(), c.pos().line(), c.pos().col(), c.in(), c.what(), c.file()));
+        var uses = new java.util.ArrayList<LibraryUse>();
+        for (Ir.Library l : p.libraries()) uses.add(new LibraryUse("jsc", l.id() != null ? l.id() : l.qualified(), l.sourceSha256()));
+        for (Ir.JavaLib j : p.javaLibraries()) uses.add(new LibraryUse("java", "java:" + j.fqcn(), j.sourceSha256()));
         return new Lowered(e.java(), warnings, p.recursiveFns(), fileName, javaPath, Abi.sourceMapJson(e.java(), fileName, javaPath, e.checks()),
-                p.library() ? null : Abi.of(p), p.library() ? null : IrJson.write(p, IrJson.sourceHash(source)), List.copyOf(sites));
+                p.library() ? null : Abi.of(p), p.library() ? null : IrJson.write(p, IrJson.sourceHash(source)), List.copyOf(sites),
+                List.copyOf(uses));
     }
 
     /** The reference interpreter (D15) of a {@code .jsc} 2 source, over the same checked IR the lowering reads. */

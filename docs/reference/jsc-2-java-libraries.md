@@ -16,7 +16,10 @@ it; `JscV2JavaLibraryTest` tests every entry.
 | Path | The library's sources | The JVM side |
 |---|---|---|
 | Gradle (plugin `org.julclang.joust`, or `examples/dsl`'s build) | the `joustLibrary` configuration: each jar's `META-INF/plutus-sources/**/*.java`, extracted to `build/joust/library-sources` | compiled from those sources into the project (they are a source directory of `main`); the jar's own classes are never used |
-| npm (M4c) | an npm package's `joust-lib/` | the npm engine runs transitions as UPLC programs (ADR-0015 D3), compiled from the same sources |
+| npm (M4c) | an npm package's `joust-lib/<package path>/<Class>.java` (`joust build` collects every package's `joust-lib/`) | the npm engine runs transitions as UPLC programs (ADR-0015 D3), compiled from the same sources; there are no JVM classes to substitute |
+
+Either way, `joust.lock` (npm) or the `--lock` of `generateJsc` (Gradle) pins each imported Java library by the
+SHA-256 of its certified sources (J12; `JSC0731`, `JSC0732`).
 
 **One body on both sides.** On Gradle the JVM runs classes compiled from the certified sources, and JuLC compiles the
 same sources into the validator and the transition programs.

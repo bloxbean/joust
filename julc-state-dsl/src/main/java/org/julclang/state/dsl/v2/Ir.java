@@ -141,7 +141,13 @@ final class Ir {
      * SHA-256 of its text, and its checked declarations.
      */
     record Library(String qualified, String fileName, String sourceSha256, Map<String, RecordType> records,
-                   Map<String, EnumType> enums, List<Fn> fns) {
+                   Map<String, EnumType> enums, List<Fn> fns, String id) {
+        /** A library known by its declarations only (read from an IR export, which does not carry its module id). */
+        Library(String qualified, String fileName, String sourceSha256, Map<String, RecordType> records, Map<String, EnumType> enums,
+                List<Fn> fns) {
+            this(qualified, fileName, sourceSha256, records, enums, fns, null);
+        }
+
         /** The class's simple name ({@code Fees}). */
         String simpleName() {
             return qualified.substring(qualified.lastIndexOf('.') + 1);

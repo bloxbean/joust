@@ -54,7 +54,18 @@ def generateJsc = tasks.register('generateJsc', JavaExec) {
     inputs.dir(jscSrc)
     inputs.dir(librarySources)
     outputs.dir(jscOut)
-    args jscSrc.path, jscOut.get().asFile.path, '--java-libraries', librarySources.get().asFile.path
+    inputs.file(file('joust.lock')).optional()
+    args jscSrc.path, jscOut.get().asFile.path, '--java-libraries', librarySources.get().asFile.path, '--lock', file('joust.lock').path
+}
+// ADR-0018 J12: joust.lock pins every library from outside the sources (the java: ones here) by its sources' hash; only
+// this task writes it, to be reviewed and committed.
+tasks.register('acceptJoustLock', JavaExec) {
+    description = 'Writes joust.lock: the SHA-256 of every library from outside the sources this build uses'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    dependsOn extractJoustLibraries
+    args jscSrc.path, layout.buildDirectory.dir('tmp/acceptJoustLock').get().asFile.path, '--java-libraries', librarySources.get().asFile.path,
+            '--lock', file('joust.lock').path, '--accept-lock'
 }
 // ADR-0018 D12 (review F1): generateJsc never accepts an ABI manifest; a new or changed one is accepted only by running
 // this task, which writes the manifests beside the .jsc files to be reviewed and committed.

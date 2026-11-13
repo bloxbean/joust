@@ -7,10 +7,11 @@ import { loadToolchain } from './toolchain.js';
 
 const plain = (r) => JSON.parse(JSON.stringify(r, (k, v) => (typeof v === 'bigint' ? Number(v) : v)));
 
-parentPort.on('message', async ({ id, files, options, dir }) => {
+parentPort.on('message', async ({ id, files, options, dir, javaLibraries, packages }) => {
   try {
     const engine = await loadToolchain({ dir });
-    parentPort.postMessage({ id, result: plain(engine.joust.build({ files, options })) });
+    // ADR-0018 D9, D14 (M4): the npm packages' libraries (.jsc, by <package>/<path>) and Java library sources.
+    parentPort.postMessage({ id, result: plain(engine.joust.build({ files, options, javaLibraries: javaLibraries ?? {}, packages: packages ?? {} })) });
   } catch (e) {
     parentPort.postMessage({ id, error: String(e?.message ?? e) });
   }

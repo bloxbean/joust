@@ -86,7 +86,12 @@ public final class Toolchain {
      * with its source map, ABI manifest and checked IR ({@code .jsc} 2, ADR-0018 D12, D15; null for v1). {@code javaFile} is
      * {@code a/b/Name.java}.
      */
-    public record Generated(String jscFile, String javaFile, String java, String sourceMapJson, String abiJson, String irJson) {}
+    public record Generated(String jscFile, String javaFile, String java, String sourceMapJson, String abiJson, String irJson,
+                            List<org.julclang.state.dsl.v2.JscV2.LibraryUse> libraries) {
+        public Generated(String jscFile, String javaFile, String java, String sourceMapJson, String abiJson, String irJson) {
+            this(jscFile, javaFile, java, sourceMapJson, abiJson, irJson, List.of());
+        }
+    }
 
     /**
      * The build's result: the contracts, the plain validators, every diagnostic ({@code ok} when there is no error), and
@@ -129,10 +134,20 @@ public final class Toolchain {
      * sources are on Gradle's processor path.
      */
     public static Result build(Map<String, String> files, Map<String, String> options, Map<String, String> javaLibrarySources) {
+        return build(files, options, javaLibrarySources, Map.<String, String>of());
+    }
+
+    /**
+     * As above, with the {@code .jsc} libraries of the project's npm packages ({@code packages}: by
+     * {@code <package>/<path>}, the path inside the package's {@code joust-lib/}; ADR-0018 D14, M4c), which
+     * {@code import { fee } from "@acme/fees/fees.jsc"} names.
+     */
+    public static Result build(Map<String, String> files, Map<String, String> options, Map<String, String> javaLibrarySources,
+                               Map<String, String> packages) {
         var generated = new ArrayList<Generated>();
         Result r;
         try {
-            r = build(files, options, javaLibrarySources, generated);
+            r = build(files, options, javaLibrarySources, packages, generated);
         } catch (StackOverflowError e) {
             // A safety net past the front end (javac, the processor, JuLC): the build fails with a diagnostic, it does not
             // crash its caller (the npm CLI's engine, an editor) (ADR-0018 J18, review S2).
@@ -204,12 +219,12 @@ public final class Toolchain {
     }
 
     private static Result build(Map<String, String> files, Map<String, String> options, Map<String, String> javaLibrarySources,
-                                List<Generated> generatedOut) {
+                                Map<String, String> packages, List<Generated> generatedOut) {
         var diagnostics = new ArrayList<Diagnostic>();
         // 1. .jsc → Java. A .jsc 2 file's ./x.jsc imports name other files of the build, by path (ADR-0018 D9, M4); its
         //    java: imports name certified Java libraries (M4b), certified once, when the first one is needed.
         var sources = new LinkedHashMap<String, String>();
-        var modules = org.julclang.state.dsl.v2.JscModules.of(files);
+        var modules = org.julclang.state.dsl.v2.JscModules.of(files, packages);
         var certified = new Map[1];
         org.julclang.state.dsl.v2.JavaLibraries javaLibraries = fqcn -> {
             if (certified[0] == null) certified[0] = javaLibrarySources.isEmpty() ? Map.of() : JavaLibraryCertifier.certify(javaLibrarySources);
@@ -224,7 +239,7 @@ public final class Toolchain {
                     var lowered = JscMain.lowerWithWarnings(text, base, name.replace('\\', '/'), modules, javaLibraries);
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());
                     generatedOut.add(new Generated(name, javaPath(lowered.java(), name), lowered.java(), lowered.sourceMapJson(), lowered.abiJson(),
-                            lowered.irJson()));
+                            lowered.irJson(), lowered.libraries()));
                     // ADR-0018 D12: warnings reach the npm path with their line and column (F13).
                     for (var w : lowered.diagnostics()) {
                         diagnostics.add(new Diagnostic(Severity.WARNING, w.message(), name, w.line(), w.col(), "jsc", w.code()));
@@ -240,6 +255,33 @@ public final class Toolchain {
                 sources.put(name, text);
             }
         });
+        // 1b. The .jsc libraries of npm packages the build imports (each contract's IR lists them, transitively; M4c): lowered
+        //     once each, by their package path, and compiled with the project's sources, as a project's own library is.
+        var packageLibraryPaths = new java.util.HashSet<String>();
+        if (!hasErrors(diagnostics)) {
+            var done = new java.util.HashSet<String>();
+            for (Generated g : List.copyOf(generatedOut)) {
+                for (var use : g.libraries()) {
+                    String id = use.name();
+                    if (!id.startsWith(org.julclang.state.dsl.v2.JscModules.PACKAGE) || !done.add(id)) continue;
+                    String text = packages.get(id.substring(org.julclang.state.dsl.v2.JscModules.PACKAGE.length()));
+                    try {
+                        var lowered = JscMain.lowerWithWarnings(text, id.substring(id.lastIndexOf('/') + 1), id, modules, javaLibraries);
+                        String path = javaPath(lowered.java(), id);
+                        if (sources.containsKey(path)) {
+                            diagnostics.add(new Diagnostic(Severity.ERROR, "the library " + id.substring(4) + " is the class " + path
+                                    + ", which the project also declares", g.jscFile(), 1, 1, "jsc", "JSC0709"));
+                            continue;
+                        }
+                        sources.put(path, lowered.java());
+                        packageLibraryPaths.add(path);
+                    } catch (org.julclang.state.dsl.JscException e) {
+                        // Checked already, at the import (JSC0712): reported at the first importer.
+                        diagnostics.add(new Diagnostic(Severity.ERROR, e.getMessage(), g.jscFile(), 1, 1, "jsc", e.code));
+                    }
+                }
+            }
+        }
         if (hasErrors(diagnostics)) return new Result(false, List.of(), diagnostics);
 
         // 2. JuLC's library pool, as on Gradle's processor path: JOUST's API sources (and any other on-chain library
@@ -256,6 +298,7 @@ public final class Toolchain {
         // (review F13: two packages may each have a Foo.java) and can be remapped to the .jsc file.
         var generatedPaths = new java.util.HashSet<String>();
         for (Generated g : generatedOut) generatedPaths.add(g.javaFile());
+        generatedPaths.addAll(packageLibraryPaths);
         // Hand-written Java is named by the path the build was given (review F15: other/Zed.java declaring Foo is
         // reported as other/Zed.java, not Foo.java).
         sources.forEach((name, t) -> {

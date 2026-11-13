@@ -6,6 +6,7 @@ JOUST's DSL (`.jsc`), built with npm only. No JDK, JRE or GraalVM: the compiler 
 ```sh
 npm create joust my-app && cd my-app && npm install
 npx joust build      # contracts/ -> build/joust/ (validators, descriptions, typed clients, contracts.json)
+npx joust test       # build, then test/*.test.js offline (an in-memory ledger: @julclang/joust/test)
 npx joust deploy     # publishes the reference scripts; writes build/joust/deployments.<network>.json
 npx joust migrate    # .jsc v1 files -> .jsc 2, into build/joust/migrated/ (--in-place: replaces them, keeps <Name>.jsc.v1)
 ```
@@ -13,6 +14,11 @@ npx joust migrate    # .jsc v1 files -> .jsc 2, into build/joust/migrated/ (--in
 A `.jsc` 2 contract's ABI manifest (`<Contract>.abi.json`, beside it) is committed; a build whose manifest is missing or
 different fails until it is accepted with `joust build --accept-abi` (ADR-0018 D12). A build warns when a recorded
 deployment's script is not the one it produces (a migrated or changed contract: earlier instances stay on the old one).
+
+npm packages can ship on-chain libraries under `joust-lib/` (`.jsc` libraries, imported as `"@acme/fees/fees.jsc"`, and
+Java library sources, imported with `java:`). `joust.lock`, committed at the project's root, pins each of them by the
+hash of its on-chain sources; a build with a library that is not pinned, or that changed, fails until it is accepted with
+`joust build --accept-lock` (ADR-0018 J12). `joust build --traces` keeps the contracts' traces in the scripts.
 
 ## `joust dev`
 

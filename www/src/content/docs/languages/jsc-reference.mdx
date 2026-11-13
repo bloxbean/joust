@@ -315,6 +315,32 @@ contract Shop {
 | Artifacts | A library has no ABI manifest of its own: each contract's manifest states the library types its datum and redeemers reach (`"kind": "library"`, with the library's class). Each contract's IR export carries the libraries it imports (format 2), so the JavaScript reference interpreter evaluates their fns, and its message map lists a library's messages with the library's file (`"file": "fees.jsc"`) |
 | Identity | A library's package and file name are its class, which importing files and Java contracts name: renaming either is a code change of every importer, and may change the scripts that use it (bloxbean/julc#328), as a contract's package does |
 
+### Library packages and `joust.lock`
+
+An npm package ships libraries under its `joust-lib/` folder: `.jsc` libraries, and the on-chain sources of Java
+libraries (`joust-lib/<package path>/<Class>.java`). A `.jsc` file imports a package's `.jsc` library by the package
+name and the path under `joust-lib/`, and a Java library by its class:
+
+```jsc
+import { fee } from "@acme/fees/fees.jsc"        // node_modules/@acme/fees/joust-lib/fees.jsc
+import { cap } from "java:acme.allow.Limits"      // node_modules/<any package>/joust-lib/acme/allow/Limits.java
+```
+
+A package library's own relative imports stay inside its package (`JSC0706`). A Java library from a package is
+certified like one from Gradle's `joustLibrary`, and the same codes apply.
+
+**`joust.lock`** (committed at the project's root) pins every library that comes from **outside the project's sources**
+by the SHA-256 of its on-chain sources: a package's `.jsc` library (with the libraries it imports) or a Java library's
+certified sources (ADR-0018 J12). `joust build` lists every library it used with its hash. It fails with `JSC0731` when
+such a library is not pinned, and with `JSC0732` when its sources differ from the pin. Review the library, then run
+`joust build --accept-lock`, which writes the lock to commit. The project's own `.jsc` libraries are part of its sources
+and are not pinned. On Gradle, `generateJsc` checks `joust.lock` for the `joustLibrary` libraries, and `acceptJoustLock`
+writes it.
+
+```json
+{ "lock": 1, "libraries": { "@acme/fees/fees.jsc": "…64 hex…", "java:acme.allow.Limits": "…64 hex…" } }
+```
+
 ## Java libraries (`java:`)
 
 A `.jsc` file may import the public static methods and records of a Java (JuLC) on-chain library whose **on-chain

@@ -88,8 +88,9 @@ test('a guard naming this copy, where the project resolves to this copy, runs no
   writeFileSync(join(root, 'joust.config.json'), '{}');
   symlinkSync(fileURLToPath(new URL('..', import.meta.url)), join(root, 'node_modules', '@julclang', 'joust'));
   const r = run(root, ['test'], { JOUST_DEFERRED: SELF });
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /run npm test/);
+  // It runs here, at the project's root: joust test builds first, and this project has no contracts.
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /no \.java or \.jsc contracts under .*self[\/\\]contracts/);
 });
 
 test('without the project\'s package, or in a Gradle build, the npm joust refuses rather than acting', () => {
@@ -125,8 +126,9 @@ test('this copy as the project\'s own runs the command itself', () => {
   symlinkSync(fileURLToPath(new URL('..', import.meta.url)), join(root, 'node_modules', '@julclang', 'joust'));
   mkdirSync(join(root, 'sub'));
   const r = run(join(root, 'sub'), ['test']);
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /npm joust has no test command; run npm test/);
+  // Run by this copy, at the project's root (not the working directory): the build finds no contracts there.
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /no \.java or \.jsc contracts under .*own[\/\\]contracts/);
 });
 
 test('new runs nothing and says what does', () => {

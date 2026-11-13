@@ -102,6 +102,44 @@ export function parseTx(hex) {
   };
 }
 
+/**
+ * A transaction as an in-memory ledger reads it (ADR-0018 D14, M4c: @julclang/joust/test): parseTx's view, plus what
+ * applying it needs: each output's inline datum as CBOR hex and its reference script ({ hash, cbor }: the script as
+ * Blockfrost's /scripts/{hash}/cbor serves it), and the vkey witnesses ({ vkey, signature }, hex).
+ */
+export function ledgerTx(hex) {
+  const view = parseTx(hex);
+  const tx = Serialization.Transaction.fromCbor(hex);
+  const outs = tx.body().outputs();
+  view.rawOutputs = outs.map((o) => {
+    const datum = o.datum();
+    const inline = datum?.asInlineData?.();
+    const ref = o.scriptRef();
+    let script = null;
+    if (ref) {
+      const plutus = ref.asPlutusV3?.() ?? ref.asPlutusV2?.() ?? ref.asPlutusV1?.();
+      if (plutus) script = { hash: ref.hash(), cbor: plutus.rawBytes() };
+    }
+    return { inlineDatum: inline ? inline.toCbor() : null, scriptRef: script };
+  });
+  view.vkeys = (tx.witnessSet().vkeys()?.values() ?? []).map((w) => ({ vkey: w.vkey(), signature: w.signature() }));
+  return view;
+}
+
+/** Whether a vkey witness signs a transaction id (Ed25519, as the ledger checks it). */
+export async function verifyWitness(vkeyHex, signatureHex, txHashHex) {
+  const crypto = await import('@cardano-sdk/crypto');
+  await crypto.ready();
+  return crypto.Ed25519PublicKey.fromHex(vkeyHex).verify(crypto.Ed25519Signature.fromHex(signatureHex), txHashHex);
+}
+
+/** The key hash of a vkey (blake2b-224 of its bytes). */
+export async function vkeyHash(vkeyHex) {
+  const crypto = await import('@cardano-sdk/crypto');
+  await crypto.ready();
+  return crypto.Ed25519PublicKey.fromHex(vkeyHex).hash().hex();
+}
+
 /** The transaction's id: the hash of its body's own bytes (never a re-encoding). */
 export function txHash(hex) {
   return Serialization.Transaction.fromCbor(hex).getId();

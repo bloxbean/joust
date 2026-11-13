@@ -200,6 +200,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   Gradle takes it through `joustLibrary` (sources only, compiled into the project; `checkJoustLibraries`,
   `recordJoustLibraries`); `examples/dsl` imports `examples/compliance`. Interpreters give no answer for `CallJava`
   (three legs in `FourWay.threeLegs`). Rules and catalogue: `docs/reference/jsc-2-java-libraries.md`.
+- ADR-0018 M4c: npm packages ship libraries under `joust-lib/` (`"@acme/fees/fees.jsc"`; module ids `pkg:…`);
+  `joust.lock` (root, committed) pins only external libraries (`--accept-lock`, Gradle `acceptJoustLock`; `examples/dsl`
+  has one). Offline tests: `@julclang/joust/test` (`js/joust/src/test/offline.js`), phase 2 by the runtime engine's
+  `joust.evaluate`/`joust.attacks` (`Offline.java`). Nested `node --test` runs need `NODE_TEST_CONTEXT` removed.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

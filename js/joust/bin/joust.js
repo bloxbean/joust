@@ -12,7 +12,7 @@
 // ADR-0017 D5/D9: version, help (also `<cmd> --help`) and new are answered here and never run project code. Project
 // commands run at the npm project's root, and by the project's own @julclang/joust: a global or other copy hands over.
 import { spawnSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { constants } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { locate, resolveJoust } from '../src/project.js';
@@ -26,7 +26,8 @@ delete process.env.JOUST_DEFERRED;
 const handedOver = deferredTo === SELF;
 
 const COMMANDS = {
-  build: 'build [--accept-abi]        compile contracts/ (.java, .jsc) into build/joust/',
+  build: 'build [--accept-abi] [--accept-lock] [--traces]   compile contracts/ (.java, .jsc) into build/joust/',
+  test: 'test [-- <node --test args>]   build, then run test/*.test.js offline (an in-memory ledger: @julclang/joust/test)',
   deploy: 'deploy [--network <name>]   publish the reference scripts; write build/joust/deployments.<name>.json',
   dev: 'dev [--network <name>] [--port <port>] [--accept-abi]   build, deploy, rebuild on save, serve the page',
   serve: 'serve [--network <name>] [--dir <dir>] [--port <port>]   serve a built page with the chain API proxied',
@@ -114,7 +115,8 @@ async function project() {
   switch (cmd) {
     case 'build': {
       const { build } = await import('../src/build.js');
-      const r = await build({ src: flag('src') ?? config.contracts, out: flag('out') ?? config.out, acceptAbi: args.includes('--accept-abi') });
+      const r = await build({ src: flag('src') ?? config.contracts, out: flag('out') ?? config.out, acceptAbi: args.includes('--accept-abi'),
+        acceptLock: args.includes('--accept-lock'), traces: args.includes('--traces') });
       return r.ok ? 0 : 1;
     }
     case 'migrate': {
@@ -138,9 +140,23 @@ async function project() {
       process.on('SIGTERM', stop);
       return undefined;   // keeps running
     }
-    case 'test':
-      console.error('joust: the npm joust has no test command; run npm test');
-      return 2;
+    case 'test': {
+      // ADR-0018 D14 (M4c): build, then the project's tests (test/*.test.js) with Node's runner. They run offline when
+      // they use @julclang/joust/test (an in-memory ledger, the validators evaluated by the runtime engine); nothing here
+      // needs a chain.
+      const { build } = await import('../src/build.js');
+      const r = await build({ src: config.contracts, out: config.out, traces: args.includes('--traces') });
+      if (!r.ok) return 1;
+      const { readdirSync } = await import('node:fs');
+      const tests = existsSync('test') ? readdirSync('test').filter((f) => f.endsWith('.test.js')).sort().map((f) => `test/${f}`) : [];
+      if (!tests.length) {
+        console.error('joust test: no test/*.test.js');
+        return 1;
+      }
+      const t = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...(end >= 0 ? args.slice(end + 1) : []), ...tests],
+        { stdio: 'inherit', env: { ...process.env, JOUST_OFFLINE: '1' } });
+      return t.status ?? 1;
+    }
     default:
       console.error(`joust: unknown command '${cmd}' (this is the npm joust, @julclang/joust ${VERSION})\n\n${usage()}`);
       return 2;

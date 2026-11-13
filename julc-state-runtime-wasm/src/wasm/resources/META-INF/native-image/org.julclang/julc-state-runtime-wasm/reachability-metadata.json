@@ -1,5 +1,9 @@
 {
   "reflection": [
+    { "type": "org.julclang.state.runtime.wasm.Offline$EvaluateRequest", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.runtime.wasm.Offline$EvaluateResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.runtime.wasm.Offline$Attack", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
+    { "type": "org.julclang.state.runtime.wasm.Offline$AttackResult", "allDeclaredFields": true, "allDeclaredMethods": true, "allDeclaredConstructors": true },
     {
       "type": "org.julclang.state.runtime.wasm.Prepare$Contract",
       "allDeclaredFields": true,

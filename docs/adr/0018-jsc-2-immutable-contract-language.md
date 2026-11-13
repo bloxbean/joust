@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r19)
+**Status:** Proposed (r20)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -8,7 +8,7 @@ Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
 **Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76),
-M4a (`.jsc` libraries, r16) and M4b (`java:` imports, r19) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+M4a (`.jsc` libraries, r16), M4b (`java:` imports, r19) and M4c (packages, `joust.lock`, offline tests, r20) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -798,6 +798,32 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   validator evaluated and the attack suite, without DevKit. They need the Web Image engine to evaluate validators
   without a chain (entry gate of M4). The reference interpreter (D15) is a differential oracle and powers a fast
   `joust check`, not the offline tests.
+- **As built (r20, M4c).**
+  - **Library packages.** `import { fee } from "@acme/fees/fees.jsc"` names `node_modules/@acme/fees/joust-lib/fees.jsc`
+    (a package specifier: an npm name, then a path without `.` or `..` segments). Inside a package, relative imports
+    resolve within it and never leave it (JSC0712 at the importer, JSC0706 in the package). `joust build` hands the
+    toolchain every package's `joust-lib/`: its `.jsc` libraries, lowered and compiled with the project when a contract
+    imports them, and its `.java` files as Java library sources, which a `java:` import certifies as on Gradle. A package
+    library and the same library in the project build the same script.
+  - **`joust.lock` (J12).** Committed at the project's root: `{ "lock": 1, "libraries": { name: sha256 } }`. It pins only
+    the libraries from **outside the project's sources** (a package's `.jsc` library, a `java:` library: the hash of its
+    on-chain sources), since the project's own libraries are its code, under its version control. A build reports every
+    library with its hash; it fails on one not pinned (JSC0731) or changed (JSC0732), until `joust build --accept-lock`
+    (Gradle: `acceptJoustLock`) rewrites the lock to be reviewed and committed. On Gradle `generateJsc` checks the lock
+    for its `joustLibrary` libraries. The lock is a different file from the build's `build/joust/joust.lock.json`
+    (script hashes, not committed).
+  - **Offline tests.** `@julclang/joust/test`'s `offline({ contracts })` gives an in-memory ledger behind the provider
+    interface, a runtime over it, funded key wallets, and the generated clients' options. The ledger checks a
+    transaction as a node would (inputs unspent, validity interval, balance with fee and deposits, minimum ADA, key
+    witnesses, collateral) and has the **runtime engine** evaluate its scripts (`joust.evaluate`: JuLC's VM with the
+    ledger's cost model, the evaluator that prices transactions), so phase 2 runs the validator the build produced. On
+    each script transaction it runs the attack suite (`joust.attacks`, the mutations of the JVM testkit's `Attacks`: the
+    state's datum replaced or hashed, value skimmed, token dust, a key address, a stake credential, an output dropped,
+    the signer replaced, and the validity bounds moved or removed when the call read its window), which the scripts must
+    refuse. `joust test` builds and runs `test/*.test.js` with Node's runner; the template's test is offline, and its
+    DevKit test moved to `test/devkit/`. The ledger has no rewards, no governance and no certificates beyond stake
+    registration; tests of those run on DevKit.
+  - **`joust build --traces`** keeps the contracts' traces (`-Pjoust.traces` on Gradle).
 
 ### D15. Correctness: a written semantics and an independent interpreter
 
@@ -1266,3 +1292,8 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   records; the `joustLibrary` configuration, the duplicate-class check and two sources of a class refused; downstream
   class loading as a check of the defining bytes, not an isolated loader (the typed client API); no answer in the
   interpreters, three legs for Java calls, per-function vectors.
+- **r20** (2026-11-13, M4c: packages, the lock, offline tests): D14 records the library packages (`joust-lib/`, package
+  specifiers, relative imports kept inside a package, Java sources from packages certified as on Gradle), `joust.lock`
+  as built (only libraries from outside the sources; JSC0731/JSC0732; `--accept-lock`, `acceptJoustLock`), the offline
+  tests (an in-memory ledger whose phase 2 is the runtime engine's `joust.evaluate`, the attack suite as
+  `joust.attacks`, `joust test`, the template's test offline), and `joust build --traces`.

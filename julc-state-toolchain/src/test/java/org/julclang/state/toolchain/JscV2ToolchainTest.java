@@ -42,6 +42,42 @@ class JscV2ToolchainTest {
         }
     }
 
+    /**
+     * ADR-0018 D14 (M4c): a .jsc library of an npm package, imported by package specifier, is lowered and compiled with
+     * the project, its class linted as a generated library; the same library inside the project builds the same script.
+     */
+    @Test
+    void anNpmPackagesJscLibrary_buildsAsTheProjectsOwnWould() {
+        String fees = "jsc 2\nlibrary acme.fees\n\nfn fee(amount: Int, bps: Int): Int = amount * bps / 10_000\n";
+        String shop = """
+                jsc 2
+                package app
+
+                import { fee } from "%s"
+
+                contract Shop {
+                  state { owner: Key, price: Int }
+                  init(price: Int) { return { owner: caller, price } }
+                  action buy() payable {
+                    require(received >= price + fee(price, 100), "pay the price and the fee")
+                    return state
+                  }
+                }
+                """;
+        var fromPackage = Toolchain.build(Map.of("app/Shop.jsc", shop.formatted("@acme/fees/fees.jsc")), Map.of(), Map.of(),
+                Map.of("@acme/fees/fees.jsc", fees));
+        assertTrue(fromPackage.ok(), fromPackage.diagnostics().toString());
+        var uses = fromPackage.generated().get(0).libraries();
+        assertEquals("pkg:@acme/fees/fees.jsc", uses.get(0).name());
+        assertTrue(uses.get(0).external());
+        // The same library in the project's sources (its own package directory): the same script, not pinned.
+        var local = Toolchain.build(Map.of("app/Shop.jsc", shop.formatted("../acme/fees.jsc"), "acme/fees.jsc", fees), Map.of());
+        assertTrue(local.ok(), local.diagnostics().toString());
+        assertEquals(local.contracts().get(0).scriptHash(), fromPackage.contracts().get(0).scriptHash());
+        assertFalse(local.generated().stream().filter(g -> g.jscFile().equals("app/Shop.jsc")).findFirst().orElseThrow()
+                .libraries().get(0).external());
+    }
+
     @Test
     void errorsKeepTheirJscLineAndColumn() {
         var r = Toolchain.build(Map.of("t/Bad.jsc", """

@@ -151,6 +151,9 @@ public class JoustPlugin implements Plugin<Project> {
             t.getOutputs().dir(out).withPropertyName("java");
             t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), out.get().getAsFile().getAbsolutePath()));
             t.getArgumentProviders().add(javaLibraries);
+            // ADR-0018 J12: joust.lock pins the libraries from outside the sources; a mismatch fails the build.
+            t.getInputs().files(project.files("joust.lock")).withPropertyName("lock");
+            t.getArgumentProviders().add(() -> List.of("--lock", project.file("joust.lock").getAbsolutePath()));
         });
         // ADR-0018 D12 (review F1): generateJsc never accepts a .jsc 2 file's ABI manifest (Name.abi.json beside it); a
         // missing or changed one fails it. Only this task accepts: it writes the manifests, to be reviewed and committed.
@@ -173,6 +176,18 @@ public class JoustPlugin implements Plugin<Project> {
         // Java) is a resource beside its classes, so the runtime names the .jsc sites of a refusal.
         project.getTasks().named(main.getProcessResourcesTaskName(), org.gradle.language.jvm.tasks.ProcessResources.class,
                 t -> t.from(project.files(out).builtBy(generate), spec -> spec.include("**/*.jscmap.json")));
+        // ADR-0018 J12: only this task writes joust.lock (to be reviewed and committed); no property switches the check off.
+        Provider<Directory> lockScratch = project.getLayout().getBuildDirectory().dir("tmp/acceptJoustLock");
+        project.getTasks().register("acceptJoustLock", JavaExec.class, t -> {
+            t.setGroup("build");
+            t.setDescription("Writes joust.lock: the SHA-256 of every library from outside the sources the build uses");
+            t.setClasspath(tool);
+            t.getMainClass().set("org.julclang.state.dsl.JscMain");
+            t.dependsOn(extract);
+            t.getArgumentProviders().add(() -> List.of(src.getAbsolutePath(), lockScratch.get().getAsFile().getAbsolutePath(), "--lock",
+                    project.file("joust.lock").getAbsolutePath(), "--accept-lock"));
+            t.getArgumentProviders().add(javaLibraries);
+        });
         // ADR-0018 D12 (review F12, S10): after compileJava, every .jsc 2 file's ABI manifest is checked against the
         // processor's description of its contract (META-INF/joust/<package>.<Contract>.json), as the npm toolchain
         // checks it at every build; part of check, so of build.
