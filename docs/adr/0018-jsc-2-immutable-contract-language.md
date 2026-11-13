@@ -456,7 +456,19 @@ import { concat, slice, length } from "std/bytes"
     variants; JSC0710 otherwise); a library's values flow without an import (a fn may return a record whose type the
     caller did not import). The declarations of a build (a contract and every library it imports, transitively) share
     one namespace (JSC0709), so every name in the IR means one declaration; a binding may take the name of a library
-    declaration the file does not import. `std` imports are per file.
+    declaration the file does not import. `std` imports are per file. *(r16, amended in review r2.)* The generated Java
+    names a library by its simple class name, so no binding (parameter, const, lambda parameter, match binding, state
+    field) takes a library's class name, where it would obscure the class (JLS 6.4.2) and could turn `Fees.fee()` into
+    a record accessor (Codex C1), and the libraries of one build have distinct class names, whatever their packages
+    (Codex C2): both JSC0709. *Known limit:* with one namespace per build, two third-party libraries that declare the
+    same name (or share a file name) cannot be used together, and the user cannot rename either; there is no aliasing.
+    The planned fix is qualified names in the IR (a format 3) and qualified references in the generated Java (design
+    F3, recorded for M4c's packages too).
+  - **Java callers (r16, amended).** A `.jsc` library's fns are checked on the assumption that D5's ingress checks
+    have run (a `Key` is 28 bytes, a `Hash` 28 or 32, a map canonical). Only `.jsc` callers guarantee that: a Java
+    contract builds `new Fees.Line(anyBytes, …)` unchecked. Both sides run the same code, so this is no JVM/on-chain
+    divergence, but it is a precondition a Java caller must meet itself (security S1; checked factories are a
+    follow-up).
   - **Checking.** A library is checked on its own and again in each importer. D11 runs through library calls: a
     library fn called with a time value is checked with that parameter marked, in its own scope, and refused at the
     call. An error in a library is reported at the import that brings it into the build, naming the library's position
@@ -972,7 +984,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J17 | Data built from `.jsc` values (state, redeemers, `send` datums, memos) equals JuLC's encoding of the generated Java and the committed ABI manifest, and matches independent CBOR golden vectors | D5, D12 | encoder tests on the JVM, JS and on-chain; manifest comparison |
 | J18 | Off-chain evaluation of a transition is bounded (step or depth cap) in the prepare service and the batcher, and engines' stacks fit the deepest recursion the budget allows; the front end nests at most 64 levels on every path (JSC0149, JSC0150, JSC0340), reads `+`/`-`, `*`, `&&`, `\|\|` chains and else-if chains of any length without deeper recursion, and reports any stack exhaustion as JSC0005 (on the JVM) or an engine failure `joust build` reports (in the Web Image, whose `joust build` engine runs on an 8 MB worker), never a crash (r12) | D7, D12 | depth tests on the JVM and on a cold Web Image engine (Node's main thread; `joust build`'s worker) |
 | J19 | Every build reports each method's execution units and script size over measured scenarios (empty, small, saturated states; branch-covering inputs), names uncovered paths and unbounded arguments, warns above 80% of the protocol maximum, and calls a figure a bound only for an enumerated bounded domain | D12 | build-report tests |
-| J20 | Every generated check's message is a key of ABI facts and source order, unique within the script and mapped to exactly one `.jsc` construct by the message map; every string the linked script holds is in that map; no message holds a file name, line, column or name the author did not write in a `require` message, and no author's message contains a key's form; a trace is matched whole, and only against the refusing contract's map; layout, comments, the file's name and renames (in any order) leave the script hash unchanged, the package excepted (bloxbean/julc#328) (r12) | D12 | uniqueness and message-map tests; hash invariance under layout, comment, file-name and rename edits for every example; a changed condition changes the hash |
+| J20 | Every generated check's message is a key of ABI facts and source order, unique within the script and mapped to exactly one `.jsc` construct by the message map; every string the linked script holds is in that map; no message holds a file name, line, column or name the author did not write in a `require` message, and no author's message contains a key's form; a trace is matched whole, and only against the refusing contract's map; layout, comments, the file's name and renames (in any order) leave the script hash unchanged, the package excepted (bloxbean/julc#328), and a library's file name excepted, which is its class (D9; r12, r16 amended) | D12 | uniqueness and message-map tests; hash invariance under layout, comment, file-name and rename edits for every example; a changed condition changes the hash |
 
 ## 6. Alternatives considered
 
@@ -1260,6 +1272,12 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   named by the file, relative imports, scope and one namespace per build, D11 through library calls, errors at the
   import, the lowering to `@OnchainLibrary`, helpers per class rather than shared, the artifacts: manifest kind `library`,
   IR format 2, message-map files). The M4 entry gate was verified first (`runtimeWasmTest`, M4a report §0).
+- **r16 (amended)** (2026-11-13, M4a review round r2: Codex C1–C2, design F1–F3, security S1): D9 refuses a binding
+  named like a library's class (it obscured the class in the generated Java, and a record parameter's accessor ran in
+  place of the library fn on all three compiled legs) and two libraries of one class name in different packages (an
+  ambiguous Java import), both JSC0709. J20 excepts a library's file name, which is its class. D9 records one namespace
+  per build as a known limit with its planned fix (qualified IR names), and that Java callers of a `.jsc` library must
+  meet D5's ingress checks themselves.
 - **r19** (2026-11-13, M4b: `java:` imports): D9 records the Java imports as built: `byte[]` as `Bytes` and no maps in
   M4b; overloads refused; the trusted base made concrete (D8's table, `Require` and the adapters, an allow-list); three
   catalogue entries added (`equals`/`hashCode`/`toString`, record constructors, `BigInteger.mod`); verified and opaque

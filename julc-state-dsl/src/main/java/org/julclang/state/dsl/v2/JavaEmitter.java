@@ -56,6 +56,12 @@ final class JavaEmitter {
      * {@code IntentCall} variant ({@link Abi#intentOrder}; M1 integration, review S1).
      */
     private final Map<String, String> redeemers = new HashMap<>();
+    /**
+     * The words that mark a library class as generated from {@code .jsc}: the processor lints such a class (D1, J1;
+     * {@code JoustProcessor.JSC_LIBRARY_MARKER}, kept equal by {@code ProcessorDiagnosticsTest}, which lints a real
+     * lowering; design F2, r2).
+     */
+    static final String LIBRARY_MARKER = "by julc-state-dsl (ADR-0018, a .jsc 2 library)";
     private final Set<String> imports = new TreeSet<>();
     private final LinkedHashMap<String, String> helpers = new LinkedHashMap<>();
     private int counter;
@@ -189,7 +195,7 @@ final class JavaEmitter {
         out.append("package ").append(p.pkg()).append(";\n\n");
         for (String im : imports) out.append("import ").append(im).append(";\n");
         out.append("\n/**\n * GENERATED from ").append(p.fileName())
-                .append(" by julc-state-dsl (ADR-0018, a .jsc 2 library). Do not edit: change the .jsc file.\n */\n");
+                .append(" ").append(LIBRARY_MARKER).append(". Do not edit: change the .jsc file.\n */\n");
         out.append("@OnchainLibrary\n");
         out.append("public class ").append(p.name()).append(" {\n\n");
         out.append(records);
