@@ -312,4 +312,44 @@ class JscV2JavaLibraryR2Test {
         assertEquals(0, code, err.toString());
         assertTrue(Files.exists(dir.resolve("generated/lib/L.java")));
     }
+
+    /**
+     * Codex C20 (r4): a record's top-level class is held to the rules a library's class is. Codex's b.BigInteger (beside
+     * java.math.BigInteger), b.State (the generated state), b.Init (an annotation the generated code imports) and a type
+     * the contract declares are refused at the import (JSC0709); a top-level record naming itself is not.
+     */
+    @Test
+    void aRecordsClass_neverTakesAGeneratedOrDeclaredName() {
+        String body = "contract C {\n  state { n: Int }\n  init() { return { n: f(1).n } }\n}\n";
+        for (String owner : List.of("BigInteger", "State", "Init", "Box")) {
+            var sources = new LinkedHashMap<String, String>();
+            sources.put("lib/L.java", "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                    + "@OnchainLibrary\npublic class L {\n    public static b." + owner + ".R f(BigInteger n) { return new b." + owner + ".R(n); }\n}\n");
+            sources.put("b/" + owner + ".java", "package b;\npublic class " + owner + " {\n    public record R(java.math.BigInteger n) {}\n}\n");
+            var libs = JavaLibraryCertifier.certify(sources);
+            assertEquals(List.of(), libs.get("lib.L").problems(), owner);
+            String declared = owner.equals("Box") ? "type Box = { x: Int }\n" : "";
+            var e = refusedWith("jsc 2\npackage app\nimport { f } from \"java:lib.L\"\n" + declared + body, libs, "JSC0709");
+            assertTrue(e.getMessage().contains("imported as " + owner), owner + ": " + e.getMessage());
+        }
+        // Control: a top-level record is its own class.
+        var sources = new LinkedHashMap<String, String>();
+        sources.put("lib/L.java", "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static b.Duo f(BigInteger n) { return new b.Duo(n); }\n}\n");
+        sources.put("b/Duo.java", "package b;\npublic record Duo(java.math.BigInteger n) {}\n");
+        var ok = lower("jsc 2\npackage app\nimport { f } from \"java:lib.L\"\n" + body, JavaLibraryCertifier.certify(sources));
+        assertTrue(ok.java().contains("import b.Duo;"), ok.java());
+    }
+
+    /** Codex C21, security S6 (r4): annotation types and array element writes are refused by the certifier itself. */
+    @Test
+    void annotationTypesAndArrayWrites_areRefused() {
+        refused("public @interface A { byte[] TAG = new byte[]{1, 2}; }\n public static BigInteger f() { return BigInteger.ONE; }",
+                "is an annotation type");
+        refused("public @interface A { P DEFAULT = new P(new byte[]{1, 2}, BigInteger.ONE); }\n public static BigInteger f() { return BigInteger.ONE; }",
+                "is an annotation type");
+        for (String write : List.of("b[0] = 9;", "b[0] += 1;", "b[0]++;", "--b[0];")) {
+            refused("public static byte[] f(byte[] b) { " + write + " return b; }", "writes an array element");
+        }
+    }
 }

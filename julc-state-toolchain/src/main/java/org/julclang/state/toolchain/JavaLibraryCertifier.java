@@ -372,6 +372,10 @@ public final class JavaLibraryCertifier {
          * constructors and explicit accessors of a library record.
          */
         void classLevel(TypeElement c, List<String> problems) {
+            if (c.getKind() == ElementKind.ANNOTATION_TYPE) {
+                problems.add(c.getQualifiedName() + " is an annotation type (a library declares none: its members escape the static-state rules)");
+                return;
+            }
             var names = new java.util.HashMap<String, Integer>();
             for (Element m : c.getEnclosedElements()) {
                 if (m.getKind() == ElementKind.METHOD) names.merge(m.getSimpleName().toString(), 1, Integer::sum);
@@ -395,8 +399,10 @@ public final class JavaLibraryCertifier {
                         Tree init = tree instanceof com.sun.source.tree.VariableTree v ? v.getInitializer() : null;
                         // Codex C13 (r3): an array is mutable state on the JVM (final keeps the reference, not the contents): a
                         // caller that changes a returned static byte[] changes every later call, while UPLC keeps the constant.
-                        // A static field is a final scalar (BigInteger, boolean, String) initialised by a literal; a byte
-                        // constant is written in the method that returns it, or built by a stdlib call.
+                        // A static field is a final scalar (BigInteger, boolean, String) initialised by a literal. A certified
+                        // library cannot express a byte constant at all (array creation is refused in bodies too, and D8's
+                        // table builds no bytes from a literal): it takes byte constants from its caller (review r4, F10;
+                        // jsc-2-java-libraries.md, #88).
                         if (m.asType().getKind() == TypeKind.ARRAY) {
                             problems.add(c.getQualifiedName() + "." + m.getSimpleName() + ": a static array is mutable on the JVM (a caller can"
                                     + " change it for every later call; UPLC keeps the constant): no static arrays");
@@ -422,6 +428,9 @@ public final class JavaLibraryCertifier {
                         }
                     }
                     case RECORD, CLASS, INTERFACE, ENUM -> classLevel((TypeElement) m, problems);
+                    // Codex C21 (r4): an annotation type can hold static fields and types the rules above would not see.
+                    case ANNOTATION_TYPE -> problems.add(c.getQualifiedName() + "." + m.getSimpleName() + " is an annotation type (a library"
+                            + " declares none: its members escape the static-state rules)");
                     default -> { }
                 }
             }
@@ -660,6 +669,36 @@ public final class JavaLibraryCertifier {
                 public Void visitLiteral(com.sun.source.tree.LiteralTree node, Void unused) {
                     if (node.getKind() == Tree.Kind.NULL_LITERAL) problems.add(where(getCurrentPath()) + ": null (no null on-chain; use Optional)");
                     return super.visitLiteral(node, unused);
+                }
+
+                // Security S6 (r4): writing an array element changes the caller's array on the JVM (a state's key bytes,
+                // for every later read); there are no arrays on-chain but immutable byte strings.
+                void arrayWrite(Tree target) {
+                    if (target instanceof com.sun.source.tree.ArrayAccessTree) {
+                        problems.add(where(getCurrentPath()) + ": writes an array element (it changes the caller's array on the JVM; byte"
+                                + " strings are immutable on-chain)");
+                    }
+                }
+
+                @Override
+                public Void visitAssignment(com.sun.source.tree.AssignmentTree node, Void unused) {
+                    arrayWrite(node.getVariable());
+                    return super.visitAssignment(node, unused);
+                }
+
+                @Override
+                public Void visitCompoundAssignment(com.sun.source.tree.CompoundAssignmentTree node, Void unused) {
+                    arrayWrite(node.getVariable());
+                    return super.visitCompoundAssignment(node, unused);
+                }
+
+                @Override
+                public Void visitUnary(com.sun.source.tree.UnaryTree node, Void unused) {
+                    switch (node.getKind()) {
+                        case PREFIX_INCREMENT, PREFIX_DECREMENT, POSTFIX_INCREMENT, POSTFIX_DECREMENT -> arrayWrite(node.getExpression());
+                        default -> { }
+                    }
+                    return super.visitUnary(node, unused);
                 }
 
                 @Override

@@ -58,6 +58,12 @@ that supplies both itself, for example a composite build (`includeBuild`) of thi
 julc-state-toolchain and puts julc-state-api's `onchainSources` on the toolchain's class path, as `examples/dsl` does by
 hand. Without that, the toolchain coordinate does not resolve. Publishing is tracked in #88.
 
+**No byte constants (review r4, F10).** A certified library cannot express a byte constant: a static array is refused
+(mutable JVM state, r3 C13), creating an array in a body is refused (no arrays on-chain but byte strings), and D8's
+table has no row that builds bytes from a literal. A library takes every byte constant (a policy id, a tag) from its
+`.jsc` caller as a parameter. Admitting a per-call `new byte[]{literals}`, backed by per-function JVM-vs-UPLC vectors, is
+tracked in #88.
+
 ## Signatures
 
 javac's scoped attribution of the sources (JuLC's `JavacFrontend.attribute`) gives each public static method's exact
@@ -102,7 +108,7 @@ import, with every problem and its file and line (JSC0721).
 | No unchecked representation casts | every cast: `(R) (Object) Builtins.constrData(…)` holds on-chain and throws on the JVM (`Datum.java:10-12`) |
 | The trusted base | every call outside the library and the trusted base |
 | Objects | `new` of anything but the library's records and `new BigInteger("…")` literals; arrays; local classes |
-| What JuLC would refuse later (review r2, S4), refused here so certification does not depend on the JuLC version | method references; calls to an abstract method (dynamic dispatch to an uncertified body); initialiser blocks; static fields not final, not a scalar or not initialised by a literal (no static arrays: an array is mutable JVM state that a caller can change for every later call, r3 C13); overloads of any name, private ones too; constructors, accessor overrides and any instance method (r3 S5) in a library's classes and records; `null`; `&`, `\|` and `^` on booleans; `continue`; `return` inside a for-each; `JulcMap.lookup`, `delete`, `insert` on keys not compared by content |
+| What JuLC would refuse later (review r2, S4), refused here so certification does not depend on the JuLC version | method references; calls to an abstract method (dynamic dispatch to an uncertified body); initialiser blocks; static fields not final, not a scalar or not initialised by a literal (no static arrays: an array is mutable JVM state that a caller can change for every later call, r3 C13); overloads of any name, private ones too; constructors, accessor overrides and any instance method (r3 S5) in a library's classes and records; annotation types (r4 C21); writing an array element, `=`, compound or `++`/`--` (r4 S6); `null`; `&`, `\|` and `^` on booleans; `continue`; `return` inside a for-each; `JulcMap.lookup`, `delete`, `insert` on keys not compared by content |
 | Packages (review r2, S3; r3 F7, F8) | a source of a library's closure that declares a class in a package of JOUST, JuLC, cardano-client-lib or the JDK (`org.julclang.`, `com.bloxbean.`, `java.`, `javax.`, `jdk.`, `sun.`, `com.sun.`; no exception: the example library is `com.example.compliance.AllowList`) refuses that library. A file outside every closure is never compiled and refuses nothing |
 
 ### The catalogue of known JVM/on-chain differences

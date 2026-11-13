@@ -1382,6 +1382,10 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   `com.example.compliance`, and the reserved-package rule has no exception; it refuses only the library whose closure
   holds such a class, so one bad source of a set no longer refuses every library (a set that does not compile still
   does: #88). `jsc-2-java-libraries.md` states exactly what `-Pjoust.javaLibraries=experimental` does.
+  *Review round r4 (Codex C20, C21; design F10; security S6):* a Java record's top-level class is held to a library
+  class's naming rules (no name the generated code uses, none this build declares, unless it is the record itself);
+  annotation types and array element writes are refused; a certified library cannot express a byte constant (its
+  caller passes one), which `jsc-2-java-libraries.md` states and #88 tracks.
 - **r20** (2026-11-13, M4c: packages, the lock, offline tests): D14 records the library packages (`joust-lib/`, package
   specifiers, relative imports kept inside a package, Java sources from packages certified as on Gradle), `joust.lock`
   as built (only libraries from outside the sources; JSC0731/JSC0732; `--accept-lock`, `acceptJoustLock`), the offline
