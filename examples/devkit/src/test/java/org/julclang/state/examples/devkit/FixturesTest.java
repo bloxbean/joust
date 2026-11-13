@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * ADR-0015 M0's oracle is sound: every recorded fixture's unsigned transaction parses and hashes to the recorded
  * transaction hash (the body is what was signed), and every read's result reference resolves to a stored blob; each
- * group holds one recording (its files numbered 1 to n).
+ * group holds one recording (its files numbered 1 to n), and every blob is read by some recording.
  */
 class FixturesTest {
 
@@ -27,6 +27,7 @@ class FixturesTest {
     void fixturesAreConsistent() throws Exception {
         assertTrue(Files.isDirectory(ROOT), "fixtures/m0 is missing");
         int fixtures = 0, reads = 0;
+        var referenced = new java.util.HashSet<String>();
         try (Stream<Path> files = Files.walk(ROOT)) {
             for (Path f : files.filter(p -> p.toString().endsWith(".json") && !p.toString().contains("/blobs/")
                     && !p.getFileName().toString().equals("devkit.json")).toList()) {
@@ -35,9 +36,13 @@ class FixturesTest {
                 assertEquals(d.get("txHash").asText(), TransactionUtil.getTxHash(tx), f.toString());
                 for (JsonNode r : d.get("reads")) {
                     JsonNode ref = r.path("result").path("$ref");
-                    if (ref.isTextual()) assertTrue(Files.exists(ROOT.resolve("blobs").resolve(ref.asText() + ".json")), f + ": " + ref);
+                    if (ref.isTextual()) {
+                        assertTrue(Files.exists(ROOT.resolve("blobs").resolve(ref.asText() + ".json")), f + ": " + ref);
+                        referenced.add(ref.asText() + ".json");
+                    }
                     reads++;
                 }
+                for (JsonNode r : d.findValues("$ref")) if (r.isTextual()) referenced.add(r.asText() + ".json");
                 fixtures++;
             }
         }
@@ -64,6 +69,11 @@ class FixturesTest {
             }
         }
         assertEquals(java.util.List.of(), mixed, "groups that mix recordings (clear a group before recording it again)");
+        // No blob outlives the recordings that read it (prune them after a group is recorded again).
+        try (Stream<Path> bs = Files.list(ROOT.resolve("blobs"))) {
+            var orphans = bs.map(p -> p.getFileName().toString()).filter(n -> !referenced.contains(n)).sorted().toList();
+            assertEquals(java.util.List.of(), orphans, "blobs no recording reads");
+        }
         System.out.println("[fixtures] " + fixtures + " transactions, " + reads + " chain reads");
     }
 }
