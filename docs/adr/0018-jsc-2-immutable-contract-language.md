@@ -504,7 +504,7 @@ import { concat, slice, length } from "std/bytes"
     certified sources of the libraries the contracts use beside the generated Java, which compiles them. *(r19 amended,
     review r2, S3.)* Only a library's **closure** compiles: every source file its class's file names through a name javac
     resolves (a type, a call, a field, an import), transitively; no other file of a jar. The certifier refuses a library
-    set that declares a class in a package of JOUST, JuLC, cardano-client-lib or the JDK (a no-op `JavaLibraryCheck`,
+    whose closure declares a class in a package of JOUST, JuLC, cardano-client-lib or the JDK (r3: only that library) (a no-op `JavaLibraryCheck`,
     say). `checkJoustLibraries` refuses a library class on the compile or runtime class path from a jar or a directory
     (JSC0727); it runs **before `compileJava`**, so `test`, `jar` and `run` never build a shadowed class, and it checks the
     classes by javac's binary names, nested ones too (r1 took names from the source text by regex: S2, F5). Two sources
@@ -534,8 +534,8 @@ import { concat, slice, length } from "std/bytes"
     `.jsc` libraries, JSC0709); a record that two libraries' signatures share is one type of the build, by its binary
     name; a raw `JulcList` or `Optional` in a signature is unmappable per fn (JSC0722), never a crash. The certifier
     refuses on its own, independently of the JuLC version, what JuLC refuses later: method references, calls to abstract
-    methods (dynamic dispatch to an uncertified body), initialiser blocks, static fields not final or not initialised by
-    a literal, overloads of any name (private ones too), constructors and accessor overrides in any library record,
+    methods (dynamic dispatch to an uncertified body), initialiser blocks, static fields not final, not scalar or not initialised by
+    a literal (no static arrays, r3), overloads of any name (private ones too), constructors and accessor overrides in any library record,
     `null`, non-short-circuit boolean operators, `continue`, a `return` inside a for-each, and `JulcMap.lookup`,
     `delete` and `insert` on keys not compared by content.
   - **In the interpreters.** A Java body has no reference semantics there: a `CallJava` gets no answer (a `Limit`, never
@@ -1372,6 +1372,13 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   published. The certifier refuses the constructs JuLC would refuse later, binding hygiene covers Java calls, a shared
   record is one type, raw signatures are per-fn refusals. The r2 isolated-loader sentence is marked superseded, J3
   states the three legs of a Java call, and the build certifies statically (vectors are the library's obligation).
+  *Review round r3 (Codex C13–C15; design F7–F9; security S5):* a static array is refused (mutable JVM state a caller
+  can change for every later call, while UPLC keeps the constant), as is any instance method of a library's class or
+  record; a Java record's top-level class takes its simple name in the generated imports, so it clashes with a library
+  class of that name (JSC0709); `JscMain` normalises its output root. The example library moved to
+  `com.example.compliance`, and the reserved-package rule has no exception; it refuses only the library whose closure
+  holds such a class, so one bad source of a set no longer refuses every library (a set that does not compile still
+  does: #88). `jsc-2-java-libraries.md` states exactly what `-Pjoust.javaLibraries=experimental` does.
 - **r20** (2026-11-13, M4c: packages, the lock, offline tests): D14 records the library packages (`joust-lib/`, package
   specifiers, relative imports kept inside a package, Java sources from packages certified as on Gradle), `joust.lock`
   as built (only libraries from outside the sources; JSC0731/JSC0732; `--accept-lock`, `acceptJoustLock`), the offline

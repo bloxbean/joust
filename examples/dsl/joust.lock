@@ -1,6 +1,6 @@
 {
   "lock": 1,
   "libraries": {
-    "java:org.julclang.state.examples.compliance.AllowList": "5c959a9a86cacbe2f7b191b0ec18c295860a0b5e11361c41d99b88f77074e56d"
+    "java:com.example.compliance.AllowList": "c7e5c9a6d771f94315d2c583440fafb86049008da28e52eb6f32a73a59fdcd41"
   }
 }

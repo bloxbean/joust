@@ -281,12 +281,6 @@ public final class JavaLibraryCertifier {
                 certified.add(elements.getBinaryName((TypeElement) m.getEnclosingElement()).toString());
                 body(path, problems, work);
             }
-            // Security S3 (r2): a library's sources never declare a class of JOUST, JuLC, cardano-client-lib or the JDK. The
-            // build compiles a library's sources into the consumer, ahead of those jars (a no-op JavaLibraryCheck, say).
-            for (String r : reserved) {
-                problems.add(classPath.get(r) + " declares " + r + ", in a package of JOUST, JuLC, cardano-client-lib or the JDK: a"
-                        + " library's sources never declare those (they would be compiled into the build, ahead of the real classes)");
-            }
             for (TypeElement c : classes) {
                 SubsetLint.lint(trees, c, (t, node, cu, message) -> {
                     long pos = t.getSourcePositions().getStartPosition(cu, node);
@@ -309,6 +303,16 @@ public final class JavaLibraryCertifier {
             for (String f : files) if (paths.containsKey(f)) texts.put(f, paths.get(f));
             var closureClasses = new TreeSet<String>();
             classPath.forEach((bin, f) -> { if (files.contains(f)) closureClasses.add(bin); });
+            // Security S3 (r2): a library's sources never declare a class of JOUST, JuLC, cardano-client-lib or the JDK; the
+            // build compiles a library's closure into the consumer, ahead of those jars (a no-op JavaLibraryCheck, say). Only
+            // a library whose closure holds such a class is refused: a file outside every closure is never compiled
+            // (review r2: #79 F8, #82 F10).
+            for (String r : reserved) {
+                if (closureClasses.contains(r)) {
+                    problems.add(classPath.get(r) + " declares " + r + ", in a package of JOUST, JuLC, cardano-client-lib or the JDK: a"
+                            + " library's sources never declare those (they would be compiled into the build, ahead of the real classes)");
+                }
+            }
             for (String bin : closureClasses) {
                 TypeElement t = types.get(bin);
                 if (t != null && t.getNestingKind() == javax.lang.model.element.NestingKind.TOP_LEVEL) classLevel(t, problems);
@@ -389,9 +393,14 @@ public final class JavaLibraryCertifier {
                         if (!m.getModifiers().contains(Modifier.STATIC)) break;
                         var tree = trees.getTree(m);
                         Tree init = tree instanceof com.sun.source.tree.VariableTree v ? v.getInitializer() : null;
-                        boolean literal = literal(init) || init instanceof NewArrayTree a && a.getDimensions().isEmpty()
-                                && a.getInitializers() != null && a.getInitializers().stream().allMatch(JavaLibraryCertifier.Certification::literal);
-                        if (!literal || !m.getModifiers().contains(Modifier.FINAL)) {
+                        // Codex C13 (r3): an array is mutable state on the JVM (final keeps the reference, not the contents): a
+                        // caller that changes a returned static byte[] changes every later call, while UPLC keeps the constant.
+                        // A static field is a final scalar (BigInteger, boolean, String) initialised by a literal; a byte
+                        // constant is written in the method that returns it, or built by a stdlib call.
+                        if (m.asType().getKind() == TypeKind.ARRAY) {
+                            problems.add(c.getQualifiedName() + "." + m.getSimpleName() + ": a static array is mutable on the JVM (a caller can"
+                                    + " change it for every later call; UPLC keeps the constant): no static arrays");
+                        } else if (!literal(init) || !m.getModifiers().contains(Modifier.FINAL)) {
                             problems.add(c.getQualifiedName() + "." + m.getSimpleName() + ": a static field is final and initialised by a literal"
                                     + " (its initialiser runs on the JVM only)");
                         }
@@ -406,6 +415,10 @@ public final class JavaLibraryCertifier {
                         if (components.contains(m.getSimpleName().toString()) && ((ExecutableElement) m).getParameters().isEmpty()
                                 && declared.containsKey((ExecutableElement) m)) {   // a method written in the source (javac's own has no tree)
                             problems.add(c.getQualifiedName() + "." + m.getSimpleName() + "() overrides a record accessor (JuLC reads the field)");
+                        } else if (!m.getModifiers().contains(Modifier.STATIC) && declared.containsKey((ExecutableElement) m)) {
+                            // Security S5 (r3): an instance method (of a record, a class or an interface) is reached by dispatch or
+                            // through an object, which JuLC does not compile: a library's methods are static.
+                            problems.add(c.getQualifiedName() + "." + m.getSimpleName() + "() is an instance method (a library's methods are static)");
                         }
                     }
                     case RECORD, CLASS, INTERFACE, ENUM -> classLevel((TypeElement) m, problems);
@@ -420,10 +433,10 @@ public final class JavaLibraryCertifier {
             return t instanceof com.sun.source.tree.LiteralTree && t.getKind() != Tree.Kind.NULL_LITERAL;
         }
 
-        /** A class of the JDK, cardano-client-lib, JuLC or JOUST (this repo's examples excepted). */
+        /** A class of the JDK, cardano-client-lib, JuLC or JOUST (no exception: the example library is com.example's, r3 F7). */
         static boolean reservedPackage(String bin) {
             for (String p : List.of("java.", "javax.", "jdk.", "sun.", "com.sun.", "com.bloxbean.", "org.julclang.")) {
-                if (bin.startsWith(p)) return !bin.startsWith("org.julclang.state.examples.");
+                if (bin.startsWith(p)) return true;
             }
             return false;
         }

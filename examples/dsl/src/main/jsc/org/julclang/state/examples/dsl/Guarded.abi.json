@@ -31,7 +31,7 @@
     ]
   },
   "types": {
-    "Entry": { "kind": "library", "library": "org.julclang.state.examples.compliance.AllowList", "constructors": [{ "name": "Entry", "constr": 0, "fields": [
+    "Entry": { "kind": "library", "library": "com.example.compliance.AllowList", "constructors": [{ "name": "Entry", "constr": 0, "fields": [
         { "name": "who", "type": "Bytes", "data": "bytes" },
         { "name": "limit", "type": "Int", "data": "int" }
       ] }] },
