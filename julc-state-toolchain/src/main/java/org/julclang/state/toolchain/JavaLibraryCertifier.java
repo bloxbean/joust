@@ -674,6 +674,8 @@ public final class JavaLibraryCertifier {
                 // Security S6 (r4): writing an array element changes the caller's array on the JVM (a state's key bytes,
                 // for every later read); there are no arrays on-chain but immutable byte strings.
                 void arrayWrite(Tree target) {
+                    // Codex C25, design F11 (r5): (b[0]) = 9 writes the element too.
+                    while (target instanceof com.sun.source.tree.ParenthesizedTree p) target = p.getExpression();
                     if (target instanceof com.sun.source.tree.ArrayAccessTree) {
                         problems.add(where(getCurrentPath()) + ": writes an array element (it changes the caller's array on the JVM; byte"
                                 + " strings are immutable on-chain)");
