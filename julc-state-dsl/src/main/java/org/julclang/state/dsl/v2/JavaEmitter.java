@@ -1959,7 +1959,14 @@ final class JavaEmitter {
     private String checkCall(Ty t, String v) {
         // M2 (D5): every hash in a credential or an address is 28 bytes (AddressAdapter, one body on both sides).
         if (t instanceof Ty.Ledger l) {
-            if (l.equals(Ty.VALUE)) throw new IllegalStateException("a Value is never a checked input");
+            if (l.equals(Ty.VALUE)) {
+                // M2c (review r1, C4): a stored Value in a read state is well formed in its wire form (fromWire's rules: policies
+                // ascending, no empty token map, no repeated name, no zero, names at most 32 bytes, quantities in range), used
+                // or not. fromWire fails on any other; the disjunction is then always true (a non-empty wire is a non-empty value).
+                addHelper("check__Value", "    static boolean check__Value(Value v__) {\n        return !ValueAdapter.isEmpty(ValueAdapter.fromWire(v__))"
+                        + " || ValueAdapter.isEmpty(v__);\n    }\n\n");
+                return "check__Value(" + v + ")";
+            }
             return "AddressAdapter." + (l.equals(Ty.CREDENTIAL) ? "credentialOk" : "addressOk") + "(" + v + ")";
         }
         String h = "check__" + checkMangle(t);
@@ -2098,7 +2105,7 @@ final class JavaEmitter {
      */
     private String depositsIn(Ty memo) {
         String rec = depositRecord(memo);
-        String h = "depositsIn__" + Ty.mangle(memo);
+        String h = "depositsIn__" + checkMangle(memo);   // by the checked type: Key and Bytes decode differently (C1)
         imports.add("org.julclang.state.api.DepositClaim");
         addHelper(h, "    static JulcList<" + rec + "> " + h + "(JulcList<DepositClaim> ds__, String k__) {\n        if (ds__.isEmpty()) {\n"
                 + "            JulcList<" + rec + "> none = JulcList.empty();\n            return none;\n        } else {\n"
@@ -2126,10 +2133,11 @@ final class JavaEmitter {
         if (helpers.containsKey(h)) return h;
         helpers.put(h, "");
         imports.add("org.julclang.state.api.Require");
+        imports.add("java.math.BigInteger");   // a tag is an Int: SubsetLint refuses a long local (S1)
         String jt = jt(t, true);
         String body = switch (t) {
-            case Ty.Prim pr when pr.equals(Ty.BOOL) -> "long t__ = Builtins.constrTag(d__);\n        Require.that(t__ <= 1L && "
-                    + "Builtins.nullList(Builtins.constrFields(d__)), k__);\n        return t__ == 1L;";
+            case Ty.Prim pr when pr.equals(Ty.BOOL) -> "BigInteger t__ = BigInteger.valueOf(Builtins.constrTag(d__));\n        Require.that(t__.compareTo(BigInteger.ONE) <= 0 && "
+                    + "Builtins.nullList(Builtins.constrFields(d__)), k__);\n        return t__.compareTo(BigInteger.ONE) == 0;";
             case Ty.Prim pr -> "byte[] b__ = Builtins.unBData(d__);\n        Require.that(ByteStringLib.length(b__) == 28, k__);\n        return b__;";
             case Ty.ListT l -> {
                 String items = "decItems__" + checkMangle(l.elem());
@@ -2139,10 +2147,10 @@ final class JavaEmitter {
                         + ";\n            return " + items + "(Builtins.tailList(xs__), k__).prepend(x__);\n        }\n    }\n\n");
                 yield "return " + items + "(Builtins.unListData(d__), k__);";
             }
-            case Ty.OptT o -> "long t__ = Builtins.constrTag(d__);\n        PlutusData fs__ = Builtins.constrFields(d__);\n"
-                    + "        if (t__ == 0L) {\n            Require.that(!Builtins.nullList(fs__) && Builtins.nullList(Builtins.tailList(fs__)), k__);\n"
+            case Ty.OptT o -> "BigInteger t__ = BigInteger.valueOf(Builtins.constrTag(d__));\n        PlutusData fs__ = Builtins.constrFields(d__);\n"
+                    + "        if (t__.compareTo(BigInteger.ZERO) == 0) {\n            Require.that(!Builtins.nullList(fs__) && Builtins.nullList(Builtins.tailList(fs__)), k__);\n"
                     + "            " + jt(o.elem(), true) + " x__ = " + decode(o.elem(), "Builtins.headList(fs__)") + ";\n            return Optional.of(x__);\n"
-                    + "        } else {\n            Require.that(t__ == 1L && Builtins.nullList(fs__), k__);\n            " + jt + " none = Optional.empty();\n"
+                    + "        } else {\n            Require.that(t__.compareTo(BigInteger.ONE) == 0 && Builtins.nullList(fs__), k__);\n            " + jt + " none = Optional.empty();\n"
                     + "            return none;\n        }";
             case Ty.MapT m -> {
                 // Canonical (D5, J14): each key at most 64 bytes (28 for a Key or Hash), strictly ascending in SortedMaps order.
@@ -2162,14 +2170,14 @@ final class JavaEmitter {
             case Ty.Rec r -> "Require.that(Builtins.constrTag(d__) == 0L, k__);\n        " + fieldsFrom(p.record(r.name()), "Builtins.constrFields(d__)", "k__");
             case Ty.EnumT e -> {
                 var en = p.enumType(e.name());
-                var sb = new StringBuilder("long t__ = Builtins.constrTag(d__);\n        PlutusData fs__ = Builtins.constrFields(d__);\n        ");
+                var sb = new StringBuilder("BigInteger t__ = BigInteger.valueOf(Builtins.constrTag(d__));\n        PlutusData fs__ = Builtins.constrFields(d__);\n        ");
                 var vs = List.copyOf(en.variants().values());
                 for (int tag = 0; tag < vs.size(); tag++) {
                     boolean last = tag == vs.size() - 1;
                     String arm = fieldsFrom(vs.get(tag), "fs__", "k__").replace("\n        ", "\n            ");
                     // The last variant's branch checks its own tag: any other tag fails there.
-                    if (last) sb.append("{\n            Require.that(t__ == ").append(tag).append("L, k__);\n            ").append(arm).append("\n        }");
-                    else sb.append("if (t__ == ").append(tag).append("L) {\n            ").append(arm).append("\n        } else ");
+                    if (last) sb.append("{\n            Require.that(t__.compareTo(BigInteger.valueOf(").append(tag).append("L)) == 0, k__);\n            ").append(arm).append("\n        }");
+                    else sb.append("if (t__.compareTo(BigInteger.valueOf(").append(tag).append("L)) == 0) {\n            ").append(arm).append("\n        } else ");
                 }
                 yield sb.toString();
             }

@@ -54,24 +54,32 @@ public class ValueAdapter {
      * token name over 32 bytes, a quantity out of the 128-bit range (review r1, C1).
      */
     public static Value fromWire(Value v) {
+        wire(v.toPlutusData(), "fromWire");
+        return Assets.build(Assets.read(v));
+    }
+
+    /** {@link #fromWire}'s rules on the data's own entries, in their own order (nothing normalised before the check). */
+    private static void wire(PlutusData d, String op) {
+        Require.that(d instanceof PlutusData.MapData, op + ": not a map");
         String prevPolicy = null;
-        for (var e : v.toPlutusData().entries()) {
+        for (var e : ((PlutusData.MapData) d).entries()) {
+            Require.that(e.key() instanceof PlutusData.BytesData && e.value() instanceof PlutusData.MapData, op + ": not a value");
             String p = HEX.formatHex(((PlutusData.BytesData) e.key()).value());
-            Require.that(prevPolicy == null || prevPolicy.compareTo(p) < 0, "fromWire: policies out of order or repeated");
+            Require.that(prevPolicy == null || prevPolicy.compareTo(p) < 0, op + ": policies out of order or repeated");
             prevPolicy = p;
             var tokens = ((PlutusData.MapData) e.value()).entries();
-            Require.that(!tokens.isEmpty(), "fromWire: an empty token map");
+            Require.that(!tokens.isEmpty(), op + ": an empty token map");
             var seen = new java.util.HashSet<String>();
             for (var t : tokens) {
+                Require.that(t.key() instanceof PlutusData.BytesData && t.value() instanceof PlutusData.IntData, op + ": not a value");
                 String n = HEX.formatHex(((PlutusData.BytesData) t.key()).value());
                 BigInteger q = ((PlutusData.IntData) t.value()).value();
-                Require.that(seen.add(n), "fromWire: a repeated token name");
-                Require.that(q.signum() != 0, "fromWire: a zero quantity");
-                Require.that(p.length() <= 64 && n.length() <= 64, "fromWire: a policy id or token name over 32 bytes");
-                inRange(q, "fromWire");
+                Require.that(seen.add(n), op + ": a repeated token name");
+                Require.that(q.signum() != 0, op + ": a zero quantity");
+                Require.that(p.length() <= 64 && n.length() <= 64, op + ": a policy id or token name over 32 bytes");
+                inRange(q, op);
             }
         }
-        return Assets.build(Assets.read(v));
     }
 
     /**
@@ -114,8 +122,13 @@ public class ValueAdapter {
         return v.toPlutusData();
     }
 
-    /** A value decoded from data (a memo's, M2c): {@link #fromWire}'s rules, so a malformed one fails. */
+    /**
+     * A value decoded from data (a memo's, M2c): {@link #fromWire}'s rules, so a malformed one fails. They are checked on the
+     * data as it came, before a {@code Value} is built from it, since that build normalises (it puts lovelace first, as the
+     * on-chain body does not: review r1, C3).
+     */
     public static Value fromData(PlutusData d) {
+        wire(d, "fromData");
         return fromWire(Value.fromPlutusData(d));
     }
 

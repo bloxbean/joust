@@ -1392,7 +1392,10 @@ public final class Interpreter {
                     yield x.payment().hash().value.length == 28
                             && (!x.stake().present() || x.stake().value() instanceof StakeHash h && h.credential().hash().value.length == 28);
                 }
-                default -> true;
+                // M2c (review r1, C2): a Value that arrives (in a memo, a read state) is in the decoder's domain: every
+                // policy and token name at most 32 bytes, every quantity in the signed 128-bit range (ValueV keeps no zero).
+                default -> ((ValueV) v).entries().entrySet().stream().allMatch(e -> e.getKey().length() <= 64
+                        && e.getValue().entrySet().stream().allMatch(tq -> tq.getKey().length() <= 64 && inRange(tq.getValue())));
             };
             case Ty.Instance i -> true;
             case Ty.DepositT d -> true;

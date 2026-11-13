@@ -442,7 +442,8 @@ export function validate(p) {
 
 /** §4: a type holds a Key, a Hash or a Map somewhere (records and variants through their fields). */
 function needsCheck(t, shapes, enums) {
-  if (typeof t === 'string') return t === 'Key' || t === 'Hash' || t === 'Address' || t === 'Credential';
+  // M2c (review r1, C4): a Value too (it crosses only stored in a read state; an argument never holds one).
+  if (typeof t === 'string') return t === 'Key' || t === 'Hash' || t === 'Address' || t === 'Credential' || t === 'Value';
   const [k, v] = Object.entries(t)[0];
   if (k === 'instance' || k === 'deposit') return false;   // M2c: the deployer's; memos are checked where the action starts
   if (k === 'list' || k === 'option') return needsCheck(v, shapes, enums);

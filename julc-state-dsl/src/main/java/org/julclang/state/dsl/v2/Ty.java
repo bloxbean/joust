@@ -158,8 +158,9 @@ sealed interface Ty {
     private static boolean needsCheck(Ty t, Function<String, List<Ty>> components, Set<String> seen) {
         return switch (t) {
             case Prim p -> p.equals(KEY) || p.equals(HASH);
-            // An Address or a Credential holds hashes (28 bytes each, D5); a Value never crosses as an input (M2).
-            case Ledger l -> !l.equals(VALUE);
+            // An Address or a Credential holds hashes (28 bytes each, D5). A Value crosses only as a stored one, in a read
+            // state (M2c; an argument never holds one, JSC0341): its wire form is checked there, used or not (review r1, C4).
+            case Ledger l -> true;
             // M2c: an instance is the deployer's (params); a deposit's memo is checked where the action starts (#memo:).
             case Instance i -> false;
             case DepositT d -> false;
