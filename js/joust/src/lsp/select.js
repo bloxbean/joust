@@ -27,6 +27,9 @@ export const GRADLE_PLUGIN = /id[\s(]*["']org\.julclang\.joust["'][\s)]*version[
 
 const hex = (b) => createHash('sha256').update(b).digest('hex');
 
+/** How long a lease protects a copy: a load takes seconds; a crashed holder's lease stops protecting after this. */
+const LEASE_MS = 10 * 60 * 1000;
+
 /** The id of an engine: the SHA-256 of its two files' SHA-256s. */
 export const engineId = (jsHash, wasmHash) => hex(`${jsHash}\n${wasmHash}\n`);
 
@@ -83,10 +86,35 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
         kept++;
         continue;
       }
+      // C18: claimed by an atomic rename first; only then are its leases and its use read, from the claimed directory,
+      // where nobody can add a lease (a lease taken after the rename fails: its taker selects again). A leased or freshly
+      // used copy is put back.
       const aside = join(root, `.evicted-${n}-${process.pid}-${Date.now()}`);
       try {
         await fs.rename(join(root, n), aside);
       } catch {
+        continue;
+      }
+      let leased = false;
+      try {
+        for (const f of await fs.readdir(aside)) {
+          if (!f.startsWith('.lease-')) continue;
+          const st = await fs.stat(join(aside, f)).catch(() => null);
+          if (st && Date.now() - st.mtimeMs < LEASE_MS) leased = true;
+        }
+      } catch {
+        leased = true;
+      }
+      let usedNow = 0;
+      try {
+        usedNow = (await fs.stat(join(aside, '.used'))).mtimeMs;
+      } catch {
+        usedNow = 0;
+      }
+      if (leased || inUse().has(n) || Date.now() - usedNow < recentMs) {
+        kept++;
+        // Back in place; if another window republished the copy meanwhile, its copy stays and this one goes.
+        await fs.rename(aside, join(root, n)).catch(() => fs.rm(aside, { recursive: true, force: true }).catch(() => {}));
         continue;
       }
       await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
@@ -127,10 +155,30 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
         p = install(id, js, wasm, jsHash, wasmHash).finally(() => installing.delete(id));
         installing.set(id, p);
       }
-      const dir = await p;
-      await fs.writeFile(join(dir, '.used'), String(Date.now()));
+      let dir = await p;
+      try {
+        await fs.writeFile(join(dir, '.used'), String(Date.now()));
+      } catch {
+        // Claimed by a collector in another window between the install and the touch: install again (C18).
+        dir = await install(id, js, wasm, jsHash, wasmHash);
+        await fs.writeFile(join(dir, '.used'), String(Date.now()));
+      }
       await evict(id, typeof inUse === 'function' ? inUse : () => inUse);
       return { id, file: join(dir, ENGINE_JS) };
+    },
+    /**
+     * A lease on a copy while a worker loads it (C18): an async release function, or null when the copy is gone.
+     * The collector puts back any copy holding a lease younger than LEASE_MS (a crashed holder's lease expires).
+     */
+    async lease(id) {
+      if (!/^[0-9a-f]{64}$/.test(String(id))) return async () => {};
+      const f = join(root, id, `.lease-${process.pid}-${createHash('sha256').update(String(Math.random()) + Date.now()).digest('hex').slice(0, 12)}`);
+      try {
+        await fs.writeFile(f, '', { flag: 'wx' });
+      } catch {
+        return null;
+      }
+      return () => fs.rm(f, { force: true }).catch(() => {});
     },
     /** Marks a copy as used now (a worker started on it); nothing for an engine that is not in the store. */
     async touch(id) {

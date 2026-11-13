@@ -40,7 +40,8 @@ export async function runEngineWorker({ engineFile }) {
   try {
     api = await load(engineFile);
   } catch (e) {
-    parentPort.postMessage({ ready: false, error: String(e?.message ?? e) });
+    // The code and path go along: a copy that vanished is told from an engine fault by them (review C18 on #83).
+    parentPort.postMessage({ ready: false, error: String(e?.message ?? e), code: e?.code, path: e?.path });
     return;
   }
   let info = null;

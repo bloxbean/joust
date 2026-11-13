@@ -39,6 +39,21 @@ export const DEFAULTS = {
 
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
+/**
+ * Whether a failed load is the engine's own files missing (a store copy evicted or not yet republished), from the load
+ * failure itself (review C18 on #83): `MODULE_NOT_FOUND` for the loader, `ENOENT` for its .wasm, naming those files;
+ * or the file absent now. Never from the path's existence alone: another window may republish the copy before the
+ * failure arrives, and an engine that fails on its own is still an engine fault.
+ */
+export function isMissingEngine(r, engine) {
+  if (r.ready) return false;
+  const msg = String(r.error ?? '');
+  const files = [engine.file, `${engine.file}.wasm`];
+  if (r.code === 'MODULE_NOT_FOUND' && files.some((f) => msg.includes(f))) return true;
+  if (r.code === 'ENOENT' && files.some((f) => r.path === f || msg.includes(f))) return true;
+  return !existsSync(engine.file);
+}
+
 /** One engine worker: load, then one call at a time (the protocol thread serialises per key). */
 class EngineWorker {
   constructor(engine, opts) {
@@ -70,7 +85,7 @@ class EngineWorker {
       });
       this.worker.once('error', (e) => {
         clearTimeout(timer);
-        resolve({ ready: false, error: String(e?.message ?? e), code: e?.code });
+        resolve({ ready: false, error: String(e?.message ?? e), code: e?.code, path: e?.path });
       });
     });
     this.worker.on('error', (e) => this.died(e?.code === 'ERR_WORKER_OUT_OF_MEMORY' ? 'memory' : 'crash', String(e?.message ?? e)));
@@ -196,9 +211,20 @@ export class EngineHost {
         }
         this.stopWorker(idle[0]);
       }
+      // C18: a lease on the engine's store copy, held until the worker has loaded it; the collector never removes a
+      // leased copy. No lease (null): the copy is gone, select again.
+      const release = this.opts.lease ? await this.opts.lease(s.engine) : () => {};
+      if (!release) return { missing: true };
+      if (s.worker && !s.worker.dead) {
+        release();
+        return s.worker;
+      }
       if (process.env.JOUST_LSP_DEBUG) process.stderr.write(`[joust-lsp] starting a worker for ${s.key}\n`);
       s.worker = new EngineWorker(s.engine, this.opts);
-      s.worker.ready.then(() => this.wake());
+      s.worker.ready.then(() => {
+        release();
+        this.wake();
+      });
       this.stats.started++;
       this.opts.onStart?.(s.engine);
       return s.worker;
@@ -213,7 +239,7 @@ export class EngineHost {
       const w = await this.acquire(s);
       if (w.missing) return { ready: false, missing: true, error: 'the engine file is missing' };
       const r = await w.ready;
-      if (!r.ready && !existsSync(engine.file)) return { ready: false, missing: true, error: 'the engine file is missing' };
+      if (isMissingEngine(r, engine)) return { ready: false, missing: true, error: 'the engine file is missing' };
       if (!r.ready) return { ready: false, error: r.error };
       return { ready: true, info: r.info, version: r.version };
     } finally {
@@ -254,7 +280,7 @@ export class EngineHost {
         // A worker stopped while it loaded (Restart analysis, or evicted) is no engine fault: requeue, never quarantine.
         if (w.dead && (w.killedFor === 'stopped' || w.killedFor === 'cancelled')) return this.displaced();
         // A store copy removed while the worker loaded it (another window evicted it) is no engine fault: select again.
-        if (!ready.ready && !existsSync(s.engine.file)) {
+        if (isMissingEngine(ready, s.engine)) {
           this.stopWorker(s);
           return { missing: true };
         }

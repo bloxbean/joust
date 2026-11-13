@@ -77,22 +77,30 @@ test('C12: a copy removed while its worker loads is "missing", not an engine fai
   }
 });
 
-test('C13: a slow selection that resumes after a newer one never cancels it; the newer compiler is published', async () => {
+test('C13, C20: a slow selection that resumes after a newer one never cancels it; the newer compiler is published', async () => {
+  // The project is nested (initialization's probe of the folder's root does not discover it), so its slow compiler A
+  // first loads when the document opens.
   const ws = tmp('joust-lsp-ws-');
-  const pkg = project(ws, stubVariant(join(tmp(), 'a'), 'a', 1200));   // compiler A takes 1.2 s to boot
+  const pkg = project(join(ws, 'sub'), stubVariant(join(tmp(), 'a'), 'a', 1500));
   const lsp = await startLsp({ engineDir: STUB, folders: [ws], args: ['--project-engine'], hostOptions: { analysisMs: 5000 } });
   try {
-    const uri = uriOf(join(ws, 'contracts', 'C.jsc'));
-    lsp.published.length = 0;
-    lsp.open(uri, 'jsc 2 SLOW WARN', 1);
-    await sleep(300);   // the selection is waiting for A to boot
+    const uri = uriOf(join(ws, 'sub', 'contracts', 'C.jsc'));
+    lsp.open(uri, 'jsc 2 WARN', 1);
+    // Established, not assumed: A's worker exists and is still loading, so the selection waits for it.
+    const loadingA = async () => (await lsp.stats()).slots.find((x) => x.alive && !x.booted && x.file.includes('engines'));
+    let a;
+    for (let k = 0; k < 200 && !(a = await loadingA()); k++) await sleep(10);
+    assert.ok(a, 'A is loading');
     const b = stubVariant(join(tmp(), 'b'), 'b');
     for (const f of [ENGINE_JS, ENGINE_WASM]) copyFileSync(join(b, f), join(pkg, 'engine', f));
     lsp.conn.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uriOf(join(pkg, 'engine', ENGINE_JS)), type: 2 }] });
-    const p = await lsp.until(() => lsp.published.find((x) => x.uri === uri && x.diagnostics.some((d) => /stub warning/.test(d.message))),
-      15000, 'a publication');
-    assert.equal(p.version, 1);
-    assert.equal((await lsp.request('joust/status', { uri })).compiler, 'test-stub-b');
+    const p = await lsp.until(() => lsp.published.find((x) => x.uri === uri && x.diagnostics.length), 15000, 'a publication');
+    // Published by B, and no later status names A.
+    assert.match(p.diagnostics[0].source, /test-stub-b/);
+    await sleep(2500);   // A has long finished loading
+    const statuses = lsp.statuses.filter((x) => x.uri === uri);
+    assert.equal(statuses[statuses.length - 1].compiler, 'test-stub-b', JSON.stringify(statuses.map((x) => x.compiler)));
+    assert.ok(!lsp.published.some((x) => x.uri === uri && x.diagnostics.some((d) => /test-stub-a/.test(d.source))));
   } finally {
     await lsp.stop();
   }

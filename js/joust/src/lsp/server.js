@@ -7,7 +7,7 @@
 import { randomBytes } from 'node:crypto';
 import { promises as fsp, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CancellationTokenSource, CodeActionKind, CodeActionTriggerKind, TextDocumentSyncKind, TextDocuments,
@@ -95,7 +95,11 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   const documents = new TextDocuments(TextDocument);
   let store;
   // Each worker start marks its engine copy as used, on disk, so other windows sharing the store keep it (S3).
-  const host = new EngineHost({ workerEntry, ...hostOptions, onStart: (engine) => store?.touch?.(engine.id) });
+  const host = new EngineHost({
+    workerEntry, ...hostOptions, onStart: (engine) => store?.touch?.(engine.id),
+    // C18: a worker loading a store copy holds a lease on it; engines outside the store (the bundled one) need none.
+    lease: (engine) => (store?.root && engine.file.startsWith(store.root + sep) ? store.lease(engine.id) : () => {}),
+  });
   const reader = createReader();
   // uri -> the state of ONE open lifetime of the document (review C2 on #83): every asynchronous result checks that the
   // state it started with is still the current one, so a close and a reopen at the same version never mix lifetimes.
@@ -410,11 +414,12 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (!current()) return { applied: false, reason: 'stale fix' };
     // D4a: applied by the client only through a versioned workspace/applyEdit (the extension's handleApplyEdit refuses
     // it if the document is closed or has another version).
-    // S9 on #83: the text each edit replaces goes along (joustExpected), and the extension's handler compares it with the
-    // document right before applying, which also closes a close-and-reopen at a reused version before the handler runs.
-    const replaced = fix.edits.map((e) => ({ uri: f.uri, range: e.range, text: doc.getText(e.range) }));
+    // S9, C19 on #83: the SHA-256 of the whole document text the fix was validated on goes along (joustExpected), and the
+    // extension's handler compares it with the document right before applying: a close and reopen at a reused version
+    // with other text anywhere (not only in the replaced range) refuses the edit.
+    const expected = [{ uri: f.uri, sha256: hash(text) }];
     const res = await connection.workspace.applyEdit({ label: fix.title, edit: { documentChanges: [{ textDocument: { uri: f.uri, version: f.version },
-      edits: fix.edits }] }, joustExpected: replaced });
+      edits: fix.edits }] }, joustExpected: expected });
     return { applied: res.applied === true };
   });
 
@@ -447,7 +452,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   if (flags.testHooks) {
     connection.onRequest('joust/test/stats', () => ({
-      ...host.stats, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), calls: s.worker?.calls ?? 0 })),
+      ...host.stats, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
     }));
   }
 
