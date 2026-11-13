@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r16)
+**Status:** Proposed (r19)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -8,7 +8,7 @@ Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
 **Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76),
-M4a (`.jsc` libraries, r15) and M4b (`java:` imports, r16) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+M4a (`.jsc` libraries, r15) and M4b (`java:` imports, r19) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -472,7 +472,7 @@ import { concat, slice, length } from "std/bytes"
     processor's description. Each contract's IR carries the libraries it imports (format 2, `libraries`), so both
     reference interpreters evaluate library fns (five-way, J3); each contract's message map lists a library's messages
     with the library's file (D12, J20).
-- **`java:` imports as built (r16, M4b).** `docs/reference/jsc-2-java-libraries.md` states the rules; the choices made
+- **`java:` imports as built (r19, M4b).** `docs/reference/jsc-2-java-libraries.md` states the rules; the choices made
   where the bullets above left room:
   - **Types.** `byte[]` maps to `Bytes` (a Java signature cannot say Key or Hash; `asKey(b)` checks a result), and no map
     crosses into `.jsc` in M4b (`JulcMap` is refused both ways), so a Java fn's result holds no Key, Hash or Map and its
@@ -1260,7 +1260,7 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   named by the file, relative imports, scope and one namespace per build, D11 through library calls, errors at the
   import, the lowering to `@OnchainLibrary`, helpers per class rather than shared, the artifacts: manifest kind `library`,
   IR format 2, message-map files). The M4 entry gate was verified first (`runtimeWasmTest`, M4a report §0).
-- **r16** (2026-11-13, M4b: `java:` imports): D9 records the Java imports as built: `byte[]` as `Bytes` and no maps in
+- **r19** (2026-11-13, M4b: `java:` imports): D9 records the Java imports as built: `byte[]` as `Bytes` and no maps in
   M4b; overloads refused; the trusted base made concrete (D8's table, `Require` and the adapters, an allow-list); three
   catalogue entries added (`equals`/`hashCode`/`toString`, record constructors, `BigInteger.mod`); verified and opaque
   records; the `joustLibrary` configuration, the duplicate-class check and two sources of a class refused; downstream

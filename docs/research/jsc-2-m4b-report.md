@@ -1,4 +1,4 @@
-# `.jsc` 2, milestone M4b: report (ADR-0018 r16)
+# `.jsc` 2, milestone M4b: report (ADR-0018 r19)
 
 Date 2026-11-13. Branch `feat/jsc-2-m4b`, stacked on M4a (`feat/jsc-2-m4a`). JuLC `v0.1.0-pre21-rc1`, JDK 25.0.2,
 GraalVM 25.3.4.1, Node 22.12.0, macOS arm64. M4b is `java:` imports with every rule of D9. This is the part of M4 that
@@ -32,7 +32,7 @@ generated Java names them (`AllowList.Entry`), and the ABI manifest states them 
 `checkJscAbi` checks: 18 manifests agree. The IR (format 2) lists `javaLibraries` and has the `CallJava` node.
 
 **In the interpreters** both evaluators give no answer for a `CallJava` (a `Limit`). They still answer every call that
-reaches no Java library. ADR r16 states the reason.
+reaches no Java library. ADR r19 states the reason.
 
 ## 2. The example
 
