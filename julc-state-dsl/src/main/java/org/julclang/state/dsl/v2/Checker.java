@@ -185,6 +185,26 @@ final class Checker {
     private final Map<String, String> javaFnLib = new HashMap<>();
     /** Each Java library record's library (by its simple name). */
     private final Map<String, String> javaRecLib = new HashMap<>();
+    /** Each class the generated Java imports by its simple name: libraries' classes and Java records' top-level classes. */
+    private final Map<String, String> importedSimple = new HashMap<>();
+
+    private static String simpleOf(String fqcn) {
+        return fqcn.substring(fqcn.lastIndexOf('.') + 1);
+    }
+
+    /** {@code fqcn} takes the simple name {@code simple} in the generated imports: a different class of that name is a clash. */
+    private void claimImport(String simple, String fqcn, Pos at, String what) {
+        if (importedSimple.isEmpty()) for (Module m : libraries) importedSimple.put(m.cls, m.qualified());
+        if (simple.equals(main.cls) || file.contract() != null && file.contract().name().equals(simple)) {
+            throw at.error("JSC0709", what + " is imported as " + simple + ", the name of this file's own class; rename one");
+        }
+        String other = importedSimple.putIfAbsent(simple, fqcn);
+        if (other != null && !other.equals(fqcn)) {
+            throw at.error("JSC0709", what + " is imported as " + simple + ", and so is " + other + ": the generated Java names both by that"
+                    + " simple name, an ambiguous import; rename one");
+        }
+    }
+
     /** Each Java library record's binary name, by its {@code .jsc} name: one record shared by two libraries is one type. */
     private final Map<String, String> javaRecBinary = new HashMap<>();
     /** The Java library records that are opaque: no fields to read, no equality, never written as a type. */
@@ -717,6 +737,12 @@ final class Checker {
             if (!r.verified()) javaOpaque.add(n);
             fresh.add(r);
         }
+        // Codex C14 (r3): the generated Java imports a Java record's top-level class to name it (B.R): that class takes its
+        // simple name in the importing file, as a library's class does, so two different classes of one simple name (b.B
+        // for a record, c.B for a fn) would be an ambiguous import. Refused at the import (JSC0709), in either order and
+        // against .jsc libraries too.
+        claimImport(cls, fqcn, at, "the Java library " + fqcn);
+        for (JavaLibraries.Rec r : fresh) claimImport(simpleOf(r.importClass()), r.importClass(), at, "the class of the record " + r.binaryName() + " of java:" + fqcn);
         for (JavaLibraries.Rec r : fresh) {
             var fields = records.get(r.simpleName());
             if (r.verified()) for (int i = 0; i < r.fieldNames().size(); i++) fields.put(r.fieldNames().get(i), javaTy(lib, r.fieldTypes().get(i)));

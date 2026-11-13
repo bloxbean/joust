@@ -3,7 +3,7 @@
 ADR-0018 D9, M4b. A `.jsc` 2 file may import the public static methods and records of a Java (JuLC) on-chain library:
 
 ```jsc
-import { Entry, isAllowed, limitOf, entry } from "java:org.julclang.state.examples.compliance.AllowList"
+import { Entry, isAllowed, limitOf, entry } from "java:com.example.compliance.AllowList"
 ```
 
 A library is admitted only when its **on-chain sources** are on the library path and **certified**. This page states
@@ -45,6 +45,15 @@ same sources into the validator and the transition programs.
 sources of one class are refused (a duplicate class). A jar's own classes, which could be another variant, never reach
 the build (`checkJoustLibraries`). The JOUST API's `src/onchain/java` variants (`Require`, `Assets`) are part of the trusted
 base, outside this rule.
+
+**The Gradle plugin (review r3, F9).** The plugin fails fast on a `joustLibrary` dependency: the certifier,
+julc-state-toolchain, is not published, and nothing published carries JOUST's on-chain API sources, which the
+certifier's pool needs. `-Pjoust.javaLibraries=experimental` turns the refusal off and keeps the wiring (the
+`joustLibrary` configuration, `extractJoustLibraries`, `checkJoustLibraries`, `recordJoustLibraries`, and
+`org.julclang:julc-state-toolchain` added to the `jsc` tool class path), **and nothing more**: it works only in a build
+that supplies both itself, for example a composite build (`includeBuild`) of this repository that substitutes
+julc-state-toolchain and puts julc-state-api's `onchainSources` on the toolchain's class path, as `examples/dsl` does by
+hand. Without that, the toolchain coordinate does not resolve. Publishing is tracked in #88.
 
 ## Signatures
 
@@ -90,8 +99,8 @@ import, with every problem and its file and line (JSC0721).
 | No unchecked representation casts | every cast: `(R) (Object) Builtins.constrData(…)` holds on-chain and throws on the JVM (`Datum.java:10-12`) |
 | The trusted base | every call outside the library and the trusted base |
 | Objects | `new` of anything but the library's records and `new BigInteger("…")` literals; arrays; local classes |
-| What JuLC would refuse later (review r2, S4), refused here so certification does not depend on the JuLC version | method references; calls to an abstract method (dynamic dispatch to an uncertified body); initialiser blocks; static fields not final or not initialised by a literal (a `byte[]` of literals included); overloads of any name, private ones too; constructors and accessor overrides in any library record; `null`; `&`, `\|` and `^` on booleans; `continue`; `return` inside a for-each; `JulcMap.lookup`, `delete`, `insert` on keys not compared by content |
-| Packages (review r2, S3) | a source declaring a class in a package of JOUST, JuLC, cardano-client-lib or the JDK (`org.julclang.`, except this repository's examples, `com.bloxbean.`, `java.`, `javax.`, `jdk.`, `sun.`, `com.sun.`): the whole set is refused |
+| What JuLC would refuse later (review r2, S4), refused here so certification does not depend on the JuLC version | method references; calls to an abstract method (dynamic dispatch to an uncertified body); initialiser blocks; static fields not final, not a scalar or not initialised by a literal (no static arrays: an array is mutable JVM state that a caller can change for every later call, r3 C13); overloads of any name, private ones too; constructors, accessor overrides and any instance method (r3 S5) in a library's classes and records; `null`; `&`, `\|` and `^` on booleans; `continue`; `return` inside a for-each; `JulcMap.lookup`, `delete`, `insert` on keys not compared by content |
+| Packages (review r2, S3; r3 F7, F8) | a source of a library's closure that declares a class in a package of JOUST, JuLC, cardano-client-lib or the JDK (`org.julclang.`, `com.bloxbean.`, `java.`, `javax.`, `jdk.`, `sun.`, `com.sun.`; no exception: the example library is `com.example.compliance.AllowList`) refuses that library. A file outside every closure is never compiled and refuses nothing |
 
 ### The catalogue of known JVM/on-chain differences
 

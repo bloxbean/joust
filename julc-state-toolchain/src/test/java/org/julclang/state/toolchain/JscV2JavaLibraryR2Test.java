@@ -136,13 +136,15 @@ class JscV2JavaLibraryR2Test {
                 + " public BigInteger val() { return CryptoLib.keccak_256(new byte[0]).length == 0 ? v : v; } }\n"
                 + " public static BigInteger f(BigInteger v) { return g(new Q(v)); }\n static BigInteger g(S s) { return s.val(); }", "calls the abstract");
         refused("public static Optional<BigInteger> f(JulcMap<P, BigInteger> m, P k) { return m.lookup(k); }", "JulcMap.lookup on");
-        // Still admitted: a literal constant, and a byte[] literal.
+        // Security S5 (r3): an instance method of a library record (or class) is refused, not left to JuLC.
+        refused("public record Q(BigInteger v) { BigInteger twice() { return v.add(v); } }\n public static BigInteger f(BigInteger v) { return v; }",
+                "Q.twice() is an instance method");
+        // Still admitted: scalar constants initialised by a literal.
         assertEquals(List.of(), JscV2JavaLibraryTest.problems("", """
-                static final BigInteger SEVEN = new BigInteger("7");
-                static final byte[] TAG = new byte[]{1, 2, -3};
                 static final boolean ON = true;
-                public static boolean f(byte[] b) { return ON && ByteStringLib.equals(b, TAG); }
-                """).stream().filter(p -> !p.contains("SEVEN")).toList());
+                static final String NAME = "tag";
+                public static boolean f(byte[] b) { return ON && ByteStringLib.equals(b, b); }
+                """));
     }
 
     /**
@@ -170,13 +172,22 @@ class JscV2JavaLibraryR2Test {
         var other = new LinkedHashMap<>(sources);
         other.put("acme/Unused.java", sources.get("acme/Unused.java").replace("TWO", "TEN"));
         assertEquals(l.sourceSha256(), JavaLibraryCertifier.certify(other).get("acme.Limits").sourceSha256());
-        // A decoy in a package of the trusted base, anywhere in the set.
+        // A decoy in a package of the trusted base. Outside every closure it is never compiled, and refuses nothing (r3:
+        // #79 F8, #82 F10: one bad source of a set no longer refuses every library); in a library's closure it refuses that
+        // library.
+        String decoySource = "/*\npackage decoy;\n*/\npackage org.julclang.state.runtime;\n"
+                + "public final class JavaLibraryCheck { public static void verify(Class<?> a, Class<?> b, String c, java.util.List<String> d) { } }\n";
         var decoy = new LinkedHashMap<>(sources);
-        decoy.put("org/julclang/state/runtime/JavaLibraryCheck.java", "/*\npackage decoy;\n*/\npackage org.julclang.state.runtime;\n"
-                + "public final class JavaLibraryCheck { public static void verify(Class<?> a, Class<?> b, String c, java.util.List<String> d) { } }\n");
+        decoy.put("org/julclang/state/runtime/JavaLibraryCheck.java", decoySource);
+        var apart = JavaLibraryCertifier.certify(decoy).get("acme.Limits");
+        assertEquals(List.of(), apart.problems());
+        assertEquals(List.of("acme/Bound.java", "acme/Limits.java"), apart.sources());
+        decoy.put("acme/Limits.java", sources.get("acme/Limits.java").replace("import org.julclang.stdlib.annotation.OnchainLibrary;",
+                "import org.julclang.stdlib.annotation.OnchainLibrary;\nimport org.julclang.state.runtime.JavaLibraryCheck;"));
         var refused = JavaLibraryCertifier.certify(decoy).get("acme.Limits");
         assertTrue(refused.problems().stream().anyMatch(p -> p.contains("declares org.julclang.state.runtime.JavaLibraryCheck, in a package of JOUST")),
                 refused.problems().toString());
+        assertEquals(List.of(), JavaLibraryCertifier.certify(decoy).get("acme.Unused").problems(), "the other library of the set");
     }
 
     /**
@@ -231,5 +242,74 @@ class JscV2JavaLibraryR2Test {
             System.setErr(old);
         }
         assertTrue(err.toString().contains("error[JSC0727]: acme.Lib$Box is in this jar"), err.toString());
+    }
+
+    /**
+     * Codex C13 (r3): a static byte[] is mutable JVM state: a caller that changes the array a fn returns changes every
+     * later call, while UPLC keeps the constant. Refused; a constant written in the method that returns it is a new array
+     * per call on the JVM and a constant on-chain, so JVM and UPLC agree on repeated calls.
+     */
+    @Test
+    void aStaticArray_isRefused_aConstantPerCallAgrees() throws Exception {
+        String head = "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n@OnchainLibrary\n";
+        var shared = JavaLibraryCertifier.certify(Map.of("lib/L.java", head
+                + "public class L {\n    private static final byte[] TAG = new byte[]{1, 2};\n    public static byte[] tag() { return TAG; }\n}\n"));
+        assertTrue(shared.get("lib.L").problems().stream().anyMatch(p -> p.contains("a static array is mutable on the JVM")),
+                shared.get("lib.L").problems().toString());
+        String c = "jsc 2\npackage app\nimport { tag } from \"java:lib.L\"\ncontract C {\n  state { b: Bytes }\n  init() { return { b: tag() } }\n"
+                + "  view v(): Bytes = tag()\n}\n";
+        refusedWith(c, shared, "JSC0721");
+        // The same constant built per call (BigInteger's byte form here: certified, a fresh value each time).
+        var perCall = Map.of("lib/L.java", head + "public class L {\n    public static BigInteger tag() { return BigInteger.valueOf(258); }\n}\n");
+        var libs = JavaLibraryCertifier.certify(perCall);
+        assertEquals(List.of(), libs.get("lib.L").problems());
+        String ci = c.replace("b: Bytes", "b: Int").replace("Bytes = tag()", "Int = tag()");
+        var r = Toolchain.build(Map.of("app/C.jsc", ci), Map.of(), perCall);
+        assertTrue(r.ok(), r.diagnostics().toString());
+    }
+
+    /**
+     * Codex C14 (r3): a Java record's top-level class is imported to name the record (B.R), so b.B (a record's class) and
+     * c.B (a fn's library) were both imported as B. Refused at the import, in either order.
+     */
+    @Test
+    void aRecordsClassAndALibrary_ofOneSimpleName_areRefused() {
+        String head = "import java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n@OnchainLibrary\n";
+        var sources = new LinkedHashMap<String, String>();
+        sources.put("a/A.java", "package a;\n" + head + "public class A {\n    public static b.B.R make(BigInteger n) { return new b.B.R(n); }\n}\n");
+        sources.put("b/B.java", "package b;\n" + head + "public class B {\n    public record R(BigInteger n) {}\n}\n");
+        sources.put("c/B.java", "package c;\n" + head + "public class B {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n");
+        var libs = JavaLibraryCertifier.certify(sources);
+        String body = "contract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n  view v(): Int = make(f()).n\n}\n";
+        for (String imports : List.of("import { make } from \"java:a.A\"\nimport { f } from \"java:c.B\"\n",
+                "import { f } from \"java:c.B\"\nimport { make } from \"java:a.A\"\n")) {
+            var e = refusedWith("jsc 2\npackage app\n" + imports + body, libs, "JSC0709");
+            assertTrue(e.getMessage().contains("imported as B"), e.getMessage());
+        }
+    }
+
+    /** Codex C15 (r3): an output directory written ./generated is the same directory as generated. */
+    @Test
+    void jscMain_takesAnOutputRootWrittenWithDot(@TempDir Path dir) throws Exception {
+        Path src = Files.createDirectories(dir.resolve("src/app"));
+        Files.writeString(src.resolve("C.jsc"), "jsc 2\npackage app\nimport { f } from \"java:lib.L\"\ncontract C {\n  state { n: Int }\n"
+                + "  init() { return { n: f() } }\n}\n");
+        Path libs = Files.createDirectories(dir.resolve("libs/lib"));
+        Files.writeString(libs.resolve("L.java"), "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n");
+        // A relative output path with ./, resolved against the working directory as the CLI does.
+        Path cwd = Path.of("").toAbsolutePath();
+        String out = "./" + cwd.relativize(dir.resolve("generated")).toString().replace('\\', '/');
+        var err = new ByteArrayOutputStream();
+        var old = System.err;
+        int code;
+        try {
+            System.setErr(new PrintStream(err));
+            code = JscMain.run(new String[]{dir.resolve("src").toString(), out, "--accept-abi", "--java-libraries", dir.resolve("libs").toString()});
+        } finally {
+            System.setErr(old);
+        }
+        assertEquals(0, code, err.toString());
+        assertTrue(Files.exists(dir.resolve("generated/lib/L.java")));
     }
 }

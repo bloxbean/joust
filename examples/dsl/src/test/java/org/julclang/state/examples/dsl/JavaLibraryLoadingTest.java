@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class JavaLibraryLoadingTest {
 
-    static final String LIB = "org.julclang.state.examples.compliance.AllowList";
+    static final String LIB = "com.example.compliance.AllowList";
     static final String CONTRACT = "org.julclang.state.examples.dsl.Guarded";
     static final Path BUILT = Path.of("build/classes/java/main");
 
@@ -79,10 +79,10 @@ class JavaLibraryLoadingTest {
 
     /** A substitute AllowList (isAllowed answers true for everyone; same constants, another body), compiled into {@code dir}. */
     static Path substitute(Path dir) throws IOException {
-        String source = Files.readString(Path.of("build/generated/sources/jsc/java/main/org/julclang/state/examples/compliance/AllowList.java"));
+        String source = Files.readString(Path.of("build/generated/sources/jsc/java/main/com/example/compliance/AllowList.java"));
         String evil = source.replace("return find(list, who).isPresent();", "return true;");
         assertNotEquals(source, evil);
-        Path src = Files.createDirectories(dir.resolve("src/org/julclang/state/examples/compliance")).resolve("AllowList.java");
+        Path src = Files.createDirectories(dir.resolve("src/com/example/compliance")).resolve("AllowList.java");
         Files.writeString(src, evil);
         Path out = Files.createDirectories(dir.resolve("classes"));
         int code = ToolProvider.getSystemJavaCompiler().run(null, null, null, "-d", out.toString(), "-cp", System.getProperty("java.class.path"),

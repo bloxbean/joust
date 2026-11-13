@@ -1,7 +1,7 @@
 jsc 2
 package org.julclang.state.examples.dsl
 
-import { Entry, isAllowed, limitOf, entry, total, clamp, tag } from "java:org.julclang.state.examples.compliance.AllowList"
+import { Entry, isAllowed, limitOf, entry, total, clamp, tag } from "java:com.example.compliance.AllowList"
 
 // A vault whose withdrawals a Java (JuLC) library decides (ADR-0018 D9, M4b): its record in the state and the init's
 // redeemer (read-only in .jsc), its fns in requires, values and a payout. The library's sources are certified before the

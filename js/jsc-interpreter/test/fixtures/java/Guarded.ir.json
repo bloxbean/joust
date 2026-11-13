@@ -1,7 +1,7 @@
 {
   "ir": 2,
   "language": "jsc 2",
-  "sourceSha256": "298ab5fbfd8894d006d71a3872793fba3c3399154b900979c33bfcea3dd7433e",
+  "sourceSha256": "5f7e5615883061a1b2a50491a448a6ee52892db5da172add3dca6c3a8c95c30f",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Guarded",
   "source": "Guarded.jsc",
@@ -22,15 +22,15 @@
   "libraries": [],
   "javaLibraries": [
     {
-      "class": "org.julclang.state.examples.compliance.AllowList",
-      "sourceSha256": "5c959a9a86cacbe2f7b191b0ec18c295860a0b5e11361c41d99b88f77074e56d",
+      "class": "com.example.compliance.AllowList",
+      "sourceSha256": "c7e5c9a6d771f94315d2c583440fafb86049008da28e52eb6f32a73a59fdcd41",
       "records": [
         {
           "name": "Entry",
           "fields": [{ "name": "who", "type": "Bytes" }, { "name": "limit", "type": "Int" }],
           "at": [4, 1],
-          "owner": "org.julclang.state.examples.compliance.AllowList",
-          "import": "org.julclang.state.examples.compliance.AllowList",
+          "owner": "com.example.compliance.AllowList",
+          "import": "com.example.compliance.AllowList",
           "javaName": "AllowList.Entry",
           "verified": true
         }
@@ -65,7 +65,7 @@
               "op": "<=",
               "left": {
                 "node": "CallJava",
-                "library": "org.julclang.state.examples.compliance.AllowList",
+                "library": "com.example.compliance.AllowList",
                 "fn": "total",
                 "args": [
                   {
@@ -137,7 +137,7 @@
               "items": [
                 {
                   "node": "CallJava",
-                  "library": "org.julclang.state.examples.compliance.AllowList",
+                  "library": "com.example.compliance.AllowList",
                   "fn": "entry",
                   "args": [
                     { "node": "LocalRef", "local": 2, "type": "Key", "taint": 0, "at": [19, 37] },
@@ -192,7 +192,7 @@
             "stmt": "Require",
             "cond": {
               "node": "CallJava",
-              "library": "org.julclang.state.examples.compliance.AllowList",
+              "library": "com.example.compliance.AllowList",
               "fn": "isAllowed",
               "args": [
                 {
@@ -233,7 +233,7 @@
               "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [26, 13] },
               "right": {
                 "node": "CallJava",
-                "library": "org.julclang.state.examples.compliance.AllowList",
+                "library": "com.example.compliance.AllowList",
                 "fn": "limitOf",
                 "args": [
                   {
@@ -261,7 +261,7 @@
             "to": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [27, 9] },
             "amount": {
               "node": "CallJava",
-              "library": "org.julclang.state.examples.compliance.AllowList",
+              "library": "com.example.compliance.AllowList",
               "fn": "clamp",
               "args": [
                 { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [27, 23] },
@@ -351,7 +351,7 @@
         "stmts": [],
         "result": {
           "node": "CallJava",
-          "library": "org.julclang.state.examples.compliance.AllowList",
+          "library": "com.example.compliance.AllowList",
           "fn": "limitOf",
           "args": [
             {
@@ -384,7 +384,7 @@
         "stmts": [],
         "result": {
           "node": "CallJava",
-          "library": "org.julclang.state.examples.compliance.AllowList",
+          "library": "com.example.compliance.AllowList",
           "fn": "tag",
           "args": [{ "node": "LocalRef", "local": 6, "type": "Key", "taint": 0, "at": [37, 37] }],
           "type": "Bytes",

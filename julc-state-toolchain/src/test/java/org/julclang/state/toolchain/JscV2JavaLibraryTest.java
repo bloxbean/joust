@@ -20,7 +20,7 @@ import org.julclang.state.dsl.v2.Interpreter.Tx;
 import org.julclang.state.dsl.v2.JavaLibraries;
 import org.julclang.state.dsl.v2.JscModules;
 import org.julclang.state.dsl.v2.JscV2;
-import org.julclang.state.examples.compliance.AllowList;
+import com.example.compliance.AllowList;
 import org.julclang.stdlib.StdlibRegistry;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -60,7 +60,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class JscV2JavaLibraryTest {
 
-    static final String FQCN = "org.julclang.state.examples.compliance.AllowList";
+    static final String FQCN = "com.example.compliance.AllowList";
     static final String DIR = "org/julclang/state/examples/dsl/";
     static final Path DSL = Path.of("../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl");
     static final byte[] OWNER = fill(0x0A), ANN = fill(0xA1), BEN = fill(0xB1), CAT = fill(0xC1);
@@ -267,7 +267,7 @@ class JscV2JavaLibraryTest {
     @Order(4)
     void theFrontEnd_admitsCertifiedFnsOnly() {
         var l = lower(FQCN, "action add(who: Key) open { return { ...state, list: [entry(who, 1), ...list] } }", certified);
-        assertTrue(l.java().contains("import org.julclang.state.examples.compliance.AllowList;"), l.java());
+        assertTrue(l.java().contains("import com.example.compliance.AllowList;"), l.java());
         assertTrue(l.java().contains("AllowList.entry(who, BigInteger.valueOf(1L))"), l.java());
         assertTrue(l.java().contains("JulcList<AllowList.Entry> list"), l.java());
         assertTrue(l.abiJson().contains("\"Entry\": { \"kind\": \"library\", \"library\": \"" + FQCN + "\""), l.abiJson());
@@ -367,7 +367,7 @@ class JscV2JavaLibraryTest {
                 import java.math.BigInteger;
                 import java.util.Optional;
                 import org.julclang.core.types.JulcList;
-                import org.julclang.state.examples.compliance.AllowList;
+                import com.example.compliance.AllowList;
                 public class Probe {
                 """);
         for (var f : lib.fns()) {

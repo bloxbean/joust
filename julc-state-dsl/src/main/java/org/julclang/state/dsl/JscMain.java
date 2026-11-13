@@ -645,7 +645,8 @@ public final class JscMain {
             return 2;
         }
         Path src = Path.of(args[0]);
-        Path out = Path.of(args[1]);
+        // Codex C15 (r3): one normalised, absolute root for resolution, containment and collisions (./out is out).
+        Path out = Path.of(args[1]).toAbsolutePath().normalize();
         List<Path> files = new ArrayList<>();
         if (Files.isDirectory(src)) {
             try (Stream<Path> s = Files.walk(src)) {

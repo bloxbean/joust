@@ -1,4 +1,4 @@
-package org.julclang.state.examples.compliance;
+package com.example.compliance;
 
 import java.math.BigInteger;
 import java.util.Optional;
