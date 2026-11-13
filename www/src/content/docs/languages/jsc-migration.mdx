@@ -60,7 +60,8 @@ is `JscMain --migrate <srcDir> <outDir> [--in-place]`.
 
 Each refusal prints at the v1 position, and each migrated file prints notes for what changed, then the new-script
 reminder. Gradle and `JscMain` print `File.jsc:line:col: error[JSC11xx]: …` and `File.jsc:line:col: note: …`;
-`joust migrate` prints `error[JSC11xx]: File.jsc:line:col: …` and `note: File.jsc:line:col: …`, as `joust build` does.
+`joust migrate` prints `error[JSC11xx]: File.jsc:line:col: …` and `note: File.jsc:line:col: …` (`joust build` prints the
+first shape, `File.jsc:line:col: error[JSC…]: …`, since ADR-0021 M5a).
 
 ## Before and after
 

@@ -37,6 +37,17 @@ function sources(dir, keep = () => true) {
   return out;
 }
 
+/**
+ * One diagnostic as both build paths print it (ADR-0021 D9; the catalogue's shape, as Gradle's JscMain prints it):
+ * `app/Counter.jsc:12:5: error[JSC0502]: message`, the file relative to the contracts directory; `error: message` when
+ * there is no file. The `$joust` problem matcher of the VS Code extension reads this shape.
+ */
+export function diagnosticLine(d) {
+  const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
+  // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
+  return `${where}${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${d.message}`;
+}
+
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
 export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep,
   acceptAbi = false } = {}) {
@@ -56,11 +67,7 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
       + ` (JOUST_ENGINE_STACK_MB=${ENGINE_STACK_MB}): build it on Gradle, or split it (please report it, with the file)` }],
       generated: [] };
   }
-  for (const d of r.diagnostics) {
-    const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
-    // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
-    (d.severity === 'error' ? console.error : log)(`${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${where}${d.message}`);
-  }
+  for (const d of r.diagnostics) (d.severity === 'error' ? console.error : log)(diagnosticLine(d));
   const dir = resolve(root, out);
   // ADR-0018 D12: the ABI gate first. Accepting is for a build that succeeded only.
   const refused = new Set();
