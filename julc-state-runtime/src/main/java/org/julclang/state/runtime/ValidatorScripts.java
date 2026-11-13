@@ -40,7 +40,8 @@ import java.util.stream.Stream;
  *   used. A single copy whose location cannot be read is used too, but
  *   only when it sits under the validator's own location (its URL is that location followed by the resource, issue
  *   #73): <b>this is the remaining fallback</b>. A lone copy elsewhere (another nested jar, or no location to compare
- *   with) is refused. If the validator's own copy under its location is another validator's script (a merge kept the
+ *   with) is refused; a GraalVM image's own resource ({@code resource:}) counts as beside, the image being one closed
+ *   build. If the validator's own copy under its location is another validator's script (a merge kept the
  *   wrong one), only a script hash recorded in bytecode (julc#326) catches it. Anything else, several candidates
  *   included, is refused.</li>
  *   <li><b>JuLC's parameter checks</b> are kept (as {@code JulcScriptLoader.load}): a parameterized validator is never
@@ -181,9 +182,14 @@ public final class ValidatorScripts {
 
     /**
      * Whether {@code copy} is {@code resource} under the validator's own location {@code where} (issue #73, security S9):
-     * a lone copy elsewhere, in another nested jar say, is another validator's of the same simple name. No location: no.
+     * a lone copy elsewhere, in another nested jar say, is another validator's of the same simple name. No location: no,
+     * unless the copy is a GraalVM image's own resource.
      */
     static boolean besideLocation(URL copy, URL where, String resource) {
+        // A native or Web Image (GraalVM) serves its resources as resource: URLs, and its classes have no readable
+        // location (Web Image reports a placeholder file). The image is one closed build, the class's own container: a
+        // second copy of the name would be a second resource: URL, which the caller refuses.
+        if ("resource".equals(copy.getProtocol())) return true;
         if (where == null) return false;
         String base = where.toString();
         if (!base.endsWith("/")) base += "/";

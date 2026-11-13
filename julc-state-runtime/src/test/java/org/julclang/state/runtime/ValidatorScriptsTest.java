@@ -188,6 +188,12 @@ class ValidatorScriptsTest {
         refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", nestedLocation, copies(nestedPrefix)));
         // ...and without a location to compare with, a lone unreadable copy is refused too.
         refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", null, copies(nestedOwn)));
+        // A GraalVM (Web) Image: a placeholder location and the image's one resource: copy, which is the class's own.
+        URL image = nested("resource:/2!/" + RESOURCE, json("ab07"));
+        URL placeholder = new URL("file:/this-is-not-a-real-file.js");
+        assertEquals("ab07", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", placeholder, copies(image))));
+        URL image2 = nested("resource:/3!/" + RESOURCE, json("ab08"));
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", placeholder, copies(image, image2)));
         // A location written without its trailing slash still matches its own copy.
         URL noSlash = nested("jar:nested:/app.jar/!BOOT-INF/lib/dsl.jar!", "");
         assertEquals("ee05", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", noSlash, copies(nestedOwn))));
