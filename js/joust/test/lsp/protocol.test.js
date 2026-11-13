@@ -72,7 +72,7 @@ test('diagnostics as you type: the first error with its code and link, then the 
     const e = p1.diagnostics[0];
     assert.equal(e.severity, 1);
     assert.equal(e.code, 'JSC0217');
-    assert.match(e.codeDescription.href, /^https:\/\/github\.com\/bloxbean\/joust\/blob\/main\/docs\/reference\/jsc-2-diagnostics\.md#:~:text=JSC0217$/);
+    assert.match(e.codeDescription.href, /^https:\/\/github\.com\/bloxbean\/joust\/blob\/main\/docs\/reference\/jsc-2-diagnostics\.md#:~:text=JSC0217,-error$/);
     assert.match(e.source, /^joust \(bundled \S+, advisory\)$/);
     assert.deepEqual(e.range, { start: { line: 6, character: 37 }, end: { line: 6, character: 44 } });
     lsp.change(uri, 2, src('n + 1'));
@@ -178,14 +178,33 @@ test('oversized, binary and deeply nested files: one diagnostic each, the server
   }
 });
 
-test('a v1 file gets the build\'s deprecation warning (ADR-0018 D16)', { skip }, async () => {
+const V1 = 'package t;\ncontract C {\n  state n: Int;\n  init() { n = 0; }\n}\n';
+
+test('a valid v1 file gets the build\'s deprecation warning and no error (ADR-0018 D16; review C10)', { skip }, async () => {
   const dir = tmp();
   const lsp = await startLsp({ folders: [dir] });
   try {
     const uri = uriOf(join(dir, 'Old.jsc'));
-    lsp.open(uri, 'package t;\ncontract C {\n  state { n: Int }\n  init() { n = 0; }\n}\n');
+    lsp.open(uri, V1);
     const p = await lsp.diagnostics(uri, 1);
-    assert.ok(p.diagnostics.some((d) => d.code === 'JSC9006' || d.severity === 1), JSON.stringify(p.diagnostics));
+    assert.deepEqual(p.diagnostics.map((d) => [d.code, d.severity]), [['JSC9006', 2]]);
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('an accepted model with no declarations clears the outline (review C9)', { skip }, async () => {
+  const dir = tmp();
+  const lsp = await startLsp({ folders: [dir] });
+  try {
+    const uri = uriOf(join(dir, 'C.jsc'));
+    lsp.open(uri, COUNTER, 1);
+    await lsp.diagnostics(uri, 1);
+    assert.equal((await lsp.request('textDocument/documentSymbol', { textDocument: { uri } }))[0].name, 'Counter');
+    lsp.change(uri, 2, V1);
+    await lsp.diagnostics(uri, 2);
+    assert.deepEqual(await lsp.request('textDocument/documentSymbol', { textDocument: { uri } }), []);
+    assert.deepEqual(await lsp.request('textDocument/foldingRange', { textDocument: { uri } }), []);
   } finally {
     await lsp.stop();
   }

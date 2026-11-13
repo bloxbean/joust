@@ -11,7 +11,8 @@ const skip = !HAS_ENGINE && 'needs the toolchain engine in js/joust/engine';
 const INVOKED = 1;
 const AUTOMATIC = 2;
 
-const withLet = COUNTER.replace('    require(by > 0, "increment must be positive")', '    let x = 1\n    require(by > 0, "increment must be positive")');
+const withLet = COUNTER.replace('    require(by > 0, "increment must be positive")', '    let x = by\n    require(by > 0, "increment must be positive")')
+  .replace('count: count + by', 'count: count + x');
 
 async function server(dir) {
   return startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: false } });
@@ -107,6 +108,24 @@ test('a fix whose document changed after it was offered is refused, with no appl
       await refusing.stop();
     }
     assert.ok(b);
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('a fix whose result has an error at the fix\'s own position is refused (S2: `let` of a state field\'s name)', { skip }, async () => {
+  const dir = tmp();
+  const lsp = await server(dir);
+  try {
+    const uri = uriOf(join(dir, 'Counter.jsc'));
+    // `const count = by` would hide the state field count: JSC0213 at the same position as the JSC0128 it fixes.
+    lsp.open(uri, withLet.replace('let x = by', 'let count = by').replace('count: count + x', 'count: count + by'), 1);
+    const p = await lsp.diagnostics(uri, 1);
+    assert.equal(p.diagnostics[0].code, 'JSC0128');
+    const [a] = await actions(lsp, uri, INVOKED, p.diagnostics);
+    const r = await lsp.request('workspace/executeCommand', { command: 'joust.applyFix', arguments: a.command.arguments });
+    assert.deepEqual(r, { applied: false, reason: 'the fix did not check' });
+    assert.equal(lsp.applied.length, 0);
   } finally {
     await lsp.stop();
   }

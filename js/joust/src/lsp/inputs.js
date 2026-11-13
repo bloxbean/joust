@@ -4,7 +4,12 @@
 //      the same way before it is followed (an absolute target, or one leaving the folder, is refused there);
 //   3. then the real path must still lie inside the folder (segment comparison), the file is opened non-blocking (a
 //      FIFO cannot block the open), checked with fstat ON THE DESCRIPTOR (regular files only), and read up to cap + 1
-//      bytes (anything longer is "too large").
+//      bytes (anything longer is "too large");
+//   4. and the file opened must be the file checked (review C1 on #83: a checked file, or one of its directories, can be
+//      swapped for a symlink between the check and the open): after the open, the path's real path is resolved again,
+//      must still lie inside the folder, and must name the descriptor's own file (same device and inode). Either swap,
+//      of the final component or of an ancestor, makes the descriptor's file differ from what the path names now, or
+//      the path name something outside: refused. (A hard link inside the folder is inside the folder.)
 // All of it on the protocol thread with asynchronous fs (D2a): engine workers do no file I/O. The fs is injectable, so a
 // test can record every call (D12, S14).
 import { constants, promises as realFs } from 'node:fs';
@@ -13,7 +18,7 @@ import { inside, lexicalSegments } from './paths.js';
 
 const MAX_LINKS = 32;
 
-/** The calls the reader makes: lstat, readlink, realpath, open (each as fs.promises has it). */
+/** The calls the reader makes: lstat, readlink, realpath, stat, open (each as fs.promises has it). */
 export function createReader(fs = realFs) {
   /**
    * Resolves `rel` (text, relative to the folder `folder`, a real path) to a path inside it, following symlinks under
@@ -80,6 +85,21 @@ export function createReader(fs = realFs) {
       const st = await fh.stat();
       if (!st.isFile()) return { error: 'not-a-file' };
       if (st.size > cap) return { error: 'too-large' };
+      // 4. The descriptor's file is the one the path names inside the folder, now that it is open.
+      let again;
+      try {
+        again = await fs.realpath(r.path);
+      } catch {
+        return { error: 'changed' };
+      }
+      if (!inside(again, folder)) return { error: 'outside' };
+      let named;
+      try {
+        named = await fs.stat(again);
+      } catch {
+        return { error: 'changed' };
+      }
+      if (named.dev !== st.dev || named.ino !== st.ino) return { error: 'changed' };
       const buf = Buffer.alloc(Math.min(cap + 1, st.size + 1));
       let n = 0;
       while (n < buf.length) {

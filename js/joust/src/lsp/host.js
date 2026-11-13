@@ -17,6 +17,7 @@
 // finding is about JuLC's compiler passes in a build (bloxbean/julc#327), which an analysis worker never runs; a build
 // worker (M5b) takes joust build's 8 MB.
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { Worker } from 'node:worker_threads';
 
 export const ANALYSIS_STACK_MB = 4;
@@ -101,6 +102,7 @@ class EngineWorker {
     // A worker still booting is terminated once it has booted (or failed to): terminating Electron's worker while its
     // node_init runs ends the whole process with SIGTRAP (seen on VS Code 1.109's extension host). It is dead to its
     // callers at once either way.
+    // A load that times out (30 s) is still terminated at once: deferring would keep a hung worker forever (§12 note 11).
     if (this.booted || reason === 'load-timeout') this.worker.terminate().catch(() => {});
     else this.ready.then(() => this.worker.terminate().catch(() => {}));
     this.died(reason);
@@ -108,7 +110,7 @@ class EngineWorker {
 
   /** Posts a call; resolves with the worker's answer, or `{ failure: 'time'|'memory'|'crash'|'cancelled' }`. */
   call(msg, timeoutMs, token) {
-    if (this.dead) return Promise.resolve({ failure: 'crash', message: 'the engine worker is gone' });
+    if (this.dead) return Promise.resolve({ failure: this.killedFor ?? 'crash', message: 'the engine worker is gone' });
     const id = ++this.seq;
     this.calls++;
     return new Promise((resolve) => {
@@ -127,14 +129,20 @@ class EngineWorker {
   }
 }
 
-/** The engine workers of a server, by key (a project root and compiler, or "bundled"). */
+/**
+ * The engine workers of a server. A worker is keyed by compiler (`engine:<id>`, §12 note 11); the failures, backoff and
+ * "analysis unavailable" state are kept per (worker key, scope), a scope being a project root (review S7 on #83): a
+ * hostile file in one project stops analysis of that project only, while the projects on one compiler share its worker.
+ */
 export class EngineHost {
   constructor(opts) {
     this.opts = { ...DEFAULTS, ...opts };
     if (!this.opts.workerEntry) throw new Error('EngineHost needs workerEntry');
-    this.slots = new Map();      // key -> { worker, engine, lastUsed, failures: [], backoffUntil, backoffMs, unavailable, queue }
+    this.slots = new Map();      // key -> { key, engine, worker, lastUsed, busy, queue }
+    this.health = new Map();     // key|scope -> { failures: [], backoffUntil, backoffMs, unavailable }
     this.quarantine = new Map(); // sha256(source) + engine id -> the failure
-    this.stats = { started: 0, terminated: 0, calls: 0, cancelled: 0, failures: 0 };
+    this.waiters = [];
+    this.stats = { started: 0, terminated: 0, calls: 0, cancelled: 0, failures: 0, displaced: 0 };
     this.now = this.opts.now ?? (() => Date.now());
     this.idleTimer = setInterval(() => this.reapIdle(), Math.min(60_000, this.opts.idleMs)).unref();
   }
@@ -146,78 +154,128 @@ export class EngineHost {
       s = undefined;
     }
     if (!s) {
-      s = { key, engine, worker: null, lastUsed: this.now(), failures: [], backoffUntil: 0, backoffMs: 0, unavailable: false, queue: Promise.resolve() };
+      s = { key, engine, worker: null, lastUsed: this.now(), busy: 0, queue: Promise.resolve() };
       this.slots.set(key, s);
     }
     return s;
   }
 
-  workerFor(s) {
-    if (s.worker && !s.worker.dead) return s.worker;
-    // At most maxWorkers alive: stop the least recently used other one.
-    const alive = [...this.slots.values()].filter((o) => o !== s && o.worker && !o.worker.dead);
-    if (alive.length >= this.opts.maxWorkers) {
-      alive.sort((a, b) => a.lastUsed - b.lastUsed);
-      for (const o of alive.slice(0, alive.length - this.opts.maxWorkers + 1)) this.stopWorker(o);
+  healthOf(key, scope = '') {
+    const k = `${key}|${scope}`;
+    let h = this.health.get(k);
+    if (!h) {
+      h = { failures: [], backoffUntil: 0, backoffMs: 0, unavailable: false };
+      this.health.set(k, h);
     }
-    if (process.env.JOUST_LSP_DEBUG) process.stderr.write(`[joust-lsp] starting a worker for ${s.key}\n`);
-    s.worker = new EngineWorker(s.engine, this.opts);
-    this.stats.started++;
-    return s.worker;
+    return h;
+  }
+
+  /** Wakes every acquisition waiting for a worker to become idle. */
+  wake() {
+    const w = this.waiters;
+    this.waiters = [];
+    for (const r of w) r();
+  }
+
+  /**
+   * The slot's worker, started if needed. At most maxWorkers are alive; to admit another, only an IDLE worker (booted,
+   * no call running or queued for it) is stopped, the least recently used first; when every live worker is busy, the
+   * acquisition waits for one to finish (review C3 on #83: a loading or busy worker is never evicted to admit another).
+   * `{ missing: true }` when the engine's file is gone (a store copy evicted by another window): select again, no failure.
+   */
+  async acquire(s) {
+    for (;;) {
+      if (s.worker && !s.worker.dead) return s.worker;
+      if (!existsSync(s.engine.file)) return { missing: true };
+      const alive = [...this.slots.values()].filter((o) => o !== s && o.worker && !o.worker.dead);
+      if (alive.length >= this.opts.maxWorkers) {
+        const idle = alive.filter((o) => o.busy === 0 && o.worker.booted && o.worker.pending.size === 0).sort((a, b) => a.lastUsed - b.lastUsed);
+        if (!idle.length) {
+          await new Promise((r) => this.waiters.push(r));
+          continue;
+        }
+        this.stopWorker(idle[0]);
+      }
+      if (process.env.JOUST_LSP_DEBUG) process.stderr.write(`[joust-lsp] starting a worker for ${s.key}\n`);
+      s.worker = new EngineWorker(s.engine, this.opts);
+      s.worker.ready.then(() => this.wake());
+      this.stats.started++;
+      this.opts.onStart?.(s.engine);
+      return s.worker;
+    }
   }
 
   /** Loads the key's engine (if needed) and returns its `lang.info` (null for an engine without the lang entries). */
   async info(key, engine) {
     const s = this.slot(key, engine);
-    const w = this.workerFor(s);
-    const r = await w.ready;
-    if (!r.ready) return { ready: false, error: r.error };
-    return { ready: true, info: r.info, version: r.version };
+    s.busy++;
+    try {
+      const w = await this.acquire(s);
+      if (w.missing) return { ready: false, missing: true, error: 'the engine file is missing' };
+      const r = await w.ready;
+      if (!r.ready) return { ready: false, error: r.error };
+      return { ready: true, info: r.info, version: r.version };
+    } finally {
+      s.busy--;
+      this.wake();
+    }
   }
 
-  status(key) {
+  status(key, scope = '') {
     const s = this.slots.get(key);
-    if (!s) return { state: 'idle' };
-    if (s.unavailable) return { state: 'unavailable', failures: s.failures.length };
-    if (s.backoffUntil > this.now()) return { state: 'backoff', until: s.backoffUntil };
-    return { state: 'ok' };
+    const h = this.health.get(`${key}|${scope}`);
+    if (h?.unavailable) return { state: 'unavailable', failures: h.failures.length };
+    if (h && h.backoffUntil > this.now()) return { state: 'backoff', until: h.backoffUntil };
+    return { state: s ? 'ok' : 'idle' };
   }
 
   /**
-   * Analyses one file on the key's engine: `{ model }` (the JSON text), `{ internal: { kind, message } }` (the call
-   * failed: kind time, memory, crash, failed or too-large; the input is quarantined), `{ cancelled: true }`,
-   * `{ unavailable: true }`, or `{ retryAt }` (in backoff).
+   * Analyses one file on the key's engine for `scope` (its project root): `{ model }` (the JSON text),
+   * `{ internal: { kind, message } }` (the call failed: kind time, memory, crash, failed or too-large; the input is
+   * quarantined), `{ cancelled: true }` (cancelled, or displaced by a stop: `displaced`), `{ unavailable: true }`,
+   * `{ retryAt }` (in backoff) or `{ missing: true }` (the engine's file is gone).
    */
-  analyze(key, engine, { file, source }, token) {
+  analyze(key, engine, { file, source, scope = '' }, token) {
     const s = this.slot(key, engine);
+    const h = this.healthOf(key, scope);
     const run = async () => {
-      if (s.unavailable) return { unavailable: true };
+      if (h.unavailable) return { unavailable: true };
       const q = this.quarantine.get(sha256(source) + '|' + engine.id);
       if (q) return { internal: q, quarantined: true };
-      if (s.backoffUntil > this.now()) return { retryAt: s.backoffUntil };
+      if (h.backoffUntil > this.now()) return { retryAt: h.backoffUntil };
       if (token?.isCancellationRequested) return { cancelled: true };
       s.lastUsed = this.now();
-      const w = this.workerFor(s);
-      const ready = await w.ready;
-      if (!ready.ready) return this.failed(s, source, { kind: 'crash', message: `the engine did not load: ${ready.error}` }, true);
-      this.stats.calls++;
-      const r = await w.call({ op: 'analyze', file, source }, this.opts.analysisMs, token);
-      if (r.failure === 'cancelled' || r.failure === 'stopped') {
-        this.stats.cancelled++;
-        if (r.failure === 'cancelled') this.stats.terminated++;
-        return { cancelled: true };
+      s.busy++;
+      try {
+        const w = await this.acquire(s);
+        if (w.missing) return { missing: true };
+        const ready = await w.ready;
+        // A worker stopped while it loaded (Restart analysis, or evicted) is no engine fault: requeue, never quarantine.
+        if (w.dead && (w.killedFor === 'stopped' || w.killedFor === 'cancelled')) return this.displaced();
+        if (!ready.ready) return this.failed(h, s, source, { kind: 'crash', message: `the engine did not load: ${ready.error}` }, true);
+        this.stats.calls++;
+        const r = await w.call({ op: 'analyze', file, source }, this.opts.analysisMs, token);
+        if (r.failure === 'stopped') return this.displaced();
+        if (r.failure === 'cancelled') {
+          this.stats.cancelled++;
+          this.stats.terminated++;
+          return { cancelled: true };
+        }
+        if (r.failure) {
+          if (r.failure === 'time') this.stats.terminated++;
+          const message = r.failure === 'time' ? `analysis stopped: time limit (${this.opts.analysisMs} ms)`
+            : r.failure === 'memory' ? `analysis stopped: memory limit (${this.opts.maxOldGenerationSizeMb} MB)`
+              : `analysis stopped: the engine failed (${r.message ?? r.failure})`;
+          return this.failed(h, s, source, { kind: r.failure, message }, true);
+        }
+        if (r.failed) return this.failed(h, s, source, { kind: 'failed', message: `analysis stopped: internal error (${r.failed})` }, false);
+        if (r.tooLarge) return this.failed(h, s, source, { kind: 'too-large', message: 'analysis stopped: the document model is too large' }, false);
+        h.backoffMs = 0;
+        return { model: r.model };
+      } finally {
+        s.busy--;
+        this.wake();
       }
-      if (r.failure) {
-        if (r.failure === 'time') this.stats.terminated++;
-        const message = r.failure === 'time' ? `analysis stopped: time limit (${this.opts.analysisMs} ms)`
-          : r.failure === 'memory' ? `analysis stopped: memory limit (${this.opts.maxOldGenerationSizeMb} MB)`
-            : `analysis stopped: the engine failed (${r.message ?? r.failure})`;
-        return this.failed(s, source, { kind: r.failure, message }, true);
-      }
-      if (r.failed) return this.failed(s, source, { kind: 'failed', message: `analysis stopped: internal error (${r.failed})` }, false);
-      if (r.tooLarge) return this.failed(s, source, { kind: 'too-large', message: 'analysis stopped: the document model is too large' }, false);
-      s.backoffMs = 0;
-      return { model: r.model };
     };
     // One call at a time per key.
     const p = s.queue.then(run, run);
@@ -225,32 +283,29 @@ export class EngineHost {
     return p;
   }
 
-  failed(s, source, failure, workerFailure) {
+  displaced() {
+    this.stats.displaced++;
+    return { cancelled: true, displaced: true };
+  }
+
+  failed(h, s, source, failure, workerFailure) {
     this.stats.failures++;
     this.quarantine.set(sha256(source) + '|' + s.engine.id, failure);
-    s.backoffMs = s.backoffMs ? Math.min(s.backoffMs * 2, this.opts.backoffMaxMs) : this.opts.backoffMs;
-    s.backoffUntil = this.now() + s.backoffMs;
+    h.backoffMs = h.backoffMs ? Math.min(h.backoffMs * 2, this.opts.backoffMaxMs) : this.opts.backoffMs;
+    h.backoffUntil = this.now() + h.backoffMs;
     if (workerFailure) {
       const t = this.now();
-      s.failures = s.failures.filter((x) => t - x < this.opts.failureWindowMs);
-      s.failures.push(t);
-      if (s.failures.length >= this.opts.maxFailures) {
-        s.unavailable = true;
-        this.stopWorker(s);
-      }
+      h.failures = h.failures.filter((x) => t - x < this.opts.failureWindowMs);
+      h.failures.push(t);
+      if (h.failures.length >= this.opts.maxFailures) h.unavailable = true;
     }
     return { internal: failure };
   }
 
-  /** "Restart analysis": a new worker for every key, limits, backoff and quarantine cleared. */
+  /** "Restart analysis": a new worker for every key; limits, backoff and quarantine cleared. */
   restart() {
-    for (const s of this.slots.values()) {
-      this.stopWorker(s);
-      s.failures = [];
-      s.unavailable = false;
-      s.backoffMs = 0;
-      s.backoffUntil = 0;
-    }
+    for (const s of this.slots.values()) this.stopWorker(s);
+    this.health.clear();
     this.quarantine.clear();
   }
 
@@ -260,6 +315,7 @@ export class EngineHost {
       this.stats.terminated++;
     }
     s.worker = null;
+    this.wake();
   }
 
   stop(key) {
@@ -270,12 +326,12 @@ export class EngineHost {
 
   reapIdle() {
     const t = this.now();
-    for (const s of this.slots.values()) if (s.worker && t - s.lastUsed > this.opts.idleMs) this.stopWorker(s);
+    for (const s of this.slots.values()) if (s.worker && s.busy === 0 && t - s.lastUsed > this.opts.idleMs) this.stopWorker(s);
   }
 
-  /** Engine ids some live worker uses (the engine store keeps their copies). */
+  /** The engine ids a live (loading or loaded) worker of this server uses: the store never evicts their copies (C7). */
   inUse() {
-    return new Set([...this.slots.values()].map((s) => s.engine.id));
+    return new Set([...this.slots.values()].filter((s) => (s.worker && !s.worker.dead) || s.busy > 0).map((s) => s.engine.id));
   }
 
   dispose() {

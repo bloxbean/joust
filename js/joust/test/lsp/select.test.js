@@ -156,7 +156,7 @@ test('every ineligible case runs the bundled engine, advisory, and says why (D3b
 
 test('the engine store keeps a few copies, the least recently used not in use evicted first (S21)', async () => {
   const storage = tmp('joust-lsp-store-');
-  const store = createStore(storage, { maxCopies: 2 });
+  const store = createStore(storage, { maxCopies: 2, recentMs: 0 });
   const ids = [];
   for (let k = 0; k < 4; k++) {
     const { id } = await store.put(Buffer.from(`js ${k}`), Buffer.from(`wasm ${k}`), new Set(ids.slice(0, 1)));

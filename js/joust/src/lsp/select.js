@@ -22,6 +22,8 @@ export const ENGINE_WASM = 'joust-toolchain.js.wasm';
 const JS_CAP = 8 * 1024 * 1024;
 const WASM_CAP = 128 * 1024 * 1024;
 const GRADLE_FILES = ['settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts'];
+/** The org.julclang.joust plugin's version, as Groovy or Kotlin build files write it. Linear: one quantifier per gap. */
+export const GRADLE_PLUGIN = /id[\s(]*["']org\.julclang\.joust["'][\s)]*version[\s(]*["']([^"'\s]{1,64})["']/;
 
 const hex = (b) => createHash('sha256').update(b).digest('hex');
 
@@ -31,9 +33,32 @@ export const engineId = (jsHash, wasmHash) => hex(`${jsHash}\n${wasmHash}\n`);
 /** The engine worker a compiler runs in: one per engine id (D2a's "per compiler version"). */
 export const workerKey = (engine) => `engine:${engine.id}`;
 
-/** Private storage of checked engine copies: `<storage>/engines/<id>/`. Writes nothing anywhere else (L3). */
-export function createStore(storageDir, { maxCopies = 3, fs = realFs } = {}) {
+/**
+ * Private storage of checked engine copies: `<storage>/engines/<id>/`. Writes nothing anywhere else (L3).
+ * - Several windows share the store (VS Code's global storage): a copy is in use when a live worker of this process uses
+ *   it, or when any process touched its `.used` within `recentMs` (each worker start touches it); only copies in use by
+ *   neither, beyond the `maxCopies` most recent, are evicted (security review S3, Codex C7 on #83).
+ * - Installing is coalesced by digest within the process, and a copy another process published first is reused once its
+ *   bytes check, never removed (Codex C5 on #83). A copy is immutable once published.
+ */
+export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 1000, fs = realFs } = {}) {
   const root = join(storageDir, 'engines');
+  const installing = new Map();
+  const valid = async (dir, jsHash, wasmHash) => {
+    try {
+      const [a, b] = await Promise.all([fs.readFile(join(dir, ENGINE_JS)), fs.readFile(join(dir, ENGINE_WASM))]);
+      return hex(a) === jsHash && hex(b) === wasmHash;
+    } catch {
+      return false;
+    }
+  };
+  const usedAt = async (n) => {
+    try {
+      return (await fs.stat(join(root, n, '.used'))).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
   async function evict(keep, inUse) {
     let names;
     try {
@@ -41,54 +66,63 @@ export function createStore(storageDir, { maxCopies = 3, fs = realFs } = {}) {
     } catch {
       return;
     }
+    const now = Date.now();
     const aged = [];
-    for (const n of names) {
-      try {
-        aged.push({ n, t: (await fs.stat(join(root, n, '.used'))).mtimeMs });
-      } catch {
-        aged.push({ n, t: 0 });
-      }
-    }
-    aged.sort((a, b) => b.t - a.t);
+    for (const n of names) aged.push({ n, t: await usedAt(n) });
+    aged.sort((x, y) => y.t - x.t);
     let kept = 0;
-    for (const { n } of aged) {
-      if (n === keep || inUse.has(n)) {
-        kept++;
-        continue;
-      }
-      if (kept < maxCopies) {
+    for (const { n, t } of aged) {
+      if (n === keep || inUse.has(n) || now - t < recentMs || kept < maxCopies) {
         kept++;
         continue;
       }
       await fs.rm(join(root, n), { recursive: true, force: true }).catch(() => {});
     }
   }
+  async function install(id, js, wasm, jsHash, wasmHash) {
+    const dir = join(root, id);
+    if (await valid(dir, jsHash, wasmHash)) return dir;
+    await fs.mkdir(root, { recursive: true });
+    const tmp = await fs.mkdtemp(join(root, '.tmp-'));
+    try {
+      await fs.writeFile(join(tmp, ENGINE_JS), js);
+      await fs.writeFile(join(tmp, ENGINE_WASM), wasm);
+      // The loader is CommonJS; this keeps any package.json above the storage from deciding how it loads.
+      await fs.writeFile(join(tmp, 'package.json'), '{ "type": "commonjs" }\n');
+      try {
+        await fs.rename(tmp, dir);
+      } catch (e) {
+        // Published meanwhile (another window): reuse it if its bytes check; else replace a damaged copy once.
+        if (await valid(dir, jsHash, wasmHash)) return dir;
+        await fs.rm(dir, { recursive: true, force: true });
+        await fs.rename(tmp, dir);
+      }
+      return dir;
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    }
+  }
   return {
     root,
     /** Writes (or reuses, after checking its bytes) the copy of an engine; `{ id, file }`. */
     async put(js, wasm, inUse = new Set()) {
-      const id = engineId(hex(js), hex(wasm));
-      const dir = join(root, id);
-      let ok = false;
-      try {
-        const [a, b] = await Promise.all([fs.readFile(join(dir, ENGINE_JS)), fs.readFile(join(dir, ENGINE_WASM))]);
-        ok = hex(a) === hex(js) && hex(b) === hex(wasm);
-      } catch {
-        ok = false;
+      const jsHash = hex(js);
+      const wasmHash = hex(wasm);
+      const id = engineId(jsHash, wasmHash);
+      let p = installing.get(id);
+      if (!p) {
+        p = install(id, js, wasm, jsHash, wasmHash).finally(() => installing.delete(id));
+        installing.set(id, p);
       }
-      if (!ok) {
-        await fs.mkdir(root, { recursive: true });
-        const tmp = await fs.mkdtemp(join(root, '.tmp-'));
-        await fs.writeFile(join(tmp, ENGINE_JS), js);
-        await fs.writeFile(join(tmp, ENGINE_WASM), wasm);
-        // The loader is CommonJS; this keeps any package.json above the storage from deciding how it loads.
-        await fs.writeFile(join(tmp, 'package.json'), '{ "type": "commonjs" }\n');
-        await fs.rm(dir, { recursive: true, force: true });
-        await fs.rename(tmp, dir);
-      }
+      const dir = await p;
       await fs.writeFile(join(dir, '.used'), String(Date.now()));
       await evict(id, inUse);
       return { id, file: join(dir, ENGINE_JS) };
+    },
+    /** Marks a copy as used now (a worker started on it); nothing for an engine that is not in the store. */
+    async touch(id) {
+      if (!/^[0-9a-f]{64}$/.test(String(id))) return;
+      await fs.writeFile(join(root, id, '.used'), String(Date.now())).catch(() => {});
     },
   };
 }
@@ -158,7 +192,9 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
       const r = await reader.read(folder, [...rel, g].join('/'), { cap: 512 * 1024 });
       if (r.error) continue;
       // Read as text, never by running Gradle (D3).
-      const m = /id\s*\(?\s*["']org\.julclang\.joust["']\s*\)?\s*version\s*\(?\s*["']([^"']+)["']/.exec(r.bytes.toString('utf8'));
+      // One quantifier per gap, so the match is linear on any text (security review S1 on #83: the earlier pattern
+      // backtracked quadratically on a long run of spaces, 154 s on the protocol thread for 512 KiB).
+      const m = GRADLE_PLUGIN.exec(r.bytes.toString('utf8'));
       if (m) return m[1];
     }
     return null;
@@ -233,7 +269,12 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
       const dir = dirname(realFile);
       const hit = cache.get(dir);
       if (hit) return hit;
-      const p = selectUncached(realFile).catch((e) => advisory(`the compiler could not be selected (${e?.message ?? e})`));
+      const gen = generation;
+      // A selection that failed is not cached (C5): the next file tries again.
+      const p = selectUncached(realFile).catch((e) => {
+        if (cache.get(dir) === p && generation === gen) cache.delete(dir);
+        return advisory(`the compiler could not be selected (${e?.message ?? e})`);
+      });
       cache.set(dir, p);
       return p;
     },

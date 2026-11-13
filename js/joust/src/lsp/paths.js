@@ -11,6 +11,14 @@ import { resolve, sep } from 'node:path';
  * The normalised segments of a relative path, or null when the text is not a plain relative path that stays below its
  * base. `base` is the segments it is relative to (a symlink's directory); '..' may climb within them, never above.
  */
+/**
+ * Windows' reserved device names (security review S4 on #83): opening `NUL`, `COM1` or `CONIN$` opens a device, with or
+ * without an extension (`nul.txt`), in any directory. Refused on every platform, so a repository behaves alike everywhere.
+ */
+const DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$|clock\$)(\.[^.]*)*$/i;
+
+export const isDeviceName = (segment) => DEVICE.test(segment.replace(/[ .]+$/, ''));
+
 export function lexicalSegments(text, base = []) {
   if (typeof text !== 'string' || text.length === 0 || text.length > 4096 || text.includes('\0')) return null;
   // UNC, device and extended paths, and POSIX or Windows absolute paths.
@@ -26,10 +34,22 @@ export function lexicalSegments(text, base = []) {
       continue;
     }
     // Windows ignores trailing dots and spaces in a segment ("..." and ".. " name the parent there).
-    if (/^\.+[ .]*$/.test(s) || /[ .]$/.test(s) && process.platform === 'win32') return null;
+    if (/^\.+[ .]*$/.test(s) || /[ .]$/.test(s) && process.platform === 'win32' || isDeviceName(s)) return null;
     out.push(s);
   }
   return out;
+}
+
+/**
+ * A filesystem path as text, before any filesystem call (S4): absolute, local, and none of UNC (`\\host\share`), device or
+ * extended (`\\.\`, `\\?\`) form, and no reserved device name in any segment. Null when refused.
+ */
+export function localPath(p) {
+  if (typeof p !== 'string' || !p || p.includes('\0') || p.length > 4096) return null;
+  if (/^[\\/]{2}/.test(p)) return null;
+  if (process.platform === 'win32' ? !/^[A-Za-z]:[\\/]/.test(p) : !p.startsWith('/')) return null;
+  for (const seg of p.split(/[\\/]+/).slice(1)) if (seg && isDeviceName(seg)) return null;
+  return p;
 }
 
 /** Whether `child` (a real path) is `parent` or lies inside it, by segment. */

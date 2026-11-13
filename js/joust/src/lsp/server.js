@@ -18,7 +18,7 @@ import { createReader } from './inputs.js';
 import {
   diagnostics as toDiagnostics, documentSymbols, fixFor, foldingRanges, internalDiagnostic, parseModel, selectionRanges,
 } from './model.js';
-import { inside } from './paths.js';
+import { inside, localPath } from './paths.js';
 import { createSelector, createStore, ENGINE_JS, ENGINE_WASM, engineId, workerKey } from './select.js';
 import { createHash } from 'node:crypto';
 
@@ -50,6 +50,33 @@ function defaultStorage() {
   return join(base, 'joust-lsp');
 }
 
+/** Marks a .code-workspace file whose directory does not resolve: every folder fails the rule (S5). */
+const UNRESOLVED = Symbol('unresolved');
+
+/** The local filesystem path of a `file:` URI, checked as text first (S4), or null: never a host, device or UNC path. */
+function localFileOf(uri) {
+  if (typeof uri !== 'string' || !uri.startsWith('file:')) return null;
+  let u;
+  try {
+    u = new URL(uri);
+  } catch {
+    return null;
+  }
+  if (u.host !== '' && u.host !== 'localhost') return null;
+  let p;
+  try {
+    p = fileURLToPath(u);
+  } catch {
+    return null;
+  }
+  return localPath(p);
+}
+
+const fileNameOf = (uri) => {
+  const p = localFileOf(uri);
+  return p ? basename(p) : 'Untitled.jsc';
+};
+
 async function real(p) {
   try {
     return await fsp.realpath(p);
@@ -66,10 +93,14 @@ async function real(p) {
 export function startServer({ connection, engineDir, workerEntry, storageDir: storageOverride, flags = {}, hostOptions = {}, version }) {
   const serverVersion = version ?? JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
   const documents = new TextDocuments(TextDocument);
-  const host = new EngineHost({ workerEntry, ...hostOptions });
+  let store;
+  // Each worker start marks its engine copy as used, on disk, so other windows sharing the store keep it (S3).
+  const host = new EngineHost({ workerEntry, ...hostOptions, onStart: (engine) => store?.touch?.(engine.id) });
   const reader = createReader();
-  const state = new Map();   // uri -> { lastPublished, model, outlineModel, timer, cts, selection }
-  const fixes = new Map();   // opaque single-use fix id -> { uri, version, code, range, issued }
+  // uri -> the state of ONE open lifetime of the document (review C2 on #83): every asynchronous result checks that the
+  // state it started with is still the current one, so a close and a reopen at the same version never mix lifetimes.
+  const state = new Map();   // uri -> { lastPublished, model, modelVersion, modelGen, outlineModel, timer, cts, selection }
+  const fixes = new Map();   // opaque single-use fix id -> { uri, st, version, gen, engineId, code, range, issued }
   let selector;
   let bundled;
   let isVscode = false;
@@ -87,9 +118,17 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const transactional = ['transactional', 'textOnlyTransactional'].includes(ws.workspaceEdit?.failureHandling);
     edits = (isVscode || flags.enableEdits === true) && ws.applyEdit === true && ws.workspaceEdit?.documentChanges === true && transactional;
 
-    const folderPaths = (params.workspaceFolders ?? []).map((f) => f.uri).filter((u) => u.startsWith('file:')).map((u) => fileURLToPath(u));
+    // S4: folder paths are checked as text before any filesystem call; a folder with a host (UNC), a device or extended
+    // path, or a URI that is not a local file, is treated as absent.
+    const folderPaths = (params.workspaceFolders ?? []).map((f) => localFileOf(f.uri)).filter(Boolean);
     const folders = (await Promise.all(folderPaths.map(real))).filter(Boolean);
-    const wsFile = typeof io.workspaceFile === 'string' && isAbsolute(io.workspaceFile) ? await real(dirname(io.workspaceFile)) : null;
+    // S5: a .code-workspace file the client names whose directory does not resolve fails closed: no folder outside it
+    // (none, then) is eligible.
+    let wsFile = null;
+    if (io.workspaceFile !== undefined && io.workspaceFile !== null) {
+      const f = localPath(io.workspaceFile);
+      wsFile = (f && await real(dirname(f))) ?? UNRESOLVED;
+    }
     const allowedRoots = (await Promise.all((Array.isArray(io.allowedRoots) ? io.allowedRoots : [])
       .filter((p) => typeof p === 'string' && isAbsolute(p)).map(real))).filter(Boolean);
     // The checked engine copies go to the client's private storage, which must lie outside every workspace folder (L3).
@@ -104,8 +143,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     bundled.version = probe.info?.joust ?? probe.version ?? 'unknown';
     if (!probe.ready || !probe.info) log(`the bundled engine has no lang entries: ${probe.error ?? 'no lang.info'}`);
 
+    store = storage ? createStore(storage) : { put: async () => { throw new Error('no private storage outside the workspace'); } };
     selector = createSelector({
-      reader, store: storage ? createStore(storage) : { put: async () => { throw new Error('no private storage outside the workspace'); } },
+      reader, store,
       host, bundled, trusted, folders, workspaceFileDir: wsFile, allowedRoots,
     });
     // L2: serverInfo names the compiler and the mode (of the first folder; each file's is in joust/status).
@@ -122,12 +162,17 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   const sourceLabel = (sel) => `joust (${sel.source} ${sel.engine.version}, ${sel.mode})`;
 
   async function selectionFor(uri) {
-    if (!uri.startsWith('file:')) return selector.select(null);
-    return selector.select(await real(fileURLToPath(uri)));
+    const p = localFileOf(uri);
+    if (!p) return selector.select(null);
+    // A buffer not saved yet: its directory's real path, and its name.
+    const r = (await real(p)) ?? (await real(dirname(p)).then((d) => (d ? join(d, basename(p)) : null)));
+    return selector.select(r);
   }
 
+  const scopeOf = (sel) => sel.root ?? sel.folder ?? '';
+
   function statusOf(uri, sel) {
-    const h = host.status(sel.key);
+    const h = host.status(sel.key, scopeOf(sel));
     return {
       uri, compiler: sel.engine.version, source: sel.source, mode: sel.mode, reason: sel.reason, trusted: selector.trusted,
       state: h.state === 'unavailable' ? 'unavailable' : 'ok', server: serverVersion,
@@ -159,6 +204,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const text = doc.getText();
     const gen = selector.generation;
     const sel = await selectionFor(uri);
+    if (state.get(uri) !== s) return;
     s.selection = sel;
     connection.sendNotification('joust/status', statusOf(uri, sel));
     const label = sourceLabel(sel);
@@ -170,12 +216,24 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     s.cts?.cancel();
     const cts = new CancellationTokenSource();
     s.cts = cts;
-    const file = uri.startsWith('file:') ? basename(fileURLToPath(uri)) : 'Untitled.jsc';
-    const r = await host.analyze(sel.key, sel.engine, { file, source: text }, cts.token);
+    const file = fileNameOf(uri);
+    const r = await host.analyze(sel.key, sel.engine, { file, source: text, scope: scopeOf(sel) }, cts.token);
     if (s.cts === cts) s.cts = undefined;
-    // D4a: a result is published only if nothing it read changed since: the buffer's version and the selection.
+    // D4a: a result is published only if nothing it read changed since: the open lifetime (C2), the buffer's version and
+    // the selection.
     const now = documents.get(uri);
-    if (!now || now.version !== version || selector.generation !== gen || r.cancelled) return;
+    if (state.get(uri) !== s || !now || now.version !== version || selector.generation !== gen) return;
+    if (r.missing) {
+      // The engine copy was evicted (by another window sharing the store): select again (S3), no failure.
+      selector.invalidate();
+      schedule(uri, 0);
+      return;
+    }
+    if (r.cancelled) {
+      // Displaced by a stop (eviction, Restart analysis) while still current: analyse again (C3).
+      if (r.displaced) schedule(uri, 0);
+      return;
+    }
     if (r.retryAt) {
       schedule(uri, Math.max(10, r.retryAt - Date.now()));
       return;
@@ -207,11 +265,16 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     s.model = model;
     s.modelVersion = version;
-    if (model.declarations.length) s.outlineModel = model;
+    s.modelGen = gen;
+    s.modelEngine = sel.engine.id;
+    // C9: an accepted model replaces the outline even when it has no declarations (a v1 file, an emptied contract); a
+    // file the front end stopped in early keeps the last outline only while its own model has none.
+    if (model.declarations.length || model.accepted) s.outlineModel = model;
     publish(uri, version, toDiagnostics(model, label));
   }
 
   documents.onDidOpen((e) => {
+    clearTimeout(state.get(e.document.uri)?.timer);
     state.set(e.document.uri, { lastPublished: null });
     schedule(e.document.uri, 0);
   });
@@ -229,6 +292,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       s.cts?.cancel();
     }
     state.delete(e.document.uri);
+    // A close ends the lifetime: its unexecuted fixes go, and executing ones fail their identity check (C2).
     for (const [id, f] of fixes) if (f.uri === e.document.uri) fixes.delete(id);
     connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
   });
@@ -262,7 +326,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (!edits || p.context?.triggerKind !== CodeActionTriggerKind.Invoked) return [];
     const doc = documents.get(p.textDocument.uri);
     const s = state.get(p.textDocument.uri);
-    if (!doc || !s?.model || s.modelVersion !== doc.version) return [];
+    // C4: only from a model of the current text AND the current selection generation.
+    if (!doc || !s?.model || s.modelVersion !== doc.version || s.modelGen !== selector.generation) return [];
     const out = [];
     for (const d of s.model.diagnostics) {
       if (d.severity !== 'error' || d.internal) continue;
@@ -271,7 +336,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       const fix = fixFor(doc.getText(), d, doc.getText({ start: { line: r[0], character: 0 }, end: { line: r[0] + 1, character: 0 } }));
       if (!fix) continue;
       const id = randomBytes(18).toString('base64url');
-      fixes.set(id, { uri: p.textDocument.uri, version: doc.version, code: d.code, range: r, issued: Date.now() });
+      fixes.set(id, { uri: p.textDocument.uri, st: s, version: doc.version, gen: s.modelGen, engineId: s.modelEngine, code: d.code, range: r,
+        issued: Date.now() });
       const lsp = toDiagnostics({ diagnostics: [d] }, sourceLabel(s.selection))[0];
       out.push({ title: fix.title, kind: CodeActionKind.QuickFix, diagnostics: [lsp], command: { title: fix.title, command: FIX_COMMAND, arguments: [id] } });
     }
@@ -288,7 +354,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (!f || Date.now() - f.issued > 10 * 60 * 1000) return { applied: false, reason: 'unknown or used fix' };
     const doc = documents.get(f.uri);
     const s = state.get(f.uri);
-    if (!doc || doc.version !== f.version || !s?.model || s.modelVersion !== f.version) return { applied: false, reason: 'stale fix' };
+    // The same open lifetime (C2), text version and selection generation (C4) as when the fix was offered.
+    const current = () => state.get(f.uri) === f.st && documents.get(f.uri)?.version === f.version && selector.generation === f.gen
+      && f.st.selection?.engine.id === f.engineId;
+    if (!doc || s !== f.st || !current() || !s.model || s.modelVersion !== f.version) return { applied: false, reason: 'stale fix' };
     // Recomputed on the current snapshot, then re-checked by the engine (L6: the diagnostic goes and none is added).
     const d = s.model.diagnostics.find((x) => x.code === f.code && x.range.join() === f.range.join());
     if (!d) return { applied: false, reason: 'stale fix' };
@@ -296,18 +365,20 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const fix = fixFor(text, d, doc.getText({ start: { line: d.range[0], character: 0 }, end: { line: d.range[0] + 1, character: 0 } }));
     if (!fix) return { applied: false, reason: 'stale fix' };
     const fixed = TextDocument.applyEdits(doc, fix.edits);
-    const r = await host.analyze(s.selection.key, s.selection.engine, { file: f.uri.startsWith('file:') ? basename(fileURLToPath(f.uri)) : 'Untitled.jsc', source: fixed }, token);
+    const sel = s.selection;
+    const r = await host.analyze(sel.key, sel.engine, { file: fileNameOf(f.uri), source: fixed, scope: scopeOf(sel) }, token);
     if (!r.model) return { applied: false, reason: 'the fix could not be checked' };
+    if (!current()) return { applied: false, reason: 'stale fix' };
     const after = parseModel(r.model);
     const at = (x) => x.line * 1e6 + x.col;
     const fixedAt = (d.range[0] + 1) * 1e6 + d.range[1] + 1;
-    // M5a's model holds the first error only: the fix's diagnostic must be gone, and no error may come before it (any
-    // later error was hidden behind it, not added).
+    // M5a's model holds the first error only: the fix's diagnostic must be gone, and no error may come at or before its
+    // position (one there is the fix's own doing, review S2 on #83: `let k` becoming `const k` that hides a state field);
+    // a later error was hidden behind it, not added.
     const bad = after.diagnostics.some((x) => x.severity === 'error' && (x.internal || (x.code === d.code && x.range.join() === d.range.join())
-      || at(x) < fixedAt));
+      || at(x) <= fixedAt));
     if (bad) return { applied: false, reason: 'the fix did not check' };
-    const still = documents.get(f.uri);
-    if (!still || still.version !== f.version) return { applied: false, reason: 'stale fix' };
+    if (!current()) return { applied: false, reason: 'stale fix' };
     // D4a: applied by the client only through a versioned workspace/applyEdit (the extension's handleApplyEdit refuses
     // it if the document is closed or has another version).
     const res = await connection.workspace.applyEdit({ label: fix.title, edit: { documentChanges: [{ textDocument: { uri: f.uri, version: f.version }, edits: fix.edits }] } });
@@ -321,6 +392,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   });
 
   connection.onRequest('joust/restartAnalysis', () => {
+    // C6: a restart also selects the compiler again, re-reading and re-checking the project's engine bytes.
+    selector.invalidate();
+    fixes.clear();
     host.restart();
     unavailableShown = false;
     for (const uri of state.keys()) schedule(uri, 0);
@@ -331,11 +405,13 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   connection.onNotification('joust/trust', (p) => {
     if (!isVscode || p?.trusted !== true) return;
     selector.invalidate({ trusted: true });
+    fixes.clear();
     for (const uri of state.keys()) schedule(uri, 0);
   });
 
   connection.onDidChangeWatchedFiles(() => {
     selector?.invalidate();
+    fixes.clear();
     for (const uri of state.keys()) schedule(uri, 0);
   });
 

@@ -25,8 +25,10 @@ export function diagnostics(model, source) {
       range: range(d.range),
       severity: d.severity === 'error' ? 1 : 2,
       ...(code ? { code } : {}),
-      // A catalogue code links its row (text fragment on the catalogue's page); internal ones link nothing.
-      ...(code && /^JSC\d{4}$/.test(code) ? { codeDescription: { href: `${CATALOGUE}#:~:text=${code}` } } : {}),
+      // A catalogue code links its ROW (review F4 on #83): a text fragment for the code followed by its severity, which only
+      // the table row has (`| JSC0502 | error |`); the code alone first matches the format example or prose. Internal
+      // codes link nothing.
+      ...(code && /^JSC\d{4}$/.test(code) ? { codeDescription: { href: `${CATALOGUE}#:~:text=${code},-${d.severity === 'error' ? 'error' : 'warning'}` } } : {}),
       source,
       message: d.message,
     };

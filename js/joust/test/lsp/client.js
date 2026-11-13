@@ -22,7 +22,7 @@ export const VSCODE_CAPS = {
 };
 
 export async function startLsp({ engineDir = ENGINE, storage = tmp('joust-lsp-store-'), args = [], hostOptions, initOptions,
-  capabilities = {}, folders = [], applyEdit } = {}) {
+  capabilities = {}, folders = [], workspaceFolders, applyEdit } = {}) {
   const env = { ...process.env, JOUST_LSP_TEST_HOOKS: '1', ...(hostOptions ? { JOUST_LSP_HOST_OPTIONS: JSON.stringify(hostOptions) } : {}) };
   const child = spawn(process.execPath, [BIN, '--stdio', '--engine-dir', engineDir, '--storage', storage, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
   let stderr = '';
@@ -46,7 +46,7 @@ export async function startLsp({ engineDir = ENGINE, storage = tmp('joust-lsp-st
   conn.listen();
   const init = await conn.sendRequest('initialize', {
     processId: process.pid, rootUri: folders[0] ? uriOf(folders[0]) : null, capabilities,
-    workspaceFolders: folders.map((f) => ({ uri: uriOf(f), name: f })), initializationOptions: initOptions,
+    workspaceFolders: workspaceFolders ?? folders.map((f) => ({ uri: uriOf(f), name: f })), initializationOptions: initOptions,
   });
   conn.sendNotification('initialized', {});
 
