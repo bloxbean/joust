@@ -42,7 +42,7 @@ revision resolved every finding. The resolution is recorded in the ADR itself.
 | [0015](#adr-0015-option-n-npm-toolchain-and-runtime-on-wasm) | Option N: npm toolchain and runtime on Wasm | Accepted (r5); M0 to M4 implemented | [The joust CLI and projects](/apps/cli-and-projects/) |
 | [0016](#adr-0016-keyed-objects) | Keyed objects: one UTxO per key, in a sorted on-chain list | Accepted (r8); M1 to M3 implemented on `main` (PR #37), not yet released; M4 a follow-up | [Keyed objects](/contracts/keyed-objects/) |
 | [0018](#adr-0018-jsc-2-an-immutable-contract-language) | `.jsc` 2: an immutable contract language for JavaScript developers | Proposed (r6) | [.jsc](/languages/jsc/) |
-| [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc-2) | A language server and VS Code extension for `.jsc` 2 | Proposed (r5) | – |
+| [0021](#adr-0021-a-language-server-and-vs-code-extension-for-jsc-2) | A language server and VS Code extension for `.jsc` 2 | Proposed (r6); M5a in #83 (draft) | – |
 
 ## The base
 
@@ -329,7 +329,7 @@ Files start with `jsc 2`; v1 files keep compiling and `joust migrate` rewrites t
 ### ADR-0021: A language server and VS Code extension for `.jsc` 2
 
 [`0021-jsc-language-server-and-vscode-extension.md`](https://github.com/bloxbean/joust/blob/main/docs/adr/0021-jsc-language-server-and-vscode-extension.md)
-· Proposed (r5)
+· Proposed (r6); M5a implemented in #83 (draft)
 
 The editor runs the build's own `.jsc` 2 front end, so the editor and the build cannot disagree about the language.
 A Java language core beside the checker turns files into a document model (diagnostics with their stable codes,
