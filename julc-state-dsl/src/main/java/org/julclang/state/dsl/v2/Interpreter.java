@@ -613,10 +613,13 @@ public final class Interpreter {
                 }
                 case Ir.Send sd -> {
                     // §5.1: both arguments, left to right; a value with a negative quantity, or a reserved token name
-                    // under the contract's own policy, cannot be sent.
+                    // under the contract's own policy, cannot be sent; nor can anything to the contract's own script (I30).
                     AddrV to = (AddrV) eval(sd.to(), env, f);
                     ValueV v = (ValueV) eval(sd.value(), env, f);
                     if (!sendable(v, funds(f).policy(), false)) throw Refused.domain("send", "this value cannot be sent");
+                    if (to.payment().script() && Arrays.equals(to.payment().hash().value, funds(f).policy().value)) {
+                        throw Refused.domain("send", "a send cannot go to the contract's own script");
+                    }
                     f.sends.add(new SendV(to, v));
                 }
                 case Ir.Mint mt -> {
@@ -1128,13 +1131,14 @@ public final class Interpreter {
                 yield true;
             }
             case Ty.BigMapT b -> true;
-            // §4: every hash in a credential or an address (its payment credential, a staking hash) is 28 bytes.
+            // §4: every hash in a credential or an address (its payment credential, a staking hash) is 28 bytes, and an
+            // address's staking part is none or a hash: a pointer is refused (review S1).
             case Ty.Ledger l -> switch (l.name()) {
                 case "Credential" -> ((CredV) v).hash().value.length == 28;
                 case "Address" -> {
                     AddrV x = (AddrV) v;
                     yield x.payment().hash().value.length == 28
-                            && (!x.stake().present() || !(x.stake().value() instanceof StakeHash h) || h.credential().hash().value.length == 28);
+                            && (!x.stake().present() || x.stake().value() instanceof StakeHash h && h.credential().hash().value.length == 28);
                 }
                 default -> true;
             };

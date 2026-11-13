@@ -175,10 +175,14 @@ class Program {
           break;
         }
         case 'Send': {
-          // §5.1: both arguments, left to right; no negative quantity, no reserved name of the own policy.
+          // §5.1: both arguments, left to right; no negative quantity, no reserved name of the own policy; never to the
+          // contract's own script (I30).
           const to = this.#eval(s.to, env, f);
           const value = this.#eval(s.value, env, f);
           if (!sendable(value, funds(f).policy, false)) throw new Refused('this value cannot be sent', 'domain', 'send');
+          if (to.payment.script && bytesEqual(to.payment.hash, funds(f).policy)) {
+            throw new Refused("a send cannot go to the contract's own script", 'domain', 'send');
+          }
           f.sends.push({ to, value });
           break;
         }
@@ -537,7 +541,8 @@ class Program {
       if (t === 'Key' || t === 'Hash') return v.length === 28;
       // §4 (M2): every hash of a credential or an address (its payment credential, a staking hash) is 28 bytes.
       if (t === 'Credential') return v.hash.length === 28;
-      if (t === 'Address') return v.payment.hash.length === 28 && (v.stake === NONE || !(v.stake.value instanceof StakeHash) || v.stake.value.credential.hash.length === 28);
+      // A staking part is none or a hash: a pointer is refused (review S1).
+      if (t === 'Address') return v.payment.hash.length === 28 && (v.stake === NONE || (v.stake.value instanceof StakeHash && v.stake.value.credential.hash.length === 28));
       return true;
     }
     if ('list' in t) return v.every((x) => this.wellFormed(x, t.list));

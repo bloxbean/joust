@@ -5,6 +5,8 @@ import org.julclang.ledger.Credential;
 import org.julclang.ledger.PubKeyHash;
 import org.julclang.ledger.ScriptHash;
 import org.julclang.ledger.StakingCredential;
+import org.julclang.core.PlutusData;
+import org.julclang.stdlib.Builtins;
 import org.julclang.stdlib.annotation.OnchainLibrary;
 import org.julclang.stdlib.lib.ByteStringLib;
 
@@ -14,7 +16,8 @@ import java.util.Optional;
  * Audited adapters for {@code .jsc}'s {@code Address} and {@code Credential} (ADR-0018 D5, D8; M2): construction,
  * projection, structural equality and the checked-input rule, one body on the JVM and on-chain. Credentials are the
  * ledger's ({@code PubKeyCredential}, {@code ScriptCredential}); an address is a payment credential and an optional
- * staking credential ({@code StakingHash} or {@code StakingPtr}), encoded as the ledger encodes them.
+ * staking credential ({@code StakingHash} or {@code StakingPtr}), encoded as the ledger encodes them. A checked input
+ * never holds a pointer ({@link #addressOk}), so in {@code .jsc} an address's staking part is none or a hash.
  */
 @OnchainLibrary
 public class AddressAdapter {
@@ -133,26 +136,91 @@ public class AddressAdapter {
         };
     }
 
-    /** A checked input (ADR-0018 D5): a credential holds a 28-byte hash. */
+    /**
+     * Whether a send to {@code a} can be delivered (ADR-0007 I30): never at the contract's own script ({@code policy}, the
+     * script's hash), whose input every call spends, so the validator refuses such a send. A key, or another script, is
+     * fine here; another script spent in the same transaction is a transaction-level rule (semantics §2, the transaction-level rules).
+     */
+    public static boolean notOwnScript(Address a, byte[] policy) {
+        Credential c = a.credential();
+        return switch (c) {
+            case Credential.PubKeyCredential k -> true;
+            case Credential.ScriptCredential s -> !ByteStringLib.equals(scriptOf(s), policy);
+        };
+    }
+
+    // ------------------------------------------------------------------ checked inputs (ADR-0018 D5, J15)
+    //
+    // Decided on the data itself, not through the typed accessors: a transition program (and any code that JuLC's strict
+    // entrypoint decoding does not stand in front of) may be handed a value whose constructor tags or field counts are
+    // not the ledger's, and the accessors project fields of whatever constructor is there, while Optional.isPresent()
+    // reads only "tag 0". So every tag and every field count is checked here. The same body runs on the JVM, where a
+    // ledger record converts to its data (Builtins' Object overloads), and on-chain, where it is that data.
+
+    /** A checked input: the ledger's encoding of a credential (Constr 0 or 1 with one field), holding a 28-byte hash. */
     public static boolean credentialOk(Credential c) {
-        return ByteStringLib.length(hashOf(c)) == 28;
+        return credentialData(Builtins.constrTag(c), Builtins.constrFields(c));
     }
 
-    /** A checked input: a 28-byte payment credential, and a staking hash (if any) of 28 bytes too. */
+    /**
+     * A checked input: the ledger's encoding of an address (Constr 0 [payment, staking]), a checked payment credential, and
+     * a staking part that is none (Constr 1 []) or a staking hash (Constr 0 [Constr 0 [credential]]) with a checked
+     * credential. A staking pointer is refused (review S1): Conway gives pointers no staking meaning, their components'
+     * widths are the era's, and a stored pointer no output could carry would make every send to that address fail.
+     */
     public static boolean addressOk(Address a) {
-        Optional<StakingCredential> s = a.stakingCredential();
-        return credentialOk(a.credential()) && stakeOk(s);
+        return addressData(Builtins.constrTag(a), Builtins.constrFields(a));
     }
 
-    static boolean stakeOk(Optional<StakingCredential> s) {
-        if (s.isPresent()) {
-            StakingCredential c = s.get();
-            return switch (c) {
-                case StakingCredential.StakingHash h -> credentialOk(h.credential());
-                case StakingCredential.StakingPtr p -> true;
-            };
+    static boolean addressData(long tag, PlutusData fields) {
+        if (tag == 0L && two(fields)) {
+            PlutusData payment = Builtins.headList(fields);
+            PlutusData stake = Builtins.headList(Builtins.tailList(fields));
+            return credentialData(Builtins.constrTag(payment), Builtins.constrFields(payment))
+                    && stakeData(Builtins.constrTag(stake), Builtins.constrFields(stake));
         } else {
-            return true;
+            return false;
+        }
+    }
+
+    /** The staking part: None (Constr 1 []) or Some (Constr 0 [a staking hash]). */
+    static boolean stakeData(long tag, PlutusData fields) {
+        if (tag == 1L) {
+            return Builtins.nullList(fields);
+        } else if (tag == 0L && one(fields)) {
+            PlutusData s = Builtins.headList(fields);
+            return stakingHashData(Builtins.constrTag(s), Builtins.constrFields(s));
+        } else {
+            return false;
+        }
+    }
+
+    /** A staking hash: Constr 0 [credential] (Constr 1, a pointer, is refused). */
+    static boolean stakingHashData(long tag, PlutusData fields) {
+        if (tag == 0L && one(fields)) {
+            PlutusData c = Builtins.headList(fields);
+            return credentialData(Builtins.constrTag(c), Builtins.constrFields(c));
+        } else {
+            return false;
+        }
+    }
+
+    /** Whether a list of fields has exactly one element. */
+    static boolean one(PlutusData fields) {
+        return !Builtins.nullList(fields) && Builtins.nullList(Builtins.tailList(fields));
+    }
+
+    /** Whether a list of fields has exactly two elements. */
+    static boolean two(PlutusData fields) {
+        return !Builtins.nullList(fields) && one(Builtins.tailList(fields));
+    }
+
+    /** A credential: Constr 0 (a key) or Constr 1 (a script), with one field, a 28-byte hash. */
+    static boolean credentialData(long tag, PlutusData fields) {
+        if ((tag == 0L || tag == 1L) && one(fields)) {
+            return Builtins.lengthOfByteString(Builtins.unBData(Builtins.headList(fields))) == 28L;
+        } else {
+            return false;
         }
     }
 }

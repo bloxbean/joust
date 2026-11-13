@@ -815,7 +815,8 @@ final class JavaEmitter {
                 }
                 case Ir.Send y -> {
                     // send(to, value) (M2): both arguments left to right; then the value is checked sendable (semantics
-                    // §5.1: no negative quantity, no reserved name of the own policy) and added to the sends in order.
+                    // §5.1: no negative quantity, no reserved name of the own policy), the address never the contract's own
+                    // script (I30; review F1), and the send added to the sends in order.
                     String to = ex(y.to());
                     if (!total(y.to())) {
                         String t = fresh("to");
@@ -825,7 +826,9 @@ final class JavaEmitter {
                     String v = fresh("value"), ns = fresh("sends");
                     imports.add("org.julclang.state.api.Require");
                     out.append(ind).append("Value ").append(v).append(" = ").append(ex(y.value())).append(";\n");
-                    out.append(ind).append("Require.that(ValueAdapter.sendable(").append(v).append(", funds.policy()), ")
+                    imports.add("org.julclang.state.api.AddressAdapter");
+                    out.append(ind).append("Require.that(ValueAdapter.sendable(").append(v).append(", funds.policy()) && AddressAdapter.notOwnScript(")
+                            .append(to).append(", funds.policy()), ")
                             .append(str(key("send", ordinals.get("send").get(y.pos()), y.pos(), null))).append(");\n");
                     out.append(ind).append("JulcList<Send> ").append(ns).append(" = Sends.add(").append(acc.cur.get("send")).append(", ")
                             .append(to).append(", ").append(v).append(", Datum.none());\n");
