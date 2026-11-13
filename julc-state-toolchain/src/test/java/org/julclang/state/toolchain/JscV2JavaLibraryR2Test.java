@@ -348,7 +348,7 @@ class JscV2JavaLibraryR2Test {
                 "is an annotation type");
         refused("public @interface A { P DEFAULT = new P(new byte[]{1, 2}, BigInteger.ONE); }\n public static BigInteger f() { return BigInteger.ONE; }",
                 "is an annotation type");
-        for (String write : List.of("b[0] = 9;", "b[0] += 1;", "b[0]++;", "--b[0];")) {
+        for (String write : List.of("b[0] = 9;", "b[0] += 1;", "b[0]++;", "--b[0];", "(b[0]) = 9;", "((b[0])) += 1;", "(b[0])++;")) {
             refused("public static byte[] f(byte[] b) { " + write + " return b; }", "writes an array element");
         }
     }
