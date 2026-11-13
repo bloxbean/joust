@@ -86,8 +86,10 @@ const addValue = (m, unit, q) => m.set(unit, (m.get(unit) ?? 0n) + q);
  * - with Plutus scripts: collateral (key-locked, at most max_collateral_inputs, ADA only unless returned, at least
  *   collateral_percent of the fee, total_collateral if declared), the script integrity hash (PlutusV2/V3 language
  *   views), the declared units within max_tx_ex_mem/steps and at least what each script consumes;
+ * - spending and reference inputs are disjoint (protocol version 11 on), and the collateral return holds its minimum;
  * - concurrent submissions are applied one at a time, each checked against the ledger as the previous one left it.
- * Not modelled: rewards and governance, pool certificates' rules, the treasury, PlutusV1's integrity hash, and the
+ * Not modelled, and refused (`NotModelled`, review r3): votes, proposals, treasury donations and values, pool, DRep and
+ * committee certificates. Not modelled otherwise: rewards (withdrawals take 0), PlutusV1's integrity hash, and the
  * collateral loss of a phase-2 failure (a failing script refuses the whole transaction here).
  */
 export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000) * 1000, slotLengthMs = 1000, attacks = true,
@@ -136,11 +138,24 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
         + ' only transactions whose scripts pass, and does not model collateral loss');
     }
     if (v.size > Number(p.max_tx_size)) throw new LedgerRefusal('MaxTxSizeUTxO', `${v.size} bytes, over max_tx_size ${p.max_tx_size}`);
+    // Review r3 (#82 F9, S7): what the ledger does not model is refused, not applied as if it were not there.
+    const unmodelled = [v.hasDonation && 'a treasury donation', v.hasTreasuryValue && 'a treasury value', v.hasVotes && 'votes',
+      v.hasProposals && 'proposals',
+      ...v.certificates.filter((c) => !c.credential || /Pool|DRep|Committee|Genesis|MoveInstantaneous/.test(c.kind)).map((c) => `a ${c.kind} certificate`)]
+      .filter(Boolean);
+    if (unmodelled.length) {
+      throw new LedgerRefusal('NotModelled', `the in-memory ledger does not model ${unmodelled.join(', ')}: test this on DevKit`);
+    }
     // Inputs, reference inputs and collateral: unspent outputs of this ledger.
     for (const r of [...v.inputs, ...v.referenceInputs, ...v.collateral]) {
       if (!utxos.has(r)) throw new LedgerRefusal('BadInputsUTxO', `${r} is not an unspent output`);
     }
     if (!v.inputs.length) throw new LedgerRefusal('InputSetEmptyUTxO', 'no inputs');
+    // Review r3 (#82 C19): from protocol version 11 (Conway), an output is spent or referenced, not both.
+    const both = v.inputs.filter((r) => v.referenceInputs.includes(r));
+    if (both.length && Number(p.protocol_major_ver ?? 11) >= 11) {
+      throw new LedgerRefusal('BabbageNonDisjointRefInputs', `${both.join(', ')} is both spent and referenced`);
+    }
     // The validity window holds the current slot.
     if (v.validFrom !== null && slot < Number(v.validFrom)) throw new LedgerRefusal('OutsideValidityIntervalUTxO', `slot ${slot} is before ${v.validFrom}`);
     if (v.ttl !== null && slot >= Number(v.ttl)) throw new LedgerRefusal('OutsideValidityIntervalUTxO', `slot ${slot} is at or after ${v.ttl}`);
@@ -168,6 +183,13 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
       const min = perByte * BigInt(160 + o.size);
       if ((o.value.get('lovelace') ?? 0n) < min) throw new LedgerRefusal('BabbageOutputTooSmallUTxO', `output ${i} holds less than ${min} lovelace`);
     });
+    // Review r3 (#82 C18): the collateral return is an output too, whatever phase 2 does.
+    if (v.collateralReturn) {
+      const min = perByte * BigInt(160 + v.collateralReturn.size);
+      if ((v.collateralReturn.value.get('lovelace') ?? 0n) < min) {
+        throw new LedgerRefusal('BabbageOutputTooSmallUTxO', `the collateral return holds less than ${min} lovelace`);
+      }
+    }
     // Signatures: every vkey witness signs the transaction's id.
     const signed = new Set();
     for (const w of v.vkeys) {
@@ -226,8 +248,12 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     for (const x of plutus) if (!redeemed.has(key(x.tag, x.index))) throw new LedgerRefusal('MissingRedeemers', `no redeemer for ${x.what}`);
     const wanted = new Set(plutus.map((x) => key(x.tag, x.index)));
     for (const r of v.redeemers) if (!wanted.has(key(r.tag, r.index))) throw new LedgerRefusal('ExtraRedeemers', `a redeemer ${key(r.tag, r.index)} for no Plutus script`);
-    // A spent output's datum hash needs its datum among the witnesses.
-    for (const r of v.inputs) {
+    // A Plutus-locked spent output's datum hash needs its datum among the witnesses (review r3, #82 C17: a key-locked or
+    // native-script output carrying a datum hash needs none).
+    const spent = [...v.inputs].sort(byRef);
+    for (const x of plutus) {
+      if (x.tag !== 'spend') continue;
+      const r = spent[x.index];
       const h = out(r).datumHash;
       if (h && !v.witnessDatums.includes(h)) throw new LedgerRefusal('MissingRequiredDatums', `no datum for ${r}'s datum hash ${h}`);
     }

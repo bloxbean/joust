@@ -277,7 +277,9 @@ test("offline: the template's counter on an in-memory ledger, the validators eva
   };
   await instance.increment(owner, { by: 5n });
   net.ledger.submit = submit;
-  assert.ok(probed instanceof LedgerRefusal && ['PPViewHashesDontMatch', 'ScriptFailure'].includes(probed.rule), String(probed));
+  // Review r3 (F8): the redeemers changed, so the integrity hash no longer matches; the units rule (with a consistent
+  // hash) is offline-ledger.test.js's "declared units" test.
+  assert.ok(probed instanceof LedgerRefusal && probed.rule === 'PPViewHashesDontMatch', String(probed));
   assert.equal((await instance.state()).count, 5n);
   await assert.rejects(instance.increment(owner, { by: 0n }), /increment must be positive/);
   const stranger = await net.wallet(10);

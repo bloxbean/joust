@@ -176,19 +176,49 @@ public final class Toolchain {
     }
 
     /**
-     * The classes a hand-written Java source imports ({@code import a.b.C;}, {@code import static a.b.C.f;}), each with
-     * its enclosing names ({@code a.b.C.Inner} gives {@code a.b.C} too). Read from the text: a class it names otherwise is
-     * not on the build's pool, so its compilation fails (closed).
+     * The top-level classes hand-written Java sources name, read from javac's attribution (review r3, Codex C16: not from
+     * the text, whose layout and comments would decide what javac may see). Attributed with every Java library source
+     * offered, only to find which of them the sources reach (an import in any form, a qualified name); the build itself
+     * then compiles only those libraries' closures. Empty when the sources do not attribute (their build fails anyway).
      */
-    static java.util.Set<String> javaImports(String text) {
-        var out = new java.util.TreeSet<String>();
-        var m = java.util.regex.Pattern.compile("(?m)^\\s*import\\s+(static\\s+)?([\\w.$]+)\\s*;").matcher(text);
-        while (m.find()) {
-            String n = m.group(2);
-            if (m.group(1) != null && n.contains(".")) n = n.substring(0, n.lastIndexOf('.'));
-            for (; n.contains("."); n = n.substring(0, n.lastIndexOf('.'))) out.add(n);
-        }
-        return out;
+    static java.util.Set<String> referencedClasses(Map<String, String> javaFiles, Map<String, String> javaLibrarySources) {
+        var roots = new ArrayList<JavacFrontend.Unit>();
+        javaFiles.forEach((name, text) -> roots.add(new JavacFrontend.Unit(text, java.nio.file.Path.of(name))));
+        var pool = new ArrayList<JavacFrontend.Unit>();
+        LibrarySourceResolver.scanClasspathSources(Toolchain.class.getClassLoader(), problem -> {})
+                .values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
+        javaLibrarySources.values().forEach(t -> pool.add(JavacFrontend.Unit.jar(t)));
+        java.util.Set<String> found = JavacFrontend.shared().attribute(roots, pool, a -> {
+            var out = new java.util.TreeSet<String>();
+            if (a.trees() == null) return out;
+            for (var unit : a.roots()) {
+                new com.sun.source.util.TreePathScanner<Void, Void>() {
+                    void note() {
+                        javax.lang.model.element.Element e = a.trees().getElement(getCurrentPath());
+                        while (e != null && !(e instanceof javax.lang.model.element.TypeElement t
+                                && t.getNestingKind() == javax.lang.model.element.NestingKind.TOP_LEVEL)) {
+                            if (e instanceof javax.lang.model.element.PackageElement) return;
+                            e = e.getEnclosingElement();
+                        }
+                        if (e != null) out.add(((javax.lang.model.element.TypeElement) e).getQualifiedName().toString());
+                    }
+
+                    @Override
+                    public Void visitIdentifier(com.sun.source.tree.IdentifierTree node, Void unused) {
+                        note();
+                        return super.visitIdentifier(node, unused);
+                    }
+
+                    @Override
+                    public Void visitMemberSelect(com.sun.source.tree.MemberSelectTree node, Void unused) {
+                        note();
+                        return super.visitMemberSelect(node, unused);
+                    }
+                }.scan(unit, null);
+            }
+            return out;
+        });
+        return found == null ? java.util.Set.of() : found;
     }
 
     /**
@@ -311,9 +341,9 @@ public final class Toolchain {
         if (!javaLibrarySources.isEmpty() && !hasErrors(diagnostics)) {
             var wanted = new java.util.TreeSet<String>();
             for (Generated g : generatedOut) for (var u : g.libraries()) if (u.kind().equals("java")) wanted.add(u.name().substring("java:".length()));
-            for (var e : files.entrySet()) {
-                if (!e.getKey().endsWith(".java")) continue;
-                for (String fqcn : javaImports(e.getValue())) {
+            // The build's Java (hand-written, and lowered from .jsc, which hand-written code may name) as javac reads it.
+            if (files.keySet().stream().anyMatch(n -> n.endsWith(".java"))) {
+                for (String fqcn : referencedClasses(sources, javaLibrarySources)) {
                     var lib = javaLibraries.describe(fqcn);
                     if (lib == null || lib.sources().isEmpty()) continue;
                     wanted.add(fqcn);

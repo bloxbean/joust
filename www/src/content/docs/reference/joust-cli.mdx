@@ -84,23 +84,26 @@ assert.deepEqual(net.ledger.acceptedAttacks(), []);        // every mutation of 
 a transaction it checks these phase-1 rules (each refusal names the node's error):
 
 - the transaction is tagged valid, is at most `max_tx_size` bytes, and its inputs, reference inputs and collateral exist
-  and are unspent;
+  and are unspent; an output is not both spent and referenced;
 - the validity interval holds at the ledger's slot (`ledger.advance(ms)` moves its clock);
 - withdrawals come from registered reward accounts and take exactly their balance (always 0: no rewards are paid);
-- the transaction balances, with the fee and the deposits, and every output holds its minimum ADA;
+- the transaction balances, with the fee and the deposits, and every output holds its minimum ADA, the collateral
+  return included;
 - the fee is at least the size's, the declared execution units' and the reference scripts' fee;
 - every key that must sign has a verifying witness, every script credential that must authorise (a script-locked input,
   a mint policy, a script withdrawal or certificate) has its script, witnessed or referenced; native scripts are
-  evaluated; each Plutus purpose has a redeemer and no redeemer is extra; a spent datum hash has its datum;
+  evaluated; each Plutus purpose has a redeemer and no redeemer is extra; a Plutus-locked input's datum hash has its
+  datum (a key-locked output with a datum hash needs none);
 - with Plutus scripts: the collateral is key-locked, at most `max_collateral_inputs`, ADA only unless returned, at least
   `collateral_percent` of the fee, and matches `total_collateral` when it is declared; the script integrity hash
   matches; the declared units are within the per-transaction limit;
 - phase 2: every Plutus script that must run, evaluated by the runtime engine (`joust.evaluate`, the evaluator that
   prices transactions), within its redeemer's declared units.
 
-Concurrent submissions are applied one at a time. Not modelled: rewards, governance and pool rules, the treasury,
-PlutusV1's integrity hash, and the collateral loss of a failing script (an invalid-tagged transaction is refused; a
-failing script refuses the whole transaction).
+Concurrent submissions are applied one at a time. A transaction carrying what the ledger does not model is refused
+(`NotModelled`): votes, proposals, treasury donations and values, pool, DRep and committee certificates; test those on
+DevKit. Not modelled otherwise: rewards (withdrawals take 0), PlutusV1's integrity hash, and the collateral loss of a
+failing script (an invalid-tagged transaction is refused; a failing script refuses the whole transaction).
 
 A refusal is a `LedgerRefusal`. For each transaction a script ran in, the ledger also runs the attack suite
 (`joust.attacks`, a subset of the JVM testkit's `Attacks`) on it: the state datum replaced or hashed, one lovelace

@@ -81,7 +81,7 @@ class JscV2ToolchainTest {
     /**
      * Review r2 (#82 C7, F2, S2; design P-b, Codex's JavaOnlyProbe): a hand-written Java contract that imports a package's
      * Java library reports it, with the hash of its source closure, so joust.lock pins it; changing the library's body
-     * changes that hash. A package source no import names is not on the build's pools: the contract cannot reach it.
+     * changes that hash, however the contract names it (r3 C16).
      */
     @Test
     void aJavaContractsPackageLibrary_isReportedForTheLock_andNothingElseIsOnThePool() throws Exception {
@@ -102,10 +102,23 @@ class JscV2ToolchainTest {
         assertTrue(two.ok(), two.diagnostics().toString());
         assertNotEquals(use.sha256(), two.libraries().get(0).sha256(), "a changed body moves the pin");
         assertNotEquals(one.contracts().get(0).scriptHash(), two.contracts().get(0).scriptHash());
-        // Named without an import, the class is not on the pool: the build fails, nothing unpinned reaches the script.
-        String hidden = counter.replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(lib.L.f(), ctx.caller());");
-        var none = Toolchain.build(Map.of("app/Counter.java", hidden), Map.of(), Map.of("lib/L.java", lib));
-        assertFalse(none.ok(), "an unimported package class is not on the build");
+        // Review r3 (Codex C16): what the contract reaches is read from javac, not from the text: an import on the package's
+        // line and an import with a comment inside it are found and pinned.
+        for (String spelling : List.of(
+                uses.replace("package app;\n", "package app; ").replace("import lib.L;", ""),
+                uses.replace("import lib.L;", "import /* library */ lib.L;"))) {
+            assertNotEquals(counter, spelling);
+            var r = Toolchain.build(Map.of("app/Counter.java", spelling.contains("package app; ") ? spelling.replace("package app; ",
+                    "package app; import lib.L;\n") : spelling), Map.of(), Map.of("lib/L.java", lib));
+            assertTrue(r.ok(), r.diagnostics().toString());
+            assertEquals(List.of(use), r.libraries());
+        }
+        // A qualified name without an import reaches the library too: javac finds it (JuLC then asks for an import).
+        var qualified = Toolchain.build(Map.of("app/Counter.java", counter.replace("return new State(BigInteger.ZERO, ctx.caller());",
+                "return new State(lib.L.f(), ctx.caller());")), Map.of(), Map.of("lib/L.java", lib));
+        assertFalse(qualified.ok());
+        assertTrue(qualified.diagnostics().stream().anyMatch(d -> d.message().contains("JULC0123")), qualified.diagnostics().toString());
+        assertTrue(qualified.diagnostics().stream().noneMatch(d -> d.message().contains("does not exist")), qualified.diagnostics().toString());
         // A contract that imports nothing of a package reports nothing.
         var plain = Toolchain.build(Map.of("app/Counter.java", counter), Map.of(), Map.of("lib/L.java", lib));
         assertTrue(plain.ok(), plain.diagnostics().toString());

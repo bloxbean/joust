@@ -878,7 +878,10 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
     one at a time. It has the **runtime engine** evaluate its scripts whenever a Plutus script must run
     (`joust.evaluate`: JuLC's VM with the ledger's cost model, the evaluator that prices transactions), so phase 2 runs
     the validator the build produced. Not modelled: rewards, governance and pool rules, the treasury, PlutusV1's
-    integrity hash, and a phase-2 failure's collateral loss (an invalid-tagged transaction is refused). On each script
+    integrity hash, and a phase-2 failure's collateral loss (an invalid-tagged transaction is refused). *(r3:)* What is
+    not modelled and would change a transaction's meaning (votes, proposals, treasury donations and values, pool, DRep
+    and committee certificates) is refused (`NotModelled`), not applied; spending and reference inputs are disjoint;
+    the collateral return holds its minimum; only Plutus-locked inputs need their datums. On each script
     transaction it runs the attack suite (`joust.attacks`, **a subset** of the JVM testkit's `Attacks` (design F4): the
     state's datum replaced or hashed, value skimmed, token dust, a key address, a stake credential, an output dropped,
     the signer replaced, and the validity bounds moved or removed when the call read its window; the payout, mint and
@@ -1394,3 +1397,9 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   units, refuses invalid-tagged transactions, and serialises submissions; D14 lists what it models and what it does not.
   The attack suite is called a subset, and only a script's refusal counts. `--accept-abi` no longer writes the lock;
   `joust test`'s offline flag makes the network providers refuse.
+  *Review round r3 (Codex C16–C19; design F8–F10; security S7):* a Java contract's libraries are found from javac's
+  attribution of the build's sources (any import form, a qualified name), not from the text; the ledger requires datums
+  only for Plutus-locked inputs, checks the collateral return's minimum and disjoint spending and reference inputs, and
+  refuses what it does not model (`NotModelled`); each new ledger rule has a refusal test. One bad package source no
+  longer refuses every `java:` import (the reserved-package rule is per library, #79 r3); a set that does not compile
+  still does (#88).

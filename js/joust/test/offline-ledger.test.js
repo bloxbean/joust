@@ -21,13 +21,21 @@ function setup() {
 }
 
 /** A transaction built with cardano-js-sdk (an implementation independent of the runtime's). */
-function rawTx({ inputs, outputs, fee, withdrawals = [], mint = null, nativeScripts = [], collateral = [], redeemers = [] }) {
+function rawTx({ inputs, outputs, fee, withdrawals = [], mint = null, nativeScripts = [], collateral = [], redeemers = [], plutusScripts = [],
+  referenceInputs = [], collateralReturn = null, totalCollateral, integrity, donation }) {
   const ref = (r) => ({ txId: Cardano.TransactionId(r.split('#')[0]), index: Number(r.split('#')[1]) });
+  const txOut = (o) => ({ address: Cardano.PaymentAddress(o.address), value: { coins: o.lovelace, ...(o.assets ? { assets: o.assets } : {}) },
+    ...(o.datumHash ? { datumHash: o.datumHash } : {}) });
   const body = {
     inputs: inputs.map(ref),
-    outputs: outputs.map((o) => ({ address: Cardano.PaymentAddress(o.address), value: { coins: o.lovelace, ...(o.assets ? { assets: o.assets } : {}) } })),
+    outputs: outputs.map(txOut),
     fee,
     ...(collateral.length ? { collaterals: collateral.map(ref) } : {}),
+    ...(referenceInputs.length ? { referenceInputs: referenceInputs.map(ref) } : {}),
+    ...(collateralReturn ? { collateralReturn: txOut(collateralReturn) } : {}),
+    ...(totalCollateral !== undefined ? { totalCollateral } : {}),
+    ...(integrity ? { scriptIntegrityHash: integrity } : {}),
+    ...(donation ? { donation } : {}),
     ...(withdrawals.length ? { withdrawals: withdrawals.map((w) => ({ stakeAddress: Cardano.RewardAccount(w.address), quantity: w.amount })) } : {}),
     ...(mint ? { mint } : {}),
   };
@@ -35,6 +43,8 @@ function rawTx({ inputs, outputs, fee, withdrawals = [], mint = null, nativeScri
   const ws = tx.witnessSet();
   if (nativeScripts.length) ws.setNativeScripts(Serialization.CborSet.fromCore(nativeScripts.map((s) => s.toCore()), Serialization.NativeScript.fromCore));
   if (redeemers.length) ws.setRedeemers(Serialization.Redeemers.fromCore(redeemers));
+  if (plutusScripts.length) ws.setPlutusV3Scripts(Serialization.CborSet.fromCore(plutusScripts.map((c) => Serialization.Script.fromCore(c).asPlutusV3().toCore()),
+    Serialization.PlutusV3Script.fromCore));
   tx.setWitnessSet(ws);
   return tx.toCbor();
 }
@@ -146,4 +156,101 @@ test('concurrent submissions never spend one output twice (C9)', async () => {
   const rejected = rx.status === 'rejected' ? rx : ry;
   assert.equal(rejected.reason.rule, 'BadInputsUTxO');
   assert.equal((await ledger.utxos(dest('22'))).length + (await ledger.utxos(dest('33'))).length, 1);
+});
+
+// ---- Review r3 (#82 F8): one refusal test per rule, on a Plutus spend whose phase 1 is otherwise valid. The engine is a
+// stub that reports the units the test gives it (P-c's recipe: a consistent integrity hash, recomputed after each change).
+
+const SCRIPT = { __type: Cardano.ScriptType.Plutus, bytes: '4d01000033222220051200120011', version: Cardano.PlutusLanguageVersion.V3 };
+const PARAMS = JSON.parse((await import('node:fs')).readFileSync(new URL('../src/test/protocol-params.json', import.meta.url), 'utf8'));
+
+function scriptSetup(used = { mem: 500n, steps: 50_000n }) {
+  const engine = { joust: { evaluate: ({ tx }) => {
+    const v = L.ledgerTx(tx);
+    return { ok: true, redeemers: v.redeemers.map((r) => `${r.tag}:${r.index} ${used.steps} ${used.mem}`) };
+  }, attacks() { throw new Error('attacks reached'); } } };
+  const ledger = memoryLedger({ engine, attacks: false });
+  const chain = { utxos: (x) => ledger.utxos(x), submit: (c) => ledger.submit(c) };
+  const a = devWallet({ chain, mnemonic: DEVKIT_MNEMONIC, index: 7 });
+  const hash = Serialization.Script.fromCore(SCRIPT).hash();
+  const scriptAddr = L.enterpriseAddress({ type: 'script', hash }, 0);
+  return { ledger, a, scriptAddr };
+}
+
+/** A spend of {@code locked} (script-locked) with the script witnessed, a redeemer and the integrity hash it needs. */
+async function scriptSpend(ledger, a, { locked, collateral, mem = 1_000n, steps = 100_000n, ...more }) {
+  const ins = [locked].sort();
+  const redeemers = [{ purpose: Cardano.RedeemerPurpose.spend, index: 0n, data: 0n, executionUnits: { memory: Number(mem), steps: Number(steps) } }];
+  const value = BigInt((await ledger.output(locked)).value[0].quantity);
+  const base = { inputs: ins, outputs: [{ address: a.address, lovelace: value - 600_000n }], fee: 600_000n, collateral, redeemers,
+    plutusScripts: [SCRIPT], ...more };
+  const unhashed = rawTx(base);
+  const { hash } = await L.scriptIntegrityHash(L.ledgerTx(unhashed).integrityParts, ['PlutusV3'], PARAMS.cost_models_raw);
+  return signed(a, rawTx({ ...base, integrity: hash }));
+}
+
+test('a valid Plutus spend applies (the control of the rules below)', async () => {
+  const { ledger, a, scriptAddr } = scriptSetup();
+  const locked = ledger.fund(scriptAddr, 10n * ADA);
+  await ledger.submit(await scriptSpend(ledger, a, { locked, collateral: [ledger.fund(a.address, 5n * ADA)] }));
+  assert.equal(await ledger.output(locked), null);
+});
+
+test('collateral: enough, ADA only, as declared, not too many (F8)', async () => {
+  let { ledger, a, scriptAddr } = scriptSetup();
+  await refused(ledger, await scriptSpend(ledger, a, { locked: ledger.fund(scriptAddr, 10n * ADA), collateral: [ledger.fund(a.address, 500_000n)] }),
+    'InsufficientCollateral');
+  await refused(ledger, await scriptSpend(ledger, a, { locked: ledger.fund(scriptAddr, 10n * ADA), collateral: [ledger.fund(a.address, 5n * ADA)],
+    totalCollateral: 1n }), 'IncorrectTotalCollateralField');
+  const four = [1, 2, 3, 4].map(() => ledger.fund(a.address, 2n * ADA));
+  await refused(ledger, await scriptSpend(ledger, a, { locked: ledger.fund(scriptAddr, 10n * ADA), collateral: four }), 'TooManyCollateralInputs');
+  // Collateral holding a token, not returned.
+  const own = Serialization.NativeScript.fromCore({ __type: Cardano.ScriptType.Native, kind: Cardano.NativeScriptKind.RequireSignature, keyHash: a.keyHash });
+  const unit = own.hash() + '01';
+  const src = ledger.fund(a.address, 5n * ADA);
+  const mintHash = await ledger.submit(await signed(a, rawTx({ inputs: [src], outputs: [{ address: a.address, lovelace: 5n * ADA - 300_000n,
+    assets: new Map([[Cardano.AssetId(unit), 7n]]) }], fee: 300_000n, mint: new Map([[Cardano.AssetId(unit), 7n]]), nativeScripts: [own] })));
+  await refused(ledger, await scriptSpend(ledger, a, { locked: ledger.fund(scriptAddr, 10n * ADA), collateral: [`${mintHash}#0`] }),
+    'CollateralContainsNonADA');
+  // C18: a collateral return under its minimum (on a key-only transaction too).
+  ({ ledger, a } = scriptSetup());
+  const ref = ledger.fund(a.address, 10n * ADA);
+  await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 9_800_000n }], fee: 200_000n,
+    collateral: [ledger.fund(a.address, 2n * ADA)], collateralReturn: { address: a.address, lovelace: 1n }, totalCollateral: 1_999_999n })),
+  'BabbageOutputTooSmallUTxO');
+});
+
+test('declared units: within the transaction limit, and covering what the script uses (F8, P-c)', async () => {
+  let { ledger, a, scriptAddr } = scriptSetup();
+  await refused(ledger, await scriptSpend(ledger, a, { locked: ledger.fund(scriptAddr, 10n * ADA), collateral: [ledger.fund(a.address, 5n * ADA)],
+    mem: BigInt(PARAMS.max_tx_ex_mem) + 1n }), 'ExUnitsTooBigUTxO');
+  ({ ledger, a, scriptAddr } = scriptSetup({ mem: 243_199n, steps: 81_903_897n }));
+  await refused(ledger, await scriptSpend(ledger, a, { locked: ledger.fund(scriptAddr, 10n * ADA), collateral: [ledger.fund(a.address, 5n * ADA)],
+    mem: 1n, steps: 1n }), 'ScriptFailure');
+});
+
+test('datums: a Plutus input with a datum hash needs its datum; a key-locked one does not (F8, C17)', async () => {
+  const { ledger, a, scriptAddr } = scriptSetup();
+  const datumHash = '11'.repeat(32);
+  // An output at the script, and one at the key, each with a datum hash.
+  const src = ledger.fund(a.address, 25n * ADA);
+  const h = await ledger.submit(await signed(a, rawTx({ inputs: [src], outputs: [{ address: scriptAddr, lovelace: 10n * ADA, datumHash },
+    { address: a.address, lovelace: 10n * ADA, datumHash }, { address: a.address, lovelace: 5n * ADA - 300_000n }], fee: 300_000n })));
+  await refused(ledger, await scriptSpend(ledger, a, { locked: `${h}#0`, collateral: [ledger.fund(a.address, 5n * ADA)] }), 'MissingRequiredDatums');
+  await ledger.submit(await signed(a, rawTx({ inputs: [`${h}#1`], outputs: [{ address: a.address, lovelace: 9_800_000n }], fee: 200_000n })));
+});
+
+test('an output is spent or referenced, not both (C19)', async () => {
+  const { ledger, a } = setup();
+  const ref = ledger.fund(a.address, 10n * ADA);
+  await refused(ledger, await signed(a, rawTx({ inputs: [ref], referenceInputs: [ref], outputs: [{ address: a.address, lovelace: 9_800_000n }],
+    fee: 200_000n })), 'BabbageNonDisjointRefInputs');
+  assert.ok(await ledger.output(ref), 'the output is still unspent');
+});
+
+test('what the ledger does not model is refused (F9, S7)', async () => {
+  const { ledger, a } = setup();
+  const ref = ledger.fund(a.address, 5n * ADA);
+  await refused(ledger, await signed(a, rawTx({ inputs: [ref], outputs: [{ address: a.address, lovelace: 4_700_000n }], fee: 300_000n,
+    donation: 1000n * ADA })), 'NotModelled');
 });
