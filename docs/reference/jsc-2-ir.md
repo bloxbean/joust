@@ -40,8 +40,13 @@ and the JavaScript `load`).
 M2b export and silently dropped its `params` and `invariants` (an invariant-only contract loaded, called and re-emitted
 without its invariant). M2b's additions therefore take a new version, which every version-1 reader refuses, and both
 readers of version 2 refuse any field they do not know, at every level (the Java reader now as the JavaScript one), so a
-later addition cannot be dropped either. ADR-0018 M4a (libraries) also moves the format to 2 on its branch; the
-integration of M2 and M4 joins both sets of additions in one version 2.
+later addition cannot be dropped either (the Java reader checks each object's fields, each statement's and node's from
+the writer's own lists: `JscV2IrTest.theReader_refusesAnUnknownField_atEveryLevel`). ADR-0018 M4a (libraries) also moves
+the format to 2 on its branch; the integration of M2 and M4 joins both sets of additions in one version 2, under two
+conditions (#84 review F11): neither branch's version 2 is published (npm, snapshots) before the join, and the joined
+Java reader keeps this strictness at every level (M4a's version-2 reader, without it, would drop `params` and
+`invariants`). The integration adds a test that an export with `params`, `invariants` and `libraries` reads back with all
+three, and that an unknown field is refused.
 
 **Version 1 is the format as of the M1 integration** (#76): `If` and `IfValue` hold a `branches` list (M1e's flat
 else-if chains). M1b's pre-release shape (`cond`, `then`, `otherwise` on those nodes) was never released and is not

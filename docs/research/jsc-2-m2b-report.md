@@ -132,9 +132,24 @@ this branch; the treasury gates above are re-measured after that merge (unchange
 | F4 | The port section states the argument-name difference for name-keyed (JS) clients | above |
 | F5 | ADR-0018 D10's events row: "treasury (M2b), market (M3)" | ADR |
 | F6 | §5.6 references; §5's title names events | — |
-| F7 | examples/dsl no longer depends on examples/treasury: it holds a copy of `Guardian` as `TreasuryGuardian` (the copied tests' word renamed), so neither its test class path nor the toolchain's holds two scripts of one name | `:examples:dsl:test` (DevKit included) |
+| F7 | examples/dsl no longer depends on examples/treasury: it holds a copy of `Guardian` as `TreasuryGuardian` (the copied tests' word renamed), so examples/dsl's class path no longer holds two `TreasuryValidator` scripts, and `Guardian` has no twin anywhere. The toolchain's test class path still holds examples/treasury and examples/dsl, and so both `TreasuryValidator` scripts, on purpose, as with vault and escrow: `ValidatorScriptCollisionTest` relies on it (#84 review F13) | `:examples:dsl:test` (DevKit included) |
 | F8 | The semantics and the reference say a native script approves through its withdrawal alone | — |
 | F9 | A processor-level test of a destroy that emits without assets (fails without the type witness) | `ParamsAuthDiagnosticsTest.aDestroyThatEmits_withoutAssets_compiles` |
+
+## Review r2 (#84) and round r3
+
+Design and security approved round r2 (`0688969`), with P3s; Codex requested one change (C7). Round r3 also merges
+`feat/jsc-2-m2a` at `61e759c` (#78, approved); the treasury gates are unchanged after it.
+
+| Finding | Resolution | Evidence |
+|---|---|---|
+| **C7 (P2)**: a view that takes the params still listed them as a caller's argument in the description, which the JS client and pages read | `DescriptionWriter` skips the `@Params` record (`ViewIR.takesParams`): `cap` has no arguments | `ParamsAuthDiagnosticsTest.aViewThatTakesTheParams_getsTheDeployments` asserts the client and the description, for a view with params only, one with params and an argument, and one without (it fails without the fix) |
+| **C8 / F10**: the Java IR reader was strict at four levels only | It refuses an unknown field in every object: options, records and their fields, enums, fns, locals, blocks, branches, arms, every statement and every node (each kind's fields as the writer writes them) | `JscV2IrTest.theReader_refusesAnUnknownField_atEveryLevel`: all 136 objects of Council's export, each with an extra field, are refused |
+| **C9**: the saturation check compared literals | `JscV2M2bGateTest.saturatedCouncil` finds the largest council both validators accept at creation, checks one key more is refused by both and that its datum, unlike the saturated one's, is over 640 bytes, and the "@ max" rows measure that council (21 keys, 11 signing) | `JscV2M2bGateTest.budgets` |
+| **S3**: the Java processor neither refused nor checked a mixed `@Quorum` | `ContractReader` refuses a `@Quorum` whose keys and threshold are not both state components or both `params.*` (as JSC0439), and r3's batched rule counts a quorum as a state quorum when either field is a state field | `ParamsAuthDiagnosticsTest.aMixedQuorum_isRefused` (both shapes; a params quorum with a batched action compiles) |
+| F11 | The IR doc states the join's conditions: neither version 2 published before the join; the joined Java reader stays strict; the integration's test | `docs/reference/jsc-2-ir.md` |
+| F12 | The diagnostics catalogue lists the names M2b reserves | `docs/reference/jsc-2-diagnostics.md` |
+| F13 | The F7 row above says exactly what changed | — |
 
 ## Found on the way
 
@@ -173,6 +188,16 @@ this branch; the treasury gates above are re-measured after that merge (unchange
    invariant's value could depend on one.
 
 ## Tests run at this head
+
+Round r3 (after the merge of `61e759c` and #84 review r2's fixes):
+
+| Command | Result |
+|---|---|
+| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL, none failed: julc-state-dsl 150, julc-state-toolchain 118, julc-state-processor 74, julc-state-runtime 76, julc-state-api 10, examples/dsl 82, examples/treasury 8. `checkJscAbi`: 22 manifests agree |
+| `toolchainWasmTest` + `runtimeWasm` (GraalVM 25.3.4.1, images rebuilt) | `ALL SAME`; S2 in Wasm 2140/2140; 21 depth cases; S2b 43/43 |
+| `npm test` in `js/jsc-interpreter` / `js/joust` / `tree-sitter-jsc` | 36/36 / 39/39 / 15/15, the shared corpus agreeing |
+| DevKit: `:examples:dsl:test --tests '*Treasury*' :examples:treasury:test --rerun` | BUILD SUCCESSFUL; `TreasuryDevnetPortTest` and examples/treasury's `TreasuryDevnetTest` passed on Yaci DevKit |
+| `JscV2M2bGateTest` after the merge | unchanged: 9,297 → 9,801 B (+5.4%); −0.2% to +8.3%; at most 5.21% CPU / 14.46% memory at the saturated 21-key council |
 
 Round r2 (after the merge of `de0da1d` and #84's fixes):
 

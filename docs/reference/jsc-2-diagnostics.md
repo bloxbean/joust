@@ -131,6 +131,20 @@ changes).
 
 `Value`, `Address` and `Credential` were reserved type names in M1 already.
 
+### Names M2b reserves (ADR-0018 D16; #84 review F12)
+
+As M2a's, these are refused **in every contract**, whether it uses params, events, invariants, quorum or authorized or not.
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Stepped` (a batched action's result record, beside a direct action's that holds events), `Invariant`, `Params`, `Quorum`, `AuthorizedBy` (the annotations the lowering imports) | a type, enum, variant or event name (`type Params = { … }`, `event Quorum`) | JSC0211 |
+| `Stepped` | a method whose capitalised name is it (`action stepped()`) | JSC0203 |
+| `params` | a state field, a parameter or a binding (it was a built-in name in M1 already; M2b gives it its meaning, `params.f`) | JSC0208, JSC0213 |
+| `Config` and `Event` | a type, enum, variant or event name, only in a contract that declares params (`Config`) or events (`Event`) | JSC0225 |
+
+`quorum`, `authorized`, `event`, `invariant` and `emit` are not reserved: they are words only where they start a
+modifier, a member or a statement, so a field may be called `quorum` (treasury's is).
+
 ## Types and values (ADR-0018 D5, D6)
 
 | Code | Severity | Message | Raised by |

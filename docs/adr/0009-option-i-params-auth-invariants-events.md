@@ -209,5 +209,8 @@ order) that the validator accepts, locking the contract. Running the shape check
 match a call's meaning (each intent is a step whose next state the interpreters check) without checking every
 intermediate state, so r3 refuses the combination, as D4 refuses invariants with `@Batched`: `ContractReader` reports
 "@Quorum over state fields cannot be combined with @Batched yet", and `.jsc` 2 reports JSC0440. Test:
-`ParamsAuthDiagnosticsTest.batchedRestrictions`.
+`ParamsAuthDiagnosticsTest.batchedRestrictions`. Review r2 (S3) added: a `@Quorum` whose keys and threshold are not both
+state components or both `params.*` is refused (the validator checks a state pair on every output and a params pair at
+creation, so a mixed pair would be neither), and the batched rule counts a quorum with any state field as a state
+quorum (`ParamsAuthDiagnosticsTest.aMixedQuorum_isRefused`).
 

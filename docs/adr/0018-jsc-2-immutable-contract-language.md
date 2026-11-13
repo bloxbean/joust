@@ -1277,3 +1277,6 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   (JSC9008). Treasury gates M2b (J11): +5.4% script; every transaction from −0.2% to +8.3% of the Java example's budget,
   at most 5.21% of the CPU and 14.46% of the memory maximum at the saturated 21-key council. After #84's review r1: the
   batched-action rules above (JSC0440, `Stepped`), JSC0441, IR format 2, views with params, reserved annotation names.
+  After review r2: a view's described arguments leave the params out too; the Java IR reader refuses unknown fields at
+  every level (the conditions for joining format 2 with M4a's are in the IR doc); the processor refuses a mixed
+  `@Quorum` (S3), as JSC0439 does.
