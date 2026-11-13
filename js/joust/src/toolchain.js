@@ -80,6 +80,15 @@ let HOST_EXEC = undefined;
 export function setEngineHostForTests(url, { execPath } = {}) {
   HOST = url ?? new URL('./toolchain-host.js', import.meta.url);
   HOST_EXEC = execPath;
+  // The next build starts the new host: the current one is retired (stopped once its builds settle).
+  if (current && !current.dead) {
+    current.retiring = true;
+    if (!current.pending.size) {
+      current.dead = true;
+      current.worker.terminate();
+    }
+  }
+  current = null;
 }
 
 /**
