@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r15)
+**Status:** Proposed (r16)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -443,7 +443,7 @@ import { concat, slice, length } from "std/bytes"
     part of the trusted base and covered by its own differential tests.
   - Library records map to `.jsc` records with read-only fields where the projection is representation-verified;
     otherwise they are opaque.
-- **`.jsc` libraries as built (r15, M4a).**
+- **`.jsc` libraries as built (r16, M4a).**
   - **The file and its class.** `library <package>` replaces `package`; the file holds imports, types, enums and fns
     (a contract is JSC0711). Its class is its file name capitalised (`fees.jsc` is `<package>.Fees`; JSC0705 when that
     is no class name), so a library's package and file name are its identity, named by every importer and by Java
@@ -1226,7 +1226,7 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   M1b's exit and M1b had not done; the modifier vectors are five-way. §9 and the M2 row say five-way. D14 and r13's
   entry: M1e changed the hashes of scripts with generated checks only. D16 states the JSC1103 refusal of v1
   `batched`. The header no longer says design only.
-- **r15** (2026-11-13, M4a: `.jsc` libraries): D9 records the libraries as built (the `library` header and the class
+- **r16** (2026-11-13, M4a: `.jsc` libraries): D9 records the libraries as built (the `library` header and the class
   named by the file, relative imports, scope and one namespace per build, D11 through library calls, errors at the
   import, the lowering to `@OnchainLibrary`, helpers per class rather than shared, the artifacts: manifest kind `library`,
   IR format 2, message-map files). The M4 entry gate was verified first (`runtimeWasmTest`, M4a report §0).
