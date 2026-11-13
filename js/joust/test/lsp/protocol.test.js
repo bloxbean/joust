@@ -247,3 +247,27 @@ test('the server writes nothing into the workspace; only checked engine copies i
   assert.ok(stored.length > 0);
   for (const f of stored) assert.match(f, /^engines(\/[0-9a-f]{64}(\/(joust-toolchain\.js|joust-toolchain\.js\.wasm|package\.json|\.used))?)?$/, f);
 });
+
+test('an outline, folding or selection request sent right after didOpen waits for the first model (review F12)', { skip }, async () => {
+  const dir = tmp();
+  const lsp = await startLsp({ folders: [dir] });
+  try {
+    const uri = uriOf(join(dir, 'Counter.jsc'));
+    lsp.open(uri, COUNTER, 1);
+    // No wait: VS Code asks for the outline as the editor opens, and caches the answer for the version.
+    const [syms, folds, [sel]] = await Promise.all([
+      lsp.request('textDocument/documentSymbol', { textDocument: { uri } }),
+      lsp.request('textDocument/foldingRange', { textDocument: { uri } }),
+      lsp.request('textDocument/selectionRange', { textDocument: { uri }, positions: [{ line: 10, character: 20 }] }),
+    ]);
+    assert.equal(syms[0]?.name, 'Counter', JSON.stringify(syms));
+    assert.ok(folds.length >= 3, JSON.stringify(folds));
+    assert.ok(sel?.parent, 'a selection chain');
+    // The same right after an edit: the new version's model.
+    lsp.change(uri, 2, COUNTER.replace('contract Counter', 'contract Renamed'));
+    const again = await lsp.request('textDocument/documentSymbol', { textDocument: { uri } });
+    assert.equal(again[0]?.name, 'Renamed');
+  } finally {
+    await lsp.stop();
+  }
+});

@@ -56,7 +56,8 @@ function render() {
 
 function onStatus(s) {
   if (!s) return;
-  if (s.uri) statusByUri.set(s.uri, s);
+  // A later status keeps the last model version known for the document (joust/status carries it once a model exists).
+  if (s.uri) statusByUri.set(s.uri, { ...statusByUri.get(s.uri), ...s });
   lastStatus = s;
   if (s.state === 'unavailable' && !unavailableNotified) {
     unavailableNotified = true;

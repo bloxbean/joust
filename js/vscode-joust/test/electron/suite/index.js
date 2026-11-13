@@ -52,8 +52,10 @@ async function waitCode(doc, code) {
   return waitFor(() => joustDiagnostics(doc.uri).find((d) => codeOf(d) === code), `${code} on ${path.basename(doc.fileName)}`);
 }
 
+/** The document's first model (review F12 on #83: a status arrives before the analysis it announces has finished). */
 async function analysed(doc) {
-  return waitFor(async () => (await status()).statuses.find((s) => s.uri === doc.uri.toString()), `the analysis of ${doc.fileName}`);
+  return waitFor(async () => (await status()).statuses.find((s) => s.uri === doc.uri.toString() && s.modelVersion >= 1),
+    `the first model of ${doc.fileName}`);
 }
 
 async function serverInfo() {

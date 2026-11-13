@@ -205,7 +205,39 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const s = state.get(uri);
     if (!s) return;
     clearTimeout(s.timer);
-    s.timer = setTimeout(() => analyse(uri).catch((e) => log(`analysis of ${uri} failed: ${e?.stack ?? e}`)), delay);
+    s.timer = setTimeout(() => {
+      s.timer = null;
+      s.running = (s.running ?? 0) + 1;
+      analyse(uri).catch((e) => log(`analysis of ${uri} failed: ${e?.stack ?? e}`)).finally(() => {
+        s.running--;
+        settle(s);
+      });
+    }, delay);
+  }
+
+  /** Wakes the requests waiting for this lifetime's model (F12). */
+  function settle(s) {
+    for (const w of (s.waiters ?? []).splice(0)) w();
+  }
+
+  /**
+   * Review F12 on #83: an outline, folding or selection-range request that arrives while the document's current version
+   * has no model yet, and an analysis of it is pending, waits for that analysis (bounded by the analysis cap). VS Code
+   * caches the outline per document version, and an early empty answer would stay until the text changed.
+   */
+  async function waitModel(uri) {
+    const end = Date.now() + (host.opts.analysisMs ?? 2000) + DEBOUNCE_MS;
+    for (;;) {
+      const s = state.get(uri);
+      const doc = documents.get(uri);
+      if (!s || !doc || (s.model && s.modelVersion === doc.version) || (!s.timer && !s.running)) return;
+      const left = end - Date.now();
+      if (left <= 0) return;
+      await new Promise((r) => {
+        (s.waiters ??= []).push(r);
+        setTimeout(r, left);
+      });
+    }
   }
 
   async function analyse(uri) {
@@ -304,10 +336,23 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // file the front end stopped in early keeps the last outline only while its own model has none.
     if (model.declarations.length || model.accepted) s.outlineModel = model;
     publish(uri, version, toDiagnostics(model, label));
+    settle(s);
+    // The status says which version has a model (the extension's tests wait for it, F12).
+    connection.sendNotification('joust/status', { ...statusOf(uri, sel), modelVersion: version });
+    // A selection that failed (not cached) is tried again, a few times, without waiting for an edit (#83 r6 design nit).
+    if (/^the compiler could not be selected/.test(sel.reason ?? '') && (s.selectRetries = (s.selectRetries ?? 0) + 1) <= 3) {
+      schedule(uri, 1000 * s.selectRetries);
+    } else if (!/^the compiler could not be selected/.test(sel.reason ?? '')) {
+      s.selectRetries = 0;
+    }
   }
 
   documents.onDidOpen((e) => {
-    clearTimeout(state.get(e.document.uri)?.timer);
+    const old = state.get(e.document.uri);
+    if (old) {
+      clearTimeout(old.timer);
+      settle(old);
+    }
     state.set(e.document.uri, { lastPublished: null });
     schedule(e.document.uri, 0);
   });
@@ -325,6 +370,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       s.cts?.cancel();
     }
     state.delete(e.document.uri);
+    if (s) settle(s);
     // A close ends the lifetime: its unexecuted fixes go, and executing ones fail their identity check (C2).
     for (const [id, f] of fixes) if (f.uri === e.document.uri) fixes.delete(id);
     connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
@@ -335,15 +381,18 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     return s?.outlineModel ?? s?.model;
   };
 
-  connection.onDocumentSymbol((p) => {
+  connection.onDocumentSymbol(async (p) => {
+    await waitModel(p.textDocument.uri);
     const m = modelOf(p.textDocument.uri);
     return m ? documentSymbols(m) : [];
   });
-  connection.onFoldingRanges((p) => {
+  connection.onFoldingRanges(async (p) => {
+    await waitModel(p.textDocument.uri);
     const m = modelOf(p.textDocument.uri);
     return m ? foldingRanges(m) : [];
   });
-  connection.onSelectionRanges((p) => {
+  connection.onSelectionRanges(async (p) => {
+    await waitModel(p.textDocument.uri);
     const doc = documents.get(p.textDocument.uri);
     const m = modelOf(p.textDocument.uri);
     if (!doc || !m) return [];
