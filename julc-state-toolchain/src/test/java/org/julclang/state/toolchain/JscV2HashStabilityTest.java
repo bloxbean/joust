@@ -33,7 +33,8 @@ class JscV2HashStabilityTest {
         try (Stream<Path> s = Files.list(DSL)) {
             return s.filter(p -> p.toString().endsWith(".jsc")).filter(p -> {
                 try {
-                    return Files.readString(p).startsWith("jsc 2");
+                    String t = Files.readString(p);
+                    return t.startsWith("jsc 2") && !org.julclang.state.dsl.v2.JscV2.isLibrary(t);
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -43,8 +44,26 @@ class JscV2HashStabilityTest {
 
     record Built(String hash, int size) {}
 
-    static Built build(String file, String text) {
-        var r = Toolchain.build(Map.of(PKG + file, text), Map.of());
+    /** The examples' {@code .jsc} libraries (ADR-0018 D9, M4), by path: every build includes them, as Gradle's does. */
+    static Map<String, String> libraries() throws Exception {
+        var out = new LinkedHashMap<String, String>();
+        try (Stream<Path> s = Files.list(DSL)) {
+            for (Path p : s.filter(p -> p.toString().endsWith(".jsc")).sorted().toList()) {
+                String t = Files.readString(p);
+                if (t.startsWith("jsc 2") && org.julclang.state.dsl.v2.JscV2.isLibrary(t)) out.put(PKG + p.getFileName(), t);
+            }
+        }
+        return out;
+    }
+
+    static Built build(String file, String text) throws Exception {
+        return build(file, text, libraries());
+    }
+
+    static Built build(String file, String text, Map<String, String> libraries) {
+        var files = new LinkedHashMap<String, String>(libraries);
+        files.put(PKG + file, text);
+        var r = Toolchain.build(files, Map.of());
         assertTrue(r.ok(), file + ": " + r.diagnostics());
         assertEquals(1, r.contracts().size());
         return new Built(r.contracts().get(0).scriptHash(), r.contracts().get(0).scriptSizeBytes());
@@ -144,6 +163,7 @@ class JscV2HashStabilityTest {
         }
         declared.removeAll(fields);
         declared.removeAll(Set.of("caller", "received", "balance", "validFrom", "validTo", "state", "from", "of", "in"));
+        declared.removeAll(LIBRARY_NAMES);
         var out = new LinkedHashMap<String, String>();
         for (String n : declared) out.put(n, n + "Rn");
         return out;
@@ -162,12 +182,37 @@ class JscV2HashStabilityTest {
         for (var b : org.julclang.state.dsl.v2.JscV2.bindings()) LANGUAGE.add(b.name());
     }
 
+    /** Every name the examples' libraries declare (fields, types, variants, fns, parameters): an importer keeps them. */
+    static final Set<String> LIBRARY_NAMES = new HashSet<>();
+
+    static {
+        try {
+            for (String lib : libraries().values()) LIBRARY_NAMES.addAll(renameAllOf(lib));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /**
      * Every name the file declares (types, enums, variants, the contract, fields, fns, methods, parameters, consts, lambda,
      * loop and match variables), renamed so that their alphabetical order is reversed (design F1, F7: a suffix keeps the
      * order, this does not). Imported names and the language's words are kept.
      */
     static Map<String, String> renameAll(String s) {
+        var names = new ArrayList<>(renameAllOf(s));
+        names.removeAll(LIBRARY_NAMES);
+        var out = new LinkedHashMap<String, String>();
+        for (int i = 0; i < names.size(); i++) {
+            int r = names.size() - i;   // reversed rank
+            String code3 = "" + (char) ('a' + r / 676 % 26) + (char) ('a' + r / 26 % 26) + (char) ('a' + r % 26);
+            String n = names.get(i);
+            out.put(n, (Character.isUpperCase(n.charAt(0)) ? "Zq" : "zq") + code3);
+        }
+        return out;
+    }
+
+    /** The names {@link #renameAll} renames, before the libraries' are kept: sorted. */
+    static java.util.TreeSet<String> renameAllOf(String s) {
         String code = stripComments(s).replaceAll("\"(?:[^\"\\\\]|\\\\.)*\"", "\"\"");
         var declared = new java.util.TreeSet<String>();
         for (String re : List.of("\\b(?:type|enum|contract)\\s+([A-Z]\\w*)", "\\b(?:fn|action|destroy|view|const)\\s+([a-z]\\w*)",
@@ -195,15 +240,7 @@ class JscV2HashStabilityTest {
         Matcher imports = Pattern.compile("import\\s*\\{([^}]*)\\}").matcher(code);
         while (imports.find()) for (String n : imports.group(1).split("\\s*,\\s*")) declared.remove(n.trim());
         declared.removeAll(LANGUAGE);
-        var names = new ArrayList<>(declared);
-        var out = new LinkedHashMap<String, String>();
-        for (int i = 0; i < names.size(); i++) {
-            int r = names.size() - i;   // reversed rank
-            String code3 = "" + (char) ('a' + r / 676 % 26) + (char) ('a' + r / 26 % 26) + (char) ('a' + r % 26);
-            String n = names.get(i);
-            out.put(n, (Character.isUpperCase(n.charAt(0)) ? "Zq" : "zq") + code3);
-        }
-        return out;
+        return declared;
     }
 
     static Map<String, String> edits(String src) {
@@ -242,6 +279,30 @@ class JscV2HashStabilityTest {
         }
         System.out.print(table);
         assertTrue(checked >= 9 * 10, "edits checked: " + checked);
+    }
+
+    /**
+     * ADR-0018 M4 (J20 for libraries): layout and comment edits of a {@code .jsc} library leave the hash of every contract
+     * that imports it unchanged (its names are its importers' too, so renames are not behaviour-neutral edits of the
+     * library alone).
+     */
+    @Test
+    void libraryLayoutAndCommentEdits_leaveTheImportersHash() throws Exception {
+        String fees = Files.readString(DSL.resolve("fees.jsc"));
+        String shop = Files.readString(DSL.resolve("Shop.jsc"));
+        Built base = build("Shop.jsc", shop);
+        int checked = 0;
+        for (var e : edits(fees).entrySet()) {
+            // Renames are not edits of the library alone; an edit that targets a contract's header changes nothing here.
+            if (e.getKey().contains("renamed") || e.getValue().equals(fees)) continue;
+            assertEquals(base.hash(), build("Shop.jsc", shop, Map.of(PKG + "fees.jsc", e.getValue())).hash(),
+                    "fees.jsc: " + e.getKey() + " moved Shop's script hash");
+            checked++;
+        }
+        assertNotEquals(base.hash(), build("Shop.jsc", shop, Map.of(PKG + "fees.jsc", fees.replace("since >= 10 ? 25 : 50", "since >= 10 ? 25 : 51"))).hash(),
+                "a changed library fn changes its importer's script");
+        assertTrue(checked >= 6, "edits checked: " + checked);
+        System.out.println("[hash] Shop keeps " + base.hash() + " under " + checked + " layout and comment edits of fees.jsc");
     }
 
     /**

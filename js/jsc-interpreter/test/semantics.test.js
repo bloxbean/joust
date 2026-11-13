@@ -32,10 +32,10 @@ const someOf = (v, t) => node('SomeOf', { value: v }, { option: t });
 const none = (t) => node('NoneLit', {}, { option: t });
 
 /** A program with the given records, enums and fns, and no methods: for evaluating expressions. */
-function program({ records = [], enums = [], fns = [] } = {}) {
+function program({ records = [], enums = [], fns = [], libraries = [] } = {}) {
   return load(JSON.stringify({
-    ir: 1, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
-    state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], fns, methods: [], warnings: [],
+    ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
+    state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], libraries, fns, methods: [], warnings: [],
   }));
 }
 
@@ -282,8 +282,8 @@ function deepProgram() {
   const go = { kind: 'view', name: 'go', params: [k], mods: [], checked: [], usesCtx: false, pays: false, result: INT, at,
     body: { stmts: [], at, result: node('CallFn', { fn: 'down', args: [node('LocalRef', { local: 2 }, INT)] }, INT) } };
   return JSON.stringify({
-    ir: 1, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'Deep', source: 'Deep.jsc', options: [], records: [],
-    enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], fns: [down], methods: [go], warnings: [],
+    ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'Deep', source: 'Deep.jsc', options: [], records: [],
+    enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], libraries: [], fns: [down], methods: [go], warnings: [],
   });
 }
 
@@ -435,7 +435,7 @@ test('§3.9 asKey and asHash: exactly 28 bytes', () => {
 
 test('a reader refuses another IR version, an unknown std row, and keeps answers in the vector form', () => {
   const text = readFileSync(new URL('./fixtures/Counter2.ir.json', import.meta.url), 'utf8');
-  assert.throws(() => load(text.replace('"ir": 1,', '"ir": 2,')), /"ir" must be exactly 1/);
+  assert.throws(() => load(text.replace('"ir": 2,', '"ir": 1,')), /"ir" must be exactly 2/);
   const stdBytes = readFileSync(new URL('./fixtures/StdBytes.ir.json', import.meta.url), 'utf8');
   assert.throws(() => load(stdBytes.replace('"name": "sha2_256"', '"name": "keccak_256"')), /unknown std row std\/crypto.keccak_256/);
   const counter = load(text);
@@ -451,8 +451,8 @@ test('a reader refuses up front what it does not know or cannot trust (review S3
   const text = readFileSync(new URL('./fixtures/Pledges.ir.json', import.meta.url), 'utf8');
   load(text);
   const refuses = (edit, why) => assert.throws(() => load(edit(text)), why);
-  refuses((t) => t.replace('"ir": 1,', '"ir": 1.0,'), /not a plain integer/);
-  refuses((t) => t.replace('"ir": 1,', '"ir": 1, "ir": 1,'), /duplicate key "ir"/);
+  refuses((t) => t.replace('"ir": 2,', '"ir": 2.0,'), /not a plain integer/);
+  refuses((t) => t.replace('"ir": 2,', '"ir": 2, "ir": 2,'), /duplicate key "ir"/);
   refuses((t) => t.replace('"checked": [3]', '"checked": [3], "checked": []'), /duplicate key "checked"/);
   refuses((t) => t.replace('"checked": [3]', '"checked": []'), /checked is \[\], but the parameters whose types hold a Key, a Hash or a Map are \[3\]/);
   refuses((t) => t.replace('"node": "Compare"', '"node": "Bogus"'), /unknown node "Bogus"/);

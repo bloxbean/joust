@@ -1,4 +1,4 @@
-# `.jsc` 2 IR export (format 1)
+# `.jsc` 2 IR export (format 2)
 
 The checker's typed IR of a `.jsc` 2 contract, as JSON (ADR-0018 D15, M1b). The JavaScript reference interpreter
 (`js/jsc-interpreter`) evaluates it. Its meaning is defined in [`jsc-2-semantics.md`](jsc-2-semantics.md).
@@ -33,8 +33,13 @@ disagrees (below).
 
 ## Stability
 
-`"ir"` is the format version, exactly the integer 1 here. Readers refuse versions they do not know (`IrJson.read`,
+`"ir"` is the format version, exactly the integer 2 here. Readers refuse versions they do not know (`IrJson.read`,
 and the JavaScript `load`).
+
+**Version 2 (ADR-0018 M4) adds `libraries`:** the `.jsc` libraries the program imports, transitively, in dependency
+order, each with its class, file, source hash and declarations (records, enums, fns). It is a new top-level field, so
+the version changed: a version-1 reader refuses every version-2 export, including those with no library. Nothing else
+changed: a program without libraries has `"libraries": []` and otherwise the shape of version 1.
 
 **Version 1 is the format as of the M1 integration** (#76): `If` and `IfValue` hold a `branches` list (M1e's flat
 else-if chains). M1b's pre-release shape (`cond`, `then`, `otherwise` on those nodes) was never released and is not
@@ -85,6 +90,8 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   "state": Record,
   "timeFields": ["lastSeen"],
   "recursiveFns": ["fact"],
+  "libraries": [{ "library": "org.example.Fees", "source": "fees.jsc", "sourceSha256": "<64 hex digits>",
+                  "records": [Record…], "enums": [Enum…], "fns": [Fn…] }],
   "fns": [{ "name", "params": [Local…], "result": Type, "body": Block, "at" }],
   "methods": [{ "kind": "init|action|destroy|view", "name", "params": [Local…], "mods": [{ "name", "field"? }],
                 "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at" }],
@@ -94,6 +101,11 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 
 - **Record:** `{ "name", "fields": [{ "name", "type": Type }], "at" }`, with the fields in declaration order. An enum's
   variants are records in declaration order, so a variant's tag is its index.
+- **Libraries** (version 2): a library's records, enums and fns join the program's in one namespace (the checker refuses a
+  name declared twice across a build, `JSC0709`), so a `CallFn`, `New`, `Variant` or type naming one of them means it.
+  The interpreters evaluate a library fn like the program's own. Its `at` positions are in its own file (`source`), so a
+  refusal's class names a position there (`require:32:3:…`); both interpreters read the same positions. Locals'
+  ids are unique across the program and its libraries.
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `{ "list": T }`, `{ "option": T }`, `{ "record": name }`
   (`"State"` for the state), `{ "enum": name }`, `{ "map": [K, V] }`, `{ "bigmap": [K, V] }`.
 - **Local** (where it is bound): `{ "id", "name", "type", "taint", "at", "fieldTaints"? }`. A reference to it is

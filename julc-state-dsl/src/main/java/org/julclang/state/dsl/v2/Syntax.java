@@ -28,8 +28,8 @@ final class Syntax {
      * {@code leadingMinus}: where a binary '-' starts a line, continuing the expression above it (D3: newlines do not
      * end statements; review r2 F2, S4): each is warned about (JSC9007) and named in any error.
      */
-    record File(String pkg, List<Import> imports, List<TypeDecl> types, List<EnumDecl> enums, List<Fn> fns, Contract contract,
-                List<Pos> leadingMinus, List<int[]> members) {}
+    record File(String pkg, boolean library, List<Import> imports, List<TypeDecl> types, List<EnumDecl> enums, List<Fn> fns,
+                Contract contract, List<Pos> leadingMinus, List<int[]> members) {}
 
     record Import(List<String> names, String from, Pos pos) {}
 

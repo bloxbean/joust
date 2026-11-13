@@ -1,5 +1,5 @@
 {
-  "ir": 1,
+  "ir": 2,
   "language": "jsc 2",
   "sourceSha256": "3bae84bba6b36c6c10236181367e0fb21ce49a87916afaecb64f3e0863186a54",
   "package": "org.julclang.state.examples.dsl",
@@ -21,6 +21,7 @@
   },
   "timeFields": [],
   "recursiveFns": [],
+  "libraries": [],
   "fns": [],
   "methods": [
     {

@@ -27,8 +27,11 @@ import java.util.TreeSet;
 final class IrJson {
     private IrJson() {}
 
-    /** The version of this format. A change to the IR's shape or meaning gets a new version. */
-    static final int VERSION = 1;
+    /**
+     * The version of this format. A change to the IR's shape or meaning gets a new version. 2 (ADR-0018 M4): the program
+     * carries the {@code .jsc} libraries it imports ({@code libraries}).
+     */
+    static final int VERSION = 2;
 
     private static final HexFormat HEX = HexFormat.of();
 
@@ -60,24 +63,20 @@ final class IrJson {
         var options = new ArrayList<Object>();
         for (Ir.ContractOption o : p.options()) options.add(obj("name", o.name(), "value", o.value().toString()));
         out.put("options", options);
-        var records = new ArrayList<Object>();
-        for (Ir.RecordType r : p.records().values()) records.add(w.record(r));
-        out.put("records", records);
-        var enums = new ArrayList<Object>();
-        for (Ir.EnumType e : p.enums().values()) {
-            var vs = new ArrayList<Object>();
-            for (Ir.RecordType v : e.variants().values()) vs.add(w.record(v));
-            enums.add(obj("name", e.name(), "variants", vs, "at", at(e.pos())));
-        }
-        out.put("enums", enums);
+        out.put("records", w.records(p.records()));
+        out.put("enums", w.enums(p.enums()));
         out.put("state", w.record(p.state()));
         out.put("timeFields", List.copyOf(new TreeSet<>(p.timeFields())));
         out.put("recursiveFns", List.copyOf(new TreeSet<>(p.recursiveFns())));
-        var fns = new ArrayList<Object>();
-        for (Ir.Fn f : p.fns()) {
-            fns.add(obj("name", f.name(), "params", w.decls(f.params()), "result", type(f.ret()), "body", w.block(f.body()), "at", at(f.pos())));
+        // Version 2 (M4): the .jsc libraries the program imports, transitively, in dependency order, with their
+        // declarations; the build's names are one namespace, so a name means one declaration across them.
+        var libraries = new ArrayList<Object>();
+        for (Ir.Library l : p.libraries()) {
+            libraries.add(obj("library", l.qualified(), "source", l.fileName(), "sourceSha256", l.sourceSha256(),
+                    "records", w.records(l.records()), "enums", w.enums(l.enums()), "fns", w.fns(l.fns())));
         }
-        out.put("fns", fns);
+        out.put("libraries", libraries);
+        out.put("fns", w.fns(p.fns()));
         var methods = new ArrayList<Object>();
         for (Ir.Method m : p.methods()) {
             var mods = new ArrayList<Object>();
@@ -131,6 +130,30 @@ final class IrJson {
     private static final class Writer {
         private final Set<Integer> declared = new java.util.HashSet<>();
         private final Map<Integer, Ir.Local> byId = new HashMap<>();
+
+        List<Object> records(Map<String, Ir.RecordType> rs) {
+            var out = new ArrayList<Object>();
+            for (Ir.RecordType r : rs.values()) out.add(record(r));
+            return out;
+        }
+
+        List<Object> enums(Map<String, Ir.EnumType> es) {
+            var out = new ArrayList<Object>();
+            for (Ir.EnumType e : es.values()) {
+                var vs = new ArrayList<Object>();
+                for (Ir.RecordType v : e.variants().values()) vs.add(record(v));
+                out.add(obj("name", e.name(), "variants", vs, "at", at(e.pos())));
+            }
+            return out;
+        }
+
+        List<Object> fns(List<Ir.Fn> fs) {
+            var out = new ArrayList<Object>();
+            for (Ir.Fn f : fs) {
+                out.add(obj("name", f.name(), "params", decls(f.params()), "result", type(f.ret()), "body", block(f.body()), "at", at(f.pos())));
+            }
+            return out;
+        }
 
         Map<String, Object> record(Ir.RecordType r) {
             var fs = new ArrayList<Object>();
@@ -404,16 +427,18 @@ final class IrJson {
             return new Pos(i(l(o).get(0)), i(l(o).get(1)));
         }
 
-        Ir.Program program(Map<String, Object> r) {
-            var options = new ArrayList<Ir.ContractOption>();
-            for (Object o : l(r.get("options"))) options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
+        LinkedHashMap<String, Ir.RecordType> records(Object list) {
             var records = new LinkedHashMap<String, Ir.RecordType>();
-            for (Object o : l(r.get("records"))) {
+            for (Object o : l(list)) {
                 Ir.RecordType t = record(m(o));
                 records.put(t.name(), t);
             }
+            return records;
+        }
+
+        LinkedHashMap<String, Ir.EnumType> enums(Object list) {
             var enums = new LinkedHashMap<String, Ir.EnumType>();
-            for (Object o : l(r.get("enums"))) {
+            for (Object o : l(list)) {
                 var vs = new LinkedHashMap<String, Ir.RecordType>();
                 for (Object x : l(m(o).get("variants"))) {
                     Ir.RecordType t = record(m(x));
@@ -421,12 +446,31 @@ final class IrJson {
                 }
                 enums.put(s(m(o).get("name")), new Ir.EnumType(s(m(o).get("name")), vs, pos(m(o).get("at"))));
             }
-            Ir.RecordType state = record(m(r.get("state")));
+            return enums;
+        }
+
+        List<Ir.Fn> fns(Object list) {
             var fns = new ArrayList<Ir.Fn>();
-            for (Object o : l(r.get("fns"))) {
+            for (Object o : l(list)) {
                 var f = m(o);
                 fns.add(new Ir.Fn(s(f.get("name")), decls(f.get("params")), type(f.get("result")), block(f.get("body")), pos(f.get("at"))));
             }
+            return fns;
+        }
+
+        Ir.Program program(Map<String, Object> r) {
+            var options = new ArrayList<Ir.ContractOption>();
+            for (Object o : l(r.get("options"))) options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
+            var records = records(r.get("records"));
+            var enums = enums(r.get("enums"));
+            Ir.RecordType state = record(m(r.get("state")));
+            var libraries = new ArrayList<Ir.Library>();
+            for (Object o : l(r.get("libraries"))) {
+                var x = m(o);
+                libraries.add(new Ir.Library(s(x.get("library")), s(x.get("source")), s(x.get("sourceSha256")), records(x.get("records")),
+                        enums(x.get("enums")), fns(x.get("fns"))));
+            }
+            var fns = fns(r.get("fns"));
             var methods = new ArrayList<Ir.Method>();
             for (Object o : l(r.get("methods"))) {
                 var x = m(o);
@@ -449,7 +493,7 @@ final class IrJson {
                 warnings.add(new Ir.Warning(i(w.get("line")), i(w.get("col")), s(w.get("code")), s(w.get("message"))));
             }
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
-                    Set.copyOf(timeFields), recursive, warnings);
+                    Set.copyOf(timeFields), recursive, warnings, false, List.copyOf(libraries));
         }
 
         Ir.RecordType record(Map<String, Object> r) {

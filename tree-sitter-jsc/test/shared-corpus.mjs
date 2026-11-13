@@ -194,8 +194,9 @@ function shape(file) {
   const mods = (n) => [...kids(n, 'modifier'), ...kids(n, 'v1_modifier')].map((m) => text(m).replace(/\s+/g, ' ')).join(' ');
   const t = tree(file);
   const out = [];
-  const pkg = fieldOf(t, 'name') ?? fieldOf(kids(t, 'package_declaration')[0] ?? { children: [] }, 'name');
-  out.push('package ' + text(pkg).replace(/\s+/g, ''));
+  const lib = kids(t, 'library_declaration')[0];
+  const pkg = fieldOf(t, 'name') ?? fieldOf(lib ?? kids(t, 'package_declaration')[0] ?? { children: [] }, 'name');
+  out.push((lib ? 'library ' : 'package ') + text(pkg).replace(/\s+/g, ''));
   const v1 = kids(t, 'v1_contract_declaration')[0];
   if (v1) {
     const opts = v1.children.filter((c) => c.kind === 'v1_option').map((o) => text(fieldOf(o, 'name')));
@@ -215,6 +216,7 @@ function shape(file) {
   };
   out.push('imports: ' + join(kids(t, 'import_declaration').map((i) => `${text(fieldOf(i, 'source')).slice(1, -1)}{${join(fieldsOf(i, 'name').map(text))}}`)));
   decls(t, '');
+  if (lib) return out.join(' | ');   // a library has no contract (ADR-0018 D9, M4)
   const c = kids(t, 'contract_declaration')[0];
   const opts = fieldOf(c, 'options');
   out.push(`contract ${text(fieldOf(c, 'name'))}(${opts ? join(kids(opts, 'contract_option').map((o) => text(fieldOf(o, 'name')))) : ''})`);

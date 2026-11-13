@@ -191,6 +191,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   (`… [app/Counter.jsc:22:5 (a require in increment)]`, M1e), so tests match them for `.jsc`, not for Java. Message keys
   are ABI facts (`#pay:spend<i>.<n>`, `intent<k>` for `batched only`). The interpreters check `only`/`after`/`before`
   (their `Tx` has `signers`); the JVM method and transition program don't: compare those with `Interpreter.transition`.
+- ADR-0018 M4a (`.jsc` libraries): `library <package>` files lower to an `@OnchainLibrary` class named by the file
+  (`fees.jsc` → `Fees`); imports are relative (`./fees.jsc`); a build's declarations share one namespace; the IR is
+  format 2 (`libraries`). Lower a file of a build with `JscV2.lower(src, name, id, JscModules.of(files))` (tests:
+  `v2/Examples`), never alone, or its imports are JSC0706.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

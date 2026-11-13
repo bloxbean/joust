@@ -255,4 +255,29 @@ class ProcessorDiagnosticsTest {
                 "@Action @Batched public static S put(S s, byte[] k, Ctx ctx)"));
         assertTrue(r.hasError("@Batched actions and MerkleMap state cannot be combined"), r.errors().toString());
     }
+
+    /**
+     * ADR-0018 D1, D9 (M4): a library lowered from {@code .jsc} (julc-state-dsl marks the class it generates) is linted
+     * like a contract; a hand-written {@code @OnchainLibrary} is the project's own choice and is not.
+     */
+    @Test
+    void aJscLibrary_isLinted_aHandWrittenOneIsNot() {
+        String body = """
+                /**
+                 * GENERATED from fees.jsc by julc-state-dsl (ADR-0018, a .jsc 2 library). Do not edit: change the .jsc file.
+                 */
+                @OnchainLibrary
+                public class C {
+                    public static BigInteger twice(BigInteger x) {
+                        int k = 2;
+                        return x.multiply(BigInteger.valueOf(k * 1));
+                    }
+                }
+                """;
+        var r = compile(body);
+        assertTrue(!r.success(), "a fixed-width local in a generated library");
+        assertTrue(r.hasError("'int' in an on-chain library"), r.errors().toString());
+        var hand = compile(body.replace("GENERATED from fees.jsc by julc-state-dsl (ADR-0018, a .jsc 2 library).", "A hand-written library."));
+        assertTrue(hand.success(), hand.errors().toString());
+    }
 }

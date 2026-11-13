@@ -1,14 +1,14 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r14)
+**Status:** Proposed (r15)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
 `generateJsc`), and the contract model of ADR-0001 to ADR-0016, which `.jsc` 2 only spells differently. JuLC's scoped
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
-**Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76)
-implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+**Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76),
+and M4a (`.jsc` libraries, r15) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -443,7 +443,35 @@ import { concat, slice, length } from "std/bytes"
     part of the trusted base and covered by its own differential tests.
   - Library records map to `.jsc` records with read-only fields where the projection is representation-verified;
     otherwise they are opaque.
-- **No `extern` declarations**: a `.jsc` author never writes a signature for Java code.
+- **`.jsc` libraries as built (r15, M4a).**
+  - **The file and its class.** `library <package>` replaces `package`; the file holds imports, types, enums and fns
+    (a contract is JSC0711). Its class is its file name capitalised (`fees.jsc` is `<package>.Fees`; JSC0705 when that
+    is no class name), so a library's package and file name are its identity, named by every importer and by Java
+    contracts: renaming either is a code change of its importers and may move their scripts (bloxbean/julc#328), as a
+    contract's package does (D12).
+  - **Imports.** `./x.jsc` and `../dir/x.jsc`, resolved from the importing file, never outside the source folder
+    (JSC0706); only a library and only names it declares (JSC0708); libraries may import libraries, without cycles
+    (JSC0707). npm library packages (D14) add package specifiers in M4c.
+  - **Scope and one namespace.** A file sees its own declarations and what it imports (an imported enum brings its
+    variants; JSC0710 otherwise); a library's values flow without an import (a fn may return a record whose type the
+    caller did not import). The declarations of a build (a contract and every library it imports, transitively) share
+    one namespace (JSC0709), so every name in the IR means one declaration; a binding may take the name of a library
+    declaration the file does not import. `std` imports are per file.
+  - **Checking.** A library is checked on its own and again in each importer. D11 runs through library calls: a
+    library fn called with a time value is checked with that parameter marked, in its own scope, and refused at the
+    call. An error in a library is reported at the import that brings it into the build, naming the library's position
+    (JSC0712, J5).
+  - **Lowering.** The library's class is a JuLC `@OnchainLibrary`; its fns are `public static`, its records and enums
+    nested (`Fees.Line`); importers qualify them and import the class. Helpers are generated in the class whose code
+    needs them (an importer's equality and check helpers on a library type are its own, under the same deterministic
+    names), not shared across classes as the r2 wording of D5 put it: a library's public surface stays its fns, and a
+    helper never becomes an API of the library. `SubsetLint` runs on a generated library on both paths (the toolchain;
+    the processor, for a class marked as generated from `.jsc`) (D1).
+  - **Artifacts.** A library has no ABI manifest: each contract's manifest states the library types its datum and
+    redeemers reach (`"kind": "library"`, with the class), which `checkJscAbi` and every toolchain build check against the
+    processor's description. Each contract's IR carries the libraries it imports (format 2, `libraries`), so both
+    reference interpreters evaluate library fns (five-way, J3); each contract's message map lists a library's messages
+    with the library's file (D12, J20).
 - **Other contracts.** `import contract { Oracle } from "./Oracle.jsc"` (or `from "java:org.example.Oracle"`) makes
   the contract's state type `Oracle.State` and `Instance<Oracle>` available, for `reads`, `deposit` and params. On
   Gradle the contract is in the same project or a dependency on the processor path; on npm, in `contracts/` or a
@@ -1197,3 +1225,7 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   M1b's exit and M1b had not done; the modifier vectors are five-way. §9 and the M2 row say five-way. D14 and r13's
   entry: M1e changed the hashes of scripts with generated checks only. D16 states the JSC1103 refusal of v1
   `batched`. The header no longer says design only.
+- **r15** (2026-11-13, M4a: `.jsc` libraries): D9 records the libraries as built (the `library` header and the class
+  named by the file, relative imports, scope and one namespace per build, D11 through library calls, errors at the
+  import, the lowering to `@OnchainLibrary`, helpers per class rather than shared, the artifacts: manifest kind `library`,
+  IR format 2, message-map files). The M4 entry gate was verified first (`runtimeWasmTest`, M4a report §0).

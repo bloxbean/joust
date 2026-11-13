@@ -264,3 +264,70 @@ contract Pool {
         (block
           (return_statement
             (identifier)))))))
+
+================================================================================
+A library
+================================================================================
+
+jsc 2
+library app.lib
+
+import { sha2_256 } from "std/crypto"
+
+type Line = { to: Key, bps: Int }
+enum Tier { Basic, Gold { since: Int } }
+fn fee(amount: Int, bps: Int): Int = amount * bps / 10_000
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (library_declaration
+    (package_name
+      (identifier)
+      (identifier)))
+  (import_declaration
+    (identifier)
+    (string
+      (string_content)))
+  (type_declaration
+    (identifier)
+    (field_list
+      (field_declaration
+        (identifier)
+        (type
+          (identifier)))
+      (field_declaration
+        (identifier)
+        (type
+          (identifier)))))
+  (enum_declaration
+    (identifier)
+    (variant_declaration
+      (identifier))
+    (variant_declaration
+      (identifier)
+      (field_list
+        (field_declaration
+          (identifier)
+          (type
+            (identifier))))))
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (identifier)))
+      (parameter
+        (identifier)
+        (type
+          (identifier))))
+    (type
+      (identifier))
+    (binary_expression
+      (binary_expression
+        (identifier)
+        (identifier))
+      (number
+        (integer)))))

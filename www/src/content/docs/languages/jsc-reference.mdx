@@ -15,8 +15,8 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 [standard library](/languages/jsc-std/). A file without `jsc 2` is [.jsc v1](/languages/jsc-v1/).
 
 <Aside type="caution" title="A preview">
-`.jsc` 2 is a preview: the core language of milestone M1. The features of M2 to M4 (values and assets, owned and keyed
-objects, purposes, libraries) still need [Java](/languages/java/).
+`.jsc` 2 is a preview: the core language of milestone M1, and `.jsc` libraries (M4, below). The features of M2 and M3
+(values and assets, owned and keyed objects, purposes) and `java:` library imports still need [Java](/languages/java/).
 </Aside>
 
 ## Lexical rules
@@ -36,8 +36,9 @@ objects, purposes, libraries) still need [Java](/languages/java/).
 ## Grammar at a glance
 
 ```text
-file      = "jsc" "2" "package" seg { "." seg } { import | type | enum | fn } contract
-import    = "import" "{" Ident { "," Ident } "}" "from" String
+file      = "jsc" "2" "package" seg { "." seg } { import | type | enum | fn } contract { import | type | enum | fn }
+library   = "jsc" "2" "library" seg { "." seg } { import | type | enum | fn }
+import    = "import" "{" Ident { "," Ident } "}" "from" String     (String: "std/…" or a relative "./x.jsc")
 type      = "type" Name "=" "{" { field [","] } "}"
 enum      = "enum" Name "{" { Name [ "{" { field [","] } "}" ] [","] } "}"
 field     = Ident ":" typeRef
@@ -269,6 +270,51 @@ For accrual that pays the caller, measure from `validFrom` (`elapsedSince(t)`); 
 
 Every read and write is proven against the root by the shared map verifier ([MerkleMaps](/contracts/merklemaps/)).
 
+## Libraries
+
+A file headed `library <package>` is a **`.jsc` library** (ADR-0018 D9): imports, types, enums and fns, and no contract
+(`JSC0711`). Contracts and other libraries import from it by its path relative to the importing file:
+
+```jsc
+// contracts/app/fees.jsc
+jsc 2
+library app
+
+type Line = { to: Key, bps: Int }
+enum Tier { Basic, Gold { since: Int } }
+
+fn fee(amount: Int, bps: Int): Int = amount * bps / 10_000
+fn rate(t: Tier): Int = match t { Basic => 100, Gold { since } => since >= 10 ? 25 : 50 }
+```
+
+```jsc
+// contracts/app/Shop.jsc
+jsc 2
+package app
+
+import { Line, Tier, fee, rate } from "./fees.jsc"
+
+contract Shop {
+  state { owner: Key, price: Int, lines: List<Line>, tier: Tier }
+  init(price: Int, lines: List<Line>) { return { owner: caller, price, lines, tier: Basic } }
+  action buy() payable {
+    require(received >= price + fee(price, rate(tier)), "pay the price and the fee")
+    return state
+  }
+}
+```
+
+| Rule | |
+|---|---|
+| The class | A library lowers to a JuLC `@OnchainLibrary` class of its package, named by its file: `fees.jsc` is `app.Fees` (`JSC0705` when the file name makes no class name). Its fns are `public static`, its types nested records and sealed interfaces (`Fees.Line`, `Fees.Tier`), so **Java contracts call it** as they call any on-chain library (`examples/dsl`'s `JavaShop.java`). Its generated helpers are package-private, named with `__` |
+| Imports | `./x.jsc` and `../dir/x.jsc`, resolved from the importing file and never outside the source folder (`JSC0706`). Only a library can be imported (`JSC0708`), and only names it declares (`JSC0708`). Libraries may import libraries, without cycles (`JSC0707`) |
+| Scope | A file sees its own declarations and the names it imports; importing an enum brings its variants. A library's other declarations are not in scope (`JSC0710`), but its values flow: a fn may return a record whose type the caller did not import, and the caller reads its fields. `std` imports are per file |
+| One namespace | The declarations of a build (a contract and every library it imports, transitively) share one namespace: no two of them, in any of its files, have the same name (`JSC0709`), and none takes a library's class name. A method of the contract named like a library variant is refused as for its own (`JSC0203`) |
+| Checking | A library is checked on its own, and again in each contract that imports it. The time rule (D11) runs through library calls: a library fn called with a time value is checked with that parameter marked, so a division or a `require` on it is refused at the call. An error in a library is reported at the import that brings it into the build, naming the library's own position (`JSC0712`) |
+| Inputs | A library's types are checked inputs like the contract's: a `Line` in a redeemer has its `Key` checked to 28 bytes before the method runs |
+| Artifacts | A library has no ABI manifest of its own: each contract's manifest states the library types its datum and redeemers reach (`"kind": "library"`, with the library's class). Each contract's IR export carries the libraries it imports (format 2), so the JavaScript reference interpreter evaluates their fns, and its message map lists a library's messages with the library's file (`"file": "fees.jsc"`) |
+| Identity | A library's package and file name are its class, which importing files and Java contracts name: renaming either is a code change of every importer, and may change the scripts that use it (bloxbean/julc#328), as a contract's package does |
+
 ## The ABI manifest
 
 For every `.jsc` 2 contract the lowering writes `<Contract>.abi.json` (format `"abi": 2`), which the project commits
@@ -280,7 +326,7 @@ beside the `.jsc` file:
 | `datum` | the `State` constructor, its fields in order, each with its `.jsc` type and data shape |
 | `redeemers.spend` | one constructor per action, then per destroy, in source order, with its index and fields (the generated `ctx` included) |
 | `redeemers.mint` | `CreateInstance` (`seed`, `ctx`) and `BurnInstance` |
-| `types` | every schema the datum and the redeemers reach: records, enums, and API and ledger types such as `Ctx`, `TxOutRef`, `MerkleMap` |
+| `types` | every schema the datum and the redeemers reach: records, enums, imported library types (`"kind": "library"`, with the library's class), and API and ledger types such as `Ctx`, `TxOutRef`, `MerkleMap` |
 | `timeFields` | the state's time fields |
 
 Views are not encoded, so moving or adding a view does not change the manifest.
@@ -347,10 +393,11 @@ map gives, with the generated file and line as a note.
 
 | Entry point | Use |
 |---|---|
-| `org.julclang.state.dsl.JscMain <srcDir> <outDir> [--accept-abi]` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first), with each `.jsc` 2 file's source map; checks (or with `--accept-abi` writes) the ABI manifests. Exits 1 on an error, 2 on bad usage. Gradle's `generateJsc` and `acceptJscAbi` run it |
+| `org.julclang.state.dsl.JscMain <srcDir> <outDir> [--accept-abi]` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first), with each `.jsc` 2 file's source map; checks (or with `--accept-abi` writes) the ABI manifests. A file's `./x.jsc` imports resolve to other files of `srcDir`. Exits 1 on an error, 2 on bad usage. Gradle's `generateJsc` and `acceptJscAbi` run it |
 | `JscMain --check-abi <srcDir> <descriptionsDir>` | Checks every manifest against the processor's descriptions (`checkJscAbi`) |
 | `JscMain --migrate <srcDir> <outDir> [--in-place]` | Translates v1 files to `.jsc` 2 ([migration](/languages/jsc-migration/)) |
-| `JscMain.lowerWithWarnings(source, fileName)` | `Lowered(java, diagnostics, fileName, sourceMapJson, abiJson)` for one file |
+| `JscMain.lowerWithWarnings(source, fileName)` | `Lowered(java, diagnostics, fileName, sourceMapJson, abiJson)` for one file, on its own (it imports no libraries) |
+| `JscMain.lowerWithWarnings(source, fileName, id, modules)` | The same for the file `id` of a build whose libraries `modules` (`JscModules.of(files)`) finds |
 | `Toolchain.build(files, options)` (`julc-state-toolchain`) | Lowers `.jsc` entries, then compiles everything as Gradle does; used by `joust build` |
 
 ## Next steps

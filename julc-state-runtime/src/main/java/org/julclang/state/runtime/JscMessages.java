@@ -83,7 +83,9 @@ public final class JscMessages {
         if (best == null) return new ArrayList<>(out);
         String source = map.path("source").asText();
         for (JsonNode s : map.get("messages").get(best)) {
-            out.add(source + ":" + s.path("line").asInt() + ":" + s.path("col").asInt() + " (" + describe(s) + ")");
+            // A site in an imported .jsc library names its file (ADR-0018 D9, M4).
+            out.add((s.hasNonNull("file") ? s.path("file").asText() : source) + ":" + s.path("line").asInt() + ":" + s.path("col").asInt()
+                    + " (" + describe(s) + ")");
         }
         return new ArrayList<>(out);
     }
