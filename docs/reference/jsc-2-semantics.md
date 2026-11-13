@@ -134,8 +134,21 @@ finish a call (its stack runs out) gives **no answer**, which is not a refusal (
 **The modifiers are preconditions of a call** (§2.6): `only f`, `after f`, `before f`, `quorum` and `authorized` are
 evaluated against τ before the body; the output checks (§2.7) after it. `payable`, `open` and `batched` refuse nothing in a call. **Other transaction-level rules are not evaluated by
 a call:** everything about the payouts as a whole (whether they total more than τ.`balance`, what a destroy leaves
-over, the ledger's minimum per output) and a batch's own rules. The validator leg checks them with the rest of the
-transaction.
+over, the ledger's minimum per output) and a batch's own rules. From M2 also the rules on native assets that depend on
+the transaction or on everything the instance holds rather than on the call (ADR-0018 D4, r15; review r1 F1, S2):
+
+- sends and burns that exceed what the instance holds plus what it receives, accepts and mints: the instance's output
+  would hold a negative quantity, which no output can;
+- an output quantity above 2^64 − 1, or a net mint of one token outside Int64 (the ledger's widths; a call's values
+  range over 128 bits, §1.3);
+- a destroy that leaves native assets the instance holds, neither sent nor burned;
+- the ledger's minimum lovelace in each send's output;
+- a send to the address of another script the same transaction spends (a send to the contract's own script is the
+  call's to refuse, §5.1).
+
+The call succeeds; its transaction fails, at the ledger or at the validator. The validator leg checks them with the
+rest of the transaction; the differential tests' harness refuses the first two as the ledger does
+(`StateHarness.ledgerProblem`) and carries a vector of each kind ("every leg accepts, the transaction is refused").
 
 **Names.** Records, enum variants and the state (`State`) share one namespace in a file (D5, M1a decision #3), so a
 record or variant value is identified by its name alone, as both interpreters and the vectors' `{"rec": name}` do.
@@ -514,11 +527,15 @@ A value crossing a trust boundary is checked before the body sees it. At M1a thi
 | record `R` | every field is well formed at its declared type |
 | enum `E` | every field of its variant is well formed at the variant's declared field type |
 | `Map<K, V>` | every key has at most 64 bytes and is well formed at `K`, the keys are **strictly** ascending in canonical order (§1.1; so unique), and every value is well formed at `V` |
-| `Credential` (M2) | its hash has exactly 28 bytes |
-| `Address` (M2) | its payment credential is well formed, and a staking hash, if any, is a well-formed credential (a pointer always is) |
+| `Credential` (M2) | it is the ledger's encoding (a key `Constr 0 [h]` or a script `Constr 1 [h]`: no other tag, no other field count) and `h` has exactly 28 bytes |
+| `Address` (M2) | it is the ledger's encoding (`Constr 0 [payment, staking]`, staking `Constr 1 []` or `Constr 0 [s]`), its payment credential is well formed, and its staking part is none or a staking hash (`Constr 0 [c]`) with `c` a well-formed credential. **A staking pointer is never well formed** (r15, review r1 S1: whatever its parts; Conway gives pointers no staking meaning, and a stored pointer no output can carry would make every send to the address fail) |
 
 A `Value` never crosses as an argument (it is not a parameter type, D5), so it has no rule here; the IR lists a
-parameter whose type holds an `Address` or a `Credential` in `checked`.
+parameter whose type holds an `Address` or a `Credential` in `checked`. The interpreters' values cannot hold a wrong
+constructor tag or field count, so for them the encoding clauses are always true; the generated code decides them on the
+data (`AddressAdapter.addressOk`/`credentialOk`), where a transition program, which decodes nothing before the method
+runs, could otherwise be handed one (review r1 C2). The validator's decoding of a redeemer refuses such data too; the
+tests carry both legs on raw data (`JscV2M2HostileInputTest`).
 
 A map that is out of order or has a duplicate key cannot be a map value (§1). Such an argument is refused here, so the
 body never sees one.
@@ -536,7 +553,9 @@ a lambda. Each kind accumulates on its own; no order across kinds is defined. Ea
 ### 5.1 Sends
 
 `send(to, v)` evaluates `to` (an `Address`), then `v` (a `Value`). It fails when `v` holds a quantity that is not
-positive, or a reserved token name (§5.5) under the contract's own policy (τ.`funds`.`policy`). Otherwise it appends the
+positive, or a reserved token name (§5.5) under the contract's own policy (τ.`funds`.`policy`), or when `to`'s payment
+credential is the contract's own script (`ScriptCred(τ.funds.policy)`: every call spends the instance's input there, and
+the validator never delivers a send to a spent script's address, ADR-0007 I30; review r1 F1). Otherwise it appends the
 send *(to, v)*: a call's sends are in the order they were made. An empty value may be sent (the transaction's builder
 adds the ledger's minimum). A send has no datum (a datum comes with M2c).
 
@@ -561,6 +580,15 @@ result is evaluated (step 6 of §2), the sum of what it accepted must equal τ.`
 burns must accept (static rules, D4). A method without `accept` has nothing to check: the validator requires that it is
 offered no native assets.
 
+### 5.4a What is offered, as a value
+
+τ.`funds`.`received` is a value (§1.3), in the ledger's order, like every other. The transaction carries it as data in
+the redeemer, where a writer may order a policy's token names otherwise (cardano-client-lib writes canonical CBOR,
+shorter names first: `01` before `00ff`). The validator and the transition program convert that encoding before the
+method sees it, and refuse one that is not a value's: a repeated token name of a policy, a zero quantity, an empty token
+map, policies out of order (`ValueAdapter.fromWire`; review r1 C1). A transition program's τ.`funds`.`held` is converted
+the same way. So the outcome of a call never depends on how its offer was written.
+
 ### 5.5 Reserved token names
 
 Under a contract's own policy, a token name of 32 bytes (an instance), or of 29 bytes starting with 0x4F (an owned
@@ -581,11 +609,12 @@ none.
 
 Time taint is a static property. The checker marks every expression that depends on `validFrom` or `validTo` and
 refuses the programs whose outcome a time value could decide or make fail, except through `after`/`before`. M2: a time
-value is never a `Value`'s quantity, any part of a sent or accepted value, or a mint quantity, and never decides whether
-`paymentKey` or `paymentScript` is `Some`. M2b: a field that holds a time value is never a quorum's keys or threshold or
-an authorized credential (JSC0524), an invariant never depends on one (JSC0525; a comparison of one is refused where it
-is, JSC0502), the params are never time values, and an event may carry one (with a warning, JSC9008: the window's bias
-carries into the event). Evaluation
+value is never a `Value`'s quantity, any part of a sent or accepted value, or a mint quantity or token name (a name over
+32 bytes or of a reserved kind fails the call; review r1 S5), and never decides whether `paymentKey` or `paymentScript`
+is `Some`. A time value in either operand of `covers` taints its result. M2b: a field that holds a time value is never a
+quorum's keys or threshold or an authorized credential (JSC0524), an invariant never depends on one (JSC0525; a
+comparison of one is refused where it is, JSC0502), the params are never time values, and an event may carry one (with a
+warning, JSC9008: the window's bias carries into the event). Evaluation
 ignores the `taint` fields of the IR. `validFrom`, `validTo` and the `std/time` rows are ordinary integers when a call
 runs. A program the checker accepts has the same outcome for every window that gives `after` and `before` the same
 answers, apart from amounts. A time value can still set an amount, for example a clamped `pay`, and the checker warns

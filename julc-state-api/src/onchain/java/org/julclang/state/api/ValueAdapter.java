@@ -1,6 +1,7 @@
 package org.julclang.state.api;
 
 import org.julclang.state.api.Assets;
+import org.julclang.state.api.Funds;
 import org.julclang.core.PlutusData;
 import org.julclang.core.types.JulcValue;
 import org.julclang.ledger.Value;
@@ -13,10 +14,56 @@ import java.math.BigInteger;
 /**
  * On-chain variant of {@code ValueAdapter} (see src/main/java): the PV11 native Value builtins, which fail by themselves
  * where the JVM body checks (a quantity out of the 128-bit range, a token name over 32 bytes, a negative quantity in
- * {@code valueContains}). Every value is canonical, so equality is Data equality.
+ * {@code valueContains}). Every argument is canonical (the JVM body's precondition), so equality is Data equality;
+ * {@link #fromWire} makes a value from the wire canonical.
  */
 @OnchainLibrary
 public class ValueAdapter {
+
+    /** See the JVM body: a canonical value from a wire-ordered one, folded entry by entry (any token order). */
+    public static Value fromWire(Value v) {
+        JulcValue empty = Builtins.unValueData(Builtins.mapData(Builtins.mkNilPairData()));
+        return (Value) (Object) Builtins.valueData(wirePolicies(Builtins.unMapData((PlutusData) (Object) v), Builtins.emptyByteString(),
+                true, empty));
+    }
+
+    /** Each policy in strictly ascending order, its token map not empty, folded in (recursive: a native value is no loop accumulator). */
+    static JulcValue wirePolicies(PlutusData ps, byte[] prev, boolean first, JulcValue acc) {
+        if (Builtins.nullList(ps)) {
+            return acc;
+        } else {
+            PlutusData pair = Builtins.headList(ps);
+            byte[] p = Builtins.unBData(Builtins.fstPair(pair));
+            PlutusData ts = Builtins.unMapData(Builtins.sndPair(pair));
+            if ((first || Builtins.lessThanByteString(prev, p)) && !Builtins.nullList(ts)) {
+                return wirePolicies(Builtins.tailList(ps), p, false, wireTokens(ts, p, acc));
+            } else {
+                Builtins.error();   // no message, as the builtins fail (a message would need a place in every message map)
+                return acc;
+            }
+        }
+    }
+
+    /** Each token once, with a non-zero quantity; insertCoin refuses a key over 32 bytes and a quantity out of range. */
+    static JulcValue wireTokens(PlutusData ts, byte[] p, JulcValue acc) {
+        if (Builtins.nullList(ts)) {
+            return acc;
+        } else {
+            PlutusData pair = Builtins.headList(ts);
+            byte[] n = Builtins.unBData(Builtins.fstPair(pair));
+            BigInteger q = Builtins.unIData(Builtins.sndPair(pair));
+            if (q.compareTo(BigInteger.ZERO) != 0 && Builtins.lookupCoin(p, n, acc).compareTo(BigInteger.ZERO) == 0) {
+                return wireTokens(Builtins.tailList(ts), p, Builtins.insertCoin(p, n, q, acc));
+            } else {
+                Builtins.error();
+                return acc;
+            }
+        }
+    }
+
+    public static Funds fundsFromWire(Funds f) {
+        return new Funds(f.policy(), f.self(), fromWire(f.received()), fromWire(f.held()), f.deposits());
+    }
 
     public static Value none() {
         return Assets.none();

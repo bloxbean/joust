@@ -2,6 +2,7 @@ package org.julclang.state.api;
 
 import org.julclang.state.api.Assets;
 import org.julclang.state.api.Require;
+import org.julclang.core.PlutusData;
 import org.julclang.ledger.Value;
 import org.julclang.stdlib.annotation.OnchainLibrary;
 
@@ -16,8 +17,13 @@ import java.util.HexFormat;
  * those limits, so a value the chain refuses would pass on the JVM. Generated {@code .jsc} code calls only this class
  * for values, and the on-chain variant ({@code src/onchain/java}) calls the builtins, which fail by themselves.
  * <p>
- * Every value here is canonical (ledger order, no zero quantities, no empty token maps), as the builtins keep them,
- * so equality is equality of the canonical encodings. The JVM failures throw {@link RequireException} with the messages
+ * <b>Precondition: every argument is canonical</b> (ledger order, no zero quantities, no empty token maps, no repeated
+ * key), as the builtins keep every value they return, so equality is equality of the canonical encodings. The arguments
+ * generated code passes are: the results of this class, the instance's held value (the ledger's), and what the caller
+ * offers, which reaches a method only through {@link #fromWire} (the validator and the transition program convert it).
+ * On a non-canonical argument the two bodies differ: the JVM's normalises ({@link Assets#read}) where the builtins fail
+ * or compare structurally; the differential test ({@code ValueAdapterDifferentialTest}) covers canonical inputs, and
+ * {@link #fromWire}'s refusals of non-canonical ones. The JVM failures throw {@link RequireException} with the messages
  * below; on-chain the builtin fails without a message.
  */
 @OnchainLibrary
@@ -36,6 +42,41 @@ public class ValueAdapter {
 
     private static void allInRange(Value v, String op) {
         Assets.read(v).values().forEach(ts -> ts.values().forEach(q -> inRange(q, op)));
+    }
+
+    /**
+     * A value as it arrives encoded in a redeemer or an argument ("the wire": the offered assets, a transition program's
+     * funds) as a canonical value. cardano-client-lib writes a map's keys in canonical CBOR order (shorter encodings
+     * first), so the token names of one policy may come in another order than the ledger's (unsigned bytes: {@code 00ff}
+     * before {@code 01}); the native builtins refuse such a value. Token names may come in any order; refused (as the
+     * on-chain fold refuses them): a repeated token name of a policy, a zero quantity, an empty token map, policies not in
+     * strictly ascending order (both orders agree on policies: lovelace's is empty, every other has 28 bytes), a policy or
+     * token name over 32 bytes, a quantity out of the 128-bit range (review r1, C1).
+     */
+    public static Value fromWire(Value v) {
+        String prevPolicy = null;
+        for (var e : v.toPlutusData().entries()) {
+            String p = HEX.formatHex(((PlutusData.BytesData) e.key()).value());
+            Require.that(prevPolicy == null || prevPolicy.compareTo(p) < 0, "fromWire: policies out of order or repeated");
+            prevPolicy = p;
+            var tokens = ((PlutusData.MapData) e.value()).entries();
+            Require.that(!tokens.isEmpty(), "fromWire: an empty token map");
+            var seen = new java.util.HashSet<String>();
+            for (var t : tokens) {
+                String n = HEX.formatHex(((PlutusData.BytesData) t.key()).value());
+                BigInteger q = ((PlutusData.IntData) t.value()).value();
+                Require.that(seen.add(n), "fromWire: a repeated token name");
+                Require.that(q.signum() != 0, "fromWire: a zero quantity");
+                Require.that(p.length() <= 64 && n.length() <= 64, "fromWire: a policy id or token name over 32 bytes");
+                inRange(q, "fromWire");
+            }
+        }
+        return Assets.build(Assets.read(v));
+    }
+
+    /** {@code f} with its offered and held values {@link #fromWire from the wire}: what a transition program hands a method. */
+    public static Funds fundsFromWire(Funds f) {
+        return new Funds(f.policy(), f.self(), fromWire(f.received()), fromWire(f.held()), f.deposits());
     }
 
     /** The empty value. */
@@ -153,10 +194,16 @@ public class ValueAdapter {
         return name.length <= 32 && !reserved(name);
     }
 
-    /** {@code acc} with {@code q} more of {@code (policy, name)} (insertCoin of the new total: in range, zero removes it). */
+    /**
+     * {@code acc} with {@code q} more of {@code (policy, name)} (insertCoin of the new total: with a non-zero total, keys of
+     * at most 32 bytes and the total in range; zero removes it).
+     */
     public static Value mintAdd(Value acc, byte[] policy, byte[] name, BigInteger q) {
         BigInteger total = Assets.quantity(acc, policy, name).add(q);
-        if (total.signum() != 0) inRange(total, "mint");
+        if (total.signum() != 0) {
+            Require.that(policy.length <= 32 && name.length <= 32, "mint: a policy id or token name over 32 bytes");
+            inRange(total, "mint");
+        }
         return Assets.add(acc, Assets.of(policy, name, q));
     }
 

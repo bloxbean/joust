@@ -32,7 +32,17 @@
           { "name": "ctx", "type": "Ctx", "data": "Ctx" },
           { "name": "assetsIn", "type": "Value", "data": "map<bytes, map<bytes, int>>" }
         ] },
-      { "name": "Close", "constr": 3, "fields": [
+      { "name": "Forge", "constr": 3, "fields": [
+          { "name": "name", "type": "Bytes", "data": "bytes" },
+          { "name": "n", "type": "Int", "data": "int" },
+          { "name": "m", "type": "Int", "data": "int" }
+        ] },
+      { "name": "Give", "constr": 4, "fields": [
+          { "name": "name", "type": "Bytes", "data": "bytes" },
+          { "name": "k", "type": "Int", "data": "int" },
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Close", "constr": 5, "fields": [
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] }
     ],

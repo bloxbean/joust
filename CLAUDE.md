@@ -190,6 +190,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   variant in `src/onchain/java`), never `Assets` directly. A value's entries are in the ledger's order (bytewise, a prefix
   first), not CCL's canonical order: build value data with `Value.toPlutusData()`, never through CCL's canonical writer.
   Under the own policy a 32-byte name (an instance id) is reserved: name minted tokens `blake2b_224(funds.self)`.
+  Offered assets arrive in CCL's order (a redeemer is canonical CBOR): validators and transition programs convert them
+  with `ValueAdapter.fromWire` (Java contracts too) before a method or I31 sees them. `Address`/`Credential` checked
+  inputs are decided on the data (`AddressAdapter`: tags, field counts; a staking pointer refused), since a transition
+  program decodes nothing. `StateHarness` refuses what the ledger would (negative or > 2^64 - 1 output quantities, a mint
+  outside Int64; `ledgerRules(false)` only for worst-case budgets). `ValueAdapterDifferentialTest` covers both bodies.
 - ADR-0018 M2b (params, events, quorum, authorized, invariants): the generated params record is `Config` (parameter
   `params__`; an init always takes it, other methods when they read `params.f`), the events' type `Event`; both names
   are reserved when declared. Result records hold `events` last; the redeemer of any method whose record has them

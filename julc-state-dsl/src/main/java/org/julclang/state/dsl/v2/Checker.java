@@ -1223,6 +1223,12 @@ final class Checker {
                         throw mt.qty().pos().error("JSC0521", "a time value cannot be a " + (mt.burn() ? "burn" : "mint") + " quantity: it must"
                                 + " be positive, so its sign would decide whether the call fails (ADR-0018 D11)");
                     }
+                    if ((name.taint() & TIME) != 0) {
+                        // Review S5: a name over 32 bytes or of a reserved kind fails the call, so time would decide that too.
+                        throw mt.name().pos().error("JSC0521", "a time value cannot decide a " + (mt.burn() ? "burn" : "mint") + "'s token name:"
+                                + " a name over 32 bytes or of a reserved kind fails the call, so the window would decide whether it fails"
+                                + " (ADR-0018 D11)");
+                    }
                     out.add(new Ir.Mint(mt.burn(), name, qty, mt.pos()));
                 }
                 case Syntax.Accept ac -> {
@@ -1779,7 +1785,8 @@ final class Checker {
                 if (a.size() != 1) throw m.pos().error("JSC0342", "v.covers takes one Value: v.covers(w)");
                 Ir.Expr w = expr(a.get(0), sc, Ty.VALUE);
                 expectType(Ty.VALUE, w, a.get(0).pos());
-                return new Ir.LedgerOp("covers", List.of(v, w), Ty.BOOL, 0, m.pos());
+                // The operands' taint carries over (review S5): a time value in either decides the result.
+                return new Ir.LedgerOp("covers", List.of(v, w), Ty.BOOL, v.taint() | w.taint(), m.pos());
             }
             case "lovelace" -> throw m.pos().error("JSC0342", "v.lovelace is a property: write it without parentheses");
             default -> throw m.pos().error("JSC0342", "Value has no method '" + m.method() + "' (of, covers; the property lovelace)");

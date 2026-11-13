@@ -147,7 +147,7 @@ or lambdas:
 
 | Method kind | `pay` | `send` | `mint`/`burn` | `deposit` | `accept` | `emit` |
 |---|---|---|---|---|---|---|
-| `init`, owned `init` | – | – | – | – | `payable` with `Funds` | – |
+| `init`, owned `init` | – | – | – | – | `payable` with `Funds`; **refused until #81** (r15: JSC0426 refuses `accept` in an init and any payable init that reads `funds`) | – |
 | `init migrate` | – | – | – | – | – (migration is refused in asset-aware contracts, `ContractReader.java:568-576`) | – |
 | `action`, owned `action` (both may be `receives`) | yes | yes | yes | yes | `payable` with `Funds` | yes |
 | `batched` action | yes | – | – | – | – | – |
@@ -155,10 +155,12 @@ or lambdas:
 | `withdraw` handler | – | yes (its result is the sends, totalling the amount) | – | – | – | – |
 | `certify`, `vote`, `propose` handlers | – | – | – | – | – | – |
 
-**A `payable` method takes native assets only if it uses `funds` or `accept`**; it is then lowered with the `Funds`
-parameter, and `accept` is **required** in it (ADR-0007 r2: the method states exactly the native assets it takes in;
-`ContractReader.java:1176-1182` ties the rule to the method's `Funds`, not to the contract). A `payable` method that
-uses neither takes ADA only and has no `Funds` (fees' `sell`, which deposits but takes no native assets). The fixtures
+**A `payable` method takes native assets only if it is lowered with the `Funds` parameter**, and `accept` is then
+**required** in it (ADR-0007 r2: the method states exactly the native assets it takes in; `ContractReader.java:1176-1182`
+ties the rule to the method's `Funds`, not to the contract). A method is lowered with `Funds` when it reads `funds` or
+sends, mints, burns or accepts (r15: each needs the own policy, or states what it takes in), so a payable method that
+sends, mints or burns takes `Funds` and must `accept` too (`accept(Value.none())` when it takes none). A `payable` method
+that does none of these takes ADA only and has no `Funds` (fees' `sell`, which deposits but takes no native assets). The fixtures
 include that sale and a contract mixing ADA-only and asset-taking payable methods. **Contract-level combinations**
 the processor refuses are reported at `.jsc` positions too: owned objects with an instance `destroy`; owned objects with
 instance-state `BigMap`s; keyed types with native assets; native assets with `batched` actions (`ContractReader.java:
@@ -184,13 +186,24 @@ kinds is promised. In a `for` loop the order is list order; an effect in an unta
 key is D12's: a sent value holds positive quantities and no reserved token name of the own policy (`#send:`); a mint or
 burn has a positive quantity of a user token name of at most 32 bytes (`#mint:`); an accepted value is native assets
 only, positive (`#accept:`); and a method that accepts checks, last, that the sum equals `funds.received`
-(`#funds:<redeemer>.1`). These are the validator's own rules on what a method returns (ADR-0007 D2, D2b, D3; the
-runtime's `AssetTx`), checked in the method too, so the JVM method, the transition program and both interpreters refuse
-exactly where the validator does. A method is lowered with `Funds` when it reads `funds` or sends, mints, burns or
-accepts (each needs the own policy, or states what it takes in); a payable method lowered so must `accept`. `send` takes
-no datum until M2c's encoders (`JSC0429`). `accept` in an `init` is refused for now (`JSC0426`): the processor's transition
-program of a creation that returns `(state, accepted)` is not generated correctly (`TransitionsGenerator.creation`
-takes the whole result for the state), a processor fix outside this ADR. The result records are fixed by name:
+(`#funds:<redeemer>.1`); a send never goes to the contract's own script (`#send:` too: I30's rule for the one spent
+script a call can name, review r1 F1). These are the validator's own rules on what a method returns (ADR-0007 D2, D2b,
+D3, I30; the runtime's `AssetTx`), checked in the method too, so on **the rules a call can decide from its own inputs**
+(what it returns and the own policy) the JVM method, the transition program and both interpreters refuse exactly where
+the validator does. **Transaction-level rules** remain, as J6 has for balance: the call succeeds and its transaction
+fails, at the ledger or at the validator, because they depend on the transaction or the instance's whole value, not on
+the call (semantics §2, the transaction-level rules): sends and burns exceeding what the instance holds plus what it receives, accepts and mints (an
+output cannot hold a negative quantity); an output quantity above 2^64 − 1 or a net mint outside Int64; a destroy that
+leaves native assets; the ledger's minimum lovelace per send output; a send to the address of another script spent in
+the same transaction. `StateHarness` refuses the first two as the ledger does, and the five-way tests carry one vector
+per rule it models ("every leg accepts, the transaction is refused"). What the caller offers reaches a method as a
+canonical value: the validator and the transition program convert the redeemer's encoding (cardano-client-lib's
+canonical CBOR orders a policy's token names by encoded length) with `ValueAdapter.fromWire` before the method or the
+`accepted == offered` check (I31) sees it (review r1 C1; Java contracts too). `send` takes no datum until M2c's encoders
+(`JSC0429`). An init moves no native assets yet: `JSC0426` refuses `accept` in an `init` and any payable `init` that
+reads `funds`, because the processor's transition program of a creation that returns `(state, accepted)` is wrong
+(`TransitionsGenerator.creation` takes the whole result for the state and drops what was accepted, for Java contracts
+too): issue [#81](https://github.com/bloxbean/joust/issues/81), fixed in its own PR; the refusal is lifted in M2b or M2c. The result records are fixed by name:
 `Outcome` (an action's effects), `Received` (an action that takes native assets: `accepted` last) and `Settled` (a destroy
 that sends, mints or burns); each holds every kind its methods produce, in the order payouts, sends, mint, accepted.
 A contract whose only effect is `pay` keeps M1's lowering byte for byte.
@@ -231,8 +244,8 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
 | `Key` | `byte[]` | a 28-byte verification-key hash. `Bytes` is not a `Key`: keys come from `caller`, checked inputs, fields, or `asKey(b)` (a located check) |
 | `Hash` | `byte[]` | a 28-byte script hash or policy id, same rules |
 | `Credential` | `Credential` | `keyCred(k)`, `scriptCred(h)`; `match` on `KeyCred { key }` / `ScriptCred { hash }`. Needed by `authorized` (ADR-0009 D3). As built (M2a): comparable, storable, a checked input (a 28-byte hash) |
-| `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`). As built (M2a): comparable, storable, a checked input (a 28-byte payment credential and staking hash; a pointer is accepted) |
-| `Value` | `Value` | `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`; as built, the API's `ValueAdapter`, whose JVM body fails where the PV11 builtins fail: a quantity outside the signed 128-bit range, a token name over 32 bytes, `covers` on a negative quantity). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos |
+| `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`). As built (M2a): comparable, storable, a checked input: the ledger's encoding, every constructor tag and field count (decided on the data by `AddressAdapter`, one body on the JVM and on-chain), a 28-byte payment credential and staking hash, and **no staking pointer** (r15, review r1 S1: Conway gives pointers no staking meaning and the ledger bounds their parts by era, so a stored pointer could make every send to the address undeliverable; `wallet`/`script` never build one) |
+| `Value` | `Value` | `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`; as built, the API's `ValueAdapter`, whose JVM body fails where the PV11 builtins fail: a quantity outside the signed 128-bit range, a token name over 32 bytes, `covers` on a negative quantity). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos. M2a converts the one wire `Value` it has, what the caller offers (and a transition program's funds), with `ValueAdapter.fromWire` at the boundary (review r1 C1) |
 | `List<T>` | `JulcList<T>` | literals `[a, b]`, `[x, ...xs]`; D7 |
 | `Map<K, V>` | `JulcMap<K, V>`, canonical | an inline map in the datum. `K` is `Bytes`, `Key` or `Hash`, at most 64 bytes (F19); keys strictly ascending in canonical order, unique. `Map.empty()`. D7 |
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | a Merkle map (ADR-0002/0014), state fields only; `K` as for `Map` (F14). Rules in D7 |
@@ -261,7 +274,9 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
   code sees it: method parameters (the redeemer), `init` arguments, foreign datums (`reads`), deposit memos and claims,
   and `java:` library results (D9). The check is recursive: every nested `Key`/`Hash` is 28 bytes; every `Map` has
   unique keys of at most 64 bytes in strictly ascending canonical order; every stored or received `Value` is canonical in its wire
-  form (encoded-key order, no zero quantities, no empty token maps), checked before conversion to `Assets` order (M2); every `Address` has valid constructor tags and 28-byte credentials. A failure is a
+  form (encoded-key order, no zero quantities, no empty token maps), checked before conversion to `Assets` order (M2); every `Address` and `Credential` has the ledger's constructor tags and
+field counts, decided on the data (an unknown tag must not reach a typed accessor: a transition program decodes nothing
+before the method runs), 28-byte credentials and no staking pointer (r15). A failure is a
   located `require` failure. From M2, `Value` parameters are carried in the redeemer as data and decoded by the
   generated wire-to-native conversion plus this check (CLAUDE.md: redeemer fields typed `Value` mis-decode in JuLC). The on-chain cost of the
   checks is measured in M0 and budgeted in each milestone (J15, J16). A foreign datum that fails the checks makes that
@@ -469,7 +484,9 @@ import { concat, slice, length } from "std/bytes"
     on-chain safety never depends on it.
   - **No second variant.** A library that ships an on-chain variant different from its JVM source (as JOUST's own
     `Require` and `Assets` do, under `src/onchain/java`) is refused, except the JOUST API itself, whose variants are
-    part of the trusted base and covered by its own differential tests.
+    part of the trusted base and covered by its own differential tests (M2a's `ValueAdapter`:
+    `ValueAdapterDifferentialTest`, every public function, JVM body against on-chain body, on canonical arguments, its
+    stated precondition; `AddressAdapter` keeps one body).
   - Library records map to `.jsc` records with read-only fields where the projection is representation-verified;
     otherwise they are opaque.
 - **No `extern` declarations**: a `.jsc` author never writes a signature for Java code.
@@ -1236,7 +1253,12 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   datum until M2c, and `accept` in an `init` refused until the processor's creation transition program is fixed. D5:
   `Credential` and `Address` are storable checked inputs; `Value` stays a local's, a `fn`'s and an effect's, its stored
   form (the wire conversion) moving to M2c; its operations fail where the PV11 builtins fail (`ValueAdapter`). D8 lists
-  `std/value` and `std/address`. D12's message map gains the new kinds.
+  `std/value` and `std/address`. D12's message map gains the new kinds. After the implementation review (r1, still
+  r15): D4 narrows "refuse exactly where the validator does" to the rules a call can decide, lists the transaction-level
+  rules, adds the own-script send to `#send:`, states that the validator and the transition program convert the offered
+  assets from the wire (`ValueAdapter.fromWire`), and links JSC0426's processor bug (#81), the table saying so; D5 makes
+  the `Address`/`Credential` checked input tag- and arity-exact on the data and refuses staking pointers;
+  `ValueAdapter`'s on-chain variant has its differential test (D9).
 - **r18** (2026-11-13, M2b): D4 records what M2b built: `emit` and the events in the result records and redeemers, the
   `Event` and `Config` names, which methods take the params, `quorum` and `authorized` as audiences without `Ctx`, a
   quorum's fields of one place (JSC0439), invariants; and the processor's client fix for a destroy that emits. D10: both

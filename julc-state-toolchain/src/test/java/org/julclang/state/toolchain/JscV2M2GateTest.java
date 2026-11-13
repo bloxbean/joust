@@ -121,7 +121,9 @@ class JscV2M2GateTest {
             this.cls = Class.forName(pkg + ".Dex");
             this.stateClass = Class.forName(pkg + ".Dex$" + state);
             var spec = (org.julclang.state.runtime.ContractSpec<Object>) Class.forName(pkg + ".DexClient").getField("SPEC").get(null);
-            this.h = StateHarness.of(spec);
+            // "@ max" measures quantities of 25 digits, more than an output may hold (2^64 - 1): the scripts' worst case,
+            // not a transaction the ledger takes, so the harness's ledger rules are off here (review r1, S2).
+            this.h = StateHarness.of(spec).ledgerRules(false);
         }
 
         Object state(byte[] tokenName, BigInteger lpSupply) throws Exception {
