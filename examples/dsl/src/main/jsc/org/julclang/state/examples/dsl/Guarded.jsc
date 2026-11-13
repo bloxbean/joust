@@ -1,0 +1,40 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { Entry, isAllowed, limitOf, entry, total, clamp, tag } from "java:com.example.compliance.AllowList"
+
+// A vault whose withdrawals a Java (JuLC) library decides (ADR-0018 D9, M4b): its record in the state and the init's
+// redeemer (read-only in .jsc), its fns in requires, values and a payout. The library's sources are certified before the
+// import is admitted, and compiled on both sides from the same sources.
+contract Guarded(maxDatumBytes = 2048) {
+  state { owner: Key, list: List<Entry>, spent: Int }
+
+  init(list: List<Entry>) {
+    require(total(list) <= 100 ada, "the limits exceed 100 ADA")
+    return { owner: caller, list, spent: 0 }
+  }
+
+  // The owner adds a key with a limit (the library builds the entry: its records are read-only in .jsc).
+  action allow(who: Key, limit: Int) only owner {
+    return { ...state, list: [entry(who, limit), ...list] }
+  }
+
+  // An allowed key takes up to its limit, at most what the vault holds.
+  action withdraw(amount: Int) open {
+    require(isAllowed(list, caller), "not on the list")
+    require(amount > 0, "a positive amount")
+    require(amount <= limitOf(list, caller), "over the limit")
+    pay(caller, clamp(amount, 0, balance))
+    return { ...state, spent: spent + amount }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+
+  view limit(who: Key): Int = limitOf(list, who)
+
+  view tagOf(who: Key): Bytes = tag(who)
+
+  view firstLimit(): Int = match list.head { Some(e) => e.limit, None => 0 }
+}

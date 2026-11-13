@@ -39,11 +39,36 @@ public final class Examples {
     public static JscV2.Lowered lower(String fileName, String text) {
         String id = DIR + fileName;
         if (text.equals(files().get(id))) return JscV2.lower(text, fileName, id, modules());
+        if (importsJava(text)) return JscV2.lower(text, fileName, null, JscModules.NONE, JAVA);
         return JscV2.lower(text, fileName);
     }
 
-    /** Whether a source is a {@code .jsc} 2 contract (not v1, not a library). */
+    /**
+     * A Java library as a certifier would describe it (M4b), written by hand: this module has no certifier (it needs
+     * JuLC's compiler), and the front end reads descriptions only. {@code com.acme.L}: {@code twice(Int): Int},
+     * {@code mk(Bytes, Int): P}, {@code size(List<P>): Int}, and the verified record {@code P(k: Bytes, v: Int)}.
+     */
+    public static final JavaLibraries JAVA = JavaLibraries.of(java.util.Map.of("com.acme.L", new JavaLibraries.Library("com.acme.L",
+            "0".repeat(64), java.util.List.of(
+                    new JavaLibraries.Fn("twice", java.util.List.of("x"), java.util.List.of(JavaLibraries.JType.INT), JavaLibraries.JType.INT, null),
+                    new JavaLibraries.Fn("mk", java.util.List.of("k", "v"), java.util.List.of(JavaLibraries.JType.BYTES, JavaLibraries.JType.INT),
+                            JavaLibraries.JType.record("com.acme.L$P"), null),
+                    new JavaLibraries.Fn("size", java.util.List.of("ps"), java.util.List.of(JavaLibraries.JType.list(JavaLibraries.JType.record("com.acme.L$P"))),
+                            JavaLibraries.JType.INT, null)),
+            java.util.List.of(new JavaLibraries.Rec("com.acme.L$P", "P", "com.acme.L", "com.acme.L", "L.P", java.util.List.of("k", "v"),
+                    java.util.List.of(JavaLibraries.JType.BYTES, JavaLibraries.JType.INT), true, null)),
+            java.util.List.of(), java.util.List.of("com.acme.L", "com.acme.L$P"))));
+
+    /**
+     * Whether a source is a {@code .jsc} 2 contract (not v1, not a library) that this module can lower: one with
+     * {@code java:} imports needs the certifier (julc-state-toolchain), whose tests cover it (M4b).
+     */
     public static boolean isContract(String text) {
-        return JscV2.isV2(text) && !JscV2.isLibrary(text);
+        return JscV2.isV2(text) && !JscV2.isLibrary(text) && !importsJava(text);
+    }
+
+    /** Whether a source imports a Java library ({@code java:}). */
+    public static boolean importsJava(String text) {
+        return Parser.imports(text).stream().anyMatch(i -> i.from().startsWith("java:"));
     }
 }

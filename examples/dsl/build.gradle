@@ -2,10 +2,19 @@ description = 'JOUST example: contracts written in .jsc (ADR-0005)'
 
 configurations {
     jsc
+    // ADR-0018 D9 (M4b): Java (JuLC) libraries .jsc imports with java:, taken as on-chain sources only (as the plugin's
+    // joustLibrary configuration does): their META-INF/plutus-sources are compiled into this project, on both sides.
+    joustLibrary {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
 }
 
 dependencies {
     jsc project(':julc-state-dsl')
+    jsc project(':julc-state-toolchain')   // the java: library certifier (javac attribution needs JuLC's compiler)
+    joustLibrary project(':examples:compliance')
 
     implementation project(':julc-state-runtime')
     implementation project(':examples:devkit')
@@ -17,6 +26,23 @@ dependencies {
     testImplementation project(':julc-state-testkit')
 }
 
+// ADR-0018 D9 (M4b): the java: libraries' on-chain sources, extracted from their jars. generateJsc certifies them before
+// any import, and writes the certified sources of the libraries the contracts use (each library's closure, no other file
+// of its jar; review r2 S3) beside the generated Java, which compiles them into this project: the JVM side runs these
+// sources, never a jar's classes. checkJoustLibraries (before compileJava) refuses them reaching the class path from
+// elsewhere.
+def librarySources = layout.buildDirectory.dir('joust/library-sources')
+def extractJoustLibraries = tasks.register('extractJoustLibraries', Sync) {
+    description = 'Extracts the on-chain sources (META-INF/plutus-sources) of the joustLibrary dependencies'
+    dependsOn configurations.joustLibrary
+    from({ configurations.joustLibrary.collect { zipTree(it) } }) {
+        include 'META-INF/plutus-sources/**/*.java'
+        eachFile { f -> f.relativePath = new RelativePath(true, f.relativePath.segments.drop(2)) }
+        includeEmptyDirs = false
+    }
+    into librarySources
+}
+
 // .jsc -> Java @StateContract, before compileJava (ADR-0005 D5). The generated Java is ordinary source: the JOUST
 // processor turns it into a validator and a client like hand-written contracts.
 def jscSrc = file('src/main/jsc')
@@ -25,9 +51,11 @@ def generateJsc = tasks.register('generateJsc', JavaExec) {
     description = 'Lowers src/main/jsc/**/*.jsc to Java'
     classpath = configurations.jsc
     mainClass = 'org.julclang.state.dsl.JscMain'
+    dependsOn extractJoustLibraries
     inputs.dir(jscSrc)
+    inputs.dir(librarySources)
     outputs.dir(jscOut)
-    args jscSrc.path, jscOut.get().asFile.path
+    args jscSrc.path, jscOut.get().asFile.path, '--java-libraries', librarySources.get().asFile.path
 }
 // ADR-0018 D12 (review F1): generateJsc never accepts an ABI manifest; a new or changed one is accepted only by running
 // this task, which writes the manifests beside the .jsc files to be reviewed and committed.
@@ -35,7 +63,9 @@ tasks.register('acceptJscAbi', JavaExec) {
     description = 'Writes the ABI manifests (Name.abi.json) of src/main/jsc/**/*.jsc, accepting new and changed ones'
     classpath = configurations.jsc
     mainClass = 'org.julclang.state.dsl.JscMain'
-    args jscSrc.path, layout.buildDirectory.dir('tmp/acceptJscAbi').get().asFile.path, '--accept-abi'
+    dependsOn extractJoustLibraries
+    args jscSrc.path, layout.buildDirectory.dir('tmp/acceptJscAbi').get().asFile.path, '--accept-abi', '--java-libraries',
+            librarySources.get().asFile.path
 }
 // Review F12, S10: after compileJava, every manifest is checked against the processor's description (JSC0004).
 def checkJscAbi = tasks.register('checkJscAbi', JavaExec) {
@@ -46,9 +76,35 @@ def checkJscAbi = tasks.register('checkJscAbi', JavaExec) {
     def described = layout.buildDirectory.dir('classes/java/main/META-INF/joust')
     inputs.dir(jscSrc)
     inputs.dir(described)
-    args '--check-abi', jscSrc.path, described.get().asFile.path
+    args '--check-abi', jscSrc.path, described.get().asFile.path, '--java-libraries', librarySources.get().asFile.path
 }
 tasks.named('check') { dependsOn checkJscAbi }
+// ADR-0018 D9 (M4b): no class compiled from a java: library's sources also reaches the compile or runtime class path from
+// a jar or directory. It runs before compileJava (review r2 F5, S3), so test, jar and run never build a shadowed class.
+// The classes are the ones generateJsc listed per contract: javac's binary names, nested classes too (S2).
+def checkJoustLibraries = tasks.register('checkJoustLibraries', JavaExec) {
+    description = 'Fails when a class of a java: library also reaches the class path from a jar or directory'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    dependsOn generateJsc
+    def classPath = configurations.compileClasspath + configurations.runtimeClasspath
+    inputs.files(classPath)
+    inputs.dir(jscOut)
+    argumentProviders.add({ ['--check-library-classes', jscOut.get().asFile.path,
+                             classPath.files.collect { it.absolutePath }.join(File.pathSeparator)] } as CommandLineArgumentProvider)
+}
+tasks.named('compileJava') { dependsOn checkJoustLibraries }
+tasks.named('check') { dependsOn checkJoustLibraries }
+// ...and the bytes of each such class are recorded per contract, for its client to check when it loads (JavaLibraryCheck).
+def recordJoustLibraries = tasks.register('recordJoustLibraries', JavaExec) {
+    description = 'Records the SHA-256 of each class compiled from a java: library\'s sources (META-INF/joust/java-libraries/<contract>.json)'
+    classpath = configurations.jsc
+    mainClass = 'org.julclang.state.dsl.JscMain'
+    def classesDir = sourceSets.main.java.destinationDirectory
+    args '--library-manifest', jscOut.get().asFile.path, classesDir.get().asFile.path
+}
+tasks.named('compileJava') { finalizedBy recordJoustLibraries }
+tasks.named('classes') { dependsOn recordJoustLibraries }
 sourceSets.main.java.srcDir(files(jscOut).builtBy(generateJsc))
 // ADR-0018 D12 (r12): each contract's message map is a resource beside its classes (the runtime explains refusals with it).
 tasks.named('processResources') { from(files(jscOut).builtBy(generateJsc)) { include '**/*.jscmap.json' } }

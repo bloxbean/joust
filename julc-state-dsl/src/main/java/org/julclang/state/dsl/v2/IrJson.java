@@ -76,6 +76,26 @@ final class IrJson {
                     "records", w.records(l.records()), "enums", w.enums(l.enums()), "fns", w.fns(l.fns())));
         }
         out.put("libraries", libraries);
+        // The certified Java libraries it imports (M4b): their records (fields only when verified) and imported fns'
+        // signatures. Their bodies are not here: the interpreters do not evaluate them (CallJava: no answer).
+        var java = new ArrayList<Object>();
+        for (Ir.JavaLib j : p.javaLibraries()) {
+            var recs = new ArrayList<Object>();
+            for (Ir.JavaRec r : j.records().values()) {
+                var m = w.record(r.type());
+                m.put("owner", r.canonicalOwner());
+                m.put("import", r.importClass());
+                m.put("javaName", r.sourceName());
+                m.put("verified", r.verified());
+                recs.add(m);
+            }
+            var fs = new ArrayList<Object>();
+            for (Ir.JavaFn f : j.fns().values()) {
+                fs.add(obj("name", f.name(), "params", f.params().stream().map(IrJson::type).toList(), "result", type(f.result())));
+            }
+            java.add(obj("class", j.fqcn(), "sourceSha256", j.sourceSha256(), "records", recs, "fns", fs));
+        }
+        out.put("javaLibraries", java);
         out.put("fns", w.fns(p.fns()));
         var methods = new ArrayList<Object>();
         for (Ir.Method m : p.methods()) {
@@ -257,6 +277,7 @@ final class IrJson {
                 case Ir.GetField g -> obj("node", "GetField", "target", expr(g.target()), "record", g.record(), "field", g.field());
                 case Ir.New n -> obj("node", "New", "record", n.record(), "values", exprs(n.values()));
                 case Ir.CallFn c -> obj("node", "CallFn", "fn", c.fn(), "args", exprs(c.args()));
+                case Ir.CallJava c -> obj("node", "CallJava", "library", c.library(), "fn", c.fn(), "args", exprs(c.args()));
                 case Ir.CallStd c -> obj("node", "CallStd", "module", c.binding().module(), "name", c.binding().name(), "args", exprs(c.args()));
                 case Ir.Prelude c -> obj("node", "Prelude", "op", c.op(), "args", exprs(c.args()));
                 case Ir.TimePred t -> obj("node", "TimePred", "after", t.after(), "threshold", expr(t.threshold()));
@@ -533,6 +554,24 @@ final class IrJson {
                 libraries.add(new Ir.Library(s(x.get("library")), s(x.get("source")), s(x.get("sourceSha256")), records(x.get("records")),
                         enums(x.get("enums")), fns(x.get("fns"))));
             }
+            var java = new ArrayList<Ir.JavaLib>();
+            for (Object o : l(r.get("javaLibraries"))) {
+                var x = m(o);
+                var recs = new LinkedHashMap<String, Ir.JavaRec>();
+                for (Object ro : l(x.get("records"))) {
+                    var rm = m(ro);
+                    Ir.RecordType t = record(rm);
+                    recs.put(t.name(), new Ir.JavaRec(t, s(rm.get("owner")), s(rm.get("import")), s(rm.get("javaName")), (Boolean) rm.get("verified")));
+                }
+                var fs = new LinkedHashMap<String, Ir.JavaFn>();
+                for (Object fo : l(x.get("fns"))) {
+                    var fm = m(fo);
+                    var ps = new ArrayList<Ty>();
+                    for (Object pt : l(fm.get("params"))) ps.add(type(pt));
+                    fs.put(s(fm.get("name")), new Ir.JavaFn(s(fm.get("name")), List.copyOf(ps), type(fm.get("result"))));
+                }
+                java.add(new Ir.JavaLib(s(x.get("class")), s(x.get("sourceSha256")), recs, fs));
+            }
             var fns = fns(r.get("fns"));
             var methods = new ArrayList<Ir.Method>();
             for (Object o : l(r.get("methods"))) {
@@ -556,7 +595,7 @@ final class IrJson {
                 warnings.add(new Ir.Warning(i(w.get("line")), i(w.get("col")), s(w.get("code")), s(w.get("message"))));
             }
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
-                    Set.copyOf(timeFields), recursive, warnings, false, List.copyOf(libraries));
+                    Set.copyOf(timeFields), recursive, warnings, false, List.copyOf(libraries), List.copyOf(java));
         }
 
         Ir.RecordType record(Map<String, Object> r) {
@@ -699,6 +738,7 @@ final class IrJson {
                 case "GetField" -> new Ir.GetField(expr(x.get("target")), s(x.get("record")), s(x.get("field")), t, taint, at);
                 case "New" -> new Ir.New(s(x.get("record")), exprs(x.get("values")), t, taint, at);
                 case "CallFn" -> new Ir.CallFn(s(x.get("fn")), exprs(x.get("args")), t, taint, at);
+                case "CallJava" -> new Ir.CallJava(s(x.get("library")), s(x.get("fn")), exprs(x.get("args")), t, taint, at);
                 case "CallStd" -> {
                     Std.Binding b = Std.ROWS.get(s(x.get("name")));
                     if (b == null || !b.module().equals(x.get("module"))) throw new IllegalArgumentException("unknown std row " + x.get("module") + "." + x.get("name"));

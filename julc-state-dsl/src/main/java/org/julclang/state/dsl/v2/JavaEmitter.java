@@ -62,6 +62,11 @@ final class JavaEmitter {
      * lowering; design F2, r2).
      */
     static final String LIBRARY_MARKER = "by julc-state-dsl (ADR-0018, a .jsc 2 library)";
+    /**
+     * The words before the {@code java:} libraries of a contract, in its Javadoc ({@code ContractReader.JAVA_LIBRARIES_MARKER},
+     * kept equal by {@code JscV2JavaLibraryTest}, which reads a real client).
+     */
+    static final String JAVA_LIBRARIES_MARKER = "Built with the java: libraries (ADR-0018 D9):";
     private final Set<String> imports = new TreeSet<>();
     private final LinkedHashMap<String, String> helpers = new LinkedHashMap<>();
     private int counter;
@@ -80,6 +85,12 @@ final class JavaEmitter {
         var checks = new ArrayList<>(e.checks);
         for (Ir.Library l : p.libraries()) {
             for (Check c : new JavaEmitter(libraryProgram(p, l)).checksOnly()) checks.add(c.in(l.fileName()));
+        }
+        // A Java library's messages (M4b): its requires and its adapters' checks, at their lines in its sources.
+        for (Ir.JavaLib j : p.javaLibraries()) {
+            for (JavaLibraries.Message m : j.messages()) {
+                checks.add(new Check(m.text(), m.kind(), new Syntax.Pos(m.line(), 1), m.in(), null, m.file()));
+            }
         }
         return new Emitted(java, List.copyOf(checks));
     }
@@ -136,7 +147,14 @@ final class JavaEmitter {
         for (String im : imports) out.append("import ").append(im).append(";\n");
         // The file name was checked to [A-Za-z0-9._-] at the boundary (JscV2.checkFileName), so it is safe in comments.
         out.append("\n/**\n * GENERATED from ").append(p.fileName())
-                .append(" by julc-state-dsl (ADR-0018, .jsc 2). Do not edit: change the .jsc file.\n */\n");
+                .append(" by julc-state-dsl (ADR-0018, .jsc 2). Do not edit: change the .jsc file.\n");
+        // ADR-0018 D9 (review r2: F1, F2, S1): the java: libraries the contract is built with, for its client, which checks
+        // their classes' bytes when it loads and refuses to run without its record of them (JoustProcessor reads this line).
+        if (!p.javaLibraries().isEmpty()) {
+            out.append(" * ").append(JAVA_LIBRARIES_MARKER).append(" ").append(String.join(" ",
+                    p.javaLibraries().stream().map(Ir.JavaLib::fqcn).sorted().toList())).append("\n");
+        }
+        out.append(" */\n");
         out.append("// ").append(mark(p.state().pos())).append("\n");
         out.append("@StateContract").append(options()).append("\n");
         out.append("public class ").append(p.name()).append(" {\n\n");
@@ -255,6 +273,11 @@ final class JavaEmitter {
      * which is imported (ADR-0018 D9, M4; JuLC follows imports, and needs them for same-package classes too).
      */
     private String qual(String name) {
+        Ir.JavaRec jr = p.javaRecord(name);
+        if (jr != null) {
+            imports.add(jr.importClass());
+            return jr.sourceName();
+        }
         Ir.Library l = p.libraryOf(name);
         if (l == null) return name;
         imports.add(l.qualified());
@@ -520,6 +543,7 @@ final class JavaEmitter {
                 case Ir.GetField g -> expr(g.target());
                 case Ir.New n -> n.values().forEach(this::expr);
                 case Ir.CallFn c -> c.args().forEach(this::expr);
+                case Ir.CallJava c -> c.args().forEach(this::expr);
                 case Ir.CallStd c -> {
                     if (c.binding().module().equals("std/time")) ctx = true;
                     c.args().forEach(this::expr);
@@ -849,6 +873,12 @@ final class JavaEmitter {
             }
             case Ir.New n -> "new " + qual(n.record()) + "(" + String.join(", ", n.values().stream().map(this::ex).toList()) + ")";
             case Ir.CallFn c -> qual(c.fn()) + "(" + String.join(", ", c.args().stream().map(this::ex).toList()) + ")";
+            // A certified Java library's public static method (D9, M4b), through its imported class.
+            case Ir.CallJava c -> {
+                imports.add(c.library());
+                yield c.library().substring(c.library().lastIndexOf('.') + 1) + "." + c.fn() + "("
+                        + String.join(", ", c.args().stream().map(this::ex).toList()) + ")";
+            }
             case Ir.CallStd c -> callStd(c);
             case Ir.Prelude c -> prelude(c);
             case Ir.TimePred t -> {

@@ -30,8 +30,14 @@ for (const m of modules) {
       }
     }
   }
+  // ADR-0018 D9 (M4b): examples/dsl imports the Java library of examples/compliance (its joustLibrary), as sources.
+  const javaLibraries = {};
+  if (m === 'dsl') {
+    const root = join(examples, 'compliance', 'src/main/java');
+    for (const p of walk(root)) if (p.endsWith('.java')) javaLibraries[relative(root, p)] = readFileSync(p, 'utf8');
+  }
   const t = Date.now();
-  const r = engine.joust.build({ files, options: {} });
+  const r = engine.joust.build({ files, options: {}, javaLibraries });
   // Review r3 F13: a built engine reports the versions it was built with, never 'dev'.
   if (!r.joust || r.joust === 'dev' || !r.julc || r.julc === 'dev') {
     console.log(`DIFF engine versions: joust ${r.joust}, julc ${r.julc}`);

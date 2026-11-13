@@ -151,8 +151,13 @@ public final class JscV2 {
      * its own: each contract that imports it carries its declarations (the IR's {@code libraries}).
      */
     public static Lowered lower(String source, String fileName, String id, JscModules modules) {
+        return lower(source, fileName, id, modules, JavaLibraries.NONE);
+    }
+
+    /** As above, with the certified Java libraries its {@code java:} imports may name (D9, M4b). */
+    public static Lowered lower(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries) {
         checkFileName(fileName);
-        return lowered(Checker.check(source, fileName, id, modules), source, fileName);
+        return lowered(Checker.check(source, fileName, id, modules, javaLibraries), source, fileName);
     }
 
     /** Whether a {@code .jsc} 2 source is a library ({@code library <package>}): read from its header only. */
@@ -178,8 +183,14 @@ public final class JscV2 {
 
     /** The reference interpreter of the module {@code id} of a build, with the {@code .jsc} libraries it imports (M4). */
     public static Interpreter interpreter(String source, String fileName, String id, JscModules modules, Interpreter.Hashes hashes) {
+        return interpreter(source, fileName, id, modules, JavaLibraries.NONE, hashes);
+    }
+
+    /** As above, with Java libraries: a call of one has no answer in the interpreter (M4b). */
+    public static Interpreter interpreter(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries,
+                                          Interpreter.Hashes hashes) {
         checkFileName(fileName);
-        return new Interpreter(Checker.check(source, fileName, id, modules), hashes);
+        return new Interpreter(Checker.check(source, fileName, id, modules, javaLibraries), hashes);
     }
 
     /**
@@ -195,6 +206,17 @@ public final class JscV2 {
         return Std.ROWS.values().stream().map(b -> new BindingRow(b.module(), b.name(), b.params().stream().map(Ty::show).toList(),
                 Ty.show(b.result()), b.targetClass(), b.target(), b.prefix(), b.policy().name(), b.domain(), b.timeTotal(),
                 b.javaSignature())).toList();
+    }
+
+    /**
+     * The fixed messages the target of the binding row with Java signature {@code javaSignature} can trace (its adapter's
+     * domain checks; D12), or none.
+     */
+    public static List<String> bindingMessages(String javaSignature) {
+        for (Std.Binding b : Std.ROWS.values()) {
+            if (javaSignature.equals(b.javaSignature())) return Std.MESSAGES.getOrDefault(b.name(), List.of());
+        }
+        return List.of();
     }
 
     /** The exact Java signature behind every {@code std} binding row (ADR-0018 D8). */

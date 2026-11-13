@@ -10,7 +10,7 @@ import { parseStrict } from './strict-json.js';
 import { validate } from './validate.js';
 import { applyStd } from './std.js';
 
-export const IR_VERSION = 1;
+export const IR_VERSION = 2;
 
 /**
  * Reads an IR export from its JSON text and returns the program, ready to call. The text is read strictly (no
@@ -51,7 +51,7 @@ class Program {
     const add = (r) => this.shapes.set(r.name, { names: r.fields.map((f) => f.name), types: r.fields.map((f) => f.type) });
     // A build's declarations are one namespace (IR version 2, ADR-0018 M4): the .jsc libraries' records, enums and fns
     // join the program's, and a library fn runs like the program's own.
-    const records = [...p.libraries.flatMap((l) => l.records), ...p.records];
+    const records = [...p.libraries.flatMap((l) => l.records), ...p.javaLibraries.flatMap((j) => j.records), ...p.records];
     const enums = [...p.libraries.flatMap((l) => l.enums), ...p.enums];
     for (const r of records) add(r);
     for (const e of enums) for (const v of e.variants) add(v);
@@ -224,6 +224,10 @@ class Program {
       case 'New': return new Rec(e.record, e.values.map((x) => this.#eval(x, env, f)));
       case 'Variant': return new Rec(e.variant, e.values.map((x) => this.#eval(x, env, f)));
       case 'CallFn': return this.#invoke(e.fn, e.args.map((x) => this.#eval(x, env, f)));
+      // ADR-0018 D9 (M4b): a Java library's body has no reference semantics here (its certification and per-function
+      // vectors cover it on the JVM and UPLC). No answer, never a refusal (semantics §2.4).
+      case 'CallJava': throw new Limit(`java:${e.library}.${e.fn} has no reference semantics: the interpreters do not evaluate Java`
+        + ' library calls (ADR-0018 D9, M4b; no answer)');
       case 'CallStd': {
         const args = e.args.map((x) => this.#eval(x, env, f));
         const listType = e.args[0]?.type;

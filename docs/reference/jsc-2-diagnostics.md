@@ -230,7 +230,14 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0710 | error | ' … ' is declared in … : import { … } from it to use it here (a library's declarations are seen only where they are imported) | Checker |
 | JSC0711 | error | a library holds imports, types, enums and fns, not a contract: write the contract in its own file and import the library there | Parser |
 | JSC0712 | error | in the imported library …: error[…]: … (an error in a library, reported at the import that brings it into this build) | Checker |
-| JSC0720 | error | Java library imports (java:…) are not available yet (ADR-0018 D9, M4b) | Checker |
+| JSC0720 | error | no on-chain sources of the Java library … are on the library path (Gradle: the joustLibrary configuration; npm: a package's joust-lib/); or: ' … ' does not name a class | Checker |
+| JSC0721 | error | the Java library … is not certified, so it cannot be imported (ADR-0018 D9): … (each problem, with its file and line) | Checker |
+| JSC0722 | error | java: … . … cannot be imported: its parameter … is … : … (or its result) | Checker |
+| JSC0723 | error | java: … . … is overloaded: .jsc calls a library fn by name, so an overloaded method cannot be imported | Checker |
+| JSC0724 | error | … is a record of java: … : read-only in .jsc (ADR-0018 D9); build it with the library's fns | Checker |
+| JSC0725 | error | … is an opaque record of java: … : never written as a type, stored, compared or read (or: an opaque Java library record is not comparable) | Checker |
+| JSC0726 | error | … is a Java library's (java: … ): a time value never reaches one, since its body is not checked for the time rule (ADR-0018 D11) | Checker |
+| JSC0727 | error | … is on the class path here, and is also compiled from the java: library's sources (ADR-0018 D9); also: a listed library class was not compiled (recordJoustLibraries) | JscMain (checkJoustLibraries, recordJoustLibraries) |
 
 ## Map and BigMap (ADR-0018 D5, D7, J14)
 

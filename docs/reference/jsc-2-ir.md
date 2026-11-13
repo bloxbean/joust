@@ -99,6 +99,9 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   "recursiveFns": ["fact"],
   "libraries": [{ "library": "org.example.Fees", "source": "fees.jsc", "sourceSha256": "<64 hex digits>",
                   "records": [Record…], "enums": [Enum…], "fns": [Fn…] }],
+  "javaLibraries": [{ "class": "org.example.AllowList", "sourceSha256": "<64 hex digits>",
+                      "records": [Record + { "owner", "import", "javaName", "verified" }…],
+                      "fns": [{ "name", "params": [Type…], "result": Type }…] }],
   "fns": [{ "name", "params": [Local…], "result": Type, "body": Block, "at" }],
   "methods": [{ "kind": "init|action|destroy|view", "name", "params": [Local…], "mods": [{ "name", "field"? }],
                 "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at" }],
@@ -108,6 +111,11 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 
 - **Record:** `{ "name", "fields": [{ "name", "type": Type }], "at" }`, with the fields in declaration order. An enum's
   variants are records in declaration order, so a variant's tag is its index.
+- **Java libraries** (version 2, M4b): each certified Java library the program imports with `java:`. Its records join the
+  namespace (`fields` empty when the record is opaque, `verified` false); `fns` lists the imported fns' signatures only.
+  Their bodies are not here: a `CallJava` node (`library`, `fn`, `args`) has no answer in either interpreter (semantics
+  §2.4), and both readers check that it names an imported fn with its arity. See
+  [jsc-2-java-libraries.md](jsc-2-java-libraries.md).
 - **Libraries** (version 2): a library's records, enums and fns join the program's in one namespace (the checker refuses a
   name declared twice across a build, `JSC0709`), so a `CallFn`, `New`, `Variant` or type naming one of them means it.
   The interpreters evaluate a library fn like the program's own. Its `at` positions are in its own file (`source`), so a
@@ -153,6 +161,7 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   | `GetField` | `target`, `record`, `field` | | `MapEmpty` | |
   | `New` | `record`, `values` (in field order) | | `MapOp` | `op` (`get has set delete size keys values isEmpty`), `map`, `args` |
   | `CallFn` | `fn`, `args` | | `MapHof` | `kind` (`any all`), `map`, `k`, `v` (Locals), `body` |
+  | `CallJava` | `library`, `fn`, `args` (M4b; no answer) | | | |
   | `CallStd` | `module`, `name`, `args` | | `MapFold` | `map`, `init`, `acc`, `k`, `v` (Locals), `body` |
   | `Prelude` | `op` (`min max abs asKey asHash`), `args` | | `BigEmpty` | |
   | `TimePred` | `after` (boolean), `threshold` | | `BigOp` | `op` (`get has at set delete isEmpty`), `map`, `args` |

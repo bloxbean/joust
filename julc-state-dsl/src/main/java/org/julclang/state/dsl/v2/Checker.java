@@ -175,12 +175,56 @@ final class Checker {
     /** The simple class names of the build's libraries: the generated Java names them as static receivers. */
     private final Set<String> libraryClasses = new HashSet<>();
 
-    private Checker(Module main, List<Module> libraries) {
+    // ------------------------------------------------------------------ Java libraries (D9, M4b)
+
+    /** The certified Java libraries a {@code java:} import may name. */
+    private final JavaLibraries javaLibraries;
+    /** The Java libraries this build imports, by class: their records and imported fns. */
+    private final LinkedHashMap<String, Ir.JavaLib> javaUsed = new LinkedHashMap<>();
+    /** Each imported Java fn's library (by its {@code .jsc} name, which is its Java name). */
+    private final Map<String, String> javaFnLib = new HashMap<>();
+    /** Each Java library record's library (by its simple name). */
+    private final Map<String, String> javaRecLib = new HashMap<>();
+    /** Each class the generated Java imports by its simple name: libraries' classes and Java records' top-level classes. */
+    private final Map<String, String> importedSimple = new HashMap<>();
+
+    private static String simpleOf(String fqcn) {
+        return fqcn.substring(fqcn.lastIndexOf('.') + 1);
+    }
+
+    /** {@code fqcn} takes the simple name {@code simple} in the generated imports: a different class of that name is a clash. */
+    private void claimImport(String simple, String fqcn, Pos at, String what) {
+        if (importedSimple.isEmpty()) for (Module m : libraries) importedSimple.put(m.cls, m.qualified());
+        if (simple.equals(main.cls) || file.contract() != null && file.contract().name().equals(simple)) {
+            throw at.error("JSC0709", what + " is imported as " + simple + ", the name of this file's own class; rename one");
+        }
+        // Codex C20 (r4): a record's top-level class is held to the rules a library's class is: not a name the generated
+        // code uses (BigInteger, Optional, State, an annotation…) nor a type this build declares, other than a top-level
+        // Java record naming itself.
+        boolean itself = fqcn.equals(javaRecBinary.get(simple));
+        if (RESERVED.contains(simple) || PROCESSOR_TYPES.contains(simple)
+                || !itself && (records.containsKey(simple) || enums.containsKey(simple) || variantEnum.containsKey(simple) || fns.containsKey(simple))) {
+            throw at.error("JSC0709", what + " is imported as " + simple + ", a name the generated code uses or this build declares; rename one");
+        }
+        String other = importedSimple.putIfAbsent(simple, fqcn);
+        if (other != null && !other.equals(fqcn)) {
+            throw at.error("JSC0709", what + " is imported as " + simple + ", and so is " + other + ": the generated Java names both by that"
+                    + " simple name, an ambiguous import; rename one");
+        }
+    }
+
+    /** Each Java library record's binary name, by its {@code .jsc} name: one record shared by two libraries is one type. */
+    private final Map<String, String> javaRecBinary = new HashMap<>();
+    /** The Java library records that are opaque: no fields to read, no equality, never written as a type. */
+    private final Set<String> javaOpaque = new HashSet<>();
+
+    private Checker(Module main, List<Module> libraries, JavaLibraries javaLibraries) {
         this.file = main.file;
         this.fileName = main.fileName;
         this.main = main;
         this.libraries = libraries;
         this.current = main;
+        this.javaLibraries = javaLibraries;
     }
 
     /** All modules, libraries first (dependency order), the main file last. */
@@ -197,7 +241,7 @@ final class Checker {
             for (Import im : file.imports()) {
                 if (isModuleSpec(im.from())) throw noModule(im.pos(), im.from(), null);
             }
-            return checkFile(m, List.of());
+            return checkFile(m, List.of(), JavaLibraries.NONE);
         } catch (JscException e) {
             throw Parser.hinted(e, file.leadingMinus(), file.members());
         }
@@ -208,10 +252,15 @@ final class Checker {
      * D9, M4): its imports are loaded first, transitively, each parsed and declared in the build's one namespace.
      */
     static Ir.Program check(String source, String fileName, String id, JscModules modules) {
+        return check(source, fileName, id, modules, JavaLibraries.NONE);
+    }
+
+    /** As above, with the certified Java libraries {@code java:} imports may name (D9, M4b). */
+    static Ir.Program check(String source, String fileName, String id, JscModules modules, JavaLibraries javaLibraries) {
         var loader = new Loader(modules);
         Module main = loader.main(source, fileName, id);
         try {
-            return checkFile(main, loader.order);
+            return checkFile(main, loader.order, javaLibraries);
         } catch (JscException e) {
             throw Parser.hinted(e, main.file.leadingMinus(), main.file.members());
         }
@@ -263,6 +312,9 @@ final class Checker {
             var deps = new LinkedHashMap<String, Module>();
             var types = new HashSet<String>();
             for (Import im : Parser.imports(source)) {
+                // A Java library's records (M4b): a capitalised imported name is read as a type, so a constructor of one
+                // reaches the checker, which refuses it (read-only, JSC0724).
+                if (im.from().startsWith("java:")) for (String n : im.names()) if (Character.isUpperCase(n.charAt(0))) types.add(n);
                 if (!isModuleSpec(im.from()) || deps.containsKey(im.from())) continue;
                 JscModules.Source s = JscModules.isRelative(im.from()) ? modules.resolve(id, im.from()) : null;
                 if (s == null) throw noModule(im.pos(), im.from(), id == null ? null : id);
@@ -297,6 +349,7 @@ final class Checker {
                     throw inLibrary(s.id(), at, e);
                 }
                 for (Import im : imports) {
+                    if (im.from().startsWith("java:")) for (String n : im.names()) if (Character.isUpperCase(n.charAt(0))) types.add(n);
                     if (!isModuleSpec(im.from()) || deps.containsKey(im.from())) continue;
                     JscModules.Source d = JscModules.isRelative(im.from()) ? modules.resolve(s.id(), im.from()) : null;
                     if (d == null) throw inLibrary(s.id(), at, noModule(im.pos(), im.from(), s.id()));
@@ -360,8 +413,8 @@ final class Checker {
         throw p.error("JSC0710", what + " from it to use it here (a library's declarations are seen only where they are imported)");
     }
 
-    private static Ir.Program checkFile(Module main, List<Module> libraries) {
-        var c = new Checker(main, libraries);
+    private static Ir.Program checkFile(Module main, List<Module> libraries, JavaLibraries javaLibraries) {
+        var c = new Checker(main, libraries, javaLibraries);
         File file = main.file;
         c.declare();
         Ir.Program p;
@@ -380,7 +433,7 @@ final class Checker {
                     + " if the line is meant to stand alone, end the line above with ';'");
         }
         return new Ir.Program(p.pkg(), p.fileName(), p.name(), p.options(), p.records(), p.enums(), p.state(), p.methods(), p.fns(),
-                Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings), p.library(), p.libraries());
+                Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings), p.library(), p.libraries(), p.javaLibraries());
     }
 
     private void resetRound() {
@@ -542,6 +595,7 @@ final class Checker {
         generated.addAll(enums.keySet());
         generated.addAll(variantEnum.keySet());
         generated.addAll(libraryClasses);
+        generated.addAll(importedSimple.keySet());   // a record's class, imported by its simple name (C20, r4)
         generated.add(c.name());   // the variant would shadow the contract's class in its validator
         for (Syntax.Method m : c.methods()) {
             if (m.kind() != Kind.INIT) checkUserName(m.name(), m.pos(), "method");
@@ -572,7 +626,8 @@ final class Checker {
     private void imports(Module m) {
         for (Import im : m.file.imports()) {
             if (im.from().startsWith("java:")) {
-                throw im.pos().error("JSC0720", "Java library imports (java:…) are not available yet (ADR-0018 D9, M4b)");
+                javaImport(m, im);
+                continue;
             }
             if (isModuleSpec(im.from())) {
                 Module dep = m.deps.get(im.from());
@@ -602,6 +657,143 @@ final class Checker {
                 m.std.add(n);
             }
         }
+    }
+
+    /**
+     * {@code import { f, R } from "java:com.acme.Lib"} (D9, M4b): the library must be on the library path and certified;
+     * each name is one of its public static methods, admitted (its signature maps to {@code .jsc} types: exact types, from
+     * javac's attribution of its on-chain sources), or one of its records. A library's records and the class itself join
+     * the build's namespace.
+     */
+    private void javaImport(Module m, Import im) {
+        String fqcn = im.from().substring("java:".length());
+        if (!fqcn.matches("([A-Za-z_][A-Za-z0-9_]*\\.)+[A-Za-z_][A-Za-z0-9_]*")) {
+            throw im.pos().error("JSC0720", "'" + im.from() + "' does not name a class: write java:<package>.<Class>");
+        }
+        JavaLibraries.Library lib = javaLibraries.describe(fqcn);
+        if (lib == null) {
+            throw im.pos().error("JSC0720", "no on-chain sources of the Java library " + fqcn + " are on the library path (Gradle: the"
+                    + " joustLibrary configuration; npm: a package's joust-lib/): a java: import compiles the library from its sources, on"
+                    + " both sides (ADR-0018 D9)");
+        }
+        if (!lib.problems().isEmpty()) {
+            throw im.pos().error("JSC0721", "the Java library " + fqcn + " is not certified, so it cannot be imported (ADR-0018 D9): "
+                    + String.join("; ", lib.problems()));
+        }
+        javaRegister(lib, im.pos());
+        Ir.JavaLib used = javaUsed.get(fqcn);
+        for (String n : im.names()) {
+            var candidates = lib.fns().stream().filter(f -> f.name().equals(n)).toList();
+            if (candidates.size() > 1) {
+                throw im.pos().error("JSC0723", "java:" + fqcn + "." + n + " is overloaded: .jsc calls a library fn by name, so an overloaded"
+                        + " method cannot be imported (give each its own name in the library)");
+            }
+            if (candidates.size() == 1) {
+                JavaLibraries.Fn f = candidates.get(0);
+                if (f.refusal() != null) {
+                    throw im.pos().error("JSC0722", "java:" + fqcn + "." + n + " cannot be imported: " + f.refusal());
+                }
+                if (fns.containsKey(n) || PRELUDE.contains(n) || Std.ROWS.containsKey(n) || (javaFnLib.containsKey(n) && !javaFnLib.get(n).equals(fqcn))
+                        || records.containsKey(n) || enums.containsKey(n) || variantEnum.containsKey(n)) {
+                    throw im.pos().error("JSC0709", "java:" + fqcn + "." + n + " has the name of another declaration or import of this build; rename"
+                            + " one (the declarations of a build share one namespace)");
+                }
+                var params = new ArrayList<Ty>();
+                for (JavaLibraries.JType t : f.params()) params.add(javaTy(lib, t));
+                var jf = new Ir.JavaFn(n, List.copyOf(params), javaTy(lib, f.result()));
+                used.fns().put(n, jf);
+                javaFnLib.put(n, fqcn);
+                m.visible.add(n);
+                continue;
+            }
+            if (lib.records().stream().anyMatch(r -> r.simpleName().equals(n))) {
+                m.visible.add(n);
+                continue;
+            }
+            throw im.pos().error("JSC0708", "'" + n + "' is not a public static method or a record of java:" + fqcn);
+        }
+    }
+
+    /** A Java library's class and records, into the build's namespace (once per library). */
+    private void javaRegister(JavaLibraries.Library lib, Pos at) {
+        String fqcn = lib.fqcn();
+        if (javaUsed.containsKey(fqcn)) return;
+        String cls = lib.simpleName();
+        if (records.containsKey(cls) || enums.containsKey(cls) || variantEnum.containsKey(cls) || fns.containsKey(cls) || cls.equals(main.cls)
+                || libraries.stream().anyMatch(l -> l.cls.equals(cls)) || (file.contract() != null && file.contract().name().equals(cls))
+                || javaUsed.values().stream().anyMatch(j -> j.simpleName().equals(cls)) || RESERVED.contains(cls) || PROCESSOR_TYPES.contains(cls)) {
+            throw at.error("JSC0709", "the Java library " + fqcn + " is the class " + cls + ", the name of a declaration, library or contract of this"
+                    + " build (or of the generated code); rename one");
+        }
+        // Codex C3 (r2): the generated Java calls the library through its class (AllowList.isAllowed(…)), which a value of
+        // the class's name would obscure, as for a .jsc library (C1): no binding takes it (declaredName).
+        libraryClasses.add(cls);
+        var recs = new LinkedHashMap<String, Ir.JavaRec>();
+        var fresh = new ArrayList<JavaLibraries.Rec>();
+        for (JavaLibraries.Rec r : lib.records()) {
+            String n = r.simpleName();
+            // Codex C5 (r2): a record two libraries' signatures share (lib.A$R, made by A and read by B) is one type of the
+            // build, registered once, by its binary name; only a different record of the same name is a clash.
+            if (r.binaryName().equals(javaRecBinary.get(n))) continue;
+            if (records.containsKey(n) || enums.containsKey(n) || variantEnum.containsKey(n) || fns.containsKey(n) || javaRecLib.containsKey(n)
+                    || RESERVED.contains(n) || PROCESSOR_TYPES.contains(n) || n.equals(cls) || n.contains("_")) {
+                throw at.error("JSC0709", "the record " + r.binaryName() + " of java:" + fqcn + " is named " + n + ", the name of a declaration of this"
+                        + " build (or of the generated code); rename one");
+            }
+            records.put(n, new LinkedHashMap<>());
+            javaRecLib.put(n, fqcn);
+            javaRecBinary.put(n, r.binaryName());
+            if (!r.verified()) javaOpaque.add(n);
+            fresh.add(r);
+        }
+        // Codex C14 (r3): the generated Java imports a Java record's top-level class to name it (B.R): that class takes its
+        // simple name in the importing file, as a library's class does, so two different classes of one simple name (b.B
+        // for a record, c.B for a fn) would be an ambiguous import. Refused at the import (JSC0709), in either order and
+        // against .jsc libraries too.
+        claimImport(cls, fqcn, at, "the Java library " + fqcn);
+        for (JavaLibraries.Rec r : fresh) claimImport(simpleOf(r.importClass()), r.importClass(), at, "the class of the record " + r.binaryName() + " of java:" + fqcn);
+        for (JavaLibraries.Rec r : fresh) {
+            var fields = records.get(r.simpleName());
+            if (r.verified()) for (int i = 0; i < r.fieldNames().size(); i++) fields.put(r.fieldNames().get(i), javaTy(lib, r.fieldTypes().get(i)));
+            recs.put(r.simpleName(), new Ir.JavaRec(new Ir.RecordType(r.simpleName(), fields, at), r.canonicalOwner(), r.importClass(),
+                    r.sourceName(), r.verified()));
+        }
+        javaUsed.put(fqcn, new Ir.JavaLib(fqcn, lib.sourceSha256(), recs, new LinkedHashMap<>(), lib.messages()));
+    }
+
+    /** A Java type as a {@code .jsc} type (an admitted signature maps; a record by its simple name). */
+    private static Ty javaTy(JavaLibraries.Library lib, JavaLibraries.JType t) {
+        return switch (t.kind()) {
+            case "Int" -> Ty.INT;
+            case "Bool" -> Ty.BOOL;
+            case "Bytes" -> Ty.BYTES;
+            case "List" -> new Ty.ListT(javaTy(lib, t.elem()));
+            case "Option" -> new Ty.OptT(javaTy(lib, t.elem()));
+            case "Record" -> {
+                JavaLibraries.Rec r = lib.record(t.record());
+                if (r == null) throw new IllegalStateException("the certifier described no record " + t.record());
+                yield new Ty.Rec(r.simpleName());
+            }
+            default -> throw new IllegalStateException("an unmappable type in an admitted signature: " + t.why());
+        };
+    }
+
+    /** A Java library's name is seen only where it is imported (D9). */
+    private void visibleJava(String name, Pos p) {
+        if (current.visible.contains(name)) return;
+        String lib = javaFnLib.containsKey(name) ? javaFnLib.get(name) : javaRecLib.get(name);
+        throw p.error("JSC0710", "'" + name + "' is from java:" + lib + ": import { " + name + " } from \"java:" + lib + "\" to use it here");
+    }
+
+    /** Whether a type holds an opaque Java record anywhere (it is then not comparable: D6). */
+    private boolean hasOpaque(Ty t) {
+        return switch (t) {
+            case Ty.Rec r -> javaOpaque.contains(r.name()) || components(r.name()).stream().anyMatch(this::hasOpaque);
+            case Ty.ListT l -> hasOpaque(l.elem());
+            case Ty.OptT o -> hasOpaque(o.elem());
+            case Ty.MapT m -> hasOpaque(m.val());
+            default -> false;
+        };
     }
 
     /** A declared type, enum or variant name: capitalised, without '_', not reserved, not taken (D5, J10). */
@@ -681,7 +873,13 @@ final class Checker {
                     throw t.pos().error("JSC0306", t.name() + " comes in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
             default -> records.containsKey(t.name()) ? new Ty.Rec(t.name()) : enums.containsKey(t.name()) ? new Ty.EnumT(t.name()) : null;
         };
-        if (ty instanceof Ty.Rec || ty instanceof Ty.EnumT) visible(t.name(), t.pos());
+        if (ty instanceof Ty.Rec && javaRecLib.containsKey(t.name())) {
+            visibleJava(t.name(), t.pos());
+            if (javaOpaque.contains(t.name())) {
+                throw t.pos().error("JSC0725", t.name() + " is an opaque record of java:" + javaRecLib.get(t.name()) + " (its encoding is not"
+                        + " verified): it can be passed between the library's fns, never written as a type, stored, compared or read (ADR-0018 D9)");
+            }
+        } else if (ty instanceof Ty.Rec || ty instanceof Ty.EnumT) visible(t.name(), t.pos());
         if (ty == null && variantEnum.containsKey(t.name())) {
             throw t.pos().error("JSC0911", t.name() + " is a variant of " + variantEnum.get(t.name()) + ", not a type: write " + variantEnum.get(t.name()));
         }
@@ -961,12 +1159,13 @@ final class Checker {
                     List.copyOf(byModule.getOrDefault(m, List.of()))));
         }
         List<Ir.Fn> own = List.copyOf(byModule.getOrDefault(main, List.of()));
+        List<Ir.JavaLib> java = List.copyOf(javaUsed.values());
         if (c == null) {
             return new Ir.Program(file.pkg(), fileName, main.cls, List.of(), recordsOf(main), enumsIrOf(main), null, List.of(), own,
-                    Set.of(), Set.of(), List.of(), true, List.copyOf(libs));
+                    Set.of(), Set.of(), List.of(), true, List.copyOf(libs), java);
         }
         return new Ir.Program(file.pkg(), fileName, c.name(), options, recordsOf(main), enumsIrOf(main),
-                new Ir.RecordType("State", stateFields, c.pos()), methods, own, Set.of(), Set.of(), List.of(), false, List.copyOf(libs));
+                new Ir.RecordType("State", stateFields, c.pos()), methods, own, Set.of(), Set.of(), List.of(), false, List.copyOf(libs), java);
     }
 
     private LinkedHashMap<String, Ir.RecordType> recordsOf(Module m) {
@@ -1601,6 +1800,10 @@ final class Checker {
             };
         }
         if (target.type() instanceof Ty.Rec r) {
+            if (javaOpaque.contains(r.name())) {
+                throw f.pos().error("JSC0725", r.name() + " is an opaque record of java:" + javaRecLib.get(r.name()) + ": its fields cannot be read"
+                        + " (its encoding is not verified; ADR-0018 D9)");
+            }
             Ty ft = fieldsOf(r.name()).get(f.name());
             if (ft == null) throw f.pos().error("JSC0320", r.name() + " has no field " + f.name());
             if (ft instanceof Ty.BigMapT) bigMapRead(f.pos(), sc);
@@ -1619,6 +1822,7 @@ final class Checker {
             visible(fn, c.pos());
             return userCall(user, c, sc);
         }
+        if (javaFnLib.containsKey(fn)) return javaCall(c, sc);
         Std.Binding b = Std.ROWS.get(fn);
         if (b != null) {
             if (!current.std.contains(fn)) throw c.pos().error("JSC0704", fn + " is in " + b.module() + ": import { " + fn + " } from \"" + b.module() + "\"");
@@ -1673,6 +1877,32 @@ final class Checker {
             }
             default -> throw c.pos().error("JSC0324", "unknown function '" + fn + "'");
         }
+    }
+
+    /**
+     * A certified Java library's fn (D9, M4b): its exact signature, mapped; a time value never reaches it (D11: a
+     * {@code java:} import never accepts one), and its result is a checked input (D5; the mapped types hold no Key, Hash or
+     * Map, so it needs no generated check).
+     */
+    private Ir.Expr javaCall(Call c, Sc sc) {
+        String fn = c.fn();
+        visibleJava(fn, c.pos());
+        String lib = javaFnLib.get(fn);
+        Ir.JavaFn jf = javaUsed.get(lib).fns().get(fn);
+        if (c.args().size() != jf.params().size()) {
+            throw c.pos().error("JSC0325", fn + " takes " + jf.params().size() + " argument" + (jf.params().size() == 1 ? "" : "s"));
+        }
+        var args = new ArrayList<Ir.Expr>();
+        for (int i = 0; i < c.args().size(); i++) {
+            Ir.Expr a = expr(c.args().get(i), sc, jf.params().get(i));
+            expectType(jf.params().get(i), a, c.args().get(i).pos());
+            if ((a.taint() & TIME) != 0) {
+                throw c.args().get(i).pos().error("JSC0726", fn + " is a Java library's (java:" + lib + "): a time value never reaches one, since its"
+                        + " body is not checked for the time rule (ADR-0018 D11)");
+            }
+            args.add(a);
+        }
+        return new Ir.CallJava(lib, fn, args, jf.result(), 0, c.pos());
     }
 
     private Ir.Expr intArg(Call c, int i, Sc sc) {
@@ -1960,9 +2190,11 @@ final class Checker {
             }
             if (!records.containsKey(o.type())) throw o.pos().error("JSC0329", "unknown type " + o.type());
             visible(o.type(), o.pos());
+            javaReadOnly(o.type(), o.pos());
             recName = o.type();
         } else if (expected instanceof Ty.Rec r) {
             recName = r.name();
+            javaReadOnly(recName, o.pos());
         } else if (expected instanceof Ty.EnumT e) {
             throw o.pos().error("JSC0914", "an " + e.name() + " is one of its variants: write " + String.join(" { … }, ", enums.get(e.name()).keySet()) + " { … }");
         } else {
@@ -2010,6 +2242,14 @@ final class Checker {
             if (en.getValue() instanceof Ty.BigMapT) bigMapField(en.getKey(), v, sc, given.containsKey(en.getKey()) ? null : o.pos());
         }
         return new Ir.New(recName, values, type, taint, o.pos());
+    }
+
+    /** A Java library's records are built by its fns, never in {@code .jsc} (D9: read-only). */
+    private void javaReadOnly(String rec, Pos p) {
+        if (javaRecLib.containsKey(rec)) {
+            throw p.error("JSC0724", rec + " is a record of java:" + javaRecLib.get(rec) + ": read-only in .jsc (ADR-0018 D9); build it with the"
+                    + " library's fns");
+        }
     }
 
     /** {@code Closed { at }}: every field given, no spread (D5). */
@@ -2147,6 +2387,10 @@ final class Checker {
                 Ty t = unify(l.type(), r.type(), b.pos());
                 if (Ty.hasBigMap(t, this::components) || t.equals(Ty.STATE) && stateFields.values().stream().anyMatch(x -> x instanceof Ty.BigMapT)) {
                     throw b.pos().error("JSC0812", "a BigMap is not comparable: it is a witness of a Merkle root, not its contents (ADR-0018 D6)");
+                }
+                if (hasOpaque(t)) {
+                    throw b.pos().error("JSC0725", "an opaque Java library record is not comparable: only through an equality fn its library"
+                            + " exports (ADR-0018 D6, D9)");
                 }
                 return new Ir.Equals(op.equals("!="), l, r, t, Ty.BOOL, 0, b.pos());
             }

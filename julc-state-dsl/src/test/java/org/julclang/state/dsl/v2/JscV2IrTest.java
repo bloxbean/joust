@@ -75,6 +75,18 @@ class JscV2IrTest {
             }
         }
         out.put("Forms.jsc", FORMS);
+        // A java: import (M4b), against a hand-written library description: CallJava and a Java record in the state.
+        out.put("JavaForms.jsc", """
+                jsc 2
+                package forms
+                import { P, twice, mk, size } from "java:com.acme.L"
+                contract JavaForms {
+                  state { n: Int, ps: List<P> }
+                  init() { return { n: twice(1), ps: [mk(#01, 2)] } }
+                  action add(k: Bytes) open { return { ...state, n: size(ps), ps: [mk(k, n), ...ps] } }
+                  view first(): Int = match ps.head { Some(p) => p.v, None => 0 }
+                }
+                """);
         return out;
     }
 
@@ -213,7 +225,7 @@ class JscV2IrTest {
         var stale = new ArrayList<String>();
         var names = new ArrayList<String>();
         for (var e : sources().entrySet()) {
-            if (e.getKey().equals("Forms.jsc")) continue;
+            if (e.getKey().equals("Forms.jsc") || e.getKey().equals("JavaForms.jsc")) continue;
             String name = e.getKey().replace(".jsc", ".ir.json");
             names.add(name);
             Path f = JS_FIXTURES.resolve(name);

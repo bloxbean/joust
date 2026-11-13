@@ -118,10 +118,21 @@ public final class Toolchain {
      * {@code options} are JOUST's processor options ({@code joust.traces}, ...).
      */
     public static Result build(Map<String, String> files, Map<String, String> options) {
+        return build(files, options, Map.of());
+    }
+
+    /**
+     * As {@link #build(Map, Map)}, with the on-chain sources of the Java (JuLC) libraries the build's {@code .jsc} files may
+     * import with {@code java:} (ADR-0018 D9, M4b): path to text, as a library jar's {@code META-INF/plutus-sources} or an
+     * npm package's {@code joust-lib/} holds them. They are certified ({@link JavaLibraryCertifier}) before any
+     * {@code .jsc} file that imports one is lowered, and they are on javac's and JuLC's library pools, as a library jar's
+     * sources are on Gradle's processor path.
+     */
+    public static Result build(Map<String, String> files, Map<String, String> options, Map<String, String> javaLibrarySources) {
         var generated = new ArrayList<Generated>();
         Result r;
         try {
-            r = build(files, options, generated);
+            r = build(files, options, javaLibrarySources, generated);
         } catch (StackOverflowError e) {
             // A safety net past the front end (javac, the processor, JuLC): the build fails with a diagnostic, it does not
             // crash its caller (the npm CLI's engine, an editor) (ADR-0018 J18, review S2).
@@ -192,18 +203,25 @@ public final class Toolchain {
         return out;
     }
 
-    private static Result build(Map<String, String> files, Map<String, String> options, List<Generated> generatedOut) {
+    private static Result build(Map<String, String> files, Map<String, String> options, Map<String, String> javaLibrarySources,
+                                List<Generated> generatedOut) {
         var diagnostics = new ArrayList<Diagnostic>();
-        // 1. .jsc → Java. A .jsc 2 file's ./x.jsc imports name other files of the build, by path (ADR-0018 D9, M4).
+        // 1. .jsc → Java. A .jsc 2 file's ./x.jsc imports name other files of the build, by path (ADR-0018 D9, M4); its
+        //    java: imports name certified Java libraries (M4b), certified once, when the first one is needed.
         var sources = new LinkedHashMap<String, String>();
         var modules = org.julclang.state.dsl.v2.JscModules.of(files);
+        var certified = new Map[1];
+        org.julclang.state.dsl.v2.JavaLibraries javaLibraries = fqcn -> {
+            if (certified[0] == null) certified[0] = javaLibrarySources.isEmpty() ? Map.of() : JavaLibraryCertifier.certify(javaLibrarySources);
+            return (org.julclang.state.dsl.v2.JavaLibraries.Library) certified[0].get(fqcn);
+        };
         files.forEach((name, text) -> {
             if (name.endsWith(".jsc")) {
                 try {
                     // The bare file name, as Gradle's generateJsc passes it: the lowering embeds it. A .jsc 2 file's name
                     // must be [A-Za-z0-9][A-Za-z0-9._-]* (else a 1:1 error, security S3); a v1 file's name is escaped.
                     String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
-                    var lowered = JscMain.lowerWithWarnings(text, base, name.replace('\\', '/'), modules);
+                    var lowered = JscMain.lowerWithWarnings(text, base, name.replace('\\', '/'), modules, javaLibraries);
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());
                     generatedOut.add(new Generated(name, javaPath(lowered.java(), name), lowered.java(), lowered.sourceMapJson(), lowered.abiJson(),
                             lowered.irJson()));
@@ -249,6 +267,8 @@ public final class Toolchain {
         });
         var pool = new ArrayList<JavacFrontend.Unit>();
         classpathLibraries.values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
+        // The Java libraries' on-chain sources (M4b): library sources, as on Gradle's processor path.
+        javaLibrarySources.values().forEach(t -> pool.add(JavacFrontend.Unit.jar(t)));
         var generated = new ArrayList<JoustGenerators.Generated>();
         var plain = new ArrayList<PlainValidator>();   // the project's plain validators, as strings
         boolean attributed = JavacFrontend.shared().attribute(roots, pool, attribution -> {
@@ -314,6 +334,10 @@ public final class Toolchain {
             if (l != null) project.put(l.fqcn(), l);
         }
         Map<String, LibrarySource> libraryPool = new LinkedHashMap<>(classpathLibraries);
+        for (String text : javaLibrarySources.values()) {
+            LibrarySource l = LibrarySourceResolver.librarySource(text);
+            if (l != null) libraryPool.put(l.fqcn(), l);
+        }
         libraryPool.putAll(project);
         var compilerOptions = OptimizationConfiguration.apply(new CompilerOptions().setTarget(CompilerTarget.PLUTUS_V3_PV11),
                 OptimizationLevel.DEFAULT_PROFILE_ID, null);
