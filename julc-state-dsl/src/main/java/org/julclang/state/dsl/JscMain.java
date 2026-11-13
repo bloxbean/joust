@@ -386,14 +386,20 @@ public final class JscMain {
      * Whether directory {@code dir}, an entry of {@code parentReal} (a real path), is a link (#80 review C3): a symbolic
      * link, or another kind (a Windows junction, which the JDK reports as neither a link nor a directory without
      * following it), or an entry whose real path is not in {@code parentReal} under its own name. The name is compared
-     * ignoring case, since a case-insensitive file system answers a spelling other than the stored one with the same
-     * directory; a link between two names differing only in case is still a symbolic link.
+     * ignoring case and in Unicode normal form C, since a case- or normalization-insensitive file system answers a
+     * spelling other than the stored one with the same directory (#80 review C9, F9); a link between two such names is
+     * still a symbolic link.
      */
     static boolean isLink(Path dir, Path parentReal) throws IOException {
         var attrs = Files.readAttributes(dir, java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
         if (attrs.isSymbolicLink() || attrs.isOther() || !attrs.isDirectory()) return true;
         Path real = dir.toRealPath();
-        return !parentReal.equals(real.getParent()) || !real.getFileName().toString().equalsIgnoreCase(dir.getFileName().toString());
+        return !parentReal.equals(real.getParent()) || !nfc(real.getFileName().toString()).equalsIgnoreCase(nfc(dir.getFileName().toString()));
+    }
+
+    /** A name in Unicode normal form C (#80 review C9, F9): a file system that ignores normalization keeps its own form. */
+    private static String nfc(String name) {
+        return java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFC);
     }
 
     /** {@code p}'s real path, through its nearest existing ancestor (the rest appended as written). */

@@ -641,6 +641,8 @@ final class IrJson {
 
         Ir.Stmt stmt(Map<String, Object> x) {
             Pos at = pos(x.get("at"));
+            // #80 review r3 note: a missing or non-string kind is a refusal, never a NullPointerException.
+            if (!(x.get("stmt") instanceof String)) throw new IllegalArgumentException("unknown statement " + x.get("stmt"));
             return switch (s(x.get("stmt"))) {
                 case "Let" -> {
                     Ir.Expr value = expr(x.get("value"));
@@ -702,6 +704,7 @@ final class IrJson {
             Ty t = type(x.get("type"));
             int taint = i(x.get("taint"));
             Pos at = pos(x.get("at"));
+            if (!(x.get("node") instanceof String)) throw new IllegalArgumentException("unknown node " + x.get("node"));
             return switch (s(x.get("node"))) {
                 case "Lit" -> {
                     Object v = x.get("value");

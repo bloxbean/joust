@@ -637,6 +637,21 @@ class MigrateTest {
         assertTrue(e.getMessage().contains("is a symbolic link"), e.getMessage());
     }
 
+    /** #80 review C9, F9: a directory stored in one Unicode normal form and named in the other is not a link. */
+    @Test
+    void r4_inPlace_anotherUnicodeNormalFormOfAPlainDirectory_isNotALink(@TempDir Path tmp) throws Exception {
+        Path base = tmp.toRealPath();
+        String nfd = java.text.Normalizer.normalize("Caf\u00e9", java.text.Normalizer.Form.NFD);
+        String nfc = java.text.Normalizer.normalize("Caf\u00e9", java.text.Normalizer.Form.NFC);
+        Path lib = Files.createDirectories(base.resolve("project").resolve(nfd).resolve("lib"));
+        Files.copy(DSL.resolve("Points.jsc"), lib.resolve("Points.jsc"));
+        Path other = base.resolve("project").resolve(nfc).resolve("lib/Points.jsc");
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.exists(other), "a normalization-insensitive file system (APFS)");
+        JscMain.inPlaceProblem(other, other.getParent(), true, base.resolve("project"));
+        assertEquals(0, JscMain.migrate(other, base.resolve("out"), true, base.resolve("project")));
+        assertTrue(Files.readString(lib.resolve("Points.jsc")).startsWith("jsc 2"));
+    }
+
     @Test
     void r4F12_theMinusNote_reachesForwardWithinTheMember() {
         // N1 (design r3): the value block's error is found at its start, before the line starting with '-' that causes it.

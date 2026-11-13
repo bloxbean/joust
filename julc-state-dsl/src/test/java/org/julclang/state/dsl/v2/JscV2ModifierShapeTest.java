@@ -106,6 +106,9 @@ class JscV2ModifierShapeTest {
         refused(pool.replaceFirst("\"kind\": \"action\"", "\"kind\": \"ACTION\""), "unknown kind ACTION");
         refused(pool.replaceFirst("\"kind\": \"init\"", "\"kind\": \"INIT\""), "unknown kind INIT");
         refused(pool.replaceFirst("\"kind\": \"init\"", "\"kind\": \"ınit\""), "unknown kind");
+        // #80 review r3 note: a null or missing node or statement kind is a refusal, not a NullPointerException.
+        refused(pool.replaceFirst("\"node\": \"StateRef\"", "\"node\": null"), "unknown node null");
+        refused(pool.replaceFirst("\"stmt\": \"Require\"", "\"stmt\": null"), "unknown statement null");
     }
 
     /** #80 review C4, S7, F7: the shared mutants (js/jsc-interpreter/test/mutants), refused as the JavaScript reader does. */
