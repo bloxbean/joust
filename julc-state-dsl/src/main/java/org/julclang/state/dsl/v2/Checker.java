@@ -198,6 +198,14 @@ final class Checker {
         if (simple.equals(main.cls) || file.contract() != null && file.contract().name().equals(simple)) {
             throw at.error("JSC0709", what + " is imported as " + simple + ", the name of this file's own class; rename one");
         }
+        // Codex C20 (r4): a record's top-level class is held to the rules a library's class is: not a name the generated
+        // code uses (BigInteger, Optional, State, an annotation…) nor a type this build declares, other than a top-level
+        // Java record naming itself.
+        boolean itself = fqcn.equals(javaRecBinary.get(simple));
+        if (RESERVED.contains(simple) || PROCESSOR_TYPES.contains(simple)
+                || !itself && (records.containsKey(simple) || enums.containsKey(simple) || variantEnum.containsKey(simple) || fns.containsKey(simple))) {
+            throw at.error("JSC0709", what + " is imported as " + simple + ", a name the generated code uses or this build declares; rename one");
+        }
         String other = importedSimple.putIfAbsent(simple, fqcn);
         if (other != null && !other.equals(fqcn)) {
             throw at.error("JSC0709", what + " is imported as " + simple + ", and so is " + other + ": the generated Java names both by that"
@@ -587,6 +595,7 @@ final class Checker {
         generated.addAll(enums.keySet());
         generated.addAll(variantEnum.keySet());
         generated.addAll(libraryClasses);
+        generated.addAll(importedSimple.keySet());   // a record's class, imported by its simple name (C20, r4)
         generated.add(c.name());   // the variant would shadow the contract's class in its validator
         for (Syntax.Method m : c.methods()) {
             if (m.kind() != Kind.INIT) checkUserName(m.name(), m.pos(), "method");
