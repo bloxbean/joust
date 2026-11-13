@@ -65,40 +65,56 @@ function oldProject(root) {
   for (const f of [ENGINE_JS, ENGINE_WASM, 'package.json']) copyFileSync(join(OLD, f), join(pkg, 'engine', f));
 }
 
-test('C25: two projects probing one pre-M5a compiler at once leave no worker running', async () => {
-  const a = tmp('joust-lsp-a-');
-  const b = tmp('joust-lsp-b-');
-  oldProject(a);
-  oldProject(b);
-  const store = createStore(tmp('joust-lsp-store-'));
-  let gateB;
-  let leases = 0;
-  const host = new EngineHost({
-    workerEntry: WORKER,
-    lease: async (e) => {
-      // The second probe's lease waits until the first selection has rejected the compiler (and stopped its slot).
-      if (++leases === 2) await new Promise((r) => { gateB = r; });
-      return store.lease(e.id);
-    },
-  });
-  const bundled = { file: join(STUB, ENGINE_JS), id: 'bundled-stub', source: 'bundled', version: 'test-stub' };
-  const sa = createSelector({ reader: createReader(), store, host, bundled, trusted: true, folders: [a] });
-  const sb = createSelector({ reader: createReader(), store, host, bundled, trusted: true, folders: [b] });
-  try {
-    const pa = sa.select(join(a, 'contracts', 'C.jsc'));
-    const pb = sb.select(join(b, 'contracts', 'C.jsc'));
-    const ra = await pa;
-    for (let k = 0; k < 200 && !gateB; k++) await sleep(5);
-    assert.ok(gateB, 'the second probe\'s lease is pending after the first selection stopped the slot');
-    gateB();
-    const rb = await pb;
-    assert.equal(ra.source, 'bundled');
-    assert.equal(rb.source, 'bundled');
-    const live = [...host.slots.values()].filter((s) => s.worker && !s.worker.dead);
-    assert.equal(live.length, 0, 'no worker of the rejected compiler is alive');
-    assert.equal(host.stats.started, host.stats.terminated, `started ${host.stats.started}, terminated ${host.stats.terminated}`);
-  } finally {
-    host.dispose();
+/** `p`, or a failure naming `what` after `ms` (a stuck await fails the test instead of cancelling the file). */
+const within = (p, what, ms = 15000) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(`${what}: no answer in ${ms} ms`)), ms))]);
+
+test('C25, F11: two projects probing one pre-M5a compiler at once leave no worker running, whichever arrives first', async () => {
+  // Deterministic (reviews F11, C32, S15 on #83): both probes are held at their leases, in whichever order they arrive;
+  // then the first is let go (it loads the compiler, rejects it and stops the slot), then the second (its start is
+  // abandoned). Every await is bounded.
+  // Twice: the arrival order is the scheduler's, and the test holds whichever arrives first.
+  for (const order of ['round 1', 'round 2']) {
+    const a = tmp('joust-lsp-a-');
+    const b = tmp('joust-lsp-b-');
+    oldProject(a);
+    oldProject(b);
+    const store = createStore(tmp('joust-lsp-store-'));
+    const held = [];
+    let arrived;
+    const both = new Promise((r) => { arrived = r; });
+    const host = new EngineHost({
+      workerEntry: WORKER,
+      lease: async (e) => {
+        await new Promise((go) => {
+          held.push(go);
+          if (held.length === 2) arrived();
+        });
+        return store.lease(e.id);
+      },
+    });
+    const bundled = { file: join(STUB, ENGINE_JS), id: 'bundled-stub', source: 'bundled', version: 'test-stub' };
+    const sa = createSelector({ reader: createReader(), store, host, bundled, trusted: true, folders: [a] });
+    const sb = createSelector({ reader: createReader(), store, host, bundled, trusted: true, folders: [b] });
+    try {
+      const pa = sa.select(join(a, 'contracts', 'C.jsc'));
+      const pb = sb.select(join(b, 'contracts', 'C.jsc'));
+      await within(both, `${order}: both probes at their leases`);
+      // Let the first arrival go; it rejects the compiler and stops the slot while the second still waits.
+      held[0]();
+      const firstDone = await within(Promise.race([pa.then(() => 'a'), pb.then(() => 'b')]), `${order}: the first selection`);
+      held[1]();
+      const [ra, rb] = await within(Promise.all([pa, pb]), `${order}: both selections`);
+      assert.ok(['a', 'b'].includes(firstDone));
+      assert.equal(ra.source, 'bundled', ra.reason);
+      assert.equal(rb.source, 'bundled', rb.reason);
+      const live = [...host.slots.values()].filter((s) => s.worker && !s.worker.dead);
+      assert.equal(live.length, 0, `${order}: no worker of the rejected compiler is alive`);
+      assert.equal(host.stats.started, 1, `${order}: one worker was started (the second start was abandoned)`);
+      assert.equal(host.stats.started, host.stats.terminated, `${order}: started ${host.stats.started}, terminated ${host.stats.terminated}`);
+    } finally {
+      for (const go of held) go();
+      host.dispose();
+    }
   }
 });
 
