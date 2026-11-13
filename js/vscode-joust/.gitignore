@@ -1,0 +1,5 @@
+node_modules/
+dist/
+engine/
+*.vsix
+.vscode-test/

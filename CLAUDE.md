@@ -41,6 +41,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `.github/scripts/joust-cli-e2e.sh`. The npm side of the shared vocabulary is `js/joust/bin/joust.js` +
   `js/joust/src/project.js`.
 - `julc-state-verifier`: the generic MapVerifier (withdraw-zero) that checks every MerkleMap claim (ADR-0002 D9).
+- ADR-0021 (M5a): `JscLang` (julc-state-dsl) is the language core, served by the toolchain engine as `lang.analyze`
+  (julc-wasm names operations `group.operation`); `js/joust/src/lsp` is the language server (`joust-lsp`, engines in
+  workers, D2a); `js/vscode-joust` is the VS Code extension (the TextMate grammar lives there now). The server's stdout is
+  the JSON-RPC channel: nothing else may print to it (engine workers' stdout is captured).
 - `examples/{counter,vault,escrow,crowdfund,token,bank,pool,dsl,rollup,dex,market,treasury,staking,oracle,upgrade,guild,fees,locker,registry,wallet,dapp}`: contracts + JVM/harness/devnet tests; `examples/devkit`:
   DevKit helper. Options A (ADR-0001), B (ADR-0002, MerkleMap, token), C (ADR-0003, owned objects, bank) and D
   (ADR-0004, batched intents, pool) E (ADR-0005, `.jsc`, dsl) and the F spike (ADR-0006, optimistic L2, rollup) run on Yaci DevKit.

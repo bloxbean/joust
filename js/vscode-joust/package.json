@@ -1,0 +1,209 @@
+{
+  "name": "vscode-joust",
+  "displayName": "JOUST .jsc",
+  "description": "JOUST's contract language, .jsc 2, in VS Code: diagnostics as you type from the build's own front end, the outline, folding, highlighting, and JOUST: Build with clickable build errors (ADR-0021). Language preview.",
+  "version": "0.1.0",
+  "private": true,
+  "preview": true,
+  "license": "MIT",
+  "publisher": "joust-q4-undecided",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bloxbean/joust.git",
+    "directory": "js/vscode-joust"
+  },
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "cardano",
+    "joust",
+    "jsc",
+    "smart contracts"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onLanguage:jsc",
+    "workspaceContains:joust.config.json"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In Restricted Mode the bundled compiler analyses .jsc files (advisory): no project code runs and no build task is offered.",
+      "restrictedConfigurations": [
+        "joust.allowedProjectRoots"
+      ]
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "jsc",
+        "aliases": [
+          ".jsc",
+          "jsc",
+          "JOUST"
+        ],
+        "extensions": [
+          ".jsc"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "jsc",
+        "scopeName": "source.jsc",
+        "path": "./syntaxes/jsc.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "jsc",
+        "path": "./snippets/jsc.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "joust.restartAnalysis",
+        "title": "Restart analysis",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.restartServer",
+        "title": "Restart server",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.build",
+        "title": "Build",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.showCompiler",
+        "title": "Show compiler and mode",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust.applyFix",
+        "title": "Apply a JOUST quick fix",
+        "category": "JOUST"
+      },
+      {
+        "command": "joust._status",
+        "title": "JOUST status (internal)",
+        "category": "JOUST"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "joust.applyFix",
+          "when": "false"
+        },
+        {
+          "command": "joust._status",
+          "when": "false"
+        },
+        {
+          "command": "joust.build",
+          "when": "isWorkspaceTrusted"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "JOUST",
+      "properties": {
+        "joust.allowedProjectRoots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "description": "Absolute paths of folders a .code-workspace file lists outside its own directory whose project compiler may still be loaded (ADR-0021 D3b). User settings only."
+        },
+        "joust.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "scope": "window",
+          "description": "Traces the messages between VS Code and the JOUST language server."
+        }
+      }
+    },
+    "taskDefinitions": [
+      {
+        "type": "joust",
+        "required": [
+          "task"
+        ],
+        "properties": {
+          "task": {
+            "type": "string",
+            "enum": [
+              "build"
+            ],
+            "description": "The project command: build (joust build, or ./gradlew build)."
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "joust",
+        "owner": "joust",
+        "source": "joust build",
+        "fileLocation": [
+          "search",
+          {
+            "include": [
+              "${workspaceFolder}"
+            ],
+            "exclude": [
+              "${workspaceFolder}/node_modules",
+              "${workspaceFolder}/build"
+            ]
+          }
+        ],
+        "pattern": {
+          "regexp": "^(.+?\\.(?:jsc|java)):(\\d+)(?::(\\d+))?: (error|warning|note)(?:\\[(JSC\\d{4})\\])?: (.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "package": "node scripts/build.mjs && vsce package --pre-release --no-dependencies --out vscode-joust.vsix && node scripts/check-vsix.mjs vscode-joust.vsix",
+    "test": "node --test test/*.test.mjs",
+    "test:electron": "node test/electron/run.mjs"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.1.1",
+    "esbuild": "0.28.2",
+    "vscode-languageclient": "11.0.0",
+    "vscode-languageserver": "11.0.0",
+    "vscode-languageserver-textdocument": "1.0.16",
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2"
+  }
+}
