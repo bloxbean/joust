@@ -76,6 +76,22 @@ class ParamsAuthDiagnosticsTest {
         assertTrue(r3.hasError("@Quorum over state fields cannot be combined with @Batched"), r3.errors().toString());
     }
 
+    /** #84 review S3: a @Quorum's keys and threshold are both state components or both params.* (as .jsc 2's JSC0439). */
+    @Test
+    void aMixedQuorum_isRefused() {
+        var r = compile(contract("@Action @Quorum(keys = \"params.keys\", threshold = \"k\") public static S a(S s) { return s; }")
+                .replace("org.julclang.ledger.Credential gov, BigInteger cap", "org.julclang.ledger.Credential gov, BigInteger cap, JulcList<byte[]> keys"));
+        assertTrue(r.hasError("the keys and the threshold are both state components or both params.*"), r.errors().toString());
+        var r2 = compile(contract("@Action @Quorum(keys = \"keys\", threshold = \"params.cap\") public static S a(S s) { return s; }"));
+        assertTrue(r2.hasError("the keys and the threshold are both state components or both params.*"), r2.errors().toString());
+        // A params quorum with a batched action compiles; one whose threshold is a state field would be a state quorum.
+        var ok = compile(contract("""
+                @Action @Batched public static S bump(S s, Ctx ctx) { return s; }
+                @Action @Quorum(keys = "params.keys", threshold = "params.cap") public static S a(S s) { return s; }""")
+                .replace("org.julclang.ledger.Credential gov, BigInteger cap", "org.julclang.ledger.Credential gov, BigInteger cap, JulcList<byte[]> keys"));
+        assertTrue(ok.success(), ok.errors().toString());
+    }
+
     /** #84 review F9: a client's destroy that emits without native assets compiles (Transition.<S>end, a type witness). */
     @Test
     void aDestroyThatEmits_withoutAssets_compiles() {
@@ -99,10 +115,23 @@ class ParamsAuthDiagnosticsTest {
     /** #84 review C3: a view that takes the params gets the client's deployment params, never a caller's. */
     @Test
     void aViewThatTakesTheParams_getsTheDeployments() throws Exception {
-        var r = compile(contract("@View public static BigInteger cap(S s, P p) { return p.cap(); }"));
+        var r = compile(contract("""
+                @View public static BigInteger cap(S s, P p) { return p.cap(); }
+                @View public static BigInteger above(S s, P p, BigInteger x) { return p.cap().add(x); }
+                @View public static BigInteger k(S s) { return s.k(); }"""));
         assertTrue(r.success(), r.errors().toString());
         String client = java.nio.file.Files.readString(r.out().toPath().resolve("t/CClient.java"));
         assertTrue(client.contains("public BigInteger cap() {"), client);
         assertTrue(client.contains("return instance.view(s -> C.cap(s, this.params));"), client);
+        assertTrue(client.contains("public BigInteger above(BigInteger x) {"), client);
+        assertTrue(client.contains("return instance.view(s -> C.above(s, this.params, x));"), client);
+        // C7: the description (which the JS client and pages read) lists only a caller's arguments.
+        String desc = java.nio.file.Files.readString(r.out().toPath().resolve("META-INF/joust/t.C.json"));
+        var views = new com.fasterxml.jackson.databind.ObjectMapper().readTree(desc).path("x-joust").path("views");
+        var byName = new java.util.HashMap<String, com.fasterxml.jackson.databind.JsonNode>();
+        for (var v : views) byName.put(v.get("name").asText(), v.get("args"));
+        assertTrue(byName.get("cap").isEmpty(), desc);
+        assertTrue(byName.get("k").isEmpty(), desc);
+        assertTrue(byName.get("above").size() == 1 && byName.get("above").get(0).get("name").asText().equals("x"), desc);
     }
 }

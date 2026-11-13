@@ -316,7 +316,7 @@ final class IrJson {
     // ------------------------------------------------------------------ printing
 
     /** Pretty JSON: an object or array stays on one line when that line is short, else one member per line. */
-    private static void print(Object v, StringBuilder out, String ind) {
+    static void print(Object v, StringBuilder out, String ind) {
         String flat = flat(v);
         if (flat.length() + ind.length() <= 120 || !(v instanceof Map<?, ?> || v instanceof List<?>)) {
             out.append(flat);
@@ -434,11 +434,46 @@ final class IrJson {
             for (String k : o.keySet()) if (!allowed.contains(k)) throw new IllegalArgumentException("unknown field \"" + k + "\" in " + where);
         }
 
+
+        /** Each statement's fields (beside "stmt" and "at"), as {@link Writer#stmt} writes them (#84 review C8, F10). */
+        static final Map<String, Set<String>> STMT_FIELDS = Map.ofEntries(Map.entry("Let", Set.of("local", "value")),
+                Map.entry("Require", Set.of("cond", "message")), Map.entry("Pay", Set.of("to", "amount")), Map.entry("Send", Set.of("to", "value")),
+                Map.entry("Mint", Set.of("burn", "name", "qty")), Map.entry("Accept", Set.of("value")), Map.entry("Emit", Set.of("event")),
+                Map.entry("If", Set.of("branches", "otherwise", "pays")), Map.entry("For", Set.of("var", "list", "body", "pays")),
+                Map.entry("Match", Set.of("scrutinee", "arms", "pays")));
+
+        /** Each node's fields (beside "node", "type", "taint" and "at"), as {@link Writer#expr} writes them. */
+        static final Map<String, Set<String>> NODE_FIELDS = Map.ofEntries(Map.entry("Lit", Set.of("value")), Map.entry("LocalRef", Set.of("local")),
+                Map.entry("StateRef", Set.of()), Map.entry("StateField", Set.of("field")), Map.entry("CtxRef", Set.of("name")),
+                Map.entry("NoneLit", Set.of()), Map.entry("SomeOf", Set.of("value")), Map.entry("GetField", Set.of("target", "record", "field")),
+                Map.entry("New", Set.of("record", "values")), Map.entry("CallFn", Set.of("fn", "args")), Map.entry("CallStd", Set.of("module", "name", "args")),
+                Map.entry("Prelude", Set.of("op", "args")), Map.entry("TimePred", Set.of("after", "threshold")), Map.entry("ListLit", Set.of("items", "rest")),
+                Map.entry("Neg", Set.of("operand")), Map.entry("Not", Set.of("operand")), Map.entry("Arith", Set.of("op", "left", "right")),
+                Map.entry("Compare", Set.of("op", "left", "right")), Map.entry("Equals", Set.of("negate", "left", "right", "operand")),
+                Map.entry("Logic", Set.of("op", "left", "right")), Map.entry("Cond", Set.of("cond", "then", "otherwise")),
+                Map.entry("Coalesce", Set.of("option", "default")), Map.entry("BlockValue", Set.of("block")), Map.entry("IfValue", Set.of("branches", "otherwise")),
+                Map.entry("ListProp", Set.of("op", "list")), Map.entry("Concat", Set.of("left", "right")), Map.entry("Contains", Set.of("list", "value", "elem")),
+                Map.entry("Hof", Set.of("kind", "list", "x", "body")), Map.entry("Fold", Set.of("list", "init", "acc", "x", "body")),
+                Map.entry("Variant", Set.of("enum", "variant", "values")), Map.entry("Match", Set.of("scrutinee", "arms")), Map.entry("MapEmpty", Set.of()),
+                Map.entry("MapOp", Set.of("op", "map", "args")), Map.entry("MapHof", Set.of("kind", "map", "k", "v", "body")),
+                Map.entry("MapFold", Set.of("map", "init", "acc", "k", "v", "body")), Map.entry("BigEmpty", Set.of()), Map.entry("BigOp", Set.of("op", "map", "args")),
+                Map.entry("Range", Set.of("from", "to")), Map.entry("ListArg", Set.of("op", "list", "arg")), Map.entry("FundsRef", Set.of("field")),
+                Map.entry("LedgerOp", Set.of("op", "args")), Map.entry("ParamsRef", Set.of("field")));
+
+        static Set<String> with(Set<String> a, String... more) {
+            var out = new java.util.HashSet<>(a);
+            out.addAll(List.of(more));
+            return out;
+        }
+
         Ir.Program program(Map<String, Object> r) {
             known(r, Set.of("ir", "language", "sourceSha256", "package", "contract", "source", "options", "records", "enums", "state", "params",
                     "timeFields", "recursiveFns", "fns", "methods", "invariants", "warnings"), "the program");
             var options = new ArrayList<Ir.ContractOption>();
-            for (Object o : l(r.get("options"))) options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
+            for (Object o : l(r.get("options"))) {
+                known(m(o), Set.of("name", "value"), "an option");
+                options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
+            }
             var records = new LinkedHashMap<String, Ir.RecordType>();
             for (Object o : l(r.get("records"))) {
                 Ir.RecordType t = record(m(o));
@@ -446,6 +481,7 @@ final class IrJson {
             }
             var enums = new LinkedHashMap<String, Ir.EnumType>();
             for (Object o : l(r.get("enums"))) {
+                known(m(o), Set.of("name", "variants", "at"), "an enum");
                 var vs = new LinkedHashMap<String, Ir.RecordType>();
                 for (Object x : l(m(o).get("variants"))) {
                     Ir.RecordType t = record(m(x));
@@ -457,6 +493,7 @@ final class IrJson {
             var fns = new ArrayList<Ir.Fn>();
             for (Object o : l(r.get("fns"))) {
                 var f = m(o);
+                known(f, Set.of("name", "params", "result", "body", "at"), "a fn");
                 fns.add(new Ir.Fn(s(f.get("name")), decls(f.get("params")), type(f.get("result")), block(f.get("body")), pos(f.get("at"))));
             }
             var methods = new ArrayList<Ir.Method>();
@@ -487,6 +524,7 @@ final class IrJson {
             var warnings = new ArrayList<Ir.Warning>();
             for (Object o : l(r.get("warnings"))) {
                 var w = m(o);
+                known(w, Set.of("line", "col", "code", "message"), "a warning");
                 warnings.add(new Ir.Warning(i(w.get("line")), i(w.get("col")), s(w.get("code")), s(w.get("message"))));
             }
             Ir.RecordType params = r.get("params") == null ? null : record(m(r.get("params")));
@@ -503,8 +541,12 @@ final class IrJson {
         }
 
         Ir.RecordType record(Map<String, Object> r) {
+            known(r, Set.of("name", "fields", "at"), "a record");
             var fields = new LinkedHashMap<String, Ty>();
-            for (Object o : l(r.get("fields"))) fields.put(s(m(o).get("name")), type(m(o).get("type")));
+            for (Object o : l(r.get("fields"))) {
+                known(m(o), Set.of("name", "type"), "a record's field");
+                fields.put(s(m(o).get("name")), type(m(o).get("type")));
+            }
             return new Ir.RecordType(s(r.get("name")), fields, pos(r.get("at")));
         }
 
@@ -538,6 +580,7 @@ final class IrJson {
 
         Ir.Local decl(Object o) {
             var d = m(o);
+            known(d, Set.of("id", "name", "type", "taint", "at", "fieldTaints"), "a local");
             Map<String, Integer> ft = null;
             if (d.containsKey("fieldTaints")) {
                 ft = new HashMap<>();
@@ -562,12 +605,16 @@ final class IrJson {
 
         Ir.Block block(Object o) {
             var b = m(o);
+            known(b, Set.of("stmts", "result", "at"), "a block");
             var stmts = new ArrayList<Ir.Stmt>();
             for (Object x : l(b.get("stmts"))) stmts.add(stmt(m(x)));
             return new Ir.Block(stmts, b.get("result") == null ? null : expr(b.get("result")), pos(b.get("at")));
         }
 
         Ir.Stmt stmt(Map<String, Object> x) {
+            Set<String> fs = STMT_FIELDS.get(s(x.get("stmt")));
+            if (fs == null) throw new IllegalArgumentException("unknown statement " + x.get("stmt"));
+            known(x, with(fs, "stmt", "at"), "a " + x.get("stmt") + " statement");
             Pos at = pos(x.get("at"));
             return switch (s(x.get("stmt"))) {
                 case "Let" -> {
@@ -604,6 +651,7 @@ final class IrJson {
             var out = new ArrayList<Ir.Branch>();
             for (Object x : l(o)) {
                 var b = m(x);
+                known(b, Set.of("cond", "then", "at"), "a branch");
                 Ir.Expr cond = expr(b.get("cond"));
                 out.add(new Ir.Branch(cond, block(b.get("then")), pos(b.get("at"))));
             }
@@ -615,6 +663,7 @@ final class IrJson {
             var out = new ArrayList<Ir.Arm>();
             for (Object x : l(o)) {
                 var a = m(x);
+                known(a, Set.of("ctors", "fields", "binds", "body", "at"), "an arm");
                 var ctors = l(a.get("ctors")).stream().map(Reader::s).toList();
                 var fields = l(a.get("fields")).stream().map(Reader::s).toList();
                 var binds = decls(a.get("binds"));
@@ -631,6 +680,9 @@ final class IrJson {
 
         Ir.Expr expr(Object o) {
             var x = m(o);
+            Set<String> fs = NODE_FIELDS.get(s(x.get("node")));
+            if (fs == null) throw new IllegalArgumentException("unknown node " + x.get("node"));
+            known(x, with(fs, "node", "type", "taint", "at"), "a " + x.get("node") + " node");
             Ty t = type(x.get("type"));
             int taint = i(x.get("taint"));
             Pos at = pos(x.get("at"));

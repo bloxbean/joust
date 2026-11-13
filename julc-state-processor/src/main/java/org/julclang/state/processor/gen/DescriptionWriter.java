@@ -524,7 +524,10 @@ public final class DescriptionWriter {
         return out;
     }
 
-    /** A view: its name, its arguments (every parameter after the state) and its result's schema. */
+    /**
+     * A view: its name, its arguments (every parameter after the state, but the {@code @Params} record, which is the
+     * deployment's, never a caller's: #84 review C7) and its result's schema.
+     */
     private Map<String, Object> view(org.julclang.state.processor.ir.ViewIR v) {
         var m = new LinkedHashMap<String, Object>();
         m.put("name", v.method());
@@ -532,7 +535,7 @@ public final class DescriptionWriter {
         var args = new ArrayList<Object>();
         if (e != null) {
             var ps = e.getParameters();
-            for (int i = 1; i < ps.size(); i++) {
+            for (int i = v.takesParams() ? 2 : 1; i < ps.size(); i++) {
                 args.add(map("name", ps.get(i).getSimpleName().toString(), "schema", schemaOf(ps.get(i).asType())));
             }
             m.put("returns", schemaOf(e.getReturnType()));

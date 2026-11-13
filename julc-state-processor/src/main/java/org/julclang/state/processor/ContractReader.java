@@ -595,7 +595,8 @@ final class ContractReader {
         // quorumWellFormed, on every output), and a batch's states are not checked: a batched action could break the
         // shape and lock the contract. A params quorum cannot change, so it stays allowed.
         boolean stateQuorum = java.util.stream.Stream.concat(actionIRs.stream(), destroyIRs.stream())
-                .anyMatch(t -> t.quorumKeys() != null && !t.quorumKeys().startsWith("params."));
+                .anyMatch(t -> t.quorumKeys() != null && (!t.quorumKeys().startsWith("params.")
+                        || t.quorumThreshold() == null || !t.quorumThreshold().startsWith("params.")));
         if (stateQuorum && anyBatched) {
             error(type, "@Quorum over state fields cannot be combined with @Batched yet: a batch passes through states whose"
                     + " quorum shape the validator does not check, so a batched action could make the quorum unreachable"
@@ -1122,6 +1123,12 @@ final class ContractReader {
                 error(m, "@Quorum(keys) names \"" + quorumKeys + "\", which must be JulcList<byte[]> but is " + k.type());
             }
             ParamIR t = fieldOf(m, r, quorumThreshold, "@Quorum(threshold)");
+            // #84 review S3: the validator checks a state pair's shape on every output and a params pair's at creation;
+            // a mixed pair would be neither (as .jsc 2's JSC0439 refuses).
+            if (quorumThreshold != null && quorumKeys.startsWith("params.") != quorumThreshold.startsWith("params.")) {
+                error(m, "@Quorum(keys = \"" + quorumKeys + "\", threshold = \"" + quorumThreshold + "\"): the keys and the threshold are"
+                        + " both state components or both params.* (ADR-0009 D2)");
+            }
             if (t != null && t.kind() != ParamIR.TypeKind.INTEGER) {
                 error(m, "@Quorum(threshold) names \"" + quorumThreshold + "\", which must be BigInteger but is " + t.type());
             }

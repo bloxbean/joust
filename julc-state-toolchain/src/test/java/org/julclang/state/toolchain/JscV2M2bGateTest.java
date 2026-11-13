@@ -265,6 +265,31 @@ class JscV2M2bGateTest {
         if (p.cpu() > 0.8 * MAX_CPU || p.mem() > 0.8 * MAX_MEM) WARNINGS.add("Treasury " + label + " is above 80% of the maximum");
     }
 
+    /**
+     * The largest council whose creation both the Java example and the port accept (#84 review C9): the vector the "@ max"
+     * rows measure, tied to the contracts' own datum bound: one key more is refused by both validators, and its datum
+     * is over the 640 bytes the bound allows while the saturated one's is not.
+     */
+    static int saturatedCouncil() throws Exception {
+        int n = 3;
+        while (run(impl(true), "init", council(n + 1), 2).verdict().accepted()) n++;
+        for (boolean java : List.of(true, false)) {
+            assertTrue(run(impl(java), "init", council(n), 2).verdict().accepted(), (java ? "Java" : ".jsc 2") + ": " + n + " keys");
+            var over = run(impl(java), "init", council(n + 1), 2).verdict();
+            assertFalse(over.accepted(), (java ? "Java" : ".jsc 2") + ": " + (n + 1) + " keys");
+        }
+        // The refusal is the datum bound's: n keys fit in 640 bytes of datum, n + 1 do not.
+        var i = impl(false);
+        assertTrue(datumBytes(i.state(list(council(n)), BigInteger.TWO, false)) <= 640, n + " keys fit the datum bound");
+        assertTrue(datumBytes(i.state(list(council(n + 1)), BigInteger.TWO, false)) > 640, (n + 1) + " keys exceed the datum bound");
+        System.out.println("[M2b budget] saturated council: " + n + " keys (" + (n + 1) + " refused at creation by both validators)");
+        return n;
+    }
+
+    static int datumBytes(Object state) {
+        return org.julclang.core.cbor.PlutusDataCborEncoder.encode(StateHarness.data(state)).length;
+    }
+
     /** Sorted 28-byte keys 0x11.., 0x12.., … */
     static List<byte[]> council(int n) {
         var out = new ArrayList<byte[]>();
@@ -274,13 +299,13 @@ class JscV2M2bGateTest {
 
     @Test
     void budgets() throws Exception {
-        // Ordinary: a council of three, two signing. Saturated (#84 review F2): the largest council both the Java example
-        // and the port accept under the 640-byte datum bound (a key is 30 bytes of datum: 21 keys; 22 are refused at init),
-        // a majority of it (11) signing.
-        assertEquals(21, (640 - 10) / 30, "the saturated council");
+        // Ordinary: a council of three, two signing. Saturated (#84 review F2, C9): the largest council both the Java
+        // example and the port accept under their 640-byte datum bound, found by creating each with one key more until
+        // the validator refuses; a majority of it signing.
+        int saturated = saturatedCouncil();
         for (boolean max : List.of(false, true)) {
-            var c = council(max ? 21 : 3);
-            int q = max ? 11 : 2;
+            var c = council(max ? saturated : 3);
+            int q = max ? saturated / 2 + 1 : 2;
             for (String m : List.of("init", "fund", "pay", "rotate", "freeze", "close")) compare(m, c, q, max);
         }
         System.out.println("[M2b budget] | Contract | Call | Java CPU | .jsc 2 CPU | Δ CPU | Java memory | .jsc 2 memory (Δ) | % of max (CPU / mem) |");
