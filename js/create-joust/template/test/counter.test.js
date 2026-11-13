@@ -24,8 +24,8 @@ test('a counter: create, increment, refuse, close (offline)', { timeout: 300_000
   await assert.rejects(instance.close(stranger));
   await instance.close(owner);
   assert.equal(await instance.state(), null);
-  // Every mutation of the attack suite (a replaced datum, skimmed or added value, a redirected state output, a dropped
-  // signer, ...) was refused by the validators.
+  // Every mutation of the offline attack suite (a subset of the JVM testkit's: a replaced datum, skimmed or added value,
+  // a redirected state output, a dropped signer, ...) was refused by the validators.
   assert.ok(net.ledger.attacks().length > 0);
   assert.deepEqual(net.ledger.acceptedAttacks(), []);
 });

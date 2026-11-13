@@ -159,11 +159,19 @@ public final class Offline {
             Transaction t = Transaction.deserialize(cbor);
             mutate.accept(t);
             var e = run(t, snapshot, r);
-            return new Attack(name, invariant, !e.ok(), e.ok() ? "accepted: " + e.redeemers() : e.error());
+            if (e.ok()) return new Attack(name, invariant, false, "accepted: " + e.redeemers());
+            // Review r2 (#82 S5): only a script's refusal counts (a phase-2 failure or an exhausted budget). Anything else
+            // (an evaluator or deserialisation error) is an error of the suite, reported as not refused, so it fails the test.
+            if (scriptRefusal(e.error())) return new Attack(name, invariant, true, e.error());
+            return new Attack(name, invariant, false, "suite error (not a script's refusal): " + e.error());
         } catch (Exception x) {
-            // A transaction the mutation made unreadable is refused before any script runs.
-            return new Attack(name, invariant, true, "malformed: " + x.getMessage());
+            return new Attack(name, invariant, false, "suite error (the mutation could not be built or evaluated): " + x);
         }
+    }
+
+    /** Whether an evaluation failure is a script's (JuLC's evaluator: a failing script, or its budget exhausted). */
+    static boolean scriptRefusal(String error) {
+        return error != null && (error.contains("Script evaluation failed for") || error.contains("Budget exhausted for"));
     }
 
     private static TransactionOutput output(Transaction t, int k) {

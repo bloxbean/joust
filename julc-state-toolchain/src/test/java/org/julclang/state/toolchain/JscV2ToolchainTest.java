@@ -78,6 +78,67 @@ class JscV2ToolchainTest {
                 .libraries().get(0).external());
     }
 
+    /**
+     * Review r2 (#82 C7, F2, S2; design P-b, Codex's JavaOnlyProbe): a hand-written Java contract that imports a package's
+     * Java library reports it, with the hash of its source closure, so joust.lock pins it; changing the library's body
+     * changes that hash. A package source no import names is not on the build's pools: the contract cannot reach it.
+     */
+    @Test
+    void aJavaContractsPackageLibrary_isReportedForTheLock_andNothingElseIsOnThePool() throws Exception {
+        String lib = "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n";
+        String counter = Files.readString(Path.of("../js/create-joust/template/contracts/app/Counter.java"));
+        String uses = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport lib.L;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(L.f(), ctx.caller());");
+        assertNotEquals(counter, uses);
+        var one = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib));
+        assertTrue(one.ok(), one.diagnostics().toString());
+        assertEquals(1, one.libraries().size(), one.libraries().toString());
+        var use = one.libraries().get(0);
+        assertEquals("java:lib.L", use.name());
+        assertEquals(org.julclang.state.dsl.v2.JscV2.LibraryUse.JAVA_SOURCE, use.kind());
+        assertTrue(use.external());
+        var two = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib.replace("ONE", "TWO")));
+        assertTrue(two.ok(), two.diagnostics().toString());
+        assertNotEquals(use.sha256(), two.libraries().get(0).sha256(), "a changed body moves the pin");
+        assertNotEquals(one.contracts().get(0).scriptHash(), two.contracts().get(0).scriptHash());
+        // Named without an import, the class is not on the pool: the build fails, nothing unpinned reaches the script.
+        String hidden = counter.replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(lib.L.f(), ctx.caller());");
+        var none = Toolchain.build(Map.of("app/Counter.java", hidden), Map.of(), Map.of("lib/L.java", lib));
+        assertFalse(none.ok(), "an unimported package class is not on the build");
+        // A contract that imports nothing of a package reports nothing.
+        var plain = Toolchain.build(Map.of("app/Counter.java", counter), Map.of(), Map.of("lib/L.java", lib));
+        assertTrue(plain.ok(), plain.diagnostics().toString());
+        assertEquals(List.of(), plain.libraries());
+    }
+
+    /** Review r2 (#82 S6): --accept-abi accepts the ABI manifest only; only --accept-lock writes joust.lock. */
+    @Test
+    void acceptingTheAbi_neverWritesTheLock(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        Path src = Files.createDirectories(dir.resolve("jsc/app"));
+        Files.writeString(src.resolve("C.jsc"), "jsc 2\npackage app\nimport { f } from \"java:lib.L\"\ncontract C {\n  state { n: Int }\n"
+                + "  init() { return { n: f() } }\n}\n");
+        Path libs = Files.createDirectories(dir.resolve("libs/lib"));
+        Files.writeString(libs.resolve("L.java"), "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n");
+        Path lock = dir.resolve("joust.lock");
+        String[] base = {dir.resolve("jsc").toString(), dir.resolve("out").toString(), "--java-libraries", dir.resolve("libs").toString(), "--lock", lock.toString()};
+        var old = System.err;
+        System.setErr(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+        try {
+            String[] acceptAbi = java.util.Arrays.copyOf(base, base.length + 1);
+            acceptAbi[base.length] = "--accept-abi";
+            assertEquals(1, org.julclang.state.dsl.JscMain.run(acceptAbi), "the library is not pinned");
+            assertFalse(Files.exists(lock), "--accept-abi wrote no lock");
+            String[] acceptLock = java.util.Arrays.copyOf(acceptAbi, acceptAbi.length + 1);
+            acceptLock[acceptAbi.length] = "--accept-lock";
+            assertEquals(0, org.julclang.state.dsl.JscMain.run(acceptLock));
+            assertTrue(Files.readString(lock).contains("java:lib.L"));
+        } finally {
+            System.setErr(old);
+        }
+    }
+
     @Test
     void errorsKeepTheirJscLineAndColumn() {
         var r = Toolchain.build(Map.of("t/Bad.jsc", """

@@ -123,7 +123,87 @@ export function ledgerTx(hex) {
     return { inlineDatum: inline ? inline.toCbor() : null, scriptRef: script };
   });
   view.vkeys = (tx.witnessSet().vkeys()?.values() ?? []).map((w) => ({ vkey: w.vkey(), signature: w.signature() }));
+  // Review r2 (#82 C8, S3, F1): what a node's phase 1 reads besides. The encoded size; the witness set's scripts (by
+  // hash: native ones with their core form, to evaluate; Plutus ones with their language and size) and datums (by hash);
+  // each output's reference script, native ones too; and the witness set's redeemers and datums as their own bytes, for
+  // the script integrity hash.
+  view.size = hex.length / 2;
+  view.witnessScripts = (tx.toCore().witness.scripts ?? []).map(scriptView);
+  view.witnessDatums = (tx.witnessSet().plutusData()?.values() ?? []).map((d) => d.hash());
+  view.rawOutputs.forEach((r, i) => {
+    const ref = outs[i].scriptRef();
+    if (ref && !r.scriptRef) r.scriptRef = { hash: ref.hash(), cbor: null };
+    if (ref) r.scriptRef.view = scriptView(ref.toCore());
+  });
+  view.integrityParts = integrityParts(hex);
   return view;
+}
+
+/** A script as the in-memory ledger reads it: { hash, kind: native | PlutusV1 | PlutusV2 | PlutusV3, size, native? }. */
+function scriptView(core) {
+  const s = Serialization.Script.fromCore(core);
+  if (core.__type === 'native') return { hash: s.hash(), kind: 'native', size: s.toCbor().length / 2, native: core };
+  return { hash: s.hash(), kind: `PlutusV${core.version + 1}`, size: core.bytes.length / 2 };
+}
+
+/** The witness set's redeemers (key 5) and datums (key 4), as the transaction encodes them (hex), or null. */
+function integrityParts(hex) {
+  const r = new Serialization.CborReader(hexToBytes(hex));
+  r.readStartArray();
+  r.readEncodedValue();                                     // the body
+  const parts = { redeemers: null, datums: null };
+  const n = r.readStartMap();
+  for (let i = 0; n === null ? r.peekState() !== Serialization.CborReaderState.EndMap : i < n; i++) {
+    const key = Number(r.readInt());
+    const value = bytesToHex(r.readEncodedValue());
+    if (key === 5) parts.redeemers = value;
+    if (key === 4) parts.datums = value;
+  }
+  return parts;
+}
+
+const LANGUAGE_IDS = { PlutusV1: 0, PlutusV2: 1, PlutusV3: 2 };
+
+/**
+ * The script integrity hash a transaction must carry (Conway): blake2b-256 of its redeemers, its datums (when it has
+ * any) and the language views of {@code languages} (the Plutus languages its scripts use) over {@code costModels} (by
+ * language: the cost model as a list of integers). Null when it needs none. PlutusV1's view (a doubly encoded legacy
+ * form) is not computed: null is returned with {@code unsupported}.
+ */
+export async function scriptIntegrityHash(parts, languages, costModels) {
+  if (!parts.redeemers && !parts.datums) return { hash: null };
+  const langs = [...new Set(languages)].sort((a, b) => LANGUAGE_IDS[a] - LANGUAGE_IDS[b]);
+  if (langs.includes('PlutusV1')) return { hash: null, unsupported: 'PlutusV1 language views' };
+  const w = new Serialization.CborWriter();
+  w.writeStartMap(langs.length);
+  for (const l of langs) {
+    w.writeInt(LANGUAGE_IDS[l]);
+    const costs = costModels[l];
+    if (!costs) throw new LedgerError(`no cost model for ${l}`);
+    w.writeStartArray(costs.length);
+    for (const c of costs) w.writeInt(BigInt(c));
+  }
+  const views = bytesToHex(w.encode());
+  const crypto = await import('@cardano-sdk/crypto');
+  await crypto.ready();
+  return { hash: crypto.blake2b.hash((parts.redeemers ?? 'a0') + (parts.datums ?? '') + views, 32) };
+}
+
+/**
+ * Whether a native script (its core form) holds for a transaction signed by {@code signed} (key hashes) within
+ * [{@code validFrom}, {@code ttl}) (slots, or null).
+ */
+export function nativeScriptHolds(core, signed, validFrom, ttl) {
+  const k = Cardano.NativeScriptKind;
+  switch (core.kind) {
+    case k.RequireSignature: return signed.has(core.keyHash);
+    case k.RequireAllOf: return core.scripts.every((s) => nativeScriptHolds(s, signed, validFrom, ttl));
+    case k.RequireAnyOf: return core.scripts.some((s) => nativeScriptHolds(s, signed, validFrom, ttl));
+    case k.RequireNOf: return core.scripts.filter((s) => nativeScriptHolds(s, signed, validFrom, ttl)).length >= core.required;
+    case k.RequireTimeAfter: return validFrom !== null && Number(validFrom) >= Number(core.slot);
+    case k.RequireTimeBefore: return ttl !== null && Number(ttl) <= Number(core.slot);
+    default: return false;
+  }
 }
 
 /** Whether a vkey witness signs a transaction id (Ed25519, as the ledger checks it). */

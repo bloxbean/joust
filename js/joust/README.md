@@ -16,9 +16,10 @@ different fails until it is accepted with `joust build --accept-abi` (ADR-0018 D
 deployment's script is not the one it produces (a migrated or changed contract: earlier instances stay on the old one).
 
 npm packages can ship on-chain libraries under `joust-lib/` (`.jsc` libraries, imported as `"@acme/fees/fees.jsc"`, and
-Java library sources, imported with `java:`). `joust.lock`, committed at the project's root, pins each of them by the
-hash of its on-chain sources; a build with a library that is not pinned, or that changed, fails until it is accepted with
-`joust build --accept-lock` (ADR-0018 J12). `joust build --traces` keeps the contracts' traces in the scripts.
+Java library sources, imported with `java:` or by a hand-written Java contract). `joust.lock`, committed at the
+project's root, pins each one the build uses by the hash of its on-chain sources (a Java library's: its source closure,
+the only part of a package the build compiles); a build with a library that is not pinned, or that changed, fails until
+it is accepted with `joust build --accept-lock` (ADR-0018 J12). `joust build --traces` keeps the contracts' traces in the scripts.
 
 ## `joust dev`
 

@@ -77,24 +77,39 @@ const owner = await net.wallet(100);                       // a funded key walle
 const counter = new Counter(await net.options('app.Counter', owner));
 const { instance } = await counter.deploy(owner, {});
 await instance.increment(owner, { by: 5n });
-assert.deepEqual(net.ledger.acceptedAttacks(), []);        // every mutation of the attack suite was refused
+assert.deepEqual(net.ledger.acceptedAttacks(), []);        // every mutation of the offline attack suite was refused
 ```
 
 `net.ledger` is an in-memory ledger behind the same provider interface as Yaci Store or Blockfrost. Before it applies
-a transaction it checks, in order:
+a transaction it checks these phase-1 rules (each refusal names the node's error):
 
-- the inputs exist and are unspent;
+- the transaction is tagged valid, is at most `max_tx_size` bytes, and its inputs, reference inputs and collateral exist
+  and are unspent;
 - the validity interval holds at the ledger's slot (`ledger.advance(ms)` moves its clock);
-- the transaction balances, with the fee and the deposits;
-- every output holds its minimum ADA;
-- the required key witnesses are present and verify, and a script transaction has collateral;
-- phase 2: every script, evaluated by the runtime engine (`joust.evaluate`, the evaluator that prices transactions).
+- withdrawals come from registered reward accounts and take exactly their balance (always 0: no rewards are paid);
+- the transaction balances, with the fee and the deposits, and every output holds its minimum ADA;
+- the fee is at least the size's, the declared execution units' and the reference scripts' fee;
+- every key that must sign has a verifying witness, every script credential that must authorise (a script-locked input,
+  a mint policy, a script withdrawal or certificate) has its script, witnessed or referenced; native scripts are
+  evaluated; each Plutus purpose has a redeemer and no redeemer is extra; a spent datum hash has its datum;
+- with Plutus scripts: the collateral is key-locked, at most `max_collateral_inputs`, ADA only unless returned, at least
+  `collateral_percent` of the fee, and matches `total_collateral` when it is declared; the script integrity hash
+  matches; the declared units are within the per-transaction limit;
+- phase 2: every Plutus script that must run, evaluated by the runtime engine (`joust.evaluate`, the evaluator that
+  prices transactions), within its redeemer's declared units.
+
+Concurrent submissions are applied one at a time. Not modelled: rewards, governance and pool rules, the treasury,
+PlutusV1's integrity hash, and the collateral loss of a failing script (an invalid-tagged transaction is refused; a
+failing script refuses the whole transaction).
 
 A refusal is a `LedgerRefusal`. For each transaction a script ran in, the ledger also runs the attack suite
-(`joust.attacks`) on it: the state datum replaced or hashed, one lovelace skimmed, token dust added, the output sent to
-a key address or given a stake credential, the output dropped, the required signer replaced, the validity bounds moved
-or removed. `ledger.attacks()` lists every attack with its outcome; `ledger.acceptedAttacks()` lists those the scripts
-accepted, which should be none. Pass `{ attacks: false }` to `offline` to skip the suite.
+(`joust.attacks`, a subset of the JVM testkit's `Attacks`) on it: the state datum replaced or hashed, one lovelace
+skimmed, token dust added, the output sent to a key address or given a stake credential, the output dropped, the
+required signer replaced, the validity bounds moved or removed. Only a script's refusal counts as refused; any other
+failure of a mutation is reported as accepted, with its reason, so that it fails the test. `ledger.attacks()` lists
+every attack with its outcome; `ledger.acceptedAttacks()` lists those the scripts accepted, which should be none. Pass
+`{ attacks: false }` to `offline` to skip the suite. `joust test` runs offline: a network provider (Blockfrost, Yaci
+Store, Ogmios) refuses to start under it.
 
 The template's `test/counter.test.js` is such a test: `npm test` runs `joust test`. Its DevKit test is in `test/devkit/`.
 

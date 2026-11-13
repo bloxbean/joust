@@ -1,9 +1,9 @@
 // @julclang/joust/test (ADR-0018 D14, M4c): a contract's calls against an in-memory ledger, with the generated validators
 // evaluated and the attack suite run, without DevKit. The runtime engine (Wasm, ADR-0015 D4) prepares each call from
-// this ledger, as it does from a chain; the ledger checks each transaction it is given as a node would (its inputs, its
-// validity window, its balance, its signatures, each output's minimum) and has the same engine evaluate its scripts
-// (joust.evaluate: JuLC's VM, the ledger's semantics) before applying it. With `attacks`, every mutation the attack
-// suite applies to a script transaction (joust.attacks) must be refused by the scripts too.
+// this ledger, as it does from a chain; the ledger checks each transaction it is given with a node's phase-1 rules that
+// it models (listed at memoryLedger, review r2), and has the same engine evaluate its scripts (joust.evaluate: JuLC's VM,
+// the ledger's semantics) before applying it. With `attacks`, every mutation the attack suite applies to a script
+// transaction (joust.attacks, a subset of the JVM testkit's suite) must be refused by the scripts too.
 //
 //   import { offline } from '@julclang/joust/test';
 //   const net = await offline({ contracts });          // build/joust/contracts.json
@@ -15,7 +15,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { loadEngine, joustRuntime, devWallet } from '@julclang/joust-runtime';
-import { ledgerTx, verifyWitness, vkeyHash, addressParts, rewardAddress } from '@julclang/state-client/ledger';
+import { ledgerTx, verifyWitness, vkeyHash, addressParts, rewardAddress, scriptIntegrityHash, nativeScriptHolds }
+  from '@julclang/state-client/ledger';
 
 const PARAMS = JSON.parse(readFileSync(new URL('./protocol-params.json', import.meta.url), 'utf8'));
 const ADA = 1_000_000n;
@@ -29,6 +30,36 @@ export class LedgerRefusal extends Error {
 }
 
 const h32 = (s) => createHash('sha256').update(s).digest('hex');
+const byRef = (a, b) => {
+  const [ha, ia] = a.split('#');
+  const [hb, ib] = b.split('#');
+  return ha < hb ? -1 : ha > hb ? 1 : Number(ia) - Number(ib);
+};
+/** A decimal (a protocol parameter's price) as an exact fraction [numerator, denominator]. */
+const ratio = (x) => {
+  let t = String(x);
+  let exp = 0;
+  const m = t.match(/^(.*)e([+-]?\d+)$/i);
+  if (m) [t, exp] = [m[1], Number(m[2])];
+  const [i, f = ''] = t.split('.');
+  let [num, den] = [BigInt(i + f), 10n ** BigInt(f.length)];
+  if (exp > 0) num *= 10n ** BigInt(exp);
+  if (exp < 0) den *= 10n ** BigInt(-exp);
+  return [num, den];
+};
+const ceilDiv = (a, b) => (a + b - 1n) / b;
+/** Conway's fee for reference scripts (floored): minFeeRefScriptCostPerByte per byte, x1.2 for each further 25 KiB. */
+const refScriptFee = (bytes, perByte) => {
+  let [num, den] = ratio(perByte);
+  let [tn, td] = [0n, 1n];
+  for (let left = BigInt(bytes); left > 0n;) {
+    const chunk = left < 25600n ? left : 25600n;
+    [tn, td] = [tn * den + chunk * num * td, td * den];
+    left -= chunk;
+    [num, den] = [num * 6n, den * 5n];
+  }
+  return tn / td;
+};
 const addValue = (m, unit, q) => m.set(unit, (m.get(unit) ?? 0n) + q);
 
 /**
@@ -39,6 +70,25 @@ const addValue = (m, unit, q) => m.set(unit, (m.get(unit) ?? 0n) + q);
  * @param o.zeroTimeMs    the POSIX time of slot 0 (default: now, rounded to a second)
  * @param o.slotLengthMs  default 1000
  * @param o.attacks       run the attack suite on every script transaction (default true): see attacks() and acceptedAttacks()
+ *
+ * The phase-1 rules it checks (review r2: #82 F1, S3, C8–C12), each with the name of the node's error:
+ * - the transaction is tagged valid (an invalid-tagged one, which a node applies as a collateral loss, is refused: not
+ *   modelled), at most max_tx_size bytes, with inputs, and only unspent inputs, reference inputs and collateral;
+ * - the validity interval holds the current slot;
+ * - withdrawals: from registered reward accounts, of exactly their balance (always 0 here: no rewards are paid);
+ * - the balance (inputs, withdrawals, mint = outputs, fee, deposits), each output's minimum ADA;
+ * - the fee is at least min_fee_a x size + min_fee_b + the declared units' price + the reference scripts' fee;
+ * - witnesses: a vkey witness for every key credential that must sign (key-locked inputs and collateral, required
+ *   signers, key withdrawals and certificates); a script for every script credential that must authorise (script-locked
+ *   inputs, mint policies, script withdrawals and certificates), from the witness set or a reference input or input;
+ *   native scripts evaluated; a redeemer for every Plutus purpose and none without one; a witness datum for every
+ *   spent datum hash;
+ * - with Plutus scripts: collateral (key-locked, at most max_collateral_inputs, ADA only unless returned, at least
+ *   collateral_percent of the fee, total_collateral if declared), the script integrity hash (PlutusV2/V3 language
+ *   views), the declared units within max_tx_ex_mem/steps and at least what each script consumes;
+ * - concurrent submissions are applied one at a time, each checked against the ledger as the previous one left it.
+ * Not modelled: rewards and governance, pool certificates' rules, the treasury, PlutusV1's integrity hash, and the
+ * collateral loss of a phase-2 failure (a failing script refuses the whole transaction here).
  */
 export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000) * 1000, slotLengthMs = 1000, attacks = true,
   protocolParams = PARAMS } = {}) {
@@ -48,6 +98,8 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
   const utxos = new Map();          // ref -> Utxo (unspent)
   const txs = new Map();            // hash -> cbor
   const scripts = new Map();        // hash -> cbor
+  const scriptViews = new Map();    // hash -> { kind, size, native? } (reference scripts, for phase 1)
+  let queue = Promise.resolve();    // submissions, one at a time (review r2 C9)
   const registered = new Set();     // stake addresses
   const history = new Map();        // unit -> [txHash]
   const attackLog = [];             // { tx, name, refused, detail }
@@ -78,6 +130,12 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     slotLengthMs: BigInt(slotLengthMs) });
 
   async function check(cbor, v) {
+    const p = protocolParams;
+    if (!v.isValid) {
+      throw new LedgerRefusal('ValidityTagMismatch', 'the transaction is tagged invalid (is_valid = false): the in-memory ledger applies'
+        + ' only transactions whose scripts pass, and does not model collateral loss');
+    }
+    if (v.size > Number(p.max_tx_size)) throw new LedgerRefusal('MaxTxSizeUTxO', `${v.size} bytes, over max_tx_size ${p.max_tx_size}`);
     // Inputs, reference inputs and collateral: unspent outputs of this ledger.
     for (const r of [...v.inputs, ...v.referenceInputs, ...v.collateral]) {
       if (!utxos.has(r)) throw new LedgerRefusal('BadInputsUTxO', `${r} is not an unspent output`);
@@ -86,6 +144,11 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     // The validity window holds the current slot.
     if (v.validFrom !== null && slot < Number(v.validFrom)) throw new LedgerRefusal('OutsideValidityIntervalUTxO', `slot ${slot} is before ${v.validFrom}`);
     if (v.ttl !== null && slot >= Number(v.ttl)) throw new LedgerRefusal('OutsideValidityIntervalUTxO', `slot ${slot} is at or after ${v.ttl}`);
+    // Withdrawals: from a registered reward account, of exactly its balance (no rewards are paid here: 0).
+    for (const w of v.withdrawals) {
+      if (!registered.has(w.address)) throw new LedgerRefusal('WithdrawalsNotInRewardsCERTS', `${w.address} is not a registered reward account`);
+      if (w.amount !== 0n) throw new LedgerRefusal('WithdrawalsNotInRewardsCERTS', `${w.amount} withdrawn from ${w.address}, whose balance is 0`);
+    }
     // The balance: what comes in (inputs, withdrawals, mint) is what goes out (outputs, fee, deposits).
     const balance = new Map();
     for (const r of v.inputs) for (const [unit, q] of valueMap(out(r))) addValue(balance, unit, q);
@@ -94,35 +157,133 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
     for (const o of v.outputs) for (const [unit, q] of o.value) addValue(balance, unit, -q);
     addValue(balance, 'lovelace', -v.fee);
     for (const c of v.certificates) {
-      const deposit = c.deposit ?? BigInt(protocolParams.key_deposit);
+      const deposit = c.deposit ?? BigInt(p.key_deposit);
       if (/Registration$/.test(c.kind) && !/Unregistration|Deregistration/.test(c.kind) && c.kind !== 'PoolRegistration') addValue(balance, 'lovelace', -deposit);
       if (/Unregistration|Deregistration/.test(c.kind)) addValue(balance, 'lovelace', deposit);
     }
     for (const [unit, q] of balance) if (q !== 0n) throw new LedgerRefusal('ValueNotConservedUTxO', `${unit} is off by ${q}`);
     // Each output carries its minimum (Babbage: coinsPerUTxOByte x (160 + its size)).
-    const perByte = BigInt(protocolParams.coins_per_utxo_size);
+    const perByte = BigInt(p.coins_per_utxo_size);
     v.outputs.forEach((o, i) => {
       const min = perByte * BigInt(160 + o.size);
       if ((o.value.get('lovelace') ?? 0n) < min) throw new LedgerRefusal('BabbageOutputTooSmallUTxO', `output ${i} holds less than ${min} lovelace`);
     });
-    // Signatures: every vkey witness signs the transaction's id; every key the transaction needs has one.
+    // Signatures: every vkey witness signs the transaction's id.
     const signed = new Set();
     for (const w of v.vkeys) {
       if (!(await verifyWitness(w.vkey, w.signature, v.hash))) throw new LedgerRefusal('InvalidWitnessesUTXOW', `a bad signature by ${w.vkey}`);
       signed.add(await vkeyHash(w.vkey));
     }
+    // What must authorise the transaction (review r2 C8, S3): each credential, by purpose and index (the ledger's order).
     const needed = new Set(v.requiredSigners);
-    for (const r of [...v.inputs, ...v.collateral]) {
-      const p = addressParts(out(r).address).payment;
-      if (p?.type === 'key') needed.add(p.hash);
+    const purposes = [];   // { tag, index, script, what }
+    const credential = (c, tag, index, what) => {
+      if (!c) return;
+      if (c.type === 'key') needed.add(c.hash);
+      else purposes.push({ tag, index, script: c.hash, what });
+    };
+    [...v.inputs].sort(byRef).forEach((r, i) => credential(addressParts(out(r).address).payment, 'spend', i, `the input ${r}`));
+    for (const r of v.collateral) {
+      const c = addressParts(out(r).address).payment;
+      if (c?.type !== 'key') throw new LedgerRefusal('ScriptsNotPaidUTxO', `the collateral ${r} is not locked by a key`);
+      needed.add(c.hash);
+    }
+    [...new Set([...v.mint.keys()].map((u) => u.slice(0, 56)))].sort().forEach((policy, i) =>
+      purposes.push({ tag: 'mint', index: i, script: policy, what: `the policy ${policy}` }));
+    v.withdrawals.forEach((w, i) => credential(addressParts(w.address).stake, 'reward', i, `the withdrawal from ${w.address}`));
+    v.certificates.forEach((c, i) => {
+      if (c.kind !== 'StakeRegistration') credential(c.credential, 'cert', i, `the certificate ${i} (${c.kind})`);
+    });
+    // The scripts at hand: the witness set's, and the reference scripts of the inputs and reference inputs.
+    const available = new Map();
+    for (const w of v.witnessScripts) available.set(w.hash, w);
+    let refBytes = 0;
+    for (const r of [...v.inputs, ...v.referenceInputs]) {
+      const h = out(r).referenceScriptHash;
+      if (!h) continue;
+      const view = scriptViews.get(h);
+      if (view) {
+        available.set(h, view);
+        refBytes += view.size;
+      }
+    }
+    const languages = [];
+    const plutus = [];
+    for (const x of purposes) {
+      const script = available.get(x.script);
+      if (!script) throw new LedgerRefusal('MissingScriptWitnessesUTXOW', `no script ${x.script} for ${x.what} (neither witnessed nor referenced)`);
+      if (script.kind === 'native') {
+        if (!nativeScriptHolds(script.native, signed, v.validFrom, v.ttl)) {
+          throw new LedgerRefusal('ScriptWitnessNotValidatingUTXOW', `the native script ${x.script} of ${x.what} does not hold`);
+        }
+      } else {
+        languages.push(script.kind);
+        plutus.push(x);
+      }
+    }
+    const key = (tag, index) => `${tag}:${index}`;
+    const redeemed = new Set(v.redeemers.map((r) => key(r.tag, r.index)));
+    for (const x of plutus) if (!redeemed.has(key(x.tag, x.index))) throw new LedgerRefusal('MissingRedeemers', `no redeemer for ${x.what}`);
+    const wanted = new Set(plutus.map((x) => key(x.tag, x.index)));
+    for (const r of v.redeemers) if (!wanted.has(key(r.tag, r.index))) throw new LedgerRefusal('ExtraRedeemers', `a redeemer ${key(r.tag, r.index)} for no Plutus script`);
+    // A spent output's datum hash needs its datum among the witnesses.
+    for (const r of v.inputs) {
+      const h = out(r).datumHash;
+      if (h && !v.witnessDatums.includes(h)) throw new LedgerRefusal('MissingRequiredDatums', `no datum for ${r}'s datum hash ${h}`);
     }
     for (const k of needed) if (!signed.has(k)) throw new LedgerRefusal('MissingVKeyWitnessesUTXOW', `no signature by ${k}`);
-    // Phase 2: the scripts, evaluated by the engine at the ledger's semantics.
-    if (v.redeemers.length) {
+    // The declared units: within the per-transaction maximum (review r2 F1e).
+    let mem = 0n;
+    let steps = 0n;
+    for (const r of v.redeemers) [mem, steps] = [mem + r.mem, steps + r.steps];
+    if (mem > BigInt(p.max_tx_ex_mem) || steps > BigInt(p.max_tx_ex_steps)) {
+      throw new LedgerRefusal('ExUnitsTooBigUTxO', `${mem} mem, ${steps} steps declared; at most ${p.max_tx_ex_mem}, ${p.max_tx_ex_steps}`);
+    }
+    // The fee: at least the size's, the declared units' and the reference scripts' (review r2 F1b, C12).
+    const [mn, md] = ratio(p.price_mem);
+    const [sn, sd] = ratio(p.price_step);
+    const units = ceilDiv(mem * mn * sd + steps * sn * md, md * sd);
+    const minFee = BigInt(p.min_fee_a) * BigInt(v.size) + BigInt(p.min_fee_b) + units + refScriptFee(refBytes, p.min_fee_ref_script_cost_per_byte ?? 0);
+    if (v.fee < minFee) throw new LedgerRefusal('FeeTooSmallUTxO', `a fee of ${v.fee}, under the minimum ${minFee}`);
+    if (plutus.length) {
+      // Collateral (review r2 F1d, C10).
       if (!v.collateral.length) throw new LedgerRefusal('NoCollateralInputs', 'a script transaction without collateral');
+      if (v.collateral.length > Number(p.max_collateral_inputs)) {
+        throw new LedgerRefusal('TooManyCollateralInputs', `${v.collateral.length} collateral inputs, at most ${p.max_collateral_inputs}`);
+      }
+      const coll = new Map();
+      for (const r of v.collateral) for (const [unit, q] of valueMap(out(r))) addValue(coll, unit, q);
+      if (v.collateralReturn) for (const [unit, q] of v.collateralReturn.value) addValue(coll, unit, -q);
+      for (const [unit, q] of coll) {
+        if (unit !== 'lovelace' && q !== 0n) throw new LedgerRefusal('CollateralContainsNonADA', `the collateral keeps ${q} of ${unit}`);
+      }
+      const net = coll.get('lovelace') ?? 0n;
+      const [cn, cd] = ratio(p.collateral_percent);
+      if (net * 100n * cd < v.fee * cn) throw new LedgerRefusal('InsufficientCollateral', `${net} lovelace of collateral for a fee of ${v.fee}`);
+      if (v.totalCollateral !== null && v.totalCollateral !== net) {
+        throw new LedgerRefusal('IncorrectTotalCollateralField', `total_collateral says ${v.totalCollateral}, the collateral is ${net}`);
+      }
+    }
+    // The script integrity hash (review r2 F1a): of the redeemers, datums and the cost models of the languages used.
+    const costModels = p.cost_models_raw ?? {};
+    const integrity = await scriptIntegrityHash(v.integrityParts, languages, costModels);
+    if (!integrity.unsupported && (integrity.hash ?? null) !== (v.scriptDataHash ?? null)) {
+      throw new LedgerRefusal('PPViewHashesDontMatch', `the script integrity hash is ${v.scriptDataHash ?? 'absent'}, expected ${integrity.hash ?? 'none'}`);
+    }
+    // Phase 2: the scripts, evaluated by the engine at the ledger's semantics, whenever a Plutus script must run.
+    if (plutus.length) {
       const refs = [...v.inputs, ...v.referenceInputs, ...v.collateral];
       const e = evaluate(cbor, refs);
       if (!e.ok) throw new LedgerRefusal('ScriptFailure', e.error);
+      // Each redeemer's declared units cover what its script consumed (a node runs it with the declared budget).
+      const declared = new Map(v.redeemers.map((r) => [key(r.tag, r.index), r]));
+      for (const line of e.redeemers ?? []) {
+        const [tagIndex, used, usedMem] = line.split(' ');
+        const r = declared.get(tagIndex);
+        if (r && (BigInt(used) > r.steps || BigInt(usedMem) > r.mem)) {
+          throw new LedgerRefusal('ScriptFailure', `the redeemer ${tagIndex} declares ${r.mem} mem, ${r.steps} steps; its script uses ${usedMem}, ${used}`);
+        }
+      }
       if (attacks) {
         const a = engine.joust.attacks({ tx: cbor, snapshot: snapshotJson(refs), zeroSlot: 0n, zeroTimeMs: BigInt(zeroTimeMs), slotLengthMs: BigInt(slotLengthMs) });
         if (!a.ok) throw new Error('the attack suite could not run: ' + a.error);
@@ -132,13 +293,16 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
   }
 
   function apply(cbor, v) {
+    // Review r2 C9: submissions are serialised (submit), and the inputs are checked once more as they are spent.
+    for (const r of [...v.inputs, ...v.collateral]) if (!utxos.has(r)) throw new LedgerRefusal('BadInputsUTxO', `${r} was spent meanwhile`);
     for (const r of v.inputs) utxos.delete(r);
     v.outputs.forEach((o, i) => {
       const raw = v.rawOutputs[i];
       const value = [...o.value].filter(([, q]) => q !== 0n).map(([unit, q]) => ({ unit, quantity: String(q) }));
       utxos.set(`${v.hash}#${i}`, { txHash: v.hash, index: i, address: o.address, value, datumHash: o.datumHash ?? null,
         inlineDatum: raw.inlineDatum, referenceScriptHash: raw.scriptRef?.hash ?? null });
-      if (raw.scriptRef) scripts.set(raw.scriptRef.hash, raw.scriptRef.cbor);
+      if (raw.scriptRef?.cbor) scripts.set(raw.scriptRef.hash, raw.scriptRef.cbor);
+      if (raw.scriptRef?.view) scriptViews.set(raw.scriptRef.hash, raw.scriptRef.view);
       for (const [unit] of o.value) if (unit !== 'lovelace') (history.get(unit) ?? history.set(unit, []).get(unit)).push(v.hash);
     });
     for (const [unit] of v.mint) if (!history.get(unit)?.includes(v.hash)) (history.get(unit) ?? history.set(unit, []).get(unit)).push(v.hash);
@@ -198,11 +362,17 @@ export function memoryLedger({ engine, zeroTimeMs = Math.floor(Date.now() / 1000
       return scripts.get(hash) ?? null;
     },
     async submit(cbor) {
-      const v = ledgerTx(cbor);
-      if (txs.has(v.hash)) return v.hash;
-      await check(cbor, v);
-      apply(cbor, v);
-      return v.hash;
+      // One at a time: a transaction is checked against the ledger as the previous submission left it (review r2 C9:
+      // two concurrent spends of one output both passed their checks before either applied).
+      const run = queue.then(async () => {
+        const v = ledgerTx(cbor);
+        if (txs.has(v.hash)) return v.hash;
+        await check(cbor, v);
+        apply(cbor, v);
+        return v.hash;
+      });
+      queue = run.catch(() => {});
+      return run;
     },
     async awaitTx(hash) {
       if (!txs.has(hash)) throw new Error(`the in-memory ledger has no transaction ${hash}`);

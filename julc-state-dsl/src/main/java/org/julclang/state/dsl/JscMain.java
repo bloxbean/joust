@@ -746,9 +746,10 @@ public final class JscMain {
         // ADR-0018 J12: every library the build used, with its hash; the external ones pinned by joust.lock.
         for (var u : used.values()) {
             System.out.println("jsc: library " + u.name() + " sha256 " + u.sha256() + (u.external() ? (u.kind().equals("java")
-                    ? " (certified; pinned)" : " (pinned)") : " (the project's)"));
+                    ? " (statically certified; pinned)" : " (pinned)") : " (the project's)"));
         }
-        if (lock != null) errors += checkLock(lock, used.values(), accept || acceptLock);
+        // Review r2 (#82 S6): only acceptJoustLock (--accept-lock) writes the lock; --accept-abi does not.
+        if (lock != null) errors += checkLock(lock, used.values(), acceptLock);
         if (errors > 0) return 1;
         System.out.println("jsc: lowered " + files.size() + " file(s) into " + out);
         return 0;

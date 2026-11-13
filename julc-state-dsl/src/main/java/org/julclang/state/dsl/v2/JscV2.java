@@ -66,9 +66,15 @@ public final class JscV2 {
      * (a {@code .jsc} library's text; a Java library's certified sources, {@code JavaLibraryCertifier.hash}).
      */
     public record LibraryUse(String kind, String name, String sha256) {
+        /**
+         * The kind of a Java library a hand-written Java contract imports (review r2, #82 C7): pinned as a {@code java:}
+         * import is, under the same name, though nothing certifies it for {@code .jsc}.
+         */
+        public static final String JAVA_SOURCE = "java-source";
+
         /** Whether it comes from outside the project's sources (an npm package, a Java library): what joust.lock pins. */
         public boolean external() {
-            return kind.equals("java") || name.startsWith(JscModules.PACKAGE);
+            return kind.equals("java") || kind.equals(JAVA_SOURCE) || name.startsWith(JscModules.PACKAGE);
         }
     }
 

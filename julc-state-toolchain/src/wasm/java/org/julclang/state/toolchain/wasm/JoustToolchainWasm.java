@@ -59,7 +59,7 @@ public final class JoustToolchainWasm {
 
     /** {@code joust}, {@code julc}: the versions that built it (review r3 F9). */
     public record BuildResult(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics,
-                              List<Generated> generated, String joust, String julc) {}
+                              List<Generated> generated, String joust, String julc, List<Library> libraries) {}
 
     /** A transition program (script CBOR hex) and its Data arguments (CBOR hex). */
     public record RunRequest(String program, List<String> args) {}
@@ -148,6 +148,8 @@ public final class JoustToolchainWasm {
                         d.col(), d.source(), d.code())).toList(),
                 r.generated().stream().map(g -> new Generated(g.jscFile(), g.javaFile(), g.java(), g.sourceMapJson(), g.abiJson(), g.irJson(),
                         g.libraries().stream().map(u -> new Library(u.kind(), u.name(), u.sha256(), u.external())).toList())).toList(),
-                VERSION, JULC_VERSION));
+                VERSION, JULC_VERSION,
+                // Review r2 (#82 C7): the Java libraries hand-written Java contracts import, which joust.lock pins too.
+                r.libraries().stream().map(u -> new Library(u.kind(), u.name(), u.sha256(), u.external())).toList()));
     }
 }

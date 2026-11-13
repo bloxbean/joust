@@ -552,8 +552,11 @@ import { concat, slice, length } from "std/bytes"
   the contract's state type `Oracle.State` and `Instance<Oracle>` available, for `reads`, `deposit` and params. On
   Gradle the contract is in the same project or a dependency on the processor path; on npm, in `contracts/` or a
   library package. The checker reads a `.jsc` contract's checked AST, and a Java contract through javac attribution.
-- **Supply chain.** A committed `joust.lock` pins every library (`.jsc` and Java) by the hash of its on-chain sources;
-  the build fails on a mismatch, and the build report lists every library with its hash (J12).
+- **Supply chain.** The build report lists every library (`.jsc` and Java) with the hash of its on-chain sources, and
+  a committed `joust.lock` pins every library from **outside the project's sources** (an npm package's `.jsc` library,
+  a `java:` library, and a Java library a hand-written Java contract imports); the build fails on a mismatch (J12).
+  *(r20, amended in review r2, design F3: the project's own libraries are its code, under its version control; the
+  reason is D14's.)* A Java library's hash covers its source closure, which is exactly what the build compiles.
 
 ### D10. Every contract feature, as the processor already defines it
 
@@ -849,7 +852,13 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
     resolve within it and never leave it (JSC0712 at the importer, JSC0706 in the package). `joust build` hands the
     toolchain every package's `joust-lib/`: its `.jsc` libraries, lowered and compiled with the project when a contract
     imports them, and its `.java` files as Java library sources, which a `java:` import certifies as on Gradle. A package
-    library and the same library in the project build the same script.
+    library and the same library in the project build the same script. *(r20 amended, review r2: F2, S2, C7, F5, S4.)*
+    Of the packages' Java sources, the build compiles only the source closure of each library a `.jsc` file imports with
+    `java:` or a hand-written Java contract imports (`import a.b.Lib;`), and the lock pins each of them; no other package
+    source reaches javac or JuLC, so a package cannot change a script unpinned. A Java source is keyed by its path inside
+    `joust-lib/`, so its pin does not depend on the npm package's name; two packages shipping one path are refused.
+    Links under `joust-lib/` are not followed. *Known limit (design F7):* one namespace per build spans packages, so two
+    packages' libraries that declare one name cannot be combined (D9 r16 amended).
   - **`joust.lock` (J12).** Committed at the project's root: `{ "lock": 1, "libraries": { name: sha256 } }`. It pins only
     the libraries from **outside the project's sources** (a package's `.jsc` library, a `java:` library: the hash of its
     on-chain sources), since the project's own libraries are its code, under its version control. A build reports every
@@ -858,14 +867,22 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
     for its `joustLibrary` libraries. The lock is a different file from the build's `build/joust/joust.lock.json`
     (script hashes, not committed).
   - **Offline tests.** `@julclang/joust/test`'s `offline({ contracts })` gives an in-memory ledger behind the provider
-    interface, a runtime over it, funded key wallets, and the generated clients' options. The ledger checks a
-    transaction as a node would (inputs unspent, validity interval, balance with fee and deposits, minimum ADA, key
-    witnesses, collateral) and has the **runtime engine** evaluate its scripts (`joust.evaluate`: JuLC's VM with the
-    ledger's cost model, the evaluator that prices transactions), so phase 2 runs the validator the build produced. On
-    each script transaction it runs the attack suite (`joust.attacks`, the mutations of the JVM testkit's `Attacks`: the
+    interface, a runtime over it, funded key wallets, and the generated clients' options. The ledger checks the phase-1
+    rules it models *(r20 amended, review r2: F1, S3, C8–C12; the list is `memoryLedger`'s, `joust-cli.mdx` repeats
+    it)*: a valid tag, the size limit, unspent inputs, the validity interval, withdrawals from registered accounts of
+    their (zero) balance, the balance with fee and deposits, minimum ADA, the minimum fee (size, declared units,
+    reference scripts), a vkey witness for every key that must sign, a script (witnessed or referenced) for every script
+    credential that must authorise, native scripts evaluated, a redeemer for every Plutus purpose and none extra, witness
+    datums, collateral (key-locked, ADA-only or returned, enough, counted, `total_collateral`), the script integrity
+    hash, and the declared units (within the limit, and covering what each script uses); concurrent submissions apply
+    one at a time. It has the **runtime engine** evaluate its scripts whenever a Plutus script must run
+    (`joust.evaluate`: JuLC's VM with the ledger's cost model, the evaluator that prices transactions), so phase 2 runs
+    the validator the build produced. Not modelled: rewards, governance and pool rules, the treasury, PlutusV1's
+    integrity hash, and a phase-2 failure's collateral loss (an invalid-tagged transaction is refused). On each script
+    transaction it runs the attack suite (`joust.attacks`, **a subset** of the JVM testkit's `Attacks` (design F4): the
     state's datum replaced or hashed, value skimmed, token dust, a key address, a stake credential, an output dropped,
-    the signer replaced, and the validity bounds moved or removed when the call read its window), which the scripts must
-    refuse. `joust test` builds and runs `test/*.test.js` with Node's runner; the template's test is offline, and its
+    the signer replaced, and the validity bounds moved or removed when the call read its window; the payout, mint and
+    send mutations are a follow-up), which the scripts must refuse; only a script's refusal counts as refused (S5). `joust test` builds and runs `test/*.test.js` with Node's runner; the template's test is offline, and its
     DevKit test moved to `test/devkit/`. The ledger has no rewards, no governance and no certificates beyond stake
     registration; tests of those run on DevKit.
   - **`joust build --traces`** keeps the contracts' traces (`-Pjoust.traces` on Gradle).
@@ -1035,7 +1052,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J9 | Only direct self-recursion, checked after lowering; the build report lists recursive functions | D7 | checker tests (nested folds and branches) |
 | J10 | Generated names cannot collide with user names; no binding shadows a state field or a built-in name in methods with input state; no binding or state field replaces a declared type, enum, variant or `fn`; names are ASCII, and a file holds no format character, no line end other than LF or CRLF (r8) and no control character but TAB (r9) | D3, D7 | checker tests |
 | J11 | A D10 row is supported only once its gating port builds, passes its Java example's tests and attack suite, and stays within the size and budget bounds of §8 | D10 | milestone exit criteria |
-| J12 | The build names every library with its on-chain-source hash, and fails when it does not match `joust.lock` | D9 | build tests |
+| J12 | The build names every library with its on-chain-source hash, and fails when one from outside the project's sources (a package's `.jsc` library, a `java:` library, a Java library a Java contract imports: its source closure, all the build compiles of it) is not pinned by `joust.lock` or does not match it (r20 amended) | D9, D14 | build tests |
 | J13 | `joust migrate` preserves behaviour (equal next state, equal per-kind obligation multisets) or refuses with a reason; it never overwrites without a flag | D16 | migration tests over v1 vectors and generated v1 programs |
 | J14 | Every inline `Map` is canonical (unique keys of at most 64 bytes, strictly ascending), whether built by `set`/`delete` or received as input | D5, D7 | property tests against CCL and the JS codec, keys of 0–80 bytes, duplicates |
 | J15 | Every checked input (D5) is validated recursively before user code reads it: nested `Key`/`Hash` lengths, map canonicality, canonical `Value`, `Address` shape | D5 | negative tests on-chain and in the attack suite |
@@ -1102,7 +1119,7 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 | M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; five-way differential tests (four-way to M1a) and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten. M1c's thresholds (r11): "below 14 KB" is below 14,000 bytes; "the protocol maximum" is 10,000,000,000 CPU steps and 14,000,000 memory units (the pre-Plomin memory limit, the stricter one), summed over every script of the transaction, with a warning above 80%; the saturated state is the largest one the Java example accepts (its stored datum within `maxDatumBytes`), which the port must then accept; a batched action is measured at `Batcher.DEFAULT_MAX` intents too |
 | M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green |
 | M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green |
-| M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12; a `.jsc` library called from Java and a Java library from `.jsc`; the template's tests run offline |
+| M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12 (libraries from outside the sources pinned); a `.jsc` library called from Java and a Java library from `.jsc` (in `examples/dsl`; the plugin path waits for the toolchain's publication, D9 r19 amended); the template's tests run offline |
 | M5 | Language server | M3, M4 exit | — |
 
 **Recommendation gate.** `.jsc` 2 becomes the recommended language for JS developers when M2 and M4 have exited (the
@@ -1358,3 +1375,13 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   as built (only libraries from outside the sources; JSC0731/JSC0732; `--accept-lock`, `acceptJoustLock`), the offline
   tests (an in-memory ledger whose phase 2 is the runtime engine's `joust.evaluate`, the attack suite as
   `joust.attacks`, `joust test`, the template's test offline), and `joust build --traces`.
+- **r20 (amended)** (2026-11-13, M4c review round r2: design F1–F7, security S1–S6, Codex C7–C12): J12, D9's supply-chain
+  bullet and the M4 exit say what the build does: every library is named with its hash, and those from outside the
+  sources are pinned. A Java library's pin is its source closure (a record's own file included), which is all the build
+  compiles of it; on npm the packages' Java sources reach javac and JuLC only as the closures of libraries a `.jsc` file
+  or a hand-written Java contract imports, and the lock pins both; Java sources are keyed by their path inside
+  `joust-lib/`; links are not followed. The offline ledger checks script witnesses and redeemers for every purpose,
+  native scripts, the minimum fee, withdrawals, collateral, the size and unit limits, the integrity hash and the declared
+  units, refuses invalid-tagged transactions, and serialises submissions; D14 lists what it models and what it does not.
+  The attack suite is called a subset, and only a script's refusal counts. `--accept-abi` no longer writes the lock;
+  `joust test`'s offline flag makes the network providers refuse.

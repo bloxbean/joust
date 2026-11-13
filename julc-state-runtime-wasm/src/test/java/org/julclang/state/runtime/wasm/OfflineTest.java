@@ -75,4 +75,13 @@ class OfflineTest {
         var none = Offline.evaluate(new Offline.EvaluateRequest(any.get("unsignedTx").asText(), "{}", zeroSlot, zeroTime, slot));
         assertFalse(none.ok());
     }
+
+    /** Review r2 (#82 S5): only a script's refusal counts as refused; an evaluator or suite error does not. */
+    @Test
+    void onlyAScriptsRefusal_countsAsRefused() {
+        assertTrue(Offline.scriptRefusal("Script evaluation failed for SPEND[0]: the datum is not the state"));
+        assertTrue(Offline.scriptRefusal("Budget exhausted for MINT[0]"));
+        assertFalse(Offline.scriptRefusal("the snapshot has no output aa#0"));
+        assertFalse(Offline.scriptRefusal(null));
+    }
 }

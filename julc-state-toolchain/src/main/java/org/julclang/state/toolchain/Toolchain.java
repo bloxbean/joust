@@ -98,7 +98,12 @@ public final class Toolchain {
      * the Java lowered from each {@code .jsc} file.
      */
     public record Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics,
-                         List<Generated> generated) {
+                         List<Generated> generated, List<org.julclang.state.dsl.v2.JscV2.LibraryUse> libraries) {
+        public Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics,
+                      List<Generated> generated) {
+            this(ok, contracts, validators, diagnostics, generated, List.of());
+        }
+
         public Result(boolean ok, List<Contract> contracts, List<Validator> validators, List<Diagnostic> diagnostics) {
             this(ok, contracts, validators, diagnostics, List.of());
         }
@@ -167,7 +172,23 @@ public final class Toolchain {
             }
         }
         boolean ok = r.ok() && diagnostics.stream().noneMatch(d -> d.severity() == Severity.ERROR);
-        return new Result(ok, r.contracts(), r.validators(), diagnostics, List.copyOf(generated));
+        return new Result(ok, r.contracts(), r.validators(), diagnostics, List.copyOf(generated), r.libraries());
+    }
+
+    /**
+     * The classes a hand-written Java source imports ({@code import a.b.C;}, {@code import static a.b.C.f;}), each with
+     * its enclosing names ({@code a.b.C.Inner} gives {@code a.b.C} too). Read from the text: a class it names otherwise is
+     * not on the build's pool, so its compilation fails (closed).
+     */
+    static java.util.Set<String> javaImports(String text) {
+        var out = new java.util.TreeSet<String>();
+        var m = java.util.regex.Pattern.compile("(?m)^\\s*import\\s+(static\\s+)?([\\w.$]+)\\s*;").matcher(text);
+        while (m.find()) {
+            String n = m.group(2);
+            if (m.group(1) != null && n.contains(".")) n = n.substring(0, n.lastIndexOf('.'));
+            for (; n.contains("."); n = n.substring(0, n.lastIndexOf('.'))) out.add(n);
+        }
+        return out;
     }
 
     /**
@@ -282,6 +303,29 @@ public final class Toolchain {
                 }
             }
         }
+        // 1c. The Java library sources the build compiles (review r2: #82 F2, S2, C7; #79 S3): the source closure of each
+        //     java: library a .jsc file imports, and of each library a hand-written Java contract imports, which joust.lock
+        //     then pins as well; no other source of a package reaches javac or JuLC.
+        var pooledJava = new java.util.TreeMap<String, String>();
+        var javaUses = new java.util.TreeMap<String, org.julclang.state.dsl.v2.JscV2.LibraryUse>();
+        if (!javaLibrarySources.isEmpty() && !hasErrors(diagnostics)) {
+            var wanted = new java.util.TreeSet<String>();
+            for (Generated g : generatedOut) for (var u : g.libraries()) if (u.kind().equals("java")) wanted.add(u.name().substring("java:".length()));
+            for (var e : files.entrySet()) {
+                if (!e.getKey().endsWith(".java")) continue;
+                for (String fqcn : javaImports(e.getValue())) {
+                    var lib = javaLibraries.describe(fqcn);
+                    if (lib == null || lib.sources().isEmpty()) continue;
+                    wanted.add(fqcn);
+                    javaUses.put("java:" + fqcn, new org.julclang.state.dsl.v2.JscV2.LibraryUse(org.julclang.state.dsl.v2.JscV2.LibraryUse.JAVA_SOURCE, "java:" + fqcn,
+                            lib.sourceSha256()));
+                }
+            }
+            for (String fqcn : wanted) {
+                var lib = javaLibraries.describe(fqcn);
+                if (lib != null) for (String path : lib.sources()) pooledJava.put(path, javaLibrarySources.get(path));
+            }
+        }
         if (hasErrors(diagnostics)) return new Result(false, List.of(), diagnostics);
 
         // 2. JuLC's library pool, as on Gradle's processor path: JOUST's API sources (and any other on-chain library
@@ -311,7 +355,7 @@ public final class Toolchain {
         var pool = new ArrayList<JavacFrontend.Unit>();
         classpathLibraries.values().forEach(l -> pool.add(JavacFrontend.Unit.jar(l.source())));
         // The Java libraries' on-chain sources (M4b): library sources, as on Gradle's processor path.
-        javaLibrarySources.values().forEach(t -> pool.add(JavacFrontend.Unit.jar(t)));
+        pooledJava.values().forEach(t -> pool.add(JavacFrontend.Unit.jar(t)));
         var generated = new ArrayList<JoustGenerators.Generated>();
         var plain = new ArrayList<PlainValidator>();   // the project's plain validators, as strings
         boolean attributed = JavacFrontend.shared().attribute(roots, pool, attribution -> {
@@ -377,7 +421,7 @@ public final class Toolchain {
             if (l != null) project.put(l.fqcn(), l);
         }
         Map<String, LibrarySource> libraryPool = new LinkedHashMap<>(classpathLibraries);
-        for (String text : javaLibrarySources.values()) {
+        for (String text : pooledJava.values()) {
             LibrarySource l = LibrarySourceResolver.librarySource(text);
             if (l != null) libraryPool.put(l.fqcn(), l);
         }
@@ -449,7 +493,7 @@ public final class Toolchain {
                     result.isParameterized() ? "" : JulcScriptAdapter.scriptHash(program), result.scriptSizeBytes(),
                     List.copyOf(params)));
         }
-        return new Result(!hasErrors(diagnostics), contracts, validators, diagnostics);
+        return new Result(!hasErrors(diagnostics), contracts, validators, diagnostics, List.of(), List.copyOf(javaUses.values()));
     }
 
     /** {@code a/b/Name.java} for generated Java: its package and its public class. */

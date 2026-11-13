@@ -44,7 +44,13 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   const files = sources(resolve(root, src), keep);
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
   // ADR-0018 D14 (M4c): the libraries the project's npm packages ship under joust-lib/ (.jsc, and Java on-chain sources).
-  const { packages, javaLibraries } = libraryPackages(root);
+  let packages;
+  let javaLibraries;
+  try {
+    ({ packages, javaLibraries } = libraryPackages(root));
+  } catch (e) {
+    return { ok: false, contracts: [], diagnostics: [{ severity: 'error', message: e.message }] };
+  }
   // ADR-0018 D12: joust build --traces keeps the contracts' traces in the scripts (Gradle: -Pjoust.traces).
   if (traces) options = { ...options, 'joust.traces': 'true' };
   const t = Date.now();
@@ -86,7 +92,7 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics, ...(abiErrors.length ? { abiErrors } : {}) };
   if (abiErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, abiErrors };
   // ADR-0018 J12: the build names every library it used with its hash; joust.lock pins those from outside the sources.
-  const lockErrors = lockGate({ generated: r.generated ?? [], root, acceptLock, log });
+  const lockErrors = lockGate({ generated: r.generated ?? [], libraries: r.libraries ?? [], root, acceptLock, log });
   for (const e of lockErrors) console.error(e);
   if (lockErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, lockErrors };
   mkdirSync(dir, { recursive: true });
