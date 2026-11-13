@@ -70,7 +70,7 @@ final class Syntax {
         }
     }
 
-    sealed interface Stmt permits Const, Require, Pay, For, IfStmt, MatchStmt {
+    sealed interface Stmt permits Const, Require, Pay, Send, Mint, Accept, For, IfStmt, MatchStmt {
         Pos pos();
     }
 
@@ -79,6 +79,15 @@ final class Syntax {
     record Require(Expr cond, String message, Pos pos) implements Stmt {}
 
     record Pay(Expr to, Expr amount, Pos pos) implements Stmt {}
+
+    /** {@code send(to, value)}: an output of {@code value} to the address {@code to} (D4, M2). */
+    record Send(Expr to, Expr value, Pos pos) implements Stmt {}
+
+    /** {@code mint(name, qty)} or {@code burn(name, qty)}: the own policy's tokens (D4, M2). */
+    record Mint(boolean burn, Expr name, Expr qty, Pos pos) implements Stmt {}
+
+    /** {@code accept(value)}: native assets the method takes in (D4, M2). */
+    record Accept(Expr value, Pos pos) implements Stmt {}
 
     record For(String var, Expr list, Block body, Pos pos) implements Stmt {}
 

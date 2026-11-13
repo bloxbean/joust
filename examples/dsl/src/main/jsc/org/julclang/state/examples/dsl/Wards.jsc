@@ -1,0 +1,62 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { isEmpty } from "std/value"
+import { paymentKey, paymentScript } from "std/address"
+
+// ADR-0018 M2's fixture for addresses and credentials (J3): construction, structural equality, a match on a credential,
+// std/address, checked inputs, and sends to addresses in loops, branches and match arms, on all five legs. Not an
+// example to deploy. Coins.jsc covers values and the effects on native assets.
+type Share = { to: Address, weight: Int }
+
+contract Wards(maxDatumBytes = 512, assetSlots = 4) {
+  state { owner: Key, beneficiary: Address, guard: Credential }
+
+  init(beneficiary: Address, guard: Credential) {
+    return { owner: caller, beneficiary, guard }
+  }
+
+  // Pays the guard's key, or sends lovelace to the guard's script: a match whose arms have different effects.
+  action tip(amount: Int) only owner {
+    match guard {
+      KeyCred { key } => pay(key, amount)
+      ScriptCred { hash } => send(script(hash), Value.lovelace(amount))
+    }
+    return state
+  }
+
+  // Sends each share its weight of (policy, name), skipping weights of 0; pays the owner 1 ADA when some share is the
+  // beneficiary. Effects in a loop and its branches.
+  action spread(shares: List<Share>, policy: Hash, name: Bytes) only owner {
+    for (const s of shares) {
+      if s.weight > 0 {
+        send(s.to, Value.asset(policy, name, s.weight))
+      }
+    }
+    if shares.any(s => s.to == beneficiary) {
+      pay(owner, 1 ada)
+    }
+    return state
+  }
+
+  // A new beneficiary and guard: addresses and credentials compare structurally.
+  action rotate(to: Address, g: Credential) only owner {
+    require(to != beneficiary || g != guard, "nothing changes")
+    require(paymentScript(to) == None || g == scriptCred(asHash(paymentScript(to) ?? #00)), "a script beneficiary is its own guard")
+    return { ...state, beneficiary: to, guard: g }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+    if !isEmpty(funds.held) {
+      send(beneficiary, funds.held)
+    }
+  }
+
+  view beneficiaryKey(): Option<Key> = paymentKey(beneficiary)
+  view guardHash(): Bytes = match guard {
+    KeyCred { key } => key
+    ScriptCred { hash } => hash
+  }
+  view walletOf(k: Key): Address = wallet(k, k)
+}

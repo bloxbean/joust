@@ -1,0 +1,64 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { blake2b_224 } from "std/crypto"
+import { isEmpty, withoutLovelace, scale } from "std/value"
+
+// ADR-0018 M2's fixture for values and the effects on native assets (J3): Value's operations and std/value, funds, and
+// send, mint, burn and accept, on all five legs. Not an example to deploy. Wards.jsc covers addresses and credentials.
+contract Coins(maxDatumBytes = 512, assetSlots = 4) {
+  state { owner: Key, beneficiary: Address, minted: Int, label: Bytes }
+
+  // The receipts' token name is derived from the instance's id (funds.self), so each instance mints its own receipts.
+  // The id itself (32 bytes) is a reserved token kind of the policy (ADR-0007 D3): minting it is refused.
+  init(beneficiary: Address) {
+    return { owner: caller, beneficiary, minted: 0, label: blake2b_224(funds.self) }
+  }
+
+  fn tokens(policy: Hash, name: Bytes, n: Int): Value = Value.asset(policy, name, n)
+
+  fn total(v: Value, policy: Hash, name: Bytes): Int = v.lovelace + v.of(policy, name)
+
+  // Takes n of (policy, name), accepted in two parts, and sends the caller n receipts minted for them.
+  action lodge(policy: Hash, name: Bytes, n: Int) payable open {
+    require(n > 0, "lodge something")
+    accept(tokens(policy, name, n / 2))
+    accept(tokens(policy, name, n - n / 2))
+    mint(label, n)
+    send(wallet(caller), Value.asset(funds.policy, label, n))
+    return { ...state, minted: minted + n }
+  }
+
+  // Takes n receipts back and burns them (a burn of n + 1 and a mint of 1: the net), and sends the beneficiary n of
+  // (policy, name) from what the instance holds.
+  action redeem(policy: Hash, name: Bytes, n: Int) payable open {
+    require(n > 0 && n <= minted, "bad amount")
+    require(funds.held.covers(tokens(policy, name, n)), "not enough held")
+    accept(Value.asset(funds.policy, label, n))
+    burn(label, n + 1)
+    mint(label, 1)
+    send(beneficiary, tokens(policy, name, n))
+    return { ...state, minted: minted - n }
+  }
+
+  // Value arithmetic, comparison and std/value, checked against arguments; accepts whatever is offered.
+  action probe(policy: Hash, name: Bytes, n: Int, k: Int) payable open {
+    const v = tokens(policy, name, n) + Value.lovelace(n)
+    const w = scale(k, v) - v
+    require(w.of(policy, name) == (k - 1) * n && w.lovelace == (k - 1) * n, "scale")
+    require(withoutLovelace(v) == tokens(policy, name, n) && v != Value.none() || n == 0, "withoutLovelace")
+    require(isEmpty(v - v) && (isEmpty(v) == (n == 0)), "isEmpty")
+    require(v.covers(Value.none()), "covers")
+    accept(funds.received)
+    return { ...state, minted: minted + total(funds.received, policy, name) }
+  }
+
+  // Ends the instance once every receipt is burned: the owner gets the lovelace, the beneficiary what else is held.
+  destroy close() only owner {
+    require(minted == 0, "receipts are outstanding")
+    pay(owner, balance)
+    if !isEmpty(funds.held) {
+      send(beneficiary, funds.held)
+    }
+  }
+}

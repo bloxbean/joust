@@ -73,7 +73,7 @@
 ] @keyword
 
 [
-  "const" "let" "for" "of" "return" "require" "pay" "to" "delete" "this" "match"
+  "const" "let" "for" "of" "return" "require" "pay" "send" "mint" "burn" "accept" "to" "delete" "this" "match"
 ] @keyword
 
 [ "if" "else" ] @keyword.conditional

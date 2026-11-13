@@ -19,8 +19,20 @@ sealed interface Ty {
     /** A 28-byte script hash or policy id (D5): Bytes at run time, checked like a Key. */
     Ty HASH = new Prim("Hash");
     Ty STATE = new Rec("State");
+    /** A multi-asset value (M2): locals, fn parameters and results, effects and funds only (D5). */
+    Ty VALUE = new Ledger("Value");
+    /** A ledger address: a payment credential and an optional staking credential (M2). */
+    Ty ADDRESS = new Ledger("Address");
+    /** A ledger credential: KeyCred { key } or ScriptCred { hash } (M2). */
+    Ty CREDENTIAL = new Ledger("Credential");
 
     record Prim(String name) implements Ty {}
+
+    /**
+     * A ledger type of M2 (D5): {@code Value}, {@code Address}, {@code Credential}. Not a {@link Prim}, so every
+     * exhaustive walk over types states what it does with them.
+     */
+    record Ledger(String name) implements Ty {}
 
     record ListT(Ty elem) implements Ty {}
 
@@ -47,6 +59,7 @@ sealed interface Ty {
             case EnumT e -> e.name();
             case MapT m -> "Map<" + show(m.key()) + ", " + show(m.val()) + ">";
             case BigMapT m -> "BigMap<" + show(m.key()) + ", " + show(m.val()) + ">";
+            case Ledger l -> l.name();
         };
     }
 
@@ -70,6 +83,7 @@ sealed interface Ty {
             case EnumT e -> e.name();
             case MapT m -> "Map_" + mangle(m.key()) + "_" + mangle(m.val());
             case BigMapT m -> throw new IllegalStateException("a BigMap has no generated helpers by type");
+            case Ledger l -> l.name();
         };
     }
 
@@ -97,6 +111,7 @@ sealed interface Ty {
         return switch (t) {
             case BigMapT b -> true;
             case Prim p -> false;
+            case Ledger l -> false;
             case ListT l -> hasBigMap(l.elem(), components, seen);
             case OptT o -> hasBigMap(o.elem(), components, seen);
             case MapT m -> hasBigMap(m.val(), components, seen);
@@ -118,6 +133,8 @@ sealed interface Ty {
     private static boolean needsCheck(Ty t, Function<String, List<Ty>> components, Set<String> seen) {
         return switch (t) {
             case Prim p -> p.equals(KEY) || p.equals(HASH);
+            // An Address or a Credential holds hashes (28 bytes each, D5); a Value never crosses as an input (M2).
+            case Ledger l -> !l.equals(VALUE);
             case ListT l -> needsCheck(l.elem(), components, seen);
             case OptT o -> needsCheck(o.elem(), components, seen);
             case Rec r -> seen.add(r.name()) && components.apply(r.name()).stream().anyMatch(f -> needsCheck(f, components, seen));

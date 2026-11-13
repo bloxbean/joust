@@ -229,6 +229,9 @@ module.exports = grammar({
       $.const_declaration,
       $.require_statement,
       $.pay_statement,
+      $.send_statement,
+      $.mint_statement,
+      $.accept_statement,
       $.for_statement,
       prec.dynamic(1, $.if_statement),
       prec.dynamic(1, $.match_statement),
@@ -243,6 +246,13 @@ module.exports = grammar({
     ),
 
     pay_statement: $ => seq('pay', '(', field('to', $._expression), ',', field('amount', $._expression), ')'),
+
+    // ADR-0018 M2 (D4): the effects on native assets. send takes no datum yet (JSC0429).
+    send_statement: $ => seq('send', '(', field('to', $._expression), ',', field('value', $._expression), ')'),
+
+    mint_statement: $ => seq(choice('mint', 'burn'), '(', field('name', $._expression), ',', field('quantity', $._expression), ')'),
+
+    accept_statement: $ => seq('accept', '(', field('value', $._expression), ')'),
 
     for_statement: $ => seq(
       'for', '(', 'const', field('name', $.identifier), 'of', field('iterable', $._expression), ')', field('body', $.block),
@@ -263,7 +273,8 @@ module.exports = grammar({
 
     match_arm: $ => seq(
       field('pattern', $._pattern), '=>',
-      field('body', choice(alias($._arm_block, $.block), $.require_statement, $.pay_statement, $._expression)),
+      field('body', choice(alias($._arm_block, $.block), $.require_statement, $.pay_statement, $.send_statement, $.mint_statement,
+        $.accept_statement, $._expression)),
     ),
 
     _pattern: $ => choice($.some_pattern, $.variant_pattern),
@@ -405,7 +416,7 @@ module.exports = grammar({
 
     // A require or pay arm in a match used as a value: the Java parser reads it as a statement arm and then refuses the
     // match (JSC0907), so here it is always an error.
-    _statement_arm: $ => seq(choice('require', 'pay'), $.refused),
+    _statement_arm: $ => seq(choice('require', 'pay', 'send', 'mint', 'burn', 'accept'), $.refused),
 
     call_expression: $ => prec(PREC.CALL, seq(field('function', $.identifier), field('arguments', $.arguments))),
 

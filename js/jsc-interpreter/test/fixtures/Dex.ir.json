@@ -1,0 +1,900 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "6d0f0442b7f027452d50a84c3e7c44088b3c3e125c9843957c8d92875775bf9c",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Dex",
+  "source": "Dex.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "256" }, { "name": "assetSlots", "value": "2" }],
+  "records": [],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "admin", "type": "Key" },
+      { "name": "tokenPolicy", "type": "Hash" },
+      { "name": "tokenName", "type": "Bytes" },
+      { "name": "lpName", "type": "Bytes" },
+      { "name": "lpSupply", "type": "Int" }
+    ],
+    "at": [11, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [
+    {
+      "name": "amountOut",
+      "params": [
+        { "id": 14, "name": "amount", "type": "Int", "taint": 0, "at": [20, 16] },
+        { "id": 15, "name": "reserveIn", "type": "Int", "taint": 0, "at": [20, 29] },
+        { "id": 16, "name": "reserveOut", "type": "Int", "taint": 0, "at": [20, 45] }
+      ],
+      "result": "Int",
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 17, "name": "withFee", "type": "Int", "taint": 0, "at": [21, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "*",
+              "left": { "node": "LocalRef", "local": 14, "type": "Int", "taint": 0, "at": [21, 21] },
+              "right": { "node": "Lit", "value": "997", "type": "Int", "taint": 0, "at": [21, 30] },
+              "type": "Int",
+              "taint": 0,
+              "at": [21, 21]
+            },
+            "at": [21, 5]
+          }
+        ],
+        "result": {
+          "node": "Arith",
+          "op": "/",
+          "left": {
+            "node": "Arith",
+            "op": "*",
+            "left": { "node": "LocalRef", "local": 16, "type": "Int", "taint": 0, "at": [22, 5] },
+            "right": { "node": "LocalRef", "local": 17, "type": "Int", "taint": 0, "at": [22, 18] },
+            "type": "Int",
+            "taint": 0,
+            "at": [22, 5]
+          },
+          "right": {
+            "node": "Arith",
+            "op": "+",
+            "left": {
+              "node": "Arith",
+              "op": "*",
+              "left": { "node": "LocalRef", "local": 15, "type": "Int", "taint": 0, "at": [22, 29] },
+              "right": { "node": "Lit", "value": "1000", "type": "Int", "taint": 0, "at": [22, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [22, 29]
+            },
+            "right": { "node": "LocalRef", "local": 17, "type": "Int", "taint": 0, "at": [22, 48] },
+            "type": "Int",
+            "taint": 0,
+            "at": [22, 29]
+          },
+          "type": "Int",
+          "taint": 0,
+          "at": [22, 5]
+        },
+        "at": [20, 67]
+      },
+      "at": [20, 3]
+    }
+  ],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [
+        { "id": 1, "name": "tokenPolicy", "type": "Hash", "taint": 0, "at": [15, 8] },
+        { "id": 2, "name": "tokenName", "type": "Bytes", "taint": 0, "at": [15, 27] }
+      ],
+      "mods": [],
+      "checked": [1],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [16, 21] },
+            { "node": "LocalRef", "local": 1, "type": "Hash", "taint": 0, "at": [16, 29] },
+            { "node": "LocalRef", "local": 2, "type": "Bytes", "taint": 0, "at": [16, 42] },
+            {
+              "node": "CallStd",
+              "module": "std/crypto",
+              "name": "blake2b_224",
+              "args": [{ "node": "FundsRef", "field": "self", "type": "Bytes", "taint": 0, "at": [16, 73] }],
+              "type": "Bytes",
+              "taint": 0,
+              "at": [16, 61]
+            },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [16, 96] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [16, 12]
+        },
+        "at": [15, 45]
+      },
+      "at": [15, 3]
+    },
+    {
+      "kind": "action",
+      "name": "addLiquidity",
+      "params": [{ "id": 3, "name": "tokenIn", "type": "Int", "taint": 0, "at": [26, 23] }],
+      "mods": [{ "name": "payable" }, { "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [27, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [27, 24] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [27, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [27, 29] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [27, 39] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [27, 29]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [27, 13]
+            },
+            "message": "add both ADA and tokens",
+            "at": [27, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 4, "name": "reserveToken", "type": "Int", "taint": 0, "at": [28, 5] },
+            "value": {
+              "node": "LedgerOp",
+              "op": "of",
+              "args": [
+                { "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [28, 26] },
+                { "node": "StateField", "field": "tokenPolicy", "type": "Hash", "taint": 0, "at": [28, 40] },
+                { "node": "StateField", "field": "tokenName", "type": "Bytes", "taint": 0, "at": [28, 53] }
+              ],
+              "type": "Int",
+              "taint": 0,
+              "at": [28, 26]
+            },
+            "at": [28, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 5, "name": "minted", "type": "Int", "taint": 0, "at": [29, 5] },
+            "value": {
+              "node": "Cond",
+              "cond": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [29, 20] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [29, 32] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [29, 20]
+              },
+              "then": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [29, 36] },
+              "otherwise": {
+                "node": "Prelude",
+                "op": "min",
+                "args": [
+                  {
+                    "node": "Arith",
+                    "op": "/",
+                    "left": {
+                      "node": "Arith",
+                      "op": "*",
+                      "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [29, 51] },
+                      "right": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [29, 62] },
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [29, 51]
+                    },
+                    "right": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [29, 73] },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [29, 51]
+                  },
+                  {
+                    "node": "Arith",
+                    "op": "/",
+                    "left": {
+                      "node": "Arith",
+                      "op": "*",
+                      "left": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [29, 82] },
+                      "right": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [29, 92] },
+                      "type": "Int",
+                      "taint": 0,
+                      "at": [29, 82]
+                    },
+                    "right": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [29, 103] },
+                    "type": "Int",
+                    "taint": 0,
+                    "at": [29, 82]
+                  }
+                ],
+                "type": "Int",
+                "taint": 0,
+                "at": [29, 47]
+              },
+              "type": "Int",
+              "taint": 0,
+              "at": [29, 20]
+            },
+            "at": [29, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [30, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [30, 22] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [30, 13]
+            },
+            "message": "deposit too small",
+            "at": [30, 5]
+          },
+          {
+            "stmt": "Mint",
+            "burn": false,
+            "name": { "node": "StateField", "field": "lpName", "type": "Bytes", "taint": 0, "at": [31, 10] },
+            "qty": { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [31, 18] },
+            "at": [31, 5]
+          },
+          {
+            "stmt": "Send",
+            "to": {
+              "node": "LedgerOp",
+              "op": "wallet",
+              "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [32, 17] }],
+              "type": "Address",
+              "taint": 0,
+              "at": [32, 10]
+            },
+            "value": {
+              "node": "LedgerOp",
+              "op": "asset",
+              "args": [
+                { "node": "FundsRef", "field": "policy", "type": "Hash", "taint": 0, "at": [32, 38] },
+                { "node": "StateField", "field": "lpName", "type": "Bytes", "taint": 0, "at": [32, 52] },
+                { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [32, 60] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [32, 26]
+            },
+            "at": [32, 5]
+          },
+          {
+            "stmt": "Accept",
+            "value": {
+              "node": "LedgerOp",
+              "op": "asset",
+              "args": [
+                { "node": "StateField", "field": "tokenPolicy", "type": "Hash", "taint": 0, "at": [33, 24] },
+                { "node": "StateField", "field": "tokenName", "type": "Bytes", "taint": 0, "at": [33, 37] },
+                { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [33, 48] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [33, 12]
+            },
+            "at": [33, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [34, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 17] },
+              "record": "State",
+              "field": "tokenPolicy",
+              "type": "Hash",
+              "taint": 0,
+              "at": [34, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 17] },
+              "record": "State",
+              "field": "tokenName",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [34, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [34, 17] },
+              "record": "State",
+              "field": "lpName",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [34, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "+",
+              "left": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [34, 34] },
+              "right": { "node": "LocalRef", "local": 5, "type": "Int", "taint": 0, "at": [34, 45] },
+              "type": "Int",
+              "taint": 0,
+              "at": [34, 34]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [34, 12]
+        },
+        "at": [26, 50]
+      },
+      "at": [26, 3]
+    },
+    {
+      "kind": "action",
+      "name": "removeLiquidity",
+      "params": [{ "id": 6, "name": "lp", "type": "Int", "taint": 0, "at": [38, 26] }],
+      "mods": [{ "name": "payable" }, { "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [39, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [39, 18] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [39, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": "<=",
+                "left": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [39, 23] },
+                "right": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [39, 29] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [39, 23]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [39, 13]
+            },
+            "message": "bad LP amount",
+            "at": [39, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 7, "name": "adaOut", "type": "Int", "taint": 0, "at": [40, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "/",
+              "left": {
+                "node": "Arith",
+                "op": "*",
+                "left": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [40, 20] },
+                "right": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [40, 30] },
+                "type": "Int",
+                "taint": 0,
+                "at": [40, 20]
+              },
+              "right": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [40, 35] },
+              "type": "Int",
+              "taint": 0,
+              "at": [40, 20]
+            },
+            "at": [40, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 8, "name": "tokenOut", "type": "Int", "taint": 0, "at": [41, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "/",
+              "left": {
+                "node": "Arith",
+                "op": "*",
+                "left": {
+                  "node": "LedgerOp",
+                  "op": "of",
+                  "args": [
+                    { "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [41, 22] },
+                    { "node": "StateField", "field": "tokenPolicy", "type": "Hash", "taint": 0, "at": [41, 36] },
+                    { "node": "StateField", "field": "tokenName", "type": "Bytes", "taint": 0, "at": [41, 49] }
+                  ],
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [41, 22]
+                },
+                "right": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [41, 62] },
+                "type": "Int",
+                "taint": 0,
+                "at": [41, 22]
+              },
+              "right": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [41, 67] },
+              "type": "Int",
+              "taint": 0,
+              "at": [41, 22]
+            },
+            "at": [41, 5]
+          },
+          {
+            "stmt": "Mint",
+            "burn": true,
+            "name": { "node": "StateField", "field": "lpName", "type": "Bytes", "taint": 0, "at": [42, 10] },
+            "qty": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [42, 18] },
+            "at": [42, 5]
+          },
+          {
+            "stmt": "Accept",
+            "value": {
+              "node": "LedgerOp",
+              "op": "asset",
+              "args": [
+                { "node": "FundsRef", "field": "policy", "type": "Hash", "taint": 0, "at": [43, 24] },
+                { "node": "StateField", "field": "lpName", "type": "Bytes", "taint": 0, "at": [43, 38] },
+                { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [43, 46] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [43, 12]
+            },
+            "at": [43, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [44, 9] },
+            "amount": { "node": "LocalRef", "local": 7, "type": "Int", "taint": 0, "at": [44, 17] },
+            "at": [44, 5]
+          },
+          {
+            "stmt": "Send",
+            "to": {
+              "node": "LedgerOp",
+              "op": "wallet",
+              "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [45, 17] }],
+              "type": "Address",
+              "taint": 0,
+              "at": [45, 10]
+            },
+            "value": {
+              "node": "LedgerOp",
+              "op": "asset",
+              "args": [
+                { "node": "StateField", "field": "tokenPolicy", "type": "Hash", "taint": 0, "at": [45, 38] },
+                { "node": "StateField", "field": "tokenName", "type": "Bytes", "taint": 0, "at": [45, 51] },
+                { "node": "LocalRef", "local": 8, "type": "Int", "taint": 0, "at": [45, 62] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [45, 26]
+            },
+            "at": [45, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "admin",
+              "type": "Key",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "tokenPolicy",
+              "type": "Hash",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "tokenName",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "lpName",
+              "type": "Bytes",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "-",
+              "left": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [46, 34] },
+              "right": { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [46, 45] },
+              "type": "Int",
+              "taint": 0,
+              "at": [46, 34]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [46, 12]
+        },
+        "at": [38, 48]
+      },
+      "at": [38, 3]
+    },
+    {
+      "kind": "action",
+      "name": "swapAdaForToken",
+      "params": [{ "id": 9, "name": "minOut", "type": "Int", "taint": 0, "at": [50, 26] }],
+      "mods": [{ "name": "payable" }, { "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Let",
+            "local": { "id": 10, "name": "out", "type": "Int", "taint": 0, "at": [51, 5] },
+            "value": {
+              "node": "CallFn",
+              "fn": "amountOut",
+              "args": [
+                { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [51, 27] },
+                { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [51, 37] },
+                {
+                  "node": "LedgerOp",
+                  "op": "of",
+                  "args": [
+                    { "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [51, 46] },
+                    { "node": "StateField", "field": "tokenPolicy", "type": "Hash", "taint": 0, "at": [51, 60] },
+                    { "node": "StateField", "field": "tokenName", "type": "Bytes", "taint": 0, "at": [51, 73] }
+                  ],
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [51, 46]
+                }
+              ],
+              "type": "Int",
+              "taint": 0,
+              "at": [51, 17]
+            },
+            "at": [51, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [52, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [52, 19] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [52, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": ">=",
+                "left": { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [52, 24] },
+                "right": { "node": "LocalRef", "local": 9, "type": "Int", "taint": 0, "at": [52, 31] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [52, 24]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [52, 13]
+            },
+            "message": "slippage: output below minOut",
+            "at": [52, 5]
+          },
+          {
+            "stmt": "Send",
+            "to": {
+              "node": "LedgerOp",
+              "op": "wallet",
+              "args": [{ "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [53, 17] }],
+              "type": "Address",
+              "taint": 0,
+              "at": [53, 10]
+            },
+            "value": {
+              "node": "LedgerOp",
+              "op": "asset",
+              "args": [
+                { "node": "StateField", "field": "tokenPolicy", "type": "Hash", "taint": 0, "at": [53, 38] },
+                { "node": "StateField", "field": "tokenName", "type": "Bytes", "taint": 0, "at": [53, 51] },
+                { "node": "LocalRef", "local": 10, "type": "Int", "taint": 0, "at": [53, 62] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [53, 26]
+            },
+            "at": [53, 5]
+          },
+          {
+            "stmt": "Accept",
+            "value": { "node": "LedgerOp", "op": "none", "args": [], "type": "Value", "taint": 0, "at": [54, 12] },
+            "at": [54, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [55, 12] },
+        "at": [50, 52]
+      },
+      "at": [50, 3]
+    },
+    {
+      "kind": "action",
+      "name": "swapTokenForAda",
+      "params": [
+        { "id": 11, "name": "tokenIn", "type": "Int", "taint": 0, "at": [59, 26] },
+        { "id": 12, "name": "minOut", "type": "Int", "taint": 0, "at": [59, 40] }
+      ],
+      "mods": [{ "name": "payable" }, { "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [60, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [60, 25] },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [60, 13]
+            },
+            "message": "pay tokens, not ADA",
+            "at": [60, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 13, "name": "out", "type": "Int", "taint": 0, "at": [61, 5] },
+            "value": {
+              "node": "CallFn",
+              "fn": "amountOut",
+              "args": [
+                { "node": "LocalRef", "local": 11, "type": "Int", "taint": 0, "at": [61, 27] },
+                {
+                  "node": "LedgerOp",
+                  "op": "of",
+                  "args": [
+                    { "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [61, 36] },
+                    { "node": "StateField", "field": "tokenPolicy", "type": "Hash", "taint": 0, "at": [61, 50] },
+                    { "node": "StateField", "field": "tokenName", "type": "Bytes", "taint": 0, "at": [61, 63] }
+                  ],
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [61, 36]
+                },
+                { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [61, 75] }
+              ],
+              "type": "Int",
+              "taint": 0,
+              "at": [61, 17]
+            },
+            "at": [61, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [62, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [62, 19] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [62, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": ">=",
+                "left": { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [62, 24] },
+                "right": { "node": "LocalRef", "local": 12, "type": "Int", "taint": 0, "at": [62, 31] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [62, 24]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [62, 13]
+            },
+            "message": "slippage: output below minOut",
+            "at": [62, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [63, 9] },
+            "amount": { "node": "LocalRef", "local": 13, "type": "Int", "taint": 0, "at": [63, 17] },
+            "at": [63, 5]
+          },
+          {
+            "stmt": "Accept",
+            "value": {
+              "node": "LedgerOp",
+              "op": "asset",
+              "args": [
+                { "node": "StateField", "field": "tokenPolicy", "type": "Hash", "taint": 0, "at": [64, 24] },
+                { "node": "StateField", "field": "tokenName", "type": "Bytes", "taint": 0, "at": [64, 37] },
+                { "node": "LocalRef", "local": 11, "type": "Int", "taint": 0, "at": [64, 48] }
+              ],
+              "type": "Value",
+              "taint": 0,
+              "at": [64, 12]
+            },
+            "at": [64, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [65, 12] },
+        "at": [59, 66]
+      },
+      "at": [59, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "admin" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Equals",
+              "negate": false,
+              "left": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [70, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [70, 25] },
+              "operand": "Int",
+              "type": "Bool",
+              "taint": 0,
+              "at": [70, 13]
+            },
+            "message": "liquidity is still in the pool",
+            "at": [70, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "admin", "type": "Key", "taint": 0, "at": [71, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [71, 16] },
+            "at": [71, 5]
+          },
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Not",
+                  "operand": {
+                    "node": "CallStd",
+                    "module": "std/value",
+                    "name": "isEmpty",
+                    "args": [{ "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [72, 17] }],
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [72, 9]
+                  },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [72, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Send",
+                      "to": {
+                        "node": "LedgerOp",
+                        "op": "wallet",
+                        "args": [{ "node": "StateField", "field": "admin", "type": "Key", "taint": 0, "at": [73, 19] }],
+                        "type": "Address",
+                        "taint": 0,
+                        "at": [73, 12]
+                      },
+                      "value": { "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [73, 27] },
+                      "at": [73, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [72, 29]
+                },
+                "at": [72, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": false,
+            "at": [72, 5]
+          }
+        ],
+        "result": null,
+        "at": [69, 30]
+      },
+      "at": [69, 3]
+    },
+    {
+      "kind": "view",
+      "name": "lpSupply",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Int",
+      "body": {
+        "stmts": [],
+        "result": { "node": "StateField", "field": "lpSupply", "type": "Int", "taint": 0, "at": [77, 26] },
+        "at": [77, 26]
+      },
+      "at": [77, 3]
+    }
+  ],
+  "warnings": []
+}

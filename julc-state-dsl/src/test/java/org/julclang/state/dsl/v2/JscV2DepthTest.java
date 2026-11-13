@@ -253,17 +253,14 @@ class JscV2DepthTest {
         assertTrue(JscMain.internalError(new StackOverflowError()).contains("ran out of stack"));
         Path src = Files.createDirectories(dir.resolve("src/t"));
         Files.writeString(src.resolve("D.jsc"), action("(".repeat(60) + "x" + ")".repeat(60)));
-        var err = new ByteArrayOutputStream();
-        PrintStream old = System.err;
-        int code;
-        try {
-            System.setErr(new PrintStream(err, true));
-            code = onSmallStack(() -> JscMain.run(new String[]{dir.resolve("src").toString(), dir.resolve("out").toString()}));
-        } finally {
-            System.setErr(old);
-        }
-        assertEquals(1, code);
-        assertTrue(err.toString().contains("t/D.jsc:1:1: error[JSC0005]: internal error lowering this file: the front end ran out of stack"),
-                err.toString());
+        // In a JVM of its own, interpreted (-Xint) on the smallest main-thread stack the JVM allows: a thread of this
+        // test JVM ran out of stack only while the parser was not yet compiled, so whether it did depended on the tests
+        // that ran before it (M2: a 96 KB thread no longer overflowed once earlier tests had warmed the parser up).
+        String bin = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+        var p = new ProcessBuilder(bin, "-Xint", "-Xss208k", "-cp", System.getProperty("java.class.path"), JscMain.class.getName(),
+                dir.resolve("src").toString(), dir.resolve("out").toString()).redirectErrorStream(true).start();
+        String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(1, p.waitFor(), out);
+        assertTrue(out.contains("t/D.jsc:1:1: error[JSC0005]: internal error lowering this file: the front end ran out of stack"), out);
     }
 }

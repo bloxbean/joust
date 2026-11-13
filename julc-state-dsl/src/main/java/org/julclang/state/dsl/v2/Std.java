@@ -57,6 +57,7 @@ final class Std {
     private static final String API = "org.julclang.state.api.";
     private static final String BI = "java.math.BigInteger";
     private static final Ty INT_LIST = new Ty.ListT(Ty.INT);
+    private static final String VAL = "org.julclang.ledger.Value", ADDR = "org.julclang.ledger.Address";
 
     static {
         // ---- std/crypto: hashes are total, and their cost depends on the input's length only. keccak-256, ECDSA,
@@ -143,6 +144,23 @@ final class Std {
         add(new Binding("std/list", "indexOf", List.of(INT_LIST, Ty.INT), new Ty.OptT(Ty.INT), null, null, List.of(),
                 Policy.GENERATED, "any list and value (structural equality, D6); the first index, or None", true, null));
 
+        // ---- std/value (M2): values are never time values, and only scale can fail (its product out of the 128-bit range).
+        add(new Binding("std/value", "isEmpty", List.of(Ty.VALUE), Ty.BOOL, API + "ValueAdapter", "ValueAdapter.isEmpty", List.of(),
+                Policy.DIRECT, "any value; true when it holds nothing", true, API + "ValueAdapter.isEmpty(" + VAL + "):boolean"));
+        add(new Binding("std/value", "withoutLovelace", List.of(Ty.VALUE), Ty.VALUE, API + "ValueAdapter", "ValueAdapter.withoutLovelace",
+                List.of(), Policy.DIRECT, "any value; its native assets", true, API + "ValueAdapter.withoutLovelace(" + VAL + "):" + VAL));
+        add(new Binding("std/value", "scale", List.of(Ty.INT, Ty.VALUE), Ty.VALUE, API + "ValueAdapter", "ValueAdapter.scale",
+                List.of(), Policy.ADAPTER, "every product within the 128-bit range, else a failure (the ledger's scaleValue); 0 gives the"
+                + " empty value", false, API + "ValueAdapter.scale(" + BI + "," + VAL + "):" + VAL));
+
+        // ---- std/address (M2)
+        add(new Binding("std/address", "paymentKey", List.of(Ty.ADDRESS), new Ty.OptT(Ty.KEY), API + "AddressAdapter",
+                "AddressAdapter.paymentKey", List.of(), Policy.DIRECT, "any address; the key it is paid to, or None for a script's", false,
+                API + "AddressAdapter.paymentKey(" + ADDR + "):java.util.Optional<byte[]>"));
+        add(new Binding("std/address", "paymentScript", List.of(Ty.ADDRESS), new Ty.OptT(Ty.HASH), API + "AddressAdapter",
+                "AddressAdapter.paymentScript", List.of(), Policy.DIRECT, "any address; the script it is paid to, or None for a key's", false,
+                API + "AddressAdapter.paymentScript(" + ADDR + "):java.util.Optional<byte[]>"));
+
         // ---- std/time (D11): sources of time values with a documented bias, never exemptions. after and before are in
         //      the prelude and may also be imported from here.
         add(new Binding("std/time", "elapsedSince", List.of(Ty.INT), Ty.INT, null, null, List.of(), Policy.GENERATED,
@@ -173,7 +191,9 @@ final class Std {
             Map.entry("expMod", List.of("expMod: the exponent must not be negative", "expMod: the modulus must be positive")),
             Map.entry("readBit", List.of("readBit: index must be in [0, 2^31)", "readBit: index past the end")),
             Map.entry("shift", List.of("shift: n must be in (-2^31, 2^31)")),
-            Map.entry("rotate", List.of("rotate: n must be in (-2^31, 2^31)")));
+            Map.entry("rotate", List.of("rotate: n must be in (-2^31, 2^31)")),
+            // std/value's scale fails in the ledger's builtin on-chain (no message); the JVM body's message is its own.
+            Map.entry("scale", List.of()));
 
     /** The fixed message of {@code MerkleMaps.putInt}, which an Int BigMap's set reaches (D7). */
     static final String PUT_INT = "MerkleMaps.putInt: value must not be negative";

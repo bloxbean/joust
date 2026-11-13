@@ -1,0 +1,611 @@
+{
+  "ir": 1,
+  "language": "jsc 2",
+  "sourceSha256": "39ba240d21fb597c8f970bb1f93400baf96f06bd2ff0813539c04c1d4ea3a92c",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Wards",
+  "source": "Wards.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "512" }, { "name": "assetSlots", "value": "4" }],
+  "records": [
+    {
+      "name": "Share",
+      "fields": [{ "name": "to", "type": "Address" }, { "name": "weight", "type": "Int" }],
+      "at": [10, 1]
+    }
+  ],
+  "enums": [],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "owner", "type": "Key" },
+      { "name": "beneficiary", "type": "Address" },
+      { "name": "guard", "type": "Credential" }
+    ],
+    "at": [12, 1]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [
+        { "id": 1, "name": "beneficiary", "type": "Address", "taint": 0, "at": [15, 8] },
+        { "id": 2, "name": "guard", "type": "Credential", "taint": 0, "at": [15, 30] }
+      ],
+      "mods": [],
+      "checked": [1, 2],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [16, 21] },
+            { "node": "LocalRef", "local": 1, "type": "Address", "taint": 0, "at": [16, 29] },
+            { "node": "LocalRef", "local": 2, "type": "Credential", "taint": 0, "at": [16, 42] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [16, 12]
+        },
+        "at": [15, 49]
+      },
+      "at": [15, 3]
+    },
+    {
+      "kind": "action",
+      "name": "tip",
+      "params": [{ "id": 3, "name": "amount", "type": "Int", "taint": 0, "at": [20, 14] }],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Match",
+            "scrutinee": { "node": "StateField", "field": "guard", "type": "Credential", "taint": 0, "at": [21, 11] },
+            "arms": [
+              {
+                "ctors": ["KeyCred"],
+                "fields": ["key"],
+                "binds": [{ "id": 4, "name": "key", "type": "Key", "taint": 0, "at": [22, 17] }],
+                "body": {
+                  "stmts": [
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "LocalRef", "local": 4, "type": "Key", "taint": 0, "at": [22, 30] },
+                      "amount": { "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [22, 35] },
+                      "at": [22, 26]
+                    }
+                  ],
+                  "result": null,
+                  "at": [22, 26]
+                },
+                "at": [22, 7]
+              },
+              {
+                "ctors": ["ScriptCred"],
+                "fields": ["hash"],
+                "binds": [{ "id": 5, "name": "hash", "type": "Hash", "taint": 0, "at": [23, 20] }],
+                "body": {
+                  "stmts": [
+                    {
+                      "stmt": "Send",
+                      "to": {
+                        "node": "LedgerOp",
+                        "op": "script",
+                        "args": [{ "node": "LocalRef", "local": 5, "type": "Hash", "taint": 0, "at": [23, 42] }],
+                        "type": "Address",
+                        "taint": 0,
+                        "at": [23, 35]
+                      },
+                      "value": {
+                        "node": "LedgerOp",
+                        "op": "lovelace",
+                        "args": [{ "node": "LocalRef", "local": 3, "type": "Int", "taint": 0, "at": [23, 64] }],
+                        "type": "Value",
+                        "taint": 0,
+                        "at": [23, 49]
+                      },
+                      "at": [23, 30]
+                    }
+                  ],
+                  "result": null,
+                  "at": [23, 30]
+                },
+                "at": [23, 7]
+              }
+            ],
+            "pays": true,
+            "at": [21, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [25, 12] },
+        "at": [20, 38]
+      },
+      "at": [20, 3]
+    },
+    {
+      "kind": "action",
+      "name": "spread",
+      "params": [
+        { "id": 6, "name": "shares", "type": { "list": { "record": "Share" } }, "taint": 0, "at": [30, 17] },
+        { "id": 7, "name": "policy", "type": "Hash", "taint": 0, "at": [30, 38] },
+        { "id": 8, "name": "name", "type": "Bytes", "taint": 0, "at": [30, 52] }
+      ],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [6, 7],
+      "usesCtx": false,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "For",
+            "var": { "id": 9, "name": "s", "type": { "record": "Share" }, "taint": 0, "at": [31, 5] },
+            "list": { "node": "LocalRef", "local": 6, "type": { "list": { "record": "Share" } }, "taint": 0, "at": [31, 21] },
+            "body": {
+              "stmts": [
+                {
+                  "stmt": "If",
+                  "branches": [
+                    {
+                      "cond": {
+                        "node": "Compare",
+                        "op": ">",
+                        "left": {
+                          "node": "GetField",
+                          "target": { "node": "LocalRef", "local": 9, "type": { "record": "Share" }, "taint": 0, "at": [32, 10] },
+                          "record": "Share",
+                          "field": "weight",
+                          "type": "Int",
+                          "taint": 0,
+                          "at": [32, 10]
+                        },
+                        "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [32, 21] },
+                        "type": "Bool",
+                        "taint": 0,
+                        "at": [32, 10]
+                      },
+                      "then": {
+                        "stmts": [
+                          {
+                            "stmt": "Send",
+                            "to": {
+                              "node": "GetField",
+                              "target": {
+                                "node": "LocalRef",
+                                "local": 9,
+                                "type": { "record": "Share" },
+                                "taint": 0,
+                                "at": [33, 14]
+                              },
+                              "record": "Share",
+                              "field": "to",
+                              "type": "Address",
+                              "taint": 0,
+                              "at": [33, 14]
+                            },
+                            "value": {
+                              "node": "LedgerOp",
+                              "op": "asset",
+                              "args": [
+                                { "node": "LocalRef", "local": 7, "type": "Hash", "taint": 0, "at": [33, 32] },
+                                { "node": "LocalRef", "local": 8, "type": "Bytes", "taint": 0, "at": [33, 40] },
+                                {
+                                  "node": "GetField",
+                                  "target": {
+                                    "node": "LocalRef",
+                                    "local": 9,
+                                    "type": { "record": "Share" },
+                                    "taint": 0,
+                                    "at": [33, 46]
+                                  },
+                                  "record": "Share",
+                                  "field": "weight",
+                                  "type": "Int",
+                                  "taint": 0,
+                                  "at": [33, 46]
+                                }
+                              ],
+                              "type": "Value",
+                              "taint": 0,
+                              "at": [33, 20]
+                            },
+                            "at": [33, 9]
+                          }
+                        ],
+                        "result": null,
+                        "at": [32, 23]
+                      },
+                      "at": [32, 7]
+                    }
+                  ],
+                  "otherwise": null,
+                  "pays": false,
+                  "at": [32, 7]
+                }
+              ],
+              "result": null,
+              "at": [31, 29]
+            },
+            "pays": false,
+            "at": [31, 5]
+          },
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Hof",
+                  "kind": "any",
+                  "list": {
+                    "node": "LocalRef",
+                    "local": 6,
+                    "type": { "list": { "record": "Share" } },
+                    "taint": 0,
+                    "at": [36, 8]
+                  },
+                  "x": { "id": 10, "name": "s", "type": { "record": "Share" }, "taint": 0, "at": [36, 19] },
+                  "body": {
+                    "stmts": [],
+                    "result": {
+                      "node": "Equals",
+                      "negate": false,
+                      "left": {
+                        "node": "GetField",
+                        "target": { "node": "LocalRef", "local": 10, "type": { "record": "Share" }, "taint": 0, "at": [36, 24] },
+                        "record": "Share",
+                        "field": "to",
+                        "type": "Address",
+                        "taint": 0,
+                        "at": [36, 24]
+                      },
+                      "right": { "node": "StateField", "field": "beneficiary", "type": "Address", "taint": 0, "at": [36, 32] },
+                      "operand": "Address",
+                      "type": "Bool",
+                      "taint": 0,
+                      "at": [36, 24]
+                    },
+                    "at": [36, 19]
+                  },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [36, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Pay",
+                      "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [37, 11] },
+                      "amount": { "node": "Lit", "value": "1000000", "type": "Int", "taint": 0, "at": [37, 18] },
+                      "at": [37, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [36, 45]
+                },
+                "at": [36, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": true,
+            "at": [36, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [39, 12] },
+        "at": [30, 76]
+      },
+      "at": [30, 3]
+    },
+    {
+      "kind": "action",
+      "name": "rotate",
+      "params": [
+        { "id": 11, "name": "to", "type": "Address", "taint": 0, "at": [43, 17] },
+        { "id": 12, "name": "g", "type": "Credential", "taint": 0, "at": [43, 30] }
+      ],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [11, 12],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "||",
+              "left": {
+                "node": "Equals",
+                "negate": true,
+                "left": { "node": "LocalRef", "local": 11, "type": "Address", "taint": 0, "at": [44, 13] },
+                "right": { "node": "StateField", "field": "beneficiary", "type": "Address", "taint": 0, "at": [44, 19] },
+                "operand": "Address",
+                "type": "Bool",
+                "taint": 0,
+                "at": [44, 13]
+              },
+              "right": {
+                "node": "Equals",
+                "negate": true,
+                "left": { "node": "LocalRef", "local": 12, "type": "Credential", "taint": 0, "at": [44, 34] },
+                "right": { "node": "StateField", "field": "guard", "type": "Credential", "taint": 0, "at": [44, 39] },
+                "operand": "Credential",
+                "type": "Bool",
+                "taint": 0,
+                "at": [44, 34]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [44, 13]
+            },
+            "message": "nothing changes",
+            "at": [44, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "||",
+              "left": {
+                "node": "Equals",
+                "negate": false,
+                "left": {
+                  "node": "CallStd",
+                  "module": "std/address",
+                  "name": "paymentScript",
+                  "args": [{ "node": "LocalRef", "local": 11, "type": "Address", "taint": 0, "at": [45, 27] }],
+                  "type": { "option": "Hash" },
+                  "taint": 0,
+                  "at": [45, 13]
+                },
+                "right": { "node": "NoneLit", "type": { "option": "Hash" }, "taint": 0, "at": [45, 34] },
+                "operand": { "option": "Hash" },
+                "type": "Bool",
+                "taint": 0,
+                "at": [45, 13]
+              },
+              "right": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "LocalRef", "local": 12, "type": "Credential", "taint": 0, "at": [45, 42] },
+                "right": {
+                  "node": "LedgerOp",
+                  "op": "scriptCred",
+                  "args": [
+                    {
+                      "node": "Prelude",
+                      "op": "asHash",
+                      "args": [
+                        {
+                          "node": "Coalesce",
+                          "option": {
+                            "node": "CallStd",
+                            "module": "std/address",
+                            "name": "paymentScript",
+                            "args": [{ "node": "LocalRef", "local": 11, "type": "Address", "taint": 0, "at": [45, 79] }],
+                            "type": { "option": "Hash" },
+                            "taint": 0,
+                            "at": [45, 65]
+                          },
+                          "default": { "node": "Lit", "value": "00", "type": "Bytes", "taint": 0, "at": [45, 86] },
+                          "type": "Bytes",
+                          "taint": 0,
+                          "at": [45, 65]
+                        }
+                      ],
+                      "type": "Hash",
+                      "taint": 0,
+                      "at": [45, 58]
+                    }
+                  ],
+                  "type": "Credential",
+                  "taint": 0,
+                  "at": [45, 47]
+                },
+                "operand": "Credential",
+                "type": "Bool",
+                "taint": 0,
+                "at": [45, 42]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [45, 13]
+            },
+            "message": "a script beneficiary is its own guard",
+            "at": [45, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [46, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [46, 12]
+            },
+            { "node": "LocalRef", "local": 11, "type": "Address", "taint": 0, "at": [46, 37] },
+            { "node": "LocalRef", "local": 12, "type": "Credential", "taint": 0, "at": [46, 48] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [46, 12]
+        },
+        "at": [43, 56]
+      },
+      "at": [43, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [50, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [50, 16] },
+            "at": [50, 5]
+          },
+          {
+            "stmt": "If",
+            "branches": [
+              {
+                "cond": {
+                  "node": "Not",
+                  "operand": {
+                    "node": "CallStd",
+                    "module": "std/value",
+                    "name": "isEmpty",
+                    "args": [{ "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [51, 17] }],
+                    "type": "Bool",
+                    "taint": 0,
+                    "at": [51, 9]
+                  },
+                  "type": "Bool",
+                  "taint": 0,
+                  "at": [51, 8]
+                },
+                "then": {
+                  "stmts": [
+                    {
+                      "stmt": "Send",
+                      "to": { "node": "StateField", "field": "beneficiary", "type": "Address", "taint": 0, "at": [52, 12] },
+                      "value": { "node": "FundsRef", "field": "held", "type": "Value", "taint": 0, "at": [52, 25] },
+                      "at": [52, 7]
+                    }
+                  ],
+                  "result": null,
+                  "at": [51, 29]
+                },
+                "at": [51, 5]
+              }
+            ],
+            "otherwise": null,
+            "pays": false,
+            "at": [51, 5]
+          }
+        ],
+        "result": null,
+        "at": [49, 30]
+      },
+      "at": [49, 3]
+    },
+    {
+      "kind": "view",
+      "name": "beneficiaryKey",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "option": "Key" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "CallStd",
+          "module": "std/address",
+          "name": "paymentKey",
+          "args": [{ "node": "StateField", "field": "beneficiary", "type": "Address", "taint": 0, "at": [56, 51] }],
+          "type": { "option": "Key" },
+          "taint": 0,
+          "at": [56, 40]
+        },
+        "at": [56, 40]
+      },
+      "at": [56, 3]
+    },
+    {
+      "kind": "view",
+      "name": "guardHash",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Bytes",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Match",
+          "scrutinee": { "node": "StateField", "field": "guard", "type": "Credential", "taint": 0, "at": [57, 35] },
+          "arms": [
+            {
+              "ctors": ["KeyCred"],
+              "fields": ["key"],
+              "binds": [{ "id": 13, "name": "key", "type": "Key", "taint": 0, "at": [58, 15] }],
+              "body": {
+                "stmts": [],
+                "result": { "node": "LocalRef", "local": 13, "type": "Key", "taint": 0, "at": [58, 24] },
+                "at": [58, 24]
+              },
+              "at": [58, 5]
+            },
+            {
+              "ctors": ["ScriptCred"],
+              "fields": ["hash"],
+              "binds": [{ "id": 14, "name": "hash", "type": "Hash", "taint": 0, "at": [59, 18] }],
+              "body": {
+                "stmts": [],
+                "result": { "node": "LocalRef", "local": 14, "type": "Hash", "taint": 0, "at": [59, 28] },
+                "at": [59, 28]
+              },
+              "at": [59, 5]
+            }
+          ],
+          "type": "Bytes",
+          "taint": 0,
+          "at": [57, 29]
+        },
+        "at": [57, 29]
+      },
+      "at": [57, 3]
+    },
+    {
+      "kind": "view",
+      "name": "walletOf",
+      "params": [{ "id": 15, "name": "k", "type": "Key", "taint": 0, "at": [61, 17] }],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": "Address",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "LedgerOp",
+          "op": "walletStaked",
+          "args": [
+            { "node": "LocalRef", "local": 15, "type": "Key", "taint": 0, "at": [61, 43] },
+            { "node": "LocalRef", "local": 15, "type": "Key", "taint": 0, "at": [61, 46] }
+          ],
+          "type": "Address",
+          "taint": 0,
+          "at": [61, 36]
+        },
+        "at": [61, 36]
+      },
+      "at": [61, 3]
+    }
+  ],
+  "warnings": []
+}

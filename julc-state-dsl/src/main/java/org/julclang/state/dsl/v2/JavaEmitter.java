@@ -21,7 +21,13 @@ final class JavaEmitter {
             Map.entry("Require", "org.julclang.state.api.Require"), Map.entry("Clock", "org.julclang.state.api.Clock"),
             Map.entry("Ctx", "org.julclang.state.api.Ctx"), Map.entry("MerkleMap", "org.julclang.state.api.MerkleMap"),
             Map.entry("MerkleMaps", "org.julclang.state.api.MerkleMaps"), Map.entry("MapEntry", "org.julclang.state.api.MapEntry"),
-            Map.entry("SortedMaps", "org.julclang.state.api.SortedMaps"), Map.entry("ByteStringLib", "org.julclang.stdlib.lib.ByteStringLib"));
+            Map.entry("SortedMaps", "org.julclang.state.api.SortedMaps"), Map.entry("ByteStringLib", "org.julclang.stdlib.lib.ByteStringLib"),
+            // M2: values, addresses and effects
+            Map.entry("Value", "org.julclang.ledger.Value"), Map.entry("Address", "org.julclang.ledger.Address"),
+            Map.entry("Credential", "org.julclang.ledger.Credential"), Map.entry("Funds", "org.julclang.state.api.Funds"),
+            Map.entry("Send", "org.julclang.state.api.Send"), Map.entry("Sends", "org.julclang.state.api.Sends"),
+            Map.entry("Datum", "org.julclang.state.api.Datum"), Map.entry("ValueAdapter", "org.julclang.state.api.ValueAdapter"),
+            Map.entry("AddressAdapter", "org.julclang.state.api.AddressAdapter"));
 
     /**
      * A message the script can trace, where it comes from: a generated check's key ({@code input}, {@code pay}), an
@@ -39,8 +45,8 @@ final class JavaEmitter {
     private final List<Check> checks = new ArrayList<>();
     /** The redeemer of the method being emitted ({@code spend2}, {@code mint0}; null in views and fns), for message keys. */
     private String redeemer;
-    /** Each pay statement of the method being emitted, by position, and its ordinal in source order (from 1). */
-    private Map<Syntax.Pos, Integer> payOrdinals = Map.of();
+    /** Each effect statement of the method being emitted, by kind and position: its ordinal per kind in source order (from 1). */
+    private Map<String, Map<Syntax.Pos, Integer>> ordinals = Map.of();
     /**
      * Each method's redeemer in the ABI manifest, for message keys: {@code spend<i>} for an action or destroy with a spend
      * constructor ({@link Abi#spendOrder}), {@code intent<k>} for a {@code batched only} action, which has none, by its
@@ -70,11 +76,12 @@ final class JavaEmitter {
         for (int i = 0; i < spend.size(); i++) redeemers.put(spend.get(i).name(), "spend" + i);
         for (int k = 0; k < intents.size(); k++) redeemers.putIfAbsent(intents.get(k).name(), "intent" + k);
         var body = new StringBuilder();
-        boolean outcome = false;
+        var results = new TreeSet<String>();
         for (Ir.Method m : p.methods()) {
             body.append(method(m));
-            outcome |= m.kind() == Ir.Kind.ACTION && m.pays();
+            if (m.kind() == Ir.Kind.ACTION && Effects.actionRecord(m) != null) results.add(Effects.actionRecord(m));
         }
+        if (Effects.settled(p)) results.add("Settled");
         for (Ir.Fn f : p.fns()) body.append(fn(f));
         var records = new StringBuilder();
         records.append("    // ").append(mark(p.state().pos())).append("\n");
@@ -95,10 +102,20 @@ final class JavaEmitter {
             }
             records.append("\n");
         }
-        if (outcome) {
-            imports.add("org.julclang.core.types.JulcList");
-            imports.add("org.julclang.state.api.Payout");
-            records.append("    // (generated)\n    public record Outcome(State state, JulcList<Payout> payouts) {}\n\n");
+        // The result records (D4; Effects): Outcome and Received hold the next state, then each kind of effect their actions
+        // produce; Settled a destroy's. A contract that only pays keeps M1's Outcome(state, payouts).
+        for (String r : List.of("Outcome", "Received", "Settled")) {
+            if (!results.contains(r)) continue;
+            var comps = new ArrayList<String>();
+            if (!r.equals("Settled")) comps.add("State state");
+            for (String k : Effects.recordKinds(p, r)) comps.add(kindType(k) + " " + Effects.component(k));
+            records.append("    // (generated)\n    public record ").append(r).append("(").append(String.join(", ", comps)).append(") {}\n\n");
+        }
+        // Several kinds of effects out of one helper (D4): a record per combination the helpers return.
+        for (var e : fxRecords.entrySet()) {
+            var comps = new ArrayList<String>();
+            for (String k : e.getValue()) comps.add(kindType(k) + " " + Effects.component(k));
+            records.append("    // (generated)\n    public record ").append(e.getKey()).append("(").append(String.join(", ", comps)).append(") {}\n\n");
         }
         imports.add("java.math.BigInteger");
         imports.add("org.julclang.state.api.StateContract");
@@ -136,7 +153,7 @@ final class JavaEmitter {
         if (p.options().isEmpty()) return "";
         var parts = new ArrayList<String>();
         for (Ir.ContractOption o : p.options()) {
-            parts.add(o.name() + " = " + o.value() + (o.name().equals("maxDatumBytes") ? "" : "L"));
+            parts.add(o.name() + " = " + o.value() + (o.name().equals("maxDatumBytes") || o.name().equals("assetSlots") ? "" : "L"));
         }
         return "(" + String.join(", ", parts) + ")";
     }
@@ -170,6 +187,7 @@ final class JavaEmitter {
                 imports.add("org.julclang.state.api.MerkleMap");
                 yield "MerkleMap";
             }
+            case Ty.Ledger l -> l.name();
         };
     }
 
@@ -208,9 +226,12 @@ final class JavaEmitter {
         checks.add(new Check(message, "operation", pos, owner, null));
     }
 
-    /** The pay statements of a method body, by position, numbered in source order from 1 (iterative: J18). */
-    private static Map<Syntax.Pos, Integer> payOrdinals(Ir.Block body) {
-        var pays = new ArrayList<Syntax.Pos>();
+    /**
+     * The effect statements of a method body, by kind ({@code pay}, {@code send}, {@code mint} for mint and burn,
+     * {@code accept}) and position, numbered per kind in source order from 1 (iterative: J18).
+     */
+    private static Map<String, Map<Syntax.Pos, Integer>> ordinals(Ir.Block body) {
+        var found = new TreeMap<String, List<Syntax.Pos>>();
         var work = new ArrayDeque<Ir.Block>();
         work.push(body);
         while (!work.isEmpty()) {
@@ -218,7 +239,10 @@ final class JavaEmitter {
             if (b == null) continue;
             for (Ir.Stmt st : b.stmts()) {
                 switch (st) {
-                    case Ir.Pay y -> pays.add(y.pos());
+                    case Ir.Pay y -> found.computeIfAbsent("pay", k -> new ArrayList<>()).add(y.pos());
+                    case Ir.Send y -> found.computeIfAbsent("send", k -> new ArrayList<>()).add(y.pos());
+                    case Ir.Mint y -> found.computeIfAbsent("mint", k -> new ArrayList<>()).add(y.pos());
+                    case Ir.Accept y -> found.computeIfAbsent("accept", k -> new ArrayList<>()).add(y.pos());
                     case Ir.If i -> {
                         for (Ir.Branch br : i.branches()) work.push(br.then());
                         if (i.otherwise() != null) work.push(i.otherwise());
@@ -230,9 +254,13 @@ final class JavaEmitter {
                 }
             }
         }
-        pays.sort(Comparator.comparingInt(Syntax.Pos::line).thenComparingInt(Syntax.Pos::col));
-        var out = new HashMap<Syntax.Pos, Integer>();
-        for (Syntax.Pos q : pays) out.putIfAbsent(q, out.size() + 1);
+        var out = new HashMap<String, Map<Syntax.Pos, Integer>>();
+        found.forEach((kind, ps) -> {
+            ps.sort(Comparator.comparingInt(Syntax.Pos::line).thenComparingInt(Syntax.Pos::col));
+            var m = new HashMap<Syntax.Pos, Integer>();
+            for (Syntax.Pos q : ps) m.putIfAbsent(q, m.size() + 1);
+            out.put(kind, m);
+        });
         return out;
     }
 
@@ -250,7 +278,7 @@ final class JavaEmitter {
             case ACTION, DESTROY -> redeemers.get(m.name());
             case VIEW -> null;
         };
-        payOrdinals = payOrdinals(m.body());
+        ordinals = ordinals(m.body());
         String ann = switch (m.kind()) {
             case INIT -> "Init";
             case ACTION -> "Action";
@@ -284,12 +312,18 @@ final class JavaEmitter {
                 }
             }
         }
+        boolean funds = Effects.takesFunds(m);
         var params = new ArrayList<String>();
         if (m.kind() != Ir.Kind.INIT) params.add("State s__");
         for (Ir.Local l : m.params()) params.add(jt(l.type) + " " + l.name);
         if (m.usesCtx()) {
             imports.add("org.julclang.state.api.Ctx");
             params.add("Ctx ctx");
+        }
+        if (funds) {
+            // M2 (ADR-0007 D1): Funds is the last parameter, after Ctx.
+            imports.add("org.julclang.state.api.Funds");
+            params.add("Funds funds");
         }
 
         var stmts = new StringBuilder();
@@ -300,15 +334,13 @@ final class JavaEmitter {
             stmts.append("        Require.that(").append(checkCall(l.type, l.name)).append(", ")
                     .append(str(key("input", field, l.pos, l.name))).append(");\n");
         }
-        boolean pays = m.pays();
-        String[] payouts = {null};
-        if (pays || m.kind() == Ir.Kind.DESTROY) {
-            imports.add("org.julclang.core.types.JulcList");
-            imports.add("org.julclang.state.api.Payout");
-            imports.add("org.julclang.state.api.Payouts");
-            payouts[0] = "Payouts.none()";
-        }
-        stmts(m.body().stmts(), stmts, "        ", payouts);
+        // The effects this method threads (D4): each kind it reaches, plus payouts for any destroy (M1's layout).
+        var kinds = new ArrayList<String>();
+        var reached = Effects.kinds(m);
+        for (String k : Effects.ORDER) if (reached.contains(k) || (k.equals("pay") && m.kind() == Ir.Kind.DESTROY)) kinds.add(k);
+        Acc acc = new Acc(m.kind() == Ir.Kind.VIEW || m.kind() == Ir.Kind.INIT ? List.of() : kinds);
+        for (String k : acc.kinds) acc.cur.put(k, empty(k));
+        stmts(m.body().stmts(), stmts, "        ", acc);
         String ret;
         switch (m.kind()) {
             case INIT -> {
@@ -316,18 +348,35 @@ final class JavaEmitter {
                 stmts.append("        return ").append(ex(m.body().result())).append(";\n");
             }
             case ACTION -> {
-                if (pays) {
-                    ret = "Outcome";
-                    stmts.append("        return new Outcome(").append(ex(m.body().result())).append(", ").append(payouts[0])
-                            .append(".reverse());\n");
-                } else {
+                String record = Effects.actionRecord(m);
+                if (record == null) {
                     ret = "State";
                     stmts.append("        return ").append(ex(m.body().result())).append(";\n");
+                } else if (!acc.kinds.contains("accept")) {
+                    ret = record;
+                    stmts.append("        return new ").append(record).append("(").append(ex(m.body().result())).append(", ")
+                            .append(result(record, acc)).append(");\n");
+                } else {
+                    // The next state first, then the end-of-call check that what was accepted is exactly what the caller
+                    // offers (ADR-0007 r2; semantics §5.4), then the result.
+                    ret = record;
+                    imports.add("org.julclang.state.api.Require");
+                    String next = fresh("next");
+                    stmts.append("        State ").append(next).append(" = ").append(ex(m.body().result())).append(";\n");
+                    stmts.append("        Require.that(ValueAdapter.same(").append(acc.cur.get("accept")).append(", funds.received()), ")
+                            .append(str(key("funds", 1, m.pos(), null))).append(");\n");
+                    stmts.append("        return new ").append(record).append("(").append(next).append(", ").append(result(record, acc))
+                            .append(");\n");
                 }
             }
             case DESTROY -> {
-                ret = "JulcList<Payout>";
-                stmts.append("        return ").append(payouts[0]).append(".reverse();\n");
+                if (Effects.settled(p)) {
+                    ret = "Settled";
+                    stmts.append("        return new Settled(").append(result("Settled", acc)).append(");\n");
+                } else {
+                    ret = "JulcList<Payout>";
+                    stmts.append("        return ").append(acc.cur.get("pay")).append(".reverse();\n");
+                }
             }
             case VIEW -> {
                 ret = jt(m.resultType());
@@ -340,25 +389,159 @@ final class JavaEmitter {
         return code.toString();
     }
 
+    /** A result record's components after the state: each kind of the record, from this method or empty; lists reversed. */
+    private String result(String record, Acc acc) {
+        var parts = new ArrayList<String>();
+        for (String k : Effects.recordKinds(p, record)) {
+            String v = acc.cur.containsKey(k) ? acc.cur.get(k) : empty(k);
+            // Lists accumulate by prepending: reversed into source order, unless still empty.
+            parts.add((k.equals("pay") || k.equals("send")) && !v.equals(empty(k)) ? v + ".reverse()" : v);
+        }
+        return String.join(", ", parts);
+    }
+
+    /** The empty accumulation of a kind. */
+    private String empty(String kind) {
+        return switch (kind) {
+            case "pay" -> {
+                imports.add("org.julclang.core.types.JulcList");
+                imports.add("org.julclang.state.api.Payout");
+                imports.add("org.julclang.state.api.Payouts");
+                yield "Payouts.none()";
+            }
+            case "send" -> {
+                imports.add("org.julclang.state.api.Send");
+                yield "Sends.none()";
+            }
+            default -> "ValueAdapter.none()";
+        };
+    }
+
+    private String kindType(String kind) {
+        return switch (kind) {
+            case "pay" -> {
+                imports.add("org.julclang.core.types.JulcList");
+                imports.add("org.julclang.state.api.Payout");
+                yield "JulcList<Payout>";
+            }
+            case "send" -> {
+                imports.add("org.julclang.core.types.JulcList");
+                imports.add("org.julclang.state.api.Send");
+                yield "JulcList<Send>";
+            }
+            default -> "Value";
+        };
+    }
+
+    private static String var(String kind) {
+        return switch (kind) {
+            case "pay" -> "payouts";
+            case "send" -> "sends";
+            case "mint" -> "mint";
+            default -> "accepted";
+        };
+    }
+
+    /** The generated records that carry several kinds of effects out of a helper ({@code Fx__PS}: payouts and sends). */
+    private final TreeMap<String, List<String>> fxRecords = new TreeMap<>();
+
+    /**
+     * The effects a method threads through its statements (D4): each kind it uses, in {@link Effects#ORDER}, with the Java
+     * expression holding its accumulation so far. A helper that runs effects takes each kind in ({@code payouts__in}, …)
+     * and returns them all: the kind's own type when there is one (as M1 threads payouts), else an {@code Fx__} record.
+     */
+    private final class Acc {
+        final List<String> kinds;
+        final LinkedHashMap<String, String> cur = new LinkedHashMap<>();
+
+        Acc(List<String> kinds) {
+            this.kinds = List.copyOf(kinds);
+        }
+
+        boolean any() {
+            return !kinds.isEmpty();
+        }
+
+        /** The same kinds, read from a helper's parameters. */
+        Acc in() {
+            Acc a = new Acc(kinds);
+            for (String k : kinds) a.cur.put(k, var(k) + "__in");
+            return a;
+        }
+
+        String type() {
+            if (kinds.size() == 1) return kindType(kinds.get(0));
+            var letters = new StringBuilder();
+            for (String k : kinds) letters.append(Character.toUpperCase(k.charAt(0)));
+            String name = "Fx__" + letters;
+            fxRecords.put(name, kinds);
+            return name;
+        }
+
+        String params() {
+            var ps = new ArrayList<String>();
+            for (String k : kinds) ps.add(kindType(k) + " " + var(k) + "__in");
+            return String.join(", ", ps);
+        }
+
+        String args() {
+            var as = new ArrayList<String>();
+            for (String k : kinds) as.add(cur.get(k));
+            return String.join(", ", as);
+        }
+
+        /** What a helper returns: the kinds now. */
+        String pack() {
+            return kinds.size() == 1 ? cur.get(kinds.get(0)) : "new " + type() + "(" + args() + ")";
+        }
+
+        /** Binds what a helper call returns, and reads the kinds from it. */
+        void unpack(String call, StringBuilder out, String ind) {
+            if (kinds.size() == 1) {
+                String k = kinds.get(0), v = fresh(var(k));
+                out.append(ind).append(kindType(k)).append(" ").append(v).append(" = ").append(call).append(";\n");
+                cur.put(k, v);
+                return;
+            }
+            String fx = fresh("fx");
+            out.append(ind).append(type()).append(" ").append(fx).append(" = ").append(call).append(";\n");
+            for (String k : kinds) {
+                String v = fresh(var(k));
+                out.append(ind).append(kindType(k)).append(" ").append(v).append(" = ").append(fx).append(".").append(Effects.component(k))
+                        .append("();\n");
+                cur.put(k, v);
+            }
+        }
+    }
+
+    private Acc none() {
+        return new Acc(List.of());
+    }
+
     private String fn(Ir.Fn f) {
         owner = f.name();
         redeemer = null;
-        payOrdinals = Map.of();
+        ordinals = Map.of();
         var params = new ArrayList<String>();
         for (Ir.Local l : f.params()) params.add(jt(l.type) + " " + l.name);
         var stmts = new StringBuilder();
-        stmts(f.body().stmts(), stmts, "        ", new String[]{null});
+        stmts(f.body().stmts(), stmts, "        ", none());
         return "    // " + mark(f.pos()) + "\n    public static " + jt(f.ret()) + " " + f.name() + "(" + String.join(", ", params)
                 + ") {\n" + stmts + "        return " + ex(f.body().result()) + ";\n    }\n\n";
     }
 
     // ------------------------------------------------------------------ captures (free variables, F6)
 
-    /** What a helper's body reads from outside it. */
-    private static final class Free {
+    /**
+     * What a helper's body reads from outside it; also, for {@link Effects}, the effect kinds it reaches ({@code pay},
+     * {@code send}, {@code mint}, {@code accept}) and whether it needs {@code Funds} (it reads funds, or an effect needs
+     * the own policy).
+     */
+    static final class Free {
         final TreeMap<Integer, Ir.Local> refs = new TreeMap<>();
         final Set<Ir.Local> declared = Collections.newSetFromMap(new IdentityHashMap<>());
-        boolean state, ctx;
+        final Set<String> kinds = new TreeSet<>();
+        boolean state, ctx, funds;
 
         List<Ir.Local> locals() {
             var out = new ArrayList<Ir.Local>();
@@ -370,8 +553,10 @@ final class JavaEmitter {
         Free merge(Free o) {
             refs.putAll(o.refs);
             declared.addAll(o.declared);
+            kinds.addAll(o.kinds);
             state |= o.state;
             ctx |= o.ctx;
+            funds |= o.funds;
             return this;
         }
 
@@ -395,8 +580,26 @@ final class JavaEmitter {
                 }
                 case Ir.Require r -> expr(r.cond());
                 case Ir.Pay y -> {
+                    kinds.add("pay");
                     expr(y.to());
                     expr(y.amount());
+                }
+                case Ir.Send y -> {
+                    kinds.add("send");
+                    funds = true;
+                    expr(y.to());
+                    expr(y.value());
+                }
+                case Ir.Mint y -> {
+                    kinds.add("mint");
+                    funds = true;
+                    expr(y.name());
+                    expr(y.qty());
+                }
+                case Ir.Accept y -> {
+                    kinds.add("accept");
+                    funds = true;
+                    expr(y.value());
                 }
                 case Ir.If i -> {
                     for (Ir.Branch b : i.branches()) {
@@ -542,6 +745,8 @@ final class JavaEmitter {
                     expr(l.list());
                     expr(l.arg());
                 }
+                case Ir.FundsRef fr -> funds = true;
+                case Ir.LedgerOp o -> o.args().forEach(this::expr);
             }
             return this;
         }
@@ -552,6 +757,10 @@ final class JavaEmitter {
         if (f.state) ps.add("State s__");
         for (Ir.Local l : f.locals()) ps.add(jt(l.type) + " " + l.name);
         if (f.ctx) ps.add("Ctx ctx");
+        if (f.funds) {
+            imports.add("org.julclang.state.api.Funds");
+            ps.add("Funds funds");
+        }
         return String.join(", ", ps);
     }
 
@@ -560,6 +769,7 @@ final class JavaEmitter {
         if (f.state) as.add("s__");
         for (Ir.Local l : f.locals()) as.add(l.name);
         if (f.ctx) as.add("ctx");
+        if (f.funds) as.add("funds");
         return String.join(", ", as);
     }
 
@@ -571,8 +781,8 @@ final class JavaEmitter {
 
     // ------------------------------------------------------------------ statements
 
-    /** Statements in order; {@code payouts[0]} is the current payouts list (Java), threaded through pays. */
-    private void stmts(List<Ir.Stmt> ss, StringBuilder out, String ind, String[] payouts) {
+    /** Statements in order; {@code acc} holds the effects threaded so far (D4), updated as effects run. */
+    private void stmts(List<Ir.Stmt> ss, StringBuilder out, String ind, Acc acc) {
         for (Ir.Stmt s : ss) {
             out.append(ind).append("// ").append(mark(s.pos())).append("\n");
             switch (s) {
@@ -594,17 +804,60 @@ final class JavaEmitter {
                     }
                     String a = fresh("amount"), np = fresh("payouts");
                     imports.add("org.julclang.state.api.Require");
+                    String cur = acc.cur.get("pay");
                     out.append(ind).append("BigInteger ").append(a).append(" = ").append(ex(y.amount())).append(";\n");
                     out.append(ind).append("Require.that(").append(a).append(".compareTo(BigInteger.ZERO) >= 0, ")
-                            .append(str(key("pay", payOrdinals.get(y.pos()), y.pos(), null))).append(");\n");
+                            .append(str(key("pay", ordinals.get("pay").get(y.pos()), y.pos(), null))).append(");\n");
                     out.append(ind).append("JulcList<Payout> ").append(np).append(" = ").append(a).append(".compareTo(BigInteger.ZERO) == 0 ? ")
-                            .append(payouts[0]).append(" : Payouts.add(").append(payouts[0]).append(", ").append(to).append(", ")
+                            .append(cur).append(" : Payouts.add(").append(cur).append(", ").append(to).append(", ")
                             .append(a).append(");\n");
-                    payouts[0] = np;
+                    acc.cur.put("pay", np);
                 }
-                case Ir.If i -> ifStmt(i, out, ind, payouts);
-                case Ir.For f -> forStmt(f, out, ind, payouts);
-                case Ir.MatchStmt m -> matchStmt(m, out, ind, payouts);
+                case Ir.Send y -> {
+                    // send(to, value) (M2): both arguments left to right; then the value is checked sendable (semantics
+                    // §5.1: no negative quantity, no reserved name of the own policy) and added to the sends in order.
+                    String to = ex(y.to());
+                    if (!total(y.to())) {
+                        String t = fresh("to");
+                        out.append(ind).append("Address ").append(t).append(" = ").append(to).append(";\n");
+                        to = t;
+                    }
+                    String v = fresh("value"), ns = fresh("sends");
+                    imports.add("org.julclang.state.api.Require");
+                    out.append(ind).append("Value ").append(v).append(" = ").append(ex(y.value())).append(";\n");
+                    out.append(ind).append("Require.that(ValueAdapter.sendable(").append(v).append(", funds.policy()), ")
+                            .append(str(key("send", ordinals.get("send").get(y.pos()), y.pos(), null))).append(");\n");
+                    out.append(ind).append("JulcList<Send> ").append(ns).append(" = Sends.add(").append(acc.cur.get("send")).append(", ")
+                            .append(to).append(", ").append(v).append(", Datum.none());\n");
+                    acc.cur.put("send", ns);
+                }
+                case Ir.Mint y -> {
+                    // mint(name, qty) / burn(name, qty) (M2): a positive quantity of a user token name (§5.2), into the net mint.
+                    String n = fresh("name"), q = fresh("qty"), nm = fresh("mint");
+                    imports.add("org.julclang.state.api.Require");
+                    out.append(ind).append("byte[] ").append(n).append(" = ").append(ex(y.name())).append(";\n");
+                    out.append(ind).append("BigInteger ").append(q).append(" = ").append(ex(y.qty())).append(";\n");
+                    out.append(ind).append("Require.that(").append(q).append(".compareTo(BigInteger.ZERO) > 0 && ValueAdapter.mintable(").append(n)
+                            .append("), ").append(str(key("mint", ordinals.get("mint").get(y.pos()), y.pos(), null))).append(");\n");
+                    out.append(ind).append("Value ").append(nm).append(" = ValueAdapter.mintAdd(").append(acc.cur.get("mint"))
+                            .append(", funds.policy(), ").append(n).append(", ").append(q).append(y.burn() ? ".negate()" : "").append(");\n");
+                    acc.cur.put("mint", nm);
+                }
+                case Ir.Accept y -> {
+                    // accept(value) (M2): native assets only, every quantity positive (§5.3), summed.
+                    String v = fresh("value"), na = fresh("accepted");
+                    imports.add("org.julclang.state.api.Require");
+                    out.append(ind).append("Value ").append(v).append(" = ").append(ex(y.value())).append(";\n");
+                    out.append(ind).append("Require.that(ValueAdapter.acceptable(").append(v).append(", funds.policy()), ")
+                            .append(str(key("accept", ordinals.get("accept").get(y.pos()), y.pos(), null))).append(");\n");
+                    String prior = acc.cur.get("accept");
+                    out.append(ind).append("Value ").append(na).append(" = ").append(prior.equals(empty("accept")) ? v
+                            : "ValueAdapter.add(" + prior + ", " + v + ")").append(";\n");
+                    acc.cur.put("accept", na);
+                }
+                case Ir.If i -> ifStmt(i, out, ind, acc);
+                case Ir.For f -> forStmt(f, out, ind, acc);
+                case Ir.MatchStmt m -> matchStmt(m, out, ind, acc);
             }
         }
     }
@@ -621,75 +874,82 @@ final class JavaEmitter {
         };
     }
 
+    /** Whether running these blocks can produce an effect (then their helpers thread the method's effects). */
+    private static boolean effects(Ir.Block... bs) {
+        var f = new Free();
+        for (Ir.Block b : bs) f.block(b);
+        return !f.kinds.isEmpty();
+    }
+
     /**
-     * An if statement: each arm is a helper that runs its statements and returns the payouts (when an arm pays) or
+     * An if statement: each arm is a helper that runs its statements and returns the effects (when an arm has any) or
      * {@code true} (checks only), so only the taken arm runs (D4, D6). An else-if chain is one node (J18): branch
      * {@code k}'s else is a helper running the rest of the chain, so the generated Java nests no deeper for a longer chain.
      * The helpers are built from the chain's end, in a loop, so the emitter does not recurse along it either.
      */
-    private void ifStmt(Ir.If i, StringBuilder out, String ind, String[] payouts) {
+    private void ifStmt(Ir.If i, StringBuilder out, String ind, Acc acc) {
         String base = owner + "__if" + (++counter);
         List<Ir.Branch> bs = i.branches();
         int n = bs.size();
-        boolean pays = i.pays();
-        // rest: how branch k's else is called (the payouts it takes are substituted for PAYOUTS__), from the end.
-        String rest = i.otherwise() == null ? null : armCall(base + "_else", i.otherwise(), pays, PAYOUTS);
+        var blocks = new ArrayList<Ir.Block>();
+        for (Ir.Branch b : bs) blocks.add(b.then());
+        if (i.otherwise() != null) blocks.add(i.otherwise());
+        boolean fx = acc.any() && effects(blocks.toArray(new Ir.Block[0]));
+        // rest: how branch k's else is called (the effects it takes are substituted for EFFECTS), from the end.
+        String rest = i.otherwise() == null ? null : armCall(base + "_else", i.otherwise(), fx, acc, EFFECTS);
         Free restFree = new Free().block(i.otherwise());
         for (int k = n - 1; k >= 1; k--) {
             Free f = new Free().expr(bs.get(k).cond()).block(bs.get(k).then()).merge(restFree);
             String name = base + "_elif" + k;
             // if (c) { the arm's statements; return …; } else { return rest(…); }: one helper per branch, the arm inline,
             // as an if used as a value lowers (a then-helper per branch too made JuLC's passes nest twice as deep).
-            String in = pays ? "payouts__in" : null;
+            Acc in = fx ? acc.in() : none();
             var arm = new StringBuilder();
-            String[] ps = {in};
-            stmts(bs.get(k).then().stmts(), arm, "            ", ps);
-            String r = rest == null ? (pays ? "payouts__in" : "true") : rest.replace(PAYOUTS, String.valueOf(in));
-            addHelper(name, "    // " + mark(bs.get(k).pos()) + "\n    static " + (pays ? "JulcList<Payout>" : "boolean") + " " + name + "("
-                    + join(capParams(f), pays ? "JulcList<Payout> payouts__in" : null) + ") {\n        if (" + ex(bs.get(k).cond())
-                    + ") {\n" + arm + "            return " + (pays ? ps[0] : "true") + ";\n        } else {\n            return " + r
+            stmts(bs.get(k).then().stmts(), arm, "            ", in);
+            String r = rest == null ? (fx ? acc.in().pack() : "true") : rest.replace(EFFECTS, fx ? acc.in().args() : "null");
+            addHelper(name, "    // " + mark(bs.get(k).pos()) + "\n    static " + (fx ? acc.type() : "boolean") + " " + name + "("
+                    + join(capParams(f), fx ? acc.params() : null) + ") {\n        if (" + ex(bs.get(k).cond())
+                    + ") {\n" + arm + "            return " + (fx ? in.pack() : "true") + ";\n        } else {\n            return " + r
                     + ";\n        }\n    }\n\n");
-            rest = name + "(" + join(capArgs(f), pays ? PAYOUTS : null) + ")";
+            rest = name + "(" + join(capArgs(f), fx ? EFFECTS : null) + ")";
             restFree = f;
         }
-        ifTest(bs.get(0), base + "_then", rest, pays, out, ind, payouts);
+        ifTest(bs.get(0), base + "_then", rest, fx, out, ind, acc);
     }
 
-    /** Stands for the payouts a call in an else-if chain takes, substituted where the call is written. */
-    private static final String PAYOUTS = "\u0000payouts\u0000";
+    /** Stands for the effects a call in an else-if chain takes, substituted where the call is written. */
+    private static final String EFFECTS = "\u0000effects\u0000";
 
     /**
-     * One test of an if statement: {@code c ? then : rest} ({@code rest} null: no else). Paying, it binds the payouts the
-     * taken arm returns; otherwise a require keeps the call, with an empty message: the arms' requires run inside their
-     * helpers, which return true, so this one cannot fail and is never traced (D12).
+     * One test of an if statement: {@code c ? then : rest} ({@code rest} null: no else). With effects, it binds the
+     * effects the taken arm returns; otherwise a require keeps the call, with an empty message: the arms' requires run
+     * inside their helpers, which return true, so this one cannot fail and is never traced (D12).
      */
-    private void ifTest(Ir.Branch b, String thenName, String rest, boolean pays, StringBuilder out, String ind, String[] payouts) {
+    private void ifTest(Ir.Branch b, String thenName, String rest, boolean fx, StringBuilder out, String ind, Acc acc) {
         String c = ex(b.cond());
-        String then = armCall(thenName, b.then(), pays, payouts[0]);
-        String r = rest == null ? null : rest.replace(PAYOUTS, String.valueOf(payouts[0]));
+        String then = armCall(thenName, b.then(), fx, acc, acc.args());
+        String r = rest == null ? null : rest.replace(EFFECTS, fx ? acc.args() : "null");
         String call;
         if (r != null) call = "(" + c + " ? " + then + " : " + r + ")";
-        else call = pays ? "(" + c + " ? " + then + " : " + payouts[0] + ")" : "(!" + c + " || " + then + ")";
-        if (pays) {
-            String np = fresh("payouts");
-            out.append(ind).append("JulcList<Payout> ").append(np).append(" = ").append(call).append(";\n");
-            payouts[0] = np;
+        else call = fx ? "(" + c + " ? " + then + " : " + acc.pack() + ")" : "(!" + c + " || " + then + ")";
+        if (fx) {
+            acc.unpack(call, out, ind);
         } else {
             imports.add("org.julclang.state.api.Require");
             out.append(ind).append("Require.that(").append(call).append(", \"\");\n");
         }
     }
 
-    /** An arm's helper and its call ({@code payoutsIn}: the payouts it takes, when it pays). */
-    private String armCall(String name, Ir.Block b, boolean pays, String payoutsIn) {
+    /** An arm's helper and its call ({@code accArgs}: the effects it takes, when it threads them). */
+    private String armCall(String name, Ir.Block b, boolean fx, Acc acc, String accArgs) {
         Free f = new Free().block(b);
         var body = new StringBuilder();
-        String[] ps = {pays ? "payouts__in" : null};
-        stmts(b.stmts(), body, "        ", ps);
-        String params = join(capParams(f), pays ? "JulcList<Payout> payouts__in" : null);
-        addHelper(name, "    // " + mark(b.pos()) + "\n    static " + (pays ? "JulcList<Payout>" : "boolean") + " " + name + "(" + params
-                + ") {\n" + body + "        return " + (pays ? ps[0] : "true") + ";\n    }\n\n");
-        return name + "(" + join(capArgs(f), pays ? payoutsIn : null) + ")";
+        Acc in = fx ? acc.in() : none();
+        stmts(b.stmts(), body, "        ", in);
+        String params = join(capParams(f), fx ? acc.params() : null);
+        addHelper(name, "    // " + mark(b.pos()) + "\n    static " + (fx ? acc.type() : "boolean") + " " + name + "(" + params
+                + ") {\n" + body + "        return " + (fx ? in.pack() : "true") + ";\n    }\n\n");
+        return name + "(" + join(capArgs(f), fx ? accArgs : null) + ")";
     }
 
     /**
@@ -706,26 +966,24 @@ final class JavaEmitter {
         return new Cursor("JulcList<" + jt(elem, true) + "> xs__", "xs__.isEmpty()", "xs__.head()", "xs__.tail()", ex(receiver));
     }
 
-    private void forStmt(Ir.For f, StringBuilder out, String ind, String[] payouts) {
+    private void forStmt(Ir.For f, StringBuilder out, String ind, Acc acc) {
         String name = owner + "__for" + (++counter);
         Free fr = new Free().declare(f.var()).block(f.body());
-        boolean pays = f.pays();
+        boolean fx = acc.any() && !fr.kinds.isEmpty();
         var body = new StringBuilder();
-        String[] ps = {pays ? "payouts__in" : null};
-        stmts(f.body().stmts(), body, "            ", ps);
+        Acc in = fx ? acc.in() : none();
+        stmts(f.body().stmts(), body, "            ", in);
         Ty elem = f.var().type;
         Cursor cu = cursor(f.list(), elem);
-        String params = join(cu.param(), capParams(fr), pays ? "JulcList<Payout> payouts__in" : null);
-        String done = pays ? "payouts__in" : "true";
-        addHelper(name, "    // " + mark(f.pos()) + "\n    static " + (pays ? "JulcList<Payout>" : "boolean") + " " + name + "(" + params
+        String params = join(cu.param(), capParams(fr), fx ? acc.params() : null);
+        String done = fx ? acc.in().pack() : "true";
+        addHelper(name, "    // " + mark(f.pos()) + "\n    static " + (fx ? acc.type() : "boolean") + " " + name + "(" + params
                 + ") {\n        if (" + cu.empty() + ") {\n            return " + done + ";\n        } else {\n            " + jt(elem) + " "
                 + f.var().name + " = " + cu.head() + ";\n" + body + "            return " + name + "(" + join(cu.next(), capArgs(fr),
-                pays ? ps[0] : null) + ");\n        }\n    }\n\n");
-        String call = name + "(" + join(cu.start(), capArgs(fr), pays ? payouts[0] : null) + ")";
-        if (pays) {
-            String np = fresh("payouts");
-            out.append(ind).append("JulcList<Payout> ").append(np).append(" = ").append(call).append(";\n");
-            payouts[0] = np;
+                fx ? in.args() : null) + ");\n        }\n    }\n\n");
+        String call = name + "(" + join(cu.start(), capArgs(fr), fx ? acc.args() : null) + ")";
+        if (fx) {
+            acc.unpack(call, out, ind);
         } else {
             // The body's requires run in the helper, which returns true: this require keeps the call and never fails (D12).
             imports.add("org.julclang.state.api.Require");
@@ -810,6 +1068,31 @@ final class JavaEmitter {
             case Ir.BigOp b -> bigOp(b);
             case Ir.Range r -> throw new IllegalStateException("range is only a receiver (the checker refuses it elsewhere)");
             case Ir.ListArg l -> listArg(l);
+            case Ir.FundsRef f -> "funds." + f.field() + "()";
+            case Ir.LedgerOp o -> ledger(o);
+        };
+    }
+
+    /**
+     * Values, credentials and addresses (M2, D5): every operation through the JOUST API's audited adapters, whose JVM
+     * body fails where the ledger's native Value builtins fail on-chain (ValueAdapter), and whose address helpers have
+     * one body on both sides (AddressAdapter). Arguments are evaluated left to right, as Java evaluates a call's.
+     */
+    private String ledger(Ir.LedgerOp o) {
+        var a = new ArrayList<String>();
+        for (Ir.Expr x : o.args()) a.add(ex(x));
+        String args = String.join(", ", a);
+        return switch (o.op()) {
+            case "none" -> "ValueAdapter.none()";
+            case "lovelace" -> "ValueAdapter.lovelace(" + args + ")";
+            case "asset" -> "ValueAdapter.asset(" + args + ")";
+            case "add" -> "ValueAdapter.add(" + args + ")";
+            case "sub" -> "ValueAdapter.subtract(" + args + ")";
+            case "lovelaceOf" -> "ValueAdapter.lovelaceOf(" + args + ")";
+            case "of" -> "ValueAdapter.quantity(" + args + ")";
+            case "covers" -> "ValueAdapter.covers(" + args + ")";
+            case "keyCred", "scriptCred", "wallet", "walletStaked", "script", "scriptStaked", "payment" -> "AddressAdapter." + o.op() + "(" + args + ")";
+            default -> throw new IllegalStateException(o.op());
         };
     }
 
@@ -924,7 +1207,7 @@ final class JavaEmitter {
         Free f = new Free().block(b.block());
         String name = owner + "__value" + (++counter);
         var body = new StringBuilder();
-        stmts(b.block().stmts(), body, "        ", new String[]{null});
+        stmts(b.block().stmts(), body, "        ", none());
         addHelper(name, "    // " + mark(b.pos()) + "\n    static " + jt(b.type()) + " " + name + "(" + capParams(f) + ") {\n" + body
                 + "        return " + ex(b.block().result()) + ";\n    }\n\n");
         return name + "(" + capArgs(f) + ")";
@@ -939,7 +1222,7 @@ final class JavaEmitter {
         String base = owner + "__value" + (++counter);
         List<Ir.Branch> bs = i.branches();
         var d = new StringBuilder();
-        stmts(i.otherwise().stmts(), d, "            ", new String[]{null});
+        stmts(i.otherwise().stmts(), d, "            ", none());
         String rest = d + "            return " + ex(i.otherwise().result()) + ";\n";
         Free restFree = new Free().block(i.otherwise());
         String call = null;
@@ -948,7 +1231,7 @@ final class JavaEmitter {
             Free f = new Free().expr(b.cond()).block(b.then()).merge(restFree);
             String name = k == 0 ? base : base + "_" + (k + 1);
             var a = new StringBuilder();
-            stmts(b.then().stmts(), a, "            ", new String[]{null});
+            stmts(b.then().stmts(), a, "            ", none());
             addHelper(name, "    // " + mark(k == 0 ? i.pos() : b.pos()) + "\n    static " + jt(i.type()) + " " + name + "(" + capParams(f)
                     + ") {\n        if (" + ex(b.cond()) + ") {\n" + a + "            return " + ex(b.then().result()) + ";\n        } else {\n"
                     + rest + "        }\n    }\n\n");
@@ -966,7 +1249,7 @@ final class JavaEmitter {
         String ej = jt(e, true);
         String name = owner + "__" + h.kind() + (++counter);
         var stmts = new StringBuilder();
-        stmts(h.body().stmts(), stmts, "            ", new String[]{null});
+        stmts(h.body().stmts(), stmts, "            ", none());
         String body = ex(h.body().result());
         Cursor cu = cursor(h.list(), e);
         String rec = name + "(" + join(cu.next(), capArgs(f)) + ")";
@@ -1006,7 +1289,7 @@ final class JavaEmitter {
         Ty e = fo.x().type;
         String name = owner + "__fold" + (++counter);
         var stmts = new StringBuilder();
-        stmts(fo.body().stmts(), stmts, "            ", new String[]{null});
+        stmts(fo.body().stmts(), stmts, "            ", none());
         String acc = jt(fo.type());
         Cursor cu = cursor(fo.list(), e);
         addHelper(name, "    static " + acc + " " + name + "(" + join(cu.param(), acc + " " + fo.acc().name,
@@ -1107,51 +1390,59 @@ final class JavaEmitter {
 
     // ------------------------------------------------------------------ match (D6)
 
-    /** The Java pattern variable and the reads of an arm's bound fields from it. */
-    private static List<String> bindReads(Ir.Arm a, boolean option) {
+    /** The Java pattern variable and the reads of an arm's bound fields from it (a credential's hash through the adapter). */
+    private List<String> bindReads(Ir.Arm a, Ty scrutinee) {
         var out = new ArrayList<String>();
-        for (String f : a.fields()) out.add(option ? "v__.get()" : "x__." + f + "()");
+        for (String f : a.fields()) {
+            if (scrutinee instanceof Ty.OptT) out.add("v__.get()");
+            else if (scrutinee.equals(Ty.CREDENTIAL)) out.add("AddressAdapter." + (f.equals("key") ? "keyOf" : "scriptOf") + "(x__)");
+            else out.add("x__." + f + "()");
+        }
         return out;
     }
 
     /**
      * An arm's helper: its bound fields first, then what its body reads from outside; it runs the body's statements and
-     * returns its value ({@code ret} non-null), the payouts ({@code pays}) or {@code true}.
+     * returns its value ({@code ret} non-null), the effects ({@code fx}) or {@code true}.
      */
-    private String armHelper(String name, Ir.Arm a, Ty ret, boolean pays) {
+    private String armHelper(String name, Ir.Arm a, Ty ret, boolean fx, Acc acc) {
         Free f = new Free().declare(a.binds().toArray(new Ir.Local[0])).block(a.body());
         var body = new StringBuilder();
-        String[] ps = {pays ? "payouts__in" : null};
-        stmts(a.body().stmts(), body, "        ", ps);
+        Acc in = fx ? acc.in() : none();
+        stmts(a.body().stmts(), body, "        ", in);
         var params = new ArrayList<String>();
         for (Ir.Local l : a.binds()) params.add(jt(l.type) + " " + l.name);
-        String result = ret != null ? ex(a.body().result()) : pays ? ps[0] : "true";
-        String type = ret != null ? jt(ret) : pays ? "JulcList<Payout>" : "boolean";
+        String result = ret != null ? ex(a.body().result()) : fx ? in.pack() : "true";
+        String type = ret != null ? jt(ret) : fx ? acc.type() : "boolean";
         addHelper(name, "    // " + mark(a.pos()) + "\n    static " + type + " " + name + "(" + join(String.join(", ", params), capParams(f),
-                pays ? "JulcList<Payout> payouts__in" : null) + ") {\n" + body + "        return " + result + ";\n    }\n\n");
+                fx ? acc.params() : null) + ") {\n" + body + "        return " + result + ";\n    }\n\n");
         return capArgs(f);
     }
 
     /**
      * A match: a helper taking the scrutinee and what the arms read, with a {@code switch} over the sealed interface (an
-     * enum) or {@code isPresent} (an Option); each case calls its arm's helper, so only the taken arm runs (D6).
+     * enum, or a credential) or {@code isPresent} (an Option); each case calls its arm's helper, so only the taken arm
+     * runs (D6).
      */
-    private String matchHelper(String base, Ir.Expr scrutinee, List<Ir.Arm> arms, Ty ret, boolean pays, Free outer) {
+    private String matchHelper(String base, Ir.Expr scrutinee, List<Ir.Arm> arms, Ty ret, boolean fx, Acc acc, Free outer) {
         boolean option = scrutinee.type() instanceof Ty.OptT;
         var calls = new LinkedHashMap<String, String>();   // constructor -> the arm call
         for (int i = 0; i < arms.size(); i++) {
             Ir.Arm a = arms.get(i);
             String name = base + "_arm" + (i + 1);
-            String caps = armHelper(name, a, ret, pays);
-            String call = name + "(" + join(String.join(", ", bindReads(a, option)), caps, pays ? "payouts__in" : null) + ")";
+            String caps = armHelper(name, a, ret, fx, acc);
+            String call = name + "(" + join(String.join(", ", bindReads(a, scrutinee.type())), caps, fx ? acc.in().args() : null) + ")";
             for (String c : a.ctors()) calls.put(c, call);
         }
-        String type = ret != null ? jt(ret) : pays ? "JulcList<Payout>" : "boolean";
-        String params = join(jt(scrutinee.type()) + " v__", capParams(outer), pays ? "JulcList<Payout> payouts__in" : null);
+        String type = ret != null ? jt(ret) : fx ? acc.type() : "boolean";
+        String params = join(jt(scrutinee.type()) + " v__", capParams(outer), fx ? acc.params() : null);
         String body;
         if (option) {
             body = "        if (v__.isPresent()) {\n            return " + calls.get("Some") + ";\n        } else {\n            return "
                     + calls.get("None") + ";\n        }\n";
+        } else if (scrutinee.type().equals(Ty.CREDENTIAL)) {
+            body = "        return switch (v__) {\n            case Credential.PubKeyCredential x__ -> " + calls.get("KeyCred")
+                    + ";\n            case Credential.ScriptCredential x__ -> " + calls.get("ScriptCred") + ";\n        };\n";
         } else {
             var cases = new StringBuilder();
             for (String v : p.enums().get(((Ty.EnumT) scrutinee.type()).name()).variantNames()) {
@@ -1167,20 +1458,19 @@ final class JavaEmitter {
         Free outer = new Free();
         outer.arms(m.arms());
         String base = owner + "__match" + (++counter);
-        matchHelper(base, m.scrutinee(), m.arms(), m.type(), false, outer);
+        matchHelper(base, m.scrutinee(), m.arms(), m.type(), false, none(), outer);
         return base + "(" + join(ex(m.scrutinee()), capArgs(outer)) + ")";
     }
 
-    private void matchStmt(Ir.MatchStmt m, StringBuilder out, String ind, String[] payouts) {
+    private void matchStmt(Ir.MatchStmt m, StringBuilder out, String ind, Acc acc) {
         Free outer = new Free();
         outer.arms(m.arms());
+        boolean fx = acc.any() && !outer.kinds.isEmpty();
         String base = owner + "__match" + (++counter);
-        matchHelper(base, m.scrutinee(), m.arms(), null, m.pays(), outer);
-        String call = base + "(" + join(ex(m.scrutinee()), capArgs(outer), m.pays() ? payouts[0] : null) + ")";
-        if (m.pays()) {
-            String np = fresh("payouts");
-            out.append(ind).append("JulcList<Payout> ").append(np).append(" = ").append(call).append(";\n");
-            payouts[0] = np;
+        matchHelper(base, m.scrutinee(), m.arms(), null, fx, acc, outer);
+        String call = base + "(" + join(ex(m.scrutinee()), capArgs(outer), fx ? acc.args() : null) + ")";
+        if (fx) {
+            acc.unpack(call, out, ind);
         } else {
             // The arms' requires run in their helpers, which return true: this require keeps the call and never fails (D12).
             imports.add("org.julclang.state.api.Require");
@@ -1261,7 +1551,7 @@ final class JavaEmitter {
         Free f = new Free().declare(h.k(), h.v()).block(h.body());
         String name = owner + "__" + h.kind() + (++counter), vj = jt(mt.val(), true);
         var stmts = new StringBuilder();
-        stmts(h.body().stmts(), stmts, "            ", new String[]{null});
+        stmts(h.body().stmts(), stmts, "            ", none());
         String rec = name + "(" + join("ks__.tail(), vs__.tail()", capArgs(f)) + ")";
         boolean any = h.kind().equals("any");
         imports.add("org.julclang.core.types.JulcList");
@@ -1280,7 +1570,7 @@ final class JavaEmitter {
         Free f = new Free().declare(fo.acc(), fo.k(), fo.v()).block(fo.body());
         String name = owner + "__fold" + (++counter), vj = jt(mt.val(), true), acc = jt(fo.type());
         var stmts = new StringBuilder();
-        stmts(fo.body().stmts(), stmts, "            ", new String[]{null});
+        stmts(fo.body().stmts(), stmts, "            ", none());
         imports.add("org.julclang.core.types.JulcList");
         addHelper(name, "    static " + acc + " " + name + "(" + join("JulcList<byte[]> ks__, JulcList<" + vj + "> vs__", acc + " " + fo.acc().name,
                 capParams(f)) + ") {\n        if (ks__.isEmpty()) {\n            return " + fo.acc().name + ";\n        } else {\n            byte[] "
@@ -1407,6 +1697,14 @@ final class JavaEmitter {
                         + "(a__.values(), b__.values());";
             }
             case Ty.BigMapT b -> throw new IllegalStateException("a BigMap is not comparable (the checker refuses it)");
+            // M2: canonical values by their entries, credentials and addresses structurally (the API's adapters).
+            case Ty.Ledger l -> {
+                return switch (l.name()) {
+                    case "Value" -> "ValueAdapter.same";
+                    case "Credential" -> "AddressAdapter.sameCredential";
+                    default -> "AddressAdapter.sameAddress";
+                };
+            }
         }
         addHelper(h, "    static boolean " + h + "(" + jt + " a__, " + jt + " b__) {\n        " + body + "\n    }\n\n");
         return h;
@@ -1441,6 +1739,11 @@ final class JavaEmitter {
     }
 
     private String checkCall(Ty t, String v) {
+        // M2 (D5): every hash in a credential or an address is 28 bytes (AddressAdapter, one body on both sides).
+        if (t instanceof Ty.Ledger l) {
+            if (l.equals(Ty.VALUE)) throw new IllegalStateException("a Value is never a checked input");
+            return "AddressAdapter." + (l.equals(Ty.CREDENTIAL) ? "credentialOk" : "addressOk") + "(" + v + ")";
+        }
         String h = "check__" + checkMangle(t);
         String jt = jt(t);
         imports.add("org.julclang.stdlib.lib.ByteStringLib");
@@ -1486,6 +1789,7 @@ final class JavaEmitter {
                 yield "return " + (parts.isEmpty() ? "true" : String.join(" && ", parts)) + ";";
             }
             case Ty.BigMapT b -> throw new IllegalStateException("a BigMap is never a checked input");
+            case Ty.Ledger l -> throw new IllegalStateException("handled above");
         };
         addHelper(h, "    static boolean " + h + "(" + jt + " v__) {\n        " + body + "\n    }\n\n");
         return h + "(" + v + ")";

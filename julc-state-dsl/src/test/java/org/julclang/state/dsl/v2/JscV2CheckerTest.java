@@ -322,7 +322,7 @@ class JscV2CheckerTest {
         bad("action a(o: Option<Option<Int>>) { return state }", "Option<Option", 0, 13);
         bad("action a(b: Bytes) only owner { return { ...state, owner: b } }", "Bytes is not a Key", 0, 59);
         ok("action a(b: Bytes) only owner { return { ...state, owner: asKey(b) } }");
-        bad("action a(m: Value) { return state }", "later milestone", 0, 13);
+        bad("action a(m: Value) { return state }", "a Value cannot be a method parameter", 0, 13);
         bad("action a() { const o: Option<Int> = Some(None)\n return { ...state, count: o ?? 0 } }", "Some(None) is not allowed", 0, 42);
         bad("action a() { require(None == None, \"x\")\n return state }", "type of this comparison is unknown", 0, 22);
         bad("action a() { require([] == [], \"x\")\n return state }", "type of this comparison is unknown", 0, 22);

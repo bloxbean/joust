@@ -105,7 +105,7 @@ class JscV2M1aCheckerTest {
         bad("view v(): Int = match phase { Closed { when } => when, _ => 0 }", "Closed has no field when", 0, 40);
         bad("view v(): Int = match phase { Closed { day, day: d } => day + d, _ => 0 }", "day is bound twice", 0, 45);
         bad("view v(): Int = match phase { Closed { day, by } => day, _ => 0 }", "'by' is bound but never used", 0, 45);
-        bad("view v(): Int = match deadline { _ => 0 }", "match needs an enum or an Option, not Int", 0, 23);
+        bad("view v(): Int = match deadline { _ => 0 }", "match needs an enum, an Option or a Credential, not Int", 0, 23);
         bad("view v(): Int = match o { Some => 1, None => 0 }", "Some binds its value", 0, 27);
         bad("view v(): Int = match o { Some { value } => value, None => 0 }", "an Option's value is bound as Some(x)", 0, 34);
         bad("view v(): Int = match phase { Closed(d) => d, _ => 0 }", "matched by name", 0, 37);
@@ -251,7 +251,7 @@ class JscV2M1aCheckerTest {
 
     @Test
     void std_imports_domains_andTime() {
-        badSource(withImports("import { lovelace } from \"std/value\"", ""), "comes with Value and Address", 3, 1);
+        badSource(withImports("import { lovelace } from \"std/value\"", ""), "'lovelace' is not in std/value", 3, 1);
         badSource(withImports("import { div } from \"std/bytes\"", ""), "'div' is not in std/bytes (it is in std/math)", 3, 1);
         badSource(withImports("import { div, pow } from \"std/math\"", "action a() { return { ...state, stamp: div(100, validFrom - deadline) } }"),
                 "div can fail", L, 49);
