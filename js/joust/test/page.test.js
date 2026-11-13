@@ -100,12 +100,31 @@ async function flow({ page, logText, until }) {
   return reviews;
 }
 
-test('the template page on DevKit: connect, top up, create, increment, refusal, close', { skip, timeout: 900_000 }, async () => {
+/**
+ * Closes what a test opened, once, even when it times out (#80 review F12): node:test runs an after hook on a timeout,
+ * while the test's own finally never runs. `add(close)` registers a resource; `run()` closes them all, newest first.
+ */
+function closer(t) {
+  const items = [];
+  let done = false;
+  const run = async () => {
+    if (done) return;
+    done = true;
+    for (const close of items.reverse()) await Promise.resolve().then(close).catch(() => {});
+  };
+  t.after(run);
+  return { add: (close) => { items.push(close); }, run };
+}
+
+test('the template page on DevKit: connect, top up, create, increment, refusal, close', { skip, timeout: 900_000 }, async (t) => {
   const root = await project();
   const logs = [];
+  const c = closer(t);
   const d = await dev({ root, config: loadConfig(root), port: 0, log: (m) => logs.push(m) });
+  c.add(() => d.close());
   const { chromium } = await import('playwright');
   const browser = await chromium.launch();
+  c.add(() => browser.close());
   try {
     const p = await open(browser, d.url);
     assert.equal(await flow(p), 3, 'create, +1 and close were reviewed in the page before signing');
@@ -140,12 +159,11 @@ test('the template page on DevKit: connect, top up, create, increment, refusal, 
     assert.deepEqual(inWorker.back, [['k', 'v']], 'the mirror cache keeps a state across a reopen');
     assert.ok(inWorker.dbs.some((n) => n.includes('joust-page-test')), `the mirror cache is IndexedDB (${inWorker.dbs})`);
   } finally {
-    await browser.close();
-    await d.close();
+    await c.run();
   }
 });
 
-test('the template page built and served as static files (joust serve); a tampered engine is refused', { skip, timeout: 900_000 }, async () => {
+test('the template page built and served as static files (joust serve); a tampered engine is refused', { skip, timeout: 900_000 }, async (t) => {
   const root = await project();
   const config = loadConfig(root);
   await deploy({ root, config, networkName: 'devkit', log: () => {} });
@@ -163,10 +181,13 @@ test('the template page built and served as static files (joust serve); a tamper
   tampered('dist-script', 'joust-runtime.js', (b) => Buffer.from(String(b).replace('Copyright', 'Copyleft')));
   tampered('dist-wasm', 'joust-runtime.js.wasm', (b) => { b[b.length >> 1] ^= 1; return b; });
 
+  const c = closer(t);
   const { chromium } = await import('playwright');
   const browser = await chromium.launch();
+  c.add(() => browser.close());
   try {
     const s = await serve({ root, config, dir: 'dist', port: 0, log: () => {} });
+    c.add(() => s.close());
     try {
       const p = await open(browser, s.url);
       assert.equal(await flow(p), 3, 'create, +1 and close were reviewed in the page before signing');
@@ -179,6 +200,7 @@ test('the template page built and served as static files (joust serve); a tamper
     }
     for (const [dir, what] of [['dist-script', 'script'], ['dist-wasm', 'Wasm']]) {
       const s2 = await serve({ root, config, dir, port: 0, log: () => {} });
+      c.add(() => s2.close());
       try {
         const p = await open(browser, s2.url);
         await p.until(async () => /runtime engine did not load/.test(await p.logText()), `the tampered ${what} is refused`, 90_000);
@@ -189,7 +211,7 @@ test('the template page built and served as static files (joust serve); a tamper
       }
     }
   } finally {
-    await browser.close();
+    await c.run();
   }
 });
 
