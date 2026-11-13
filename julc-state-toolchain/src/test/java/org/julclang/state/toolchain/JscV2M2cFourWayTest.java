@@ -1,6 +1,9 @@
 package org.julclang.state.toolchain;
 
+import org.julclang.state.dsl.v2.Interpreter.AddrV;
 import org.julclang.state.dsl.v2.Interpreter.Bytes;
+import org.julclang.state.dsl.v2.Interpreter.CredV;
+import org.julclang.state.dsl.v2.Interpreter.StakeHash;
 import org.julclang.state.dsl.v2.Interpreter.DepositV;
 import org.julclang.state.dsl.v2.Interpreter.InstV;
 import org.julclang.state.dsl.v2.Interpreter.MapV;
@@ -17,6 +20,7 @@ import org.junit.jupiter.api.TestMethodOrder;
 
 import java.math.BigInteger;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +43,9 @@ import static org.junit.jupiter.api.Assertions.*;
  * {@code Oracle}, {@code Kiosk}, {@code Pot} and {@code Stall} are the ports of examples/oracle (Oracle, Shop) and
  * examples/fees (Pot, Stall): every vector also runs on the Java example's JVM method. {@code Tips} and {@code Tipper}
  * cover what the ports do not: typed memos (receives Note), stored values (the state, a record, an Option of a record),
- * native assets deposited, a read state holding a map and values, send datums (a record, an enum).
+ * native assets deposited, a read state holding a map and values, send datums (a record, an enum). {@code Inbox} (review
+ * r1, S1, F5, C1, C2) receives memos of every shape a decoder decides: a record holding a Bool, an Option, an enum, a List,
+ * a Map, a Value and an Address; a Key and a Bytes (one Java representation, two decoders); an unread Value.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class JscV2M2cFourWayTest {
@@ -67,7 +73,7 @@ class JscV2M2cFourWayTest {
 
     static Map<String, String> sources() throws Exception {
         var out = new LinkedHashMap<String, String>();
-        for (String c : List.of("Oracle", "Kiosk", "Pot", "Stall", "Tips", "Tipper")) out.put(c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
+        for (String c : List.of("Oracle", "Kiosk", "Pot", "Stall", "Tips", "Tipper", "Inbox")) out.put(c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
         return out;
     }
 
@@ -308,6 +314,80 @@ class JscV2M2cFourWayTest {
         f.mutants("tip", s, List.of(Bytes.of(A), Bytes.hex("0102"), ada(3)), jar(funds(f, at(BUYER, 3_000_000, 5_000_000), offered, ValueV.NONE), jarState),
                 BUYER);
         f.mutants("refund", s, List.of(Bytes.of(A), ada(2), true), funds(f, at(fill(0x0A), 0, 10_000_000), ValueV.NONE, ValueV.NONE), fill(0x0A));
+        JsLeg.check(f);
+        report(f);
+    }
+
+    // ------------------------------------------------------------------ Inbox: every memo shape (review r1, S1, F5, C1, C2)
+
+    static final Rec PLAIN = rec("Plain");
+    static final AddrV STAKED = new AddrV(new CredV(true, Bytes.of(fill(0x5C))), Opt.some(new StakeHash(new CredV(false, Bytes.of(fill(0x5D))))));
+
+    static Rec slip(boolean urgent, Opt ref, Rec kind, List<Object> tags, MapV shares, ValueV extra, AddrV reply) {
+        return rec("Slip", urgent, ref, kind, new ArrayList<>(tags), shares, extra, reply);
+    }
+
+    static Rec inbox(long urgent, long refs, long bonus, long tags, long shares, long extra, Opt reply, long keys, long names) {
+        return rec("State", Bytes.of(fill(0x0A)), n(urgent), n(refs), n(bonus), n(tags), n(shares), n(extra), reply, n(keys), n(names));
+    }
+
+    static final Rec INBOX = inbox(0, 0, 0, 0, 0, 0, Opt.NONE, 0, 0);
+
+    static ValueV lovelace(long q) {
+        return vv(new byte[0], new byte[0], n(q));
+    }
+
+    static Rec slipA() {
+        return slip(true, Opt.some(n(5)), rec("Bonus", n(3)), List.of(Bytes.hex("01"), Bytes.hex("0203")),
+                map(Bytes.of(A), n(2), Bytes.of(B), n(3)), vv(new byte[0], new byte[0], n(7), TOKEN_POLICY, N00FF, n(1), TOKEN_POLICY, N01, n(-2)),
+                JscV2M2FourWayTest.wallet(A));
+    }
+
+    static Rec slipB() {
+        return slip(false, Opt.NONE, PLAIN, List.of(), MapV.EMPTY, ValueV.NONE, STAKED);
+    }
+
+    @Test
+    @Order(7)
+    void inbox() throws Exception {
+        var f = LEGS.get("Inbox");
+        ok(f.check("init", null, List.of(), at(fill(0x0A), 0, 0), fill(0x0A)));
+        // Honest memos of every shape: two slips (every field read), then each scalar memo type.
+        Tx two = deposits(f, at(BUYER, 0, 0), new DepositV(lovelace(2_000_000), slipA()), new DepositV(lovelace(1_000_000), slipB()));
+        ok(f.check("post", INBOX, List.of(), two, BUYER));
+        ok(f.check("post", INBOX, List.of(), deposits(f, at(BUYER, 0, 0), new DepositV(lovelace(1_000_000), slipB())), BUYER));
+        assertEquals("refused", f.check("post", INBOX, List.of(), deposits(f, at(BUYER, 0, 0)), BUYER));
+        ok(f.check("keyed", INBOX, List.of(), deposits(f, at(BUYER, 0, 0), new DepositV(lovelace(1_000_000), Bytes.of(A))), BUYER));
+        ok(f.check("named", INBOX, List.of(), deposits(f, at(BUYER, 0, 0), new DepositV(lovelace(1_000_000), Bytes.hex("0102")),
+                new DepositV(lovelace(1_000_000), Bytes.hex(""))), BUYER));
+        ok(f.check("valued", INBOX, List.of(), deposits(f, at(BUYER, 0, 0), new DepositV(lovelace(1_000_000), vv(TOKEN_POLICY, N01, n(1))),
+                new DepositV(lovelace(1_000_000), ValueV.NONE)), BUYER));
+        // Memos the interpreters can express that are not well formed: refused on every leg where the action starts.
+        var bad = new LinkedHashMap<String, Object[]>();
+        bad.put("a 27-byte Key memo", new Object[]{"keyed", Bytes.of(new byte[27])});
+        bad.put("a 29-byte Key memo", new Object[]{"keyed", Bytes.of(new byte[29])});
+        bad.put("a slip whose map key has 27 bytes", new Object[]{"post", slip(false, Opt.NONE, PLAIN, List.of(), map(Bytes.of(new byte[27]), n(1)),
+                ValueV.NONE, STAKED)});
+        bad.put("a slip whose address has a 27-byte hash", new Object[]{"post", slip(false, Opt.NONE, PLAIN, List.of(), MapV.EMPTY, ValueV.NONE,
+                JscV2M2FourWayTest.wallet(new byte[27]))});
+        BigInteger over = BigInteger.ONE.shiftLeft(127);
+        bad.put("an unread Value memo of quantity 2^127", new Object[]{"valued", vv(TOKEN_POLICY, N01, over)});
+        bad.put("an unread Value memo with a 33-byte name", new Object[]{"valued", vv(TOKEN_POLICY, Bytes.of(new byte[33]), n(1))});
+        bad.put("an unread Value memo with a 33-byte policy", new Object[]{"valued", vv(new byte[33], N01, n(1))});
+        bad.put("a slip whose Value has quantity -2^127 - 1", new Object[]{"post", slip(false, Opt.NONE, PLAIN, List.of(), MapV.EMPTY,
+                vv(TOKEN_POLICY, N01, over.negate().subtract(BigInteger.ONE)), STAKED)});
+        bad.put("a slip whose Value has a 33-byte name", new Object[]{"post", slip(false, Opt.NONE, PLAIN, List.of(), MapV.EMPTY,
+                vv(TOKEN_POLICY, Bytes.of(new byte[33]), n(1)), STAKED)});
+        for (var e : bad.entrySet()) {
+            String m = (String) e.getValue()[0];
+            assertEquals("refused", f.check(m, INBOX, List.of(), deposits(f, at(BUYER, 0, 0), new DepositV(lovelace(1_000_000), e.getValue()[1])), BUYER),
+                    e.getKey());
+            assertEquals("input:deposits", f.lastRefusal, e.getKey());
+        }
+        ok(f.check("close", INBOX, List.of(), at(fill(0x0A), 0, 4_000_000), fill(0x0A)));
+        f.modifierRefused("close", INBOX, List.of(), at(STRANGER, 0, 4_000_000), STRANGER);
+        f.mutants("post", INBOX, List.of(), two, BUYER);
+        f.mutants("keyed", INBOX, List.of(), deposits(f, at(BUYER, 0, 0), new DepositV(lovelace(1_000_000), Bytes.of(A))), BUYER);
         JsLeg.check(f);
         report(f);
     }
