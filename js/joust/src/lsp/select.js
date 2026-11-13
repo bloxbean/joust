@@ -257,15 +257,28 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       await fs.writeFile(join(tmp, ENGINE_WASM), wasm);
       // The loader is CommonJS; this keeps any package.json above the storage from deciding how it loads.
       await fs.writeFile(join(tmp, 'package.json'), '{ "type": "commonjs" }\n');
-      try {
-        await fs.rename(tmp, dir);
-      } catch (e) {
-        // Published meanwhile (another window): reuse it if its bytes check; else replace a damaged copy once.
-        if (await valid(dir, jsHash, wasmHash)) return dir;
-        await fs.rm(dir, { recursive: true, force: true });
-        await fs.rename(tmp, dir);
+      // Another window may publish, claim or put back this digest at any moment (CI's S13 churn found a put-back landing
+      // between a check and the rename): the rename is retried, a valid copy in place is reused, and an invalid one is
+      // moved aside (checked again there) rather than deleted.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await fs.rename(tmp, dir);
+          return dir;
+        } catch (e) {
+          if (await valid(dir, jsHash, wasmHash)) return dir;
+          if (attempt >= 8) throw e;
+          const there = await fs.stat(dir).then(() => true, () => false);
+          if (there) {
+            const damaged = join(root, `.damaged-${id}-${process.pid}-${Date.now()}`);
+            await fs.rename(dir, damaged).catch(() => {});
+            if (await valid(damaged, jsHash, wasmHash)) {
+              // A valid copy after all (put back meanwhile): it goes straight back, and this install is not needed.
+              if (await fs.rename(damaged, dir).then(() => true, () => false)) return dir;
+            }
+          }
+          await new Promise((r) => setTimeout(r, 5 * (attempt + 1)));
+        }
       }
-      return dir;
     } finally {
       await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
     }
