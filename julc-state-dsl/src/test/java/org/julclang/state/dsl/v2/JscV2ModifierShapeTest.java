@@ -108,6 +108,17 @@ class JscV2ModifierShapeTest {
         refused(pool.replaceFirst("\"kind\": \"init\"", "\"kind\": \"ınit\""), "unknown kind");
     }
 
+    /** #80 review C4, S7, F7: the shared mutants (js/jsc-interpreter/test/mutants), refused as the JavaScript reader does. */
+    @Test
+    void theReader_refusesAPayUnderAnExpressionOrInAFn_andADestroyWithoutPay() throws Exception {
+        Path mutants = Path.of("../js/jsc-interpreter/test/mutants");
+        refused(Files.readString(mutants.resolve("pay-in-value-block.json")),
+                "method withdraw: a pay inside an expression or a fn, where the checker allows none (JSC0413)");
+        refused(Files.readString(mutants.resolve("pay-in-value-if.json")), "method withdraw: a pay inside an expression or a fn");
+        refused(Files.readString(mutants.resolve("pay-in-fn.json")), "fn total: a pay inside an expression or a fn");
+        refused(Files.readString(mutants.resolve("destroy-without-pay.json")), "method close: a destroy pays out what the instance holds");
+    }
+
     /** {@code json} with {@code from} replaced by {@code to} in method {@code name}'s own fields (before its body). */
     static String withMethodField(String json, String name, String from, String to) {
         int m = json.indexOf("\"name\": \"" + name + "\",");

@@ -667,3 +667,12 @@ test('the reader recomputes pays and requires a paying method to say who may cal
   assert.doesNotThrow(edit('Pool', () => {}));
   assert.doesNotThrow(edit('Ledger', () => {}));
 });
+
+test('the reader refuses a pay under an expression or in a fn (JSC0413), and a destroy that pays nothing (JSC0409) (#80 review C4, S7, F7)', () => {
+  const mutant = (n) => readFileSync(new URL(`./mutants/${n}.json`, import.meta.url), 'utf8');
+  // Before, the first loaded and a stranger alone got Pool's payout: pays was recomputed from statement blocks only.
+  assert.throws(() => load(mutant('pay-in-value-block')), /method withdraw\): a pay inside an expression or a fn, where the checker allows none \(JSC0413\)/);
+  assert.throws(() => load(mutant('pay-in-value-if')), /method withdraw\): a pay inside an expression or a fn/);
+  assert.throws(() => load(mutant('pay-in-fn')), /fn total\): a pay inside an expression or a fn/);
+  assert.throws(() => load(mutant('destroy-without-pay')), /method close\): a destroy pays out what the instance holds: it has no pay/);
+});

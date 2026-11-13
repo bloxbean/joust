@@ -426,6 +426,7 @@ final class IrJson {
             var fns = new ArrayList<Ir.Fn>();
             for (Object o : l(r.get("fns"))) {
                 var f = m(o);
+                noPayInExpressions(f.get("body"), true, "fn " + f.get("name"));   // a fn never pays (JSC0413)
                 fns.add(new Ir.Fn(s(f.get("name")), decls(f.get("params")), type(f.get("result")), block(f.get("body")), pos(f.get("at"))));
             }
             var methods = new ArrayList<Ir.Method>();
@@ -456,6 +457,8 @@ final class IrJson {
                 modifiers(kind, s(x.get("name")), mods, state);
                 var checked = new ArrayList<Ir.Local>();
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
+                // #80 review C4, S7: a pay only in the method's statement blocks, never under an expression (JSC0413).
+                noPayInExpressions(x.get("body"), false, "method " + x.get("name"));
                 Ir.Block body = block(x.get("body"));
                 // #80 review S3: pays is recomputed from the body (a Pay statement in it, at any depth of if, for and match),
                 // and a method that pays says who may call it ('only f' or 'open'), as the checker requires (JSC0408).
@@ -465,6 +468,10 @@ final class IrJson {
                 }
                 if (pays && mods.stream().noneMatch(md -> md.name().equals("open") || md.name().equals("only") && md.field() != null)) {
                     throw new IllegalArgumentException("method " + x.get("name") + ": it pays, so it says who may call it ('only f' or 'open')");
+                }
+                // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409).
+                if (kind == Ir.Kind.DESTROY && !pays) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": a destroy pays out what the instance holds: it has no pay");
                 }
                 methods.add(new Ir.Method(kind, s(x.get("name")), params, mods, checked,
                         (Boolean) x.get("usesCtx"), pays, body,
@@ -525,6 +532,23 @@ final class IrJson {
                 for (String w : List.of("only", "after", "before")) {
                     if (seen.contains(w)) throw new IllegalArgumentException(where + "a batched action cannot use " + w);
                 }
+            }
+        }
+
+        /**
+         * Refuses a Pay statement anywhere below an expression node (#80 review C4, S7; JSC0413), or anywhere when
+         * {@code pure} (a fn's body): statement blocks of if, for and match statements are not expressions.
+         */
+        static void noPayInExpressions(Object o, boolean pure, String where) {
+            if (o instanceof List<?> list) {
+                for (Object x : list) noPayInExpressions(x, pure, where);
+            } else if (o instanceof Map<?, ?> map) {
+                if (pure && "Pay".equals(map.get("stmt"))) {
+                    throw new IllegalArgumentException(where + ": a pay inside an expression or a fn, where the checker allows none (JSC0413), at "
+                            + map.get("at"));
+                }
+                boolean below = pure || map.get("node") instanceof String;
+                for (Object v : map.values()) noPayInExpressions(v, below, where);
             }
         }
 

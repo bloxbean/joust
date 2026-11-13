@@ -296,6 +296,7 @@ export function validate(p) {
     f.params.forEach((l) => decl(l, `fn ${f.name}`, scope));
     type(f.result, `fn ${f.name}`);
     block(f.body, `fn ${f.name}`, scope);
+    noPayInExpressions(f.body, true, (what) => fail(`fn ${f.name}`, what));   // a fn never pays (JSC0413)
   }
   const methodNames = new Set();
   const stateFields = new Map(p.state.fields.map((f) => [f.name, f.type]));
@@ -311,12 +312,17 @@ export function validate(p) {
     modifiers(m, where, fail, keys, stateFields);
     if (m.result !== null) type(m.result, where);
     block(m.body, where, scope);
+    // #80 review C4, S7: a pay only where the checker allows one (JSC0413): in the method's statement blocks, never in
+    // an expression's block (a value block, a value if or match, a lambda), so the statement walk below is complete.
+    noPayInExpressions(m.body, false, (what) => fail(where, what));
     // #80 review S3: pays is recomputed from the body, and a method that pays says who may call it (JSC0408, JSC0420).
     const pays = paysIn(m.body);
     if (m.pays !== pays) fail(where, `pays is ${JSON.stringify(m.pays)}, but the body ${pays ? 'pays' : 'does not pay'}`);
     if (pays && !m.mods.some((x) => x.name === 'open' || (x.name === 'only' && typeof x.field === 'string'))) {
       fail(where, 'it pays, so it says who may call it (only f or open)');
     }
+    // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409).
+    if (m.kind === 'destroy' && !pays) fail(where, 'a destroy pays out what the instance holds: it has no pay');
     // F7: the checker's two decisions, recomputed from their definitions.
     const checked = m.kind === 'view' ? [] : m.params.filter((l) => needsCheck(l.type, shapes, enums)).map((l) => l.id);
     if (JSON.stringify(checked) !== JSON.stringify(m.checked)) {
@@ -367,6 +373,21 @@ function modifiers(m, where, fail, keys, state) {
     for (const w of ['only', 'after', 'before']) if (names.includes(w)) fail(where, `a batched action cannot use ${w}`);
   }
 }
+/**
+ * Refuses a Pay statement anywhere below an expression node (#80 review C4, S7; JSC0413), or anywhere at all when `pure`
+ * (a fn's body). Statement blocks of if, for and match statements are not expressions; everything under a node is.
+ */
+function noPayInExpressions(o, pure, fail) {
+  if (Array.isArray(o)) {
+    for (const x of o) noPayInExpressions(x, pure, fail);
+    return;
+  }
+  if (!o || typeof o !== 'object') return;
+  if (o.stmt === 'Pay' && pure) fail(`a pay inside an expression or a fn, where the checker allows none (JSC0413), at ${o.at}`);
+  const below = pure || typeof o.node === 'string';
+  for (const v of Object.values(o)) noPayInExpressions(v, below, fail);
+}
+
 /** Whether a block pays: a Pay statement in it, or in an if's, a for's or a match's block (never in an expression). */
 function paysIn(block) {
   return (block?.stmts ?? []).some((s) => s.stmt === 'Pay'
