@@ -129,6 +129,32 @@ class JscV2IrTest {
         }
     }
 
+    /**
+     * Review r2 (coordinator, with M2b #84): the Java reader refuses an unknown field at every level, as the JavaScript
+     * reader does, so a field another format-2 addition writes (M2b's program-level params, a method's invariants) is
+     * refused rather than silently dropped. Each case adds one field to a valid export.
+     */
+    @Test
+    void aReader_refusesAnUnknownField_atEveryLevel() {
+        String json = JscV2.lower(FORMS, "Forms.jsc").irJson();
+        IrJson.read(json);   // the export itself reads
+        var cases = new java.util.LinkedHashMap<String, String[]>();
+        cases.put("the program", new String[]{"\"ir\": 2,", "\"ir\": 2, \"params\": null,"});
+        cases.put("a method", new String[]{"\"usesCtx\":", "\"invariants\": [], \"usesCtx\":"});
+        cases.put("a statement", new String[]{"\"stmt\": \"", "\"zz\": 1, \"stmt\": \""});
+        cases.put("an expression", new String[]{"\"node\": \"", "\"zz\": 1, \"node\": \""});
+        cases.put("a record", new String[]{"\"fields\": [", "\"zz\": 1, \"fields\": ["});
+        cases.put("a declaration", new String[]{"\"taint\": 0, \"at\"", "\"taint\": 0, \"zz\": 1, \"at\""});
+        cases.put("a block", new String[]{"\"stmts\": [", "\"zz\": 1, \"stmts\": ["});
+        for (var c : cases.entrySet()) {
+            String from = c.getValue()[0];
+            assertTrue(json.contains(from), c.getKey() + ": the export has " + from);
+            String bad = json.replaceFirst(java.util.regex.Pattern.quote(from), java.util.regex.Matcher.quoteReplacement(c.getValue()[1]));
+            var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(bad), c.getKey());
+            assertTrue(e.getMessage().contains("unknown field"), c.getKey() + ": " + e.getMessage());
+        }
+    }
+
     @Test
     void aReader_refusesAnotherVersion_anUnknownNode_andAnUndeclaredLocal() {
         String json = JscV2.lower(FORMS, "Forms.jsc").irJson();

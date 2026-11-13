@@ -1310,7 +1310,9 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   place of the library fn on all three compiled legs) and two libraries of one class name in different packages (an
   ambiguous Java import), both JSC0709. J20 excepts a library's file name, which is its class. D9 records one namespace
   per build as a known limit with its planned fix (qualified IR names), and that Java callers of a `.jsc` library must
-  meet D5's ingress checks themselves.
+  meet D5's ingress checks themselves. The Java IR reader refuses an unknown field at every level, as the JavaScript one
+  does; M2b (#84) also moved the IR to format 2, so the two additions are joined into one version before either is
+  released (`docs/reference/jsc-2-ir.md`).
 - **r19** (2026-11-13, M4b: `java:` imports): D9 records the Java imports as built: `byte[]` as `Bytes` and no maps in
   M4b; overloads refused; the trusted base made concrete (D8's table, `Require` and the adapters, an allow-list); three
   catalogue entries added (`equals`/`hashCode`/`toString`, record constructors, `BigInteger.mod`); verified and opaque

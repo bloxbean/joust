@@ -41,13 +41,20 @@ order, each with its class, file, source hash and declarations (records, enums, 
 the version changed: a version-1 reader refuses every version-2 export, including those with no library. Nothing else
 changed: a program without libraries has `"libraries": []` and otherwise the shape of version 1.
 
+**Two format-2 additions, one version.** M4a (#77: `libraries`, and later `javaLibraries`) and M2b (#84: the
+program's `params` and a method's `invariants`) each moved the IR to format 2 independently, and each reader refuses the
+other's fields. Before either is released, the integration that joins the two branches must merge them into **one**
+format-2 definition (both writers' fields, both readers' rules, one fixture set), or take format 3 for the second: two
+different formats must never both be released as version 2.
+
 **Version 1 is the format as of the M1 integration** (#76): `If` and `IfValue` hold a `branches` list (M1e's flat
 else-if chains). M1b's pre-release shape (`cond`, `then`, `otherwise` on those nodes) was never released and is not
 version 1; the readers refuse it ("unknown field"). From M1's release, the rule below applies.
 
 **What a version-1 reader refuses, and so what may change without a new version.** Both readers are strict: a duplicate
 key, a number that is not a plain integer, an integer literal that is not decimal, bytes that are not lower-case hex, a
-local referenced before it is declared or declared twice. The JavaScript reader also validates the whole program at
+local referenced before it is declared or declared twice, and (review r2 of M4) a field it does not know, at every level
+(the program, a library, a method, a statement, an expression, a record, a declaration, a block). The JavaScript reader also validates the whole program at
 load, before anything runs: an unknown node or statement kind, field, operator, modifier name (`payable`, `open`,
 `only`, `after`, `before`, `batched`), method kind, `std` row or type is refused there. So a change is **additive** when an old
 reader refuses every program that uses it, at load, rather than misreading it: a new node kind, a new modifier (M1c's
