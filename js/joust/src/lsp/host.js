@@ -18,6 +18,7 @@
 // worker (M5b) takes joust build's 8 MB.
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { dirname, resolve, sep } from 'node:path';
 import { Worker } from 'node:worker_threads';
 
 export const ANALYSIS_STACK_MB = 4;
@@ -50,10 +51,20 @@ export function isMissingEngine(r, engine) {
   if (r.ready) return false;
   const files = [engine.file, `${engine.file}.wasm`];
   if (r.code === 'MODULE_NOT_FOUND') {
-    const m = /^Cannot find module '([^'\n]*)'/.exec(String(r.error ?? ''));
-    return !!m && files.includes(m[1]);
+    // The message's whole first line against the exact header Node writes for the loader's request (C26 on #83: a
+    // request is not parsed out of the quotes, since a path may hold quotes and spaces; Node escapes neither).
+    const first = String(r.error ?? '').split('\n', 1)[0];
+    return files.some((f) => first === `Cannot find module '${f}'`);
   }
-  if (r.code === 'ENOENT') return files.includes(r.path);
+  if (r.code === 'ENOENT' || r.code === 'ENOTDIR') {
+    if (files.includes(r.path)) return true;
+    // S13 on #83: require lstats each directory on the way to the loader; a copy renamed aside fails there, on the
+    // copy's own directory. A directory between the store's root (or, outside a store, the loader's directory) and the
+    // loader counts too.
+    const top = resolve(engine.storeRoot ?? dirname(engine.file));
+    const p = typeof r.path === 'string' ? resolve(r.path) : null;
+    return !!p && engine.file.startsWith(p + sep) && (p === top || p.startsWith(top + sep));
+  }
   return false;
 }
 
@@ -230,6 +241,13 @@ export class EngineHost {
         this.wake();
         return { missing: true };
       }
+      // C25 on #83: the slot may have been stopped (or the host disposed) while the lease was awaited; a start for a
+      // slot no longer tracked would be an orphan no bound, reaper or dispose could see. Abandoned: lease released.
+      if (this.disposed || s.stopped || this.slots.get(s.key) !== s) {
+        release();
+        this.wake();
+        return { displaced: true };
+      }
       if (s.worker && !s.worker.dead) {
         release();
         this.wake();
@@ -255,6 +273,7 @@ export class EngineHost {
     try {
       const w = await this.acquire(s);
       if (w.missing) return { ready: false, missing: true, error: 'the engine file is missing' };
+      if (w.displaced) return { ready: false, displaced: true, error: 'the start was abandoned (its worker slot was stopped)' };
       const r = await w.ready;
       if (isMissingEngine(r, engine)) return { ready: false, missing: true, error: 'the engine file is missing' };
       if (!r.ready) return { ready: false, error: r.error };
@@ -293,6 +312,7 @@ export class EngineHost {
       try {
         const w = await this.acquire(s);
         if (w.missing) return { missing: true };
+        if (w.displaced) return this.displaced();
         const ready = await w.ready;
         // A worker stopped while it loaded (Restart analysis, or evicted) is no engine fault: requeue, never quarantine.
         if (w.dead && (w.killedFor === 'stopped' || w.killedFor === 'cancelled')) return this.displaced();
@@ -369,7 +389,10 @@ export class EngineHost {
 
   stop(key) {
     const s = this.slots.get(key);
-    if (s) this.stopWorker(s);
+    if (s) {
+      s.stopped = true;
+      this.stopWorker(s);
+    }
     this.slots.delete(key);
   }
 
@@ -384,6 +407,7 @@ export class EngineHost {
   }
 
   dispose() {
+    this.disposed = true;
     clearInterval(this.idleTimer);
     for (const s of this.slots.values()) this.stopWorker(s);
     this.slots.clear();

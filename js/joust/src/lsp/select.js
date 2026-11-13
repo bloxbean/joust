@@ -100,17 +100,37 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
    * to put back later, never deleted.
    */
   async function putBack(aside, n) {
+    // S14 on #83: a claim goes back under its digest name only if its bytes ARE that digest; one that is not is removed.
+    const [jsHash, wasmHash] = await Promise.all([fs.readFile(join(aside, ENGINE_JS)), fs.readFile(join(aside, ENGINE_WASM))])
+      .then(([a, b]) => [hex(a), hex(b)]).catch(() => [null, null]);
+    if (!jsHash || engineId(jsHash, wasmHash) !== n) {
+      await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
+      return;
+    }
     try {
       await fs.rename(aside, join(root, n));
       return;
     } catch {
       // fall through
     }
-    const [jsHash, wasmHash] = await Promise.all([fs.readFile(join(aside, ENGINE_JS)), fs.readFile(join(aside, ENGINE_WASM))])
-      .then(([a, b]) => [hex(a), hex(b)]).catch(() => [null, null]);
-    if (jsHash && engineId(jsHash, wasmHash) === n && await valid(join(root, n), jsHash, wasmHash)) {
+    if (await valid(join(root, n), jsHash, wasmHash)) {
       await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
+      return;
     }
+    // C27 on #83: a destination that is there but not a valid copy never costs the claim its good bytes: it is moved
+    // aside and the claim put in its place; any failure keeps the claim, for the sweep to retry.
+    const damaged = join(root, `.damaged-${n}-${process.pid}-${Date.now()}`);
+    try {
+      await fs.rename(join(root, n), damaged);
+    } catch {
+      return;
+    }
+    try {
+      await fs.rename(aside, join(root, n));
+    } catch {
+      return;
+    }
+    await fs.rm(damaged, { recursive: true, force: true }).catch(() => {});
   }
 
   /**
@@ -128,15 +148,22 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       if (age < CLAIM_MS) continue;
       if (age < LEASE_MS && Number(pid) !== process.pid && alive(Number(pid))) continue;
       const aside = join(root, c);
-      const present = await fs.stat(join(root, n)).then(() => true, () => false);
-      if (!present && await wanted(aside, n, inUse)) await putBack(aside, n);
+      // A wanted claim always goes through putBack, which keeps its good bytes unless a valid copy is in place (C27); an
+      // unwanted one is removed.
+      if (await wanted(aside, n, inUse)) await putBack(aside, n);
       else await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
     }
   }
 
   async function evict(keep, inUse) {
     try {
-      await sweep((await fs.readdir(root)).filter((n) => n.startsWith('.evicted-')), inUse);
+      const all = await fs.readdir(root);
+      await sweep(all.filter((n) => n.startsWith('.evicted-')), inUse);
+      // A damaged destination moved aside (C27) and left by a crash: removed once past the claim bound.
+      for (const d of all) {
+        const m = /^\.damaged-[0-9a-f]{64}-\d+-(\d+)$/.exec(d);
+        if (m && Date.now() - Number(m[1]) > CLAIM_MS) await fs.rm(join(root, d), { recursive: true, force: true }).catch(() => {});
+      }
     } catch {
       // no store yet
     }
@@ -172,7 +199,7 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       } catch {
         continue;
       }
-      if (await wanted(aside, n)) {
+      if (await wanted(aside, n, inUse)) {   // C28 on #83: this server's live use counts here too
         kept++;
         await putBack(aside, n);
         continue;
@@ -357,10 +384,12 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
     }
     const copy = await store.put(js.bytes, wasm.bytes, () => host.inUse());
     const key = workerKey(copy);
-    const engine = { file: copy.file, id: copy.id, source: 'project', packageVersion: pkg.version };
+    const engine = { file: copy.file, id: copy.id, source: 'project', packageVersion: pkg.version, storeRoot: store.root };
     const probe = await host.info(key, engine);
-    // The copy vanished while it loaded (another window evicted it): not cached, the next file selects again (C12).
+    // The copy vanished while it loaded (another window evicted it), or the probe's start was abandoned because its
+    // slot was stopped meanwhile (C25): not cached, the next file selects again (C12).
     if (probe.missing) throw new Error('the engine copy was removed while it loaded');
+    if (probe.displaced) throw new Error('the compiler\'s probe was interrupted');
     const info = probe.info;
     if (!probe.ready || !info || info.protocol !== LANG_PROTOCOL || !Array.isArray(info.features) || !info.features.includes('analyze')) {
       host.stop(key);
