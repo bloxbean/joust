@@ -242,3 +242,109 @@ contract C {
               (identifier))
             (number
               (integer))))))))
+
+================================================================================
+Effects on native assets (M2a): send, mint, burn, accept, and effect arms
+================================================================================
+
+jsc 2
+package t
+contract C {
+  state { n: Int }
+  init() { return { n: 0 } }
+  action a(v: Int) payable open {
+    send(wallet(caller), Value.lovelace(v))
+    mint(#01, v)
+    burn(#02, 1)
+    accept(funds.received)
+    match guard {
+      KeyCred { key } => send(wallet(key), Value.none())
+      ScriptCred { hash } => mint(hash, 1)
+    }
+    return state
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (version)
+  (package_declaration
+    (package_name
+      (identifier)))
+  (contract_declaration
+    (identifier)
+    (contract_body
+      (state_declaration
+        (field_list
+          (field_declaration
+            (identifier)
+            (type
+              (identifier)))))
+      (init_declaration
+        (parameters)
+        (block
+          (return_statement
+            (object_literal
+              (field_initializer
+                (identifier)
+                (number
+                  (integer)))))))
+      (action_declaration
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (type
+              (identifier))))
+        (modifier)
+        (modifier)
+        (block
+          (send_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier)))
+            (method_call
+              (identifier)
+              (identifier)
+              (arguments
+                (identifier))))
+          (mint_statement
+            (bytes)
+            (identifier))
+          (mint_statement
+            (bytes)
+            (number
+              (integer)))
+          (accept_statement
+            (field_expression
+              (identifier)
+              (identifier)))
+          (match_statement
+            (identifier)
+            (match_arm
+              (variant_pattern
+                (identifier)
+                (pattern_binding
+                  (identifier)))
+              (send_statement
+                (call_expression
+                  (identifier)
+                  (arguments
+                    (identifier)))
+                (method_call
+                  (identifier)
+                  (identifier)
+                  (arguments))))
+            (match_arm
+              (variant_pattern
+                (identifier)
+                (pattern_binding
+                  (identifier)))
+              (mint_statement
+                (identifier)
+                (number
+                  (integer)))))
+          (return_statement
+            (identifier)))))))

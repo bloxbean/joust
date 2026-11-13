@@ -1,14 +1,14 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r14)
+**Status:** Proposed (r15)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
 `generateJsc`), and the contract model of ADR-0001 to ADR-0016, which `.jsc` 2 only spells differently. JuLC's scoped
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
-**Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76)
-implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+**Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76) and
+M2a implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -180,6 +180,21 @@ destroy must produce at least one of pay/send/mint/deposit.
 "Source order" is order **within each kind**: the processor keeps kinds in separate components, so no order across
 kinds is promised. In a `for` loop the order is list order; an effect in an untaken branch does not happen.
 
+**As built in M2a (r15).** `send`, `mint`/`burn` and `accept` lower as the tables say, each with a generated check whose
+key is D12's: a sent value holds positive quantities and no reserved token name of the own policy (`#send:`); a mint or
+burn has a positive quantity of a user token name of at most 32 bytes (`#mint:`); an accepted value is native assets
+only, positive (`#accept:`); and a method that accepts checks, last, that the sum equals `funds.received`
+(`#funds:<redeemer>.1`). These are the validator's own rules on what a method returns (ADR-0007 D2, D2b, D3; the
+runtime's `AssetTx`), checked in the method too, so the JVM method, the transition program and both interpreters refuse
+exactly where the validator does. A method is lowered with `Funds` when it reads `funds` or sends, mints, burns or
+accepts (each needs the own policy, or states what it takes in); a payable method lowered so must `accept`. `send` takes
+no datum until M2c's encoders (`JSC0429`). `accept` in an `init` is refused for now (`JSC0426`): the processor's transition
+program of a creation that returns `(state, accepted)` is not generated correctly (`TransitionsGenerator.creation`
+takes the whole result for the state), a processor fix outside this ADR. The result records are fixed by name:
+`Outcome` (an action's effects), `Received` (an action that takes native assets: `accepted` last) and `Settled` (a destroy
+that sends, mints or burns); each holds every kind its methods produce, in the order payouts, sends, mint, accepted.
+A contract whose only effect is `pay` keeps M1's lowering byte for byte.
+
 **Lowering:** the method threads one accumulator per kind it uses (lists, or a `Value` for mint and accepted), as
 final locals; an `if`/`match` arm or a loop helper that may produce effects returns a generated record of
 `(value, effects…)`, the arm-helper scheme of ADR-0005 D3 (linear, lazy). Methods with no effects build no record.
@@ -202,9 +217,9 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
 | `Bytes` | `byte[]` | `==` through `ByteStringLib.equals`; `<`, `<=` through `ByteStringLib.lessThan[Equals]` |
 | `Key` | `byte[]` | a 28-byte verification-key hash. `Bytes` is not a `Key`: keys come from `caller`, checked inputs, fields, or `asKey(b)` (a located check) |
 | `Hash` | `byte[]` | a 28-byte script hash or policy id, same rules |
-| `Credential` | `Credential` | `keyCred(k)`, `scriptCred(h)`; `match` on `KeyCred { key }` / `ScriptCred { hash }`. Needed by `authorized` (ADR-0009 D3) |
-| `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`) |
-| `Value` | `Value` | `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos |
+| `Credential` | `Credential` | `keyCred(k)`, `scriptCred(h)`; `match` on `KeyCred { key }` / `ScriptCred { hash }`. Needed by `authorized` (ADR-0009 D3). As built (M2a): comparable, storable, a checked input (a 28-byte hash) |
+| `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`). As built (M2a): comparable, storable, a checked input (a 28-byte payment credential and staking hash; a pointer is accepted) |
+| `Value` | `Value` | `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`; as built, the API's `ValueAdapter`, whose JVM body fails where the PV11 builtins fail: a quantity outside the signed 128-bit range, a token name over 32 bytes, `covers` on a negative quantity). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos |
 | `List<T>` | `JulcList<T>` | literals `[a, b]`, `[x, ...xs]`; D7 |
 | `Map<K, V>` | `JulcMap<K, V>`, canonical | an inline map in the datum. `K` is `Bytes`, `Key` or `Hash`, at most 64 bytes (F19); keys strictly ascending in canonical order, unique. `Map.empty()`. D7 |
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | a Merkle map (ADR-0002/0014), state fields only; `K` as for `Map` (F14). Rules in D7 |
@@ -354,7 +369,8 @@ import { sha2_256, blake2b_224, verifyEd25519 } from "std/crypto"
 import { concat, slice, length } from "std/bytes"
 ```
 
-- Modules: `std/bytes`, `std/crypto`, `std/math`, `std/bits`, `std/value`, `std/address`, `std/list`, `std/time`
+- Modules: `std/bytes`, `std/crypto`, `std/math`, `std/bits`, `std/value` (M2a: `isEmpty`, `withoutLovelace`, `scale`),
+  `std/address` (M2a: `paymentKey`, `paymentScript`), `std/list`, `std/time`
   (`after`, `before`, `elapsedSince`, `elapsedSinceAtMost`, `windowStart`, `windowEnd`: D11). A prelude needs
   no import: `min`, `max`, `abs`, `utf8`, `asKey`, `asHash` (D5's checked conversion to a `Hash`, r7), `range`,
   `keyCred`, `scriptCred`, `wallet`, `script`, `Some`, `None`.
@@ -671,7 +687,7 @@ the bound). M2's `authorized` and `quorum` are further preconditions on the same
     the `fn` in the script.
   - **The message map, the audit trail.** The source map (format 2) holds, beside the line map, `messages`: every
     message the script can trace, each with the `.jsc` sites that raise it (line, column, kind: `input`, `pay`,
-    `require`, `operation`; the method or `fn`; an input's parameter). "Every" is tested on the linked scripts: each
+    `require`, `operation`, and M2a's `send`, `mint`, `accept`, `funds`; the method or `fn`; an input's parameter). "Every" is tested on the linked scripts: each
     string constant a compiled validator or transition program holds is in its map (the read discovery's own trace
     aside). The map is written beside the generated Java (`Name.jscmap.json`) on both paths, into `contracts.json` by
     `joust build` (with the script's hash), and on Gradle as a resource beside the contract's classes. The JS runtime
@@ -970,7 +986,7 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 |---|---|---|---|
 | M0 | Spike: version line, `const`, spread updates, shadowing rule, `fn` with direct recursion and the after-lowering recursion check (nested folds), a `fold`/`find`/`contains` helper and both `filter` lowerings, `Option` as `Optional` end to end (datum, redeemer, portable codec, JS; `Some(None)` rejected), one generated equality helper over a record with bytes, one checked input, one `std/crypto` and one `std/bytes` binding with domains, the binding test via javac attribution, positions on the npm path, the time dataflow pass | ADR accepted | builds on both paths; four-way agreement (J3) on hand vectors; size, budget and check-cost numbers recorded; javac attribution of library sources works inside the Web Image toolchain |
 | M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; five-way differential tests (four-way to M1a) and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten. M1c's thresholds (r11): "below 14 KB" is below 14,000 bytes; "the protocol maximum" is 10,000,000,000 CPU steps and 14,000,000 memory units (the pre-Plomin memory limit, the stricter one), summed over every script of the transaction, with a warning above 80%; the saturated state is the largest one the Java example accepts (its stored datum within `maxDatumBytes`), which the port must then accept; a batched action is measured at `Batcher.DEFAULT_MAX` intents too |
-| M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green |
+| M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green. Split (r15) into stacked parts: **M2a** values and assets (`Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `std/value`, `std/address`; gated by dex), **M2b** params, invariants, events, quorum, authorized (gated by treasury), **M2c** composition (deposits and `receives`, `reads`, `Instance<C>`, `import contract`, send datums and memo encoders, stored `Value`s with the wire conversion; gated by oracle and fees) |
 | M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green |
 | M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12; a `.jsc` library called from Java and a Java library from `.jsc`; the template's tests run offline |
 | M5 | Language server | M3, M4 exit | — |
@@ -1197,3 +1213,11 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   M1b's exit and M1b had not done; the modifier vectors are five-way. §9 and the M2 row say five-way. D14 and r13's
   entry: M1e changed the hashes of scripts with generated checks only. D16 states the JSC1103 refusal of v1
   `batched`. The header no longer says design only.
+- **r15** (2026-11-13, M2a): §8 splits M2 into M2a (values and assets, gated by dex), M2b (params, invariants, events,
+  quorum, authorized; treasury) and M2c (composition; oracle, fees). D4 records what M2a built: the generated checks of
+  `send`, `mint`/`burn` and `accept` with their keys (`#send:`, `#mint:`, `#accept:`, and `#funds:` for what was accepted,
+  checked last), when a method takes `Funds`, the result records (`Outcome`, `Received`, `Settled`), `send` without a
+  datum until M2c, and `accept` in an `init` refused until the processor's creation transition program is fixed. D5:
+  `Credential` and `Address` are storable checked inputs; `Value` stays a local's, a `fn`'s and an effect's, its stored
+  form (the wire conversion) moving to M2c; its operations fail where the PV11 builtins fail (`ValueAdapter`). D8 lists
+  `std/value` and `std/address`. D12's message map gains the new kinds.
