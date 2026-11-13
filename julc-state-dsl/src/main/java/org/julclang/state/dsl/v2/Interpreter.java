@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 
 /**
  * The reference interpreter of {@code .jsc} 2 (ADR-0018 D15, M0 scope): a direct evaluator of the checked {@link Ir}.
@@ -227,12 +228,20 @@ public final class Interpreter {
 
     /**
      * The transaction a call sees: {@code caller}, {@code received}, {@code balance}, the validity window, and the keys
-     * that signed it ({@code signers}, the caller among them), which the {@code only} modifier reads (semantics §2.6).
+     * that signed it ({@code signers}, the caller among them), which {@code only}, {@code quorum} and {@code authorized}
+     * read (semantics §2.6); M2b: {@code approvers}, the scripts that approve this call (a withdrawal of theirs in the
+     * transaction whose approval names this contract, instance and action, ADR-0009 D3), which {@code authorized} reads.
      */
     public record Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
-                     FundsV funds) {
+                     FundsV funds, List<Bytes> approvers) {
         public Tx {
             signers = List.copyOf(signers);
+            approvers = List.copyOf(approvers);
+        }
+
+        public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
+                  FundsV funds) {
+            this(caller, received, balance, validFrom, validTo, signers, funds, List.of());
         }
 
         public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers) {
@@ -246,12 +255,17 @@ public final class Interpreter {
 
         /** The same transaction, signed by {@code keys}. */
         public Tx signedBy(List<Bytes> keys) {
-            return new Tx(caller, received, balance, validFrom, validTo, keys, funds);
+            return new Tx(caller, received, balance, validFrom, validTo, keys, funds, approvers);
         }
 
         /** The same transaction, with the native assets the call sees (M2). */
         public Tx withFunds(FundsV f) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, f);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, f, approvers);
+        }
+
+        /** The same transaction, approved by these scripts (M2b, ADR-0009 D3). */
+        public Tx approvedBy(List<Bytes> scripts) {
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, scripts);
         }
     }
 
@@ -269,9 +283,13 @@ public final class Interpreter {
 
     /**
      * A call's result: the next state (init, action), the view's value, or null (destroy); the payouts and sends in
-     * source order; the net mint and the sum of what was accepted (M2).
+     * source order; the net mint and the sum of what was accepted (M2); the events in source order (M2b).
      */
-    public record Outcome(Object value, List<Payment> payouts, List<SendV> sends, ValueV mint, ValueV accepted) {
+    public record Outcome(Object value, List<Payment> payouts, List<SendV> sends, ValueV mint, ValueV accepted, List<Object> events) {
+        public Outcome(Object value, List<Payment> payouts, List<SendV> sends, ValueV mint, ValueV accepted) {
+            this(value, payouts, sends, mint, accepted, List.of());
+        }
+
         public Outcome(Object value, List<Payment> payouts) {
             this(value, payouts, List.of(), ValueV.NONE, ValueV.NONE);
         }
@@ -362,10 +380,41 @@ public final class Interpreter {
 
     private final Ir.Program p;
     private final Hashes hashes;
+    /** The deploy-time parameters (M2b, ADR-0009 D1): a {@code Config} record; null until supplied. */
+    private final Rec params;
 
     Interpreter(Ir.Program p, Hashes hashes) {
+        this(p, hashes, null);
+    }
+
+    private Interpreter(Ir.Program p, Hashes hashes, Rec params) {
         this.p = p;
         this.hashes = hashes;
+        this.params = params;
+    }
+
+    /** The same contract, deployed with these params (a {@code Config} record: its fields in declaration order). */
+    public Interpreter withParams(Rec params) {
+        if (p.params() == null) throw new IllegalArgumentException("the contract declares no params");
+        if (!params.type().equals(Ir.PARAMS) || params.fields().size() != p.params().fields().size()) {
+            throw new IllegalArgumentException("params are a Config record of " + p.params().fields().size() + " fields");
+        }
+        return new Interpreter(p, hashes, params);
+    }
+
+    /** The params' fields, in order (empty when the contract declares none). */
+    public List<String> paramsFields() {
+        return p.params() == null ? List.of() : p.params().fieldNames();
+    }
+
+    /** The contract's invariants, in declaration order (M2b). */
+    public List<String> invariants() {
+        return p.invariants().stream().map(Ir.Invariant::name).toList();
+    }
+
+    /** Whether the method's redeemer carries its events (M2b: its result record has events, ADR-0009 D5). */
+    public boolean carriesEvents(String method) {
+        return Effects.events(p, method(method));
     }
 
     /** The contract's state fields, in order. */
@@ -451,32 +500,109 @@ public final class Interpreter {
         if ((m.kind() == Ir.Kind.INIT) != (state == null)) throw new IllegalArgumentException("an init has no input state; others do");
         return deep(() -> {
             if (modifiers) modifiers(m, state, tx);
-            return run(m, state, args, tx);
+            Outcome o = run(m, state, args, tx);
+            if (modifiers) outputs(m, o);
+            return o;
         });
+    }
+
+    /**
+     * Semantics §2.7 (M2b): what the validator checks of every state it accepts as an output (ADR-0009 D2, D4), after the
+     * body, so the reference refuses where the validator does, as it does for the modifiers. At a creation, each quorum
+     * that names params is well formed; then, for an init's or action's next state, each quorum that names state fields
+     * (every pair any method's quorum names, once, in source order) is well formed; then each invariant holds, in
+     * declaration order. Well formed: keys strictly ascending (so distinct), each 28 bytes, and 1 <= threshold <= keys.
+     */
+    private void outputs(Ir.Method m, Outcome o) {
+        if (m.kind() != Ir.Kind.INIT && m.kind() != Ir.Kind.ACTION) return;
+        Rec next = (Rec) o.value();
+        var pairs = new java.util.LinkedHashSet<String>();
+        for (Ir.Method x : p.methods()) for (Ir.Mod mod : x.mods()) if (mod.name().equals("quorum")) pairs.add(mod.field());
+        for (String pair : pairs) {
+            String[] kt = pair.split(" ");
+            boolean ofParams = kt[0].startsWith("params.");
+            if (ofParams && m.kind() != Ir.Kind.INIT) continue;
+            if (!wellFormed(modField(next, kt[0]), modField(next, kt[1]))) {
+                throw new Refused("the quorum " + pair + " is not well formed", "invariant", "quorum " + pair);
+            }
+        }
+        for (Ir.Invariant inv : p.invariants()) {
+            boolean holds;
+            try {
+                holds = bool(block(inv.body(), null, new Frame(next, null)));
+            } catch (Refused e) {
+                // #84 review S2: an invariant that fails (a division by zero, a std row's domain) does not hold; the
+                // refusal is the validator's, as one that evaluates to false (semantics §2.7).
+                throw new Refused("the invariant " + inv.name() + " fails: " + e.getMessage(), "invariant", inv.name());
+            }
+            if (!holds) throw new Refused("the invariant " + inv.name() + " does not hold", "invariant", inv.name());
+        }
+    }
+
+    /** ADR-0009 D2: keys strictly ascending (so distinct), each 28 bytes, and 1 <= threshold <= their number. */
+    private static boolean wellFormed(Object keys, Object threshold) {
+        @SuppressWarnings("unchecked")
+        List<Object> ks = (List<Object>) keys;
+        Bytes prev = null;
+        for (Object k : ks) {
+            Bytes b = (Bytes) k;
+            if (b.value.length != 28) return false;
+            if (prev != null && Arrays.compareUnsigned(prev.value, b.value) >= 0) return false;
+            prev = b;
+        }
+        BigInteger t = (BigInteger) threshold;
+        return t.signum() > 0 && t.compareTo(BigInteger.valueOf(ks.size())) <= 0;
+    }
+
+    /** A modifier's field: {@code f} of the state, or {@code params.f}. */
+    private Object modField(Rec state, String ref) {
+        if (ref.startsWith("params.")) return paramsField(ref.substring("params.".length()));
+        return field(state, ref);
+    }
+
+    private Object paramsField(String name) {
+        if (params == null) throw new IllegalArgumentException("this contract reads its params: supply them (withParams)");
+        return field(params, name);
     }
 
     /**
      * Semantics §2.6: the transaction preconditions, in source order. {@code only f}: the key in state field {@code f}
      * is among the transaction's signers. {@code after f}: the window starts at or after the time in {@code f}.
-     * {@code before f}: it ends at or before it. {@code payable}, {@code open} and {@code batched} are not refusals.
+     * {@code before f}: it ends at or before it. M2b: {@code quorum k t}: the threshold is at least 1 and at least that
+     * many distinct signers are among the keys (each read from the input state or the params); {@code authorized c}: a
+     * key credential signed, or a script credential is among the transaction's approvers. {@code payable}, {@code open}
+     * and {@code batched} are not refusals.
      */
     private void modifiers(Ir.Method m, Rec state, Tx tx) {
         for (Ir.Mod mod : m.mods()) {
             String w = mod.name();
-            if (!w.equals("only") && !w.equals("after") && !w.equals("before")) continue;
+            if (!Set.of("only", "after", "before", "quorum", "authorized").contains(w)) continue;
             if (mod.field() == null) continue;   // 'batched only' is not 'only f'
             if (tx == null) throw new IllegalArgumentException(m.name() + " has '" + w + " " + mod.field() + "': its call needs the transaction");
-            Object v = field(state, mod.field());
             boolean holds = switch (w) {
-                case "only" -> tx.signers().contains((Bytes) v);
-                case "after" -> tx.validFrom().compareTo((BigInteger) v) >= 0;
-                default -> tx.validTo().compareTo((BigInteger) v) <= 0;
+                case "only" -> tx.signers().contains((Bytes) field(state, mod.field()));
+                case "after" -> tx.validFrom().compareTo((BigInteger) field(state, mod.field())) >= 0;
+                case "before" -> tx.validTo().compareTo((BigInteger) field(state, mod.field())) <= 0;
+                case "quorum" -> {
+                    String[] kt = mod.field().split(" ");
+                    @SuppressWarnings("unchecked")
+                    List<Object> keys = (List<Object>) modField(state, kt[0]);
+                    BigInteger t = (BigInteger) modField(state, kt[1]);
+                    long n = new java.util.LinkedHashSet<>(tx.signers()).stream().filter(keys::contains).count();
+                    yield t.signum() > 0 && BigInteger.valueOf(n).compareTo(t) >= 0;
+                }
+                default -> {
+                    CredV c = (CredV) modField(state, mod.field());
+                    yield c.script() ? tx.approvers().contains(c.hash()) : tx.signers().contains(c.hash());
+                }
             };
             if (!holds) {
                 String what = switch (w) {
                     case "only" -> "the transaction is not signed by " + mod.field();
                     case "after" -> "the validity window starts before " + mod.field();
-                    default -> "the validity window ends after " + mod.field();
+                    case "before" -> "the validity window ends after " + mod.field();
+                    case "quorum" -> "too few of " + mod.field().split(" ")[0] + " signed the transaction";
+                    default -> mod.field() + " did not authorize the transaction";
                 };
                 throw new Refused(what, "modifier", w + " " + mod.field());
             }
@@ -543,7 +669,7 @@ public final class Interpreter {
         if (accepts(m.body()) && !f.accepted.equals(funds(f).received())) {
             throw Refused.domain("accepted", "the method accepts other native assets than the caller offers");
         }
-        return new Outcome(value, List.copyOf(f.payouts), List.copyOf(f.sends), f.mint, f.accepted);
+        return new Outcome(value, List.copyOf(f.payouts), List.copyOf(f.sends), f.mint, f.accepted, List.copyOf(f.events));
     }
 
     /** Whether a block holds an accept statement, in any arm or loop. */
@@ -579,6 +705,7 @@ public final class Interpreter {
         final Tx tx;
         final List<Payment> payouts = new ArrayList<>();
         final List<SendV> sends = new ArrayList<>();
+        final List<Object> events = new ArrayList<>();
         ValueV mint = ValueV.NONE, accepted = ValueV.NONE;
 
         Frame(Rec state, Tx tx) {
@@ -643,6 +770,8 @@ public final class Interpreter {
                     if (!sum.quantities().stream().allMatch(Interpreter::inRange)) throw Refused.domain("accept", "accept: a quantity out of the 128-bit range");
                     f.accepted = sum;
                 }
+                // §5.6 (M2b): an event joins the call's events, in source order.
+                case Ir.Emit em -> f.events.add(eval(em.event(), env, f));
                 case Ir.If i -> {
                     Ir.Block taken = i.otherwise();
                     for (Ir.Branch b : i.branches()) {
@@ -825,6 +954,7 @@ public final class Interpreter {
                 default -> throw new IllegalStateException(fr.field());
             };
             case Ir.LedgerOp o -> ledger(o, env, f);
+            case Ir.ParamsRef pr -> paramsField(pr.field());
         };
     }
 

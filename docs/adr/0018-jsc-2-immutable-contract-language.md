@@ -1,14 +1,14 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r15)
+**Status:** Proposed (r18)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
 `generateJsc`), and the contract model of ADR-0001 to ADR-0016, which `.jsc` 2 only spells differently. JuLC's scoped
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
-**Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76) and
-M2a implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+**Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76),
+M2a and M2b implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -208,6 +208,27 @@ too): issue [#81](https://github.com/bloxbean/joust/issues/81), fixed in its own
 `Outcome` (an action's effects), `Received` (an action that takes native assets: `accepted` last) and `Settled` (a destroy
 that sends, mints or burns); each holds every kind its methods produce, in the order payouts, sends, mint, accepted.
 A contract whose only effect is `pay` keeps M1's lowering byte for byte.
+
+**As built in M2b (r18).** `emit(e)` lowers as the tables say: the events, a list in source order, are the last
+component of the result records (`Outcome`, `Received`, `Settled`: an action or a destroy whose record holds `events`
+carries them last in its redeemer, empty when it emits none), with no generated check in the method, since the
+validator compares the redeemer's events with the method's (ADR-0009 I35). A destroy that emits returns `Settled`. The
+events are the variants of an enum named `Event`, one per `event X { … }`; `params { … }` is the `@Params` record,
+named `Config`; both names are reserved in a contract that declares them (JSC0225). An `init` takes the params whenever
+the contract declares them (the creation is made under the script applied to them), any other method or view when it
+reads `params.f`. `quorum` and `authorized` are audiences, read no `Ctx`, and are refused in an init and a batched action;
+a quorum's two fields are both state fields or both params fields (JSC0439: the validator checks a state pair on every
+output and a params pair at creation). Invariants lower to `@Invariant` methods, not with batched actions or BigMap
+state. M2b fixed one processor defect on the way: a client's destroy that emits without native assets did not compile
+(`Transition.end(…).withEvents(…)` had no type witness). After #84's review r1: a batched action never returns events
+(ADR-0009 D5): when a direct action's `Outcome` holds events, a batched action that pays returns `Stepped(state,
+payouts)`; a contract with a quorum over state fields has no batched actions (JSC0440; the processor refuses it too,
+ADR-0009 r3), since a batch's states are not checked and a batched action could lock the contract; an invariant holds no
+`require` (JSC0441), and one that fails while evaluated is refused as the invariant's (class `invariant:<name>`); a view
+that reads `params.f` gets the deployment's params from the generated client (the processor's `ViewIR.takesParams`);
+the annotation names the lowering imports are reserved; invariants and emitted events are under the depth cap (J18).
+The IR format is version 2 (D15: version 1's Java reader dropped unknown top-level fields, so it would have lost
+invariants; both readers now refuse unknown fields at every level).
 
 **Lowering:** the method threads one accumulator per kind it uses (lists, or a `Value` for mint and accepted), as
 final locals; an `if`/`match` arm or a loop helper that may produce effects returns a generated record of
@@ -500,7 +521,7 @@ positions. Each row names the example whose port gates it (J11).
 | `@Params` | `params { feeBps: Int, oracle: Instance<Oracle> }`, `params.feeBps` | treasury, oracle (M2) |
 | `@Invariant` | `invariant name = expr` | treasury (M2), guild (M3) |
 | `@Quorum`, `@AuthorizedBy` | `quorum guardians threshold`, `authorized admin` (a `Credential` field or `params.f`) | treasury (M2), registry (M3) |
-| events | `event Sold { price: Int }`, `emit(Sold { price })` | market (M3) |
+| events | `event Sold { price: Int }`, `emit(Sold { price })` | treasury (M2b), market (M3) |
 | `Funds`, `Assets`, `Send`, mint | the built-in `funds` (`received`, `held`, `policy`, `self`, `deposits`); a contract is asset-aware when it uses `funds`, `send`, `mint`, `deposit` or `receives` (`assetSlots` defaults from that, `ContractReader.java:312-315`) | dex (M2), market (M3) |
 | `@Reads` | a parameter `oracle: reads params.oracle` typed `Oracle.State` | oracle (M2) |
 | `@Receives`, deposits | `action name(…) receives`, `deposit(…)` | fees (M2) |
@@ -534,7 +555,10 @@ the call with the class `modifier:<word> <field>`. So every modifier site of eve
 all five legs: both interpreters refuse it with that class, the JVM method and the transition program compute the
 transition (and agree with the interpreters' transition alone), and the validator refuses. The attack suite adds
 entries read from the description (a stranger who signs as the caller; windows on the wrong side of, or straddling,
-the bound). M2's `authorized` and `quorum` are further preconditions on the same transaction.
+the bound). M2's `authorized` and `quorum` are further preconditions on the same transaction (as built in M2b: both
+interpreters model them, `quorum` counting distinct signers among the keys and `authorized` reading the signers or the
+transaction's approving scripts), and the validator's output checks (a quorum's shape, the invariants) are modelled
+after the body, class `invariant` (semantics §2.7), with vectors on all five legs.
 
 **ADR-0005 rules kept, changed and dropped:**
 
@@ -1244,3 +1268,15 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   assets from the wire (`ValueAdapter.fromWire`), and links JSC0426's processor bug (#81), the table saying so; D5 makes
   the `Address`/`Credential` checked input tag- and arity-exact on the data and refuses staking pointers;
   `ValueAdapter`'s on-chain variant has its differential test (D9).
+- **r18** (2026-11-13, M2b): D4 records what M2b built: `emit` and the events in the result records and redeemers, the
+  `Event` and `Config` names, which methods take the params, `quorum` and `authorized` as audiences without `Ctx`, a
+  quorum's fields of one place (JSC0439), invariants; and the processor's client fix for a destroy that emits. D10: both
+  interpreters model `quorum` and `authorized`, and the validator's output checks (semantics §2.7, class `invariant`).
+  D11 at the new positions: a time field is never a quorum's or an authorized field (JSC0524), an invariant never depends
+  on a time value (JSC0525, behind JSC0502), the params are never time values, an event may carry one with a warning
+  (JSC9008). Treasury gates M2b (J11): +5.4% script; every transaction from −0.2% to +8.3% of the Java example's budget,
+  at most 5.21% of the CPU and 14.46% of the memory maximum at the saturated 21-key council. After #84's review r1: the
+  batched-action rules above (JSC0440, `Stepped`), JSC0441, IR format 2, views with params, reserved annotation names.
+  After review r2: a view's described arguments leave the params out too; the Java IR reader refuses unknown fields at
+  every level (the conditions for joining format 2 with M4a's are in the IR doc); the processor refuses a mixed
+  `@Quorum` (S3), as JSC0439 does.

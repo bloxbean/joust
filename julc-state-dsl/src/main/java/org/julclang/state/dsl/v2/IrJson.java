@@ -28,7 +28,7 @@ final class IrJson {
     private IrJson() {}
 
     /** The version of this format. A change to the IR's shape or meaning gets a new version. */
-    static final int VERSION = 1;
+    static final int VERSION = 2;
 
     private static final HexFormat HEX = HexFormat.of();
 
@@ -71,6 +71,8 @@ final class IrJson {
         }
         out.put("enums", enums);
         out.put("state", w.record(p.state()));
+        // M2b (additive): the params record and the invariants, present only when the contract declares them.
+        if (p.params() != null) out.put("params", w.record(p.params()));
         out.put("timeFields", List.copyOf(new TreeSet<>(p.timeFields())));
         out.put("recursiveFns", List.copyOf(new TreeSet<>(p.recursiveFns())));
         var fns = new ArrayList<Object>();
@@ -81,7 +83,14 @@ final class IrJson {
         var methods = new ArrayList<Object>();
         for (Ir.Method m : p.methods()) {
             var mods = new ArrayList<Object>();
-            for (Ir.Mod mod : m.mods()) mods.add(mod.field() == null ? obj("name", mod.name()) : obj("name", mod.name(), "field", mod.field()));
+            for (Ir.Mod mod : m.mods()) {
+                if (mod.name().equals("quorum")) {
+                    String[] kt = mod.field().split(" ");
+                    mods.add(obj("name", mod.name(), "keys", kt[0], "threshold", kt[1]));
+                } else {
+                    mods.add(mod.field() == null ? obj("name", mod.name()) : obj("name", mod.name(), "field", mod.field()));
+                }
+            }
             var m2 = new LinkedHashMap<String, Object>();
             m2.put("kind", m.kind().name().toLowerCase());
             m2.put("name", m.name());
@@ -96,6 +105,11 @@ final class IrJson {
             methods.add(m2);
         }
         out.put("methods", methods);
+        if (!p.invariants().isEmpty()) {
+            var invariants = new ArrayList<Object>();
+            for (Ir.Invariant inv : p.invariants()) invariants.add(obj("name", inv.name(), "body", w.block(inv.body()), "at", at(inv.pos())));
+            out.put("invariants", invariants);
+        }
         var warnings = new ArrayList<Object>();
         for (Ir.Warning x : p.warnings()) warnings.add(obj("line", (long) x.line(), "col", (long) x.col(), "code", x.code(), "message", x.message()));
         out.put("warnings", warnings);
@@ -179,6 +193,7 @@ final class IrJson {
                 case Ir.Send y -> obj("stmt", "Send", "to", expr(y.to()), "value", expr(y.value()), "at", at(y.pos()));
                 case Ir.Mint y -> obj("stmt", "Mint", "burn", y.burn(), "name", expr(y.name()), "qty", expr(y.qty()), "at", at(y.pos()));
                 case Ir.Accept y -> obj("stmt", "Accept", "value", expr(y.value()), "at", at(y.pos()));
+                case Ir.Emit y -> obj("stmt", "Emit", "event", expr(y.event()), "at", at(y.pos()));
                 case Ir.If i -> {
                     Object branches = branches(i.branches());
                     yield obj("stmt", "If", "branches", branches, "otherwise", i.otherwise() == null ? null : block(i.otherwise()),
@@ -289,6 +304,7 @@ final class IrJson {
                 case Ir.ListArg l -> obj("node", "ListArg", "op", l.op(), "list", expr(l.list()), "arg", expr(l.arg()));
                 case Ir.FundsRef f -> obj("node", "FundsRef", "field", f.field());
                 case Ir.LedgerOp o -> obj("node", "LedgerOp", "op", o.op(), "args", exprs(o.args()));
+                case Ir.ParamsRef r -> obj("node", "ParamsRef", "field", r.field());
             };
             node.put("type", type(e.type()));
             node.put("taint", (long) e.taint());
@@ -300,7 +316,7 @@ final class IrJson {
     // ------------------------------------------------------------------ printing
 
     /** Pretty JSON: an object or array stays on one line when that line is short, else one member per line. */
-    private static void print(Object v, StringBuilder out, String ind) {
+    static void print(Object v, StringBuilder out, String ind) {
         String flat = flat(v);
         if (flat.length() + ind.length() <= 120 || !(v instanceof Map<?, ?> || v instanceof List<?>)) {
             out.append(flat);
@@ -410,9 +426,54 @@ final class IrJson {
             return new Pos(i(l(o).get(0)), i(l(o).get(1)));
         }
 
+        /**
+         * #84 review C2: like the JavaScript reader, a field this reader does not know is refused, so a later addition to
+         * the format is refused rather than dropped (version 1's Java reader ignored unknown top-level fields).
+         */
+        static void known(Map<String, Object> o, Set<String> allowed, String where) {
+            for (String k : o.keySet()) if (!allowed.contains(k)) throw new IllegalArgumentException("unknown field \"" + k + "\" in " + where);
+        }
+
+
+        /** Each statement's fields (beside "stmt" and "at"), as {@link Writer#stmt} writes them (#84 review C8, F10). */
+        static final Map<String, Set<String>> STMT_FIELDS = Map.ofEntries(Map.entry("Let", Set.of("local", "value")),
+                Map.entry("Require", Set.of("cond", "message")), Map.entry("Pay", Set.of("to", "amount")), Map.entry("Send", Set.of("to", "value")),
+                Map.entry("Mint", Set.of("burn", "name", "qty")), Map.entry("Accept", Set.of("value")), Map.entry("Emit", Set.of("event")),
+                Map.entry("If", Set.of("branches", "otherwise", "pays")), Map.entry("For", Set.of("var", "list", "body", "pays")),
+                Map.entry("Match", Set.of("scrutinee", "arms", "pays")));
+
+        /** Each node's fields (beside "node", "type", "taint" and "at"), as {@link Writer#expr} writes them. */
+        static final Map<String, Set<String>> NODE_FIELDS = Map.ofEntries(Map.entry("Lit", Set.of("value")), Map.entry("LocalRef", Set.of("local")),
+                Map.entry("StateRef", Set.of()), Map.entry("StateField", Set.of("field")), Map.entry("CtxRef", Set.of("name")),
+                Map.entry("NoneLit", Set.of()), Map.entry("SomeOf", Set.of("value")), Map.entry("GetField", Set.of("target", "record", "field")),
+                Map.entry("New", Set.of("record", "values")), Map.entry("CallFn", Set.of("fn", "args")), Map.entry("CallStd", Set.of("module", "name", "args")),
+                Map.entry("Prelude", Set.of("op", "args")), Map.entry("TimePred", Set.of("after", "threshold")), Map.entry("ListLit", Set.of("items", "rest")),
+                Map.entry("Neg", Set.of("operand")), Map.entry("Not", Set.of("operand")), Map.entry("Arith", Set.of("op", "left", "right")),
+                Map.entry("Compare", Set.of("op", "left", "right")), Map.entry("Equals", Set.of("negate", "left", "right", "operand")),
+                Map.entry("Logic", Set.of("op", "left", "right")), Map.entry("Cond", Set.of("cond", "then", "otherwise")),
+                Map.entry("Coalesce", Set.of("option", "default")), Map.entry("BlockValue", Set.of("block")), Map.entry("IfValue", Set.of("branches", "otherwise")),
+                Map.entry("ListProp", Set.of("op", "list")), Map.entry("Concat", Set.of("left", "right")), Map.entry("Contains", Set.of("list", "value", "elem")),
+                Map.entry("Hof", Set.of("kind", "list", "x", "body")), Map.entry("Fold", Set.of("list", "init", "acc", "x", "body")),
+                Map.entry("Variant", Set.of("enum", "variant", "values")), Map.entry("Match", Set.of("scrutinee", "arms")), Map.entry("MapEmpty", Set.of()),
+                Map.entry("MapOp", Set.of("op", "map", "args")), Map.entry("MapHof", Set.of("kind", "map", "k", "v", "body")),
+                Map.entry("MapFold", Set.of("map", "init", "acc", "k", "v", "body")), Map.entry("BigEmpty", Set.of()), Map.entry("BigOp", Set.of("op", "map", "args")),
+                Map.entry("Range", Set.of("from", "to")), Map.entry("ListArg", Set.of("op", "list", "arg")), Map.entry("FundsRef", Set.of("field")),
+                Map.entry("LedgerOp", Set.of("op", "args")), Map.entry("ParamsRef", Set.of("field")));
+
+        static Set<String> with(Set<String> a, String... more) {
+            var out = new java.util.HashSet<>(a);
+            out.addAll(List.of(more));
+            return out;
+        }
+
         Ir.Program program(Map<String, Object> r) {
+            known(r, Set.of("ir", "language", "sourceSha256", "package", "contract", "source", "options", "records", "enums", "state", "params",
+                    "timeFields", "recursiveFns", "fns", "methods", "invariants", "warnings"), "the program");
             var options = new ArrayList<Ir.ContractOption>();
-            for (Object o : l(r.get("options"))) options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
+            for (Object o : l(r.get("options"))) {
+                known(m(o), Set.of("name", "value"), "an option");
+                options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
+            }
             var records = new LinkedHashMap<String, Ir.RecordType>();
             for (Object o : l(r.get("records"))) {
                 Ir.RecordType t = record(m(o));
@@ -420,6 +481,7 @@ final class IrJson {
             }
             var enums = new LinkedHashMap<String, Ir.EnumType>();
             for (Object o : l(r.get("enums"))) {
+                known(m(o), Set.of("name", "variants", "at"), "an enum");
                 var vs = new LinkedHashMap<String, Ir.RecordType>();
                 for (Object x : l(m(o).get("variants"))) {
                     Ir.RecordType t = record(m(x));
@@ -431,14 +493,24 @@ final class IrJson {
             var fns = new ArrayList<Ir.Fn>();
             for (Object o : l(r.get("fns"))) {
                 var f = m(o);
+                known(f, Set.of("name", "params", "result", "body", "at"), "a fn");
                 fns.add(new Ir.Fn(s(f.get("name")), decls(f.get("params")), type(f.get("result")), block(f.get("body")), pos(f.get("at"))));
             }
             var methods = new ArrayList<Ir.Method>();
             for (Object o : l(r.get("methods"))) {
                 var x = m(o);
+                known(x, Set.of("kind", "name", "params", "mods", "checked", "usesCtx", "pays", "result", "body", "at"), "a method");
                 var params = decls(x.get("params"));
                 var mods = new ArrayList<Ir.Mod>();
-                for (Object mo : l(x.get("mods"))) mods.add(new Ir.Mod(s(m(mo).get("name")), (String) m(mo).get("field")));
+                for (Object mo : l(x.get("mods"))) {
+                    var md = m(mo);
+                    known(md, Set.of("name", "field", "keys", "threshold"), "a modifier");
+                    if (!Set.of("payable", "open", "only", "after", "before", "batched", "quorum", "authorized").contains(s(md.get("name")))) {
+                        throw new IllegalArgumentException("unknown modifier " + md.get("name"));
+                    }
+                    mods.add(new Ir.Mod(s(md.get("name")), s(md.get("name")).equals("quorum") ? s(md.get("keys")) + " " + s(md.get("threshold"))
+                            : (String) md.get("field")));
+                }
                 var checked = new ArrayList<Ir.Local>();
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
                 methods.add(new Ir.Method(Ir.Kind.valueOf(s(x.get("kind")).toUpperCase()), s(x.get("name")), params, mods, checked,
@@ -452,15 +524,29 @@ final class IrJson {
             var warnings = new ArrayList<Ir.Warning>();
             for (Object o : l(r.get("warnings"))) {
                 var w = m(o);
+                known(w, Set.of("line", "col", "code", "message"), "a warning");
                 warnings.add(new Ir.Warning(i(w.get("line")), i(w.get("col")), s(w.get("code")), s(w.get("message"))));
             }
+            Ir.RecordType params = r.get("params") == null ? null : record(m(r.get("params")));
+            var invariants = new ArrayList<Ir.Invariant>();
+            if (r.get("invariants") != null) {
+                for (Object o : l(r.get("invariants"))) {
+                    var x = m(o);
+                    known(x, Set.of("name", "body", "at"), "an invariant");
+                    invariants.add(new Ir.Invariant(s(x.get("name")), block(x.get("body")), pos(x.get("at"))));
+                }
+            }
             return new Ir.Program(s(r.get("package")), s(r.get("source")), s(r.get("contract")), options, records, enums, state, methods, fns,
-                    Set.copyOf(timeFields), recursive, warnings);
+                    Set.copyOf(timeFields), recursive, warnings, params, invariants);
         }
 
         Ir.RecordType record(Map<String, Object> r) {
+            known(r, Set.of("name", "fields", "at"), "a record");
             var fields = new LinkedHashMap<String, Ty>();
-            for (Object o : l(r.get("fields"))) fields.put(s(m(o).get("name")), type(m(o).get("type")));
+            for (Object o : l(r.get("fields"))) {
+                known(m(o), Set.of("name", "type"), "a record's field");
+                fields.put(s(m(o).get("name")), type(m(o).get("type")));
+            }
             return new Ir.RecordType(s(r.get("name")), fields, pos(r.get("at")));
         }
 
@@ -494,6 +580,7 @@ final class IrJson {
 
         Ir.Local decl(Object o) {
             var d = m(o);
+            known(d, Set.of("id", "name", "type", "taint", "at", "fieldTaints"), "a local");
             Map<String, Integer> ft = null;
             if (d.containsKey("fieldTaints")) {
                 ft = new HashMap<>();
@@ -518,12 +605,16 @@ final class IrJson {
 
         Ir.Block block(Object o) {
             var b = m(o);
+            known(b, Set.of("stmts", "result", "at"), "a block");
             var stmts = new ArrayList<Ir.Stmt>();
             for (Object x : l(b.get("stmts"))) stmts.add(stmt(m(x)));
             return new Ir.Block(stmts, b.get("result") == null ? null : expr(b.get("result")), pos(b.get("at")));
         }
 
         Ir.Stmt stmt(Map<String, Object> x) {
+            Set<String> fs = STMT_FIELDS.get(s(x.get("stmt")));
+            if (fs == null) throw new IllegalArgumentException("unknown statement " + x.get("stmt"));
+            known(x, with(fs, "stmt", "at"), "a " + x.get("stmt") + " statement");
             Pos at = pos(x.get("at"));
             return switch (s(x.get("stmt"))) {
                 case "Let" -> {
@@ -538,6 +629,7 @@ final class IrJson {
                     yield new Ir.Mint(burn, expr(x.get("name")), expr(x.get("qty")), at);
                 }
                 case "Accept" -> new Ir.Accept(expr(x.get("value")), at);
+                case "Emit" -> new Ir.Emit(expr(x.get("event")), at);
                 case "If" -> {
                     var branches = branches(x.get("branches"));
                     yield new Ir.If(branches, x.get("otherwise") == null ? null : block(x.get("otherwise")), (Boolean) x.get("pays"), at);
@@ -559,6 +651,7 @@ final class IrJson {
             var out = new ArrayList<Ir.Branch>();
             for (Object x : l(o)) {
                 var b = m(x);
+                known(b, Set.of("cond", "then", "at"), "a branch");
                 Ir.Expr cond = expr(b.get("cond"));
                 out.add(new Ir.Branch(cond, block(b.get("then")), pos(b.get("at"))));
             }
@@ -570,6 +663,7 @@ final class IrJson {
             var out = new ArrayList<Ir.Arm>();
             for (Object x : l(o)) {
                 var a = m(x);
+                known(a, Set.of("ctors", "fields", "binds", "body", "at"), "an arm");
                 var ctors = l(a.get("ctors")).stream().map(Reader::s).toList();
                 var fields = l(a.get("fields")).stream().map(Reader::s).toList();
                 var binds = decls(a.get("binds"));
@@ -586,6 +680,9 @@ final class IrJson {
 
         Ir.Expr expr(Object o) {
             var x = m(o);
+            Set<String> fs = NODE_FIELDS.get(s(x.get("node")));
+            if (fs == null) throw new IllegalArgumentException("unknown node " + x.get("node"));
+            known(x, with(fs, "node", "type", "taint", "at"), "a " + x.get("node") + " node");
             Ty t = type(x.get("type"));
             int taint = i(x.get("taint"));
             Pos at = pos(x.get("at"));
@@ -662,6 +759,7 @@ final class IrJson {
                 case "BigOp" -> new Ir.BigOp(s(x.get("op")), expr(x.get("map")), exprs(x.get("args")), t, taint, at);
                 case "Range" -> new Ir.Range(expr(x.get("from")), expr(x.get("to")), t, taint, at);
                 case "ListArg" -> new Ir.ListArg(s(x.get("op")), expr(x.get("list")), expr(x.get("arg")), t, taint, at);
+                case "ParamsRef" -> new Ir.ParamsRef(s(x.get("field")), t, at);
                 case "FundsRef" -> {
                     String f = s(x.get("field"));
                     if (!Set.of("received", "held", "policy", "self").contains(f)) throw new IllegalArgumentException("unknown funds field " + f);

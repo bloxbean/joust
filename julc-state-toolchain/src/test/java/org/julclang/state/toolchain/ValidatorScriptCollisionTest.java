@@ -111,20 +111,26 @@ class ValidatorScriptCollisionTest {
         // 3. the count.
         e = assertThrows(IllegalArgumentException.class, () -> ValidatorScripts.load(treasury, cfg, cfg));
         assertTrue(e.getMessage().contains("requires 1 param(s), but 2 were provided"), e.getMessage());
-        // And with its parameters, every path agrees with JuLC's loader.
-        String applied = JulcScriptLoader.load(treasury, cfg).getCborHex();
+        // And with its parameters, the runtime's path applies them to the script beside the class. Since ADR-0018 M2b the
+        // class path also holds treasury's .jsc 2 port, whose TreasuryValidator has the same resource name, so JuLC's own
+        // loader (by that name) may read the port's script: JuLC's application is compared on a validator without a twin
+        // (Guardian, below).
+        String applied = ValidatorScripts.load(treasury, cfg).getCborHex();
         assertEquals(applied, StateContractHandle.scriptFor(spec, new org.julclang.state.examples.treasury.Treasury.Config(
                 new Credential.ScriptCredential(new ScriptHash(StateHarness.fill(28, 0x6A))), BigInteger.valueOf(100_000_000))).getCborHex());
+        assertNotEquals(applied, ValidatorScripts.load(org.julclang.state.examples.dsl.TreasuryValidator.class, cfg).getCborHex(),
+                "the Java example's and the port's scripts, each beside its class");
     }
 
     @Test
     void parameters_areAppliedAsJuLCsLoaderAppliesThem() throws Exception {
-        // A validator without a twin: the script beside it, with params applied, equals JuLC's own loading.
-        var cfg = new org.julclang.state.examples.treasury.Treasury.Config(new Credential.ScriptCredential(new ScriptHash(StateHarness.fill(28, 0x6A))),
-                BigInteger.valueOf(100_000_000));
-        Class<?> v = org.julclang.state.examples.treasury.TreasuryValidator.class;
-        var ours = ValidatorScripts.load(v, PlutusDataAdapter.convert(cfg));
-        var juLC = JulcScriptLoader.load(v, PlutusDataAdapter.convert(cfg));
+        // A validator without a twin (examples/treasury's Guardian; since M2b treasury's own validator has one, its .jsc 2
+        // port): the script beside it, with params applied, equals JuLC's own loading.
+        var owner = new com.bloxbean.cardano.client.plutus.spec.BytesPlutusData(StateHarness.fill(28, 0x6A));
+        Class<?> v = org.julclang.state.examples.treasury.Guardian.class;
+        assertEquals(1, Collections.list(getClass().getClassLoader().getResources("META-INF/plutus/Guardian.plutus.json")).size(), "no twin");
+        var ours = ValidatorScripts.load(v, owner);
+        var juLC = JulcScriptLoader.load(v, owner);
         assertEquals(juLC.getCborHex(), ours.getCborHex());
         var seen = new HashSet<String>();
         for (Class<?> verifier : List.of(org.julclang.state.verifier.MapVerifier.class, org.julclang.state.verifier.OutputVerifier.class)) {

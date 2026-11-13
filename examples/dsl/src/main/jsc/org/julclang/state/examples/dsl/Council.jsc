@@ -1,0 +1,57 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M2b: what the treasury port leaves out, on every leg. A quorum over the params (a board fixed at deploy) and
+// one over the state; authorized by a state credential (a key or a script) and by a params credential; events emitted
+// in loops and arms, and by a destroy; invariants that read the params; an event that carries a time value (JSC9008).
+contract Council(maxDatumBytes = 512) {
+  params { board: List<Key>, boardQuorum: Int, auditor: Credential, cap: Int }
+  state { owner: Key, keeper: Credential, members: List<Key>, need: Int, spent: Int }
+
+  event Spent { to: Key, amount: Int }
+  event Joined { member: Key }
+  event Stamped { from: Int }
+  event Closed
+
+  init(members: List<Key>, need: Int, keeper: Credential) {
+    return { owner: caller, keeper, members, need, spent: 0 }
+  }
+
+  // The board (a quorum of the params) pays each of tos; an event per payment, in the loop's order.
+  action spend(tos: List<Key>, amount: Int) quorum params.board params.boardQuorum {
+    for (const to of tos) {
+      pay(to, amount)
+      emit(Spent { to, amount })
+    }
+    return { ...state, spent: spent + amount * tos.length }
+  }
+
+  // A quorum of the members replaces them; each new member is announced.
+  action setMembers(newMembers: List<Key>, newNeed: Int) quorum members need {
+    for (const m of newMembers) {
+      if !members.any(x => x == m) {
+        emit(Joined { member: m })
+      }
+    }
+    return { ...state, members: newMembers, need: newNeed }
+  }
+
+  // The keeper (a key that signs, or a script that approves) stamps the call's window start.
+  action stamp() authorized keeper {
+    emit(Stamped { from: validFrom })
+    return state
+  }
+
+  // The auditor (a params credential) resets the spending.
+  action audit() authorized params.auditor {
+    return { ...state, spent: 0 }
+  }
+
+  destroy close() only owner {
+    emit(Closed)
+    pay(owner, balance)
+  }
+
+  invariant withinCap { spent <= params.cap }
+  invariant someone = members.length > 0
+}

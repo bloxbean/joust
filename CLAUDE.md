@@ -195,6 +195,14 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   inputs are decided on the data (`AddressAdapter`: tags, field counts; a staking pointer refused), since a transition
   program decodes nothing. `StateHarness` refuses what the ledger would (negative or > 2^64 - 1 output quantities, a mint
   outside Int64; `ledgerRules(false)` only for worst-case budgets). `ValueAdapterDifferentialTest` covers both bodies.
+- ADR-0018 M2b (params, events, quorum, authorized, invariants): the generated params record is `Config` (parameter
+  `params__`; an init always takes it, other methods when they read `params.f`), the events' type `Event`; both names
+  are reserved when declared. Result records hold `events` last; the redeemer of any method whose record has them
+  carries them (empty when it emits none). The interpreters model quorum/authorized as modifiers (their `Tx` has
+  `approvers`: scripts approving the action) and the validator's output checks (quorum shapes, invariants; class
+  `invariant:…`) after the body; `FourWay.as(signers, approvers)` signs and approves the next call on every leg.
+  `copyPortTests` also renames words: treasury's tests use `Guardian`, which examples/dsl copies as `TreasuryGuardian`
+  (never put a Java example on examples/dsl's class path: its validator shares a script resource name with its port's).
 - ADR-0018 `.jsc` 2 generated artifacts: after changing the IR, the lowering or an example, rewrite the JS
   interpreter's IR fixtures (`./gradlew :julc-state-dsl:test -Pjoust.writeIrFixtures`; `JscV2IrTest` fails when stale)
   and tree-sitter's shapes (`... --tests '*JscCorpusTest*' -Djsc.writeShapes=true`), and run `npm test` in

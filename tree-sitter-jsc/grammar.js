@@ -155,9 +155,23 @@ module.exports = grammar({
       $.function_declaration,
       $.type_declaration,
       $.enum_declaration,
+      $.params_declaration,
+      $.event_declaration,
+      $.invariant_declaration,
     ),
 
     state_declaration: $ => seq('state', field('fields', $.field_list)),
+
+    // M2b (ADR-0009 via ADR-0018): the deploy-time parameters (read as params.f; once, JSC0431), the contract's events
+    // (the variants of its Event) and its invariants.
+    params_declaration: $ => seq('params', field('fields', $.field_list)),
+
+    event_declaration: $ => seq('event', field('name', $.identifier), optional(field('fields', $.field_list))),
+
+    invariant_declaration: $ => seq(
+      'invariant', field('name', $.identifier),
+      choice(seq('=', field('value', $._expression)), field('body', $.block)),
+    ),
 
     init_declaration: $ => seq(
       'init', field('parameters', $.parameters), repeat($.modifier), field('body', $.block),
@@ -184,7 +198,14 @@ module.exports = grammar({
       'batched',
       seq('batched', 'only'),
       seq(choice('only', 'after', 'before'), field('field', $.identifier)),
+      // M2b: quorum <keys> <threshold> and authorized <credential>, each a state field or params.f.
+      seq('quorum', field('keys', $._field_ref), field('threshold', $._field_ref)),
+      seq('authorized', field('field', $._field_ref)),
     ),
+
+    _field_ref: $ => choice($.identifier, $.params_field),
+
+    params_field: $ => seq('params', '.', field('name', $.identifier)),
 
     // ------------------------------------------------------------------ blocks and statements
 
@@ -232,6 +253,7 @@ module.exports = grammar({
       $.send_statement,
       $.mint_statement,
       $.accept_statement,
+      $.emit_statement,
       $.for_statement,
       prec.dynamic(1, $.if_statement),
       prec.dynamic(1, $.match_statement),
@@ -253,6 +275,9 @@ module.exports = grammar({
     mint_statement: $ => seq(choice('mint', 'burn'), '(', field('name', $._expression), ',', field('quantity', $._expression), ')'),
 
     accept_statement: $ => seq('accept', '(', field('value', $._expression), ')'),
+
+    // M2b: an event of the call (a value of the contract's Event), in source order.
+    emit_statement: $ => seq('emit', '(', field('event', $._expression), ')'),
 
     for_statement: $ => seq(
       'for', '(', 'const', field('name', $.identifier), 'of', field('iterable', $._expression), ')', field('body', $.block),

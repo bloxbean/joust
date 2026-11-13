@@ -1,0 +1,392 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "90b44fc4d8797de2e8e11fed6e46ed36c5d73f85989be7da0ea511fcf1b018f5",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Treasury",
+  "source": "Treasury.jsc",
+  "options": [{ "name": "maxDatumBytes", "value": "640" }],
+  "records": [],
+  "enums": [
+    {
+      "name": "Event",
+      "variants": [
+        {
+          "name": "Paid",
+          "fields": [{ "name": "to", "type": "Key" }, { "name": "amount", "type": "Int" }],
+          "at": [12, 9]
+        },
+        {
+          "name": "CouncilChanged",
+          "fields": [{ "name": "members", "type": "Int" }, { "name": "quorum", "type": "Int" }],
+          "at": [13, 9]
+        },
+        { "name": "Frozen", "fields": [{ "name": "frozen", "type": "Bool" }], "at": [14, 9] }
+      ],
+      "at": [12, 9]
+    }
+  ],
+  "state": {
+    "name": "State",
+    "fields": [
+      { "name": "council", "type": { "list": "Key" } },
+      { "name": "quorum", "type": "Int" },
+      { "name": "frozen", "type": "Bool" }
+    ],
+    "at": [8, 1]
+  },
+  "params": {
+    "name": "Config",
+    "fields": [{ "name": "guardian", "type": "Credential" }, { "name": "maxPayout", "type": "Int" }],
+    "at": [9, 3]
+  },
+  "timeFields": [],
+  "recursiveFns": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [
+        { "id": 1, "name": "council", "type": { "list": "Key" }, "taint": 0, "at": [16, 8] },
+        { "id": 2, "name": "quorum", "type": "Int", "taint": 0, "at": [16, 28] }
+      ],
+      "mods": [{ "name": "payable" }],
+      "checked": [1],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "LocalRef", "local": 1, "type": { "list": "Key" }, "taint": 0, "at": [17, 14] },
+            { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [17, 23] },
+            { "node": "Lit", "value": false, "type": "Bool", "taint": 0, "at": [17, 39] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [17, 12]
+        },
+        "at": [16, 49]
+      },
+      "at": [16, 3]
+    },
+    {
+      "kind": "action",
+      "name": "fund",
+      "params": [],
+      "mods": [{ "name": "payable" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">",
+              "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [21, 13] },
+              "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [21, 24] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [21, 13]
+            },
+            "message": "fund with some ADA",
+            "at": [21, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [22, 12] },
+        "at": [20, 25]
+      },
+      "at": [20, 3]
+    },
+    {
+      "kind": "action",
+      "name": "pay",
+      "params": [
+        { "id": 3, "name": "to", "type": "Key", "taint": 0, "at": [26, 14] },
+        { "id": 4, "name": "amount", "type": "Int", "taint": 0, "at": [26, 23] }
+      ],
+      "mods": [{ "name": "quorum", "keys": "council", "threshold": "quorum" }],
+      "checked": [3],
+      "usesCtx": true,
+      "pays": true,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Not",
+              "operand": { "node": "StateField", "field": "frozen", "type": "Bool", "taint": 0, "at": [27, 14] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [27, 13]
+            },
+            "message": "the treasury is frozen",
+            "at": [27, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [28, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [28, 22] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [28, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": "<=",
+                "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [28, 27] },
+                "right": { "node": "ParamsRef", "field": "maxPayout", "type": "Int", "taint": 0, "at": [28, 37] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [28, 27]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [28, 13]
+            },
+            "message": "amount out of range",
+            "at": [28, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": "<=",
+              "left": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [29, 13] },
+              "right": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [29, 23] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [29, 13]
+            },
+            "message": "not enough funds",
+            "at": [29, 5]
+          },
+          {
+            "stmt": "Pay",
+            "to": { "node": "LocalRef", "local": 3, "type": "Key", "taint": 0, "at": [30, 9] },
+            "amount": { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [30, 13] },
+            "at": [30, 5]
+          },
+          {
+            "stmt": "Emit",
+            "event": {
+              "node": "Variant",
+              "enum": "Event",
+              "variant": "Paid",
+              "values": [
+                { "node": "LocalRef", "local": 3, "type": "Key", "taint": 0, "at": [31, 17] },
+                { "node": "LocalRef", "local": 4, "type": "Int", "taint": 0, "at": [31, 21] }
+              ],
+              "type": { "enum": "Event" },
+              "taint": 0,
+              "at": [31, 10]
+            },
+            "at": [31, 5]
+          }
+        ],
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [32, 12] },
+        "at": [26, 58]
+      },
+      "at": [26, 3]
+    },
+    {
+      "kind": "action",
+      "name": "rotate",
+      "params": [
+        { "id": 5, "name": "newCouncil", "type": { "list": "Key" }, "taint": 0, "at": [36, 17] },
+        { "id": 6, "name": "newQuorum", "type": "Int", "taint": 0, "at": [36, 40] }
+      ],
+      "mods": [{ "name": "quorum", "keys": "council", "threshold": "quorum" }],
+      "checked": [5],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Emit",
+            "event": {
+              "node": "Variant",
+              "enum": "Event",
+              "variant": "CouncilChanged",
+              "values": [
+                {
+                  "node": "ListProp",
+                  "op": "length",
+                  "list": { "node": "LocalRef", "local": 5, "type": { "list": "Key" }, "taint": 0, "at": [37, 36] },
+                  "type": "Int",
+                  "taint": 0,
+                  "at": [37, 36]
+                },
+                { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [37, 63] }
+              ],
+              "type": { "enum": "Event" },
+              "taint": 0,
+              "at": [37, 10]
+            },
+            "at": [37, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "LocalRef", "local": 5, "type": { "list": "Key" }, "taint": 0, "at": [38, 33] },
+            { "node": "LocalRef", "local": 6, "type": "Int", "taint": 0, "at": [38, 53] },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [38, 17] },
+              "record": "State",
+              "field": "frozen",
+              "type": "Bool",
+              "taint": 0,
+              "at": [38, 12]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [38, 12]
+        },
+        "at": [36, 78]
+      },
+      "at": [36, 3]
+    },
+    {
+      "kind": "action",
+      "name": "freeze",
+      "params": [{ "id": 7, "name": "on", "type": "Bool", "taint": 0, "at": [42, 17] }],
+      "mods": [{ "name": "authorized", "field": "params.guardian" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Emit",
+            "event": {
+              "node": "Variant",
+              "enum": "Event",
+              "variant": "Frozen",
+              "values": [{ "node": "LocalRef", "local": 7, "type": "Bool", "taint": 0, "at": [43, 27] }],
+              "type": { "enum": "Event" },
+              "taint": 0,
+              "at": [43, 10]
+            },
+            "at": [43, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [44, 17] },
+              "record": "State",
+              "field": "council",
+              "type": { "list": "Key" },
+              "taint": 0,
+              "at": [44, 12]
+            },
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [44, 17] },
+              "record": "State",
+              "field": "quorum",
+              "type": "Int",
+              "taint": 0,
+              "at": [44, 12]
+            },
+            { "node": "LocalRef", "local": 7, "type": "Bool", "taint": 0, "at": [44, 32] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [44, 12]
+        },
+        "at": [42, 54]
+      },
+      "at": [42, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [{ "id": 8, "name": "to", "type": "Key", "taint": 0, "at": [48, 17] }],
+      "mods": [{ "name": "quorum", "keys": "council", "threshold": "quorum" }],
+      "checked": [8],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "LocalRef", "local": 8, "type": "Key", "taint": 0, "at": [49, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [49, 13] },
+            "at": [49, 5]
+          }
+        ],
+        "result": null,
+        "at": [48, 48]
+      },
+      "at": [48, 3]
+    }
+  ],
+  "invariants": [
+    {
+      "name": "reachable",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Logic",
+          "op": "&&",
+          "left": {
+            "node": "Compare",
+            "op": ">",
+            "left": { "node": "StateField", "field": "quorum", "type": "Int", "taint": 0, "at": [53, 25] },
+            "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [53, 34] },
+            "type": "Bool",
+            "taint": 0,
+            "at": [53, 25]
+          },
+          "right": {
+            "node": "Compare",
+            "op": "<=",
+            "left": { "node": "StateField", "field": "quorum", "type": "Int", "taint": 0, "at": [53, 39] },
+            "right": {
+              "node": "ListProp",
+              "op": "length",
+              "list": { "node": "StateField", "field": "council", "type": { "list": "Key" }, "taint": 0, "at": [53, 49] },
+              "type": "Int",
+              "taint": 0,
+              "at": [53, 49]
+            },
+            "type": "Bool",
+            "taint": 0,
+            "at": [53, 39]
+          },
+          "type": "Bool",
+          "taint": 0,
+          "at": [53, 25]
+        },
+        "at": [53, 25]
+      },
+      "at": [53, 3]
+    }
+  ],
+  "warnings": []
+}

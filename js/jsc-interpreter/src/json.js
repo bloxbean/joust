@@ -75,6 +75,8 @@ export function txFromJson(t) {
     validTo: BigInt(t.validTo),
     // §2.6: the keys that signed the transaction; the caller alone when the vector does not say.
     signers: (t.signers ?? [t.caller]).map(fromHex),
+    // M2b: the scripts that approve this call (authorized), none when the vector does not say.
+    approvers: (t.approvers ?? []).map(fromHex),
   };
 }
 
@@ -85,7 +87,9 @@ export function txFromJson(t) {
  */
 export function runCall(program, call) {
   try {
-    const run = call.transition === true ? program.transition.bind(program) : program.call.bind(program);
+    // M2b: a contract with params is called as deployed with them (call.params, a Config record).
+    const deployed = call.params == null ? program : program.withParams(fromJson(call.params));
+    const run = call.transition === true ? deployed.transition.bind(deployed) : deployed.call.bind(deployed);
     const o = run(call.method, call.state == null ? null : fromJson(call.state), call.args.map(fromJson), txFromJson(call.tx));
     const ok = {
       value: o.value === null ? null : toJson(o.value),
@@ -95,6 +99,7 @@ export function runCall(program, call) {
     if (o.sends.length > 0) ok.sends = o.sends.map((x) => ({ to: toJson(x.to), value: valueToJson(x.value) }));
     if (o.mint.entries.length > 0) ok.mint = valueToJson(o.mint);
     if (o.accepted.entries.length > 0) ok.accepted = valueToJson(o.accepted);
+    if (o.events.length > 0) ok.events = o.events.map(toJson);
     return { ok };
   } catch (e) {
     if (e instanceof Refused) return { refused: e.message, class: e.refusal };

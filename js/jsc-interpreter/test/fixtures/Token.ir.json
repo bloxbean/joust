@@ -1,5 +1,5 @@
 {
-  "ir": 1,
+  "ir": 2,
   "language": "jsc 2",
   "sourceSha256": "885302645768354d9fc2534de66f7b826fe91b0c9bd609d42753112f621cfb67",
   "package": "org.julclang.state.examples.dsl",

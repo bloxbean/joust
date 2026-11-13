@@ -15,9 +15,9 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 [standard library](/languages/jsc-std/). A file without `jsc 2` is [.jsc v1](/languages/jsc-v1/).
 
 <Aside type="caution" title="A preview">
-`.jsc` 2 is a preview: the core language of milestone M1, and M2a's values and native assets (`Value`, `Address`,
-`Credential`, `funds`, `send`, `mint`, `burn`, `accept`). The rest of M2 (params, invariants, events, quorum, authorized
-actions, reads, deposits, other contracts) and M3 to M4 (owned and keyed objects, purposes, libraries) still need
+`.jsc` 2 is a preview: the core language of milestone M1, M2a's values and native assets (`Value`, `Address`,
+`Credential`, `funds`, `send`, `mint`, `burn`, `accept`), and M2b's params, invariants, events, `quorum` and
+`authorized`. The rest of M2 (reads, deposits, other contracts) and M3 to M4 (owned and keyed objects, purposes, libraries) still need
 [Java](/languages/java/).
 </Aside>
 
@@ -48,16 +48,22 @@ fn        = "fn" Ident params ":" typeRef ( "=" expr | block )
 contract  = "contract" Name [ "(" option { "," option } ")" ] "{" { member } "}"
 option    = ( "minAda" | "maxDatumBytes" | "maxValidityMs" ) "=" Int [ "ada" ]
 member    = "state" "{" { field [","] } "}"          (exactly once)
+          | "params" "{" { field [","] } "}"          (at most once)
+          | "event" Name [ "{" { field [","] } "}" ]
+          | "invariant" Ident ( "=" expr | block )
           | "init" params [ "payable" ] block
           | ( "action" | "destroy" ) Ident params { modifier } block
           | "view" Ident params ":" typeRef ( "=" expr | block )
           | fn | type | enum
 params    = "(" [ Ident ":" typeRef { "," Ident ":" typeRef } ] ")"
 modifier  = "payable" | "open" | "batched" [ "only" ] | ( "only" | "after" | "before" ) Ident
+          | "quorum" fieldRef fieldRef | "authorized" fieldRef
+fieldRef  = Ident | "params" "." Ident
 block     = "{" { stmt } [ [ "return" ] expr ] "}"
 stmt      = "const" Ident [ ":" typeRef ] "=" expr
           | "require" "(" expr "," String ")"
           | "pay" "(" expr "," expr ")"
+          | ( "send" | "mint" | "burn" ) "(" expr "," expr ")" | "accept" "(" expr ")" | "emit" "(" expr ")"
           | "if" expr block [ "else" ( if | block ) ]
           | "match" expr "{" { pattern "=>" ( block | require | pay | expr ) [","] } "}"
           | "for" "(" "const" Ident "of" expr ")" block
@@ -140,10 +146,22 @@ hash, and every `Address` the ledger's encoding with a well-formed payment crede
 | `destroy name(params) mods { … }` | `@Destroy public static JulcList<Payout> name(State s__, params, Ctx ctx)` | no result (`JSC0411`); must pay at least once (`JSC0409`); cannot be `payable` (`JSC0406`) |
 | `view name(params): T = expr` | `@View public static T name(State s__, params)` | no transaction built-ins (`JSC0415`), no `pay` |
 | `fn name(params): T = expr` | a `static` method of the contract class | pure: no state, no built-ins, no `pay` |
+| `params { … }` | `@Params public record Config(...)` | once (`JSC0431`), at least one field (`JSC0432`); read as `params.f` in methods, views and invariants, never in a `fn` (`JSC0433`) |
+| `event Name { … }` | a variant of `public sealed interface Event` | the contract's events; emitted with `emit(Name { … })` |
+| `invariant name = expr` | `@Invariant public static boolean name(State s__[, Config params__])` | a `Bool` over the state and the params, like a view's body, without `require` (`JSC0441`); not with `BigMap` state (`JSC0435`) or `batched` actions (`JSC0436`) |
 
-Method names are unique, and a `fn` may not share one (`JSC0202`). A method gets `Ctx ctx` when it is a destroy, has a
-modifier other than `open` and `only`, or mentions `caller`, `received`, `balance`, `validFrom`, `validTo`, `after` or
-`before`.
+Method names are unique, and a `fn` may not share one (`JSC0202`); nor may an invariant (`JSC0224`). A method gets
+`Ctx ctx` when it is a destroy, has a modifier other than `open`, `only`, `quorum` and `authorized`, or mentions
+`caller`, `received`, `balance`, `validFrom`, `validTo`, `after` or `before`.
+
+**Params** (ADR-0009 D1) are fixed when the contract is deployed: the script is applied to them, so each set of params is
+its own script (pin `policyIdFor(params)`), and they are in no redeemer. An `init` takes them (first) whenever the
+contract declares them; any other method or view takes them (directly after the state) when it reads them. `Config` is
+then a reserved type name, as `Event` is in a contract with events (`JSC0225`). A batched action does not read them yet
+(`JSC0437`).
+
+**Invariants** (ADR-0009 D4) are checked by the validator on every state it accepts as an output (a creation and every
+action; a destroy has none), and by the runtime before it submits. A state that breaks one can only be destroyed.
 
 ## Modifiers
 
@@ -156,8 +174,22 @@ modifier other than `open` and `only`, or mentions `caller`, `received`, `balanc
 | `open` | none | `action`, `destroy` | |
 | `batched` | `@Batched` | `action` (`JSC0418`) | |
 | `batched only` | `@Batched(only = true)`: intent-only, no direct call | `action` | |
+| `quorum k t` | `@Quorum(keys = "k", threshold = "t")` | `action`, `destroy` | `List<Key>` and `Int`, both state fields or both `params.f` (`JSC0439`) |
+| `authorized c` | `@AuthorizedBy("c")` | `action`, `destroy` | `Credential`, a state field or `params.f` |
 
-Modifiers name state fields, never parameters (`JSC0310`). Each is given at most once (`JSC0416`). A `batched` action
+`quorum k t` (ADR-0009 D2) holds when at least `t ≥ 1` of the transaction's signatories are in `k`, read from the
+input state, never the result. Every state the validator accepts as an output keeps each state quorum *well formed*
+(keys strictly ascending, so distinct, each 28 bytes, and 1 ≤ `t` ≤ their number), and a params quorum is checked at
+creation, so no rotation can lock the contract. `authorized c` (ADR-0009 D3) holds when the key credential `c` signed, or
+the script `c` is withdrawn from in the transaction with an `Approvals` redeemer listing `(policy, instance, action)` (a
+native script, which has no redeemer, approves through its withdrawal alone); never this contract's own script or a JOUST
+verifier. Both are an audience (J16). Neither is allowed in an `init`
+(`JSC0405`) or a batched action (`JSC0417`), and neither field holds a time value (`JSC0524`). A contract with a quorum over
+state fields has no batched actions (`JSC0440`, ADR-0009 r3): a batch's states are not checked, so a batched action could
+make the quorum unreachable; a quorum over params may be combined with them. `quorum` and
+`authorized` are modifier words only in a method's header: a state field may be called `quorum` (`quorum council quorum`).
+
+Modifiers name state fields (`quorum` and `authorized` also `params.f`), never parameters (`JSC0310`). Each is given at most once (`JSC0416`). A `batched` action
 cannot also have `only`, `after` or `before` (`JSC0417`): the batcher signs a batch and sets its window, so check the
 caller or the time in the body. A paying one says `open` (`JSC0420`): an intent authorises its action until its
 deadline, against the state a batcher applies it to, in the batcher's order, so keep deadlines short and bound
@@ -253,6 +285,7 @@ sends, mints, burns or accepts, is lowered with the processor's `Funds` paramete
 | `send(to, v)` | an output of `v` to the address `to`, without a datum | every quantity positive, no reserved name of the own policy, never to the contract's own script (`#send:`) |
 | `mint(name, n)`, `burn(name, n)` | `n` more, or fewer, of the own policy's `name`; the net is what the transaction mints | `n` positive, `name` a user token of at most 32 bytes (`#mint:`) |
 | `accept(v)` | the method takes in `v` | native assets only, every quantity positive (`#accept:`); at the end, the sum accepted equals `funds.received` (`#funds:`) |
+| `emit(e)` | an event (a value of the contract's `Event`), in source order | none in the method; the validator requires the redeemer to carry exactly these events (ADR-0009 D5) |
 
 Each kind accumulates **in source order** (in a `for`, in list order; an effect in an untaken branch does not happen);
 `mint` and `accept` are net sums. An `init` takes no effect but may read `funds` (`JSC0404`; `accept` in an init is
@@ -260,7 +293,13 @@ not supported yet, `JSC0426`). `accept` needs `payable` (`JSC0422`), and a payab
 mints or burns must state what it takes in, `accept(Value.none())` for nothing (`JSC0423`). A method that can reach a
 `pay`, `send`, `mint` or `burn` in any arm or loop must have `only <field>` or `open` (`JSC0408`). A contract with native
 assets has no `batched` actions (`JSC0424`). An action with effects returns `Outcome`, or `Received` when it takes native
-assets; a destroy that sends, mints or burns returns `Settled` (the processor's result records).
+assets; a destroy that sends, mints, burns or emits returns `Settled` (the processor's result records). A batched action
+never returns events: when a direct action's `Outcome` holds them, a batched action that pays returns
+`Stepped(state, payouts)`. These names, and the annotations the lowering imports (`Invariant`, `Params`, `Quorum`,
+`AuthorizedBy`), are reserved. Events (M2b) come
+last in each record, and a method whose record has them carries them last in its redeemer (empty when it emits none). An
+`emit` is allowed in an action or a destroy (`JSC0413`), not in a batched action (`JSC0425`); the contract must declare
+an event (`JSC0438`).
 
 ## Time (D11)
 
@@ -282,11 +321,12 @@ manifest lists them as `timeFields`).
   (`JSC0517`), a range bound (`JSC0516`), a `take`/`drop` count (`JSC0512`), an `nth` index (`JSC0510`), a `Key` or
   `Hash` conversion (`JSC0507`), a `BigMap<K, Int>` value (`JSC0518`), a `Value`'s quantity (`JSC0519`), any part of a
   sent or accepted value (`JSC0520`, `JSC0522`) or a mint or burn quantity (`JSC0521`), and it never decides whether
-  `paymentKey` or `paymentScript` is `Some` (`JSC0523`). A `fn` called with a time argument is checked with that
+  `paymentKey` or `paymentScript` is `Some` (`JSC0523`). A field that holds a time value is never a quorum's keys or
+  threshold or an authorized credential (`JSC0524`), and an invariant never depends on one (`JSC0525`). A `fn` called with a time argument is checked with that
   parameter as a time value.
 - **Flowing.** Arithmetic on time values is allowed, and they may set state and amounts. A payout set by one must be
   exactly `pay(to, max(0, …))` (`JSC0501`). Warnings name the bias: a stored window value (`JSC9003`), a value derived
-  from a stored time (`JSC9004`), a payout (`JSC9005`).
+  from a stored time (`JSC9004`), a payout (`JSC9005`), an event that carries one (`JSC9008`).
 
 The submitter chooses the window, within `maxValidityMs`: `validFrom` can be that much early, `validTo` that much late.
 For accrual that pays the caller, measure from `validFrom` (`elapsedSince(t)`); for a charge the caller pays, from
@@ -317,7 +357,8 @@ beside the `.jsc` file:
 |---|---|
 | `contract`, `source` | the qualified contract name and the `.jsc` file |
 | `datum` | the `State` constructor, its fields in order, each with its `.jsc` type and data shape |
-| `redeemers.spend` | one constructor per action, then per destroy, in source order, with its index and fields (the generated `ctx` included) |
+| `params` (M2b) | the `Config` constructor the script is applied to, when the contract declares params |
+| `redeemers.spend` | one constructor per action, then per destroy, in source order, with its index and fields (the generated `ctx`, M2's `assetsIn` and M2b's `events` included) |
 | `redeemers.mint` | `CreateInstance` (`seed`, `ctx`) and `BurnInstance` |
 | `types` | every schema the datum and the redeemers reach: records, enums, and API and ledger types such as `Ctx`, `TxOutRef`, `MerkleMap` |
 | `timeFields` | the state's time fields |

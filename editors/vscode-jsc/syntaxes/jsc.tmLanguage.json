@@ -72,7 +72,7 @@
     "declarations": {
       "patterns": [
         {
-          "match": "\\b(type|enum|contract)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(type|enum|contract|event)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
               "name": "storage.type.jsc"
@@ -83,7 +83,7 @@
           }
         },
         {
-          "match": "\\b(fn|action|destroy|view)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(fn|action|destroy|view|invariant)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
               "name": "storage.type.function.jsc"
@@ -98,7 +98,7 @@
           "name": "storage.type.function.jsc"
         },
         {
-          "match": "\\b(state)\\b(?=\\s*\\{|\\s+[A-Za-z_][A-Za-z0-9_]*\\s*:)",
+          "match": "\\b(state|params)\\b(?=\\s*\\{|\\s+[A-Za-z_][A-Za-z0-9_]*\\s*:)",
           "name": "storage.type.state.jsc"
         }
       ]
@@ -202,7 +202,7 @@
         },
         {
           "name": "keyword.other.effect.jsc",
-          "match": "\\b(require|pay|send|mint|burn|accept|delete)\\b"
+          "match": "\\b(require|pay|send|mint|burn|accept|emit|delete)\\b"
         },
         {
           "name": "keyword.other.to.jsc",
@@ -210,7 +210,7 @@
         },
         {
           "name": "storage.modifier.jsc",
-          "match": "\\b(payable|open|only|batched)\\b"
+          "match": "\\b(payable|open|only|batched|quorum|authorized)\\b"
         },
         {
           "name": "storage.modifier.jsc",

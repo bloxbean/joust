@@ -1,7 +1,8 @@
 # `.jsc` 2 semantics
 
 What a checked `.jsc` 2 program evaluates to (ADR-0018 D15), for the constructs of milestone M1 (M0, M1a, and M1c's
-modifiers and batched actions) and of M2a (values, addresses, credentials, funds, and the effects on native assets). It is
+modifiers and batched actions), of M2a (values, addresses, credentials, funds, and the effects on native assets) and of M2b
+(params, invariants, events, quorum and authorized). It is
 written so that an interpreter can be built from it alone. The JavaScript reference interpreter
 (`js/jsc-interpreter`) is built from this document, and its tests hold the hand-written vectors cited here
 (`test/semantics.test.js`). Five implementations must agree on every outcome defined here (J3): the JavaScript
@@ -14,8 +15,7 @@ types, shadowing, effect legality, the time rule (D11) and the BigMap flow rules
 except where a rule is what makes an evaluation well defined. Every node name below (`Arith`, `MapOp`, …) is the IR's.
 The encodings of values as Plutus data (D5) are in the ADR and in the ABI manifest. They are not part of evaluation.
 
-**Not yet covered:** `deposit`, `emit`, `params`, `invariant`, `quorum`, `authorized`, `reads` and other contracts (M2b,
-M2c), owned and keyed objects (M3), libraries (M4). A `batched` action (M1c) is covered: its transition
+**Not yet covered:** `deposit`, `reads` and other contracts (M2c), owned and keyed objects (M3), libraries (M4). A `batched` action (M1c) is covered: its transition
 is an ordinary action's, the same in a batch and in a direct call; batch execution itself (the batcher's order, the
 fold over intents, refunds) is the validator's and the batcher's, not a call's.
 
@@ -81,7 +81,8 @@ equal (a pointer's three integers by value).
 
 A call evaluates one method. Its inputs are the method's name, the input state σ (a `State` record, absent for an
 `init`), the arguments in parameter order, and the transaction context τ. τ is absent for a view, and for a method whose
-IR says `usesCtx: false` and that has no `only f` modifier, which then never reads it. τ holds six values:
+IR says `usesCtx: false` and that has no `only f`, `quorum` or `authorized` modifier, which then never reads it. τ holds
+these values:
 
 | Name | Type | Meaning |
 |---|---|---|
@@ -90,8 +91,13 @@ IR says `usesCtx: false` and that has no `only f` modifier, which then never rea
 | `balance` | `Int` | the lovelace the call may allocate (for a destroy: everything the instance holds) |
 | `validFrom` | `Int` | the start of the transaction's validity window (POSIX ms) |
 | `validTo` | `Int` | its end |
-| `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, §2.6; the caller alone when a vector does not say) |
+| `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, `quorum` and `authorized`, §2.6; the caller alone when a vector does not say) |
+| `approvers` (M2b) | `List<Hash>` | the scripts that approve this call: each has a zero withdrawal in the transaction whose approval names this contract, instance and action (ADR-0009 D3; a native script, which has no redeemer, approves through its withdrawal alone), and is neither this contract's script nor a JOUST verifier (read only by `authorized`, §2.6; none when a vector does not say) |
 | `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns or accepts: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token), `policy` (a `Hash`: the contract's policy) and `self` (`Bytes`: the instance's token name) |
+
+**The params** (M2b, ADR-0009 D1). A contract that declares `params { … }` is called as deployed with them: a `Config`
+record, fixed for every call of the deployment (the script is applied to them), read as `params.f`. A call of a method
+that reads them needs them; without them it is the caller's error, not a refusal. They are never a time value.
 
 **The outcome** is one of the following:
 
@@ -121,10 +127,12 @@ finish a call (its stack runs out) gives **no answer**, which is not a refusal (
 6. **What was accepted** (§5.4): if the method's body holds an `accept` statement (in any arm or loop), the sum of what
    it accepted must equal τ.`funds`.`received`; otherwise the call fails.
 7. The outcome is that value with the **effects** collected in step 4: the payouts and the sends, each in the order
-   they were made, the net mint and the sum of what was accepted (§5).
+   they were made, the net mint and the sum of what was accepted (§5), and the events in the order they were emitted
+   (§5.6).
+8. **Output checks** (M2b, §2.7): for an init or an action, the next state's quorum shapes and the invariants.
 
-**The modifiers are preconditions of a call** (§2.6): `only f`, `after f` and `before f` are evaluated against τ before
-the body. `payable`, `open` and `batched` refuse nothing in a call. **Other transaction-level rules are not evaluated by
+**The modifiers are preconditions of a call** (§2.6): `only f`, `after f`, `before f`, `quorum` and `authorized` are
+evaluated against τ before the body; the output checks (§2.7) after it. `payable`, `open` and `batched` refuse nothing in a call. **Other transaction-level rules are not evaluated by
 a call:** everything about the payouts as a whole (whether they total more than τ.`balance`, what a destroy leaves
 over, the ledger's minimum per output) and a batch's own rules. From M2 also the rules on native assets that depend on
 the transaction or on everything the instance holds rather than on the call (ADR-0018 D4, r15; review r1 F1, S2):
@@ -224,7 +232,8 @@ A refusal's class names the rule that refused the call, as `kind:detail`:
 |---|---|
 | `require:<line>:<col>:<message>` | a `require` did not hold; the detail is its position in the `.jsc` file (the IR's `at`) and its message, as written, so two `require`s with one message are told apart (review S6) |
 | `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name |
-| `modifier:<word> <field>` | a modifier did not hold (§2.6): `only owner`, `after deadline`, `before deadline` |
+| `modifier:<word> <field>` | a modifier did not hold (§2.6): `only owner`, `after deadline`, `before deadline`; M2b: `quorum council quorum` (the keys, then the threshold), `authorized params.guardian` |
+| `invariant:<name>` | M2b (§2.7): the next state broke the invariant `<name>`; `invariant:quorum <keys> <threshold>`: a quorum's shape |
 | `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`, `scale`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; `pay` (a negative amount); M2's `Value.lovelace`, `Value.asset`, `Value +`, `Value -`, `covers` (§3.12), `send`, `mint`, `accept` (§5.1–5.3), or `accepted` (§5.4) |
 
 The two interpreters must give the same class for every refused call (review S4), so a vector meant to reach one rule
@@ -234,13 +243,15 @@ decides.
 ### 2.6 Modifiers
 
 A method's modifiers (D10) are checked in source order, after binding the arguments and before the checked inputs.
-Each reads a state field `f` of σ and τ:
+Each reads a state field `f` of σ (M2b: `quorum` and `authorized` may read `params.f` instead) and τ:
 
 | Modifier | Holds when |
 |---|---|
 | `only f` | the key in `f` is one of τ.`signers` (compared by content) |
 | `after f` | τ.`validFrom` ≥ the time in `f` |
 | `before f` | τ.`validTo` ≤ the time in `f` |
+| `quorum k t` (M2b) | the threshold `t` is at least 1, and at least `t` distinct keys of τ.`signers` are in the list `k` (ADR-0009 D2: read from the input state, never the result) |
+| `authorized c` (M2b) | the credential `c` is a key credential whose hash is one of τ.`signers`, or a script credential whose hash is one of τ.`approvers` (ADR-0009 D3) |
 
 The first that does not hold refuses the call with the class `modifier:<word> <field>`; no statement runs. The
 validator makes the same checks on the transaction (an unbounded window end never passes). The generated Java method
@@ -248,6 +259,26 @@ and the UPLC transition program compute the *transition* alone: every step but s
 modifiers to the validator. So on a call that breaks a modifier, both interpreters refuse, the validator refuses, and the
 JVM and transition legs agree with the interpreters' transition (`Interpreter.transition`, the JS `program.transition`).
 A call of a method with a modifier needs τ; without one it is the caller's error, not a refusal.
+
+### 2.7 Output checks (M2b)
+
+The validator checks every state it accepts as an output (ADR-0009 D2, D4); the interpreters make the same checks after
+the body, in this order, so a call refused there has the class the rule names:
+
+1. At a creation (an init): each quorum that names params fields (`quorum params.k params.t`) is *well formed*.
+2. For an init's or an action's next state: each pair of state fields any method's `quorum` names (once each, in source
+   order) is well formed. A destroy has no output and makes no output check.
+3. Each invariant holds of the next state (with the params), in declaration order (class `invariant:<name>`). An
+   invariant that *fails* while it is evaluated (a division by zero, a `std` row out of its domain) does not hold either,
+   and refuses with the same class: its failure is the validator's, as its being false is (#84 review S2). An invariant
+   holds no `require` (JSC0441).
+
+*Well formed* (class `invariant:quorum <keys> <threshold>`): the keys are strictly ascending, by content (so they are
+distinct), each is 28 bytes, and 1 ≤ threshold ≤ the number of keys. As with the modifiers, the generated Java method
+and the transition program compute the transition without these checks, which are the validator's (and the runtime's,
+before it submits): on such a call both interpreters refuse, the validator refuses, and the JVM and transition legs
+agree with the interpreters' transition. An invariant is evaluated like a view's body: the state, the params and its
+own consts; no transaction, no effects.
 
 ## 3. Expressions
 
@@ -517,7 +548,7 @@ view given a non-canonical map (out of order, or with a duplicate key) has **no 
 §3.7 are defined on canonical maps only, and the legs may answer differently. The differential tests never send one,
 and the runtime's codec writes maps canonically.
 
-## 5. Effects on native assets (M2, D4)
+## 5. Effects on native assets (M2, D4) and events (M2b)
 
 Effects are statements (D4): an action's or a destroy's, in any arm or loop, never in a `fn`, a view, a `const` value or
 a lambda. Each kind accumulates on its own; no order across kinds is defined. Each needs τ.`funds` (§2).
@@ -570,13 +601,26 @@ Under a contract's own policy, a token name of 32 bytes (an instance), or of 29 
 object) or 0x49 (an intent), is reserved (ADR-0007 D3): it is never minted, burned, sent or accepted by a call. Another
 policy's names are not reserved.
 
+### 5.6 Events (M2b)
+
+`emit(e)` evaluates `e`, a value of the contract's `Event` (each `event X { … }` declares one of its variants), and
+appends it to the call's events: they are in the order they were emitted, in arms and loops as they run, and an
+untaken branch emits nothing. It needs no τ and never fails. An action or a destroy may emit; an init, a view, a `fn`, a
+lambda or a value block may not, nor a batched action. The events are part of the outcome, and of the redeemer: the
+validator requires that the redeemer carries exactly the events the method returns (ADR-0009 D5, I35). A method whose
+result record has events (any action of the contract that returns the record emits) carries them, empty when it emits
+none.
+
 ## 6. Time values (D11)
 
 Time taint is a static property. The checker marks every expression that depends on `validFrom` or `validTo` and
 refuses the programs whose outcome a time value could decide or make fail, except through `after`/`before`. M2: a time
 value is never a `Value`'s quantity, any part of a sent or accepted value, or a mint quantity or token name (a name over
 32 bytes or of a reserved kind fails the call; review r1 S5), and never decides whether `paymentKey` or `paymentScript`
-is `Some`. A time value in either operand of `covers` taints its result. Evaluation
+is `Some`. A time value in either operand of `covers` taints its result. M2b: a field that holds a time value is never a
+quorum's keys or threshold or an authorized credential (JSC0524), an invariant never depends on one (JSC0525; a
+comparison of one is refused where it is, JSC0502), the params are never time values, and an event may carry one (with a
+warning, JSC9008: the window's bias carries into the event). Evaluation
 ignores the `taint` fields of the IR. `validFrom`, `validTo` and the `std/time` rows are ordinary integers when a call
 runs. A program the checker accepts has the same outcome for every window that gives `after` and `before` the same
 answers, apart from amounts. A time value can still set an amount, for example a clamped `pay`, and the checker warns

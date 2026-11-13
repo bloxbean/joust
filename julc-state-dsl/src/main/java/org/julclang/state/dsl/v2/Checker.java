@@ -55,6 +55,9 @@ final class Checker {
             // M2: the API classes values, addresses and effects lower to, and the generated result records
             "ValueAdapter", "AddressAdapter", "Assets", "Funds", "Send", "Sends", "Datum", "PubKeyHash", "ScriptHash",
             "KeyCred", "ScriptCred", "Received", "Settled",
+            // M2b: the batched actions' result record (beside a direct action's that holds events), the annotations
+            // invariants, params, quorum and authorized lower to (#84 review C6: a type of the name would shadow them)
+            "Stepped", "Invariant", "Params", "Quorum", "AuthorizedBy",
             "Payable", "SignedBy", "ValidAfter", "ValidBefore", "Batched", "StateContract", "String", "Object", "Boolean",
             "Integer", "Long", "Byte", "Math", "System", "Record", "Override",
             // .jsc 2 type names and helper-name fragments: a declared type of the same name would share a helper (C6)
@@ -111,6 +114,8 @@ final class Checker {
     private final Map<String, String> variantEnum = new HashMap<>();
     private final Map<String, Syntax.Fn> fns = new LinkedHashMap<>();
     private final Set<String> imported = new HashSet<>();
+    /** M2b: the params' fields (ADR-0009 D1), read as {@code params.f}; null when the contract declares none. */
+    private LinkedHashMap<String, Ty> paramsFields;
 
     /** State fields that hold time values (D11), contract-wide; grown to a fixed point. */
     private Set<String> timeFields = new TreeSet<>();
@@ -154,7 +159,7 @@ final class Checker {
                     + " if the line is meant to stand alone, end the line above with ';'");
         }
         return new Ir.Program(p.pkg(), p.fileName(), p.name(), p.options(), p.records(), p.enums(), p.state(), p.methods(), p.fns(),
-                Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings));
+                Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings), p.params(), p.invariants());
     }
 
     private void resetRound() {
@@ -175,8 +180,15 @@ final class Checker {
         checkUserName(c.name(), c.pos(), "contract");
         var allTypes = new ArrayList<TypeDecl>(file.types());
         allTypes.addAll(c.types());
-        var allEnums = new ArrayList<EnumDecl>(file.enums());
-        allEnums.addAll(c.enums());
+        var allEnums = allEnums(c);
+        // M2b: the generated names of the params record (Config) and the events' sum type (Event) are taken when the
+        // contract has params or events: a declared type of that name would be the same Java class.
+        for (TypeDecl t : allTypes) generatedTypeName(t.name(), t.pos(), c);
+        for (EnumDecl e : allEnums) {
+            // The events' own Event is generated; its variants (each event) are declared names like any other.
+            if (!(e.name().equals(Ir.EVENT) && e.variants() == c.events())) generatedTypeName(e.name(), e.pos(), c);
+            for (VariantDecl v : e.variants()) generatedTypeName(v.name(), v.pos(), c);
+        }
         // Records, enums and variants share one namespace: each becomes a class of the contract (D5).
         for (TypeDecl t : allTypes) {
             typeName(t.name(), t.pos(), "type", c);
@@ -198,6 +210,12 @@ final class Checker {
             for (VariantDecl v : e.variants()) fillFields(enums.get(e.name()).get(v.name()), v.fields(), v.name(), false);
         }
         fillFields(stateFields, c.state(), "state", true);
+        if (c.params() != null) {
+            // M2b (ADR-0009 D1): the deploy-time parameters, a record named Config, read as params.f.
+            if (c.params().isEmpty()) throw c.paramsPos().error("JSC0432", "the params need at least one field: params { fee: Int }");
+            paramsFields = new LinkedHashMap<>();
+            fillFields(paramsFields, c.params(), "params", false);
+        }
         for (TypeDecl t : allTypes) {
             if (cyclic(t.name())) {
                 throw t.pos().error("JSC0301", "the type " + t.name() + " contains itself; recursive types are not supported");
@@ -212,8 +230,9 @@ final class Checker {
         for (TypeDecl t : allTypes) declaredAt.put(t.name(), t.pos());
         for (EnumDecl e : allEnums) declaredAt.put(e.name(), e.pos());
         typeDepths(declaredAt);
-        // The state is a root too: each field's type nests at most MAX_DEPTH levels (J18).
+        // The state is a root too: each field's type nests at most MAX_DEPTH levels (J18); so are the params.
         for (FieldDecl f : c.state()) measured(stateFields.get(f.name()), f.type().pos());
+        if (c.params() != null) for (FieldDecl f : c.params()) measured(paramsFields.get(f.name()), f.type().pos());
         if (stateFields.isEmpty()) throw c.pos().error("JSC0303", "the state needs at least one field");
 
         var methodNames = new HashSet<String>();
@@ -232,6 +251,19 @@ final class Checker {
                 throw f.pos().error("JSC0202", "the fn " + f.name() + " has the name of a method of the contract; rename one (both become methods of one Java class)");
             }
             fns.put(f.name(), f);
+        }
+        // M2b: an invariant is a static method of the contract's class beside its methods and fns (ADR-0009 D4).
+        var invariantNames = new HashSet<String>();
+        for (Syntax.InvariantDecl inv : c.invariants()) {
+            checkUserName(inv.name(), inv.pos(), "invariant");
+            if (methodNames.contains(inv.name()) || fns.containsKey(inv.name()) || !invariantNames.add(inv.name())) {
+                throw inv.pos().error("JSC0224", "the invariant " + inv.name() + " has the name of a method, fn or other invariant; rename"
+                        + " it (each becomes a method of one Java class)");
+            }
+            if (records.containsKey(inv.name()) || enums.containsKey(inv.name()) || variantEnum.containsKey(inv.name())
+                    || PRELUDE.contains(inv.name()) || Std.ROWS.containsKey(inv.name()) || EFFECTS.contains(inv.name())) {
+                throw inv.pos().error("JSC0224", "the invariant " + inv.name() + " has the name of a declared type, variant or built-in; rename it");
+            }
         }
         // Security S7: a state field is read by its bare name, so it never takes a declared type's, enum's, variant's
         // or fn's name, which it would hide in every method (a field Open would replace the variant Open).
@@ -254,7 +286,7 @@ final class Checker {
         var generated = new HashSet<>(Set.of("Payout", "State", "Outcome", "CreateInstance", "BurnInstance", "Batch", "InBatch",
                 "CancelIntent", "Adopt", "Calls", "Step",
                 // M2: the result records of methods with sends, mints or accepted assets, and the mint redeemer ByAction
-                "Received", "Settled", "ByAction"));
+                "Received", "Settled", "ByAction", "Stepped"));
         generated.addAll(records.keySet());
         generated.addAll(enums.keySet());
         generated.addAll(variantEnum.keySet());
@@ -282,6 +314,29 @@ final class Checker {
             }
         }
         if (c.methods().stream().noneMatch(m -> m.kind() == Kind.INIT)) throw c.pos().error("JSC0401", "the contract needs an init(…)");
+    }
+
+    /**
+     * The contract's enums: the file's and the contract's, then (M2b, ADR-0009 D5) {@code Event}, whose variants are the
+     * contract's {@code event} declarations, when it has any.
+     */
+    private List<EnumDecl> allEnums(Contract c) {
+        var out = new ArrayList<EnumDecl>(file.enums());
+        out.addAll(c.enums());
+        if (!c.events().isEmpty()) out.add(new EnumDecl(Ir.EVENT, c.events(), c.events().get(0).pos()));
+        return out;
+    }
+
+    /** M2b: {@code Config} names the params record and {@code Event} the events' type, when the contract has them. */
+    private static void generatedTypeName(String n, Pos p, Contract c) {
+        if (n.equals(Ir.PARAMS) && c.params() != null) {
+            throw p.error("JSC0225", "'Config' is the name of the params record (ADR-0009 D1): a contract with params cannot declare a"
+                    + " type, enum, variant or event named Config; rename it");
+        }
+        if (n.equals(Ir.EVENT) && !c.events().isEmpty()) {
+            throw p.error("JSC0225", "'Event' is the type of the contract's events (each 'event X { … }' is one of its variants,"
+                    + " ADR-0009 D5): a contract with events cannot declare a type, enum, variant or event named Event; rename it");
+        }
     }
 
     /** A declared type, enum or variant name: capitalised, without '_', not reserved, not taken (D5, J10). */
@@ -561,8 +616,13 @@ final class Checker {
             this.parent = parent;
         }
 
+        /** In an invariant's body (M2b): a Bool, so no require (JSC0441). */
+        boolean invariant;
+
         Sc child(boolean effects, boolean lambda) {
-            return new Sc(kind, owner, hasState, hasCtx, effects, inLambda || lambda, helperDepth + 1, this);
+            Sc c = new Sc(kind, owner, hasState, hasCtx, effects, inLambda || lambda, helperDepth + 1, this);
+            c.invariant = invariant;
+            return c;
         }
 
         Ir.Local lookup(String n) {
@@ -647,15 +707,41 @@ final class Checker {
         allTypes.addAll(c.types());
         for (TypeDecl t : allTypes) recs.put(t.name(), new Ir.RecordType(t.name(), records.get(t.name()), t.pos()));
         var ens = new LinkedHashMap<String, Ir.EnumType>();
-        var allEnums = new ArrayList<EnumDecl>(file.enums());
-        allEnums.addAll(c.enums());
-        for (EnumDecl e : allEnums) {
+        for (EnumDecl e : allEnums(c)) {
             var vs = new LinkedHashMap<String, Ir.RecordType>();
             for (VariantDecl v : e.variants()) vs.put(v.name(), new Ir.RecordType(v.name(), enums.get(e.name()).get(v.name()), v.pos()));
             ens.put(e.name(), new Ir.EnumType(e.name(), vs, e.pos()));
         }
+        var invariants = new ArrayList<Ir.Invariant>();
+        for (Syntax.InvariantDecl inv : c.invariants()) invariants.add(invariant(inv, c));
         return new Ir.Program(file.pkg(), fileName, c.name(), options, recs, ens, new Ir.RecordType("State", stateFields, c.pos()),
-                methods, irFns, Set.of(), Set.of(), List.of());
+                methods, irFns, Set.of(), Set.of(), List.of(), paramsFields == null ? null : new Ir.RecordType(Ir.PARAMS, paramsFields,
+                c.paramsPos()), invariants);
+    }
+
+    /**
+     * An invariant (M2b, ADR-0009 D4): a Bool over the state and the params, which the validator checks on every state it
+     * accepts as an output. Checked like a view's body (no transaction, no effects). Not on BigMap state (only the opened
+     * reads are visible on chain), and never a time value (D11): whether a state is acceptable would move with a window.
+     */
+    private Ir.Invariant invariant(Syntax.InvariantDecl inv, Contract c) {
+        if (stateFields.values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+            throw inv.pos().error("JSC0435", "a contract with BigMap state cannot have invariants: on chain only the opened reads are"
+                    + " visible, so the JVM and the chain would disagree (ADR-0009 D4)");
+        }
+        var sc = new Sc(Ir.Kind.VIEW, inv.name(), true, false, false, false, 0, null);
+        sc.invariant = true;
+        Syntax.Block b = inv.body();
+        var stmts = stmts(b.stmts(), sc);
+        if (b.result() == null) throw b.pos().error("JSC0412", "an invariant evaluates to a Bool");
+        Ir.Expr r = expr(b.result(), sc, Ty.BOOL);
+        expectType(Ty.BOOL, r, b.result().pos());
+        if ((r.taint() & TIME) != 0) {
+            throw b.result().pos().error("JSC0525", "an invariant cannot depend on a time value: whether a state is accepted would then"
+                    + " move with a validity window (ADR-0018 D11)");
+        }
+        unusedConsts(sc);
+        return new Ir.Invariant(inv.name(), new Ir.Block(stmts, r, b.pos()), inv.pos());
     }
 
     private static Ir.Kind kind(Kind k) {
@@ -670,7 +756,10 @@ final class Checker {
     private boolean usesCtx(Syntax.Method m) {
         if (m.kind() == Kind.DESTROY) return true;
         if (m.kind() == Kind.VIEW) return false;
-        for (Mod mod : m.mods()) if (!mod.name().equals("open") && !mod.name().equals("only")) return true;
+        // quorum and authorized (M2b) read the transaction's signatories and withdrawals in the validator, not Ctx.
+        for (Mod mod : m.mods()) {
+            if (!Set.of("open", "only", "quorum", "authorized").contains(mod.name())) return true;
+        }
         return mentionsCtx(m.body());
     }
 
@@ -724,6 +813,10 @@ final class Checker {
         for (Mod mod : m.mods()) {
             if (!modNames.add(mod.name())) throw mod.pos().error("JSC0416", "the modifier '" + mod.name() + "' is given twice");
             if (m.kind() == Kind.INIT && !mod.name().equals("payable")) throw mod.pos().error("JSC0405", "an init takes only 'payable'");
+            if (batched && (mod.name().equals("quorum") || mod.name().equals("authorized"))) {
+                throw mod.pos().error("JSC0417", "a batched action cannot use '" + mod.name() + "': an intent's owner is its caller, and the"
+                        + " batcher, not the caller, signs a batch (ADR-0009, ADR-0004 D1). " + INTENT_CAVEAT);
+            }
             if (batched && (mod.name().equals("only") || mod.name().equals("after") || mod.name().equals("before"))) {
                 // Review F4: the hint names the check that replaces this modifier; S6: with ADR-0004's caveat.
                 String instead = mod.name().equals("only")
@@ -741,12 +834,54 @@ final class Checker {
                     audience = true;
                 }
                 case "after", "before" -> stateField(mod.arg(), Ty.INT, mod.pos(), mod.name());
+                case "quorum" -> {
+                    // M2b (ADR-0009 D2): at least threshold of the transaction's signatories are in keys, read from the
+                    // input state (or the params); each a state field or params.f.
+                    String[] kt = mod.arg().split(" ");
+                    if (kt[0].startsWith("params.") != kt[1].startsWith("params.")) {
+                        // The validator checks a state pair's shape on every output and a params pair's at creation
+                        // (ADR-0009 D2): a pair is one or the other.
+                        throw mod.pos().error("JSC0439", "'quorum " + mod.arg() + "': the keys and the threshold are both state fields or"
+                                + " both params fields (ADR-0009 D2)");
+                    }
+                    modField(kt[0], new Ty.ListT(Ty.KEY), mod.pos(), "quorum");
+                    modField(kt[1], Ty.INT, mod.pos(), "quorum " + kt[0]);
+                    audience = true;
+                }
+                case "authorized" -> {
+                    // M2b (ADR-0009 D3): the credential signed (a key) or approved this action (a script's withdrawal).
+                    modField(mod.arg(), Ty.CREDENTIAL, mod.pos(), "authorized");
+                    audience = true;
+                }
                 case "batched" -> {
                     // ADR-0018 D10 (gated by pool, M1c): @Batched, or @Batched(only = true) for 'batched only'.
                     if (m.kind() != Kind.ACTION) throw mod.pos().error("JSC0418", "only an action can be batched (ADR-0004 D1)");
                     if (assetAware) {
                         throw mod.pos().error("JSC0424", "a contract with native assets (a method uses funds, send, mint, burn or accept) cannot"
                                 + " have batched actions: intents carry only lovelace (ADR-0007 r2, ADR-0018 D4)");
+                    }
+                    if (!file.contract().invariants().isEmpty()) {
+                        throw mod.pos().error("JSC0436", "a contract with invariants cannot have batched actions: a batch passes through"
+                                + " intermediate states the validator does not check (ADR-0009 D4)");
+                    }
+                    // #84 review S1/C1 (ADR-0009 r3): a quorum over state fields has its shape checked on every output
+                    // (as an invariant is), but a batch's states are not checked, so a batched action could make the
+                    // quorum unreachable and lock the contract. A params quorum cannot change.
+                    for (Syntax.Method x : file.contract().methods()) {
+                        for (Mod q : x.mods()) {
+                            if (q.name().equals("quorum") && !q.arg().startsWith("params.")) {
+                                throw mod.pos().error("JSC0440", "a contract with a quorum over state fields ('quorum " + q.arg() + "' in "
+                                        + x.name() + ") cannot have batched actions: a batch's states are not checked, so a batched"
+                                        + " action could make the quorum unreachable (ADR-0009 r3); use a params quorum, or no batched actions");
+                            }
+                        }
+                    }
+                    if (mentions(m.body(), "params")) {
+                        throw mod.pos().error("JSC0437", "a batched action cannot read params yet (ADR-0009 D1): pass the value as an argument");
+                    }
+                    if (fx.contains("emit")) {
+                        throw firstEffect(m.body(), Set.of("emit")).error("JSC0425", "a batched action cannot emit events: an intent's owner"
+                                + " is its caller, not an authenticated signer of the batch (ADR-0009 D5)");
                     }
                     if (stateFields.values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
                         throw mod.pos().error("JSC0419", "a contract with BigMap state cannot have batched actions: each step of a batch"
@@ -833,6 +968,26 @@ final class Checker {
         unusedConsts(sc);
         return new Ir.Method(kind(m.kind()), m.name(), params, mods, checked, ctx, pays, new Ir.Block(stmts, result, b.pos()),
                 resultType, m.pos());
+    }
+
+    /**
+     * The field a quorum or authorized modifier names (M2b): a state field or {@code params.f}, of the type the check
+     * reads. Never a time field (D11): who may call would then move with a validity window.
+     */
+    private void modField(String ref, Ty want, Pos p, String mod) {
+        if (ref.startsWith("params.")) {
+            String f = ref.substring("params.".length());
+            if (paramsFields == null) throw p.error("JSC0434", "'" + mod + " " + ref + "': the contract declares no params { … }");
+            Ty t = paramsFields.get(f);
+            if (t == null) throw p.error("JSC0310", "'" + mod + " " + ref + "': the params have no field " + f);
+            if (!t.equals(want)) throw p.error("JSC0311", "'" + mod + " " + ref + "' needs a " + Ty.show(want) + "; " + ref + " is " + Ty.show(t));
+            return;
+        }
+        stateField(ref, want, p, mod);
+        if (timeFields.contains(ref)) {
+            throw p.error("JSC0524", "'" + mod + " " + ref + "': " + ref + " holds a time value, so who may call would depend on a validity"
+                    + " window; a quorum or authorized field is never a time value (ADR-0018 D11)");
+        }
     }
 
     private void stateField(String name, Ty want, Pos p, String mod) {
@@ -1040,6 +1195,10 @@ final class Checker {
                     out.add(new Ir.Let(local, v, c.pos()));
                 }
                 case Syntax.Require r -> {
+                    if (sc.invariant) {
+                        throw r.pos().error("JSC0441", "an invariant is a Bool, so it holds no require (ADR-0009 D4): write the condition into"
+                                + " its value (invariant ok = a && b)");
+                    }
                     // A generated check's key ("#input:spend2.1", D12) names one construct: an author's message never
                     // holds that form, anywhere, so no trace of it can be taken for a generated check (review r1 S2, C3).
                     if (GENERATED_KEY.matcher(r.message()).find()) {
@@ -1106,6 +1265,22 @@ final class Checker {
                                 + " the native assets the call receives (ADR-0018 D11)");
                     }
                     out.add(new Ir.Accept(value, ac.pos()));
+                }
+                case Syntax.Emit em -> {
+                    // M2b (ADR-0009 D5): an event of the call, in source order; the validator checks the redeemer
+                    // carries exactly these. Events are the contract's Event (each 'event X { … }').
+                    effectAllowed(em.pos(), sc, "emit(…)");
+                    if (!enums.containsKey(Ir.EVENT) || file.contract().events().isEmpty()) {
+                        throw em.pos().error("JSC0438", "the contract declares no events: declare one with event Name { field: Type } (ADR-0009 D5)");
+                    }
+                    Ty et = new Ty.EnumT(Ir.EVENT);
+                    Ir.Expr ev = expr(em.event(), sc, et);
+                    expectType(et, ev, em.event().pos());
+                    if ((ev.taint() & TIME) != 0) {
+                        warn(em.event().pos(), "JSC9008", "this event carries a time value: whoever submits the transaction chooses the"
+                                + " window, so a value of it can be up to maxValidityMs early or late (ADR-0018 D11)");
+                    }
+                    out.add(new Ir.Emit(ev, em.pos()));
                 }
                 case IfStmt i -> {
                     // An else-if chain is one node: its branches are checked in order, in a loop (J18).
@@ -1303,7 +1478,7 @@ final class Checker {
                 }
                 return new Ir.NoneLit(expected, n.pos());
             }
-            case "params" -> throw n.pos().error("JSC0319", "'" + n.name() + "' comes in a later part of M2 of .jsc 2 (ADR-0018 §8)");
+            case "params" -> throw n.pos().error("JSC0319", "params is read by its fields: params.f (ADR-0009 D1)");
             case "funds" -> throw n.pos().error("JSC0343", "funds is read by its fields: funds.received, funds.held (Values), funds.policy (a"
                     + " Hash) and funds.self (Bytes)");
             case "Value" -> throw n.pos().error("JSC0344", "a Value is built with Value.none(), Value.lovelace(n) or Value.asset(policy, name, n)");
@@ -1330,6 +1505,17 @@ final class Checker {
         return new Ir.FundsRef(f.name(), t, f.pos());
     }
 
+    /** {@code params.f} (M2b, ADR-0009 D1): in a method or invariant of a contract with params; never a time value. */
+    private Ir.Expr paramsRef(Field f, Sc sc) {
+        if (paramsFields == null) throw f.pos().error("JSC0434", "the contract declares no params { … }, so there is no params." + f.name());
+        if (sc.kind == null) {
+            throw f.pos().error("JSC0433", "params is not available in a fn: pass params." + f.name() + " as an argument");
+        }
+        Ty t = paramsFields.get(f.name());
+        if (t == null) throw f.pos().error("JSC0320", "the params have no field " + f.name() + " (" + String.join(", ", paramsFields.keySet()) + ")");
+        return new Ir.ParamsRef(f.name(), t, f.pos());
+    }
+
     private static void needCtx(Name n, Sc sc) {
         if (!sc.hasCtx) {
             throw n.pos().error("JSC0415", n.name() + " is part of the transaction: it is not available in a view or fn (pass it as an argument)");
@@ -1339,6 +1525,7 @@ final class Checker {
     /** {@code t.name}: a record field, or a list property; which one is decided by the target's type (C7). */
     private Ir.Expr field(Field f, Sc sc) {
         if (f.target() instanceof Name n && n.name().equals("funds") && sc.lookup("funds") == null) return fundsRef(f, sc);
+        if (f.target() instanceof Name n && n.name().equals("params") && sc.lookup("params") == null) return paramsRef(f, sc);
         Ir.Expr target = expr(f.target(), sc, null);
         if (target.type() instanceof Ty.Ledger l) {
             if (l.equals(Ty.VALUE) && f.name().equals("lovelace")) return new Ir.LedgerOp("lovelaceOf", List.of(target), Ty.INT, target.taint(), f.pos());
@@ -2597,7 +2784,7 @@ final class Checker {
         return false;
     }
 
-    /** The effect kinds a block can reach, in any arm or loop: pay, send, mint (burn too) and accept (D4, M2). */
+    /** The effect kinds a block can reach, in any arm or loop: pay, send, mint (burn too), accept (D4, M2) and emit (M2b). */
     static Set<String> effectsIn(Syntax.Block b) {
         var out = new TreeSet<String>();
         var work = new ArrayDeque<Syntax.Block>();
@@ -2610,6 +2797,7 @@ final class Checker {
                     case Syntax.Send d -> out.add("send");
                     case Syntax.Mint m -> out.add("mint");
                     case Syntax.Accept a -> out.add("accept");
+                    case Syntax.Emit em -> out.add("emit");
                     case IfStmt i -> {
                         for (Syntax.Branch br : i.branches()) work.push(br.then());
                         if (i.otherwise() != null) work.push(i.otherwise());
@@ -2637,6 +2825,7 @@ final class Checker {
                     case Syntax.Send d -> "send";
                     case Syntax.Mint m -> "mint";
                     case Syntax.Accept a -> "accept";
+                    case Syntax.Emit em -> "emit";
                     default -> null;
                 };
                 if (k != null && kinds.contains(k) && (best == null || s.pos().line() < best.line()
@@ -2680,6 +2869,7 @@ final class Checker {
                 case Syntax.Send d -> walk(d.to(), p) || walk(d.value(), p);
                 case Syntax.Mint m -> walk(m.name(), p) || walk(m.qty(), p);
                 case Syntax.Accept a -> walk(a.value(), p);
+                case Syntax.Emit em -> walk(em.event(), p);
                 case For f -> walk(f.list(), p) || walk(f.body(), p);
                 case IfStmt i -> i.branches().stream().anyMatch(br -> walk(br.cond(), p) || walk(br.then(), p))
                         || (i.otherwise() != null && walk(i.otherwise(), p));
