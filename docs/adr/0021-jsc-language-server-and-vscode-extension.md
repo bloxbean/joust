@@ -994,15 +994,19 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
     before applying. A worker loading a store copy holds a lease on it (a file in the copy) until the copy has loaded;
     the collector claims a copy by an atomic rename, then reads its leases and its use from the claimed directory and
     puts back any copy leased or freshly used (a lease cannot be taken on a claimed copy: its taker selects again). A
-    load failure counts as a missing copy only from the failing request itself (round r4, C22 and S12): a
-    `MODULE_NOT_FOUND` whose requested module (the first line of Node's message, not its require stack) is the loader,
-    or an `ENOENT` whose path is exactly the loader or its `.wasm`; a missing dependency, or any other error, is an
-    engine fault, and the path's existence is never consulted for it (the host checks that the loader exists before it
+    load failure counts as a missing copy only from the failing request itself (rounds r4 and r5, C22, C26, S12, S13):
+    a `MODULE_NOT_FOUND` whose message's whole first line is Node's exact header for the loader's request (never its
+    require stack; a path may hold quotes), or an `ENOENT`/`ENOTDIR` whose path is the loader, its `.wasm`, or a
+    directory between the store's root and the loader (require `lstat`s the copy's directory, which a claim renames
+    away); a missing dependency, or any other error, is an engine fault, and the path's existence is never consulted for it (the host checks that the loader exists before it
     starts a worker, which is a separate, earlier question). A start awaiting its lease holds a place against the worker
     bound (C21). A claim a crashed collector left behind is recovered after a minute (unless its owner is alive and
     the claim younger than a lease): put back when still wanted and nothing of its digest is in place, removed
     otherwise (C23); a put-back that fails deletes the claimed copy only when a valid copy of its digest is already in
-    place, else it is left for that recovery (C24). Windows device names are refused in absolute paths on Windows only (a POSIX `aux` directory is a directory);
+    place, else it is left for that recovery (C24). A claim goes back under its digest name only when its bytes hash to
+    that digest (S14); a wanted claim facing a destination that is there but invalid replaces it (C27); the final check
+    on a claimed copy counts this server's live use (C28). A start whose slot was stopped while its lease was pending
+    starts no worker (C25). Windows device names are refused in absolute paths on Windows only (a POSIX `aux` directory is a directory);
     repository-relative text refuses them everywhere.
 
 ## Revision history
@@ -1102,4 +1106,4 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
   weaker L6); §12 holds the implementation notes. Status stays Proposed; #83 merges after #76 and ADR-0018's
   acceptance. After #83's round r2 (design F9, security S9–S11, Codex C11–C17): L10 names its reference machine and
   CI's figures; §12 notes 16–18. After round r3 (design F10, Codex C18–C20): notes 17 and 18 extended. After round r4 (security S12, Codex
-  C21–C24): note 18 corrected and extended.
+  C21–C24): note 18 corrected and extended. After round r5 (security S13, S14; Codex C25–C28): note 18 extended.
