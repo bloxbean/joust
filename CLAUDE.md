@@ -203,6 +203,15 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `invariant:…`) after the body; `FourWay.as(signers, approvers)` signs and approves the next call on every leg.
   `copyPortTests` also renames words: treasury's tests use `Guardian`, which examples/dsl copies as `TreasuryGuardian`
   (never put a Java example on examples/dsl's class path: its validator shares a script resource name with its port's).
+- ADR-0018 M2c (composition): `import contract { C } from "./C.jsc"` resolves through `JscModules` (M4a's interface;
+  JscMain and the toolchain pass the build's files; tests: `DslExamples.lower`, `JscModules.of(map)`), each import
+  checked on its own; its types are `C.State`/`C.T` (Java `C.State`, imported) and never stored. `reads params.f` lowers to
+  `@Reads` right after the params (checked: `#read:`); `receives [T]` to `@Receives` + Funds + Ctx (memos decoded where
+  the action starts: `#memo:`); `deposit` to the `deposits` component (no Funds). A stored `Value` (a record/state/params
+  field) is held in its wire form: `ValueAdapter.toWire` where built, `fromWire` where read. #85 (fixed here): deposit
+  claims are read from the wire (verifier, `depositsMade`, `claimsFromWire`), so the verifier's hash moved. Ports:
+  Oracle, Kiosk (oracle's Shop: M4a holds `Shop.jsc`), Pot, Stall; coverage: Tips, Tipper. `FourWay` composes reads
+  (reference inputs) and deposits (target in/out + claims; receiver claims on its output) per contract harness.
 - ADR-0018 `.jsc` 2 generated artifacts: after changing the IR, the lowering or an example, rewrite the JS
   interpreter's IR fixtures (`./gradlew :julc-state-dsl:test -Pjoust.writeIrFixtures`; `JscV2IrTest` fails when stale)
   and tree-sitter's shapes (`... --tests '*JscCorpusTest*' -Djsc.writeShapes=true`), and run `npm test` in

@@ -1,8 +1,9 @@
 # `.jsc` 2 semantics
 
 What a checked `.jsc` 2 program evaluates to (ADR-0018 D15), for the constructs of milestone M1 (M0, M1a, and M1c's
-modifiers and batched actions), of M2a (values, addresses, credentials, funds, and the effects on native assets) and of M2b
-(params, invariants, events, quorum and authorized). It is
+modifiers and batched actions), of M2a (values, addresses, credentials, funds, and the effects on native assets), of M2b
+(params, invariants, events, quorum and authorized) and of M2c (composition: other contracts' instances, read states,
+deposits made and received, send datums, stored values). It is
 written so that an interpreter can be built from it alone. The JavaScript reference interpreter
 (`js/jsc-interpreter`) is built from this document, and its tests hold the hand-written vectors cited here
 (`test/semantics.test.js`). Five implementations must agree on every outcome defined here (J3): the JavaScript
@@ -15,7 +16,7 @@ types, shadowing, effect legality, the time rule (D11) and the BigMap flow rules
 except where a rule is what makes an evaluation well defined. Every node name below (`Arith`, `MapOp`, …) is the IR's.
 The encodings of values as Plutus data (D5) are in the ADR and in the ABI manifest. They are not part of evaluation.
 
-**Not yet covered:** `deposit`, `reads` and other contracts (M2c), owned and keyed objects (M3), libraries (M4). A `batched` action (M1c) is covered: its transition
+**Not yet covered:** owned and keyed objects (M3), libraries (M4). A `batched` action (M1c) is covered: its transition
 is an ordinary action's, the same in a batch and in a direct call; batch execution itself (the batcher's order, the
 fold over intents, refunds) is the validator's and the batcher's, not a call's.
 
@@ -33,9 +34,12 @@ fold over intents, refunds) is the validator's and the batcher's, not a call's.
 | enum `E` | a variant `V` of `E` and a tuple of `V`'s field values | a variant's *tag* is its index in `E`'s declaration, from 0 |
 | `Map<K, V>` | a finite sequence of entries `(k, v)`, keys unique and in canonical order | §1.1 |
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | a triple *(before, now, written)* | §1.2; a state field only |
-| `Value` (M2) | a finite map from (policy, token name) to a non-zero quantity | §1.3; a local's, a fn's or an effect's only |
+| `Value` (M2) | a finite map from (policy, token name) to a non-zero quantity | §1.3; a local's, a fn's, an effect's, and (M2c) a field of the state, the params, a record or a variant |
 | `Credential` (M2) | `KeyCred { key }` or `ScriptCred { hash }` | §1.4 |
 | `Address` (M2) | a payment credential and a staking part: none, a staking hash (a credential) or a pointer (three integers) | §1.4; `a.payment` is its credential |
+| `Instance<C>` (M2c) | another contract's instance: a policy and a 32-byte instance id | a params field only; used whole, as a deposit's target and by `reads` (§5.7, §5.9); not comparable |
+| `C.State`, `C.T` (M2c) | a value of the imported contract `C`'s state or declared type | as that type's values, by `C`'s declaration (§5.9) |
+| a deposit (M2c) | a value and, for `receives T`, a memo of type `T` | the elements of τ.`funds`.`deposits` (§5.8); not comparable |
 
 Internal values have no type of their own: the **range** `range(a, b)` (§3.6), the **payout** `(to, lovelace)` (§2.3)
 and the **send** `(to, value)` (§5.1).
@@ -68,6 +72,11 @@ lexicographically, unsigned, a proper prefix first (the order of `<` on `Bytes`,
 the signed 128-bit range **[−2^127, 2^127 − 1]** (the ledger's native values, CIP-153); an operation whose result would
 leave it fails (§3.12). Two values are equal when they hold the same entries.
 
+**Stored values (M2c).** A value may be a field of the state, the params, a record or a variant, so it is stored and
+carried as data. As data a value is a map whose token names are in cardano-client-lib's canonical order (shorter first),
+not the ledger's; that is an encoding (D5), invisible here: a stored value is the same value, and reading the field gives
+it. A value is never an element of a list, an option or a map (wrap it in a record).
+
 ### 1.4 Credentials and addresses (M2)
 
 A credential is a key's (`KeyCred`, its 28-byte hash `key`) or a script's (`ScriptCred`, its hash `hash`). An address
@@ -93,7 +102,8 @@ these values:
 | `validTo` | `Int` | its end |
 | `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, `quorum` and `authorized`, §2.6; the caller alone when a vector does not say) |
 | `approvers` (M2b) | `List<Hash>` | the scripts that approve this call: each has a zero withdrawal in the transaction whose approval names this contract, instance and action (ADR-0009 D3; a native script, which has no redeemer, approves through its withdrawal alone), and is neither this contract's script nor a JOUST verifier (read only by `authorized`, §2.6; none when a vector does not say) |
-| `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns or accepts: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token), `policy` (a `Hash`: the contract's policy) and `self` (`Bytes`: the instance's token name) |
+| `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns, accepts or receives: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token), `policy` (a `Hash`: the contract's policy), `self` (`Bytes`: the instance's token name) and (M2c) `deposits`: for a receiving action, the deposits claimed on its continuing output in the registry's order, each a value and, for `receives T`, a memo (a value of `T`); empty otherwise |
+| `reads` (M2c) | | for a method with `reads` parameters: the state of each instance a params field names, by that field, as the transaction's reference inputs hold it (ADR-0011 D2) |
 
 **The params** (M2b, ADR-0009 D1). A contract that declares `params { … }` is called as deployed with them: a `Config`
 record, fixed for every call of the deployment (the script is applied to them), read as `params.f`. A call of a method
@@ -117,18 +127,22 @@ finish a call (its stack runs out) gives **no answer**, which is not a refusal (
 
 **Steps of a call:**
 
-1. Bind each parameter to its argument.
+1. Bind each parameter to its argument, and (M2c) each `reads` parameter to τ.`reads` of its params field (a call of
+   such a method without it is the caller's error, not a refusal).
 2. **Modifiers** (§2.6), in source order: a broken one fails the call.
 3. **Checked inputs** (§4). For each parameter listed in the method's `checked` list, in order, the argument must be
-   well formed at the parameter's type; otherwise the call fails. This happens before any statement runs.
+   well formed at the parameter's type; otherwise the call fails (class `input:<parameter>`). M2c: then each read state,
+   in the method's order, well formed at `C.State` (class `input:<parameter>`); then, for `receives T`, every deposit's
+   memo well formed at `T` (class `input:deposits`). This happens before any statement runs, in the transition alone
+   too (it is the method's own check, as the generated code makes it where the method starts).
 4. Run the body's statements in order (§2.2).
 5. Evaluate the body's result expression, if any: the next state (init, action) or the value (view). A destroy has no
    result.
 6. **What was accepted** (§5.4): if the method's body holds an `accept` statement (in any arm or loop), the sum of what
    it accepted must equal τ.`funds`.`received`; otherwise the call fails.
 7. The outcome is that value with the **effects** collected in step 4: the payouts and the sends, each in the order
-   they were made, the net mint and the sum of what was accepted (§5), and the events in the order they were emitted
-   (§5.6).
+   they were made, the net mint and the sum of what was accepted (§5), the events in the order they were emitted
+   (§5.6), and (M2c) the deposits in the order they were made (§5.7).
 8. **Output checks** (M2b, §2.7): for an init or an action, the next state's quorum shapes and the invariants.
 
 **The modifiers are preconditions of a call** (§2.6): `only f`, `after f`, `before f`, `quorum` and `authorized` are
@@ -144,7 +158,12 @@ the transaction or on everything the instance holds rather than on the call (ADR
 - a destroy that leaves native assets the instance holds, neither sent nor burned;
 - the ledger's minimum lovelace in each send's output;
 - a send to the address of another script the same transaction spends (a send to the contract's own script is the
-  call's to refuse, §5.1).
+  call's to refuse, §5.1);
+- M2c (ADR-0011): a deposit whose target is not spent in the same transaction by a receiving action, or whose claim is
+  missing or differs; a read state that is not the inline datum of the unique reference input holding its instance's
+  token at its script's address, or not of the contract's state's shape (constructor and field count). The validators
+  of the depositor and the receiver, and the reader's, refuse those transactions; a call is evaluated on the deposits
+  claimed and the states read as τ gives them.
 
 The call succeeds; its transaction fails, at the ledger or at the validator. The validator leg checks them with the
 rest of the transaction; the differential tests' harness refuses the first two as the ledger does
@@ -231,10 +250,10 @@ A refusal's class names the rule that refused the call, as `kind:detail`:
 | Class | When |
 |---|---|
 | `require:<line>:<col>:<message>` | a `require` did not hold; the detail is its position in the `.jsc` file (the IR's `at`) and its message, as written, so two `require`s with one message are told apart (review S6) |
-| `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name |
+| `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name; M2c: a read state's (a `reads` parameter's name), or `input:deposits` for a deposit's memo |
 | `modifier:<word> <field>` | a modifier did not hold (§2.6): `only owner`, `after deadline`, `before deadline`; M2b: `quorum council quorum` (the keys, then the threshold), `authorized params.guardian` |
 | `invariant:<name>` | M2b (§2.7): the next state broke the invariant `<name>`; `invariant:quorum <keys> <threshold>`: a quorum's shape |
-| `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`, `scale`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; `pay` (a negative amount); M2's `Value.lovelace`, `Value.asset`, `Value +`, `Value -`, `covers` (§3.12), `send`, `mint`, `accept` (§5.1–5.3), or `accepted` (§5.4) |
+| `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`, `scale`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; `pay` (a negative amount); M2's `Value.lovelace`, `Value.asset`, `Value +`, `Value -`, `covers` (§3.12), `send`, `mint`, `accept` (§5.1–5.3), or `accepted` (§5.4); M2c's `deposit` (§5.7) |
 
 The two interpreters must give the same class for every refused call (review S4), so a vector meant to reach one rule
 shows that both interpreters reach that rule. With several failures in one call, the first in evaluation order (§2.1)
@@ -540,6 +559,15 @@ data (`AddressAdapter.addressOk`/`credentialOk`), where a transition program, wh
 runs, could otherwise be handed one (review r1 C2). The validator's decoding of a redeemer refuses such data too; the
 tests carry both legs on raw data (`JscV2M2HostileInputTest`).
 
+**M2c: read states and memos.** A `reads` parameter's state (another contract's datum) and, for `receives T`, each
+deposit's memo are checked inputs too (§2, step 3), by the same rules at `C.State` and `T`. A value stored in them (a
+record's `Value` field) is well formed when its data is a value's: no repeated token name, no zero quantity, no empty
+token map, policies in order (§5.4a's rules; any token order). The generated decoder of a memo decides every constructor
+tag and field count on the data, as for addresses; the validator checks a read state's outer shape (its constructor and
+field count, ADR-0011 D2) and the checked-input rule its keys, maps and addresses. A read state's nested constructor tags
+are taken as its contract wrote them: a JOUST contract's validator checks every state it writes, so one it accepted is
+well formed (D5).
+
 A map that is out of order or has a duplicate key cannot be a map value (§1). Such an argument is refused here, so the
 body never sees one.
 
@@ -563,7 +591,9 @@ may be that script: the rule knows no policy, so a stored address can make every
 A contract that stores an address it will send to guards it where it is taken, as Coins' `init` does:
 `require(paymentScript(a) == None || asHash(paymentScript(a) ?? #00) != funds.policy, …)`. Otherwise it appends the
 send *(to, v)*: a call's sends are in the order they were made. An empty value may be sent (the transaction's builder
-adds the ledger's minimum). A send has no datum (a datum comes with M2c).
+adds the ledger's minimum). M2c: `send(to, v, d)` evaluates `d` after `v` (and its checks) and attaches it to the send as
+its inline datum: a value of any of the contract's own types, encoded by D5's rules (a stored value in its wire form,
+§1.3). The validator requires the output to carry exactly that datum. Without `d` the send has none.
 
 ### 5.2 Mints and burns
 
@@ -611,6 +641,33 @@ validator requires that the redeemer carries exactly the events the method retur
 result record has events (any action of the contract that returns the record emits) carries them, empty when it emits
 none.
 
+### 5.7 Deposits (M2c)
+
+`deposit(i, v, m)` evaluates `i` (an `Instance<C>`, a params field), then `v` (a `Value`), then `m` (the memo: a value of
+any of the contract's own types). It fails (class `domain:deposit`) when `v` is empty, holds a quantity that is not
+positive, or holds a reserved token name of any policy but lovelace's (32 bytes; 29 starting 0x4F or 0x49: the output
+verifier's rule, so an NFT named by a 32-byte hash cannot be deposited; send it instead). Otherwise it appends the
+deposit *(i, v, m)*: a call's deposits are in the order they were made. A deposit takes no `funds`: a method that only
+deposits takes ADA (fees' `sell`). The value leaves this instance and goes into `i`'s continuing output in the same
+transaction, which `C`'s receiving action takes in (§5.8; ADR-0011 D3); the checker refuses a deposit into a contract
+with no receiving action, or with a memo none of its receiving actions decodes. Moving value out, a deposit needs an
+audience (`open`, `only`, …), as a payout does.
+
+### 5.8 Receiving deposits (M2c)
+
+An action that says `receives` takes the deposits claimed on its continuing output: τ.`funds`.`deposits`, in the
+registry's order, each its value and, for `receives T`, its memo (a checked input, §4). The method decides what to
+credit; the validator adds exactly the claimed deposits to the instance's value (ADR-0011 I40). Any other method takes
+none: a deposit claimed on its output fails its transaction. A deposit is not comparable; read its `value` and `memo`.
+
+### 5.9 Read states (M2c)
+
+A parameter `p: reads params.f` (an action's or a destroy's) is the state of the instance `params.f` names (an
+`Instance<C>`), as the transaction's reference input holds it: a value of `C.State`, read with `C`'s declaration. Its
+fields are read like any record's. A field `C` sets from its own window (a time field of `C`, which `C`'s checked IR lists)
+is a time value here (§6). Staleness is the reader's rule: a reference input runs no validator, so the reader checks a
+time field with `before`/`after` (`require(before(p.updatedAt + maxAge))`: the whole window ends in time).
+
 ## 6. Time values (D11)
 
 Time taint is a static property. The checker marks every expression that depends on `validFrom` or `validTo` and
@@ -620,7 +677,11 @@ value is never a `Value`'s quantity, any part of a sent or accepted value, or a 
 is `Some`. A time value in either operand of `covers` taints its result. M2b: a field that holds a time value is never a
 quorum's keys or threshold or an authorized credential (JSC0524), an invariant never depends on one (JSC0525; a
 comparison of one is refused where it is, JSC0502), the params are never time values, and an event may carry one (with a
-warning, JSC9008: the window's bias carries into the event). Evaluation
+warning, JSC9008: the window's bias carries into the event). M2c: a read state's field is a time value when it is a time
+field of its contract; a time value is never any part of a deposit's value (JSC0526; a deposit must be strictly
+positive); a send's datum or a deposit's memo may carry one (with a warning, JSC9009); a memo a receiving action reads is
+not a time value there (it is a checked input, as an argument is: whoever writes a depositing contract chooses it, as a
+caller chooses an argument). Evaluation
 ignores the `taint` fields of the IR. `validFrom`, `validTo` and the `std/time` rows are ordinary integers when a call
 runs. A program the checker accepts has the same outcome for every window that gives `after` and `before` the same
 answers, apart from amounts. A time value can still set an amount, for example a clamped `pay`, and the checker warns

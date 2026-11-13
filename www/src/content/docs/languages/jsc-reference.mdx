@@ -17,8 +17,8 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 <Aside type="caution" title="A preview">
 `.jsc` 2 is a preview: the core language of milestone M1, M2a's values and native assets (`Value`, `Address`,
 `Credential`, `funds`, `send`, `mint`, `burn`, `accept`), and M2b's params, invariants, events, `quorum` and
-`authorized`. The rest of M2 (reads, deposits, other contracts) and M3 to M4 (owned and keyed objects, purposes, libraries) still need
-[Java](/languages/java/).
+`authorized`, and M2c's composition (other contracts' instances and states, deposits made and received, send datums,
+stored values). M3 to M4 (owned and keyed objects, purposes, libraries) still need [Java](/languages/java/).
 </Aside>
 
 ## Lexical rules
@@ -40,10 +40,11 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 ```text
 file      = "jsc" "2" "package" seg { "." seg } { import | type | enum | fn } contract
 import    = "import" "{" Ident { "," Ident } "}" "from" String
+          | "import" "contract" "{" Name "}" "from" String          (M2c: another contract, "./Name.jsc")
 type      = "type" Name "=" "{" { field [","] } "}"
 enum      = "enum" Name "{" { Name [ "{" { field [","] } "}" ] [","] } "}"
 field     = Ident ":" typeRef
-typeRef   = Ident [ "<" typeRef { "," typeRef } ">" ]
+typeRef   = Ident [ "." Name ] [ "<" typeRef { "," typeRef } ">" ]      (Oracle.State, Instance<Oracle>)
 fn        = "fn" Ident params ":" typeRef ( "=" expr | block )
 contract  = "contract" Name [ "(" option { "," option } ")" ] "{" { member } "}"
 option    = ( "minAda" | "maxDatumBytes" | "maxValidityMs" ) "=" Int [ "ada" ]
@@ -55,15 +56,16 @@ member    = "state" "{" { field [","] } "}"          (exactly once)
           | ( "action" | "destroy" ) Ident params { modifier } block
           | "view" Ident params ":" typeRef ( "=" expr | block )
           | fn | type | enum
-params    = "(" [ Ident ":" typeRef { "," Ident ":" typeRef } ] ")"
+params    = "(" [ param { "," param } ] ")";   param = Ident ":" ( typeRef | "reads" "params" "." Ident )
 modifier  = "payable" | "open" | "batched" [ "only" ] | ( "only" | "after" | "before" ) Ident
-          | "quorum" fieldRef fieldRef | "authorized" fieldRef
+          | "quorum" fieldRef fieldRef | "authorized" fieldRef | "receives" [ typeRef ]
 fieldRef  = Ident | "params" "." Ident
 block     = "{" { stmt } [ [ "return" ] expr ] "}"
 stmt      = "const" Ident [ ":" typeRef ] "=" expr
           | "require" "(" expr "," String ")"
           | "pay" "(" expr "," expr ")"
           | ( "send" | "mint" | "burn" ) "(" expr "," expr ")" | "accept" "(" expr ")" | "emit" "(" expr ")"
+          | "send" "(" expr "," expr "," expr ")" | "deposit" "(" expr "," expr "," expr ")"
           | "if" expr block [ "else" ( if | block ) ]
           | "match" expr "{" { pattern "=>" ( block | require | pay | expr ) [","] } "}"
           | "for" "(" "const" Ident "of" expr ")" block
@@ -108,7 +110,9 @@ Java, so a `.jsc` contract and a Java contract with the same state agree on chai
 | `enum E { A, B { x: Int } }` | a generated sealed interface and one record per variant | `Constr i`, `i` the variant's declaration index, then its fields | |
 | `Credential` | the ledger's `Credential` | `Constr 0 [key hash]` (`KeyCred`) / `Constr 1 [script hash]` (`ScriptCred`) | built with `keyCred(k)`, `scriptCred(h)`; read with `match c { KeyCred { key } => …, ScriptCred { hash } => … }` |
 | `Address` | the ledger's `Address` | `Constr 0 [credential, staking option]` | built with `wallet(k)`, `wallet(k, stakeKey)`, `script(h)`, `script(h, stakeKey)`; `a.payment` is its credential |
-| `Value` | the ledger's `Value` | never stored or passed | a local's, a `fn`'s parameter or result, `funds`' and the effects' only (`JSC0341`) |
+| `Value` | the ledger's `Value` | a map of maps, each policy's token names in canonical order (shorter first: its *wire form*) | a local's, a `fn`'s, `funds`' and the effects'; M2c: a field of the state, the params, a record or a variant, never in a `List`, `Option` or `Map` (wrap it in a record) nor a method parameter (`JSC0341`) |
+| `Instance<C>` | the API's `ForeignInstance` | `Constr 0 [policy, instance id]` (`ForeignInstance`) | M2c: another contract's instance, `C` imported (`import contract`); a `params` field only (`JSC0445`), used whole as a deposit's target and by `reads` |
+| `C.State`, `C.T` | the imported contract's own records (`Oracle.State`) | as that contract encodes them | M2c: read, not stored: a `const`'s, a `fn`'s or a lambda's type, never a field, a method parameter, a memo or a datum (`JSC0446`); not matched (`JSC0446`) |
 
 There are no strings at run time, no implicit conversions, no `null` and no generic user types. Type, enum and variant
 names start with a capital (`JSC0205`), have no `_` (`JSC0206`), share one namespace (`JSC0910`), and may not be a
@@ -149,6 +153,7 @@ hash, and every `Address` the ledger's encoding with a well-formed payment crede
 | `params { … }` | `@Params public record Config(...)` | once (`JSC0431`), at least one field (`JSC0432`); read as `params.f` in methods, views and invariants, never in a `fn` (`JSC0433`) |
 | `event Name { … }` | a variant of `public sealed interface Event` | the contract's events; emitted with `emit(Name { … })` |
 | `invariant name = expr` | `@Invariant public static boolean name(State s__[, Config params__])` | a `Bool` over the state and the params, like a view's body, without `require` (`JSC0441`); not with `BigMap` state (`JSC0435`) or `batched` actions (`JSC0436`) |
+| `import contract { C } from "./C.jsc"` | `import <C's package>.C;` | M2c (ADR-0018 D9): another `.jsc` contract of the build, checked on its own; its state is `C.State` and its instances `Instance<C>`. One name, the file's contract (`JSC0740`, `JSC0742`); no cycle (`JSC0743`); not twice, nor its name for another declaration (`JSC0744`); `java:` contracts not yet (`JSC0741`) |
 
 Method names are unique, and a `fn` may not share one (`JSC0202`); nor may an invariant (`JSC0224`). A method gets
 `Ctx ctx` when it is a destroy, has a modifier other than `open`, `only`, `quorum` and `authorized`, or mentions
@@ -176,6 +181,7 @@ action; a destroy has none), and by the runtime before it submits. A state that 
 | `batched only` | `@Batched(only = true)`: intent-only, no direct call | `action` | |
 | `quorum k t` | `@Quorum(keys = "k", threshold = "t")` | `action`, `destroy` | `List<Key>` and `Int`, both state fields or both `params.f` (`JSC0439`) |
 | `authorized c` | `@AuthorizedBy("c")` | `action`, `destroy` | `Credential`, a state field or `params.f` |
+| `receives`, `receives T` | `@Receives`, and the method takes `Funds` | `action` (`JSC0447`), not `batched` | `T`: the type of the deposits' memos, each a checked input |
 
 `quorum k t` (ADR-0009 D2) holds when at least `t ≥ 1` of the transaction's signatories are in `k`, read from the
 input state, never the result. Every state the validator accepts as an output keeps each state quorum *well formed*
@@ -197,6 +203,14 @@ order-sensitive arguments. A contract with `BigMap` state cannot have batched ac
 followed by an identifier that is not a modifier reads as `batched` plus `only f` (then refused), and the six modifier
 words are no field or binding name (`JSC0211`).
 
+**Composition (M2c, ADR-0011).** A parameter `p: reads params.f` is the state of the instance the params field `f` (an
+`Instance<C>`) names, read from a reference input the validator authenticates (`@Reads("params.f") C.State p`, placed
+right after the params): in an action or a destroy (`JSC0443`), of a contract without `BigMap` state (`JSC0451`); the
+state is a checked input (`#read:`). A field the other contract sets from its own window is a time value: check
+staleness with `require(before(p.updatedAt + maxAge))`. An action that `receives` takes the deposits claimed on its
+output, `funds.deposits` (`JSC0448` elsewhere), each with `d.value` and, for `receives T`, `d.memo` (each memo decoded and
+checked where the action starts: `#memo:`). It also takes `Ctx`.
+
 ## Statements
 
 | Statement | Meaning | Rules |
@@ -207,6 +221,7 @@ words are no field or binding name (`JSC0211`).
 | `if c { … } else { … }` | branches; `else if` chains | as a statement, its arms end in statements (`JSC0314`) |
 | `match e { … }` | branches by case | exhaustive (`JSC0924`); as a statement, its arms end in statements |
 | `for (const x of xs) { … }` | runs the body per element, in order | the body has no value (`JSC1011`); effects in it accumulate in list order |
+| `send(to, v[, d])`, `mint`, `burn`, `accept`, `emit`, `deposit(i, v, m)` | the effects: see [Effects and audiences](#effects-and-audiences) | in an action or a destroy |
 
 A block used as a value (a lambda's block, a value `if` or `match` arm) holds only `const` and `require` statements
 (`JSC0315`).
@@ -275,14 +290,21 @@ leave it fails, as the ledger's builtins do on-chain.
 `funds` is the native assets a call sees, in an `init`, action or destroy: `funds.received` (what the caller offers,
 no lovelace: that is `received`), `funds.held` (what the instance holds besides lovelace and its own token),
 `funds.policy` (the contract's policy) and `funds.self` (the instance's token name). A method that reads `funds`, or
-sends, mints, burns or accepts, is lowered with the processor's `Funds` parameter.
+sends, mints, burns, accepts or receives, is lowered with the processor's `Funds` parameter. `funds.deposits` (M2c) is a
+receiving action's deposits.
+
+**Stored values (M2c).** A field of the state, the params, a record or a variant may be a `Value`. It is stored in its
+wire form (cardano-client-lib's canonical order) and read back in the ledger's: the lowering converts where the field is
+read (`ValueAdapter.fromWire`, which also refuses a malformed one) and where the record is built (`ValueAdapter.toWire`),
+so the datum the validator compares is the one the runtime writes.
 
 ## Effects and audiences
 
 | Statement | Effect | Generated check (key) |
 |---|---|---|
 | `pay(to, n)` | a payout of `n` lovelace to the key `to`; 0 is skipped | `n` is not negative (`#pay:`) |
-| `send(to, v)` | an output of `v` to the address `to`, without a datum | every quantity positive, no reserved name of the own policy, never to the contract's own script (`#send:`) |
+| `send(to, v)`, `send(to, v, d)` | an output of `v` to the address `to`; M2c: with the inline datum `d`, any value of the contract's own types, built by a generated encoder | every quantity positive, no reserved name of the own policy, never to the contract's own script (`#send:`) |
+| `deposit(i, v, m)` | M2c (ADR-0011 D3): `v` into the instance `i` (an `Instance<C>` from the params), which `C`'s receiving action takes in the same transaction; `m` the memo, any value of the contract's own types | `v` not empty, every quantity positive, no reserved-kind name under any policy (`#deposit:`). The target's contract must receive (`JSC0449`), and one of its receiving actions decode the memo (`JSC0450`); no time value in `v` (`JSC0526`) |
 | `mint(name, n)`, `burn(name, n)` | `n` more, or fewer, of the own policy's `name`; the net is what the transaction mints | `n` positive, `name` a user token of at most 32 bytes (`#mint:`) |
 | `accept(v)` | the method takes in `v` | native assets only, every quantity positive (`#accept:`); at the end, the sum accepted equals `funds.received` (`#funds:`) |
 | `emit(e)` | an event (a value of the contract's `Event`), in source order | none in the method; the validator requires the redeemer to carry exactly these events (ADR-0009 D5) |
@@ -291,7 +313,9 @@ Each kind accumulates **in source order** (in a `for`, in list order; an effect 
 `mint` and `accept` are net sums. An `init` takes no effect but may read `funds` (`JSC0404`; `accept` in an init is
 not supported yet, `JSC0426`). `accept` needs `payable` (`JSC0422`), and a payable method that reads `funds`, sends,
 mints or burns must state what it takes in, `accept(Value.none())` for nothing (`JSC0423`). A method that can reach a
-`pay`, `send`, `mint` or `burn` in any arm or loop must have `only <field>` or `open` (`JSC0408`). A contract with native
+`pay`, `send`, `mint`, `burn` or `deposit` in any arm or loop must have `only <field>` or `open` (`JSC0408`). A deposit
+alone takes no `Funds` (a payable method that only deposits takes ADA). An action that deposits returns `Outcome` with
+`deposits`; a destroy that deposits returns `Settled`. A contract with native
 assets has no `batched` actions (`JSC0424`). An action with effects returns `Outcome`, or `Received` when it takes native
 assets; a destroy that sends, mints, burns or emits returns `Settled` (the processor's result records). A batched action
 never returns events: when a direct action's `Outcome` holds them, a batched action that pays returns
@@ -430,7 +454,7 @@ map gives, with the generated file and line as a note.
 | `org.julclang.state.dsl.JscMain <srcDir> <outDir> [--accept-abi]` | Lowers every `.jsc` under `srcDir` into `outDir` (emptied first), with each `.jsc` 2 file's source map; checks (or with `--accept-abi` writes) the ABI manifests. Exits 1 on an error, 2 on bad usage. Gradle's `generateJsc` and `acceptJscAbi` run it |
 | `JscMain --check-abi <srcDir> <descriptionsDir>` | Checks every manifest against the processor's descriptions (`checkJscAbi`) |
 | `JscMain --migrate <srcDir> <outDir> [--in-place]` | Translates v1 files to `.jsc` 2 ([migration](/languages/jsc-migration/)) |
-| `JscMain.lowerWithWarnings(source, fileName)` | `Lowered(java, diagnostics, fileName, sourceMapJson, abiJson)` for one file |
+| `JscMain.lowerWithWarnings(source, fileName)` | `Lowered(java, diagnostics, fileName, sourceMapJson, abiJson)` for one file; with `(…, id, modules)` (M2c) a file of a build, whose `import contract` imports `modules` resolves |
 | `Toolchain.build(files, options)` (`julc-state-toolchain`) | Lowers `.jsc` entries, then compiles everything as Gradle does; used by `joust build` |
 
 ## Next steps
