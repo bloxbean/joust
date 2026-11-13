@@ -5,12 +5,12 @@
 // A build's time counts from when the worker starts it; a build past it stops the worker. No worker is left behind.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { engineLimits, buildInWorker, liveWorkers, setEngineHostForTests, ENGINE_STACK_MB, ENGINE_MEMORY_MB,
+import { engineLimits, buildInWorker, liveWorkers, setEngineHostForTests, stripHeapFlags, hostEnv, ENGINE_STACK_MB, ENGINE_MEMORY_MB,
   ENGINE_TIMEOUT_S } from '../src/toolchain.js';
 import * as joust from '../src/index.js';
 import { heapProblem, probeHeapLimit } from '../src/toolchain-heap.js';
@@ -88,13 +88,53 @@ test('inherited Node heap flags never reach the engine: the configured heap hold
   }
 });
 
+test('the engine host keeps NODE_OPTIONS without its heap flags, under every case of the key (C12, F10)', () => {
+  assert.equal(stripHeapFlags('--require ./.pnp.cjs --max-old-space-size=8192 --import "./a b.mjs" --max_heap_size=1'
+    + ' "--max-old-space-size=256" --max-old-space-size="256" --max-semi-space-size=64'), '--require ./.pnp.cjs --import "./a b.mjs" --max-semi-space-size=64');
+  assert.equal(stripHeapFlags(undefined), '');
+  // Windows reads the environment case-insensitively: every case variant goes, and one NODE_OPTIONS comes back.
+  assert.deepEqual(hostEnv({ PATH: '/x', Node_Options: '--max-old-space-size=256 --require ./h.cjs', node_options: '--import x' }),
+    { PATH: '/x', NODE_OPTIONS: '--require ./h.cjs' });
+  assert.deepEqual(hostEnv({ node_options: '--import y', NODE_OPTIONS: '--require ./p.cjs --max-heap-size=9' }), { NODE_OPTIONS: '--require ./p.cjs' });
+  assert.deepEqual(hostEnv({ Node_Options: '--max-old-space-size=256' }), {}, 'nothing left: no NODE_OPTIONS at all');
+});
+
+test('a NODE_OPTIONS preload reaches the engine host, its heap flag does not (F10)', { skip: ENGINE ? false : 'no engine (js/joust/engine)', timeout: 300_000 }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'joust-preload-'));
+  const marker = join(dir, 'ran.txt');
+  writeFileSync(join(dir, 'preload.cjs'), `require('node:fs').appendFileSync(${JSON.stringify(marker)}, process.argv[1] + '\\n');`);
+  const r = child({ NODE_OPTIONS: `--require ${join(dir, 'preload.cjs')} --max-old-space-size=8192`, JOUST_ENGINE_MEMORY_MB: '256' },
+    buildCall(JSON.stringify(chain(3))));
+  assert.deepEqual(r, { ok: true });
+  assert.ok(readFileSync(marker, 'utf8').split('\n').some((l) => l.endsWith('toolchain-host.js')), 'the preload ran in the host');
+});
+
+test('a fork the OS refuses is not counted as a live host (C13)', () => {
+  const script = join(mkdtempSync(join(tmpdir(), 'joust-emfile-')), 'emfile.mjs');
+  writeFileSync(script, `import fs from 'node:fs';
+    import { buildInWorker, liveWorkers } from ${JSON.stringify(TOOLCHAIN)};
+    const fds = [];
+    try { for (;;) fds.push(fs.openSync('/dev/null', 'r')); } catch {}
+    let error = null;
+    try { await buildInWorker({ files: {}, limits: { timeoutS: 5 } }); } catch (e) { error = e.message; }
+    for (const fd of fds) fs.closeSync(fd);
+    await new Promise((r) => setTimeout(r, 200));
+    console.log(JSON.stringify({ error, live: liveWorkers() }));
+    process.exit(0);`);
+  const out = JSON.parse(execFileSync('/bin/sh', ['-c', `ulimit -n 128; "${process.execPath}" "${script}"`], { encoding: 'utf8', timeout: 60_000 }).trim());
+  assert.ok(out.error, JSON.stringify(out));
+  assert.equal(out.live, 0, JSON.stringify(out));
+});
+
 test('a host that does not start, or exits before it reports, rejects its builds and leaves nothing running (C10)', async () => {
-  for (const [host, why] of [['silent', /did not start within 1 s/], ['exits', /host exited \(code 0\) before it answered/],
-    ['probe-exits', /heap probe failed: the heap probe exited \(code 0\) before it reported/]]) {
+  // The silent host is ended by a 1 s startup limit; the others get 10 s, so a slow process start under load is not
+  // mistaken for the failure they show.
+  for (const [host, why, timeoutS] of [['silent', /did not start within 1 s/, 1], ['exits', /host exited \(code 0\) before it answered/, 10],
+    ['probe-exits', /heap probe failed: the heap probe exited \(code 0\) before it reported/, 10]]) {
     setEngineHostForTests(new URL(`./hosts/${host}.mjs`, import.meta.url));
     try {
       const t = Date.now();
-      await assert.rejects(buildInWorker({ files: {}, limits: { timeoutS: 1 } }), why, host);
+      await assert.rejects(buildInWorker({ files: {}, limits: { timeoutS } }), why, host);
       assert.ok(Date.now() - t < 10_000, host);
       await settled();
       assert.equal(liveWorkers(), 0, `${host}: nothing left running`);

@@ -77,6 +77,37 @@ export function setEngineHostForTests(url) {
   HOST = url ?? new URL('./toolchain-host.js', import.meta.url);
 }
 
+/** The old-generation heap flags, in Node's spellings (hyphen or underscore), whole or quoted. */
+const HEAP_FLAG = /^"?--max[-_](old[-_]space|heap)[-_]size(=|"|$)/;
+
+/**
+ * NODE_OPTIONS without its heap flags (#80 review F10): a preload (--require, --import: Yarn PnP, loaders) still
+ * reaches the engine host, while no inherited heap flag sets its workers' old generation. Tokens are split on white
+ * space outside double quotes, as Node reads them; the three-point measurement in the host still decides.
+ */
+export function stripHeapFlags(nodeOptions) {
+  const tokens = String(nodeOptions ?? '').match(/(?:[^\s"]+|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  return tokens.filter((t) => !HEAP_FLAG.test(t)).join(' ');
+}
+
+/**
+ * The engine host's environment: this process's, with every key that is NODE_OPTIONS ignoring case removed (Windows
+ * reads the environment case-insensitively: Node_Options would survive a plain delete; #80 review C12) and one
+ * NODE_OPTIONS put back, its heap flags stripped (the exact key's value, else the first case variant's).
+ */
+export function hostEnv(env = process.env) {
+  const out = {};
+  let options;
+  for (const [k, v] of Object.entries(env)) {
+    if (k.toUpperCase() === 'NODE_OPTIONS') {
+      if (k === 'NODE_OPTIONS' || options === undefined) options = v;
+    } else out[k] = v;
+  }
+  const kept = stripHeapFlags(options);
+  if (kept) out.NODE_OPTIONS = kept;
+  return out;
+}
+
 let current = null;
 let seq = 0;
 /** Every worker started and not yet exited. */
@@ -88,16 +119,15 @@ export function liveWorkers() {
 }
 
 /**
- * A worker with these limits, in an engine host process of its own (#80 review C7, C8): forked with no Node options
- * (execArgv empty, NODE_OPTIONS removed), so no inherited --max-old-space-size or preload reaches it, and the worker's
+ * A worker with these limits, in an engine host process of its own (#80 review C7, C8, C12, F10): forked without the
+ * command line's Node flags and with NODE_OPTIONS stripped of its heap flags (hostEnv), so no inherited
+ * --max-old-space-size reaches it, while preloads still do, and the worker's
  * resourceLimits are what V8 applies. The host measures them before any build (toolchain-heap.js); the startup timer
  * runs until that measurement has settled (#80 review C10). Its builds; what ends them.
  */
 function spawn(limits) {
   const pending = new Map();
-  const env = { ...process.env };
-  delete env.NODE_OPTIONS;
-  const child = fork(HOST, [JSON.stringify(limits)], { execArgv: [], env, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+  const child = fork(HOST, [JSON.stringify(limits)], { execArgv: [], env: hostEnv(), serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
   const worker = {
     postMessage: (m) => child.send(m),
     ref: () => { child.ref(); child.channel?.ref(); },
@@ -106,7 +136,10 @@ function spawn(limits) {
   };
   const w = { worker, pending, key: `${limits.stackMb}/${limits.memoryMb}`, dead: false, retiring: false };
   live.add(child);
+  // A fork the OS refused emits error and close, never exit (#80 review C13): either way it is no longer live.
   child.once('exit', () => live.delete(child));
+  child.once('close', () => live.delete(child));
+  child.once('error', () => { if (child.pid === undefined) live.delete(child); });
   const failAll = (e) => {
     if (w.dead) return;
     w.dead = true;

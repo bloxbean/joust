@@ -26,9 +26,11 @@ limits as `{ stackMb, memoryMb, timeoutS }`, in the same ranges.
 | `JOUST_ENGINE_MEMORY_MB` | 256–65536 | 4096 | the worker's heap; a build that needs more fails with an out-of-memory error |
 | `JOUST_ENGINE_TIMEOUT_S` | 1–86400 | 600 | one build's time, from when the worker starts it; past it the worker is stopped |
 
-The engine runs in a host process of its own, started with no Node options (`NODE_OPTIONS` is not passed on, and no
-command-line flags are), so an inherited `--max-old-space-size` or `--max-heap-size` cannot change the worker's heap:
-`JOUST_ENGINE_MEMORY_MB` is what V8 applies, and the host measures it before any build, refusing to build if it is not.
+The engine runs in a host process of its own, started without the command line's Node flags and with `NODE_OPTIONS`
+stripped of its heap flags (`--max-old-space-size`, `--max-heap-size`, in either spelling; every case variant of the
+variable is replaced, as Windows reads it ignoring case). Preloads in `NODE_OPTIONS` (`--require`, `--import`: Yarn
+PnP, loaders) still apply. So no inherited flag sets the worker's heap: `JOUST_ENGINE_MEMORY_MB` is what V8 applies,
+and the host measures it before any build, refusing to build if it is not.
 `loadToolchain()` runs builds on the caller's thread, which needs a stack of at
 least 8 MB; `buildInWorker` provides one. On Node 22 the engines turn on Wasm exception references
 (`--experimental-wasm-exnref`) themselves; newer Node has them on by default, and the flag is not set there (it would only print a warning).

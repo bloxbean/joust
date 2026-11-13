@@ -1,5 +1,6 @@
-// The toolchain engine's host process (#80 review C7, C8): `joust build` forks it with no Node options of its own
-// (execArgv empty, NODE_OPTIONS removed), so no inherited --max-old-space-size can set the worker's old generation, and
+// The toolchain engine's host process (#80 review C7, C8, C12, F10): `joust build` forks it without the command line's
+// Node flags and with NODE_OPTIONS stripped of its heap flags (toolchain.js hostEnv; preloads stay), so no inherited
+// --max-old-space-size can set the worker's old generation, and
 // runs the build worker inside it with the configured resourceLimits. Before any build it measures the worker's heap
 // (toolchain-heap.js) and reports; then it relays builds both ways. When the worker exits, so does the host.
 import { Worker } from 'node:worker_threads';

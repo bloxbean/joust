@@ -345,8 +345,10 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
     `JOUST_ENGINE_STACK_MB` (8–1024, default 8), `JOUST_ENGINE_MEMORY_MB` (the heap, 256–65536, default 4,096) and
     `JOUST_ENGINE_TIMEOUT_S` (per build, 1–86400, default 600), or a caller's `limits` in the same ranges; an invalid
     one is refused with its name. The heap limit is enforced, not best-effort: the engine (WasmGC) allocates on the
-    worker's JS heap. The worker runs in an engine host process forked with no Node options (no `execArgv`, no
-    `NODE_OPTIONS`; #80 review C7, C8), so an inherited `--max-old-space-size` or `--max-heap-size` never reaches it, and
+    worker's JS heap. The worker runs in an engine host process forked without the command line's Node flags and with
+    `NODE_OPTIONS` stripped of its heap flags (#80 review C7, C8, C12, F10: every case variant of the variable is
+    replaced; preloads such as Yarn PnP's still apply), so an inherited `--max-old-space-size` or `--max-heap-size`
+    never reaches it, and
     before any build the host measures the old generation: the build worker and two probes whose old generations are
     64 MB smaller and larger each report V8's `heap_size_limit`, and they must step by exactly 64 MB (true whatever the
     young generation; an old generation set elsewhere makes them equal). The decision rests on these measurements only,
@@ -1242,4 +1244,5 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   counts classes per name per location, and covers JOUST's own images only (any other image must run it). After round
   r3: the engine runs in a host process without inherited Node options, its heap decided from three measurements
   only; directory names compare in Unicode normal form C too; `checkImageScripts` reads each class's real simple name
-  from its class file (`$` is legal in a Java name).
+  from its class file (`$` is legal in a Java name). After round r4: the host keeps `NODE_OPTIONS` preloads, its heap
+  flags stripped, under any case of the variable.
