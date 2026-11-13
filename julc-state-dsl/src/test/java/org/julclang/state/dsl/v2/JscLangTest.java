@@ -247,6 +247,9 @@ class JscLangTest {
     /** L1 and L5: the analysis's front end is the build's: the same error, or the same warnings and the same lowering. */
     static void sameAsTheBuild(String src, String file) {
         JscLang.Analysis a = JscLang.analysis(src, file, true);
+        // Review F2 on #83: the server's path (the front end alone, lower = false) gives the same model as the lowering
+        // path, so every L1/L5 comparison below also holds for what the server publishes.
+        assertEquals(a.model().json(), JscLang.analysis(src, file, false).model().json(), file);
         if (!JscV2.isV2(src)) {
             // What the build does with it: the v1 front end (a deletion of 'jsc' makes a file v1).
             try {
@@ -340,11 +343,18 @@ class JscLangTest {
 
     @Test
     void aV1FileGetsTheBuildsDeprecationWarningAndNoSpans() {
-        String v1 = "package t;\ncontract C {\n  state { n: Int }\n  init() { n = 0; }\n}\n";
+        // Valid v1 (review C10 on #83): accepted, with exactly the deprecation warning.
+        String v1 = "package t;\ncontract C {\n  state n: Int;\n  init() { n = 0; }\n}\n";
         var m = JscLang.analyze(v1, "C.jsc");
         assertEquals("jsc1", m.language());
-        assertTrue(m.diagnostics().stream().anyMatch(d -> "JSC9006".equals(d.code()) || d.severity().equals("error")), m.toString());
+        assertTrue(m.accepted(), m.toString());
+        assertEquals(List.of("JSC9006"), m.diagnostics().stream().map(JscLang.Diagnostic::code).toList());
         assertTrue(m.declarations().isEmpty());
+        // Malformed v1: the v1 front end's error, as the build reports it.
+        String bad = "package t;\ncontract C {\n  state { n: Int }\n  init() { n = 0; }\n}\n";
+        var e = JscLang.analyze(bad, "C.jsc");
+        assertFalse(e.accepted());
+        sameAsTheBuild(bad, "C.jsc");
     }
 
     // ------------------------------------------------------------------ D2a: the model's bounds
