@@ -1,6 +1,6 @@
 # `.jsc` 2, milestone M2c: report (ADR-0018 §8, r21)
 
-Date 2026-11-13. Branch `feat/jsc-2-m2c`, stacked on `feat/jsc-2-m2b` (`d12d080`, #84, approved; ADR-0018 r18). JuLC
+Date 2026-11-13; round r2 2026-11-14. Branch `feat/jsc-2-m2c`, stacked on `feat/jsc-2-m2b` (`d12d080`, #84, approved; ADR-0018 r18). JuLC
 `v0.1.0-pre21-rc1`, cardano-client-lib `0.8.0-pre7`, JDK 25, Node 22, macOS arm64, Yaci DevKit. Every number below was
 measured at this branch's head, by the test named with it.
 
@@ -220,7 +220,20 @@ fix a `.jsc` deposit of tokens with unequal-length names would fail on chain whi
 | S5 (P3) deposits are unauthenticated | semantics §5.8, the reference | |
 | C5 (P3) the gate compared a constant | `collect @ max` compares the pot's next state; the composed sale includes it | `JscV2M2cGateTest` (same budgets) |
 
-## Tests run at this head
+## Tests run in round r2
+
+DevKit was started afresh for round r2 (a new chain), so the recordings below publish and register the verifiers where a
+group first needs them.
+
+| Command | Result |
+|---|---|
+| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL, none failed: julc-state-dsl 158, julc-state-toolchain 135 (`JscV2M2cFourWayTest` 8, `JscV2M2cHostileInputTest` 5, `EngineFixtureScriptsTest` 1, `ValueAdapterDifferentialTest` 3,651 cases), julc-state-processor 74, julc-state-runtime 76, julc-state-runtime-wasm 3, julc-state-api 10, examples/dsl 94, examples/fees 8, examples/oracle 4, examples/devkit 1 (`FixturesTest`: 209 transactions, 4,028 reads). `checkJscAbi`: 29 manifests agree |
+| `./gradlew :julc-state-toolchain:toolchainWasm :julc-state-toolchain:toolchainWasmTest :julc-state-runtime-wasm:runtimeWasm -PgraalvmHome=…` (then copied into `js/joust/engine`, `js/joust-runtime/engine`) | BUILD SUCCESSFUL: `ALL SAME`; S2 in Wasm 2283/2283; 21 depth cases on a cold engine; S2b 43/43 |
+| `npm test` in `js/jsc-interpreter` / `js/joust` / `tree-sitter-jsc` | 43/43 / 36/36 and `test/page.test.js` 3/3 (run apart, as in r1) / 17/17 parses, the shared corpus agreeing (86 corpus, 34 repository, 70 research files) |
+| DevKit, recording: `fixtures/m0/{dex,fees,locker,market,treasury}` deleted, then `./gradlew :examples:{dex,fees,locker,market,treasury}:test -PjoustFixtures --rerun`; `fixtures/m3/{treasury,treasury-governor}` and Treasury's contract file deleted, then `JOUST_RECORD=…/fixtures/m3 node --test --test-name-pattern='^Treasury:' test/examples.test.js` in js/joust-runtime | every test passed (the five examples' devnet tests among them; both Treasury flows); then `EngineFixturesTest`: every engine call replays byte for byte (treasury 16, treasury-governor 17) |
+| DevKit: `./gradlew :examples:dsl:test :examples:treasury:test --rerun` | examples/dsl 105 tests, examples/treasury 9, none skipped or failed (`TreasuryDevnetPortTest`, `TreasuryDevnetTest`, the other ports' devnet tests) |
+
+## Tests run in round r1 (at `7d3376d`)
 
 | Command | Result |
 |---|---|
