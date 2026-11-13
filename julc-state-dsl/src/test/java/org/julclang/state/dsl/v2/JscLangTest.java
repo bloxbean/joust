@@ -295,6 +295,7 @@ class JscLangTest {
             sameAsTheBuild(src, name(p));
             n++;
         }
+        System.out.println("[lang] " + n + " corpus files analysed as the build lowers them");
         assertTrue(n >= 60, n + " corpus files");
     }
 
@@ -317,6 +318,7 @@ class JscLangTest {
                 n++;
             }
         }
+        System.out.println("[lang] " + n + " single-token deletions analysed as the build lowers them");
         assertTrue(n > 3000, n + " mutations");
     }
 
