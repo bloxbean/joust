@@ -65,8 +65,13 @@ test('C12: a copy reused while the collector decides is kept (its use is read ag
 test('C12: a copy removed while its worker loads is "missing", not an engine failure, and nothing is quarantined', async () => {
   const dir = stubVariant(join(tmp(), 'gone'), 'gone');
   const engine = { file: join(dir, ENGINE_JS), id: 'id-gone' };
-  // Removed the moment the worker is started, before it can require the file.
-  const host = new EngineHost({ workerEntry: WORKER, onStart: () => rmSync(dir, { recursive: true, force: true }) });
+  // Removed after the host's existence check and before the worker exists (its lease step), so the worker's require
+  // always finds it gone. (Removing it at onStart, after the worker was created, raced the worker's own require under
+  // load: the security review saw this test fail once in five full runs.)
+  const host = new EngineHost({ workerEntry: WORKER, lease: async () => {
+    rmSync(dir, { recursive: true, force: true });
+    return () => {};
+  } });
   try {
     const r = await host.analyze('engine:id-gone', engine, { file: 'S.jsc', source: 'jsc 2 WARN' });
     assert.deepEqual(r, { missing: true });
