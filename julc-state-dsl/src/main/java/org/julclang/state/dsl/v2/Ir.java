@@ -30,13 +30,28 @@ final class Ir {
     record Program(String pkg, String fileName, String name, List<ContractOption> options,
                    Map<String, RecordType> records, Map<String, EnumType> enums, RecordType state, List<Method> methods,
                    List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings, boolean library,
-                   List<Library> libraries) {
+                   List<Library> libraries, List<JavaLib> javaLibraries) {
 
         /** A contract without libraries (the form before M4). */
         Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
                 Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
                 Set<String> recursiveFns, List<Warning> warnings) {
-            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, false, List.of());
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, false, List.of(),
+                    List.of());
+        }
+
+        /** A program with {@code .jsc} libraries only (M4a). */
+        Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
+                Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
+                Set<String> recursiveFns, List<Warning> warnings, boolean library, List<Library> libraries) {
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, library, libraries,
+                    List.of());
+        }
+
+        /** The Java library record named {@code name} (its simple name), or null. */
+        JavaRec javaRecord(String name) {
+            for (JavaLib j : javaLibraries) if (j.records().containsKey(name)) return j.records().get(name);
+            return null;
         }
 
         /** A record type, the state, or an enum variant (variant names are unique in a build), own or a library's. */
@@ -44,6 +59,8 @@ final class Ir {
             if (name.equals("State") && state != null) return state;
             RecordType r = records.get(name);
             if (r != null) return r;
+            JavaRec jr = javaRecord(name);
+            if (jr != null) return jr.type();
             for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return e.variants().get(name);
             for (Library l : libraries) {
                 RecordType x = l.record(name);
@@ -93,6 +110,31 @@ final class Ir {
             return null;
         }
     }
+
+    /**
+     * A Java (JuLC) library the program imports with {@code java:} (ADR-0018 D9, M4b), certified: its class, the SHA-256
+     * of its on-chain sources, the records its imported fns reach (by {@code .jsc} name) and its imported fns.
+     */
+    record JavaLib(String fqcn, String sourceSha256, Map<String, JavaRec> records, Map<String, JavaFn> fns,
+                   List<JavaLibraries.Message> messages) {
+        JavaLib(String fqcn, String sourceSha256, Map<String, JavaRec> records, Map<String, JavaFn> fns) {
+            this(fqcn, sourceSha256, records, fns, List.of());
+        }
+
+        String simpleName() {
+            return fqcn.substring(fqcn.lastIndexOf('.') + 1);
+        }
+    }
+
+    /**
+     * A Java library record: its {@code .jsc} record type (no fields when opaque), the name the processor's description
+     * gives its owner ({@code com.acme.AllowList}), the top-level class to import and how the generated Java names it
+     * ({@code AllowList.Entry}); {@code verified}: fields readable and comparable (D9).
+     */
+    record JavaRec(RecordType type, String canonicalOwner, String importClass, String sourceName, boolean verified) {}
+
+    /** A Java library fn's signature, in {@code .jsc} types. */
+    record JavaFn(String name, List<Ty> params, Ty result) {}
 
     /**
      * A {@code .jsc} library a program imports (ADR-0018 D9, M4): its Java class ({@code app.Fees}), its file and the
@@ -224,7 +266,7 @@ final class Ir {
     // ------------------------------------------------------------------ expressions
 
     sealed interface Expr permits Lit, LocalRef, StateRef, StateField, CtxRef, NoneLit, SomeOf, GetField, New, CallFn,
-            CallStd, Prelude, TimePred, ListLit, Neg, Not, Arith, Compare, Equals, Logic, Cond, Coalesce, BlockValue,
+            CallStd, CallJava, Prelude, TimePred, ListLit, Neg, Not, Arith, Compare, Equals, Logic, Cond, Coalesce, BlockValue,
             IfValue, ListProp, Concat, Contains, Hof, Fold, Variant, Match, MapEmpty, MapOp, MapHof, MapFold, BigEmpty, BigOp,
             Range, ListArg {
         Ty type();
@@ -268,6 +310,13 @@ final class Ir {
     record CallFn(String fn, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
 
     record CallStd(Std.Binding binding, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
+
+    /**
+     * A call of a certified Java library's public static method (ADR-0018 D9, M4b): {@code library} is its class. The
+     * reference interpreters do not evaluate it (no reference semantics: a Java body is certified on the two legs that
+     * run it, the JVM and UPLC, by its per-function vectors).
+     */
+    record CallJava(String library, String fn, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}
 
     /** {@code min}, {@code max}, {@code abs}, {@code asKey} (a checked conversion). */
     record Prelude(String op, List<Expr> args, Ty type, int taint, Pos pos) implements Expr {}

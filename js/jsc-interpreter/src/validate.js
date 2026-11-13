@@ -28,6 +28,7 @@ export const NODES = {
   GetField: { target: 'e', record: 's', field: 's' },
   New: { record: 's', values: 'es' },
   CallFn: { fn: 's', args: 'es' },
+  CallJava: { library: 's', fn: 's', args: 'es' },
   CallStd: { module: 's', name: 's', args: 'es' },
   Prelude: { op: set('min', 'max', 'abs', 'asKey', 'asHash'), args: 'es' },
   TimePred: { after: 'z', threshold: 'e' },
@@ -103,7 +104,7 @@ export function validate(p) {
 
   // ---- top level and declarations
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
-    'recursiveFns', 'libraries', 'fns', 'methods', 'warnings'], 'program');
+    'recursiveFns', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings'], 'program');
   if (p.ir !== 2 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 2, not ${JSON.stringify(p.ir)}`);
   // Version 2 (ADR-0018 M4): the .jsc libraries the program imports, each with its declarations. A build's names are one
   // namespace: a library's records, enums and fns join the program's, and no name is declared twice across them.
@@ -114,7 +115,25 @@ export function validate(p) {
     str(l.source, 'library');
     if (typeof l.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(l.sourceSha256)) fail('library', 'sourceSha256 must be 64 hex digits');
   }
-  const allRecords = [...p.libraries.flatMap((l) => l.records), ...p.records];
+  // The certified Java libraries it imports (M4b): their records join the namespace (fields only when verified), their
+  // imported fns' signatures are listed; their bodies are not here, and evaluating a call of one has no answer (§2.4).
+  if (!Array.isArray(p.javaLibraries)) fail('program', 'javaLibraries is a list');
+  const javaFns = new Map();
+  for (const j of p.javaLibraries) {
+    keys(j, ['class', 'sourceSha256', 'records', 'fns'], 'java library');
+    if (!/^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*$/.test(str(j.class, 'java library'))) fail('java library', `a bad class name ${j.class}`);
+    if (typeof j.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(j.sourceSha256)) fail('java library', 'sourceSha256 must be 64 hex digits');
+    for (const r of j.records) {
+      keys(r, ['name', 'fields', 'at', 'owner', 'import', 'javaName', 'verified'], 'java record');
+      if (typeof r.verified !== 'boolean') fail('java record', 'verified is a boolean');
+    }
+    for (const f of j.fns) {
+      keys(f, ['name', 'params', 'result'], 'java fn');
+      javaFns.set(`${j.class}.${f.name}`, f);
+    }
+  }
+  const allRecords = [...p.libraries.flatMap((l) => l.records), ...p.javaLibraries.flatMap((j) => j.records.map(({ name, fields, at }) => ({ name, fields, at }))),
+    ...p.records];
   const allEnums = [...p.libraries.flatMap((l) => l.enums), ...p.enums];
   const allFns = [...p.libraries.flatMap((l) => l.fns), ...p.fns];
   if (p.language !== 'jsc 2') fail('program', `not a .jsc 2 program: ${p.language}`);
@@ -277,6 +296,11 @@ export function validate(p) {
     if (e.node === 'CallFn') {
       if (!fnArity.has(e.fn)) fail(where, `no fn ${e.fn}`);
       arity(where, `fn ${e.fn}`, e.args.length, fnArity.get(e.fn));
+    }
+    if (e.node === 'CallJava') {
+      const f = javaFns.get(`${e.library}.${e.fn}`);
+      if (!f) fail(where, `no fn ${e.fn} imported from java:${e.library}`);
+      arity(where, `java:${e.library}.${e.fn}`, e.args.length, f.params.length);
     }
     if (e.node === 'CallStd') arity(where, e.name, e.args.length, STD_ARITY[e.name]);
     if (e.node === 'Prelude') arity(where, e.op, e.args.length, PRELUDE_ARITY[e.op]);

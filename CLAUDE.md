@@ -195,6 +195,11 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   (`fees.jsc` → `Fees`); imports are relative (`./fees.jsc`); a build's declarations share one namespace; the IR is
   format 2 (`libraries`). Lower a file of a build with `JscV2.lower(src, name, id, JscModules.of(files))` (tests:
   `v2/Examples`), never alone, or its imports are JSC0706.
+- ADR-0018 M4b (`java:` imports): a Java library is certified from its on-chain sources (`JavaLibraryCertifier`, in
+  julc-state-toolchain; the dsl finds it through `ServiceLoader`, so a `jsc` tool class path needs the toolchain).
+  Gradle takes it through `joustLibrary` (sources only, compiled into the project; `checkJoustLibraries`,
+  `recordJoustLibraries`); `examples/dsl` imports `examples/compliance`. Interpreters give no answer for `CallJava`
+  (three legs in `FourWay.threeLegs`). Rules and catalogue: `docs/reference/jsc-2-java-libraries.md`.
 - **Never use `byte[].equals` or `==` in shared code.** On-chain it compares bytes; on the JVM it compares references.
   Use `ByteStringLib.equals`. The processor should lint for this.
 - Use `Require.that(cond, "msg")` in contracts (JVM throws RequireException with the message; on-chain trace + error).

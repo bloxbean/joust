@@ -75,6 +75,12 @@ final class JavaEmitter {
         for (Ir.Library l : p.libraries()) {
             for (Check c : new JavaEmitter(libraryProgram(p, l)).checksOnly()) checks.add(c.in(l.fileName()));
         }
+        // A Java library's messages (M4b): its requires and its adapters' checks, at their lines in its sources.
+        for (Ir.JavaLib j : p.javaLibraries()) {
+            for (JavaLibraries.Message m : j.messages()) {
+                checks.add(new Check(m.text(), m.kind(), new Syntax.Pos(m.line(), 1), m.in(), null, m.file()));
+            }
+        }
         return new Emitted(java, List.copyOf(checks));
     }
 
@@ -249,6 +255,11 @@ final class JavaEmitter {
      * which is imported (ADR-0018 D9, M4; JuLC follows imports, and needs them for same-package classes too).
      */
     private String qual(String name) {
+        Ir.JavaRec jr = p.javaRecord(name);
+        if (jr != null) {
+            imports.add(jr.importClass());
+            return jr.sourceName();
+        }
         Ir.Library l = p.libraryOf(name);
         if (l == null) return name;
         imports.add(l.qualified());
@@ -514,6 +525,7 @@ final class JavaEmitter {
                 case Ir.GetField g -> expr(g.target());
                 case Ir.New n -> n.values().forEach(this::expr);
                 case Ir.CallFn c -> c.args().forEach(this::expr);
+                case Ir.CallJava c -> c.args().forEach(this::expr);
                 case Ir.CallStd c -> {
                     if (c.binding().module().equals("std/time")) ctx = true;
                     c.args().forEach(this::expr);
@@ -843,6 +855,12 @@ final class JavaEmitter {
             }
             case Ir.New n -> "new " + qual(n.record()) + "(" + String.join(", ", n.values().stream().map(this::ex).toList()) + ")";
             case Ir.CallFn c -> qual(c.fn()) + "(" + String.join(", ", c.args().stream().map(this::ex).toList()) + ")";
+            // A certified Java library's public static method (D9, M4b), through its imported class.
+            case Ir.CallJava c -> {
+                imports.add(c.library());
+                yield c.library().substring(c.library().lastIndexOf('.') + 1) + "." + c.fn() + "("
+                        + String.join(", ", c.args().stream().map(this::ex).toList()) + ")";
+            }
             case Ir.CallStd c -> callStd(c);
             case Ir.Prelude c -> prelude(c);
             case Ir.TimePred t -> {

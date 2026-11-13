@@ -15,8 +15,8 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 [standard library](/languages/jsc-std/). A file without `jsc 2` is [.jsc v1](/languages/jsc-v1/).
 
 <Aside type="caution" title="A preview">
-`.jsc` 2 is a preview: the core language of milestone M1, and `.jsc` libraries (M4, below). The features of M2 and M3
-(values and assets, owned and keyed objects, purposes) and `java:` library imports still need [Java](/languages/java/).
+`.jsc` 2 is a preview: the core language of milestone M1, and `.jsc` and Java libraries (M4, below). The features of M2
+and M3 (values and assets, owned and keyed objects, purposes) still need [Java](/languages/java/).
 </Aside>
 
 ## Lexical rules
@@ -38,7 +38,7 @@ it. For a guided introduction, read the [.jsc guide](/languages/jsc/); for the f
 ```text
 file      = "jsc" "2" "package" seg { "." seg } { import | type | enum | fn } contract { import | type | enum | fn }
 library   = "jsc" "2" "library" seg { "." seg } { import | type | enum | fn }
-import    = "import" "{" Ident { "," Ident } "}" "from" String     (String: "std/…" or a relative "./x.jsc")
+import    = "import" "{" Ident { "," Ident } "}" "from" String     (String: "std/…", a relative "./x.jsc", or "java:<class>")
 type      = "type" Name "=" "{" { field [","] } "}"
 enum      = "enum" Name "{" { Name [ "{" { field [","] } "}" ] [","] } "}"
 field     = Ident ":" typeRef
@@ -314,6 +314,53 @@ contract Shop {
 | Inputs | A library's types are checked inputs like the contract's: a `Line` in a redeemer has its `Key` checked to 28 bytes before the method runs |
 | Artifacts | A library has no ABI manifest of its own: each contract's manifest states the library types its datum and redeemers reach (`"kind": "library"`, with the library's class). Each contract's IR export carries the libraries it imports (format 2), so the JavaScript reference interpreter evaluates their fns, and its message map lists a library's messages with the library's file (`"file": "fees.jsc"`) |
 | Identity | A library's package and file name are its class, which importing files and Java contracts name: renaming either is a code change of every importer, and may change the scripts that use it (bloxbean/julc#328), as a contract's package does |
+
+## Java libraries (`java:`)
+
+A `.jsc` file may import the public static methods and records of a Java (JuLC) on-chain library whose **on-chain
+sources** are on the library path and **certified** (ADR-0018 D9, M4b):
+
+```jsc
+import { Entry, isAllowed, limitOf, entry } from "java:org.example.compliance.AllowList"
+```
+
+On Gradle, the library's jar goes in the `joustLibrary` configuration, as sources only:
+
+```groovy
+dependencies {
+    joustLibrary 'org.example:compliance:1.0'   // its META-INF/plutus-sources
+}
+```
+
+The build extracts the library's `META-INF/plutus-sources`, compiles them into the project (the JVM side runs these
+sources, never the jar's classes), and certifies them before any import is admitted. Certification covers:
+
+- each signature's exact Java types, mapped to `.jsc` or refused;
+- every reachable body, checked with `SubsetLint`;
+- no casts and no reference equality;
+- only calls into the trusted base (D8's table, JOUST's `Require` and adapters, an allow-list of `BigInteger`, `JulcList`,
+  `JulcMap` and `Optional` operations);
+- none of the catalogue of known JVM/on-chain differences.
+
+`checkJoustLibraries` fails when a library class also reaches the runtime class path from a jar. When a contract is
+loaded, the runtime checks the bytes of each library class against the build's.
+
+| Rule | Code |
+|---|---|
+| No sources of the class on the library path | `JSC0720` |
+| The library is not certified (each problem, with its file and line) | `JSC0721` |
+| A fn whose signature does not map (`PlutusData`, maps, values, `void`, generics, fixed-width numbers) | `JSC0722` |
+| An overloaded name | `JSC0723` |
+| A Java record is read-only: built by the library's fns, never by an object literal | `JSC0724` |
+| An opaque record (a field that does not map) is never written as a type, read or compared | `JSC0725` |
+| A time value never reaches a Java fn (D11) | `JSC0726` |
+| A library class also on the runtime class path (Gradle) | `JSC0727` |
+
+`byte[]` maps to `Bytes` (a Java signature cannot say `Key`): make a `Key` of a result with `asKey(b)`. The reference
+interpreters do not evaluate a Java library's body: a call that reaches one has no answer there, and such calls are
+differential-tested on the JVM, the transition program and the validator, beside the library's own per-function vectors.
+The details, and the catalogue, are in
+[jsc-2-java-libraries.md](https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-java-libraries.md).
 
 ## The ABI manifest
 

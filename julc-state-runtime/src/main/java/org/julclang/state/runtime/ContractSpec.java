@@ -19,6 +19,14 @@ public record ContractSpec<S>(String name, Class<?> validatorClass, Class<S> sta
                               int maxDatumBytes, long maxValidityMs, boolean stakeSelf, String scriptCborHex,
                               java.util.List<Integer> mapFields, java.util.List<KeyedType<?>> keyed) {
 
+    /**
+     * ADR-0018 D9 (M4b): a contract built with {@code java:} libraries refuses to run when a library class it loads has
+     * other bytes than its build compiled from the certified sources ({@link JavaLibraryCheck}).
+     */
+    public ContractSpec {
+        JavaLibraryCheck.verify(validatorClass);
+    }
+
     public ContractSpec(String name, Class<?> validatorClass, Class<S> stateClass, long minAda, int maxDatumBytes,
                         long maxValidityMs, boolean stakeSelf, String scriptCborHex, java.util.List<Integer> mapFields) {
         this(name, validatorClass, stateClass, minAda, maxDatumBytes, maxValidityMs, stakeSelf, scriptCborHex, mapFields,

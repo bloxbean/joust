@@ -122,6 +122,13 @@ final class Abi {
         // The .jsc libraries' types the datum and redeemers reach (D9, M4), with the library that declares each: the
         // processor names them by its class (app.Fees.Line).
         for (String n : libraryTypes(p)) {
+            Ir.JavaRec jr = p.javaRecord(n);
+            if (jr != null) {
+                // A Java library's record (D9, M4b): the processor names it by its canonical name.
+                types.add("    " + str(n) + ": { \"kind\": \"library\", \"library\": " + str(jr.canonicalOwner()) + ", \"constructors\": ["
+                        + ctor(n, 0, fields(jr.type(), "        "), "      ") + "] }");
+                continue;
+            }
             Ir.Library l = p.libraryOf(n);
             String from = ", \"library\": " + str(l.qualified());
             if (l.records().containsKey(n)) {
@@ -209,7 +216,7 @@ final class Abi {
                 case Ty.BigMapT b -> work.addFirst(b.val());
                 case Ty.Rec r -> {
                     if (!seen.add(r.name())) continue;
-                    if (p.libraryOf(r.name()) != null) out.add(r.name());
+                    if (p.libraryOf(r.name()) != null || p.javaRecord(r.name()) != null) out.add(r.name());
                     work.addAll(p.record(r.name()).fields().values());
                 }
                 case Ty.EnumT e -> {

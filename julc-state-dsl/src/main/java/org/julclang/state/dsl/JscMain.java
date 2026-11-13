@@ -36,8 +36,14 @@ public final class JscMain {
      * {@code @OnchainLibrary} class.
      */
     public static Lowered lowerWithWarnings(String source, String fileName, String id, org.julclang.state.dsl.v2.JscModules modules) {
+        return lowerWithWarnings(source, fileName, id, modules, org.julclang.state.dsl.v2.JavaLibraries.NONE);
+    }
+
+    /** As above, with the certified Java libraries its {@code java:} imports may name (ADR-0018 D9, M4b). */
+    public static Lowered lowerWithWarnings(String source, String fileName, String id, org.julclang.state.dsl.v2.JscModules modules,
+                                            org.julclang.state.dsl.v2.JavaLibraries javaLibraries) {
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
-            var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName, id, modules);
+            var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName, id, modules, javaLibraries);
             return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
                     fileName, r.sourceMapJson(), r.abiJson(), r.irJson());
         }
@@ -160,7 +166,7 @@ public final class JscMain {
             String text = Files.readString(f);
             if (!org.julclang.state.dsl.v2.JscV2.isV2(text) || org.julclang.state.dsl.v2.JscV2.isLibrary(text)) continue;
             String name = src.relativize(f).toString();
-            var lowered = org.julclang.state.dsl.v2.JscV2.lower(text, f.getFileName().toString(), id(src, f), modules);
+            var lowered = org.julclang.state.dsl.v2.JscV2.lower(text, f.getFileName().toString(), id(src, f), modules, javaLibraries);
             String path = lowered.javaPath();
             String pkg = path.contains("/") ? path.substring(0, path.lastIndexOf('/')).replace('/', '.') : "";
             String contract = path.substring(path.lastIndexOf('/') + 1).replace(".java", "");
@@ -437,6 +443,126 @@ public final class JscMain {
         return found.size() == 1 ? found.get(0).toString() : null;
     }
 
+    /** The Java libraries of this run ({@code --java-libraries}); none unless given. */
+    static org.julclang.state.dsl.v2.JavaLibraries javaLibraries = org.julclang.state.dsl.v2.JavaLibraries.NONE;
+
+    /**
+     * The Java libraries whose on-chain sources are under {@code dir} (every {@code .java}, by path), certified lazily: a
+     * build without {@code java:} imports never runs the certifier (ADR-0018 D9, M4b).
+     */
+    static org.julclang.state.dsl.v2.JavaLibraries javaLibraries(Path dir) throws IOException {
+        if (dir == null || !Files.isDirectory(dir)) return org.julclang.state.dsl.v2.JavaLibraries.NONE;
+        var sources = librarySources(dir);
+        var certified = new org.julclang.state.dsl.v2.JavaLibraries[1];
+        return fqcn -> {
+            if (certified[0] == null) certified[0] = org.julclang.state.dsl.v2.JavaLibraries.certify(sources);
+            return certified[0].describe(fqcn);
+        };
+    }
+
+    /** Every {@code .java} file under {@code dir}, by path relative to it ('/'-separated). */
+    public static java.util.Map<String, String> librarySources(Path dir) throws IOException {
+        var out = new java.util.TreeMap<String, String>();
+        if (!Files.isDirectory(dir)) return out;
+        try (Stream<Path> s = Files.walk(dir)) {
+            for (Path p : s.filter(x -> x.toString().endsWith(".java") && Files.isRegularFile(x)).sorted().toList()) {
+                out.put(dir.relativize(p).toString().replace('\\', '/'), Files.readString(p));
+            }
+        }
+        return out;
+    }
+
+    /** The top-level classes the library sources under {@code dir} declare, as class-file paths ({@code a/b/C}). */
+    static List<String> libraryClassPaths(Path dir) throws IOException {
+        var out = new ArrayList<String>();
+        var pkg = Pattern.compile("(?m)^\\s*package\\s+([\\w.]+)\\s*;");
+        for (var e : librarySources(dir).entrySet()) {
+            String name = e.getKey().substring(e.getKey().lastIndexOf('/') + 1).replace(".java", "");
+            var m = pkg.matcher(e.getValue());
+            out.add((m.find() ? m.group(1).replace('.', '/') + "/" : "") + name);
+        }
+        return out;
+    }
+
+    /**
+     * {@code JscMain --check-library-classes <sourcesDir> <classpath>} (ADR-0018 D9, M4b; the Gradle plugin's
+     * {@code checkJoustLibraries}): a class compiled from a {@code java:} library's sources must not also reach the runtime
+     * class path from a jar or directory, where it could shadow the compiled one: the JVM side runs the certified sources,
+     * never a jar's classes. {@code classpath} is the runtime class path without the project's own outputs. 0 when none does.
+     */
+    public static int checkLibraryClasses(Path sources, String classpath) throws IOException {
+        var classes = libraryClassPaths(sources);
+        int found = 0;
+        for (String entry : classpath.split(java.io.File.pathSeparator)) {
+            if (entry.isBlank()) continue;
+            Path p = Path.of(entry);
+            if (Files.isDirectory(p)) {
+                for (String c : classes) {
+                    if (Files.exists(p.resolve(c + ".class"))) {
+                        System.err.println(p + ": error[JSC0727]: " + c.replace('/', '.') + " is on the runtime class path here, and is also compiled"
+                                + " from the java: library's sources: the JVM side must run those (ADR-0018 D9); remove this dependency, or use the"
+                                + " library through the joustLibrary configuration only");
+                        found++;
+                    }
+                }
+            } else if (Files.isRegularFile(p) && p.toString().endsWith(".jar")) {
+                try (var jar = new java.util.jar.JarFile(p.toFile())) {
+                    for (String c : classes) {
+                        if (jar.getEntry(c + ".class") != null) {
+                            System.err.println(p + ": error[JSC0727]: " + c.replace('/', '.') + " is in this jar on the runtime class path, and is also"
+                                    + " compiled from the java: library's sources: the jar's class could shadow the certified one (ADR-0018 D9);"
+                                    + " take the library only through the joustLibrary configuration");
+                            found++;
+                        }
+                    }
+                }
+            }
+        }
+        if (found > 0) return 1;
+        System.out.println("jsc: no class of the " + classes.size() + " java: library class(es) reaches the runtime class path from elsewhere");
+        return 0;
+    }
+
+    /**
+     * {@code JscMain --library-manifest <sourcesDir> <classesDir>} (ADR-0018 D9, M4b; after {@code compileJava}): the
+     * SHA-256 of every class file compiled from the {@code java:} libraries' sources (each top-level class and its nested
+     * ones), into {@code <classesDir>/META-INF/joust/java-libraries.json}. A contract's runtime checks the bytes that define
+     * each such class against it when the contract is loaded ({@code JavaLibraryCheck}), and refuses to run on a mismatch.
+     */
+    public static int libraryManifest(Path sources, Path classes) throws IOException {
+        var hashes = new java.util.TreeMap<String, String>();
+        for (String c : libraryClassPaths(sources)) {
+            Path dir = classes.resolve(c).getParent();
+            String simple = c.substring(c.lastIndexOf('/') + 1);
+            if (dir == null || !Files.isDirectory(dir)) continue;
+            try (Stream<Path> s = Files.list(dir)) {
+                for (Path f : s.sorted().toList()) {
+                    String n = f.getFileName().toString();
+                    if (!n.endsWith(".class") || !(n.equals(simple + ".class") || n.startsWith(simple + "$"))) continue;
+                    String cls = (c.contains("/") ? c.substring(0, c.lastIndexOf('/') + 1).replace('/', '.') : "") + n.replace(".class", "");
+                    hashes.put(cls, sha256(Files.readAllBytes(f)));
+                }
+            }
+        }
+        Path out = classes.resolve("META-INF/joust/java-libraries.json");
+        Files.createDirectories(out.getParent());
+        var json = new StringBuilder("{\n  \"version\": 1,\n  \"classes\": {");
+        int i = 0;
+        for (var e : hashes.entrySet()) json.append(i++ == 0 ? "\n" : ",\n").append("    \"").append(e.getKey()).append("\": \"").append(e.getValue()).append('"');
+        json.append(hashes.isEmpty() ? "}\n}\n" : "\n  }\n}\n");
+        Files.writeString(out, json.toString());
+        System.out.println("jsc: recorded the class files of " + hashes.size() + " java: library class(es) in " + out);
+        return 0;
+    }
+
+    static String sha256(byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     /** A file's module id in a build over {@code src}: its relative path, '/'-separated (ADR-0018 D9, M4). */
     static String id(Path src, Path f) {
         return src.relativize(f).toString().replace('\\', '/');
@@ -459,6 +585,18 @@ public final class JscMain {
      * {@code .jsc} 2 manifest is accepted, 1 on an error, 2 on a usage error.
      */
     public static int run(String[] args) throws IOException {
+        // ADR-0018 D9 (M4b): --java-libraries <dir>, the on-chain sources of the Java libraries java: imports may name (a
+        // library jar's META-INF/plutus-sources, extracted), anywhere after the mode; certified once, when needed.
+        var rest = new ArrayList<String>();
+        Path javaDir = null;
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("--java-libraries") && i + 1 < args.length) javaDir = Path.of(args[++i]);
+            else rest.add(args[i]);
+        }
+        args = rest.toArray(new String[0]);
+        javaLibraries = javaLibraries(javaDir);
+        if (args.length == 3 && args[0].equals("--check-library-classes")) return checkLibraryClasses(Path.of(args[1]), args[2]);
+        if (args.length == 3 && args[0].equals("--library-manifest")) return libraryManifest(Path.of(args[1]), Path.of(args[2]));
         if (args.length == 3 && args[0].equals("--check-abi")) return checkAgainstDescriptions(Path.of(args[1]), Path.of(args[2]));
         if (args.length >= 3 && args[0].equals("--migrate")) {
             boolean inPlace = args.length == 4 && args[3].equals("--in-place");
@@ -496,7 +634,7 @@ public final class JscMain {
             String text = Files.readString(f);
             String name = src.relativize(f).toString();
             try {
-                var lowered = lowerWithWarnings(text, f.getFileName().toString(), id(src, f), modules);
+                var lowered = lowerWithWarnings(text, f.getFileName().toString(), id(src, f), modules, javaLibraries);
                 lowered.diagnostics().forEach(w -> System.err.println(w.format(name)));
                 String java = lowered.java();
                 String rel = outputPath(text, f.getFileName().toString());

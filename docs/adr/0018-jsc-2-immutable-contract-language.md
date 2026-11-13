@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r15)
+**Status:** Proposed (r16)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -8,7 +8,7 @@ Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
 **Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76),
-and M4a (`.jsc` libraries, r15) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+M4a (`.jsc` libraries, r15) and M4b (`java:` imports, r16) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -472,6 +472,36 @@ import { concat, slice, length } from "std/bytes"
     processor's description. Each contract's IR carries the libraries it imports (format 2, `libraries`), so both
     reference interpreters evaluate library fns (five-way, J3); each contract's message map lists a library's messages
     with the library's file (D12, J20).
+- **`java:` imports as built (r16, M4b).** `docs/reference/jsc-2-java-libraries.md` states the rules; the choices made
+  where the bullets above left room:
+  - **Types.** `byte[]` maps to `Bytes` (a Java signature cannot say Key or Hash; `asKey(b)` checks a result), and no map
+    crosses into `.jsc` in M4b (`JulcMap` is refused both ways), so a Java fn's result holds no Key, Hash or Map and its
+    checked-input function is empty. An overloaded name is refused (JSC0723), as ADR-050 reports overloads unsupported.
+  - **The trusted base, concretely.** The JuLC stdlib through D8's binding table (its exact signatures) and the three
+    byte-string comparisons the lowering uses; JOUST's `Require` and D8's adapters; an allow-list of `BigInteger`,
+    `JulcList`, `JulcMap` and `Optional` operations. Every other call, `Builtins` included, is refused.
+  - **The catalogue** adds three entries found while building it: `equals`/`hashCode`/`toString` on anything but
+    `BigInteger`; a record constructor with a body (the JVM runs it, JuLC builds `Constr 0` of the fields), a problem of the
+    library; `BigInteger.mod` (its sign).
+  - **Records.** Verified, read-only and comparable when every field maps and the record declares no constructor;
+    opaque (never written as a type, read or compared) when a field does not map.
+  - **One body.** Gradle's `joustLibrary` configuration (non-transitive) is extracted and compiled into the project;
+    `checkJoustLibraries` refuses a library class on the runtime class path from a jar or a directory (JSC0727). Two
+    sources of one class are refused, which, with the jar's classes never used, is how no second variant can run.
+  - **Downstream class loading.** The build records each library class file's SHA-256 (`recordJoustLibraries`,
+    `META-INF/joust/java-libraries.json`); a contract's `ContractSpec` checks, when it is loaded, the bytes at the code
+    source that defined each such class (as the contract's loader resolves it), and refuses to run on a mismatch
+    (`JavaLibraryCheck`; a substituted class with the same constants and another body is refused). Not an isolated
+    loader: the generated client's typed API names the library's records (`AllowList.Entry`), which an isolated loader
+    would make a different class from the application's; a loader that reports a code source other than the one that
+    defined the class is already arbitrary code in the JVM. On-chain safety never depends on it.
+  - **In the interpreters.** A Java body has no reference semantics there: a `CallJava` gets no answer (a `Limit`, never
+    a refusal). A contract that imports a Java library is differential-tested on three legs (the JVM, the transition
+    program, the validator) for the calls that reach it, five for the others; the library is covered by its certification
+    and its per-function JVM-vs-UPLC vectors, which J3 requires before it counts the library (865 for the example).
+    Evaluating a Java body through recorded results would make one leg the oracle of another (D15).
+  - **D11.** A time value never reaches a Java fn (JSC0726), as the bullet above says ("a `java:` import never accepts
+    one").
 - **No `extern` declarations**: a `.jsc` author never writes a signature for Java code.
 - **Other contracts.** `import contract { Oracle } from "./Oracle.jsc"` (or `from "java:org.example.Oracle"`) makes
   the contract's state type `Oracle.State` and `Instance<Oracle>` available, for `reads`, `deposit` and params. On
@@ -1230,3 +1260,9 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   named by the file, relative imports, scope and one namespace per build, D11 through library calls, errors at the
   import, the lowering to `@OnchainLibrary`, helpers per class rather than shared, the artifacts: manifest kind `library`,
   IR format 2, message-map files). The M4 entry gate was verified first (`runtimeWasmTest`, M4a report §0).
+- **r16** (2026-11-13, M4b: `java:` imports): D9 records the Java imports as built: `byte[]` as `Bytes` and no maps in
+  M4b; overloads refused; the trusted base made concrete (D8's table, `Require` and the adapters, an allow-list); three
+  catalogue entries added (`equals`/`hashCode`/`toString`, record constructors, `BigInteger.mod`); verified and opaque
+  records; the `joustLibrary` configuration, the duplicate-class check and two sources of a class refused; downstream
+  class loading as a check of the defining bytes, not an isolated loader (the typed client API); no answer in the
+  interpreters, three legs for Java calls, per-function vectors.

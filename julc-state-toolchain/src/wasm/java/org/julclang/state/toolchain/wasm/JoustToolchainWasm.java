@@ -27,7 +27,11 @@ public final class JoustToolchainWasm {
     }
 
     /** Sources by file name ({@code .java}, {@code .jsc}), and JOUST's processor options. */
-    public record BuildRequest(Map<String, String> files, Map<String, String> options) {}
+    /**
+     * {@code javaLibraries}: the on-chain sources of the Java libraries {@code .jsc} files may import with {@code java:}
+     * (ADR-0018 D9, M4b), by path; may be absent.
+     */
+    public record BuildRequest(Map<String, String> files, Map<String, String> options, Map<String, String> javaLibraries) {}
 
     /** {@code code}: a {@code .jsc} 2 diagnostic's stable code (ADR-0018 D12), else null. */
     public record Diagnostic(String severity, String message, String file, long line, long col, String source, String code) {}
@@ -123,7 +127,8 @@ public final class JoustToolchainWasm {
 
     static ServiceResult<BuildResult> build(BuildRequest request) {
         var r = Toolchain.build(request.files() == null ? Map.of() : request.files(),
-                request.options() == null ? Map.of() : request.options());
+                request.options() == null ? Map.of() : request.options(),
+                request.javaLibraries() == null ? Map.of() : request.javaLibraries());
         return ServiceResult.ok(new BuildResult(r.ok(),
                 r.contracts().stream().map(c -> new Contract(c.name(), c.packageName(), c.validatorName(), c.validatorSource(),
                         c.scriptCborHex(), c.scriptHash(), c.scriptSizeBytes(), c.descriptionJson(), c.transitionsSource(),

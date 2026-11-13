@@ -35,7 +35,7 @@ const none = (t) => node('NoneLit', {}, { option: t });
 function program({ records = [], enums = [], fns = [], libraries = [] } = {}) {
   return load(JSON.stringify({
     ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
-    state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], libraries, fns, methods: [], warnings: [],
+    state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], libraries, javaLibraries: [], fns, methods: [], warnings: [],
   }));
 }
 
@@ -283,7 +283,7 @@ function deepProgram() {
     body: { stmts: [], at, result: node('CallFn', { fn: 'down', args: [node('LocalRef', { local: 2 }, INT)] }, INT) } };
   return JSON.stringify({
     ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'Deep', source: 'Deep.jsc', options: [], records: [],
-    enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], libraries: [], fns: [down], methods: [go], warnings: [],
+    enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], libraries: [], javaLibraries: [], fns: [down], methods: [go], warnings: [],
   });
 }
 
@@ -582,4 +582,18 @@ test('the reader refuses a malformed branches list and a condition that is not a
       /branch condition is of type "Int", not Bool/, node);
   }
   assert.throws(edit((p) => { firstIf(p, 'IfValue').otherwise = null; }), Error);
+});
+
+// ADR-0018 D9 (M4b): a java: library's body has no reference semantics here. A call that reaches one gets no answer (a
+// Limit, §2.4), never a refusal; the program's other code is evaluated as usual. The fixture is Guarded.jsc's export
+// (julc-state-toolchain's JscV2JavaLibraryTest writes it), with CallJava nodes and the library's records.
+test('§3.9 a java: library call has no answer; the rest of the program has one', () => {
+  const guarded = load(readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8'));
+  const ann = fromHex('a1'.repeat(28));
+  const s = new Rec('State', [fromHex('0a'.repeat(28)), [new Rec('Entry', [ann, 5n])], 0n]);
+  assert.throws(() => guarded.call('limit', s, [ann], null), (e) => e instanceof Limit && /no reference semantics/.test(e.message));
+  assert.equal(guarded.call('firstLimit', s, [], null).value, 5n);
+  // A CallJava naming a fn the program did not import is refused at load.
+  const text = readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8');
+  assert.throws(() => load(text.replace('"fn": "limitOf"', '"fn": "nowhere"')), /no fn nowhere imported/);
 });

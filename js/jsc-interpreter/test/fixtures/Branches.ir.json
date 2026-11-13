@@ -12,6 +12,7 @@
   "timeFields": [],
   "recursiveFns": ["steps"],
   "libraries": [],
+  "javaLibraries": [],
   "fns": [
     {
       "name": "steps",

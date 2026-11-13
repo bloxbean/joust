@@ -60,10 +60,14 @@ class JscV2HashStabilityTest {
         return build(file, text, libraries());
     }
 
+    static Map<String, String> javaSources() {
+        return ExampleLibraries.javaSources();
+    }
+
     static Built build(String file, String text, Map<String, String> libraries) {
         var files = new LinkedHashMap<String, String>(libraries);
         files.put(PKG + file, text);
-        var r = Toolchain.build(files, Map.of());
+        var r = Toolchain.build(files, Map.of(), javaSources());
         assertTrue(r.ok(), file + ": " + r.diagnostics());
         assertEquals(1, r.contracts().size());
         return new Built(r.contracts().get(0).scriptHash(), r.contracts().get(0).scriptSizeBytes());
@@ -188,6 +192,14 @@ class JscV2HashStabilityTest {
     static {
         try {
             for (String lib : libraries().values()) LIBRARY_NAMES.addAll(renameAllOf(lib));
+            // The Java libraries' fns and record fields (M4b): declared in Java, kept by the importer.
+            for (var lib : JavaLibraryCertifier.certify(javaSources()).values()) {
+                lib.fns().forEach(f -> LIBRARY_NAMES.add(f.name()));
+                lib.records().forEach(r -> {
+                    LIBRARY_NAMES.add(r.simpleName());
+                    LIBRARY_NAMES.addAll(r.fieldNames());
+                });
+            }
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
