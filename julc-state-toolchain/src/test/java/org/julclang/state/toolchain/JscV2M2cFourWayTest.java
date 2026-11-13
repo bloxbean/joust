@@ -318,6 +318,45 @@ class JscV2M2cFourWayTest {
         report(f);
     }
 
+    /**
+     * Review r1, S1 and C1: a receiver of every memo type the checker accepts builds (JuLC and SubsetLint included), in one
+     * contract (so helpers whose types share a Java representation, Key, Hash and Bytes, must not collide).
+     */
+    @Test
+    void aReceiverOfEveryMemoTypeBuilds() throws Exception {
+        String src = """
+                jsc 2
+                package probe
+
+                enum E { A, B { x: Int } }
+                type R = { k: Key, o: Option<Bool>, e: E }
+
+                contract Every {
+                  state { n: Int }
+                  init() { return { n: 0 } }
+                  action a0() receives Int { return { n: n + funds.deposits.length } }
+                  action a1() receives Bool { return { n: n + funds.deposits.length } }
+                  action a2() receives Bytes { return { n: n + funds.deposits.length } }
+                  action a3() receives Key { return { n: n + funds.deposits.length } }
+                  action a4() receives Hash { return { n: n + funds.deposits.length } }
+                  action a5() receives Value { return { n: n + funds.deposits.length } }
+                  action a6() receives Address { return { n: n + funds.deposits.length } }
+                  action a7() receives Credential { return { n: n + funds.deposits.length } }
+                  action a8() receives Option<Int> { return { n: n + funds.deposits.length } }
+                  action a9() receives List<Key> { return { n: n + funds.deposits.length } }
+                  action a10() receives Map<Bytes, Int> { return { n: n + funds.deposits.length } }
+                  action a11() receives Map<Key, Option<Bool>> { return { n: n + funds.deposits.length } }
+                  action a12() receives E { return { n: n + funds.deposits.length } }
+                  action a13() receives R { return { n: n + funds.deposits.length } }
+                  action a14() receives List<E> { return { n: n + funds.deposits.length } }
+                  action a15() receives Option<R> { return { n: n + funds.deposits.length } }
+                }
+                """;
+        var r = Toolchain.build(Map.of("probe/Every.jsc", src), Map.of());
+        assertTrue(r.ok(), r.diagnostics().toString());
+        System.out.println("[M2c] a receiver of each of 16 memo types builds: " + r.contracts().get(0).scriptSizeBytes() + " bytes");
+    }
+
     // ------------------------------------------------------------------ Inbox: every memo shape (review r1, S1, F5, C1, C2)
 
     static final Rec PLAIN = rec("Plain");
@@ -328,7 +367,7 @@ class JscV2M2cFourWayTest {
     }
 
     static Rec inbox(long urgent, long refs, long bonus, long tags, long shares, long extra, Opt reply, long keys, long names) {
-        return rec("State", Bytes.of(fill(0x0A)), n(urgent), n(refs), n(bonus), n(tags), n(shares), n(extra), reply, n(keys), n(names));
+        return rec("State", Bytes.of(fill(0x0A)), n(urgent), n(refs), n(bonus), n(tags), n(shares), n(extra), reply, n(keys), n(names), false, Opt.NONE, PLAIN);
     }
 
     static final Rec INBOX = inbox(0, 0, 0, 0, 0, 0, Opt.NONE, 0, 0);
@@ -384,9 +423,13 @@ class JscV2M2cFourWayTest {
                     e.getKey());
             assertEquals("input:deposits", f.lastRefusal, e.getKey());
         }
+        ok(f.check("set", INBOX, List.of(true, Opt.some(n(4)), rec("Bonus", n(2))), null, fill(0x0A)));
+        ok(f.check("set", INBOX, List.of(false, Opt.NONE, PLAIN), null, fill(0x0A)));
+        f.modifierRefused("set", INBOX, List.of(true, Opt.NONE, PLAIN), null, STRANGER);
         ok(f.check("close", INBOX, List.of(), at(fill(0x0A), 0, 4_000_000), fill(0x0A)));
         f.modifierRefused("close", INBOX, List.of(), at(STRANGER, 0, 4_000_000), STRANGER);
         f.mutants("post", INBOX, List.of(), two, BUYER);
+        f.mutants("set", INBOX, List.of(true, Opt.some(n(4)), rec("Bonus", n(2))), null, fill(0x0A));
         f.mutants("keyed", INBOX, List.of(), deposits(f, at(BUYER, 0, 0), new DepositV(lovelace(1_000_000), Bytes.of(A))), BUYER);
         JsLeg.check(f);
         report(f);

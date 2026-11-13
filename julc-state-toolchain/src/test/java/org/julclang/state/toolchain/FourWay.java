@@ -1110,6 +1110,17 @@ final class FourWay {
             throws Exception {
         var o = interp.transition(method, state, args, t);
         String kind = interp.kind(method);
+        if (takesFunds(method)) {
+            // An asset-aware reader (review r1, C4): the call's composed transaction, its read state's datum replaced.
+            var tx = assetTx(method, assetRedeemer(method, args, t, null), state, t, signer, transitionOf(kind, o));
+            int k = interp.reads(method).indexOf(field);
+            var ref = tx.referenceInputs.get(k);
+            tx.referenceInputs.set(k, new TxInInfo(ref.outRef(), new TxOut(ref.resolved().address(), ref.resolved().value(),
+                    new OutputDatum.OutputDatumInline(datum), Optional.empty())));
+            var v = harness.evaluate(tx);
+            lastVerdict = v;
+            return v.accepted();
+        }
         Ctx c = interp.usesTx(method) ? ctx(t) : null;
         var redeemerArgs = new ArrayList<Object>();
         for (Object a : args) redeemerArgs.add(java(a));

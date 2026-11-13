@@ -12,7 +12,10 @@
       { "name": "extra", "type": "Int", "data": "int" },
       { "name": "reply", "type": "Option<Address>", "data": "option<Address>" },
       { "name": "keys", "type": "Int", "data": "int" },
-      { "name": "names", "type": "Int", "data": "int" }
+      { "name": "names", "type": "Int", "data": "int" },
+      { "name": "flag", "type": "Bool", "data": "bool" },
+      { "name": "pick", "type": "Option<Int>", "data": "option<int>" },
+      { "name": "kind", "type": "Kind", "data": "Kind" }
     ] },
   "redeemers": {
     "spend": [
@@ -28,7 +31,12 @@
       { "name": "Valued", "constr": 3, "fields": [
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] },
-      { "name": "Close", "constr": 4, "fields": [
+      { "name": "Set", "constr": 4, "fields": [
+          { "name": "newFlag", "type": "Bool", "data": "bool" },
+          { "name": "newPick", "type": "Option<Int>", "data": "option<int>" },
+          { "name": "newKind", "type": "Kind", "data": "Kind" }
+        ] },
+      { "name": "Close", "constr": 5, "fields": [
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] }
     ],

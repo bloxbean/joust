@@ -4,16 +4,19 @@ package org.julclang.state.examples.dsl
 // ADR-0018 M2c (review r1, S1, F5, C1): a receiver whose memo holds every shape a generated memo decoder decides on the
 // data: a Bool, an Option, an enum (a variant without fields and one with), a List, a Map, a Value and an Address. Also
 // two receiving actions whose memo types share a Java representation (Key and Bytes) but not a decoder, and a Value memo
-// the action never reads. Not an example to deploy: the five-way and the hostile-input tests' fixture.
+// the action never reads. And an action that stores a Bool, an Option and an enum argument in the state: the premise of
+// ADR-0018 D5's trusted read states (a .jsc validator never writes a malformed tag; review r1, F4). Not an example to
+// deploy: the five-way and the hostile-input tests' fixture.
 enum Kind { Plain, Bonus { factor: Int } }
 
 type Slip = { urgent: Bool, ref: Option<Int>, kind: Kind, tags: List<Bytes>, shares: Map<Key, Int>, extra: Value, reply: Address }
 
 contract Inbox(maxDatumBytes = 512) {
-  state { owner: Key, urgent: Int, refs: Int, bonus: Int, tags: Int, shares: Int, extra: Int, reply: Option<Address>, keys: Int, names: Int }
+  state { owner: Key, urgent: Int, refs: Int, bonus: Int, tags: Int, shares: Int, extra: Int, reply: Option<Address>, keys: Int, names: Int,
+    flag: Bool, pick: Option<Int>, kind: Kind }
 
   init() {
-    return { owner: caller, urgent: 0, refs: 0, bonus: 0, tags: 0, shares: 0, extra: 0, reply: None, keys: 0, names: 0 }
+    return { owner: caller, urgent: 0, refs: 0, bonus: 0, tags: 0, shares: 0, extra: 0, reply: None, keys: 0, names: 0, flag: false, pick: None, kind: Plain }
   }
 
   // Each slip's fields, folded into the counters: every part of the memo is read.
@@ -45,6 +48,11 @@ contract Inbox(maxDatumBytes = 512) {
   // A Value memo, never read: still decoded and checked (#memo:, review r1 C2).
   action valued() receives Value {
     return { ...state, names: names + funds.deposits.length }
+  }
+
+  // Arguments stored as they come: a Bool, an Option and an enum (each decided by the validator on the redeemer's data).
+  action set(newFlag: Bool, newPick: Option<Int>, newKind: Kind) only owner {
+    return { ...state, flag: newFlag, pick: newPick, kind: newKind }
   }
 
   destroy close() only owner {
