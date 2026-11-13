@@ -220,7 +220,7 @@ window.app = {
 };
 `;
 
-test('a MerkleMap contract in a page: proofs from the worker\'s mirror, IndexedDB across a reload, a rebuild from the chain', { skip, timeout: 1_200_000 }, async () => {
+test('a MerkleMap contract in a page: proofs from the worker\'s mirror, IndexedDB across a reload, a rebuild from the chain', { skip, timeout: 1_200_000 }, async (t) => {
   const root = await project((r) => {
     rmSync(join(r, 'contracts'), { recursive: true });
     const dir = join(r, 'contracts', 'org', 'julclang', 'state', 'examples', 'token');
@@ -230,13 +230,23 @@ test('a MerkleMap contract in a page: proofs from the worker\'s mirror, IndexedD
     writeFileSync(join(r, 'page', 'main.js'), TOKEN_PAGE);
   });
   const d = await dev({ root, config: loadConfig(root), port: 0, log: () => {} });
+  // Closed even when the test times out (its after hook still runs; the finally below would not).
+  let browser = null;
+  let closed = false;
+  const cleanup = async () => {
+    if (closed) return;
+    closed = true;
+    await browser?.close().catch(() => {});
+    await d.close().catch(() => {});
+  };
+  t.after(cleanup);
   const { generateMnemonic } = await import('@scure/bip39');
   const { wordlist } = await import('@scure/bip39/wordlists/english');
   const m = generateMnemonic(wordlist, 256);
   const other = 'ab'.repeat(28);
   const history = (paths) => paths.filter((x) => /^\/chain\/assets\/[0-9a-f]+\/transactions$/.test(x));
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch();
+  browser = await chromium.launch();
   try {
     // The first visit: create, mint, transfer. The mirror stages each new map state (and keeps it in IndexedDB).
     const p = await open(browser, d.url);
@@ -296,7 +306,6 @@ test('a MerkleMap contract in a page: proofs from the worker\'s mirror, IndexedD
       await s.close();
     }
   } finally {
-    await browser.close();
-    await d.close();
+    await cleanup();
   }
 });
