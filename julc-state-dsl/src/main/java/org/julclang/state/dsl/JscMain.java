@@ -304,9 +304,11 @@ public final class JscMain {
      * shared with another path, and no link on its path under the source directory (its real path lies under the source
      * directory's, and no directory between them is a link), nor anywhere on its path below {@code workingDir} (issue
      * #75), found by identity and checked on the physical path (#80 review C1, F1, S2); a path with {@code ..} is refused.
-     * Limits: a link above the working directory is the user's file system and allowed; on Windows a directory junction
-     * below the working directory is refused (its real path differs), but one outside it, and hard links (no
-     * {@code unix:nlink}), are not seen.
+     * Limits: a link above the working directory is the user's file system and allowed; a file outside the working
+     * directory is checked from its source directory down only (#80 review S10); on Windows a directory junction below
+     * the working directory is refused, but one outside it, and hard links (no {@code unix:nlink}), are not seen. The
+     * checks and the writes are separate steps (#80 review S8): they assume no concurrent writer changes the tree during
+     * the run (one that swaps a directory for a link between them could redirect the write; such a writer could do worse).
      */
     static void inPlaceProblem(Path f, Path src, boolean fileArgument, Path workingDir) throws IOException {
         if (Files.isSymbolicLink(f)) {
@@ -365,18 +367,33 @@ public final class JscMain {
             Path physical = cwdReal;
             for (Path name : anchor.relativize(abs.getParent())) {
                 if (name.toString().isEmpty()) continue;
-                physical = physical.resolve(name);
-                if (Files.isSymbolicLink(physical) || !physical.toRealPath().equals(physical)) {
-                    throw new JscException(1, 1, "JSC1109", "the directory " + cwdReal.relativize(physical) + " is a symbolic link (or another"
+                Path next = physical.resolve(name);
+                if (isLink(next, physical)) {
+                    throw new JscException(1, 1, "JSC1109", "the directory " + cwdReal.relativize(next) + " is a symbolic link (or another"
                             + " kind of link): migrate --in-place never replaces a file through a link; migrate the link's target in its"
                             + " own project");
                 }
+                physical = next.toRealPath();   // the spelling on disk (a case-insensitive file system keeps its own)
             }
         }
         if (!f.toRealPath().startsWith(src.toRealPath())) {
             throw new JscException(1, 1, "JSC1109", "this file's real path " + f.toRealPath() + " is not under the source directory: migrate"
                     + " --in-place replaces only files of the sources");
         }
+    }
+
+    /**
+     * Whether directory {@code dir}, an entry of {@code parentReal} (a real path), is a link (#80 review C3): a symbolic
+     * link, or another kind (a Windows junction, which the JDK reports as neither a link nor a directory without
+     * following it), or an entry whose real path is not in {@code parentReal} under its own name. The name is compared
+     * ignoring case, since a case-insensitive file system answers a spelling other than the stored one with the same
+     * directory; a link between two names differing only in case is still a symbolic link.
+     */
+    static boolean isLink(Path dir, Path parentReal) throws IOException {
+        var attrs = Files.readAttributes(dir, java.nio.file.attribute.BasicFileAttributes.class, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        if (attrs.isSymbolicLink() || attrs.isOther() || !attrs.isDirectory()) return true;
+        Path real = dir.toRealPath();
+        return !parentReal.equals(real.getParent()) || !real.getFileName().toString().equalsIgnoreCase(dir.getFileName().toString());
     }
 
     /** {@code p}'s real path, through its nearest existing ancestor (the rest appended as written). */

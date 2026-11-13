@@ -614,6 +614,29 @@ class MigrateTest {
         assertTrue(Files.isDirectory(child));
     }
 
+    /**
+     * #80 review C3: on a case-insensitive file system a spelling other than the stored one names the same plain
+     * directory: not a link. A real link is still refused whatever its spelling.
+     */
+    @Test
+    void r3_inPlace_aCaseVariantOfAPlainDirectory_isNotALink(@TempDir Path tmp) throws Exception {
+        Path base = tmp.toRealPath();
+        Path lib = Files.createDirectories(base.resolve("project/Src/Lib"));
+        Files.copy(DSL.resolve("Points.jsc"), lib.resolve("Points.jsc"));
+        Path variant = base.resolve("project/src/lib/Points.jsc");
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.exists(variant), "a case-insensitive file system (macOS, Windows)");
+        JscMain.inPlaceProblem(variant, variant.getParent(), true, base.resolve("project"));
+        assertEquals(0, JscMain.migrate(variant, base.resolve("out"), true, base.resolve("project")));
+        assertTrue(Files.readString(lib.resolve("Points.jsc")).startsWith("jsc 2"));
+        // A link spelled in another case is still a link.
+        Path shared = Files.createDirectories(base.resolve("shared/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        Files.createSymbolicLink(base.resolve("project/Linked"), Path.of("../shared"));
+        Path viaLink = base.resolve("project/LINKED/lib/Points.jsc");
+        var e = assertThrows(JscException.class, () -> JscMain.inPlaceProblem(viaLink, viaLink.getParent(), true, base.resolve("project")));
+        assertTrue(e.getMessage().contains("is a symbolic link"), e.getMessage());
+    }
+
     @Test
     void r4F12_theMinusNote_reachesForwardWithinTheMember() {
         // N1 (design r3): the value block's error is found at its start, before the line starting with '-' that causes it.
