@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { engineLimits, buildInWorker, liveWorkers, setEngineHostForTests, stripHeapFlags, hostEnv, ENGINE_STACK_MB, ENGINE_MEMORY_MB,
+import { engineLimits, buildInWorker, liveWorkers, setEngineHostForTests, stripHeapFlags, hostEnv, parseNodeOptions, ENGINE_STACK_MB, ENGINE_MEMORY_MB,
   ENGINE_TIMEOUT_S } from '../src/toolchain.js';
 import * as joust from '../src/index.js';
 import { heapProblem, probeHeapLimit } from '../src/toolchain-heap.js';
@@ -88,15 +88,43 @@ test('inherited Node heap flags never reach the engine: the configured heap hold
   }
 });
 
-test('the engine host keeps NODE_OPTIONS without its heap flags, under every case of the key (C12, F10)', () => {
-  assert.equal(stripHeapFlags('--require ./.pnp.cjs --max-old-space-size=8192 --import "./a b.mjs" --max_heap_size=1'
-    + ' "--max-old-space-size=256" --max-old-space-size="256" --max-semi-space-size=64'), '--require ./.pnp.cjs --import "./a b.mjs" --max-semi-space-size=64');
+test('NODE_OPTIONS is read as Node reads it, its heap flags stripped by their decoded names, the rest kept exactly (C14, S12)', () => {
+  // Node's tokenizer (src/node_options.cc ParseNodeOptionsEnvVar): only a space outside quotes splits; quotes toggle
+  // anywhere and are dropped; inside quotes a backslash takes the next character.
+  assert.deepEqual(parseNodeOptions('--max-"old-space-size"=256'), ['--max-old-space-size=256']);
+  assert.deepEqual(parseNodeOptions('""--max-old-space-size=256'), ['--max-old-space-size=256']);
+  assert.deepEqual(parseNodeOptions('"--max-\\old-space-size=256"'), ['--max-old-space-size=256']);
+  assert.deepEqual(parseNodeOptions('--conditions=a\t--require'), ['--conditions=a\t--require'], 'a tab does not split');
+  assert.deepEqual(parseNodeOptions('--conditions=a\n--import'), ['--conditions=a\n--import'], 'nor does a line feed');
+  assert.deepEqual(parseNodeOptions('  --require  "./a b.mjs"  '), ['--require', './a b.mjs']);
+  assert.throws(() => parseNodeOptions('"--require'), /unterminated string/);
+  assert.throws(() => parseNodeOptions('"--require\\'), /invalid escape/);
+  // Codex r5's three survivors are stripped; the tab and line-feed arguments are kept whole.
+  for (const v of ['--max-"old-space-size"=256', '""--max-old-space-size=256', '"--max-\\old-space-size=256"', '--max_old_space_size=8',
+    '-max-heap-size=9', '--max-old-space-size 512']) {
+    assert.equal(stripHeapFlags(v), '', v);
+  }
+  for (const v of ['--conditions=a\t--require', '--conditions=a\n--import', '--require ./.pnp.cjs --import "./a b.mjs" --max-semi-space-size=64',
+    '--title="a \\"quoted\\" \\\\ name"']) {
+    assert.deepEqual(parseNodeOptions(stripHeapFlags(v)), parseNodeOptions(v), `kept exactly: ${JSON.stringify(v)}`);
+  }
+  assert.deepEqual(parseNodeOptions(stripHeapFlags('--require ./.pnp.cjs --max-old-space-size=8192 --import "./a b.mjs"')),
+    ['--require', './.pnp.cjs', '--import', './a b.mjs']);
   assert.equal(stripHeapFlags(undefined), '');
-  // Windows reads the environment case-insensitively: every case variant goes, and one NODE_OPTIONS comes back.
-  assert.deepEqual(hostEnv({ PATH: '/x', Node_Options: '--max-old-space-size=256 --require ./h.cjs', node_options: '--import x' }),
-    { PATH: '/x', NODE_OPTIONS: '--require ./h.cjs' });
-  assert.deepEqual(hostEnv({ node_options: '--import y', NODE_OPTIONS: '--require ./p.cjs --max-heap-size=9' }), { NODE_OPTIONS: '--require ./p.cjs' });
-  assert.deepEqual(hostEnv({ Node_Options: '--max-old-space-size=256' }), {}, 'nothing left: no NODE_OPTIONS at all');
+});
+
+test('NODE_OPTIONS case variants: all of them on Windows, only the exact key elsewhere (C12, S13)', () => {
+  const win = (env) => hostEnv(env, 'win32');
+  const posix = (env) => hostEnv(env, 'linux');
+  const parsed = (env) => ({ ...env, ...(env.NODE_OPTIONS !== undefined ? { NODE_OPTIONS: parseNodeOptions(env.NODE_OPTIONS) } : {}) });
+  // Windows reads the environment ignoring case: every variant goes, and one NODE_OPTIONS comes back, stripped.
+  assert.deepEqual(parsed(win({ PATH: '/x', Node_Options: '--max-old-space-size=256 --require ./h.cjs', node_options: '--import x' })),
+    { PATH: '/x', NODE_OPTIONS: ['--require', './h.cjs'] });
+  assert.deepEqual(parsed(win({ node_options: '--import y', NODE_OPTIONS: '--require ./p.cjs --max-heap-size=9' })), { NODE_OPTIONS: ['--require', './p.cjs'] });
+  assert.deepEqual(win({ Node_Options: '--max-old-space-size=256' }), {}, 'nothing left: no NODE_OPTIONS at all');
+  // Elsewhere a node_options is an ordinary variable: kept as it is, never promoted to NODE_OPTIONS.
+  assert.deepEqual(posix({ node_options: '--require ./evil.cjs', PATH: '/x' }), { node_options: '--require ./evil.cjs', PATH: '/x' });
+  assert.deepEqual(parsed(posix({ node_options: 'x', NODE_OPTIONS: '--max-old-space-size=1 --require a' })), { node_options: 'x', NODE_OPTIONS: ['--require', 'a'] });
 });
 
 test('a NODE_OPTIONS preload reaches the engine host, its heap flag does not (F10)', { skip: ENGINE ? false : 'no engine (js/joust/engine)', timeout: 300_000 }, () => {
@@ -109,7 +137,7 @@ test('a NODE_OPTIONS preload reaches the engine host, its heap flag does not (F1
   assert.ok(readFileSync(marker, 'utf8').split('\n').some((l) => l.endsWith('toolchain-host.js')), 'the preload ran in the host');
 });
 
-test('a fork the OS refuses is not counted as a live host (C13)', () => {
+test('a fork the OS refuses (descriptors exhausted) is not counted as a live host (C13)', { skip: process.platform === 'win32' ? 'POSIX only: ulimit and /dev/null' : false }, () => {
   const script = join(mkdtempSync(join(tmpdir(), 'joust-emfile-')), 'emfile.mjs');
   writeFileSync(script, `import fs from 'node:fs';
     import { buildInWorker, liveWorkers } from ${JSON.stringify(TOOLCHAIN)};
@@ -122,8 +150,31 @@ test('a fork the OS refuses is not counted as a live host (C13)', () => {
     console.log(JSON.stringify({ error, live: liveWorkers() }));
     process.exit(0);`);
   const out = JSON.parse(execFileSync('/bin/sh', ['-c', `ulimit -n 128; "${process.execPath}" "${script}"`], { encoding: 'utf8', timeout: 60_000 }).trim());
-  assert.ok(out.error, JSON.stringify(out));
+  assert.match(out.error ?? '', /EMFILE/, JSON.stringify(out));
   assert.equal(out.live, 0, JSON.stringify(out));
+});
+
+test('a fork of a missing Node fails each time, leaves nothing live, and the next good host is used (C13, C15)', { timeout: 300_000 }, async () => {
+  const missing = join(tmpdir(), 'joust-no-such-node', process.platform === 'win32' ? 'node.exe' : 'node');
+  try {
+    for (let i = 0; i < 3; i++) {
+      setEngineHostForTests(null, { execPath: missing });
+      await assert.rejects(buildInWorker({ files: {}, limits: { timeoutS: 5 } }), /ENOENT/, `attempt ${i}`);
+      await settled();
+      assert.equal(liveWorkers(), 0, `attempt ${i}`);
+    }
+  } finally {
+    setEngineHostForTests(null);
+  }
+  // Recovery: the next build gets JOUST's own host and builds (with the engine; without it, the host still starts and
+  // the build reaches the worker, which reports the missing engine).
+  if (ENGINE) {
+    const r = await buildInWorker({ files: small });
+    assert.equal(r.ok, true);
+  } else {
+    await assert.rejects(buildInWorker({ files: small, limits: { timeoutS: 30 } }), /joust-toolchain|engine|Cannot find/);
+  }
+  assert.equal(liveWorkers(), 1, 'one host, kept for later builds');
 });
 
 test('a host that does not start, or exits before it reports, rejects its builds and leaves nothing running (C10)', async () => {

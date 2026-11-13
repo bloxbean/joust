@@ -69,37 +69,91 @@ export function engineLimits(env = process.env, overrides = {}) {
   return out;
 }
 
-/** The engine host's script; replaced by tests only (setEngineHostForTests). */
+/** The engine host's script, and the Node that runs it; replaced by tests only (setEngineHostForTests). */
 let HOST = new URL('./toolchain-host.js', import.meta.url);
-
-/** For tests: the engine host script (a module URL) the next workers start, or null for JOUST's own. */
-export function setEngineHostForTests(url) {
-  HOST = url ?? new URL('./toolchain-host.js', import.meta.url);
-}
-
-/** The old-generation heap flags, in Node's spellings (hyphen or underscore), whole or quoted. */
-const HEAP_FLAG = /^"?--max[-_](old[-_]space|heap)[-_]size(=|"|$)/;
+let HOST_EXEC = undefined;
 
 /**
- * NODE_OPTIONS without its heap flags (#80 review F10): a preload (--require, --import: Yarn PnP, loaders) still
- * reaches the engine host, while no inherited heap flag sets its workers' old generation. Tokens are split on white
- * space outside double quotes, as Node reads them; the three-point measurement in the host still decides.
+ * For tests: the engine host script (a module URL) the next workers start, or null for JOUST's own; and `execPath`, the
+ * Node executable that runs it (a missing one makes the fork itself fail), or none for this process's.
+ */
+export function setEngineHostForTests(url, { execPath } = {}) {
+  HOST = url ?? new URL('./toolchain-host.js', import.meta.url);
+  HOST_EXEC = execPath;
+}
+
+/**
+ * NODE_OPTIONS split into arguments exactly as Node splits it (#80 review C14, S12; Node 22's
+ * src/node_options.cc ParseNodeOptionsEnvVar): only an ASCII space outside double quotes separates arguments; a double
+ * quote anywhere toggles quoting and is dropped; inside quotes a backslash takes the next character literally. An
+ * unterminated quote or a trailing backslash is invalid, as Node says at startup.
+ */
+export function parseNodeOptions(value) {
+  const s = String(value ?? '');
+  const args = [];
+  let quoted = false;
+  let fresh = true;
+  for (let i = 0; i < s.length; i++) {
+    let c = s[i];
+    if (c === '\\' && quoted) {
+      if (i + 1 === s.length) throw new Error('invalid value for NODE_OPTIONS (invalid escape)');
+      c = s[++i];
+    } else if (c === ' ' && !quoted) {
+      fresh = true;
+      continue;
+    } else if (c === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (fresh) {
+      args.push(c);
+      fresh = false;
+    } else args[args.length - 1] += c;
+  }
+  if (quoted) throw new Error('invalid value for NODE_OPTIONS (unterminated string)');
+  return args;
+}
+
+/** An argument, quoted so that parseNodeOptions gives it back unchanged (spaces, tabs, quotes and backslashes kept). */
+const quoteArg = (a) => `"${a.replace(/[\\"]/g, '\\$&')}"`;
+
+/** Whether a parsed argument is an old-generation heap flag (V8 reads '-' and '_' alike, and one or two leading dashes). */
+function isHeapFlag(arg) {
+  const name = arg.split('=')[0].replace(/_/g, '-').replace(/^-{1,2}/, '--');
+  return name === '--max-old-space-size' || name === '--max-heap-size';
+}
+
+/**
+ * NODE_OPTIONS without its heap flags (#80 review F10, C14): parsed as Node parses it, the heap flags (by their decoded
+ * names, whatever the quoting) removed with a separate value if one follows, and the rest written back quoted, so
+ * every kept argument reaches the host exactly as the parent read it. Preloads (--require, --import: Yarn PnP, loaders)
+ * still apply; the three-point measurement in the host still decides.
  */
 export function stripHeapFlags(nodeOptions) {
-  const tokens = String(nodeOptions ?? '').match(/(?:[^\s"]+|"(?:[^"\\]|\\.)*")+/g) ?? [];
-  return tokens.filter((t) => !HEAP_FLAG.test(t)).join(' ');
+  const args = parseNodeOptions(nodeOptions);
+  const kept = [];
+  for (let i = 0; i < args.length; i++) {
+    if (isHeapFlag(args[i])) {
+      if (!args[i].includes('=') && i + 1 < args.length && /^[0-9]+$/.test(args[i + 1])) i++;
+      continue;
+    }
+    kept.push(args[i]);
+  }
+  return kept.map(quoteArg).join(' ');
 }
 
 /**
- * The engine host's environment: this process's, with every key that is NODE_OPTIONS ignoring case removed (Windows
- * reads the environment case-insensitively: Node_Options would survive a plain delete; #80 review C12) and one
- * NODE_OPTIONS put back, its heap flags stripped (the exact key's value, else the first case variant's).
+ * The engine host's environment: this process's, with NODE_OPTIONS replaced by its value without heap flags. On
+ * Windows, whose environment is read ignoring case, every key that is NODE_OPTIONS ignoring case is removed and one
+ * NODE_OPTIONS put back (the exact key's value, else the first variant's; #80 review C12); elsewhere only the exact
+ * key is NODE_OPTIONS, and a node_options is an ordinary variable, kept as it is (#80 review S13).
  */
-export function hostEnv(env = process.env) {
+export function hostEnv(env = process.env, platform = process.platform) {
   const out = {};
   let options;
+  const isOptions = (k) => (platform === 'win32' ? k.toUpperCase() === 'NODE_OPTIONS' : k === 'NODE_OPTIONS');
   for (const [k, v] of Object.entries(env)) {
-    if (k.toUpperCase() === 'NODE_OPTIONS') {
+    if (isOptions(k)) {
       if (k === 'NODE_OPTIONS' || options === undefined) options = v;
     } else out[k] = v;
   }
@@ -127,7 +181,8 @@ export function liveWorkers() {
  */
 function spawn(limits) {
   const pending = new Map();
-  const child = fork(HOST, [JSON.stringify(limits)], { execArgv: [], env: hostEnv(), serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+  const child = fork(HOST, [JSON.stringify(limits)], { execArgv: [], env: hostEnv(), serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    ...(HOST_EXEC ? { execPath: HOST_EXEC } : {}) });
   const worker = {
     postMessage: (m) => child.send(m),
     ref: () => { child.ref(); child.channel?.ref(); },
