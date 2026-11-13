@@ -113,7 +113,7 @@ name the processor generates (`Lifecycle`, `Calls`, `Step`, `Funds`, … : `JSC0
 Every `init` argument and every action and destroy parameter (the redeemer) is checked by generated code before the
 method's body runs, recursively through records, enums, lists and options: every `Key` and `Hash` is 28 bytes, and
 every `Map` has unique keys of at most 64 bytes in strictly ascending canonical order; every `Credential` holds a 28-byte
-hash, and every `Address` a well-formed payment credential and staking hash. A failure is a located `require` failure. View parameters are not checked: a view runs off chain on your own inputs.
+hash, and every `Address` the ledger's encoding with a well-formed payment credential and, if it has one, a staking hash (an address with a staking pointer is refused). A failure is a located `require` failure. View parameters are not checked: a view runs off chain on your own inputs.
 
 ## Names and scope
 
@@ -250,7 +250,7 @@ sends, mints, burns or accepts, is lowered with the processor's `Funds` paramete
 | Statement | Effect | Generated check (key) |
 |---|---|---|
 | `pay(to, n)` | a payout of `n` lovelace to the key `to`; 0 is skipped | `n` is not negative (`#pay:`) |
-| `send(to, v)` | an output of `v` to the address `to`, without a datum | every quantity positive, no reserved name of the own policy (`#send:`) |
+| `send(to, v)` | an output of `v` to the address `to`, without a datum | every quantity positive, no reserved name of the own policy, never to the contract's own script (`#send:`) |
 | `mint(name, n)`, `burn(name, n)` | `n` more, or fewer, of the own policy's `name`; the net is what the transaction mints | `n` positive, `name` a user token of at most 32 bytes (`#mint:`) |
 | `accept(v)` | the method takes in `v` | native assets only, every quantity positive (`#accept:`); at the end, the sum accepted equals `funds.received` (`#funds:`) |
 

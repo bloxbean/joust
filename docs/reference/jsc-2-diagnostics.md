@@ -113,6 +113,22 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0222 | error | ' … ' would hide the type / enum / variant / fn …; a name is bound once and never replaces a declaration | Checker |
 | JSC0223 | error | the batched action … has an intent form named …Intent (the client's method) and …Intent (the validator's record); a method or type of that name would clash with it: rename one of them | Checker |
 
+### Names M2a reserves: a source change for preview users (ADR-0018 D16; M2a review F9)
+
+M2a reserves names **in every contract**, whether it uses values and assets or not, so some sources that M1 accepted are
+now refused. Rename the declaration; nothing else changes (no script of a contract that does not use these names
+changes).
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Received`, `Settled` (the generated result records), `ValueAdapter`, `AddressAdapter`, `Assets`, `Funds`, `Send`, `Sends`, `Datum`, `PubKeyHash`, `ScriptHash`, `KeyCred`, `ScriptCred` (the API classes and ledger constructors the lowering names) | a type, enum or variant name (`type Send = { … }`, `enum E { Received }`) | JSC0211 |
+| `Received`, `Settled`, `ByAction` (the mint redeemer) | a method whose capitalised name is one of them (`action received()`, `action byAction()`) | JSC0203 |
+| `wallet`, `script`, `keyCred`, `scriptCred` (the prelude's constructors, D8) | a state field (`state { wallet: Key }`) | JSC0208 |
+| the same four | a `fn` name | JSC0201 |
+| `pay`, `send`, `mint`, `burn`, `accept`, `deposit`, `emit` (the effect statements, D4) | a `fn` name (`fn send(…)` would read like the statement) | JSC0201 |
+
+`Value`, `Address` and `Credential` were reserved type names in M1 already.
+
 ## Types and values (ADR-0018 D5, D6)
 
 | Code | Severity | Message | Raised by |
@@ -187,7 +203,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0422 | error | accept states the native assets a method takes in, so the method must be payable (ADR-0007 D1) | Checker |
 | JSC0423 | error | … is payable and uses funds, send, mint or burn, so it can take native assets: state exactly which with accept(…), or accept(Value.none()) for none (ADR-0007 r2, ADR-0018 D4) | Checker |
 | JSC0424 | error | a contract with native assets (a method uses funds, send, mint, burn or accept) cannot have batched actions: intents carry only lovelace (ADR-0007 r2, ADR-0018 D4) | Checker |
-| JSC0426 | error | accept in an init is not supported yet … / a payable init that uses funds would take native assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred) | Checker |
+| JSC0426 | error | accept in an init is not supported yet … / a payable init that uses funds would take native assets, which needs accept in an init: not supported yet (ADR-0018 M2, deferred). Both: `accept` in an init, and any payable init that reads `funds`. The processor's creation transition program is wrong for an init returning `(state, accepted)`, Java contracts included: [#81](https://github.com/bloxbean/joust/issues/81); lifted in M2b or M2c once it is fixed | Checker |
 | JSC0427 | error | funds is part of the transaction: it is not available in a view or fn (pass what you need as an argument) | Checker |
 | JSC0429 | error | send(to, value, datum) comes with datum encoders in a later part of M2: send(to, value) sends without a datum | Parser |
 | JSC0430 | error | a require message may not contain '#word:', the form of the checks the lowering generates (ADR-0018 D12): reword it | Checker |
@@ -216,7 +232,7 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0518 | error | a time value cannot be stored in a BigMap<…, Int>: storing it can fail (a negative value, or … one too large to encode), so the window would decide whether the call fails (ADR-0018 D11) | Checker |
 | JSC0519 | error | a time value cannot be a Value's quantity: building a value fails outside the 128-bit range, so the window would decide whether the call fails (ADR-0018 D11) | Checker |
 | JSC0520 | error | a time value cannot be any part of a send's value: a send must hold a non-negative value, so its sign would decide whether the call fails (ADR-0018 D11) | Checker |
-| JSC0521 | error | a time value cannot be a … mint / burn quantity: it must be positive, so its sign would decide whether the call fails (ADR-0018 D11) | Checker |
+| JSC0521 | error | a time value cannot be a … mint / burn quantity: it must be positive, so its sign would decide whether the call fails (ADR-0018 D11) / a time value cannot decide a mint's / burn's token name: a name over 32 bytes or of a reserved kind fails the call (M2a review S5) | Checker |
 | JSC0522 | error | a time value cannot be any part of an accepted value: it must equal exactly the native assets the call receives (ADR-0018 D11) | Checker |
 | JSC0523 | error | a time value cannot decide whether … is Some or None (ADR-0018 D11) | Checker |
 
