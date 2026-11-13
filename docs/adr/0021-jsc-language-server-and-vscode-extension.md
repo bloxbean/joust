@@ -876,6 +876,55 @@ formatter invariants including the script hash. None of these certify the compil
   D4b (no regular-file check, no size cap, symlinks followed, `contracts` not confined); the server applies D4b itself,
   and the CLI could adopt the same rules.
 
+## 12. Implementation notes (M5a)
+
+Added with the M5a implementation; no decision above changed. Each note is a place where the implementation had to
+choose, or deviates from an illustrative detail, and says so for review.
+
+1. **Engine entry names (deviation, naming only).** julc-wasm's registry names an operation `group.operation` with
+   identifiers on both sides, so `joust.lang.analyze` cannot be registered. The entries are the engine's `lang` group:
+   `lang.info` (protocol 1, model version 1, features) and `lang.analyze`; "the `joust.lang` entries" in D2, D3 and L2
+   mean these.
+2. **Diagnostic links (deviation).** The docs site has no page for the catalogue yet, so `codeDescription.href` is the
+   catalogue's file on GitHub with a text fragment for the code
+   (`…/docs/reference/jsc-2-diagnostics.md#:~:text=JSC0502`): still a fixed `https` base no workspace can change.
+3. **Quick fixes in M5a (ahead of D7's M5b, flagged).** The verified edit path of D4a and D7 (code actions only for
+   `Invoked` requests, command-only actions with opaque single-use ids, `joust.applyFix` hidden from the palette, a
+   versioned `workspace/applyEdit`, the extension's own `handleApplyEdit`) ships in M5a with the two single-token fixes
+   (JSC0128, JSC0133). With M5a's first-error model, L6's re-check is: the fix's diagnostic is gone and no error comes
+   before the fix's position (a later error was hidden behind it, not added); M5b's recovery makes it L6's full check.
+   JSC0704 and **Remove invisible characters…** stay in M5b.
+4. **The document model at M5a** carries diagnostics, declarations (all declaration name spans and extents of D6's M5a
+   row), brace blocks and folding ranges. Types, time taint, references and the source map come with the M5b features
+   that read them, as a new `modelVersion`.
+5. **Stack size.** The analysis worker keeps `stackSizeMb` 4. ADR-0018 M1e's 8 MB finding concerns JuLC's compiler passes
+   in a build (`joust build`'s worker, bloxbean/julc#327); analysis runs only the front end, whose nesting cap holds on a
+   cold engine at a 0.5 MB worker stack (8 times below) and on Node's main thread
+   (`julc-state-toolchain/src/test/js/lang-in-node.mjs`). M5b's build worker takes 8 MB.
+6. **Engine-copy store (security review S21).** At most three checked engine copies are kept in private storage; the
+   least recently used one that no worker uses is evicted first.
+7. **`serverInfo`** names the compiler and the mode of the first workspace folder: `project-matched` for the project's
+   own compiler (its contracts are), `advisory` for the bundled one. Each file's own mode (a file outside `contracts` is
+   advisory) is in the `joust/status` request and notification, which the status bar shows.
+8. **Workspace folders.** The server does not advertise workspace-folder change notifications (they are not on D10's
+   allow-list); the extension starts a new server when the window's folders change.
+9. **Publisher (Q4).** The extension's `publisher` is the placeholder `joust-q4-undecided` until Q4 is decided.
+10. **The analysis runs the front end alone** (the file name's check, parse and check: `JscV2.check`), not the whole
+    `JscV2.lower`. Every coded diagnostic of the build comes from those steps; the emitter, the ABI manifest and the IR
+    export raise only internal errors (JSC0005 on the build paths), which therefore show in the build, not as you type.
+    A whole lowering made the 1,889-line file's p95 about 115 ms in the engine, over L10's 50 ms; the front end alone
+    measured 27–35 ms. L1 is checked against `joust.build` over the corpus (`lang-in-node.mjs`), L5 against
+    `JscV2.lower` over the corpus and its single-token deletions (`JscLangTest`).
+11. **Workers are keyed by compiler** (the engine's SHA-256 id), not by project root and compiler (D2a, D4): an M5a
+    analysis holds no project state. Keyed by root, three roots on one compiler kept replacing each other's workers
+    (at most two alive), and on VS Code 1.109.0 a replacement's load hung and the server process died (SIGTRAP);
+    identical engine bytes, the bundled engine's included, now share one worker. Per-root state (libraries) arrives with
+    M5c, which revisits the key. A worker still booting is terminated only once it has booted.
+12. **Wasm exception references.** The worker sets `--experimental-wasm-exnref` only when the runtime lacks exnref:
+    VS Code 1.146.0's extension host (Electron, Node 24.22) rejects the flag as unrecognized, and setting it there stopped
+    the server. `js/joust-runtime/src/load.js` still sets it unconditionally (outside this milestone; it would affect
+    `joust` on a Node whose V8 dropped the flag).
+
 ## Revision history
 
 - **r1** (2026-11-13): initial proposal, with the measurements of §1 (toolchain and front-end-only Web Images, JVM
