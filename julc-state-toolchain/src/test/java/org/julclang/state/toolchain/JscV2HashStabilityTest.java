@@ -47,7 +47,19 @@ class JscV2HashStabilityTest {
         var r = Toolchain.build(Map.of(PKG + file, text), Map.of());
         assertTrue(r.ok(), file + ": " + r.diagnostics());
         assertEquals(1, r.contracts().size());
-        return new Built(r.contracts().get(0).scriptHash(), r.contracts().get(0).scriptSizeBytes());
+        var c = r.contracts().get(0);
+        // A contract with params (M2b) has no hash until they are applied: its unapplied script's digest stands for it
+        // (the applied script's hash moves exactly when the unapplied script does).
+        String hash = !c.scriptHash().isEmpty() ? c.scriptHash() : "unapplied:" + sha256(c.scriptCborHex());
+        return new Built(hash, c.scriptSizeBytes());
+    }
+
+    static String sha256(String hex) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(java.util.HexFormat.of().parseHex(hex)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     // ------------------------------------------------------------------ edits, outside strings and comments
@@ -163,7 +175,10 @@ class JscV2HashStabilityTest {
             // parameter is called policy, as funds.policy is): such a name is not renamed, since a member is not.
             "funds", "held", "policy", "self", "lovelace", "covers", "payment", "none", "asset", "send", "mint", "burn", "accept",
             "keyCred", "scriptCred", "wallet", "script", "Value", "Address", "Credential", "KeyCred", "ScriptCred", "key", "hash",
-            "assetSlots"));
+            "assetSlots",
+            // M2b: the declarations' and modifiers' words, emit, and the generated names. A state field may be called
+            // quorum (treasury's is): such a name is not renamed, since the modifier word beside it is not.
+            "params", "event", "invariant", "emit", "quorum", "authorized", "Config", "Event"));
 
     static {
         for (var b : org.julclang.state.dsl.v2.JscV2.bindings()) LANGUAGE.add(b.name());
