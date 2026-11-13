@@ -190,6 +190,13 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   variant in `src/onchain/java`), never `Assets` directly. A value's entries are in the ledger's order (bytewise, a prefix
   first), not CCL's canonical order: build value data with `Value.toPlutusData()`, never through CCL's canonical writer.
   Under the own policy a 32-byte name (an instance id) is reserved: name minted tokens `blake2b_224(funds.self)`.
+- ADR-0018 M2b (params, events, quorum, authorized, invariants): the generated params record is `Config` (parameter
+  `params__`; an init always takes it, other methods when they read `params.f`), the events' type `Event`; both names
+  are reserved when declared. Result records hold `events` last; the redeemer of any method whose record has them
+  carries them (empty when it emits none). The interpreters model quorum/authorized as modifiers (their `Tx` has
+  `approvers`: scripts approving the action) and the validator's output checks (quorum shapes, invariants; class
+  `invariant:…`) after the body; `FourWay.as(signers, approvers)` signs and approves the next call on every leg.
+  `copyPortTests` also takes extra imports (treasury's tests use the example's `Guardian`).
 - ADR-0018 `.jsc` 2 generated artifacts: after changing the IR, the lowering or an example, rewrite the JS
   interpreter's IR fixtures (`./gradlew :julc-state-dsl:test -Pjoust.writeIrFixtures`; `JscV2IrTest` fails when stale)
   and tree-sitter's shapes (`... --tests '*JscCorpusTest*' -Djsc.writeShapes=true`), and run `npm test` in

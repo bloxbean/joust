@@ -1,14 +1,14 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r15)
+**Status:** Proposed (r18)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
 `generateJsc`), and the contract model of ADR-0001 to ADR-0016, which `.jsc` 2 only spells differently. JuLC's scoped
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
-**Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76) and
-M2a implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+**Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76),
+M2a and M2b implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -194,6 +194,19 @@ takes the whole result for the state), a processor fix outside this ADR. The res
 `Outcome` (an action's effects), `Received` (an action that takes native assets: `accepted` last) and `Settled` (a destroy
 that sends, mints or burns); each holds every kind its methods produce, in the order payouts, sends, mint, accepted.
 A contract whose only effect is `pay` keeps M1's lowering byte for byte.
+
+**As built in M2b (r18).** `emit(e)` lowers as the tables say: the events, a list in source order, are the last
+component of the result records (`Outcome`, `Received`, `Settled`: an action or a destroy whose record holds `events`
+carries them last in its redeemer, empty when it emits none), with no generated check in the method, since the
+validator compares the redeemer's events with the method's (ADR-0009 I35). A destroy that emits returns `Settled`. The
+events are the variants of an enum named `Event`, one per `event X { … }`; `params { … }` is the `@Params` record,
+named `Config`; both names are reserved in a contract that declares them (JSC0225). An `init` takes the params whenever
+the contract declares them (the creation is made under the script applied to them), any other method or view when it
+reads `params.f`. `quorum` and `authorized` are audiences, read no `Ctx`, and are refused in an init and a batched action;
+a quorum's two fields are both state fields or both params fields (JSC0439: the validator checks a state pair on every
+output and a params pair at creation). Invariants lower to `@Invariant` methods, not with batched actions or BigMap
+state. M2b fixed one processor defect on the way: a client's destroy that emits without native assets did not compile
+(`Transition.end(…).withEvents(…)` had no type witness).
 
 **Lowering:** the method threads one accumulator per kind it uses (lists, or a `Value` for mint and accepted), as
 final locals; an `if`/`match` arm or a loop helper that may produce effects returns a generated record of
@@ -516,7 +529,10 @@ the call with the class `modifier:<word> <field>`. So every modifier site of eve
 all five legs: both interpreters refuse it with that class, the JVM method and the transition program compute the
 transition (and agree with the interpreters' transition alone), and the validator refuses. The attack suite adds
 entries read from the description (a stranger who signs as the caller; windows on the wrong side of, or straddling,
-the bound). M2's `authorized` and `quorum` are further preconditions on the same transaction.
+the bound). M2's `authorized` and `quorum` are further preconditions on the same transaction (as built in M2b: both
+interpreters model them, `quorum` counting distinct signers among the keys and `authorized` reading the signers or the
+transaction's approving scripts), and the validator's output checks (a quorum's shape, the invariants) are modelled
+after the body, class `invariant` (semantics §2.7), with vectors on all five legs.
 
 **ADR-0005 rules kept, changed and dropped:**
 
@@ -1221,3 +1237,10 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   `Credential` and `Address` are storable checked inputs; `Value` stays a local's, a `fn`'s and an effect's, its stored
   form (the wire conversion) moving to M2c; its operations fail where the PV11 builtins fail (`ValueAdapter`). D8 lists
   `std/value` and `std/address`. D12's message map gains the new kinds.
+- **r18** (2026-11-13, M2b): D4 records what M2b built: `emit` and the events in the result records and redeemers, the
+  `Event` and `Config` names, which methods take the params, `quorum` and `authorized` as audiences without `Ctx`, a
+  quorum's fields of one place (JSC0439), invariants; and the processor's client fix for a destroy that emits. D10: both
+  interpreters model `quorum` and `authorized`, and the validator's output checks (semantics §2.7, class `invariant`).
+  D11 at the new positions: a time field is never a quorum's or an authorized field (JSC0524), an invariant never depends
+  on a time value (JSC0525, behind JSC0502), the params are never time values, an event may carry one with a warning
+  (JSC9008). Treasury gates M2b (J11): +5.4% script, every transaction within +8% of the Java example's budget.
