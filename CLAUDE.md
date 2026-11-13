@@ -130,6 +130,10 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   `fixtures/m0` holds the oracle (each DevKit transaction, unsigned, with the chain reads behind it, results
   content-addressed in `blobs/`). Re-record with DevKit up: `./gradlew :examples:<m>:test -PjoustFixtures` (or all
   examples); `FixturesTest` checks the oracle. `StateRuntime.Builder.onBuilt` observes every built transaction.
+  When a script changes (the output verifier's hash moves every sending contract's), delete each affected group of
+  `fixtures/m0` and `fixtures/m3` (and its m3 contract file) before recording it again, then prune unread blobs:
+  `FixturesTest` wants one recording per group and no orphaned blob; `EngineFixtureScriptsTest` checks m3's scripts and
+  m0's unparameterized contracts' hashes, so a parameterized contract's m0 group must be recorded again with its m3 one.
 - ADR-0015 M3: the toolchain also compiles plain JuLC validators (governors) into `validators.json`; Web Image needs
   reachability metadata for every new record it serialises. Yaci Store cannot tell whether a stake credential is
   registered (`/accounts` answers alike): register and treat "already registered" as success. Runtime code that builds

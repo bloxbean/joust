@@ -532,7 +532,8 @@ import { concat, slice, length } from "std/bytes"
   joins one). Each imported contract is parsed and checked on its own (its time fields its own fixed point); its state,
   types, time fields and receiving actions' memo types reach the importer's IR (`contracts`). A cycle is refused
   (JSC0743). `java:` contracts wait for M4b's attribution of `java:` sources (JSC0741); M4b's gate for them includes a
-  strict decode of a `java:` contract's read state (D5: the nested tags a `.jsc` reader trusts today).
+  strict decode of a `java:` contract's read state (D5: the nested tags a `.jsc` reader trusts today), deciding every
+  nested constructor's tag and its field count (M2c review r2, security).
 - **Supply chain.** A committed `joust.lock` pins every library (`.jsc` and Java) by the hash of its on-chain sources;
   the build fails on a mismatch, and the build report lists every library with its hash (J12).
 

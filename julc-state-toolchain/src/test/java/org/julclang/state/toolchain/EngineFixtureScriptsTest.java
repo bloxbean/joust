@@ -21,6 +21,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * title ({@code org.julclang.state.examples.<example>.<Contract>}) and built by {@link Toolchain#build} from its sources.
  * A change to generated code (as #85's output verifier) that moves a script fails here until the recordings that use it
  * are made again (EngineFixturesTest replays only what is recorded, so it cannot tell).
+ * <p>
+ * And the ADR-0015 M0 oracle ({@code fixtures/m0}, review r2, F8): each group's deployed contracts ({@code NNNN-deploy_<Name>})
+ * that take no parameters have this head's script hash in the group's recorded transactions (as their policy and script
+ * address). A contract that takes parameters has no hash before they are applied, so it is not checked here: its
+ * {@code fixtures/m3} contract file is (above), and its m0 group is recorded again with it (CLAUDE.md).
  */
 class EngineFixtureScriptsTest {
 
@@ -59,6 +64,101 @@ class EngineFixtureScriptsTest {
         }
         System.out.println("[fixtures m3] " + checked + " recorded contracts checked against this head's build; " + diffs.size() + " differ");
         assertEquals(List.of(), diffs, "re-record the fixtures/m3 groups that use these contracts (JOUST_RECORD), removing their old contract files");
+    }
+
+    static final Path M0 = Path.of("../fixtures/m0");
+
+    @Test
+    void everyM0GroupHoldsItsUnparameterizedContractsScriptHashes() throws Exception {
+        assertTrue(Files.isDirectory(M0), "fixtures/m0 is missing");
+        org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
+        List<String> stale = new ArrayList<>(), unchecked = new ArrayList<>();
+        int checked = 0;
+        List<Path> groups;
+        try (Stream<Path> s = Files.list(M0)) {
+            groups = s.filter(p -> Files.isDirectory(p) && !p.getFileName().toString().equals("blobs")).sorted().toList();
+        }
+        for (Path g : groups) {
+            var txs = new StringBuilder();
+            var deployed = new java.util.TreeSet<String>();
+            try (Stream<Path> fs = Files.list(g)) {
+                for (Path f : fs.filter(p -> p.toString().endsWith(".json")).sorted().toList()) {
+                    txs.append(JSON.readTree(f.toFile()).get("unsignedTx").asText());
+                    String n = f.getFileName().toString();
+                    int at = n.indexOf("-deploy_");
+                    if (at > 0) deployed.add(n.substring(at + "-deploy_".length(), n.length() - ".json".length()));
+                }
+            }
+            for (String name : deployed) {
+                Toolchain.Contract c = contractNamed(g.getFileName().toString(), name);
+                if (c == null || c.scriptHash().isEmpty()) {
+                    unchecked.add(g.getFileName() + "/" + name + (c == null ? " (not built)" : " (parameterized)"));
+                    continue;
+                }
+                if (!txs.toString().contains(c.scriptHash())) stale.add(g.getFileName() + "/" + name + ": this head's hash " + c.scriptHash() + " is not recorded");
+                checked++;
+            }
+        }
+        System.out.println("[fixtures m0] " + checked + " deployed contracts have this head's script hash; not checked here: " + unchecked);
+        assertEquals(List.of(), stale, "record these fixtures/m0 groups again (clear each first; -PjoustFixtures on DevKit)");
+        assertTrue(checked >= 20, "expected most of the oracle's contracts to be checked, checked " + checked);
+    }
+
+    /** A contract by simple name: the group's example first, else the example whose sources declare it. */
+    static Toolchain.Contract contractNamed(String group, String name) throws java.io.IOException {
+        Path own = EXAMPLES.resolve(group);
+        List<Path> candidates = new ArrayList<>();
+        if (Files.isDirectory(own)) candidates.add(own);
+        try (Stream<Path> s = Files.list(EXAMPLES)) {
+            for (Path e : s.filter(Files::isDirectory).sorted().toList()) {
+                if (e.equals(own)) continue;
+                try (Stream<Path> w = Files.walk(e.resolve("src/main"))) {
+                    if (w.anyMatch(p -> p.getFileName().toString().equals(name + ".java") || p.getFileName().toString().equals(name + ".jsc"))) candidates.add(e);
+                } catch (java.io.UncheckedIOException | java.nio.file.NoSuchFileException ignored) {
+                    // an example without main sources
+                }
+            }
+        }
+        for (Path e : candidates) {
+            String ex = e.getFileName().toString();
+            var built = BUILDS.computeIfAbsent(ex + ":" + name, k -> buildAll(ex, name));
+            if (built.containsKey(name)) return built.get(name);
+        }
+        return null;
+    }
+
+    static final Map<String, Map<String, Toolchain.Contract>> BUILDS = new LinkedHashMap<>();
+
+    /** The example's Java contracts and its .jsc file of that name (examples/dsl's v1 contracts), by simple name. */
+    static Map<String, Toolchain.Contract> buildAll(String example, String name) {
+        try {
+            Map<String, String> sources = new LinkedHashMap<>();
+            Path java = EXAMPLES.resolve(example).resolve("src/main/java"), jsc = EXAMPLES.resolve(example).resolve("src/main/jsc");
+            if (Files.isDirectory(jsc)) {
+                try (Stream<Path> s = Files.walk(jsc)) {
+                    for (Path p : s.filter(x -> x.getFileName().toString().equals(name + ".jsc")).toList()) {
+                        sources.put(jsc.relativize(p).toString(), Files.readString(p));
+                    }
+                }
+            }
+            if (sources.isEmpty() && Files.isDirectory(java)) {
+                try (Stream<Path> s = Files.walk(java)) {
+                    for (Path p : s.filter(x -> x.toString().endsWith(".java")).sorted().toList()) {
+                        String text = Files.readString(p);
+                        if (text.contains("void main(") || text.contains("import org.julclang.state.runtime") || text.contains("import com.bloxbean")) continue;
+                        sources.put(java.relativize(p).toString(), text);
+                    }
+                }
+            }
+            if (sources.isEmpty()) return Map.of();
+            var r = Toolchain.build(sources, Map.of());
+            assertTrue(r.ok(), "examples/" + example + ": " + r.diagnostics());
+            Map<String, Toolchain.Contract> out = new LinkedHashMap<>();
+            for (var c : r.contracts()) out.put(c.name(), c);
+            return out;
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
     }
 
     /** The example's sources (Java), built as the toolchain builds a project: its contracts by simple name. */
