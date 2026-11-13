@@ -24,6 +24,16 @@ function createHandleApplyEdit(vscode, getClient) {
       }
     }
     const client = getClient();
+    // Review C2 on #83: a version identifies text only within one open lifetime. The target documents are captured now,
+    // before the conversion's await, and the very same documents must still be open afterwards: a target closed and
+    // reopened meanwhile (a new document at a reused version) is refused.
+    const before = new Map();
+    for (const c of changes) {
+      const uri = client.protocol2CodeConverter.asUri(c.textDocument.uri).toString();
+      const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri);
+      if (!doc || doc.isClosed) return { applied: false, failureReason: `${uri} is not open: the edit is refused` };
+      before.set(c, doc);
+    }
     let converted;
     try {
       converted = await client.protocol2CodeConverter.asWorkspaceEdit(edit);
@@ -35,6 +45,7 @@ function createHandleApplyEdit(vscode, getClient) {
       const uri = client.protocol2CodeConverter.asUri(c.textDocument.uri).toString();
       const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri);
       if (!doc || doc.isClosed) return { applied: false, failureReason: `${uri} is not open: the edit is refused` };
+      if (doc !== before.get(c)) return { applied: false, failureReason: `${uri} was closed and reopened: the edit is refused` };
       if (doc.version !== c.textDocument.version) {
         return { applied: false, failureReason: `${uri} changed since the edit was checked: the edit is refused` };
       }

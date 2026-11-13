@@ -34,18 +34,29 @@ function smallJson(p) {
 }
 
 /** How to build the project at the folder's root: `{ kind, command, args, cwd, env }`, or null. */
+/** A local absolute path as text (S4 on #83): no UNC, device or extended form, before any filesystem call. */
+function localPath(p) {
+  if (typeof p !== 'string' || !p || /^[\\/]{2}/.test(p)) return null;
+  return process.platform === 'win32' ? (/^[A-Za-z]:[\\/]/.test(p) ? p : null) : (p.startsWith('/') ? p : null);
+}
+
+/**
+ * The project at the folder's ROOT only (a monorepo's nested projects get diagnostics, not this task: README, §12).
+ */
 function buildCommand(folderPath, platform = process.platform, execPath = process.execPath) {
-  const folder = realOrNull(folderPath);
+  const folder = localPath(folderPath) && realOrNull(folderPath);
   if (!folder) return null;
   const pkg = smallJson(path.join(folder, 'package.json'));
   const npm = fs.existsSync(path.join(folder, 'joust.config.json'))
     || (pkg && ['dependencies', 'devDependencies'].some((k) => pkg[k] && typeof pkg[k] === 'object' && '@julclang/joust' in pkg[k]));
   if (npm) {
     const dir = realOrNull(path.join(folder, 'node_modules', '@julclang', 'joust'));
-    const meta = dir && smallJson(path.join(dir, 'package.json'));
+    // Inside the folder before anything there is read (S4 on #83).
+    if (!dir || !inside(dir, folder)) return null;
+    const meta = smallJson(path.join(dir, 'package.json'));
     const rel = meta && (typeof meta.bin === 'string' ? meta.bin : meta.bin && meta.bin.joust);
     const bin = typeof rel === 'string' ? realOrNull(path.join(dir, rel)) : null;
-    if (!dir || !bin || !inside(dir, folder) || !inside(bin, dir)) return null;
+    if (!bin || !inside(bin, dir)) return null;
     // The project's CLI on the extension host's Node (an absolute path), run as Node.
     return { kind: 'npm', command: execPath, args: [bin, 'build'], cwd: folder, env: { ELECTRON_RUN_AS_NODE: '1' } };
   }
@@ -56,6 +67,7 @@ function buildCommand(folderPath, platform = process.platform, execPath = proces
 
 function createTaskProvider(vscode) {
   const task = (folder) => {
+    if (folder.uri.scheme !== 'file' || folder.uri.authority) return null;
     const b = buildCommand(folder.uri.fsPath);
     if (!b) return null;
     const exec = new vscode.ProcessExecution(b.command, b.args, { cwd: b.cwd, env: b.env });

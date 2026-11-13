@@ -25,6 +25,13 @@ authority.
 
 ## Trust
 
+**Trusting a workspace runs its compiler.** When a trusted folder holds an npm project with `@julclang/joust` installed,
+the language server loads that package's engine (`engine/joust-toolchain.js` and its `.wasm`) as soon as the folder
+opens, with your privileges: it is JavaScript and WebAssembly from the repository, as `npm run build` would run.
+VS Code also trusts a folder whose parent folder you trusted, so a repository cloned into a trusted `~/work` runs its
+engine on open. **Review a repository you do not know in Restricted Mode** (don't trust it, or open it outside your
+trusted folders).
+
 - **Restricted Mode**: only the bundled compiler, advisory; no task and no project code; reads stay inside the
   workspace folders.
 - No setting names an executable or a server path. `joust.allowedProjectRoots` (user settings only, `machine` scope)
@@ -37,8 +44,16 @@ authority.
 |---|---|
 | JOUST: Restart analysis | a new engine worker, after "JOUST analysis unavailable" |
 | JOUST: Restart server | a new language server |
-| JOUST: Build | the project's `joust build` or `./gradlew build`, as a task (trusted workspaces) |
+| JOUST: Build | the project's `joust build` or `./gradlew build`, as a task (trusted workspaces): the project at a workspace folder's root only; the npm CLI runs on VS Code's own Node (an absolute path), not the `node` on your PATH |
 | JOUST: Show compiler and mode | which compiler analyses the current file, and why |
+
+## Known issue: saves that hang with `codeActionsOnSave` "quickfix"
+
+With VS Code's built-in chat on (the default) and no chat model configured, a workspace or user setting
+`"editor.codeActionsOnSave": { "quickfix": "explicit" }` (or `"always"`) makes saving a file that has diagnostics hang:
+chat's own quick-fix provider never answers the save's request. This is VS Code's behaviour, in any language (the
+JOUST server answers such a request at once, with nothing: it never applies a fix on save). Remove `quickfix` from
+`codeActionsOnSave`, or set `"chat.disableAIFeatures": true`. Seen on VS Code 1.109.0 and 1.146.0.
 
 ## Building and testing
 

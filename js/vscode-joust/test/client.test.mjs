@@ -68,6 +68,18 @@ test('applyEdit: a second target changed or closed while converting refuses the 
   }
 });
 
+test('applyEdit: a target closed and reopened (a new document, same version) during conversion is refused (C2)', async () => {
+  const a = doc('file:///a.jsc', 1);
+  const docs = [a];
+  const { vscode, calls } = fakeVscode(docs);
+  const r = await createHandleApplyEdit(vscode, () => client(() => {
+    docs.splice(0, 1, doc('file:///a.jsc', 1));   // closed, then reopened with other text at version 1
+  }))(edit(['file:///a.jsc', 1]));
+  assert.equal(r.applied, false);
+  assert.match(r.failureReason, /closed and reopened/);
+  assert.equal(calls.length, 0);
+});
+
 test('applyEdit: unversioned, file-operation or not-open targets are refused', async () => {
   const { vscode, calls } = fakeVscode([doc('file:///a.jsc', 1)]);
   const h = createHandleApplyEdit(vscode, () => client());
@@ -162,7 +174,7 @@ test('the task provider offers nothing in Restricted Mode, and resolves only its
   writeFileSync(join(tmp, 'node_modules', '@julclang', 'joust', 'bin', 'joust.js'), '');
   class ProcessExecution { constructor(process, args, options) { Object.assign(this, { process, args, options }); } }
   class Task { constructor(definition, scope, name, source, execution, matchers) { Object.assign(this, { definition, scope, name, source, execution, matchers }); } }
-  const folder = { uri: { fsPath: tmp } };
+  const folder = { uri: { fsPath: tmp, scheme: 'file', authority: '' } };
   const vscode = { workspace: { isTrusted: false, workspaceFolders: [folder] }, ProcessExecution, Task, TaskGroup: { Build: 'build' } };
   const p = createTaskProvider(vscode);
   assert.deepEqual(p.provideTasks(), []);
