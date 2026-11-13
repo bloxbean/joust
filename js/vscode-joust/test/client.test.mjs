@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -43,9 +44,10 @@ const client = (onConvert) => ({
   },
 });
 const R = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+const sha = (t) => createHash('sha256').update(t).digest('hex');
 const edit = (...targets) => ({
   edit: { documentChanges: targets.map(([uri, version]) => ({ textDocument: { uri, version }, edits: [{ range: R, newText: 'const' }] })) },
-  joustExpected: targets.map(([uri]) => ({ uri, range: R, text: 'let' })),
+  joustExpected: targets.map(([uri]) => ({ uri, sha256: sha('let') })),
 });
 
 test('applyEdit: applied when every target is open at its validated version', async () => {
@@ -207,4 +209,22 @@ test('applyEdit: a document whose text at the edit is not the checked text is re
   const p = edit(['file:///b.jsc', 1]);
   delete p.joustExpected;
   assert.equal((await createHandleApplyEdit(f2.vscode, () => client())(p)).applied, false);
+});
+
+test('applyEdit: the same replaced text in a different document is refused (C19: the whole text is bound)', async () => {
+  // The validated text had `by === 1` in a require; the reopened one has the same three characters at the same place,
+  // inside a string. Only the digest of the whole text tells them apart.
+  const validated = 'require(by === 1 || by > 0, "x")';
+  const reopened = 'require(true, "=== is literal text")';
+  const a = { uri: { toString: () => 'file:///a.jsc' }, version: 1, isClosed: false, getText: () => reopened };
+  const { vscode, calls } = fakeVscode([a]);
+  const p = { edit: { documentChanges: [{ textDocument: { uri: 'file:///a.jsc', version: 1 }, edits: [{ range: R, newText: '==' }] }] },
+    joustExpected: [{ uri: 'file:///a.jsc', sha256: sha(validated) }] };
+  const r = await createHandleApplyEdit(vscode, () => client())(p);
+  assert.equal(r.applied, false);
+  assert.equal(calls.length, 0);
+  // The validated text itself applies.
+  const b = { ...a, getText: () => validated };
+  const f2 = fakeVscode([b]);
+  assert.deepEqual(await createHandleApplyEdit(f2.vscode, () => client())(p), { applied: true });
 });

@@ -9,6 +9,8 @@
 //      before applying anything.
 // A target that closed while the edit was pending is refused, never reopened and stamped with a new version.
 
+const { createHash } = require('crypto');
+
 /** `vscode`: the API (or a fake, in tests); `client`: the LanguageClient (its protocol2CodeConverter). */
 function createHandleApplyEdit(vscode, getClient) {
   return async function handleApplyEdit(params) {
@@ -23,10 +25,13 @@ function createHandleApplyEdit(vscode, getClient) {
         return { applied: false, failureReason: 'JOUST applies only versioned edits of open documents' };
       }
     }
-    // S9 on #83: the server sends the text every edit replaces; an edit without it is not the server's checked edit.
+    // S9, C19 on #83: the server sends, for every target document, the SHA-256 of the whole text it validated the edit on;
+    // an edit without it is not the server's checked edit.
     const expected = params.joustExpected;
-    if (!Array.isArray(expected) || expected.length !== changes.reduce((n, c) => n + c.edits.length, 0)) {
-      return { applied: false, failureReason: 'JOUST applies only edits that carry the text they replace' };
+    const targets = new Set(changes.map((c) => c.textDocument.uri));
+    if (!Array.isArray(expected) || expected.length !== targets.size || !expected.every((x) => x && targets.has(x.uri)
+      && typeof x.sha256 === 'string' && /^[0-9a-f]{64}$/.test(x.sha256))) {
+      return { applied: false, failureReason: 'JOUST applies only edits that carry the digest of the text they were checked on' };
     }
     const client = getClient();
     // Review C2 on #83: a version identifies text only within one open lifetime. The target documents are captured now,
@@ -55,12 +60,12 @@ function createHandleApplyEdit(vscode, getClient) {
         return { applied: false, failureReason: `${uri} changed since the edit was checked: the edit is refused` };
       }
     }
-    // Still synchronous: the text each edit replaces is the text the server checked (a reopen at a reused version that
-    // happened before this handler started has other text there).
+    // Still synchronous: each document's whole text is the text the server checked (a reopen at a reused version that
+    // happened before this handler started has other text, somewhere).
     for (const x of expected) {
       const uri = client.protocol2CodeConverter.asUri(x.uri).toString();
       const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri);
-      if (!doc || typeof x.text !== 'string' || doc.getText(client.protocol2CodeConverter.asRange(x.range)) !== x.text) {
+      if (!doc || createHash('sha256').update(doc.getText()).digest('hex') !== x.sha256) {
         return { applied: false, failureReason: `${uri} no longer has the text the edit was checked on: the edit is refused` };
       }
     }
