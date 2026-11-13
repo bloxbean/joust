@@ -38,7 +38,22 @@ dependencies {
 }
 def runtimeGraalvm = providers.gradleProperty('graalvmHome').orElse(providers.environmentVariable('GRAALVM_HOME'))
 def runtimeWasmDir = layout.buildDirectory.dir('wasm')
+// #80 review S1: an image's resources no longer say which jar they came from, so the runtime takes its one copy of a
+// validator's script unverified (ValidatorScripts). This check, over the image's class path, is what makes that safe:
+// no script name twice, and every location holding a validator class also holds its script.
+def checkImageScripts = tasks.register('checkImageScripts') {
+    group = 'verification'
+    description = 'Checks the image class path\'s META-INF/plutus scripts: one location per name, each beside its validator'
+    def cp = sourceSets.wasm.runtimeClasspath
+    inputs.files(cp)
+    doLast {
+        rootProject.ext.plutusScriptSelfTest(layout.buildDirectory.dir('tmp/plutusScriptSelfTest').get().asFile)
+        def problems = rootProject.ext.plutusScriptProblems(cp.files)
+        if (!problems.isEmpty()) throw new GradleException("the image's class path lends a validator another's script:\n  " + problems.join('\n  '))
+    }
+}
 tasks.register('runtimeWasm', Exec) {
+    dependsOn checkImageScripts
     group = 'build'
     description = 'Builds build/wasm/joust-runtime.js(.wasm) with GraalVM Web Image'
     dependsOn 'wasmClasses'
@@ -76,6 +91,6 @@ tasks.register('runtimeWasmTest', Exec) {
     group = 'verification'
     dependsOn 'runtimeWasm', 'test'
     workingDir rootDir
-    commandLine 'node', '--experimental-wasm-exnref', 'julc-state-runtime-wasm/src/test/js/prepare.mjs',
+    commandLine 'node', 'julc-state-runtime-wasm/src/test/js/prepare.mjs',
             'julc-state-runtime-wasm/build/wasm', 'julc-state-runtime-wasm/build/prepare-vectors.json'
 }

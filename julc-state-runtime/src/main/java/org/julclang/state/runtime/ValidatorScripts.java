@@ -40,10 +40,14 @@ import java.util.stream.Stream;
  *   used. A single copy whose location cannot be read is used too, but
  *   only when it sits under the validator's own location (its URL is that location followed by the resource, issue
  *   #73): <b>this is the remaining fallback</b>. A lone copy elsewhere (another nested jar, or no location to compare
- *   with) is refused; a GraalVM image's own resource ({@code resource:}) counts as beside, the image being one closed
- *   build. If the validator's own copy under its location is another validator's script (a merge kept the
- *   wrong one), only a script hash recorded in bytecode (julc#326) catches it. Anything else, several candidates
- *   included, is refused.</li>
+ *   with) is refused. <b>Inside a GraalVM native or Web Image</b> (the {@code org.graalvm.nativeimage.imagecode}
+ *   property is set), whose resources are {@code resource:/<n>!/…} URLs that no longer say which jar they came from,
+ *   the image's one copy, in exactly that form, is <b>accepted unverified</b> (#80 review S1): the image builds check
+ *   instead that no script name is shipped twice and that every location holding a validator class also holds its
+ *   script ({@code checkImageScripts}, the root build's {@code plutusScriptProblems}), and julc#326's recorded hash would
+ *   close it at run time. Outside an image a {@code resource:} URL is never taken. If the validator's own copy under
+ *   its location is another validator's script (a merge kept the wrong one), only a script hash recorded in bytecode
+ *   (julc#326) catches it. Anything else, several candidates included, is refused.</li>
  *   <li><b>JuLC's parameter checks</b> are kept (as {@code JulcScriptLoader.load}): a parameterized validator is never
  *   loaded without its parameters, an unparameterized one never with some, and the count must match. An unapplied
  *   script's address would accept funds no transaction can spend.</li>
@@ -121,6 +125,16 @@ public final class ValidatorScripts {
      * by the rules above; refuses with a {@link JoustException}.
      */
     static String resolve(String name, String simple, URL where, ClassLoader loader) {
+        return resolve(name, simple, where, loader, inImage());
+    }
+
+    /** Whether this runs in a GraalVM native or Web Image (read when asked: an image initialises classes at build time). */
+    static boolean inImage() {
+        return System.getProperty("org.graalvm.nativeimage.imagecode") != null;
+    }
+
+    /** {@link #resolve(String, String, URL, ClassLoader)}, with whether this runs in an image given (for tests). */
+    static String resolve(String name, String simple, URL where, ClassLoader loader, boolean inImage) {
         String resource = "META-INF/plutus/" + simple + ".plutus.json";
         String classFile = name.replace('.', '/') + ".class";
         try (Container own = Container.open(where)) {
@@ -165,7 +179,7 @@ public final class ValidatorScripts {
         }
         URL chosen = ours.size() == 1 && unreadable == 0 ? ours.get(0)
                 // The documented fallback: one unreadable copy, and it sits beside the class (#73: under its own location).
-                : ours.isEmpty() && copies.size() == 1 && unreadable == 1 && besideLocation(copies.get(0), where, resource) ? copies.get(0)
+                : ours.isEmpty() && copies.size() == 1 && unreadable == 1 && besideLocation(copies.get(0), where, resource, inImage) ? copies.get(0)
                 : null;
         if (chosen == null) {
             throw new JoustException(name + ": its code source (" + where + ") cannot be read, and the class path's copies of "
@@ -182,19 +196,20 @@ public final class ValidatorScripts {
 
     /**
      * Whether {@code copy} is {@code resource} under the validator's own location {@code where} (issue #73, security S9):
-     * a lone copy elsewhere, in another nested jar say, is another validator's of the same simple name. No location: no,
-     * unless the copy is a GraalVM image's own resource.
+     * a lone copy elsewhere, in another nested jar say, is another validator's of the same simple name. No location: no.
+     * In a GraalVM image only, its one copy in the image's own form {@code resource:/<n>!/<resource>} is accepted
+     * unverified: the image builds' {@code checkImageScripts} is what stands behind it (#80 review S1).
      */
-    static boolean besideLocation(URL copy, URL where, String resource) {
-        // A native or Web Image (GraalVM) serves its resources as resource: URLs, and its classes have no readable
-        // location (Web Image reports a placeholder file). The image is one closed build, the class's own container: a
-        // second copy of the name would be a second resource: URL, which the caller refuses.
-        if ("resource".equals(copy.getProtocol())) return true;
+    static boolean besideLocation(URL copy, URL where, String resource, boolean inImage) {
+        if (inImage && IMAGE_RESOURCE.matcher(copy.toString()).matches() && copy.toString().endsWith("!/" + resource)) return true;
         if (where == null) return false;
         String base = where.toString();
         if (!base.endsWith("/")) base += "/";
         return copy.toString().equals(base + resource);
     }
+
+    /** An image's resource URL: {@code resource:/<n>!/} and the resource (GraalVM native and Web Image). */
+    private static final java.util.regex.Pattern IMAGE_RESOURCE = java.util.regex.Pattern.compile("resource:/[0-9]+!/META-INF/plutus/[^/]+\\.plutus\\.json");
 
     /**
      * The text of {@code entry} (a path from the root, {@code a/b/Name.jscmap.json}) in the code source that {@code anchor}'s

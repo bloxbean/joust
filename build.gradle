@@ -50,6 +50,9 @@ nmcpAggregation {
     }
 }
 
+// The script-resource check (ext.plutusScriptProblems): checkPlutusResources and the images' checkImageScripts.
+apply from: 'gradle/plutus-scripts.gradle'
+
 // The modules published to Maven Central and the BloxBean Maven repository; examples are never published.
 def publishedModules = ['julc-state-api', 'julc-state-processor', 'julc-state-runtime', 'julc-state-testkit',
                         'julc-state-verifier', 'julc-state-dsl', 'julc-state-server', 'julc-state-gradle-plugin']
@@ -65,32 +68,16 @@ subprojects {
         def runtime = configurations.named('runtimeClasspath')
         def classes = sourceSets.main.output
         def check = tasks.register('checkPlutusResources') {
-            description = 'Fails when two locations on the runtime class path ship the same META-INF/plutus/<Name>.plutus.json'
+            description = 'Fails when two locations on the runtime class path ship the same META-INF/plutus/<Name>.plutus.json,' +
+                    ' or a validator\'s own location lacks the script another location ships'
             group = 'verification'
             inputs.files(runtime)
             inputs.files(classes)
             doLast {
-                def where = new TreeMap<String, List<String>>()
-                (classes.files + runtime.get().files).findAll { it.exists() }.unique().each { f ->
-                    def names = []
-                    if (f.isDirectory()) {
-                        def dir = new File(f, 'META-INF/plutus')
-                        if (dir.isDirectory()) dir.eachFileMatch(~/.*\.plutus\.json/) { names << it.name }
-                    } else if (f.name.endsWith('.jar')) {
-                        new java.util.zip.ZipFile(f).withCloseable { z ->
-                            z.entries().each { e ->
-                                def m = e.name =~ /^META-INF\/plutus\/([^\/]+\.plutus\.json)$/
-                                if (m.matches()) names << m.group(1)
-                            }
-                        }
-                    }
-                    names.unique().each { n -> where.computeIfAbsent(n) { [] } << f.path }
-                }
-                def clashes = where.findAll { n, ls -> n != 'plutus.json' && ls.size() > 1 }
-                if (!clashes.isEmpty()) {
+                def problems = rootProject.ext.plutusScriptProblems(classes.files + runtime.get().files)
+                if (!problems.isEmpty()) {
                     throw new GradleException("validators with one simple name share a script resource on ${project.path}'s runtime"
-                            + " class path (JuLC, bloxbean/julc#326); a jar built from it would keep one silently:\n  "
-                            + clashes.collect { n, ls -> "META-INF/plutus/${n}: ${ls.join(', ')}" }.join('\n  '))
+                            + " class path (JuLC, bloxbean/julc#326); a jar built from it would keep one silently:\n  " + problems.join('\n  '))
                 }
             }
         }

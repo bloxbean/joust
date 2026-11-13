@@ -1,0 +1,72 @@
+// ADR-0018 M1c review S8, #80 review S1: the script resources (META-INF/plutus/<Name>.plutus.json) of a class path,
+// checked before anything is built from it (a jar, a GraalVM image). Two locations shipping one name is a clash (a fat
+// jar or an image keeps one, or the runtime sees two). And a location that holds a class <Name> (a validator) but not
+// <Name>.plutus.json, while another location ships it, would lend that validator another's script: in a GraalVM image,
+// whose resources no longer say which jar they came from, the runtime cannot tell (ValidatorScripts takes the image's
+// one copy unverified), so this check is what closes it there. Returns the problems, one line each.
+ext.plutusScriptProblems = { Collection<File> files ->
+    def scripts = new TreeMap<String, List<String>>()   // Name -> locations shipping Name.plutus.json
+    def classesOf = [:]                                  // location -> top-level class simple names
+    files.findAll { it.exists() }.unique().each { f ->
+        def names = []
+        def simple = new HashSet<String>()
+        if (f.isDirectory()) {
+            def dir = new File(f, 'META-INF/plutus')
+            if (dir.isDirectory()) dir.eachFileMatch(~/.*\.plutus\.json/) { names << it.name }
+            f.eachFileRecurse(groovy.io.FileType.FILES) { c ->
+                if (c.name.endsWith('.class') && !c.name.contains('$')) simple << c.name[0..-7]
+            }
+        } else if (f.name.endsWith('.jar')) {
+            new java.util.zip.ZipFile(f).withCloseable { z ->
+                z.entries().each { e ->
+                    def m = e.name =~ /^META-INF\/plutus\/([^\/]+\.plutus\.json)$/
+                    if (m.matches()) names << m.group(1)
+                    if (e.name.endsWith('.class') && !e.name.startsWith('META-INF/')) {
+                        def n = e.name.substring(e.name.lastIndexOf('/') + 1)
+                        if (!n.contains('$')) simple << n[0..-7]
+                    }
+                }
+            }
+        }
+        names.unique().each { n -> scripts.computeIfAbsent(n) { [] } << f.path }
+        classesOf[f.path] = simple
+    }
+    def problems = []
+    scripts.each { n, ls ->
+        if (n == 'plutus.json') return
+        if (ls.size() > 1) problems << "META-INF/plutus/${n}: ${ls.join(', ')}"
+        def validator = n[0..-('.plutus.json'.length() + 1)]
+        classesOf.each { loc, simple ->
+            if (simple.contains(validator) && !ls.contains(loc)) {
+                problems << "${loc} holds a class ${validator} but not META-INF/plutus/${n}, which ${ls.join(', ')} ships: the runtime could load that script for it"
+            }
+        }
+    }
+    problems
+}
+
+// The check's own test (run by checkImageScripts before it checks an image's class path): #73's S9 shape, a location
+// holding a validator class without its script while another ships it, is flagged; a validator beside its script is not;
+// two locations shipping one name are flagged.
+ext.plutusScriptSelfTest = { File dir ->
+    project.delete(dir)
+    def make = { String loc, String cls, boolean script ->
+        def d = new File(dir, loc)
+        new File(d, "p/${loc}").mkdirs()
+        new File(d, "p/${loc}/${cls}.class").bytes = [0xCA, 0xFE] as byte[]
+        if (script) {
+            new File(d, 'META-INF/plutus').mkdirs()
+            new File(d, "META-INF/plutus/${cls}.plutus.json").text = '{}'
+        }
+        d
+    }
+    def a = make('a', 'Foo', false), b = make('b', 'Foo', true), c = make('c', 'Foo', true)
+    def s9 = rootProject.ext.plutusScriptProblems([a, b])
+    if (s9.size() != 1 || !s9[0].contains('holds a class Foo but not META-INF/plutus/Foo.plutus.json')) {
+        throw new GradleException("plutusScriptProblems missed the S9 shape: ${s9}")
+    }
+    if (!rootProject.ext.plutusScriptProblems([b]).isEmpty()) throw new GradleException('plutusScriptProblems flagged a validator beside its script')
+    if (!rootProject.ext.plutusScriptProblems([b, c]).any { it.startsWith('META-INF/plutus/Foo.plutus.json: ') }) {
+        throw new GradleException('plutusScriptProblems missed a script shipped twice')
+    }
+}

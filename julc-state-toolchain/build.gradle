@@ -87,7 +87,22 @@ dependencies {
 }
 def toolchainGraalvm = providers.gradleProperty('graalvmHome').orElse(providers.environmentVariable('GRAALVM_HOME'))
 def toolchainWasmDir = layout.buildDirectory.dir('wasm')
+// #80 review S1: an image's resources no longer say which jar they came from, so the runtime takes its one copy of a
+// validator's script unverified (ValidatorScripts). This check, over the image's class path, is what makes that safe:
+// no script name twice, and every location holding a validator class also holds its script.
+def checkImageScripts = tasks.register('checkImageScripts') {
+    group = 'verification'
+    description = 'Checks the image class path\'s META-INF/plutus scripts: one location per name, each beside its validator'
+    def cp = sourceSets.wasm.runtimeClasspath
+    inputs.files(cp)
+    doLast {
+        rootProject.ext.plutusScriptSelfTest(layout.buildDirectory.dir('tmp/plutusScriptSelfTest').get().asFile)
+        def problems = rootProject.ext.plutusScriptProblems(cp.files)
+        if (!problems.isEmpty()) throw new GradleException("the image's class path lends a validator another's script:\n  " + problems.join('\n  '))
+    }
+}
 tasks.register('toolchainWasm', Exec) {
+    dependsOn checkImageScripts
     group = 'build'
     description = 'Builds build/wasm/joust-toolchain.js(.wasm) with GraalVM Web Image'
     dependsOn 'wasmClasses'
@@ -137,17 +152,17 @@ tasks.register('toolchainWasmTest', Exec) {
     dependsOn 'test'   // writes build/s2-vectors.json (TransitionParityTest)
     doLast {
         // S2 in Wasm: every transition vector through the engine's VM, against the JVM's answers.
-        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
+        injectedExec.execOps.exec { commandLine 'node', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2-vectors.json'; workingDir rootDir }
         // J18 in Wasm (ADR-0018 r12): the nesting cap and long chains, on Node's default stack, as on the JVM.
-        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/depth-in-node.mjs',
+        injectedExec.execOps.exec { commandLine 'node', 'julc-state-toolchain/src/test/js/depth-in-node.mjs',
                 'julc-state-toolchain/build/wasm'; workingDir rootDir }
         // S2b in Wasm: read discovery (build/s2b-vectors.json, from ReadDiscoveryTest).
-        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-discovery.mjs',
+        injectedExec.execOps.exec { commandLine 'node', 'julc-state-toolchain/src/test/js/run-discovery.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2b-vectors.json', 'examples/token/src/main/java'; workingDir rootDir }
     }
     workingDir rootDir
-    commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/build-in-node.mjs',
+    commandLine 'node', 'julc-state-toolchain/src/test/js/build-in-node.mjs',
             'julc-state-toolchain/build/wasm', 'examples', 'counter', 'bank', 'vault', 'escrow', 'crowdfund', 'dsl', 'guild',
             'token', 'treasury', 'market', 'fees', 'pool', 'rollup', 'dex', 'staking', 'oracle', 'upgrade', 'locker'
 }
