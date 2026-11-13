@@ -391,10 +391,18 @@ final class IrJson {
      */
     @SuppressWarnings("unchecked")
     static Ir.Program read(String json) {
-        var root = (Map<String, Object>) AbiCheck.Json.parseStrict(json);
-        Object v = root.get("ir");
-        if (!(v instanceof Long n) || n != VERSION) throw new IllegalArgumentException("not a version " + VERSION + " IR export: \"ir\": " + v);
-        return new Reader().program(root);
+        var raw = (Map<String, Object>) AbiCheck.Json.parseStrict(json);
+        Reader.READ.set(new java.util.IdentityHashMap<>());
+        try {
+            var root = Reader.m(raw);
+            Object v = root.get("ir");
+            if (!(v instanceof Long n) || n != VERSION) throw new IllegalArgumentException("not a version " + VERSION + " IR export: \"ir\": " + v);
+            Ir.Program p = new Reader().program(root);
+            Reader.unknownFields();
+            return p;
+        } finally {
+            Reader.READ.remove();
+        }
     }
 
     /** The source hash an export carries. */
@@ -407,8 +415,58 @@ final class IrJson {
     private static final class Reader {
         private final Map<Long, Ir.Local> locals = new HashMap<>();
 
+        /**
+         * Every JSON object the reader opened, with the fields it read. Review r2 (coordinator): the reader refuses an
+         * unknown field at every level (the program, methods, statements, expressions, records, types, libraries), as the
+         * JavaScript reader does (validate.js), so a field another format-2 addition writes (M2b's params, invariants)
+         * is refused rather than silently dropped.
+         */
+        static final ThreadLocal<java.util.IdentityHashMap<Object, Set<String>>> READ = new ThreadLocal<>();
+
         static Map<String, Object> m(Object o) {
-            return (Map<String, Object>) o;
+            var raw = (Map<String, Object>) o;
+            var read = READ.get();
+            if (read == null || raw == null) return raw;
+            Set<String> seen = read.computeIfAbsent(raw, k -> new java.util.HashSet<>());
+            return new java.util.AbstractMap<>() {
+                @Override
+                public Object get(Object key) {
+                    seen.add((String) key);
+                    return raw.get(key);
+                }
+
+                @Override
+                public boolean containsKey(Object key) {
+                    seen.add((String) key);
+                    return raw.containsKey(key);
+                }
+
+                @Override
+                public int size() {
+                    return raw.size();
+                }
+
+                @Override
+                public Set<Map.Entry<String, Object>> entrySet() {
+                    seen.addAll(raw.keySet());
+                    return raw.entrySet();
+                }
+            };
+        }
+
+        /** Refuses a field no reader read: an unknown field of the format. */
+        static void unknownFields() {
+            for (var e : READ.get().entrySet()) {
+                var unread = new TreeSet<>(((Map<String, Object>) e.getKey()).keySet());
+                unread.removeAll(e.getValue());
+                if (!unread.isEmpty()) {
+                    Map<String, Object> o = (Map<String, Object>) e.getKey();
+                    Object kind = o.containsKey("node") ? "the node " + o.get("node") : o.containsKey("stmt") ? "the statement " + o.get("stmt")
+                            : "an object with " + new TreeSet<>(o.keySet());
+                    throw new IllegalArgumentException("unknown field" + (unread.size() == 1 ? " " : "s ") + unread + " in " + kind
+                            + " (an IR of format " + VERSION + " has none)");
+                }
+            }
         }
 
         static List<Object> l(Object o) {
@@ -459,6 +517,11 @@ final class IrJson {
         }
 
         Ir.Program program(Map<String, Object> r) {
+            // Fields the program carries for its readers, checked here (the Java reader keeps no use for them).
+            if (!"jsc 2".equals(r.get("language"))) throw new IllegalArgumentException("not a .jsc 2 IR: \"language\": " + r.get("language"));
+            if (!(r.get("sourceSha256") instanceof String h) || !h.matches("[0-9a-f]{64}")) {
+                throw new IllegalArgumentException("\"sourceSha256\" is not a SHA-256: " + r.get("sourceSha256"));
+            }
             var options = new ArrayList<Ir.ContractOption>();
             for (Object o : l(r.get("options"))) options.add(new Ir.ContractOption(s(m(o).get("name")), new BigInteger(s(m(o).get("value")))));
             var records = records(r.get("records"));
