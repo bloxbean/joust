@@ -1,4 +1,4 @@
-# `.jsc` 2 IR export (format 1)
+# `.jsc` 2 IR export (format 2)
 
 The checker's typed IR of a `.jsc` 2 contract, as JSON (ADR-0018 D15, M1b). The JavaScript reference interpreter
 (`js/jsc-interpreter`) evaluates it. Its meaning is defined in [`jsc-2-semantics.md`](jsc-2-semantics.md).
@@ -33,8 +33,15 @@ disagrees (below).
 
 ## Stability
 
-`"ir"` is the format version, exactly the integer 1 here. Readers refuse versions they do not know (`IrJson.read`,
+`"ir"` is the format version, exactly the integer 2 here. Readers refuse versions they do not know (`IrJson.read`,
 and the JavaScript `load`).
+
+**Version 2 (M2b, #84 review C2).** Version 1's Java reader ignored top-level fields it did not know, so it read an
+M2b export and silently dropped its `params` and `invariants` (an invariant-only contract loaded, called and re-emitted
+without its invariant). M2b's additions therefore take a new version, which every version-1 reader refuses, and both
+readers of version 2 refuse any field they do not know, at every level (the Java reader now as the JavaScript one), so a
+later addition cannot be dropped either. ADR-0018 M4a (libraries) also moves the format to 2 on its branch; the
+integration of M2 and M4 joins both sets of additions in one version 2.
 
 **Version 1 is the format as of the M1 integration** (#76): `If` and `IfValue` hold a `branches` list (M1e's flat
 else-if chains). M1b's pre-release shape (`cond`, `then`, `otherwise` on those nodes) was never released and is not
@@ -49,10 +56,9 @@ reader refuses every program that uses it, at load, rather than misreading it: a
 `batched`), a new `std` row or a new type, each with fields of its own. **M2a's additions are of this kind**: the types
 `Value`, `Address` and `Credential`, the nodes `FundsRef` and `LedgerOp`, the statements `Send`, `Mint` and `Accept`, the
 `std/value` and `std/address` rows, and the arms `KeyCred`/`ScriptCred` of a match on a credential; they keep version 1.
-**So are M2b's**: the top-level `params` (a Record named `Config`) and `invariants`, each present only when the contract
-declares them (so an M1 or M2a export is unchanged), the node `ParamsRef`, the statement `Emit`, and the modifiers
-`quorum` (with `keys` and `threshold` instead of `field`) and `authorized`; a version-1 reader that predates them refuses
-them at load (an unknown field, node, statement or modifier). The JavaScript reader also refuses a condition or a
+**M2b's are version 2's** (above): the top-level `params` (a Record named `Config`) and `invariants`, each present only
+when the contract declares them, the node `ParamsRef`, the statement `Emit`, and the modifiers `quorum` (with `keys` and
+`threshold` instead of `field`) and `authorized`. The JavaScript reader also refuses a condition or a
 boolean operand that is not of type `Bool` (a `Branch`'s, `Require`'s or `Cond`'s condition; `Logic`'s and `Not`'s
 operands), and an empty `branches` list. Additive changes keep version 1. A change to
 an existing node's fields, to the meaning of an existing node, operator, modifier or row, or to the program's top-level
@@ -79,7 +85,7 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 
 ```json
 {
-  "ir": 1,
+  "ir": 2,
   "language": "jsc 2",
   "sourceSha256": "<64 hex digits>",
   "package": "org.example",

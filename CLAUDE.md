@@ -201,7 +201,8 @@ annotation catalogue is `docs/research/annotation-catalog.md`.
   carries them (empty when it emits none). The interpreters model quorum/authorized as modifiers (their `Tx` has
   `approvers`: scripts approving the action) and the validator's output checks (quorum shapes, invariants; class
   `invariant:…`) after the body; `FourWay.as(signers, approvers)` signs and approves the next call on every leg.
-  `copyPortTests` also takes extra imports (treasury's tests use the example's `Guardian`).
+  `copyPortTests` also renames words: treasury's tests use `Guardian`, which examples/dsl copies as `TreasuryGuardian`
+  (never put a Java example on examples/dsl's class path: its validator shares a script resource name with its port's).
 - ADR-0018 `.jsc` 2 generated artifacts: after changing the IR, the lowering or an example, rewrite the JS
   interpreter's IR fixtures (`./gradlew :julc-state-dsl:test -Pjoust.writeIrFixtures`; `JscV2IrTest` fails when stale)
   and tree-sitter's shapes (`... --tests '*JscCorpusTest*' -Djsc.writeShapes=true`), and run `npm test` in

@@ -219,7 +219,15 @@ reads `params.f`. `quorum` and `authorized` are audiences, read no `Ctx`, and ar
 a quorum's two fields are both state fields or both params fields (JSC0439: the validator checks a state pair on every
 output and a params pair at creation). Invariants lower to `@Invariant` methods, not with batched actions or BigMap
 state. M2b fixed one processor defect on the way: a client's destroy that emits without native assets did not compile
-(`Transition.end(…).withEvents(…)` had no type witness).
+(`Transition.end(…).withEvents(…)` had no type witness). After #84's review r1: a batched action never returns events
+(ADR-0009 D5): when a direct action's `Outcome` holds events, a batched action that pays returns `Stepped(state,
+payouts)`; a contract with a quorum over state fields has no batched actions (JSC0440; the processor refuses it too,
+ADR-0009 r3), since a batch's states are not checked and a batched action could lock the contract; an invariant holds no
+`require` (JSC0441), and one that fails while evaluated is refused as the invariant's (class `invariant:<name>`); a view
+that reads `params.f` gets the deployment's params from the generated client (the processor's `ViewIR.takesParams`);
+the annotation names the lowering imports are reserved; invariants and emitted events are under the depth cap (J18).
+The IR format is version 2 (D15: version 1's Java reader dropped unknown top-level fields, so it would have lost
+invariants; both readers now refuse unknown fields at every level).
 
 **Lowering:** the method threads one accumulator per kind it uses (lists, or a `Value` for mint and accepted), as
 final locals; an `if`/`match` arm or a loop helper that may produce effects returns a generated record of
@@ -512,7 +520,7 @@ positions. Each row names the example whose port gates it (J11).
 | `@Params` | `params { feeBps: Int, oracle: Instance<Oracle> }`, `params.feeBps` | treasury, oracle (M2) |
 | `@Invariant` | `invariant name = expr` | treasury (M2), guild (M3) |
 | `@Quorum`, `@AuthorizedBy` | `quorum guardians threshold`, `authorized admin` (a `Credential` field or `params.f`) | treasury (M2), registry (M3) |
-| events | `event Sold { price: Int }`, `emit(Sold { price })` | market (M3) |
+| events | `event Sold { price: Int }`, `emit(Sold { price })` | treasury (M2b), market (M3) |
 | `Funds`, `Assets`, `Send`, mint | the built-in `funds` (`received`, `held`, `policy`, `self`, `deposits`); a contract is asset-aware when it uses `funds`, `send`, `mint`, `deposit` or `receives` (`assetSlots` defaults from that, `ContractReader.java:312-315`) | dex (M2), market (M3) |
 | `@Reads` | a parameter `oracle: reads params.oracle` typed `Oracle.State` | oracle (M2) |
 | `@Receives`, deposits | `action name(…) receives`, `deposit(…)` | fees (M2) |
@@ -1265,4 +1273,6 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   interpreters model `quorum` and `authorized`, and the validator's output checks (semantics §2.7, class `invariant`).
   D11 at the new positions: a time field is never a quorum's or an authorized field (JSC0524), an invariant never depends
   on a time value (JSC0525, behind JSC0502), the params are never time values, an event may carry one with a warning
-  (JSC9008). Treasury gates M2b (J11): +5.4% script, every transaction within +8% of the Java example's budget.
+  (JSC9008). Treasury gates M2b (J11): +5.4% script; every transaction from −0.2% to +8.3% of the Java example's budget,
+  at most 5.21% of the CPU and 14.46% of the memory maximum at the saturated 21-key council. After #84's review r1: the
+  batched-action rules above (JSC0440, `Stepped`), JSC0441, IR format 2, views with params, reserved annotation names.

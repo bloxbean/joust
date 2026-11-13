@@ -1,6 +1,7 @@
 # ADR-0009: Option I — deploy parameters, quorum and script callers, invariants, authenticated events
 
-**Status:** Accepted with changes (r2): a security reviewer and Codex both returned "request changes"; resolved in §6, implemented
+**Status:** Accepted with changes (r2): a security reviewer and Codex both returned "request changes"; resolved in §6, implemented.
+r3 (2026-11-13): a quorum over state fields is not combinable with `@Batched` (D2; ADR-0018 M2b, #84 review S1/C1)
 **Date:** 2026-11-07
 **Builds on:** ADR-0001 (`@SignedBy`, I5), ADR-0007, ADR-0008.
 **Stack:** #1–#9, then this.
@@ -63,6 +64,11 @@ public class Treasury {
   - `1 ≤ threshold ≤ |keys|`.
 
   So no rotation can lock the contract.
+- **Not with `@Batched` over state fields (r3).** A batch's states are not output-checked (as D4 says of invariants), so a
+  batched action could write a state whose quorum is not well formed, which the validator accepts and after which every
+  quorum call fails: the contract locks. The processor therefore refuses a `@Quorum` over state fields in a contract with
+  `@Batched` actions; a `@Quorum` over `params.*` cannot change and stays allowed. Found by ADR-0018 M2b's review (#84,
+  security S1, Codex C1); no example combined them.
 - **Combining:** a method may have both `@Quorum` and `@SignedBy`, and `Ctx.caller` may be one of the keys.
 
 The runtime takes the co-signers with `Call.cosigners(Account…)`: they become required signers and sign the
@@ -194,3 +200,14 @@ S = security reviewer, C = Codex.
   - a single-signature payment refused by the node;
   - freeze and unfreeze by the guardian script through a zero withdrawal with an `Approvals` redeemer;
   - a rotation and a quorum close.
+
+## 8. r3: a state quorum and batched actions (2026-11-13)
+
+ADR-0018 M2b's review (#84: security S1, Codex C1) found that a batch never runs the output checks of D2, so a batched
+action in a contract with a state-field `@Quorum` could write a malformed quorum (a threshold above the keys, keys out of
+order) that the validator accepts, locking the contract. Running the shape check on a batch's final state would not
+match a call's meaning (each intent is a step whose next state the interpreters check) without checking every
+intermediate state, so r3 refuses the combination, as D4 refuses invariants with `@Batched`: `ContractReader` reports
+"@Quorum over state fields cannot be combined with @Batched yet", and `.jsc` 2 reports JSC0440. Test:
+`ParamsAuthDiagnosticsTest.batchedRestrictions`.
+

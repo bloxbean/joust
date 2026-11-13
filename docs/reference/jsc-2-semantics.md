@@ -92,7 +92,7 @@ these values:
 | `validFrom` | `Int` | the start of the transaction's validity window (POSIX ms) |
 | `validTo` | `Int` | its end |
 | `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, `quorum` and `authorized`, §2.6; the caller alone when a vector does not say) |
-| `approvers` (M2b) | `List<Hash>` | the scripts that approve this call: each has a zero withdrawal in the transaction whose approval names this contract, instance and action (ADR-0009 D3), and is neither this contract's script nor a JOUST verifier (read only by `authorized`, §2.6; none when a vector does not say) |
+| `approvers` (M2b) | `List<Hash>` | the scripts that approve this call: each has a zero withdrawal in the transaction whose approval names this contract, instance and action (ADR-0009 D3; a native script, which has no redeemer, approves through its withdrawal alone), and is neither this contract's script nor a JOUST verifier (read only by `authorized`, §2.6; none when a vector does not say) |
 | `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns or accepts: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token), `policy` (a `Hash`: the contract's policy) and `self` (`Bytes`: the instance's token name) |
 
 **The params** (M2b, ADR-0009 D1). A contract that declares `params { … }` is called as deployed with them: a `Config`
@@ -268,7 +268,10 @@ the body, in this order, so a call refused there has the class the rule names:
 1. At a creation (an init): each quorum that names params fields (`quorum params.k params.t`) is *well formed*.
 2. For an init's or an action's next state: each pair of state fields any method's `quorum` names (once each, in source
    order) is well formed. A destroy has no output and makes no output check.
-3. Each invariant holds of the next state (with the params), in declaration order (class `invariant:<name>`).
+3. Each invariant holds of the next state (with the params), in declaration order (class `invariant:<name>`). An
+   invariant that *fails* while it is evaluated (a division by zero, a `std` row out of its domain) does not hold either,
+   and refuses with the same class: its failure is the validator's, as its being false is (#84 review S2). An invariant
+   holds no `require` (JSC0441).
 
 *Well formed* (class `invariant:quorum <keys> <threshold>`): the keys are strictly ascending, by content (so they are
 distinct), each is 28 bytes, and 1 ≤ threshold ≤ the number of keys. As with the modifiers, the generated Java method
@@ -545,7 +548,7 @@ view given a non-canonical map (out of order, or with a duplicate key) has **no 
 §3.7 are defined on canonical maps only, and the legs may answer differently. The differential tests never send one,
 and the runtime's codec writes maps canonically.
 
-## 5. Effects on native assets (M2, D4)
+## 5. Effects on native assets (M2, D4) and events (M2b)
 
 Effects are statements (D4): an action's or a destroy's, in any arm or loop, never in a `fn`, a view, a `const` value or
 a lambda. Each kind accumulates on its own; no order across kinds is defined. Each needs τ.`funds` (§2).

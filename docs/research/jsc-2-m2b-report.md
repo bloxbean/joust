@@ -37,7 +37,10 @@ diffed against `25c2a8f`'s), so no M1 or M2a script changed; the committed IR fi
 from examples/treasury:
 
 - **Three field names**: a `.jsc` 2 parameter never takes a state field's name (D3), so rotate's `council` and `quorum`
-  are `newCouncil` and `newQuorum`, and freeze's `frozen` is `on`. Names are not encoded; the data is the same.
+  are `newCouncil` and `newQuorum`, and freeze's `frozen` is `on`. Names are not encoded; the data is the same. The
+  encoding is the same, but the argument names differ for clients that pass arguments by name: the JS codec encodes a
+  call's arguments by the description's field titles, so a page written against examples/treasury's description must
+  rename `council`, `quorum` and `frozen` (#84 review F4). Positional Java callers are unaffected.
 - **One result record**: the Java example returns `Spent(state, payouts, events)` from pay and `Changed(state, events)`
   from rotate and freeze; the port's actions all return `Outcome(state, payouts, events)` (the payouts empty for rotate
   and freeze). The redeemers are the same.
@@ -59,8 +62,9 @@ read back, a single signature refused by the node, the guardian script freezing 
 withdrawal, a rotation and a quorum close); and every five-way vector also ran on the Java example's JVM method (below).
 
 **Execution units** (`JscV2M2bGateTest.budgets`; each transaction signed by the quorum and with the guardian's
-withdrawal, as the runtime builds it; "@ max" with an 18-key council, the most the 640-byte datum bound holds, and nine
-signers):
+withdrawal, as the runtime builds it; "@ max" with a 21-key council, the largest both the Java example and the port
+accept under the 640-byte datum bound (a key is 30 bytes of datum; 22 are refused at init), and eleven signers; #84
+review F2 found the first measurement's 18 keys short of that):
 
 | Call | Java CPU | `.jsc` 2 CPU | Δ CPU | Java memory | `.jsc` 2 memory (Δ) | % of max (CPU / mem) |
 |---|---|---|---|---|---|---|
@@ -70,12 +74,12 @@ signers):
 | rotate | 131,350,738 | 135,771,146 | +3.4% | 432,848 | 451,841 (+4.4%) | 1.36% / 3.23% |
 | freeze | 136,885,785 | 138,888,069 | +1.5% | 421,790 | 430,472 (+2.1%) | 1.39% / 3.07% |
 | close | 123,844,730 | 127,391,201 | +2.9% | 438,435 | 456,306 (+4.1%) | 1.27% / 3.26% |
-| init @ max | 279,267,132 | 296,376,012 | +6.1% | 898,287 | 969,852 (+8.0%) | 2.96% / 6.93% |
-| fund @ max | 255,330,698 | 255,117,938 | −0.1% | 777,003 | 776,863 (−0.0%) | 2.55% / 5.55% |
-| pay @ max | 440,160,046 | 443,858,069 | +0.8% | 1,639,532 | 1,657,327 (+1.1%) | 4.44% / 11.84% |
-| rotate @ max | 411,701,438 | 429,769,161 | +4.4% | 1,571,536 | 1,646,614 (+4.8%) | 4.30% / 11.76% |
-| freeze @ max | 264,425,910 | 266,428,194 | +0.8% | 800,495 | 809,177 (+1.1%) | 2.66% / 5.78% |
-| close @ max | 245,652,275 | 249,198,746 | +1.4% | 1,069,923 | 1,087,794 (+1.7%) | 2.49% / 7.77% |
+| init @ max | 309,327,483 | 329,165,826 | +6.4% | 994,524 | 1,077,306 (+8.3%) | 3.29% / 7.70% |
+| fund @ max | 280,838,723 | 280,625,963 | −0.1% | 852,744 | 852,604 (−0.0%) | 2.81% / 6.09% |
+| pay @ max | 517,170,331 | 520,868,354 | +0.7% | 1,982,786 | 2,000,581 (+0.9%) | 5.21% / 14.29% |
+| rotate @ max | 494,502,151 | 515,299,337 | +4.2% | 1,938,350 | 2,024,645 (+4.5%) | 5.15% / 14.46% |
+| freeze @ max | 289,933,935 | 291,936,219 | +0.7% | 876,236 | 884,918 (+1.0%) | 2.92% / 6.32% |
+| close @ max | 297,154,535 | 300,701,006 | +1.2% | 1,337,436 | 1,355,307 (+1.3%) | 3.01% / 9.68% |
 
 All within +15% and far below the per-transaction maximum. What the port adds: the checked inputs of a council (init,
 rotate: a walk over the keys), the empty payouts of rotate and freeze, and `events__none()`.
@@ -92,7 +96,9 @@ instance and action, as examples/treasury's `Guardian` approves), and encodes th
 |---|---|---|---|---|---|---|---|---|
 | Treasury (the port) | 27 | 19 | 27 | 7 | 6 | 36 | 96 | quorums of two of three, of one, with a stranger; the params' payment bound; frozen; councils unsorted, repeated, above the quorum, a quorum of 0, a 27-byte key; the guardian script approving, a key of its hash signing, another script approving; close by quorum |
 | Council (the rest) | 19 | 10 | 19 | 6 | 3 | 63 | 115 | a quorum of the params' board (and of one); an invariant over the params (`withinCap`); events in a loop, in an `if` in a loop, none at all, from a destroy (`Settled`); authorized by a state key credential, a state script credential (approved, and a key of its hash refused), and a params key credential; a time value in an event |
-| **Total** | **46** | 29 | 46 | 13 | 9 | **99** | **211** | |
+| Council, malformed params (#84 F3) | 7 | 7 | 7 | 0 | 7 | — | — | seven deployments whose board quorum is unsorted, repeated, of threshold 0, −1 or 4 of 3, holds a 27-byte key, or is empty: each init refused (`invariant:quorum params.board params.boardQuorum`) |
+| Ratio (#84 S2) | 3 | 1 | 3 | 0 | 1 | 5 | 11 | an invariant that fails by a division by zero: `invariant:ratio` |
+| **Total** | **56** | 37 | 56 | 13 | 17 | **104** | **222** | |
 
 **Refusals by the output checks** (semantics §2.7): both interpreters refuse with `invariant:quorum council quorum`,
 `invariant:quorum members need` or `invariant:withinCap`; the JVM method and the transition program compute the
@@ -106,6 +112,29 @@ from the method's: each dropped, the first repeated, the first one's first field
 **Against the Java example**: every Treasury vector also ran on examples/treasury's JVM method. They differ in exactly
 one call, where the Java method accepts and the port refuses: a council key of 27 bytes at init (the port's checked
 input; the Java example's validator refuses the creation through its quorum check, so it never reaches the chain).
+
+## Review r1 (#84) and round r2
+
+All three reviews of `f70631a` requested changes. Round r2 also merges `feat/jsc-2-m2a` at `de0da1d` (#78's fixes) into
+this branch; the treasury gates above are re-measured after that merge (unchanged: M2a's r2 changes only asset-aware code).
+
+| Finding | Resolution | Evidence |
+|---|---|---|
+| **S1 / C1 (P1)**: a batched action could break a state quorum's shape; the batch path runs no output checks, so the contract locks. The processor had the same gap | Refused, on both paths: JSC0440 (a contract with a quorum over state fields has no batched actions) and `ContractReader` ("@Quorum over state fields cannot be combined with @Batched yet"), as invariants are (D4). Checking only a batch's final state would not match a call's meaning, which checks every step. A params quorum stays allowed. ADR-0009 r3 records the Java change; no example combined them | `JscV2M2bCheckerTest.quorumAndAuthorized_…` (the security review's SecQBatch, and a quorum on the batched action itself); `ParamsAuthDiagnosticsTest.batchedRestrictions` |
+| **F1 / C4**: a batched paying action inherited events from the shared `Outcome` | A batched action never returns events: when a direct action's `Outcome` holds them, it returns `Stepped(state, payouts)`; otherwise it shares `Outcome`, so earlier lowerings are unchanged | `JscV2M2bCheckerTest.aBatchedAction_returnsNoEvents` |
+| **C2**: IR version 1's Java reader dropped unknown top-level fields, so it lost invariants | IR format 2 (as M4a's branch also moves to 2; the integration joins both). Both readers refuse unknown fields at every level | `JscV2IrTest`; `semantics.test.js` |
+| **C3**: a view reading params took a caller's `Config` | The processor's `ViewIR.takesParams`: the client passes its deployment's params | `ParamsAuthDiagnosticsTest.aViewThatTakesTheParams_getsTheDeployments` |
+| **C5**: invariants and emitted events (and M2a's send, mint, accept) escaped the depth guard | `Depth` walks invariants and every effect statement | `JscV2M2bCheckerTest.invariantsAndEvents_areUnderTheDepthCap` |
+| **C6**: a type named like an imported annotation shadowed it | `Invariant`, `Params`, `Quorum`, `AuthorizedBy` and `Stepped` are reserved | `JscV2M2bCheckerTest.theAnnotationNames_areReserved` |
+| **F2**: "@ max" was 18 keys, not the saturated 21 | Measured at 21 keys (above); the claims corrected here, in r18 and in the PR | `JscV2M2bGateTest.budgets` |
+| **F3**: §2.7 step 1 (a params quorum at creation) had no vector | Council deployed with seven malformed boards (unsorted, duplicates, thresholds 0, −1 and 4 of 3, a 27-byte key, none): each init refused on all five legs | `JscV2M2bFourWayTest.paramsQuorums_areCheckedAtCreation`; `semantics.test.js` |
+| **S2**: an invariant that fails was classed as the body's refusal; `require` was allowed in one | Both interpreters class any refusal inside an invariant `invariant:<name>` (§2.7); JSC0441 refuses `require` in an invariant | `Ratio.jsc` (the security review's SecInv) on five legs; `semantics.test.js`; `JscV2M2bCheckerTest.anInvariant_holdsNoRequire` |
+| F4 | The port section states the argument-name difference for name-keyed (JS) clients | above |
+| F5 | ADR-0018 D10's events row: "treasury (M2b), market (M3)" | ADR |
+| F6 | §5.6 references; §5's title names events | — |
+| F7 | examples/dsl no longer depends on examples/treasury: it holds a copy of `Guardian` as `TreasuryGuardian` (the copied tests' word renamed), so neither its test class path nor the toolchain's holds two scripts of one name | `:examples:dsl:test` (DevKit included) |
+| F8 | The semantics and the reference say a native script approves through its withdrawal alone | — |
+| F9 | A processor-level test of a destroy that emits without assets (fails without the type witness) | `ParamsAuthDiagnosticsTest.aDestroyThatEmits_withoutAssets_compiles` |
 
 ## Found on the way
 
@@ -145,14 +174,16 @@ input; the Java example's validator refuses the creation through its quorum chec
 
 ## Tests run at this head
 
+Round r2 (after the merge of `de0da1d` and #84's fixes):
+
 | Command | Result |
 |---|---|
-| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL (227 tasks), none failed: julc-state-dsl 144 (`JscV2M2bCheckerTest` 5), julc-state-toolchain 113 (`JscV2M2bFourWayTest` 3, `JscV2M2bGateTest` 3), julc-state-processor 71, julc-state-runtime 76, julc-state-api 10, examples/dsl 82 (with `TreasuryPortTest` 7, `TreasuryDescriptionPortTest` 1), examples/treasury 8. `checkJscAbi`: `21 ABI manifest(s) agree with the processor's descriptions` |
-| `./gradlew :julc-state-toolchain:toolchainWasmTest :julc-state-runtime-wasm:runtimeWasm -PgraalvmHome=…/graalvm-25.3.4.1+1.1/Contents/Home` (images rebuilt) | BUILD SUCCESSFUL: `ALL SAME` (every `.jsc` file's Java, source map, manifest and IR equal to Gradle's, Treasury and Council included); S2 in Wasm 1951/1951; 21 depth cases on a cold engine; S2b 43/43 |
-| `npm test` in `js/jsc-interpreter` | 35/35 |
+| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL, none failed: julc-state-dsl 149 (`JscV2M2bCheckerTest` 9), julc-state-toolchain 118 (`JscV2M2bFourWayTest` 5, `JscV2M2bGateTest` 3), julc-state-processor 73, julc-state-runtime 76, julc-state-api 10, examples/dsl 82, examples/treasury 8. `checkJscAbi`: `22 ABI manifest(s) agree with the processor's descriptions` |
+| `./gradlew :julc-state-toolchain:toolchainWasmTest :julc-state-runtime-wasm:runtimeWasm -PgraalvmHome=…/graalvm-25.3.4.1+1.1/Contents/Home` (images rebuilt: IR format 2) | BUILD SUCCESSFUL: `ALL SAME`; S2 in Wasm 2136/2136; 21 depth cases on a cold engine; S2b 43/43 |
+| `npm test` in `js/jsc-interpreter` | 36/36 |
 | `npm test` in `js/joust` (with the engines just built) | 39/39 |
-| `npm test` in `tree-sitter-jsc` | 15/15 parses; the shared corpus agrees on every file (83 corpus, 26 repository, 70 research files) |
-| DevKit port tests (`:examples:dsl:test`, Yaci DevKit up) | BUILD SUCCESSFUL: 91 tests, none failed; every DevKit port test passed on Yaci DevKit: `TreasuryDevnetPortTest` (deploy pinned by `policyIdFor`, a 2-of-3 payment and its `Paid` event, one signature refused by the node, the guardian script freezing and unfreezing, a rotation, a quorum close), and Vault, Escrow, Crowdfund, Token, Pool, Dex and `DslDevnetTest` (2) |
+| `npm test` in `tree-sitter-jsc` | 15/15 parses; the shared corpus agrees (83 corpus, 27 repository, 70 research files) |
+| DevKit (`:examples:dsl:test :examples:treasury:test --rerun`, Yaci DevKit up) | BUILD SUCCESSFUL: examples/dsl 91 and examples/treasury 9 tests, none skipped; every DevKit test passed, `TreasuryDevnetPortTest` (with `TreasuryGuardian`) and examples/treasury's own `TreasuryDevnetTest` included |
 
 Two existing toolchain tests needed updating for the new port: `ValidatorScriptCollisionTest` used examples/treasury's
 validator as one "without a twin" (its .jsc 2 port is now its twin: JuLC's own loader, which reads a script by its

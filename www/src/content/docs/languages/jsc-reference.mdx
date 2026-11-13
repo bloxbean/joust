@@ -148,7 +148,7 @@ hash, and every `Address` the ledger's encoding with a well-formed payment crede
 | `fn name(params): T = expr` | a `static` method of the contract class | pure: no state, no built-ins, no `pay` |
 | `params { … }` | `@Params public record Config(...)` | once (`JSC0431`), at least one field (`JSC0432`); read as `params.f` in methods, views and invariants, never in a `fn` (`JSC0433`) |
 | `event Name { … }` | a variant of `public sealed interface Event` | the contract's events; emitted with `emit(Name { … })` |
-| `invariant name = expr` | `@Invariant public static boolean name(State s__[, Config params__])` | a `Bool` over the state and the params, like a view's body; not with `BigMap` state (`JSC0435`) or `batched` actions (`JSC0436`) |
+| `invariant name = expr` | `@Invariant public static boolean name(State s__[, Config params__])` | a `Bool` over the state and the params, like a view's body, without `require` (`JSC0441`); not with `BigMap` state (`JSC0435`) or `batched` actions (`JSC0436`) |
 
 Method names are unique, and a `fn` may not share one (`JSC0202`); nor may an invariant (`JSC0224`). A method gets
 `Ctx ctx` when it is a destroy, has a modifier other than `open`, `only`, `quorum` and `authorized`, or mentions
@@ -181,9 +181,12 @@ action; a destroy has none), and by the runtime before it submits. A state that 
 input state, never the result. Every state the validator accepts as an output keeps each state quorum *well formed*
 (keys strictly ascending, so distinct, each 28 bytes, and 1 ≤ `t` ≤ their number), and a params quorum is checked at
 creation, so no rotation can lock the contract. `authorized c` (ADR-0009 D3) holds when the key credential `c` signed, or
-the script `c` is withdrawn from in the transaction with an `Approvals` redeemer listing `(policy, instance, action)`;
-never this contract's own script or a JOUST verifier. Both are an audience (J16). Neither is allowed in an `init`
-(`JSC0405`) or a batched action (`JSC0417`), and neither field holds a time value (`JSC0524`). `quorum` and
+the script `c` is withdrawn from in the transaction with an `Approvals` redeemer listing `(policy, instance, action)` (a
+native script, which has no redeemer, approves through its withdrawal alone); never this contract's own script or a JOUST
+verifier. Both are an audience (J16). Neither is allowed in an `init`
+(`JSC0405`) or a batched action (`JSC0417`), and neither field holds a time value (`JSC0524`). A contract with a quorum over
+state fields has no batched actions (`JSC0440`, ADR-0009 r3): a batch's states are not checked, so a batched action could
+make the quorum unreachable; a quorum over params may be combined with them. `quorum` and
 `authorized` are modifier words only in a method's header: a state field may be called `quorum` (`quorum council quorum`).
 
 Modifiers name state fields (`quorum` and `authorized` also `params.f`), never parameters (`JSC0310`). Each is given at most once (`JSC0416`). A `batched` action
@@ -290,7 +293,10 @@ not supported yet, `JSC0426`). `accept` needs `payable` (`JSC0422`), and a payab
 mints or burns must state what it takes in, `accept(Value.none())` for nothing (`JSC0423`). A method that can reach a
 `pay`, `send`, `mint` or `burn` in any arm or loop must have `only <field>` or `open` (`JSC0408`). A contract with native
 assets has no `batched` actions (`JSC0424`). An action with effects returns `Outcome`, or `Received` when it takes native
-assets; a destroy that sends, mints, burns or emits returns `Settled` (the processor's result records). Events (M2b) come
+assets; a destroy that sends, mints, burns or emits returns `Settled` (the processor's result records). A batched action
+never returns events: when a direct action's `Outcome` holds them, a batched action that pays returns
+`Stepped(state, payouts)`. These names, and the annotations the lowering imports (`Invariant`, `Params`, `Quorum`,
+`AuthorizedBy`), are reserved. Events (M2b) come
 last in each record, and a method whose record has them carries them last in its redeemer (empty when it emits none). An
 `emit` is allowed in an action or a destroy (`JSC0413`), not in a batched action (`JSC0425`); the contract must declare
 an event (`JSC0438`).
