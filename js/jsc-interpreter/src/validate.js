@@ -281,6 +281,10 @@ export function validate(p) {
     keys(s, ['stmt', ...Object.keys(spec), 'at'], where);
     fields(s, spec, where, scope);
     if (s.stmt === 'Require') bool(s.cond, where, 'a require condition');
+    // #80 review S3: an if's, a for's or a match's pays is what its blocks say.
+    if (s.stmt === 'If' || s.stmt === 'For' || s.stmt === 'Match') {
+      if (s.pays !== paysIn({ stmts: [{ ...s, pays: undefined }] })) fail(where, `pays is ${s.pays}, but its blocks ${s.pays ? 'do not pay' : 'pay'}`);
+    }
     at(s.at, where);
   }
   const fnNames = new Set();
@@ -307,6 +311,12 @@ export function validate(p) {
     modifiers(m, where, fail, keys, stateFields);
     if (m.result !== null) type(m.result, where);
     block(m.body, where, scope);
+    // #80 review S3: pays is recomputed from the body, and a method that pays says who may call it (JSC0408, JSC0420).
+    const pays = paysIn(m.body);
+    if (m.pays !== pays) fail(where, `pays is ${JSON.stringify(m.pays)}, but the body ${pays ? 'pays' : 'does not pay'}`);
+    if (pays && !m.mods.some((x) => x.name === 'open' || (x.name === 'only' && typeof x.field === 'string'))) {
+      fail(where, 'it pays, so it says who may call it (only f or open)');
+    }
     // F7: the checker's two decisions, recomputed from their definitions.
     const checked = m.kind === 'view' ? [] : m.params.filter((l) => needsCheck(l.type, shapes, enums)).map((l) => l.id);
     if (JSON.stringify(checked) !== JSON.stringify(m.checked)) {
@@ -349,12 +359,22 @@ function modifiers(m, where, fail, keys, state) {
     } else if (w === 'batched') {
       if (field !== null && field !== 'only') fail(where, `batched is plain or "batched only", not ${JSON.stringify(field)}`);
       if (m.kind !== 'action') fail(where, `only an action can be batched, not a${m.kind === 'init' ? 'n' : ''} ${m.kind}`);
+      // #80 review S3: as the checker (JSC0419): no batched action in a contract with BigMap state.
+      if ([...state.values()].some((t) => t && typeof t === 'object' && 'bigmap' in t)) fail(where, 'a contract with BigMap state has no batched action');
     }
   }
   if (names.includes('batched')) {
     for (const w of ['only', 'after', 'before']) if (names.includes(w)) fail(where, `a batched action cannot use ${w}`);
   }
 }
+/** Whether a block pays: a Pay statement in it, or in an if's, a for's or a match's block (never in an expression). */
+function paysIn(block) {
+  return (block?.stmts ?? []).some((s) => s.stmt === 'Pay'
+    || (s.stmt === 'If' && (s.branches.some((b) => paysIn(b.then)) || (s.otherwise !== null && paysIn(s.otherwise))))
+    || (s.stmt === 'For' && paysIn(s.body))
+    || (s.stmt === 'Match' && s.arms.some((a) => paysIn(a.body))));
+}
+
 /** §4: a type holds a Key, a Hash or a Map somewhere (records and variants through their fields). */
 function needsCheck(t, shapes, enums) {
   if (typeof t === 'string') return t === 'Key' || t === 'Hash';

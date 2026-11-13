@@ -433,20 +433,41 @@ final class IrJson {
                 var x = m(o);
                 var params = decls(x.get("params"));
                 var mods = new ArrayList<Ir.Mod>();
-                for (Object mo : l(x.get("mods"))) {
-                    for (String k : m(mo).keySet()) {
-                        if (!k.equals("name") && !k.equals("field")) throw new IllegalArgumentException("a modifier has no field \"" + k + "\"");
+                if (!(x.get("mods") instanceof List<?> modList)) throw new IllegalArgumentException("method " + x.get("name") + ": mods is not a list");
+                for (Object mo : modList) {
+                    // #80 review S6: a malformed modifier is a refusal, as in the JavaScript reader, never a crash.
+                    if (!(mo instanceof Map<?, ?> mm)) throw new IllegalArgumentException("method " + x.get("name") + ": a modifier is not an object");
+                    for (Object k : mm.keySet()) {
+                        if (!"name".equals(k) && !"field".equals(k)) throw new IllegalArgumentException("a modifier has no field \"" + k + "\"");
                     }
-                    Object field = m(mo).get("field");
+                    if (!(mm.get("name") instanceof String name)) throw new IllegalArgumentException("method " + x.get("name") + ": a modifier's name is not a string: " + mm.get("name"));
+                    Object field = mm.get("field");
                     if (field != null && !(field instanceof String)) throw new IllegalArgumentException("a modifier's field is a name: " + field);
-                    mods.add(new Ir.Mod(s(m(mo).get("name")), (String) field));
+                    mods.add(new Ir.Mod(name, (String) field));
                 }
-                Ir.Kind kind = Ir.Kind.valueOf(s(x.get("kind")).toUpperCase());
+                // #80 review S6: the kinds exactly as written (lower case), as the JavaScript reader reads them.
+                Ir.Kind kind = switch (String.valueOf(x.get("kind"))) {
+                    case "init" -> Ir.Kind.INIT;
+                    case "action" -> Ir.Kind.ACTION;
+                    case "destroy" -> Ir.Kind.DESTROY;
+                    case "view" -> Ir.Kind.VIEW;
+                    default -> throw new IllegalArgumentException("method " + x.get("name") + ": unknown kind " + x.get("kind"));
+                };
                 modifiers(kind, s(x.get("name")), mods, state);
                 var checked = new ArrayList<Ir.Local>();
                 for (Object id : l(x.get("checked"))) checked.add(local(id));
+                Ir.Block body = block(x.get("body"));
+                // #80 review S3: pays is recomputed from the body (a Pay statement in it, at any depth of if, for and match),
+                // and a method that pays says who may call it ('only f' or 'open'), as the checker requires (JSC0408).
+                boolean pays = paysIn(body);
+                if (!Boolean.valueOf(pays).equals(x.get("pays"))) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": pays is " + x.get("pays") + ", but the body " + (pays ? "pays" : "does not pay"));
+                }
+                if (pays && mods.stream().noneMatch(md -> md.name().equals("open") || md.name().equals("only") && md.field() != null)) {
+                    throw new IllegalArgumentException("method " + x.get("name") + ": it pays, so it says who may call it ('only f' or 'open')");
+                }
                 methods.add(new Ir.Method(kind, s(x.get("name")), params, mods, checked,
-                        (Boolean) x.get("usesCtx"), (Boolean) x.get("pays"), block(x.get("body")),
+                        (Boolean) x.get("usesCtx"), pays, body,
                         x.get("result") == null ? null : type(x.get("result")), pos(x.get("at"))));
             }
             var timeFields = new LinkedHashSet<String>();
@@ -493,6 +514,10 @@ final class IrJson {
                     default -> {   // batched
                         if (f != null && !f.equals("only")) throw new IllegalArgumentException(where + "batched is plain or batched only, not " + f);
                         if (kind != Ir.Kind.ACTION) throw new IllegalArgumentException(where + "only an action can be batched, not a " + kind.name().toLowerCase());
+                        // #80 review S3: as the checker (JSC0419): no batched action in a contract with BigMap state.
+                        if (state.fields().values().stream().anyMatch(t -> t instanceof Ty.BigMapT)) {
+                            throw new IllegalArgumentException(where + "a contract with BigMap state has no batched action");
+                        }
                     }
                 }
             }
@@ -501,6 +526,29 @@ final class IrJson {
                     if (seen.contains(w)) throw new IllegalArgumentException(where + "a batched action cannot use " + w);
                 }
             }
+        }
+
+        /** {@code st}, whose {@code pays} must be what its blocks say (#80 review S3). */
+        static Ir.Stmt paysAsWritten(Ir.Stmt st, boolean written, Map<String, Object> x) {
+            boolean pays = paysIn(new Ir.Block(List.of(st), null, new Pos(1, 1)));
+            if (pays != written) throw new IllegalArgumentException(x.get("stmt") + " at " + x.get("at") + ": pays is " + written + ", but its blocks "
+                    + (pays ? "pay" : "do not pay"));
+            return st;
+        }
+
+        /** Whether a block pays: a Pay statement in it, or in an if's, a for's or a match's block (not in expressions). */
+        static boolean paysIn(Ir.Block b) {
+            for (Ir.Stmt st : b.stmts()) {
+                boolean p = switch (st) {
+                    case Ir.Pay x -> true;
+                    case Ir.If x -> x.branches().stream().anyMatch(br -> paysIn(br.then())) || x.otherwise() != null && paysIn(x.otherwise());
+                    case Ir.For x -> paysIn(x.body());
+                    case Ir.MatchStmt x -> x.arms().stream().anyMatch(a -> paysIn(a.body()));
+                    default -> false;
+                };
+                if (p) return true;
+            }
+            return false;
         }
 
         static final Set<String> MODIFIERS = Set.of("payable", "open", "only", "after", "before", "batched");
@@ -578,15 +626,18 @@ final class IrJson {
                 case "Pay" -> new Ir.Pay(expr(x.get("to")), expr(x.get("amount")), at);
                 case "If" -> {
                     var branches = branches(x.get("branches"));
-                    yield new Ir.If(branches, x.get("otherwise") == null ? null : block(x.get("otherwise")), (Boolean) x.get("pays"), at);
+                    var st = new Ir.If(branches, x.get("otherwise") == null ? null : block(x.get("otherwise")), (Boolean) x.get("pays"), at);
+                    yield paysAsWritten(st, st.pays(), x);
                 }
                 case "For" -> {
                     Ir.Expr list = expr(x.get("list"));
-                    yield new Ir.For(decl(x.get("var")), list, block(x.get("body")), (Boolean) x.get("pays"), at);
+                    var st = new Ir.For(decl(x.get("var")), list, block(x.get("body")), (Boolean) x.get("pays"), at);
+                    yield paysAsWritten(st, st.pays(), x);
                 }
                 case "Match" -> {
                     Ir.Expr scrutinee = expr(x.get("scrutinee"));
-                    yield new Ir.MatchStmt(scrutinee, arms(x.get("arms")), (Boolean) x.get("pays"), at);
+                    var st = new Ir.MatchStmt(scrutinee, arms(x.get("arms")), (Boolean) x.get("pays"), at);
+                    yield paysAsWritten(st, st.pays(), x);
                 }
                 default -> throw new IllegalArgumentException("unknown statement " + x.get("stmt"));
             };

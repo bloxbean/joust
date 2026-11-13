@@ -841,7 +841,9 @@ final class FourWay {
     String check(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate) throws Exception {
         // The interpreters see the keys that sign the transaction the validator evaluates (semantics §2.6: 'only f'). A
         // method that reads nothing else of the transaction is called without one on the other legs (usesCtx: false).
-        Tx ti = interpreterTx(t, signer);
+        // A batched action's step in a batch is signed by the batcher, its caller being the intent's owner, who signed the
+        // intent (ADR-0004; semantics §2, #80 review S5): its τ.signers are the intent's, the caller alone.
+        Tx ti = t != null && interp.kind(method).equals("action") && batched(method) ? t.signedBy(List.of(t.caller())) : interpreterTx(t, signer);
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
         // The Java interpreter's outcome; a Limit (its stack ran out) propagates and fails the test (semantics §2.4).
         Interpreter.Outcome o = null;

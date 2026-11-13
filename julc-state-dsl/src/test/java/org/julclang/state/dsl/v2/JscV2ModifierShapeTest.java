@@ -76,6 +76,47 @@ class JscV2ModifierShapeTest {
         refused(mods(vault, "action", "withdraw", x -> x.replace("]", ", { \"name\": \"batched\" }]")), "a batched action cannot use only");
     }
 
+    /** #80 review S3: pays is recomputed, a paying method needs 'only f' or 'open', no batched action with BigMap state. */
+    @Test
+    void theReader_recomputesPays_andRequiresAnAudience() throws Exception {
+        String pool = fixture("Pool"), counter = fixture("Counter2"), ledger = fixture("Ledger");
+        IrJson.read(counter);
+        IrJson.read(ledger);
+        refused(mods(pool, "action", "withdraw", x -> "[]"), "it pays, so it says who may call it ('only f' or 'open')");
+        refused(mods(pool, "action", "buy", x -> x.replace(", { \"name\": \"open\" }", "")), "it pays, so it says who may call it");
+        refused(mods(counter, "destroy", "close", x -> "[]"), "it pays, so it says who may call it");
+        refused(withMethodField(pool, "withdraw", "\"pays\": true", "\"pays\": false"), "pays is false, but the body pays");
+        refused(withMethodField(counter, "increment", "\"pays\": false", "\"pays\": true"), "pays is true, but the body does not pay");
+        refused(mods(ledger, "action", "transfer", x -> "[{ \"name\": \"batched\" }]"), "a contract with BigMap state has no batched action");
+        // A statement's own pays flag (an if in Branches' settle).
+        String branches = fixture("Branches");
+        int at = branches.indexOf("\"stmt\": \"If\"");
+        int flag = branches.indexOf("\"pays\": true", at);
+        refused(branches.substring(0, flag) + "\"pays\": false" + branches.substring(flag + "\"pays\": true".length()), "pays is false, but its blocks pay");
+    }
+
+    /** #80 review S6: malformed modifiers are refusals (no NullPointerException or ClassCastException); kinds as written. */
+    @Test
+    void theReader_refusesMalformedModifiersAndKindsCleanly() throws Exception {
+        String pool = fixture("Pool");
+        refused(mods(pool, "action", "withdraw", x -> "[{ \"name\": null, \"field\": \"admin\" }]"), "a modifier's name is not a string");
+        refused(mods(pool, "action", "withdraw", x -> "[{ \"field\": \"admin\" }]"), "a modifier's name is not a string");
+        refused(mods(pool, "action", "withdraw", x -> "[\"only\"]"), "a modifier is not an object");
+        refused(mods(pool, "action", "withdraw", x -> "[null]"), "a modifier is not an object");
+        refused(pool.replaceFirst("\"kind\": \"action\"", "\"kind\": \"ACTION\""), "unknown kind ACTION");
+        refused(pool.replaceFirst("\"kind\": \"init\"", "\"kind\": \"INIT\""), "unknown kind INIT");
+        refused(pool.replaceFirst("\"kind\": \"init\"", "\"kind\": \"ınit\""), "unknown kind");
+    }
+
+    /** {@code json} with {@code from} replaced by {@code to} in method {@code name}'s own fields (before its body). */
+    static String withMethodField(String json, String name, String from, String to) {
+        int m = json.indexOf("\"name\": \"" + name + "\",");
+        assertTrue(m > 0, name);
+        int i = json.indexOf(from, m);
+        assertTrue(i > 0, from);
+        return json.substring(0, i) + to + json.substring(i + from.length());
+    }
+
     static final byte[] OWNER = filled(0x0a), ANN = filled(0xa1);
 
     static byte[] filled(int b) {

@@ -644,3 +644,26 @@ test('§2 the caller is among the signers: a τ whose caller did not sign is the
   assert.ok(call(['a1'.repeat(28), '0a'.repeat(28)]).ok);
   assert.throws(() => call(['0a'.repeat(28)]), /caller is not among its signers/);
 });
+
+test('the reader recomputes pays and requires a paying method to say who may call it; no batched action with BigMap state (#80 review S3)', () => {
+  const edit = (name, f) => () => {
+    const p = JSON.parse(readFileSync(new URL(`./fixtures/${name}.ir.json`, import.meta.url), 'utf8'));
+    f(p, (n) => p.methods.find((m) => m.name === n));
+    return load(JSON.stringify(p));
+  };
+  // Deleting the audience of a paying method: before, Pool's withdraw then accepted a stranger alone.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods = []; }), /it pays, so it says who may call it \(only f or open\)/);
+  assert.throws(edit('Pool', (p, m) => { m('buy').mods = m('buy').mods.filter((x) => x.name !== 'open'); }), /it pays, so it says who may call it/);
+  assert.throws(edit('Counter2', (p, m) => { m('close').mods = []; }), /it pays, so it says who may call it/);
+  // pays as written must be what the body says, on the method and on each if, for and match statement.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').pays = false; }), /pays is false, but the body pays/);
+  assert.throws(edit('Counter2', (p, m) => { m('increment').pays = true; }), /pays is true, but the body does not pay/);
+  assert.throws(edit('Branches', (p, m) => {
+    const walk = (o) => (o && typeof o === 'object' ? (o.stmt === 'If' && o.pays === true ? o : Object.values(o).map(walk).find(Boolean)) : null);
+    walk(m('settle').body).pays = false;
+  }), /If at .*: pays is false, but its blocks pay/);
+  // JSC0419: no batched action in a contract with BigMap state.
+  assert.throws(edit('Ledger', (p, m) => { m('transfer').mods.push({ name: 'batched' }); }), /a contract with BigMap state has no batched action/);
+  assert.doesNotThrow(edit('Pool', () => {}));
+  assert.doesNotThrow(edit('Ledger', () => {}));
+});
