@@ -16,6 +16,7 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 import { fileURLToPath } from 'node:url';
 
 const SERVER_STACK_MB = 4;   // js/joust/src/lsp/host.js ANALYSIS_STACK_MB
+const REQUIRED_MARGIN_MB = 1;   // the cap's cases must hold on a quarter of it (C17)
 
 const self = fileURLToPath(import.meta.url);
 const load = (dir) => new Promise((ok) => {
@@ -138,6 +139,11 @@ if (!isMainThread) {
   }
   console.log(`[lang wasm] margin: every case holds on a worker stack of ${smallest ?? '(none below 4)'} MB`
     + (smallest ? `, ${SERVER_STACK_MB / smallest}x below the server's ${SERVER_STACK_MB} MB` : ''));
+  // M5a's exit: the cap holds "with margin" (review C17 on #83): every case must hold at a quarter of the server's stack;
+  // the search above for the smallest stack is a measurement on top.
+  if (!(smallest !== null && smallest <= REQUIRED_MARGIN_MB)) {
+    fail(`[margin] the nesting cap's cases need more than ${REQUIRED_MARGIN_MB} MB of worker stack (${SERVER_STACK_MB / REQUIRED_MARGIN_MB}x below the server's ${SERVER_STACK_MB} MB)`);
+  }
   console.log(failures ? `${failures} lang case(s) failed` : 'ALL SAME: lang.analyze');
   process.exit(failures ? 1 : 0);
 }
