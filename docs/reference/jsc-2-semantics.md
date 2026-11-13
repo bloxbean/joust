@@ -527,7 +527,10 @@ a lambda. Each kind accumulates on its own; no order across kinds is defined. Ea
 `send(to, v)` evaluates `to` (an `Address`), then `v` (a `Value`). It fails when `v` holds a quantity that is not
 positive, or a reserved token name (§5.5) under the contract's own policy (τ.`funds`.`policy`), or when `to`'s payment
 credential is the contract's own script (`ScriptCred(τ.funds.policy)`: every call spends the instance's input there, and
-the validator never delivers a send to a spent script's address, ADR-0007 I30; review r1 F1). Otherwise it appends the
+the validator never delivers a send to a spent script's address, ADR-0007 I30; review r1 F1). A checked `Address` (§4)
+may be that script: the rule knows no policy, so a stored address can make every later send to it fail (review r2 S6).
+A contract that stores an address it will send to guards it where it is taken, as Coins' `init` does:
+`require(paymentScript(a) == None || asHash(paymentScript(a) ?? #00) != funds.policy, …)`. Otherwise it appends the
 send *(to, v)*: a call's sends are in the order they were made. An empty value may be sent (the transaction's builder
 adds the ledger's minimum). A send has no datum (a datum comes with M2c).
 

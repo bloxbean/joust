@@ -113,7 +113,7 @@ name the processor generates (`Lifecycle`, `Calls`, `Step`, `Funds`, … : `JSC0
 Every `init` argument and every action and destroy parameter (the redeemer) is checked by generated code before the
 method's body runs, recursively through records, enums, lists and options: every `Key` and `Hash` is 28 bytes, and
 every `Map` has unique keys of at most 64 bytes in strictly ascending canonical order; every `Credential` holds a 28-byte
-hash, and every `Address` the ledger's encoding with a well-formed payment credential and, if it has one, a staking hash (an address with a staking pointer is refused). A failure is a located `require` failure. View parameters are not checked: a view runs off chain on your own inputs.
+hash, and every `Address` the ledger's encoding with a well-formed payment credential and, if it has one, a staking hash (an address with a staking pointer is refused). A checked address may still be your contract's own script, and `send` to it always fails (`#send:`). If you store an address you will send to later (a refund list, a beneficiary), refuse it when you take it: `require(paymentScript(a) == None || asHash(paymentScript(a) ?? #00) != funds.policy, "not this contract")`. A failure is a located `require` failure. View parameters are not checked: a view runs off chain on your own inputs.
 
 ## Names and scope
 
