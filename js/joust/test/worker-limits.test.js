@@ -10,9 +10,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { engineLimits, buildInWorker, liveWorkers, inheritedHeapFlags, heapProblem, ENGINE_STACK_MB, ENGINE_MEMORY_MB,
+import { engineLimits, buildInWorker, liveWorkers, setEngineHostForTests, ENGINE_STACK_MB, ENGINE_MEMORY_MB,
   ENGINE_TIMEOUT_S } from '../src/toolchain.js';
 import * as joust from '../src/index.js';
+import { heapProblem, probeHeapLimit } from '../src/toolchain-heap.js';
 import { build } from '../src/build.js';
 
 const ENGINE = existsSync(fileURLToPath(new URL('../engine/joust-toolchain.js', import.meta.url)));
@@ -45,45 +46,62 @@ test('the limits come from the environment and from the caller, validated in the
   assert.equal(joust.engineLimits, engineLimits);
 });
 
-test('the old generation is measured: an inherited old-space flag is refused, a young-generation flag is not (C2, F5)', () => {
-  assert.deepEqual(inheritedHeapFlags([], ''), []);
-  assert.deepEqual(inheritedHeapFlags(['--max-old-space-size=512'], '--max_old_space_size=8192 --max-semi-space-size=64 --enable-source-maps'),
-    ['--max-old-space-size=512', '--max_old_space_size=8192'], 'a semi-space flag is not an old-generation flag');
-  // The build worker at memoryMb and the probe at memoryMb + 64: honoured, they differ by 64, whatever the young generation.
-  assert.equal(heapProblem(304, 368, 256, []), null);
-  assert.equal(heapProblem(448, 512, 256, []), null, '--max-semi-space-size=64: +192 MB of young generation, still the old cap');
-  // Overridden, both report the same limit: refused even inside any allowance (Codex r2: 320 against 256 gave 368).
-  assert.match(heapProblem(368, 368, 256, ['--max-old-space-size=320']),
-    /not have the configured heap \(JOUST_ENGINE_MEMORY_MB=256\).*inherited Node flag --max-old-space-size=320.*set JOUST_ENGINE_MEMORY_MB=320/);
-  assert.match(heapProblem(560, 560, 4096, ['--max-old-space-size=512']), /set JOUST_ENGINE_MEMORY_MB=512/);
-  assert.match(heapProblem(176, 176, 256, ['--max-old-space-size=128']), /remove the flag$/, 'no advice out of range');
-  assert.match(heapProblem(2096, 2096, 256, ['--max-heap-size=2048']), /remove the flag$/);
-  assert.equal(heapProblem(304, 304, 256, ['--max-old-space-size=256']), null, 'a flag equal to the configured limit sets that limit');
+test('the old generation is decided from measurements only: three workers 64 MB apart (C2, F5, C7, C8)', async () => {
+  // Honoured, the build worker and its probes at -64 and +64 MB step by 64, whatever the young generation.
+  assert.equal(heapProblem(304, 368, 240, 256), null);
+  assert.equal(heapProblem(448, 512, 384, 256), null, '--max-semi-space-size=64: +192 MB of young generation, still the old cap');
+  // Set elsewhere (an old-space flag of any value, the configured one included), the three are equal: refused.
+  assert.match(heapProblem(368, 368, 368, 256), /not have the configured heap \(JOUST_ENGINE_MEMORY_MB=256\).*measured 368, 368 and 368 MB at 192, 256 and 320 MB/);
+  assert.match(heapProblem(304, 304, 304, 256), /set elsewhere/, 'equal to the configured value is not provable by measurement');
+  assert.match(heapProblem(304, 368, 304, 256), /set elsewhere/, 'both steps must hold');
+  // A probe that exits, or fails, before it reports rejects (C10): never a promise left pending.
+  await assert.rejects(probeHeapLimit(256, { code: 'process.exit(0)' }), /the heap probe exited \(code 0\) before it reported/);
+  await assert.rejects(probeHeapLimit(256, { code: 'throw new Error("boom")' }), /boom/);
+  assert.ok((await probeHeapLimit(256)) >= 256);
 });
 
-/** Runs buildInWorker in a child Node with these environment additions; returns its JSON line. */
-function child(env, files = '{}', limits = '{}', args = []) {
+/** Runs a script in a child Node with these environment additions and arguments; returns its JSON line. */
+function child(env, body, args = []) {
   const script = join(mkdtempSync(join(tmpdir(), 'joust-heap-')), 'child.mjs');
   writeFileSync(script, `import { buildInWorker } from ${JSON.stringify(TOOLCHAIN)};
-    try { const r = await buildInWorker({ files: ${files}, limits: ${limits} }); console.log(JSON.stringify({ ok: r.ok })); }
-    catch (e) { console.log(JSON.stringify({ error: e.message })); }
+    try { ${body} } catch (e) { console.log(JSON.stringify({ error: e.message })); }
     process.exit(0);`);
-  return JSON.parse(execFileSync(process.execPath, [...args, script], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 300_000 }).trim());
+  return JSON.parse(execFileSync(process.execPath, [...args, script], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 600_000 }).trim());
 }
+const buildCall = (files, limits = '{}') => `const r = await buildInWorker({ files: ${files}, limits: ${limits} }); console.log(JSON.stringify({ ok: r.ok }));`;
 
-test('a build under an inherited --max-old-space-size is refused before it runs, near the limit too (C2)', () => {
-  for (const [flag, mb] of [['8192', '256'], ['320', '256'], ['260', '256'], ['512', '4096']]) {
-    const r = child({ NODE_OPTIONS: `--max-old-space-size=${flag}`, JOUST_ENGINE_MEMORY_MB: mb });
-    assert.match(r.error ?? '', new RegExp(`JOUST_ENGINE_MEMORY_MB=${mb}\\).*inherited Node flag --max-old-space-size=${flag}`), `${flag} at ${mb}: ${JSON.stringify(r)}`);
+test('inherited Node heap flags never reach the engine: the configured heap holds under them (C2, C7, C8)', { skip: ENGINE ? false : 'no engine (js/joust/engine)', timeout: 900_000 }, () => {
+  const big = JSON.stringify(chain(2500));
+  const small = JSON.stringify(chain(3));
+  // 2,500 branches need more than 256 MB: under a large inherited old-space flag, and with NODE_OPTIONS rewritten to
+  // claim the configured value before the build (Codex r3's C7), the engine still runs out at 256 MB.
+  const oom = /reaching memory limit.*\(JOUST_ENGINE_MEMORY_MB=256\)/;
+  const r1 = child({ NODE_OPTIONS: '--max-old-space-size=8192', JOUST_ENGINE_MEMORY_MB: '256' }, buildCall(big));
+  assert.match(r1.error ?? '', oom, JSON.stringify(r1));
+  const r2 = child({ NODE_OPTIONS: '--max-old-space-size=8192', JOUST_ENGINE_MEMORY_MB: '256' },
+    `process.env.NODE_OPTIONS = '--max-old-space-size=256'; ${buildCall(big)}`);
+  assert.match(r2.error ?? '', oom, JSON.stringify(r2));
+  // The flag settings Codex r3's C8 found refused, now all built (the engine runs with the configured heap regardless).
+  for (const [env, args] of [[{ NODE_OPTIONS: '--max-old-space-size=320' }, ['--max-old-space-size=256']], [{}, ['--max-old-space-size=320', '--max-old-space-size=256']],
+    [{ NODE_OPTIONS: '--max-old-space-size="256"' }, []], [{ NODE_OPTIONS: '--max-semi-space-size=64' }, []], [{ NODE_OPTIONS: '--max-old-space-size=8192' }, []]]) {
+    assert.deepEqual(child({ ...env, JOUST_ENGINE_MEMORY_MB: '256' }, buildCall(small), args), { ok: true }, JSON.stringify([env, args]));
   }
-  const direct = child({ JOUST_ENGINE_MEMORY_MB: '256' }, '{}', '{}', ['--max-old-space-size=320']);
-  assert.match(direct.error ?? '', /inherited Node flag --max-old-space-size=320/, 'on the command line too');
 });
 
-test('a young-generation flag does not trip the check, and a matching old-space flag is accepted (F5)', { skip: ENGINE ? false : 'no engine (js/joust/engine)', timeout: 300_000 }, () => {
-  const files = JSON.stringify({ 'app/C.jsc': 'jsc 2\npackage app\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n}\n' });
-  assert.deepEqual(child({ NODE_OPTIONS: '--max-semi-space-size=64', JOUST_ENGINE_MEMORY_MB: '4096' }, files), { ok: true });
-  assert.deepEqual(child({ NODE_OPTIONS: '--max-old-space-size=512', JOUST_ENGINE_MEMORY_MB: '512' }, files), { ok: true });
+test('a host that does not start, or exits before it reports, rejects its builds and leaves nothing running (C10)', async () => {
+  for (const [host, why] of [['silent', /did not start within 1 s/], ['exits', /host exited \(code 0\) before it answered/],
+    ['probe-exits', /heap probe failed: the heap probe exited \(code 0\) before it reported/]]) {
+    setEngineHostForTests(new URL(`./hosts/${host}.mjs`, import.meta.url));
+    try {
+      const t = Date.now();
+      await assert.rejects(buildInWorker({ files: {}, limits: { timeoutS: 1 } }), why, host);
+      assert.ok(Date.now() - t < 10_000, host);
+      await settled();
+      assert.equal(liveWorkers(), 0, `${host}: nothing left running`);
+    } finally {
+      setEngineHostForTests(null);
+    }
+  }
 });
 
 test('joust build refuses an invalid limit before it runs anything', async () => {

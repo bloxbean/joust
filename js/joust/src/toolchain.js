@@ -1,7 +1,8 @@
 // The toolchain engine (ADR-0015 D1, D2): JOUST's processor and JuLC's compiler in Wasm (GraalVM Web Image). It
 // compiles .java and .jsc contracts exactly as the Gradle build does (I1), with no JVM.
 import { fileURLToPath } from 'node:url';
-import { Worker } from 'node:worker_threads';
+import { fork } from 'node:child_process';
+import { heapProblem } from './toolchain-heap.js';
 import { loadImage } from '@julclang/joust-runtime/load';
 
 let loading;
@@ -68,50 +69,12 @@ export function engineLimits(env = process.env, overrides = {}) {
   return out;
 }
 
-/**
- * The Node flags this process passes to its workers (execArgv, NODE_OPTIONS) that set the old generation's limit, which
- * override resourceLimits.maxOldGenerationSizeMb: --max-old-space-size and --max-heap-size, in either spelling. (A
- * young-generation flag such as --max-semi-space-size does not: #80 review F5.)
- */
-export function inheritedHeapFlags(execArgv = process.execArgv, nodeOptions = process.env.NODE_OPTIONS ?? '') {
-  const flag = /^--max[-_]old[-_]space[-_]size(=|$)|^--max[-_]heap[-_]size(=|$)/;
-  return [...execArgv, ...nodeOptions.split(/\s+/)].filter((a) => flag.test(a));
-}
+/** The engine host's script; replaced by tests only (setEngineHostForTests). */
+let HOST = new URL('./toolchain-host.js', import.meta.url);
 
-/** How much the probe worker's old generation differs from the build worker's (see heapProblem). */
-export const HEAP_PROBE_DELTA_MB = 64;
-
-/**
- * Why the build worker's old generation is not the configured `memoryMb`, or null (#80 review C2, F5). Measured, not
- * parsed: the build worker (old generation memoryMb) and a probe worker (memoryMb + HEAP_PROBE_DELTA_MB) each report
- * V8's heap_size_limit. When resourceLimits holds, the two differ by exactly the delta, whatever the young generation
- * (a --max-semi-space-size changes both alike); when an inherited flag sets the old generation, both report the same
- * limit. One exception: an inherited --max-old-space-size equal to memoryMb sets the very limit configured.
- */
-export function heapProblem(heapLimitMb, probeLimitMb, memoryMb, flags = inheritedHeapFlags()) {
-  if (Math.abs(probeLimitMb - heapLimitMb - HEAP_PROBE_DELTA_MB) <= 1) return null;
-  const old = flags.map((f) => /^--max[-_]old[-_]space[-_]size=([0-9]+)$/.exec(f)).filter(Boolean).map((m) => Number(m[1]));
-  if (old.length && old.every((v) => v === memoryMb) && flags.length === old.length) return null;
-  const value = old.length ? old[old.length - 1] : null;
-  const fix = value !== null && value >= 256 && value <= 65536 && flags.length === old.length
-    ? `remove the flag, or set JOUST_ENGINE_MEMORY_MB=${value}` : 'remove the flag';
-  return `the toolchain engine's worker does not have the configured heap (JOUST_ENGINE_MEMORY_MB=${memoryMb}): its old`
-    + ` generation is set elsewhere (heap limit ${Math.round(heapLimitMb)} MB)`
-    + (flags.length ? `, by the inherited Node flag ${flags.join(' ')} (execArgv or NODE_OPTIONS); ${fix}` : '');
-}
-
-/** The heap_size_limit, in MB, of a worker whose old generation is `oldMb` (a probe: it reports and exits). */
-function probeHeapLimit(oldMb) {
-  return new Promise((resolve, reject) => {
-    const w = new Worker("require('node:worker_threads').parentPort.postMessage(require('node:v8').getHeapStatistics().heap_size_limit / 1048576)",
-      { eval: true, resourceLimits: { maxOldGenerationSizeMb: oldMb } });
-    w.unref();
-    w.once('message', (v) => {
-      resolve(v);
-      w.terminate();
-    });
-    w.once('error', reject);
-  });
+/** For tests: the engine host script (a module URL) the next workers start, or null for JOUST's own. */
+export function setEngineHostForTests(url) {
+  HOST = url ?? new URL('./toolchain-host.js', import.meta.url);
 }
 
 let current = null;
@@ -124,19 +87,32 @@ export function liveWorkers() {
   return live.size;
 }
 
-/** A worker with these limits; its builds; what ends them. */
+/**
+ * A worker with these limits, in an engine host process of its own (#80 review C7, C8): forked with no Node options
+ * (execArgv empty, NODE_OPTIONS removed), so no inherited --max-old-space-size or preload reaches it, and the worker's
+ * resourceLimits are what V8 applies. The host measures them before any build (toolchain-heap.js); the startup timer
+ * runs until that measurement has settled (#80 review C10). Its builds; what ends them.
+ */
 function spawn(limits) {
   const pending = new Map();
-  const worker = new Worker(new URL('./toolchain-worker.js', import.meta.url),
-    { resourceLimits: { stackSizeMb: limits.stackMb, maxOldGenerationSizeMb: limits.memoryMb } });
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+  const child = fork(HOST, [JSON.stringify(limits)], { execArgv: [], env, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+  const worker = {
+    postMessage: (m) => child.send(m),
+    ref: () => { child.ref(); child.channel?.ref(); },
+    unref: () => { child.unref(); child.channel?.unref(); },
+    terminate: () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); },
+  };
   const w = { worker, pending, key: `${limits.stackMb}/${limits.memoryMb}`, dead: false, retiring: false };
-  live.add(worker);
-  worker.once('exit', () => live.delete(worker));
+  live.add(child);
+  child.once('exit', () => live.delete(child));
   const failAll = (e) => {
     if (w.dead) return;
     w.dead = true;
     if (current === w) current = null;
     clearTimeout(startup);
+    ready.reject(e);
     for (const p of pending.values()) {
       clearTimeout(p.timer);
       p.reject(e);
@@ -145,7 +121,7 @@ function spawn(limits) {
     worker.terminate();
   };
   w.failAll = failAll;
-  // The worker reports its effective heap limit first: a build never runs under another limit than the configured one.
+  // The host reports the measured heap first: a build never runs under another limit than the configured one.
   let ready;
   w.ready = new Promise((resolve, reject) => { ready = { resolve, reject }; });
   w.ready.catch(() => {});
@@ -153,19 +129,28 @@ function spawn(limits) {
     limits.timeoutS * 1000);
   startup.unref();
   worker.unref();
-  worker.on('message', (m) => {
+  let workerError = null;
+  child.on('message', (m) => {
     if (m.ready) {
       clearTimeout(startup);
-      probeHeapLimit(limits.memoryMb + HEAP_PROBE_DELTA_MB).then((probe) => {
-        const why = heapProblem(m.heapLimitMb, probe, limits.memoryMb);
-        if (why) {
-          ready.reject(new Error(why));
-          failAll(new Error(why));
-        } else ready.resolve();
-      }, (e) => {
-        ready.reject(e);
-        failAll(new Error(`the toolchain engine's heap probe failed: ${e?.message ?? e}`));
-      });
+      const why = heapProblem(m.heapLimitMb, m.upMb, m.downMb, limits.memoryMb);
+      if (why) failAll(new Error(why));
+      else ready.resolve();
+      return;
+    }
+    if (m.hostError) {
+      failAll(new Error(m.hostError));
+      return;
+    }
+    if (m.workerError) {
+      // Its heap limit reached (ERR_WORKER_OUT_OF_MEMORY) or any other failure: every pending build fails, never the process.
+      workerError = new Error(`the toolchain engine's worker failed: ${m.workerError.message}`
+        + (m.workerError.code === 'ERR_WORKER_OUT_OF_MEMORY' ? ` (JOUST_ENGINE_MEMORY_MB=${limits.memoryMb})` : ''));
+      failAll(workerError);
+      return;
+    }
+    if (m.workerExit !== undefined) {
+      failAll(new Error(`the toolchain engine's worker exited (code ${m.workerExit})`));
       return;
     }
     const p = pending.get(m.id);
@@ -181,10 +166,9 @@ function spawn(limits) {
     if (m.error) p.reject(new Error(m.error));
     else p.resolve(m.result);
   });
-  // Its heap limit reached (ERR_WORKER_OUT_OF_MEMORY) or any other failure: every pending build fails, never the process.
-  worker.on('error', (e) => failAll(new Error(`the toolchain engine's worker failed: ${e?.message ?? e}`
-    + (e?.code === 'ERR_WORKER_OUT_OF_MEMORY' ? ` (JOUST_ENGINE_MEMORY_MB=${limits.memoryMb})` : ''))));
-  worker.on('exit', (code) => failAll(new Error(`the toolchain engine's worker exited (code ${code})`)));
+  child.on('error', (e) => failAll(new Error(`the toolchain engine's host failed: ${e?.message ?? e}`)));
+  child.on('exit', (code, signal) => failAll(workerError
+    ?? new Error(`the toolchain engine's host exited (${signal ?? `code ${code}`}) before it answered`)));
   return w;
 }
 
