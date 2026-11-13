@@ -220,6 +220,19 @@ fix a `.jsc` deposit of tokens with unequal-length names would fail on chain whi
 | S5 (P3) deposits are unauthenticated | semantics §5.8, the reference | |
 | C5 (P3) the gate compared a constant | `collect @ max` compares the pot's next state; the composed sale includes it | `JscV2M2cGateTest` (same budgets) |
 
+## Round r3 (the r2 reviews of #90)
+
+Design and security approved round r2; Codex found C6, and design two P3s.
+
+| Finding | What changed | Evidence |
+|---|---|---|
+| C6 (P2) a valid Value memo of mixed-length policies | A Value that crosses as data (a memo, a read state's stored value) holds only the ledger's policies, lovelace's or 28 bytes, on every leg: `ValueAdapter.fromData` (both bodies), the read check (`check__Value` now calls it), both interpreters. Canonical CBOR orders map keys shorter first, which is the ledger's order only for such policies, so `#0000`/`#ff` could not come back in the order `fromWire` requires. No value `.jsc` builds has another policy (`Value.asset` takes a `Hash`). `fromWire` is unchanged, so the output verifier and every recorded script keep their hashes | Inbox five-way: policies `#0000`/`#ff`, a 29-byte and a 1-byte policy refused on all five legs; 53 hostile memos and 9 malformed read states; `ValueAdapterDifferentialTest` 3,693 cases (six more wires: both orders of `#0000`/`#ff`, 1-, 27-, 29- and 32-byte policies), 0 disagreements; `EngineFixtureScriptsTest` 19/19 |
+| F8 (P3) m0 groups not checked against the scripts | `EngineFixtureScriptsTest` also checks every m0 group: each deployed contract that takes no parameters has this head's script hash in the group's transactions (22 checked); a parameterized one (Stall, Shop, StakedVault, Treasury) has no hash before its parameters, so its m3 contract file is the check and CLAUDE.md says to record its m0 group with it | `[fixtures m0] 22 deployed contracts have this head's script hash` |
+| F9 (P3) fixtures as test inputs | `fixtures/` is an input of the toolchain tests, `fixtures/m3` of runtime-wasm's and `fixtures/m0` of examples/devkit's | a changed fixture file alone runs `:examples:devkit:test` again (checked) |
+| Security note for M4b | D9's gate text: M4b's strict decode of a `java:` read state decides field counts as well as tags | ADR-0018 D9 |
+
+Inbox.post now folds its slips once (its script, with the new check, was over the reference-script bound): 14,750 bytes.
+
 ## Tests run in round r2
 
 DevKit was started afresh for round r2 (a new chain), so the recordings below publish and register the verifiers where a

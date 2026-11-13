@@ -563,14 +563,16 @@ tests carry both legs on raw data (`JscV2M2HostileInputTest`).
 **M2c: read states and memos.** A `reads` parameter's state (another contract's datum) and, for `receives T`, each
 deposit's memo are checked inputs too (§2, step 3), by the same rules at `C.State` and `T`. A value stored in them (a
 record's `Value` field) is well formed when its data is a value's: no repeated token name, no zero quantity, no empty
-token map, policies in order (§5.4a's rules; any token order). The generated decoder of a memo decides every constructor
+token map, policies in order, each lovelace's (empty) or 28 bytes (§5.4a's rules; any token order; review r2, C6:
+data crosses as canonical CBOR, whose key order is the ledger's only for such policies). The generated decoder of a memo decides every constructor
 tag and field count on the data, as for addresses; the validator checks a read state's outer shape (its constructor and
 field count, ADR-0011 D2) and the checked-input rule its keys, maps, addresses and stored values, used or not (review
 r1, C4). A read state's nested constructor tags (its `Bool`s, `Option`s and enums) are taken as its contract wrote them:
 a `.jsc` contract's validator refuses a malformed tag in any argument it stores, so a state it accepted is well formed
 (D5; `JscV2M2cHostileInputTest`). This holds for `.jsc` imports only and is decided again for `java:` contract imports
 (M4b). The interpreters check an arriving `Value` (a memo's, a read state's) by the decoder's domain too: every policy
-and token name at most 32 bytes, every quantity in the signed 128-bit range (review r1, C2).
+lovelace's or 28 bytes, every token name at most 32 bytes, every quantity in the signed 128-bit range (review r1, C2;
+r2, C6).
 
 A map that is out of order or has a duplicate key cannot be a map value (§1). Such an argument is refused here, so the
 body never sees one.
