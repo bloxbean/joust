@@ -4,8 +4,8 @@
 //     (L10: p95 at most 50 ms for the 1,889-line file);
 //   - the process's RSS with one analysis worker (L10: at most 600 MB), with two analysis workers, and with two analysis
 //     workers and a build worker after three Ledger builds (D4's largest configuration; L10: at most 1.2 GB).
-// Usage: node js/joust/test/lsp/measure-l10.mjs [--check]   (--check: fail past CI's looser bounds, 3x the latency bound
-// and the RSS bounds + 50%, since CI hardware differs; the strict figures are what the PR reports).
+// Usage: node js/joust/test/lsp/measure-l10.mjs [--check]   (--check: fail past CI's looser bounds, 250 ms p95 (about 3x
+// what CI's runner measured) and the RSS bounds + 50%, since CI hardware differs; the strict figures are what the PR reports).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -69,7 +69,9 @@ console.log(JSON.stringify(out, null, 2));
 
 const bound = (v, strict, loose) => (check ? v <= loose : true) && { v, strict, withinStrict: v <= strict };
 const results = [
-  ['p95 (1,889 lines)', bound(out.latency['Ledger1889.jsc'].p95, 50, 150)],
+  // CI's runner measured 86.7 ms (run 43350031856); its bound is set about 3x above that, to catch regressions without
+  // flaking on a noisy runner (#83 review F9). L10's strict 50 ms is for §1's reference machine.
+  ['p95 (1,889 lines)', bound(out.latency['Ledger1889.jsc'].p95, 50, 250)],
   ['RSS, one analysis worker (MB)', bound(out.rss.oneAnalysisWorker, 600, 900)],
   ['RSS, two analysis workers and a build worker (MB)', bound(out.rss.twoAnalysisWorkersAndABuildWorker, 1229, 1800)],
 ];

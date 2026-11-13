@@ -111,7 +111,7 @@ test('C6: Restart analysis selects again and loads replaced engine bytes', async
   }
 });
 
-test('C3: more compilers than worker slots: every analysis completes; a stop during startup is no failure', async () => {
+test('C3: more compilers than worker slots: every analysis completes, with no failure', async () => {
   const base = tmp();
   const engines = ['x', 'y', 'z'].map((t) => ({ file: join(stubVariant(join(base, t), t), ENGINE_JS), id: `id-${t}` }));
   const host = new EngineHost({ workerEntry: WORKER, maxWorkers: 2, analysisMs: 10000 });
@@ -119,13 +119,26 @@ test('C3: more compilers than worker slots: every analysis completes; a stop dur
     const rs = await Promise.all(engines.map((e) => host.analyze(`engine:${e.id}`, e, { file: 'S.jsc', source: 'jsc 2 SLOW WARN' })));
     for (const r of rs) assert.ok(r.model, JSON.stringify(r));
     assert.equal(host.stats.failures, 0);
-    // Restart analysis while a worker loads: the call is displaced (analysed again by the server), nothing quarantined.
-    const fresh = { file: join(stubVariant(join(base, 'w'), 'w'), ENGINE_JS), id: 'id-w' };
-    const p = host.analyze('engine:id-w', fresh, { file: 'S.jsc', source: 'jsc 2 WARN' });
-    await sleep(20);
+  } finally {
+    host.dispose();
+  }
+});
+
+test('C3, C16: Restart analysis while a worker is still loading gives exactly a displaced result, no failure', async () => {
+  const base = tmp();
+  // A stub that takes 800 ms to boot: the restart below lands while it loads, which the test establishes first.
+  const dir = stubVariant(join(base, 'slow'), 'slow');
+  writeFileSync(join(dir, ENGINE_JS), readFileSync(join(dir, ENGINE_JS), 'utf8').replace('setTimeout(() => globalThis.onJulcReady(api), 0);',
+    'setTimeout(() => globalThis.onJulcReady(api), 800);'));
+  const host = new EngineHost({ workerEntry: WORKER, analysisMs: 10000 });
+  try {
+    const fresh = { file: join(dir, ENGINE_JS), id: 'id-slow' };
+    const p = host.analyze('engine:id-slow', fresh, { file: 'S.jsc', source: 'jsc 2 WARN' });
+    const slot = () => host.slots.get('engine:id-slow');
+    for (let k = 0; k < 100 && !slot()?.worker; k++) await sleep(10);
+    assert.ok(slot()?.worker && !slot().worker.booted, 'the worker exists and is still loading');
     host.restart();
-    const r = await p;
-    assert.ok(r.model || (r.cancelled && r.displaced), JSON.stringify(r));
+    assert.deepEqual(await p, { cancelled: true, displaced: true });
     assert.equal(host.stats.failures, 0);
     assert.equal(host.quarantine.size, 0);
   } finally {

@@ -72,11 +72,24 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
     aged.sort((x, y) => y.t - x.t);
     let kept = 0;
     for (const { n, t } of aged) {
-      if (n === keep || inUse.has(n) || now - t < recentMs || kept < maxCopies) {
+      if (n === keep || inUse().has(n) || now - t < recentMs || kept < maxCopies) {
         kept++;
         continue;
       }
-      await fs.rm(join(root, n), { recursive: true, force: true }).catch(() => {});
+      // Review C12 on #83: the snapshot above may be stale (another put reused the copy, a worker started on it, in
+      // this window or another). Right before removing, the copy's use is read again, and the copy is first renamed
+      // aside, so a loader never sees it half deleted; a loader that still finds it gone selects again (host.js).
+      if (inUse().has(n) || Date.now() - (await usedAt(n)) < recentMs) {
+        kept++;
+        continue;
+      }
+      const aside = join(root, `.evicted-${n}-${process.pid}-${Date.now()}`);
+      try {
+        await fs.rename(join(root, n), aside);
+      } catch {
+        continue;
+      }
+      await fs.rm(aside, { recursive: true, force: true }).catch(() => {});
     }
   }
   async function install(id, js, wasm, jsHash, wasmHash) {
@@ -116,7 +129,7 @@ export function createStore(storageDir, { maxCopies = 3, recentMs = 15 * 60 * 10
       }
       const dir = await p;
       await fs.writeFile(join(dir, '.used'), String(Date.now()));
-      await evict(id, inUse);
+      await evict(id, typeof inUse === 'function' ? inUse : () => inUse);
       return { id, file: join(dir, ENGINE_JS) };
     },
     /** Marks a copy as used now (a worker started on it); nothing for an engine that is not in the store. */
@@ -208,17 +221,21 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
     if (!project) {
       return advisory((await aboveFolder(folder)) ? 'compiler found outside the workspace folder' : 'no npm project for this file', { folder });
     }
+    // Review C15 on #83: every selection past discovery carries its project root, the scope of its health (failures,
+    // "unavailable"), advisory ones included; the folder is the scope only where no project is discovered.
+    const root = join(folder, ...project.rel);
+    const at = { folder, root };
     if (project.kind === 'gradle') {
       const v = await gradleVersion(folder, project.rel);
-      return advisory(`Gradle project${v ? ` (plugin ${v})` : ''}: the bundled compiler, advisory`, { folder, gradlePlugin: v });
+      return advisory(`Gradle project${v ? ` (plugin ${v})` : ''}: the bundled compiler, advisory`, { ...at, gradlePlugin: v });
     }
     if (workspaceFileDir && !inside(folder, workspaceFileDir) && !allowedRoots.some((r) => inside(folder, r))) {
-      return advisory('this folder lies outside the .code-workspace file\'s directory: its compiler is not loaded', { folder });
+      return advisory('this folder lies outside the .code-workspace file\'s directory: its compiler is not loaded', at);
     }
     const pkg = await findPackage(folder, project.rel);
     if (!pkg.rel) {
       return advisory(pkg.outside || (await aboveFolder(folder)) ? 'compiler found outside the workspace folder'
-        : 'the project\'s @julclang/joust is not installed', { folder });
+        : 'the project\'s @julclang/joust is not installed', at);
     }
     const config = (await reader.readJson(folder, [...project.rel, 'joust.config.json'].join('/'))) ?? {};
     // Only `contracts` is taken from joust.config.json, under D4b's rules; never networks, URLs or out.
@@ -228,17 +245,18 @@ export function createSelector({ reader, fs = realFs, store, host, bundled, trus
     const wasm = await reader.read(folder, [...pkg.rel, 'engine', ENGINE_WASM].join('/'), { cap: WASM_CAP });
     if (js.error || wasm.error) {
       return advisory(js.error === 'outside' || wasm.error === 'outside' || js.error === 'refused' || wasm.error === 'refused'
-        ? 'compiler found outside the workspace folder' : 'the project\'s compiler engine is missing or unreadable', { folder });
+        ? 'compiler found outside the workspace folder' : 'the project\'s compiler engine is missing or unreadable', at);
     }
-    const copy = await store.put(js.bytes, wasm.bytes, host.inUse());
-    const root = join(folder, ...project.rel);
+    const copy = await store.put(js.bytes, wasm.bytes, () => host.inUse());
     const key = workerKey(copy);
     const engine = { file: copy.file, id: copy.id, source: 'project', packageVersion: pkg.version };
     const probe = await host.info(key, engine);
+    // The copy vanished while it loaded (another window evicted it): not cached, the next file selects again (C12).
+    if (probe.missing) throw new Error('the engine copy was removed while it loaded');
     const info = probe.info;
     if (!probe.ready || !info || info.protocol !== LANG_PROTOCOL || !Array.isArray(info.features) || !info.features.includes('analyze')) {
       host.stop(key);
-      return advisory(`the project's compiler (${pkg.version}) predates the language server's protocol: the bundled compiler runs`, { folder });
+      return advisory(`the project's compiler (${pkg.version}) predates the language server's protocol: the bundled compiler runs`, at);
     }
     engine.version = info.joust ?? pkg.version;
     const inContracts = !contracts.error && inside(realFile, contracts.path);

@@ -213,6 +213,7 @@ export class EngineHost {
       const w = await this.acquire(s);
       if (w.missing) return { ready: false, missing: true, error: 'the engine file is missing' };
       const r = await w.ready;
+      if (!r.ready && !existsSync(engine.file)) return { ready: false, missing: true, error: 'the engine file is missing' };
       if (!r.ready) return { ready: false, error: r.error };
       return { ready: true, info: r.info, version: r.version };
     } finally {
@@ -252,6 +253,11 @@ export class EngineHost {
         const ready = await w.ready;
         // A worker stopped while it loaded (Restart analysis, or evicted) is no engine fault: requeue, never quarantine.
         if (w.dead && (w.killedFor === 'stopped' || w.killedFor === 'cancelled')) return this.displaced();
+        // A store copy removed while the worker loaded it (another window evicted it) is no engine fault: select again.
+        if (!ready.ready && !existsSync(s.engine.file)) {
+          this.stopWorker(s);
+          return { missing: true };
+        }
         if (!ready.ready) return this.failed(h, s, source, { kind: 'crash', message: `the engine did not load: ${ready.error}` }, true);
         this.stats.calls++;
         const r = await w.call({ op: 'analyze', file, source }, this.opts.analysisMs, token);

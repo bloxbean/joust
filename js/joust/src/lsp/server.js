@@ -108,6 +108,14 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   let unavailableShown = false;
 
   const log = (m) => connection.console.log(m);
+  const missing = new Map();   // engine id -> consecutive missing-copy results (S10)
+
+  /** Everything selected again: every open document re-analysed (C14), outstanding fixes invalid (C4). */
+  function reselectAll(delay = 0) {
+    selector.invalidate();
+    fixes.clear();
+    for (const uri of state.keys()) schedule(uri, delay);
+  }
 
   connection.onInitialize(async (params) => {
     const io = params.initializationOptions ?? {};
@@ -203,8 +211,15 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const version = doc.version;
     const text = doc.getText();
     const gen = selector.generation;
+    // Review C13 on #83: each analysis has a sequence number in its lifetime; one that a newer analysis superseded
+    // while it selected never touches the state, the status or the newer analysis.
+    const seq = s.seq = (s.seq ?? 0) + 1;
     const sel = await selectionFor(uri);
-    if (state.get(uri) !== s) return;
+    if (state.get(uri) !== s || s.seq !== seq || documents.get(uri)?.version !== version) return;
+    if (selector.generation !== gen) {
+      schedule(uri, 0);
+      return;
+    }
     s.selection = sel;
     connection.sendNotification('joust/status', statusOf(uri, sel));
     const label = sourceLabel(sel);
@@ -222,11 +237,24 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // D4a: a result is published only if nothing it read changed since: the open lifetime (C2), the buffer's version and
     // the selection.
     const now = documents.get(uri);
-    if (state.get(uri) !== s || !now || now.version !== version || selector.generation !== gen) return;
-    if (r.missing) {
-      // The engine copy was evicted (by another window sharing the store): select again (S3), no failure.
-      selector.invalidate();
+    if (state.get(uri) !== s || !now || now.version !== version || s.seq !== seq) return;
+    // The selection changed while it ran (C14 on #83): analysed again under the new one, never just dropped.
+    if (selector.generation !== gen) {
       schedule(uri, 0);
+      return;
+    }
+    if (r.missing) {
+      // The engine copy was evicted (by another window sharing the store): select again for EVERY open document (C14),
+      // no failure; with a backoff, and after five misses in a row the file says so instead of retrying (S10).
+      const m = missing.get(sel.engine.id) ?? { count: 0 };
+      m.count++;
+      missing.set(sel.engine.id, m);
+      if (m.count > 5) {
+        publish(uri, version, [internalDiagnostic(`analysis stopped: the compiler's engine file is missing (${sel.engine.file}); reinstall it, then`
+          + ' Restart analysis', label)]);
+        return;
+      }
+      reselectAll(Math.min(250 * 2 ** (m.count - 1), 8000));
       return;
     }
     if (r.cancelled) {
@@ -263,6 +291,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       publish(uri, version, [internalDiagnostic(`analysis stopped: ${e.message}`, label)]);
       return;
     }
+    missing.delete(sel.engine.id);
     s.model = model;
     s.modelVersion = version;
     s.modelGen = gen;
@@ -381,7 +410,11 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (!current()) return { applied: false, reason: 'stale fix' };
     // D4a: applied by the client only through a versioned workspace/applyEdit (the extension's handleApplyEdit refuses
     // it if the document is closed or has another version).
-    const res = await connection.workspace.applyEdit({ label: fix.title, edit: { documentChanges: [{ textDocument: { uri: f.uri, version: f.version }, edits: fix.edits }] } });
+    // S9 on #83: the text each edit replaces goes along (joustExpected), and the extension's handler compares it with the
+    // document right before applying, which also closes a close-and-reopen at a reused version before the handler runs.
+    const replaced = fix.edits.map((e) => ({ uri: f.uri, range: e.range, text: doc.getText(e.range) }));
+    const res = await connection.workspace.applyEdit({ label: fix.title, edit: { documentChanges: [{ textDocument: { uri: f.uri, version: f.version },
+      edits: fix.edits }] }, joustExpected: replaced });
     return { applied: res.applied === true };
   });
 
@@ -393,11 +426,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   connection.onRequest('joust/restartAnalysis', () => {
     // C6: a restart also selects the compiler again, re-reading and re-checking the project's engine bytes.
-    selector.invalidate();
-    fixes.clear();
     host.restart();
+    missing.clear();
     unavailableShown = false;
-    for (const uri of state.keys()) schedule(uri, 0);
+    reselectAll();
     return { restarted: true };
   });
 
@@ -410,9 +442,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   });
 
   connection.onDidChangeWatchedFiles(() => {
-    selector?.invalidate();
-    fixes.clear();
-    for (const uri of state.keys()) schedule(uri, 0);
+    if (selector) reselectAll();
   });
 
   if (flags.testHooks) {

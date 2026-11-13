@@ -48,7 +48,9 @@ export function localPath(p) {
   if (typeof p !== 'string' || !p || p.includes('\0') || p.length > 4096) return null;
   if (/^[\\/]{2}/.test(p)) return null;
   if (process.platform === 'win32' ? !/^[A-Za-z]:[\\/]/.test(p) : !p.startsWith('/')) return null;
-  for (const seg of p.split(/[\\/]+/).slice(1)) if (seg && isDeviceName(seg)) return null;
+  // Device names matter in absolute paths on Windows only (S11 on #83: /home/u/aux is a plain directory elsewhere);
+  // repository-relative text refuses them everywhere (lexicalSegments).
+  if (process.platform === 'win32') for (const seg of p.split(/[\\/]+/).slice(1)) if (seg && isDeviceName(seg)) return null;
   return p;
 }
 

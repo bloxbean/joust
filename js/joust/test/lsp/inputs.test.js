@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, promises as fsp, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createReader } from '../../src/lsp/inputs.js';
+import { createReader, descriptorPath } from '../../src/lsp/inputs.js';
 import { inside, lexicalSegments, localPath } from '../../src/lsp/paths.js';
 import { tmp } from './client.js';
 
@@ -170,8 +170,78 @@ test('a directory swapped for a symlink to an outside directory after the check 
 });
 
 test('folder and document paths are checked as text before any filesystem call (S4)', () => {
-  for (const p of ['//host/share/repo', '\\\\host\\share', '\\\\?\\C:\\x', 'relative/x', '', '/repo/NUL/x', '/repo/contracts/com1.jsc']) {
+  for (const p of ['//host/share/repo', '\\\\host\\share', '\\\\?\\C:\\x', 'relative/x', '']) {
     assert.equal(localPath(p), null, JSON.stringify(p));
   }
-  if (process.platform !== 'win32') assert.equal(localPath('/repo/contracts/C.jsc'), '/repo/contracts/C.jsc');
+  if (process.platform !== 'win32') {
+    assert.equal(localPath('/repo/contracts/C.jsc'), '/repo/contracts/C.jsc');
+    // S11: device names are Windows' only in absolute paths: a POSIX directory may be called aux or con.
+    assert.equal(localPath('/Users/me/aux/repo'), '/Users/me/aux/repo');
+    assert.equal(localPath('/home/u/con/x.jsc'), '/home/u/con/x.jsc');
+  } else {
+    assert.equal(localPath('C:\\repo\\NUL\\x'), null);
+  }
+});
+
+/**
+ * Review C11 on #83: an attacker that times every swap: the file is a symlink to an outside file whenever the reader
+ * follows the path to open or stat it, and the inside file whenever the reader resolves the path's real path. Every
+ * filesystem result is real; only the timing is the attacker's.
+ */
+function adversary(folder, top, { anchored }) {
+  const link = () => {
+    rmSync(join(folder, 'engine.js'), { force: true });
+    symlinkSync(join(top, 'out', 'engine.js'), join(folder, 'engine.js'));
+  };
+  const restore = () => {
+    rmSync(join(folder, 'engine.js'), { force: true });
+    writeFileSync(join(folder, 'engine.js'), 'INSIDE');
+  };
+  let opened = false;
+  return {
+    lstat: (...a) => fsp.lstat(...a), readlink: (...a) => fsp.readlink(...a),
+    realpath: async (p) => {
+      if (opened) restore();               // the post-open re-resolution sees the inside file...
+      const r = await fsp.realpath(p);
+      if (opened) link();                  // ...and the stat after it follows the swapped link again
+      return r;
+    },
+    stat: (...a) => fsp.stat(...a),
+    open: async (p, flags) => {
+      link();                              // the open follows the link to the outside file
+      const fh = await fsp.open(p, flags);
+      opened = true;
+      return fh;
+    },
+    ...(anchored ? { descriptorPath } : {}),
+  };
+}
+
+function raceFolder() {
+  const top = tmp();
+  const folder = join(top, 'repo');
+  mkdirSync(folder);
+  mkdirSync(join(top, 'out'));
+  writeFileSync(join(folder, 'engine.js'), 'INSIDE');
+  writeFileSync(join(top, 'out', 'engine.js'), 'OUTSIDE ENGINE BYTES');
+  return { top, folder };
+}
+
+test('C11: swaps timed around the re-resolution and the stat are refused where the OS names the descriptor (Linux)', async (t) => {
+  if (process.platform !== 'linux') return t.skip('no descriptor path on this OS: the residual window is ADR-0021 §12 note 16');
+  const { top, folder } = raceFolder();
+  const r = await createReader(adversary(folder, top, { anchored: true })).read(folder, 'engine.js');
+  assert.equal(r.bytes, undefined, `read ${r.bytes}`);
+  assert.equal(r.error, 'outside');
+});
+
+test('C11: the reviewer\'s single swap between the re-resolution and the stat is refused on every OS', async () => {
+  const { top, folder } = raceFolder();
+  // The portable check (no descriptor path) runs before and after the read: one timed swap no longer suffices.
+  const fs = adversary(folder, top, { anchored: false });
+  let realpaths = 0;
+  const once = { ...fs, realpath: async (p) => (++realpaths <= 2 ? fs.realpath(p) : fsp.realpath(p)) };
+  const r = await createReader(once).read(folder, 'engine.js');
+  assert.equal(r.bytes, undefined, `read ${r.bytes}`);
+  assert.ok(['outside', 'changed'].includes(r.error), JSON.stringify(r));
 });
