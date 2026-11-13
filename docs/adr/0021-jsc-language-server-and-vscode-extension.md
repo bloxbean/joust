@@ -975,7 +975,12 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
     this note as the reason.
 17. **CI's latency bound.** L10's 50 ms holds on the reference machine. CI's runner is about three times slower (86.7 ms
     p95), so `measure-l10.mjs --check` fails there only past 250 ms p95, to catch a regression without flaking on a noisy
-    runner; RSS keeps its bounds plus 50%.
+    runner; RSS keeps its bounds plus 50%. *What that gate catches* (review F10 on #83): a regression of about 3x on CI's
+    hardware, such as a return to whole-file lowering (115 ms on the reference machine), or a change in the engine
+    boundary's cost of that order. *What it cannot catch*: a smaller regression that would break L10's 50 ms on the
+    reference machine; that is checked only by running `measure-l10.mjs` there, which each change to the analysis path
+    should do and report (as #83 does). A calibrated gate (a fixed workload timed in the same run, bounding the ratio)
+    is a possible follow-up.
 18. **Round r2 of #83, lifecycle** (C12–C15, S9–S11). A store copy is evicted only if, read again right before removal,
     no worker uses it and no window touched it within 15 minutes, and it is renamed aside before being deleted; a copy
     that vanishes while a worker loads it is "missing" (select again), never an engine failure. Each analysis has a
@@ -984,8 +989,13 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
     document, with a backoff (0.25 s doubling to 8 s), and after five misses in a row the file gets one diagnostic saying
     the engine file is missing. Health is per discovered project root, advisory projects (Gradle, npm on the bundled
     compiler) included; the folder is the scope only where nothing is discovered (Restricted Mode does not discover). Each
-    quick-fix edit carries the text it replaces, which the extension's handler compares with the document right before
-    applying. Windows device names are refused in absolute paths on Windows only (a POSIX `aux` directory is a directory);
+    quick-fix edit carries the SHA-256 of the whole document text it was validated on (#83 round r3, C19: the replaced
+    characters alone can match in a different text), which the extension's handler compares, synchronously, right
+    before applying. A worker loading a store copy holds a lease on it (a file in the copy) until the copy has loaded;
+    the collector claims a copy by an atomic rename, then reads its leases and its use from the claimed directory and
+    puts back any copy leased or freshly used (a lease cannot be taken on a claimed copy: its taker selects again). A
+    load failure counts as a missing copy from the failure itself (`MODULE_NOT_FOUND` or `ENOENT` naming the engine's
+    files), not from whether the path exists when the failure arrives (round r3, C18). Windows device names are refused in absolute paths on Windows only (a POSIX `aux` directory is a directory);
     repository-relative text refuses them everywhere.
 
 ## Revision history
@@ -1084,4 +1094,4 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
   Generated Java's on-demand lowering, the Build task's runtime and scope) and the M5a row (the quick fixes and M5a's
   weaker L6); §12 holds the implementation notes. Status stays Proposed; #83 merges after #76 and ADR-0018's
   acceptance. After #83's round r2 (design F9, security S9–S11, Codex C11–C17): L10 names its reference machine and
-  CI's figures; §12 notes 16–18.
+  CI's figures; §12 notes 16–18. After round r3 (design F10, Codex C18–C20): notes 17 and 18 extended.
