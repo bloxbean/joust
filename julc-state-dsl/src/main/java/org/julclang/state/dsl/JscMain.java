@@ -303,7 +303,10 @@ public final class JscMain {
      * Review r3 S5: a file migrated in place is a plain file of the sources: no symbolic link (JSC1109), no hard link
      * shared with another path, and no link on its path under the source directory (its real path lies under the source
      * directory's, and no directory between them is a link), nor anywhere on its path below {@code workingDir} (issue
-     * #75).
+     * #75), found by identity and checked on the physical path (#80 review C1, F1, S2); a path with {@code ..} is refused.
+     * Limits: a link above the working directory is the user's file system and allowed; on Windows a directory junction
+     * below the working directory is refused (its real path differs), but one outside it, and hard links (no
+     * {@code unix:nlink}), are not seen.
      */
     static void inPlaceProblem(Path f, Path src, boolean fileArgument, Path workingDir) throws IOException {
         if (Files.isSymbolicLink(f)) {
@@ -318,6 +321,14 @@ public final class JscMain {
             }
         } catch (UnsupportedOperationException | IllegalArgumentException e) {
             // No unix attributes (Windows): the real-path rule below still applies.
+        }
+        // #80 review C1, S2: never a path with '..': the file system resolves it after the link before it (src/.. is the
+        // link's target's parent), while normalize() drops both, so a link would vanish from the checks below.
+        for (Path part : f) {
+            if (part.toString().equals("..")) {
+                throw new JscException(1, 1, "JSC1109", "the path " + f + " contains '..': migrate --in-place takes a path without it,"
+                        + " so no link on the way can be skipped; give the path as it is");
+            }
         }
         Path root = src.toAbsolutePath().normalize();
         Path abs = f.toAbsolutePath().normalize();
@@ -335,12 +346,31 @@ public final class JscMain {
         }
         // Issue #75 (security S8): above the source directory too, every directory below the working directory (src in
         // src/lib/Points.jsc, linked to ../sharedsrc, say). Links at or above the working directory (macOS's /tmp and
-        // /var, a linked home) are the user's file system, not a shared source, and are not refused.
-        Path cwd = workingDir.toAbsolutePath().normalize();
-        for (Path p = abs.getParent(); p != null && p.startsWith(cwd) && !p.equals(cwd); p = p.getParent()) {
-            if (Files.isSymbolicLink(p)) {
-                throw new JscException(1, 1, "JSC1109", "the directory " + cwd.relativize(p) + " is a symbolic link: migrate --in-place"
-                        + " never replaces a file through a link; migrate the link's target in its own project");
+        // /var, a linked home) are the user's file system, not a shared source, and are not refused. #80 review C1, F1,
+        // S2: the working directory is found among the file's ancestors by identity, not by spelling (a path given as
+        // /tmp/… while the JVM's working directory is /private/tmp/…), and each directory below it is checked on the
+        // physical path: a symbolic link, or any directory whose real path is not itself (a Windows junction, which
+        // Files.isSymbolicLink does not see), is refused. ('..' was refused above: it is resolved after the link before it.)
+        Path cwdReal = workingDir.toRealPath();
+        var ancestors = new ArrayList<Path>();
+        for (Path p = abs.getParent(); p != null; p = p.getParent()) ancestors.add(0, p);
+        Path anchor = null;
+        for (Path p : ancestors) {
+            if (Files.isSameFile(p, cwdReal)) {
+                anchor = p;
+                break;
+            }
+        }
+        if (anchor != null) {
+            Path physical = cwdReal;
+            for (Path name : anchor.relativize(abs.getParent())) {
+                if (name.toString().isEmpty()) continue;
+                physical = physical.resolve(name);
+                if (Files.isSymbolicLink(physical) || !physical.toRealPath().equals(physical)) {
+                    throw new JscException(1, 1, "JSC1109", "the directory " + cwdReal.relativize(physical) + " is a symbolic link (or another"
+                            + " kind of link): migrate --in-place never replaces a file through a link; migrate the link's target in its"
+                            + " own project");
+                }
             }
         }
         if (!f.toRealPath().startsWith(src.toRealPath())) {

@@ -569,6 +569,51 @@ class MigrateTest {
         assertFalse(Files.exists(shared.resolve("Points.jsc.v1")));
     }
 
+    /**
+     * #80 review C1, F1, S2: the working directory is found among the file's ancestors by identity, so a path spelled
+     * through an aliasing link (macOS's /tmp for /private/tmp) cannot skip the check; and a path with '..' is refused,
+     * since '..' after a link leaves the link's target. Both end to end: the shared source and its backup are untouched.
+     */
+    @Test
+    void r2_inPlace_aliasedPathsAndDotDot_neverSkipALink(@TempDir Path tmp) throws Exception {
+        Path base = tmp.toRealPath();
+        Path proj = Files.createDirectories(base.resolve("real/proj"));
+        Path shared = Files.createDirectories(base.resolve("real/sharedsrc/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        Files.createSymbolicLink(proj.resolve("src"), Path.of("../sharedsrc"));
+        Files.createSymbolicLink(base.resolve("alias"), base.resolve("real"));
+        // (a) The file through the alias, the working directory physical (as the JVM's user.dir is), and the reverse.
+        Path aliased = base.resolve("alias/proj/src/lib/Points.jsc");
+        for (Path cwd : List.of(proj, base.resolve("alias/proj"))) {
+            var e = assertThrows(JscException.class, () -> JscMain.inPlaceProblem(aliased, aliased.getParent(), true, cwd));
+            assertEquals("JSC1109", e.code);
+            assertTrue(e.getMessage().contains("the directory src is a symbolic link"), e.getMessage());
+        }
+        String err = stderr(() -> assertEquals(1, JscMain.migrate(aliased, base.resolve("out"), true, proj)));
+        assertTrue(err.contains("error[JSC1109]") && err.contains("the directory src is a symbolic link"), err);
+        assertTrue(Files.readString(shared.resolve("Points.jsc")).startsWith("package"));
+        assertFalse(Files.exists(shared.resolve("Points.jsc.v1")));
+        // ...while a plain directory reached through the alias is fine: the alias is above the working directory.
+        Path plain = Files.createDirectories(proj.resolve("plain/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), plain.resolve("Points.jsc"));
+        JscMain.inPlaceProblem(base.resolve("alias/proj/plain/lib/Points.jsc"), base.resolve("alias/proj/plain/lib"), true, proj);
+
+        // (b) '..' through a link (Codex's repro): project/src -> ../shared/child, the file given as src/../Points.jsc.
+        Path project = Files.createDirectories(base.resolve("project"));
+        Path child = Files.createDirectories(base.resolve("shared/child"));
+        Files.copy(DSL.resolve("Points.jsc"), base.resolve("shared/Points.jsc"));
+        Files.createSymbolicLink(project.resolve("src"), Path.of("../shared/child"));
+        Path dotted = project.resolve("src/../Points.jsc");
+        assertTrue(Files.exists(dotted), "the file system resolves it to shared/Points.jsc");
+        var e = assertThrows(JscException.class, () -> JscMain.inPlaceProblem(dotted, dotted.getParent(), true, project));
+        assertTrue(e.getMessage().contains("contains '..'"), e.getMessage());
+        err = stderr(() -> assertEquals(1, JscMain.migrate(dotted, project.resolve("out"), true, project)));
+        assertTrue(err.contains("error[JSC1109]") && err.contains("contains '..'"), err);
+        assertTrue(Files.readString(base.resolve("shared/Points.jsc")).startsWith("package"), "the shared source is untouched");
+        assertFalse(Files.exists(base.resolve("shared/Points.jsc.v1")), "and no backup is written beside it");
+        assertTrue(Files.isDirectory(child));
+    }
+
     @Test
     void r4F12_theMinusNote_reachesForwardWithinTheMember() {
         // N1 (design r3): the value block's error is found at its start, before the line starting with '-' that causes it.
