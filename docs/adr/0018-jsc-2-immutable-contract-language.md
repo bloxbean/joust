@@ -8,7 +8,7 @@ Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
 **Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76),
-and M4a (`.jsc` libraries, r15) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+and M4a (`.jsc` libraries, r16) implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
