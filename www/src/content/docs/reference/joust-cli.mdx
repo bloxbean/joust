@@ -94,8 +94,9 @@ a transaction it checks these phase-1 rules (each refusal names the node's error
   a mint policy, a script withdrawal or certificate) has its script, witnessed or referenced; native scripts are
   evaluated; each Plutus purpose has a redeemer and no redeemer is extra; a Plutus-locked input's datum hash has its
   datum (a key-locked output with a datum hash needs none), and a witness datum is either needed or named by an output
-  or a reference input;
-- certificates: a stake registration (once, paying the key deposit) and a deregistration (when registered, refunding it);
+  (the collateral return included) or a reference input;
+- certificates: a stake registration (once, paying `key_deposit`) and a deregistration (when registered, refunding the
+  deposit held); a certificate that states another amount is refused;
 - with Plutus scripts: the collateral is key-locked, at most `max_collateral_inputs`, ADA only unless returned, at least
   `collateral_percent` of the fee, and matches `total_collateral` when it is declared; the script integrity hash
   matches; the declared units are within the per-transaction limit;

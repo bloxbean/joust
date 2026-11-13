@@ -187,7 +187,54 @@ public final class Toolchain {
      */
     record Discovery(java.util.Set<String> classes, java.util.Set<String> packages, List<String> libraryErrors) {}
 
-    static Discovery referencedClasses(Map<String, String> javaFiles, Map<String, String> javaLibrarySources) {
+    /**
+     * Review r5 (design, on S10; security's note): the discovery over the offered library sources, retried without a
+     * source javac refuses, so that a broken or duplicate file no contract reaches does not fail the build; when the
+     * contracts do need it, its errors are reported, each with the offered path (a joust-lib/ path, not only the file's
+     * simple name). {@code owned}: the build's own sources (hand-written, and lowered from the project's .jsc), whose
+     * packages are the project's (Codex C28: never a package library's).
+     */
+    static Discovery discover(Map<String, String> javaFiles, Map<String, String> javaLibrarySources, java.util.Set<String> owned) {
+        // A source in a package of JOUST, JuLC, CCL or the JDK is never a usable library (the certifier refuses it): kept out
+        // of discovery, where it would take precedence over the real class (a duplicate org.julclang.state.api.Require).
+        var offered = new LinkedHashMap<String, String>();
+        javaLibrarySources.forEach((path, text) -> { if (!reservedName(path.replace('/', '.'))) offered.put(path, text); });
+        Discovery first = null;
+        for (int attempt = 0; attempt < 4; attempt++) {
+            Discovery d = referencedClasses(javaFiles, offered, owned);
+            if (first == null) first = d;
+            if (d.libraryErrors().isEmpty()) return d;
+            var bad = new java.util.TreeSet<String>();
+            for (String e : d.libraryErrors()) bad.addAll(offeredPaths(e, offered.keySet()));
+            if (bad.isEmpty()) break;
+            bad.forEach(offered::remove);
+        }
+        var errors = new ArrayList<String>();
+        for (String e : first.libraryErrors()) {
+            var paths = offeredPaths(e, javaLibrarySources.keySet());
+            errors.add(e + (paths.isEmpty() ? "" : " (offered as " + String.join(", ", paths.stream().map(x -> "joust-lib/" + x).toList()) + ")"));
+        }
+        return new Discovery(first.classes(), first.packages(), errors);
+    }
+
+    /** A name in a package of the JDK, cardano-client-lib, JuLC or JOUST (as {@code JavaLibraryCertifier}'s rule). */
+    static boolean reservedName(String name) {
+        for (String p : List.of("java.", "javax.", "jdk.", "sun.", "com.sun.", "com.bloxbean.", "org.julclang.")) if (name.startsWith(p)) return true;
+        return false;
+    }
+
+    /** The offered paths a javac error names by file (javac names a library unit by its simple file name). */
+    static java.util.Set<String> offeredPaths(String error, java.util.Set<String> paths) {
+        var out = new java.util.TreeSet<String>();
+        int colon = error.indexOf(':');
+        String file = colon < 0 ? "" : error.substring(0, colon);
+        if (file.isEmpty()) return out;
+        String simple = file.substring(file.lastIndexOf('/') + 1);
+        for (String p : paths) if (p.equals(file) || p.endsWith("/" + file) || p.equals(simple) || p.endsWith("/" + simple)) out.add(p);
+        return out;
+    }
+
+    static Discovery referencedClasses(Map<String, String> javaFiles, Map<String, String> javaLibrarySources, java.util.Set<String> owned) {
         var roots = new ArrayList<JavacFrontend.Unit>();
         javaFiles.forEach((name, text) -> roots.add(new JavacFrontend.Unit(text, java.nio.file.Path.of(name))));
         var pool = new ArrayList<JavacFrontend.Unit>();
@@ -207,7 +254,9 @@ public final class Toolchain {
             }
             if (a.trees() == null) return new Discovery(out, packages, errors);
             for (var unit : a.roots()) {
-                if (unit.getPackageName() != null) packages.add(unit.getPackageName().toString());
+                String unitName = unit.getSourceFile().getName().replace('\\', '/');
+                boolean own = owned.stream().anyMatch(n -> unitName.equals(n) || unitName.endsWith("/" + n));
+                if (own && unit.getPackageName() != null) packages.add(unit.getPackageName().toString());
                 new com.sun.source.util.TreePathScanner<Void, Void>() {
                     void note() {
                         javax.lang.model.element.Element e = a.trees().getElement(getCurrentPath());
@@ -366,13 +415,16 @@ public final class Toolchain {
                 projectPackages.add(slash < 0 ? "" : g.javaFile().substring(0, slash).replace('/', '.'));
             }
             if (files.keySet().stream().anyMatch(n -> n.endsWith(".java"))) {
-                Discovery found = referencedClasses(sources, javaLibrarySources);
+                var owned = new java.util.TreeSet<String>(sources.keySet());
+                owned.removeAll(packageLibraryPaths);   // a package's .jsc library is attributed, but its package is not the project's
+                Discovery found = discover(sources, javaLibrarySources, owned);
                 projectPackages.addAll(found.packages());
                 for (String e : found.libraryErrors()) {
                     diagnostics.add(new Diagnostic(Severity.ERROR, "a Java library source offered to the build (an npm package's joust-lib/)"
                             + " does not compile, so the build cannot tell which libraries its Java contracts use: " + e, null, -1, "toolchain"));
                 }
                 for (String fqcn : found.classes()) {
+                    if (reservedName(fqcn)) continue;   // the platform and JOUST's API, never a package's library
                     var lib = javaLibraries.describe(fqcn);
                     if (lib != null && lib.sources().isEmpty() && !lib.problems().isEmpty()) {
                         // Security S10 (r4): the contract uses this library, but the offered sources do not compile: say so,

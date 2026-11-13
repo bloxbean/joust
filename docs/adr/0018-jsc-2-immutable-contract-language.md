@@ -1414,3 +1414,8 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   needed or named by an output or reference input (`NotAllowedSupplementalDatums`). On npm, a library may not declare a
   class in a package the project's sources declare (a no-op `app.Require` would replace the real one for code naming it
   unqualified), and a used library whose offered sources do not compile is reported with the failing file.
+  *Review round r5 (Codex C26–C28):* a registration pays `key_deposit` and a deregistration refunds the deposit held,
+  whatever the certificate states (another stated amount is refused); the collateral return may name a supplemental
+  datum; the project's packages are those of its own sources, never a package library's. Discovery leaves out
+  reserved-package sources and retries without an offered source javac refuses, so a broken or duplicate file no contract
+  reaches no longer fails a build; one that is reached is named by its `joust-lib/` path.

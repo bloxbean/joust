@@ -152,6 +152,51 @@ class JscV2ToolchainTest {
                 broken.diagnostics().toString());
     }
 
+    /**
+     * Review r5 (Codex C28): a package's .jsc library is compiled with the project, but its package is not the project's:
+     * Codex's npm library acme.fees (wrapping the Java library acme.fees.L) builds with and without an unrelated project
+     * Java file. And (design, on S10) a broken or duplicate package source no contract reaches no longer fails a build with
+     * Java contracts; one a used library needs is reported with its offered path (security's note).
+     */
+    @Test
+    void packageOwnership_andUnreachedBadSources() throws Exception {
+        String javaLib = "package acme.fees;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f(BigInteger n) { return n; }\n}\n";
+        String fees = "jsc 2\nlibrary acme.fees\nimport { f } from \"java:acme.fees.L\"\nfn fee(n: Int): Int = f(n)\n";
+        String c = "jsc 2\npackage app\nimport { fee } from \"@acme/fees/fees.jsc\"\ncontract C {\n  state { n: Int }\n  init() { return { n: fee(1) } }\n}\n";
+        var plain = Toolchain.build(Map.of("app/C.jsc", c), Map.of(), Map.of("acme/fees/L.java", javaLib), Map.of("@acme/fees/fees.jsc", fees));
+        assertTrue(plain.ok(), plain.diagnostics().toString());
+        var extra = Toolchain.build(Map.of("app/C.jsc", c, "app/Extra.java", "package app; public class Extra {}\n"), Map.of(),
+                Map.of("acme/fees/L.java", javaLib), Map.of("@acme/fees/fees.jsc", fees));
+        assertTrue(extra.ok(), extra.diagnostics().toString());
+        assertEquals(plain.contracts().get(0).scriptHash(), extra.contracts().get(0).scriptHash());
+
+        // A Java contract that uses no package library, beside a broken source and a duplicate of JOUST's Require.
+        String counter = Files.readString(Path.of("../js/create-joust/template/contracts/app/Counter.java"));
+        var unreached = Toolchain.build(Map.of("app/Counter.java", counter), Map.of(), Map.of(
+                "other/Broken.java", "package other;\npublic class Broken { int x = ; }\n",
+                "org/julclang/state/api/Require.java", "package org.julclang.state.api;\npublic final class Require {\n"
+                        + "    public static void that(boolean ok, String message) { }\n}\n"));
+        assertTrue(unreached.ok(), unreached.diagnostics().toString());
+        assertEquals(List.of(), unreached.libraries());
+        // A used library beside the duplicate: the duplicate is in no closure, never compiled, and the build is the control's.
+        String lib = "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n";
+        String uses = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport lib.L;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(L.f(), ctx.caller());");
+        String dupRequire = "package org.julclang.state.api;\npublic final class Require {\n    public static void that(boolean ok, String message) { }\n}\n";
+        var control = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib));
+        var dup = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib, "org/julclang/state/api/Require.java", dupRequire));
+        assertTrue(dup.ok(), dup.diagnostics().toString());
+        assertEquals(control.contracts().get(0).scriptHash(), dup.contracts().get(0).scriptHash());
+        // When the offered set does not compile, the used library is refused, naming the files by their offered paths.
+        var broken = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib,
+                "org/julclang/state/api/Require.java", dupRequire, "other/Broken.java", "package other;\npublic class Broken { int x = ; }\n"));
+        assertFalse(broken.ok());
+        assertTrue(broken.diagnostics().stream().anyMatch(d -> d.message().contains("other/Broken.java:2")
+                && d.message().contains("org/julclang/state/api/Require.java")), broken.diagnostics().toString());
+    }
+
     /** Review r2 (#82 S6): --accept-abi accepts the ABI manifest only; only --accept-lock writes joust.lock. */
     @Test
     void acceptingTheAbi_neverWritesTheLock(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
