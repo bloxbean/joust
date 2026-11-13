@@ -54,6 +54,12 @@ contract Wards(maxDatumBytes = 512, assetSlots = 4) {
     }
   }
 
+  // Ends the instance paying the owner its lovelace and sending nothing (review r2 F13): when it holds native assets, the
+  // call succeeds and its transaction fails (a destroy must leave nothing: a transaction-level rule, semantics §2).
+  destroy retire() only owner {
+    pay(owner, balance)
+  }
+
   view beneficiaryKey(): Option<Key> = paymentKey(beneficiary)
   view guardHash(): Bytes = match guard {
     KeyCred { key } => key

@@ -59,7 +59,13 @@ names of unequal length failed on-chain while every other leg accepted it, **for
 I31 compared the native `accepted` with the raw `assetsIn`). Now the validator converts the offer once
 (`ValueAdapter.fromWire`: any token order; a repeated name, a zero quantity, an empty token map or policies out of order
 refused) and hands the method, and I31, the canonical value; the transition program converts its `Funds` (offered and
-held) the same way. Every asset-aware Java validator changes with it: examples/dex 12,104 → 12,229 B. The five-way
+held) the same way. Every asset-aware Java validator changes with it (examples/dex 12,104 → 12,229 B; ADR-0007 §8, its
+r3 amendment, records the change, the sizes of dex, market, locker and fees and the cost per call: review r2 F10), and so
+did the ADR-0015 oracle: `fixtures/m0/{dex,market,fees,locker}` and `fixtures/m3/{dex,fees,locker}` (with the Dex, Pot,
+Locker and Safes contracts) are re-recorded on DevKit at this head (review r2 F11). Deposits (ADR-0011) keep the old
+rule: the output verifier wants a deposit's value in the ledger's order, so a deposit of two names of unequal length is
+refused (fails closed; no example deposits such a value). Fixing it changes the shared verifier and every sending
+contract's script: issue #85. The five-way
 suite's transition leg now gets its funds as the runtime writes them, and Coins/Wards carry the reviewer's vectors
 (`probe`, `pair` and `close` with `00ff`/`01`).
 
@@ -110,8 +116,10 @@ of 25 digits and the pool holding another asset):
 | removeLiquidity @ max | 381,421,977 | 399,234,068 | +4.7% | 1,187,204 | 1,265,414 (+6.6%) | 3.99% / 9.04% |
 | close @ max | 243,166,307 | 260,308,266 | +7.0% | 819,599 | 891,667 (+8.8%) | 2.60% / 6.37% |
 
-Since review r1 both columns include the offered assets' conversion (`fromWire`, about 8.5M CPU on a call that accepts:
-Java's addLiquidity 318.9M → 327.4M). "@ max" holds quantities no output may hold (2^64 − 1 at most), so that run turns
+Since review r1 both columns include the offered assets' conversion (`fromWire`): on the Java example it costs
+2.6–12.8M CPU per transaction (up to +5.3%) and up to +5.6% memory, and calls that accept nothing pay too (close +2.6M,
+swapAdaForToken +5.9M), since the code is in the script whatever the call. ADR-0007 §8 has the per-call deltas for dex,
+market, locker and fees and the new script sizes (review r2 F10). "@ max" holds quantities no output may hold (2^64 − 1 at most), so that run turns
 off the harness's ledger rules (`StateHarness.ledgerRules(false)`): it measures the scripts' worst case.
 
 All within +15% and far below the per-transaction maximum (10e9 CPU, 14e6 memory). What the port adds: the generated
@@ -127,10 +135,10 @@ and minted, less the payouts and sends; each send an output claimed in the regis
 
 | Contract | Calls | Refused | Validator runs | Transaction-level | Modifier refusals | Mutants rejected | Attacks rejected | What they cover |
 |---|---|---|---|---|---|---|---|---|
-| Coins (values, effects) | 57 | 33 | 57 | 4 | 1 | 62 | 154 | accepts in two parts, and an accepted sum of 2^127 (`domain:accept`); receipts minted and sent; burns and mints netted; `covers`; `Value.asset` at 2^127, `scale` overflow, `Value -` negating −2^127 and reaching −2^127 − 2 (`probe`); a 33-byte token name; reserved names of the own policy refused (0x4F, 32 bytes) and allowed (0x4B); lovelace offered as a native asset; **the generated `#mint:` check** (`forge`: quantities 0 and −1 for mint and burn, names of 33 and 32 bytes and 29 with 0x4F/0x49, a net mint above 2^127 − 1 and below −2^127); **`#send:`'s reserved-name branch** (`give`: the instance's id, an owned object's name, a negative quantity); an offer of names of unequal length (C1: `probe`, and held by `close`); transaction-level: a burn of what is not held, a send of more than is held, a net mint outside Int64, an accepted quantity above 2^64 − 1 |
-| Wards (addresses, credentials) | 47 | 22 | 43 | 1 | 1 | 39 | 140 | checked inputs: short payment credentials, a 29-byte staking hash, **pointers refused** (7,2,0; −1; 2^200; (0,−5,0)) in `init` and `rotate`; a match on a credential whose arms pay or send; **a send to the contract's own script refused** (F1); sends in a loop's branches; structural equality of addresses; `paymentKey`/`paymentScript`; Coins' `pair` (C1: two names of unequal length, accepted as built) and `edges` (`Value +` at ±2^127, `Value -` with −2^127, `Value.lovelace` out of range); transaction-level: a send of 5 of a token held once |
+| Coins (values, effects) | 59 | 34 | 59 | 4 | 1 | 62 | 154 | an `init` refusing the own script as beneficiary (the guard idiom, review r2 S6); accepts in two parts, and an accepted sum of 2^127 (`domain:accept`); receipts minted and sent; burns and mints netted; `covers`; `Value.asset` at 2^127, `scale` overflow, `Value -` negating −2^127 and reaching −2^127 − 2 (`probe`); a 33-byte token name; reserved names of the own policy refused (0x4F, 32 bytes) and allowed (0x4B); lovelace offered as a native asset; **the generated `#mint:` check** (`forge`: quantities 0 and −1 for mint and burn, names of 33 and 32 bytes and 29 with 0x4F/0x49, a net mint above 2^127 − 1 and below −2^127); **`#send:`'s reserved-name branch** (`give`: the instance's id, an owned object's name, a negative quantity); an offer of names of unequal length (C1: `probe`, and held by `close`); transaction-level: a burn of what is not held, a send of more than is held, a net mint outside Int64, an accepted quantity above 2^64 − 1 |
+| Wards (addresses, credentials) | 49 | 22 | 45 | 2 | 1 | 39 | 140 | checked inputs: short payment credentials, a 29-byte staking hash, **pointers refused** (7,2,0; −1; 2^200; (0,−5,0)) in `init` and `rotate`; a match on a credential whose arms pay or send; **a send to the contract's own script refused** (F1); sends in a loop's branches; structural equality of addresses; `paymentKey`/`paymentScript`; Coins' `pair` (C1: two names of unequal length, accepted as built) and `edges` (`Value +` at ±2^127, `Value -` with −2^127, `Value.lovelace` out of range); transaction-level: a send of 5 of a token held once, and `retire`, a destroy leaving 3 tokens (review r2 F13) |
 | Dex (the port) | 28 | 17 | 27 | 0 | 1 | 72 | 150 | both liquidity paths, both swaps with their slippage bounds, offers that differ from what is accepted, too-small deposits, a reserve without tokens (a zero divisor), a negative `tokenIn` (F2), close with and without dust |
-| **Total** | **132** | 72 | 127 | 5 | 3 | **173** | **444** | |
+| **Total** | **136** | 73 | 131 | 6 | 3 | **173** | **444** | |
 
 A transaction-level call (semantics §2, ADR-0018 D4 r15) is one every leg accepts and whose transaction is refused:
 `FourWay.transactionLevel` asserts both, and `StateHarness` refuses what the ledger would (an output quantity below zero
@@ -167,7 +175,8 @@ port's method refuses them itself, so its JVM leg and transition program agree w
 - **The instance's id is a reserved token name** (32 bytes): a fixture that named its receipts `funds.self` could never
   mint them. Coins names them `blake2b_224(funds.self)`, as dex names its LP tokens.
 - **One fixture over the 16 KB limit**: a contract exercising every M2a construct came to 16,643 B, above the 16 KB a
-  reference script may have, so it is two (Coins 13,179 B, Wards 12,053 B).
+  reference script may have, so it is two (Coins 13,179 B and Wards 12,053 B at the split; 14,706 and 13,945 B at
+this head, with the review rounds' methods: review r2 F14).
 - **`JscV2DepthTest.anErrorInTheFrontEnd_isJsc0005_notACrash`** depended on the JIT: a 96 KB thread ran out of stack on
   60 nested parentheses only while the parser was not yet compiled, so earlier tests could make it pass or fail. Review
   r1 (F8): it takes the M1-hardening branch's fix as is (`JscMain.run(args, FrontEnd)`, a front end that raises a real
@@ -201,7 +210,11 @@ port's method refuses them itself, so its JVM leg and transition program agree w
 6. **The checks in the method stop at the call** (review F1, S2): a call refuses what it can decide (now also a send to
    the contract's own script); what depends on the transaction or the instance's whole value is a transaction-level
    failure (semantics §2), stated and tested, not a generated coverage check: the method would need the held value in
-   every method that sends or burns, and the ledger refuses those transactions anyway.
+   every method that sends or burns, and the ledger refuses those transactions anyway. Of the five rules, three have
+   vectors (negative output, Word64/Int64, a destroy leaving assets); min-ADA per send and another spent script need a
+   transaction model with them (the testkit's `Ledger`; issue #86). Likewise a checked `Address` may be the contract's
+   own script (review r2 S6): the checked-input rule knows no policy (a method without `Funds` has none), so it stays a
+   documented guard idiom (semantics §5.1, the language reference), used by Coins' `init`, not a refusal.
 7. **Hostile `Address`/`Credential` data** (review F3, S3, C2): JuLC's strict decoding of a redeemer is what refuses it
    in the validator (early, with no trace), and a transition program decodes nothing; so the checked-input rule is
    decided on the data (`AddressAdapter`), tag- and arity-exact, and both legs are tested on raw data.
@@ -219,14 +232,13 @@ M2a reserves names in every contract, so these M1 sources are refused (the catal
 
 ## Tests run at this head
 
-At review r1's fixes (the round r2 head), JDK 25.0.2, Node 22, macOS arm64, Yaci DevKit up.
+At review r2's fixes (the round r3 head), JDK 25.0.2, Node 22, macOS arm64, Yaci DevKit up.
 
 | Command | Result |
 |---|---|
-| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL (228 tasks), none failed: julc-state-dsl 140, julc-state-toolchain 110 (`JscV2M2FourWayTest` 4, `JscV2M2GateTest` 3, `JscV2M2HostileInputTest` 2, `ValueAdapterDifferentialTest` 1), julc-state-api 10, julc-state-processor 71, julc-state-testkit 6, julc-state-runtime 76, examples/dsl 74, examples/dex 6, fees 7, market 10, locker 7. `checkJscAbi`: `19 ABI manifest(s) agree with the processor's descriptions` |
-| `./gradlew :julc-state-toolchain:toolchainWasmTest :julc-state-runtime-wasm:runtimeWasm -PgraalvmHome=…/graalvm-25.3.4.1+1.1/Contents/Home` (images rebuilt) | BUILD SUCCESSFUL: `ALL SAME`; S2 in Wasm 2080/2080 identical to the JVM; 21 depth cases on a cold engine; S2b 43/43 |
+| `./gradlew build -PnoDevnet --continue` | BUILD SUCCESSFUL (228 tasks), none failed. `checkJscAbi`: `19 ABI manifest(s) agree with the processor's descriptions`. Five-way 136 calls (Coins 59, Wards 49, Dex 28); hostile inputs 132 cases; `ValueAdapterDifferentialTest` 3,216 cases, 0 differ; Dex 12,229 → 13,492 B (+10.3%) |
+| The oracle, re-recorded (review r2 F11): `./gradlew :examples:{dex,market,fees,locker}:test -PjoustFixtures` and `JOUST_RECORD=fixtures/m3 node --test --test-name-pattern='^(Locker\|Dex\|Fees):' test/examples.test.js` (js/joust-runtime, engines rebuilt and copied in) | m0: dex 6, market 9, fees 6, locker 9 transactions; m3: dex 6, fees 16, locker 5 calls; the Dex, Pot, Locker and Safes contracts' scripts and transition programs now the shipped ones (235 blobs only the old recordings used removed). Then, rerun: `FixturesTest` (201 transactions, 3,961 chain reads), `ReplayTest` 34, `EngineFixturesTest` (byte-identical on the JVM, dex 6, fees 16, locker 5 among them), `DescribedReplayTest` 2: all pass |
+| `./gradlew :julc-state-toolchain:toolchainWasmTest :julc-state-runtime-wasm:runtimeWasm -PgraalvmHome=…/graalvm-25.3.4.1+1.1/Contents/Home` (images rebuilt) | BUILD SUCCESSFUL: `ALL SAME`; S2 in Wasm 2084/2084; 21 depth cases on a cold engine; S2b 43/43 |
 | `npm test` in `js/jsc-interpreter` | 34/34 |
-| `npm test` in `js/joust` (with the engines just built) | 39/39 |
-| `npm test` in `tree-sitter-jsc` | 14/14 parses; the shared corpus agrees on every file |
-| DevKit: `:examples:dsl:test --tests '*DexDevnetPortTest*'` and `:examples:dex:test` | both pass: deploy, addLiquidity, swapAdaForToken, swapTokenForAda, removeLiquidity and close submitted, for the port and for the Java example (whose validator now converts the offer) |
-| DevKit: `:examples:market:test :examples:fees:test :examples:locker:test` (Java contracts with native assets, validators changed by C1) | all pass, devnet tests included (9, 5 and 9 transactions submitted) |
+| `npm test` in `js/joust`, with the engines copied into `js/joust/engine` and `js/joust-runtime/engine` | 39/39. (At round r2 the engines in those folders were older builds: copying them is a manual step, CI's `build.yml` does it; round r2's 39/39 ran on them.) |
+| DevKit | `DexDevnetPortTest` passes (deploy, addLiquidity, both swaps, removeLiquidity, close submitted); the re-recording runs above passed on DevKit: examples dex, market, fees, locker (JVM) and the npm Locker, Dex and Fees flows |

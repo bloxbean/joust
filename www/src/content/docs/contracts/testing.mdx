@@ -90,6 +90,16 @@ void increment_hugeNumberCannotOutgrowTheDatum() {
 The redeemers are the generated validator's records: `<Name>Validator.CreateInstance`, `BurnInstance`, and one per
 action or destroy (`Increment`, `Reset`, `Close`), with `Ctx` as their last field when the method declares it.
 
+**The ledger's value rules come first.** Before any script runs, `evaluate` refuses a transaction the ledger itself
+would refuse for its values: an output holding a negative quantity or more than 2^64 − 1 of anything, or a mint entry
+of zero or outside Int64. The verdict then has one entry, `LEDGER`, and no script result. This catches a method that
+sends or burns more than the instance holds: the value equation can still balance (the continuing output would hold a
+negative quantity), so the validator alone would accept it. A test that measures scripts at quantities no output may
+hold (a worst-case budget) can turn the check off with `h.ledgerRules(false)`; use it for that run only. The rest of
+the ledger (the minimum lovelace per output, fees, balance, conservation) is not modelled here: the testkit's `Ledger`
+(the full transaction model, used for keyed objects) checks those and refuses non-positive output quantities, but not
+yet the 2^64 − 1 and Int64 bounds. The two share no code yet (issue #86).
+
 ### Creating, acting, destroying
 
 | Method | Builds | Notes |

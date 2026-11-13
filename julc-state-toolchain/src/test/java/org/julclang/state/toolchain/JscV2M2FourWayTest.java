@@ -158,6 +158,11 @@ class JscV2M2FourWayTest {
         ok(f.check("init", null, List.of(ben), with(f, OWNER, 0, 0, none, none), OWNER));
         assertEquals("refused", f.check("init", null, List.of(new AddrV(keyCred(bytes(27, 0xB1)), Opt.NONE)), with(f, OWNER, 0, 0, none, none), OWNER, s0));
         assertEquals("input:beneficiary", f.lastRefusal);
+        // Review r2 S6: a checked address may be the contract's own script; Coins' init refuses one with the guard idiom.
+        assertEquals("refused", f.check("init", null, List.of(new AddrV(scriptCred(own), Opt.some(new StakeHash(keyCred(BEN))))),
+                with(f, OWNER, 0, 0, none, none), OWNER, s0));
+        assertTrue(f.lastRefusal.endsWith(":the beneficiary cannot be this contract's own script"), f.lastRefusal);
+        ok(f.check("init", null, List.of(new AddrV(scriptCred(fill(0x5C)), Opt.NONE)), with(f, OWNER, 0, 0, none, none), OWNER));
 
         // lodge: accept in two parts (the sum must equal exactly what is offered), mint receipts, send them to the caller.
         for (long n : List.of(1L, 4L, 7L)) ok(f.check("lodge", s0, List.of(Bytes.of(TOKEN_POLICY), TOKEN, n(n)), with(f, ANN, 0, 0, tokens(n), none), ANN));
@@ -367,6 +372,10 @@ class JscV2M2FourWayTest {
             assertEquals("domain:Value.lovelace", f.lastRefusal);
         }
 
+        // A destroy that leaves native assets (review r2 F13): every leg accepts retire, the validator's destroy equation
+        // refuses its transaction; with nothing held it is accepted everywhere.
+        ok(f.check("retire", s0, List.of(), f.funds(at(OWNER, 0, minAda), none, none), OWNER));
+        f.transactionLevel("retire", s0, List.of(), f.funds(at(OWNER, 0, 4_000_000 + minAda), none, tokens(3)), OWNER);
 
         // Views: std/address, a credential's hash, an address with a staking key.
         f.check("beneficiaryKey", s0, List.of(), null, null);

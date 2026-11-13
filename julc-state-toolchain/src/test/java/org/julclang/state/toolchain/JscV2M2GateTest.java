@@ -122,7 +122,8 @@ class JscV2M2GateTest {
             this.stateClass = Class.forName(pkg + ".Dex$" + state);
             var spec = (org.julclang.state.runtime.ContractSpec<Object>) Class.forName(pkg + ".DexClient").getField("SPEC").get(null);
             // "@ max" measures quantities of 25 digits, more than an output may hold (2^64 - 1): the scripts' worst case,
-            // not a transaction the ledger takes, so the harness's ledger rules are off here (review r1, S2).
+            // not a transaction the ledger takes. So the harness's ledger rules are off, and run() applies them itself to
+            // every other scenario (review r1 S2, r2 S7).
             this.h = StateHarness.of(spec).ledgerRules(false);
         }
 
@@ -175,7 +176,7 @@ class JscV2M2GateTest {
     record Run(String result, long cpu, long mem, StateHarness.Verdict verdict) {}
 
     @SuppressWarnings("unchecked")
-    static Run run(Impl impl, Call c) throws Exception {
+    static Run run(Impl impl, Call c, boolean saturated) throws Exception {
         var h = impl.h;
         Ctx ctx = new Ctx(c.caller(), c.received(), c.balance(), T0, T0.add(StateHarness.WINDOW_MS));
         boolean destroy = c.kind().equals("destroy");
@@ -221,12 +222,14 @@ class JscV2M2GateTest {
                     : destroy ? impl.construct("Validator$BurnInstance", List.of()) : null;
             tx = h.stepWith(held, redeemer, mintRedeemer, tr, next, c.caller(), ctx, null);
         }
+        // Only "@ max" may leave the ledger's ranges (review r2 S7): an ordinary scenario must be a transaction it takes.
+        if (!saturated) assertNull(StateHarness.ledgerProblem(tx), "Dex " + c.label() + ": the ledger would refuse it");
         var v = h.evaluate(tx);
         return new Run(result, cpu(v), mem(v), v);
     }
 
     static void compare(Call c, boolean saturated) throws Exception {
-        Run j = run(impl(true), c), p = run(impl(false), c);
+        Run j = run(impl(true), c, saturated), p = run(impl(false), c, saturated);
         assertTrue(j.verdict().accepted(), "Dex " + c.label() + " (Java):\n" + j.verdict());
         assertTrue(p.verdict().accepted(), "Dex " + c.label() + " (.jsc 2):\n" + p.verdict());
         assertEquals(j.result(), p.result(), "Dex " + c.label() + ": the port's JVM result differs from the Java example's");
