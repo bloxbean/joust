@@ -772,7 +772,7 @@ Numbered L… so they are not confused with the validator invariants I1–I55, A
 | L7 | Formatting is idempotent, keeps every comment, and leaves the script hash, ABI manifest and description unchanged (generated Java differs only in position comments) | D8 | formatter corpus tests (M5d) |
 | L8 | `publishDiagnostics` carries the document version, and the server never publishes for a version older than one already published (enforced by the server, since `vscode-languageclient` ignores the version); results computed for an older snapshot generation are dropped, and build diagnostics are withdrawn when a newer generation exists | D4, D4a | protocol tests with interleaved edits, saves and dependency changes |
 | L9 | No input (hostile, huge, deeply nested, binary, a FIFO, a network path) hangs or crashes the server: engine workers do no I/O and run under a time cap, a heap limit and an explicit stack size; models are size-capped; a failure yields one internal-error diagnostic, a new worker, a quarantined input and backoff; repeated failures (cancellations excluded) lead to "analysis unavailable", while the protocol thread keeps answering | D2a, D4, D4b | watchdog protocol tests; hostile-workspace tests |
-| L10 | On the reference corpus: analysis p95 latency, **including the model's export** across the engine boundary, at most 50 ms for the 1,889-line file; server process RSS at most 600 MB with one analysis worker, at most 1.1 GB with one analysis worker and a build worker, and **at most 1.2 GB in D4's largest configuration** (two analysis workers and a build worker, after builds; §1: 1,003–1,012 MB). D2a's heap limits are set so these hold. CI enforces looser regression bounds on its own hardware | D2a, D4 | M5a measurement job (the export is measured at M5a's exit) |
+| L10 | On the reference corpus: analysis p95 latency, **including the model's export** across the engine boundary, at most 50 ms for the 1,889-line file; server process RSS at most 600 MB with one analysis worker, at most 1.1 GB with one analysis worker and a build worker, and **at most 1.2 GB in D4's largest configuration** (two analysis workers and a build worker, after builds; §1: 1,003–1,012 MB). D2a's heap limits are set so these hold. CI enforces looser regression bounds on its own hardware. *(r6)* The strict bounds hold on §1's reference machine (Apple M4 Max, Node 22): M5a measured p95 26–35 ms, RSS 420–436 MB and 762–786 MB there. CI's `ubuntu-24.04` runner measured p95 86.7 ms, RSS 358 MB and 826 MB (run 43350031856); CI fails past 250 ms p95 and the RSS bounds plus 50% (§12 note 17) | D2a, D4 | M5a measurement job (the export is measured at M5a's exit) |
 | L11 | Positions are UTF-16 code units, correct with non-BMP characters before the position on the same line | D6 | protocol tests |
 | L12 | **Hash-preserving edits keep the script hash.** Formatting, renames, import-adding edits and any edit the server labels hash-preserving leave the script hash (and, except for ABI-recorded renames, the ABI manifest and description) unchanged on every file that builds before and after. Edits the user chooses to change the program (inserting a completion item, accepting a quick fix that turns an invalid file into a valid one) are code changes and may change it. The server never labels a code change hash-preserving | D7, D8 | hash fixtures in both classes over the corpus (D12) |
 | L13 | Recovery adds no cascades: for a single-token mutation inside one declaration, every error the recovering mode reports outside that declaration is one the strict checker reports for the same text (a genuine non-local error, e.g. a duplicate name, at its code and position), or lies in a declaration that references the mutated one or depends on a name or signature the mutation changed | D5 | mutation corpus and the namespace fixture (M5b) |
@@ -961,8 +961,32 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
 15. **Text before the filesystem** (security review S4 on #83). Workspace-folder and document URIs are checked as text
     before any filesystem call: a URI with a host (UNC), or a device or extended path, is no folder and no file (the
     document is analysed, advisory). Windows device names (`NUL`, `COM1`, `CONIN$`, with or without an extension) are
-    refused in every path segment, on every platform. A `.code-workspace` file whose directory does not resolve fails
+    refused in every segment of repository-relative text on every platform, and in absolute paths on Windows (note 18). A `.code-workspace` file whose directory does not resolve fails
     closed. The Windows-only cases (junctions, `subst`, UNC and device paths) wait for the Windows CI job.
+
+16. **The descriptor and the folder** (reviews C1, C11 on #83). The reader binds the bytes it reads to the folder through
+    the open descriptor where the OS names it: on Linux, `/proc/self/fd/N`'s target, which no path re-resolution
+    produces, must lie inside the folder, so no window is left between check and read. Node offers no descriptor path
+    and no `openat` on macOS or Windows; there the path's real path is resolved again after the open and again after the
+    read, and must lie inside the folder and name the descriptor's own file (device and inode) both times. A concurrent
+    process that times several swaps exactly can still pass these checks. It needs write access to the workspace folder,
+    and with that it can write the engine file itself, which the server then loads in a trusted workspace: the residual
+    window gives it nothing it lacks. CI runs on Linux, where the timed-swap test is enforced; on macOS it is skipped with
+    this note as the reason.
+17. **CI's latency bound.** L10's 50 ms holds on the reference machine. CI's runner is about three times slower (86.7 ms
+    p95), so `measure-l10.mjs --check` fails there only past 250 ms p95, to catch a regression without flaking on a noisy
+    runner; RSS keeps its bounds plus 50%.
+18. **Round r2 of #83, lifecycle** (C12–C15, S9–S11). A store copy is evicted only if, read again right before removal,
+    no worker uses it and no window touched it within 15 minutes, and it is renamed aside before being deleted; a copy
+    that vanishes while a worker loads it is "missing" (select again), never an engine failure. Each analysis has a
+    sequence number in its document's lifetime: one superseded while it selected touches nothing, and a result whose
+    selection generation changed is analysed again, never dropped. Recovering a missing copy selects again for every open
+    document, with a backoff (0.25 s doubling to 8 s), and after five misses in a row the file gets one diagnostic saying
+    the engine file is missing. Health is per discovered project root, advisory projects (Gradle, npm on the bundled
+    compiler) included; the folder is the scope only where nothing is discovered (Restricted Mode does not discover). Each
+    quick-fix edit carries the text it replaces, which the extension's handler compares with the document right before
+    applying. Windows device names are refused in absolute paths on Windows only (a POSIX `aux` directory is a directory);
+    repository-relative text refuses them everywhere.
 
 ## Revision history
 
@@ -1058,5 +1082,6 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
   C1–C10): amendments marked *(r6)* in L1 (the steps the server runs), D2a (8 MB build worker; workers per compiler,
   failures per project), D4 (worker key; no eviction of busy workers), D7 (code actions and the M5a quick fixes,
   Generated Java's on-demand lowering, the Build task's runtime and scope) and the M5a row (the quick fixes and M5a's
-  weaker L6); §12 holds fifteen implementation notes. Status stays Proposed; #83 merges after #76 and ADR-0018's
-  acceptance.
+  weaker L6); §12 holds the implementation notes. Status stays Proposed; #83 merges after #76 and ADR-0018's
+  acceptance. After #83's round r2 (design F9, security S9–S11, Codex C11–C17): L10 names its reference machine and
+  CI's figures; §12 notes 16–18.
