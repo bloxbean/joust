@@ -83,13 +83,24 @@ final class FourWay {
     int calls, refusals, validatorRuns, rounds, batchRuns, mutantsRejected, attacksRejected, modifierRefusals;
     StateHarness.Verdict lastVerdict;
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    /** The {@code .jsc} libraries' classes the program imports (ADR-0018 D9, M4): their records and variants are theirs. */
+    final List<String> libraries = new ArrayList<>();
+
     FourWay(String name, String jscSource, Map<String, String> transitions) throws Exception {
+        this(name, jscSource, null, org.julclang.state.dsl.v2.JscModules.NONE, transitions);
+    }
+
+    /** The contract {@code name} of a build: the module {@code id}, with the {@code .jsc} libraries {@code modules} finds. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    FourWay(String name, String jscSource, String id, org.julclang.state.dsl.v2.JscModules modules, Map<String, String> transitions)
+            throws Exception {
         this.name = name;
         this.cls = Class.forName(PKG + "." + name);
         this.stateClass = Class.forName(PKG + "." + name + "$State");
-        this.interp = JscV2.interpreter(jscSource, name + ".jsc", HASHES);
-        this.irJson = JscV2.lower(jscSource, name + ".jsc").irJson();
+        this.interp = JscV2.interpreter(jscSource, name + ".jsc", id, modules, HASHES);
+        this.irJson = JscV2.lower(jscSource, name + ".jsc", id, modules).irJson();
+        var m = java.util.regex.Pattern.compile("\"library\": \"([A-Za-z0-9_.]+)\"").matcher(irJson);
+        while (m.find()) libraries.add(m.group(1));
         this.transitions = transitions;
         var spec = (org.julclang.state.runtime.ContractSpec) Class.forName(PKG + "." + name + "Client").getField("SPEC").get(null);
         this.harness = (StateHarness<Object>) StateHarness.of(spec);
@@ -160,7 +171,7 @@ final class FourWay {
                 // The stored form: the root of the contents now, no reads or writes.
                 case BigMapV m -> new MerkleMap(root(m.now()), JulcList.empty(), JulcList.empty());
                 case Rec r -> {
-                    Class<?> rc = Class.forName(c.getName() + "$" + r.type());
+                    Class<?> rc = recordClass(c, r.type());
                     var comps = rc.getRecordComponents();
                     var types = new Class<?>[comps.length];
                     var vals = new Object[comps.length];
@@ -174,6 +185,22 @@ final class FourWay {
             };
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    /** A record's or variant's class: the program's own, else an imported {@code .jsc} library's (M4). */
+    Class<?> recordClass(Class<?> c, String type) throws ClassNotFoundException {
+        try {
+            return Class.forName(c.getName() + "$" + type);
+        } catch (ClassNotFoundException e) {
+            for (String lib : libraries) {
+                try {
+                    return Class.forName(lib + "$" + type);
+                } catch (ClassNotFoundException ignored) {
+                    // the next library
+                }
+            }
+            throw e;
         }
     }
 

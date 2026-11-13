@@ -1,4 +1,4 @@
-# `.jsc` 2 IR export (format 1)
+# `.jsc` 2 IR export (format 2)
 
 The checker's typed IR of a `.jsc` 2 contract, as JSON (ADR-0018 D15, M1b). The JavaScript reference interpreter
 (`js/jsc-interpreter`) evaluates it. Its meaning is defined in [`jsc-2-semantics.md`](jsc-2-semantics.md).
@@ -33,8 +33,19 @@ disagrees (below).
 
 ## Stability
 
-`"ir"` is the format version, exactly the integer 1 here. Readers refuse versions they do not know (`IrJson.read`,
+`"ir"` is the format version, exactly the integer 2 here. Readers refuse versions they do not know (`IrJson.read`,
 and the JavaScript `load`).
+
+**Version 2 (ADR-0018 M4) adds `libraries`:** the `.jsc` libraries the program imports, transitively, in dependency
+order, each with its class, file, source hash and declarations (records, enums, fns). It is a new top-level field, so
+the version changed: a version-1 reader refuses every version-2 export, including those with no library. Nothing else
+changed: a program without libraries has `"libraries": []` and otherwise the shape of version 1.
+
+**Two format-2 additions, one version.** M4a (#77: `libraries`, and later `javaLibraries`) and M2b (#84: the
+program's `params` and a method's `invariants`) each moved the IR to format 2 independently, and each reader refuses the
+other's fields. Before either is released, the integration that joins the two branches must merge them into **one**
+format-2 definition (both writers' fields, both readers' rules, one fixture set), or take format 3 for the second: two
+different formats must never both be released as version 2.
 
 **Version 1 is the format as of the M1 integration** (#76): `If` and `IfValue` hold a `branches` list (M1e's flat
 else-if chains). M1b's pre-release shape (`cond`, `then`, `otherwise` on those nodes) was never released and is not
@@ -42,7 +53,8 @@ version 1; the readers refuse it ("unknown field"). From M1's release, the rule 
 
 **What a version-1 reader refuses, and so what may change without a new version.** Both readers are strict: a duplicate
 key, a number that is not a plain integer, an integer literal that is not decimal, bytes that are not lower-case hex, a
-local referenced before it is declared or declared twice. The JavaScript reader also validates the whole program at
+local referenced before it is declared or declared twice, and (review r2 of M4) a field it does not know, at every level
+(the program, a library, a method, a statement, an expression, a record, a declaration, a block). The JavaScript reader also validates the whole program at
 load, before anything runs: an unknown node or statement kind, field, operator, modifier name (`payable`, `open`,
 `only`, `after`, `before`, `batched`), method kind, `std` row or type is refused there. So a change is **additive** when an old
 reader refuses every program that uses it, at load, rather than misreading it: a new node kind, a new modifier (M1c's
@@ -85,6 +97,8 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   "state": Record,
   "timeFields": ["lastSeen"],
   "recursiveFns": ["fact"],
+  "libraries": [{ "library": "org.example.Fees", "source": "fees.jsc", "sourceSha256": "<64 hex digits>",
+                  "records": [Record…], "enums": [Enum…], "fns": [Fn…] }],
   "fns": [{ "name", "params": [Local…], "result": Type, "body": Block, "at" }],
   "methods": [{ "kind": "init|action|destroy|view", "name", "params": [Local…], "mods": [{ "name", "field"? }],
                 "checked": [localId…], "usesCtx", "pays", "result": Type|null, "body": Block, "at" }],
@@ -94,6 +108,11 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 
 - **Record:** `{ "name", "fields": [{ "name", "type": Type }], "at" }`, with the fields in declaration order. An enum's
   variants are records in declaration order, so a variant's tag is its index.
+- **Libraries** (version 2): a library's records, enums and fns join the program's in one namespace (the checker refuses a
+  name declared twice across a build, `JSC0709`), so a `CallFn`, `New`, `Variant` or type naming one of them means it.
+  The interpreters evaluate a library fn like the program's own. Its `at` positions are in its own file (`source`), so a
+  refusal's class names a position there (`require:32:3:…`); both interpreters read the same positions. Locals'
+  ids are unique across the program and its libraries.
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `{ "list": T }`, `{ "option": T }`, `{ "record": name }`
   (`"State"` for the state), `{ "enum": name }`, `{ "map": [K, V] }`, `{ "bigmap": [K, V] }`.
 - **Local** (where it is bound): `{ "id", "name", "type", "taint", "at", "fieldTaints"? }`. A reference to it is

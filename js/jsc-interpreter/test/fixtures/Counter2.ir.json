@@ -1,5 +1,5 @@
 {
-  "ir": 1,
+  "ir": 2,
   "language": "jsc 2",
   "sourceSha256": "c61540cd31603e9ea88979cee5f21e47127dc30fd696524670541db6d88223d6",
   "package": "org.julclang.state.examples.dsl",
@@ -11,6 +11,7 @@
   "state": { "name": "State", "fields": [{ "name": "count", "type": "Int" }, { "name": "owner", "type": "Key" }], "at": [5, 1] },
   "timeFields": [],
   "recursiveFns": [],
+  "libraries": [],
   "fns": [],
   "methods": [
     {

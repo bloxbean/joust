@@ -75,17 +75,29 @@ module.exports = grammar({
     _v2_file: $ => seq(
       $.version,
       repeat(';'),
-      $.package_declaration,
-      repeat(';'),
-      repeat(seq($._item, repeat(';'))),
-      $.contract_declaration,
-      repeat(';'),
-      repeat(seq($._item, repeat(';'))),
+      choice(
+        seq(
+          $.package_declaration,
+          repeat(';'),
+          repeat(seq($._item, repeat(';'))),
+          $.contract_declaration,
+          repeat(';'),
+          repeat(seq($._item, repeat(';'))),
+        ),
+        // A library (ADR-0018 D9, M4): 'library <package>', then imports, types, enums and fns only.
+        seq(
+          $.library_declaration,
+          repeat(';'),
+          repeat(seq($._item, repeat(';'))),
+        ),
+      ),
     ),
 
     version: $ => seq('jsc', '2'),
 
     package_declaration: $ => seq('package', field('name', $.package_name)),
+
+    library_declaration: $ => seq('library', field('name', $.package_name)),
 
     package_name: $ => sep1($.identifier, '.'),
 

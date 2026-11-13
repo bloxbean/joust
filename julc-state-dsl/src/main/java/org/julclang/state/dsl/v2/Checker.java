@@ -103,7 +103,6 @@ final class Checker {
     private final LinkedHashMap<String, LinkedHashMap<String, LinkedHashMap<String, Ty>>> enums = new LinkedHashMap<>();
     private final Map<String, String> variantEnum = new HashMap<>();
     private final Map<String, Syntax.Fn> fns = new LinkedHashMap<>();
-    private final Set<String> imported = new HashSet<>();
 
     /** State fields that hold time values (D11), contract-wide; grown to a fixed point. */
     private Set<String> timeFields = new TreeSet<>();
@@ -115,21 +114,255 @@ final class Checker {
     private final Set<Ir.Local> used = Collections.newSetFromMap(new IdentityHashMap<>());
     private int seq;
 
-    private Checker(File file, String fileName) {
-        this.file = file;
-        this.fileName = fileName;
+    // ------------------------------------------------------------------ modules (D9, M4)
+
+    /**
+     * A file of the build: the main file (a contract, or a library lowered on its own) or a {@code .jsc} library it
+     * imports, transitively. {@code cls} is a library's class (its capitalised file name), null for a contract;
+     * {@code importedAt} is where the main file imports it (directly, or through the library that does), so an error in
+     * a library is reported there, naming the library's own position. {@code visible}: the names its imports bring;
+     * {@code std}: its std imports; {@code deps}: the library each relative specifier names.
+     */
+    static final class Module {
+        final String id;
+        final String fileName;
+        final String text;
+        final File file;
+        final String cls;
+        final Pos importedAt;
+        final Map<String, Module> deps;
+        final Set<String> visible = new HashSet<>();
+        final Set<String> std = new HashSet<>();
+
+        Module(String id, String fileName, String text, File file, String cls, Pos importedAt, Map<String, Module> deps) {
+            this.id = id;
+            this.fileName = fileName;
+            this.text = text;
+            this.file = file;
+            this.cls = cls;
+            this.importedAt = importedAt;
+            this.deps = deps;
+        }
+
+        String qualified() {
+            return file.pkg() + "." + cls;
+        }
+
+        String where() {
+            return id != null ? id : fileName;
+        }
+
+        /** The type, enum and variant names it declares: what its importers' parser reads as constructors. */
+        Set<String> typeNames() {
+            var out = new HashSet<String>();
+            for (TypeDecl t : file.types()) out.add(t.name());
+            for (EnumDecl e : file.enums()) {
+                out.add(e.name());
+                for (VariantDecl v : e.variants()) out.add(v.name());
+            }
+            return out;
+        }
     }
 
+    /** The main file. */
+    private final Module main;
+    /** The libraries the main file imports, transitively, in dependency order (a library before its importers). */
+    private final List<Module> libraries;
+    /** The module whose code is being checked: names resolve in its scope (its declarations and imports). */
+    private Module current;
+    /** The module declaring each type, enum, variant and fn of the build. */
+    private final Map<String, Module> owner = new HashMap<>();
+    /** The simple class names of the build's libraries: the generated Java names them as static receivers. */
+    private final Set<String> libraryClasses = new HashSet<>();
+
+    private Checker(Module main, List<Module> libraries) {
+        this.file = main.file;
+        this.fileName = main.fileName;
+        this.main = main;
+        this.libraries = libraries;
+        this.current = main;
+    }
+
+    /** All modules, libraries first (dependency order), the main file last. */
+    private List<Module> modules() {
+        var out = new ArrayList<Module>(libraries);
+        out.add(main);
+        return out;
+    }
+
+    /** A file lowered on its own: no {@code .jsc} imports resolve. */
     static Ir.Program check(File file, String fileName) {
+        Module m = new Module(null, fileName, null, file, file.library() ? libraryClass(fileName, file, new Pos(1, 1)) : null, null, Map.of());
         try {
-            return checkFile(file, fileName);
+            for (Import im : file.imports()) {
+                if (isModuleSpec(im.from())) throw noModule(im.pos(), im.from(), null);
+            }
+            return checkFile(m, List.of());
         } catch (JscException e) {
             throw Parser.hinted(e, file.leadingMinus(), file.members());
         }
     }
 
-    private static Ir.Program checkFile(File file, String fileName) {
-        var c = new Checker(file, fileName);
+    /**
+     * Checks {@code source}, the module {@code id} of a build whose {@code .jsc} libraries {@code modules} resolves (ADR-0018
+     * D9, M4): its imports are loaded first, transitively, each parsed and declared in the build's one namespace.
+     */
+    static Ir.Program check(String source, String fileName, String id, JscModules modules) {
+        var loader = new Loader(modules);
+        Module main = loader.main(source, fileName, id);
+        try {
+            return checkFile(main, loader.order);
+        } catch (JscException e) {
+            throw Parser.hinted(e, main.file.leadingMinus(), main.file.members());
+        }
+    }
+
+    /** Whether an import names a {@code .jsc} module (not {@code std/…} or {@code java:…}). */
+    static boolean isModuleSpec(String spec) {
+        return !spec.startsWith("std/") && !spec.startsWith("java:");
+    }
+
+    private static JscException noModule(Pos p, String spec, String from) {
+        if (!JscModules.isRelative(spec)) {
+            return p.error("JSC0706", "'" + spec + "' is not a module: a .jsc library is imported by its path relative to this file,"
+                    + " ending in .jsc (import { fee } from \"./fees.jsc\"); the standard library is std/…, a Java library java:…");
+        }
+        return p.error("JSC0706", "no .jsc library " + spec + (from == null ? " (this file is lowered on its own, so it imports no libraries)"
+                : " beside " + from + " under the sources (a library is imported by its path relative to the importing file, and never from"
+                + " outside the source directory)"));
+    }
+
+    /**
+     * A library's class: its file name without {@code .jsc}, capitalised ({@code fees.jsc} is {@code Fees}). It must be a
+     * plain class name, and not one the generated code uses.
+     */
+    static String libraryClass(String fileName, File file, Pos at) {
+        String base = fileName.endsWith(".jsc") ? fileName.substring(0, fileName.length() - 4) : fileName;
+        String cls = base.isEmpty() ? base : Character.toUpperCase(base.charAt(0)) + base.substring(1);
+        if (!cls.matches("[A-Z][A-Za-z0-9]*") || RESERVED.contains(cls) || PROCESSOR_TYPES.contains(cls)) {
+            throw at.error("JSC0705", "a library's file name is its Java class (fees.jsc is the class Fees of its package): '" + fileName
+                    + "' gives '" + cls + "', which is not a class name the generated code can use; name the file with letters and"
+                    + " digits only (fees.jsc, FeeMath.jsc)");
+        }
+        return cls;
+    }
+
+    /** Loads the main file and its libraries: each module once, dependencies first; an import cycle is refused. */
+    private static final class Loader {
+        final JscModules modules;
+        final Map<String, Module> loaded = new HashMap<>();
+        final List<Module> order = new ArrayList<>();
+        final ArrayDeque<String> stack = new ArrayDeque<>();
+
+        Loader(JscModules modules) {
+            this.modules = modules;
+        }
+
+        Module main(String source, String fileName, String id) {
+            if (id != null) stack.push(id);
+            var deps = new LinkedHashMap<String, Module>();
+            var types = new HashSet<String>();
+            for (Import im : Parser.imports(source)) {
+                if (!isModuleSpec(im.from()) || deps.containsKey(im.from())) continue;
+                JscModules.Source s = JscModules.isRelative(im.from()) ? modules.resolve(id, im.from()) : null;
+                if (s == null) throw noModule(im.pos(), im.from(), id == null ? null : id);
+                Module d = load(s, im.pos());
+                deps.put(im.from(), d);
+                types.addAll(d.typeNames());
+            }
+            File f = Parser.parse(source, types);
+            String cls = f.library() ? libraryClass(fileName, f, new Pos(1, 1)) : null;
+            return new Module(id, fileName, source, f, cls, null, deps);
+        }
+
+        /** The library {@code s}, imported (directly or through other libraries) by the main file at {@code at}. */
+        Module load(JscModules.Source s, Pos at) {
+            Module done = loaded.get(s.id());
+            if (done != null) return done;
+            if (stack.contains(s.id())) {
+                var chain = new ArrayList<String>(stack);
+                java.util.Collections.reverse(chain);
+                chain.add(s.id());
+                throw at.error("JSC0707", "these libraries import each other: " + String.join(" -> ", chain) + "; a library's imports form"
+                        + " no cycle (move what both need into a third library)");
+            }
+            stack.push(s.id());
+            try {
+                var deps = new LinkedHashMap<String, Module>();
+                var types = new HashSet<String>();
+                List<Import> imports;
+                try {
+                    imports = Parser.imports(s.text());
+                } catch (JscException e) {
+                    throw inLibrary(s.id(), at, e);
+                }
+                for (Import im : imports) {
+                    if (!isModuleSpec(im.from()) || deps.containsKey(im.from())) continue;
+                    JscModules.Source d = JscModules.isRelative(im.from()) ? modules.resolve(s.id(), im.from()) : null;
+                    if (d == null) throw inLibrary(s.id(), at, noModule(im.pos(), im.from(), s.id()));
+                    Module dm = load(d, at);
+                    deps.put(im.from(), dm);
+                    types.addAll(dm.typeNames());
+                }
+                File f;
+                String cls;
+                try {
+                    JscV2.checkFileName(s.fileName());
+                    f = Parser.parse(s.text(), types);
+                    if (!f.library()) {
+                        throw new Pos(1, 1).error("JSC0708", s.fileName() + " is a contract, not a library: only a file that starts"
+                                + " 'jsc 2' then 'library <package>' can be imported");
+                    }
+                    cls = libraryClass(s.fileName(), f, new Pos(1, 1));
+                } catch (JscException e) {
+                    throw inLibrary(s.id(), at, e);
+                }
+                Module m = new Module(s.id(), s.fileName(), s.text(), f, cls, at, deps);
+                loaded.put(s.id(), m);
+                order.add(m);
+                return m;
+            } finally {
+                stack.pop();
+            }
+        }
+    }
+
+    /** An error in a library, reported where the main file imports it, naming the library's own position (J5). */
+    static JscException inLibrary(String where, Pos at, JscException e) {
+        if ("JSC0712".equals(e.code)) return e;
+        return new JscException(at.line(), at.col(), "JSC0712", "in the imported library " + where + ":" + e.line + ":" + e.col + ": "
+                + (e.code == null ? "" : "error[" + e.code + "]: ") + e.getMessage());
+    }
+
+    /** Runs {@code r} with {@code m} as the current module; an error in a library is reported at its import. */
+    private void inModule(Module m, Runnable r) {
+        Module was = current;
+        current = m;
+        try {
+            r.run();
+        } catch (JscException e) {
+            if (m == main) throw e;
+            throw inLibrary(m.where(), m.importedAt, e);
+        } finally {
+            current = was;
+        }
+    }
+
+    /**
+     * Whether the current module may name {@code name}: its own declarations, and what its imports bring (an imported
+     * enum brings its variants). A library's other declarations are reachable only through the values its fns return.
+     */
+    private void visible(String name, Pos p) {
+        Module o = owner.get(name);
+        if (o == null || o == current || current.visible.contains(name)) return;
+        String what = variantEnum.containsKey(name) ? "the variant " + name + " of " + variantEnum.get(name) + ", which is declared in "
+                + o.where() + ": import { " + variantEnum.get(name) + " }" : "'" + name + "' is declared in " + o.where() + ": import { " + name + " }";
+        throw p.error("JSC0710", what + " from it to use it here (a library's declarations are seen only where they are imported)");
+    }
+
+    private static Ir.Program checkFile(Module main, List<Module> libraries) {
+        var c = new Checker(main, libraries);
+        File file = main.file;
         c.declare();
         Ir.Program p;
         int round = 0;
@@ -147,7 +380,7 @@ final class Checker {
                     + " if the line is meant to stand alone, end the line above with ';'");
         }
         return new Ir.Program(p.pkg(), p.fileName(), p.name(), p.options(), p.records(), p.enums(), p.state(), p.methods(), p.fns(),
-                Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings));
+                Set.copyOf(c.timeFields), c.recursive(), List.copyOf(c.warnings), p.library(), p.libraries());
     }
 
     private void resetRound() {
@@ -163,87 +396,143 @@ final class Checker {
 
     // ------------------------------------------------------------------ declarations
 
+    /** The types and enums a module declares (a contract's inside its body too). */
+    private static List<TypeDecl> typesOf(Module m) {
+        var out = new ArrayList<TypeDecl>(m.file.types());
+        if (m.file.contract() != null) out.addAll(m.file.contract().types());
+        return out;
+    }
+
+    private static List<EnumDecl> enumsOf(Module m) {
+        var out = new ArrayList<EnumDecl>(m.file.enums());
+        if (m.file.contract() != null) out.addAll(m.file.contract().enums());
+        return out;
+    }
+
+    private static List<Syntax.Fn> fnsOf(Module m) {
+        var out = new ArrayList<Syntax.Fn>(m.file.fns());
+        if (m.file.contract() != null) out.addAll(m.file.contract().fns());
+        return out;
+    }
+
     private void declare() {
         Contract c = file.contract();
-        checkUserName(c.name(), c.pos(), "contract");
-        var allTypes = new ArrayList<TypeDecl>(file.types());
-        allTypes.addAll(c.types());
-        var allEnums = new ArrayList<EnumDecl>(file.enums());
-        allEnums.addAll(c.enums());
-        // Records, enums and variants share one namespace: each becomes a class of the contract (D5).
-        for (TypeDecl t : allTypes) {
-            typeName(t.name(), t.pos(), "type", c);
-            records.put(t.name(), new LinkedHashMap<>());
-        }
-        for (EnumDecl e : allEnums) {
-            typeName(e.name(), e.pos(), "enum", c);
-            if (e.variants().isEmpty()) throw e.pos().error("JSC0909", "the enum " + e.name() + " needs at least one variant");
-            var vs = new LinkedHashMap<String, LinkedHashMap<String, Ty>>();
-            enums.put(e.name(), vs);
-            for (VariantDecl v : e.variants()) {
-                typeName(v.name(), v.pos(), "variant", c);
-                vs.put(v.name(), new LinkedHashMap<>());
-                variantEnum.put(v.name(), e.name());
+        String contractName = c == null ? null : c.name();
+        if (c != null) checkUserName(c.name(), c.pos(), "contract");
+        // Each library is a Java class of its package (D9, M4): two may not share one, and no declaration or contract of the
+        // build takes a library's class name (it would shadow the class in the generated Java).
+        var classes = new HashMap<String, Module>();
+        var simple = new HashMap<String, Module>();
+        for (Module m : libraries) {
+            Module other = classes.putIfAbsent(m.qualified(), m);
+            if (other != null) {
+                throw m.importedAt.error("JSC0709", m.where() + " and " + other.where() + " are both the library " + m.qualified()
+                        + " (a library's package and file name are its class): rename one");
+            }
+            // The generated Java imports a library's class and names it by its simple name (Fees.fee()): two classes of
+            // one simple name in different packages would be an ambiguous import (Codex C2, r2).
+            other = simple.putIfAbsent(m.cls, m);
+            if (other != null) {
+                throw m.importedAt.error("JSC0709", m.where() + " and " + other.where() + " are both classes named " + m.cls + " ("
+                        + m.qualified() + ", " + other.qualified() + "): the generated Java names a library by its class name, so the"
+                        + " libraries of a build have distinct file names; rename one");
+            }
+            if (m.cls.equals(contractName)) {
+                throw m.importedAt.error("JSC0709", "the library " + m.where() + " is the class " + m.cls + ", the contract's name; rename one");
             }
         }
-        for (TypeDecl t : allTypes) fillFields(records.get(t.name()), t.fields(), t.name(), false);
-        for (EnumDecl e : allEnums) {
-            for (VariantDecl v : e.variants()) fillFields(enums.get(e.name()).get(v.name()), v.fields(), v.name(), false);
+        if (main.cls != null && libraries.stream().anyMatch(l -> l.cls.equals(main.cls))) {
+            throw new Pos(1, 1).error("JSC0709", "this library and an imported one are both classes named " + main.cls + "; rename one");
         }
-        fillFields(stateFields, c.state(), "state", true);
-        for (TypeDecl t : allTypes) {
-            if (cyclic(t.name())) {
-                throw t.pos().error("JSC0301", "the type " + t.name() + " contains itself; recursive types are not supported");
-            }
+        for (Module m : libraries) libraryClasses.add(m.cls);
+        // Records, enums and variants share one namespace, across the build's files (D5, D9): each becomes a class.
+        for (Module m : modules()) {
+            inModule(m, () -> {
+                for (TypeDecl t : typesOf(m)) {
+                    typeName(t.name(), t.pos(), "type", contractName, libraryClasses);
+                    records.put(t.name(), new LinkedHashMap<>());
+                    owner.put(t.name(), m);
+                }
+                for (EnumDecl e : enumsOf(m)) {
+                    typeName(e.name(), e.pos(), "enum", contractName, libraryClasses);
+                    if (e.variants().isEmpty()) throw e.pos().error("JSC0909", "the enum " + e.name() + " needs at least one variant");
+                    var vs = new LinkedHashMap<String, LinkedHashMap<String, Ty>>();
+                    enums.put(e.name(), vs);
+                    owner.put(e.name(), m);
+                    for (VariantDecl v : e.variants()) {
+                        typeName(v.name(), v.pos(), "variant", contractName, libraryClasses);
+                        vs.put(v.name(), new LinkedHashMap<>());
+                        variantEnum.put(v.name(), e.name());
+                        owner.put(v.name(), m);
+                    }
+                }
+            });
         }
-        for (EnumDecl e : allEnums) {
-            if (cyclic(e.name())) {
-                throw e.pos().error("JSC0302", "the enum " + e.name() + " contains itself; recursive types are not supported");
-            }
+        var methodNames = new HashSet<String>();
+        if (c != null) for (Syntax.Method m : c.methods()) methodNames.add(m.name());
+        for (Module mod : modules()) {
+            inModule(mod, () -> {
+                for (Syntax.Fn f : fnsOf(mod)) {
+                    checkUserName(f.name(), f.pos(), "function");
+                    if (records.containsKey(f.name()) || enums.containsKey(f.name()) || variantEnum.containsKey(f.name())) {
+                        throw f.pos().error("JSC0221", "the fn " + f.name() + " has the name of a declared type or variant; rename one");
+                    }
+                    Module other = owner.get(f.name());
+                    if (fns.containsKey(f.name()) && other != null && other != mod) {
+                        throw f.pos().error("JSC0709", "the fn " + f.name() + " is also declared in " + other.where() + ": the declarations of a"
+                                + " build (a contract and the libraries it imports) share one namespace; rename one");
+                    }
+                    if (fns.containsKey(f.name()) || PRELUDE.contains(f.name()) || Std.ROWS.containsKey(f.name())) {
+                        throw f.pos().error("JSC0201", "the function " + f.name() + " is declared twice or shadows a built-in");
+                    }
+                    if (mod == main && methodNames.contains(f.name())) {
+                        throw f.pos().error("JSC0202", "the fn " + f.name() + " has the name of a method of the contract; rename one (both become methods of one Java class)");
+                    }
+                    if (libraryClasses.contains(f.name())) {
+                        throw f.pos().error("JSC0709", "the fn " + f.name() + " has the name of an imported library's class; rename it");
+                    }
+                    fns.put(f.name(), f);
+                    owner.put(f.name(), mod);
+                }
+            });
         }
-        var declaredAt = new LinkedHashMap<String, Pos>();
-        for (TypeDecl t : allTypes) declaredAt.put(t.name(), t.pos());
-        for (EnumDecl e : allEnums) declaredAt.put(e.name(), e.pos());
-        typeDepths(declaredAt);
+        for (Module m : modules()) inModule(m, () -> imports(m));
+        for (Module m : modules()) {
+            inModule(m, () -> {
+                for (TypeDecl t : typesOf(m)) fillFields(records.get(t.name()), t.fields(), t.name(), false);
+                for (EnumDecl e : enumsOf(m)) {
+                    for (VariantDecl v : e.variants()) fillFields(enums.get(e.name()).get(v.name()), v.fields(), v.name(), false);
+                }
+            });
+        }
+        if (c != null) fillFields(stateFields, c.state(), "state", true);
+        for (Module m : modules()) {
+            inModule(m, () -> {
+                for (TypeDecl t : typesOf(m)) {
+                    if (cyclic(t.name())) {
+                        throw t.pos().error("JSC0301", "the type " + t.name() + " contains itself; recursive types are not supported");
+                    }
+                }
+                for (EnumDecl e : enumsOf(m)) {
+                    if (cyclic(e.name())) {
+                        throw e.pos().error("JSC0302", "the enum " + e.name() + " contains itself; recursive types are not supported");
+                    }
+                }
+            });
+        }
+        for (Module m : modules()) {
+            var declaredAt = new LinkedHashMap<String, Pos>();
+            for (TypeDecl t : typesOf(m)) declaredAt.put(t.name(), t.pos());
+            for (EnumDecl e : enumsOf(m)) declaredAt.put(e.name(), e.pos());
+            inModule(m, () -> typeDepths(declaredAt));
+        }
+        if (c == null) return;
         // The state is a root too: each field's type nests at most MAX_DEPTH levels (J18).
         for (FieldDecl f : c.state()) measured(stateFields.get(f.name()), f.type().pos());
         if (stateFields.isEmpty()) throw c.pos().error("JSC0303", "the state needs at least one field");
-
-        var methodNames = new HashSet<String>();
-        for (Syntax.Method m : c.methods()) methodNames.add(m.name());
-        var allFns = new ArrayList<Syntax.Fn>(file.fns());
-        allFns.addAll(c.fns());
-        for (Syntax.Fn f : allFns) {
-            checkUserName(f.name(), f.pos(), "function");
-            if (records.containsKey(f.name()) || enums.containsKey(f.name()) || variantEnum.containsKey(f.name())) {
-                throw f.pos().error("JSC0221", "the fn " + f.name() + " has the name of a declared type or variant; rename one");
-            }
-            if (fns.containsKey(f.name()) || PRELUDE.contains(f.name()) || Std.ROWS.containsKey(f.name())) {
-                throw f.pos().error("JSC0201", "the function " + f.name() + " is declared twice or shadows a built-in");
-            }
-            if (methodNames.contains(f.name())) {
-                throw f.pos().error("JSC0202", "the fn " + f.name() + " has the name of a method of the contract; rename one (both become methods of one Java class)");
-            }
-            fns.put(f.name(), f);
-        }
         // Security S7: a state field is read by its bare name, so it never takes a declared type's, enum's, variant's
         // or fn's name, which it would hide in every method (a field Open would replace the variant Open).
         for (FieldDecl f : c.state()) declaredName(f.name(), f.pos());
-        for (Import im : file.imports()) {
-            for (String n : im.names()) {
-                Std.Binding b = Std.ROWS.get(n);
-                String module = b != null ? b.module() : Std.ALSO_EXPORTED.get(n);
-                if (module == null || !module.equals(im.from())) {
-                    if (im.from().equals("std/value") || im.from().equals("std/address")) {
-                        throw im.pos().error("JSC0304", im.from() + " comes with Value and Address in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
-                    }
-                    throw im.pos().error("JSC0702", "'" + n + "' is not in " + im.from() + (module != null ? " (it is in " + module + ")" : ""));
-                }
-                if (b == null) continue;   // after/before: the prelude's
-                if (fns.containsKey(n)) throw im.pos().error("JSC0703", "'" + n + "' is imported and also declared as a fn; rename the fn");
-                imported.add(n);
-            }
-        }
         var seen = new HashSet<String>();
         // The processor names redeemer variants after methods (capitalised): they must not clash with generated or
         // declared types.
@@ -252,6 +541,7 @@ final class Checker {
         generated.addAll(records.keySet());
         generated.addAll(enums.keySet());
         generated.addAll(variantEnum.keySet());
+        generated.addAll(libraryClasses);
         generated.add(c.name());   // the variant would shadow the contract's class in its validator
         for (Syntax.Method m : c.methods()) {
             if (m.kind() != Kind.INIT) checkUserName(m.name(), m.pos(), "method");
@@ -278,18 +568,62 @@ final class Checker {
         if (c.methods().stream().noneMatch(m -> m.kind() == Kind.INIT)) throw c.pos().error("JSC0401", "the contract needs an init(…)");
     }
 
+    /** A module's imports: std rows into its {@code std} set, a library's declarations into {@code visible} (D8, D9). */
+    private void imports(Module m) {
+        for (Import im : m.file.imports()) {
+            if (im.from().startsWith("java:")) {
+                throw im.pos().error("JSC0720", "Java library imports (java:…) are not available yet (ADR-0018 D9, M4b)");
+            }
+            if (isModuleSpec(im.from())) {
+                Module dep = m.deps.get(im.from());
+                if (dep == null) throw noModule(im.pos(), im.from(), m.where());
+                for (String n : im.names()) {
+                    if (owner.get(n) != dep) {
+                        throw im.pos().error("JSC0708", "'" + n + "' is not declared in " + im.from() + (owner.containsKey(n) ? " (it is in "
+                                + owner.get(n).where() + ")" : "") + ": a library exports its types, enums and fns");
+                    }
+                    m.visible.add(n);
+                    // An imported enum brings its variants, which build and match its values.
+                    if (enums.containsKey(n)) m.visible.addAll(enums.get(n).keySet());
+                }
+                continue;
+            }
+            for (String n : im.names()) {
+                Std.Binding b = Std.ROWS.get(n);
+                String module = b != null ? b.module() : Std.ALSO_EXPORTED.get(n);
+                if (module == null || !module.equals(im.from())) {
+                    if (im.from().equals("std/value") || im.from().equals("std/address")) {
+                        throw im.pos().error("JSC0304", im.from() + " comes with Value and Address in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
+                    }
+                    throw im.pos().error("JSC0702", "'" + n + "' is not in " + im.from() + (module != null ? " (it is in " + module + ")" : ""));
+                }
+                if (b == null) continue;   // after/before: the prelude's
+                if (fns.containsKey(n)) throw im.pos().error("JSC0703", "'" + n + "' is imported and also declared as a fn; rename the fn");
+                m.std.add(n);
+            }
+        }
+    }
+
     /** A declared type, enum or variant name: capitalised, without '_', not reserved, not taken (D5, J10). */
-    private void typeName(String n, Pos p, String what, Contract c) {
+    private void typeName(String n, Pos p, String what, String contractName, Set<String> libraryClasses) {
         if (!Character.isUpperCase(n.charAt(0))) throw p.error("JSC0205", what + " names start with a capital: " + n);
         if (n.contains("_")) throw p.error("JSC0206", what + " names are written without '_' (e.g. " + n.replace("_", "") + ")");
         checkUserName(n, p, what);
         if (PROCESSOR_TYPES.contains(n)) {
             throw p.error("JSC0220", "'" + n + "' is a name the generated validator or client uses for its own types; choose another " + what + " name");
         }
-        if (n.equals(c.name())) {
+        if (n.equals(contractName)) {
             throw p.error("JSC0207", "the " + what + " " + n + " has the contract's name; rename one (it is generated inside the contract's class)");
         }
+        if (libraryClasses.contains(n) || n.equals(main.cls)) {
+            throw p.error("JSC0709", "the " + what + " " + n + " has the name of a library's class in this build; rename one");
+        }
         if (records.containsKey(n) || enums.containsKey(n) || variantEnum.containsKey(n)) {
+            Module other = owner.get(n);
+            if (other != null && other != current) {
+                throw p.error("JSC0709", "the " + what + " " + n + " is also declared in " + other.where() + ": the declarations of a build (a"
+                        + " contract and the libraries it imports) share one namespace; rename one");
+            }
             throw p.error("JSC0910", "the name " + n + " is declared twice: types, enums and variants share one namespace (each becomes a Java class)");
         }
     }
@@ -347,6 +681,7 @@ final class Checker {
                     throw t.pos().error("JSC0306", t.name() + " comes in a later milestone of .jsc 2 (ADR-0018 §8: M2)");
             default -> records.containsKey(t.name()) ? new Ty.Rec(t.name()) : enums.containsKey(t.name()) ? new Ty.EnumT(t.name()) : null;
         };
+        if (ty instanceof Ty.Rec || ty instanceof Ty.EnumT) visible(t.name(), t.pos());
         if (ty == null && variantEnum.containsKey(t.name())) {
             throw t.pos().error("JSC0911", t.name() + " is a variant of " + variantEnum.get(t.name()) + ", not a type: write " + variantEnum.get(t.name()));
         }
@@ -571,6 +906,17 @@ final class Checker {
      * {@code phase == Open} into a check that always holds.
      */
     private void declaredName(String n, Pos p) {
+        // Codex C1 (r2): the generated Java calls a library fn through its class (Fees.fee()), where a value of the class's
+        // name would obscure it (JLS 6.4.2): a parameter Fees whose record has a field fee would make that call its
+        // accessor, and the JVM, the transition and the validator would all agree on the wrong program.
+        // A library's own class too, so that a library refused in an importer's build is refused on its own.
+        if (libraryClasses.contains(n) || n.equals(main.cls)) {
+            throw p.error("JSC0709", "'" + n + "' is the class of a library of this build: the generated Java names the library by it,"
+                    + " and a value of that name would hide it; rename the binding");
+        }
+        // Only a declaration this file can name can be hidden: a library's unimported names are not in scope (D9, M4).
+        Module o = owner.get(n);
+        if (o != null && o != current && !current.visible.contains(n)) return;
         String what = records.containsKey(n) ? "the type" : enums.containsKey(n) ? "the enum" : variantEnum.containsKey(n)
                 ? "the variant " + n + " of " + variantEnum.get(n) + "," : fns.containsKey(n) ? "the fn" : null;
         if (what == null) return;
@@ -590,33 +936,53 @@ final class Checker {
     private Ir.Program checkAll() {
         Contract c = file.contract();
         var options = new ArrayList<Ir.ContractOption>();
-        for (Syntax.Option o : c.options()) {
-            switch (o.name()) {
-                case "minAda", "maxDatumBytes", "maxValidityMs" -> {
-                    if (o.value().signum() < 0 || o.value().bitLength() > 62) throw o.pos().error("JSC0402", o.name() + " is out of range");
-                    options.add(new Ir.ContractOption(o.name(), o.value()));
-                }
-                default -> throw o.pos().error("JSC0403", "unknown contract option '" + o.name() + "' (minAda, maxDatumBytes, maxValidityMs)");
-            }
-        }
         var methods = new ArrayList<Ir.Method>();
-        for (Syntax.Method m : c.methods()) methods.add(method(m));
-        var irFns = new ArrayList<Ir.Fn>();
-        for (Syntax.Fn f : fns.values()) irFns.add(checkFn(f, new int[f.params().size()]));
+        if (c != null) {
+            for (Syntax.Option o : c.options()) {
+                switch (o.name()) {
+                    case "minAda", "maxDatumBytes", "maxValidityMs" -> {
+                        if (o.value().signum() < 0 || o.value().bitLength() > 62) throw o.pos().error("JSC0402", o.name() + " is out of range");
+                        options.add(new Ir.ContractOption(o.name(), o.value()));
+                    }
+                    default -> throw o.pos().error("JSC0403", "unknown contract option '" + o.name() + "' (minAda, maxDatumBytes, maxValidityMs)");
+                }
+            }
+            for (Syntax.Method m : c.methods()) methods.add(method(m));
+        }
+        // Every fn of the build, each in its module's scope: the program's own, then each library's (the interpreters
+        // evaluate library fns from the program's IR; D9, M4).
+        var byModule = new HashMap<Module, List<Ir.Fn>>();
+        for (Syntax.Fn f : fns.values()) {
+            byModule.computeIfAbsent(owner.get(f.name()), k -> new ArrayList<>()).add(checkFn(f, new int[f.params().size()]));
+        }
+        var libs = new ArrayList<Ir.Library>();
+        for (Module m : libraries) {
+            libs.add(new Ir.Library(m.qualified(), m.fileName, IrJson.sourceHash(m.text), recordsOf(m), enumsIrOf(m),
+                    List.copyOf(byModule.getOrDefault(m, List.of()))));
+        }
+        List<Ir.Fn> own = List.copyOf(byModule.getOrDefault(main, List.of()));
+        if (c == null) {
+            return new Ir.Program(file.pkg(), fileName, main.cls, List.of(), recordsOf(main), enumsIrOf(main), null, List.of(), own,
+                    Set.of(), Set.of(), List.of(), true, List.copyOf(libs));
+        }
+        return new Ir.Program(file.pkg(), fileName, c.name(), options, recordsOf(main), enumsIrOf(main),
+                new Ir.RecordType("State", stateFields, c.pos()), methods, own, Set.of(), Set.of(), List.of(), false, List.copyOf(libs));
+    }
+
+    private LinkedHashMap<String, Ir.RecordType> recordsOf(Module m) {
         var recs = new LinkedHashMap<String, Ir.RecordType>();
-        var allTypes = new ArrayList<TypeDecl>(file.types());
-        allTypes.addAll(c.types());
-        for (TypeDecl t : allTypes) recs.put(t.name(), new Ir.RecordType(t.name(), records.get(t.name()), t.pos()));
+        for (TypeDecl t : typesOf(m)) recs.put(t.name(), new Ir.RecordType(t.name(), records.get(t.name()), t.pos()));
+        return recs;
+    }
+
+    private LinkedHashMap<String, Ir.EnumType> enumsIrOf(Module m) {
         var ens = new LinkedHashMap<String, Ir.EnumType>();
-        var allEnums = new ArrayList<EnumDecl>(file.enums());
-        allEnums.addAll(c.enums());
-        for (EnumDecl e : allEnums) {
+        for (EnumDecl e : enumsOf(m)) {
             var vs = new LinkedHashMap<String, Ir.RecordType>();
             for (VariantDecl v : e.variants()) vs.put(v.name(), new Ir.RecordType(v.name(), enums.get(e.name()).get(v.name()), v.pos()));
             ens.put(e.name(), new Ir.EnumType(e.name(), vs, e.pos()));
         }
-        return new Ir.Program(file.pkg(), fileName, c.name(), options, recs, ens, new Ir.RecordType("State", stateFields, c.pos()),
-                methods, irFns, Set.of(), Set.of(), List.of());
+        return ens;
     }
 
     private static Ir.Kind kind(Kind k) {
@@ -760,6 +1126,8 @@ final class Checker {
     }
 
     private void warn(Pos p, String code, String message) {
+        // A library's own build reports its warnings, at its positions; here they would name this file's lines.
+        if (current != main) return;
         warnings.add(new Ir.Warning(p.line(), p.col(), code, message));
     }
 
@@ -884,6 +1252,14 @@ final class Checker {
     // ------------------------------------------------------------------ functions
 
     private Ir.Fn checkFn(Syntax.Fn f, int[] taints) {
+        Module m = owner.getOrDefault(f.name(), main);
+        if (m == current) return checkFnHere(f, taints);
+        Ir.Fn[] out = new Ir.Fn[1];
+        inModule(m, () -> out[0] = checkFnHere(f, taints));
+        return out[0];
+    }
+
+    private Ir.Fn checkFnHere(Syntax.Fn f, int[] taints) {
         var sc = new Sc(null, f.name(), false, false, false, false, 0, null);
         var params = new ArrayList<Ir.Local>();
         for (int i = 0; i < f.params().size(); i++) {
@@ -1146,6 +1522,7 @@ final class Checker {
         }
         if (variantEnum.containsKey(n.name())) {
             String e = variantEnum.get(n.name());
+            visible(n.name(), n.pos());
             if (!enums.get(e).get(n.name()).isEmpty()) {
                 throw n.pos().error("JSC0912", n.name() + " has fields: write " + n.name() + " { " + String.join(", ", enums.get(e).get(n.name()).keySet()) + " }");
             }
@@ -1238,10 +1615,13 @@ final class Checker {
     private Ir.Expr call(Call c, Sc sc, Ty expected) {
         String fn = c.fn();
         Syntax.Fn user = fns.get(fn);
-        if (user != null) return userCall(user, c, sc);
+        if (user != null) {
+            visible(fn, c.pos());
+            return userCall(user, c, sc);
+        }
         Std.Binding b = Std.ROWS.get(fn);
         if (b != null) {
-            if (!imported.contains(fn)) throw c.pos().error("JSC0704", fn + " is in " + b.module() + ": import { " + fn + " } from \"" + b.module() + "\"");
+            if (!current.std.contains(fn)) throw c.pos().error("JSC0704", fn + " is in " + b.module() + ": import { " + fn + " } from \"" + b.module() + "\"");
             return stdCall(b, c, sc);
         }
         switch (fn) {
@@ -1317,7 +1697,7 @@ final class Checker {
         int taint = 0;
         int[] taints = new int[c.args().size()];
         for (int i = 0; i < c.args().size(); i++) {
-            Ty pt = resolve(f.params().get(i).type());
+            Ty pt = signatureType(f, f.params().get(i).type());
             Ir.Expr a = expr(c.args().get(i), sc, pt);
             expectType(pt, a, c.args().get(i).pos());
             args.add(a);
@@ -1325,7 +1705,19 @@ final class Checker {
             taints[i] = a.taint();
         }
         analyseCall(f, taints, c.pos());
-        return new Ir.CallFn(f.name(), args, resolve(f.ret()), taint, c.pos());
+        return new Ir.CallFn(f.name(), args, signatureType(f, f.ret()), taint, c.pos());
+    }
+
+    /**
+     * A type in {@code f}'s signature, resolved where {@code f} is declared: a library fn's parameter and result types are
+     * its library's, whether or not the caller imports them (D9, M4).
+     */
+    private Ty signatureType(Syntax.Fn f, TypeRef t) {
+        Module m = owner.getOrDefault(f.name(), main);
+        if (m == current) return resolve(t);
+        Ty[] out = new Ty[1];
+        inModule(m, () -> out[0] = resolve(t));
+        return out[0];
     }
 
     private Ir.Expr stdCall(Std.Binding b, Call c, Sc sc) {
@@ -1562,8 +1954,12 @@ final class Checker {
     private Ir.Expr objLit(ObjLit o, Sc sc, Ty expected) {
         String recName;
         if (o.type() != null) {
-            if (variantEnum.containsKey(o.type())) return variantLit(o, sc);
+            if (variantEnum.containsKey(o.type())) {
+                visible(o.type(), o.pos());
+                return variantLit(o, sc);
+            }
             if (!records.containsKey(o.type())) throw o.pos().error("JSC0329", "unknown type " + o.type());
+            visible(o.type(), o.pos());
             recName = o.type();
         } else if (expected instanceof Ty.Rec r) {
             recName = r.name();

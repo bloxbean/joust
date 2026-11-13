@@ -103,8 +103,20 @@ export function validate(p) {
 
   // ---- top level and declarations
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
-    'recursiveFns', 'fns', 'methods', 'warnings'], 'program');
-  if (p.ir !== 1 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 1, not ${JSON.stringify(p.ir)}`);
+    'recursiveFns', 'libraries', 'fns', 'methods', 'warnings'], 'program');
+  if (p.ir !== 2 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 2, not ${JSON.stringify(p.ir)}`);
+  // Version 2 (ADR-0018 M4): the .jsc libraries the program imports, each with its declarations. A build's names are one
+  // namespace: a library's records, enums and fns join the program's, and no name is declared twice across them.
+  if (!Array.isArray(p.libraries)) fail('program', 'libraries is a list');
+  for (const l of p.libraries) {
+    keys(l, ['library', 'source', 'sourceSha256', 'records', 'enums', 'fns'], 'library');
+    if (!/^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Z][A-Za-z0-9]*$/.test(str(l.library, 'library'))) fail('library', `a bad class name ${l.library}`);
+    str(l.source, 'library');
+    if (typeof l.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(l.sourceSha256)) fail('library', 'sourceSha256 must be 64 hex digits');
+  }
+  const allRecords = [...p.libraries.flatMap((l) => l.records), ...p.records];
+  const allEnums = [...p.libraries.flatMap((l) => l.enums), ...p.enums];
+  const allFns = [...p.libraries.flatMap((l) => l.fns), ...p.fns];
   if (p.language !== 'jsc 2') fail('program', `not a .jsc 2 program: ${p.language}`);
   if (typeof p.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(p.sourceSha256)) fail('program', 'sourceSha256 must be 64 hex digits');
   for (const k of ['package', 'contract', 'source']) str(p[k], k);
@@ -121,9 +133,9 @@ export function validate(p) {
     shapes.set(r.name, r.fields);
     at(r.at, where);
   };
-  for (const r of p.records) record(r, 'record');
+  for (const r of allRecords) record(r, 'record');
   const enums = new Map();
-  for (const e of p.enums) {
+  for (const e of allEnums) {
     keys(e, ['name', 'variants', 'at'], 'enum');
     if (enums.has(e.name) || shapes.has(e.name)) fail('enum', `two declarations named ${e.name}`);
     enums.set(e.name, e.variants.map((v) => v.name));
@@ -235,7 +247,7 @@ export function validate(p) {
       } else if (kind !== 'lit') throw new Error(kind);
     }
   };
-  const fnArity = new Map(p.fns.map((f) => [f.name, Array.isArray(f.params) ? f.params.length : -1]));
+  const fnArity = new Map(allFns.map((f) => [f.name, Array.isArray(f.params) ? f.params.length : -1]));
   const arity = (where, what, got, want) => {
     if (got !== want) fail(where, `${what} takes ${want} argument(s), not ${got}`);
   };
@@ -284,7 +296,7 @@ export function validate(p) {
     at(s.at, where);
   }
   const fnNames = new Set();
-  for (const f of p.fns) {
+  for (const f of allFns) {
     keys(f, ['name', 'params', 'result', 'body', 'at'], 'fn');
     if (fnNames.has(f.name)) fail('fn', `two fns named ${f.name}`);
     fnNames.add(f.name);

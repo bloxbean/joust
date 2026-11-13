@@ -71,7 +71,7 @@ class JscV2IrTest {
         try (Stream<Path> s = Files.list(EXAMPLES)) {
             for (Path p : s.filter(p -> p.toString().endsWith(".jsc")).sorted().toList()) {
                 String text = Files.readString(p);
-                if (JscV2.isV2(text)) out.put(p.getFileName().toString(), text);
+                if (Examples.isContract(text)) out.put(p.getFileName().toString(), text);
             }
         }
         out.put("Forms.jsc", FORMS);
@@ -82,7 +82,7 @@ class JscV2IrTest {
     void theExport_roundTrips_toTheSameTextJavaAndManifest() throws Exception {
         var nodes = new TreeSet<String>();
         for (var e : sources().entrySet()) {
-            var lowered = JscV2.lower(e.getValue(), e.getKey());
+            var lowered = Examples.lower(e.getKey(), e.getValue());
             String json = lowered.irJson();
             assertTrue(json.startsWith("{\n  \"ir\": " + IrJson.VERSION + ",\n"), json.substring(0, 40));
             Ir.Program back = IrJson.read(json);
@@ -117,19 +117,45 @@ class JscV2IrTest {
         }
     }
 
+    /**
+     * Review r2 (coordinator, with M2b #84): the Java reader refuses an unknown field at every level, as the JavaScript
+     * reader does, so a field another format-2 addition writes (M2b's program-level params, a method's invariants) is
+     * refused rather than silently dropped. Each case adds one field to a valid export.
+     */
+    @Test
+    void aReader_refusesAnUnknownField_atEveryLevel() {
+        String json = JscV2.lower(FORMS, "Forms.jsc").irJson();
+        IrJson.read(json);   // the export itself reads
+        var cases = new java.util.LinkedHashMap<String, String[]>();
+        cases.put("the program", new String[]{"\"ir\": 2,", "\"ir\": 2, \"params\": null,"});
+        cases.put("a method", new String[]{"\"usesCtx\":", "\"invariants\": [], \"usesCtx\":"});
+        cases.put("a statement", new String[]{"\"stmt\": \"", "\"zz\": 1, \"stmt\": \""});
+        cases.put("an expression", new String[]{"\"node\": \"", "\"zz\": 1, \"node\": \""});
+        cases.put("a record", new String[]{"\"fields\": [", "\"zz\": 1, \"fields\": ["});
+        cases.put("a declaration", new String[]{"\"taint\": 0, \"at\"", "\"taint\": 0, \"zz\": 1, \"at\""});
+        cases.put("a block", new String[]{"\"stmts\": [", "\"zz\": 1, \"stmts\": ["});
+        for (var c : cases.entrySet()) {
+            String from = c.getValue()[0];
+            assertTrue(json.contains(from), c.getKey() + ": the export has " + from);
+            String bad = json.replaceFirst(java.util.regex.Pattern.quote(from), java.util.regex.Matcher.quoteReplacement(c.getValue()[1]));
+            var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(bad), c.getKey());
+            assertTrue(e.getMessage().contains("unknown field"), c.getKey() + ": " + e.getMessage());
+        }
+    }
+
     @Test
     void aReader_refusesAnotherVersion_anUnknownNode_andAnUndeclaredLocal() {
         String json = JscV2.lower(FORMS, "Forms.jsc").irJson();
-        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 2,")));
-        assertTrue(e.getMessage().contains("not a version 1"), e.getMessage());
+        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 2,", "\"ir\": 1,")));
+        assertTrue(e.getMessage().contains("not a version 2"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"node\": \"Arith\"", "\"node\": \"Arith2\"")));
         assertTrue(e.getMessage().contains("unknown node Arith2"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"local\": (\\d+)", "\"local\": 9999")));
         assertTrue(e.getMessage().contains("undeclared local 9999"), e.getMessage());
         // Review S3: the reader is strict, like the JavaScript one.
-        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 1.0,")));
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 2,", "\"ir\": 2.0,")));
         assertTrue(e.getMessage().contains("not a plain integer"), e.getMessage());
-        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 1,", "\"ir\": 1, \"ir\": 1,")));
+        e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replace("\"ir\": 2,", "\"ir\": 2, \"ir\": 2,")));
         assertTrue(e.getMessage().contains("duplicate key"), e.getMessage());
         e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.replaceFirst("\"value\": \"(\\d+)\"", "\"value\": \"0x10\"")));
         assertTrue(e.getMessage().contains("not a decimal integer: 0x10"), e.getMessage());
@@ -191,7 +217,7 @@ class JscV2IrTest {
             String name = e.getKey().replace(".jsc", ".ir.json");
             names.add(name);
             Path f = JS_FIXTURES.resolve(name);
-            String now = JscV2.lower(e.getValue(), e.getKey()).irJson();
+            String now = Examples.lower(e.getKey(), e.getValue()).irJson();
             if (write) Files.writeString(f, now);
             else if (!Files.exists(f) || !Files.readString(f).equals(now)) stale.add(name);
         }

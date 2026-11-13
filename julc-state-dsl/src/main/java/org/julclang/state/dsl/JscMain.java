@@ -27,8 +27,17 @@ public final class JscMain {
      * a v1 file's name is escaped instead, so existing v1 files keep rebuilding (ADR-0018 D16, review F16).
      */
     public static Lowered lowerWithWarnings(String source, String fileName) {
+        return lowerWithWarnings(source, fileName, null, org.julclang.state.dsl.v2.JscModules.NONE);
+    }
+
+    /**
+     * As {@link #lowerWithWarnings(String, String)}, for the module {@code id} of a build whose {@code .jsc} 2 libraries
+     * {@code modules} finds (ADR-0018 D9, M4): a contract's imports resolve, and a library lowers to its
+     * {@code @OnchainLibrary} class.
+     */
+    public static Lowered lowerWithWarnings(String source, String fileName, String id, org.julclang.state.dsl.v2.JscModules modules) {
         if (org.julclang.state.dsl.v2.JscV2.isV2(source)) {
-            var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName);
+            var r = org.julclang.state.dsl.v2.JscV2.lower(source, fileName, id, modules);
             return new Lowered(r.java(), r.diagnostics().stream().map(w -> new Warning(w.line(), w.col(), w.code(), w.message())).toList(),
                     fileName, r.sourceMapJson(), r.abiJson(), r.irJson());
         }
@@ -82,7 +91,12 @@ public final class JscMain {
 
     /** The package and class name the .jsc text declares, as a relative path {@code a/b/Name.java}. */
     static String outputPath(String source) {
-        if (org.julclang.state.dsl.v2.JscV2.isV2(source)) return org.julclang.state.dsl.v2.JscV2.outputPath(source);
+        return outputPath(source, null);
+    }
+
+    /** As {@link #outputPath(String)}; a {@code .jsc} 2 library's class is its capitalised file name {@code fileName}. */
+    public static String outputPath(String source, String fileName) {
+        if (org.julclang.state.dsl.v2.JscV2.isV2(source)) return org.julclang.state.dsl.v2.JscV2.outputPath(source, fileName);
         var c = Parser.parse(source);
         return c.pkg().replace('.', '/') + "/" + c.name() + ".java";
     }
@@ -141,11 +155,12 @@ public final class JscMain {
             }
         }
         int errors = 0, checked = 0;
+        var modules = modules(src, files);
         for (Path f : files) {
             String text = Files.readString(f);
-            if (!org.julclang.state.dsl.v2.JscV2.isV2(text)) continue;
+            if (!org.julclang.state.dsl.v2.JscV2.isV2(text) || org.julclang.state.dsl.v2.JscV2.isLibrary(text)) continue;
             String name = src.relativize(f).toString();
-            var lowered = org.julclang.state.dsl.v2.JscV2.lower(text, f.getFileName().toString());
+            var lowered = org.julclang.state.dsl.v2.JscV2.lower(text, f.getFileName().toString(), id(src, f), modules);
             String path = lowered.javaPath();
             String pkg = path.contains("/") ? path.substring(0, path.lastIndexOf('/')).replace('/', '.') : "";
             String contract = path.substring(path.lastIndexOf('/') + 1).replace(".java", "");
@@ -412,7 +427,7 @@ public final class JscMain {
                     // The unit a file declares, as the parser reads it: comments and strings are never declarations
                     // (review r3 C3).
                     try {
-                        if (outputPath(Files.readString(p)).equals(javaRel)) found.add(p);
+                        if (outputPath(Files.readString(p), p.getFileName().toString()).equals(javaRel)) found.add(p);
                     } catch (JscException | IOException e) {
                         // A file that does not parse generated nothing.
                     }
@@ -420,6 +435,18 @@ public final class JscMain {
             }
         }
         return found.size() == 1 ? found.get(0).toString() : null;
+    }
+
+    /** A file's module id in a build over {@code src}: its relative path, '/'-separated (ADR-0018 D9, M4). */
+    static String id(Path src, Path f) {
+        return src.relativize(f).toString().replace('\\', '/');
+    }
+
+    /** The {@code .jsc} files of a source tree as modules, by id: what their {@code ./x.jsc} imports resolve to. */
+    static org.julclang.state.dsl.v2.JscModules modules(Path src, List<Path> files) throws IOException {
+        var texts = new java.util.LinkedHashMap<String, String>();
+        for (Path f : files) texts.put(id(src, f), Files.readString(f));
+        return org.julclang.state.dsl.v2.JscModules.of(texts);
     }
 
     public static void main(String[] args) throws IOException {
@@ -457,6 +484,8 @@ public final class JscMain {
         }
         int errors = 0;
         var written = new java.util.HashSet<Path>();
+        // ADR-0018 D9 (M4): the .jsc libraries the files import are files of the same tree, by relative path.
+        var modules = modules(src, files);
         // Start clean: a deleted or renamed .jsc must not leave a stale contract behind.
         if (Files.isDirectory(out)) {
             try (Stream<Path> s = Files.walk(out)) {
@@ -467,12 +496,13 @@ public final class JscMain {
             String text = Files.readString(f);
             String name = src.relativize(f).toString();
             try {
-                var lowered = lowerWithWarnings(text, f.getFileName().toString());
+                var lowered = lowerWithWarnings(text, f.getFileName().toString(), id(src, f), modules);
                 lowered.diagnostics().forEach(w -> System.err.println(w.format(name)));
                 String java = lowered.java();
-                Path target = out.resolve(outputPath(text));
+                String rel = outputPath(text, f.getFileName().toString());
+                Path target = out.resolve(rel);
                 if (Files.exists(target) && written.contains(target)) {
-                    throw new JscException(1, 1, "another .jsc file already generates " + outputPath(text));
+                    throw new JscException(1, 1, "another .jsc file already generates " + rel);
                 }
                 written.add(target);
                 if (lowered.abiJson() != null) {

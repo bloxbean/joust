@@ -222,6 +222,15 @@ that still happens in the front end is JSC0005, never a crash.
 | JSC0702 | error | ' … ' is not in … (it is in … ) | Checker |
 | JSC0703 | error | ' … ' is imported and also declared as a fn; rename the fn | Checker |
 | JSC0704 | error | is in … : import { … } from " … " | Checker |
+| JSC0705 | error | a library's file name is its Java class (fees.jsc is the class Fees of its package): ' … ' gives ' … ', which is not a class name the generated code can use; name the file with letters and digits only | Checker |
+| JSC0706 | error | ' … ' is not a module: a .jsc library is imported by its path relative to this file, ending in .jsc; or: no .jsc library … beside … under the sources | Checker |
+| JSC0707 | error | these libraries import each other: … -> …; a library's imports form no cycle (move what both need into a third library) | Checker |
+| JSC0708 | error | ' … ' is not declared in … : a library exports its types, enums and fns; or: … is a contract, not a library | Checker |
+| JSC0709 | error | the … is also declared in …: the declarations of a build (a contract and the libraries it imports) share one namespace; rename one (also: two libraries with one class or one class name, a declaration or binding taking a library's class name) | Checker |
+| JSC0710 | error | ' … ' is declared in … : import { … } from it to use it here (a library's declarations are seen only where they are imported) | Checker |
+| JSC0711 | error | a library holds imports, types, enums and fns, not a contract: write the contract in its own file and import the library there | Parser |
+| JSC0712 | error | in the imported library …: error[…]: … (an error in a library, reported at the import that brings it into this build) | Checker |
+| JSC0720 | error | Java library imports (java:…) are not available yet (ADR-0018 D9, M4b) | Checker |
 
 ## Map and BigMap (ADR-0018 D5, D7, J14)
 

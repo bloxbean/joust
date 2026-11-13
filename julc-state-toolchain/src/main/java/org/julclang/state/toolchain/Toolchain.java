@@ -194,15 +194,16 @@ public final class Toolchain {
 
     private static Result build(Map<String, String> files, Map<String, String> options, List<Generated> generatedOut) {
         var diagnostics = new ArrayList<Diagnostic>();
-        // 1. .jsc → Java.
+        // 1. .jsc → Java. A .jsc 2 file's ./x.jsc imports name other files of the build, by path (ADR-0018 D9, M4).
         var sources = new LinkedHashMap<String, String>();
+        var modules = org.julclang.state.dsl.v2.JscModules.of(files);
         files.forEach((name, text) -> {
             if (name.endsWith(".jsc")) {
                 try {
                     // The bare file name, as Gradle's generateJsc passes it: the lowering embeds it. A .jsc 2 file's name
                     // must be [A-Za-z0-9][A-Za-z0-9._-]* (else a 1:1 error, security S3); a v1 file's name is escaped.
                     String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
-                    var lowered = JscMain.lowerWithWarnings(text, base);
+                    var lowered = JscMain.lowerWithWarnings(text, base, name.replace('\\', '/'), modules);
                     sources.put(name.replaceAll("\\.jsc$", ".java"), lowered.java());
                     generatedOut.add(new Generated(name, javaPath(lowered.java(), name), lowered.java(), lowered.sourceMapJson(), lowered.abiJson(),
                             lowered.irJson()));
@@ -270,6 +271,16 @@ public final class Toolchain {
                         } catch (java.io.IOException e) {
                             throw new java.io.UncheckedIOException(e);
                         }
+                        continue;
+                    }
+                    // A .jsc library's generated class is checked by SubsetLint's rules too (ADR-0018 D1, D9; M4).
+                    if (element instanceof TypeElement lib && isOnchainLibrary(lib)
+                            && generatedPaths.contains(unit.getSourceFile().getName().replaceFirst("^/", ""))) {
+                        SubsetLint.lint(attribution.trees(), lib, (trees, node, cu, message) -> {
+                            long pos = trees.getSourcePositions().getStartPosition(cu, node);
+                            diagnostics.add(new Diagnostic(Severity.ERROR, message, cu.getSourceFile().getName(),
+                                    pos < 0 ? -1 : cu.getLineMap().getLineNumber(pos), "joust-lint"));
+                        });
                         continue;
                     }
                     if (!(element instanceof TypeElement type) || !isStateContract(type)) continue;
@@ -408,6 +419,13 @@ public final class Toolchain {
             }
         }
         return out;
+    }
+
+    static final String ONCHAIN_LIBRARY = "org.julclang.stdlib.annotation.OnchainLibrary";
+
+    private static boolean isOnchainLibrary(TypeElement type) {
+        return type.getAnnotationMirrors().stream().anyMatch(a ->
+                ((TypeElement) a.getAnnotationType().asElement()).getQualifiedName().contentEquals(ONCHAIN_LIBRARY));
     }
 
     private static boolean isStateContract(TypeElement type) {

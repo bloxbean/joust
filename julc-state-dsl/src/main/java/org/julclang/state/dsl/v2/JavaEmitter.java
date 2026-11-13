@@ -30,7 +30,16 @@ final class JavaEmitter {
      * the source map (D12), so tooling turns a trace back into a {@code .jsc} position; none of this reaches the script
      * except {@code message}.
      */
-    record Check(String message, String kind, Syntax.Pos pos, String in, String what) {}
+    record Check(String message, String kind, Syntax.Pos pos, String in, String what, String file) {
+        Check(String message, String kind, Syntax.Pos pos, String in, String what) {
+            this(message, kind, pos, in, what, null);
+        }
+
+        /** The same check, raised in another file of the build: an imported library (ADR-0018 D9, M4). */
+        Check in(String otherFile) {
+            return new Check(message, kind, pos, in, what, otherFile);
+        }
+    }
 
     /** The emitted Java and every message it can trace. */
     record Emitted(String java, List<Check> checks) {}
@@ -47,6 +56,12 @@ final class JavaEmitter {
      * {@code IntentCall} variant ({@link Abi#intentOrder}; M1 integration, review S1).
      */
     private final Map<String, String> redeemers = new HashMap<>();
+    /**
+     * The words that mark a library class as generated from {@code .jsc}: the processor lints such a class (D1, J1;
+     * {@code JoustProcessor.JSC_LIBRARY_MARKER}, kept equal by {@code ProcessorDiagnosticsTest}, which lints a real
+     * lowering; design F2, r2).
+     */
+    static final String LIBRARY_MARKER = "by julc-state-dsl (ADR-0018, a .jsc 2 library)";
     private final Set<String> imports = new TreeSet<>();
     private final LinkedHashMap<String, String> helpers = new LinkedHashMap<>();
     private int counter;
@@ -60,12 +75,34 @@ final class JavaEmitter {
     static Emitted emit(Ir.Program p) {
         var e = new JavaEmitter(p);
         String java = e.source();
-        return new Emitted(java, List.copyOf(e.checks));
+        // The messages the libraries' code can trace are the script's too (JuLC compiles their bodies into it): each
+        // with its site in the library's file (D12, J20).
+        var checks = new ArrayList<>(e.checks);
+        for (Ir.Library l : p.libraries()) {
+            for (Check c : new JavaEmitter(libraryProgram(p, l)).checksOnly()) checks.add(c.in(l.fileName()));
+        }
+        return new Emitted(java, List.copyOf(checks));
+    }
+
+    /** {@code l} as a program of its own, with the other libraries of {@code p} (its dependencies among them). */
+    static Ir.Program libraryProgram(Ir.Program p, Ir.Library l) {
+        var deps = new ArrayList<Ir.Library>();
+        for (Ir.Library x : p.libraries()) if (x != l) deps.add(x);
+        String pkg = l.qualified().substring(0, l.qualified().lastIndexOf('.'));
+        return new Ir.Program(pkg, l.fileName(), l.simpleName(), List.of(), l.records(), l.enums(), null, List.of(), l.fns(),
+                java.util.Set.of(), java.util.Set.of(), List.of(), true, List.copyOf(deps));
+    }
+
+    /** Emits the program only for the messages it can trace. */
+    private List<Check> checksOnly() {
+        source();
+        return checks;
     }
 
     // ------------------------------------------------------------------ the class
 
     private String source() {
+        if (p.library()) return librarySource();
         List<Ir.Method> spend = Abi.spendOrder(p), intents = Abi.intentOrder(p);
         for (int i = 0; i < spend.size(); i++) redeemers.put(spend.get(i).name(), "spend" + i);
         for (int k = 0; k < intents.size(); k++) redeemers.putIfAbsent(intents.get(k).name(), "intent" + k);
@@ -79,22 +116,7 @@ final class JavaEmitter {
         var records = new StringBuilder();
         records.append("    // ").append(mark(p.state().pos())).append("\n");
         records.append("    public record State(").append(components(p.state())).append(") {}\n\n");
-        for (Ir.RecordType r : p.records().values()) {
-            records.append("    // ").append(mark(r.pos())).append("\n");
-            records.append("    public record ").append(r.name()).append("(").append(components(r)).append(") {}\n\n");
-        }
-        // An enum: a sealed interface whose permits clause lists the variants in declaration order, which is their
-        // constructor tag (D5) for JuLC, the runtime's codec, the description and the portable codecs alike.
-        for (Ir.EnumType e : p.enums().values()) {
-            records.append("    // ").append(mark(e.pos())).append("\n");
-            records.append("    public sealed interface ").append(e.name()).append(" permits ")
-                    .append(String.join(", ", e.variantNames())).append(" {}\n");
-            for (Ir.RecordType v : e.variants().values()) {
-                records.append("    public record ").append(v.name()).append("(").append(components(v)).append(") implements ")
-                        .append(e.name()).append(" {}\n");
-            }
-            records.append("\n");
-        }
+        records.append(typeDecls());
         if (outcome) {
             imports.add("org.julclang.core.types.JulcList");
             imports.add("org.julclang.state.api.Payout");
@@ -121,6 +143,57 @@ final class JavaEmitter {
         out.append(records);
         out.append(body);
         // A helper with no .jsc position (equality, checks, map and list helpers) is marked as generated (source map).
+        for (String h : helpers.values()) out.append(h.startsWith("    // ") ? "" : "    // (generated)\n").append(h);
+        out.append("}\n");
+        return out.toString();
+    }
+
+    /** The program's own records and enums (a library's are declared in its class). */
+    private String typeDecls() {
+        var records = new StringBuilder();
+        for (Ir.RecordType r : p.records().values()) {
+            records.append("    // ").append(mark(r.pos())).append("\n");
+            records.append("    public record ").append(r.name()).append("(").append(components(r)).append(") {}\n\n");
+        }
+        // An enum: a sealed interface whose permits clause lists the variants in declaration order, which is their
+        // constructor tag (D5) for JuLC, the runtime's codec, the description and the portable codecs alike.
+        for (Ir.EnumType e : p.enums().values()) {
+            records.append("    // ").append(mark(e.pos())).append("\n");
+            records.append("    public sealed interface ").append(e.name()).append(" permits ")
+                    .append(String.join(", ", e.variantNames())).append(" {}\n");
+            for (Ir.RecordType v : e.variants().values()) {
+                records.append("    public record ").append(v.name()).append("(").append(components(v)).append(") implements ")
+                        .append(e.name()).append(" {}\n");
+            }
+            records.append("\n");
+        }
+        return records.toString();
+    }
+
+    /**
+     * A {@code .jsc} library (ADR-0018 D9, M4): a JuLC {@code @OnchainLibrary} class of its records, enums and fns,
+     * each fn {@code public static}, so Java contracts call it as they call any on-chain library. Its helpers are
+     * package-private, named with {@code __} (no {@code .jsc} name has one), and generated in the class whose code needs
+     * them.
+     */
+    private String librarySource() {
+        var body = new StringBuilder();
+        for (Ir.Fn f : p.fns()) body.append(fn(f));
+        String records = typeDecls();
+        imports.add("org.julclang.stdlib.annotation.OnchainLibrary");
+        String text = records + "\n" + body + "\n" + String.join("", helpers.values());
+        for (var t : TYPES.entrySet()) {
+            if (java.util.regex.Pattern.compile("\\b" + t.getKey() + "\\b").matcher(text).find()) imports.add(t.getValue());
+        }
+        var out = new StringBuilder();
+        out.append("package ").append(p.pkg()).append(";\n\n");
+        for (String im : imports) out.append("import ").append(im).append(";\n");
+        out.append("\n/**\n * GENERATED from ").append(p.fileName())
+                .append(" ").append(LIBRARY_MARKER).append(". Do not edit: change the .jsc file.\n */\n");
+        out.append("@OnchainLibrary\n");
+        out.append("public class ").append(p.name()).append(" {\n\n");
+        out.append(records);
+        out.append(body);
         for (String h : helpers.values()) out.append(h.startsWith("    // ") ? "" : "    // (generated)\n").append(h);
         out.append("}\n");
         return out.toString();
@@ -160,8 +233,8 @@ final class JavaEmitter {
                 imports.add("java.util.Optional");
                 yield "Optional<" + jt(o.elem(), true) + ">";
             }
-            case Ty.Rec r -> r.name();
-            case Ty.EnumT e -> e.name();
+            case Ty.Rec r -> qual(r.name());
+            case Ty.EnumT e -> qual(e.name());
             case Ty.MapT m -> {
                 imports.add("org.julclang.core.types.JulcMap");
                 yield "JulcMap<byte[], " + jt(m.val(), true) + ">";
@@ -175,6 +248,17 @@ final class JavaEmitter {
 
     private String jt(Ty t) {
         return jt(t, false);
+    }
+
+    /**
+     * A type, enum or variant name as the generated Java names it: a library's through its class ({@code Fees.Line}),
+     * which is imported (ADR-0018 D9, M4; JuLC follows imports, and needs them for same-package classes too).
+     */
+    private String qual(String name) {
+        Ir.Library l = p.libraryOf(name);
+        if (l == null) return name;
+        imports.add(l.qualified());
+        return l.simpleName() + "." + name;
     }
 
     private void addHelper(String name, String code) {
@@ -759,12 +843,12 @@ final class JavaEmitter {
                 if (simple(t)) yield t + "." + g.field() + "()";
                 // JuLC needs a typed receiver before an accessor on a call result: an accessor helper keeps it lazy.
                 String h = "get__" + g.record() + "_" + g.field();
-                addHelper(h, "    static " + jt(g.type()) + " " + h + "(" + g.record() + " r__) {\n        return r__." + g.field()
+                addHelper(h, "    static " + jt(g.type()) + " " + h + "(" + qual(g.record()) + " r__) {\n        return r__." + g.field()
                         + "();\n    }\n\n");
                 yield h + "(" + t + ")";
             }
-            case Ir.New n -> "new " + n.record() + "(" + String.join(", ", n.values().stream().map(this::ex).toList()) + ")";
-            case Ir.CallFn c -> c.fn() + "(" + String.join(", ", c.args().stream().map(this::ex).toList()) + ")";
+            case Ir.New n -> "new " + qual(n.record()) + "(" + String.join(", ", n.values().stream().map(this::ex).toList()) + ")";
+            case Ir.CallFn c -> qual(c.fn()) + "(" + String.join(", ", c.args().stream().map(this::ex).toList()) + ")";
             case Ir.CallStd c -> callStd(c);
             case Ir.Prelude c -> prelude(c);
             case Ir.TimePred t -> {
@@ -797,7 +881,7 @@ final class JavaEmitter {
             case Ir.Contains c -> contains(c);
             case Ir.Hof h -> hof(h);
             case Ir.Fold f -> fold(f);
-            case Ir.Variant v -> "new " + v.variant() + "(" + String.join(", ", v.values().stream().map(this::ex).toList()) + ")";
+            case Ir.Variant v -> "new " + qual(v.variant()) + "(" + String.join(", ", v.values().stream().map(this::ex).toList()) + ")";
             case Ir.Match m -> match(m);
             case Ir.MapEmpty m -> mapEmpty(((Ty.MapT) m.type()).val());
             case Ir.MapOp m -> mapOp(m);
@@ -1154,8 +1238,8 @@ final class JavaEmitter {
                     + calls.get("None") + ";\n        }\n";
         } else {
             var cases = new StringBuilder();
-            for (String v : p.enums().get(((Ty.EnumT) scrutinee.type()).name()).variantNames()) {
-                cases.append("            case ").append(v).append(" x__ -> ").append(calls.get(v)).append(";\n");
+            for (String v : p.enumType(((Ty.EnumT) scrutinee.type()).name()).variantNames()) {
+                cases.append("            case ").append(qual(v)).append(" x__ -> ").append(calls.get(v)).append(";\n");
             }
             body = "        return switch (v__) {\n" + cases + "        };\n";
         }
@@ -1384,7 +1468,7 @@ final class JavaEmitter {
             }
             case Ty.EnumT e -> {
                 // Tag, then fields: a switch on each side, so no cast and no equals (D6, J8).
-                var vs = p.enums().get(e.name()).variantNames();
+                var vs = p.enumType(e.name()).variantNames();
                 var cases = new StringBuilder();
                 for (String a : vs) {
                     var inner = new StringBuilder();
@@ -1395,9 +1479,9 @@ final class JavaEmitter {
                             p.record(a).fields().forEach((n, ft) -> parts.add(elemEq(ft, "x__." + n + "()", "y__." + n + "()", false)));
                             same = parts.isEmpty() ? "true" : String.join(" && ", parts);
                         }
-                        inner.append("                case ").append(b).append(" y__ -> ").append(same).append(";\n");
+                        inner.append("                case ").append(qual(b)).append(" y__ -> ").append(same).append(";\n");
                     }
-                    cases.append("            case ").append(a).append(" x__ -> switch (b__) {\n").append(inner).append("            };\n");
+                    cases.append("            case ").append(qual(a)).append(" x__ -> switch (b__) {\n").append(inner).append("            };\n");
                 }
                 body = "return switch (a__) {\n" + cases + "        };";
             }
@@ -1432,9 +1516,9 @@ final class JavaEmitter {
     }
 
     private List<Ty> components(String name) {
-        if (p.enums().containsKey(name)) {
+        if (p.enumType(name) != null) {
             var out = new ArrayList<Ty>();
-            p.enums().get(name).variants().values().forEach(v -> out.addAll(v.fields().values()));
+            p.enumType(name).variants().values().forEach(v -> out.addAll(v.fields().values()));
             return out;
         }
         return List.copyOf(p.record(name).fields().values());
@@ -1448,12 +1532,12 @@ final class JavaEmitter {
             case Ty.Prim pr -> "return ByteStringLib.length(v__) == 28;";
             case Ty.EnumT e -> {
                 var cases = new StringBuilder();
-                for (Ir.RecordType vr : p.enums().get(e.name()).variants().values()) {
+                for (Ir.RecordType vr : p.enumType(e.name()).variants().values()) {
                     var parts = new ArrayList<String>();
                     vr.fields().forEach((n, ft) -> {
                         if (Ty.needsCheck(ft, this::components)) parts.add(checkCall(ft, "x__." + n + "()"));
                     });
-                    cases.append("            case ").append(vr.name()).append(" x__ -> ").append(parts.isEmpty() ? "true" : String.join(" && ", parts))
+                    cases.append("            case ").append(qual(vr.name())).append(" x__ -> ").append(parts.isEmpty() ? "true" : String.join(" && ", parts))
                             .append(";\n");
                 }
                 yield "return switch (v__) {\n" + cases + "        };";

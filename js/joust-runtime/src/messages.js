@@ -53,7 +53,8 @@ export function messageSites(text, contract) {
   if (!m?.messages) return [];
   const best = matchingMessage(text, Object.keys(m.messages));
   if (best === null) return [];
-  return [...new Set(m.messages[best].map((s) => `${m.source}:${s.line}:${s.col} (${describe(s)})`))];
+  // A site in an imported .jsc library names its file (ADR-0018 D9, M4); the map's own file is the default.
+  return [...new Set(m.messages[best].map((s) => `${s.file ?? m.source}:${s.line}:${s.col} (${describe(s)})`))];
 }
 
 /** A refusal's text with the .jsc position(s) of its message, from the refusing contract's map when it has one. */

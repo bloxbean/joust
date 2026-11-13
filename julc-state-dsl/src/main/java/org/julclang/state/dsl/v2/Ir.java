@@ -21,22 +21,51 @@ final class Ir {
     /** Taint bits (D11): the value depends on a time value; on the current call's validity window. */
     static final int TIME = 1, WINDOW = 2;
 
+    /**
+     * A checked program: a contract, or a library ({@code library}: no options, state or methods; {@code name} is its
+     * class). {@code records}, {@code enums} and {@code fns} are the file's own; {@code libraries} holds the declarations
+     * of every {@code .jsc} library it imports, transitively, in dependency order (ADR-0018 D9, M4). A build's
+     * declarations share one namespace, so a name means one declaration across the program and its libraries.
+     */
     record Program(String pkg, String fileName, String name, List<ContractOption> options,
                    Map<String, RecordType> records, Map<String, EnumType> enums, RecordType state, List<Method> methods,
-                   List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings) {
+                   List<Fn> fns, Set<String> timeFields, Set<String> recursiveFns, List<Warning> warnings, boolean library,
+                   List<Library> libraries) {
 
-        /** A record type, the state, or an enum variant (variant names are unique in a file). */
+        /** A contract without libraries (the form before M4). */
+        Program(String pkg, String fileName, String name, List<ContractOption> options, Map<String, RecordType> records,
+                Map<String, EnumType> enums, RecordType state, List<Method> methods, List<Fn> fns, Set<String> timeFields,
+                Set<String> recursiveFns, List<Warning> warnings) {
+            this(pkg, fileName, name, options, records, enums, state, methods, fns, timeFields, recursiveFns, warnings, false, List.of());
+        }
+
+        /** A record type, the state, or an enum variant (variant names are unique in a build), own or a library's. */
         RecordType record(String name) {
-            if (name.equals("State")) return state;
+            if (name.equals("State") && state != null) return state;
             RecordType r = records.get(name);
             if (r != null) return r;
             for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return e.variants().get(name);
+            for (Library l : libraries) {
+                RecordType x = l.record(name);
+                if (x != null) return x;
+            }
             return null;
         }
 
         /** The enum a variant belongs to, or null. */
         EnumType enumOf(String variant) {
             for (EnumType e : enums.values()) if (e.variants().containsKey(variant)) return e;
+            for (Library l : libraries) {
+                for (EnumType e : l.enums().values()) if (e.variants().containsKey(variant)) return e;
+            }
+            return null;
+        }
+
+        /** The enum named {@code name}, own or a library's, or null. */
+        EnumType enumType(String name) {
+            EnumType e = enums.get(name);
+            if (e != null) return e;
+            for (Library l : libraries) if (l.enums().containsKey(name)) return l.enums().get(name);
             return null;
         }
 
@@ -47,7 +76,47 @@ final class Ir {
 
         Fn fn(String name) {
             for (Fn f : fns) if (f.name().equals(name)) return f;
+            for (Library l : libraries) for (Fn f : l.fns()) if (f.name().equals(name)) return f;
             return null;
+        }
+
+        /**
+         * The library declaring the type, enum, variant or fn {@code name}, or null when the program declares it (or
+         * nothing does).
+         */
+        Library libraryOf(String name) {
+            if (name.equals("State") && state != null) return null;
+            if (records.containsKey(name) || enums.containsKey(name)) return null;
+            for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return null;
+            for (Fn f : fns) if (f.name().equals(name)) return null;
+            for (Library l : libraries) if (l.declares(name)) return l;
+            return null;
+        }
+    }
+
+    /**
+     * A {@code .jsc} library a program imports (ADR-0018 D9, M4): its Java class ({@code app.Fees}), its file and the
+     * SHA-256 of its text, and its checked declarations.
+     */
+    record Library(String qualified, String fileName, String sourceSha256, Map<String, RecordType> records,
+                   Map<String, EnumType> enums, List<Fn> fns) {
+        /** The class's simple name ({@code Fees}). */
+        String simpleName() {
+            return qualified.substring(qualified.lastIndexOf('.') + 1);
+        }
+
+        RecordType record(String name) {
+            RecordType r = records.get(name);
+            if (r != null) return r;
+            for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return e.variants().get(name);
+            return null;
+        }
+
+        boolean declares(String name) {
+            if (records.containsKey(name) || enums.containsKey(name)) return true;
+            for (EnumType e : enums.values()) if (e.variants().containsKey(name)) return true;
+            for (Fn f : fns) if (f.name().equals(name)) return true;
+            return false;
         }
     }
 
