@@ -35,6 +35,9 @@
         ] },
       { "name": "Close", "constr": 5, "fields": [
           { "name": "ctx", "type": "Ctx", "data": "Ctx" }
+        ] },
+      { "name": "Retire", "constr": 6, "fields": [
+          { "name": "ctx", "type": "Ctx", "data": "Ctx" }
         ] }
     ],
     "mint": [

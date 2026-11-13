@@ -1,7 +1,7 @@
 {
   "ir": 1,
   "language": "jsc 2",
-  "sourceSha256": "9386a6463bad82c53c985971c1c4f9187038510672549b1ed2123075bb54c9ca",
+  "sourceSha256": "1a1fa0d33a766fa077903b588f33fad1f1bc48fdd6a6fc7384f87de2eee5819a",
   "package": "org.julclang.state.examples.dsl",
   "contract": "Wards",
   "source": "Wards.jsc",
@@ -511,6 +511,29 @@
       "at": [50, 3]
     },
     {
+      "kind": "destroy",
+      "name": "retire",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [60, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [60, 16] },
+            "at": [60, 5]
+          }
+        ],
+        "result": null,
+        "at": [59, 31]
+      },
+      "at": [59, 3]
+    },
+    {
       "kind": "view",
       "name": "beneficiaryKey",
       "params": [],
@@ -525,14 +548,14 @@
           "node": "CallStd",
           "module": "std/address",
           "name": "paymentKey",
-          "args": [{ "node": "StateField", "field": "beneficiary", "type": "Address", "taint": 0, "at": [57, 51] }],
+          "args": [{ "node": "StateField", "field": "beneficiary", "type": "Address", "taint": 0, "at": [63, 51] }],
           "type": { "option": "Key" },
           "taint": 0,
-          "at": [57, 40]
+          "at": [63, 40]
         },
-        "at": [57, 40]
+        "at": [63, 40]
       },
-      "at": [57, 3]
+      "at": [63, 3]
     },
     {
       "kind": "view",
@@ -547,43 +570,43 @@
         "stmts": [],
         "result": {
           "node": "Match",
-          "scrutinee": { "node": "StateField", "field": "guard", "type": "Credential", "taint": 0, "at": [58, 35] },
+          "scrutinee": { "node": "StateField", "field": "guard", "type": "Credential", "taint": 0, "at": [64, 35] },
           "arms": [
             {
               "ctors": ["KeyCred"],
               "fields": ["key"],
-              "binds": [{ "id": 13, "name": "key", "type": "Key", "taint": 0, "at": [59, 15] }],
+              "binds": [{ "id": 13, "name": "key", "type": "Key", "taint": 0, "at": [65, 15] }],
               "body": {
                 "stmts": [],
-                "result": { "node": "LocalRef", "local": 13, "type": "Key", "taint": 0, "at": [59, 24] },
-                "at": [59, 24]
+                "result": { "node": "LocalRef", "local": 13, "type": "Key", "taint": 0, "at": [65, 24] },
+                "at": [65, 24]
               },
-              "at": [59, 5]
+              "at": [65, 5]
             },
             {
               "ctors": ["ScriptCred"],
               "fields": ["hash"],
-              "binds": [{ "id": 14, "name": "hash", "type": "Hash", "taint": 0, "at": [60, 18] }],
+              "binds": [{ "id": 14, "name": "hash", "type": "Hash", "taint": 0, "at": [66, 18] }],
               "body": {
                 "stmts": [],
-                "result": { "node": "LocalRef", "local": 14, "type": "Hash", "taint": 0, "at": [60, 28] },
-                "at": [60, 28]
+                "result": { "node": "LocalRef", "local": 14, "type": "Hash", "taint": 0, "at": [66, 28] },
+                "at": [66, 28]
               },
-              "at": [60, 5]
+              "at": [66, 5]
             }
           ],
           "type": "Bytes",
           "taint": 0,
-          "at": [58, 29]
+          "at": [64, 29]
         },
-        "at": [58, 29]
+        "at": [64, 29]
       },
-      "at": [58, 3]
+      "at": [64, 3]
     },
     {
       "kind": "view",
       "name": "walletOf",
-      "params": [{ "id": 15, "name": "k", "type": "Key", "taint": 0, "at": [62, 17] }],
+      "params": [{ "id": 15, "name": "k", "type": "Key", "taint": 0, "at": [68, 17] }],
       "mods": [],
       "checked": [],
       "usesCtx": false,
@@ -595,24 +618,24 @@
           "node": "LedgerOp",
           "op": "walletStaked",
           "args": [
-            { "node": "LocalRef", "local": 15, "type": "Key", "taint": 0, "at": [62, 43] },
-            { "node": "LocalRef", "local": 15, "type": "Key", "taint": 0, "at": [62, 46] }
+            { "node": "LocalRef", "local": 15, "type": "Key", "taint": 0, "at": [68, 43] },
+            { "node": "LocalRef", "local": 15, "type": "Key", "taint": 0, "at": [68, 46] }
           ],
           "type": "Address",
           "taint": 0,
-          "at": [62, 36]
+          "at": [68, 36]
         },
-        "at": [62, 36]
+        "at": [68, 36]
       },
-      "at": [62, 3]
+      "at": [68, 3]
     },
     {
       "kind": "action",
       "name": "pair",
       "params": [
-        { "id": 16, "name": "policy", "type": "Hash", "taint": 0, "at": [65, 15] },
-        { "id": 17, "name": "a", "type": "Bytes", "taint": 0, "at": [65, 29] },
-        { "id": 18, "name": "b", "type": "Bytes", "taint": 0, "at": [65, 39] }
+        { "id": 16, "name": "policy", "type": "Hash", "taint": 0, "at": [71, 15] },
+        { "id": 17, "name": "a", "type": "Bytes", "taint": 0, "at": [71, 29] },
+        { "id": 18, "name": "b", "type": "Bytes", "taint": 0, "at": [71, 39] }
       ],
       "mods": [{ "name": "payable" }],
       "checked": [16],
@@ -631,46 +654,46 @@
                   "node": "LedgerOp",
                   "op": "asset",
                   "args": [
-                    { "node": "LocalRef", "local": 16, "type": "Hash", "taint": 0, "at": [66, 24] },
-                    { "node": "LocalRef", "local": 17, "type": "Bytes", "taint": 0, "at": [66, 32] },
-                    { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [66, 35] }
+                    { "node": "LocalRef", "local": 16, "type": "Hash", "taint": 0, "at": [72, 24] },
+                    { "node": "LocalRef", "local": 17, "type": "Bytes", "taint": 0, "at": [72, 32] },
+                    { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [72, 35] }
                   ],
                   "type": "Value",
                   "taint": 0,
-                  "at": [66, 12]
+                  "at": [72, 12]
                 },
                 {
                   "node": "LedgerOp",
                   "op": "asset",
                   "args": [
-                    { "node": "LocalRef", "local": 16, "type": "Hash", "taint": 0, "at": [66, 52] },
-                    { "node": "LocalRef", "local": 18, "type": "Bytes", "taint": 0, "at": [66, 60] },
-                    { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [66, 63] }
+                    { "node": "LocalRef", "local": 16, "type": "Hash", "taint": 0, "at": [72, 52] },
+                    { "node": "LocalRef", "local": 18, "type": "Bytes", "taint": 0, "at": [72, 60] },
+                    { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [72, 63] }
                   ],
                   "type": "Value",
                   "taint": 0,
-                  "at": [66, 40]
+                  "at": [72, 40]
                 }
               ],
               "type": "Value",
               "taint": 0,
-              "at": [66, 12]
+              "at": [72, 12]
             },
-            "at": [66, 5]
+            "at": [72, 5]
           }
         ],
-        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [67, 12] },
-        "at": [65, 57]
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [73, 12] },
+        "at": [71, 57]
       },
-      "at": [65, 3]
+      "at": [71, 3]
     },
     {
       "kind": "action",
       "name": "edges",
       "params": [
-        { "id": 19, "name": "add", "type": "Bool", "taint": 0, "at": [71, 16] },
-        { "id": 20, "name": "n", "type": "Int", "taint": 0, "at": [71, 27] },
-        { "id": 21, "name": "m", "type": "Int", "taint": 0, "at": [71, 35] }
+        { "id": 19, "name": "add", "type": "Bool", "taint": 0, "at": [77, 16] },
+        { "id": 20, "name": "n", "type": "Int", "taint": 0, "at": [77, 27] },
+        { "id": 21, "name": "m", "type": "Int", "taint": 0, "at": [77, 35] }
       ],
       "mods": [],
       "checked": [],
@@ -681,10 +704,10 @@
         "stmts": [
           {
             "stmt": "Let",
-            "local": { "id": 22, "name": "r", "type": "Value", "taint": 0, "at": [72, 5] },
+            "local": { "id": 22, "name": "r", "type": "Value", "taint": 0, "at": [78, 5] },
             "value": {
               "node": "Cond",
-              "cond": { "node": "LocalRef", "local": 19, "type": "Bool", "taint": 0, "at": [72, 18] },
+              "cond": { "node": "LocalRef", "local": 19, "type": "Bool", "taint": 0, "at": [78, 18] },
               "then": {
                 "node": "LedgerOp",
                 "op": "add",
@@ -692,23 +715,23 @@
                   {
                     "node": "LedgerOp",
                     "op": "lovelace",
-                    "args": [{ "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [72, 39] }],
+                    "args": [{ "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [78, 39] }],
                     "type": "Value",
                     "taint": 0,
-                    "at": [72, 24]
+                    "at": [78, 24]
                   },
                   {
                     "node": "LedgerOp",
                     "op": "lovelace",
-                    "args": [{ "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [72, 59] }],
+                    "args": [{ "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [78, 59] }],
                     "type": "Value",
                     "taint": 0,
-                    "at": [72, 44]
+                    "at": [78, 44]
                   }
                 ],
                 "type": "Value",
                 "taint": 0,
-                "at": [72, 24]
+                "at": [78, 24]
               },
               "otherwise": {
                 "node": "LedgerOp",
@@ -717,29 +740,29 @@
                   {
                     "node": "LedgerOp",
                     "op": "lovelace",
-                    "args": [{ "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [72, 86] }],
+                    "args": [{ "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [78, 86] }],
                     "type": "Value",
                     "taint": 0,
-                    "at": [72, 71]
+                    "at": [78, 71]
                   },
                   {
                     "node": "LedgerOp",
                     "op": "lovelace",
-                    "args": [{ "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [72, 106] }],
+                    "args": [{ "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [78, 106] }],
                     "type": "Value",
                     "taint": 0,
-                    "at": [72, 91]
+                    "at": [78, 91]
                   }
                 ],
                 "type": "Value",
                 "taint": 0,
-                "at": [72, 71]
+                "at": [78, 71]
               },
               "type": "Value",
               "taint": 0,
-              "at": [72, 15]
+              "at": [78, 15]
             },
-            "at": [72, 5]
+            "at": [78, 5]
           },
           {
             "stmt": "Require",
@@ -749,49 +772,49 @@
               "left": {
                 "node": "LedgerOp",
                 "op": "lovelaceOf",
-                "args": [{ "node": "LocalRef", "local": 22, "type": "Value", "taint": 0, "at": [73, 13] }],
+                "args": [{ "node": "LocalRef", "local": 22, "type": "Value", "taint": 0, "at": [79, 13] }],
                 "type": "Int",
                 "taint": 0,
-                "at": [73, 13]
+                "at": [79, 13]
               },
               "right": {
                 "node": "Cond",
-                "cond": { "node": "LocalRef", "local": 19, "type": "Bool", "taint": 0, "at": [73, 31] },
+                "cond": { "node": "LocalRef", "local": 19, "type": "Bool", "taint": 0, "at": [79, 31] },
                 "then": {
                   "node": "Arith",
                   "op": "+",
-                  "left": { "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [73, 37] },
-                  "right": { "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [73, 41] },
+                  "left": { "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [79, 37] },
+                  "right": { "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [79, 41] },
                   "type": "Int",
                   "taint": 0,
-                  "at": [73, 37]
+                  "at": [79, 37]
                 },
                 "otherwise": {
                   "node": "Arith",
                   "op": "-",
-                  "left": { "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [73, 52] },
-                  "right": { "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [73, 56] },
+                  "left": { "node": "LocalRef", "local": 20, "type": "Int", "taint": 0, "at": [79, 52] },
+                  "right": { "node": "LocalRef", "local": 21, "type": "Int", "taint": 0, "at": [79, 56] },
                   "type": "Int",
                   "taint": 0,
-                  "at": [73, 52]
+                  "at": [79, 52]
                 },
                 "type": "Int",
                 "taint": 0,
-                "at": [73, 28]
+                "at": [79, 28]
               },
               "operand": "Int",
               "type": "Bool",
               "taint": 0,
-              "at": [73, 13]
+              "at": [79, 13]
             },
             "message": "the sum or difference",
-            "at": [73, 5]
+            "at": [79, 5]
           }
         ],
-        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [74, 12] },
-        "at": [71, 43]
+        "result": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [80, 12] },
+        "at": [77, 43]
       },
-      "at": [71, 3]
+      "at": [77, 3]
     }
   ],
   "warnings": []

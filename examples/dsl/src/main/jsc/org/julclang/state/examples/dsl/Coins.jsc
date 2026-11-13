@@ -3,6 +3,7 @@ package org.julclang.state.examples.dsl
 
 import { blake2b_224 } from "std/crypto"
 import { isEmpty, withoutLovelace, scale } from "std/value"
+import { paymentScript } from "std/address"
 
 // ADR-0018 M2's fixture for values and the effects on native assets (J3): Value's operations and std/value, funds, and
 // send, mint, burn and accept, on all five legs. Not an example to deploy. Wards.jsc covers addresses and credentials.
@@ -11,7 +12,11 @@ contract Coins(maxDatumBytes = 512, assetSlots = 4) {
 
   // The receipts' token name is derived from the instance's id (funds.self), so each instance mints its own receipts.
   // The id itself (32 bytes) is a reserved token kind of the policy (ADR-0007 D3): minting it is refused.
+  // The beneficiary is never this contract's own script (review r2 S6): every call spends the instance's input there,
+  // so a send to it always fails, and close and redeem would lock what is held. The guard idiom for a checked address.
   init(beneficiary: Address) {
+    require(paymentScript(beneficiary) == None || asHash(paymentScript(beneficiary) ?? #00) != funds.policy,
+      "the beneficiary cannot be this contract's own script")
     return { owner: caller, beneficiary, minted: 0, label: blake2b_224(funds.self) }
   }
 
