@@ -281,6 +281,10 @@ export function validate(p) {
     keys(s, ['stmt', ...Object.keys(spec), 'at'], where);
     fields(s, spec, where, scope);
     if (s.stmt === 'Require') bool(s.cond, where, 'a require condition');
+    // #80 review S3: an if's, a for's or a match's pays is what its blocks say.
+    if (s.stmt === 'If' || s.stmt === 'For' || s.stmt === 'Match') {
+      if (s.pays !== paysIn({ stmts: [{ ...s, pays: undefined }] })) fail(where, `pays is ${s.pays}, but its blocks ${s.pays ? 'do not pay' : 'pay'}`);
+    }
     at(s.at, where);
   }
   const fnNames = new Set();
@@ -292,22 +296,33 @@ export function validate(p) {
     f.params.forEach((l) => decl(l, `fn ${f.name}`, scope));
     type(f.result, `fn ${f.name}`);
     block(f.body, `fn ${f.name}`, scope);
+    noPayInExpressions(f.body, true, (what) => fail(`fn ${f.name}`, what));   // a fn never pays (JSC0413)
   }
   const methodNames = new Set();
+  const stateFields = new Map(p.state.fields.map((f) => [f.name, f.type]));
   for (const m of p.methods) {
     const where = `method ${m.name}`;
     keys(m, ['kind', 'name', 'params', 'mods', 'checked', 'usesCtx', 'pays', 'result', 'body', 'at'], where);
+    if (!Array.isArray(m.mods)) fail(where, 'mods is not a list');
     if (!KINDS.has(m.kind)) fail(where, `unknown kind ${m.kind}`);
     if (methodNames.has(m.name)) fail(where, 'two methods of that name');
     methodNames.add(m.name);
     const scope = new Set();
     m.params.forEach((l) => decl(l, where, scope));
-    for (const mod of m.mods) {
-      keys(mod, ['name', 'field'], where);
-      if (!MODS.has(mod.name)) fail(where, `unknown modifier ${mod.name}`);
-    }
+    modifiers(m, where, fail, keys, stateFields);
     if (m.result !== null) type(m.result, where);
     block(m.body, where, scope);
+    // #80 review C4, S7: a pay only where the checker allows one (JSC0413): in the method's statement blocks, never in
+    // an expression's block (a value block, a value if or match, a lambda), so the statement walk below is complete.
+    noPayInExpressions(m.body, false, (what) => fail(where, what));
+    // #80 review S3: pays is recomputed from the body, and a method that pays says who may call it (JSC0408, JSC0420).
+    const pays = paysIn(m.body);
+    if (m.pays !== pays) fail(where, `pays is ${JSON.stringify(m.pays)}, but the body ${pays ? 'pays' : 'does not pay'}`);
+    if (pays && !m.mods.some((x) => x.name === 'open' || (x.name === 'only' && typeof x.field === 'string'))) {
+      fail(where, 'it pays, so it says who may call it (only f or open)');
+    }
+    // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409).
+    if (m.kind === 'destroy' && !pays) fail(where, 'a destroy pays out what the instance holds: it has no pay');
     // F7: the checker's two decisions, recomputed from their definitions.
     const checked = m.kind === 'view' ? [] : m.params.filter((l) => needsCheck(l.type, shapes, enums)).map((l) => l.id);
     if (JSON.stringify(checked) !== JSON.stringify(m.checked)) {
@@ -318,6 +333,67 @@ export function validate(p) {
     if (usesCtx !== m.usesCtx) fail(where, `usesCtx is ${m.usesCtx}, but the method ${usesCtx ? 'reads' : 'does not read'} the transaction`);
   }
   for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${n}`);
+}
+
+/**
+ * A method's modifiers are the checker's (D4, D10; M1 hardening, review S5 on #76): each is known; `payable` and `open`
+ * name no field; `only f` names a Key field of the state and `after f`/`before f` an Int field; `batched` names none
+ * or is `batched only`, on an action, with no `only`, `after` or `before` beside it; none is given twice; an init takes
+ * only `payable`, a view none, a destroy is never payable. A reader that took any other shape on trust would decide on
+ * its own who may call a method (an `only` with no field was skipped, and the call accepted unsigned).
+ */
+function modifiers(m, where, fail, keys, state) {
+  const seen = new Set();
+  const names = m.mods.map((x) => x?.name);
+  for (const mod of m.mods) {
+    keys(mod, ['name', 'field'], where);
+    const w = mod.name;
+    if (!MODS.has(w)) fail(where, `unknown modifier ${w}`);
+    const field = mod.field ?? null;
+    if (seen.has(w)) fail(where, `the modifier ${w} is given twice`);
+    seen.add(w);
+    if (m.kind === 'view') fail(where, `a view takes no modifiers, not ${w}`);
+    if (m.kind === 'init' && w !== 'payable') fail(where, `an init takes only payable, not ${w}`);
+    if (w === 'payable' || w === 'open') {
+      if (field !== null) fail(where, `${w} names no field, not ${JSON.stringify(field)}`);
+      if (w === 'payable' && m.kind === 'destroy') fail(where, 'a destroy cannot be payable');
+    } else if (w === 'only' || w === 'after' || w === 'before') {
+      const want = w === 'only' ? 'Key' : 'Int';
+      if (typeof field !== 'string') fail(where, `${w} names a state field, not ${JSON.stringify(field)}`);
+      if (!state.has(field)) fail(where, `${w} ${field}: the state has no field ${field}`);
+      if (state.get(field) !== want) fail(where, `${w} ${field}: ${field} is of type ${JSON.stringify(state.get(field))}, not ${want}`);
+    } else if (w === 'batched') {
+      if (field !== null && field !== 'only') fail(where, `batched is plain or "batched only", not ${JSON.stringify(field)}`);
+      if (m.kind !== 'action') fail(where, `only an action can be batched, not a${m.kind === 'init' ? 'n' : ''} ${m.kind}`);
+      // #80 review S3: as the checker (JSC0419): no batched action in a contract with BigMap state.
+      if ([...state.values()].some((t) => t && typeof t === 'object' && 'bigmap' in t)) fail(where, 'a contract with BigMap state has no batched action');
+    }
+  }
+  if (names.includes('batched')) {
+    for (const w of ['only', 'after', 'before']) if (names.includes(w)) fail(where, `a batched action cannot use ${w}`);
+  }
+}
+/**
+ * Refuses a Pay statement anywhere below an expression node (#80 review C4, S7; JSC0413), or anywhere at all when `pure`
+ * (a fn's body). Statement blocks of if, for and match statements are not expressions; everything under a node is.
+ */
+function noPayInExpressions(o, pure, fail) {
+  if (Array.isArray(o)) {
+    for (const x of o) noPayInExpressions(x, pure, fail);
+    return;
+  }
+  if (!o || typeof o !== 'object') return;
+  if (o.stmt === 'Pay' && pure) fail(`a pay inside an expression or a fn, where the checker allows none (JSC0413), at ${o.at}`);
+  const below = pure || typeof o.node === 'string';
+  for (const v of Object.values(o)) noPayInExpressions(v, below, fail);
+}
+
+/** Whether a block pays: a Pay statement in it, or in an if's, a for's or a match's block (never in an expression). */
+function paysIn(block) {
+  return (block?.stmts ?? []).some((s) => s.stmt === 'Pay'
+    || (s.stmt === 'If' && (s.branches.some((b) => paysIn(b.then)) || (s.otherwise !== null && paysIn(s.otherwise))))
+    || (s.stmt === 'For' && paysIn(s.body))
+    || (s.stmt === 'Match' && s.arms.some((a) => paysIn(a.body))));
 }
 
 /** §4: a type holds a Key, a Hash or a Map somewhere (records and variants through their fields). */

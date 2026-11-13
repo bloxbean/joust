@@ -1,6 +1,6 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r14)
+**Status:** Proposed (r17)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
@@ -341,7 +341,25 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
     a warm engine went further. So `joust build` runs the engine on a worker with an 8 MB stack
     (`js/joust/src/toolchain.js`, `JOUST_ENGINE_STACK_MB`). There, a cold engine builds 2,000 statement branches and
     1,000 value branches, as the JVM does. In the Web Image such an exhaustion is not JSC0005: it is an engine failure,
-    which `joust build` reports as a diagnostic.
+    which `joust build` reports as a diagnostic. The worker's limits (r17, #74; #80 review C2, S4, F3) are
+    `JOUST_ENGINE_STACK_MB` (8–1024, default 8), `JOUST_ENGINE_MEMORY_MB` (the heap, 256–65536, default 4,096) and
+    `JOUST_ENGINE_TIMEOUT_S` (per build, 1–86400, default 600), or a caller's `limits` in the same ranges; an invalid
+    one is refused with its name. The heap limit is enforced, not best-effort: the engine (WasmGC) allocates on the
+    worker's JS heap. The worker runs in an engine host process forked without the command line's Node flags and with
+    `NODE_OPTIONS` stripped of its heap flags (#80 review C7, C8, C12, F10, C14, S13: parsed with Node's own token rules,
+    the heap flags matched by their decoded names, the rest written back quoted so it reaches the host unchanged;
+    preloads such as Yarn PnP's still apply; on Windows every case variant of the variable is replaced, elsewhere only
+    the exact key), so an inherited `--max-old-space-size` or `--max-heap-size`
+    never reaches it, and
+    before any build the host measures the old generation: the build worker and two probes whose old generations are
+    64 MB smaller and larger each report V8's `heap_size_limit`, and they must step by exactly 64 MB (true whatever the
+    young generation; an old generation set elsewhere makes them equal). The decision rests on these measurements only,
+    never on flag text, and the startup timer runs until they settle (a probe that exits unanswered fails the start). Builds wait in the worker's queue without a limit.
+    A build's time counts from when the worker starts it, not its wait behind another build; past it, the worker is
+    stopped. `buildInWorker` is exported beside `loadToolchain`, whose builds run on the caller's thread and need a
+    stack of at least 8 MB. The engines enable Wasm exnref themselves, setting `--experimental-wasm-exnref` only where
+    a probe module does not validate (newer Node has it on, and only prints a warning for the flag: hardening against
+    stderr noise).
 - **Off-chain depth.** On the JVM, generated recursion is Java recursion without tail calls: the runtime runs
   transitions on a thread whose stack fits the deepest recursion the per-transaction budget allows, and the prepare
   service and the batcher evaluate under a step or depth cap. In the npm engine, transitions are UPLC programs (F21)
@@ -500,7 +518,11 @@ the call with the class `modifier:<word> <field>`. So every modifier site of eve
 all five legs: both interpreters refuse it with that class, the JVM method and the transition program compute the
 transition (and agree with the interpreters' transition alone), and the validator refuses. The attack suite adds
 entries read from the description (a stranger who signs as the caller; windows on the wrong side of, or straddling,
-the bound). M2's `authorized` and `quorum` are further preconditions on the same transaction.
+the bound). M2's `authorized` and `quorum` are further preconditions on the same transaction. Both IR readers take
+modifiers only in the checker's shapes (`only f` on a Key field, `after f`/`before f` on an Int field, `batched` on an
+action without them, none twice, an init with `payable` only), and the interpreters never skip a modifier without its
+field; a transaction whose caller is not among its signers is the caller's error in both interpreters, as the
+validator never accepts it (r17, #76 review S5, S6).
 
 **ADR-0005 rules kept, changed and dropped:**
 
@@ -674,7 +696,9 @@ the bound). M2's `authorized` and `quorum` are further preconditions on the same
     `require`, `operation`; the method or `fn`; an input's parameter). "Every" is tested on the linked scripts: each
     string constant a compiled validator or transition program holds is in its map (the read discovery's own trace
     aside). The map is written beside the generated Java (`Name.jscmap.json`) on both paths, into `contracts.json` by
-    `joust build` (with the script's hash), and on Gradle as a resource beside the contract's classes. The JS runtime
+    `joust build` (with the script's hash, which the JS runtime does not trust: it derives the hash from the entry's own
+    script when it reads the map, and a `@Params` contract, whose deployed script is not the bundle's, has none and is
+    found by title only; r17, #74), and on Gradle as a resource beside the contract's classes. The JS runtime
     adds the sites to a refusal (`#pay:spend1.2 [Pay.jsc:9:17 (a payout in split is negative)]`); so does the JVM
     runtime to a `RequireException` its contract method raises (`JscMessages`), and build tooling reads
     `Lowered.explain`. It is the build's record of what each message means, kept with the script it describes:
@@ -791,7 +815,15 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   sources, or a target that is a source, is refused (JSC1108). `--in-place` replaces the v1 file and keeps its text as
   `Name.jsc.v1`, written create-new (an existing file or link is JSC1107); it never replaces a symbolic link, a file with
   more than one hard link or a file whose path under the sources goes through a link (JSC1109), and writes the new text
-  to a temporary file renamed over the source. Every default-mode target is checked before anything is written: none may
+  to a temporary file renamed over the source. Since r17 (#75; #80 review C1, F1, S2) it also refuses a path with `..`,
+  and a link anywhere on the path below the working directory, which it finds among the file's ancestors by identity
+  (so `/tmp/…` and `/private/tmp/…` are one) and checks on the physical path (a directory whose real path is not itself:
+  a symbolic link, or a Windows junction; a spelling that differs from the stored one only in case, on a
+  case-insensitive file system, is the same directory, not a link). Links at or above the working directory are the
+  user's file system, and a file outside the working directory is checked from its source directory down only. Both
+  CLIs do this (`JscMain` and the npm `joust migrate`, whose working directory is the project root; #80 review F6). On
+  Windows a junction outside the working directory, and hard links, are not detected. The checks and the writes are
+  separate steps: they assume no concurrent writer changes the tree during the run (#80 review S8). Every default-mode target is checked before anything is written: none may
   lie in the sources or be a source through a link on its path, resolved at its nearest existing ancestor.
   On npm it first copies the v1 build's artifacts to `build/joust/v1/` (the contract's, by the name the parser reads,
   and the shared ones), and does not replace the file if that fails; `joust deploy` keeps each record it replaces under
@@ -1197,3 +1229,23 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   M1b's exit and M1b had not done; the modifier vectors are five-way. §9 and the M2 row say five-way. D14 and r13's
   entry: M1e changed the hashes of scripts with generated checks only. D16 states the JSC1103 refusal of v1
   `batched`. The header no longer says design only.
+- **r17** (2026-11-13, the M1 hardening after #76: security S5, S6; issues #73, #74, #75): D10: both IR readers
+  validate a method's modifiers against the checker's rules, the interpreters refuse a modifier without its field
+  instead of skipping it, and a transaction whose caller is not among its signers is the caller's error (semantics §2,
+  §2.6; IR reference). D7: the build worker's stack, heap and time limits are validated settings, and `buildInWorker`
+  is exported. D12: the runtime derives a message map's script hash from the script (#74). The depth test's JSC0005
+  check no longer depends on the stack size. After #80's review round r1: the readers also recompute `pays` and
+  require `only f` or `open` on a paying method, and refuse `batched` with BigMap state; semantics §2 states the
+  caller-signature rule for batch steps; D7 states the worker's limits, ranges and checks (an inherited heap flag is
+  refused); D12 says a `@Params` contract is found by title only; D16 states the in-place checks by identity and `..`;
+  `ValidatorScripts` takes an image's one `resource:` copy unverified inside an image only, with the image builds'
+  `checkImageScripts` behind it (#73); the engines set the exnref flag only where exnref is off (no stderr noise on
+  newer Node). After round r2: the readers refuse a `pay` under an expression or in a fn (JSC0413) and a destroy
+  without one (JSC0409); D7 measures the worker's old generation (a young-generation flag passes); D16 compares names
+  ignoring case, covers the npm CLI, files outside the working directory and concurrent writers; `checkImageScripts`
+  counts classes per name per location, and covers JOUST's own images only (any other image must run it). After round
+  r3: the engine runs in a host process without inherited Node options, its heap decided from three measurements
+  only; directory names compare in Unicode normal form C too; `checkImageScripts` reads each class's real simple name
+  from its class file (`$` is legal in a Java name). After round r4: the host keeps `NODE_OPTIONS` preloads, its heap
+  flags stripped, under any case of the variable. After round r5: NODE_OPTIONS is parsed as Node parses it, and case
+  variants are promoted on Windows only.

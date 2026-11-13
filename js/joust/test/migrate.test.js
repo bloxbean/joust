@@ -288,3 +288,39 @@ test('r4 C6: a stale temporary file of the same pid is left alone, and in place 
   const { readdirSync: ls } = await import('node:fs');
   assert.deepEqual(ls(join(root, 'contracts/a')).filter((f) => f.endsWith('.migrating')), [basename(stale)]);
 });
+
+test('#80 F6: --in-place refuses a linked contracts/ (any link below the project root), a path with \'..\', not a case variant', { skip, timeout: 300_000 }, async () => {
+  const { symlinkSync, realpathSync } = await import('node:fs');
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'joust-migrate-f6-')));
+  const proj = join(base, 'proj');
+  mkdirSync(proj);
+  mkdirSync(join(base, 'shared'));
+  cpSync(join(DSL, 'Points.jsc'), join(base, 'shared/Points.jsc'));
+  symlinkSync('../shared', join(proj, 'contracts'));
+  const q = quiet();
+  // By file, and by walking contracts/: refused, the shared file and its backup untouched.
+  for (const files of [['contracts/Points.jsc'], []]) {
+    const r = await migrate({ root: proj, files, inPlace: true, log: q.log, error: q.error });
+    assert.deepEqual(r.refused, ['Points.jsc'], q.lines.join('\n'));
+    assert.ok(q.lines.some((l) => l.startsWith('error[JSC1109]: Points.jsc') && /the directory contracts is a symbolic link/.test(l)), q.lines.join('\n'));
+    assert.match(readFileSync(join(base, 'shared/Points.jsc'), 'utf8'), /^package/);
+    assert.ok(!existsSync(join(base, 'shared/Points.jsc.v1')));
+  }
+  // Through an alias of the project root, too.
+  symlinkSync(proj, join(base, 'alias'));
+  let r = await migrate({ root: join(base, 'alias'), files: ['contracts/Points.jsc'], inPlace: true, log: q.log, error: q.error });
+  assert.deepEqual(r.refused, ['Points.jsc']);
+  // '..' in the path given.
+  const plain = join(base, 'plain');
+  mkdirSync(join(plain, 'contracts/app'), { recursive: true });
+  cpSync(join(DSL, 'Points.jsc'), join(plain, 'contracts/app/Points.jsc'));
+  r = await migrate({ root: plain, files: ['contracts/app/../app/Points.jsc'], inPlace: true, log: q.log, error: q.error });
+  assert.deepEqual(r.refused, ['app/Points.jsc']);
+  assert.ok(q.lines.some((l) => /contains '\.\.'/.test(l)), q.lines.join('\n'));
+  // A case variant of a plain directory, where the file system ignores case: migrated.
+  if (existsSync(join(plain, 'CONTRACTS/APP/Points.jsc'))) {
+    r = await migrate({ root: plain, src: 'CONTRACTS', files: ['CONTRACTS/APP/Points.jsc'], inPlace: true, log: q.log, error: q.error });
+    assert.ok(r.ok, q.lines.join('\n'));
+    assert.match(readFileSync(join(plain, 'contracts/app/Points.jsc'), 'utf8'), /^jsc 2/);
+  }
+});

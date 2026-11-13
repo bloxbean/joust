@@ -50,7 +50,7 @@ with `-Ajoust.portable=true`):
 
 `WasmParityTest` checks the Wasm results byte for byte against the JVM (136 vectors). `DappDevnetTest` runs the Wasm
 steps on DevKit when the image is built. Both skip themselves otherwise. Chrome 137+ is needed (WebAssembly exnref);
-Node 22 needs `--experimental-wasm-exnref`.
+On Node 22 the scripts turn on `--experimental-wasm-exnref` themselves; newer Node has exnref on by default.
 
 ## Pieces
 

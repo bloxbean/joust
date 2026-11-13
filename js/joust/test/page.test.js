@@ -100,12 +100,31 @@ async function flow({ page, logText, until }) {
   return reviews;
 }
 
-test('the template page on DevKit: connect, top up, create, increment, refusal, close', { skip, timeout: 900_000 }, async () => {
+/**
+ * Closes what a test opened, once, even when it times out (#80 review F12): node:test runs an after hook on a timeout,
+ * while the test's own finally never runs. `add(close)` registers a resource; `run()` closes them all, newest first.
+ */
+function closer(t) {
+  const items = [];
+  let done = false;
+  const run = async () => {
+    if (done) return;
+    done = true;
+    for (const close of items.reverse()) await Promise.resolve().then(close).catch(() => {});
+  };
+  t.after(run);
+  return { add: (close) => { items.push(close); }, run };
+}
+
+test('the template page on DevKit: connect, top up, create, increment, refusal, close', { skip, timeout: 900_000 }, async (t) => {
   const root = await project();
   const logs = [];
+  const c = closer(t);
   const d = await dev({ root, config: loadConfig(root), port: 0, log: (m) => logs.push(m) });
+  c.add(() => d.close());
   const { chromium } = await import('playwright');
   const browser = await chromium.launch();
+  c.add(() => browser.close());
   try {
     const p = await open(browser, d.url);
     assert.equal(await flow(p), 3, 'create, +1 and close were reviewed in the page before signing');
@@ -140,12 +159,11 @@ test('the template page on DevKit: connect, top up, create, increment, refusal, 
     assert.deepEqual(inWorker.back, [['k', 'v']], 'the mirror cache keeps a state across a reopen');
     assert.ok(inWorker.dbs.some((n) => n.includes('joust-page-test')), `the mirror cache is IndexedDB (${inWorker.dbs})`);
   } finally {
-    await browser.close();
-    await d.close();
+    await c.run();
   }
 });
 
-test('the template page built and served as static files (joust serve); a tampered engine is refused', { skip, timeout: 900_000 }, async () => {
+test('the template page built and served as static files (joust serve); a tampered engine is refused', { skip, timeout: 900_000 }, async (t) => {
   const root = await project();
   const config = loadConfig(root);
   await deploy({ root, config, networkName: 'devkit', log: () => {} });
@@ -163,10 +181,13 @@ test('the template page built and served as static files (joust serve); a tamper
   tampered('dist-script', 'joust-runtime.js', (b) => Buffer.from(String(b).replace('Copyright', 'Copyleft')));
   tampered('dist-wasm', 'joust-runtime.js.wasm', (b) => { b[b.length >> 1] ^= 1; return b; });
 
+  const c = closer(t);
   const { chromium } = await import('playwright');
   const browser = await chromium.launch();
+  c.add(() => browser.close());
   try {
     const s = await serve({ root, config, dir: 'dist', port: 0, log: () => {} });
+    c.add(() => s.close());
     try {
       const p = await open(browser, s.url);
       assert.equal(await flow(p), 3, 'create, +1 and close were reviewed in the page before signing');
@@ -179,6 +200,7 @@ test('the template page built and served as static files (joust serve); a tamper
     }
     for (const [dir, what] of [['dist-script', 'script'], ['dist-wasm', 'Wasm']]) {
       const s2 = await serve({ root, config, dir, port: 0, log: () => {} });
+      c.add(() => s2.close());
       try {
         const p = await open(browser, s2.url);
         await p.until(async () => /runtime engine did not load/.test(await p.logText()), `the tampered ${what} is refused`, 90_000);
@@ -189,7 +211,7 @@ test('the template page built and served as static files (joust serve); a tamper
       }
     }
   } finally {
-    await browser.close();
+    await c.run();
   }
 });
 
@@ -220,7 +242,7 @@ window.app = {
 };
 `;
 
-test('a MerkleMap contract in a page: proofs from the worker\'s mirror, IndexedDB across a reload, a rebuild from the chain', { skip, timeout: 1_200_000 }, async () => {
+test('a MerkleMap contract in a page: proofs from the worker\'s mirror, IndexedDB across a reload, a rebuild from the chain', { skip, timeout: 1_200_000 }, async (t) => {
   const root = await project((r) => {
     rmSync(join(r, 'contracts'), { recursive: true });
     const dir = join(r, 'contracts', 'org', 'julclang', 'state', 'examples', 'token');
@@ -230,13 +252,23 @@ test('a MerkleMap contract in a page: proofs from the worker\'s mirror, IndexedD
     writeFileSync(join(r, 'page', 'main.js'), TOKEN_PAGE);
   });
   const d = await dev({ root, config: loadConfig(root), port: 0, log: () => {} });
+  // Closed even when the test times out (its after hook still runs; the finally below would not).
+  let browser = null;
+  let closed = false;
+  const cleanup = async () => {
+    if (closed) return;
+    closed = true;
+    await browser?.close().catch(() => {});
+    await d.close().catch(() => {});
+  };
+  t.after(cleanup);
   const { generateMnemonic } = await import('@scure/bip39');
   const { wordlist } = await import('@scure/bip39/wordlists/english');
   const m = generateMnemonic(wordlist, 256);
   const other = 'ab'.repeat(28);
   const history = (paths) => paths.filter((x) => /^\/chain\/assets\/[0-9a-f]+\/transactions$/.test(x));
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch();
+  browser = await chromium.launch();
   try {
     // The first visit: create, mint, transfer. The mirror stages each new map state (and keeps it in IndexedDB).
     const p = await open(browser, d.url);
@@ -296,7 +328,6 @@ test('a MerkleMap contract in a page: proofs from the worker\'s mirror, IndexedD
       await s.close();
     }
   } finally {
-    await browser.close();
-    await d.close();
+    await cleanup();
   }
 });

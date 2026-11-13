@@ -475,6 +475,25 @@ class MigrateTest {
         assertTrue(f.getMessage().contains("note: the line starting with '-' at 8:5"), f.getMessage());
     }
 
+    @Test
+    void issue75_theMinusNote_isScopedByMemberSpan_notByLine() {
+        String head = "jsc 2\npackage t\ncontract C {\n  state { n: Int }\n  init() { return { n: 0 } }\n";
+        // Line 7 holds the end of w (a line starting with '-', w's) and all of v, whose error is on that line: the '-'
+        // is w's, so v's error has no note (by line, it named w's '-').
+        var e = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+                + "  view w(x: Int): Int = x\n    - 1; view v(): Int = nope\n}\n", "C.jsc"));
+        assertEquals(7, e.line);
+        assertFalse(e.getMessage().contains("note: the line starting with '-'"), e.getMessage());
+        // The same '-' with the error in w itself, after it on the same line: the note.
+        var f = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+                + "  view w(x: Int): Int = x\n    - nope; view v(): Int = 1\n}\n", "C.jsc"));
+        assertTrue(f.getMessage().contains("note: the line starting with '-' at 7:5"), f.getMessage());
+        // Two members on one line, the second one's own '-' on the next line: named for the second's error only.
+        var g = assertThrows(JscException.class, () -> org.julclang.state.dsl.v2.JscV2.lower(head
+                + "  view a(): Int = nope; view b(x: Int): Int = x\n    - 1\n}\n", "C.jsc"));
+        assertFalse(g.getMessage().contains("note: the line starting with '-'"), g.getMessage());
+    }
+
     // ------------------------------------------------------------------ review r4
 
     @Test
@@ -520,6 +539,117 @@ class MigrateTest {
         assertTrue(err.contains("error[JSC1109]") && err.contains("symbolic link"), err);
         assertTrue(Files.readString(lib.resolve("Points.jsc")).startsWith("package"));
         assertFalse(Files.exists(lib.resolve("Points.jsc.v1")));
+    }
+
+    @Test
+    void issue75_inPlace_refusesALinkAboveTheSourcesBelowTheWorkingDirectory(@TempDir Path dir) throws Exception {
+        // src -> sharedsrc, and src/lib/Points.jsc migrated in place (by itself, or its directory): the shared file would
+        // be replaced through the link on src, above the source directory src/lib.
+        Path shared = Files.createDirectories(dir.resolve("sharedsrc/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        Files.createSymbolicLink(dir.resolve("src"), Path.of("sharedsrc"));
+        Path f = dir.resolve("src/lib/Points.jsc");
+        for (boolean fileArgument : List.of(true, false)) {
+            var e = assertThrows(JscException.class, () -> JscMain.inPlaceProblem(f, dir.resolve("src/lib"), fileArgument, dir));
+            assertEquals("JSC1109", e.code);
+            assertTrue(e.getMessage().contains("the directory src is a symbolic link"), e.getMessage());
+        }
+        // Links at or above the working directory are the user's file system (macOS's /var holds this test's directory):
+        // from elsewhere, the same file is not refused by this rule.
+        JscMain.inPlaceProblem(f, dir.resolve("src/lib"), true, Files.createDirectories(dir.resolve("elsewhere")));
+        JscMain.inPlaceProblem(f, dir.resolve("src/lib"), true, dir.resolve("src"));
+        // A plain tree below the working directory passes.
+        Path plain = Files.createDirectories(dir.resolve("plain/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), plain.resolve("Points.jsc"));
+        JscMain.inPlaceProblem(plain.resolve("Points.jsc"), plain, true, dir);
+        // End to end: nothing is replaced and no backup is written.
+        String err = stderr(() -> assertEquals(1, JscMain.migrate(f, dir.resolve("out"), true, dir)));
+        assertTrue(err.contains("error[JSC1109]") && err.contains("the directory src is a symbolic link"), err);
+        assertTrue(Files.readString(shared.resolve("Points.jsc")).startsWith("package"));
+        assertFalse(Files.exists(shared.resolve("Points.jsc.v1")));
+    }
+
+    /**
+     * #80 review C1, F1, S2: the working directory is found among the file's ancestors by identity, so a path spelled
+     * through an aliasing link (macOS's /tmp for /private/tmp) cannot skip the check; and a path with '..' is refused,
+     * since '..' after a link leaves the link's target. Both end to end: the shared source and its backup are untouched.
+     */
+    @Test
+    void r2_inPlace_aliasedPathsAndDotDot_neverSkipALink(@TempDir Path tmp) throws Exception {
+        Path base = tmp.toRealPath();
+        Path proj = Files.createDirectories(base.resolve("real/proj"));
+        Path shared = Files.createDirectories(base.resolve("real/sharedsrc/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        Files.createSymbolicLink(proj.resolve("src"), Path.of("../sharedsrc"));
+        Files.createSymbolicLink(base.resolve("alias"), base.resolve("real"));
+        // (a) The file through the alias, the working directory physical (as the JVM's user.dir is), and the reverse.
+        Path aliased = base.resolve("alias/proj/src/lib/Points.jsc");
+        for (Path cwd : List.of(proj, base.resolve("alias/proj"))) {
+            var e = assertThrows(JscException.class, () -> JscMain.inPlaceProblem(aliased, aliased.getParent(), true, cwd));
+            assertEquals("JSC1109", e.code);
+            assertTrue(e.getMessage().contains("the directory src is a symbolic link"), e.getMessage());
+        }
+        String err = stderr(() -> assertEquals(1, JscMain.migrate(aliased, base.resolve("out"), true, proj)));
+        assertTrue(err.contains("error[JSC1109]") && err.contains("the directory src is a symbolic link"), err);
+        assertTrue(Files.readString(shared.resolve("Points.jsc")).startsWith("package"));
+        assertFalse(Files.exists(shared.resolve("Points.jsc.v1")));
+        // ...while a plain directory reached through the alias is fine: the alias is above the working directory.
+        Path plain = Files.createDirectories(proj.resolve("plain/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), plain.resolve("Points.jsc"));
+        JscMain.inPlaceProblem(base.resolve("alias/proj/plain/lib/Points.jsc"), base.resolve("alias/proj/plain/lib"), true, proj);
+
+        // (b) '..' through a link (Codex's repro): project/src -> ../shared/child, the file given as src/../Points.jsc.
+        Path project = Files.createDirectories(base.resolve("project"));
+        Path child = Files.createDirectories(base.resolve("shared/child"));
+        Files.copy(DSL.resolve("Points.jsc"), base.resolve("shared/Points.jsc"));
+        Files.createSymbolicLink(project.resolve("src"), Path.of("../shared/child"));
+        Path dotted = project.resolve("src/../Points.jsc");
+        assertTrue(Files.exists(dotted), "the file system resolves it to shared/Points.jsc");
+        var e = assertThrows(JscException.class, () -> JscMain.inPlaceProblem(dotted, dotted.getParent(), true, project));
+        assertTrue(e.getMessage().contains("contains '..'"), e.getMessage());
+        err = stderr(() -> assertEquals(1, JscMain.migrate(dotted, project.resolve("out"), true, project)));
+        assertTrue(err.contains("error[JSC1109]") && err.contains("contains '..'"), err);
+        assertTrue(Files.readString(base.resolve("shared/Points.jsc")).startsWith("package"), "the shared source is untouched");
+        assertFalse(Files.exists(base.resolve("shared/Points.jsc.v1")), "and no backup is written beside it");
+        assertTrue(Files.isDirectory(child));
+    }
+
+    /**
+     * #80 review C3: on a case-insensitive file system a spelling other than the stored one names the same plain
+     * directory: not a link. A real link is still refused whatever its spelling.
+     */
+    @Test
+    void r3_inPlace_aCaseVariantOfAPlainDirectory_isNotALink(@TempDir Path tmp) throws Exception {
+        Path base = tmp.toRealPath();
+        Path lib = Files.createDirectories(base.resolve("project/Src/Lib"));
+        Files.copy(DSL.resolve("Points.jsc"), lib.resolve("Points.jsc"));
+        Path variant = base.resolve("project/src/lib/Points.jsc");
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.exists(variant), "a case-insensitive file system (macOS, Windows)");
+        JscMain.inPlaceProblem(variant, variant.getParent(), true, base.resolve("project"));
+        assertEquals(0, JscMain.migrate(variant, base.resolve("out"), true, base.resolve("project")));
+        assertTrue(Files.readString(lib.resolve("Points.jsc")).startsWith("jsc 2"));
+        // A link spelled in another case is still a link.
+        Path shared = Files.createDirectories(base.resolve("shared/lib"));
+        Files.copy(DSL.resolve("Points.jsc"), shared.resolve("Points.jsc"));
+        Files.createSymbolicLink(base.resolve("project/Linked"), Path.of("../shared"));
+        Path viaLink = base.resolve("project/LINKED/lib/Points.jsc");
+        var e = assertThrows(JscException.class, () -> JscMain.inPlaceProblem(viaLink, viaLink.getParent(), true, base.resolve("project")));
+        assertTrue(e.getMessage().contains("is a symbolic link"), e.getMessage());
+    }
+
+    /** #80 review C9, F9: a directory stored in one Unicode normal form and named in the other is not a link. */
+    @Test
+    void r4_inPlace_anotherUnicodeNormalFormOfAPlainDirectory_isNotALink(@TempDir Path tmp) throws Exception {
+        Path base = tmp.toRealPath();
+        String nfd = java.text.Normalizer.normalize("Caf\u00e9", java.text.Normalizer.Form.NFD);
+        String nfc = java.text.Normalizer.normalize("Caf\u00e9", java.text.Normalizer.Form.NFC);
+        Path lib = Files.createDirectories(base.resolve("project").resolve(nfd).resolve("lib"));
+        Files.copy(DSL.resolve("Points.jsc"), lib.resolve("Points.jsc"));
+        Path other = base.resolve("project").resolve(nfc).resolve("lib/Points.jsc");
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.exists(other), "a normalization-insensitive file system (APFS)");
+        JscMain.inPlaceProblem(other, other.getParent(), true, base.resolve("project"));
+        assertEquals(0, JscMain.migrate(other, base.resolve("out"), true, base.resolve("project")));
+        assertTrue(Files.readString(lib.resolve("Points.jsc")).startsWith("jsc 2"));
     }
 
     @Test

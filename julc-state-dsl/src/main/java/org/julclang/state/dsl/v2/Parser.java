@@ -82,38 +82,44 @@ final class Parser {
     }
 
     /**
-     * The lines of each declaration and contract member (review r3 F12): {startLine, startToken, endLine}. A member
-     * still being parsed when an error is thrown ends at the '}' that closes its first '{' (or at the end of the file).
+     * The span of each declaration and contract member (review r3 F12; issue #75, Codex C7): {startLine, startCol,
+     * startToken, endLine, endCol}, from its first token to its last. A member still being parsed when an error is thrown
+     * ends at the '}' that closes its first '{' (or at the end of the file). Spans, not lines: two members may share a
+     * line ({@code fn a(): Int = 1; fn b(): Int = 2}).
      */
     private final List<int[]> members = new ArrayList<>();
 
     private int[] startMember() {
-        int[] m = {peek().line(), i, -1};
+        int[] m = {peek().line(), peek().col(), i, -1, -1};
         members.add(m);
         return m;
     }
 
     private void endMember(int[] m) {
-        m[2] = toks.get(Math.max(i - 1, 0)).line();
+        Tok last = toks.get(Math.max(i - 1, 0));
+        m[3] = last.line();
+        m[4] = last.col();
     }
 
-    /** Each member's [startLine, endLine]. */
+    /** Each member's span: {startLine, startCol, endLine, endCol} (the end is its last token's start). */
     private List<int[]> members() {
         var out = new ArrayList<int[]>();
         for (int[] m : members) {
-            int end = m[2];
-            if (end < 0) {
+            int endLine = m[3], endCol = m[4];
+            if (endLine < 0) {
                 int depth = 0;
-                end = toks.get(toks.size() - 1).line();
-                for (int k = m[1]; k < toks.size(); k++) {
+                Tok end = toks.get(toks.size() - 1);
+                for (int k = m[2]; k < toks.size(); k++) {
                     if (toks.get(k).is("{")) depth++;
                     else if (toks.get(k).is("}") && --depth == 0) {
-                        end = toks.get(k).line();
+                        end = toks.get(k);
                         break;
                     }
                 }
+                endLine = end.line();
+                endCol = end.col();
             }
-            out.add(new int[]{m[0], end});
+            out.add(new int[]{m[0], m[1], endLine, endCol});
         }
         return out;
     }
@@ -121,23 +127,38 @@ final class Parser {
     /** Binary '-' tokens that start a line (review r2 F2, S4). */
     private final List<Pos> leadingMinus = new ArrayList<>();
 
+    /** Whether position (line, col) is at or after (l2, c2). */
+    private static boolean atOrAfter(int line, int col, int l2, int c2) {
+        return line > l2 || line == l2 && col >= c2;
+    }
+
+    /** Whether position {@code p} lies in member span {@code m} ({startLine, startCol, endLine, endCol}). */
+    private static boolean inSpan(int line, int col, int[] m) {
+        return atOrAfter(line, col, m[0], m[1]) && atOrAfter(m[2], m[3], line, col);
+    }
+
     /**
      * An error with a note when a line starting with '-', on or before the error's line, continued the expression above it: the cause is often there,
      * not where the error is found (a block without its value, an unknown name).
      */
     static JscException hinted(JscException e, List<Pos> leadingMinus, List<int[]> members) {
-        // The member (declaration, method) the error is in: a leading '-' there, the nearest on or before the error's line,
-        // else the first after it within the member, since an error found at a construct's start (a value block without
-        // its value) comes before its cause (review r3 F12). Outside any member: the nearest on or before (F10).
+        // The member (declaration, method) the error is in, by span: a leading '-' there, the nearest on or before the
+        // error's line, else the first after it within the member, since an error found at a construct's start (a value
+        // block without its value) comes before its cause (review r3 F12). A '-' of another member is never named, even
+        // on the same line (issue #75). Outside any member: the nearest on or before (F10).
         int[] in = null;
-        for (int[] m : members) if (m[0] <= e.line && e.line <= m[1] && (in == null || m[0] >= in[0])) in = m;
+        for (int[] m : members) {
+            if (inSpan(e.line, e.col, m) && (in == null || atOrAfter(m[0], m[1], in[0], in[1]))) in = m;
+        }
         Pos near = null;
         for (Pos p : leadingMinus) {
-            if (in != null && (p.line() < in[0] || p.line() > in[1])) continue;
+            if (in != null && !inSpan(p.line(), p.col(), in)) continue;
             if (p.line() <= e.line && (near == null || p.line() > near.line())) near = p;
         }
         if (near == null && in != null) {
-            for (Pos p : leadingMinus) if (p.line() > e.line && p.line() <= in[1] && (near == null || p.line() < near.line())) near = p;
+            for (Pos p : leadingMinus) {
+                if (p.line() > e.line && inSpan(p.line(), p.col(), in) && (near == null || p.line() < near.line())) near = p;
+            }
         }
         if (near == null) return e;
         return new JscException(e.line, e.col, e.code, e.getMessage() + " (note: the line starting with '-' at " + near

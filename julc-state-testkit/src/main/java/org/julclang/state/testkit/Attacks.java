@@ -104,7 +104,9 @@ public final class Attacks {
             out.add(new Attack("required signer missing", "I5/I11", t -> {
                 var c = t.copy();
                 c.signers.clear();
-                c.signers.add(StateHarness.fill(28, 0xEE));
+                // Issue #73: a key that is none of the transaction's parties (derived, never a fixed key a contract may
+                // be owned by: then the attack would sign as an authorised key and be accepted).
+                c.signers.add(outsider(t));
                 return c;
             }));
         }
@@ -293,8 +295,34 @@ public final class Attacks {
         var taken = new ArrayList<byte[]>(tx.signers);
         collectBytes(datum, taken);
         collectBytes(redeemer, taken);
+        return fresh(0xE5, taken);
+    }
+
+    /**
+     * The signer of "required signer missing" (issue #73): a key that is none of the transaction's parties, derived as
+     * {@link #attacker} is and checked, by content, against every signer, every byte string in the inputs' inline datums,
+     * the redeemers (spend, mint, withdrawal) and the outputs' inline datums. A fixed key could be a contract's owner,
+     * and the attack would then sign as that owner and be accepted: a false failure.
+     */
+    static byte[] outsider(TxModel tx) {
+        var taken = new ArrayList<byte[]>(tx.signers);
+        for (var in : tx.inputs) datumBytes(in.resolved(), taken);
+        for (var in : tx.referenceInputs) datumBytes(in.resolved(), taken);
+        for (var o : tx.outputs) datumBytes(o, taken);
+        tx.spendRedeemers.values().forEach(r -> collectBytes(r, taken));
+        tx.withdrawals.values().forEach(r -> collectBytes(r, taken));
+        if (tx.mintRedeemer != null) collectBytes(tx.mintRedeemer, taken);
+        return fresh(0xEE, taken);
+    }
+
+    private static void datumBytes(TxOut o, List<byte[]> into) {
+        if (o.datum() instanceof OutputDatum.OutputDatumInline d) collectBytes(d.datum(), into);
+    }
+
+    /** The first of {@code fill(28, seed)}, then that key with its last two bytes varied, that is none of {@code taken}. */
+    private static byte[] fresh(int seed, List<byte[]> taken) {
         for (int i = 0; ; i++) {
-            byte[] k = StateHarness.fill(28, 0xE5);
+            byte[] k = StateHarness.fill(28, seed);
             k[26] ^= (byte) (i >> 8);
             k[27] ^= (byte) i;
             if (taken.stream().noneMatch(t -> java.util.Arrays.equals(t, k))) return k;

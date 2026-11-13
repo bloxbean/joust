@@ -48,7 +48,17 @@ load, before anything runs: an unknown node or statement kind, field, operator, 
 reader refuses every program that uses it, at load, rather than misreading it: a new node kind, a new modifier (M1c's
 `batched`), a new `std` row or a new type, each with fields of its own. The JavaScript reader also refuses a condition or a
 boolean operand that is not of type `Bool` (a `Branch`'s, `Require`'s or `Cond`'s condition; `Logic`'s and `Not`'s
-operands), and an empty `branches` list. Additive changes keep version 1. A change to
+operands), and an empty `branches` list. **Both readers** (the JavaScript one and the Java `IrJson.read`) take a
+method's modifiers only in the shapes the checker emits (#76 review S5): `payable` and `open` with no field; `only f`
+with `f` a `Key` field of the state; `after f` and `before f` with `f` an `Int` field; `batched` with no field or the
+field `"only"` (`batched only`), on an action only, never beside `only`, `after` or `before` and never in a contract with
+`BigMap` state; no modifier twice; an init with `payable` only, a view with none, and no `payable` destroy. They
+recompute `pays` (a method's, and each `If`'s, `For`'s and `Match`'s) from the `Pay` statements in its blocks, and
+refuse a paying method without `only f` or `open` (#80 review S3); they refuse a `Pay` under any expression (a
+value block, value `if` or `match`, a lambda) or in a `fn` (JSC0413), so the statement blocks hold every payout, and a
+destroy without a `Pay` (JSC0409). These checks keep a reader from deciding what the
+checker did not; they do not authenticate an IR (swapping `only admin` for `open` is well formed). What binds an IR to
+its contract is the build that produced it: `sourceSha256` and the build's own outputs. Additive changes keep version 1. A change to
 an existing node's fields, to the meaning of an existing node, operator, modifier or row, or to the program's top-level
 fields gets a new version.
 
