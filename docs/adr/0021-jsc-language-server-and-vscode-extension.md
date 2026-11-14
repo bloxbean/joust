@@ -1009,7 +1009,11 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
     on a claimed copy counts this server's live use (C28). A start whose slot was stopped while its lease was pending
     starts no worker (C25). A claim whose bytes cannot be read now is kept (C30). A recovering collector first renames an
     abandoned claim to its own claim, so of two collectors one recovers it; what it moves aside from the destination is
-    checked, and a valid copy goes straight back, as the sweep also does for a valid moved-aside copy (C31).
+    checked, and a valid copy goes straight back, as the sweep also does for a valid moved-aside copy (C31). A copy is
+    published already marked as used, so no collector takes it before its first touch (S16). A moved-aside copy is
+    deleted only when its bytes fail their digest or a valid copy of its digest is verified in place; one that cannot be
+    read now is kept, and a valid one facing an invalid destination replaces it (C33). Each race protection has a
+    deterministic test that fails without it (C34).
 19. **The first outline** (round r6, F12). VS Code caches a document's outline per version and turns an empty answer
     into none, so the outline, folding and selection-range requests that arrive while the current version's first
     analysis is pending wait for it, up to the analysis cap; an early empty answer would otherwise stay until the text
@@ -1113,4 +1117,5 @@ D7 (code actions, Generated Java, Commands) and the M5a row. The rest are choice
   acceptance. After #83's round r2 (design F9, security S9–S11, Codex C11–C17): L10 names its reference machine and
   CI's figures; §12 notes 16–18. After round r3 (design F10, Codex C18–C20): notes 17 and 18 extended. After round r4 (security S12, Codex
   C21–C24): note 18 corrected and extended. After round r5 (security S13, S14; Codex C25–C28): note 18 extended. After round r6 (design F11, F12;
-  security S15; Codex C29–C32): note 18 extended, note 19.
+  security S15; Codex C29–C32): note 18 extended, note 19. After round r7 (security S16; Codex C33, C34): note 18
+  extended; note 19's stray last sentence removed.
