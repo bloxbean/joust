@@ -120,11 +120,14 @@ export function validate(p) {
     if (typeof v !== 'string') fail(where, 'not a string');
     return v;
   };
+  // Positions, local ids and taints are 32-bit, as the Java reader holds them (IrReaderFuzzTest: a column of 2^46 was
+  // accepted here and refused there).
+  const INT_MAX = 0x7fffffff;
   const at = (v, where) => {
-    if (!Array.isArray(v) || v.length !== 2 || !v.every((n) => Number.isSafeInteger(n) && n >= 0)) fail(where, 'a bad position');
+    if (!Array.isArray(v) || v.length !== 2 || !v.every((n) => Number.isSafeInteger(n) && n >= 0 && n <= INT_MAX)) fail(where, 'a bad position');
   };
   const nat = (v, where) => {
-    if (!Number.isSafeInteger(v) || v < 0) fail(where, 'not a non-negative integer');
+    if (!Number.isSafeInteger(v) || v < 0 || v > INT_MAX) fail(where, 'not a non-negative integer');
   };
 
   // ---- top level and declarations
