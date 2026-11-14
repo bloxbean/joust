@@ -613,8 +613,9 @@ final class Parser {
                 owned.add(new TypeDecl(n, fieldBlock("field"), tp));
                 closeDecl();
             } else if (t.is("owned") && (peek(1).is("init") || peek(1).is("action") || peek(1).is("destroy"))) {
-                // M3a: owned init T.m(…), owned action T.m(…), owned destroy T.m(…): a method of the owned type T.
-                openDecl(peek(1).text());
+                // M3a: owned init T.m(…), owned action T.m(…), owned destroy T.m(…): a method of the owned type T. Its
+                // declaration (#101 review F8) is an owned kind named T.m, so the outline says whose method it is.
+                openDecl(peek(1).is("init") ? "ownedInit" : peek(1).is("action") ? "ownedAction" : "ownedDestroy");
                 next();
                 Tok k = next();
                 String on = ident("the owned type of an owned " + k.text() + " (owned " + k.text() + " Account.name(…))");
@@ -624,7 +625,7 @@ final class Parser {
                 next();
                 Tok nt = peek();
                 String n = ident("a method name");
-                named(nt);
+                if (spans != null) spans.name(nt, on + "." + n);
                 var ps = params();
                 var mods = mods();
                 Kind kind = k.is("init") ? Kind.OWNED_INIT : k.is("action") ? Kind.OWNED_ACTION : Kind.OWNED_DESTROY;

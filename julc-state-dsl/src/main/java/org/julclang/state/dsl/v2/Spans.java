@@ -61,9 +61,14 @@ final class Spans {
 
     /** The open declaration's name is {@code t}. */
     void name(Tok t) {
+        name(t, t.text());
+    }
+
+    /** The open declaration's name is {@code text}, its span the token's (an owned method's T.m, at m: #101 review F8). */
+    void name(Tok t, String text) {
         Decl d = open.peek();
         if (d == null || d.name != null) return;
-        d.name = t.text();
+        d.name = text;
         d.nameSpan = new int[]{t.line(), t.col(), t.end()};
     }
 
