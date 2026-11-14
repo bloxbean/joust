@@ -55,7 +55,7 @@ class JscV2M3a3FourWayTest {
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         if (!LEGS.isEmpty()) return;
         Map<String, String> files = new LinkedHashMap<>();
-        for (String c : List.of("Guild", "Armory", "Market")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
+        for (String c : List.of("Guild", "Armory", "Market", "Ferry")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
         var r = Toolchain.build(files, Map.of());
         assertTrue(r.ok(), r.diagnostics().toString());
         for (var c : r.contracts()) {
@@ -109,8 +109,10 @@ class JscV2M3a3FourWayTest {
         assertEquals("refused", f.check("transfer", hero(1), List.of(), moving, ANN));
         assertEquals("refused", f.check("transfer", hero(2), List.of(), at(ANN, 0, 0).withShared(closed).withInto(open), ANN));
         f.modifierRefused("transfer", hero(2), List.of(), at(EVE, 0, 0).withShared(open).withInto(open), EVE);
-        // A24 (decision, ADR-0018 r25): the source's half first. A move from a closed guild into a closed guild is refused
-        // with the source's class on every leg, though the destination's admit would refuse it too.
+        // A24 (ADR-0018 r25, narrowed after #107 review C1): each half is its own call with its own refusal class. The
+        // move's half from a closed guild is refused with its own (the source's) class on the interpreters, the JVM and
+        // the transition program, and the validator refuses the transaction (whose admit, into a closed guild, would
+        // refuse too); the admit's half, checked from its side, reports the destination's class (admitItem below).
         f.partner = new FourWay.Partner("admit", closed, List.of(), null, null);
         assertEquals("refused", f.check("transfer", hero(2), List.of(), at(ANN, 0, 0).withShared(closed).withInto(closed), ANN));
         assertTrue(f.lastRefusal.endsWith(":the source guild is closed"), f.lastRefusal);
@@ -255,6 +257,54 @@ class JscV2M3a3FourWayTest {
         f.partner = new FourWay.Partner("enlist", open, List.of(), null, null);
         f.mutants("relist", l5, List.of(ada(7)), relisting, ANN);
         f.partner = null;
+        JsLeg.check(f);
+        report(f);
+    }
+
+    // ------------------------------------------------------------------ Ferry (coverage, #107 review C2, K22)
+
+    static Rec pass(long level) {
+        return rec("Pass", Bytes.of(ANN), n(level));
+    }
+
+    /** The two halves' verdicts in the last validator run: the arriving object's spend and the destination's. */
+    static boolean[] halves(FourWay f) {
+        var r = f.lastVerdict.results();
+        return new boolean[]{r.get("SPEND 2@0b0b0b0b").isSuccess(), r.get("SPEND 1@7a7a7a7a").isSuccess()};
+    }
+
+    /**
+     * K22: the admission reads the arriving object as its input holds it, never the move's result. Ferry's moves change
+     * the very field board reads: a level-1 pass lifted to 3 is refused at a level-3 ferry (it arrives at level 1), and a
+     * level-3 pass lowered to 1 is boarded (it arrives at level 3), on all five legs. The halves' verdicts say which side
+     * refuses: the move's spend is accepted in both, the destination's refuses only the lifted pass. A validator that
+     * read the move's output instead would board the lifted pass and refuse the lowered one, failing both vectors.
+     */
+    @Test
+    @Order(4)
+    void ferry() throws Exception {
+        var f = LEGS.get("Ferry");
+        Rec ferry = rec("State", Bytes.of(MASTER), n(3), n(0));
+        f.defaultShared = ferry;
+        ok(f.check("init", null, List.of(n(3)), at(MASTER, 0, 0), MASTER));
+        // Low in, high out: refused at the destination.
+        f.partner = new FourWay.Partner("lift", pass(1), List.of(), null, ferry);
+        assertEquals("refused", f.check("board", ferry, List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(1)), ANN));
+        assertTrue(f.lastRefusal.endsWith(":below the ferry's level"), f.lastRefusal);
+        boolean[] lifted = halves(f);
+        assertTrue(lifted[0] && !lifted[1], "the lift's spend accepted, the destination's refused: " + f.lastVerdict);
+        // High in, low out: boarded, and the move checked from its own side too.
+        f.partner = new FourWay.Partner("lower", pass(3), List.of(), null, ferry);
+        ok(f.check("board", ferry, List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(3)), ANN));
+        boolean[] lowered = halves(f);
+        assertTrue(lowered[0] && lowered[1], "both halves accepted: " + f.lastVerdict);
+        f.partner = new FourWay.Partner("board", ferry, List.of(), null, null);
+        ok(f.check("lower", pass(3), List.of(), at(ANN, 0, 0).withInto(ferry), ANN));
+        assertEquals("refused", f.check("lower", pass(2), List.of(), at(ANN, 0, 0).withInto(ferry), ANN));
+        f.partner = new FourWay.Partner("lower", pass(3), List.of(), null, ferry);
+        f.mutants("board", ferry, List.of(Bytes.of(f.harness.objectId())), at(ANN, 0, 0).withArriving(pass(3)), ANN);
+        f.partner = null;
+        ok(f.check("scrap", pass(3), List.of(), at(ANN, 0, f.harness.minAda()), ANN));
         JsLeg.check(f);
         report(f);
     }

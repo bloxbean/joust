@@ -266,12 +266,15 @@ class JscV2M3a2GateTest {
                         gold(70).toPlutusData()), i.make("SafesValidator$Holding", h.instanceId(), s), ann, gold(70), true, keeper);
                 return run(StateHarness.data(s).toString(), h.evaluate(h.withClaims(tx, created.claims())));
             }
-            case "note" -> {
+            case "note", "note0", "note0existing" -> {
+                // #104 review C2: note0 writes zero under a new key, note0existing zero over the note openSafe wrote.
+                byte[] key = call.equals("note0existing") ? GOLD : "why".getBytes();
+                BigInteger value = call.equals("note") ? BigInteger.valueOf(7) : BigInteger.ZERO;
                 ms = new MerkleSupport(i.store);   // one MerkleSupport for a call's run and its witnesses
-                Object next = i.invoke(ms, "Safes", "note", s, "why".getBytes(), BigInteger.valueOf(7));
+                Object next = i.invoke(ms, "Safes", "note", s, key, value);
                 var p = ms.prepare(h.policy(), safe, s, next, StateHarness.OBJECT_REF);
                 var held = h.heldObject(i.make("SafesValidator$Holding", h.instanceId(), s), BigInteger.ZERO, gold(70));
-                var tx = h.stepWith(held, i.make("SafesValidator$Note", "why".getBytes(), BigInteger.valueOf(7)), null,
+                var tx = h.stepWith(held, i.make("SafesValidator$Note", key, value), null,
                         Transition.full(p.stored(), null, null, null, null), i.make("SafesValidator$Holding", h.instanceId(), p.stored()), ANN, null, null);
                 return run(StateHarness.data(p.stored()).toString(), h.evaluate(h.withClaims(tx, p.claims())));
             }
@@ -287,6 +290,24 @@ class JscV2M3a2GateTest {
                         Transition.full(null, pays, sends, null, null), null, ANN, c, null);
                 return run(StateHarness.data(pays) + " " + StateHarness.data(sends), h.evaluate(h.withClaims(tx, p.claims())));
             }
+        }
+    }
+
+    /**
+     * #104 review C2, a stated difference: a zero note. The port's notes are a {@code BigMap<Bytes, Int>}, whose set of 0
+     * removes the key (D7: an absent key reads 0), where examples/locker's {@code MerkleMaps.putInt} stores a present entry
+     * of the empty encoding. Both validators accept both calls; the committed maps differ: under a new key the Java
+     * example adds a present zero and the port changes nothing, and over an existing note the Java example keeps the key
+     * (zero) and the port removes it. Any other value agrees (the budget gate's note).
+     */
+    @Test
+    void aZeroNote_isAStatedDifference() throws Exception {
+        for (String c : List.of("note0", "note0existing")) {
+            Run j = safes(new Impl(true), c), p = safes(new Impl(false), c);
+            assertTrue(j.accepted(), c + " (Java):\n" + j.verdict());
+            assertTrue(p.accepted(), c + " (.jsc 2):\n" + p.verdict());
+            assertNotEquals(j.result(), p.result(), c + ": the zero note is the stated difference (the maps' roots differ)");
+            System.out.println("[M3a2 C2] Safes " + c + ": both accepted; the notes' roots differ (Java keeps a present zero, the port does not)");
         }
     }
 

@@ -57,9 +57,15 @@ const SYMBOL_KIND = {
   params: 23, // Struct
   event: 24, // Event
   invariant: 7, // Property
-  // ADR-0018 M3a: an owned type.
+  // ADR-0018 M3a: an owned type, and its methods (named T.m, #101 review F8).
   owned: 23, // Struct
+  ownedInit: 9,
+  ownedAction: 6,
+  ownedDestroy: 6,
 };
+
+/** An outline declaration's detail: its kind as a reader says it. */
+const DETAIL = { stateField: 'state field', ownedInit: 'owned init', ownedAction: 'owned action', ownedDestroy: 'owned destroy' };
 
 /** The document outline (D7): DocumentSymbol[] from the model's outline declarations. */
 export function documentSymbols(model) {
@@ -69,7 +75,7 @@ export function documentSymbols(model) {
     if (!d.outline) continue;
     const s = {
       name: d.name,
-      detail: d.kind === 'stateField' ? 'state field' : d.kind,
+      detail: DETAIL[d.kind] ?? d.kind,
       kind: SYMBOL_KIND[d.kind] ?? 13,
       range: range(d.range),
       selectionRange: range(d.nameRange),

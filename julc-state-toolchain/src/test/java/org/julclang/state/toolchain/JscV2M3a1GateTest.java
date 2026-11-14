@@ -42,7 +42,7 @@ class JscV2M3a1GateTest {
 
     static final BigInteger ADA = BigInteger.valueOf(1_000_000);
     static final byte[] ADMIN = StateHarness.fill(28, 0xAD), ANN = StateHarness.fill(28, 0xA1);
-    static final int SATURATED_BITS = 560;
+    static final int SATURATED_BITS = 656;   // #101 review F6: the largest the 160-byte datum takes (theSaturatedAccount_…)
     static int[] SIZE;
     static final List<String> ROWS = new ArrayList<>();
 
@@ -170,6 +170,13 @@ class JscV2M3a1GateTest {
                 return run(StateHarness.data(st).toString(), h.evaluate(h.act(h.live(open, BigInteger.ZERO), i.make("BankValidator$SetPaused", true),
                         st, ADMIN, null)));
             }
+            case "setLimit" -> {
+                // #101 review F6: the seventh call's row.
+                BigInteger limit = ADA.multiply(BigInteger.valueOf(20));
+                Object st = i.invoke("Bank", "setLimit", open, limit);
+                return run(StateHarness.data(st).toString(), h.evaluate(h.act(h.live(open, BigInteger.ZERO), i.make("BankValidator$SetLimit", limit),
+                        st, ADMIN, null)));
+            }
             case "open" -> {
                 Ctx ctx = h.ctx(ANN, ADA.multiply(BigInteger.TEN), BigInteger.ZERO);
                 Object made = i.invoke("Bank", "open", open, ctx);
@@ -226,9 +233,47 @@ class JscV2M3a1GateTest {
     @Test
     void budgets() throws Exception {
         BigInteger ten = ADA.multiply(BigInteger.TEN), full = BigInteger.ONE.shiftLeft(SATURATED_BITS).subtract(BigInteger.ONE);
-        for (String c : List.of("init", "setPaused", "open", "deposit", "withdraw", "close")) compare(c, i -> bank(i, c, ten));
-        for (String c : List.of("deposit", "withdraw", "close")) compare(c + " (saturated)", i -> bank(i, c, full));
+        for (String c : List.of("init", "setPaused", "setLimit", "open", "deposit", "withdraw", "close")) compare(c, i -> bank(i, c, ten));
+        // The deposit's starts five ADA below the largest account, so the account it makes fills the datum (K9).
+        for (String c : List.of("deposit", "withdraw", "close")) {
+            BigInteger from = c.equals("deposit") ? full.subtract(ADA.multiply(BigInteger.valueOf(5))) : full;
+            compare(c + " (saturated)", i -> bank(i, c, from));
+        }
         System.out.println("[M3a1 budget] | Contract | Call | Java CPU | .jsc 2 CPU | Δ CPU | Java memory | .jsc 2 memory (Δ) | % of max (CPU / mem) |");
         ROWS.forEach(r -> System.out.println("[M3a1 budget] " + r));
+    }
+
+    /** The size of a datum as the ledger receives it: its canonical CBOR (as CCL writes inline datums). */
+    static int datumBytes(Object datum) throws Exception {
+        var ccl = org.julclang.clientlib.PlutusDataAdapter.convert(datum);
+        return com.bloxbean.cardano.client.common.cbor.CborSerializationUtil.serialize(ccl.serialize(), true).length;
+    }
+
+    /**
+     * #101 review F6 (K9, J11's saturation rule): the saturated rows' account is the largest the 160-byte bound accepts.
+     * An account's object datum is Holding(instance, Account(owner, saved)); savings of 2^(8B) - 1 fill it exactly, and a
+     * deposit onto them is accepted, while a deposit that carries them over to 2^(8B) (one byte more) is refused.
+     */
+    @Test
+    void theSaturatedAccount_isTheLargestTheBoundAccepts() throws Exception {
+        StateHarness<org.julclang.state.examples.dsl.Bank.State> h = StateHarness.of(org.julclang.state.examples.dsl.BankClient.SPEC);
+        java.util.function.Function<BigInteger, Object> held = saved -> new org.julclang.state.examples.dsl.BankValidator.Holding(h.instanceId(),
+                new org.julclang.state.examples.dsl.Bank.Account(ANN, saved));
+        int bytes = 1;
+        while (datumBytes(held.apply(BigInteger.ONE.shiftLeft(8 * (bytes + 1)).subtract(BigInteger.ONE))) <= 160) bytes++;
+        BigInteger max = BigInteger.ONE.shiftLeft(8 * bytes).subtract(BigInteger.ONE);
+        assertEquals(160, datumBytes(held.apply(max)), "savings of " + (8 * bytes) + " bits fill the datum exactly");
+        assertEquals(161, datumBytes(held.apply(max.add(BigInteger.ONE))), "one more is one byte over");
+        assertEquals(SATURATED_BITS, 8 * bytes, "the saturated rows' savings are the largest the bound accepts");
+        BigInteger five = ADA.multiply(BigInteger.valueOf(5));
+        Ctx ctx = h.ctx(ANN, five, ADA.multiply(BigInteger.TEN));
+        for (BigInteger to : List.of(max, max.add(BigInteger.ONE))) {
+            BigInteger from = to.subtract(five);
+            var tx = h.actObject(h.liveObject(held.apply(from), ADA.multiply(BigInteger.TEN)), new org.julclang.state.examples.dsl.BankValidator.Deposit(ctx),
+                    held.apply(to), JulcList.empty(), ANN, ctx, null);
+            if (to.equals(max)) h.assertAccepted(tx);
+            else h.assertRejected(tx, "a deposit making the object's datum 161 bytes");
+        }
+        System.out.println("[M3a1 K9] savings of " + (8 * bytes) + " bits: a 160-byte datum (accepted); one more: 161 bytes (refused)");
     }
 }

@@ -1,0 +1,24 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import contract { Twin } from "./Twin.jsc"
+
+// ADR-0018 M3a1 coverage (#101 review F11, A2): a contract that reads a contract with owned types. Twin's objects sit at
+// Twin's address and decode as Twin's State, so only the read's 32-byte instance token keeps one from being read.
+contract TwinReader {
+  params { twin: Instance<Twin> }
+  state { host: Key, seen: Int }
+
+  init() {
+    return { host: caller, seen: 0 }
+  }
+
+  // Copies the twin's counter.
+  action look(t: reads params.twin) open {
+    return { ...state, seen: t.inner.n }
+  }
+
+  destroy close() only host {
+    pay(host, balance)
+  }
+}

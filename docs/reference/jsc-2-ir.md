@@ -185,8 +185,11 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   (an `admits T` action's arriving object, M3a3) is declared after the first parameter. The modifier `admits` is
   `{ "name": "admits", "field": T }`. An owned type's invariant names it in `on` (M3a3). A time field of an owned type is
   `T.f` in `timeFields`. Both readers refuse an owned kind without `on`, an `on` that is not an owned type, `shared` outside
-  an owned method, `into` outside an owned action, `arriving` without `admits`, and modifiers naming fields the object does
-  not have.
+  an owned method or of another type than `State`, `into` outside an owned action, `arriving` without `admits`, modifiers
+  naming fields the object does not have, `receives` on an owned method, and an owned type without an owned init or an
+  escape hatch (an owned destroy without `shared`, `before` or `after`). **Not produced until their part** (#101 review
+  F2, F9; refused by both readers until then): `into`, `arriving`, `admits` and an invariant's `on` (M3a3), a payable owned
+  destroy and native assets in an owned method (M3a2).
 - **M3b** (additive within format 2, ADR-0016). `keyed` (present only when the contract declares keyed types) lists each
   keyed type, in declaration order, with its options as the checker resolved them (the processor's defaults applied):
   `type` (an owned type), `key` (its key field), `maxKeyBytes`, `signed` (a boolean), `linkCooldownMs` and `linkWindowMs`

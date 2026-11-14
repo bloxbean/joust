@@ -637,10 +637,6 @@
     },
     {
      "name": "retire"
-    },
-    {
-     "name": "after",
-     "field": "choice"
     }
    ],
    "checked": [],
@@ -1808,6 +1804,10 @@
     },
     {
      "name": "retire"
+    },
+    {
+     "name": "after",
+     "field": "stake"
     }
    ],
    "checked": [],

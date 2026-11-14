@@ -1,0 +1,39 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3a3 coverage (#107 review C2, K22): moves that change the very field the destination's admission reads.
+// lift raises a pass by 2 as it moves, lower drops it by 2; board admits a pass of at least the ferry's level, as the
+// pass arrives (its input, before the move). A ferry of level 3 refuses a level-1 pass lifted to 3, and boards a
+// level-3 pass lowered to 1.
+contract Ferry {
+  state { keeper: Key, minLevel: Int, arrivals: Int }
+
+  owned Pass { owner: Key, level: Int }
+
+  init(minLevel: Int) {
+    require(minLevel > 0, "a level of at least 1")
+    return { keeper: caller, minLevel, arrivals: 0 }
+  }
+
+  owned init Pass.issue(f: shared) {
+    return { owner: caller, level: 1 }
+  }
+
+  owned action Pass.lift(to: into) only owner {
+    return { ...state, level: level + 2 }
+  }
+
+  owned action Pass.lower(to: into) only owner {
+    require(level > 2, "too low to lower")
+    return { ...state, level: level - 2 }
+  }
+
+  action board(passId: Bytes, pass: Pass) admits Pass {
+    require(pass.level >= minLevel, "below the ferry's level")
+    return { ...state, arrivals: arrivals + 1 }
+  }
+
+  owned destroy Pass.scrap() only owner {
+    pay(owner, balance)
+  }
+}

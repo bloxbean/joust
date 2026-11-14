@@ -144,7 +144,7 @@ public final class JscLang {
             // ADR-0018 M2b (the integration with M5a): the params block, events and invariants.
             "params", "event", "invariant",
             // ADR-0018 M3a: an owned type (its fields are "field"s; its methods are init, action and destroy).
-            "owned");
+            "owned", "ownedInit", "ownedAction", "ownedDestroy");
 
     /** Diagnostics on one character (D7: the lexer's character rules underline the offending character). */
     private static final Set<String> ONE_CHARACTER = Set.of("JSC0104", "JSC0106", "JSC0107", "JSC0108", "JSC0145", "JSC0146",

@@ -203,4 +203,88 @@ class JscV2M3a1AttackTest {
         fs.set(i, v);
         return new PlutusData.ConstrData(cd.constructorTag(), fs);
     }
+
+    // ------------------------------------------------------------------ #101 review S2: alike shapes (Twin)
+
+    final StateHarness<org.julclang.state.examples.dsl.Twin.State> tw = StateHarness.of(org.julclang.state.examples.dsl.TwinClient.SPEC);
+
+    org.julclang.state.examples.dsl.Twin.State twinState(long n) {
+        return new org.julclang.state.examples.dsl.Twin.State(StateHarness.fill(32, 0x7E), new org.julclang.state.examples.dsl.Twin.Inner(ANN,
+                BigInteger.valueOf(n)));
+    }
+
+    org.julclang.state.examples.dsl.TwinValidator.Holding twinHeld(byte[] instance, long n) {
+        return new org.julclang.state.examples.dsl.TwinValidator.Holding(instance, new org.julclang.state.examples.dsl.Twin.O(ANN, BigInteger.valueOf(n)));
+    }
+
+    /**
+     * S2 (A6, I21): Twin's State and Holding decode as each other, so these crossings are refused only by the token-kind
+     * checks: the instance UTxO spent with an owned redeemer (its datum read as a Holding), an object spent with the
+     * instance's redeemer (its datum read as a State), and a creation naming an object as its instance with the object
+     * UTxO as the reference. Each honest call beside it is accepted.
+     */
+    @Test
+    void alikeShapes_theTokenKindDecides() {
+        // The instance spent with the object's inc: it would continue State(tag, Inner(ANN, 1)), Holding's shape.
+        var live = tw.live(twinState(0), BigInteger.ZERO);
+        tw.assertAccepted(tw.act(live, new org.julclang.state.examples.dsl.TwinValidator.Touch(), twinState(0), null, null));
+        tw.assertRejected(tw.act(live, new org.julclang.state.examples.dsl.TwinValidator.Inc(), twinState(1), ANN, null),
+                "the instance spent with an owned redeemer");
+        // An object spent with the instance's touch: its Holding read as a State.
+        var obj = tw.liveObject(twinHeld(tw.instanceId(), 0), BigInteger.ZERO);
+        tw.assertAccepted(tw.actObject(obj, new org.julclang.state.examples.dsl.TwinValidator.Inc(), twinHeld(tw.instanceId(), 1), JulcList.empty(), ANN,
+                null, null));
+        tw.assertRejected(tw.actObject(obj, new org.julclang.state.examples.dsl.TwinValidator.Touch(), twinHeld(tw.instanceId(), 0), JulcList.empty(), null,
+                null, null), "an object spent with the instance's redeemer");
+        // A creation naming an object id as its instance, the object UTxO (Holding read as a State) as the reference.
+        Ctx c = tw.ctx(ANN, BigInteger.ZERO, BigInteger.ZERO);
+        tw.assertAccepted(tw.createObject(new org.julclang.state.examples.dsl.TwinValidator.Make(tw.seed(), tw.instanceId(), c), twinHeld(tw.instanceId(), 0),
+                twinState(0), c));
+        byte[] objectId = tw.objectId();
+        var tx = tw.createObject(new org.julclang.state.examples.dsl.TwinValidator.Make(tw.seed(), objectId, c), twinHeld(objectId, 0), twinState(0), c);
+        Value v = Value.lovelace(BigInteger.valueOf(tw.minAda())).merge(Value.singleton(new PolicyId(tw.policy()), new TokenName(objectId), BigInteger.ONE));
+        tx.referenceInputs.clear();
+        tx.referenceInputs.add(new TxInInfo(StateHarness.OBJECT_REF, new TxOut(tw.stateAddress(), v,
+                new OutputDatum.OutputDatumInline(StateHarness.data(twinHeld(tw.instanceId(), 0))), Optional.empty())));
+        tw.assertRejected(tx, "a creation under an object, with the object UTxO as the reference");
+    }
+
+    /**
+     * F11 (A2's reads case): a reader of Twin (TwinReader) never reads a Twin object as Twin's State, though its Holding
+     * decodes as one. With the params naming the Twin instance, an object UTxO of Twin's policy offered as the read is
+     * refused (the read is the instance's token). A reader whose own deployer names a Twin object in its params can be
+     * created (an Instance<C> param is not checked at the init), but it can never read: the generated read requires a
+     * 32-byte instance id, so no reader reads an object.
+     */
+    @Test
+    void aReaderOfAContractWithOwnedTypes_neverReadsAnObject() {
+        byte[] twinPolicy = tw.policy(), instance = tw.instanceId(), objectId = tw.objectId();
+        var params = new org.julclang.state.examples.dsl.TwinReader.Config(new org.julclang.state.api.ForeignInstance(twinPolicy, instance));
+        StateHarness<org.julclang.state.examples.dsl.TwinReader.State> r = StateHarness.of(org.julclang.state.examples.dsl.TwinReaderClient.SPEC, params);
+        var reader = new org.julclang.state.examples.dsl.TwinReader.State(ADMIN, BigInteger.ZERO);
+        var live = r.live(reader, BigInteger.ZERO);
+        java.util.function.BiFunction<byte[], Object, TxInInfo> ref = (token, datum) -> new TxInInfo(new TxOutRef(new TxId(StateHarness.fill(32, 0x61)),
+                BigInteger.ZERO), new TxOut(tw.stateAddress(), Value.lovelace(BigInteger.valueOf(tw.minAda())).merge(Value.singleton(new PolicyId(twinPolicy),
+                new TokenName(token), BigInteger.ONE)), new OutputDatum.OutputDatumInline(StateHarness.data(datum)), Optional.empty()));
+        // The honest read: the Twin instance (n = 0).
+        var honest = r.act(live, new org.julclang.state.examples.dsl.TwinReaderValidator.Look(), reader, null, null);
+        honest.referenceInputs.add(ref.apply(instance, twinState(0)));
+        r.assertAccepted(honest);
+        // A Twin object (its Holding decoding as Twin's State, n = 5), offered as the read.
+        var attack = r.act(live, new org.julclang.state.examples.dsl.TwinReaderValidator.Look(),
+                new org.julclang.state.examples.dsl.TwinReader.State(ADMIN, BigInteger.valueOf(5)), null, null);
+        attack.referenceInputs.add(ref.apply(objectId, twinHeld(instance, 5)));
+        r.assertRejected(attack, "a Twin object offered as the Twin instance's read");
+        // A reader whose own deployer names a Twin object in its params: created, but its read of the object is refused.
+        var objParams = new org.julclang.state.examples.dsl.TwinReader.Config(new org.julclang.state.api.ForeignInstance(twinPolicy, objectId));
+        StateHarness<org.julclang.state.examples.dsl.TwinReader.State> bad = StateHarness.of(org.julclang.state.examples.dsl.TwinReaderClient.SPEC, objParams);
+        Ctx c = bad.ctx(ADMIN, BigInteger.ZERO, BigInteger.ZERO);
+        var created = bad.evaluate(bad.create(new org.julclang.state.examples.dsl.TwinReaderValidator.CreateInstance(bad.seed(), c), reader, c));
+        var read = bad.act(bad.live(reader, BigInteger.ZERO), new org.julclang.state.examples.dsl.TwinReaderValidator.Look(),
+                new org.julclang.state.examples.dsl.TwinReader.State(ADMIN, BigInteger.valueOf(5)), null, null);
+        read.referenceInputs.add(ref.apply(objectId, twinHeld(instance, 5)));
+        System.out.println("[M3a1 F11] a reader whose params name a Twin object: creation " + created.accepted() + ", the object's read "
+                + bad.evaluate(read).accepted());
+        bad.assertRejected(read, "a read of a Twin object, its id named by the reader's params (the read takes a 32-byte instance id)");
+    }
 }

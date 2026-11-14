@@ -96,8 +96,8 @@
   "message": "a keyed contract has no batched action"
  },
  {
-  "file": "keyed-admits.json",
-  "message": "a keyed object does not move (admits Ballot)"
+  "file": "keyed-move.json",
+  "message": "a keyed object does not move"
  },
  {
   "file": "keyed-send.json",

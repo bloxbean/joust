@@ -101,7 +101,8 @@ const ballot = (p) => p.keyed.find((k) => k.type === 'Ballot');
 const entryK = (p) => p.keyed.find((k) => k.type === 'Entry');
 keyed('retire-open', 'Registry', (p, m) => { m('leave').mods[0] = { name: 'open' }; }, 'a retiring exit is signed by its owner');
 keyed('retire-payable', 'Registry', (p, m) => { m('leave').mods.push({ name: 'payable' }); }, 'needs nobody else');
-keyed('retire-after', 'Registry', (p, m) => { m('leave').mods.push({ name: 'after', field: 'choice' }); }, 'needs nobody else');
+// (on Entry, whose release is an escape hatch of M3a's kind, so only the keyed rule refuses it)
+keyed('retire-after', 'Registry', (p, m) => { m('retire').mods.push({ name: 'after', field: 'stake' }); }, 'needs nobody else');
 keyed('retire-quorum', 'Registry', (p, m) => { m('retire').mods.push({ name: 'quorum', keys: 'guardians', threshold: 'needed' }); }, 'needs nobody else');
 keyed('action-open', 'Registry', (p, m) => { m('change').mods = [{ name: 'open' }]; }, 'a keyed action names its audience');
 keyed('no-hatch', 'Registry', (p, m) => { m('leave').mods = m('leave').mods.filter((x) => x.name !== 'retire'); }, 'Ballot has no retiring exit');
@@ -123,7 +124,13 @@ keyed('signed-string', 'Registry', (p) => { ballot(p).signed = 'true'; }, 'signe
 keyed('key-time-field', 'Registry', (p) => { p.timeFields.push('Entry.name'); p.timeFields.sort(); }, 'its key is a time field');
 keyed('max-datum-2049', 'Registry', (p) => { p.options.find((o) => o.name === 'maxDatumBytes').value = '2049'; }, 'maxDatumBytes is at most 2048');
 keyed('batched', 'Registry', (p, m) => { m('setOpen').mods = [{ name: 'batched' }]; m('setOpen').usesCtx = true; }, 'a keyed contract has no batched action');
-keyed('admits', 'Registry', (p, m) => { m('setOpen').mods.push({ name: 'admits', field: 'Ballot' }); m('setOpen').usesCtx = true; }, 'a keyed object does not move (admits Ballot)');
+// A move of a keyed type with its admit (M3a's JSC1214 satisfied): the keyed rule refuses the move.
+keyed('move', 'Registry', (p, m) => {
+  m('setOpen').mods.push({ name: 'admits', field: 'Ballot' });
+  m('setOpen').usesCtx = true;
+  m('change').into = { id: 99901, name: 'dest', type: { record: 'State' }, taint: 0, at };
+  m('change').usesCtx = true;
+}, 'a keyed object does not move');
 keyed('send', 'Registry', (p, m) => { m('withdraw').body.stmts.unshift(sendStmt()); }, 'a keyed contract handles no native assets');
 keyed('retire-plain', 'Bank', (p, m) => { m('close').mods.push({ name: 'retire' }); }, 'only a keyed type');
 keyed('retire-on-action', 'Registry', (p, m) => { m('setOpen').mods.push({ name: 'retire' }); m('setOpen').usesCtx = true; }, 'only an owned destroy retires');
