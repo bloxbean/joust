@@ -158,6 +158,7 @@ export function validate(p) {
     }
     for (const f of j.fns) {
       keys(f, ['name', 'params', 'result'], 'java fn');
+      if (javaFns.has(`${j.class}.${f.name}`)) fail('java fn', `java:${j.class}.${f.name} is listed twice`);
       javaFns.set(`${j.class}.${f.name}`, f);
     }
   }
@@ -254,11 +255,15 @@ export function validate(p) {
   for (const c of contracts.values()) for (const t of c.receives) if (t !== null) type(t, `imported contract ${c.name}`);
   // #98 review F2, C5: a java: library fn's signature: a name, a list of parameter types and a result type, each a type
   // of the namespace (the Java reader reads them with type()).
-  for (const [k, f] of javaFns) {
-    str(f.name, `java fn ${k}`);
-    if (!Array.isArray(f.params)) fail(`java fn ${k}`, 'params is a list of types');
-    for (const t of f.params) type(t, `java fn ${k}`);
-    type(f.result, `java fn ${k}`);
+  // #98 review C11: every entry of every library's list (a duplicate cannot hide a malformed one: it is refused).
+  for (const j of p.javaLibraries) {
+    for (const f of j.fns) {
+      const k = `${j.class}.${f?.name}`;
+      str(f.name, `java fn ${k}`);
+      if (!Array.isArray(f.params)) fail(`java fn ${k}`, 'params is a list of types');
+      for (const t of f.params) type(t, `java fn ${k}`);
+      type(f.result, `java fn ${k}`);
+    }
   }
   for (const [name, fields] of shapes) for (const f of fields) type(f.type, `${name}.${f.name}`);
   for (const k of ['timeFields', 'recursiveFns']) for (const x of p[k]) str(x, k);

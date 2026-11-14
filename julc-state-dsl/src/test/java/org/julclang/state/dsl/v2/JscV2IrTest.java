@@ -422,6 +422,25 @@ class JscV2IrTest {
         System.out.println("[ir] Guarded's export (javaLibraries, CallJava): an unknown field is refused in each of its " + paths.size() + " objects");
     }
 
+    /** #98 review C11: a java: fn listed twice is refused (a valid copy cannot hide a malformed one), as in the JS reader. */
+    @Test
+    void aJavaFnListedTwice_isRefused() throws Exception {
+        String json = Files.readString(JS_FIXTURES.resolve("java/Guarded.ir.json"));
+        int i = json.indexOf("\"fns\": [", json.indexOf("\"javaLibraries\""));
+        int start = json.indexOf('{', i), depth = 0, end = start;
+        for (int k = start; k < json.length(); k++) {
+            char c = json.charAt(k);
+            if (c == '{') depth++;
+            if (c == '}' && --depth == 0) {
+                end = k + 1;
+                break;
+            }
+        }
+        String first = json.substring(start, end);
+        var e = assertThrows(IllegalArgumentException.class, () -> IrJson.read(json.substring(0, start) + first + ", " + json.substring(start)));
+        assertTrue(e.getMessage().contains("is listed twice"), e.getMessage());
+    }
+
     /** Every JSON object below {@code node}, type objects included; a local's fieldTaints (a map of its own kind) aside. */
     @SuppressWarnings("unchecked")
     private static void collectAll(Object node, java.util.List<Object> path, java.util.List<java.util.List<Object>> out) {

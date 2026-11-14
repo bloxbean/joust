@@ -718,6 +718,8 @@ final class IrJson {
                     known(fm, Set.of("name", "params", "result"), "a Java library fn");
                     var ps = new ArrayList<Ty>();
                     for (Object pt : l(fm.get("params"))) ps.add(type(pt));
+                    // #98 review C11: a fn is listed once (a duplicate would hide the other).
+                    if (fs.containsKey(s(fm.get("name")))) throw new IllegalArgumentException("java:" + x.get("class") + "." + fm.get("name") + " is listed twice");
                     fs.put(s(fm.get("name")), new Ir.JavaFn(s(fm.get("name")), List.copyOf(ps), type(fm.get("result"))));
                 }
                 java.add(new Ir.JavaLib(s(x.get("class")), s(x.get("sourceSha256")), recs, fs));
