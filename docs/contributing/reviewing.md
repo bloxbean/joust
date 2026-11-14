@@ -204,7 +204,8 @@ points; a unit without an entry must reach 40% (PIT) or 10% (Stryker). A missing
 reports with no mutant in them ("no measurements", never 100%). A change that means to lower a baseline updates the file,
 visibly. `-Ppit.targetClasses=a.B` and `JOUST_MUTATE=src/build.js` narrow a local run.
 
-The baselines (#95; the file holds every class and file):
+The baselines come from CI's `mutation_all` run [43629689255](https://github.com/bloxbean/joust/actions/runs/43629689255)
+at 525ff225, with the engines (the file holds every class and file):
 
 | Unit | Mutants | Killed or detected | Score |
 |---|---:|---:|---:|
@@ -212,20 +213,20 @@ The baselines (#95; the file holds every class and file):
 | `ValueAdapter` | 128 | 125 | 98% |
 | `AddressAdapter` | 72 | 46 | 64% |
 | `JavaLibraryCertifier` (and its nested classes) | 261 | 165 | 63% |
-| PIT julc-state-dsl, all (the checker's and lock's tests) | 2,067 | 1,174 | 56.8% |
-| `Checker` | 1,666 | 1,105 | 66% |
-| `JscMain` (before its own tests joined the set) | 343 | 37 | 11% |
-| Stryker js/joust `src/toolchain.js` | 381 | 263 | 69% |
-| Stryker js/joust `src/lsp/select.js` | 696 | 239 | 34% |
-| Stryker js/joust `src/build.js` | 283 | 30 | 11% |
+| PIT julc-state-dsl, all (the checker's and lock's tests) | 2,069 | 1,323 | 63.9% |
+| `Checker` | 1,668 | 1,131 | 68% |
+| `JscMain` | 343 | 154 | 45% |
+| Stryker js/joust `src/toolchain-heap.js` (set `joust-heap`) | 35 | 34 | 97% |
+| Stryker js/joust `src/toolchain.js` | 382 | 306 | 80% |
+| Stryker js/joust `src/lsp/select.js` | 698 | 246 | 35% |
+| Stryker js/joust `src/build.js` | 283 | 78 | 28% |
 | Stryker js/state-client `src/keyed.js` | 1,542 | 952 | 62% |
 | Stryker js/state-client `src/verify.js` | 1,003 | 86 | 9% |
 
-The js/joust figures were measured without the engines, so the engine-backed cases skipped. CI's `mutation_all` run,
-with the engines, is the baseline file's source. #106 sets targets for the low ones (`verify.js`, `build.js`,
-`select.js`) and asks whether the processor's output checks can be mutated. `src/toolchain-host.js` and
-`src/toolchain-worker.js` are not mutated: they run only in the forked engine host and its worker, where Stryker's
-coverage cannot follow (0 of 68 mutants covered).
+In that run the `mutation` job took 25 minutes and the Stryker jobs 26 (`joust-heap`), 79 (`joust`) and 25
+(`state-client`). #106 sets targets for the low ones (`verify.js`, `build.js`, `select.js`) and asks whether the
+processor's output checks can be mutated. `src/toolchain-host.js` and `src/toolchain-worker.js` are not mutated: they
+run only in the forked engine host and its worker, where Stryker's coverage cannot follow (0 of 68 mutants covered).
 
 ## 5. What is left to the reviewer
 

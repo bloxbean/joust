@@ -22,3 +22,4 @@ js/joust/reports/
 **/*Inputs/**/timeout-*
 **/*Inputs/**/oom-*
 js/state-client/reports/
+js/*/stryker-output-*.json

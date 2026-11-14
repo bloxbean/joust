@@ -11,7 +11,7 @@
     },
     "org.julclang.state.dsl.JscMain": {
       "mutants": 343,
-      "score": 10.8
+      "score": 44.9
     },
     "org.julclang.state.dsl.JscMain$Lowered": {
       "mutants": 2,
@@ -22,8 +22,8 @@
       "score": 50.0
     },
     "org.julclang.state.dsl.v2.Checker": {
-      "mutants": 1666,
-      "score": 66.3
+      "mutants": 1668,
+      "score": 67.8
     },
     "org.julclang.state.dsl.v2.Checker$1": {
       "mutants": 2,
@@ -31,11 +31,11 @@
     },
     "org.julclang.state.dsl.v2.Checker$Loader": {
       "mutants": 29,
-      "score": 31.0
+      "score": 44.8
     },
     "org.julclang.state.dsl.v2.Checker$Module": {
       "mutants": 4,
-      "score": 50.0
+      "score": 100.0
     },
     "org.julclang.state.dsl.v2.Checker$Sc": {
       "mutants": 19,
@@ -69,19 +69,19 @@
   "stryker": {
     "js/joust/src/build.js": {
       "mutants": 283,
-      "score": 10.6
+      "score": 27.6
     },
     "js/joust/src/lsp/select.js": {
-      "mutants": 696,
-      "score": 34.3
+      "mutants": 698,
+      "score": 35.2
     },
     "js/joust/src/toolchain-heap.js": {
       "mutants": 35,
-      "score": 88.6
+      "score": 97.1
     },
     "js/joust/src/toolchain.js": {
-      "mutants": 381,
-      "score": 69.0
+      "mutants": 382,
+      "score": 80.1
     },
     "js/state-client/src/keyed.js": {
       "mutants": 1542,
