@@ -185,10 +185,12 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   `{ "name": "admits", "field": T }`. An owned type's invariant names it in `on` (M3a3). A time field of an owned type is
   `T.f` in `timeFields`. Both readers refuse an owned kind without `on`, an `on` that is not an owned type, `shared` outside
   an owned method or of another type than `State`, `into` outside an owned action, `arriving` without `admits`, modifiers
-  naming fields the object does not have, `receives` on an owned method, and an owned type without an owned init or an
-  escape hatch (an owned destroy without `shared`, `before` or `after`). **Not produced until their part** (#101 review
-  F2, F9; refused by both readers until then): `into`, `arriving`, `admits` and an invariant's `on` (M3a3), a payable owned
-  destroy and native assets in an owned method (M3a2).
+  naming fields the object does not have, `receives` on an owned method, an owned type without an owned init or an
+  escape hatch (an owned destroy without `shared`, `before` or `after`), an escape hatch that never reads `balance`
+  (JSC1216), and a present `null` for `on`, `shared`, `into`, `arriving` or `reads` (an absent field is not written; #101
+  round-r2 review C4, C5). **Not produced until their part** (#101 review F2, F9, round-r2 C3; refused by both readers until
+  then): `into`, `arriving`, `admits` and an invariant's `on` (M3a3); a payable owned destroy, native assets in an owned
+  method, a second owned type and a BigMap in an owned type (M3a2).
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),
   `{ "instance": C }` (M2c, `Instance<C>`), `{ "deposit": T|null }` (M2c, an element of `funds.deposits`: its memo type,
   or null),

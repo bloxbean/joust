@@ -179,6 +179,16 @@ misses edits in the sandbox these ran in.)
 | F10 | the owned annotations' names are reserved only in contracts with owned types | `reviewRound1_rules` |
 | F11 | a reader of a contract with owned types never reads an object | `aReaderOfAContractWithOwnedTypes_neverReadsAnObject` (TwinReader) |
 
+## Review round r2 (#101)
+
+Design and security approved round r2. Codex's three items:
+
+| Item | What changed | Test |
+|---|---|---|
+| C3 | both readers refuse a second owned type and a BigMap in an owned type until M3a2 (`OWNED_STAGE < 2`), as the checker refuses them (JSC1215) | the round-r2 mutants of `JscV2M3a1IrStrictTest` and `owned-strict.test.js` (a second type with its own owned init and escape hatch, so JSC1208 and JSC1209 cannot mask the stage) |
+| C4 | both readers refuse an escape hatch that never reads `balance` (JSC1216), as the checker | the same (Bank's `close` paying 1); the unmutated port, whose hatch pays `balance`, reads |
+| C5 | both readers read `on`, `shared`, `into`, `arriving` and `reads` by presence: a present `null` is refused; Java's M3a3 gate is by presence | the same, for each field on `withdraw` |
+
 ## Found on the way
 
 - **The transition generator took an owned method's first parameter after its object for the params**
