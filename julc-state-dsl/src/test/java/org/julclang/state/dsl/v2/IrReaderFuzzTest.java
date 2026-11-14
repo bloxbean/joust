@@ -307,7 +307,7 @@ class IrReaderFuzzTest {
             new String[]{"arity", ".*takes \\d+ argument\\(s\\), not \\d+"},
             new String[]{"a missing field", "missing field \".*\""},
             new String[]{"a name declared twice", "(two methods of that name|a name taken by another method, fn or invariant|two declarations named .*|a bad or repeated name|two fns named .*)"},
-            new String[]{"a type check", "(a bad (big)?map type|.* is of type .*, not .*|not a string)"},
+            new String[]{"a type check", "(a bad (big)?map type|.* is of type .*, not .*|a literal of type .*|not a string)"},
             new String[]{"a name that resolves to nothing", "(no (fn|record|enum|variant|imported contract) .*|.* has no field .*|the (state|params) (has|have) no field .*|unknown (name|op) \".*\"|a reference to the local \\d+ \\(.*\\) outside its scope)"},
             new String[]{"a method's checked inputs or transaction use", "(checked is \\[.*\\], but .*|usesCtx is (true|false), but .*)"},
             new String[]{"a declaration's shape", "(the (state|params) record .* named .*|its state is named .*|a bad name.*|binds and fields differ in length|only a single-constructor arm binds)"},
