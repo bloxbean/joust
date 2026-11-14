@@ -1,0 +1,33 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M3a1 coverage (#101 review S2): the instance's datum and an object's decode as each other. State is
+// (Bytes, Inner(Key, Int)) and Holding is (instance: Bytes, O(Key, Int)), so only the token-kind checks (a 32-byte
+// instance token, a 29-byte 0x4F object token) keep an object's method off the instance and the reverse.
+contract Twin {
+  type Inner = { owner: Key, n: Int }
+  state { tag: Bytes, inner: Inner }
+
+  owned O { owner: Key, n: Int }
+
+  init(tag: Bytes) {
+    return { tag, inner: Inner { owner: caller, n: 0 } }
+  }
+
+  // Anyone may touch the instance; it does not change.
+  action touch() open {
+    return state
+  }
+
+  owned init O.make(t: shared) {
+    return { owner: caller, n: 0 }
+  }
+
+  owned action O.inc() only owner {
+    return { ...state, n: n + 1 }
+  }
+
+  owned destroy O.end() only owner {
+    pay(owner, balance)
+  }
+}

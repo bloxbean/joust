@@ -129,10 +129,10 @@ class JscV2M3a1CheckerTest {
         bad("  action a(@@s: shared) only admin { return state }", "JSC1205", "for owned methods");
         bad("  owned action Account.x(n: Int, @@s: shared) only owner { return state }", "JSC1206", "comes first");
         bad("  owned action Account.x(s: shared, @@t: shared) only owner { return state }", "JSC1206", "at most one shared");
-        // An owned init's parameters may share the object's field names, never the shared state's (D3).
+        // An owned init's parameters may share the object's field names, and the shared state's too (#101 review F4: that
+        // state is read only by projection, so nothing is hidden).
         lower(bank(BASICS + "  owned init Account.give(bank: shared, saved: Int) { return { owner: caller, saved } }"));
-        bad("  owned init Account.give(bank: shared, @@limit: Int) { return { owner: caller, saved: limit } }", "JSC0213",
-                "would hide the shared state's field");
+        lower(bank(BASICS + "  owned init Account.give(bank: shared, limit: Int) { return { owner: caller, saved: limit } }"));
         // An owned action's bindings never take its object's field names.
         bad("  owned action Account.x(@@saved: Int) only owner { return state }", "JSC0213", "would hide the Account field");
         // A client's lambda names.
@@ -241,6 +241,36 @@ class JscV2M3a1CheckerTest {
         bad("  type Box = { a: @@Option<Account> }", "JSC1207", "owned type");
         bad("  owned action Account.x(a: @@List<Account>) only owner { return state }", "JSC1207", "owned type");
         // A19: shared after an ordinary parameter (JSC1206 above), shared in an instance method (JSC1205 above).
+    }
+
+    /** #101 review round r1: F3 (native assets in owned methods until M3a2), S3 (the escape hatch), F10 (reserved names). */
+    @Test
+    void reviewRound1_rules() {
+        // F3: accept, send, mint, deposit and funds in an owned action or destroy were refused in M3a1 (JSC1215); M3a2
+        // builds them (semantics §2.8: funds for an object).
+        lower(bank(BASICS + "  owned action Account.give(to: Key) only owner { send(wallet(to), Value.lovelace(1)); return state }"));
+        lower(bank(BASICS + "  owned action Account.take() payable only owner { accept(Value.none()); return state }"));
+        // S3: an escape hatch that never reads balance could never pay out its object (JSC1216); one with a deadline is no
+        // escape hatch (JSC1209).
+        badSource(bank("""
+                  init() { return { admin: caller, paused: false, limit: 10 } }
+                  owned init Account.open(bank: shared) payable { require(!bank.paused, "paused"); return { owner: caller, saved: received } }
+                  @@owned destroy Account.close() only owner { pay(owner, 1) }
+                """), "JSC1216", "never reads balance");
+        badSource("""
+                jsc 2
+                package t
+                contract Bank {
+                  state { admin: Key, paused: Bool, limit: Int }
+                  owned @@Account { owner: Key, saved: Int, until: Int }
+                  init() { return { admin: caller, paused: false, limit: 10 } }
+                  owned init Account.open() { return { owner: caller, saved: 0, until: 5 } }
+                  owned destroy Account.close() only owner before until { pay(owner, balance) }
+                }
+                """, "JSC1209", "need an escape hatch");
+        // F10: the annotation names are reserved only in a contract with owned types.
+        lower("jsc 2\npackage t\ncontract C {\n  state { a: Int }\n  type Shared = { b: Int }\n  init() { return { a: 0 } }\n}\n");
+        bad("  @@type Shared = { b: Int }", "JSC0211", "reserved in a contract with owned types");
     }
 
     static void badSourceIn(String source, String file, String code, String fragment) {

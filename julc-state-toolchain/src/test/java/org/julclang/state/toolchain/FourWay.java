@@ -326,6 +326,20 @@ final class FourWay {
     }
 
     /**
+     * #101 review C2: what a refused owned action's body would produce without the defence a vector targets (its next
+     * object and events). Set, the validator's transaction for the refusal proposes it, so the validator must refuse the
+     * outcome itself (an unchanged object could be refused for another reason); the next check consumes it.
+     */
+    Rec unguardedNext;
+    List<Object> unguardedEvents;
+
+    FourWay unguarded(Rec next, List<Object> events) {
+        this.unguardedNext = next;
+        this.unguardedEvents = events;
+        return this;
+    }
+
+    /**
      * A transition's result as the runtime encodes it: Constr 0 [Some(next) | None, payouts], and (M2b) its events when the
      * contract has any (the step's last field).
      */
@@ -1729,7 +1743,12 @@ final class FourWay {
         }
         for (Object a : args) redeemerArgs.add(java(a));
         if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
-        if (interp.carriesEvents(method)) redeemerArgs.add(events(o));
+        // #101 review C2: a refusal's unguarded outcome proposes the events the body would emit.
+        Rec unNext = ok ? null : unguardedNext;
+        List<Object> unEvents = ok ? null : unguardedEvents;
+        unguardedNext = null;
+        unguardedEvents = null;
+        if (interp.carriesEvents(method)) redeemerArgs.add(unEvents != null ? java(unEvents) : events(o));
         Object redeemer = construct(cap(method), redeemerArgs);
         // The arguments as an attacker may send them (raw, not re-encoded canonically).
         var encoded = (org.julclang.core.PlutusData.ConstrData) StateHarness.data(redeemer);
@@ -1747,7 +1766,8 @@ final class FourWay {
             case "action" -> {
                 Object before = java(state);
                 var live = harness.liveObject(holding(before), t == null ? BigInteger.ZERO : t.balance());
-                yield harness.actObject(live, redeemer, holding(ok ? next : before), pays, signer, c, shared);
+                Object proposed = ok ? next : unNext != null ? java(unNext) : before;
+                yield harness.actObject(live, redeemer, holding(proposed), pays, signer, c, shared);
             }
             default -> {
                 // An owned destroy's balance is everything the object holds, deposit included.

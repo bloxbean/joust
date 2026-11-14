@@ -49,15 +49,23 @@ class JscV2M3a1FourWayTest {
         org.julclang.stdlib.Builtins.setCryptoProvider(new org.julclang.state.runtime.CclCryptoProvider());
         if (!LEGS.isEmpty()) return;
         Map<String, String> files = new LinkedHashMap<>();
-        for (String c : List.of("Bank", "Members")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
+        for (String c : List.of("Bank", "Members", "Vouch")) files.put("org/julclang/state/examples/dsl/" + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
         var r = Toolchain.build(files, Map.of());
         assertTrue(r.ok(), r.diagnostics().toString());
         for (var c : r.contracts()) {
             System.out.println("[M3a1] " + c.name() + ": " + c.scriptSizeBytes() + " bytes");
-            LEGS.put(c.name(), new FourWay(c.name(), files.get("org/julclang/state/examples/dsl/" + c.name() + ".jsc"), c.transitions(),
-                    c.name().equals("Members") ? rec("Config", ada(2)) : null));
+            String src = files.get("org/julclang/state/examples/dsl/" + c.name() + ".jsc");
+            if (c.name().equals("Vouch")) {
+                VOUCH = src;
+                VOUCH_TRANSITIONS = c.transitions();
+                continue;
+            }
+            LEGS.put(c.name(), new FourWay(c.name(), src, c.transitions(), c.name().equals("Members") ? rec("Config", ada(2)) : null));
         }
     }
+
+    static String VOUCH;
+    static Map<String, String> VOUCH_TRANSITIONS;
 
     static void report(FourWay f) {
         System.out.println("[M3a1 five-way] " + f.name + ": " + f.calls + " calls, interpreter = JVM = transition program = validator (" + f.refusals
@@ -170,7 +178,12 @@ class JscV2M3a1FourWayTest {
         f.modifierRefused("score", fresh, List.of(Bytes.of(K1), n(3)), at(ADMIN, 0, 0), ADMIN);
         // A member joining at Gold: an enum argument stored in the object.
         ok(f.check("join", null, List.of(keys(K1, K2, K3), n(2), later, rec("Gold", n(1))), shared(at(ANN, ada(5).longValue(), 0), club), ANN));
-        assertEquals("refused", f.check("score", fresh, List.of(Bytes.of(new byte[27]), n(3)), at(ANN, 0, 0), ANN));
+        // #101 review C2: the validator's transaction proposes what the body would make without the guard (the note under
+        // the short key, the best note, the event), so only the guard refuses it (JscV2M3a1GuardMutationTest).
+        Bytes by27 = Bytes.of(new byte[27]);
+        f.unguarded(member(keys(K1, K2, K3), 2, MapV.of(Map.of(by27, n(3))), rec("Basic"), Opt.some(rec("Note", by27, Bytes.hex("6e6f746564"))), later),
+                List.of(rec("Noted", by27, n(3))));
+        assertEquals("refused", f.check("score", fresh, List.of(by27, n(3)), at(ANN, 0, 0), ANN));
         assertEquals("input:by", f.lastRefusal);
         // Promoting by the guardians' quorum over the object's own fields.
         ok(f.as(List.of(K1, K3), null).check("promote", fresh, List.of(n(7)), null, K1));
@@ -193,5 +206,42 @@ class JscV2M3a1FourWayTest {
         f.mutants("leave", noted, List.of(), at(ANN, 0, lovelace), ANN);
         JsLeg.check(f);
         report(f);
+    }
+
+    // ------------------------------------------------------------------ #101 review S1, C1: params quorums of owned methods
+
+    /**
+     * A params quorum named only by an owned action (Vouch's endorse) is the deployment's: the instance's init checks its
+     * shape on every leg, as the validator does (one key: threshold 1 is accepted, 0 and 2 are refused with the quorum's
+     * class), and an owned init does not, on any leg (the validator's creation of an object checks no params quorum).
+     */
+    @Test
+    @Order(3)
+    void paramsQuorumsOfOwnedMethods_areTheInstancesInits() throws Exception {
+        var keys = keys(K1);
+        String cls = "invariant:quorum params.keys params.threshold";
+        Rec state = rec("State", Bytes.of(ADMIN), n(0));
+        Rec card = rec("Card", Bytes.of(ANN), n(0));
+        for (long threshold : new long[]{1, 0, 2}) {
+            var f = new FourWay("Vouch", VOUCH, VOUCH_TRANSITIONS, rec("Config", keys, n(threshold)));
+            f.defaultShared = state;
+            if (threshold == 1) {
+                ok(f.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN));
+            } else {
+                assertEquals("refused", f.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN, state), "threshold " + threshold);
+                assertEquals(cls, f.lastRefusal, "threshold " + threshold);
+            }
+            // An owned init checks no params quorum (not even under params the instance's init refuses).
+            ok(f.check("make", null, List.of(), shared(at(ANN, 0, 0), state), ANN));
+            ok(f.check("tear", card, List.of(), at(ANN, 0, f.harness.minAda()), ANN));
+            if (threshold == 1) {
+                f.as(List.of(K1), null);
+                ok(f.check("endorse", card, List.of(), null, K1));
+                f.mutants("endorse", card, List.of(), null, K1);
+            }
+            JsLeg.check(f);
+            System.out.println("[M3a1 five-way] Vouch (threshold " + threshold + "): " + f.calls + " calls, " + f.refusals + " refusals, "
+                    + f.validatorRuns + " validator runs");
+        }
     }
 }

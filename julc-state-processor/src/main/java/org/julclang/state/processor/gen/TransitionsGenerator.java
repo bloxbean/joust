@@ -99,7 +99,7 @@ public final class TransitionsGenerator {
             ExecutableElement m = method(t.method());
             if (m == null || methods.contains(t.method())) continue;
             // A creation that returns a result record (state, accepted): its step is the state's (issue #81).
-            String made = render(createdType(m.getReturnType()));
+            String made = render(createdType(t, m.getReturnType()));
             String step = stepTypes.computeIfAbsent(made, k -> "Step" + (stepTypes.size() + 1));
             String code = creation(t, m, step);
             if (code == null) continue;
@@ -305,7 +305,7 @@ public final class TransitionsGenerator {
                 .append(" shared, ").append(argsRecord).append(" args, Ctx ctx) {\n");
         String invoke = c.name() + "." + t.method() + "(" + String.join(", ", call) + ")";
         TypeMirror r = m.getReturnType();
-        if (r != createdType(r)) {
+        if (r != createdType(t, r)) {
             // Issue #81: a result record (state, accepted), as the validator reads it (result.state(), and
             // result.accepted() against the offered assets, I31). A creation pays, sends, mints and deposits nothing.
             boolean accepted = false;
@@ -327,10 +327,12 @@ public final class TransitionsGenerator {
 
     /**
      * What a creation makes: its result, or the {@code state} of a result record (issue #81: an {@code @Init} or
-     * {@code @OwnedInit} returning {@code (state, accepted)}).
+     * {@code @OwnedInit} returning {@code (state, accepted)}). Only a transition ContractReader classified as returning a
+     * result record ({@link TransitionIR.Returns#RESULT}) is unwrapped: a state or an owned record may itself have a
+     * component named {@code state} (#104 review C1).
      */
-    private TypeMirror createdType(TypeMirror r) {
-        if (r instanceof DeclaredType d && d.asElement().getKind() == ElementKind.RECORD) {
+    private TypeMirror createdType(TransitionIR t, TypeMirror r) {
+        if (t.returns() == TransitionIR.Returns.RESULT && r instanceof DeclaredType d && d.asElement().getKind() == ElementKind.RECORD) {
             for (RecordComponentElement rc : Records.components((TypeElement) d.asElement())) {
                 if (rc.getSimpleName().contentEquals("state")) return rc.asType();
             }
