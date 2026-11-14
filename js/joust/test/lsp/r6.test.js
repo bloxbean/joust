@@ -242,7 +242,20 @@ test('S13: another window churning the shared store while this one reloads its e
       const r = await host.analyze(`engine:${c.id}`, { file: c.file, id: c.id, storeRoot: store.root }, { file: 'S.jsc', source: `jsc 2 WARN ${k}` });
       const kind = r.model ? 'model' : r.missing ? 'missing' : r.cancelled ? 'cancelled' : `internal:${r.internal?.kind}:${r.internal?.message}`;
       tally[kind] = (tally[kind] ?? 0) + 1;
-      if (r.missing) c = await store.put(js, wasm);   // what the server does: select again, republishing the copy
+      // What the server does: select again, republishing the copy; a copy collected before its touch (#100) is a failed
+      // selection, which the server makes again after a backoff.
+      if (r.missing) {
+        for (let wait = 10; ; wait *= 2) {
+          try {
+            c = await store.put(js, wasm);
+            break;
+          } catch (e) {
+            if (e.code !== 'ENGINE_COLLECTED') throw e;
+            tally.collected = (tally.collected ?? 0) + 1;
+            await new Promise((res) => setTimeout(res, Math.min(wait, 500)));
+          }
+        }
+      }
     }
     const churned = await churner;
     assert.ok(churned > 10, `the other window installed ${churned} copies`);
