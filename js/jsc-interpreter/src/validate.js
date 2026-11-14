@@ -160,6 +160,7 @@ export function validate(p) {
     }
     for (const f of j.fns) {
       keys(f, ['name', 'params', 'result'], 'java fn');
+      if (javaFns.has(`${j.class}.${f.name}`)) fail('java fn', `java:${j.class}.${f.name} is listed twice`);
       javaFns.set(`${j.class}.${f.name}`, f);
     }
   }
@@ -254,6 +255,18 @@ export function validate(p) {
     } else fail(where, `unknown type ${k}`);
   };
   for (const c of contracts.values()) for (const t of c.receives) if (t !== null) type(t, `imported contract ${c.name}`);
+  // #98 review F2, C5: a java: library fn's signature: a name, a list of parameter types and a result type, each a type
+  // of the namespace (the Java reader reads them with type()).
+  // #98 review C11: every entry of every library's list (a duplicate cannot hide a malformed one: it is refused).
+  for (const j of p.javaLibraries) {
+    for (const f of j.fns) {
+      const k = `${j.class}.${f?.name}`;
+      str(f.name, `java fn ${k}`);
+      if (!Array.isArray(f.params)) fail(`java fn ${k}`, 'params is a list of types');
+      for (const t of f.params) type(t, `java fn ${k}`);
+      type(f.result, `java fn ${k}`);
+    }
+  }
   for (const [name, fields] of shapes) for (const f of fields) type(f.type, `${name}.${f.name}`);
   for (const k of ['timeFields', 'recursiveFns']) for (const x of p[k]) str(x, k);
   for (const w of p.warnings) keys(w, ['line', 'col', 'code', 'message'], 'warning');
@@ -317,7 +330,9 @@ export function validate(p) {
   /** M2b: a quorum's or authorized's field, a state field or params.f, of the type its check reads. */
   const modField = (ref, want, where, input = 'State') => {
     const params = typeof ref === 'string' && ref.startsWith('params.');
-    const fs = shapes.get(params ? 'Config' : input) ?? [];
+    // #98 review S5: params.f names the program's params, never another record that happens to be named Config.
+    if (params && !('params' in p)) fail(where, `${ref}: the contract has no params`);
+    const fs = (params ? p.params.fields : shapes.get(input)) ?? [];
     const f = fs.find((x) => x.name === (params ? ref.slice(7) : ref));
     if (!f) fail(where, `no field ${JSON.stringify(ref)}`);
     if (JSON.stringify(f.type) !== JSON.stringify(want)) fail(where, `${ref} is not ${JSON.stringify(want)}`);
@@ -396,7 +411,7 @@ export function validate(p) {
     if (e.node === 'GetField' && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${e.record} has no field ${e.field}`);
     // M3a: in an owned method or an owned type's invariant, the input is the object.
     if (e.node === 'StateField' && !shapes.get(inputRec).some((f) => f.name === e.field)) fail(where, `the ${inputRec === 'State' ? 'state' : inputRec} has no field ${e.field}`);
-    if (e.node === 'ParamsRef' && !(shapes.get('Config') ?? []).some((f) => f.name === e.field)) fail(where, `the params have no field ${e.field}`);
+    if (e.node === 'ParamsRef' && !(p.params?.fields ?? []).some((f) => f.name === e.field)) fail(where, `the params have no field ${e.field}`);
   }
   function stmt(s, scope) {
     // M2c: a send with a datum.
@@ -465,7 +480,7 @@ export function validate(p) {
     // M2c: each read: a local of the instance's state type, named by a params field Instance<C>.
     for (const r of m.reads ?? []) {
       keys(r, ['local', 'field'], where);
-      const f = (shapes.get('Config') ?? []).find((x) => x.name === str(r.field, where));
+      const f = (p.params?.fields ?? []).find((x) => x.name === str(r.field, where));
       if (!f || typeof f.type !== 'object' || !('instance' in f.type)) fail(where, `reads params.${r.field}, which is not an Instance<C>`);
       decl(r.local, where, scope);
       if (JSON.stringify(r.local.type) !== JSON.stringify({ record: `${f.type.instance}.State` })) fail(where, `a read of ${f.type.instance} has its state's type`);
@@ -477,9 +492,11 @@ export function validate(p) {
     inputRec = m.on ?? 'State';
     block(m.body, where, scope);
     inputRec = 'State';
-    // #80 review C4, S7: a pay only where the checker allows one (JSC0413): in the method's statement blocks, never in
-    // an expression's block (a value block, a value if or match, a lambda), so the statement walk below is complete.
-    noPayInExpressions(m.body, false, (what) => fail(where, what));
+    // #80 review C4, S7; #98 F1: an effect only where the checker allows one (JSC0413): in an action's or destroy's
+    // statement blocks, never in an expression's block (a value block, a value if or match, a lambda), so the statement
+    // walks below (paysIn, movesIn) are complete.
+    // #98 review F1: an init and a view move nothing (JSC0404): their whole body is pure.
+    noPayInExpressions(m.body, m.kind === 'init' || m.kind === 'view', (what) => fail(where, what));
     // #80 review S3: pays is recomputed from the body, and a method that pays says who may call it (JSC0408, JSC0420).
     const pays = paysIn(m.body);
     if (m.pays !== pays) fail(where, `pays is ${JSON.stringify(m.pays)}, but the body ${pays ? 'pays' : 'does not pay'}`);
@@ -514,6 +531,7 @@ export function validate(p) {
       inputRec = inv.on ?? 'State';
       block(inv.body, where, new Set());
       inputRec = 'State';
+      noPayInExpressions(inv.body, true, (what) => fail(where, what));   // #98 F1: an invariant moves nothing
       if (inv.body.result === null) fail(where, 'an invariant has a value');
       bool(inv.body.result, where, 'an invariant');
       at(inv.at, where);
@@ -538,7 +556,11 @@ function modifiers(m, where, fail, keys, state, modField, type) {
     // most (the integration of #80 with #84 and #90: the strict shapes of both).
     if (w === 'quorum') keys(mod, ['name', 'keys', 'threshold'], where);
     else if (w === 'receives') keys(mod, ['name', ...('type' in mod ? ['type'] : [])], where);
+    // #98 review C6 (with the Java reader): payable and open name no field at all; a batched modifier's field is absent
+    // or "only", never null.
+    else if (w === 'payable' || w === 'open') keys(mod, ['name'], where);
     else keys(mod, ['name', 'field'], where);
+    if (w === 'batched' && 'field' in mod && mod.field === null) fail(where, 'batched names no field or "only", not null');
     if (!MODS.has(w)) fail(where, `unknown modifier ${w}`);
     const field = mod.field ?? null;
     if (seen.has(w)) fail(where, `the modifier ${w} is given twice`);
@@ -584,9 +606,14 @@ function modifiers(m, where, fail, keys, state, modField, type) {
     for (const w of ['only', 'after', 'before', 'quorum', 'authorized', 'receives']) if (names.includes(w)) fail(where, `a batched action cannot use ${w}`);
   }
 }
+/** The effect statements (ADR-0018 D4): only in an action's or a destroy's statement blocks (JSC0413, JSC0404). */
+const EFFECT_STMTS = new Set(['Pay', 'Send', 'Mint', 'Deposit', 'Accept', 'Emit']);
+
 /**
- * Refuses a Pay statement anywhere below an expression node (#80 review C4, S7; JSC0413), or anywhere at all when `pure`
- * (a fn's body). Statement blocks of if, for and match statements are not expressions; everything under a node is.
+ * Refuses an effect statement (a pay, and since M2 a send, mint or burn, deposit, accept or emit; #98 review F1) anywhere
+ * below an expression node (#80 review C4, S7; JSC0413), or anywhere at all when `pure` (a fn's, an invariant's, an
+ * init's or a view's body: JSC0413, JSC0404). Statement blocks of if, for and match statements are not expressions;
+ * everything under a node is. So the statement walks (paysIn, movesIn) see every effect a method has.
  */
 function noPayInExpressions(o, pure, fail) {
   if (Array.isArray(o)) {
@@ -594,7 +621,7 @@ function noPayInExpressions(o, pure, fail) {
     return;
   }
   if (!o || typeof o !== 'object') return;
-  if (o.stmt === 'Pay' && pure) fail(`a pay inside an expression or a fn, where the checker allows none (JSC0413), at ${o.at}`);
+  if (pure && EFFECT_STMTS.has(o.stmt)) fail(`a ${o.stmt.toLowerCase()} inside an expression or a fn, where the checker allows none (JSC0413; in an init or a view, JSC0404), at ${o.at}`);
   const below = pure || typeof o.node === 'string';
   for (const v of Object.values(o)) noPayInExpressions(v, below, fail);
 }

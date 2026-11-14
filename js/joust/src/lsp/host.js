@@ -175,7 +175,7 @@ export class EngineHost {
     if (!this.opts.workerEntry) throw new Error('EngineHost needs workerEntry');
     this.slots = new Map();      // key -> { key, engine, worker, lastUsed, busy, queue }
     this.health = new Map();     // key|scope -> { failures: [], backoffUntil, backoffMs, unavailable }
-    this.quarantine = new Map(); // sha256(source) + engine id -> the failure
+    this.quarantine = new Map(); // the input's digest (its source, and a project file's id and files: #98 C4) + engine id -> the failure
     this.waiters = [];
     this.starting = 0;           // acquisitions holding a reserved place while they await their lease (C21)
     this.stats = { started: 0, terminated: 0, calls: 0, cancelled: 0, failures: 0, displaced: 0 };
@@ -305,11 +305,15 @@ export class EngineHost {
    * `{ retryAt }` (in backoff) or `{ missing: true }` (the engine's file is gone).
    */
   analyze(key, engine, { file, source, scope = '', moduleId, files }, token) {
+    // #98 review C4: a project file's analysis depends on its module id and the project files it reads, so its
+    // quarantine key is all of them: an edit to an imported library frees an importer quarantined for it.
+    const input = files ? sha256(JSON.stringify([source, moduleId ?? null, Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))]))
+      : sha256(source);
     const s = this.slot(key, engine);
     const h = this.healthOf(key, scope);
     const run = async () => {
       if (h.unavailable) return { unavailable: true };
-      const q = this.quarantine.get(sha256(source) + '|' + engine.id);
+      const q = this.quarantine.get(input + '|' + engine.id);
       if (q) return { internal: q, quarantined: true };
       if (h.backoffUntil > this.now()) return { retryAt: h.backoffUntil };
       if (token?.isCancellationRequested) return { cancelled: true };
@@ -327,7 +331,7 @@ export class EngineHost {
           this.stopWorker(s);
           return { missing: true };
         }
-        if (!ready.ready) return this.failed(h, s, source, { kind: 'crash', message: `the engine did not load: ${ready.error}` }, true);
+        if (!ready.ready) return this.failed(h, s, input, { kind: 'crash', message: `the engine did not load: ${ready.error}` }, true);
         this.stats.calls++;
         const r = await w.call(files ? { op: 'analyze', file, source, moduleId, files } : { op: 'analyze', file, source }, this.opts.analysisMs, token);
         if (r.failure === 'stopped') return this.displaced();
@@ -341,10 +345,10 @@ export class EngineHost {
           const message = r.failure === 'time' ? `analysis stopped: time limit (${this.opts.analysisMs} ms)`
             : r.failure === 'memory' ? `analysis stopped: memory limit (${this.opts.maxOldGenerationSizeMb} MB)`
               : `analysis stopped: the engine failed (${r.message ?? r.failure})`;
-          return this.failed(h, s, source, { kind: r.failure, message }, true);
+          return this.failed(h, s, input, { kind: r.failure, message }, true);
         }
-        if (r.failed) return this.failed(h, s, source, { kind: 'failed', message: `analysis stopped: internal error (${r.failed})` }, false);
-        if (r.tooLarge) return this.failed(h, s, source, { kind: 'too-large', message: 'analysis stopped: the document model is too large' }, false);
+        if (r.failed) return this.failed(h, s, input, { kind: 'failed', message: `analysis stopped: internal error (${r.failed})` }, false);
+        if (r.tooLarge) return this.failed(h, s, input, { kind: 'too-large', message: 'analysis stopped: the document model is too large' }, false);
         h.backoffMs = 0;
         return { model: r.model };
       } finally {
@@ -363,9 +367,9 @@ export class EngineHost {
     return { cancelled: true, displaced: true };
   }
 
-  failed(h, s, source, failure, workerFailure) {
+  failed(h, s, input, failure, workerFailure) {
     this.stats.failures++;
-    this.quarantine.set(sha256(source) + '|' + s.engine.id, failure);
+    this.quarantine.set(input + '|' + s.engine.id, failure);
     h.backoffMs = h.backoffMs ? Math.min(h.backoffMs * 2, this.opts.backoffMaxMs) : this.opts.backoffMs;
     h.backoffUntil = this.now() + h.backoffMs;
     if (workerFailure) {
