@@ -307,7 +307,7 @@ class IrReaderFuzzTest {
             new String[]{"arity", ".*takes \\d+ argument\\(s\\), not \\d+"},
             new String[]{"a missing field", "missing field \".*\""},
             new String[]{"a name declared twice", "(two methods of that name|a name taken by another method, fn or invariant|two declarations named .*|a bad or repeated name|two fns named .*)"},
-            new String[]{"a type check", "(a bad (big)?map type|.* is of type .*, not .*|a literal of type .*|not a string)"},
+            new String[]{"a type check", "(a bad (big)?map type|.* is of type .*, not .*|a literal of type .*|an emitted value is an Event|not a string)"},
             new String[]{"a name that resolves to nothing", "(no (fn|record|enum|variant|imported contract) .*|.* has no field .*|the (state|params) (has|have) no field .*|unknown (name|op) \".*\"|a reference to the local \\d+ \\(.*\\) outside its scope|reads params\\..*, which is not an Instance<C>)"},
             new String[]{"a method's checked inputs or transaction use", "(checked is \\[.*\\], but .*|usesCtx is (true|false), but .*)"},
             new String[]{"a declaration's shape", "(the (state|params) record .* named .*|its state is named .*|a (type|variant) not qualified by .*|a bad enum name .*|a bad name.*|binds and fields differ in length|only a single-constructor arm binds)"},
@@ -402,6 +402,14 @@ class IrReaderFuzzTest {
         var answer = (Map<String, Object>) AbiCheck.Json.parse(js);
         String jsMessage = answer.get("message") instanceof String x ? x : "";
         String rule = j.equals("ok") && !jsOk && !jsCrash ? known97(jsMessage) : null;
+        if (rule == null && j.equals("ok") && !jsOk && !jsCrash && System.getenv("JOUST_IR_SURVEY") != null) {
+            // A survey run (JOUST_IR_SURVEY set; never in CI): count an unregistered class instead of failing, to list
+            // the Java reader's missing checks in one run before they are reviewed into KNOWN_97 or fixed.
+            String cls = jsMessage.replaceFirst("^invalid IR \\((?:[^()]|\\([^()]*\\))*\\): ", "").replaceAll("\\d+", "N")
+                    .replaceAll("\"[^\"]*\"", "\"X\"");
+            count("survey, unregistered: " + (cls.length() > 100 ? cls.substring(0, 100) : cls));
+            return;
+        }
         if (rule != null) {
             // A registered divergence (as JuLC's KnownDivergences: an exact rule, counted and reported, never silent): the
             // Java reader, which only the tests use, lacks one of the JavaScript reader's semantic checks that #97 lists.

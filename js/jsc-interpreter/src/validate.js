@@ -189,6 +189,12 @@ export function validate(p) {
   for (const k of ['options', 'records', 'enums', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings']) {
     for (const x of p[k]) if (!x || typeof x !== 'object' || Array.isArray(x)) fail(k, 'an entry is not an object');
   }
+  // The optional "invariants" is a list of objects too (CI's IrReaderFuzzTest: an object there made "p.invariants is not
+  // iterable" a TypeError).
+  if ('invariants' in p) {
+    if (!Array.isArray(p.invariants)) fail('program', 'invariants is a list');
+    for (const x of p.invariants) if (!x || typeof x !== 'object' || Array.isArray(x)) fail('invariants', 'an entry is not an object');
+  }
   for (const l of [...p.libraries, ...p.javaLibraries]) {
     for (const k of ['records', 'enums', 'fns']) {
       if (Array.isArray(l[k])) for (const x of l[k]) if (!x || typeof x !== 'object' || Array.isArray(x)) fail(k, 'an entry is not an object');
