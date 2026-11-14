@@ -206,6 +206,30 @@ the program read back to the same Java and the same ABI manifest, and checks tha
 - **Vectors (M3b):** a keyed insert's or removal's transaction carries `"instance"` (hex: the instance it acts under) and
   `"anchor"`: `{ "instance", "type", "key", "next", "linkedAt" }`, the node it relinks (an insert's anchor, a removal's
   predecessor; `key` empty for a head).
+- **M3c** (additive within format 2, ADR-0010, ADR-0011 D4). Method kinds `"withdraw"`, `"certify"`, `"vote"`,
+  `"propose"` (the script purposes' handlers, no input state; a withdraw handler's `result` is null, the others'
+  `"Bool"`) and `"migrate"` (`init migrate`, a creation), which names `"from"` (the params field pinning the previous
+  version) and `"old"` (the local of the adopted state, declared before the parameters; both or neither). The modifier
+  `migrates` is `{ "name": "migrates", "field": f }`, on an instance destroy. The option `stakeSelf` is
+  `{ "name": "stakeSelf", "value": "1" }`. Types gain the ledger types by name (`"TxCert"`, `"Voter"`, `"Vote"`,
+  `"GovernanceActionId"`, `"ProposalProcedure"`, `"GovernanceAction"`, `"Delegatee"`, `"DRep"`, `"ProtocolVersion"`,
+  `"Rational"`, `"Constitution"`, and `"Data"` for a field carried and never read) and `{ "ledgerMap": [K, V] }`; a
+  `GetField` may read a ledger record's field, a `Match` may match a sealed ledger type's constructors, and a `CallStd`
+  may call `std/certs`. Both readers refuse a program with purposes or migration outside the checker's shapes (semantics
+  §2.10, §2.11): stakeSelf not the flag `"1"` once, or without a withdraw and a certify handler; a ledger type in a field
+  of the state, the params, a record, an enum or an imported contract, in a parameter of any method but a handler's
+  purpose data, or as a view's result; two handlers of one purpose, a handler in a contract without params, parameters
+  outside the processor's shapes, a withdraw handler with a result or another effect than `Send`, a certify, vote or
+  propose handler with effects, a transaction (`usesCtx`) or a result other than `Bool`, a handler reading the state
+  (`StateRef`, `StateField`), modifiers other than `quorum` or `authorized` over `params.*` (none on propose, at least
+  one on the others); two init migrates, an init migrate with modifiers or effects, a `from` that is no `Hash` or `Bytes`
+  params field, an `old` that is no imported contract's state or one with BigMaps; a migrating destroy with effects,
+  without an audience, or naming a time field or a field that is no `Bytes` or `Hash`; and either side in a contract
+  with owned types, BigMap state or native assets (`js/jsc-interpreter/test/mutants/purpose-*.json`, shared by both
+  readers' tests, each with the checker's code in the fragment both messages share).
+- **Vectors (M3c):** a vote's call takes two arguments, the voter and its votes `[[actionId, vote]…]`. A migrating
+  destroy's transaction carries `"successor"` (hex: the policy whose instance it mints); an init migrate's carries
+  `"prior"`: `{ "policy": hex, "state": v }` (the spent instance's policy and state).
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),
   `{ "instance": C }` (M2c, `Instance<C>`), `{ "deposit": T|null }` (M2c, an element of `funds.deposits`: its memo type,
   or null),
@@ -292,6 +316,9 @@ The differential tests pass calls to the JavaScript interpreter as JSON, in a ta
 | `Value` (M2) | `{ "value": [[policy, name, "q"]…] }`: policy and name as hex, the quantity as a decimal string, in the ledger's order (semantics §1.3) |
 | `Credential` (M2) | `{ "keyCred": hex }`, `{ "scriptCred": hex }` |
 | `Instance<C>` (M2c) | `{ "instance": [policy, id] }`, both hex |
+| a ledger type (M3c) | `{ "gov": "Type", "ctor": "Ctor", "fields": [v…] }`: a sealed type's constructor (a record's `ctor` is its type) and its fields in the table's order (semantics §1.5) |
+| `Data` (M3c) | `{ "data": hex }`: a `PlutusData` field's CBOR, carried and never read |
+| `LedgerMap` (M3c) | `{ "ledgerMap": [[k, v]…] }`, the ledger's entries in their order (a key may repeat) |
 | `Address` (M2) | `{ "address": [credential, stake] }`, `stake` `null`, `{ "stakeHash": credential }` or `{ "stakePtr": ["slot", "tx", "cert"] }`. A pointer can be written (a vector may offer one) but is never a checked input's (semantics §4, r15) |
 
 A call is `{ "method", "state": v|null, "args": [v…], "tx": { "caller", "received", "balance", "validFrom",

@@ -87,6 +87,24 @@ certificate index). `wallet(k)` is *(KeyCred k, none)*, `wallet(k, s)` is *(KeyC
 equal when they are of the same kind with equal bytes; two addresses when their payment credentials and staking parts are
 equal (a pointer's three integers by value).
 
+### 1.5 The purposes' ledger types (M3c)
+
+The script purposes' data (§2.10) is JuLC's ledger types, with the ledger's constructors in its tag order and their
+fields under JuLC's names (`julc-state-dsl`'s `Gov`, the JavaScript interpreter's `gov.js`: one table, checked against
+JuLC's records by `JscV2M3cGovTableTest`): the sealed `TxCert` (11 constructors, Conway's), `Delegatee`, `DRep`, `Voter`,
+`Vote`, `GovernanceAction` (7), and the records `GovernanceActionId`, `ProposalProcedure`, `ProtocolVersion`,
+`Rational`, `Constitution`. A `PubKeyHash` field is a `Key`, a `ScriptHash` a `Hash`, a `TxId` `Bytes`, and a ledger map
+(`TreasuryWithdrawals.withdrawals`, `UpdateCommittee.addedMembers`) a **`LedgerMap<Credential, Int>`**.
+
+These values come only from the script context: they are read (a record's fields by projection, a sealed type's by an
+exhaustive `match`), never built, stored, passed by a caller, encoded into an output or compared (JSC1321, JSC1322,
+JSC1325). So they are trusted ledger data, not checked inputs. `ParameterChange.parameters` is `PlutusData` in the ledger:
+it is carried (so its constructor's arity and tag are the ledger's) and never read (JSC1320). A `LedgerMap` is the
+ledger's association list as it is: `size`, `isEmpty`, `keys` and `values` are entry-wise (a key twice counts twice),
+`get(k)` and `has(k)` take the first entry whose key equals `k` (§3.4), and `any`, `all` and `fold` run over the entries in
+order. It has no `set` or `delete` (JSC1324). `std/certs` holds the API's certificate tests (`isRegistration`,
+`delegatesOnlyTo`, `delegatesVoteTo`, `isDRepLifecycle`), each true for one constructor exactly.
+
 ## 2. Calls
 
 A call evaluates one method. Its inputs are the method's name, the input state σ (a `State` record, absent for an
@@ -261,10 +279,12 @@ A refusal's class names the rule that refused the call, as `kind:detail`:
 | Class | When |
 |---|---|
 | `require:<line>:<col>:<message>` | a `require` did not hold; the detail is its position in the `.jsc` file (the IR's `at`) and its message, as written, so two `require`s with one message are told apart (review S6) |
-| `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name; M2c: a read state's (a `reads` parameter's name), or `input:deposits` for a deposit's memo |
+| `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name; M2c: a read state's (a `reads` parameter's name), or `input:deposits` for a deposit's memo; M3c: `input:<old>` for an init migrate's adopted state, `input:params` for its params |
 | `modifier:<word> <field>` | a modifier did not hold (§2.6): `only owner`, `after deadline`, `before deadline`; M2b: `quorum council quorum` (the keys, then the threshold), `authorized params.guardian` |
 | `invariant:<name>` | M2b (§2.7): the next state broke the invariant `<name>`; `invariant:quorum <keys> <threshold>`: a quorum's shape |
 | `keyed:<rule>` | M3b (§2.9): a keyed call broke a rule of its list: `keyed:anchor` (the anchor is not a node of the instance's list of the type, or a removal's predecessor does not point at the node), `keyed:window` (the window is longer than W or ends outside [2^32, 2^64)), `keyed:cooldown` (it starts less than C after the anchor's last relink), `keyed:length` (the key is not 1 to maxKeyBytes long), `keyed:signed` (a signed key is not a 28-byte key among the signers), `keyed:order` (the key is not in the anchor's gap: taken, or out of order), `keyed:fixed` (a keyed action changed its key) |
+| `purpose:<rule>` | M3c (§2.10): a handler's purpose refused the call: `purpose:certificate` (not a certificate a handler may allow), `purpose:voter` (not a script DRep or committee voter), `purpose:votes` (the voter casts no votes), `purpose:withdraw` (the sends do not allocate exactly the amount, in lovelace), `purpose:certify`, `purpose:vote`, `purpose:propose` (the handler is false) |
+| `migrate:<side>` | M3c (§2.11): `migrate:to` (the successor field is unset or names another policy than the one minted), `migrate:from` (the adopted instance is not of the policy the params pin) |
 | `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`, `scale`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; `pay` (a negative amount); M2's `Value.lovelace`, `Value.asset`, `Value +`, `Value -`, `covers` (§3.12), `send`, `mint`, `accept` (§5.1–5.3), or `accepted` (§5.4); M2c's `deposit` (§5.7) |
 
 The two interpreters must give the same class for every refused call (review S4), so a vector meant to reach one rule
@@ -418,6 +438,73 @@ retire's continuing output (Retired_T, the deposit plus a builder's top-up) and 
 assets, no batched actions, no BigMaps, no moves, at most 16 keyed types, maxDatumBytes at most 2048, a retiring exit
 signed by its owner and needing nobody else, every keyed action with an audience, and a key that is never a time value
 (D11: a key decides the list's order and whether an insert succeeds, as a map key does).
+
+### 2.10 Script purposes (M3c)
+
+A *handler* (ADR-0010) is the contract's script run for a purpose other than spending or minting: `withdraw m(amount:
+Int, args…)` (the contract's own staking credential's rewards), `certify m(cert: TxCert)`, `vote m(voter: Voter, action:
+GovernanceActionId, vote: Vote)` and `propose m(p: ProposalProcedure)`, at most one of each. No instance is spent, so a
+handler has **no state** (`state` and the state's fields are no names in it: JSC1318) and reads the params, its
+parameters and, in a withdraw handler, τ (its caller, signers and window; τ.`received` is 0 and τ.`balance` the amount,
+so neither is a name: JSC1315). certify, vote and propose take no τ. Each handler but propose names its audience with
+`quorum` or `authorized` over `params.*` (JSC1312, JSC1313): the modifiers of §2.6, read from the params. propose takes
+none: its validator checks no audience, so it is a guardrail on the proposal alone.
+
+The purpose's data is the ledger's (§1.5). A call's arguments are, for a withdrawal, the amount and its arguments (the
+Rewards redeemer's fields after the marker: checked inputs, §4); for a certificate, the certificate; for a proposal, the
+procedure; for a vote, **the voter and its votes in the transaction**, `[(action id, vote)…]` in the ledger's order: the
+handler runs once per vote, each with the voter, the action and the vote, and the call is the conjunction.
+
+In this order, with the modifiers (transaction preconditions, §2.6: the JVM method and the transition program compute
+the transition alone):
+
+1. **The purpose's own filter**, before the audience: a certificate is a `RegStaking`, `DelegStaking`, `RegDeleg`,
+   `RegDRep` or `UpdateDRep` of a script credential (`purpose:certificate`: the processor's filter, which no handler can
+   widen); a voter is a `DRepVoter` or `CommitteeVoter` of a script credential (`purpose:voter`) and casts at least one
+   vote (`purpose:votes`).
+2. **The modifiers** (`modifier:quorum params.k params.t`, `modifier:authorized params.c`), as §2.6.
+3. **The checked inputs** (§4): a withdrawal's arguments.
+4. **The body.** A withdraw handler's only effect is `send` (JSC1319) and it has no value (JSC1340); the others evaluate
+   to a Bool and have no effects (JSC1341).
+5. **The decision**: a withdrawal's sends hold lovelace only and total exactly the amount (`purpose:withdraw`, I37: the
+   rewards allocated entirely, each send claimed by the contract's reward reference on-chain); a certify or propose
+   handler that is false refuses (`purpose:certify`, `purpose:propose`); a vote handler refuses at the first vote it does
+   not allow (`purpose:vote`). A vote's transition (without the modifiers) is whether it allows every vote.
+
+**Not evaluated by a call:** the marker (a Rewards redeemer's leading 74, so it never decodes as a governor's
+Approvals), the claims binding each send to the reward reference, the withdrawal's amount as the ledger states it, and
+which of the transaction's votes are the voter's: the validator's. `stakeSelf` (a contract option) puts the state's
+address under the contract's own staking credential; it needs a withdraw and a certify handler (JSC1302), or the
+rewards and the registration would be unreachable (I38), and every state output keeps that stake part.
+
+### 2.11 Migration (M3c)
+
+An instance moves into a successor version (ADR-0011 D4) by two halves of one transaction, each its own call (as a
+move's halves, §2.8):
+
+- **The old version's** `destroy m() <audience> migrates to f { }`: `f` a `Bytes` or `Hash` state field naming the
+  successor's policy (never a params field: JSC1331; never a time field: JSC1330), and an audience (`only`, `quorum` or
+  `authorized`: JSC1333). It has no effects (JSC1332): the instance's whole value moves.
+- **The new version's** `init migrate from params.p(old: V.State, args…) { … }`: `p` a `Hash` or `Bytes` params field
+  pinning the previous version's policy (JSC1335), `old` that version's state (an imported contract's, JSC1336). It
+  takes no modifiers (JSC1339), receives nothing and has no effects (JSC1338): the new instance holds exactly the old
+  instance's lovelace.
+
+τ carries the other half: for the destroy, τ.`successor` (the policy whose instance the transaction mints); for the
+init, τ.`prior` (the spent instance: its policy and its state). After the modifiers:
+
+1. **The successor** (`migrate:to`): the destroy's field is set (not empty) and equals τ.`successor`.
+2. **The previous version** (`migrate:from`): τ.`prior`'s policy equals `params.p`.
+
+Then, for the init, its checked inputs: the params (`input:params`, as every creation's), **the old state**
+(`input:old`, §4: it arrives as data from another script, as a read state does), and its arguments; its result is
+checked as every creation's (§2.7: the invariants, the params' quorum shape). **Not evaluated by a call:** the old
+token burned, the new one minted for the spent instance (the seed), one old instance into one new, the value moved
+exactly, the successor's output at its address: the two validators'. Neither half exists in a contract with owned or
+keyed objects, `BigMap` state or native assets (JSC1334): they would stay behind, and an arriving object (§2.8) is then
+always the contract's own output, never another policy's. **The successor can change** (review A43): whoever may write
+`f` can rename the successor until the migration; the checker warns (JSC9014) unless the writer requires it unset
+(`require(f == #, …)`), which fixes it once.
 
 ## 3. Expressions
 
@@ -704,6 +791,13 @@ r2, C6).
 
 A map that is out of order or has a duplicate key cannot be a map value (§1). Such an argument is refused here, so the
 body never sees one.
+
+**M3c: the adopted state** (§2.11, review A44). An init migrate's `old` is another script's datum, so it is a checked
+input, by the read states' rules at the previous version's state: every `Key` and `Hash` 28 bytes, every map's keys
+canonical and unique, addresses the ledger's (`input:<old>`). Its nested constructor tags are taken as its version wrote
+them, as a read state's are, and a field's kind is its writer's type: a field the adoption reads is decoded when read (a
+malformed one fails then), one it never reads is not looked at (`JscV2M3cAttackTest` shows both). The adoption's params
+are checked as every creation's (`input:params`).
 
 **Views are not checked**: their arguments come from the caller's own query, and nothing on-chain depends on them. A
 view given a non-canonical map (out of order, or with a duplicate key) has **no defined outcome**: the map operations of
