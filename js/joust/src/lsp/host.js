@@ -304,7 +304,7 @@ export class EngineHost {
    * quarantined), `{ cancelled: true }` (cancelled, or displaced by a stop: `displaced`), `{ unavailable: true }`,
    * `{ retryAt }` (in backoff) or `{ missing: true }` (the engine's file is gone).
    */
-  analyze(key, engine, { file, source, scope = '', id, files }, token) {
+  analyze(key, engine, { file, source, scope = '', moduleId, files }, token) {
     const s = this.slot(key, engine);
     const h = this.healthOf(key, scope);
     const run = async () => {
@@ -329,7 +329,7 @@ export class EngineHost {
         }
         if (!ready.ready) return this.failed(h, s, source, { kind: 'crash', message: `the engine did not load: ${ready.error}` }, true);
         this.stats.calls++;
-        const r = await w.call(files ? { op: 'analyze', file, source, id, files } : { op: 'analyze', file, source }, this.opts.analysisMs, token);
+        const r = await w.call(files ? { op: 'analyze', file, source, moduleId, files } : { op: 'analyze', file, source }, this.opts.analysisMs, token);
         if (r.failure === 'stopped') return this.displaced();
         if (r.failure === 'cancelled') {
           this.stats.cancelled++;

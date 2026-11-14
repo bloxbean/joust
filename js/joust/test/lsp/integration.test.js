@@ -37,7 +37,7 @@ contract Shop {
 
   action buy(f: reads params.feed, amount: Int) payable {
     require(received == amount + fee(amount, params.bps), "pay the price and the fee")
-    require(f.open, "the feed is closed")
+    require(f.live, "the feed is closed")
     emit(Sold { amount })
     return { ...state, sold: sold + 1 }
   }
@@ -54,14 +54,14 @@ const FEED = `jsc 2
 package app
 
 contract Feed {
-  state { owner: Key, open: Bool }
+  state { owner: Key, live: Bool }
 
   init() {
-    return { owner: caller, open: true }
+    return { owner: caller, live: true }
   }
 
   action toggle() only owner {
-    return { ...state, open: !open }
+    return { ...state, live: !live }
   }
 }
 `;
