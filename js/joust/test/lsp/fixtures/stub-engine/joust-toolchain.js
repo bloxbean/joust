@@ -2,17 +2,20 @@
 // lang protocol and misbehaves on demand, by the text it is asked to analyse:
 //   HANG  never returns;  OOM  allocates until the worker's heap limit;  SLOW  takes 1.5 s;  WARN  one warning;
 //   `let ` the parser's JSC0128 there (as the real engine reports it); SLOWCHECK with no `let ` (a fix being checked)
-//   takes 1.5 s; anything else: an accepted file with no diagnostics. lang.analyze counts its calls.
+//   takes 1.5 s; a project file (files given) one of whose files says DEPHANG never returns; anything else: an
+//   accepted file with no diagnostics. lang.analyze counts its calls.
 let calls = 0;
 const model = (file, diagnostics = []) => JSON.stringify({ modelVersion: 1, language: 'jsc2', file, accepted: true, contract: null,
   diagnostics, declarations: [], blocks: [], folding: [] });
 const api = {
   version: 'test-stub',
   lang: {
-    info: () => ({ info: JSON.stringify({ protocol: 1, modelVersion: 1, joust: 'test-stub', features: ['analyze'] }) }),
-    analyze: ({ file, source }) => {
+    info: () => ({ info: JSON.stringify({ protocol: 1, modelVersion: 1, joust: 'test-stub', features: ['analyze', 'modules'] }) }),
+    analyze: ({ file, source, files }) => {
       calls++;
       if (source.includes('HANG')) for (;;) { /* never returns */ }
+      // A project file whose imported file says DEPHANG never returns either (#98 C4: the quarantine key holds the files).
+      if (files && Object.values(files).some((t) => t.includes('DEPHANG'))) for (;;) { /* never returns */ }
       if (source.includes('OOM')) {
         const keep = [];
         for (;;) keep.push(new Array(1 << 20).fill(calls));

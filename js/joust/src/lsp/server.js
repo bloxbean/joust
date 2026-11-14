@@ -15,6 +15,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { EngineHost } from './host.js';
 import { createReader } from './inputs.js';
+import { scanImports } from './imports.js';
 import {
   diagnostics as toDiagnostics, documentSymbols, fixFor, foldingRanges, internalDiagnostic, parseModel, selectionRanges,
 } from './model.js';
@@ -29,6 +30,9 @@ export const MAX_FILE_CHARS = 1024 * 1024;
 export const MAX_PROJECT_FILES = 64;
 
 export const MAX_PROJECT_CHARS = 8 * 1024 * 1024;
+
+/** The import specifiers read from one project file at most (#98 S1): MAX_PROJECT_FILES × 2. */
+export const MAX_IMPORTS_PER_FILE = 128;
 export const DEBOUNCE_MS = 150;
 export const SERVER_NAME = 'joust-lsp';
 const FIX_COMMAND = 'joust.applyFix';
@@ -246,76 +250,171 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   }
 
   /**
-   * The project files a document's imports reach (the integration of M5a with ADR-0018 M2c and M4; L1): the document's
-   * module id under its project's contracts directory, and every .jsc file its relative imports (`import { … } from
-   * "./fees.jsc"`, `import contract { … } from "./Oracle.jsc"`) and npm package imports (`"@acme/fees/fees.jsc"`, a
-   * package's joust-lib/) reach, transitively, by the build's module ids, so the engine resolves them as the build does.
-   * Read under D4b's input policy (inside the folder, links checked, at most MAX_FILE_CHARS each), an open document's
-   * buffer before its file, at most MAX_PROJECT_FILES of them. null: the file is not in a project's contracts directory
-   * (analysed on its own, as before). java: imports are not read: the build certifies their Java sources, which the
-   * server does not (M5c).
+   * The project files a document's imports reach (ADR-0021 r7a; the .jsc 2 integration, #98): the document's module id
+   * under its project's contracts directory, and every .jsc file its relative imports (`import { … } from "./fees.jsc"`,
+   * `import contract { … } from "./Oracle.jsc"`) and npm package imports (`"@acme/fees/fees.jsc"`, a package's joust-lib/)
+   * reach, transitively, by the build's module ids, so the engine resolves them as the build does.
+   *   - The imports are read by scanImports (imports.js): one linear pass by the lexer's rules, comments and strings
+   *     skipped (#98 S1, C3), at most MAX_IMPORTS_PER_FILE specifiers a file.
+   *   - Each target is confined first (D4b; #98 S2): its path is resolved inside the folder by the reader, which never
+   *     resolves a path outside it; an open buffer is used only for that confined path.
+   *   - The build's walk rules apply (#92 S12, #98 S3): in an npm project no node_modules or dot-directory segment, and
+   *     no link anywhere on the path (the build follows none); in a Gradle project no directory link (Files.walk follows
+   *     none). A package library's path follows no link either (libraries.js).
+   *   - Bounds: MAX_PROJECT_FILES files, MAX_PROJECT_CHARS characters, MAX_FILE_CHARS each, open buffers included (#98
+   *     C8). A bound reached makes the analysis advisory, with its reason (#98 F4).
+   *   - A java: import makes the analysis advisory (D3a): the build certifies the library's Java sources, which the
+   *     server does not read (M5c).
+   * `{ id, files, deps, advisory }` (deps: the real paths read, for rescheduling importers), or null: the file is not in a
+   * project's contracts directory (analysed on its own, as before).
    */
   async function projectOf(uri, text, sel) {
     if (!sel.contracts || !sel.folder) return null;
     const file = localFileOf(uri);
-    const realFile = file ? await real(file) : null;
-    if (!realFile || !inside(realFile, sel.contracts) || !realFile.endsWith('.jsc')) return null;
-    const id = relative(sel.contracts, realFile).split(sep).join('/');
+    if (!file || !inside(file, sel.folder)) return null;
+    const self = await reader.resolveIn(sel.folder, relative(sel.folder, file).split(sep).join('/'));
+    if (self.error || !inside(self.path, sel.contracts) || !self.path.endsWith('.jsc')) return null;
+    const id = relative(sel.contracts, self.path).split(sep).join('/');
+    // The open buffers, by their confined real paths only.
     const open = new Map();
     for (const d of documents.all()) {
+      if (d.uri === uri) continue;
       const p = localFileOf(d.uri);
-      const r = p && d.uri !== uri ? await real(p) : null;
-      if (r) open.set(r, d.getText());
+      if (!p || !inside(p, sel.folder)) continue;
+      const r = await reader.resolveIn(sel.folder, relative(sel.folder, p).split(sep).join('/'));
+      if (!r.error) open.set(r.path, d.getText());
     }
     const files = { [id]: text };
+    const deps = new Set();
     let chars = text.length;
+    let advisory = null;
     const todo = [id];
-    const PACKAGE = /^(@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*\/.+\.jsc$/;
+    const npm = sel.kind !== 'gradle';
+    const PACKAGE = /^(@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*\/[^\\]+\.jsc$/;
     const pkgOf = (spec) => (spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]);
-    while (todo.length && Object.keys(files).length < MAX_PROJECT_FILES) {
+    const unsafe = (segs) => segs.some((x) => x === '' || x === '.' || x === '..');
+    /** `path` (absolute, lexical) resolved inside the folder by D4b's reader, or null; never resolved when outside. */
+    const confined = async (path) => {
+      if (!inside(path, sel.folder)) return null;
+      const r = await reader.resolveIn(sel.folder, relative(sel.folder, path).split(sep).join('/'));
+      return r.error ? null : r.path;
+    };
+    /**
+     * The target's real path, confined and under each build's walk rules (#98 C12), or null:
+     *   - 'none' (npm project files, as sources()): no link at any segment below `base` (the contracts directory);
+     *   - 'files' (Gradle, as Files.walk): no directory link below `base`; the file itself may be a link (confined);
+     *   - 'package' (npm package libraries, as libraries.js): the package root (node_modules/<pkg>) may be a link,
+     *     resolved inside the folder; nothing below its joust-lib/ is.
+     */
+    const locate = async (path, { links, base, pkgRoot }) => {
+      const r = await confined(path);
+      if (!r) return null;
+      if (links === 'none') return r === path ? r : null;
+      if (links === 'files') {
+        const parent = await confined(dirname(path));
+        return parent === dirname(path) || (parent && parent === join(base, relative(base, dirname(path)))) ? r : null;
+      }
+      // 'package'
+      const root = await confined(pkgRoot);
+      if (!root) return null;
+      const below = relative(pkgRoot, path).split(sep);
+      return r === join(root, ...below) ? r : null;
+    };
+    while (todo.length) {
       const at = todo.shift();
-      for (const m of files[at].matchAll(/\bimport\s+(?:contract\s*)?\{[^}]*\}\s*from\s*"([^"\\\n]*)"/g)) {
-        const spec = m[1];
+      const scanned = scanImports(files[at], MAX_IMPORTS_PER_FILE);
+      if (scanned.truncated) advisory ??= `${at} has more than ${MAX_IMPORTS_PER_FILE} imports, more than the language server reads: analysed in part`;
+      for (const { spec } of scanned.imports) {
+        // #98 S7: as JscModules.join, a specifier with a backslash or '//' names no module: never joined into a path.
+        if (spec.includes('\\') || spec.includes('//')) continue;
+        if (spec.startsWith('java:')) {
+          advisory ??= `a java: import (${spec}): the build certifies the Java library's sources, which the language server does not read yet (M5c)`;
+          continue;
+        }
         let target;
         let path;
+        let links;
+        let pkgRoot;
         if (spec.startsWith('./') || spec.startsWith('../')) {
           if (at.startsWith('pkg:')) {
             // Inside a package, a relative import stays inside it (JscModules).
             const inner = at.slice(4);
             const pkg = pkgOf(inner);
             const rel = posix.normalize(posix.join(posix.dirname(inner.slice(pkg.length + 1)), spec));
-            if (rel.startsWith('..')) continue;
+            if (rel.startsWith('..') || unsafe(rel.split('/'))) continue;
             target = `pkg:${pkg}/${rel}`;
-            path = join(sel.root ?? sel.contracts, 'node_modules', ...pkg.split('/'), 'joust-lib', ...rel.split('/'));
+            pkgRoot = join(sel.root ?? sel.contracts, 'node_modules', ...pkg.split('/'));
+            path = join(pkgRoot, 'joust-lib', ...rel.split('/'));
+            links = 'package';
           } else {
             const rel = posix.normalize(posix.join(posix.dirname(at), spec));
-            if (rel.startsWith('..') || !rel.endsWith('.jsc')) continue;
+            const segs = rel.split('/');
+            if (rel.startsWith('..') || !rel.endsWith('.jsc') || unsafe(segs)) continue;
+            // The npm build's sources() skips node_modules and dot-directories (#92 S12): such a file is no project file.
+            if (npm && segs.slice(0, -1).some((x) => x === 'node_modules' || x.startsWith('.'))) continue;
             target = rel;
-            path = join(sel.contracts, ...rel.split('/'));
+            path = join(sel.contracts, ...segs);
+            links = npm ? 'none' : 'files';
           }
-        } else if (PACKAGE.test(spec) && !spec.split('/').some((x) => x === '.' || x === '..') && sel.root) {
+        } else if (PACKAGE.test(spec) && !unsafe(spec.split('/')) && sel.root && npm) {
           const pkg = pkgOf(spec);
           target = `pkg:${spec}`;
-          path = join(sel.root, 'node_modules', ...pkg.split('/'), 'joust-lib', ...spec.slice(pkg.length + 1).split('/'));
+          pkgRoot = join(sel.root, 'node_modules', ...pkg.split('/'));
+          path = join(pkgRoot, 'joust-lib', ...spec.slice(pkg.length + 1).split('/'));
+          links = 'package';
         } else {
-          continue;   // std/… and java:… are the engine's, not files
+          continue;   // std/… is the engine's; anything else is the engine's error, as in the build
         }
         if (target in files) continue;
-        const realPath = await real(path);
-        let body = realPath ? open.get(realPath) : undefined;
+        // #98 C9, N1: every path looked for is an edge, read or not (missing, refused, over a bound): a file that appears,
+        // shrinks or comes back later reschedules this importer.
+        deps.add(path);
+        if (Object.keys(files).length >= MAX_PROJECT_FILES) {
+          advisory ??= `the file's imports reach more than ${MAX_PROJECT_FILES} files, more than the language server reads: analysed in part`;
+          break;
+        }
+        const realPath = await locate(path, { links, base: sel.contracts, pkgRoot });
+        if (!realPath) continue;   // missing or refused: the engine reports the import as the build does
+        deps.add(realPath);
+        let body = open.get(realPath);
         if (body === undefined) {
-          const r = await reader.read(sel.folder, relative(sel.folder, path).split(sep).join('/'), { cap: MAX_FILE_CHARS });
-          if (r.error) continue;   // missing or refused: the engine reports the import as the build does
+          const r = await reader.read(sel.folder, relative(sel.folder, realPath).split(sep).join('/'), { cap: MAX_FILE_CHARS });
+          if (r.error) {
+            if (r.error === 'too-large') advisory ??= `${target} is larger than the language server reads (${MAX_FILE_CHARS} bytes): analysed in part`;
+            continue;
+          }
           body = r.bytes.toString('utf8');
         }
-        if (chars + body.length > MAX_PROJECT_CHARS) return { id, files };
+        if (Buffer.byteLength(body, 'utf8') > MAX_FILE_CHARS) {
+          advisory ??= `${target} is larger than the language server reads (${MAX_FILE_CHARS} bytes): analysed in part`;
+          continue;
+        }
+        if (chars + body.length > MAX_PROJECT_CHARS) {
+          advisory ??= `the file's imports reach more than ${MAX_PROJECT_CHARS} characters, more than the language server reads: analysed in part`;
+          break;
+        }
         chars += body.length;
         files[target] = body;
         todo.push(target);
-        if (Object.keys(files).length >= MAX_PROJECT_FILES) break;
       }
     }
-    return { id, files };
+    return { id, files, deps, advisory };
+  }
+
+  /** Every open document whose last analysis read `realPath` (it imports it, directly or not): analysed again. */
+  function rescheduleImporters(paths, delay = DEBOUNCE_MS * 2, except = null) {
+    const ps = (Array.isArray(paths) ? paths : [paths]).filter(Boolean);
+    if (!ps.length) return;
+    for (const [uri, st] of state) if (uri !== except && ps.some((x) => st.deps?.has(x))) schedule(uri, delay);
+  }
+
+  /** The confined real path of a document's file, or null. */
+  async function realPathOf(uri, sel) {
+    const p = localFileOf(uri);
+    const folder = sel?.folder;
+    if (!p || !folder || !inside(p, folder)) return null;
+    const r = await reader.resolveIn(folder, relative(folder, p).split(sep).join('/'));
+    return r.error ? null : r.path;
   }
 
   async function analyse(uri) {
@@ -334,11 +433,19 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       schedule(uri, 0);
       return;
     }
-    s.selection = sel;
-    connection.sendNotification('joust/status', statusOf(uri, sel));
-    const label = sourceLabel(sel);
-    if (text.length > MAX_FILE_CHARS) {
-      publish(uri, version, [internalDiagnostic(`analysis skipped: this file is larger than the language server reads (${MAX_FILE_CHARS} characters)`, label)]);
+    // The project files its imports reach (r7a); a java: import or a bound reached makes it advisory (D3a; #98 F3, F4).
+    // #98 C14: the per-file bound is in UTF-8 bytes, for the document, its open imports and their files on disk alike.
+    const tooLarge = Buffer.byteLength(text, 'utf8') > MAX_FILE_CHARS;
+    const project = tooLarge ? null : await projectOf(uri, text, sel);
+    if (state.get(uri) !== s || s.seq !== seq || documents.get(uri)?.version !== version) return;
+    const eff = project?.advisory && sel.mode !== 'advisory' ? { ...sel, mode: 'advisory', reason: project.advisory } : sel;
+    s.selection = eff;
+    s.deps = project?.deps ?? new Set();
+    s.realPath = await realPathOf(uri, sel);
+    connection.sendNotification('joust/status', statusOf(uri, eff));
+    const label = sourceLabel(eff);
+    if (tooLarge) {
+      publish(uri, version, [internalDiagnostic(`analysis skipped: this file is larger than the language server reads (${MAX_FILE_CHARS} bytes)`, label)]);
       return;
     }
     // A newer analysis of this document supersedes this one (D2a: cancellation, not failure).
@@ -346,8 +453,6 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const cts = new CancellationTokenSource();
     s.cts = cts;
     const file = fileNameOf(uri);
-    const project = await projectOf(uri, text, sel);
-    if (state.get(uri) !== s || s.seq !== seq || documents.get(uri)?.version !== version) return;
     const r = await host.analyze(sel.key, sel.engine, { file, source: text, scope: scopeOf(sel), ...(project ? { moduleId: project.id, files: project.files } : {}) }, cts.token);
     if (s.cts === cts) s.cts = undefined;
     // D4a: a result is published only if nothing it read changed since: the open lifetime (C2), the buffer's version and
@@ -386,7 +491,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       const stale = (s.lastDiagnostics ?? []).map((d) => ({ ...d, message: d.message.endsWith('(stale: JOUST analysis unavailable)') ? d.message
         : `${d.message} (stale: JOUST analysis unavailable)` }));
       connection.sendDiagnostics({ uri, version: s.lastPublished ?? version, diagnostics: stale });
-      connection.sendNotification('joust/status', statusOf(uri, sel));
+      connection.sendNotification('joust/status', statusOf(uri, eff));
       if (!isVscode && !unavailableShown) {
         unavailableShown = true;
         // A notification, not a request: nothing to wait for, and nothing to fail if the client cannot answer one.
@@ -397,7 +502,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     if (r.internal) {
       publish(uri, version, [internalDiagnostic(r.internal.message, label)]);
-      connection.sendNotification('joust/status', statusOf(uri, sel));
+      connection.sendNotification('joust/status', statusOf(uri, eff));
       return;
     }
     let model;
@@ -418,7 +523,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     publish(uri, version, toDiagnostics(model, label));
     settle(s);
     // The status says which version has a model (the extension's tests wait for it, F12).
-    connection.sendNotification('joust/status', { ...statusOf(uri, sel), modelVersion: version });
+    // #98 C10: the effective selection (a java: import or a bound reached keeps the file advisory, with its reason).
+    connection.sendNotification('joust/status', { ...statusOf(uri, eff), modelVersion: version });
     // A selection that failed (not cached) is tried again, a few times, without waiting for an edit (#83 r6 design nit).
     if (/^the compiler could not be selected/.test(sel.reason ?? '') && (s.selectRetries = (s.selectRetries ?? 0) + 1) <= 3) {
       schedule(uri, 1000 * s.selectRetries);
@@ -435,6 +541,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     state.set(e.document.uri, { lastPublished: null });
     schedule(e.document.uri, 0);
+    // A buffer opened for a file an importer looked for (perhaps missing on disk) is now what it reads (#98 N1).
+    rescheduleImporters([localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
   });
   documents.onDidChangeContent((e) => {
     if (!state.has(e.document.uri)) state.set(e.document.uri, { lastPublished: null });
@@ -442,12 +550,14 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // An analysis of an older version still running is cancelled (after the grace period its worker is replaced).
     s.cts?.cancel();
     schedule(e.document.uri);
-    // Another open .jsc file may import this one (a library, a contract it reads): analysed again after it, so its
-    // diagnostics follow the buffer (the integration with ADR-0018 M2c and M4).
-    if (e.document.uri.endsWith('.jsc')) for (const other of state.keys()) if (other !== e.document.uri) schedule(other, DEBOUNCE_MS * 2);
+    // The open files that import this one (a library, a contract they read) are analysed again after it, and only they
+    // (#98 F4): their last analysis read its path.
+    rescheduleImporters([s.realPath, localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
   });
   documents.onDidClose((e) => {
     const s = state.get(e.document.uri);
+    // Its importers read its buffer: they are analysed again with its file on disk (#98 F3d).
+    rescheduleImporters([s?.realPath, localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
     if (s) {
       clearTimeout(s.timer);
       s.cts?.cancel();
@@ -557,7 +667,13 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   connection.onRequest('joust/status', async (p) => {
     const uri = p?.uri;
-    if (uri && documents.get(uri)) return statusOf(uri, await selectionFor(uri));
+    if (uri && documents.get(uri)) {
+      // #98 C10: the current analysis's effective selection when it is for the current selection; else selected now.
+      const sel = await selectionFor(uri);
+      const st = state.get(uri);
+      const eff = st?.selection && st.selection.key === sel.key && st.selection.engine?.id === sel.engine?.id ? st.selection : sel;
+      return statusOf(uri, eff);
+    }
     return { server: serverVersion, compiler: bundled?.version, source: 'bundled', mode: 'advisory', trusted: selector?.trusted ?? false, state: 'ok' };
   });
 
@@ -578,8 +694,25 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     for (const uri of state.keys()) schedule(uri, 0);
   });
 
-  connection.onDidChangeWatchedFiles(() => {
-    if (selector) reselectAll();
+  // A watched file changed. A .jsc file (a checkout, an external edit; the extension watches **/*.jsc): the open files
+  // whose last analysis read it are analysed again (#98 F3d). Anything else (a package.json, joust.config.json, an
+  // engine): everything is selected again, as before.
+  connection.onDidChangeWatchedFiles(async (p) => {
+    const changes = p?.changes ?? [];
+    const jsc = changes.filter((ch) => /\.jsc$/.test(ch.uri));
+    if (changes.length > jsc.length || !changes.length) {
+      if (selector) reselectAll();
+      return;
+    }
+    for (const ch of jsc) {
+      const f = localFileOf(ch.uri);
+      if (!f) continue;
+      // #98 N2: a path the client sends is resolved only inside a workspace folder an open file was selected in.
+      const folder = [...state.values()].map((st) => st.selection?.folder).find((d) => d && inside(f, d));
+      if (!folder) continue;
+      const r = await reader.resolveIn(folder, relative(folder, f).split(sep).join('/'));
+      rescheduleImporters([f, r.error ? null : r.path]);
+    }
   });
 
   if (flags.testHooks) {

@@ -608,8 +608,8 @@ test('the reader refuses a modifier the checker would not emit: fields, kinds, d
   assert.throws(edit('Vault', (p, m) => { m('init').mods.push({ name: 'only', field: 'owner' }); }), /an init takes only payable, not only/);
   assert.throws(edit('Vault', (p, m) => { m('total').mods.push({ name: 'open' }); }), /a view takes no modifiers, not open/);
   assert.throws(edit('Vault', (p, m) => { m('close').mods.push({ name: 'payable' }); }), /a destroy cannot be payable/);
-  assert.throws(edit('Vault', (p, m) => { m('deposit').mods[0].field = 'owner'; }), /payable names no field, not "owner"/);
-  assert.throws(edit('Pool', (p, m) => { m('buy').mods[2].field = 'admin'; }), /open names no field, not "admin"/);
+  assert.throws(edit('Vault', (p, m) => { m('deposit').mods[0].field = 'owner'; }), /unknown field "field"/);
+  assert.throws(edit('Pool', (p, m) => { m('buy').mods[2].field = 'admin'; }), /unknown field "field"/);
   // batched: plain or 'batched only', on an action, never with only/after/before.
   assert.throws(edit('Pool', (p, m) => { m('close').mods.push({ name: 'batched', field: 'only' }); }), /only an action can be batched, not a destroy/);
   assert.throws(edit('Pool', (p, m) => { m('init').mods.push({ name: 'batched' }); }), /an init takes only payable, not batched/);
@@ -671,10 +671,15 @@ test('the reader recomputes pays and requires a paying method to say who may cal
 test('the reader refuses a pay under an expression or in a fn (JSC0413), and a destroy that pays nothing (JSC0409) (#80 review C4, S7, F7)', () => {
   const mutant = (n) => readFileSync(new URL(`./mutants/${n}.json`, import.meta.url), 'utf8');
   // Before, the first loaded and a stranger alone got Pool's payout: pays was recomputed from statement blocks only.
-  assert.throws(() => load(mutant('pay-in-value-block')), /method withdraw\): a pay inside an expression or a fn, where the checker allows none \(JSC0413\)/);
+  assert.throws(() => load(mutant('pay-in-value-block')), /method withdraw\): a pay inside an expression or a fn, where the checker allows none \(JSC0413/);
   assert.throws(() => load(mutant('pay-in-value-if')), /method withdraw\): a pay inside an expression or a fn/);
   assert.throws(() => load(mutant('pay-in-fn')), /fn total\): a pay inside an expression or a fn/);
   assert.throws(() => load(mutant('destroy-without-pay')), /method close\): a destroy pays out what the instance holds: it has no pay/);
+  // #98 review F1: every effect statement, not only a pay (send, mint, deposit), as the Java reader refuses them.
+  assert.throws(() => load(mutant('send-in-value-block')), /method give\): a send inside an expression or a fn/);
+  assert.throws(() => load(mutant('send-in-fn')), /fn total\): a send inside an expression or a fn/);
+  assert.throws(() => load(mutant('mint-in-fn')), /fn tokens\): a mint inside an expression or a fn/);
+  assert.throws(() => load(mutant('deposit-in-lambda')), /method sell\): a deposit inside an expression or a fn/);
 });
 
 // ------------------------------------------------------------------ M2a: values, credentials, addresses, effects
@@ -1058,5 +1063,89 @@ test('format 2 joined: params, invariants, contracts, reads, receives T and libr
     const q = JSON.parse(text);
     q[k] = null;
     assert.throws(() => load(JSON.stringify(q)), /is null/, k);
+  }
+});
+
+// #98 review F2, C5: the strictness sweep over a program with javaLibraries and CallJava (Guarded.ir.json): an unknown
+// field added to any one of its objects is refused, the java: fns' parameter and result types included.
+test('format 2, java: libraries: an unknown field in any object of Guarded\'s export is refused', () => {
+  const text = readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8');
+  const p = JSON.parse(text);
+  assert.ok(p.javaLibraries.length > 0 && text.includes('"CallJava"'));
+  const paths = [];
+  // Every object, type objects included ({ "list": T } with a field more is refused too), but a local's fieldTaints,
+  // a map of its own kind.
+  const walk = (o, path) => {
+    if (Array.isArray(o)) o.forEach((x, i) => walk(x, [...path, i]));
+    else if (o && typeof o === 'object') {
+      if (path.at(-1) === 'fieldTaints') return;
+      paths.push(path);
+      for (const k of Object.keys(o)) walk(o[k], [...path, k]);
+    }
+  };
+  walk(p, []);
+  const taken = [];
+  for (const path of paths) {
+    const copy = structuredClone(p);
+    let o = copy;
+    for (const k of path) o = o[k];
+    o.futureCheck = false;
+    try {
+      load(JSON.stringify(copy));
+      taken.push(path.join('.'));
+    } catch (e) {
+      assert.match(e.message, /futureCheck/, path.join('.'));
+    }
+  }
+  assert.deepEqual(taken, [], 'objects whose unknown field the reader took');
+  // A type object inside a java: fn's signature, too (the review's case: a result { record: Entry } with a field more).
+  for (const f of p.javaLibraries[0].fns) {
+    const copy = structuredClone(p);
+    const g = copy.javaLibraries[0].fns.find((x) => x.name === f.name);
+    const t = typeof g.result === 'object' ? g.result : null;
+    if (!t) continue;
+    t.futureField = true;
+    assert.throws(() => load(JSON.stringify(copy)), /a bad type/, f.name);
+  }
+  assert.ok(paths.length > 100, `objects checked: ${paths.length}`);
+});
+
+// #98 review S5: params.f names the program's params only, never a record of another name space called Config.
+test('a quorum over params.f in a contract without params is refused, even with a record named Config', () => {
+  const p = JSON.parse(readFileSync(new URL('./fixtures/Counter2.ir.json', import.meta.url), 'utf8'));
+  p.records.push({ name: 'Config', fields: [{ name: 'k', type: { list: 'Key' } }, { name: 't', type: 'Int' }], at: [1, 1] });
+  p.methods.find((m) => m.name === 'increment').mods = [{ name: 'quorum', keys: 'params.k', threshold: 'params.t' }];
+  assert.throws(() => load(JSON.stringify(p)), /params.k: the contract has no params/);
+});
+
+// #98 review C6: a present null in a modifier is malformed in both readers, never read as an absent field.
+test('a modifier\'s present null is refused, never normalised away (Joined, Treasury, Tips, Pool)', () => {
+  const fix = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}.ir.json`, import.meta.url), 'utf8'));
+  const refused = (p, re) => assert.throws(() => load(JSON.stringify(p)), re);
+  let p = fix('joined/Joined');
+  p.methods.find((m) => m.name === 'take').mods[0].type = null;
+  refused(p, /a bad type null/);
+  p = fix('Treasury');
+  p.methods.find((m) => m.name === 'pay').mods[0].field = null;
+  refused(p, /unknown field "field"/);
+  p = fix('Tips');
+  p.methods.find((m) => m.name === 'claim').mods[0].field = null;
+  refused(p, /unknown field "field"/);
+  p = fix('Pool');
+  const b = p.methods.find((m) => m.mods.some((x) => x.name === 'batched' && !('field' in x)));
+  b.mods.find((x) => x.name === 'batched').field = null;
+  refused(p, /batched names no field or "only", not null/);
+});
+
+// #98 review C11: a duplicate java: fn cannot hide a malformed signature: listed twice is refused, in both readers.
+test('a java: fn listed twice is refused, whichever copy is malformed', () => {
+  const text = readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8');
+  for (const bad of [(f) => { f.result = { record: 'Nonexistent', futureField: true }; }, (f) => { f.params = [{ list: 'Int', futureField: true }]; }]) {
+    const p = JSON.parse(text);
+    const fns = p.javaLibraries[0].fns;
+    const copy = structuredClone(fns[0]);
+    bad(copy);
+    fns.unshift(copy);
+    assert.throws(() => load(JSON.stringify(p)), /listed twice|a bad type/);
   }
 });
