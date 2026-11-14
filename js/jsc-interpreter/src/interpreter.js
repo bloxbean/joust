@@ -22,7 +22,15 @@ export const IR_VERSION = 2;
 export function load(text) {
   if (typeof text !== 'string') throw new TypeError('load takes the IR export\'s JSON text');
   const p = parseStrict(text);
-  validate(p);
+  try {
+    validate(p);
+  } catch (e) {
+    // validate.js reads the export as it checks it: a value of another kind where it reads one (a number where a list is
+    // due) can throw a TypeError or a RangeError before the check that names it. That is a refusal too, and is reported as
+    // one, as the Java reader does (IrReaderFuzzTest found several; a crash in Program below would still be a finding).
+    if (e instanceof TypeError || e instanceof RangeError) throw new Error(`invalid IR: ${e.message}`, { cause: e });
+    throw e;
+  }
   return new Program(p);
 }
 

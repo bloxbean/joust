@@ -136,7 +136,11 @@ final class FuzzData {
         }
 
         synchronized void count(String outcome) {
-            counts.merge(outcome, 1L, Long::sum);
+            count(outcome, 1);
+        }
+
+        synchronized void count(String outcome, long n) {
+            counts.merge(outcome, n, Long::sum);
         }
 
         synchronized String line() {

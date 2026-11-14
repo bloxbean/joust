@@ -130,11 +130,17 @@ export function validate(p) {
   // ---- top level and declarations
   // M2b (additive): "params" and "invariants" appear only when the contract declares them.
   // M2c (additive): "contracts" appears only when the contract imports another.
+  // An export that is not an object is refused as such (IrReaderFuzzTest: 'in' on a number threw a TypeError).
+  if (!p || typeof p !== 'object' || Array.isArray(p)) fail('program', 'not an object');
   const optional = ['params', 'invariants', 'contracts'].filter((k) => k in p);
   for (const k of optional) if (p[k] === null || typeof p[k] !== 'object') fail('program', `"${k}" is ${JSON.stringify(p[k])}: an absent ${k} is not written`);
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
     'recursiveFns', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings', ...optional], 'program');
   if (p.ir !== 2 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 2, not ${JSON.stringify(p.ir)}`);
+  // Every top-level list is one before anything iterates it (IrReaderFuzzTest: "p.fns is not iterable" was a TypeError).
+  for (const k of ['options', 'records', 'enums', 'timeFields', 'recursiveFns', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings']) {
+    if (!Array.isArray(p[k])) fail('program', `${k} is a list`);
+  }
   // Version 2 (ADR-0018 M4): the .jsc libraries the program imports, each with its declarations. A build's names are one
   // namespace: a library's records, enums and fns join the program's, and no name is declared twice across them.
   if (!Array.isArray(p.libraries)) fail('program', 'libraries is a list');
@@ -154,6 +160,7 @@ export function validate(p) {
     if (typeof j.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(j.sourceSha256)) fail('java library', 'sourceSha256 must be 64 hex digits');
     for (const r of j.records) {
       keys(r, ['name', 'fields', 'at', 'owner', 'import', 'javaName', 'verified'], 'java record');
+      at(r.at, 'java record');   // its position too (IrReaderFuzzTest)
       if (typeof r.verified !== 'boolean') fail('java record', 'verified is a boolean');
     }
     for (const f of j.fns) {
@@ -170,6 +177,7 @@ export function validate(p) {
   for (const k of ['package', 'contract', 'source']) str(p[k], k);
   for (const o of p.options) {
     keys(o, ['name', 'value'], 'option');
+    str(o.name, 'option');   // a name (IrReaderFuzzTest: an object there was accepted, the Java reader refused it)
     if (!INT_RE.test(str(o.value, 'option'))) fail('option', `not an integer: ${o.value}`);
   }
   const shapes = new Map();
@@ -177,7 +185,12 @@ export function validate(p) {
     keys(r, ['name', 'fields', 'at'], where);
     if (!(qualified ? QUALIFIED : IDENT).test(str(r.name, where))) fail(where, `a bad name ${r.name}`);
     if (shapes.has(r.name)) fail(where, `two declarations named ${r.name} (records, variants and the state share one namespace)`);
-    for (const f of r.fields) keys(f, ['name', 'type'], `${r.name}'s field`);
+    if (!Array.isArray(r.fields)) fail(where, 'fields is not a list');
+    for (const f of r.fields) {
+      keys(f, ['name', 'type'], `${r.name}'s field`);
+      // A field's name is a name (IrReaderFuzzTest: a variant's field named 0 was accepted, the Java reader refused it).
+      if (!IDENT.test(str(f.name, `${r.name}'s field`))) fail(`${r.name}'s field`, `a bad name ${f.name}`);
+    }
     shapes.set(r.name, r.fields);
     at(r.at, where);
   };
@@ -185,6 +198,8 @@ export function validate(p) {
   const enums = new Map();
   for (const e of allEnums) {
     keys(e, ['name', 'variants', 'at'], 'enum');
+    at(e.at, 'enum');   // its position too (IrReaderFuzzTest)
+    if (!Array.isArray(e.variants)) fail('enum', 'variants is not a list');
     if (enums.has(e.name) || shapes.has(e.name)) fail('enum', `two declarations named ${e.name}`);
     enums.set(e.name, e.variants.map((v) => v.name));
     for (const v of e.variants) record(v, `variant of ${e.name}`);
@@ -265,6 +280,12 @@ export function validate(p) {
     str(l.name, where);
     type(l.type, where);
     at(l.at, where);
+    // A read state's field taints, when written: an object of non-negative integers (IrReaderFuzzTest: a record there was
+    // accepted, the Java reader refused it).
+    if ('fieldTaints' in l) {
+      if (!l.fieldTaints || typeof l.fieldTaints !== 'object' || Array.isArray(l.fieldTaints)) fail(where, 'fieldTaints is not an object');
+      for (const v of Object.values(l.fieldTaints)) nat(v, where);
+    }
     if (locals.has(l.id)) fail(where, `the local id ${l.id} is declared twice`);
     locals.set(l.id, l);
     scope.add(l.id);
@@ -280,6 +301,9 @@ export function validate(p) {
   const arms = (as, where, scope, scrutineeType) => {
     for (const a of as) {
       keys(a, ['ctors', 'fields', 'binds', 'body', 'at'], where);
+      // An arm's position and lists are checked like any other's (IrReaderFuzzTest: [24, 7, 0] was accepted here).
+      at(a.at, where);
+      for (const k of ['ctors', 'fields', 'binds']) if (!Array.isArray(a[k])) fail(where, `an arm's ${k} is a list`);
       a.ctors.forEach((c) => str(c, where));
       a.fields.forEach((c) => str(c, where));
       if (a.binds.length !== a.fields.length) fail(where, 'binds and fields differ in length');
@@ -410,6 +434,7 @@ export function validate(p) {
   const fnNames = new Set();
   for (const f of allFns) {
     keys(f, ['name', 'params', 'result', 'body', 'at'], 'fn');
+    at(f.at, 'fn');   // its position too (IrReaderFuzzTest)
     if (fnNames.has(f.name)) fail('fn', `two fns named ${f.name}`);
     fnNames.add(f.name);
     const scope = new Set();   // a fn sees its parameters only
@@ -423,7 +448,10 @@ export function validate(p) {
   for (const m of p.methods) {
     const where = `method ${m.name}`;
     // M2c (additive): "reads" appears only when the method reads another contract.
-    keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...('reads' in m ? ['reads'] : []), 'usesCtx', 'pays', 'result', 'body', 'at'], where);
+    // A method that is not an object is refused by keys (IrReaderFuzzTest: 'in' on a number threw a TypeError).
+    const reads = m && typeof m === 'object' && 'reads' in m;
+    keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...(reads ? ['reads'] : []), 'usesCtx', 'pays', 'result', 'body', 'at'], where);
+    at(m.at, where);   // its position too (IrReaderFuzzTest)
     if (!Array.isArray(m.mods)) fail(where, 'mods is not a list');
     if (!KINDS.has(m.kind)) fail(where, `unknown kind ${m.kind}`);
     if (methodNames.has(m.name)) fail(where, 'two methods of that name');

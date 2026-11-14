@@ -88,6 +88,15 @@ final class FourWay {
     };
 
     static final String PKG = "org.julclang.state.examples.dsl";
+
+    /** The package of the generated classes, and the class loader that holds them (examples/dsl's: {@link #PKG}). */
+    final String pkg;
+    final ClassLoader loader;
+
+    /** A class of the contract's build, by binary name, from {@link #loader}. */
+    Class<?> load(String binaryName) throws ClassNotFoundException {
+        return Class.forName(binaryName, true, loader);
+    }
     static final HexFormat HEX = HexFormat.of();
     static final int ROUND_LIMIT = 8;
 
@@ -151,12 +160,24 @@ final class FourWay {
     }
 
     /** Every leg of a contract: its module id and modules (M2c, M4), its Java libraries (M4b) and its params (M2b). */
-    @SuppressWarnings({"unchecked", "rawtypes"})
     FourWay(String name, String jscSource, String id, org.julclang.state.dsl.v2.JscModules modules,
             org.julclang.state.dsl.v2.JavaLibraries javaLibs, Map<String, String> transitions, Rec params) throws Exception {
+        this(PKG, FourWay.class.getClassLoader(), name, jscSource, id, modules, javaLibs, transitions, params);
+    }
+
+    /**
+     * The same, for a contract whose generated classes are in package {@code pkg} of {@code loader}: a contract built
+     * while the tests run (the five-way fuzz test's generated contracts, compiled by javac with the processors as Gradle
+     * compiles examples/dsl), rather than one of examples/dsl on the test class path.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    FourWay(String pkg, ClassLoader loader, String name, String jscSource, String id, org.julclang.state.dsl.v2.JscModules modules,
+            org.julclang.state.dsl.v2.JavaLibraries javaLibs, Map<String, String> transitions, Rec params) throws Exception {
+        this.pkg = pkg;
+        this.loader = loader;
         this.name = name;
-        this.cls = Class.forName(PKG + "." + name);
-        this.stateClass = Class.forName(PKG + "." + name + "$State");
+        this.cls = load(pkg + "." + name);
+        this.stateClass = load(pkg + "." + name + "$State");
         Interpreter i = JscV2.interpreter(jscSource, name + ".jsc", id, modules, javaLibs, HASHES);
         this.params = params;
         this.interp = params == null ? i : i.withParams(params);
@@ -166,7 +187,7 @@ final class FourWay {
         var lm = java.util.regex.Pattern.compile("\"library\": \"([A-Za-z0-9_.]+)\"").matcher(irJson);
         while (lm.find()) libraries.add(lm.group(1));
         this.transitions = transitions;
-        var spec = (org.julclang.state.runtime.ContractSpec) Class.forName(PKG + "." + name + "Client").getField("SPEC").get(null);
+        var spec = (org.julclang.state.runtime.ContractSpec) load(pkg + "." + name + "Client").getField("SPEC").get(null);
         this.harness = (StateHarness<Object>) (params == null ? StateHarness.of(spec) : StateHarness.of(spec, java(params)));
         this.events = interp.methods().keySet().stream().anyMatch(interp::carriesEvents);
         this.bigMaps = interp.bigMaps();
@@ -355,7 +376,7 @@ final class FourWay {
                     String type = c == reference && r.type().equals("State") ? referenceState : r.type();
                     // M2c: another contract's type (Oracle.State) is a nested class of that contract, in the same package;
                     // M4: a library's type is a nested class of its library (recordClass).
-                    Class<?> rc = type.contains(".") ? Class.forName(c.getPackageName() + "." + type.replace('.', '$'))
+                    Class<?> rc = type.contains(".") ? load(c.getPackageName() + "." + type.replace('.', '$'))
                             : recordClass(c, type);
                     var comps = rc.getRecordComponents();
                     var types = new Class<?>[comps.length];
@@ -376,11 +397,11 @@ final class FourWay {
     /** A record's or variant's class: the program's own, else an imported {@code .jsc} or Java library's (M4). */
     Class<?> recordClass(Class<?> c, String type) throws ClassNotFoundException {
         try {
-            return Class.forName(c.getName() + "$" + type);
+            return load(c.getName() + "$" + type);
         } catch (ClassNotFoundException e) {
             for (String lib : libraries) {
                 try {
-                    return Class.forName(lib + "$" + type);
+                    return load(lib + "$" + type);
                 } catch (ClassNotFoundException ignored) {
                     // the next library
                 }
@@ -957,7 +978,7 @@ final class FourWay {
         if (kind.equals("init")) redeemerArgs.add(harness.seed());
         for (Object a : args) redeemerArgs.add(java(a));
         if (interp.usesTx(method)) redeemerArgs.add(ctx(t));
-        Class<?> rc = Class.forName(PKG + "." + name + "Validator$" + variant);
+        Class<?> rc = load(pkg + "." + name + "Validator$" + variant);
         var comps = rc.getRecordComponents();
         boolean assetsIn = comps.length > 0 && comps[comps.length - 1].getName().equals("assetsIn");
         if (assetsIn) redeemerArgs.add(value(t.funds() == null ? ValueV.NONE : t.funds().received()).toPlutusData());
@@ -1341,7 +1362,7 @@ final class FourWay {
                 txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), tr.payouts(), q, tr.mint(), tr.accepted())));
             }
             // A contract that never mints has no ByAction: its mint mutants are those of a contract that mints (Coins, Dex).
-            if (exists(PKG + "." + name + "Validator$ByAction")) {
+            if (exists(pkg + "." + name + "Validator$ByAction")) {
                 for (var q : nearbyValues(tr.mint(), true)) {
                     txs.add(assetTx(method, redeemer, state, t, signer, Transition.full(tr.next(), tr.payouts(), tr.sends(), q, tr.accepted())));
                 }
@@ -1384,7 +1405,7 @@ final class FourWay {
 
     private boolean exists(String cls) {
         try {
-            Class.forName(cls);
+            load(cls);
             return true;
         } catch (ClassNotFoundException e) {
             return false;
@@ -1398,20 +1419,20 @@ final class FourWay {
      */
     boolean batched(String method) {
         boolean source = interp.modifiers(method).stream().anyMatch(m -> m.startsWith("batched"));
-        assertEquals(source, exists(PKG + "." + name + "Validator$" + cap(method) + "Intent"), name + "." + method + ": batched in the source and the validator");
+        assertEquals(source, exists(pkg + "." + name + "Validator$" + cap(method) + "Intent"), name + "." + method + ": batched in the source and the validator");
         return source;
     }
 
     /** A direct call exists unless the action is {@code batched only} (from the source; the validator must agree). */
     boolean direct(String method) {
         boolean source = !interp.modifiers(method).contains("batched only");
-        assertEquals(source, exists(PKG + "." + name + "Validator$" + cap(method)), name + "." + method + ": a direct redeemer in the source and the validator");
+        assertEquals(source, exists(pkg + "." + name + "Validator$" + cap(method)), name + "." + method + ": a direct redeemer in the source and the validator");
         return source;
     }
 
     @SuppressWarnings("unchecked")
     private org.julclang.state.runtime.IntentCodec<Object> intents() throws Exception {
-        return (org.julclang.state.runtime.IntentCodec<Object>) Class.forName(PKG + "." + name + "Client").getField("INTENTS").get(null);
+        return (org.julclang.state.runtime.IntentCodec<Object>) load(pkg + "." + name + "Client").getField("INTENTS").get(null);
     }
 
     /**
@@ -1718,7 +1739,7 @@ final class FourWay {
     }
 
     private Object construct(String variant, List<Object> values, String in) throws Exception {
-        Class<?> rc = Class.forName(PKG + "." + name + in + variant);
+        Class<?> rc = load(pkg + "." + name + in + variant);
         var comps = rc.getRecordComponents();
         var types = new Class<?>[comps.length];
         for (int i = 0; i < comps.length; i++) types[i] = comps[i].getType();
@@ -1737,14 +1758,14 @@ final class FourWay {
 
     /** Also runs every vector on the Java example {@code pkg.<name>}, whose init is {@code init}, and records differences. */
     FourWay reference(String pkg, String init) throws Exception {
-        this.reference = Class.forName(pkg + "." + name);
+        this.reference = load(pkg + "." + name);
         this.referenceInit = init;
         return this;
     }
 
     /** M2c: as {@link #reference(String, String)}, the Java example's contract named {@code javaName} (oracle's Shop for Kiosk). */
     FourWay referenceNamed(String pkg, String javaName, String init) throws Exception {
-        this.reference = Class.forName(pkg + "." + javaName);
+        this.reference = load(pkg + "." + javaName);
         this.referenceInit = init;
         return this;
     }
@@ -1759,7 +1780,7 @@ final class FourWay {
     @SuppressWarnings({"unchecked", "rawtypes"})
     String javaReference(String method, Rec state, List<Object> args, Tx t) throws Exception {
         String kind = interp.kind(method);
-        Class<?> rs = Class.forName(reference.getName() + "$" + referenceState);
+        Class<?> rs = load(reference.getName() + "$" + referenceState);
         Object before = state == null ? null : java(state, reference);
         String m = kind.equals("init") ? referenceInit : method;
         Method found = null;

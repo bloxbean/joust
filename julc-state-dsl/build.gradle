@@ -18,3 +18,13 @@ tasks.named('test') {
             .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('examples/dsl/src/main/jsc')).withPropertyName('dslExamples').withPathSensitivity(PathSensitivity.RELATIVE)
 }
+
+// Coverage-guided fuzzing (gradle/jazzer-fuzz.gradle): the Java and JavaScript IR readers against each other.
+dependencies {
+    testImplementation libs.jazzer.junit
+}
+apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
+fuzzTargets 'org.julclang.state.dsl.v2.IrReaderFuzzTest.readersAgree'
+tasks.withType(Test).matching { it.name.startsWith('fuzz') }.configureEach {
+    inputs.dir(rootProject.file('js/jsc-interpreter/src')).withPropertyName('jscInterpreterSources').withPathSensitivity(PathSensitivity.RELATIVE)
+}

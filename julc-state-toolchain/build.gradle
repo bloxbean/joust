@@ -30,10 +30,13 @@ dependencies {
     testImplementation project(':julc-state-testkit')     // ADR-0018 M0: the validator leg of the four-way vectors
     // Coverage-guided fuzzing (gradle/jazzer-fuzz.gradle): the five-way differential and the decoders of untrusted data.
     testImplementation libs.jazzer.junit
+    // The five-way fuzz test compiles each generated contract as Gradle does: javac with JOUST's and JuLC's processors.
+    testImplementation libs.julc.annotation.processor
 }
 
 apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
-fuzzTargets 'org.julclang.state.toolchain.ValueAdapterFuzzTest.decoders',
+fuzzTargets 'org.julclang.state.toolchain.FiveWayFuzzTest.generatedContractsAgree',
+        'org.julclang.state.toolchain.ValueAdapterFuzzTest.decoders',
         'org.julclang.state.toolchain.AddressAdapterFuzzTest.addressesAndCredentials'
 
 // I1 compares with what the Gradle build of the examples wrote.
