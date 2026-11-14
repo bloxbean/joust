@@ -1535,6 +1535,8 @@ final class FourWay {
                 var rf = new ArrayList<>(adopt.fields());
                 for (int i = 0; i < args.size(); i++) rf.set(1 + i, raw(args.get(i)));
                 mine.mintRedeemer = new org.julclang.core.PlutusData.ConstrData(adopt.constructorTag(), rf);
+                // The adopting transaction's window is the one its Ctx states (the previous version's destroy set its own).
+                if (c != null) mine.range = StateHarness.window(c.validFrom(), c.validTo());
                 v = evaluate(method, t, signer, mine);
             }
             default -> {

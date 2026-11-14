@@ -425,7 +425,7 @@ class JscV2M3cFourWayTest {
      * lovelace plus {@code delta}, its datum the adopted first state.
      */
     static java.util.function.Function<Object, TxModel> adoption(FourWay v1, String destroy, Object old, BigInteger funds, FourWay v2, long delta,
-                                                                 byte[] signer) {
+                                                                 byte[] signer, byte[]... cosigners) {
         return first -> {
             try {
                 var live = v1.harness.live(old, funds);
@@ -433,6 +433,7 @@ class JscV2M3cFourWayTest {
                 JulcList<Payout> none = JulcList.empty();
                 var tx = v1.harness.destroy(live, v1.construct(Character.toUpperCase(destroy.charAt(0)) + destroy.substring(1), List.of(c1)),
                         v1.construct("BurnInstance", List.of()), none, signer, c1);
+                for (byte[] k : cosigners) tx.signers.add(k);
                 tx = successor(v2.harness.policy(), v2.harness.stateAddress(), first, delta).apply(tx, live);
                 tx.stateOutput = tx.outputs.size() - 1;
                 tx.token = successorId();
@@ -525,6 +526,146 @@ class JscV2M3cFourWayTest {
         report(v2, null);
     }
 
+
+    // ------------------------------------------------------------------ Tally (coverage): migration with every kind of input
+
+    static Rec tallyParams(byte[] previous, List<Object> council, long needed) {
+        return rec("Config", Bytes.of(previous), council, n(needed), DEADLINE);
+    }
+
+    static MapV tags(String... kv) {
+        var ks = new ArrayList<Bytes>();
+        var vs = new ArrayList<Object>();
+        for (int i = 0; i < kv.length; i += 2) {
+            ks.add(Bytes.of(kv[i].getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            vs.add(n(Long.parseLong(kv[i + 1])));
+        }
+        return new MapV(ks, vs);
+    }
+
+    static Bytes text(String s) {
+        return Bytes.of(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /** A call refused on all five legs; the validator sees {@code candidate} (the transition refuses: there is no next state). */
+    static String refusedWith(FourWay f, String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate) throws Exception {
+        assertEquals("refused", f.check(method, state, args, t, signer, candidate), f.name + "." + method + " " + args);
+        return f.lastRefusal;
+    }
+
+    @Test
+    @Order(5)
+    void tally() throws Exception {
+        var v1 = legs("TallyV1", null);
+        byte[] p1 = v1.harness.policy();
+        var v2 = legs("TallyV2", tallyParams(p1, keys(A, B), 2));
+        byte[] p2 = v2.harness.policy();
+        Bytes none = Bytes.of(new byte[0]);
+        List<Object> voters = keys(A, B, C);
+        Tx create = at(ADMIN, ada(10).longValue(), 0);
+        // Version 1: created with a reachable quorum of its voters (its invariant, and the quorum's shape, on the output).
+        ok(v1.check("init", null, List.of(voters, n(2)), create, ADMIN));
+        v1.invariantRefused("invariant:quorum voters needed", "init", null, List.of(voters, n(4)), create, ADMIN);
+        v1.invariantRefused("invariant:quorum voters needed", "init", null, List.of(keys(B, A, C), n(2)), create, ADMIN);
+        Rec fresh = rec("State", Bytes.of(ADMIN), none, voters, n(2), tags(), Opt.NONE);
+        ok(v1.check("tag", fresh, List.of(text("a"), n(3)), null, ADMIN));
+        v1.modifierRefused("tag", fresh, List.of(text("a"), n(3)), null, EVE);
+        v1.mutants("tag", fresh, List.of(text("a"), n(3)), null, ADMIN);
+        // A43: the successor is set once (the lock the contract states; JSC9014 is silent for it): a second set is refused.
+        ok(v1.check("setSuccessor", fresh, List.of(Bytes.of(p2)), null, ADMIN));
+        Rec named = rec("State", Bytes.of(ADMIN), Bytes.of(p2), voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b")));
+        assertEquals("refused", v1.check("setSuccessor", named, List.of(Bytes.of(fill(0x5E))), null, ADMIN));
+        assertEquals("require:20:5:the successor is set once", v1.lastRefusal);
+        v1.mutants("setSuccessor", fresh, List.of(Bytes.of(p2)), null, ADMIN);
+
+        // ---- the old half: moved by a quorum of its voters into the successor its field names
+        BigInteger funds = ada(10);
+        BigInteger lovelace = BigInteger.valueOf(v1.harness.minAda()).add(funds);
+        Tx mv = at(A, 0, lovelace.longValue()).withSuccessor(Bytes.of(p2));
+        // count = the tags' size + the note's length: 2 + 1.
+        Rec adopted = rec("State", Bytes.of(ADMIN), voters, n(3), n(5));
+        v1.successor = successor(p2, v2.harness.stateAddress(), v2.java(adopted), 0);
+        ok(v1.as(List.of(A, B), null).check("move", named, List.of(), mv, A));
+        v1.as(List.of(A), null).modifierRefused("move", named, List.of(), mv, A);
+        v1.as(List.of(A, EVE), null).modifierRefused("move", named, List.of(), mv, A);
+        migrateRefused(v1.as(List.of(A, B), null), "migrate:to", "move",
+                rec("State", Bytes.of(ADMIN), none, voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b"))), List.of(), mv, A);
+        v1.successor = successor(fill(0x5F), v2.harness.stateAddress(), v2.java(adopted), 0);
+        migrateRefused(v1.as(List.of(A, B), null), "migrate:to", "move", named, List.of(), mv.withSuccessor(Bytes.of(fill(0x5F))), A);
+        v1.successor = successor(p2, v2.harness.stateAddress(), v2.java(adopted), -1);
+        v1.as(List.of(A, B), null).transactionLevel("move", named, List.of(), mv, A);
+        v1.successor = successor(p2, v2.harness.stateAddress(), v2.java(adopted), 0);
+        oldSideMutants(v1, "Move", List.of(A, B), named, lovelace, p2, v2.harness.stateAddress(), v2.java(adopted));
+
+        // ---- the new half: adopted with an argument, by the old state's admin, before the params' deadline
+        ok(v2.check("init", null, List.of(), at(ADMIN, 0, 0), ADMIN));
+        Object oldJ = v1.java(named);
+        Interpreter.PriorV prior = new Interpreter.PriorV(Bytes.of(p1), as("TallyV1.State", named));
+        Tx adopt = new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW)).withPrior(prior);
+        v2.adoption = adoption(v1, "move", oldJ, funds, v2, 0, A, B);
+        assertEquals(ok(v2.check("migrate", null, List.of(n(5)), adopt, ADMIN)), "ok:" + v2.encoded(v2.java(adopted), null, null));
+        // The body's requires: another caller (the old admin did not adopt), a window past params.until.
+        Tx byEve = new Tx(Bytes.of(EVE), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW)).withPrior(prior);
+        v2.adoption = adoption(v1, "move", oldJ, funds, v2, 0, A, B);
+        assertEquals("require:19:5:the admin adopts", refusedWith(v2, "migrate", null, List.of(n(5)), byEve, EVE, adopted));
+        Tx late = new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, DEADLINE, DEADLINE.add(WINDOW)).withPrior(prior);
+        assertEquals("require:20:5:too late to adopt", refusedWith(v2, "migrate", null, List.of(n(5)), late, ADMIN, adopted));
+        // The invariant on the adopted state (a bonus over 100).
+        v2.adoption = adoption(v1, "move", oldJ, funds, v2, 0, A, B);
+        v2.invariantRefused("invariant:sane", "migrate", null, List.of(n(101)), adopt, ADMIN);
+        // A42: an instance of another policy than params.previous.
+        var honest = adoption(v1, "move", oldJ, funds, v2, 0, A, B);
+        v2.adoption = first -> elsewhere(honest.apply(first), p1, fill(0x5D), v1.harness.instanceId());
+        migrateRefused(v2, "migrate:from", "migrate", null, List.of(n(5)), adopt.withPrior(new Interpreter.PriorV(Bytes.of(fill(0x5D)), as("TallyV1.State", named))), ADMIN);
+        // A44, K48: the old state is a checked input, of every kind it holds: a voter of 27 bytes, an admin of 27 bytes (no
+        // v1 build stores either; the new side checks).
+        var hostile = new LinkedHashMap<String, Rec[]>();
+        hostile.put("a 27-byte voter", new Rec[] {
+                rec("State", Bytes.of(ADMIN), Bytes.of(p2), keys(new byte[27], B, C), n(2), tags("a", "3", "b", "4"), Opt.some(text("b"))),
+                rec("State", Bytes.of(ADMIN), keys(new byte[27], B, C), n(3), n(5))});
+        hostile.put("a 27-byte admin", new Rec[] {
+                rec("State", Bytes.of(new byte[27]), Bytes.of(p2), voters, n(2), tags("a", "3", "b", "4"), Opt.some(text("b"))),
+                rec("State", Bytes.of(new byte[27]), voters, n(3), n(5))});
+        for (var e : hostile.entrySet()) {
+            Rec old = e.getValue()[0];
+            v2.adoption = adoption(v1, "move", v1.java(old), funds, v2, 0, A, B);
+            Tx t = new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW)).withPrior(new Interpreter.PriorV(Bytes.of(p1), as("TallyV1.State", old)));
+            migrateRefused(v2, "input:old", "migrate", null, List.of(n(5)), t, ADMIN, e.getValue()[1]);
+        }
+        // A map out of canonical order or with a key twice: the interpreters refuse it (input:old); the validator's check is
+        // the generated SortedMaps key walk an argument's map has (mapKeys__Bytes), and the harness cannot carry the datum
+        // (it writes canonical CBOR, which sorts the keys and keeps one of each: as JscV2M2cHostileInputTest states).
+        for (MapV m : List.of(tags("b", "4", "a", "3"), tags("a", "3", "a", "4"))) {
+            Rec old = rec("State", Bytes.of(ADMIN), Bytes.of(p2), voters, n(2), m, Opt.some(text("b")));
+            Tx t = FourWay.interpreterTx(new Tx(Bytes.of(ADMIN), BigInteger.ZERO, BigInteger.ZERO, T0, T0.add(WINDOW))
+                    .withPrior(new Interpreter.PriorV(Bytes.of(p1), as("TallyV1.State", old))), ADMIN);
+            var e = assertThrows(Interpreter.Refused.class, () -> v2.interp.call("migrate", null, List.of(n(5)), t));
+            assertEquals("input:old", e.refusal(), m.toString());
+            v2.jsCalls.add(JsLeg.call("migrate", null, List.of(n(5)), t, v2.params, "refused", null, e, "TallyV2.migrate " + m));
+        }
+        // K49: exactly the old input's lovelace.
+        v2.adoption = adoption(v1, "move", oldJ, funds, v2, 1, A, B);
+        v2.transactionLevel("migrate", null, List.of(n(5)), adopt, ADMIN);
+        v2.adoption = adoption(v1, "move", oldJ, funds, v2, 0, A, B, ADMIN);   // the adopter (the Ctx's caller) signs too
+        newSideMutants(v2, v1, oldJ, adopted, funds, List.of(BigInteger.valueOf(5), v2.harness.ctx(ADMIN, BigInteger.ZERO, BigInteger.ZERO)));
+        // The params' quorum is checked at adoption as at every creation (semantics §2.7 step 1): a council out of order.
+        var bad = legs("TallyV2", tallyParams(p1, keys(B, A), 2));
+        bad.adoption = adoption(v1, "move", oldJ, funds, bad, 0, A, B);
+        bad.invariantRefused("invariant:quorum params.council params.needed", "migrate", null, List.of(n(5)), adopt, ADMIN);
+        bad.invariantRefused("invariant:quorum params.council params.needed", "init", null, List.of(), at(ADMIN, 0, 0), ADMIN);
+        // The new version's own methods.
+        ok(v2.check("count", adopted, List.of(), null, ADMIN));
+        v2.modifierRefused("count", adopted, List.of(), null, EVE);
+        v2.mutants("count", adopted, List.of(), null, ADMIN);
+        ok(v2.as(List.of(A, B), null).check("close", adopted, List.of(), at(A, 0, lovelace.longValue()), A));
+        v2.as(List.of(A), null).modifierRefused("close", adopted, List.of(), at(A, 0, lovelace.longValue()), A);
+        JsLeg.check(v1);
+        JsLeg.check(v2);
+        JsLeg.check(bad);
+        report(v1, null);
+        report(v2, null);
+    }
+
     /** A state of another contract, as an importer names it (C.State). */
     static Rec as(String type, Rec r) {
         return new Rec(type, r.fields());
@@ -558,10 +699,16 @@ class JscV2M3cFourWayTest {
 
     /** The old side's transaction one step away (each rejected by the old version's validator alone), and the attack suite. */
     static void oldSideMutants(FourWay v1, Rec named, BigInteger lovelace, byte[] p2, org.julclang.ledger.Address to, Object adopted) throws Exception {
+        oldSideMutants(v1, "Upgrade", List.of(ADMIN), named, lovelace, p2, to, adopted);
+    }
+
+    static void oldSideMutants(FourWay v1, String destroy, List<byte[]> signers, Rec named, BigInteger lovelace, byte[] p2,
+                               org.julclang.ledger.Address to, Object adopted) throws Exception {
         var live = v1.harness.live(v1.java(named), lovelace.subtract(BigInteger.valueOf(v1.harness.minAda())));
-        Ctx c1 = v1.harness.ctx(ADMIN, BigInteger.ZERO, live.lovelace());
+        Ctx c1 = v1.harness.ctx(signers.get(0), BigInteger.ZERO, live.lovelace());
         JulcList<Payout> none = JulcList.empty();
-        var base = v1.harness.destroy(live, v1.construct("Upgrade", List.of(c1)), v1.construct("BurnInstance", List.of()), none, ADMIN, c1);
+        var base = v1.harness.destroy(live, v1.construct(destroy, List.of(c1)), v1.construct("BurnInstance", List.of()), none, signers.get(0), c1);
+        for (byte[] k : signers.subList(1, signers.size())) base.signers.add(k);
         var honest = successor(p2, to, adopted, 0).apply(base, live);
         assertTrue(v1.harness.evaluate(honest).accepted(), "the control");
         var muts = new LinkedHashMap<String, TxModel>();
@@ -590,11 +737,27 @@ class JscV2M3cFourWayTest {
 
     /** The new side's transaction one step away (each rejected by the new version's mint alone), and the attack suite. */
     static void newSideMutants(FourWay v2, FourWay v1, Object oldJ, Rec adopted, BigInteger funds) throws Exception {
+        newSideMutants(v2, v1, oldJ, adopted, funds, List.of());
+    }
+
+    /** {@code args}: the Adopt redeemer's fields after the seed (the init migrate's arguments, its Ctx). */
+    static void newSideMutants(FourWay v2, FourWay v1, Object oldJ, Rec adopted, BigInteger funds, List<Object> args) throws Exception {
+        var adoptWith = new java.util.function.Function<org.julclang.ledger.TxOutRef, Object>() {
+            public Object apply(org.julclang.ledger.TxOutRef seed) {
+                var fs = new ArrayList<Object>(List.of(seed));
+                fs.addAll(args);
+                try {
+                    return v2.construct("Adopt", fs);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+        };
         Object first = v2.java(adopted);
         var honest = v2.adoption.apply(first);
         var mine = honest.copy();
         mine.spendRedeemers.clear();
-        mine.mintRedeemer = StateHarness.data(v2.construct("Adopt", List.of(StateHarness.LIVE_REF)));
+        mine.mintRedeemer = StateHarness.data(adoptWith.apply(StateHarness.LIVE_REF));
         assertTrue(v2.harness.evaluate(mine).accepted(), "the control\n" + v2.harness.evaluate(mine));
         var muts = new LinkedHashMap<String, TxModel>();
         var unburned = mine.copy();
@@ -608,8 +771,8 @@ class JscV2M3cFourWayTest {
         noPrior.inputs.remove(0);
         muts.put("the seed not spent (a reference, or another input)", noPrior);
         var otherSeed = mine.copy();
-        otherSeed.mintRedeemer = StateHarness.data(v2.construct("Adopt", List.of(new org.julclang.ledger.TxOutRef(
-                new org.julclang.ledger.TxId(StateHarness.fill(32, 0x33)), BigInteger.ZERO))));
+        otherSeed.mintRedeemer = StateHarness.data(adoptWith.apply(new org.julclang.ledger.TxOutRef(
+                new org.julclang.ledger.TxId(StateHarness.fill(32, 0x33)), BigInteger.ZERO)));
         muts.put("a wallet input as the seed", otherSeed);
         for (var e : muts.entrySet()) {
             var v = v2.harness.evaluate(e.getValue());
@@ -620,10 +783,12 @@ class JscV2M3cFourWayTest {
         // The attack suite on the whole migration (both halves' scripts run in one transaction): each attack is refused by the
         // old version's spend and burn or by the new version's mint.
         var refusedBy = new LinkedHashMap<String, String>();
-        for (var a : Attacks.applicable(v2.harness, honest)) {
-            // The spent instance is the old version's: its junk-UTxO case (the token dropped from the spent state) is the old
-            // side's attack suite's, run on the old version's destroy (oldSideMutants), where the token is its own.
-            if (a.name().startsWith("junk UTxO")) continue;
+        // The new version sees a creation (its attacks are a creation's: the spent instance's, and its modifiers', are the old
+        // side's attack suite's, run on the old version's destroy in oldSideMutants).
+        for (var a : Attacks.applicable(v2.harness, honest.copyAs(TxModel.Kind.CREATE))) {
+            // An adoption's seed is the spent old instance, not the harness's wallet seed this attack moves (a no-op here): the
+            // mutants above cover it ("the seed not spent", "a wallet input as the seed").
+            if (a.name().equals("seed not consumed")) continue;
             var m = a.mutate().apply(honest);
             if (m == null) continue;
             var oldSide = v1.harness.evaluate(m);
