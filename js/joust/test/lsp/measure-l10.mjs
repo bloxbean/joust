@@ -82,8 +82,8 @@ console.log(JSON.stringify(out, null, 2));
 const bound = (v, strict, loose) => (check ? v <= loose : true) && { v, strict, withinStrict: v <= strict };
 const results = [
   // CI's runner measured 86.7 ms (run 43350031856); its bound is set about 3x above that, to catch regressions without
-  // flaking on a noisy runner (#83 review F9). L10's strict 50 ms is for §1's reference machine.
-  ['p95 (1,889 lines)', bound(out.latency['Ledger1889.jsc'].p95, 50, 250)],
+  // flaking on a noisy runner (#83 review F9). L10's strict bound (60 ms since r7, #99 F3) is for §1's reference machine.
+  ['p95 (1,889 lines)', bound(out.latency['Ledger1889.jsc'].p95, 60, 250)],
   ['RSS, one analysis worker (MB)', bound(out.rss.oneAnalysisWorker, 600, 900)],
   ['RSS, two analysis workers and a build worker (MB)', bound(out.rss.twoAnalysisWorkersAndABuildWorker, 1229, 1800)],
 ];
