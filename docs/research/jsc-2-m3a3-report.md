@@ -155,6 +155,17 @@ Security approved round r2; design and Codex requested changes. Each item:
 
 ## Builds and DevKit
 
+Round r3 (after the round-r2 reviews of #101, #104 and #107), at `65b13d80`: `./gradlew clean build -PnoDevnet
+--continue --no-watch-fs` gives 1,077 JVM tests, 0 failures (1 skipped): julc-state-dsl 229, julc-state-toolchain 219,
+examples/dsl 148. `toolchainWasm`, `toolchainWasmTest` and `runtimeWasm` at this head: BUILD SUCCESSFUL. The Web Image
+against the JVM gives 154 results the same (116 build outputs, 38 depth runs), 124 language-server models
+byte-identical, 3,689/3,689 S2 cases, 21 depth cases and 43/43 S2b token calls. With those engines, npm gives:
+`js/jsc-interpreter` 59/59; `tree-sitter-jsc` 20/20, with the shared corpus (91 corpus, 53 repository, 70 research
+files) in agreement; `js/state-client` 48/48; `js/joust` 169/170 (1 skipped, 0 failures); `js/joust-runtime` 34/37
+(1 skipped). Its two failures are environmental: the Ogmios probe, as before, and "Counter and Bank on DevKit through
+the runtime engine", where the DevKit faucet was dry and no genesis account could pay 500 ADA. DevKit was not re-run
+this round.
+
 Round r2 (after the round-r1 reviews of #101, #104 and #107), at `66586603`: `./gradlew clean build -PnoDevnet --continue
 --no-watch-fs` gives 1,071 JVM tests, 0 failures (1 skipped): julc-state-dsl 227, julc-state-toolchain 215, examples/dsl
 148. `toolchainWasm`, `toolchainWasmTest` and `runtimeWasm` at this head: BUILD SUCCESSFUL; the Web Image against the JVM gives 154 results the same (116 build outputs and 38 depth runs; earlier rounds' "build outputs" counts include the depth runs too), 124 language-server models byte-identical, 3,680/3,680 S2 cases, 21 depth cases, 43/43 S2b token calls. With these engines copied into `js/joust/engine` and `js/joust-runtime/engine`, npm: `js/jsc-interpreter` 57/57, `tree-sitter-jsc` 20/20 and the shared corpus (91 corpus, 53 repository, 70 research files) in agreement, `js/state-client` 48/48, `js/joust` 169/170 (1 skipped, 0 failures) and `js/joust-runtime` 35/37 (1 skipped; the one failure is the environmental Ogmios probe: 3 of the reference-script outputs it needs on a reset devnet). The DevKit results below were measured at the round-r1 head (`79228781`):
