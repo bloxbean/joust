@@ -161,6 +161,8 @@ hash, and every `Address` the ledger's encoding with a well-formed payment crede
 | `owned init T.m(params) [payable] { … }` | `@OwnedInit public static T m([@Shared State s, ]params[, Ctx ctx])` | returns the new object; only `payable` (`JSC0405`); cannot pay, send, mint or deposit (`JSC0404`) |
 | `owned action T.m(params) mods { … }` | `@OwnedAction public static T m(T s__[, @Shared State s], params[, Ctx ctx])`, or `TOutcome` when it has effects | its input is the object: bare names and `state` read it, and so do `only`, `after`, `before`, `quorum`; returns the next object |
 | `owned destroy T.m(params) mods { … }` | `@OwnedDestroy public static JulcList<Payout> m(T s__, …, Ctx ctx)` (or `Settled`) | pays out what the object holds (`JSC0409`) |
+| `owned T keyed by f (opts) { … }` | `@Owned(key = "f", maxKeyBytes = n, …) public record T(...)` | M3b (ADR-0016): a keyed type, one object per key per instance, in a sorted on-chain list. `f` is a `Bytes`, `Key` or `Hash` field (`JSC1241`); the options are `signed`, `maxKeyBytes = 1…64` (default 32; at least 28 with `signed`, `JSC1242`), `linkCooldownMs = 0 or 60000…3600000` (default 60,000) and `linkWindowMs = 20000…min(900000, maxValidityMs)` (default min(120,000, maxValidityMs), `JSC1243`) |
+| `owned destroy T.m() only f retire { … }` | `@OwnedDestroy(retire = true)` | M3b: a keyed type's retiring exit, its escape hatch (`JSC1245`): the node stays retired, its key taken for good; signed by `only f` and needing nobody else |
 | `import contract { C } from "./C.jsc"` | `import <C's package>.C;` | M2c (ADR-0018 D9): another `.jsc` contract of the build, checked on its own; its state is `C.State` and its instances `Instance<C>`. One name, the file's contract (`JSC0740`, `JSC0742`); no cycle (`JSC0743`); not twice, nor its name for another declaration (`JSC0744`); `java:` contracts not yet (`JSC0741`). Not yet: a contract whose state, declared types, events or memos use a `.jsc` or `java:` library's type cannot be imported (`JSC0746`); a library type in its methods' parameters and results is fine. |
 
 Method names are unique, and a `fn` may not share one (`JSC0202`); nor may an invariant (`JSC0224`). A method gets
@@ -207,6 +209,43 @@ contract Bank(maxDatumBytes = 160) {
 }
 ```
 
+**Keyed objects** (ADR-0016, M3b). `owned Entry keyed by name (maxKeyBytes = 64) { name: Bytes, owner: Key, … }`
+makes `Entry` unique by `name` within an instance: each key is its own UTxO, a node of a sorted list whose head the
+instance's creation makes. An owned init inserts after the node whose gap the key falls into (the runtime finds it);
+the key cannot be one already taken, live or retired. A keyed type's methods are an owned type's, with its rules:
+
+- **The key is fixed** for the object's life (`JSC1248`): an action returns `{ ...state, … }` without it, or with it
+  unchanged. To change a key, retire or remove the object and insert another.
+- **`signed`**: the key is a 28-byte key hash that signs the insert, so nobody can take someone else's key. Without it,
+  an initializer that does not take the key from `caller` warns (`JSC9011`: anyone may take a free key first).
+- **Exits.** `retire` keeps the node, retired, with its key for good: the owner leaves with all but the deposit, and needs
+  no neighbour, so this is the escape hatch every keyed type has (`JSC1245`). An owned destroy without `retire` removes
+  the node and frees its key; it needs its predecessor, which anyone can delay, so it is never the escape hatch.
+- **Audiences.** Every keyed action says who may call it with `only`, `quorum` or `authorized`; `open` is not enough
+  (`JSC1246`), and an action authorized by someone other than the retire's signer warns (`JSC9013`).
+- **Time.** An insert or a removal relinks a node: its window is at most `linkWindowMs` long and starts at least
+  `linkCooldownMs` after that node's last relink (the runtime waits for it). `linkCooldownMs = 0` warns (`JSC9012`). A
+  key is never set from a time value (`JSC1251`).
+- **Limits** (the processor's, `JSC1244`): no native assets, batched actions or `BigMap`s in a contract with keyed types;
+  at most 16 keyed types; `maxDatumBytes` at most 2048, and a retired node's worst case must fit it (`JSC1250`). Keyed
+  objects do not move (`JSC1247`). The validator's generated names are reserved (`JSC1249`: `Link`, `Insert_m`,
+  `Remove_T`, `Head_T`, `Keyed_T`, `Retired_T`; the client's `tList`, `tExists`, `tKeys`; the handle's members; the
+  parameters `anchor`, `removed`, `instance`).
+
+```text
+contract Registry(maxDatumBytes = 384) {
+  state { admin: Key, isOpen: Bool }
+  owned Ballot keyed by voter (signed, maxKeyBytes = 28) { voter: Key, choice: Int }
+  init() { return { admin: caller, isOpen: true } }
+  owned init Ballot.cast(registry: shared, voter: Key, choice: Int) {
+    require(registry.isOpen, "voting is closed")
+    return { voter, choice }
+  }
+  owned action Ballot.change(pick: Int) only voter { return { ...state, choice: pick } }
+  owned destroy Ballot.leave() only voter retire { pay(voter, balance) }
+}
+```
+
 **Invariants** (ADR-0009 D4) are checked by the validator on every state it accepts as an output (a creation and every
 action; a destroy has none), and by the runtime before it submits. A state that breaks one can only be destroyed.
 
@@ -224,6 +263,7 @@ action; a destroy has none), and by the runtime before it submits. A state that 
 | `quorum k t` | `@Quorum(keys = "k", threshold = "t")` | `action`, `destroy` | `List<Key>` and `Int`, both state fields or both `params.f` (`JSC0439`) |
 | `authorized c` | `@AuthorizedBy("c")` | `action`, `destroy` | `Credential`, a state field or `params.f` |
 | `receives`, `receives T` | `@Receives`, and the method takes `Funds` | `action` (`JSC0447`), not `batched` | `T`: the type of the deposits' memos, each a checked input |
+| `retire` | `@OwnedDestroy(retire = true)` | an owned destroy of a keyed type (`JSC1245`) | |
 
 `quorum k t` (ADR-0009 D2) holds when at least `t ≥ 1` of the transaction's signatories are in `k`, read from the
 input state, never the result. Every state the validator accepts as an output keeps each state quorum *well formed*
@@ -242,7 +282,7 @@ cannot also have `only`, `after` or `before` (`JSC0417`): the batcher signs a ba
 caller or the time in the body. A paying one says `open` (`JSC0420`): an intent authorises its action until its
 deadline, against the state a batcher applies it to, in the batcher's order, so keep deadlines short and bound
 order-sensitive arguments. A contract with `BigMap` state cannot have batched actions (`JSC0419`). `batched only`
-followed by an identifier that is not a modifier reads as `batched` plus `only f` (then refused), and the six modifier
+followed by an identifier that is not a modifier reads as `batched` plus `only f` (then refused), and the modifier
 words are no field or binding name (`JSC0211`).
 
 **Composition (M2c, ADR-0011).** A parameter `p: reads params.f` is the state of the instance the params field `f` (an

@@ -106,6 +106,7 @@ these values:
 | `funds` (M2) | | the native assets the call sees, for a method that reads `funds` or sends, mints, burns, accepts or receives: `received` (a `Value`: what the caller offers, without lovelace), `held` (a `Value`: what the instance holds besides lovelace and its own token), `policy` (a `Hash`: the contract's policy), `self` (`Bytes`: the instance's token name) and (M2c) `deposits`: for a receiving action, the deposits claimed on its continuing output in the registry's order, each a value and, for `receives T`, a memo (a value of `T`); empty otherwise |
 | `reads` (M2c) | | for a method with `reads` parameters: the state of each instance a params field names, by that field, as the transaction's reference inputs hold it (ADR-0011 D2) |
 | `shared` (M3a) | | for an owned method with a `shared` parameter: the instance's state, as the transaction's reference input holds it (§2.8) |
+| `instance`, `anchor` (M3b) | | for a keyed insert or removal: the instance it acts under, and the node of its list it relinks, with its key, `next` and `linkedAt` (§2.9) |
 
 **The params** (M2b, ADR-0009 D1). A contract that declares `params { … }` is called as deployed with them: a `Config`
 record, fixed for every call of the deployment (the script is applied to them), read as `params.f`. A call of a method
@@ -263,6 +264,7 @@ A refusal's class names the rule that refused the call, as `kind:detail`:
 | `input:<parameter>` | a checked input was not well formed (§4); the detail is the parameter's name; M2c: a read state's (a `reads` parameter's name), or `input:deposits` for a deposit's memo |
 | `modifier:<word> <field>` | a modifier did not hold (§2.6): `only owner`, `after deadline`, `before deadline`; M2b: `quorum council quorum` (the keys, then the threshold), `authorized params.guardian` |
 | `invariant:<name>` | M2b (§2.7): the next state broke the invariant `<name>`; `invariant:quorum <keys> <threshold>`: a quorum's shape |
+| `keyed:<rule>` | M3b (§2.9): a keyed call broke a rule of its list: `keyed:anchor` (the anchor is not a node of the instance's list of the type, or a removal's predecessor does not point at the node), `keyed:window` (the window is longer than W or ends outside [2^32, 2^64)), `keyed:cooldown` (it starts less than C after the anchor's last relink), `keyed:length` (the key is not 1 to maxKeyBytes long), `keyed:signed` (a signed key is not a 28-byte key among the signers), `keyed:order` (the key is not in the anchor's gap: taken, or out of order), `keyed:fixed` (a keyed action changed its key) |
 | `domain:<operation>` | an operation left its domain. The operation is `/` or `%` (a zero divisor); a `std` row by name (`slice`, `take`, `drop`, `byteAt`, `verifyEd25519`, `div`, `mod`, `pow`, `expMod`, `readBit`, `shift`, `rotate`, `nth`, `scale`); `asKey` or `asHash`; `List.take` or `List.drop` (a negative count); `Map.set`; `BigMap.set` or `BigMap.delete`; `pay` (a negative amount); M2's `Value.lovelace`, `Value.asset`, `Value +`, `Value -`, `covers` (§3.12), `send`, `mint`, `accept` (§5.1–5.3), or `accepted` (§5.4); M2c's `deposit` (§5.7) |
 
 The two interpreters must give the same class for every refused call (review S4), so a vector meant to reach one rule
@@ -364,6 +366,53 @@ a record (§1), compared and encoded as one. Owned methods name their type: `own
 - **Invariants by type** (M3a3, ADR-0012 D1): `invariant T.name = …` reads an object of type `T` (its fields as bare
   names) and is checked on every continuing object of that type (an owned init's, an owned action's, a move's), never
   on another type's objects or on the state. A type that keeps a `BigMap` has none (JSC1213).
+
+### 2.9 Keyed objects (M3b)
+
+A *keyed type* (ADR-0016), `owned T keyed by f (…) { … }`, is an owned type whose objects are unique by the bytes of
+their field `f` within an instance: each key is its own UTxO, a node of a sorted list per (instance, type) whose head
+the instance's creation makes. A keyed type's methods are evaluated as an owned type's (§2.8), with these additions,
+which are **transaction preconditions** like the modifiers: checked by both interpreters at the same points, never by
+the JVM method or the transition program (they compute the transition alone, §2.6), and by the validator on the
+transaction.
+
+| Kind | τ | Checked |
+|---|---|---|
+| `owned init T.m` (an insert) | τ.`instance`, τ.`anchor` (the node it is linked after: a head, a live node or a retired node, with its key, `next` and `linkedAt`) | before the body: the anchor, the window, the cooldown; after: the key's length, signer and place |
+| `owned action T.m` | | after the body: the key is kept |
+| `owned destroy T.m … retire` (a retire) | τ.`received` is 0; τ.`balance` is what the node holds less its deposit (I55) | the modifiers only |
+| `owned destroy T.m` (a removal) | τ.`instance`, τ.`anchor` (the node's predecessor) | before the body: the anchor, the window, the cooldown |
+
+After the modifiers and before the checked inputs, in this order:
+
+1. **The anchor** (`keyed:anchor`): τ.`anchor` is a node of τ.`instance`'s list of `T` (its instance and type); for a
+   removal, its `next` is the removed node's key.
+2. **The window** (`keyed:window`): τ.`validTo` − τ.`validFrom` ≤ W (`linkWindowMs`), and 2^32 ≤ τ.`validTo` < 2^64. The
+   window is closed below and open above, as every transaction the runtime builds; an infinite or otherwise-shaped bound is
+   the validator's to refuse (vectors cannot express one).
+3. **The cooldown** (`keyed:cooldown`): when C (`linkCooldownMs`) > 0, τ.`validFrom` ≥ anchor.`linkedAt` + C. C = 0
+   removes this rule, never the window's.
+
+After the body and before the output checks (§2.7), for an insert of key `k` (the new object's key field):
+
+4. **The length** (`keyed:length`): 1 ≤ |k| ≤ maxKeyBytes.
+5. **The signer** (`keyed:signed`), with `signed`: |k| = 28 and `k` is one of τ.`signers` (not necessarily the caller).
+6. **The place** (`keyed:order`): anchor.`key` < `k`, and anchor.`next` is empty or `k` < anchor.`next`, by the order
+   of §3.3 (unsigned, a proper prefix first). With the anchor the true predecessor, this is the key's uniqueness: a key
+   that is taken (live or retired) has no gap.
+
+For a keyed action: **the key is fixed** (`keyed:fixed`): its result's key field equals its input's. The checker refuses
+any action that could change it (JSC1248), so only a hand-made IR reaches this rule.
+
+**Not evaluated by a call** (§2's transaction-level rules): the size rule (a node's datum, with `next` padded to
+maxKeyBytes and `linkedAt` to 9 bytes, fits maxDatumBytes, ADR-0016 D2: the validator refuses an insert or an action
+whose envelope does not fit, `JscV2M3bAttackTest`), the anchor's relink (its datum with only `next` and `linkedAt`
+replaced, its lovelace not lowered), the token's name (`0x4B ‖ blake2b_224(instance ‖ typeId ‖ key)`), the mint, a
+retire's continuing output (Retired_T, the deposit plus a builder's top-up) and its payouts' total, and which UTxO
+τ.`anchor` is: the validator binds it to its token. The keyed limits are the checker's (JSC1240–JSC1251): no native
+assets, no batched actions, no BigMaps, no moves, at most 16 keyed types, maxDatumBytes at most 2048, a retiring exit
+signed by its owner and needing nobody else, every keyed action with an audience, and a key that is never a time value
+(D11: a key decides the list's order and whether an insert succeeds, as a map key does).
 
 ## 3. Expressions
 

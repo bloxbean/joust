@@ -133,6 +133,7 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   "enums": [{ "name": "Phase", "variants": [Record…], "at": [3, 1] }],
   "state": Record,
   "owned": [name…],
+  "keyed": [{ "type", "key", "maxKeyBytes", "signed", "linkCooldownMs", "linkWindowMs" }],
   "params": Record,
   "contracts": [{ "name", "package", "state": Record, "records": [Record…], "enums": [Enum…], "timeFields": [name…],
                   "receives": [Type|null…], "bigMaps" }],
@@ -186,6 +187,22 @@ the program read back to the same Java and the same ABI manifest, and checks tha
   `T.f` in `timeFields`. Both readers refuse an owned kind without `on`, an `on` that is not an owned type, `shared` outside
   an owned method, `into` outside an owned action, `arriving` without `admits`, and modifiers naming fields the object does
   not have.
+- **M3b** (additive within format 2, ADR-0016). `keyed` (present only when the contract declares keyed types) lists each
+  keyed type, in declaration order, with its options as the checker resolved them (the processor's defaults applied):
+  `type` (an owned type), `key` (its key field), `maxKeyBytes`, `signed` (a boolean), `linkCooldownMs` and `linkWindowMs`
+  (JSON integers, milliseconds). The modifier `retire` is `{ "name": "retire" }`, on an owned destroy of a keyed type.
+  Both readers refuse a keyed program outside the checker's shapes: an entry that is no owned type or names one twice, a
+  key that is no `Bytes`, `Key` or `Hash` field, options out of their ranges (maxKeyBytes 1 to 64, at least 28 and no
+  `Hash` when signed; the cooldown 0 or 60,000 to 3,600,000; the window 20,000 to min(900,000, maxValidityMs)), more than
+  16 keyed types, maxDatumBytes over 2048, a batched action, a `BigMap` in any owned type, a native-asset statement or
+  `funds` read, `receives`, a keyed type that moves (`into`, `admits`), a key that is a time field, a keyed type without a
+  retiring exit signed by its owner (`only f`) that needs nobody else (no `shared`, reads, `payable`, `quorum`,
+  `authorized`, `after` or `before`), a keyed action without an audience (`only`, `quorum` or `authorized`), and `retire`
+  anywhere else (`js/jsc-interpreter/test/mutants/keyed-*.json`, shared by both readers' tests). A keyed action that
+  changes its key is well-formed IR (the checker refuses it, JSC1248): the interpreters refuse its call (`keyed:fixed`).
+- **Vectors (M3b):** a keyed insert's or removal's transaction carries `"instance"` (hex: the instance it acts under) and
+  `"anchor"`: `{ "instance", "type", "key", "next", "linkedAt" }`, the node it relinks (an insert's anchor, a removal's
+  predecessor; `key` empty for a head).
 - **Type:** `"Int"`, `"Bool"`, `"Bytes"`, `"Key"`, `"Hash"`, `"Value"`, `"Address"`, `"Credential"` (M2),
   `{ "instance": C }` (M2c, `Instance<C>`), `{ "deposit": T|null }` (M2c, an element of `funds.deposits`: its memo type,
   or null),
