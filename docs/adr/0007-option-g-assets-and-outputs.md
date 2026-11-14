@@ -393,7 +393,9 @@ refuse. No shipped flow hit it: examples/fees deposits lovelace only.
   (fails at `d12d080`, passes after); the `.jsc` 2 five-way suite deposits and receives such values on every leg
   (`JscV2M2cFourWayTest`: Pot, Tips, Tipper).
 
-**What it costs** (measured at the M2c head against `d12d080`, the head before the change).
+**What it costs** (measured for #85 against `d12d080`, the head before the change; the `.jsc` Treasury and Council rows
+also give their size at the M2c head and in the `.jsc` 2 integration, after #90 review C7's params check, which is
+separate from #85: #90 review F11, Codex C10).
 
 Script sizes (bytes, flat script; every contract that sends or deposits embeds the verifier's hash, so its script hash
 changes even where its size does not):
@@ -408,8 +410,8 @@ changes even where its size does not):
 | fees `Pot` (receives) | 9,009 | 9,336 |
 | fees `Stall` (deposits) | 9,464 | 9,475 |
 | treasury `Treasury` (sends) | 9,297 | 9,297 (another hash) |
-| `.jsc` 2 `Treasury` (examples/dsl, the port) | 9,801 | 9,801 (another hash) |
-| `.jsc` 2 `Council` (examples/dsl) | 10,333 | 10,333 (another hash) |
+| `.jsc` 2 `Treasury` (examples/dsl, the port) | 9,801 | 9,801 (another hash); 9,910 at the M2c head and in the `.jsc` 2 integration, with #90 review C7's params check (below) |
+| `.jsc` 2 `Council` (examples/dsl) | 10,333 | 10,333 (another hash); 10,389 at the M2c head and in the `.jsc` 2 integration, with C7's check |
 
 Execution units, per script, from the examples' harness tests (`DexTest`, `MarketTest`, `LockerTest`, `FeesTest`) at both
 heads:
@@ -429,7 +431,8 @@ heads:
 | locker lock | −3,935,693 (−1.7%) | −10,709 (−1.4%) |
 | locker unlock | −6,057,214 (−2.1%) | −14,738 (−1.6%) |
 | dex (every call), mint validators, map verifier | 0 | 0 |
-| treasury `Treasury` and its `.jsc` port, each of the 12 calls of `JscV2M2bGateTest` (init, fund, pay, rotate, freeze, close, each also at the council's maximum) | 0 | 0 |
+| treasury `Treasury` and its `.jsc` port, each of the 12 calls of `JscV2M2bGateTest` (init, fund, pay, rotate, freeze, close, each also at the council's maximum), #85's own delta | 0 | 0 |
+| the `.jsc` port's init, then #90 review C7's params check (a checked input of the init, separate from #85): measured at the M2c head and in the `.jsc` 2 integration | +2,867,762 (init: 135,294,704 CPU, +4.9% over Java; at the council's maximum 332,033,588, +7.3%) | +10,998 (init: 443,580, +6.3%; at the maximum 1,088,304, +9.4%) |
 
 The verifier's conversion costs a deposit claim about 3.3M CPU (the sends' claims pay +0.5M for the code's layout); the
 receiver's conversion about 10M per collect. Market, locker and treasury do not deposit, and their scripts are

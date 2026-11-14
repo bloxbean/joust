@@ -29,9 +29,10 @@ issue #85 (deposit claims read from the wire). ADR-0018's amendment is r21 (r19 
 
 ### What earlier contracts keep
 
-Every earlier `.jsc` file of examples/dsl (25) lowers to byte-identical Java, IR, source maps and ABI manifests:
-`generateJsc`'s output with this branch's front end diffed against `d12d080`'s (`diff -r`: identical); the committed IR
-fixtures and manifests did not change. Their scripts change only where they embed the output verifier (Coins, Wards,
+Of the 25 earlier `.jsc` files of examples/dsl, 23 lower to byte-identical Java, IR, source maps and ABI manifests
+(`generateJsc`'s output with this branch's front end diffed against `d12d080`'s, `diff -r`); the committed IR fixtures and
+manifests did not change. Treasury and Council change their Java and source maps (not their IR or manifests): since
+round r4 (C7) their inits check their params (#90 review F10; Treasury 9,801 → 9,910 B, Council 10,333 → 10,389 B). Their scripts change only where they embed the output verifier (Coins, Wards,
 Dex, Treasury, Council: #85, below; Treasury and Council were missing from this list in round r1, review F1).
 
 ## The ports (J11)
@@ -145,7 +146,9 @@ five-way suite deposits and receives such values on every leg. Measured cost: th
 on a sale's claim; Pot 9,009 → 9,336 B and +10.4M CPU per collect; Stall 9,464 → 9,475 B, +7.0M CPU per sale. Every
 contract embedding the verifier changes its hash (dex, market, locker's two, fees' two, staking's StakedVault,
 treasury's Treasury, and the `.jsc` Coins, Wards, Dex, Pot, Stall, Tips, Tipper, Treasury, Council). ADR-0007 §9 has every
-delta (Treasury and Council: same sizes, another hash, no budget change in `JscV2M2bGateTest`'s 12 calls). The ADR-0015
+delta (Treasury and Council: #85 alone keeps their sizes, gives another hash and no budget change in `JscV2M2bGateTest`'s
+12 calls; round r4's params check then makes them 9,910 and 10,389 B and the port's init +4.9% / +6.3% over Java, at the
+council's maximum +7.3% / +9.4%: #90 review C10). The ADR-0015
 oracle is recorded again on DevKit for the Java examples that hold the verifier's hash: `fixtures/m0/{dex,fees,locker,
 market,staking,treasury}` and `fixtures/m3/{dex,fees,locker,staking,treasury,treasury-governor}`, each group holding one
 recording, and every blob no recording reads removed (round r2; round r1 had missed treasury and left the older
