@@ -1,24 +1,51 @@
 name: Build
 
-# Builds and tests every module and example, in parallel jobs:
-#   build   compile, unit, harness and attack-suite tests, the JavaScript client's tests and the dApp page; no DevKit
-#           (-PnoDevnet excludes the tests tagged devnet).
-#   devnet  the DevKit tests (@Tag("devnet")), sharded by .github/ci/devnet-shards.txt: each shard runs on its own runner
-#           against its own Yaci DevKit, so shards share neither a devnet nor its faucet.
-#   plan    checks that every module with DevKit tests is in exactly one shard, and hands the shards to devnet.
-#   engines the npm packages' Wasm engines, and the create-joust templates built with them.
-#   cli     the native joust (ADR-0017 D8), end to end with this commit's modules, plugin and engines.
-#   vscode  the VS Code extension (ADR-0021), packaged with this commit's engine and tested in VS Code.
+# Builds and tests every module and example, in parallel jobs, once per pushed head; the head's results are published as
+# artifacts, so a reviewer fetches them (scripts/fetch-ci-build.sh <sha>; docs/contributing/reviewing.md) instead of
+# building again:
+#   build     compile, unit, harness, attack-suite, five-way and fuzz-replay tests, the short fuzz runs, the JavaScript
+#             packages' tests and the dApp page; no DevKit (-PnoDevnet excludes the tests tagged devnet). Publishes
+#             `verification` (JUnit XML of the JVM and npm tests, the five-way counts, the fuzz summary and any fuzz
+#             findings).
+#   devnet    the DevKit tests (@Tag("devnet")), sharded by .github/ci/devnet-shards.txt: each shard runs on its own runner
+#             against its own Yaci DevKit, so shards share neither a devnet nor its faucet.
+#   plan      checks that every module with DevKit tests is in exactly one shard, and hands the shards to devnet.
+#   engines   the npm packages' Wasm engines, and the create-joust templates built with them. Publishes `engines` (both
+#             engines and their SHA-256 digests, engines.sha256).
+#   cli       the native joust (ADR-0017 D8), end to end with this commit's modules, plugin and engines.
+#   vscode    the VS Code extension (ADR-0021), packaged with this commit's engine and tested in VS Code. Publishes
+#             `vscode-joust-vsix` (the .vsix and its digest).
+#   mutation  PIT on the changed security-relevant Java and Stryker on the changed security-relevant JavaScript (the
+#             classes and files gradle/pitest.gradle's modules and js/mutation/stryker.config.mjs name), with a reported
+#             score and a threshold. Publishes `mutation`.
 # bloxbean-snapshot.yml publishes only commits whose push run of this workflow passed: every job must pass.
+#
+# Every action is pinned by its commit SHA. No job reads a repository secret; the engine and CLI jobs pass the run's
+# read-only GITHUB_TOKEN (permissions: contents: read) to setup-graalvm, which only raises its API rate limit. npm
+# installs run with --ignore-scripts; the one package whose binary its install script fetches (tree-sitter-cli, pinned
+# in tree-sitter-jsc's lock file) is rebuilt by name.
 
 on:
   push:
     branches: [ main, 'release/**' ]
   pull_request:
   workflow_dispatch:
+    inputs:
+      mutation_all:
+        description: 'Mutation-test the whole security-relevant set (the baselines), not only what changed'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+env:
+  # Where scripts/node-test.sh writes the npm tests' JUnit XML (the verification artifact).
+  NODE_TEST_RESULTS: ${{ github.workspace }}/build/npm-test-results
+  # The head every job but devnet builds: a pull request's own head commit, not the merge with its base that
+  # pull_request checks out by default, so the artifacts are the head's, the commit a reviewer has checked out
+  # (scripts/fetch-ci-build.sh checks it). A push builds its commit.
+  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   plan:
@@ -27,8 +54,9 @@ jobs:
     outputs:
       shards: ${{ steps.shards.outputs.shards }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ env.HEAD_SHA }}
           persist-credentials: false
 
       # A module whose DevKit tests are in no shard would silently stop running them in CI.
@@ -58,49 +86,56 @@ jobs:
 
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ env.HEAD_SHA }}
           persist-credentials: false
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           java-version: '25'
           distribution: 'temurin'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
+        with:
+          # Only this job's own cache, never another job's (review r1, security S2): setup-gradle otherwise falls back to
+          # any job's entry on the same OS.
+          gradle-home-cache-strict-match: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
 
       # The wallet example's page proof of concept (examples/wallet/js) needs its Node dependencies.
       - name: Install the wallet page's Node dependencies
         working-directory: examples/wallet/js
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # The JavaScript client (ADR-0013 D3): its unit tests, then the dApp page that uses it.
       - name: Test the JavaScript client
         working-directory: js/state-client
         run: |
-          npm ci
-          npm test
+          npm ci --ignore-scripts
+          ../../scripts/node-test.sh state-client test/*.test.js
 
       # npm create joust: what each template and contract language writes, and the command line.
       - name: Test create-joust
         working-directory: js/create-joust
-        run: npm test
+        run: ../../scripts/node-test.sh create-joust test/*.test.js
 
       # ADR-0018 D13: the tree-sitter grammar (its own tests, then the shared parse corpus against the hand-written
       # parsers' verdicts and declarations, which JscCorpusTest checks on the Java side), and the TextMate grammar.
+      # tree-sitter-cli's install script fetches its binary: it alone is rebuilt (the version is the lock file's).
       - name: Test the tree-sitter grammar and the shared parse corpus
         working-directory: tree-sitter-jsc
         run: |
-          npm ci
+          npm ci --ignore-scripts
+          npm rebuild tree-sitter-cli
           npm test
 
       # The VS Code extension's Node-only tests (ADR-0021 D12): the TextMate grammar, the verified applyEdit handler, the
@@ -109,19 +144,26 @@ jobs:
         working-directory: js/vscode-joust
         run: |
           npm ci --ignore-scripts
-          npm test
+          ../../scripts/node-test.sh vscode-joust test/*.test.mjs
 
       # The npm joust's command line (ADR-0017 D5, D9), and joust deploy's write of deployments.<network>.json with the
-      # runtime and wallet stubbed (issue #75): Node built-ins only, no packages installed.
+      # runtime and wallet stubbed (issue #75). Two cases run the command from this copy, whose build.js imports the
+      # client: this repository's packages are linked beside js/joust while they run, as in the engines job (no registry).
       - name: Test the npm joust command line
-        working-directory: js/joust
-        run: node --test test/cli.test.js test/deploy.test.js
+        run: |
+          mkdir -p js/node_modules/@julclang
+          ln -sfn ../../state-client js/node_modules/@julclang/state-client
+          ln -sfn ../../joust-runtime js/node_modules/@julclang/joust-runtime
+          (cd js/joust && ../../scripts/node-test.sh joust-cli test/cli.test.js test/deploy.test.js)
+          # Unlinked again: npm installing into js/node_modules below would reify through the links and prune the
+          # client's own node_modules, which the dApp page's build needs.
+          rm -r js/node_modules/@julclang
 
       # The .jsc 2 reference interpreter (ADR-0018 D15): its crypto and the semantics' hand-written vectors. No packages
       # installed. The five-way differential tests in ./gradlew build run it too.
       - name: Test the .jsc reference interpreter
         working-directory: js/jsc-interpreter
-        run: npm test
+        run: ../../scripts/node-test.sh jsc-interpreter test/*.test.js
 
       # ADR-0017 D7, D10: the Homebrew formula and JOUST's version order; the release flags' combinations.
       - name: Test the release scripts
@@ -135,13 +177,13 @@ jobs:
 
       - name: Install the dApp page's Node dependencies
         working-directory: examples/dapp/frontend
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # The dApp page uses JOUST's Vite plugin from source (js/joust/src/vite.js). js/joust's package.json also names
       # this repository's npm packages, which only a local registry serves (ADR-0015 M2), so install just the plugin's
       # two dependencies beside it (js/node_modules); nothing is saved or tracked.
       - name: Install the Vite plugin's Node dependencies
-        run: npm install --no-save --no-package-lock --prefix js vite-plugin-node-polyfills@0.28.0 @rollup/plugin-inject@5.0.5
+        run: npm install --no-save --no-package-lock --ignore-scripts --prefix js vite-plugin-node-polyfills@0.28.0 @rollup/plugin-inject@5.0.5
 
       # The dApp's typed clients come from the contracts' descriptions; then the page must build.
       - name: Generate the dApp's clients and build its page
@@ -149,29 +191,72 @@ jobs:
           ./gradlew :examples:dapp:jsClients --stacktrace
           (cd examples/dapp/frontend && npm run build)
 
+      # Everything `./gradlew build -PnoDevnet` runs (the fuzz targets' replays included), but the short fuzz runs, which
+      # the next step makes with libFuzzer's statistics logged.
       - name: Build and test (no DevKit)
-        run: ./gradlew build -PnoDevnet --stacktrace
+        run: ./gradlew build -PnoDevnet -PnoFuzz --continue --stacktrace
+
+      # gradle/jazzer-fuzz.gradle's fuzzShort (part of `build` without -PnoFuzz): each target for 30 s. Gradle logs
+      # libFuzzer's statistics at --info; scripts/verification-report.py keeps each run's final line.
+      # gradle/jazzer-fuzz.gradle's fuzzShort (part of `build` without -PnoFuzz), each public target for 30 s: the IR readers
+      # and NODE_OPTIONS. -Pfuzz.public leaves out the decoders of on-chain data (ValueAdapter, AddressAdapter, the memos),
+      # whose findings can be vulnerabilities: public CI only replays them (`test`), and they are fuzzed locally (SECURITY.md,
+      # reviewing.md §3; JuLC ADR-063 D13). The five-way target is fuzzed by fuzz-nightly.yml, not here. Gradle logs
+      # libFuzzer's statistics at --info; scripts/verification-report.py keeps each run's final line.
+      - name: Fuzz the public targets briefly
+        run: |
+          set -o pipefail
+          ./gradlew fuzzShort -PnoDevnet -Pfuzz.public -Pfuzz.short=30s --continue --info --stacktrace 2>&1 | tee build/fuzz-gradle.log \
+            | grep -E --line-buffered 'DONE|\[fuzz\]|FAILED|> Task :.*:fuzz'
 
       - name: Verify the publication scope
         run: ./gradlew verifyMavenReleasePublicationScope -PskipSigning=true --stacktrace
 
+      - name: Write the verification report
+        if: always()
+        run: |
+          python3 scripts/verification-report.py build/verification --fuzz-log build/fuzz-gradle.log | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "${HEAD_SHA}" > build/verification/head.txt
+
+      # The head's results, for reviewers (scripts/fetch-ci-build.sh), staged with their SHA256SUMS: the JUnit XML of the
+      # JVM tests and of the npm suites this job runs, the five-way counts, every fuzz target's summary, and the failure
+      # records and crash-* inputs of the public targets only (never of an on-chain decoder's: reviewing.md §3).
+      - name: Stage and upload the verification artifacts
+        if: always()
+        run: >-
+          bash scripts/stage-artifact.sh build/artifact-verification
+          'build/verification/**' 'build/npm-test-results/**' '**/build/test-results/**/*.xml' '**/build/fuzz/*.summary.txt'
+          '**/build/fuzz/IrReaderFuzzTest.*' '**/build/fuzz/NodeOptionsFuzzTest.*' '**/build/fuzz/FiveWayFuzzTest.*'
+          '**/src/test/resources/**/IrReaderFuzzTestInputs/**/crash-*' '**/src/test/resources/**/NodeOptionsFuzzTestInputs/**/crash-*'
+          'build/fuzz-gradle.log'
+
+      - name: Upload the verification artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verification
+          path: build/artifact-verification/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload test reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-reports-build
-          path: '**/build/reports/tests/test'
+          path: '**/build/reports/tests/'
 
 
   # The npm packages' Wasm engines (ADR-0015), built as release.yml's npm job builds them, so a toolchain problem shows
-  # on the PR and not after a release tag (v0.1.0-pre1-rc6 failed there). No secrets: GITHUB_TOKEN only raises
-  # setup-graalvm's API rate limit.
+  # on the PR and not after a release tag (v0.1.0-pre1-rc6 failed there). Published with their digests: a reviewer's
+  # fetch-ci-build.sh checks them before it puts them in place.
   engines:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ env.HEAD_SHA }}
           persist-credentials: false
 
       # The engines are GraalVM Web Images (ADR-0015). Web Image ships with the GraalVM 25.3 release line (as JuLC's
@@ -184,16 +269,16 @@ jobs:
           version: '25.3'
           distribution: 'graalvm'
           set-java-home: 'false'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           java-version: '25'
           distribution: 'temurin'
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
 
@@ -230,6 +315,7 @@ jobs:
           ./gradlew :julc-state-runtime-wasm:runtimeWasm :julc-state-toolchain:toolchainWasm
           -PgraalvmHome="$GRAALVM_HOME" --stacktrace
 
+      # The digests are written before anything runs the engines, from the files the build wrote.
       - name: Pack the packages with their engines
         shell: bash
         run: |
@@ -237,8 +323,24 @@ jobs:
           mkdir -p js/joust-runtime/engine js/joust/engine
           cp julc-state-runtime-wasm/build/wasm/{joust-runtime.js,joust-runtime.js.wasm,package.json} js/joust-runtime/engine/
           cp julc-state-toolchain/build/wasm/{joust-toolchain.js,joust-toolchain.js.wasm,package.json} js/joust/engine/
+          (cd js && sha256sum joust/engine/* joust-runtime/engine/* | tee engines.sha256)
+          echo "${HEAD_SHA}" > js/engines.head
+          { echo '### Engines'; echo '```'; cat js/engines.sha256; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           ls -l js/joust-runtime/engine js/joust/engine
           for p in state-client joust-runtime joust create-joust; do (cd "js/$p" && npm pack --dry-run --ignore-scripts); done
+
+      # Uploaded at once (before the steps below run the engines), for the cli and vscode jobs and for reviewers.
+      - name: Upload the engines
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: engines
+          path: |
+            js/joust/engine/
+            js/joust-runtime/engine/
+            js/engines.sha256
+            js/engines.head
+          if-no-files-found: error
+          retention-days: 14
 
       # Every create-joust template, built by the toolchain engine just built: the .jsc and Java counters must give the
       # same description and client. This repository's packages are linked beside js/joust (no registry).
@@ -246,20 +348,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          (cd js/state-client && npm ci)
+          (cd js/state-client && npm ci --ignore-scripts)
           mkdir -p js/node_modules/@julclang
           ln -s ../../state-client js/node_modules/@julclang/state-client
           ln -s ../../joust-runtime js/node_modules/@julclang/joust-runtime
           cd js/create-joust
-          node --test test/*.test.js 2>&1 | tee "$RUNNER_TEMP/create-joust.tap"
-          if grep -q '# SKIP' "$RUNNER_TEMP/create-joust.tap"; then echo "::error::the template build was skipped"; exit 1; fi
+          ../../scripts/node-test.sh create-joust-engine test/*.test.js 2>&1 | tee "$RUNNER_TEMP/create-joust.tap"
+          if grep -q '# SKIP\|﹣ .*# SKIP\|skipped [1-9]' "$RUNNER_TEMP/create-joust.tap"; then echo "::error::the template build was skipped"; exit 1; fi
 
       # ADR-0021 M5a: the language core in this commit's engine. JscLangTest writes the JVM's document models; the
       # engine's must be byte-identical, its diagnostics must be joust.build's (L1, on the path the server runs), and the
       # nesting cap must hold on the main thread and the server's 4 MB worker, cold (M5a's exit).
       - name: Test the language core in the engine
         run: |
-          ./gradlew :julc-state-dsl:test --tests '*JscLangTest' --stacktrace
+          ./gradlew :julc-state-dsl:test --tests '*JscLangTest' -PnoFuzz --stacktrace
           node --experimental-wasm-exnref julc-state-toolchain/src/test/js/lang-in-node.mjs julc-state-toolchain/build/wasm julc-state-dsl/build/lang-parity.json
 
       # ADR-0021 M5a: the language server's protocol, watchdog, confinement, input and edit tests on this commit's
@@ -269,29 +371,39 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm install --no-save --no-package-lock --ignore-scripts --prefix js vscode-languageserver@11.0.0 vscode-languageserver-textdocument@1.0.16
-          mkdir -p js/node_modules/@julclang
-          ln -sfn ../../state-client js/node_modules/@julclang/state-client
-          ln -sfn ../../joust-runtime js/node_modules/@julclang/joust-runtime
+          bash scripts/setup-js.sh
           cd js/joust
-          node --test --test-concurrency=1 test/lsp/*.test.js
+          ../../scripts/node-test.sh joust-lsp --test-concurrency=1 test/lsp/*.test.js
           node test/lsp/measure-l10.mjs --check
 
-      # For the cli job: the engines of this commit, so its npm build is real.
-      - name: Upload the engines
+      # Review r1, design F5: every npm suite that runs without DevKit, a browser or a preview key, on this commit's engines
+      # (the security tests of M1h, M4 and #80 among them: migrate's link refusals, the worker's heap and time limits, the
+      # library pin, the keyed window). Not here, because they need DevKit or Chromium: js/joust's create, dev and page;
+      # js/joust-runtime's devkit, examples and providers; preview needs a Blockfrost preview key (reviewing.md §2). exnref
+      # rejoined once #108 branched it on what the probe finds.
+      - name: Test the npm packages on the engines
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/setup-js.sh
+          (cd js/joust && ../../scripts/node-test.sh joust --test-concurrency=1 test/abi.test.js test/cold-engine.test.js \
+            test/libraries.test.js test/migrate.test.js test/offline-ledger.test.js test/sources.test.js test/worker-limits.test.js)
+          (cd js/joust-runtime && ../../scripts/node-test.sh joust-runtime --test-concurrency=1 test/compat.test.js \
+            test/exnref.test.js test/keyed-window.test.js test/messages.test.js test/mirror.test.js)
+
+      - name: Upload the engine job's npm test results
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: engines
-          path: |
-            js/joust/engine/
-            js/joust-runtime/engine/
-          if-no-files-found: error
-          retention-days: 1
+          name: npm-test-results-engines
+          path: build/npm-test-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   # ADR-0017 D8: the native joust, built with GraalVM 25.3 (as the engines), and .github/scripts/joust-cli-e2e.sh on it:
   # generated Gradle projects built from this commit's modules and plugin only; joust new -t node isolated from hostile
   # npm configuration (with controls that must fail); an npm project built through the native joust with this commit's
-  # engines, giving the Gradle projects' description. No secrets: GITHUB_TOKEN only raises setup-graalvm's rate limit.
+  # engines, giving the Gradle projects' description.
   cli:
     needs: engines
     runs-on: ubuntu-24.04
@@ -299,6 +411,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ env.HEAD_SHA }}
           persist-credentials: false
 
       - name: Set up GraalVM 25.3
@@ -307,7 +420,7 @@ jobs:
           version: '25.3'
           distribution: 'graalvm'
           set-java-home: 'false'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
 
       - name: Set up JDK 25
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
@@ -317,6 +430,10 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
+        with:
+          # Only this job's own cache, never another job's (review r1, security S2): setup-gradle otherwise falls back to
+          # any job's entry on the same OS.
+          gradle-home-cache-strict-match: true
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -329,12 +446,12 @@ jobs:
           name: engines
           path: js
 
-      - name: Link this repository's packages
+      - name: Check the engines' digests and link this repository's packages
         shell: bash
         run: |
           set -euo pipefail
-          ls js/joust/engine/joust-toolchain.js js/joust-runtime/engine/joust-runtime.js
-          (cd js/state-client && npm ci)
+          (cd js && sha256sum -c engines.sha256)
+          (cd js/state-client && npm ci --ignore-scripts)
           mkdir -p js/node_modules/@julclang
           ln -s ../../state-client js/node_modules/@julclang/state-client
           ln -s ../../joust-runtime js/node_modules/@julclang/joust-runtime
@@ -363,6 +480,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ env.HEAD_SHA }}
           persist-credentials: false
 
       - name: Set up Node.js
@@ -377,27 +495,124 @@ jobs:
           path: js
 
       - name: Package the extension
-        working-directory: js/vscode-joust
+        shell: bash
         run: |
+          set -euo pipefail
+          (cd js && sha256sum -c engines.sha256)
+          cd js/vscode-joust
           npm ci --ignore-scripts
           npm run package
 
       # Recorded and uploaded BEFORE the tests open hostile workspaces in VS Code (#83 review S6).
       - name: Record and upload the .vsix
         working-directory: js/vscode-joust
-        run: sha256sum vscode-joust.vsix | tee -a "$GITHUB_STEP_SUMMARY"
+        run: sha256sum vscode-joust.vsix | tee vscode-joust.vsix.sha256 | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the .vsix
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vscode-joust-vsix
-          path: js/vscode-joust/vscode-joust.vsix
+          path: |
+            js/vscode-joust/vscode-joust.vsix
+            js/vscode-joust/vscode-joust.vsix.sha256
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
 
       - name: Test the packaged extension in VS Code 1.109.0 and stable
         working-directory: js/vscode-joust
         run: xvfb-run -a node test/electron/run.mjs --versions 1.109.0,stable
+
+  # Mutation testing of what a change can weaken (review r1, design F6): PIT on gradle/pitest.gradle's targets
+  # (julc-state-api's ValueAdapter and AddressAdapter, the certifier, the checker, JscMain's joust.lock) and Stryker on
+  # js/mutation's two sets (js/joust's select.js, build.js, toolchain.js, toolchain-heap.js; state-client's verify.js and
+  # keyed.js), each whole when its tests or mutation configuration changed, else on the changed classes and files only,
+  # with this commit's engines so the engine-backed tests run (and must not skip). Each class and file must score at least
+  # its baseline in gradle/mutation-baseline.json less 5 points. The manual run's mutation_all runs everything.
+  mutation:
+    needs: engines
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.mutation_all && 330 || 150 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
+        with:
+          # Only this job's own cache, never another job's (review r1, security S2): setup-gradle otherwise falls back to
+          # any job's entry on the same OS.
+          gradle-home-cache-strict-match: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Download the engines
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: engines
+          path: js
+
+      - name: The base to compare with
+        id: base
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          ALL: ${{ inputs.mutation_all }}
+        run: |
+          set -euo pipefail
+          if [[ "$ALL" == "true" ]]; then echo "base=--all" >> "$GITHUB_OUTPUT"; echo "Mutation testing the whole set" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          elif [[ -n "$BASE_REF" ]]; then base="origin/$BASE_REF"
+          elif [[ -n "$BEFORE" && "$BEFORE" != 0000000000000000000000000000000000000000 ]]; then base="$BEFORE"
+          else base="HEAD~1"; fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "Mutation testing what changed since $base: $(git rev-parse "$base")" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: PIT on the changed security-relevant Java
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          set -o pipefail
+          mkdir -p build/mutation
+          python3 scripts/pit-changed.py "$BASE" --floor 40 | tee build/mutation/pit.md | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Stryker on the changed security-relevant JavaScript
+        if: always()
+        shell: bash
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          set -euo pipefail
+          (cd js && sha256sum -c engines.sha256)
+          (cd js/mutation && npm ci --ignore-scripts)
+          bash scripts/setup-js.sh
+          JOUST_REQUIRE_ENGINES=1 bash scripts/stryker-changed.sh "$BASE" 10 | tee build/mutation/stryker.md | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Stage the mutation reports
+        if: always()
+        run: >-
+          bash scripts/stage-artifact.sh build/artifact-mutation 'build/mutation/**' 'julc-state-toolchain/build/reports/pitest/**'
+          'julc-state-dsl/build/reports/pitest/**' 'js/joust/reports/mutation/**' 'js/state-client/reports/mutation/**'
+
+      - name: Upload the mutation reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation
+          path: build/artifact-mutation/
+          if-no-files-found: warn
+          retention-days: 14
 
   devnet:
     needs: plan
@@ -409,21 +624,25 @@ jobs:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     name: devnet (${{ matrix.shard.index }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           java-version: '25'
           distribution: 'temurin'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
+        with:
+          # Read-only (review r1, security S2): this job runs DevKit's npm tree, so it must not save the Gradle home that
+          # other jobs restore.
+          cache-read-only: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
 
@@ -431,16 +650,16 @@ jobs:
       # Started first: it boots while the rest installs and compiles.
       - name: Start Yaci DevKit
         run: |
-          npm install -g @bloxbean/yaci-devkit@0.12.0
+          npm install -g --ignore-scripts @bloxbean/yaci-devkit@0.12.0
           .github/ci/devkit.sh start
 
       # The DevKit tests of the wallet page, the dApp and the Wasm runtime drive Node.
       - name: Install the Node dependencies the DevKit tests use
         run: |
-          (cd examples/wallet/js && npm ci)
-          (cd js/state-client && npm ci)
-          (cd examples/dapp/frontend && npm ci)
-          npm install --no-save --no-package-lock --prefix js vite-plugin-node-polyfills@0.28.0 @rollup/plugin-inject@5.0.5
+          (cd examples/wallet/js && npm ci --ignore-scripts)
+          (cd js/state-client && npm ci --ignore-scripts)
+          (cd examples/dapp/frontend && npm ci --ignore-scripts)
+          npm install --no-save --no-package-lock --ignore-scripts --prefix js vite-plugin-node-polyfills@0.28.0 @rollup/plugin-inject@5.0.5
 
       - name: Compile
         env:
@@ -486,14 +705,14 @@ jobs:
 
       - name: Upload test reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-reports-devnet-${{ matrix.shard.index }}
           path: '**/build/reports/tests/test'
 
       - name: Upload the Yaci DevKit log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: yaci-devkit-log-${{ matrix.shard.index }}
           path: |

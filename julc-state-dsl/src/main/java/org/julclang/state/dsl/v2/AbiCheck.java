@@ -323,7 +323,13 @@ public final class AbiCheck {
 
         private static Object parse(String s, boolean strict) {
             var j = new Json(s, strict);
-            Object v = j.value();
+            Object v;
+            try {
+                v = j.value();
+            } catch (IndexOutOfBoundsException e) {
+                // Text that ends inside a value is refused as malformed, like any other (IrReaderFuzzTest found it crashing).
+                throw new IllegalArgumentException("the JSON text ends inside a value", e);
+            }
             j.ws();
             if (j.i != s.length()) throw new IllegalArgumentException("trailing text at " + j.i);
             return v;

@@ -28,7 +28,30 @@ dependencies {
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes
     testImplementation project(':julc-state-testkit')     // ADR-0018 M0: the validator leg of the four-way vectors
+    // Coverage-guided fuzzing (gradle/jazzer-fuzz.gradle): the five-way differential and the decoders of untrusted data.
+    testImplementation libs.jazzer.junit
+    // The five-way fuzz test compiles each generated contract as Gradle does: javac with JOUST's and JuLC's processors.
+    testImplementation libs.julc.annotation.processor
 }
+
+// Mutation testing (gradle/pitest.gradle): the value and address adapters (julc-state-api's JVM bodies, against their
+// on-chain bodies in the differential and hostile-input tests here) and the java: library certifier.
+ext.pitTargets = ['org.julclang.state.api.ValueAdapter*', 'org.julclang.state.api.AddressAdapter*',
+                  'org.julclang.state.toolchain.JavaLibraryCertifier*']
+ext.pitTests = ['org.julclang.state.toolchain.ValueAdapterDifferentialTest', 'org.julclang.state.toolchain.ValueAdapterFuzzTest',
+                'org.julclang.state.toolchain.AddressAdapterFuzzTest', 'org.julclang.state.toolchain.JscV2M2FourWayTest',
+                'org.julclang.state.toolchain.JscV2M2HostileInputTest',
+                'org.julclang.state.toolchain.JscV2M2cHostileInputTest', 'org.julclang.state.toolchain.JscV2JavaLibraryTest',
+                'org.julclang.state.toolchain.JscV2JavaLibraryR2Test']
+ext.pitMutableCodePaths = [project(':julc-state-api')]
+apply from: rootProject.file('gradle/pitest.gradle')
+
+apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
+fuzzLongOnly 'org.julclang.state.toolchain.FiveWayFuzzTest.generatedContractsAgree'
+fuzzOnChainDecoders 'org.julclang.state.toolchain.ValueAdapterFuzzTest.decoders',
+        'org.julclang.state.toolchain.AddressAdapterFuzzTest.addressesAndCredentials',
+        'org.julclang.state.toolchain.MemoFuzzTest.decodersAgree'
+fuzzTargets 'org.julclang.state.toolchain.NodeOptionsFuzzTest.portAgreesWithNode'
 
 // I1 compares with what the Gradle build of the examples wrote.
 tasks.named('test') {

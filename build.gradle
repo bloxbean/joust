@@ -3,6 +3,8 @@ plugins {
     // Central Portal publisher (as JuLC): nmcp per published module, aggregated here into one deployment.
     id 'com.gradleup.nmcp' version '1.6.2' apply false
     id 'com.gradleup.nmcp.aggregation' version '1.6.2'
+    // Mutation testing (gradle/pitest.gradle), applied by the modules with security-relevant Java.
+    id 'info.solidsoft.pitest' version '1.19.0' apply false
 }
 
 // The root publishes nothing, but nmcp resolves its tasks from here.

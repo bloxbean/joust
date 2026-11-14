@@ -468,7 +468,8 @@ final class IrJson {
      */
     @SuppressWarnings("unchecked")
     static Ir.Program read(String json) {
-        var raw = (Map<String, Object>) AbiCheck.Json.parseStrict(json);
+        if (!(AbiCheck.Json.parseStrict(json) instanceof Map<?, ?> top)) throw new IllegalArgumentException("an IR export is a JSON object");
+        var raw = (Map<String, Object>) top;
         Reader.READ.set(new java.util.IdentityHashMap<>());
         try {
             var root = Reader.m(raw);
@@ -477,6 +478,10 @@ final class IrJson {
             Ir.Program p = new Reader().program(root);
             Reader.unknownFields();
             return p;
+        } catch (ClassCastException | NullPointerException | IndexOutOfBoundsException | ArithmeticException e) {
+            // A value of another kind than the format's where the reader casts (an object where a number is due, a missing
+            // node): refused as malformed, as the JavaScript reader refuses it (IrReaderFuzzTest found it crashing).
+            throw new IllegalArgumentException("not a well-formed IR export: " + e.getMessage(), e);
         } finally {
             Reader.READ.remove();
         }
@@ -558,8 +563,13 @@ final class IrJson {
             return Math.toIntExact((Long) o);
         }
 
+        /** A position: exactly [line, col], both non-negative, as the JavaScript reader requires (IrReaderFuzzTest). */
         static Pos pos(Object o) {
-            return new Pos(i(l(o).get(0)), i(l(o).get(1)));
+            var p = l(o);
+            if (p.size() != 2) throw new IllegalArgumentException("a bad position: " + p);
+            int line = i(p.get(0)), col = i(p.get(1));
+            if (line < 0 || col < 0) throw new IllegalArgumentException("a bad position: " + p);
+            return new Pos(line, col);
         }
 
         /**

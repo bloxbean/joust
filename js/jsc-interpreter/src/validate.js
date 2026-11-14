@@ -106,41 +106,106 @@ const CRED_FIELDS = { KeyCred: 'key', ScriptCred: 'hash' };
 const PRELUDE_ARITY = { min: 2, max: 2, abs: 1, asKey: 1, asHash: 1 };
 const MAP_ARITY = { get: 1, has: 1, set: 2, delete: 1, size: 0, keys: 0, values: 0, isEmpty: 0, at: 1 };
 const KINDS = set('init', 'action', 'destroy', 'view');
+// The fields below the top level whose value is always a list (docs/reference/jsc-2-ir.md); branches is checked where it is read.
+const NESTED_LISTS = set('args', 'arms', 'binds', 'checked', 'ctors', 'enums', 'fields', 'fns', 'items', 'mods', 'params',
+  'reads', 'receives', 'records', 'stmts', 'timeFields', 'values', 'variants');
+
+/** A value of the export, as a property key for a lookup table: only a string is (a prototype-less object throws). */
+function key(v) {
+  return typeof v === 'string' ? v : '\u0000not a name';
+}
+
+/**
+ * A value of the export, as text for a message: whatever its kind (review r1, security S3). The strict parser builds
+ * objects without a prototype, which a template literal cannot convert, so a malformed export (an object where a name or
+ * a position is due) made the message itself throw a TypeError.
+ */
+function show(v) {
+  if (v === null || typeof v !== 'object') return String(v);
+  if (Array.isArray(v) && v.every((x) => x === null || typeof x !== 'object')) return v.join(',');
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return '?';
+  }
+}
 
 export function validate(p) {
   const fail = (where, what) => {
-    throw new Error(`invalid IR (${where}): ${what}`);
+    throw new Error(`invalid IR (${show(where)}): ${show(what)}`);
   };
   const keys = (o, allowed, where) => {
     if (!o || typeof o !== 'object' || Array.isArray(o)) fail(where, 'not an object');
-    for (const k of Object.keys(o)) if (!allowed.includes(k)) fail(where, `unknown field "${k}"`);
-    for (const k of allowed) if (!(k in o) && !(k === 'fieldTaints' || k === 'field')) fail(where, `missing field "${k}"`);
+    for (const k of Object.keys(o)) if (!allowed.includes(k)) fail(where, `unknown field "${show(k)}"`);
+    for (const k of allowed) if (!(k in o) && !(k === 'fieldTaints' || k === 'field')) fail(where, `missing field "${show(k)}"`);
   };
   const str = (v, where) => {
     if (typeof v !== 'string') fail(where, 'not a string');
     return v;
   };
+  // Positions, local ids and taints are 32-bit, as the Java reader holds them (IrReaderFuzzTest: a column of 2^46 was
+  // accepted here and refused there).
+  const INT_MAX = 0x7fffffff;
   const at = (v, where) => {
-    if (!Array.isArray(v) || v.length !== 2 || !v.every((n) => Number.isSafeInteger(n) && n >= 0)) fail(where, 'a bad position');
+    if (!Array.isArray(v) || v.length !== 2 || !v.every((n) => Number.isSafeInteger(n) && n >= 0 && n <= INT_MAX)) fail(where, 'a bad position');
   };
   const nat = (v, where) => {
-    if (!Number.isSafeInteger(v) || v < 0) fail(where, 'not a non-negative integer');
+    if (!Number.isSafeInteger(v) || v < 0 || v > INT_MAX) fail(where, 'not a non-negative integer');
   };
 
   // ---- top level and declarations
   // M2b (additive): "params" and "invariants" appear only when the contract declares them.
   // M2c (additive): "contracts" appears only when the contract imports another.
+  // An export that is not an object is refused as such (IrReaderFuzzTest: 'in' on a number threw a TypeError).
+  if (!p || typeof p !== 'object' || Array.isArray(p)) fail('program', 'not an object');
+  // Every field the format holds a list in is a list at every level, before anything iterates it: a string would iterate
+  // as characters, or as nothing when empty (IrReaderFuzzTest: a block's stmts "" was read as no statements). The
+  // top-level lists are checked below; a top-level "params" is the params record (M2b), a nested one a list.
+  const walkLists = (v, top) => {
+    if (Array.isArray(v)) {
+      for (const x of v) walkLists(x, false);
+    } else if (v && typeof v === 'object') {
+      for (const [k, x] of Object.entries(v)) {
+        if (!top && NESTED_LISTS.has(k) && !Array.isArray(x)) fail('program', `"${show(k)}" is not a list`);
+        // A read state's fieldTaints is keyed by the user's own field names (a field may be named "fields"), not by the
+        // format's: its keys are never structural (review r1, Codex C3). decl() checks it.
+        if (k === 'fieldTaints') continue;
+        walkLists(x, false);
+      }
+    }
+  };
+  walkLists(p, true);
   const optional = ['params', 'invariants', 'contracts'].filter((k) => k in p);
-  for (const k of optional) if (p[k] === null || typeof p[k] !== 'object') fail('program', `"${k}" is ${JSON.stringify(p[k])}: an absent ${k} is not written`);
+  for (const k of optional) if (p[k] === null || typeof p[k] !== 'object') fail('program', `"${show(k)}" is ${JSON.stringify(p[k])}: an absent ${show(k)} is not written`);
   keys(p, ['ir', 'language', 'sourceSha256', 'package', 'contract', 'source', 'options', 'records', 'enums', 'state', 'timeFields',
     'recursiveFns', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings', ...optional], 'program');
   if (p.ir !== 2 || typeof p.ir !== 'number') fail('program', `"ir" must be exactly 2, not ${JSON.stringify(p.ir)}`);
+  // Every top-level list is one before anything iterates it (IrReaderFuzzTest: "p.fns is not iterable" was a TypeError).
+  for (const k of ['options', 'records', 'enums', 'timeFields', 'recursiveFns', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings']) {
+    if (!Array.isArray(p[k])) fail('program', `${show(k)} is a list`);
+  }
+  // Every entry of a top-level list of declarations is an object, before anything reads its fields (IrReaderFuzzTest: a
+  // fn that was null made the fns' arity table throw a TypeError).
+  for (const k of ['options', 'records', 'enums', 'libraries', 'javaLibraries', 'fns', 'methods', 'warnings']) {
+    for (const x of p[k]) if (!x || typeof x !== 'object' || Array.isArray(x)) fail(k, 'an entry is not an object');
+  }
+  // The optional "invariants" is a list of objects too (CI's IrReaderFuzzTest: an object there made "p.invariants is not
+  // iterable" a TypeError).
+  if ('invariants' in p) {
+    if (!Array.isArray(p.invariants)) fail('program', 'invariants is a list');
+    for (const x of p.invariants) if (!x || typeof x !== 'object' || Array.isArray(x)) fail('invariants', 'an entry is not an object');
+  }
+  for (const l of [...p.libraries, ...p.javaLibraries]) {
+    for (const k of ['records', 'enums', 'fns']) {
+      if (Array.isArray(l[k])) for (const x of l[k]) if (!x || typeof x !== 'object' || Array.isArray(x)) fail(k, 'an entry is not an object');
+    }
+  }
   // Version 2 (ADR-0018 M4): the .jsc libraries the program imports, each with its declarations. A build's names are one
   // namespace: a library's records, enums and fns join the program's, and no name is declared twice across them.
   if (!Array.isArray(p.libraries)) fail('program', 'libraries is a list');
   for (const l of p.libraries) {
     keys(l, ['library', 'source', 'sourceSha256', 'records', 'enums', 'fns'], 'library');
-    if (!/^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Z][A-Za-z0-9]*$/.test(str(l.library, 'library'))) fail('library', `a bad class name ${l.library}`);
+    if (!/^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Z][A-Za-z0-9]*$/.test(str(l.library, 'library'))) fail('library', `a bad class name ${show(l.library)}`);
     str(l.source, 'library');
     if (typeof l.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(l.sourceSha256)) fail('library', 'sourceSha256 must be 64 hex digits');
   }
@@ -150,35 +215,42 @@ export function validate(p) {
   const javaFns = new Map();
   for (const j of p.javaLibraries) {
     keys(j, ['class', 'sourceSha256', 'records', 'fns'], 'java library');
-    if (!/^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*$/.test(str(j.class, 'java library'))) fail('java library', `a bad class name ${j.class}`);
+    if (!/^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*$/.test(str(j.class, 'java library'))) fail('java library', `a bad class name ${show(j.class)}`);
     if (typeof j.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(j.sourceSha256)) fail('java library', 'sourceSha256 must be 64 hex digits');
     for (const r of j.records) {
       keys(r, ['name', 'fields', 'at', 'owner', 'import', 'javaName', 'verified'], 'java record');
+      at(r.at, 'java record');   // its position too (IrReaderFuzzTest)
       if (typeof r.verified !== 'boolean') fail('java record', 'verified is a boolean');
     }
     for (const f of j.fns) {
       keys(f, ['name', 'params', 'result'], 'java fn');
-      if (javaFns.has(`${j.class}.${f.name}`)) fail('java fn', `java:${j.class}.${f.name} is listed twice`);
-      javaFns.set(`${j.class}.${f.name}`, f);
+      if (javaFns.has(`${show(j.class)}.${show(f.name)}`)) fail('java fn', `java:${show(j.class)}.${show(f.name)} is listed twice`);
+      javaFns.set(`${show(j.class)}.${show(f.name)}`, f);
     }
   }
   const allRecords = [...p.libraries.flatMap((l) => l.records), ...p.javaLibraries.flatMap((j) => j.records.map(({ name, fields, at }) => ({ name, fields, at }))),
     ...p.records];
   const allEnums = [...p.libraries.flatMap((l) => l.enums), ...p.enums];
   const allFns = [...p.libraries.flatMap((l) => l.fns), ...p.fns];
-  if (p.language !== 'jsc 2') fail('program', `not a .jsc 2 program: ${p.language}`);
+  if (p.language !== 'jsc 2') fail('program', `not a .jsc 2 program: ${show(p.language)}`);
   if (typeof p.sourceSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(p.sourceSha256)) fail('program', 'sourceSha256 must be 64 hex digits');
   for (const k of ['package', 'contract', 'source']) str(p[k], k);
   for (const o of p.options) {
     keys(o, ['name', 'value'], 'option');
-    if (!INT_RE.test(str(o.value, 'option'))) fail('option', `not an integer: ${o.value}`);
+    str(o.name, 'option');   // a name (IrReaderFuzzTest: an object there was accepted, the Java reader refused it)
+    if (!INT_RE.test(str(o.value, 'option'))) fail('option', `not an integer: ${show(o.value)}`);
   }
   const shapes = new Map();
   const record = (r, where, qualified = false) => {
     keys(r, ['name', 'fields', 'at'], where);
-    if (!(qualified ? QUALIFIED : IDENT).test(str(r.name, where))) fail(where, `a bad name ${r.name}`);
-    if (shapes.has(r.name)) fail(where, `two declarations named ${r.name} (records, variants and the state share one namespace)`);
-    for (const f of r.fields) keys(f, ['name', 'type'], `${r.name}'s field`);
+    if (!(qualified ? QUALIFIED : IDENT).test(str(r.name, where))) fail(where, `a bad name ${show(r.name)}`);
+    if (shapes.has(r.name)) fail(where, `two declarations named ${show(r.name)} (records, variants and the state share one namespace)`);
+    if (!Array.isArray(r.fields)) fail(where, 'fields is not a list');
+    for (const f of r.fields) {
+      keys(f, ['name', 'type'], `${show(r.name)}'s field`);
+      // A field's name is a name (IrReaderFuzzTest: a variant's field named 0 was accepted, the Java reader refused it).
+      if (!IDENT.test(str(f.name, `${show(r.name)}'s field`))) fail(`${show(r.name)}'s field`, `a bad name ${show(f.name)}`);
+    }
     shapes.set(r.name, r.fields);
     at(r.at, where);
   };
@@ -186,32 +258,34 @@ export function validate(p) {
   const enums = new Map();
   for (const e of allEnums) {
     keys(e, ['name', 'variants', 'at'], 'enum');
-    if (enums.has(e.name) || shapes.has(e.name)) fail('enum', `two declarations named ${e.name}`);
+    at(e.at, 'enum');   // its position too (IrReaderFuzzTest)
+    if (!Array.isArray(e.variants)) fail('enum', 'variants is not a list');
+    if (enums.has(e.name) || shapes.has(e.name)) fail('enum', `two declarations named ${show(e.name)}`);
     enums.set(e.name, e.variants.map((v) => v.name));
-    for (const v of e.variants) record(v, `variant of ${e.name}`);
+    for (const v of e.variants) record(v, `variant of ${show(e.name)}`);
   }
   // M2c: each imported contract's state and types, under its qualified names; checked like the contract's own.
   const contracts = new Map();
   if ('contracts' in p) {
     if (!Array.isArray(p.contracts)) fail('contracts', 'not a list');
     for (const c of p.contracts) {
-      const where = `imported contract ${c?.name}`;
+      const where = `imported contract ${show(c?.name)}`;
       keys(c, ['name', 'package', 'state', 'records', 'enums', 'timeFields', 'receives', 'bigMaps'], where);
       if (!IDENT.test(str(c.name, where)) || contracts.has(c.name)) fail(where, 'a bad or repeated name');
       str(c.package, where);
-      const q = (n) => typeof n === 'string' && n.startsWith(`${c.name}.`) && QUALIFIED.test(n);
-      if (c.state.name !== `${c.name}.State`) fail(where, `its state is named ${c.name}.State`);
+      const q = (n) => typeof n === 'string' && n.startsWith(`${show(c.name)}.`) && QUALIFIED.test(n);
+      if (c.state.name !== `${show(c.name)}.State`) fail(where, `its state is named ${show(c.name)}.State`);
       record(c.state, where, true);
       for (const r of c.records) {
-        if (!q(r.name)) fail(where, `a type not qualified by ${c.name}: ${r.name}`);
+        if (!q(r.name)) fail(where, `a type not qualified by ${show(c.name)}: ${show(r.name)}`);
         record(r, where, true);
       }
       for (const e of c.enums) {
         keys(e, ['name', 'variants', 'at'], where);
-        if (!q(e.name) || enums.has(e.name) || shapes.has(e.name)) fail(where, `a bad enum name ${e.name}`);
+        if (!q(e.name) || enums.has(e.name) || shapes.has(e.name)) fail(where, `a bad enum name ${show(e.name)}`);
         enums.set(e.name, e.variants.map((v) => v.name));
         for (const v of e.variants) {
-          if (!q(v.name)) fail(where, `a variant not qualified by ${c.name}: ${v.name}`);
+          if (!q(v.name)) fail(where, `a variant not qualified by ${show(c.name)}: ${show(v.name)}`);
           record(v, where, true);
         }
         at(e.at, where);
@@ -230,44 +304,51 @@ export function validate(p) {
   }
   const type = (t, where) => {
     if (typeof t === 'string') {
-      if (!PRIMS.has(t)) fail(where, `unknown type ${t}`);
+      if (!PRIMS.has(t)) fail(where, `unknown type ${show(t)}`);
       return;
     }
     if (!t || typeof t !== 'object' || Object.keys(t).length !== 1) fail(where, `a bad type ${JSON.stringify(t)}`);
     const [k, v] = Object.entries(t)[0];
     if (k === 'list' || k === 'option') type(v, where);
     else if (k === 'map' || k === 'bigmap') {
-      if (!Array.isArray(v) || v.length !== 2) fail(where, `a bad ${k} type`);
+      if (!Array.isArray(v) || v.length !== 2) fail(where, `a bad ${show(k)} type`);
       type(v[0], where);
       type(v[1], where);
     } else if (k === 'record') {
-      if (!shapes.has(v) || [...enums.values()].some((vs) => vs.includes(v))) fail(where, `no record ${v}`);
+      if (!shapes.has(v) || [...enums.values()].some((vs) => vs.includes(v))) fail(where, `no record ${show(v)}`);
     } else if (k === 'enum') {
-      if (!enums.has(v)) fail(where, `no enum ${v}`);
+      if (!enums.has(v)) fail(where, `no enum ${show(v)}`);
     } else if (k === 'instance') {
       // M2c: an imported contract's instance.
-      if (!contracts.has(v)) fail(where, `no imported contract ${v}`);
+      if (!contracts.has(v)) fail(where, `no imported contract ${show(v)}`);
     } else if (k === 'deposit') {
       // M2c: a deposit a receiving action sees; its memo's type, or null when it reads none.
       if (v !== null) type(v, where);
-    } else fail(where, `unknown type ${k}`);
+    } else fail(where, `unknown type ${show(k)}`);
   };
-  for (const c of contracts.values()) for (const t of c.receives) if (t !== null) type(t, `imported contract ${c.name}`);
+  for (const c of contracts.values()) for (const t of c.receives) if (t !== null) type(t, `imported contract ${show(c.name)}`);
   // #98 review F2, C5: a java: library fn's signature: a name, a list of parameter types and a result type, each a type
   // of the namespace (the Java reader reads them with type()).
   // #98 review C11: every entry of every library's list (a duplicate cannot hide a malformed one: it is refused).
   for (const j of p.javaLibraries) {
     for (const f of j.fns) {
-      const k = `${j.class}.${f?.name}`;
-      str(f.name, `java fn ${k}`);
-      if (!Array.isArray(f.params)) fail(`java fn ${k}`, 'params is a list of types');
-      for (const t of f.params) type(t, `java fn ${k}`);
-      type(f.result, `java fn ${k}`);
+      const k = `${show(j.class)}.${show(f?.name)}`;
+      str(f.name, `java fn ${show(k)}`);
+      if (!Array.isArray(f.params)) fail(`java fn ${show(k)}`, 'params is a list of types');
+      for (const t of f.params) type(t, `java fn ${show(k)}`);
+      type(f.result, `java fn ${show(k)}`);
     }
   }
-  for (const [name, fields] of shapes) for (const f of fields) type(f.type, `${name}.${f.name}`);
+  for (const [name, fields] of shapes) for (const f of fields) type(f.type, `${show(name)}.${show(f.name)}`);
   for (const k of ['timeFields', 'recursiveFns']) for (const x of p[k]) str(x, k);
-  for (const w of p.warnings) keys(w, ['line', 'col', 'code', 'message'], 'warning');
+  for (const w of p.warnings) {
+    keys(w, ['line', 'col', 'code', 'message'], 'warning');
+    // Of the kinds the Java reader reads (IrReaderFuzzTest: a warning's code that was a node was accepted here).
+    nat(w.line, 'warning');
+    nat(w.col, 'warning');
+    str(w.code, 'warning');
+    str(w.message, 'warning');
+  }
 
   // ---- bodies: locals declared once (ids unique in the program), referenced only in scope (review S7)
   const locals = new Map();
@@ -278,33 +359,45 @@ export function validate(p) {
     str(l.name, where);
     type(l.type, where);
     at(l.at, where);
-    if (locals.has(l.id)) fail(where, `the local id ${l.id} is declared twice`);
+    // A read state's field taints, when written: an object of non-negative integers (IrReaderFuzzTest: a record there was
+    // accepted, the Java reader refused it).
+    if ('fieldTaints' in l) {
+      if (!l.fieldTaints || typeof l.fieldTaints !== 'object' || Array.isArray(l.fieldTaints)) fail(where, 'fieldTaints is not an object');
+      for (const v of Object.values(l.fieldTaints)) nat(v, where);
+    }
+    if (locals.has(l.id)) fail(where, `the local id ${show(l.id)} is declared twice`);
     locals.set(l.id, l);
     scope.add(l.id);
   };
   /** A block's statements in order in a scope of its own (a const is in scope from its statement on). */
   const block = (b, where, outer) => {
     keys(b, ['stmts', 'result', 'at'], where);
+    // A list, not anything iterable (IrReaderFuzzTest: stmts "" was read as no statements).
+    if (!Array.isArray(b.stmts)) fail(where, 'stmts is not a list');
     const scope = new Set(outer);
     for (const st of b.stmts) stmt(st, scope);
     if (b.result !== null) expr(b.result, scope);
     at(b.at, where);
   };
   const arms = (as, where, scope, scrutineeType) => {
+    if (!Array.isArray(as)) fail(where, 'arms is not a list');
     for (const a of as) {
       keys(a, ['ctors', 'fields', 'binds', 'body', 'at'], where);
+      // An arm's position and lists are checked like any other's (IrReaderFuzzTest: [24, 7, 0] was accepted here).
+      at(a.at, where);
+      for (const k of ['ctors', 'fields', 'binds']) if (!Array.isArray(a[k])) fail(where, `an arm's ${show(k)} is a list`);
       a.ctors.forEach((c) => str(c, where));
       a.fields.forEach((c) => str(c, where));
       if (a.binds.length !== a.fields.length) fail(where, 'binds and fields differ in length');
       if (a.binds.length > 0 && a.ctors.length !== 1) fail(where, 'only a single-constructor arm binds');
       for (const c of a.ctors) {
-        if (c === 'Some' || c === 'None' || c in CRED_FIELDS) continue;
-        if (!(shapes.has(c) && [...enums.values()].some((vs) => vs.includes(c)))) fail(where, `no variant ${c}`);
+        if (c === 'Some' || c === 'None' || key(c) in CRED_FIELDS) continue;
+        if (!(shapes.has(c) && [...enums.values()].some((vs) => vs.includes(c)))) fail(where, `no variant ${show(c)}`);
       }
       for (const f of a.fields) {
         const c = a.ctors[0];
-        const known = c === 'Some' ? f === 'value' : c in CRED_FIELDS ? f === CRED_FIELDS[c] : (shapes.get(c) ?? []).some((x) => x.name === f);
-        if (!known) fail(where, `${c} has no field ${f}`);
+        const known = c === 'Some' ? f === 'value' : key(c) in CRED_FIELDS ? f === CRED_FIELDS[key(c)] : (shapes.get(c) ?? []).some((x) => x.name === f);
+        if (!known) fail(where, `${show(c)} has no field ${show(f)}`);
       }
       const inner = new Set(scope);
       a.binds.forEach((l) => decl(l, where, inner));
@@ -326,15 +419,15 @@ export function validate(p) {
   const modField = (ref, want, where) => {
     const params = typeof ref === 'string' && ref.startsWith('params.');
     // #98 review S5: params.f names the program's params, never another record that happens to be named Config.
-    if (params && !('params' in p)) fail(where, `${ref}: the contract has no params`);
+    if (params && !('params' in p)) fail(where, `${show(ref)}: the contract has no params`);
     const fs = (params ? p.params.fields : shapes.get('State')) ?? [];
     const f = fs.find((x) => x.name === (params ? ref.slice(7) : ref));
     if (!f) fail(where, `no field ${JSON.stringify(ref)}`);
-    if (JSON.stringify(f.type) !== JSON.stringify(want)) fail(where, `${ref} is not ${JSON.stringify(want)}`);
+    if (JSON.stringify(f.type) !== JSON.stringify(want)) fail(where, `${show(ref)} is not ${JSON.stringify(want)}`);
   };
   /** A condition or a boolean operand is of type Bool (review S3 on #76): the interpreter never tests truthiness. */
   const bool = (e, where, what) => {
-    if (e.type !== 'Bool') fail(where, `${what} is of type ${JSON.stringify(e.type)}, not Bool`);
+    if (e.type !== 'Bool') fail(where, `${show(what)} is of type ${JSON.stringify(e.type)}, not Bool`);
   };
   /** A node's own fields; bindings it introduces (a loop variable, lambda parameters) are in scope in its blocks only. */
   const fields = (o, spec, where, scope) => {
@@ -342,33 +435,33 @@ export function validate(p) {
     for (const [k, kind] of Object.entries(spec)) {
       const v = o[k];
       if (kind instanceof Set) {
-        if (!kind.has(v)) fail(where, `unknown ${k} ${JSON.stringify(v)}`);
+        if (!kind.has(v)) fail(where, `unknown ${show(k)} ${JSON.stringify(v)}`);
       } else if (kind === 'e') expr(v, scope);
       else if (kind === 'e?') { if (v !== null) expr(v, scope); }
-      else if (kind === 'es') { if (!Array.isArray(v)) fail(where, `${k} is not a list`); v.forEach((x) => expr(x, scope)); }
+      else if (kind === 'es') { if (!Array.isArray(v)) fail(where, `${show(k)} is not a list`); v.forEach((x) => expr(x, scope)); }
       else if (kind === 'b') block(v, where, inner);
       else if (kind === 'b?') { if (v !== null) block(v, where, inner); }
       else if (kind === 'l') decl(v, where, inner);
       else if (kind === 'let') decl(v, where, scope);   // a const: in scope for the rest of its block
       else if (kind === 't') type(v, where);
       else if (kind === 's') str(v, where);
-      else if (kind === 'z') { if (typeof v !== 'boolean') fail(where, `${k} is not a boolean`); }
+      else if (kind === 'z') { if (typeof v !== 'boolean') fail(where, `${show(k)} is not a boolean`); }
       else if (kind === 'arms') arms(v, where, scope);
       else if (kind === 'branches') branches(v, where, scope);
       else if (kind === 'ref') {
-        if (!locals.has(v)) fail(where, `a reference to the undeclared local ${v}`);
-        if (!scope.has(v)) fail(where, `a reference to the local ${v} (${locals.get(v).name}) outside its scope`);
+        if (!locals.has(v)) fail(where, `a reference to the undeclared local ${show(v)}`);
+        if (!scope.has(v)) fail(where, `a reference to the local ${show(v)} (${show(locals.get(v).name)}) outside its scope`);
       } else if (kind !== 'lit') throw new Error(kind);
     }
   };
   const fnArity = new Map(allFns.map((f) => [f.name, Array.isArray(f.params) ? f.params.length : -1]));
   const arity = (where, what, got, want) => {
-    if (got !== want) fail(where, `${what} takes ${want} argument(s), not ${got}`);
+    if (got !== want) fail(where, `${show(what)} takes ${show(want)} argument(s), not ${show(got)}`);
   };
   function expr(e, scope) {
-    const spec = e && NODES[e.node];
+    const spec = e && NODES[key(e.node)];
     if (!spec) fail('expression', `unknown node ${JSON.stringify(e?.node)}`);
-    const where = `${e.node} at ${e.at}`;
+    const where = `${show(e.node)} at ${show(e.at)}`;
     keys(e, ['node', ...Object.keys(spec), 'type', 'taint', 'at'], where);
     fields(e, spec, where, scope);
     type(e.type, where);
@@ -384,40 +477,40 @@ export function validate(p) {
     if (e.node === 'Cond') bool(e.cond, where, 'a condition');
     if (e.node === 'Logic') { bool(e.left, where, 'an operand'); bool(e.right, where, 'an operand'); }
     if (e.node === 'Not') bool(e.operand, where, 'an operand');
-    if (e.node === 'CallStd' && !(ROWS[e.module] ?? []).includes(e.name)) fail(where, `unknown std row ${e.module}.${e.name}`);
-    if ((e.node === 'New' || e.node === 'GetField') && !shapes.has(e.record)) fail(where, `no record ${e.record}`);
-    if (e.node === 'Variant' && !(enums.get(e.enum) ?? []).includes(e.variant)) fail(where, `no variant ${e.enum}.${e.variant}`);
+    if (e.node === 'CallStd' && !(ROWS[key(e.module)] ?? []).includes(e.name)) fail(where, `unknown std row ${show(e.module)}.${show(e.name)}`);
+    if ((e.node === 'New' || e.node === 'GetField') && !shapes.has(e.record)) fail(where, `no record ${show(e.record)}`);
+    if (e.node === 'Variant' && !(enums.get(e.enum) ?? []).includes(e.variant)) fail(where, `no variant ${show(e.enum)}.${show(e.variant)}`);
     // Review S7: references and arities.
     if (e.node === 'CallFn') {
-      if (!fnArity.has(e.fn)) fail(where, `no fn ${e.fn}`);
-      arity(where, `fn ${e.fn}`, e.args.length, fnArity.get(e.fn));
+      if (!fnArity.has(e.fn)) fail(where, `no fn ${show(e.fn)}`);
+      arity(where, `fn ${show(e.fn)}`, e.args.length, fnArity.get(e.fn));
     }
     if (e.node === 'CallJava') {
-      const f = javaFns.get(`${e.library}.${e.fn}`);
-      if (!f) fail(where, `no fn ${e.fn} imported from java:${e.library}`);
-      arity(where, `java:${e.library}.${e.fn}`, e.args.length, f.params.length);
+      const f = javaFns.get(`${show(e.library)}.${show(e.fn)}`);
+      if (!f) fail(where, `no fn ${show(e.fn)} imported from java:${show(e.library)}`);
+      arity(where, `java:${show(e.library)}.${show(e.fn)}`, e.args.length, f.params.length);
     }
-    if (e.node === 'CallStd') arity(where, e.name, e.args.length, STD_ARITY[e.name]);
-    if (e.node === 'LedgerOp') arity(where, e.op, e.args.length, LEDGER_ARITY[e.op]);
-    if (e.node === 'Prelude') arity(where, e.op, e.args.length, PRELUDE_ARITY[e.op]);
-    if (e.node === 'MapOp' || e.node === 'BigOp') arity(where, `${e.node}.${e.op}`, e.args.length, MAP_ARITY[e.op]);
-    if (e.node === 'New') arity(where, `the record ${e.record}`, e.values.length, shapes.get(e.record).length);
-    if (e.node === 'Variant') arity(where, `the variant ${e.variant}`, e.values.length, shapes.get(e.variant).length);
-    if (e.node === 'GetField' && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${e.record} has no field ${e.field}`);
-    if (e.node === 'StateField' && !shapes.get('State').some((f) => f.name === e.field)) fail(where, `the state has no field ${e.field}`);
-    if (e.node === 'ParamsRef' && !(p.params?.fields ?? []).some((f) => f.name === e.field)) fail(where, `the params have no field ${e.field}`);
+    if (e.node === 'CallStd') arity(where, e.name, e.args.length, STD_ARITY[key(e.name)]);
+    if (e.node === 'LedgerOp') arity(where, e.op, e.args.length, LEDGER_ARITY[key(e.op)]);
+    if (e.node === 'Prelude') arity(where, e.op, e.args.length, PRELUDE_ARITY[key(e.op)]);
+    if (e.node === 'MapOp' || e.node === 'BigOp') arity(where, `${show(e.node)}.${show(e.op)}`, e.args.length, MAP_ARITY[key(e.op)]);
+    if (e.node === 'New') arity(where, `the record ${show(e.record)}`, e.values.length, shapes.get(e.record).length);
+    if (e.node === 'Variant') arity(where, `the variant ${show(e.variant)}`, e.values.length, shapes.get(e.variant).length);
+    if (e.node === 'GetField' && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${show(e.record)} has no field ${show(e.field)}`);
+    if (e.node === 'StateField' && !shapes.get('State').some((f) => f.name === e.field)) fail(where, `the state has no field ${show(e.field)}`);
+    if (e.node === 'ParamsRef' && !(p.params?.fields ?? []).some((f) => f.name === e.field)) fail(where, `the params have no field ${show(e.field)}`);
   }
   function stmt(s, scope) {
     // M2c: a send with a datum.
-    const spec = s && s.stmt === 'Send' && 'datum' in s ? { ...STMTS.Send, datum: 'e' } : s && STMTS[s.stmt];
+    const spec = s && s.stmt === 'Send' && 'datum' in s ? { ...STMTS.Send, datum: 'e' } : s && STMTS[key(s.stmt)];
     if (!spec) fail('statement', `unknown statement ${JSON.stringify(s?.stmt)}`);
-    const where = `${s.stmt} at ${s.at}`;
+    const where = `${show(s.stmt)} at ${show(s.at)}`;
     keys(s, ['stmt', ...Object.keys(spec), 'at'], where);
     fields(s, spec, where, scope);
     if (s.stmt === 'Require') bool(s.cond, where, 'a require condition');
     // #80 review S3: an if's, a for's or a match's pays is what its blocks say.
     if (s.stmt === 'If' || s.stmt === 'For' || s.stmt === 'Match') {
-      if (s.pays !== paysIn({ stmts: [{ ...s, pays: undefined }] })) fail(where, `pays is ${s.pays}, but its blocks ${s.pays ? 'do not pay' : 'pay'}`);
+      if (s.pays !== paysIn({ stmts: [{ ...s, pays: undefined }] })) fail(where, `pays is ${show(s.pays)}, but its blocks ${s.pays ? 'do not pay' : 'pay'}`);
     }
     if (s.stmt === 'Emit' && JSON.stringify(s.event.type) !== JSON.stringify({ enum: 'Event' })) fail(where, 'an emitted value is an Event');
     at(s.at, where);
@@ -425,22 +518,28 @@ export function validate(p) {
   const fnNames = new Set();
   for (const f of allFns) {
     keys(f, ['name', 'params', 'result', 'body', 'at'], 'fn');
-    if (fnNames.has(f.name)) fail('fn', `two fns named ${f.name}`);
+    at(f.at, 'fn');   // its position too (IrReaderFuzzTest)
+    if (!(QUALIFIED.test(str(f.name, 'fn')) || IDENT.test(f.name))) fail('fn', `a bad name ${show(f.name)}`);
+    if (fnNames.has(f.name)) fail('fn', `two fns named ${show(f.name)}`);
     fnNames.add(f.name);
     const scope = new Set();   // a fn sees its parameters only
-    f.params.forEach((l) => decl(l, `fn ${f.name}`, scope));
-    type(f.result, `fn ${f.name}`);
-    block(f.body, `fn ${f.name}`, scope);
-    noPayInExpressions(f.body, true, (what) => fail(`fn ${f.name}`, what));   // a fn never pays (JSC0413)
+    f.params.forEach((l) => decl(l, `fn ${show(f.name)}`, scope));
+    type(f.result, `fn ${show(f.name)}`);
+    block(f.body, `fn ${show(f.name)}`, scope);
+    noPayInExpressions(f.body, true, (what) => fail(`fn ${show(f.name)}`, what));   // a fn never pays (JSC0413)
   }
   const methodNames = new Set();
   const stateFields = new Map(p.state.fields.map((f) => [f.name, f.type]));
   for (const m of p.methods) {
-    const where = `method ${m.name}`;
+    const where = `method ${show(m.name)}`;
     // M2c (additive): "reads" appears only when the method reads another contract.
-    keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...('reads' in m ? ['reads'] : []), 'usesCtx', 'pays', 'result', 'body', 'at'], where);
+    // A method that is not an object is refused by keys (IrReaderFuzzTest: 'in' on a number threw a TypeError).
+    const reads = m && typeof m === 'object' && 'reads' in m;
+    keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...(reads ? ['reads'] : []), 'usesCtx', 'pays', 'result', 'body', 'at'], where);
+    at(m.at, where);   // its position too (IrReaderFuzzTest)
+    if (!IDENT.test(str(m.name, where))) fail(where, `a bad name ${show(m.name)}`);   // IrReaderFuzzTest: a name [] was accepted
     if (!Array.isArray(m.mods)) fail(where, 'mods is not a list');
-    if (!KINDS.has(m.kind)) fail(where, `unknown kind ${m.kind}`);
+    if (!KINDS.has(m.kind)) fail(where, `unknown kind ${show(m.kind)}`);
     if (methodNames.has(m.name)) fail(where, 'two methods of that name');
     methodNames.add(m.name);
     const scope = new Set();
@@ -449,9 +548,9 @@ export function validate(p) {
     for (const r of m.reads ?? []) {
       keys(r, ['local', 'field'], where);
       const f = (p.params?.fields ?? []).find((x) => x.name === str(r.field, where));
-      if (!f || typeof f.type !== 'object' || !('instance' in f.type)) fail(where, `reads params.${r.field}, which is not an Instance<C>`);
+      if (!f || typeof f.type !== 'object' || !('instance' in f.type)) fail(where, `reads params.${show(r.field)}, which is not an Instance<C>`);
       decl(r.local, where, scope);
-      if (JSON.stringify(r.local.type) !== JSON.stringify({ record: `${f.type.instance}.State` })) fail(where, `a read of ${f.type.instance} has its state's type`);
+      if (JSON.stringify(r.local.type) !== JSON.stringify({ record: `${show(f.type.instance)}.State` })) fail(where, `a read of ${show(f.type.instance)} has its state's type`);
     }
     modifiers(m, where, fail, keys, stateFields, modField, type);
     if (m.result !== null) type(m.result, where);
@@ -479,15 +578,16 @@ export function validate(p) {
     }
     const usesCtx = m.kind === 'destroy' || (m.kind !== 'view'
       && (m.mods.some((x) => !NO_CTX.has(x.name)) || readsTx(m.body)));
-    if (usesCtx !== m.usesCtx) fail(where, `usesCtx is ${m.usesCtx}, but the method ${usesCtx ? 'reads' : 'does not read'} the transaction`);
+    if (usesCtx !== m.usesCtx) fail(where, `usesCtx is ${show(m.usesCtx)}, but the method ${usesCtx ? 'reads' : 'does not read'} the transaction`);
   }
-  for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${n}`);
+  for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${show(n)}`);
   // M2b: invariants, each a Bool over the state and the params, with names of their own.
   if ('invariants' in p) {
     const names = new Set();
     for (const inv of p.invariants) {
-      const where = `invariant ${inv.name}`;
+      const where = `invariant ${show(inv.name)}`;
       keys(inv, ['name', 'body', 'at'], where);
+      if (!IDENT.test(str(inv.name, where))) fail(where, `a bad name ${show(inv.name)}`);   // IrReaderFuzzTest: a name [] was accepted
       if (names.has(inv.name) || methodNames.has(inv.name) || fnNames.has(inv.name)) fail(where, 'a name taken by another method, fn or invariant');
       names.add(inv.name);
       block(inv.body, where, new Set());
@@ -521,25 +621,25 @@ function modifiers(m, where, fail, keys, state, modField, type) {
     else if (w === 'payable' || w === 'open') keys(mod, ['name'], where);
     else keys(mod, ['name', 'field'], where);
     if (w === 'batched' && 'field' in mod && mod.field === null) fail(where, 'batched names no field or "only", not null');
-    if (!MODS.has(w)) fail(where, `unknown modifier ${w}`);
+    if (!MODS.has(w)) fail(where, `unknown modifier ${show(w)}`);
     const field = mod.field ?? null;
-    if (seen.has(w)) fail(where, `the modifier ${w} is given twice`);
+    if (seen.has(w)) fail(where, `the modifier ${show(w)} is given twice`);
     seen.add(w);
-    if (m.kind === 'view') fail(where, `a view takes no modifiers, not ${w}`);
-    if (m.kind === 'init' && w !== 'payable') fail(where, `an init takes only payable, not ${w}`);
+    if (m.kind === 'view') fail(where, `a view takes no modifiers, not ${show(w)}`);
+    if (m.kind === 'init' && w !== 'payable') fail(where, `an init takes only payable, not ${show(w)}`);
     if (w === 'payable' || w === 'open') {
-      if (field !== null) fail(where, `${w} names no field, not ${JSON.stringify(field)}`);
+      if (field !== null) fail(where, `${show(w)} names no field, not ${JSON.stringify(field)}`);
       if (w === 'payable' && m.kind === 'destroy') fail(where, 'a destroy cannot be payable');
     } else if (w === 'only' || w === 'after' || w === 'before') {
       const want = w === 'only' ? 'Key' : 'Int';
-      if (typeof field !== 'string') fail(where, `${w} names a state field, not ${JSON.stringify(field)}`);
-      if (!state.has(field)) fail(where, `${w} ${field}: the state has no field ${field}`);
-      if (state.get(field) !== want) fail(where, `${w} ${field}: ${field} is of type ${JSON.stringify(state.get(field))}, not ${want}`);
+      if (typeof field !== 'string') fail(where, `${show(w)} names a state field, not ${JSON.stringify(field)}`);
+      if (!state.has(field)) fail(where, `${show(w)} ${show(field)}: the state has no field ${show(field)}`);
+      if (state.get(field) !== want) fail(where, `${show(w)} ${show(field)}: ${show(field)} is of type ${JSON.stringify(state.get(field))}, not ${show(want)}`);
     } else if (w === 'quorum') {
       // M2b (ADR-0009 D2, JSC0439): keys a List<Key> and the threshold an Int, both state fields or both params fields.
       if (typeof mod.keys !== 'string' || typeof mod.threshold !== 'string') fail(where, 'a quorum names its keys and threshold');
       if (mod.keys.startsWith('params.') !== mod.threshold.startsWith('params.')) {
-        fail(where, `quorum ${mod.keys} ${mod.threshold}: the keys and the threshold are both state fields or both params fields`);
+        fail(where, `quorum ${show(mod.keys)} ${show(mod.threshold)}: the keys and the threshold are both state fields or both params fields`);
       }
       modField(mod.keys, { list: 'Key' }, where);
       modField(mod.threshold, 'Int', where);
@@ -552,14 +652,14 @@ function modifiers(m, where, fail, keys, state, modField, type) {
       if (m.kind !== 'action') fail(where, 'only an action receives');
     } else if (w === 'batched') {
       if (field !== null && field !== 'only') fail(where, `batched is plain or "batched only", not ${JSON.stringify(field)}`);
-      if (m.kind !== 'action') fail(where, `only an action can be batched, not a${m.kind === 'init' ? 'n' : ''} ${m.kind}`);
+      if (m.kind !== 'action') fail(where, `only an action can be batched, not a${m.kind === 'init' ? 'n' : ''} ${show(m.kind)}`);
       // #80 review S3: as the checker (JSC0419): no batched action in a contract with BigMap state.
       if ([...state.values()].some((t) => t && typeof t === 'object' && 'bigmap' in t)) fail(where, 'a contract with BigMap state has no batched action');
     }
   }
   if (names.includes('batched')) {
     // JSC0417 (with M2b's quorum and authorized), JSC0447 (receives).
-    for (const w of ['only', 'after', 'before', 'quorum', 'authorized', 'receives']) if (names.includes(w)) fail(where, `a batched action cannot use ${w}`);
+    for (const w of ['only', 'after', 'before', 'quorum', 'authorized', 'receives']) if (names.includes(w)) fail(where, `a batched action cannot use ${show(w)}`);
   }
 }
 /** The effect statements (ADR-0018 D4): only in an action's or a destroy's statement blocks (JSC0413, JSC0404). */
@@ -577,7 +677,7 @@ function noPayInExpressions(o, pure, fail) {
     return;
   }
   if (!o || typeof o !== 'object') return;
-  if (pure && EFFECT_STMTS.has(o.stmt)) fail(`a ${o.stmt.toLowerCase()} inside an expression or a fn, where the checker allows none (JSC0413; in an init or a view, JSC0404), at ${o.at}`);
+  if (pure && EFFECT_STMTS.has(o.stmt)) fail(`a ${o.stmt.toLowerCase()} inside an expression or a fn, where the checker allows none (JSC0413; in an init or a view, JSC0404), at ${show(o.at)}`);
   const below = pure || typeof o.node === 'string';
   for (const v of Object.values(o)) noPayInExpressions(v, below, fail);
 }
@@ -599,16 +699,22 @@ function movesIn(block) {
 }
 
 /** §4: a type holds a Key, a Hash or a Map somewhere (records and variants through their fields). */
-function needsCheck(t, shapes, enums) {
+// A type that reaches itself is walked once: a second visit adds no field the first does not reach. The checker refuses
+// recursive types, so only a hostile IR holds one (IrReaderFuzzTest: a library enum with a variant holding itself made
+// this a stack overflow).
+function needsCheck(t, shapes, enums, seen = new Set()) {
   // M2c (review r1, C4): a Value too (it crosses only stored in a read state; an argument never holds one).
   if (typeof t === 'string') return t === 'Key' || t === 'Hash' || t === 'Address' || t === 'Credential' || t === 'Value';
   const [k, v] = Object.entries(t)[0];
   if (k === 'instance' || k === 'deposit') return false;   // M2c: the deployer's; memos are checked where the action starts
-  if (k === 'list' || k === 'option') return needsCheck(v, shapes, enums);
+  if (k === 'list' || k === 'option') return needsCheck(v, shapes, enums, seen);
   if (k === 'map') return true;
   if (k === 'bigmap') return false;
-  if (k === 'record') return shapes.get(v).some((f) => needsCheck(f.type, shapes, enums));
-  return enums.get(v).some((variant) => shapes.get(variant).some((f) => needsCheck(f.type, shapes, enums)));
+  const id = `${k}:${v}`;
+  if (seen.has(id)) return false;
+  seen.add(id);
+  if (k === 'record') return shapes.get(v).some((f) => needsCheck(f.type, shapes, enums, seen));
+  return enums.get(v).some((variant) => shapes.get(variant).some((f) => needsCheck(f.type, shapes, enums, seen)));
 }
 
 /** Whether a method body names the transaction: caller, received, balance, the window, after/before or std/time. */

@@ -1,0 +1,10 @@
+{
+  "name": "joust-mutation",
+  "private": true,
+  "description": "Mutation testing (Stryker) of the npm joust's security-relevant JavaScript: scripts/stryker-changed.sh runs it; not published",
+  "type": "module",
+  "devDependencies": {
+    "@stryker-mutator/core": "10.1.1",
+    "@stryker-mutator/tap-runner": "10.1.1"
+  }
+}
