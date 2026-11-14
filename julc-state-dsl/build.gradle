@@ -7,6 +7,12 @@ tasks.named('test') {
     if (project.hasProperty('joust.writeIrFixtures')) systemProperty 'joust.writeIrFixtures', 'true'
     systemProperty 'jsc.writeStdDoc', System.getProperty('jsc.writeStdDoc', 'false')
     systemProperty 'jsc.writeShapes', System.getProperty('jsc.writeShapes', 'false')
+    // -Djsc.writeModels=true: JscLangTest rewrites the language core's golden document models (ADR-0021 D12).
+    systemProperty 'jsc.writeModels', System.getProperty('jsc.writeModels', 'false')
+    inputs.dir(rootProject.file('tree-sitter-jsc/corpus')).withPropertyName('jscCorpus').withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootProject.file('js/create-joust/variants/jsc/contracts')).withPropertyName('jscTemplate').withPathSensitivity(PathSensitivity.RELATIVE)
+    // JscLangTest writes build/lang-parity.json for the Wasm engine's parity test (julc-state-toolchain's toolchainWasmTest).
+    outputs.file(layout.buildDirectory.file('lang-parity.json')).withPropertyName('langParity')
     // JscV2IrTest compares the fixtures with the current exports, and Ed25519Test reads the libsodium vectors (review F9).
     inputs.dir(rootProject.file('js/jsc-interpreter/test/fixtures')).withPropertyName('jscInterpreterFixtures')
             .withPathSensitivity(PathSensitivity.RELATIVE)

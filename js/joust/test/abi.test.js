@@ -31,7 +31,7 @@ test('a missing manifest fails (JSC0003) unless accepted, which creates it', () 
   const root = project();
   const errors = abiGate({ generated: generated(abi(1)), srcDir: 'contracts', root, log: () => {} });
   assert.equal(errors.length, 1);
-  assert.match(errors[0], /^error\[JSC0003\]: app\/Counter\.jsc: no ABI manifest/);
+  assert.match(errors[0], /^app\/Counter\.jsc:1:1: error\[JSC0003\]: no ABI manifest/);
   assert.match(errors[0], /joust build --accept-abi/);
   assert.equal(existsSync(manifest(root)), false, 'nothing written without --accept-abi');
   const logs = [];
@@ -45,7 +45,7 @@ test('a different manifest fails (JSC0002) naming the first differing line, unle
   writeFileSync(manifest(root), abi(1));
   const errors = abiGate({ generated: generated(abi(2)), srcDir: 'contracts', root, acceptAbi: false, log: () => {} });
   assert.equal(errors.length, 1);
-  assert.match(errors[0], /^error\[JSC0002\]: app\/Counter\.jsc: .* differs from the committed one at line 3: /);
+  assert.match(errors[0], /^app\/Counter\.jsc:1:1: error\[JSC0002\]: .* differs from the committed one at line 3: /);
   assert.equal(readFileSync(manifest(root), 'utf8'), abi(1), 'the committed manifest is kept');
   assert.deepEqual(abiGate({ generated: generated(abi(2)), srcDir: 'contracts', root, acceptAbi: true, log: () => {} }), []);
   assert.equal(readFileSync(manifest(root), 'utf8'), abi(2));
@@ -86,7 +86,7 @@ test('joust build: Java whose manifest is refused is not on disk', async () => {
   try {
     const missing = await build(quiet);
     assert.equal(missing.ok, false);
-    assert.match(missing.abiErrors[0], /^error\[JSC0003\]/);
+    assert.match(missing.abiErrors[0], /^\S+\.jsc:1:1: error\[JSC0003\]/);
     assert.equal(existsSync(java), false, 'no Java for a missing manifest, not even an earlier build\'s');
     const accepted = await build({ ...quiet, acceptAbi: true });   // the control: an accepted manifest writes the Java
     assert.equal(accepted.ok, true);
@@ -105,7 +105,7 @@ test('joust build: Java whose manifest is refused is not on disk', async () => {
     writeFileSync(manifest, readFileSync(manifest, 'utf8').replace('"Increment"', '"Bump"'));
     const changed = await build(quiet);
     assert.equal(changed.ok, false);
-    assert.match(changed.abiErrors[0], /^error\[JSC0002\]/);
+    assert.match(changed.abiErrors[0], /^\S+\.jsc:1:1: error\[JSC0002\]/);
     assert.equal(existsSync(java), false, 'no Java for a changed manifest');
   } finally {
     console.error = error;

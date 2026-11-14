@@ -11,7 +11,12 @@ final class Lexer {
 
     enum K { IDENT, INT, HEX, STRING, PUNCT, EOF }
 
-    record Tok(K kind, String text, int line, int col) {
+    /**
+     * A token: {@code col} is its first column and {@code end} the column just after it, on {@code line} (no token spans
+     * lines), both counted in Java {@code char}s (ADR-0021 D6: the language core's spans; the parser and lowering read only
+     * the start).
+     */
+    record Tok(K kind, String text, int line, int col, int end) {
         boolean is(String s) {
             return (kind == K.PUNCT || kind == K.IDENT) && text.equals(s);
         }
@@ -103,6 +108,14 @@ final class Lexer {
     }
 
     static List<Tok> lex(String src) {
+        return lex(src, null);
+    }
+
+    /**
+     * The tokens; when {@code comments} is not null, each comment's {@code {startLine, startCol, endLine, endCol}} is added
+     * to it (ADR-0021: the language core's folding ranges; the tokens are the same either way).
+     */
+    static List<Tok> lex(String src, List<int[]> comments) {
         noFormatCharacters(src);
         var out = new ArrayList<Tok>();
         int i = 0, line = 1, col = 1;
@@ -112,15 +125,21 @@ final class Lexer {
             if (c == '\n') { i++; line++; col = 1; continue; }
             if (Character.isWhitespace(c)) { i++; col++; continue; }
             if (src.startsWith("//", i)) {
+                int from = i;
                 while (i < src.length() && src.charAt(i) != '\n') i++;
+                // The column is not advanced past a line comment (a line end resets it): kept as it was, so the end of
+                // file after a final comment has the position it always had.
+                if (comments != null) comments.add(new int[]{line, col, line, col + (i - from)});
                 continue;
             }
             if (src.startsWith("/*", i)) {
                 int end = src.indexOf("*/", i + 2);
                 if (end < 0) throw new JscException(line, col, "JSC0101", "unterminated comment");
+                int cl = line, cc = col;
                 for (int j = i; j < end + 2; j++) {
                     if (src.charAt(j) == '\n') { line++; col = 1; } else col++;
                 }
+                if (comments != null) comments.add(new int[]{cl, cc, line, col});
                 i = end + 2;
                 continue;
             }
@@ -139,8 +158,9 @@ final class Lexer {
                     throw new JscException(sl, sc + (j - i), "JSC0146", String.format("'%c' (U+%04X) is not an ASCII letter or digit: names"
                             + " in .jsc are written with ASCII letters, digits and '_', so that no two names can look alike", d, (int) d));
                 }
-                out.add(new Tok(K.IDENT, src.substring(i, j), sl, sc));
-                col += j - i; i = j;
+                col += j - i;
+                out.add(new Tok(K.IDENT, src.substring(i, j), sl, sc, col));
+                i = j;
                 continue;
             }
             if (c >= '0' && c <= '9') {
@@ -150,8 +170,9 @@ final class Lexer {
                     if (src.charAt(j) != '_') sb.append(src.charAt(j));
                     j++;
                 }
-                out.add(new Tok(K.INT, sb.toString(), sl, sc));
-                col += j - i; i = j;
+                col += j - i;
+                out.add(new Tok(K.INT, sb.toString(), sl, sc, col));
+                i = j;
                 continue;
             }
             if (c == '#') {
@@ -159,8 +180,9 @@ final class Lexer {
                 while (j < src.length() && Character.digit(src.charAt(j), 16) >= 0) j++;
                 String hex = src.substring(i + 1, j).toLowerCase();
                 if (hex.length() % 2 != 0) throw new JscException(sl, sc, "JSC0102", "a #hex literal needs an even number of digits");
-                out.add(new Tok(K.HEX, hex, sl, sc));
-                col += j - i; i = j;
+                col += j - i;
+                out.add(new Tok(K.HEX, hex, sl, sc, col));
+                i = j;
                 continue;
             }
             if (c == '"') {
@@ -190,8 +212,9 @@ final class Lexer {
                     j++;
                 }
                 if (j >= src.length()) throw new JscException(sl, sc, "JSC0105", "unterminated string");
-                out.add(new Tok(K.STRING, sb.toString(), sl, sc));
-                col += j + 1 - i; i = j + 1;
+                col += j + 1 - i;
+                out.add(new Tok(K.STRING, sb.toString(), sl, sc, col));
+                i = j + 1;
                 continue;
             }
             String p = null;
@@ -202,10 +225,10 @@ final class Lexer {
                 if (c == '&' || c == '|') throw new JscException(sl, sc, "JSC0107", "unexpected character '" + c + "': write " + c + c + " for the logical operator");
                 throw new JscException(sl, sc, "JSC0108", "unexpected character '" + c + "'");
             }
-            out.add(new Tok(K.PUNCT, p, sl, sc));
             i += p.length(); col += p.length();
+            out.add(new Tok(K.PUNCT, p, sl, sc, col));
         }
-        out.add(new Tok(K.EOF, "", line, col));
+        out.add(new Tok(K.EOF, "", line, col, col));
         return out;
     }
 }

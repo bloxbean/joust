@@ -1,0 +1,15 @@
+# Only what the extension runs ships in the .vsix (ADR-0021 D9): the two bundles, the engine, the grammar and the
+# language files. No node_modules, no sources, no tests.
+**
+!dist/extension.js
+!dist/server.js
+!engine/joust-toolchain.js
+!engine/joust-toolchain.js.wasm
+!engine/package.json
+!engine/engine.json
+!syntaxes/jsc.tmLanguage.json
+!snippets/jsc.json
+!language-configuration.json
+!README.md
+!LICENSE
+!package.json

@@ -73,8 +73,8 @@ joust build [--src <dir>] [--out <dir>] [--accept-abi]
 Compiles every `.java` and `.jsc` file under `contracts/` (or `--src`) into `build/joust/` (or `--out`), with the
 toolchain engine, in-process. The `.jsc` language is JOUST's contract language ([.jsc](/languages/jsc/)). Plain JuLC
 validators (`@WithdrawValidator`, `@SpendingValidator`, ...) in the same folder are compiled too, for use as
-governors. Diagnostics are printed as `error: <file>:<line>: <message>`, a `.jsc` 2 diagnostic with its column and
-code (`error[JSC0502]: app/Counter.jsc:20:13: <message>`); on an error the command exits with status 1 and writes
+governors. Diagnostics are printed as `<file>:<line>: error: <message>`, a `.jsc` 2 diagnostic with its column and
+code (`app/Counter.jsc:20:13: error[JSC0502]: <message>`, as Gradle prints it); on an error the command exits with status 1 and writes
 no contract.
 
 Each `.jsc` 2 contract has an ABI manifest, `<Contract>.abi.json`, committed beside the `.jsc` file. The build fails

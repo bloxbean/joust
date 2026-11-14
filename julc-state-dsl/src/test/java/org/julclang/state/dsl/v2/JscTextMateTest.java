@@ -11,13 +11,13 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Review r2 F7: the TextMate grammar ({@code editors/vscode-jsc/syntaxes/jsc.tmLanguage.json}) names the words the front
+ * Review r2 F7: the TextMate grammar ({@code js/vscode-joust/syntaxes/jsc.tmLanguage.json}) names the words the front
  * ends know, and no others: the keywords both parsers accept, the built-in names, the prelude and every {@code std}
  * binding ({@link JscV2#bindings()}), so it does not drift as M2 adds to the std library.
  */
 class JscTextMateTest {
 
-    static final Path GRAMMAR = Path.of("../editors/vscode-jsc/syntaxes/jsc.tmLanguage.json");
+    static final Path GRAMMAR = Path.of("../js/vscode-joust/syntaxes/jsc.tmLanguage.json");
 
     /** Words a parser compares tokens with: is("x"), at("x"), eat("x"), expect("x"), accept("x"). */
     static Set<String> parserWords(Path source) throws Exception {
@@ -72,8 +72,8 @@ class JscTextMateTest {
 
     @Test
     void theLanguageConfigurationHasAWordPattern_andTheExtensionTargetsVsCode1109() throws Exception {
-        String conf = Files.readString(Path.of("../editors/vscode-jsc/language-configuration.json"));
+        String conf = Files.readString(Path.of("../js/vscode-joust/language-configuration.json"));
         assertTrue(conf.contains("\"wordPattern\""), conf);
-        assertTrue(Files.readString(Path.of("../editors/vscode-jsc/package.json")).contains("\"vscode\": \"^1.109.0\""));
+        assertTrue(Files.readString(Path.of("../js/vscode-joust/package.json")).contains("\"vscode\": \"^1.109.0\""));
     }
 }
