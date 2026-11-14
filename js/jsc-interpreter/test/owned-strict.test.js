@@ -37,3 +37,27 @@ test('owned mutants are refused (#101 review F2)', () => {
   }, 'native assets in an owned method');
   refused((ir) => { ir.methods = ir.methods.filter((m) => m.name !== 'open'); }, 'has no owned init');
 });
+
+// #101 round-r2 review C3, C4, C5, as the Java reader's twin (reviewRound2_mutants_areRefused).
+const replaceBalance = (o) => {
+  if (Array.isArray(o)) { o.forEach(replaceBalance); return; }
+  if (o === null || typeof o !== 'object') return;
+  for (const [k, v] of Object.entries(o)) {
+    if (v && v.node === 'CtxRef' && v.name === 'balance') o[k] = { node: 'Lit', value: '1', type: 'Int', taint: 0, at: v.at };
+    else replaceBalance(v);
+  }
+};
+
+test('round-r2 mutants are refused (#101 review C3, C4, C5)', () => {
+  refused((ir) => {
+    ir.records.push({ ...structuredClone(ir.records[0]), name: 'Account2' });
+    ir.owned = ['Account', 'Account2'];
+    for (const n of ['open', 'close']) ir.methods.push({ ...structuredClone(method(ir, n)), name: `${n}2`, on: 'Account2' });
+  }, 'a second owned type (Account2) is not produced yet (M3a2; JSC1215)');
+  refused((ir) => { ir.records[0].fields.push({ name: 'entries', type: { bigmap: ['Key', 'Int'] } }); },
+    'a BigMap in the owned type Account is not produced yet (M3a2; JSC1215)');
+  refused((ir) => replaceBalance(method(ir, 'close').body), "it is its type's escape hatch but never reads balance (JSC1216)");
+  for (const k of ['into', 'arriving', 'shared', 'on', 'reads']) {
+    refused((ir) => { method(ir, 'withdraw')[k] = null; }, `"${k}" is null: an absent field is not written`);
+  }
+});
