@@ -733,6 +733,21 @@ Two decisions the security review asked for (M3a1, r23):
   through its own calls (`received`, `pay`). The processor allows `@Receives` on an owned action; `.jsc` does not
   expose it, as no deposit could reach it.
 
+After #101's review (round r1), M3a1 also settles these:
+
+- **`shared` takes `Ctx`** (decision 3 of the report) is a port-fidelity choice: the processor does not tie `@Shared`
+  to `Ctx`, and examples/bank's owned methods take `Ctx` without needing it, so the ports keep their redeemers. A later
+  milestone may make it conditional on the method reading the transaction.
+- **An escape hatch** (JSC1209) is an owned destroy without `shared`, `before` or `after`: neither the instance's state
+  nor a deadline can trap an object. One that never reads `balance` could pay out nothing the validator accepts, so it is
+  an error (JSC1216). That its body can succeed is otherwise the author's: the rule is syntactic.
+- **Params quorums are the deployment's**: every `quorum params.k params.t`, an owned method's too, is checked at the
+  instance's init and at no owned init, as the validator's `paramsQuorumChecks` does (semantics §2.7).
+- **Native assets in owned actions and destroys** (`accept`, `send`, `mint`, `burn`, `deposit`, `funds`) come with
+  M3a2, which specifies `funds` for an object; M3a1 refuses them (JSC1215). Both IR readers are as strict, staged by part.
+- **An owned init's parameters** may take the shared state's field names (it is read only by projection), and the
+  owned annotations' names are reserved only in contracts with owned types.
+
 **The method modifiers** (r11, fixed in M1c; gated by vault, escrow and pool, which pass): an `init`, `action` or
 `destroy` header is followed by modifiers, in any order, each at most once (JSC0416): `payable` (not on a destroy),
 `open`, `only f` (`@SignedBy("f")`, `f` a `Key` state field), `after f` and `before f` (`@ValidAfter`/`@ValidBefore`,

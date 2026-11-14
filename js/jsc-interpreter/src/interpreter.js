@@ -162,6 +162,7 @@ class Program {
         env = bind(env, m.shared, tx.shared);
       }
       if (m.into) {
+        // τ.into and τ.arriving (M3a3, semantics §2.8 then): bound only for programs the reader admits, none before M3a3.
         if (!tx || !tx.into) throw new Error(`${m.name} moves its object (into): its transaction needs the destination`);
         env = bind(env, m.into, tx.into);
       }
