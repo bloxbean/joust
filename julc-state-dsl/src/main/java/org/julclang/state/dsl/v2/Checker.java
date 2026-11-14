@@ -1917,7 +1917,6 @@ final class Checker {
             }
             int maxKey = 32;
             long cooldown = 60_000L, window = Math.min(120_000L, maxValidity);
-            boolean cooldownWritten = false;
             for (Syntax.Option o : k.options()) {
                 switch (o.name()) {
                     case "maxKeyBytes" -> {
@@ -1933,7 +1932,6 @@ final class Checker {
                             throw o.pos().error("JSC1243", "linkCooldownMs is 0, or 60000 to 3600000 milliseconds (ADR-0016 D1, D9)");
                         }
                         cooldown = o.value().longValueExact();
-                        cooldownWritten = true;
                     }
                     case "linkWindowMs" -> {
                         long cap = Math.min(900_000L, maxValidity);
@@ -1954,10 +1952,6 @@ final class Checker {
             }
             if (k.isSigned() && kt.equals(Ty.HASH)) {
                 throw k.signed().error("JSC1242", "a signed key is a key hash that signs the insert: type " + k.field() + " Key or Bytes, not Hash (ADR-0016 I53)");
-            }
-            if (cooldown == 0L && cooldownWritten) {
-                warn(t.pos(), "JSC9012", "linkCooldownMs = 0 on " + t.name() + ": without a link cooldown anyone can keep a node in flight by"
-                        + " relinking it every block, so its retiring exit is no longer guaranteed against churn (ADR-0016 §2, D9)");
             }
             keyed.put(t.name(), new Ir.Keyed(k.field(), maxKey, k.isSigned(), cooldown, window));
         }
@@ -2176,6 +2170,11 @@ final class Checker {
         for (var e : keyed.entrySet()) {
             String o = e.getKey();
             Ir.Keyed k = e.getValue();
+            // C = 0, written (the processor's warning; a warning of the round, so here rather than with the options).
+            if (k.cooldownMs() == 0L) {
+                warn(keyedTypeDecl(c, o).pos(), "JSC9012", "linkCooldownMs = 0 on " + o + ": without a link cooldown anyone can keep a node in"
+                        + " flight by relinking it every block, so its retiring exit is no longer guaranteed against churn (ADR-0016 §2, D9)");
+            }
             // The processor's static bound (ADR-0016 D2): a constructor tag of at most 3 bytes, an indefinite list 2, the
             // instance (32 + 2), next and the key (maxKeyBytes + 2 each), linkedAt 9.
             int retiredWorst = 3 + 2 + (32 + 2) + (k.maxKeyBytes() + 2) + 9 + (k.maxKeyBytes() + 2);

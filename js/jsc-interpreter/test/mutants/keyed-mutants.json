@@ -1,0 +1,118 @@
+[
+ {
+  "file": "keyed-retire-open.json",
+  "message": "a retiring exit is signed by its owner"
+ },
+ {
+  "file": "keyed-retire-payable.json",
+  "message": "needs nobody else"
+ },
+ {
+  "file": "keyed-retire-after.json",
+  "message": "needs nobody else"
+ },
+ {
+  "file": "keyed-retire-quorum.json",
+  "message": "needs nobody else"
+ },
+ {
+  "file": "keyed-action-open.json",
+  "message": "a keyed action names its audience"
+ },
+ {
+  "file": "keyed-no-hatch.json",
+  "message": "Ballot has no retiring exit"
+ },
+ {
+  "file": "keyed-max-key-65.json",
+  "message": "maxKeyBytes is 1 to 64"
+ },
+ {
+  "file": "keyed-max-key-0.json",
+  "message": "maxKeyBytes is 1 to 64"
+ },
+ {
+  "file": "keyed-signed-27.json",
+  "message": "a signed key is a 28-byte key hash"
+ },
+ {
+  "file": "keyed-cooldown-59999.json",
+  "message": "linkCooldownMs is 0 or 60000 to 3600000"
+ },
+ {
+  "file": "keyed-window-19999.json",
+  "message": "linkWindowMs is 20000 to min(900000, maxValidityMs)"
+ },
+ {
+  "file": "keyed-window-900001.json",
+  "message": "linkWindowMs is 20000 to min(900000, maxValidityMs)"
+ },
+ {
+  "file": "keyed-type-unknown.json",
+  "message": "keyed type Nope is not one owned type"
+ },
+ {
+  "file": "keyed-type-twice.json",
+  "message": "keyed type Ballot is not one owned type"
+ },
+ {
+  "file": "keyed-key-int.json",
+  "message": "is not a Bytes, Key or Hash field"
+ },
+ {
+  "file": "keyed-key-missing.json",
+  "message": "is not a Bytes, Key or Hash field"
+ },
+ {
+  "file": "keyed-null.json",
+  "message": "keyed"
+ },
+ {
+  "file": "keyed-empty.json",
+  "message": "keyed"
+ },
+ {
+  "file": "keyed-extra-field.json",
+  "message": "extra"
+ },
+ {
+  "file": "keyed-no-signed.json",
+  "message": "signed"
+ },
+ {
+  "file": "keyed-signed-string.json",
+  "message": "signed is a boolean"
+ },
+ {
+  "file": "keyed-key-time-field.json",
+  "message": "its key is a time field"
+ },
+ {
+  "file": "keyed-max-datum-2049.json",
+  "message": "maxDatumBytes is at most 2048"
+ },
+ {
+  "file": "keyed-batched.json",
+  "message": "a keyed contract has no batched action"
+ },
+ {
+  "file": "keyed-admits.json",
+  "message": "a keyed object does not move (admits Ballot)"
+ },
+ {
+  "file": "keyed-send.json",
+  "message": "a keyed contract handles no native assets"
+ },
+ {
+  "file": "keyed-retire-plain.json",
+  "message": "only a keyed type"
+ },
+ {
+  "file": "keyed-retire-on-action.json",
+  "message": "only an owned destroy retires"
+ },
+ {
+  "file": "keyed-retire-field.json",
+  "message": "field"
+ }
+]
