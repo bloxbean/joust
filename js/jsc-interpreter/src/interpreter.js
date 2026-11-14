@@ -155,6 +155,10 @@ class Program {
         const l = m.params.find((x) => x.id === id);
         if (!this.wellFormed(lookup(env, id), l.type)) throw new Refused(`${l.name} is not a well-formed input`, 'input', l.name);
       }
+      // §4 (M2c, review r3 C7): an init checks the params it is made under (the deployment's).
+      if (m.kind === 'init' && this.params && !this.#fieldsWellFormed(this.params, 'Config')) {
+        throw new Refused('the params are not well formed', 'input', 'params');
+      }
       // §4 (M2c): then each read state, a checked input too.
       for (const r of reads) {
         if (!this.wellFormed(lookup(env, r.local.id), r.local.type)) {

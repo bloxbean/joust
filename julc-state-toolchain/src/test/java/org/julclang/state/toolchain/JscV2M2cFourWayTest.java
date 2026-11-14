@@ -51,6 +51,15 @@ import static org.junit.jupiter.api.Assertions.*;
 class JscV2M2cFourWayTest {
 
     static final Map<String, FourWay> LEGS = new LinkedHashMap<>();
+    static final Map<String, Map<String, String>> TRANSITIONS = new LinkedHashMap<>();
+    static JscModules MODULES;
+    static Map<String, String> SOURCES;
+    static final byte[] STASH_POLICY = fill(0x0B);
+    static final byte[] STASH_ID = JscV2M2FourWayTest.bytes(32, 0x3D);
+
+    static Rec stashParams(ValueV v, byte[] h) {
+        return rec("Config", v, Bytes.of(h));
+    }
     static final BigInteger ADA = BigInteger.valueOf(1_000_000);
     static final byte[] PUB = fill(0x9B), BUYER = fill(0xB0), STRANGER = fill(0x77), A = fill(0x11), B = fill(0x22);
     static final byte[] ORACLE_POLICY = fill(0x0C), POT_POLICY = fill(0x0E), JAR_POLICY = fill(0x0F), TOKEN_POLICY = fill(0x70);
@@ -73,7 +82,7 @@ class JscV2M2cFourWayTest {
 
     static Map<String, String> sources() throws Exception {
         var out = new LinkedHashMap<String, String>();
-        for (String c : List.of("Oracle", "Kiosk", "Pot", "Stall", "Tips", "Tipper", "Inbox")) out.put(c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
+        for (String c : List.of("Oracle", "Kiosk", "Pot", "Stall", "Tips", "Tipper", "Inbox", "Stash", "StashReader")) out.put(c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
         return out;
     }
 
@@ -90,8 +99,13 @@ class JscV2M2cFourWayTest {
         var params = Map.of(
                 "Kiosk", rec("Config", inst(ORACLE_POLICY, ORACLE_ID), n(600_000)),
                 "Stall", rec("Config", inst(POT_POLICY, POT_ID), n(500)),
-                "Tipper", rec("Config", inst(JAR_POLICY, JAR_ID), ada(50)));
+                "Tipper", rec("Config", inst(JAR_POLICY, JAR_ID), ada(50)),
+                "Stash", stashParams(vv(TOKEN_POLICY, N01, n(1)), fill(0x71)),
+                "StashReader", rec("Config", inst(STASH_POLICY, STASH_ID)));
+        MODULES = modules;
+        SOURCES = srcs;
         for (var c : r.contracts()) {
+            TRANSITIONS.put(c.name(), c.transitions());
             System.out.println("[M2c] " + c.name() + ": " + c.scriptSizeBytes() + " bytes");
             LEGS.put(c.name(), new FourWay(c.name(), srcs.get(c.name() + ".jsc"), c.transitions(), params.get(c.name()), modules));
         }
@@ -438,5 +452,53 @@ class JscV2M2cFourWayTest {
         f.mutants("keyed", INBOX, List.of(), deposits(f, at(BUYER, 0, 0), new DepositV(lovelace(1_000_000), Bytes.of(A))), BUYER);
         JsLeg.check(f);
         report(f);
+    }
+    // ------------------------------------------------------------------ Stash: params checked at init (review r3, C7)
+
+    /**
+     * A writer whose state stores a Value made from its params, and a reader of that state: every state the writer can make
+     * the reader can read. The params are a checked input of the init (a Value of lovelace's or 28-byte policies, a 28-byte
+     * Hash), so params a reader would refuse are refused where the instance is made, on every leg.
+     */
+    @Test
+    @Order(8)
+    void stashParams_areCheckedAtInit_andEveryStateItMakesIsReadable() throws Exception {
+        var f = LEGS.get("Stash");
+        byte[] h = fill(0x71);
+        ValueV held = vv(TOKEN_POLICY, N01, n(1), h, N01, n(1));
+        Rec made = rec("State", n(7), held);
+        ok(f.check("init", null, List.of(), at(fill(0x0A), 0, 0), fill(0x0A)));
+        // stay and read are open and never name the caller: no signer.
+        ok(f.check("stay", made, List.of(), at(fill(0x0A), 0, 0), null));
+        f.mutants("stay", made, List.of(), at(fill(0x0A), 0, 0), null);
+        JsLeg.check(f);
+        // Params outside the domain: refused by the init on every leg (input:params), so no such instance exists.
+        var bad = new LinkedHashMap<String, Rec>();
+        bad.put("a Value of a 1-byte policy", stashParams(vv(new byte[]{1}, N01, n(1)), h));
+        bad.put("a Value of policies #0000 and #ff", stashParams(vv(new byte[]{0, 0}, N01, n(1), new byte[]{(byte) 0xFF}, N01, n(1)), h));
+        bad.put("a Value of a 29-byte policy", stashParams(vv(JscV2M2FourWayTest.bytes(29, 0x70), N01, n(1)), h));
+        bad.put("a 27-byte Hash", stashParams(vv(TOKEN_POLICY, N01, n(1)), new byte[27]));
+        int refused = 0;
+        for (var e : bad.entrySet()) {
+            var w = new FourWay("Stash", SOURCES.get("Stash.jsc"), TRANSITIONS.get("Stash"), e.getValue(), MODULES);
+            assertEquals("refused", w.check("init", null, List.of(), at(fill(0x0A), 0, 0), fill(0x0A)), e.getKey());
+            assertEquals("input:params", w.lastRefusal, e.getKey());
+            JsLeg.check(w);
+            refused++;
+        }
+        // The reader reads what the writer made (its stored Value checked, though read is only n); a state holding a Value
+        // the writer can no longer make is refused (input:s).
+        var r = LEGS.get("StashReader");
+        Rec reader = rec("State", n(0));
+        ok(r.check("init", null, List.of(), at(fill(0x0A), 0, 0), fill(0x0A)));
+        ok(r.check("read", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash", rec("Stash.State", n(7), held))), null));
+        assertEquals("refused", r.check("read", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash",
+                rec("Stash.State", n(7), vv(new byte[]{1}, N01, n(1))))), null));
+        assertEquals("input:s", r.lastRefusal);
+        r.mutants("read", reader, List.of(), at(BUYER, 0, 0).withReads(Map.of("stash", rec("Stash.State", n(7), held))), null);
+        JsLeg.check(r);
+        System.out.println("[M2c five-way] Stash: " + refused + " params refused by the init on every leg (input:params); StashReader reads"
+                + " every state Stash makes");
+        report(r);
     }
 }

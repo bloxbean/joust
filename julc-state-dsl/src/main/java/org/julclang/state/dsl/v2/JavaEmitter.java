@@ -398,6 +398,15 @@ final class JavaEmitter {
             stmts.append("        Require.that(").append(checkCall(l.type, l.name)).append(", ")
                     .append(str(key("input", field, l.pos, l.name))).append(");\n");
         }
+        // M2c (review r3, C7): the params are a checked input of the init, so no instance is made under params that hold a
+        // value outside the domain a reader checks (a Value of other policies than lovelace's and 28-byte ones), or a Hash
+        // that Value.asset would make one of (a Key or Hash not 28 bytes, a map out of order, an address not the ledger's).
+        // Fixed for the deployment, they are then trusted by every other method.
+        if (m.kind() == Ir.Kind.INIT && p.params() != null && Ty.needsCheck(new Ty.Rec(Ir.PARAMS), this::components)) {
+            imports.add("org.julclang.state.api.Require");
+            stmts.append("        Require.that(").append(checkCall(new Ty.Rec(Ir.PARAMS), "params__")).append(", ")
+                    .append(str(key("params", 0, m.pos(), "params"))).append(");\n");
+        }
         // M2c (ADR-0011 D2, D5): each read state is a checked input too (a foreign datum: every Key 28 bytes, maps canonical,
         // addresses well formed), after the arguments; its key counts the method's reads from 1, in source order.
         int readNo = 0;

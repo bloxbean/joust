@@ -1,0 +1,18 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import contract { Stash } from "./Stash.jsc"
+
+// ADR-0018 M2c (review r3, C7): reads Stash's state, whose stored Value it checks (used or not) before the body runs.
+contract StashReader {
+  params { stash: Instance<Stash> }
+  state { n: Int }
+
+  init() {
+    return { n: 0 }
+  }
+
+  action read(s: reads params.stash) open {
+    return { n: s.n }
+  }
+}

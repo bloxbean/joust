@@ -741,6 +741,10 @@ public final class Interpreter {
         for (Ir.Local l : m.checked()) {
             if (!checked(lookup(env, l), l.type)) throw new Refused(l.name + " is not a well-formed input", "input", l.name);
         }
+        // M2c (review r3, C7): an init checks the params it is made under (the deployment's), as the generated code does.
+        if (m.kind() == Ir.Kind.INIT && params != null && !fieldsChecked(params, Ir.PARAMS)) {
+            throw new Refused("the params are not well formed", "input", "params");
+        }
         for (Ir.Read r : m.reads()) {
             if (!checked(lookup(env, r.local()), r.local().type)) {
                 throw new Refused(r.local().name + " is not a well-formed state of " + r.field(), "input", r.local().name);
