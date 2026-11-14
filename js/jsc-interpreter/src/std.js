@@ -1,6 +1,6 @@
 // The std rows (docs/reference/jsc-2-semantics.md §3.10, ADR-0018 D8): each fails exactly outside its domain.
 
-import { NONE, Refused, some, hex, toUnsigned, unsignedBytes, ValueV, inRange } from './values.js';
+import { NONE, Refused, some, hex, toUnsigned, unsignedBytes, ValueV, inRange, bytesEqual } from './values.js';
 
 /** A domain failure of a row (its class is domain:<row>). */
 const out = (row, message) => new Refused(message, 'domain', row);
@@ -162,6 +162,18 @@ export function applyStd(name, args, { same, elemType, tx }) {
     // std/address (M2)
     case 'paymentKey': return a.payment.script ? NONE : some(a.payment.hash);
     case 'paymentScript': return a.payment.script ? some(a.payment.hash) : NONE;
+    // std/certs (M3c, §2.10): each tests one constructor exactly; a StakeVote delegation is neither stake-only nor vote-only.
+    case 'isRegistration': return a.ctor === 'RegStaking';
+    case 'isDRepLifecycle': return a.ctor === 'RegDRep' || a.ctor === 'UpdateDRep';
+    case 'delegatesOnlyTo':
+    case 'delegatesVoteTo': {
+      if (a.ctor !== 'DelegStaking' && a.ctor !== 'RegDeleg') return false;
+      const d = a.fields[1];
+      if (name === 'delegatesOnlyTo') return d.ctor === 'Stake' && bytesEqual(d.fields[0], b);
+      const x = d.fields[0];
+      return d.ctor === 'Vote' && x.ctor === b.ctor
+        && (x.ctor !== 'DRepCredential' || (x.fields[0].script === b.fields[0].script && bytesEqual(x.fields[0].hash, b.fields[0].hash)));
+    }
     // std/time
     case 'elapsedSince': return tx.validFrom - a > 0n ? tx.validFrom - a : 0n;
     case 'elapsedSinceAtMost': return tx.validTo - a > 0n ? tx.validTo - a : 0n;
@@ -181,4 +193,6 @@ export const ROWS = Object.freeze({
   'std/time': ['elapsedSince', 'elapsedSinceAtMost', 'windowStart', 'windowEnd'],
   'std/value': ['isEmpty', 'withoutLovelace', 'scale'],
   'std/address': ['paymentKey', 'paymentScript'],
+  // M3c (ADR-0010 r2): the exact certificate checks of certify handlers.
+  'std/certs': ['isRegistration', 'delegatesOnlyTo', 'delegatesVoteTo', 'isDRepLifecycle'],
 });

@@ -413,7 +413,7 @@ cardano-client-lib's `Account` there.
 | JSC0913 | error | is an enum: read its fields with match (match v { A { … } => … }) | Checker |
 | JSC0914 | error | an … is one of its variants: write … { … }, … { … } | Checker |
 | JSC0915 | error | a variant is built from its fields: … { … } takes no spread | Checker |
-| JSC0916 | error | match needs an enum or an Option, not | Checker |
+| JSC0916 | error | match needs an enum or an Option, not … (M3c: or a sealed ledger type of the script purposes: TxCert, Voter, Vote, GovernanceAction, Delegatee, DRep) | Checker |
 | JSC0917 | error | this arm is unreachable: the arms before it cover every case | Checker |
 | JSC0918 | error | _ binds nothing | Checker |
 | JSC0919 | error | is not a case of … (it is a variant of … ) … : the cases are … , | Checker |
@@ -515,6 +515,58 @@ M3b also reads earlier rules at keyed positions: a keyed type's escape hatch is 
 JSC1209), an initializer takes only `payable` (JSC0405, as every owned init), and the instance is never destroyed
 (JSC1210).
 
+## Script purposes and migration (ADR-0018 D10, M3c; ADR-0010, ADR-0011 D4)
+
+| Code | Severity | Message | Raised by |
+|---|---|---|---|
+| JSC1301 | error | stakeSelf is a flag: contract Name(stakeSelf), without a value / stakeSelf is written twice | Checker (M3c) |
+| JSC1302 | error | stakeSelf stakes the funds to the contract's own script, so it needs a withdraw handler (its rewards) and a certify handler (its registration and delegation); without them they are unreachable (ADR-0010 D2, I38) | Checker (M3c) |
+| JSC1303 | error | a migrating destroy names its successor's field: migrates to successor | Parser (M3c) |
+| JSC1304 | error | init migrate names the previous version's policy by a params field: init migrate from params.previous(old: V1.State) | Parser (M3c) |
+| JSC1312 | error | … needs quorum or authorized over params.*: an open handler would let anyone … (ADR-0010 r2) / …'s audience names params fields (…): no instance is spent for a script purpose, so there is no state to read it from (ADR-0010 D1) | Checker (M3c) |
+| JSC1313 | error | a propose handler is a guardrail: the ledger runs it for a proposal and its validator checks no audience, so it takes no modifiers (ADR-0010 D1); drop '…' / … takes only quorum or authorized over params.* (ADR-0010 D1), not '…' | Checker (M3c) |
+| JSC1314 | error | … takes … (the processor's shape, ADR-0010 D1) / … takes …: its parameter … is a …, not … / its first parameter is the amount withdrawn, an Int / … reads no instance and no other contract: no input is spent for a script purpose (ADR-0010 D1) | Checker (M3c) |
+| JSC1315 | error | … is not available in …: it takes the params and the purpose's data only (ADR-0010 D1) / a withdraw handler's transaction has no input of the contract: received is 0 and balance the amount, so read the amount parameter (ADR-0010 r2) | Checker (M3c) |
+| JSC1316 | error | at most one … handler per contract (ADR-0010 D1): … is one (line …) | Checker (M3c) |
+| JSC1317 | error | … is governed by the params, since no instance is spent for a script purpose (ADR-0010 D1): declare params { … } and name them in its quorum or authorized | Checker (M3c) |
+| JSC1318 | error | … sees no instance: no input is spent for a script purpose, so '…' is not available; it reads the params (params.f) and its parameters (ADR-0010 D1) | Checker (M3c) |
+| JSC1319 | error | a withdraw handler's only effect is send(…): its sends allocate the rewards withdrawn, exactly (ADR-0010 D1, I37) / … decides, by its Bool: it has no effects (ADR-0010 D1) | Checker (M3c) |
+| JSC1320 | error | ….… is PlutusData in the ledger, which .jsc does not read: a guardrail that inspects proposed parameter changes stays in Java until a typed protocol-parameter view exists (ADR-0018 D5) | Checker (M3c) |
+| JSC1321 | error | … is a ledger type of the script purposes: it comes from the script context, so it is a handler's parameter, a fn's parameter or result, or a const's type, never a field … nor a method's parameter (a redeemer field) or a view's result (ADR-0018 D5, M3c) / a LedgerMap has a key and a value type … / … cannot be …: a ledger type of the script purposes is read from the script context, never encoded into an output | Checker (M3c) |
+| JSC1322 | error | … is not comparable: a ledger type of the script purposes is matched (its constructors) or read by its fields, which are (ADR-0018 D5, M3c) | Checker (M3c) |
+| JSC1323 | error | … is a sealed ledger type: read its fields with match (…'s cases: …) / … has no methods: match it / read its fields | Checker (M3c) |
+| JSC1324 | error | a LedgerMap is read-only: it is ledger data, never stored, so it has no … (ADR-0018 D5) / LedgerMap has no property '…' … / LedgerMap has no method '…' (get, has, any, all, fold) | Checker (M3c) |
+| JSC1325 | error | … is a ledger type of the script purposes (or one of its constructors): its values come from the script context and are not built in .jsc; match them, or read their fields (ADR-0018 D5, M3c) | Checker (M3c) |
+| JSC1330 | error | migrates to goes on an instance destroy … (ADR-0011 D4) / migrates to …: … is …; the successor's policy is a Bytes or Hash state field / … holds a time value, so where the funds go would depend on a validity window (ADR-0018 D11) | Checker (M3c) |
+| JSC1331 | error | migrates to names a state field, not …: the successor's params pin this version's policy, so pinning the successor in this version's params would make each script's hash depend on the other's (ADR-0011 D4); keep the successor's policy in a state field its admin sets (setSuccessor) | Checker (M3c) |
+| JSC1332 | error | a migrating destroy moves the instance's whole value into its successor, which adopts exactly its lovelace (ADR-0011 D4): it pays, sends, mints, deposits and emits nothing | Checker (M3c) |
+| JSC1333 | error | … migrates the instance: say who may, with only, quorum or authorized ('open' would let anyone move every instance into the successor whenever it is named) | Checker (M3c) |
+| JSC1334 | error | init migrate / migrates to is not supported in a contract with owned objects (…) …, BigMap state … or native assets … (ADR-0011 r2) / the previous version … keeps BigMap state, whose maps cannot move into a new instance … | Checker (M3c) |
+| JSC1335 | error | init migrate from params.…: …; the previous version's policy is a Hash (or Bytes) params field: params { previous: Hash } | Checker (M3c) |
+| JSC1336 | error | init migrate's first parameter is the previous version's state: init migrate from params.…(old: V1.State), with import contract { V1 } from "./V1.jsc" (ADR-0011 D4) | Checker (M3c) |
+| JSC1337 | error | a contract adopts from one previous version: at most one init migrate (line …) / migrate is the Java name of this contract's init migrate (@Migrate migrate(…)); rename this method | Checker (M3c) |
+| JSC1338 | error | init migrate adopts the previous instance's value exactly (ADR-0011 D4): it pays, sends, mints, accepts, deposits and emits nothing / init migrate adopts exactly the previous instance's lovelace: nothing is received, and the balance is the old instance's (ADR-0011 D4) | Checker (M3c) |
+| JSC1339 | error | init migrate takes no modifiers: the new instance holds exactly the previous one's lovelace, so it is not payable, and the previous version's migrating destroy says who may migrate (ADR-0011 D4) | Checker (M3c) |
+| JSC1340 | error | a withdraw handler's result is its sends: send(to, Value.lovelace(n)), totalling the amount (ADR-0010 D1); it has no value | Checker (M3c) |
+| JSC1341 | error | … decides: it evaluates to a Bool (= expr, or a block ending in one) | Checker (M3c) |
+
+M3c also reads earlier rules at the new positions: a handler's audience is checked by JSC0439 and JSC0311 (quorum's and
+authorized's field types), a withdrawal's arguments are checked inputs (D5), and JSC1244 (keyed types) now also refuses
+a withdraw handler beside keyed types, as the processor does.
+
+### Names M3c reserves (ADR-0018 D16)
+
+| The name | Where it is now refused | Code |
+|---|---|---|
+| `Withdraw`, `Certify`, `Votes`, `Propose`, `Migrate`, `MigrateTo` (the annotations purposes and migration lower to), `Certs` (std/certs' class), `Rewards` (the withdraw redeemer), the ledger types `TxCert`, `Voter`, `Vote`, `GovernanceActionId`, `ProposalProcedure`, `GovernanceAction`, `Delegatee`, `DRep`, `ProtocolVersion`, `Rational`, `Constitution`, `LedgerMap`, `Data` | a type, enum, variant, event, field or binding name, in every contract | JSC0211 |
+| `migrates` (a method modifier) | a field or binding name, in every contract | JSC0211 |
+| `marker`, `amount`, `handle`, `sends`, `cosigners`, `runtime`, `callerAccount` (the Rewards redeemer's and the client's names) | a withdraw handler's argument after the amount | JSC0216 |
+| `prior`, `priorState`, `result`, `seed` (the adoption's client) | a parameter of init migrate | JSC0216 |
+| `migrate` (init migrate's Java method) | a method name, in a contract with init migrate | JSC1337 |
+
+`withdraw`, `certify`, `vote`, `propose` and `migrate` are not reserved: each is a word only where a member starts (an
+action may be called `withdraw`), and `from` and `to` only after `init migrate` and `migrates`.
+
 ## Migration from .jsc v1 (ADR-0018 D16)
 
 `joust migrate` (Gradle: `migrateJsc`; `JscMain --migrate`) refuses, at the v1 position, what it cannot translate.
@@ -549,3 +601,4 @@ JSC1209), an initializer takes only `payable` (JSC0405, as every owned init), an
 | JSC9011 | warning | … lets anyone take a free … key first (squatting, ADR-0016 §2): to silence this, declare the key signed (keyed by … (signed)), or set …: caller in every result | Checker (M3b) |
 | JSC9012 | warning | linkCooldownMs = 0 on …: without a link cooldown anyone can keep a node in flight by relinking it every block, so its retiring exit is no longer guaranteed against churn (ADR-0016 §2, D9) | Checker (M3b) |
 | JSC9013 | warning | the keyed action … is authorized by someone other than the retiring exit's signer: that party can spend the … every block and delay its owner's exit (ADR-0016 §2) | Checker (M3b) |
+| JSC9014 | warning | … sets …, the successor a migration moves the instance into: whoever may call it can change the successor until the migration, after users relied on it (ADR-0011 D4); to fix it once, require it unset: require(… == #, "the successor is set once") | Checker (M3c) |

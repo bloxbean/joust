@@ -702,13 +702,13 @@ final class Parser {
                 // M3c (ADR-0011 D4): init migrate from params.f(old: C.State, …) { … }, @Migrate(from = "params.f"): the
                 // adoption of an instance of the previous version, whose policy the params field f pins.
                 openDecl("migrate");
-                named(t);
+                if (spans != null) spans.name(t, "migrate");   // the Java method's name, as init is init's
                 next();
                 next();
                 next();
                 Pos fp = peek().pos();
                 if (!at("params") || !peek(1).is(".")) {
-                    throw fp.error("JSC1335", "init migrate names the previous version's policy by a params field: init migrate from params.previous(old: V1.State)");
+                    throw fp.error("JSC1304", "init migrate names the previous version's policy by a params field: init migrate from params.previous(old: V1.State)");
                 }
                 next();
                 next();
@@ -864,7 +864,7 @@ final class Parser {
                 // M3c (ADR-0011 D4): migrates to f, on an instance destroy: @MigrateTo("f"), the successor's policy in the state
                 // field f (a params field would make the two versions' hashes circular; the checker refuses it).
                 next();
-                if (!at("to")) throw peek().pos().error("JSC1330", "a migrating destroy names its successor's field: migrates to successor");
+                if (!at("to")) throw peek().pos().error("JSC1303", "a migrating destroy names its successor's field: migrates to successor");
                 next();
                 mods.add(new Mod("migrates", fieldRef("the state field after 'migrates to' (a Bytes field holding the successor's policy)"), t.pos()));
             } else if (t.is("admits")) {

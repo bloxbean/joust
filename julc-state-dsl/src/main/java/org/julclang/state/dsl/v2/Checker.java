@@ -2971,10 +2971,12 @@ final class Checker {
             Ir.Kind k = kind(m.kind());
             if (!k.purpose() && k != Ir.Kind.MIGRATE) continue;
             Syntax.Method other = seen.putIfAbsent(k, m);
+            if (other != null && k == Ir.Kind.MIGRATE) {
+                throw m.pos().error("JSC1337", "a contract adopts from one previous version: at most one init migrate (line " + other.pos().line() + ")");
+            }
             if (other != null) {
-                throw m.pos().error(k == Ir.Kind.MIGRATE ? "JSC1337" : "JSC1316", (k == Ir.Kind.MIGRATE ? "a contract adopts from one previous version:"
-                        + " at most one init migrate" : "at most one " + m.kind().name().toLowerCase() + " handler per contract (ADR-0010 D1): "
-                        + other.name() + " is one") + " (line " + other.pos().line() + ")");
+                throw m.pos().error("JSC1316", "at most one " + m.kind().name().toLowerCase() + " handler per contract (ADR-0010 D1): " + other.name()
+                        + " is one (line " + other.pos().line() + ")");
             }
         }
         boolean stakeSelf = c.options().stream().anyMatch(o -> o.name().equals("stakeSelf"));
@@ -3716,12 +3718,14 @@ final class Checker {
             throw n.pos().error("JSC1318", handlerWord(sc.kind) + " sees no instance: no input is spent for a script purpose, so '" + n.name()
                     + "' is not available; it reads the params (params.f) and its parameters (ADR-0010 D1)");
         }
-        if (sc.kind != null && (sc.kind == Ir.Kind.WITHDRAW || sc.kind == Ir.Kind.MIGRATE) && (n.name().equals("received") || n.name().equals("balance"))) {
-            throw n.pos().error(sc.kind == Ir.Kind.WITHDRAW ? "JSC1315" : "JSC1338", sc.kind == Ir.Kind.WITHDRAW
-                    ? "a withdraw handler's transaction has no input of the contract: received is 0 and balance the amount, so read the amount"
-                    + " parameter (ADR-0010 r2)"
-                    : "init migrate adopts exactly the previous instance's lovelace: nothing is received, and its balance is the old instance's"
-                    + " (ADR-0011 D4)");
+        boolean ctxValue = n.name().equals("received") || n.name().equals("balance");
+        if (sc.kind == Ir.Kind.WITHDRAW && ctxValue && sc.lookup(n.name()) == null) {
+            throw n.pos().error("JSC1315", "a withdraw handler's transaction has no input of the contract: received is 0 and balance the amount, so"
+                    + " read the amount parameter (ADR-0010 r2)");
+        }
+        if (sc.kind == Ir.Kind.MIGRATE && ctxValue && sc.lookup(n.name()) == null) {
+            throw n.pos().error("JSC1338", "init migrate adopts exactly the previous instance's lovelace: nothing is received, and the balance is"
+                    + " the old instance's (ADR-0011 D4)");
         }
         if (Gov.NAMES.contains(n.name()) || n.name().equals("LedgerMap") || govCtor(n.name())) {
             throw n.pos().error("JSC1325", n.name() + " is a ledger type of the script purposes (or one of its constructors): its values come from"
@@ -5069,7 +5073,8 @@ final class Checker {
         if (t.equals(Ty.CREDENTIAL)) return List.of("KeyCred", "ScriptCred");
         // M3c (D5): a sealed ledger type's constructors, in the ledger's tag order.
         if (Gov.isSum(t)) return Gov.ctorNames(((Ty.Gov) t).name());
-        throw p.error("JSC0916", "match needs an enum, an Option, a Credential or a sealed ledger type, not " + Ty.show(t));
+        throw p.error("JSC0916", "match needs an enum, an Option or a Credential, not " + Ty.show(t) + " (M3c: or a sealed ledger type of the script"
+                + " purposes: TxCert, Voter, Vote, GovernanceAction, Delegatee, DRep)");
     }
 
     /** The fields a constructor binds: a variant's, or Some's one value. */

@@ -1,0 +1,40 @@
+jsc 2
+package t
+
+import { isRegistration, delegatesOnlyTo } from "std/certs"
+
+// M3c (ADR-0018 D10, ADR-0010): the script purposes' handlers, a staked state, the ledger types they read.
+contract Staked(stakeSelf, maxDatumBytes = 256) {
+  params { council: List<Key>, quorum: Int, pool: Bytes, payee: Key, cap: Int }
+  state { deposits: Int }
+
+  init() payable {
+    return { deposits: received }
+  }
+
+  // An action may still be called withdraw: the handler words are words only where a member starts.
+  action withdraw(amount: Int) payable {
+    return { deposits: deposits + amount }
+  }
+
+  withdraw collect(amount: Int) quorum params.council params.quorum {
+    if amount > 0 {
+      send(wallet(params.payee), Value.lovelace(amount))
+    }
+  }
+
+  certify certificate(cert: TxCert) quorum params.council params.quorum =
+    isRegistration(cert) || delegatesOnlyTo(cert, params.pool)
+
+  vote vote(voter: Voter, action: GovernanceActionId, vote: Vote) quorum params.council params.quorum {
+    const first = action.govActionIx == 0
+    first || match vote { Abstain => true, _ => false }
+  }
+
+  propose proposal(p: ProposalProcedure) = match p.governanceAction {
+    TreasuryWithdrawals { withdrawals } => withdrawals.fold(0, (acc, k, v) => acc + v) <= params.cap,
+    _ => true
+  }
+
+  fn total(m: LedgerMap<Credential, Int>): Int = m.values.sum()
+}

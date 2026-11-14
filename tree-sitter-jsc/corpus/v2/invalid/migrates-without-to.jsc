@@ -1,0 +1,9 @@
+jsc 2
+package t
+
+contract C {
+  state { a: Int, successor: Bytes }
+  init() { return { a: 0, successor: # } }
+  // A migrating destroy names its successor field after "migrates to".
+  destroy d() migrates successor { }
+}

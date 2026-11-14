@@ -250,11 +250,15 @@ function shape(file) {
     out.push('invariants: ' + join(invariants.map((i) => (fieldOf(i, 'type') ? text(fieldOf(i, 'type')) + '.' : '') + text(fieldOf(i, 'name')))));
   }
   const KINDS = { init_declaration: 'init', action_declaration: 'action', destroy_declaration: 'destroy', view_declaration: 'view',
-    owned_init_declaration: 'owned init', owned_action_declaration: 'owned action', owned_destroy_declaration: 'owned destroy' };
+    owned_init_declaration: 'owned init', owned_action_declaration: 'owned action', owned_destroy_declaration: 'owned destroy',
+    // M3c: the script purposes' handlers and init migrate.
+    withdraw_declaration: 'withdraw', certify_declaration: 'certify', vote_declaration: 'vote', propose_declaration: 'propose',
+    migrate_declaration: 'init migrate' };
   out.push('methods: ' + body.children.filter((m) => KINDS[m.kind]).map((m) => {
     const kind = KINDS[m.kind];
     const md = mods(m);
-    const name = kind === 'init' ? '' : kind.startsWith('owned') ? ` ${text(fieldOf(m, 'type'))}.${text(fieldOf(m, 'name'))}` : ' ' + text(fieldOf(m, 'name'));
+    const name = kind === 'init' ? '' : kind === 'init migrate' ? ` from ${text(fieldOf(m, 'from')).replace(/\s+/g, '')}`
+      : kind.startsWith('owned') ? ` ${text(fieldOf(m, 'type'))}.${text(fieldOf(m, 'name'))}` : ' ' + text(fieldOf(m, 'name'));
     return kind + name + '(' + params(fieldOf(m, 'parameters')) + ')' + (md ? ' ' + md : '');
   }).join('; '));
   decls(body, 'contract ');

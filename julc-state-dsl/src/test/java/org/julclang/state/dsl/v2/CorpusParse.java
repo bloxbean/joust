@@ -82,10 +82,13 @@ public final class CorpusParse {
             String kind = m.owned() ? "owned " + m.kind().name().toLowerCase().substring(6) + " " + m.on() + "."
                     : m.kind().name().toLowerCase();
             // M2c: receives T names its memo type, written without spaces.
+            // M3c: migrates to f, as written.
             String mods = String.join(" ", m.mods().stream().map(x -> x.type() != null ? x.name() + " " + type(x.type())
-                    : x.arg() == null ? x.name() : x.name() + " " + x.arg()).toList());
-            return kind + (m.kind() == Syntax.Kind.INIT ? "" : (m.owned() ? "" : " ") + m.name()) + "(" + join(m.params().stream().map(Syntax.Param::name).toList())
-                    + ")" + (mods.isEmpty() ? "" : " " + mods);
+                    : x.arg() == null ? x.name() : x.name().equals("migrates") ? "migrates to " + x.arg() : x.name() + " " + x.arg()).toList());
+            // M3c: init migrate from params.f(…), and the purposes' handlers by their words (withdraw m(…), …).
+            String head = m.kind() == Syntax.Kind.MIGRATE ? "init migrate from params." + m.from()
+                    : kind + (m.kind() == Syntax.Kind.INIT ? "" : (m.owned() ? "" : " ") + m.name());
+            return head + "(" + join(m.params().stream().map(Syntax.Param::name).toList()) + ")" + (mods.isEmpty() ? "" : " " + mods);
         }).toList()));
         types(out, "contract ", c.types(), c.enums(), c.fns());
         return String.join(" | ", out);

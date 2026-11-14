@@ -62,10 +62,16 @@ const SYMBOL_KIND = {
   ownedInit: 9,
   ownedAction: 6,
   ownedDestroy: 6,
+  // ADR-0018 M3c: the script purposes' handlers, and init migrate (a creation).
+  withdraw: 6,
+  certify: 6,
+  vote: 6,
+  propose: 6,
+  migrate: 9,
 };
 
 /** An outline declaration's detail: its kind as a reader says it. */
-const DETAIL = { stateField: 'state field', ownedInit: 'owned init', ownedAction: 'owned action', ownedDestroy: 'owned destroy' };
+const DETAIL = { stateField: 'state field', ownedInit: 'owned init', ownedAction: 'owned action', ownedDestroy: 'owned destroy', migrate: 'init migrate' };
 
 /** The document outline (D7): DocumentSymbol[] from the model's outline declarations. */
 export function documentSymbols(model) {

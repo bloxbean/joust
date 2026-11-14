@@ -254,6 +254,37 @@ export class CredV {
   }
 }
 
+/**
+ * M3c (§1.4): a value of a purposes' ledger type, from the script context: its type, its constructor (a record's is its
+ * type) and its fields in the ledger's order (gov.js).
+ */
+export class GovV {
+  constructor(type, ctor, fields) {
+    this.type = type;
+    this.ctor = ctor;
+    this.fields = Object.freeze([...fields]);
+    Object.freeze(this);
+  }
+}
+
+/** M3c: a field typed PlutusData in the ledger, carried as its CBOR (hex), never read. */
+export class DataV {
+  constructor(cborHex) {
+    this.cbor = cborHex;
+    Object.freeze(this);
+  }
+}
+
+/** M3c: a LedgerMap, its entries in the ledger's order, duplicates kept. */
+export class LedgerMapV {
+  constructor(keys, values) {
+    if (keys.length !== values.length) throw new TypeError('a LedgerMap has a value per key');
+    this.keys = Object.freeze([...keys]);
+    this.values = Object.freeze([...values]);
+    Object.freeze(this);
+  }
+}
+
 /** A staking credential: a hash (StakeHash) or a pointer (StakePtr). */
 export class StakeHash {
   constructor(credential) {

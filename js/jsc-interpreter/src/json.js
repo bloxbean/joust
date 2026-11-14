@@ -2,7 +2,7 @@
 // vectors"). It needs no types: { "int": "…" }, true/false, { "bytes": hex }, [ … ], { "none": true }, { "some": v },
 // { "rec": name, "fields": [ … ] }, { "map": [[k, v] …] } (in the given order), { "bigmap": [[k, v] …] }.
 
-import { NONE, Some, some, Rec, MapV, BigMapV, Refused, Limit, hex, fromHex, keyCompare, ValueV, CredV, AddrV, StakeHash, StakePtr, InstV } from './values.js';
+import { NONE, Some, some, Rec, MapV, BigMapV, Refused, Limit, hex, fromHex, keyCompare, ValueV, CredV, AddrV, StakeHash, StakePtr, InstV, GovV, DataV, LedgerMapV } from './values.js';
 
 export function fromJson(j) {
   if (j === true || j === false) return j;
@@ -22,6 +22,11 @@ export function fromJson(j) {
     if ('scriptCred' in j) return new CredV(true, fromHex(j.scriptCred));
     // M2c: { "instance": [policy hex, id hex] }, another contract's instance (a params field).
     if ('instance' in j) return new InstV(fromHex(j.instance[0]), fromHex(j.instance[1]));
+    // M3c: { "gov": type, "ctor": name, "fields": [ … ] } (a record's ctor is its type), { "data": cbor hex },
+    // { "ledgerMap": [[k, v] …] } (in the given order, duplicates kept).
+    if ('gov' in j) return new GovV(j.gov, j.ctor, j.fields.map(fromJson));
+    if ('data' in j) return new DataV(j.data);
+    if ('ledgerMap' in j) return new LedgerMapV(j.ledgerMap.map(([k]) => fromJson(k)), j.ledgerMap.map(([, v]) => fromJson(v)));
     if ('address' in j) {
       const [pay, stake] = j.address;
       const s = stake === null ? NONE : 'stakeHash' in stake ? some(new StakeHash(fromJson(stake.stakeHash)))
@@ -44,6 +49,9 @@ export function toJson(v) {
   if (v instanceof ValueV) return valueToJson(v);
   if (v instanceof CredV) return v.script ? { scriptCred: hex(v.hash) } : { keyCred: hex(v.hash) };
   if (v instanceof InstV) return { instance: [hex(v.policy), hex(v.id)] };
+  if (v instanceof GovV) return { gov: v.type, ctor: v.ctor, fields: v.fields.map(toJson) };
+  if (v instanceof DataV) return { data: v.cbor };
+  if (v instanceof LedgerMapV) return { ledgerMap: v.keys.map((k, i) => [toJson(k), toJson(v.values[i])]) };
   if (v instanceof AddrV) {
     const s = v.stake === NONE ? null : v.stake.value instanceof StakeHash ? { stakeHash: toJson(v.stake.value.credential) }
       : { stakePtr: [v.stake.value.slot.toString(), v.stake.value.txIndex.toString(), v.stake.value.certIndex.toString()] };
@@ -80,6 +88,10 @@ export function txFromJson(t) {
     shared: t.shared == null ? null : fromJson(t.shared),
     into: t.into == null ? null : fromJson(t.into),
     arriving: t.arriving == null ? null : fromJson(t.arriving),
+    // M3c (§2.11): a migrating destroy's successor policy (the instance its transaction mints), an init migrate's prior
+    // instance (its policy and its state, as its input holds it).
+    successor: t.successor == null ? null : fromHex(t.successor),
+    prior: t.prior == null ? null : { policy: fromHex(t.prior.policy), state: fromJson(t.prior.state) },
     // M3b (§2.9): a keyed insert's or removal's instance and the node it relinks (its anchor or predecessor).
     instance: t.instance == null ? null : fromHex(t.instance),
     anchor: t.anchor == null ? null : {

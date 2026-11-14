@@ -101,6 +101,17 @@
           }
         },
         {
+          "match": "\\b(withdraw|certify|vote|propose)\\s+([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.jsc"
+            },
+            "2": {
+              "name": "entity.name.function.jsc"
+            }
+          }
+        },
+        {
           "match": "\\b(owned)\\s+(init|action|destroy)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\.\\s*([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
@@ -125,6 +136,17 @@
             },
             "2": {
               "name": "entity.name.type.jsc"
+            }
+          }
+        },
+        {
+          "match": "\\b(init)\\s+(migrate)\\b",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.jsc"
+            },
+            "2": {
+              "name": "storage.modifier.jsc"
             }
           }
         },
@@ -245,7 +267,7 @@
         },
         {
           "name": "storage.modifier.jsc",
-          "match": "\\b(payable|open|only|batched|quorum|authorized|receives|reads|admits|shared|into|keyed|by|retire)\\b"
+          "match": "\\b(payable|open|only|batched|quorum|authorized|receives|reads|admits|shared|into|keyed|by|retire|migrates)\\b"
         },
         {
           "name": "storage.modifier.jsc",
@@ -288,7 +310,7 @@
           }
         },
         {
-          "match": "\\b(sha2_256|sha3_256|blake2b_256|blake2b_224|verifyEd25519|length|concat|slice|take|drop|byteAt|toInt|toHex|div|mod|pow|expMod|sign|andBytes|orBytes|xorBytes|complement|readBit|shift|rotate|countSetBits|findFirstSetBit|last|nth|indexOf|elapsedSince|elapsedSinceAtMost|windowStart|windowEnd|withoutLovelace|scale|paymentKey|paymentScript)\\s*(?=\\()",
+          "match": "\\b(sha2_256|sha3_256|blake2b_256|blake2b_224|verifyEd25519|length|concat|slice|take|drop|byteAt|toInt|toHex|div|mod|pow|expMod|sign|andBytes|orBytes|xorBytes|complement|readBit|shift|rotate|countSetBits|findFirstSetBit|last|nth|indexOf|elapsedSince|elapsedSinceAtMost|windowStart|windowEnd|withoutLovelace|scale|paymentKey|paymentScript|isRegistration|delegatesOnlyTo|delegatesVoteTo|isDRepLifecycle)\\s*(?=\\()",
           "captures": {
             "1": {
               "name": "support.function.std.jsc"

@@ -199,6 +199,32 @@ public final class Interpreter {
     /** A credential (M2): a key's ({@code KeyCred}) or a script's ({@code ScriptCred}) 28-byte hash. */
     public record CredV(boolean script, Bytes hash) {}
 
+    /**
+     * M3c (ADR-0010, semantics §2.10): a value of a purposes' ledger type, from the script context: its type, its
+     * constructor ({@code RegStaking}; a record's is its type, {@code GovernanceActionId}) and its fields in the ledger's
+     * order, typed as {@link Gov} states them (a {@code Data} field's value is a {@link DataV}).
+     */
+    public record GovV(String type, String ctor, List<Object> fields) {
+        public GovV {
+            fields = java.util.Collections.unmodifiableList(new ArrayList<>(fields));
+        }
+    }
+
+    /** M3c: a field typed PlutusData in the ledger (ParameterChange.parameters), carried as its CBOR, never read. */
+    public record DataV(String cborHex) {}
+
+    /** M3c: a LedgerMap, its entries in the ledger's order, duplicates kept (keys and values of any type). */
+    public record LedgerMapV(List<Object> keys, List<Object> values) {
+        public LedgerMapV {
+            if (keys.size() != values.size()) throw new IllegalArgumentException("a LedgerMap has a value per key");
+            keys = java.util.Collections.unmodifiableList(new ArrayList<>(keys));
+            values = java.util.Collections.unmodifiableList(new ArrayList<>(values));
+        }
+    }
+
+    /** M3c (ADR-0011 D4): the previous version's instance an init migrate adopts: its policy and its state, as its input holds it. */
+    public record PriorV(Bytes policy, Rec state) {}
+
     /** A staking credential: a hash ({@code StakeHash}) or a pointer ({@code StakePtr}). */
     public record StakeHash(CredV credential) {}
 
@@ -234,11 +260,34 @@ public final class Interpreter {
      */
     public record Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
                      FundsV funds, List<Bytes> approvers, java.util.Map<String, Object> reads, Rec shared, Rec into, Rec arriving,
-                     Bytes instance, AnchorV anchor) {
+                     Bytes instance, AnchorV anchor, Bytes successor, PriorV prior) {
         public Tx {
             signers = List.copyOf(signers);
             approvers = List.copyOf(approvers);
             reads = java.util.Map.copyOf(reads);
+        }
+
+        /** M3b's shape: no migration (M3c). */
+        public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
+                  FundsV funds, List<Bytes> approvers, java.util.Map<String, Object> reads, Rec shared, Rec into, Rec arriving,
+                  Bytes instance, AnchorV anchor) {
+            this(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, arriving, instance, anchor,
+                    null, null);
+        }
+
+        /**
+         * M3c (semantics §2.11, ADR-0011 D4): a migrating destroy's transaction mints the instance token of {@code policy}
+         * named after the destroyed input (the successor it moves into).
+         */
+        public Tx withSuccessor(Bytes policy) {
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, arriving, instance, anchor,
+                    policy, prior);
+        }
+
+        /** M3c: an init migrate's transaction spends {@code p}, the previous version's instance it adopts. */
+        public Tx withPrior(PriorV p) {
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, arriving, instance, anchor,
+                    successor, p);
         }
 
         /** M3a's shape: no keyed list (M3b). */
@@ -252,7 +301,8 @@ public final class Interpreter {
          * (an insert's anchor, a removal's predecessor), as the transaction spends it with Link (ADR-0016 D4, D5).
          */
         public Tx withAnchor(Bytes inst, AnchorV a) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, arriving, inst, a);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, arriving, inst, a,
+                    successor, prior);
         }
 
         public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
@@ -265,17 +315,20 @@ public final class Interpreter {
          * {@code shared} parameter reads (ADR-0003 D1).
          */
         public Tx withShared(Rec state) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, state, into, arriving, instance, anchor);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, state, into, arriving, instance, anchor,
+                    successor, prior);
         }
 
         /** M3a: a move's destination instance's state, as its input holds it ({@code into}, ADR-0012 D3). */
         public Tx withInto(Rec state) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, state, arriving, instance, anchor);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, state, arriving, instance, anchor,
+                    successor, prior);
         }
 
         /** M3a: the object arriving through an admits action, as its input holds it before the move (ADR-0012 r4). */
         public Tx withArriving(Rec object) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, object, instance, anchor);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, reads, shared, into, object, instance, anchor,
+                    successor, prior);
         }
 
         public Tx(Bytes caller, BigInteger received, BigInteger balance, BigInteger validFrom, BigInteger validTo, List<Bytes> signers,
@@ -299,17 +352,20 @@ public final class Interpreter {
 
         /** The same transaction, signed by {@code keys}. */
         public Tx signedBy(List<Bytes> keys) {
-            return new Tx(caller, received, balance, validFrom, validTo, keys, funds, approvers, reads, shared, into, arriving, instance, anchor);
+            return new Tx(caller, received, balance, validFrom, validTo, keys, funds, approvers, reads, shared, into, arriving, instance, anchor,
+                    successor, prior);
         }
 
         /** The same transaction, with the native assets the call sees (M2). */
         public Tx withFunds(FundsV f) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, f, approvers, reads, shared, into, arriving, instance, anchor);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, f, approvers, reads, shared, into, arriving, instance, anchor,
+                    successor, prior);
         }
 
         /** The same transaction, approved by these scripts (M2b, ADR-0009 D3). */
         public Tx approvedBy(List<Bytes> scripts) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, scripts, reads, shared, into, arriving, instance, anchor);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, scripts, reads, shared, into, arriving, instance, anchor,
+                    successor, prior);
         }
 
         /**
@@ -317,7 +373,8 @@ public final class Interpreter {
          * params field naming each instance ({@code oracle} for {@code reads params.oracle}).
          */
         public Tx withReads(java.util.Map<String, Object> states) {
-            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, states, shared, into, arriving, instance, anchor);
+            return new Tx(caller, received, balance, validFrom, validTo, signers, funds, approvers, states, shared, into, arriving, instance, anchor,
+                    successor, prior);
         }
     }
 
@@ -666,8 +723,12 @@ public final class Interpreter {
 
     private Outcome call(String name, Rec state, List<Object> args, Tx tx, boolean modifiers) {
         Ir.Method m = method(name);
-        if (args.size() != m.params().size()) throw new IllegalArgumentException(name + " takes " + m.params().size() + " arguments");
-        if (m.kind().creates() != (state == null)) throw new IllegalArgumentException("an init has no input state; others do");
+        // M3c (§2.10): a vote handler's call takes the voter and its votes, [(action id, vote)…], and runs once per vote.
+        int arity = m.kind() == Ir.Kind.VOTE ? 2 : m.params().size();
+        if (args.size() != arity) throw new IllegalArgumentException(name + " takes " + arity + " arguments");
+        if ((m.kind().creates() || m.kind().purpose()) != (state == null)) {
+            throw new IllegalArgumentException("an init and a purpose's handler have no input state; others do");
+        }
         // M3a (§2.8): an owned action's or destroy's input is an object of its type; another type is the caller's error.
         if (m.on() != null && state != null && !state.type().equals(m.on())) {
             throw new IllegalArgumentException(name + " runs on a " + m.on() + ", not a " + state.type());
@@ -679,16 +740,114 @@ public final class Interpreter {
         }
         return deep(() -> {
             if (modifiers) {
+                purposeBefore(m, args);
                 modifiers(m, state, tx);
                 keyedBefore(m, state, tx);
+                migrateBefore(m, state, tx);
             }
-            Outcome o = run(m, state, args, tx);
+            Outcome o = m.kind() == Ir.Kind.VOTE ? votes(m, args, tx, modifiers) : run(m, state, args, tx);
             if (modifiers) {
+                purposeAfter(m, args, o);
                 keyedAfter(m, state, o, tx);
                 outputs(m, o);
             }
             return o;
         });
+    }
+
+    /**
+     * Semantics §2.10 (M3c, ADR-0010 D1): a script purpose's built-in checks before its handler's audience. A certificate
+     * is one of RegStaking, DelegStaking, RegDeleg, RegDRep and UpdateDRep, of a script credential (class
+     * purpose:certificate; unregistration, pool and committee certificates are refused whatever the handler says); a voter
+     * is a DRep or a committee member with a script credential (purpose:voter), and it has votes (purpose:votes).
+     */
+    private void purposeBefore(Ir.Method m, List<Object> args) {
+        switch (m.kind()) {
+            case CERTIFY -> {
+                GovV c = (GovV) args.get(0);
+                boolean kind = java.util.Set.of("RegStaking", "DelegStaking", "RegDeleg", "RegDRep", "UpdateDRep").contains(c.ctor());
+                if (!kind || !((CredV) c.fields().get(0)).script()) {
+                    throw new Refused("the certificate is not one a handler may allow (a script credential's registration, delegation or DRep"
+                            + " registration or update)", "purpose", "certificate");
+                }
+            }
+            case VOTE -> {
+                GovV v = (GovV) args.get(0);
+                if (v.ctor().equals("StakePoolVoter") || !((CredV) v.fields().get(0)).script()) {
+                    throw new Refused("the voter is not a script's DRep or committee credential", "purpose", "voter");
+                }
+                if (list(args.get(1)).isEmpty()) throw new Refused("the voter casts no votes in the transaction", "purpose", "votes");
+            }
+            default -> {
+            }
+        }
+    }
+
+    /**
+     * Semantics §2.10, after the body: a withdrawal's sends hold lovelace only and total exactly the amount withdrawn
+     * (purpose:withdraw, I37); a certify or propose handler that evaluates to false refuses (purpose:certify,
+     * purpose:propose); a vote handler refuses at its first vote it does not allow (purpose:vote, in {@link #votes}).
+     */
+    private void purposeAfter(Ir.Method m, List<Object> args, Outcome o) {
+        switch (m.kind()) {
+            case WITHDRAW -> {
+                BigInteger total = BigInteger.ZERO;
+                boolean lovelace = true;
+                for (SendV sd : o.sends()) {
+                    for (var e : sd.value().entries().entrySet()) if (!e.getKey().isEmpty()) lovelace = false;
+                    total = total.add(sd.value().quantity(Bytes.of(new byte[0]), Bytes.of(new byte[0])));
+                }
+                if (!lovelace || total.compareTo(integer(args.get(0))) != 0) {
+                    throw new Refused("the reward sends do not allocate exactly the amount withdrawn, in lovelace", "purpose", "withdraw");
+                }
+            }
+            case CERTIFY, PROPOSE -> {
+                if (!bool(o.value())) throw new Refused("the " + m.kind().name().toLowerCase() + " handler refuses", "purpose", m.kind().name().toLowerCase());
+            }
+            default -> {
+            }
+        }
+    }
+
+    /**
+     * Semantics §2.10: a vote handler runs once per (action id, vote) of its voter, in the given order, each with the voter;
+     * with the preconditions, the first vote it does not allow refuses the call (purpose:vote); alone (the transition), its
+     * value is whether it allows every one.
+     */
+    private Outcome votes(Ir.Method m, List<Object> args, Tx tx, boolean modifiers) {
+        boolean all = true;
+        for (Object e : list(args.get(1))) {
+            List<Object> pair = list(e);
+            Outcome one = run(m, null, List.of(args.get(0), pair.get(0), pair.get(1)), tx);
+            if (!bool(one.value())) {
+                if (modifiers) throw new Refused("the vote handler refuses a vote", "purpose", "vote");
+                all = false;
+            }
+        }
+        return new Outcome(all, List.of());
+    }
+
+    /**
+     * Semantics §2.11 (M3c, ADR-0011 D4, I41): a migration's two halves, each a transaction precondition after the
+     * modifiers. A migrating destroy's transaction mints the instance of the successor its field names (τ.successor, class
+     * migrate:to: an unset or other successor refuses); an init migrate's spends an instance of the policy its params
+     * field pins (τ.prior, migrate:from). The tokens, the burn, the value and the adopted state's shape are the validators'.
+     */
+    private void migrateBefore(Ir.Method m, Rec state, Tx tx) {
+        String to = m.migratesTo();
+        if (to != null) {
+            if (tx == null || tx.successor() == null) throw new IllegalArgumentException(m.name() + " migrates: its transaction needs the successor's policy (withSuccessor)");
+            Bytes named = (Bytes) field(state, to);
+            if (named.value.length == 0 || !named.equals(tx.successor())) {
+                throw new Refused("the instance migrates only into the successor " + to + " names", "migrate", "to");
+            }
+        }
+        if (m.kind() == Ir.Kind.MIGRATE) {
+            if (tx == null || tx.prior() == null) throw new IllegalArgumentException(m.name() + " adopts an instance: its transaction needs it (withPrior)");
+            if (!tx.prior().policy().equals(paramsField(m.migration().from()))) {
+                throw new Refused("the adopted instance is not of the policy params." + m.migration().from() + " pins", "migrate", "from");
+            }
+        }
     }
 
     /**
@@ -711,7 +870,7 @@ public final class Interpreter {
             for (Ir.Mod mod : x.mods()) {
                 if (!mod.name().equals("quorum")) continue;
                 boolean ofParams = mod.field().startsWith("params.");
-                if (ofParams ? m.kind() == Ir.Kind.INIT : java.util.Objects.equals(x.on(), on)) pairs.add(mod.field());
+                if (ofParams ? m.kind().createsInstance() : java.util.Objects.equals(x.on(), on)) pairs.add(mod.field());
             }
         }
         for (String pair : pairs) {
@@ -917,7 +1076,13 @@ public final class Interpreter {
 
     private Outcome run(Ir.Method m, Rec state, List<Object> args, Tx tx) {
         var f = new Frame(state, tx);
+        f.rewards = m.kind() == Ir.Kind.WITHDRAW;
         Env env = null;
+        // M3c (§2.11): an init migrate's adopted state, from the instance its transaction spends, before the parameters.
+        if (m.migration() != null) {
+            if (tx == null || tx.prior() == null) throw new IllegalArgumentException(m.name() + " adopts an instance: its transaction needs it (withPrior)");
+            env = new Env(m.migration().old(), tx.prior().state(), env);
+        }
         // M3a (§2.8): an owned method's shared state and a move's destination come first, from the transaction; an admits
         // action's arriving object after its first argument.
         Ir.Owned ow = m.owned();
@@ -949,8 +1114,12 @@ public final class Interpreter {
             if (!checked(lookup(env, l), l.type)) throw new Refused(l.name + " is not a well-formed input", "input", l.name);
         }
         // M2c (review r3, C7): an init checks the params it is made under (the deployment's), as the generated code does.
-        if (m.kind() == Ir.Kind.INIT && params != null && !fieldsChecked(params, Ir.PARAMS)) {   // the instance's creation
+        if (m.kind().createsInstance() && params != null && !fieldsChecked(params, Ir.PARAMS)) {   // the instance's creation
             throw new Refused("the params are not well formed", "input", "params");
+        }
+        // M3c (§4, review A44): the adopted state is a checked input, as a read state is.
+        if (m.migration() != null && !checked(lookup(env, m.migration().old()), m.migration().old().type)) {
+            throw new Refused(m.migration().old().name + " is not a well-formed state of the previous version", "input", m.migration().old().name);
         }
         for (Ir.Read r : m.reads()) {
             if (!checked(lookup(env, r.local()), r.local().type)) {
@@ -1010,6 +1179,8 @@ public final class Interpreter {
         final List<Object> events = new ArrayList<>();
         final List<DepositOut> deposits = new ArrayList<>();
         ValueV mint = ValueV.NONE, accepted = ValueV.NONE;
+        /** M3c: a withdraw handler's frame: its sends are the reward account's lovelace (no funds, no own policy). */
+        boolean rewards;
 
         Frame(Rec state, Tx tx) {
             this.state = state;
@@ -1046,8 +1217,9 @@ public final class Interpreter {
                     // under the contract's own policy, cannot be sent; nor can anything to the contract's own script (I30).
                     AddrV to = (AddrV) eval(sd.to(), env, f);
                     ValueV v = (ValueV) eval(sd.value(), env, f);
-                    if (!sendable(v, funds(f).policy(), false)) throw Refused.domain("send", "this value cannot be sent");
-                    if (to.payment().script() && Arrays.equals(to.payment().hash().value, funds(f).policy().value)) {
+                    // M3c (§2.10): a withdraw handler's sends are checked as its transaction's (purpose:withdraw), after the body.
+                    if (!f.rewards && !sendable(v, funds(f).policy(), false)) throw Refused.domain("send", "this value cannot be sent");
+                    if (!f.rewards && to.payment().script() && Arrays.equals(to.payment().hash().value, funds(f).policy().value)) {
                         throw Refused.domain("send", "a send cannot go to the contract's own script");
                     }
                     // M2c: the datum, evaluated after the value (§5.1).
@@ -1130,7 +1302,10 @@ public final class Interpreter {
             };
             case Ir.NoneLit n -> Opt.NONE;
             case Ir.SomeOf s -> Opt.some(eval(s.value(), env, f));
-            case Ir.GetField g -> field((Rec) eval(g.target(), env, f), g.field());
+            case Ir.GetField g -> {
+                Object t = eval(g.target(), env, f);
+                yield t instanceof GovV gv ? govField(gv, g.field()) : field((Rec) t, g.field());
+            }
             case Ir.New n -> {
                 var vs = new ArrayList<Object>();
                 for (Ir.Expr x : n.values()) vs.add(eval(x, env, f));
@@ -1238,19 +1413,19 @@ public final class Interpreter {
             case Ir.MapEmpty m -> MapV.EMPTY;
             case Ir.MapOp o -> mapOp(o, env, f);
             case Ir.MapHof h -> {
-                MapV m = (MapV) eval(h.map(), env, f);
+                List<?>[] kv = entries(eval(h.map(), env, f));
                 boolean any = h.kind().equals("any");
-                for (int i = 0; i < m.keys().size(); i++) {
-                    boolean hit = bool(block(h.body(), new Env(h.v(), m.values().get(i), new Env(h.k(), m.keys().get(i), env)), f));
+                for (int i = 0; i < kv[0].size(); i++) {
+                    boolean hit = bool(block(h.body(), new Env(h.v(), kv[1].get(i), new Env(h.k(), kv[0].get(i), env)), f));
                     if (hit == any) yield any;
                 }
                 yield !any;
             }
             case Ir.MapFold fo -> {
-                MapV m = (MapV) eval(fo.map(), env, f);
+                List<?>[] kv = entries(eval(fo.map(), env, f));
                 Object acc = eval(fo.init(), env, f);
-                for (int i = 0; i < m.keys().size(); i++) {
-                    acc = block(fo.body(), new Env(fo.v(), m.values().get(i), new Env(fo.k(), m.keys().get(i), new Env(fo.acc(), acc, env))), f);
+                for (int i = 0; i < kv[0].size(); i++) {
+                    acc = block(fo.body(), new Env(fo.v(), kv[1].get(i), new Env(fo.k(), kv[0].get(i), new Env(fo.acc(), acc, env))), f);
                 }
                 yield acc;
             }
@@ -1367,26 +1542,59 @@ public final class Interpreter {
         };
     }
 
+    /** An inline map's or (M3c) a LedgerMap's keys and values, in their order. */
+    private static List<?>[] entries(Object m) {
+        if (m instanceof LedgerMapV l) return new List<?>[]{l.keys(), l.values()};
+        MapV x = (MapV) m;
+        return new List<?>[]{x.keys(), x.values()};
+    }
+
+    /** M3c: a ledger record's or constructor's field, by its name in {@link Gov}. */
+    private static Object govField(GovV v, String name) {
+        Gov.Ctor c = v.ctor().equals(v.type()) ? Gov.RECORDS.get(v.type()) : Gov.ctor(v.type(), v.ctor());
+        for (int i = 0; i < c.fields().size(); i++) if (c.fields().get(i).name().equals(name)) return v.fields().get(i);
+        throw new IllegalStateException(v.ctor() + " has no field " + name);
+    }
+
     /** The arm whose constructors include the value's: an Option's Some/None, a variant's name. */
     private static Ir.Arm arm(List<Ir.Arm> arms, Object v) {
         String ctor = v instanceof Opt o ? (o.present() ? "Some" : "None") : v instanceof CredV c ? (c.script() ? "ScriptCred" : "KeyCred")
-                : ((Rec) v).type();
+                : v instanceof GovV g ? g.ctor() : ((Rec) v).type();
         for (Ir.Arm a : arms) if (a.ctors().contains(ctor)) return a;
         throw new IllegalStateException("no arm for " + ctor);
     }
 
     private Env bindArm(Ir.Arm a, Object v, Env env) {
         for (int i = 0; i < a.binds().size(); i++) {
-            Object x = v instanceof Opt o ? o.value() : v instanceof CredV c ? c.hash() : field((Rec) v, a.fields().get(i));
+            Object x = v instanceof Opt o ? o.value() : v instanceof CredV c ? c.hash() : v instanceof GovV g ? govField(g, a.fields().get(i))
+                    : field((Rec) v, a.fields().get(i));
             env = new Env(a.binds().get(i), x, env);
         }
         return env;
     }
 
     private Object mapOp(Ir.MapOp o, Env env, Frame f) {
-        MapV m = (MapV) eval(o.map(), env, f);
+        Object mv = eval(o.map(), env, f);
         var a = new ArrayList<Object>();
         for (Ir.Expr x : o.args()) a.add(eval(x, env, f));
+        // M3c (§3.7): a LedgerMap's reads, over its entries in the ledger's order: get is the first entry with the key.
+        if (mv instanceof LedgerMapV l) {
+            Ty key = ((Ty.LedgerMapT) o.map().type()).key();
+            int at = -1;
+            if (o.op().equals("get") || o.op().equals("has")) {
+                for (int i = 0; i < l.keys().size() && at < 0; i++) if (same(l.keys().get(i), a.get(0), key)) at = i;
+            }
+            return switch (o.op()) {
+                case "get" -> at < 0 ? Opt.NONE : Opt.some(l.values().get(at));
+                case "has" -> at >= 0;
+                case "size" -> BigInteger.valueOf(l.keys().size());
+                case "isEmpty" -> l.keys().isEmpty();
+                case "keys" -> l.keys();
+                case "values" -> l.values();
+                default -> throw new IllegalStateException("a LedgerMap has no " + o.op());
+            };
+        }
+        MapV m = (MapV) mv;
         return switch (o.op()) {
             case "get" -> {
                 int i = m.indexOf((Bytes) a.get(0));
@@ -1635,6 +1843,21 @@ public final class Interpreter {
         var a = new ArrayList<Object>();
         for (Ir.Expr x : c.args()) a.add(eval(x, env, f));
         switch (c.binding().name()) {
+            // M3c (std/certs, ADR-0010 r2): each tests one constructor exactly (semantics §2.10).
+            case "isRegistration" -> {
+                return ((GovV) a.get(0)).ctor().equals("RegStaking");
+            }
+            case "isDRepLifecycle" -> {
+                String k = ((GovV) a.get(0)).ctor();
+                return k.equals("RegDRep") || k.equals("UpdateDRep");
+            }
+            case "delegatesOnlyTo", "delegatesVoteTo" -> {
+                GovV cert = (GovV) a.get(0);
+                if (!cert.ctor().equals("DelegStaking") && !cert.ctor().equals("RegDeleg")) return false;
+                GovV d = (GovV) cert.fields().get(1);
+                if (c.binding().name().equals("delegatesOnlyTo")) return d.ctor().equals("Stake") && d.fields().get(0).equals(a.get(1));
+                return d.ctor().equals("Vote") && sameDRep((GovV) d.fields().get(0), (GovV) a.get(1));
+            }
             case "windowStart" -> {
                 return f.tx.validFrom();
             }
@@ -1815,6 +2038,11 @@ public final class Interpreter {
             }
             default -> throw new IllegalStateException(c.op());
         };
+    }
+
+    /** M3c: two DReps alike: the same constructor, and for a credential's the same credential. */
+    private static boolean sameDRep(GovV x, GovV y) {
+        return x.ctor().equals(y.ctor()) && (!x.ctor().equals("DRepCredential") || x.fields().get(0).equals(y.fields().get(0)));
     }
 
     private Object field(Rec r, String name) {

@@ -8,6 +8,7 @@
 // parameters (semantics §4) and whether a method reads the transaction (§2).
 
 import { ROWS } from './std.js';
+import { GOV_TYPES, GOV_RECORDS, govCtors, govFields, holdsGov } from './gov.js';
 
 const PRIMS = new Set(['Int', 'Bool', 'Bytes', 'Key', 'Hash', 'Value', 'Address', 'Credential']);
 const INT_RE = /^-?(0|[1-9][0-9]*)$/;
@@ -86,7 +87,7 @@ export const STMTS = {
 };
 // batched is M1c's (#67): known here so that its IR loads; like every modifier but open and only, it makes a method
 // read the transaction (review F11).
-const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched', 'quorum', 'authorized', 'receives', 'admits', 'retire');
+const MODS = set('payable', 'open', 'only', 'after', 'before', 'batched', 'quorum', 'authorized', 'receives', 'admits', 'retire', 'migrates');
 // M2b: quorum and authorized read the signatories and withdrawals in the validator, so like open and only they do not
 // make a method read the transaction (Ctx).
 const NO_CTX = set('open', 'only', 'quorum', 'authorized');
@@ -96,6 +97,7 @@ const STD_ARITY = {
   byteAt: 2, toInt: 1, toHex: 1, div: 2, mod: 2, pow: 2, expMod: 3, sign: 1, andBytes: 3, orBytes: 3, xorBytes: 3, complement: 1,
   readBit: 2, shift: 2, rotate: 2, countSetBits: 1, findFirstSetBit: 1, last: 1, nth: 2, indexOf: 2, elapsedSince: 1,
   elapsedSinceAtMost: 1, windowStart: 0, windowEnd: 0, isEmpty: 1, withoutLovelace: 1, scale: 2, paymentKey: 1, paymentScript: 1,
+  isRegistration: 1, delegatesOnlyTo: 2, delegatesVoteTo: 2, isDRepLifecycle: 1,
 };
 const LEDGER_ARITY = {
   none: 0, lovelace: 1, asset: 3, add: 2, sub: 2, lovelaceOf: 1, of: 3, covers: 2, keyCred: 1, scriptCred: 1, wallet: 1, walletStaked: 2,
@@ -106,7 +108,10 @@ const CRED_FIELDS = { KeyCred: 'key', ScriptCred: 'hash' };
 const PRELUDE_ARITY = { min: 2, max: 2, abs: 1, asKey: 1, asHash: 1 };
 const MAP_ARITY = { get: 1, has: 1, set: 2, delete: 1, size: 0, keys: 0, values: 0, isEmpty: 0, at: 1 };
 // M3a (ADR-0003, ADR-0012): an owned method's kinds.
-const KINDS = set('init', 'action', 'destroy', 'view', 'ownedInit', 'ownedAction', 'ownedDestroy');
+const KINDS = set('init', 'action', 'destroy', 'view', 'ownedInit', 'ownedAction', 'ownedDestroy',
+  // M3c (ADR-0010 D1, ADR-0011 D4): the script purposes' handlers and the adoption of a previous version's instance.
+  'withdraw', 'certify', 'vote', 'propose', 'migrate');
+const PURPOSES = set('withdraw', 'certify', 'vote', 'propose');
 // #101 review F2: the parts of M3a the checker produces so far (1: owned objects of one type with shared reads; 2: native
 // assets in owned methods, payable owned destroys; 3: moves and invariants by type), as the Java reader's OWNED_STAGE.
 const OWNED_STAGE = 3;
@@ -246,13 +251,14 @@ export function validate(p) {
   }
   const type = (t, where) => {
     if (typeof t === 'string') {
-      if (!PRIMS.has(t)) fail(where, `unknown type ${t}`);
+      // M3c: the purposes' ledger types by name (Data: a PlutusData field's, carried and never read).
+      if (!PRIMS.has(t) && !GOV_TYPES.has(t)) fail(where, `unknown type ${t}`);
       return;
     }
     if (!t || typeof t !== 'object' || Object.keys(t).length !== 1) fail(where, `a bad type ${JSON.stringify(t)}`);
     const [k, v] = Object.entries(t)[0];
     if (k === 'list' || k === 'option') type(v, where);
-    else if (k === 'map' || k === 'bigmap') {
+    else if (k === 'map' || k === 'bigmap' || k === 'ledgerMap') {
       if (!Array.isArray(v) || v.length !== 2) fail(where, `a bad ${k} type`);
       type(v[0], where);
       type(v[1], where);
@@ -316,12 +322,24 @@ export function validate(p) {
       a.fields.forEach((c) => str(c, where));
       if (a.binds.length !== a.fields.length) fail(where, 'binds and fields differ in length');
       if (a.binds.length > 0 && a.ctors.length !== 1) fail(where, 'only a single-constructor arm binds');
+      // M3c: a sealed ledger type's arm names its constructors (gov.js), its fields theirs; a Data field is never bound.
+      const gov = typeof scrutineeType === 'string' && govCtors(scrutineeType).length > 0 ? scrutineeType : null;
       for (const c of a.ctors) {
+        if (gov) {
+          if (!govCtors(gov).includes(c)) fail(where, `${c} is not a constructor of ${gov}`);
+          continue;
+        }
         if (c === 'Some' || c === 'None' || c in CRED_FIELDS) continue;
         if (!(shapes.has(c) && [...enums.values()].some((vs) => vs.includes(c)))) fail(where, `no variant ${c}`);
       }
       for (const f of a.fields) {
         const c = a.ctors[0];
+        if (gov) {
+          const gf = govFields(gov, c).find((x) => x.name === f);
+          if (!gf) fail(where, `${c} has no field ${f}`);
+          if (gf.type === 'Data') fail(where, `${c}.${f} is PlutusData, never bound (JSC1320)`);
+          continue;
+        }
         const known = c === 'Some' ? f === 'value' : c in CRED_FIELDS ? f === CRED_FIELDS[c] : (shapes.get(c) ?? []).some((x) => x.name === f);
         if (!known) fail(where, `${c} has no field ${f}`);
       }
@@ -372,7 +390,7 @@ export function validate(p) {
       else if (kind === 't') type(v, where);
       else if (kind === 's') str(v, where);
       else if (kind === 'z') { if (typeof v !== 'boolean') fail(where, `${k} is not a boolean`); }
-      else if (kind === 'arms') arms(v, where, scope);
+      else if (kind === 'arms') arms(v, where, scope, o.scrutinee?.type);
       else if (kind === 'branches') branches(v, where, scope);
       else if (kind === 'ref') {
         if (!locals.has(v)) fail(where, `a reference to the undeclared local ${v}`);
@@ -404,7 +422,15 @@ export function validate(p) {
     if (e.node === 'Logic') { bool(e.left, where, 'an operand'); bool(e.right, where, 'an operand'); }
     if (e.node === 'Not') bool(e.operand, where, 'an operand');
     if (e.node === 'CallStd' && !(ROWS[e.module] ?? []).includes(e.name)) fail(where, `unknown std row ${e.module}.${e.name}`);
-    if ((e.node === 'New' || e.node === 'GetField') && !shapes.has(e.record)) fail(where, `no record ${e.record}`);
+    // M3c: a GetField may read a ledger record's field (gov.js), never a Data one (JSC1320).
+    const govRecord = e.node === 'GetField' && e.record in GOV_RECORDS;
+    if (govRecord) {
+      const gf = GOV_RECORDS[e.record].find((x) => x.name === e.field);
+      if (!gf) fail(where, `${e.record} has no field ${e.field}`);
+      if (gf.type === 'Data') fail(where, `${e.record}.${e.field} is PlutusData, never read (JSC1320)`);
+      if (JSON.stringify(e.target.type) !== JSON.stringify(e.record)) fail(where, `a ${e.record} field read from a ${JSON.stringify(e.target.type)}`);
+    }
+    if ((e.node === 'New' || (e.node === 'GetField' && !govRecord)) && !shapes.has(e.record)) fail(where, `no record ${e.record}`);
     if (e.node === 'Variant' && !(enums.get(e.enum) ?? []).includes(e.variant)) fail(where, `no variant ${e.enum}.${e.variant}`);
     // Review S7: references and arities.
     if (e.node === 'CallFn') {
@@ -422,7 +448,7 @@ export function validate(p) {
     if (e.node === 'MapOp' || e.node === 'BigOp') arity(where, `${e.node}.${e.op}`, e.args.length, MAP_ARITY[e.op]);
     if (e.node === 'New') arity(where, `the record ${e.record}`, e.values.length, shapes.get(e.record).length);
     if (e.node === 'Variant') arity(where, `the variant ${e.variant}`, e.values.length, shapes.get(e.variant).length);
-    if (e.node === 'GetField' && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${e.record} has no field ${e.field}`);
+    if (e.node === 'GetField' && !govRecord && !shapes.get(e.record).some((f) => f.name === e.field)) fail(where, `${e.record} has no field ${e.field}`);
     // M3a: in an owned method or an owned type's invariant, the input is the object.
     if (e.node === 'StateField' && !shapes.get(inputRec).some((f) => f.name === e.field)) fail(where, `the ${inputRec === 'State' ? 'state' : inputRec} has no field ${e.field}`);
     if (e.node === 'ParamsRef' && !(p.params?.fields ?? []).some((f) => f.name === e.field)) fail(where, `the params have no field ${e.field}`);
@@ -466,7 +492,7 @@ export function validate(p) {
     const where = `method ${m.name}`;
     // M2c (additive): "reads" appears only when the method reads another contract; M3a: "on", "shared", "into" and
     // "arriving" only for owned methods, moves and admits actions.
-    const extra = ['reads', 'on', 'shared', 'into', 'arriving'].filter((k) => k in m);
+    const extra = ['reads', 'on', 'shared', 'into', 'arriving', 'from', 'old'].filter((k) => k in m);
     keys(m, ['kind', 'name', 'params', 'mods', 'checked', ...extra, 'usesCtx', 'pays', 'result', 'body', 'at'], where);
     if (!Array.isArray(m.mods)) fail(where, 'mods is not a list');
     if (!KINDS.has(m.kind)) fail(where, `unknown kind ${m.kind}`);
@@ -497,6 +523,12 @@ export function validate(p) {
       decl(m.into, where, scope);
       if (JSON.stringify(m.into.type) !== JSON.stringify({ record: 'State' })) fail(where, 'a move\'s destination is a State');
     }
+    // M3c: init migrate's params field (from) and the adopted state (old), declared before the parameters.
+    if (('from' in m) !== ('old' in m) || ('from' in m) !== (m.kind === 'migrate')) fail(where, 'an init migrate, and only one, names from and old');
+    if ('old' in m) {
+      str(m.from, where);
+      decl(m.old, where, scope);
+    }
     m.params.forEach((l) => decl(l, where, scope));
     if ('arriving' in m) {
       decl(m.arriving, where, scope);
@@ -521,7 +553,8 @@ export function validate(p) {
     // statement blocks, never in an expression's block (a value block, a value if or match, a lambda), so the statement
     // walks below (paysIn, movesIn) are complete.
     // #98 review F1: an init and a view move nothing (JSC0404): their whole body is pure.
-    noPayInExpressions(m.body, m.kind === 'init' || m.kind === 'view', (what) => fail(where, what));
+    // M3c: a certify, vote or propose handler and an init migrate move nothing (JSC1319, JSC1338).
+    noPayInExpressions(m.body, ['init', 'view', 'migrate', 'certify', 'vote', 'propose'].includes(m.kind), (what) => fail(where, what));
     // #80 review S3: pays is recomputed from the body, and a method that pays says who may call it (JSC0408, JSC0420).
     const pays = paysIn(m.body);
     if (m.pays !== pays) fail(where, `pays is ${JSON.stringify(m.pays)}, but the body ${pays ? 'pays' : 'does not pay'}`);
@@ -532,9 +565,14 @@ export function validate(p) {
       fail(where, 'it pays, sends, mints, burns or deposits, so it says who may call it (only f, open, quorum or authorized)');
     }
     // #80 review F7: a destroy ends the instance, so it pays out what it holds (JSC0409).
-    if ((m.kind === 'destroy' || m.kind === 'ownedDestroy') && !moves) fail(where, `a destroy pays out what ${m.kind === 'destroy' ? 'the instance' : 'its object'} holds: it has no pay, send, mint, burn or deposit`);
-    // F7: the checker's two decisions, recomputed from their definitions.
-    const checked = m.kind === 'view' ? [] : m.params.filter((l) => needsCheck(l.type, shapes, enums)).map((l) => l.id);
+    // M3c: a migrating destroy moves everything into its successor and nothing else (JSC1332, purposeRules).
+    if ((m.kind === 'destroy' || m.kind === 'ownedDestroy') && !moves && !m.mods.some((x) => x.name === 'migrates')) {
+      fail(where, `a destroy pays out what ${m.kind === 'destroy' ? 'the instance' : 'its object'} holds: it has no pay, send, mint, burn or deposit`);
+    }
+    // F7: the checker's two decisions, recomputed from their definitions. M3c: a certify, vote or propose handler's
+    // parameters are the purpose's data (from the script context), a withdrawal's amount is checked by its validator.
+    const redeemerParams = ['view', 'certify', 'vote', 'propose'].includes(m.kind) ? [] : m.kind === 'withdraw' ? m.params.slice(1) : m.params;
+    const checked = redeemerParams.filter((l) => needsCheck(l.type, shapes, enums)).map((l) => l.id);
     if (JSON.stringify(checked) !== JSON.stringify(m.checked)) {
       fail(where, `checked is ${JSON.stringify(m.checked)}, but the parameters whose types hold a Key, a Hash or a Map are ${JSON.stringify(checked)}`);
     }
@@ -557,6 +595,7 @@ export function validate(p) {
     }
   }
   keyedRules(p, owned, fail, keys);
+  purposeRules(p, owned, fail, contracts);
   for (const n of p.recursiveFns) if (!fnNames.has(n)) fail('recursiveFns', `no fn ${n}`);
   // M2b: invariants, each a Bool over the state and the params, with names of their own.
   if ('invariants' in p) {
@@ -652,6 +691,84 @@ function keyedRules(p, owned, fail, keys) {
   }
 }
 
+/**
+ * M3c (ADR-0010 D1, D2; ADR-0011 D4; K2, K39, K48): a program with script purposes or migration only in the checker's
+ * shapes, as the Java reader reads it (IrJson.purposesChecked; the shared mutants test/mutants/purpose-*.json). The option
+ * stakeSelf is the flag "1", once, and needs a withdraw and a certify handler (JSC1302). No ledger type of the purposes is
+ * a field of the state, the params, a record, a variant or an imported contract's type, a parameter of a method but a
+ * handler's purpose data, or a view's result (JSC1321). Each handler, one per purpose (JSC1316), in a contract with
+ * params (JSC1317): the processor's parameter shapes (JSC1314); a withdraw handler's result none, the others' a Bool
+ * (JSC1340, JSC1341); no input state (JSC1318); a withdraw handler's only effect a Send (JSC1319); certify, vote and
+ * propose without the transaction (JSC1315); its audience quorum or authorized over params.*, required but for propose,
+ * which takes none (JSC1312, JSC1313). An init migrate, at most one (JSC1337): no modifiers (JSC1339), its from a Hash or
+ * Bytes params field (JSC1335), its old an imported contract's state without BigMaps (JSC1336, JSC1334), its result the
+ * state. A migrating destroy: no effects (JSC1332), an audience (JSC1333), its field no time field. Neither side with
+ * owned types, BigMap state or native assets (JSC1334).
+ */
+function purposeRules(p, owned, fail, contracts) {
+  const stake = p.options.filter((o) => o.name === 'stakeSelf');
+  if (stake.length > 1 || stake.some((o) => o.value !== '1')) fail('options', 'the option stakeSelf is the flag "1", once (JSC1301)');
+  const stored = [...p.records, p.state, ...('params' in p ? [p.params] : []), ...p.enums.flatMap((e) => e.variants)];
+  for (const c of contracts.values()) stored.push(c.state, ...c.records, ...c.enums.flatMap((e) => e.variants));
+  for (const r of stored) {
+    for (const fd of r.fields) if (holdsGov(fd.type)) fail(`${r.name}.${fd.name}`, 'a ledger type of the script purposes is no field (JSC1321)');
+  }
+  const seen = new Map();
+  let migrates = false;
+  const mods = (m) => m.mods.map((x) => x.name);
+  for (const m of p.methods) {
+    const where = `method ${m.name}`;
+    const redeemer = PURPOSES.has(m.kind) ? (m.kind === 'withdraw' ? m.params.slice(1) : []) : m.params;
+    for (const l of redeemer) if (holdsGov(l.type)) fail(where, `the parameter ${l.name} is a ledger type of the purposes, which no redeemer carries (JSC1321)`);
+    if (m.kind === 'view' && holdsGov(m.result)) fail(where, 'a view\'s result is no ledger type (JSC1321)');
+    if (PURPOSES.has(m.kind) || m.kind === 'migrate') {
+      if (seen.has(m.kind)) fail(where, `at most one ${m.kind}${m.kind === 'migrate' ? ' (JSC1337)' : ' handler (JSC1316)'}`);
+      seen.set(m.kind, m);
+    }
+    if (PURPOSES.has(m.kind)) {
+      if (!('params' in p)) fail(where, 'a handler is governed by the params, which the contract lacks (JSC1317)');
+      const shape = { certify: ['TxCert'], vote: ['Voter', 'GovernanceActionId', 'Vote'], propose: ['ProposalProcedure'] }[m.kind];
+      const types = m.params.map((l) => JSON.stringify(l.type));
+      if (shape ? JSON.stringify(types) !== JSON.stringify(shape.map((t) => JSON.stringify(t))) : types.length === 0 || types[0] !== '"Int"') {
+        fail(where, `a ${m.kind} handler's parameters are not the processor's shape (JSC1314)`);
+      }
+      if (m.kind === 'withdraw' ? m.result !== null : m.result !== 'Bool') fail(where, `a ${m.kind} handler ${m.kind === 'withdraw' ? 'has no result (JSC1340)' : 'is a Bool (JSC1341)'}`);
+      if (m.kind !== 'withdraw' && m.usesCtx) fail(where, `a ${m.kind} handler takes no transaction (JSC1315)`);
+      if (hasNode(m.body, ['StateRef', 'StateField'])) fail(where, 'a handler reads no instance state (JSC1318)');
+      if (m.kind === 'withdraw' && hasNode(m.body, ['Pay', 'Mint', 'Accept', 'Deposit', 'Emit'])) fail(where, 'a withdraw handler\'s only effect is send (JSC1319)');
+      if (m.kind === 'propose' && m.mods.length > 0) fail(where, 'a propose handler takes no modifiers (JSC1313)');
+      for (const x of m.mods) {
+        if (x.name !== 'quorum' && x.name !== 'authorized') fail(where, `a handler takes only quorum or authorized, not ${x.name} (JSC1313)`);
+        const refs = x.name === 'quorum' ? [x.keys, x.threshold] : [x.field];
+        if (refs.some((r) => typeof r !== 'string' || !r.startsWith('params.'))) fail(where, 'a handler\'s audience names params fields (JSC1312)');
+      }
+      if (m.kind !== 'propose' && m.mods.length === 0) fail(where, `a ${m.kind} handler needs quorum or authorized (JSC1312)`);
+    }
+    if (m.kind === 'migrate') {
+      const from = (p.params?.fields ?? []).find((x) => x.name === m.from);
+      if (!from || !['Hash', 'Bytes'].includes(from.type)) fail(where, 'init migrate\'s from names a Hash or Bytes params field (JSC1335)');
+      const c = [...contracts.values()].find((x) => JSON.stringify(m.old.type) === JSON.stringify({ record: x.state.name }));
+      if (!c) fail(where, 'init migrate adopts an imported contract\'s state (JSC1336)');
+      if (c.bigMaps) fail(where, 'the previous version keeps BigMap state (JSC1334)');
+      if (JSON.stringify(m.result) !== JSON.stringify({ record: 'State' })) fail(where, 'init migrate\'s result is the state');
+    }
+    const to = m.mods.find((x) => x.name === 'migrates');
+    if (to) {
+      migrates = true;
+      if (p.timeFields.includes(to.field)) fail(where, `migrates to ${to.field}: a time field (JSC1330)`);
+      if (hasNode(m.body, ['Pay', 'Send', 'Mint', 'Accept', 'Deposit', 'Emit'])) fail(where, 'a migrating destroy has no effects (JSC1332)');
+      if (!['only', 'quorum', 'authorized'].some((x) => mods(m).includes(x))) fail(where, 'a migrating destroy names its audience (JSC1333)');
+    }
+  }
+  if (stake.length === 1 && !(seen.has('withdraw') && seen.has('certify'))) fail('options', 'stakeSelf needs a withdraw and a certify handler (JSC1302)');
+  if (migrates || seen.has('migrate')) {
+    const assets = p.methods.some((m) => !PURPOSES.has(m.kind) && (assetsIn(m.body) || m.mods.some((x) => x.name === 'receives')));
+    if (owned.length > 0 || p.state.fields.some((fd) => fd.type && typeof fd.type === 'object' && 'bigmap' in fd.type) || assets) {
+      fail('program', 'migration with owned types, BigMap state or native assets (JSC1334)');
+    }
+  }
+}
+
 /** Whether a method's body holds a native-asset statement or reads funds (M3b: none in a keyed contract). */
 function assetsIn(o) {
   if (Array.isArray(o)) return o.some(assetsIn);
@@ -691,6 +808,7 @@ function modifiers(m, where, fail, keys, state, modField, type) {
     seen.add(w);
     if (m.kind === 'view') fail(where, `a view takes no modifiers, not ${w}`);
     if ((m.kind === 'init' || m.kind === 'ownedInit') && w !== 'payable') fail(where, `an init takes only payable, not ${w}`);
+    if (m.kind === 'migrate') fail(where, `an init migrate takes no modifiers, not ${w} (JSC1339)`);
     if (w === 'payable' || w === 'open' || w === 'retire') {
       if (field !== null) fail(where, `${w} names no field, not ${JSON.stringify(field)}`);
       // M3b (ADR-0016 D10, JSC1245): retire is an owned destroy's (keyed, checked with the program).
@@ -716,6 +834,10 @@ function modifiers(m, where, fail, keys, state, modField, type) {
       // M2c (ADR-0011 D3, JSC0447): receives, or receives T (the memo type), on an action.
       if ('type' in mod) type(mod.type, where);
       if (m.kind !== 'action' && m.kind !== 'ownedAction') fail(where, 'only an action receives');
+    } else if (w === 'migrates') {
+      // M3c (ADR-0011 D4, JSC1330, JSC1331): an instance destroy, naming a Bytes or Hash state field.
+      if (m.kind !== 'destroy') fail(where, `only an instance destroy migrates, not a ${m.kind}`);
+      if (typeof field !== 'string' || !['Bytes', 'Hash'].includes(state.get(field))) fail(where, `migrates to names a Bytes or Hash state field, not ${JSON.stringify(field)}`);
     } else if (w === 'admits') {
       // M3a (ADR-0012 D3, JSC1212): an instance action, naming an owned type (checked with the method).
       if (typeof field !== 'string') fail(where, 'admits names an owned type');
@@ -774,6 +896,7 @@ function needsCheck(t, shapes, enums) {
   if (typeof t === 'string') return t === 'Key' || t === 'Hash' || t === 'Address' || t === 'Credential' || t === 'Value';
   const [k, v] = Object.entries(t)[0];
   if (k === 'instance' || k === 'deposit') return false;   // M2c: the deployer's; memos are checked where the action starts
+  if (k === 'ledgerMap') return false;   // M3c: from the script context (a ledger type's name is a string above, never a Key)
   if (k === 'list' || k === 'option') return needsCheck(v, shapes, enums);
   if (k === 'map') return true;
   if (k === 'bigmap') return false;

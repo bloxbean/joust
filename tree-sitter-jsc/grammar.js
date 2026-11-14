@@ -159,7 +159,8 @@ module.exports = grammar({
 
     contract_options: $ => seq('(', optional(sep1($.contract_option, ',')), ')'),
 
-    contract_option: $ => seq(field('name', $.identifier), '=', field('value', $.number)),
+    // M3c (ADR-0010 D2): a flag, `stakeSelf`, is an option without a value (the checker refuses other flags: JSC0403).
+    contract_option: $ => choice(seq(field('name', $.identifier), '=', field('value', $.number)), field('name', $.identifier)),
 
     // Exactly one state block (v2 Parser.contract: JSC0121, JSC0126).
     contract_body: $ => seq(
@@ -187,6 +188,38 @@ module.exports = grammar({
       $.owned_init_declaration,
       $.owned_action_declaration,
       $.owned_destroy_declaration,
+      // M3c (ADR-0010 D1, ADR-0011 D4): the script purposes' handlers and the adoption of a previous version's instance.
+      $.withdraw_declaration,
+      $.certify_declaration,
+      $.vote_declaration,
+      $.propose_declaration,
+      $.migrate_declaration,
+    ),
+
+    // withdraw m(amount: Int, …) { send(…) }: the rewards' sends. Contextual words, as in the v2 parser (only at a member's
+    // start: an action may still be called withdraw).
+    withdraw_declaration: $ => seq(
+      'withdraw', field('name', $.identifier), field('parameters', $.parameters), repeat($.modifier), field('body', $.block),
+    ),
+
+    certify_declaration: $ => seq(
+      'certify', field('name', $.identifier), field('parameters', $.parameters), repeat($.modifier),
+      choice(seq('=', field('value', $._expression)), field('body', $.block)),
+    ),
+
+    vote_declaration: $ => seq(
+      'vote', field('name', $.identifier), field('parameters', $.parameters), repeat($.modifier),
+      choice(seq('=', field('value', $._expression)), field('body', $.block)),
+    ),
+
+    propose_declaration: $ => seq(
+      'propose', field('name', $.identifier), field('parameters', $.parameters), repeat($.modifier),
+      choice(seq('=', field('value', $._expression)), field('body', $.block)),
+    ),
+
+    // init migrate from params.f(old: V1.State, …) { … }: @Migrate(from = "params.f").
+    migrate_declaration: $ => seq(
+      'init', 'migrate', 'from', field('from', $.params_field), field('parameters', $.parameters), repeat($.modifier), field('body', $.block),
     ),
 
     owned_declaration: $ => seq('owned', field('name', $.identifier), optional(field('keyed', $.keyed_clause)), field('fields', $.field_list)),
@@ -262,6 +295,8 @@ module.exports = grammar({
       seq('admits', field('type', $.identifier)),
       // M3b (ADR-0016 D10): a keyed type's retiring exit.
       'retire',
+      // M3c (ADR-0011 D4): an instance destroy that moves the instance into its successor, named by a state field.
+      seq('migrates', 'to', field('field', $._field_ref)),
     ),
 
     _field_ref: $ => choice($.identifier, $.params_field),

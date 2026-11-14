@@ -1,0 +1,25 @@
+jsc 2
+package t
+
+import contract { Old } from "./Old.jsc"
+
+// M3c (ADR-0018 D10, ADR-0011 D4): a migrating destroy and an adoption (each version is its own file; one is shown).
+contract New {
+  params { previous: Hash }
+  state { admin: Key, successor: Bytes, count: Int }
+
+  init() {
+    return { admin: caller, successor: #, count: 0 }
+  }
+
+  init migrate from params.previous(old: Old.State, extra: Int) {
+    return { admin: old.admin, successor: #, count: old.count + extra }
+  }
+
+  action setSuccessor(next: Bytes) only admin {
+    require(successor == #, "the successor is set once")
+    return { ...state, successor: next }
+  }
+
+  destroy upgrade() only admin migrates to successor { }
+}
