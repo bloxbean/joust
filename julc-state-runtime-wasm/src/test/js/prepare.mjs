@@ -6,6 +6,9 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { gzipSync } from 'node:zlib';
+import { enableExnref } from '../../../../js/joust-runtime/src/exnref.js';
+// Wasm exception references: a flag on Node 22, on by default on newer Node (which only warns about the flag).
+enableExnref();
 
 const [engineDir, vectorsFile] = process.argv.slice(2);
 const wasm = resolve(engineDir, 'joust-runtime.js.wasm');
@@ -39,6 +42,16 @@ const refusal = engine.joust.prepare(request(JSON.stringify(zero), last.snapshot
 const refusalOk = !refusal.ok && refusal.error === 'increment must be positive';
 console.log(`  empty snapshot: ${needOk ? `needs ${need.needKind}` : 'NOT a need: ' + JSON.stringify(need)}`);
 console.log(`  increment by 0: ${refusalOk ? `refused: ${refusal.error}` : 'NOT refused as expected: ' + JSON.stringify(refusal)}`);
+// #80 review S1: the verifiers' scripts as the runtime loads them in the image (its one resource: copy, inside an image
+// only) are the JVM build's, byte for byte; and the image says it is one (org.graalvm.nativeimage.imagecode).
+let scriptsOk = true;
+for (const v of ['MapVerifier', 'OutputVerifier']) {
+  const r = engine.joust.validatorScript({ validator: v });
+  const jvm = JSON.parse(readFileSync(resolve('julc-state-verifier/build/classes/java/main/META-INF/plutus', v + '.plutus.json'), 'utf8')).cborHex;
+  const same = r.ok && r.cborHex === jvm && !!r.imagecode;
+  scriptsOk &&= same;
+  console.log(`  ${v} in the image: ${same ? `the JVM build's script (imagecode=${r.imagecode})` : 'NOT the JVM build\'s: ' + JSON.stringify(r)}`);
+}
 const size = statSync(wasm).size;
 const gz = gzipSync(readFileSync(wasm)).length;
 const mb = (n) => (n / 1048576).toFixed(2) + ' MiB';
@@ -46,4 +59,4 @@ const sorted = [...times].sort((a, b) => a - b);
 console.log(`I3 in Wasm: ${same}/${vectors.length} recorded prepares byte-identical (Counter, Bank; no contract classes in the engine)`);
 console.log(`  image ${mb(size)} (.wasm), ${mb(gz)} gzip; cold start ${cold.toFixed(0)} ms`);
 console.log(`  prepare: first ${times[0].toFixed(0)} ms, median ${sorted[sorted.length >> 1].toFixed(0)} ms, max ${sorted[sorted.length - 1].toFixed(0)} ms`);
-process.exit(same === vectors.length && needOk && refusalOk ? 0 : 1);
+process.exit(same === vectors.length && needOk && refusalOk && scriptsOk ? 0 : 1);

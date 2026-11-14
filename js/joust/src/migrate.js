@@ -72,7 +72,11 @@ function jscFiles(dir) {
  * no hard link shared with another path, no link on its path under the contracts directory, and its real path lies
  * under the contracts directory's.
  */
-function inPlaceProblem(path, srcDir) {
+function inPlaceProblem(path, srcDir, root, given) {
+  // #80 review F6 (#75 on npm): never a path with '..' (resolved lexically here, after a link by the file system).
+  if (given !== undefined && given.split(/[\\/]/).includes('..')) {
+    return `the path ${given} contains '..': migrate --in-place takes a path without it, so no link on the way can be skipped`;
+  }
   const s = lstatSync(path);
   if (s.isSymbolicLink()) return 'this file is a symbolic link: migrate --in-place never replaces a file through a link; migrate a copy, or the link\'s target in its own project';
   if (s.nlink > 1) return `this file has ${s.nlink} hard links: another path shares its contents (another project, still on v1?), so migrate --in-place does not replace it; migrate a copy`;
@@ -80,7 +84,40 @@ function inPlaceProblem(path, srcDir) {
   for (let d = dirname(path); d !== srcDir && inside(d, srcDir); d = dirname(d)) {
     if (lstatSync(d).isSymbolicLink()) return `the directory ${relative(srcDir, d)} is a symbolic link: migrate --in-place never replaces a file through a link`;
   }
+  // #80 review F6 (#75 on npm, as JscMain): every directory below the project root (the working directory, found among
+  // the file's ancestors by identity), the contracts directory included, is checked on the physical path.
+  const link = linkBelow(dirname(path), root);
+  if (link) return `the directory ${link} is a symbolic link (or another kind of link): migrate --in-place never replaces a file through a link`;
   if (!inside(realpathSync(path), realpathSync(srcDir))) return `this file's real path is not under ${basename(srcDir)}/`;
+  return null;
+}
+
+/**
+ * The first directory from `root` (found among `dir`'s ancestors by device and inode, so an alias of it counts) down
+ * to `dir` that is a link, relative to `root`; null when there is none, or when `dir` is not below `root` (a file
+ * elsewhere is checked from its contracts directory down only). A link is a symbolic link, or a directory whose real
+ * path is not in its parent's under its own name, ignoring case (a case-insensitive file system keeps its own spelling).
+ */
+function linkBelow(dir, root) {
+  const id = (p) => { const st = statSync(p); return `${st.dev}:${st.ino}`; };
+  const rootId = id(root);
+  const chain = [];
+  for (let d = resolve(dir); ; d = dirname(d)) {
+    chain.unshift(d);
+    if (dirname(d) === d) break;
+  }
+  const at = chain.findIndex((d) => id(d) === rootId);
+  if (at < 0) return null;
+  let physical = realpathSync(chain[at]);
+  for (const d of chain.slice(at + 1)) {
+    const name = basename(d);
+    const next = join(physical, name);
+    const real = lstatSync(next).isSymbolicLink() ? null : realpathSync(next);
+    if (real === null || dirname(real) !== physical || basename(real).toLowerCase() !== name.toLowerCase()) {
+      return relative(realpathSync(chain[at]), next);
+    }
+    physical = real;
+  }
   return null;
 }
 
@@ -149,6 +186,7 @@ export async function migrate({ root = process.cwd(), src = 'contracts', out = '
     return { ok: false, migrated: [], refused: [] };
   }
   const paths = files.length ? files.map((f) => resolve(root, f)) : jscFiles(srcDir);
+  const given = Object.fromEntries(files.map((f) => [resolve(root, f), f]));
   const missing = paths.filter((p) => !present(p));
   if (missing.length) throw new Error(`no such file: ${missing.map((p) => relative(root, p)).join(', ')}`);
   // Each file by its path under contracts/; a file from elsewhere by its base name, so its output stays in migrated/
@@ -213,7 +251,7 @@ export async function migrate({ root = process.cwd(), src = 'contracts', out = '
     }
     const path = byName[m.file];
     if (inPlace) {
-      const why = inPlaceProblem(path, srcDir);
+      const why = inPlaceProblem(path, srcDir, root, given[path]);
       if (why) {
         error(`error[JSC1109]: ${m.file}:1:1: ${why}`);
         refused.push(m.file);

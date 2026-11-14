@@ -428,7 +428,7 @@ final class FourWay {
                     var p = ms.prepareCreation(harness.policy(), (Class) stateClass, first, harness.seed());
                     tx = harness.withClaims(harness.create(redeemer, p.stored(), c), p.claims());
                 }
-                v = harness.evaluate(tx);
+                v = evaluate(t, signer, tx);
             }
             case "action" -> {
                 // An action's Ctx balance is what it may allocate: the instance's lovelace less the deposit (Ctx).
@@ -443,17 +443,17 @@ final class FourWay {
                         v = b;
                         break;
                     }
-                    v = harness.evaluate(o != null ? harness.act(live, redeemer, next, pays, signer, c)
+                    v = evaluate(t, signer, o != null ? harness.act(live, redeemer, next, pays, signer, c)
                             : harness.act(live, redeemer, before, JulcList.empty(), signer, c));
                     assertEquals(v.accepted(), b.accepted(), name + "." + method + ": the direct call and the intent disagree\n" + v + b);
                     batchRuns++;
                 } else if (!hasMaps()) {
-                    v = harness.evaluate(o != null ? harness.act(live, redeemer, java(o.value()), payouts(o.payouts()), signer, c)
+                    v = evaluate(t, signer, o != null ? harness.act(live, redeemer, java(o.value()), payouts(o.payouts()), signer, c)
                             : harness.act(live, redeemer, before, JulcList.empty(), signer, c));
                 } else {
                     Object after = o != null ? nextState(run(ms, method, before, args, t)) : before;
                     var p = ms.prepare(harness.policy(), (Class) stateClass, before, after, StateHarness.LIVE_REF);
-                    v = harness.evaluate(harness.withClaims(harness.act(live, redeemer, p.stored(),
+                    v = evaluate(t, signer, harness.withClaims(harness.act(live, redeemer, p.stored(),
                             o != null ? payouts(o.payouts()) : JulcList.empty(), signer, c), p.claims()));
                 }
             }
@@ -467,7 +467,7 @@ final class FourWay {
                     if (o != null) run(ms, method, before, args, t);
                     tx = harness.withClaims(tx, ms.prepare(harness.policy(), (Class) stateClass, before, null, StateHarness.LIVE_REF).claims());
                 }
-                v = harness.evaluate(tx);
+                v = evaluate(t, signer, tx);
             }
             default -> {
                 return null;
@@ -841,7 +841,9 @@ final class FourWay {
     String check(String method, Rec state, List<Object> args, Tx t, byte[] signer, Rec candidate) throws Exception {
         // The interpreters see the keys that sign the transaction the validator evaluates (semantics §2.6: 'only f'). A
         // method that reads nothing else of the transaction is called without one on the other legs (usesCtx: false).
-        Tx ti = interpreterTx(t, signer);
+        // A batched action's step in a batch is signed by the batcher, its caller being the intent's owner, who signed the
+        // intent (ADR-0004; semantics §2, #80 review S5): its τ.signers are the intent's, the caller alone.
+        Tx ti = t != null && interp.kind(method).equals("action") && batched(method) ? t.signedBy(List.of(t.caller())) : interpreterTx(t, signer);
         String what = name + "." + method + " " + args + " " + (t == null ? "" : t);
         // The Java interpreter's outcome; a Limit (its stack ran out) propagates and fails the test (semantics §2.4).
         Interpreter.Outcome o = null;
@@ -875,11 +877,25 @@ final class FourWay {
         return want;
     }
 
-    /** The transaction the interpreters see: {@code t} signed by {@code signer}, or the signer's alone when {@code t} is null. */
+    /**
+     * The transaction the interpreters see: {@code t} signed by {@code signer} and by its caller (semantics §2: the
+     * caller is among the signers; review S6 on #76), or the signer's alone when {@code t} is null. The validator's
+     * transaction is signed by the same keys ({@link #evaluate}).
+     */
     static Tx interpreterTx(Tx t, byte[] signer) {
         if (signer == null) return t;
-        return t != null ? t.signedBy(List.of(Bytes.of(signer)))
-                : new Tx(Bytes.of(signer), BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO);
+        if (t == null) return new Tx(Bytes.of(signer), BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO);
+        var keys = new ArrayList<Bytes>(List.of(Bytes.of(signer)));
+        if (!keys.contains(t.caller())) keys.add(t.caller());
+        return t.signedBy(keys);
+    }
+
+    /** Evaluates {@code tx} signed by the keys the interpreters see ({@link #interpreterTx}): the signer and the caller. */
+    private StateHarness.Verdict evaluate(Tx t, byte[] signer, org.julclang.state.testkit.TxModel tx) {
+        if (t != null && signer != null && tx.signers.stream().noneMatch(k -> java.util.Arrays.equals(k, t.caller().bytes()))) {
+            tx.signers.add(t.caller().bytes());
+        }
+        return harness.evaluate(tx);
     }
 
     /** The class of the last refusal {@link #check} saw (semantics §2.5), or null when it was accepted. */

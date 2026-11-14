@@ -1,9 +1,12 @@
 // ADR-0015 S1: the toolchain engine compiles contracts in Node (no JDK), with the same outputs as Gradle (I1).
-// Usage: node --experimental-wasm-exnref build-in-node.mjs <engine dir> <examples dir> <example>...
+// Usage: node build-in-node.mjs <engine dir> <examples dir> <example>...
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { enableExnref } from '../../../../js/joust-runtime/src/exnref.js';
+// Wasm exception references: a flag on Node 22, on by default on newer Node (which only warns about the flag).
+enableExnref();
 
 const [engineDir, examples, ...modules] = process.argv.slice(2);
 const started = Date.now();

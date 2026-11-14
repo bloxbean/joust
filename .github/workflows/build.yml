@@ -108,10 +108,11 @@ jobs:
           npm ci
           npm test
 
-      # The npm joust's command line (ADR-0017 D5, D9): Node built-ins only, no packages installed.
+      # The npm joust's command line (ADR-0017 D5, D9), and joust deploy's write of deployments.<network>.json with the
+      # runtime and wallet stubbed (issue #75): Node built-ins only, no packages installed.
       - name: Test the npm joust command line
         working-directory: js/joust
-        run: node --test test/cli.test.js
+        run: node --test test/cli.test.js test/deploy.test.js
 
       # The .jsc 2 reference interpreter (ADR-0018 D15): its crypto and the semantics' hand-written vectors. No packages
       # installed. The five-way differential tests in ./gradlew build run it too.

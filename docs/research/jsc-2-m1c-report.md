@@ -239,7 +239,9 @@ review showed that a lowering that dropped them passed at five of the ten sites.
   `ValidatorScripts`, used by `StateContractHandle.scriptFor`, `VerifierHandle` and `StateHarness`:
   - it takes the copy beside the validator class (its classes directory or jar);
   - when that cannot be read, it uses the only copy on the class path, and refuses (`JoustException`) when there are
-    more;
+    more. Since #80 (#73), that lone copy must sit under the validator's own location; inside a GraalVM image, whose
+    resources no longer say which jar they came from, the image's one `resource:` copy is taken unverified, and the
+    image builds' `checkImageScripts` checks that every location holding a validator class also holds its script;
   - it refuses a code source that holds two validators of that name (a shaded jar, where one script overwrote the
     other).
 

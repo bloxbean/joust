@@ -63,6 +63,18 @@
       "allDeclaredConstructors": true,
       "allPublicConstructors": true,
       "allDeclaredMethods": true
+    },
+    {
+      "type": "org.julclang.state.runtime.wasm.Scripts$Request",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.julclang.state.runtime.wasm.Scripts$Result",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
     }
   ]
 }

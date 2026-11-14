@@ -181,6 +181,44 @@ class ValidatorScriptsTest {
         refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", nestedLocation, copies(foreignCopy)));
         // C'': a nested location and its own copy only (unreadable as a container): the documented fallback loads it.
         assertEquals("ee05", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", nestedLocation, copies(nestedOwn))));
+        // Issue #73 (security S9): a lone unreadable copy that is not under the class's own location (another nested
+        // jar's, say the Java vault's) is refused, not loaded as this validator's script.
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", nestedLocation, copies(nestedForeign)));
+        URL nestedPrefix = nested("jar:nested:/app.jar/!BOOT-INF/lib/dsl.jar!/x/" + RESOURCE, json("ee06"));
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", nestedLocation, copies(nestedPrefix)));
+        // ...and without a location to compare with, a lone unreadable copy is refused too.
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", null, copies(nestedOwn)));
+        // A GraalVM (Web) Image: a placeholder location and the image's one resource: copy, taken unverified there only
+        // (#80 review S1; the image builds' checkImageScripts stands behind it).
+        URL image = nested("resource:/2!/" + RESOURCE, json("ab07"));
+        URL placeholder = new URL("file:/this-is-not-a-real-file.js");
+        assertEquals("ab07", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", placeholder, copies(image), true)));
+        assertEquals("ab07", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", null, copies(image), true)));
+        URL image2 = nested("resource:/3!/" + RESOURCE, json("ab08"));
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", placeholder, copies(image, image2), true));
+        // Outside an image a resource: URL is never taken, whatever the location (S1's attack 2).
+        for (URL w : new URL[]{null, placeholder, new URL("jar:file:/app.jar!/BOOT-INF/lib/a.jar!/")}) {
+            refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", w, copies(image), false));
+        }
+        assertFalse(ValidatorScripts.inImage(), "a JVM is not an image");
+        // #80 review C6: a resource: code source does not let a resource: copy through the location rule outside an image,
+        // and inside one a resource: root with a malformed copy is refused too.
+        URL resourceRoot = nested("resource:/0!/", "");
+        URL atRoot = nested("resource:/0!/" + RESOURCE, json("ab0a"));
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", resourceRoot, copies(atRoot), false));
+        URL odd0 = nested("resource:/x/" + RESOURCE, json("ab0b"));
+        URL oddRoot = nested("resource:/x/", "");
+        refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", oddRoot, copies(odd0), true));
+        assertEquals("ab0a", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", resourceRoot, copies(atRoot), true)));
+        // Inside one, only the image's exact form: not a resource: URL that names another path, nor another resource.
+        for (String spec : new String[]{"resource:/somewhere/else/b.jar/" + RESOURCE, "resource:/2!/x/" + RESOURCE, "resource:2!/" + RESOURCE,
+                "resource:/2!/META-INF/plutus/Other.plutus.json"}) {
+            URL odd = nested(spec, json("ab09"));
+            refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", placeholder, copies(odd), true));
+        }
+        // A location written without its trailing slash still matches its own copy.
+        URL noSlash = nested("jar:nested:/app.jar/!BOOT-INF/lib/dsl.jar!", "");
+        assertEquals("ee05", cbor(ValidatorScripts.resolve(PORT, "VaultValidator", noSlash, copies(nestedOwn))));
         // D: a jrt: location, two copies: refused.
         URL jrt = new URL("jrt:/some.module");
         refused("cannot be told apart", () -> ValidatorScripts.resolve(PORT, "VaultValidator", jrt, copies(nestedOwn, nestedForeign)));

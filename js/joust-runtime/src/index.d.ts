@@ -7,6 +7,7 @@ export interface Clock { zeroSlot: number; zeroTimeMs: number; slotLengthMs: num
 /** A message map site (ADR-0018 D12): where a traced message is raised in the .jsc file. */
 export interface MessageSite { line: number; col: number; kind: 'input' | 'pay' | 'require' | 'operation'; in: string; what?: string }
 /** A .jsc 2 contract's message map, as `joust build` writes it beside the script it explains. */
+/** A contract's message map (ADR-0018 D12). `scriptHash` is what the build recorded; the runtime derives the hash from the entry's own `script` instead (issue #74). */
 export interface MessageMap { source: string; scriptHash?: string; messages: Record<string, MessageSite[]> }
 export interface BuiltContract { description: string | object; script: string; transitions: Record<string, string>; messages?: MessageMap }
 /** A plain JuLC validator as `joust build` writes it in build/joust/validators.json (a governor, ...). */

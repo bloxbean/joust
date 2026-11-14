@@ -71,6 +71,13 @@ IR says `usesCtx: false` and that has no `only f` modifier, which then never rea
 | `validTo` | `Int` | its end |
 | `signers` | `List<Key>` | the keys that signed the transaction, the caller among them (read only by `only f`, §2.6; the caller alone when a vector does not say) |
 
+The caller signs. On a direct call, the validator requires the caller's signature on the transaction whenever it reads
+τ. In a batch (ADR-0004) the batcher signs the transaction, not the users: a batch step's caller is the intent's owner,
+who signed the intent when creating it, so a batch step's τ.`signers` are the intent's signers, its owner (#80 review
+S5); a batched action cannot use `only`, so its body never reads them. Either way, a τ whose `caller` is not among its
+`signers` is not a call: a call given one is the caller's error, as a call of a method with a modifier without τ is
+(§2.6), not a refusal, and neither interpreter answers it (M1 hardening, #76 review S6).
+
 **The outcome** is one of the following:
 
 | Kind | Outcome |
@@ -209,7 +216,9 @@ validator makes the same checks on the transaction (an unbounded window end neve
 and the UPLC transition program compute the *transition* alone: every step but step 2, since they leave the
 modifiers to the validator. So on a call that breaks a modifier, both interpreters refuse, the validator refuses, and the
 JVM and transition legs agree with the interpreters' transition (`Interpreter.transition`, the JS `program.transition`).
-A call of a method with a modifier needs τ; without one it is the caller's error, not a refusal.
+A call of a method with a modifier needs τ; without one it is the caller's error, not a refusal. Each `only`, `after`
+and `before` names its field: the IR readers refuse one without it (and the interpreters never skip one), so no
+modifier is dropped on the way (#76 review S5).
 
 ## 3. Expressions
 

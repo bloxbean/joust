@@ -143,7 +143,8 @@ public final class StateContractHandle<S> {
         try {
             this.policyId = HexUtil.encodeHexString(script.getScriptHash());
         } catch (Exception e) {
-            throw new JoustException("cannot hash the " + spec.name() + " script", e);
+            // Issue #73: the cause's message is the reason (a parameter refusal, say): say it, not only that hashing failed.
+            throw new JoustException("cannot hash the " + spec.name() + " script: " + e.getMessage(), e);
         }
         this.address = spec.stakeSelf()
                 ? AddressProvider.getBaseAddress(Credential.fromScript(hashOf(script)), Credential.fromScript(hashOf(script)),
@@ -198,7 +199,8 @@ public final class StateContractHandle<S> {
         } catch (JoustException e) {
             throw e;
         } catch (Exception e) {
-            throw new JoustException("cannot hash the " + spec.name() + " script", e);
+            // Issue #73: the cause's message is the reason (a parameter refusal, say): say it, not only that hashing failed.
+            throw new JoustException("cannot hash the " + spec.name() + " script: " + e.getMessage(), e);
         }
     }
 
