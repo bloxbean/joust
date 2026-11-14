@@ -392,3 +392,130 @@ test('F7: saves coalesce: one build in flight, the latest pending; a changed inp
     await lsp.stop();
   }
 });
+
+// ------------------------------------------------------------------ round r3 (#99 r2: Codex C8, C9, C11, C12, C13)
+
+test('C8: a declaration renamed before its uses: completion offers the new name, not the old one', { skip }, async () => {
+  const dir = tmp();
+  const lsp = await vscode(dir);
+  try {
+    const uri = uriOf(join(dir, 'Count.jsc'));
+    const v1 = COUNT.replace('require(by > 0, "positive")', 'const oldLocal = by + 1\n    require(oldLocal > 0, "positive")');
+    lsp.open(uri, v1);
+    await modelOf(lsp, uri, 1);
+    const v2 = v1.replace('const oldLocal', 'const newLocal');
+    lsp.change(uri, 2, v2);
+    const d = (await lsp.diagnostics(uri, 2)).diagnostics;
+    assert.ok(d.some((x) => /oldLocal/.test(x.message)), JSON.stringify(d));
+    const r = await lsp.request('textDocument/completion', { textDocument: { uri }, position: at(v2, 'oldLocal > 0') });
+    const labels = r.items.map((i) => i.label);
+    assert.ok(labels.includes('newLocal'), JSON.stringify(labels));
+    assert.ok(!labels.includes('oldLocal'), 'the old name is gone');
+    assert.ok(labels.includes('by') && labels.includes('count'), JSON.stringify(labels));
+    assert.equal(r.isIncomplete, true, 'not from a clean model: asked again as typing goes on');
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('C11: an open importer not on disk yet keeps a library\'s name from being renamed', { skip }, async () => {
+  const dir = tmp();
+  mkdirSync(join(dir, 'contracts', 'app'), { recursive: true });
+  writeFileSync(join(dir, 'joust.config.json'), '{ "contracts": "contracts" }');
+  const LIB = 'jsc 2\nlibrary app\n\nfn fee(amount: Int): Int = amount / 100\n';
+  writeFileSync(join(dir, 'contracts', 'app', 'fees.jsc'), LIB);
+  const lsp = await vscode(dir);
+  try {
+    const uri = uriOf(join(dir, 'contracts', 'app', 'fees.jsc'));
+    lsp.open(uri, LIB);
+    await modelOf(lsp, uri, 1);
+    // User.jsc exists only as an open buffer.
+    const user = uriOf(join(dir, 'contracts', 'app', 'User.jsc'));
+    lsp.open(user, 'jsc 2\npackage app\n\nimport { fee } from "./fees.jsc"\n\ncontract User {\n  state { n: Int }\n\n  init() {\n    return { n: fee(100) }\n  }\n}\n');
+    const r = await lsp.request('joust/rename', { uri, position: at(LIB, 'fee(amount'), newName: 'charge', confirm: true });
+    assert.equal(r.applied, false, JSON.stringify(r));
+    assert.match(r.error, /import this one \((contracts\/)?app\/User\.jsc\)/, r.error);
+    assert.equal(lsp.applied.length, 0);
+    // Closed: nothing imports it any more, and the rename applies.
+    lsp.close(user);
+    const ok = await lsp.request('joust/rename', { uri, position: at(LIB, 'fee(amount'), newName: 'charge', confirm: true });
+    assert.equal(ok.applied, true, JSON.stringify(ok));
+  } finally {
+    await lsp.stop();
+  }
+});
+
+const OTHER = COUNT.replace('contract Count', 'contract Other');
+
+test('C9: a file opened during a build, with other text, gets nothing from the build (nor do the files built with it)', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  const uri = uriOf(libraryProject(dir));
+  writeFileSync(join(dir, 'contracts', 'app', 'Other.jsc'), OTHER);
+  const lsp = await trusted(dir);
+  try {
+    lsp.open(uri, SHOP);
+    await modelOf(lsp, uri, 1);
+    const before = (await lsp.stats()).builds.calls;
+    const pending = lsp.request('joust/checkBuild', { uri });
+    for (let i = 0; i < 300 && (await lsp.stats()).builds.calls === before; i++) await new Promise((res) => setTimeout(res, 10));
+    const other = uriOf(join(dir, 'contracts', 'app', 'Other.jsc'));
+    const NEW = OTHER.replace('"positive"', '"strictly positive"');
+    lsp.open(other, NEW);
+    const r = await pending;
+    assert.match(r.error ?? '', /changed while it built|cancelled/, JSON.stringify(r));
+    await modelOf(lsp, other, 1);
+    await new Promise((res) => setTimeout(res, 500));
+    for (const u of [uri, other]) {
+      assert.ok(!lsp.published.filter((x) => x.uri === u).some((x) => x.diagnostics.some((d) => /in memory/.test(d.source))), u);
+    }
+    // Opened with the text on disk, a build's results reach it (its disk text is what was built).
+    lsp.close(other);
+    lsp.open(other, OTHER);
+    await modelOf(lsp, other, 1);
+    const done = await lsp.request('joust/checkBuild', { uri });
+    assert.equal(done.contracts, 2, JSON.stringify(done));
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('C12: saves in two projects of one window each get their build', { skip, timeout: 300_000 }, async () => {
+  const dirs = [tmp(), tmp(), tmp()];
+  const uris = dirs.map((d) => uriOf(libraryProject(d)));
+  const lsp = await startLsp({ folders: dirs, capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: {} });
+  try {
+    for (const u of uris) {
+      lsp.open(u, SHOP);
+      await modelOf(lsp, u, 1);
+    }
+    const before = (await lsp.stats()).builds.calls;
+    lsp.conn.sendNotification('textDocument/didSave', { textDocument: { uri: uris[0] } });
+    for (let i = 0; i < 300 && (await lsp.stats()).builds.calls === before; i++) await new Promise((res) => setTimeout(res, 10));
+    lsp.conn.sendNotification('textDocument/didSave', { textDocument: { uri: uris[1] } });
+    lsp.conn.sendNotification('textDocument/didSave', { textDocument: { uri: uris[2] } });
+    for (const u of uris) {
+      await lsp.until(() => lsp.published.find((x) => x.uri === u && x.diagnostics.some((d) => d.code === 'JSC0003')), 200000, `the build of ${u}`);
+    }
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('C13: the snapshot budget is debited while reading: a file past it is not read', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  const uri = uriOf(libraryProject(dir));
+  const lib = join(dir, 'node_modules', '@acme', 'fees', 'joust-lib');
+  writeFileSync(join(lib, 'a-pad.jsc'), `jsc 2\nlibrary acme.pad\n\n// ${'x'.repeat(5000)}\n`);
+  writeFileSync(join(lib, 'b-pad.jsc'), `jsc 2\nlibrary acme.pad2\n\n// ${'x'.repeat(5000)}\n`);
+  writeFileSync(join(lib, 'zz-too-large.jsc'), `// ${'x'.repeat(3 * 1024 * 1024)}\n`);
+  const lsp = await startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: { buildChars: 8000 } });
+  try {
+    lsp.open(uri, SHOP);
+    await modelOf(lsp, uri, 1);
+    const r = await lsp.request('joust/checkBuild', { uri });
+    assert.match(r.error ?? '', /larger than the language server builds \(8000 characters\)/, JSON.stringify(r));
+    assert.doesNotMatch(r.error, /zz-too-large/);
+  } finally {
+    await lsp.stop();
+  }
+});

@@ -20,7 +20,7 @@ import {
   diagnostics as toDiagnostics, MAX_PUBLISHED, documentSymbols, fixFor, foldingRanges, internalDiagnostic, MODEL_VERSION, parseModel, selectionRanges,
 } from './model.js';
 import {
-  completion, definition, hover, importEdit, reconcile, invisibleOccurrences, references, renamePlan, renamePreserves, semanticTokens, TOKEN_MODIFIERS,
+  completion, completionModel, definition, hover, importEdit, invisibleOccurrences, references, renamePlan, renamePreserves, semanticTokens, TOKEN_MODIFIERS,
   TOKEN_TYPES,
 } from './features.js';
 import { inside, localPath } from './paths.js';
@@ -630,6 +630,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     }
     state.set(e.document.uri, { lastPublished: null });
     schedule(e.document.uri, 0);
+    withdrawDisk(e.document.uri, e.document.getText()).catch(() => {});
     // A buffer opened for a file an importer looked for (perhaps missing on disk) is now what it reads (#98 N1).
     rescheduleImporters([localFileOf(e.document.uri)], DEBOUNCE_MS * 2, e.document.uri);
   });
@@ -888,8 +889,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const usable = fresh && current && current.model === fresh.model ? fresh.model : null;
     // A model with an error (a member recovery dropped or stopped checking, the usual state while typing) or none: the
     // last model without one, reconciled with this text (C4, F1).
+    // C8: the current model's own declarations first; the good model's only where the current one lacks them.
     const good = s.goodModel && s.goodGen === selector.generation && (!usable || usable.diagnostics.some((d) => d.severity === 'error'))
-      ? reconcile(s.goodModel, s.goodText, now.getText()) : null;
+      ? completionModel(usable, s.goodModel, s.goodText, now.getText()) : null;
     // The previous list's import ids go: only the latest list's items can still be chosen.
     for (const [id, x] of imports) if (x.uri === uri || Date.now() - x.issued > ID_MS) imports.delete(id);
     const model = good ?? usable ?? { declarations: [], references: [], builtins: [], exprs: [], types: [], diagnostics: [] };
@@ -900,7 +902,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       imports.set(id, { uri, st: s, gen: selector.generation, ...needsImport, issued: Date.now() });
       return { ...rest, command: { title: `Import ${needsImport.name}`, command: IMPORT_COMMAND, arguments: [id] } };
     });
-    return { isIncomplete: !usable && !good, items };
+    // Not from a clean model of this version: the client asks again as typing goes on.
+    return { isIncomplete: !usable || !!good, items };
   });
 
   // ------------------------------------------------------------------ M5b: rename (D7, L6)
@@ -912,16 +915,6 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     if (f.model.modelVersion < 2) return { error: 'this compiler predates rename (JOUST M5b)' };
     const plan = renamePlan(f.model, position, newName);
     if (plan.error) return plan;
-    // F2 on #99: a name other files can see is renamed only when no project file imports this one (renaming across
-    // files comes with M5c's project index).
-    if (plan.visible) {
-      const imp = await importersOf(uri, f.s.selection ?? await selectionFor(uri));
-      if (imp.error) return { error: `'${plan.decl.name}' can be named by other files, and ${imp.error}: rename it by hand (renaming across files comes with M5c)` };
-      if (imp.importers.length) {
-        return { error: `'${plan.decl.name}' can be named by the files that import this one (${imp.importers.slice(0, 3).join(', ')}${imp.importers.length > 3 ? ', …' : ''}):`
-          + ' renaming across files comes with M5c; rename it by hand' };
-      }
-    }
     const version = f.doc.version;
     const text = f.doc.getText();
     const after = await analyseText(uri, f.s.selection, TextDocument.applyEdits(f.doc, plan.edits), token);
@@ -929,6 +922,17 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const ok = renamePreserves(f.model, after, plan.edits);
     if (!ok.ok) return { error: ok.reason };
     if (!freshModel(uri) || documents.get(uri)?.version !== version) return { error: 'the file changed: try again' };
+    // F2 on #99: a name other files can see is renamed only when no file imports this one (renaming across files comes
+    // with M5c's project index). C11 (r2): checked last, on the buffers open now, just before the edit is applied.
+    if (plan.visible) {
+      const imp = await importersOf(uri, f.s.selection ?? await selectionFor(uri));
+      if (imp.error) return { error: `'${plan.decl.name}' can be named by other files, and ${imp.error}: rename it by hand (renaming across files comes with M5c)` };
+      if (imp.importers.length) {
+        return { error: `'${plan.decl.name}' can be named by the files that import this one (${imp.importers.slice(0, 3).join(', ')}${imp.importers.length > 3 ? ', …' : ''}):`
+          + ' renaming across files comes with M5c; rename it by hand' };
+      }
+      if (!freshModel(uri) || documents.get(uri)?.version !== version) return { error: 'the file changed: try again' };
+    }
     return { plan, version, text, st: f.s };
   }
 
@@ -1035,9 +1039,36 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   // ------------------------------------------------------------------ M5b: builds on save, in memory (D4)
 
   let buildSeq = 0;
+  /** S7, C13: at most this many characters in a build snapshot (a test may lower it). */
+  const buildChars = Number.isInteger(hostOptions.buildChars) ? hostOptions.buildChars : MAX_BUILD_CHARS;
   const builtFrom = new Map();   // uri of an open document -> the build seq that read it
 
   const inFlight = new Map();   // build seq -> { uris (the open buffers its snapshot read), cts }
+
+  const builtDisk = new Map();   // build seq -> its snapshot's files read from disk (real path -> SHA-256), while shown
+
+  /**
+   * C9 on #99 r2: a buffer opened on a file a build read from disk, with other text, ends that build's results (shown or
+   * in flight): they describe a file the server no longer reads.
+   */
+  async function withdrawDisk(uri, text) {
+    const p = localFileOf(uri);
+    const r = p && ((await real(p)) ?? p);
+    if (!r) return;
+    const h = hash(text);
+    const differs = (disk) => disk && disk.has(r) && disk.get(r) !== h;
+    for (const b of inFlight.values()) if (differs(b.disk)) b.cts?.cancel();
+    for (const [seq, disk] of builtDisk) {
+      if (!differs(disk)) continue;
+      builtDisk.delete(seq);
+      for (const [u, st] of state) {
+        if (st.build && st.build.seq === seq) {
+          st.build = null;
+          if (st.lastPublished != null) connection.sendDiagnostics({ uri: u, version: st.lastPublished, diagnostics: st.lastDiagnostics ?? [] });
+        }
+      }
+    }
+  }
 
   /** Withdraws every build result whose snapshot read `uri` (it changed); a build in flight that read it is cancelled (F7). */
   function withdrawBuilds(uri) {
@@ -1065,6 +1096,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     // C7 on #99: each open buffer's lifetime (its state object) with its version: a close and a reopen at the same
     // version is another buffer.
     const states = new Map();
+    const disk = new Map();   // the real path of each file read from disk -> the SHA-256 of what was read (C9)
+    const overBudget = `the project's sources and libraries are larger than the language server builds (${buildChars} characters)`;
     let chars = 0;
     const digest = createHash('sha256');
     const keep = (f, text) => {
@@ -1083,7 +1116,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       versions.set(uri, doc.version);
       states.set(uri, state.get(uri));
       keep(fileNameOf(uri), doc.getText());
-      return { files, versions, states, dir: null, packages: {}, javaLibraries: {}, digest: digest.digest('hex') };
+      return { files, versions, states, disk, dir: null, packages: {}, javaLibraries: {}, digest: digest.digest('hex') };
     }
     const rel = sel.contractsRel.join('/');
     const listed = await reader.list(sel.folder, rel, { max: MAX_BUILD_FILES, kind: sel.kind === 'gradle' ? 'gradle' : 'npm' });
@@ -1095,24 +1128,28 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         files[f] = open.getText();
         versions.set(open.uri, open.version);
         states.set(open.uri, state.get(open.uri));
+        if (chars + files[f].length > buildChars) return { error: overBudget };
       } else {
-        const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: MAX_FILE_CHARS * 2 });
+        // C13 on #99 r2: the total is debited before anything is kept; a file past what is left is not read.
+        const left = buildChars - chars;
+        const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: Math.min(MAX_FILE_CHARS * 2, left) });
+        if (r.error === 'too-large' && left < MAX_FILE_CHARS * 2) return { error: overBudget };
         if (r.error) return { error: `${f} cannot be read (${r.error})` };
         files[f] = r.bytes.toString('utf8');
+        // C9 on #99 r2: a file read from disk is an input too: a buffer opened on it later with other text makes the
+        // snapshot stale.
+        disk.set(full, hash(files[f]));
       }
       keep(f, files[f]);
-      // S7 on #99: the snapshot's total is bounded too.
-      if (chars > MAX_BUILD_CHARS) return { error: `the project's sources are larger than the language server builds (${MAX_BUILD_CHARS} characters)` };
+      if (chars > buildChars) return { error: overBudget };
     }
     // C6 on #99: the npm packages' libraries (joust-lib/: .jsc by <package>/<path>, Java sources by path), as joust
-    // build passes them (libraries.js), read confined: no link, inside the folder, under the same bounds.
-    const libs = sel.kind === 'gradle' ? { packages: {}, javaLibraries: {} } : await buildLibraries(sel);
+    // build passes them (libraries.js), read confined, within what is left of the same budget (C13).
+    const libs = sel.kind === 'gradle' ? { packages: {}, javaLibraries: {} } : await buildLibraries(sel, buildChars - chars);
     if (libs.error) return { error: libs.error };
-    for (const [k, v] of [...Object.entries(libs.packages), ...Object.entries(libs.javaLibraries)]) {
-      keep(`lib:${k}`, v);
-      if (chars > MAX_BUILD_CHARS) return { error: `the project's sources and libraries are larger than the language server builds (${MAX_BUILD_CHARS} characters)` };
-    }
-    return { files, versions, states, dir: listed.path, packages: libs.packages, javaLibraries: libs.javaLibraries, digest: digest.digest('hex') };
+    for (const [k, v] of [...Object.entries(libs.packages), ...Object.entries(libs.javaLibraries)]) keep(`lib:${k}`, v);
+    if (chars > buildChars) return { error: overBudget };
+    return { files, versions, states, disk, dir: listed.path, packages: libs.packages, javaLibraries: libs.javaLibraries, digest: digest.digest('hex') };
   }
 
   /**
@@ -1121,7 +1158,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
    * reader: a package root may be a link (confined); a joust-lib/ or anything below it reached by a link is left out
    * (as projectOf's package imports). `{ packages, javaLibraries }` or `{ error }` (one Java class shipped twice: JSC0709; a bound).
    */
-  async function buildLibraries(sel) {
+  async function buildLibraries(sel, budget = buildChars) {
+    let left = budget;
     const packages = {};
     const javaLibraries = {};
     const javaFrom = {};
@@ -1156,9 +1194,15 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       if (listed.error) return { error: listed.error === 'too-many' ? `the package ${name} ships more than ${MAX_BUILD_FILES} library files` : `${name}/joust-lib cannot be read` };
       for (const f of listed.files) {
         if (++count > MAX_BUILD_FILES) return { error: `the npm packages ship more than ${MAX_BUILD_FILES} library files` };
-        const r = await reader.read(sel.folder, `${libRel}/${f}`, { cap: MAX_FILE_CHARS * 2 });
+        // C13 on #99 r2: debited before it is kept; a file past what is left of the budget is not read at all.
+        const r = await reader.read(sel.folder, `${libRel}/${f}`, { cap: Math.max(0, Math.min(MAX_FILE_CHARS * 2, left)) });
+        if (r.error === 'too-large' && left < MAX_FILE_CHARS * 2) {
+          return { error: `the project's sources and libraries are larger than the language server builds (${buildChars} characters)` };
+        }
         if (r.error) return { error: `${name}/joust-lib/${f} cannot be read (${r.error})` };
         const text = r.bytes.toString('utf8');
+        left -= text.length;
+        if (left < 0) return { error: `the project's sources and libraries are larger than the language server builds (${buildChars} characters)` };
         if (f.endsWith('.jsc')) packages[`${name}/${f}`] = text;
         else if (f.endsWith('.java')) {
           if (f in javaLibraries) return { error: `error[JSC0709]: the npm packages ${javaFrom[f]} and ${name} both ship joust-lib/${f}: one Java class twice` };
@@ -1195,6 +1239,12 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       if (p) open.set(p, d.getText());
     }
     const importers = [];
+    const imports = (f, text) => {
+      const scanned = scanImports(text, MAX_IMPORTS_PER_FILE);
+      if (scanned.truncated) return null;
+      return scanned.imports.some(({ spec }) => (spec.startsWith('./') || spec.startsWith('../')) && !spec.includes('\\') && !spec.includes('//')
+        && posix.normalize(posix.join(posix.dirname(f), spec)) === id);
+    };
     for (const f of listed.files) {
       if (f === id) continue;
       const full = join(listed.path, ...f.split('/'));
@@ -1204,15 +1254,23 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
         if (r.error) return { error: `${f} cannot be read (${r.error})` };
         text = r.bytes.toString('utf8');
       }
-      const scanned = scanImports(text, MAX_IMPORTS_PER_FILE);
-      if (scanned.truncated) return { error: `${f} has more imports than the language server reads` };
-      for (const { spec } of scanned.imports) {
-        if (!spec.startsWith('./') && !spec.startsWith('../')) continue;
-        if (posix.normalize(posix.join(posix.dirname(f), spec)) === id) {
-          importers.push(f);
-          break;
-        }
-      }
+      const yes = imports(f, text);
+      if (yes === null) return { error: `${f} has more imports than the language server reads` };
+      if (yes) importers.push(f);
+    }
+    // C11 on #99 r2: and every open buffer of a file there that is not on disk (yet), under the same walk rules.
+    const listedSet = new Set(listed.files);
+    for (const d of documents.all()) {
+      if (d.uri === uri) continue;
+      const p = localFileOf(d.uri);
+      if (!p || !p.endsWith('.jsc') || !inside(p, base)) continue;
+      const f = relative(base, p).split(sep).join('/');
+      if (listedSet.has(f) || f === id) continue;
+      if (sel.kind !== 'gradle' && f.split('/').slice(0, -1).some((x) => x === 'node_modules' || x.startsWith('.'))) continue;
+      if (Buffer.byteLength(d.getText(), 'utf8') > MAX_FILE_CHARS) return { error: `${f} is larger than the language server reads` };
+      const yes = imports(f, d.getText());
+      if (yes === null) return { error: `${f} has more imports than the language server reads` };
+      if (yes) importers.push(f);
     }
     return { importers };
   }
@@ -1235,7 +1293,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const snap = await buildSnapshot(uri, sel);
     if (snap.error) return { error: snap.error };
     if (token?.isCancellationRequested) return { error: 'cancelled' };
-    inFlight.set(seq, { uris: new Set(snap.versions.keys()), cts: token?.cts });
+    inFlight.set(seq, { uris: new Set(snap.versions.keys()), disk: snap.disk, cts: token?.cts });
     let r;
     try {
       r = await buildHost.request(`build:${engine.id}`, engine,
@@ -1244,11 +1302,22 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     } finally {
       inFlight.delete(seq);
     }
-    // C7 on #99: every buffer the snapshot read is still the same lifetime at the same version.
-    const stale = () => selector.generation !== gen
-      || [...snap.versions].some(([u, v]) => documents.get(u)?.version !== v || state.get(u) !== snap.states.get(u));
+    // C7 on #99: every buffer the snapshot read is still the same lifetime at the same version. C9 (r2): and no file it
+    // read from disk is now open with other text (a buffer opened during the build).
+    const openOnDisk = async () => {
+      for (const d of documents.all()) {
+        if (snap.versions.has(d.uri)) continue;
+        const p = localFileOf(d.uri);
+        const r = p && ((await real(p)) ?? p);
+        if (r && snap.disk.has(r) && snap.disk.get(r) !== hash(d.getText())) return true;
+      }
+      return false;
+    };
+    const stale = async () => selector.generation !== gen
+      || [...snap.versions].some(([u, v]) => documents.get(u)?.version !== v || state.get(u) !== snap.states.get(u))
+      || await openOnDisk();
     if (!r.model) return { error: r.internal?.message ?? (r.cancelled ? 'cancelled' : r.unavailable ? 'builds are unavailable' : 'the build did not run') };
-    if (stale()) return { error: 'the sources changed while it built: not shown' };
+    if (await stale()) return { error: 'the sources changed while it built: not shown' };
     const result = JSON.parse(r.model);
     const label = `joust build (${sel.source} ${engine.version}, in memory)`;
     const byUri = new Map();
@@ -1300,35 +1369,52 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       add(uri, { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 1, source: label,
         message: `the build failed${first ? `: ${first.file ? `${first.file}:${first.line ?? 1}: ` : ''}${first.message}` : ' without a diagnostic'}` });
     }
-    if (stale()) return { error: 'the sources changed while it built: not shown' };
+    if (await stale()) return { error: 'the sources changed while it built: not shown' };
     // Published for every open document the snapshot read (or the build named), each with the version it read.
     const targets = new Set([...snap.versions.keys(), ...byUri.keys()]);
     for (const u of targets) {
       const st = state.get(u);
       const doc = documents.get(u);
       if (!st || !doc) continue;
-      st.build = { seq, gen, version: snap.versions.get(u) ?? doc.version, diagnostics: byUri.get(u) ?? [] };
+      // C9 (r2): a document gets the build's results only for the buffer the snapshot read (its lifetime and version), or,
+      // read from disk, while its buffer still holds exactly that text; never the recipient's own version instead.
+      let version = snap.versions.get(u);
+      if (version === undefined) {
+        const p = localFileOf(u);
+        const r = p && ((await real(p)) ?? p);
+        if (!r || !snap.disk.has(r) || snap.disk.get(r) !== hash(doc.getText())) continue;
+        version = doc.version;
+      } else if (snap.states.get(u) !== st) continue;
+      st.build = { seq, gen, version, diagnostics: byUri.get(u) ?? [] };
+      builtDisk.set(seq, snap.disk);
       builtFrom.set(u, seq);
       if (st.lastPublished === st.build.version) {
         connection.sendDiagnostics({ uri: u, version: st.lastPublished, diagnostics: [...(st.lastDiagnostics ?? []), ...st.build.diagnostics].slice(0, MAX_PUBLISHED + 1) });
       }
     }
+    // Only the snapshots still shown are kept.
+    const shown = new Set([...state.values()].map((st) => st.build?.seq).filter((x) => x !== undefined));
+    for (const k of builtDisk.keys()) if (!shown.has(k)) builtDisk.delete(k);
     return { ok: result.ok === true && errors === 0, errors, contracts: (result.contracts ?? []).length };
   }
 
   // D4, D10, Q7: on save, in trusted project-matched npm projects only (a user setting can turn it off).
-  // F7 on #99: coalesced: one build in flight and at most one pending (the latest save's); a build whose inputs change
-  // while it runs is cancelled (withdrawBuilds).
+  // F7 on #99: coalesced: one build in flight and at most one pending per project (the latest save's); a build whose
+  // inputs change while it runs is cancelled (withdrawBuilds).
+  // C12 on #99 r2: per project (its root, else its contracts directory): a save replaces only its own project's pending
+  // build; each project with a pending save gets its build, in the order saved.
   let saveRunning = false;
-  let savePending = null;
+  const savePending = new Map();   // project -> { uri, sel }: the latest save of each
   async function buildOnSaveLoop(next) {
-    savePending = next;
+    const key = next.sel.root ?? next.sel.contracts ?? next.uri;
+    savePending.delete(key);
+    savePending.set(key, next);
     if (saveRunning) return;
     saveRunning = true;
     try {
-      while (savePending) {
-        const { uri, sel } = savePending;
-        savePending = null;
+      while (savePending.size) {
+        const [key0, { uri, sel }] = savePending.entries().next().value;
+        savePending.delete(key0);
         if (!state.has(uri)) continue;
         const cts = new CancellationTokenSource();
         const token = Object.assign(cts.token, { cts });
