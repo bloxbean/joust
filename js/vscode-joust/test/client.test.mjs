@@ -13,7 +13,7 @@ import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { createHandleApplyEdit } = require('../src/apply-edit.js');
-const { abiCommands, buildCommand, createTaskProvider } = require('../src/tasks.js');
+const { abiCommands, buildCommand, createTaskProvider, manifestWritten } = require('../src/tasks.js');
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function fakeVscode(docs) {
@@ -253,6 +253,31 @@ test('Accept ABI…: the project\'s own tool, bound to both manifests (D7a): npm
   // F5 on #99: a multi-project build is refused (a bare task name would run in every project).
   writeFileSync(join(gradle, 'settings.gradle.kts'), 'rootProject.name = "x"\ninclude(":app", ":lib")\n');
   assert.deepEqual(abiCommands(gradle, 'linux'), { kind: 'gradle', multiProject: true });
+  // C10 on #99 r2: the read-back takes the diff's path relative to the folder, Gradle's layout as npm's.
+  mkdirSync(join(gradle, 'src', 'main', 'jsc', 'app'), { recursive: true });
+  writeFileSync(join(gradle, 'src', 'main', 'jsc', 'app', 'A.abi.json'), '{"abi":2}\n');
+  const sha = createHash('sha256').update('{"abi":2}\n').digest('hex');
+  assert.equal(manifestWritten(gradle, 'src/main/jsc/app/A.abi.json', sha), true);
+  assert.equal(manifestWritten(gradle, 'src/main/jsc/app/A.abi.json', 'a'.repeat(64)), false);
+  assert.equal(manifestWritten(gradle, 'app/A.abi.json', sha), false);
+  assert.equal(manifestWritten(gradle, join(gradle, 'src/main/jsc/app/A.abi.json'), sha), false, 'never an absolute path');
+  assert.equal(manifestWritten(gradle, '../gradle/src/main/jsc/app/A.abi.json', sha), true, 'inside by real path');
+  assert.equal(manifestWritten(join(gradle, 'src'), '../gradlew', sha), false, 'never outside the folder');
+});
+
+test('N2 on #99 r2: the commands take test arguments only in test mode', () => {
+  const { testMode } = require('../src/commands.js');
+  const was = process.env.JOUST_EXTENSION_TESTS;
+  delete process.env.JOUST_EXTENSION_TESTS;
+  try {
+    assert.equal(testMode({ ExtensionMode: { Production: 1, Test: 3 } }, { extensionMode: 1 }), false);
+    assert.equal(testMode({ ExtensionMode: { Production: 1, Test: 3 } }, { extensionMode: 3 }), true);
+    process.env.JOUST_EXTENSION_TESTS = '1';
+    assert.equal(testMode({ ExtensionMode: { Production: 1, Test: 3 } }, { extensionMode: 1 }), true);
+  } finally {
+    if (was === undefined) delete process.env.JOUST_EXTENSION_TESTS;
+    else process.env.JOUST_EXTENSION_TESTS = was;
+  }
 });
 
 test('the manifest: M5b commands, F2 bound to JOUST: Rename Symbol in .jsc editors, addImport hidden, timeValue declared', () => {

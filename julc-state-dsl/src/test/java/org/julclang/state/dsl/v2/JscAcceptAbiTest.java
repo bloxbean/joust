@@ -100,7 +100,20 @@ class JscAcceptAbiTest {
         assertTrue(amb.err().contains("ambiguous: app.A (app/A.jsc), other.A (other/A.jsc)"), amb.err());
         Path diff = dir.resolve("d.json");
         assertEquals(0, run("--abi-diff", src.toString(), "other.A", diff.toString()).code());
-        assertTrue(Files.readString(diff).contains("\"contract\":\"other.A\",\"path\":\"other/A.abi.json\""), Files.readString(diff));
+        assertTrue(Files.readString(diff).contains("\"contract\":\"other.A\",\"file\":\"other/A.jsc\",\"path\":"), Files.readString(diff));
+        // C10 on #99 r2: the path is relative to the working directory (the project), here outside it: absolute.
+        assertTrue(Files.readString(diff).contains("\"path\":\"" + src.resolve("other/A.abi.json").toAbsolutePath().normalize().toString().replace('\\', '/') + "\""),
+                Files.readString(diff));
+        // In the project (the working directory, as Gradle's JavaExec runs it): src/main/jsc/... relative to it.
+        String userDir = System.getProperty("user.dir");
+        try {
+            System.setProperty("user.dir", dir.toString());
+            Path d2 = dir.resolve("d2.json");
+            assertEquals(0, run("--abi-diff", src.toString(), "other.A", d2.toString()).code());
+            assertTrue(Files.readString(d2).contains("\"path\":\"jsc/other/A.abi.json\""), Files.readString(d2));
+        } finally {
+            System.setProperty("user.dir", userDir);
+        }
         String now = json(diff, "now");
         Run ambiguous = run(src.toString(), out.toString(), "--accept-abi=A@none.." + now);
         assertEquals(1, ambiguous.code());

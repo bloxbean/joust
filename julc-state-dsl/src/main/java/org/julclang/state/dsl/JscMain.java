@@ -791,10 +791,18 @@ public final class JscMain {
             System.out.println(was.equals(now) ? "unchanged" : "accept it with: ./gradlew acceptJscAbi --contract " + qualified
                     + " --committed-sha256 " + was + " --sha256 " + now);
             if (out != null) {
+                // C10 on #99 r2: one base for both backends: "path" is relative to the tool's working directory (the project:
+                // npm's joust runs at its root, Gradle's JavaExec at the project's directory), as joust abi diff writes it;
+                // "file" is the .jsc file under the sources directory. A manifest outside the working directory: absolute.
+                Path cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+                Path abs = committed.toAbsolutePath().normalize();
+                String path = (abs.startsWith(cwd) ? cwd.relativize(abs) : abs).toString().replace('\\', '/');
                 var o = new StringBuilder("{\"contract\":");
                 org.julclang.state.dsl.v2.JscLangJson.str(o, qualified);
+                o.append(",\"file\":");
+                org.julclang.state.dsl.v2.JscLangJson.str(o, src.relativize(f).toString().replace('\\', '/'));
                 o.append(",\"path\":");
-                org.julclang.state.dsl.v2.JscLangJson.str(o, src.relativize(committed).toString());
+                org.julclang.state.dsl.v2.JscLangJson.str(o, path);
                 o.append(",\"committed\":{\"sha256\":\"").append(was).append("\",\"text\":");
                 org.julclang.state.dsl.v2.JscLangJson.str(o, old);
                 o.append("},\"now\":{\"sha256\":\"").append(now).append("\",\"text\":");

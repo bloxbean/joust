@@ -6,12 +6,23 @@
 const fs = require('fs');
 const path = require('path');
 const { randomBytes } = require('crypto');
-const { abiCommands } = require('./tasks');
+const { abiCommands, manifestWritten } = require('./tasks');
 
 const GEN = 'joust-gen';
 const ABI = 'joust-abi';
 
+/**
+ * N2 on #99 r2: a command's arguments (a new name, a confirmation, a contract, an answer to the unsaved-buffers modal,
+ * a bound acceptance) stand in for the user's answers in the extension's own tests only (JOUST_EXTENSION_TESTS=1, which
+ * test/electron/run.mjs sets, or an extension host in test mode). Anywhere else they are ignored: the inputs and modals
+ * always ask.
+ */
+function testMode(vscode, ctx) {
+  return process.env.JOUST_EXTENSION_TESTS === '1' || (vscode.ExtensionMode && ctx.extensionMode === vscode.ExtensionMode.Test);
+}
+
 function register(vscode, ctx, getClient) {
+  const testArgs = (args) => (args && typeof args === 'object' && testMode(vscode, ctx) ? args : undefined);
   const abiDocs = new Map();   // joust-abi: path -> text (the two manifests of the last diff)
   const changed = new vscode.EventEmitter();
   const running = () => {
@@ -63,7 +74,8 @@ function register(vscode, ctx, getClient) {
   ctx.subscriptions.push(vscode.commands.registerCommand('joust.peekGeneratedJava', () => generated(true)));
 
   // JOUST: Rename Symbol. `args` (tests): { newName, confirm } instead of the input box and the modal.
-  ctx.subscriptions.push(vscode.commands.registerCommand('joust.renameSymbol', async (args) => {
+  ctx.subscriptions.push(vscode.commands.registerCommand('joust.renameSymbol', async (given) => {
+    const args = testArgs(given);
     const e = active();
     const c = running();
     if (!e || !c) return { applied: false, reason: 'no .jsc editor' };
@@ -89,7 +101,8 @@ function register(vscode, ctx, getClient) {
   }));
 
   // Remove invisible characters…: every JSC0145/JSC0148 character, listed in a modal first. `args` (tests): { confirm }.
-  ctx.subscriptions.push(vscode.commands.registerCommand('joust.removeInvisible', async (args) => {
+  ctx.subscriptions.push(vscode.commands.registerCommand('joust.removeInvisible', async (given) => {
+    const args = testArgs(given);
     const e = active();
     const c = running();
     if (!e || !c) return { applied: false, reason: 'no .jsc editor' };
@@ -170,21 +183,6 @@ function register(vscode, ctx, getClient) {
     });
   }
 
-  /** Whether the manifest at `rel` (inside the folder, no link followed out of it) now has SHA-256 `sha`. */
-  function manifestIs(folder, rel, sha) {
-    if (typeof rel !== 'string' || path.isAbsolute(rel)) return false;
-    try {
-      const root = fs.realpathSync.native(folder.uri.fsPath);
-      const file = fs.realpathSync.native(path.join(root, rel));
-      if (!file.startsWith(root + path.sep)) return false;
-      const st = fs.statSync(file);
-      if (!st.isFile() || st.size > 4 * 1024 * 1024) return false;
-      return require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex') === sha;
-    } catch {
-      return false;
-    }
-  }
-
   /**
    * The contract a .jsc document declares, by its full identity (S5 on #99): `package.Name`, from the first `package` and
    * `contract` declarations at line starts (a library declares no contract: null). The tool resolves the name again
@@ -201,7 +199,8 @@ function register(vscode, ctx, getClient) {
   // Accept ABI… (D7a). `args` (tests): { contract, confirm, unsaved: 'save' | 'continue', bound: { committed, now } }.
   // `bound` skips the diff and runs the acceptance with those two hashes: the electron test edits the source between
   // the two steps and sees the tool refuse (F4 on #99).
-  ctx.subscriptions.push(vscode.commands.registerCommand('joust.acceptAbi', async (args) => {
+  ctx.subscriptions.push(vscode.commands.registerCommand('joust.acceptAbi', async (given) => {
+    const args = testArgs(given);
     if (!vscode.workspace.isTrusted) {
       vscode.window.showWarningMessage('JOUST: Accept ABI… runs the project\'s own tool: trust the workspace first.');
       return { ran: false, reason: 'restricted' };
@@ -284,7 +283,7 @@ function register(vscode, ctx, getClient) {
     const code2 = await runTask(folder, 'accept abi', cmds.accept(name, diff.committed.sha256, diff.now.sha256));
     // What was written decides, not the exit code alone (S5 on #99): the build can accept this manifest and still fail
     // on another contract's. The manifest is read back at the path the diff named, inside the folder.
-    const written = manifestIs(folder, diff.path, diff.now.sha256);
+    const written = manifestWritten(folder.uri.fsPath, diff.path, diff.now.sha256);
     if (written && code2 === 0) vscode.window.showInformationMessage(`JOUST: accepted the ABI manifest of ${name} (${diff.path}); review and commit it.`);
     else if (written) vscode.window.showWarningMessage(`JOUST: accepted the ABI manifest of ${name} (${diff.path}), but the build reported other errors (see the task's output).`);
     else vscode.window.showWarningMessage(`JOUST: the ABI change of ${name} was not accepted (see the task's output).`);
@@ -292,4 +291,4 @@ function register(vscode, ctx, getClient) {
   }));
 }
 
-module.exports = { register, GEN, ABI };
+module.exports = { register, GEN, ABI, testMode };

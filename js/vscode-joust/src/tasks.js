@@ -114,6 +114,25 @@ function multiProject(folder) {
   return false;
 }
 
+/**
+ * Whether the manifest at `rel` now has SHA-256 `sha` (Accept ABI… reads back what was written: S5 on #99). `rel` is
+ * relative to the folder, the tool's working directory, on both backends (C10 on #99 r2: Gradle's
+ * src/main/jsc/app/A.abi.json, npm's contracts/app/A.abi.json); it must stay inside the folder, by real path.
+ */
+function manifestWritten(folderPath, rel, sha) {
+  if (typeof rel !== 'string' || !rel || path.isAbsolute(rel)) return false;
+  try {
+    const root = fs.realpathSync.native(folderPath);
+    const file = fs.realpathSync.native(path.join(root, rel));
+    if (!inside(file, root) || file === root) return false;
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size > 4 * 1024 * 1024) return false;
+    return require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex') === sha;
+  } catch {
+    return false;
+  }
+}
+
 function createTaskProvider(vscode) {
   const task = (folder) => {
     if (folder.uri.scheme !== 'file' || folder.uri.authority) return null;
@@ -139,4 +158,4 @@ function createTaskProvider(vscode) {
   };
 }
 
-module.exports = { createTaskProvider, buildCommand, abiCommands, inside };
+module.exports = { createTaskProvider, buildCommand, abiCommands, inside, manifestWritten };

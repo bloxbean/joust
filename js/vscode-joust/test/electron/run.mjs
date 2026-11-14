@@ -68,7 +68,9 @@ for (const version of versions) {
         `--extensionTestsPath=${join(root, 'test', 'electron', 'suite', 'index.js')}`,
         `--extensionDevelopmentPath=${join(root, 'test', 'electron', 'harness')}`];
       const env = { ...process.env, JOUST_LSP_DEBUG: process.env.JOUST_TRACE ?? '',
-        JOUST_SCENARIO: s.name, JOUST_WS: ws.folder, JOUST_SENTINEL: sentinel, JOUST_VSCODE: version };
+        JOUST_SCENARIO: s.name, JOUST_WS: ws.folder, JOUST_SENTINEL: sentinel, JOUST_VSCODE: version,
+        // N2 on #99 r2: the commands take their test arguments only with this set.
+        JOUST_EXTENSION_TESTS: '1' };
       delete env.ELECTRON_RUN_AS_NODE;
       const code = await new Promise((ok) => {
         const p = spawn(exe, args, { env, stdio: 'inherit' });
