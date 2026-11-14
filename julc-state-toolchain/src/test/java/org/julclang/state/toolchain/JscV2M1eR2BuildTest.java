@@ -47,7 +47,7 @@ class JscV2M1eR2BuildTest {
                 if (text.startsWith("jsc 2")) SOURCES.put(PKG_PATH + p.getFileName(), text);
             }
         }
-        all = Toolchain.build(SOURCES, Map.of());
+        all = Toolchain.build(SOURCES, Map.of(), ExampleLibraries.javaSources());
         assertTrue(all.ok(), all.diagnostics().toString());
     }
 

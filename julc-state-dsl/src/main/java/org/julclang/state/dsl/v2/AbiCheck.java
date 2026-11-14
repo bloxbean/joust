@@ -29,13 +29,27 @@ public final class AbiCheck {
         var c = new Compare(defs, types, pkg + "." + name + ".", pkg + "." + name + "Validator.", problems);
         String validator = pkg + "." + name + "Validator.";
         c.constructors("the datum", List.of(abi.get("datum")), pkg + "." + name + ".State");
+        // M2b (ADR-0009 D1): the params the script is applied to, bound to the processor's own root for them
+        // (x-joust.params), which must be the contract's Config.
+        var xj = (Map<String, Object>) ((Map<String, Object>) Json.parse(descriptionJson)).get("x-joust");
+        Object describedParams = xj == null ? null : xj.get("params");
+        if (abi.get("params") != null) {
+            String want = pkg + "." + name + "." + Ir.PARAMS;
+            if (!(describedParams instanceof Map<?, ?> d) || !("#/definitions/" + want).equals(d.get("$ref"))) {
+                problems.add("the manifest states params (" + want + ") that the description does not have as its params");
+            } else {
+                c.constructors("the params", List.of(abi.get("params")), want);
+            }
+        } else if (describedParams != null) {
+            problems.add("the description has params that the manifest does not state");
+        }
         var redeemers = (Map<String, Object>) abi.get("redeemers");
         c.constructors("the spend redeemer", (List<Object>) redeemers.get("spend"), validator + "Calls");
         c.constructors("the mint redeemer", (List<Object>) redeemers.get("mint"), validator + "Lifecycle");
         // Batched actions (M1c): the intent's datum and its refund tag are encoded on-chain too. Each role is bound to
         // the processor's own root for it (x-joust.intents.datum / .refund), never to the schema the manifest names
         // (review C3, S4): a manifest that names another schema for a role, or swaps the roles, differs.
-        var xjoust = (Map<String, Object>) ((Map<String, Object>) Json.parse(descriptionJson)).get("x-joust");
+        var xjoust = xj;
         var described = xjoust == null ? null : (Map<String, Object>) xjoust.get("intents");
         if (abi.get("intent") instanceof Map<?, ?> intent) {
             if (described == null) {
@@ -162,6 +176,8 @@ public final class AbiCheck {
             String kind = m == null ? "record" : (String) m.get("kind");
             return switch (kind) {
                 case "api" -> "org.julclang.state.api." + t;
+                // A .jsc library's type (D9, M4): its library's class, as the processor names it.
+                case "library" -> m.get("library") + "." + t;
                 case "ledger" -> "org.julclang.ledger." + t;
                 case "validator" -> validator + t;
                 default -> own + t;

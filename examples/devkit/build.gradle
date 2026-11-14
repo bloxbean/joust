@@ -4,3 +4,8 @@ dependencies {
     api project(':julc-state-runtime')
     api libs.cardano.client.backend.blockfrost
 }
+
+// FixturesTest checks fixtures/m0 (M2c review r2, F9): a change to it alone runs the test again.
+tasks.named('test') {
+    inputs.dir(rootProject.file('fixtures/m0')).withPropertyName('fixturesM0').withPathSensitivity(PathSensitivity.RELATIVE)
+}

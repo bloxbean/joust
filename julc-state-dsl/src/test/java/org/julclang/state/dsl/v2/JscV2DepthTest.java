@@ -11,7 +11,6 @@ import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -230,40 +229,64 @@ class JscV2DepthTest {
 
     // ------------------------------------------------------------------ the safety net (JSC0005)
 
-    /** Runs {@code r} on a thread with a small stack, so the front end runs out of it below the cap. */
-    static <T> T onSmallStack(java.util.concurrent.Callable<T> r) throws Exception {
-        var out = new AtomicReference<T>();
-        var err = new AtomicReference<Throwable>();
-        var t = new Thread(null, () -> {
-            try {
-                out.set(r.call());
-            } catch (Throwable x) {
-                err.set(x);
-            }
-        }, "small-stack", 96 * 1024);
-        t.start();
-        t.join();
-        if (err.get() instanceof Exception x) throw x;
-        if (err.get() != null) throw new AssertionError(err.get());
-        return out.get();
+    /** Recurses until the stack runs out: a real StackOverflowError, raised wherever it is called from. */
+    static int exhaust(int n) {
+        return exhaust(n + 1) + 1;
     }
 
+    /**
+     * Any Error that escapes the front end is JSC0005 at the file, never a crash. The front end is replaced by one that
+     * starts lowering and then runs out of stack for real, so the outcome no longer depends on how much stack a nested
+     * input needs on this JVM (M1 hardening: a small-stack thread did not always overflow after {@code clean}, and the
+     * run then failed at the ABI check, JSC0003). The other files of the run are still lowered and written.
+     */
     @Test
     void anErrorInTheFrontEnd_isJsc0005_notACrash(@TempDir Path dir) throws Exception {
         assertTrue(JscMain.internalError(new StackOverflowError()).contains("ran out of stack"));
         Path src = Files.createDirectories(dir.resolve("src/t"));
         Files.writeString(src.resolve("D.jsc"), action("(".repeat(60) + "x" + ")".repeat(60)));
+        Files.writeString(src.resolve("E.jsc"), contract("").replace("contract D", "contract E"));
+        var overflowed = new java.util.concurrent.atomic.AtomicBoolean();
+        JscMain.FrontEnd deep = (text, file) -> {
+            if (!file.equals("D.jsc")) return JscMain.lowerWithWarnings(text, file);
+            JscMain.lowerWithWarnings(text, file);   // the real front end accepts it (60 levels, under the cap)
+            try {
+                exhaust(0);
+            } catch (StackOverflowError e) {
+                overflowed.set(true);
+                throw e;
+            }
+            throw new AssertionError("unreachable");
+        };
         var err = new ByteArrayOutputStream();
         PrintStream old = System.err;
         int code;
         try {
             System.setErr(new PrintStream(err, true));
-            code = onSmallStack(() -> JscMain.run(new String[]{dir.resolve("src").toString(), dir.resolve("out").toString()}));
+            code = JscMain.run(new String[]{dir.resolve("src").toString(), dir.resolve("out").toString(), "--accept-abi"}, deep);
+        } finally {
+            System.setErr(old);
+        }
+        assertTrue(overflowed.get(), "a real StackOverflowError was raised");
+        assertEquals(1, code, err.toString());
+        assertTrue(err.toString().contains("t/D.jsc:1:1: error[JSC0005]: internal error lowering this file: the front end ran out of stack"),
+                err.toString());
+        assertFalse(err.toString().contains("JSC0003"), err.toString());
+        assertTrue(Files.exists(dir.resolve("out/t/E.java")), "the other file is still lowered");
+        assertFalse(Files.exists(dir.resolve("out/t/D.java")), "nothing is written for the file that failed");
+
+        // Any other Error or RuntimeException of the front end is JSC0005 too, with its text.
+        err.reset();
+        try {
+            System.setErr(new PrintStream(err, true));
+            code = JscMain.run(new String[]{dir.resolve("src").toString(), dir.resolve("out").toString(), "--accept-abi"}, (text, file) -> {
+                throw new IllegalStateException("boom in " + file);
+            });
         } finally {
             System.setErr(old);
         }
         assertEquals(1, code);
-        assertTrue(err.toString().contains("t/D.jsc:1:1: error[JSC0005]: internal error lowering this file: the front end ran out of stack"),
+        assertTrue(err.toString().contains("t/D.jsc:1:1: error[JSC0005]: internal error lowering this file: java.lang.IllegalStateException: boom in D.jsc"),
                 err.toString());
     }
 }

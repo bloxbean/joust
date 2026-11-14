@@ -1,6 +1,6 @@
 // The std rows (docs/reference/jsc-2-semantics.md §3.10, ADR-0018 D8): each fails exactly outside its domain.
 
-import { NONE, Refused, some, hex, toUnsigned, unsignedBytes } from './values.js';
+import { NONE, Refused, some, hex, toUnsigned, unsignedBytes, ValueV, inRange } from './values.js';
 
 /** A domain failure of a row (its class is domain:<row>). */
 const out = (row, message) => new Refused(message, 'domain', row);
@@ -152,6 +152,16 @@ export function applyStd(name, args, { same, elemType, tx }) {
       for (let i = 0; i < a.length; i++) if (same(a[i], b, elemType)) return some(BigInt(i));
       return NONE;
     }
+    // std/value (M2)
+    case 'isEmpty': return a.entries.length === 0;
+    case 'withoutLovelace': return new ValueV(a.entries.filter((e) => e[0] !== ''));
+    case 'scale':
+      if (a === 0n) return ValueV.NONE;
+      if (!b.quantities().every((q) => inRange(q * a))) throw out('scale', 'scale: a quantity out of the 128-bit range');
+      return ValueV.NONE.plus(b, a);
+    // std/address (M2)
+    case 'paymentKey': return a.payment.script ? NONE : some(a.payment.hash);
+    case 'paymentScript': return a.payment.script ? some(a.payment.hash) : NONE;
     // std/time
     case 'elapsedSince': return tx.validFrom - a > 0n ? tx.validFrom - a : 0n;
     case 'elapsedSinceAtMost': return tx.validTo - a > 0n ? tx.validTo - a : 0n;
@@ -169,4 +179,6 @@ export const ROWS = Object.freeze({
   'std/bits': ['andBytes', 'orBytes', 'xorBytes', 'complement', 'readBit', 'shift', 'rotate', 'countSetBits', 'findFirstSetBit'],
   'std/list': ['last', 'nth', 'indexOf'],
   'std/time': ['elapsedSince', 'elapsedSinceAtMost', 'windowStart', 'windowEnd'],
+  'std/value': ['isEmpty', 'withoutLovelace', 'scale'],
+  'std/address': ['paymentKey', 'paymentScript'],
 });

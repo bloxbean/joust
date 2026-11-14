@@ -1,0 +1,49 @@
+jsc 2
+package lang.m2
+
+import { isEmpty } from "std/value"
+
+// The language server on ADR-0018 M2's declarations (the integration with M5a): params, events, invariants, quorum,
+// authorized, receives with a memo, funds and stored values. JscLangTest checks its model against the build (L1, L5);
+// the LSP tests check its outline.
+type Note = { to: Key, tag: Bytes }
+
+contract Composed(assetSlots = 2) {
+  params { guardian: Credential, cap: Int }
+  state { council: List<Key>, quorum: Int, total: Int, taken: Value }
+
+  event Credited { to: Key, amount: Int }
+  event Cleared
+
+  init(council: List<Key>, quorum: Int) {
+    return { council, quorum, total: 0, taken: Value.none() }
+  }
+
+  action credit() receives Note {
+    const got = funds.deposits.fold(0, (acc, d) => acc + d.value.lovelace)
+    require(got > 0, "nothing deposited")
+    for (const d of funds.deposits) {
+      emit(Credited { to: d.memo.to, amount: d.value.lovelace })
+    }
+    return { ...state, total: total + got }
+  }
+
+  action pay(to: Key, amount: Int) quorum council quorum {
+    require(amount <= params.cap, "over the cap")
+    pay(to, amount)
+    return { ...state, total: total - amount }
+  }
+
+  action reset() authorized params.guardian {
+    require(isEmpty(taken), "assets are held")
+    emit(Cleared)
+    return { ...state, total: 0 }
+  }
+
+  destroy close(to: Key) quorum council quorum {
+    pay(to, balance)
+  }
+
+  invariant reachable = quorum > 0 && quorum <= council.length
+  invariant counted { total >= 0 }
+}

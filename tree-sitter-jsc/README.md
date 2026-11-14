@@ -4,7 +4,7 @@ A [tree-sitter](https://tree-sitter.github.io/) grammar for JOUST's contract lan
 frozen `.jsc` v1 (ADR-0005), in one grammar. A file that starts with `jsc 2` is read as `.jsc` 2, one that starts with
 `package` as v1, as the build dispatches them (ADR-0018 D2, D13). It serves editors that use tree-sitter (highlighting,
 folding, structure); ADR-0021 D5 keeps the language server on the hand-written parser, not on this grammar. Token colouring for Shiki (the docs
-site) and VS Code is the TextMate grammar in [`editors/vscode-jsc`](../editors/vscode-jsc).
+site) and VS Code is the TextMate grammar in [`js/vscode-joust`](../js/vscode-joust) (the VS Code extension, ADR-0021 D9).
 
 ```sh
 cd tree-sitter-jsc

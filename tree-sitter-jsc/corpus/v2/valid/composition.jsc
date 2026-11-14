@@ -1,0 +1,48 @@
+jsc 2
+package app
+
+import contract { Oracle } from "./Oracle.jsc"
+import contract { Pot } from "./Pot.jsc"
+
+type Order = { buyer: Key, paid: Value }
+
+// M2c: reads, deposits, receives, send datums, stored values.
+contract Shop(maxDatumBytes = 512) {
+  params { oracle: Instance<Oracle>, pot: Instance<Pot>, maxAge: Int }
+  state { owner: Key, sold: Int, last: Value }
+
+  init() {
+    return { owner: caller, sold: 0, last: Value.none() }
+  }
+
+  action buy(price: reads params.oracle, qty: Int) payable open {
+    const seen: Oracle.State = price
+    require(before(seen.updatedAt + params.maxAge), "stale price")
+    deposit(params.pot, Value.lovelace(qty), caller)
+    send(wallet(owner), Value.lovelace(qty), Order { buyer: caller, paid: Value.lovelace(qty) })
+    send(wallet(owner), Value.lovelace(qty))
+    return { ...state, sold: sold + qty }
+  }
+
+  action collect() receives open {
+    const got = funds.deposits.fold(0, (acc, d) => acc + d.value.lovelace)
+    require(got > 0, "nothing deposited")
+    return { ...state, sold: sold + got }
+  }
+
+  action credit() receives Key open {
+    match funds.deposits.head {
+      Some(d) => deposit(params.pot, d.value, d.memo),
+      None => require(false, "none")
+    }
+    return state
+  }
+
+  action many() receives List<Key> {
+    return state
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+}

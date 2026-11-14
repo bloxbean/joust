@@ -46,7 +46,35 @@ final class Abi {
             case Ty.BigMapT b -> "merkleMap<" + shape(b.val()) + ">";
             case Ty.Rec r -> r.name();
             case Ty.EnumT e -> e.name();
+            // M2: the ledger's schemas; a Value only as the native assets a redeemer carries (assetsIn).
+            case Ty.Ledger l -> l.equals(Ty.VALUE) ? VALUE_SHAPE : l.name();
+            // M2c: an instance of another contract (a params field), the API's ForeignInstance.
+            case Ty.Instance i -> "ForeignInstance";
+            case Ty.DepositT d -> throw new IllegalStateException("a deposit is never encoded by this contract");
         };
+    }
+
+    /** A value as data: policy → token name → quantity (ADR-0007; the redeemer's {@code assetsIn}). */
+    static final String VALUE_SHAPE = "map<bytes, map<bytes, int>>";
+
+    /** Whether a type names an address or a credential anywhere (the ledger schemas are then stated). */
+    private static boolean ledger(Ty t) {
+        return switch (t) {
+            case Ty.Ledger l -> !l.equals(Ty.VALUE);
+            case Ty.ListT l -> ledger(l.elem());
+            case Ty.OptT o -> ledger(o.elem());
+            case Ty.MapT m -> ledger(m.val());
+            default -> false;
+        };
+    }
+
+    private static boolean usesLedger(Ir.Program p) {
+        var all = new ArrayList<Ty>(p.state().fields().values());
+        p.records().values().forEach(r -> all.addAll(r.fields().values()));
+        p.enums().values().forEach(e -> e.variants().values().forEach(v -> all.addAll(v.fields().values())));
+        for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) all.add(l.type);
+        if (p.params() != null) all.addAll(p.params().fields().values());
+        return all.stream().anyMatch(Abi::ledger);
     }
 
     private static String field(String name, String type, String data, String ind) {
@@ -73,6 +101,8 @@ final class Abi {
         w.append("  \"contract\": ").append(str(p.pkg() + "." + p.name())).append(",\n");
         w.append("  \"source\": ").append(str(p.fileName())).append(",\n");
         w.append("  \"datum\": ").append(ctor("State", 0, fields(p.state(), "      "), "    ")).append(",\n");
+        // M2b (ADR-0009 D1): the params the script is applied to (not in any redeemer).
+        if (p.params() != null) w.append("  \"params\": ").append(ctor(Ir.PARAMS, 0, fields(p.params(), "      "), "    ")).append(",\n");
         // Redeemers, as the processor lays them out (ContractIR.spendTransitions; the Lifecycle of the mint validator).
         boolean ctx = false;
         var spend = new ArrayList<String>();
@@ -80,6 +110,10 @@ final class Abi {
             var fs = new ArrayList<String>();
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            // M2: a payable method with Funds carries the native assets the caller offers (ADR-0007 r2).
+            if (Effects.takesAssets(m)) fs.add(field("assetsIn", "Value", VALUE_SHAPE, ind));
+            // M2b (ADR-0009 D5): a method whose result record has events carries them last.
+            if (Effects.events(p, m)) fs.add(field("events", "List<" + Ir.EVENT + ">", "list<" + Ir.EVENT + ">", ind));
             ctx |= m.usesCtx();
             spend.add("      " + ctor(Character.toUpperCase(m.name().charAt(0)) + m.name().substring(1), spend.size(), fs, "        "));
         }
@@ -97,10 +131,13 @@ final class Abi {
             fs.add(field("seed", "TxOutRef", "TxOutRef", ind));
             for (Ir.Local l : m.params()) fs.add(field(l.name, Ty.show(l.type), shape(l.type), ind));
             if (m.usesCtx()) fs.add(field("ctx", "Ctx", "Ctx", ind));
+            if (Effects.takesAssets(m)) fs.add(field("assetsIn", "Value", VALUE_SHAPE, ind));
             ctx |= m.usesCtx();
             mint.add("      " + ctor("CreateInstance", 0, fs, "        "));
         }
         mint.add("      " + ctor("BurnInstance", 1, List.of(), "        "));
+        // M2: methods that mint user tokens; the mint validator's ByAction names the input whose spend checks it (ADR-0007 D4).
+        if (Effects.mints(p)) mint.add("      " + ctor("ByAction", 2, List.of(field("by", "TxOutRef", "TxOutRef", ind)), "        "));
         if (!batched.isEmpty()) {
             mint.add("      " + ctor("CreateIntent", 2, List.of(field("seed", "TxOutRef", "TxOutRef", ind), field("intent", "Intent", "Intent", ind)),
                     "        "));
@@ -119,6 +156,28 @@ final class Abi {
             for (Ir.RecordType v : e.variants().values()) vs.add("      " + ctor(v.name(), e.tag(v.name()), fields(v, ind), "        "));
             types.add("    " + str(e.name()) + ": { \"kind\": \"enum\", \"constructors\": [\n" + String.join(",\n", vs) + "\n    ] }");
         }
+        // The .jsc libraries' types the datum and redeemers reach (D9, M4), with the library that declares each: the
+        // processor names them by its class (app.Fees.Line).
+        for (String n : libraryTypes(p)) {
+            Ir.JavaRec jr = p.javaRecord(n);
+            if (jr != null) {
+                // A Java library's record (D9, M4b): the processor names it by its canonical name.
+                types.add("    " + str(n) + ": { \"kind\": \"library\", \"library\": " + str(jr.canonicalOwner()) + ", \"constructors\": ["
+                        + ctor(n, 0, fields(jr.type(), "        "), "      ") + "] }");
+                continue;
+            }
+            Ir.Library l = p.libraryOf(n);
+            String from = ", \"library\": " + str(l.qualified());
+            if (l.records().containsKey(n)) {
+                Ir.RecordType r = l.records().get(n);
+                types.add("    " + str(n) + ": { \"kind\": \"library\"" + from + ", \"constructors\": [" + ctor(n, 0, fields(r, "        "), "      ") + "] }");
+            } else {
+                Ir.EnumType e = l.enums().get(n);
+                var vs = new ArrayList<String>();
+                for (Ir.RecordType v : e.variants().values()) vs.add("      " + ctor(v.name(), e.tag(v.name()), fields(v, ind), "        "));
+                types.add("    " + str(n) + ": { \"kind\": \"library\"" + from + ", \"constructors\": [\n" + String.join(",\n", vs) + "\n    ] }");
+            }
+        }
         if (!batched.isEmpty()) {
             // The intent's call: one variant per batched action, in source order, with the action's arguments (no Ctx).
             var calls = new ArrayList<String>();
@@ -134,6 +193,8 @@ final class Abi {
             types.add("    \"IntentCall\": { \"kind\": \"validator\", \"constructors\": [\n" + String.join(",\n", calls) + "\n    ] }");
             types.add("    \"IntentRefund\": { \"kind\": \"validator\", \"constructors\": [" + ctor("IntentRefund", 0, List.of(
                     field("intent", "TxOutRef", "TxOutRef", "        ")), "      ") + "] }");
+        }
+        if (!batched.isEmpty() || usesLedger(p)) {
             types.add("    \"Address\": { \"kind\": \"ledger\", \"constructors\": [" + ctor("Address", 0, List.of(
                     field("credential", "Credential", "Credential", "        "),
                     field("stakingCredential", "Option<StakingCredential>", "option<StakingCredential>", "        ")), "      ") + "] }");
@@ -157,6 +218,11 @@ final class Abi {
             types.add("    \"MerkleMap\": { \"kind\": \"api\", \"constructors\": [" + ctor("MerkleMap", 0, List.of(field("root", "Bytes", "bytes", "        "),
                     field("reads", "List<MapEntry>", "list<MapEntry>", "        "), field("writes", "List<MapEntry>", "list<MapEntry>", "        ")), "      ") + "] }");
         }
+        // M2c: the params name another contract's instance (ADR-0011): the API's ForeignInstance (policy, instance id).
+        if (p.params() != null && p.params().fields().values().stream().anyMatch(t -> t instanceof Ty.Instance)) {
+            types.add("    \"ForeignInstance\": { \"kind\": \"api\", \"constructors\": [" + ctor("ForeignInstance", 0, List.of(
+                    field("policy", "Bytes", "bytes", "        "), field("instance", "Bytes", "bytes", "        ")), "      ") + "] }");
+        }
         types.add("    \"TxOutRef\": { \"kind\": \"ledger\", \"constructors\": [" + ctor("TxOutRef", 0, List.of(field("txId", "Bytes", "bytes", "        "),
                 field("index", "Int", "int", "        ")), "      ") + "] }");
         // One schema per name (review C4): a contract type never shares a key with an API or ledger schema.
@@ -171,6 +237,47 @@ final class Abi {
         w.append("  \"timeFields\": [").append(String.join(", ", time)).append("]\n");
         w.append("}\n");
         return w.toString();
+    }
+
+    /**
+     * The library types (records and enums of imported {@code .jsc} libraries) the encoded roots reach: the state, and
+     * the parameters of every method but views (the redeemers, the intents' calls), through every type they contain; in
+     * the order first reached.
+     */
+    static List<String> libraryTypes(Ir.Program p) {
+        var out = new java.util.LinkedHashSet<String>();
+        var seen = new java.util.HashSet<String>();
+        var work = new java.util.ArrayDeque<Ty>();
+        work.addAll(p.state().fields().values());
+        if (p.params() != null) work.addAll(p.params().fields().values());   // M2b: the params are encoded too
+        for (Ir.Method m : p.methods()) if (m.kind() != Ir.Kind.VIEW) for (Ir.Local l : m.params()) work.add(l.type);
+        while (!work.isEmpty()) {
+            Ty t = work.removeFirst();
+            switch (t) {
+                case Ty.Prim x -> { }
+                case Ty.ListT l -> work.addFirst(l.elem());
+                case Ty.OptT o -> work.addFirst(o.elem());
+                case Ty.MapT m -> work.addFirst(m.val());
+                case Ty.BigMapT b -> work.addFirst(b.val());
+                // M2c: an instance holds no library type; a deposit's memo may.
+                case Ty.Instance x -> { }
+                case Ty.Ledger x -> { }   // M2a: Value, Address, Credential
+                case Ty.DepositT d -> {
+                    if (d.memo() != null) work.addFirst(d.memo());
+                }
+                case Ty.Rec r -> {
+                    if (!seen.add(r.name())) continue;
+                    if (p.libraryOf(r.name()) != null || p.javaRecord(r.name()) != null) out.add(r.name());
+                    work.addAll(p.record(r.name()).fields().values());
+                }
+                case Ty.EnumT e -> {
+                    if (!seen.add(e.name())) continue;
+                    if (p.libraryOf(e.name()) != null) out.add(e.name());
+                    for (Ir.RecordType v : p.enumType(e.name()).variants().values()) work.addAll(v.fields().values());
+                }
+            }
+        }
+        return List.copyOf(out);
     }
 
     /**
@@ -241,13 +348,17 @@ final class Abi {
         for (int[] e : sourceMap(java, fileName)) entries.add("[" + e[0] + ", " + e[1] + ", " + e[2] + "]");
         var byMessage = new java.util.TreeMap<String, java.util.TreeSet<String>>();
         for (JavaEmitter.Check c : checks) {
-            String site = String.format("{ \"line\": %d, \"col\": %d, \"kind\": %s, \"in\": %s%s }", c.pos().line(), c.pos().col(),
-                    str(c.kind()), str(c.in() == null ? "" : c.in()), c.what() == null ? "" : ", \"what\": " + str(c.what()));
-            // Sorted by position (zero-padded), then text: the same sites in the same order on every build.
-            byMessage.computeIfAbsent(c.message(), k -> new java.util.TreeSet<>()).add(String.format("%09d%09d", c.pos().line(), c.pos().col()) + site);
+            // A site in an imported library names its file (D9, M4); the map's own file is the default.
+            String site = String.format("{ \"line\": %d, \"col\": %d, \"kind\": %s, \"in\": %s%s%s }", c.pos().line(), c.pos().col(),
+                    str(c.kind()), str(c.in() == null ? "" : c.in()), c.what() == null ? "" : ", \"what\": " + str(c.what()),
+                    c.file() == null ? "" : ", \"file\": " + str(c.file()));
+            // Sorted by file (own first), position (zero-padded), then text: the same sites in the same order on every build.
+            byMessage.computeIfAbsent(c.message(), k -> new java.util.TreeSet<>()).add((c.file() == null ? " " : c.file())
+                    + "\u0000" + String.format("%09d%09d", c.pos().line(), c.pos().col()) + site);
         }
         var messages = new ArrayList<String>();
-        byMessage.forEach((m, sites) -> messages.add("    " + str(m) + ": [" + String.join(", ", sites.stream().map(x -> x.substring(18)).toList()) + "]"));
+        byMessage.forEach((m, sites) -> messages.add("    " + str(m) + ": [" + String.join(", ", sites.stream()
+                .map(x -> x.substring(x.indexOf('\u0000') + 19)).toList()) + "]"));
         return "{\n  \"version\": 2,\n  \"source\": " + str(fileName) + ",\n  \"java\": " + str(javaPath) + ",\n  \"lines\": ["
                 + String.join(", ", entries) + "],\n  \"messages\": {" + (messages.isEmpty() ? "" : "\n" + String.join(",\n", messages) + "\n  ")
                 + "}\n}\n";

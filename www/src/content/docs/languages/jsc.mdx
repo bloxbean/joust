@@ -583,9 +583,8 @@ engines and runs `js/publish-local.sh`. Then install with `npm_config_registry=h
 </TabItem>
 </Tabs>
 
-Errors and warnings carry their position and a stable code on both paths: Gradle prints
-`app/Counter.jsc:20:13: error[JSC0502]: a time value cannot decide here: …`, and `joust build` prints
-`error[JSC0502]: app/Counter.jsc:20:13: …`. Each code is in the
+Errors and warnings carry their position and a stable code, printed alike on both paths (Gradle and `joust build`):
+`app/Counter.jsc:20:13: error[JSC0502]: a time value cannot decide here: …`. Each code is in the
 [diagnostics catalogue](https://github.com/bloxbean/joust/blob/main/docs/reference/jsc-2-diagnostics.md).
 
 ## Testing a .jsc contract

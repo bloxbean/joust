@@ -32,17 +32,27 @@ async function deployer(root, net, rt) {
   return wallet;
 }
 
-export async function deploy({ root = process.cwd(), config, networkName, log = console.log, fetchImpl } = {}) {
+/**
+ * Deploys the build's contracts on a network and writes build/joust/deployments.<network>.json. `runtime` (a
+ * joustRuntime-like factory) and `wallet` replace the runtime and the deployer's wallet: an offline test passes stubs
+ * (issue #75); `joust deploy` passes neither.
+ */
+export async function deploy({ root = process.cwd(), config, networkName, log = console.log, fetchImpl, runtime, wallet: given } = {}) {
   const net = await network(config, networkName);
   const bundleFile = join(root, config.out, 'contracts.json');
   if (!existsSync(bundleFile)) throw new Error('no build: run joust build first');
   const contracts = JSON.parse(readFileSync(bundleFile, 'utf8'));
-  const { joustRuntime, ogmiosProvider } = await import('@julclang/joust-runtime');
-  // The network's chain provider (ADR-0015 §13.9): "provider": "ogmios" with "ogmios": url; else the Blockfrost-style
-  // API at "chain" (Blockfrost, Yaci Store).
-  const provider = net.provider === 'ogmios' ? ogmiosProvider(net.ogmios ?? 'http://localhost:1337') : undefined;
-  const rt = joustRuntime({ chainUrl: net.chain, provider, projectId: net.projectId, fetchImpl, contracts, clock: net.clock, networkId: net.networkId });
-  const wallet = await deployer(root, net, rt);
+  let makeRuntime = runtime;
+  let provider;
+  if (!makeRuntime) {
+    const { joustRuntime, ogmiosProvider } = await import('@julclang/joust-runtime');
+    makeRuntime = joustRuntime;
+    // The network's chain provider (ADR-0015 §13.9): "provider": "ogmios" with "ogmios": url; else the Blockfrost-style
+    // API at "chain" (Blockfrost, Yaci Store).
+    provider = net.provider === 'ogmios' ? ogmiosProvider(net.ogmios ?? 'http://localhost:1337') : undefined;
+  }
+  const rt = makeRuntime({ chainUrl: net.chain, provider, projectId: net.projectId, fetchImpl, contracts, clock: net.clock, networkId: net.networkId });
+  const wallet = given ?? await deployer(root, net, rt);
   const out = {};
   for (const c of contracts) {
     const title = JSON.parse(c.description).preamble.title;

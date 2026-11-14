@@ -24,8 +24,12 @@ final class Depth {
         var stack = new ArrayDeque<Item>();
         List<Item> roots = new ArrayList<>();
         for (Fn fn : f.fns()) roots.add(new Item(fn.body(), 0, fn.name()));
-        for (Method m : f.contract().methods()) roots.add(new Item(m.body(), 0, null));
-        for (Fn fn : f.contract().fns()) roots.add(new Item(fn.body(), 0, fn.name()));
+        if (f.contract() != null) {
+            for (Method m : f.contract().methods()) roots.add(new Item(m.body(), 0, null));
+            for (Fn fn : f.contract().fns()) roots.add(new Item(fn.body(), 0, fn.name()));
+            // M2b (#84 review C5): invariants are roots too.
+            for (Syntax.InvariantDecl inv : f.contract().invariants()) roots.add(new Item(inv.body(), 0, null));
+        }
         for (int k = roots.size() - 1; k >= 0; k--) stack.push(roots.get(k));
         while (!stack.isEmpty()) {
             Item it = stack.pop();
@@ -84,6 +88,23 @@ final class Depth {
                 out.add(i.otherwise());
             }
             case MatchStmt m -> out.add(m.match());
+            // M2's effect statements (#84 review C5: emit's event, and send/mint/accept's arguments, were not walked).
+            case Syntax.Send s -> {
+                out.add(s.to());
+                out.add(s.value());
+                if (s.datum() != null) out.add(s.datum());
+            }
+            case Syntax.Deposit d -> {
+                out.add(d.target());
+                out.add(d.value());
+                out.add(d.memo());
+            }
+            case Syntax.Mint mt -> {
+                out.add(mt.name());
+                out.add(mt.qty());
+            }
+            case Syntax.Accept a -> out.add(a.value());
+            case Syntax.Emit em -> out.add(em.event());
             case Field e -> out.add(e.target());
             case Call e -> out.addAll(e.args());
             case MethodCall e -> {

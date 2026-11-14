@@ -1,0 +1,106 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "60fa7c4a5c3a9f1b72024d7a192d6d70df506a901a11dc71648af7bd719ee553",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "StashReader",
+  "source": "StashReader.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": { "name": "State", "fields": [{ "name": "n", "type": "Int" }], "at": [7, 1] },
+  "params": { "name": "Config", "fields": [{ "name": "stash", "type": { "instance": "Stash" } }], "at": [8, 3] },
+  "contracts": [
+    {
+      "name": "Stash",
+      "package": "org.julclang.state.examples.dsl",
+      "state": {
+        "name": "Stash.State",
+        "fields": [{ "name": "n", "type": "Int" }, { "name": "held", "type": "Value" }],
+        "at": [8, 1]
+      },
+      "records": [],
+      "enums": [],
+      "timeFields": [],
+      "receives": [],
+      "bigMaps": false
+    }
+  ],
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [{ "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [12, 17] }],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [12, 12]
+        },
+        "at": [11, 10]
+      },
+      "at": [11, 3]
+    },
+    {
+      "kind": "action",
+      "name": "peek",
+      "params": [],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "reads": [
+        {
+          "local": {
+            "id": 1,
+            "name": "got",
+            "type": { "record": "Stash.State" },
+            "taint": 0,
+            "at": [15, 15],
+            "fieldTaints": { "held": 0, "n": 0 }
+          },
+          "field": "stash"
+        }
+      ],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "LocalRef", "local": 1, "type": { "record": "Stash.State" }, "taint": 0, "at": [16, 17] },
+              "record": "Stash.State",
+              "field": "n",
+              "type": "Int",
+              "taint": 0,
+              "at": [16, 17]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [16, 12]
+        },
+        "at": [15, 45]
+      },
+      "at": [15, 3]
+    }
+  ],
+  "warnings": []
+}

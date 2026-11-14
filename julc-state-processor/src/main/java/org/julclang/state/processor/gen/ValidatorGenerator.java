@@ -66,7 +66,7 @@ public final class ValidatorGenerator {
         if (c.hasBatched() || !c.moves().isEmpty()) imports.add("org.julclang.ledger.ScriptPurpose");
         if (c.hasKeyed()) imports.addAll(List.of("org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId"));
         if (c.assetAware()) {
-            imports.addAll(List.of("org.julclang.core.types.JulcValue", "org.julclang.state.api.Funds",
+            imports.addAll(List.of("org.julclang.core.types.JulcValue", "org.julclang.state.api.Funds", "org.julclang.state.api.ValueAdapter",
                     "org.julclang.ledger.ScriptPurpose", "org.julclang.ledger.PolicyId", "org.julclang.state.api.DepositClaim"));
             if (c.hasDeposits()) imports.add("org.julclang.state.api.Deposit");
         }
@@ -1235,7 +1235,12 @@ public final class ValidatorGenerator {
     /** Lines declaring {@code Funds funds} for a method that takes it; the redeemer carries only what the caller offers. */
     private void fundsLocal(TransitionIR t, String redeemerVar, String selfExpr, String heldExpr) {
         if (!t.hasFunds()) return;
-        String offered = takesAssets(t) ? "(Value) (Object) " + redeemerVar + ".assetsIn()" : "noAssets()";
+        if (takesAssets(t)) {
+            // What the caller offers, as a canonical value: the redeemer's encoding (cardano-client-lib's canonical CBOR) may
+            // order a policy's token names otherwise than the ledger (implementation review r1, C1).
+            w.line("Value offeredIn = ValueAdapter.fromWire((Value) (Object) " + redeemerVar + ".assetsIn());");
+        }
+        String offered = takesAssets(t) ? "offeredIn" : "noAssets()";
         if (t.receives()) {
             w.line("// The deposits claimed on this call's continuing output, in registry order (ADR-0011 D3).");
             w.line("JulcList<DepositClaim> depositsIn = depositsInto(tx, policy, id);");
@@ -1252,11 +1257,16 @@ public final class ValidatorGenerator {
     private void acceptedLocal(TransitionIR t, String redeemerVar, List<String> checks) {
         if (t.resultAccepted()) {
             w.line("JulcValue acceptedV = methodValue(result.accepted(), policy, 1L);");
-            w.line("boolean acceptedOk = Builtins.equalsData(Builtins.valueData(acceptedV), " + redeemerVar + ".assetsIn());");
+            w.line("boolean acceptedOk = Builtins.equalsData(Builtins.valueData(acceptedV), " + offeredData(t, redeemerVar) + ");");
             checks.add("acceptedOk");
         } else {
             w.line("JulcValue acceptedV = noValue();");
         }
+    }
+
+    /** What the caller offered as data, to compare with the canonical accepted value: canonical too when the method takes it. */
+    private static String offeredData(TransitionIR t, String redeemerVar) {
+        return takesAssets(t) && t.hasFunds() ? "(PlutusData) (Object) offeredIn" : redeemerVar + ".assetsIn()";
     }
 
     /** MINT CreateInstance for an asset-aware contract: as A, with the full value equation (I26). */
@@ -1470,7 +1480,7 @@ public final class ValidatorGenerator {
         if (anyAccepts()) {
             settleArgs.add(accepted);
             settleArgs.add(String.valueOf(t.resultAccepted()));
-            settleArgs.add(t.resultAccepted() ? "r.assetsIn()" : "Builtins.iData(0L)");
+            settleArgs.add(t.resultAccepted() ? offeredData(t, "r") : "Builtins.iData(0L)");
         }
         if (c.hasDeposits()) {
             if (t.resultDeposits()) {
@@ -1816,7 +1826,9 @@ public final class ValidatorGenerator {
             w.line("ScriptPurpose purpose = new ScriptPurpose.Rewarding(new Credential.ScriptCredential(new ScriptHash(OUTPUT_VERIFIER)));");
             w.open("if (tx.redeemers().containsKey(purpose)) {");
             w.line("OutputClaims oc = outputClaims(tx);");
-            w.line("return keepAt(oc.deposits(), at);");
+            // #85: the method sees each claim's value canonical (the registry carries it in the wire's order), as it sees the
+            // offered assets (C1).
+            w.line("return ValueAdapter.claimsFromWire(keepAt(oc.deposits(), at));");
             w.close("} else {");
             w.indent();
             w.line("JulcList<DepositClaim> none = JulcList.empty();");
@@ -1905,9 +1917,11 @@ public final class ValidatorGenerator {
             w.close("}");
             w.line("BigInteger at = indexWith(tx, d.policy(), d.instance());");
             w.line("PlutusData v = Builtins.valueData(methodValue(d.value(), policy, 0L));");
+            // #85: a claim's value is the registry's, in the wire's order (cardano-client-lib orders a policy's token names by
+            // their encoding): compared as a value, folded the same way, not as data.;
             w.line("boolean claimed = false;");
             w.open("for (var cl : claims) {");
-            w.open("if (Builtins.equalsData(cl.by(), by) && cl.output().compareTo(at) == 0 && Builtins.equalsData((PlutusData) (Object) cl.value(), v)"
+            w.open("if (Builtins.equalsData(cl.by(), by) && cl.output().compareTo(at) == 0 && Builtins.equalsData(Builtins.valueData(methodValue(cl.value(), policy, 0L)), v)"
                     + " && Builtins.equalsData(cl.memo(), d.memo())) {");
             w.line("claimed = true;");
             w.close("}");

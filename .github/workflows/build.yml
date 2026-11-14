@@ -8,6 +8,7 @@ name: Build
 #   plan    checks that every module with DevKit tests is in exactly one shard, and hands the shards to devnet.
 #   engines the npm packages' Wasm engines, and the create-joust templates built with them.
 #   cli     the native joust (ADR-0017 D8), end to end with this commit's modules, plugin and engines.
+#   vscode  the VS Code extension (ADR-0021), packaged with this commit's engine and tested in VS Code.
 # bloxbean-snapshot.yml publishes only commits whose push run of this workflow passed: every job must pass.
 
 on:
@@ -102,16 +103,19 @@ jobs:
           npm ci
           npm test
 
-      - name: Test the TextMate grammar
-        working-directory: editors/vscode-jsc
+      # The VS Code extension's Node-only tests (ADR-0021 D12): the TextMate grammar, the verified applyEdit handler, the
+      # build task, the manifest. The packaged extension is tested in the vscode job.
+      - name: Test the VS Code extension's grammar and client
+        working-directory: js/vscode-joust
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm test
 
-      # The npm joust's command line (ADR-0017 D5, D9): Node built-ins only, no packages installed.
+      # The npm joust's command line (ADR-0017 D5, D9), and joust deploy's write of deployments.<network>.json with the
+      # runtime and wallet stubbed (issue #75): Node built-ins only, no packages installed.
       - name: Test the npm joust command line
         working-directory: js/joust
-        run: node --test test/cli.test.js
+        run: node --test test/cli.test.js test/deploy.test.js
 
       # The .jsc 2 reference interpreter (ADR-0018 D15): its crypto and the semantics' hand-written vectors. No packages
       # installed. The five-way differential tests in ./gradlew build run it too.
@@ -250,6 +254,29 @@ jobs:
           node --test test/*.test.js 2>&1 | tee "$RUNNER_TEMP/create-joust.tap"
           if grep -q '# SKIP' "$RUNNER_TEMP/create-joust.tap"; then echo "::error::the template build was skipped"; exit 1; fi
 
+      # ADR-0021 M5a: the language core in this commit's engine. JscLangTest writes the JVM's document models; the
+      # engine's must be byte-identical, its diagnostics must be joust.build's (L1, on the path the server runs), and the
+      # nesting cap must hold on the main thread and the server's 4 MB worker, cold (M5a's exit).
+      - name: Test the language core in the engine
+        run: |
+          ./gradlew :julc-state-dsl:test --tests '*JscLangTest' --stacktrace
+          node --experimental-wasm-exnref julc-state-toolchain/src/test/js/lang-in-node.mjs julc-state-toolchain/build/wasm julc-state-dsl/build/lang-parity.json
+
+      # ADR-0021 M5a: the language server's protocol, watchdog, confinement, input and edit tests on this commit's
+      # engine, then L10's figures with CI's looser bounds. Its two pinned dependencies go into js/node_modules, where
+      # npm prunes what it did not install: the linked packages are linked again after it (#83 review F1).
+      - name: Test the language server
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock --ignore-scripts --prefix js vscode-languageserver@11.0.0 vscode-languageserver-textdocument@1.0.16
+          mkdir -p js/node_modules/@julclang
+          ln -sfn ../../state-client js/node_modules/@julclang/state-client
+          ln -sfn ../../joust-runtime js/node_modules/@julclang/joust-runtime
+          cd js/joust
+          node --test --test-concurrency=1 test/lsp/*.test.js
+          node test/lsp/measure-l10.mjs --check
+
       # For the cli job: the engines of this commit, so its npm build is real.
       - name: Upload the engines
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -324,6 +351,53 @@ jobs:
         run: >-
           bash .github/scripts/joust-cli-e2e.sh julc-state-cli/build/native/nativeCompile/joust
           "$RUNNER_TEMP/staging" "$RUNNER_TEMP/e2e"
+
+  # ADR-0021 D9, D11, D12: the VS Code extension packaged from this commit's engine, checked (no native code, under
+  # 16 MB, the engine's digests), and tested with @vscode/test-electron on the minimum and the current VS Code: the
+  # smoke test and the hostile workspaces, trusted and restricted. No secret is referenced; nothing is published
+  # (publishing to the Marketplace and Open VSX is a maintainer's, by hand).
+  vscode:
+    needs: engines
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Download the engines
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: engines
+          path: js
+
+      - name: Package the extension
+        working-directory: js/vscode-joust
+        run: |
+          npm ci --ignore-scripts
+          npm run package
+
+      # Recorded and uploaded BEFORE the tests open hostile workspaces in VS Code (#83 review S6).
+      - name: Record and upload the .vsix
+        working-directory: js/vscode-joust
+        run: sha256sum vscode-joust.vsix | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the .vsix
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vscode-joust-vsix
+          path: js/vscode-joust/vscode-joust.vsix
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Test the packaged extension in VS Code 1.109.0 and stable
+        working-directory: js/vscode-joust
+        run: xvfb-run -a node test/electron/run.mjs --versions 1.109.0,stable
 
   devnet:
     needs: plan

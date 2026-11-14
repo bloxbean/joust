@@ -130,15 +130,22 @@ class JscV2M1aR2CheckerTest {
         cases.put("nth", new String[]{"action a() { return { ...state, o: nth(xs, validFrom - deadline) } }", "index"});
         cases.put("indexOf", new String[]{"action a() { return { ...state, o: indexOf(xs, validFrom) } }", "cannot decide"});
         cases.put("last", new String[]{"action a() { return { ...state, o: last(range(0, validTo - deadline).filter(i => i > 0)) } }", "range"});
+        // M2: an address read out of a value that holds a time value carries its taint (conservatively), so its payment
+        // credential's kind cannot be read from it either.
+        cases.put("paymentKey", new String[]{"type Ad = { to: Address, t: Int }\n action a() { const r = Ad { to: wallet(caller), t: validFrom }\n"
+                + " require(paymentKey(r.to) == None, \"x\")\n return state }", "cannot decide whether paymentKey"});
+        cases.put("paymentScript", new String[]{"type Ad = { to: Address, t: Int }\n action a() { const r = Ad { to: wallet(caller), t: validFrom }\n"
+                + " require(paymentScript(r.to) == None, \"x\")\n return state }", "cannot decide whether paymentScript"});
         for (var c : cases.entrySet()) {
             var e = assertThrows(org.julclang.state.dsl.JscException.class,
-                    () -> JscV2.lower(withImports("import { nth, indexOf, last } from \"std/list\"", c.getValue()[0]), "T.jsc"), c.getKey());
+                    () -> JscV2.lower(withImports("import { nth, indexOf, last } from \"std/list\"\nimport { paymentKey, paymentScript } from \"std/address\"",
+                            c.getValue()[0]), "T.jsc"), c.getKey());
             assertTrue(e.getMessage().contains(c.getValue()[1]), c.getKey() + ": " + e.getMessage());
         }
         // Every std row returning an Option is covered (the built-in methods above: Map.get, BigMap.get, find, head).
         var optionRows = new TreeSet<String>();
         for (var r : JscV2.bindings()) if (r.result().startsWith("Option<")) optionRows.add(r.name());
-        assertEquals(new TreeSet<>(java.util.List.of("indexOf", "last", "nth")), optionRows,
+        assertEquals(new TreeSet<>(java.util.List.of("indexOf", "last", "nth", "paymentKey", "paymentScript")), optionRows,
                 "a std row returning an Option needs a case here showing that a time value cannot decide its presence");
     }
 

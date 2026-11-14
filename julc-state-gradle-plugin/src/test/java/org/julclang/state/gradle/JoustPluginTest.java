@@ -121,7 +121,14 @@ class JoustPluginTest {
         assertThat(gen.getSystemProperties()).doesNotContainKey("joust.acceptAbi");
         var genArgs = new java.util.ArrayList<String>();
         gen.getArgumentProviders().forEach(a -> a.asArguments().forEach(genArgs::add));
-        assertThat(genArgs).doesNotContain("--accept-abi").hasSize(2);
+        assertThat(genArgs).doesNotContain("--accept-abi").doesNotContain("--accept-lock").hasSize(4);
+        // ADR-0018 J12: joust.lock is checked at every lowering; only acceptJoustLock writes it.
+        assertThat(genArgs.get(2)).isEqualTo("--lock");
+        assertThat(genArgs.get(3).replace('\\', '/')).endsWith("/joust.lock");
+        JavaExec acceptLock = (JavaExec) p.getTasks().getByName("acceptJoustLock");
+        var lockArgs = new java.util.ArrayList<String>();
+        acceptLock.getArgumentProviders().forEach(a -> a.asArguments().forEach(lockArgs::add));
+        assertThat(lockArgs).contains("--accept-lock");
         JavaExec accept = (JavaExec) p.getTasks().getByName("acceptJscAbi");
         assertThat(accept.getMainClass().get()).isEqualTo("org.julclang.state.dsl.JscMain");
         var acceptArgs = new java.util.ArrayList<String>();
@@ -156,6 +163,56 @@ class JoustPluginTest {
         assertThat(remapArgs.get(2)).isEqualTo(genArgs.get(1));
         assertThat(remapArgs.get(3)).isEqualTo(genArgs.get(0));
         assertThat(p.getTasks().getByName("compileJava").getFinalizedBy().getDependencies(null).stream().map(org.gradle.api.Task::getName).toList()).contains("remapJscDiagnostics");
+    }
+
+    /**
+     * ADR-0018 D9 (M4b): a joustLibrary dependency is taken as on-chain sources: extracted, compiled into the project,
+     * passed to the lowering (whose certifier, julc-state-toolchain, joins the tool's class path), checked not to reach the
+     * runtime class path from elsewhere, and its class files recorded after compileJava.
+     */
+    @org.junit.jupiter.api.Test
+    void javaLibrariesAreSourcesOnly() throws IOException {
+        Files.createDirectories(dir.resolve("src/main/jsc/app"));
+        // Design F3 (r2): julc-state-toolchain is not published, so a joustLibrary dependency fails fast, with the reason.
+        Project failing = ProjectBuilder.builder().withProjectDir(dir.toFile()).build();
+        failing.getPluginManager().apply(JoustPlugin.ID);
+        failing.getDependencies().add("joustLibrary", "com.acme:allow-list:1.0");
+        var e = org.assertj.core.api.Assertions.catchThrowable(() -> ((ProjectInternal) failing).evaluate());
+        assertThat(String.valueOf(e) + (e == null ? "" : String.valueOf(e.getCause())))
+                .contains("not available through the JOUST Gradle plugin yet").contains("julc-state-toolchain");
+        // The wiring, for a build that supplies the toolchain itself.
+        Files.createDirectories(dir.resolve("experimental/src/main/jsc/app"));
+        Project p = ProjectBuilder.builder().withProjectDir(dir.resolve("experimental").toFile()).build();
+        p.getExtensions().getExtraProperties().set("joust.javaLibraries", "experimental");
+        p.getPluginManager().apply(JoustPlugin.ID);
+        p.getDependencies().add("joustLibrary", "com.acme:allow-list:1.0");
+        ((ProjectInternal) p).evaluate();
+        var libs = p.getConfigurations().getByName("joustLibrary");
+        assertThat(libs.isCanBeConsumed()).isFalse();
+        assertThat(libs.isTransitive()).isFalse();
+        assertThat(deps(p, "joustJsc")).containsExactly("org.julclang:julc-state-dsl:" + versions().getProperty("joust"),
+                "org.julclang:julc-state-toolchain:" + versions().getProperty("joust"));
+        JavaExec gen = (JavaExec) p.getTasks().getByName("generateJsc");
+        var genArgs = new java.util.ArrayList<String>();
+        gen.getArgumentProviders().forEach(a -> a.asArguments().forEach(genArgs::add));
+        assertThat(genArgs).hasSize(6);
+        assertThat(genArgs.get(2)).isEqualTo("--java-libraries");
+        assertThat(genArgs.get(3).replace('\\', '/')).endsWith("build/joust/library-sources");
+        assertThat(genArgs.get(4)).isEqualTo("--lock");
+        // Review r2 S3: the extracted sources are no source directory; only the certified closure generateJsc writes is.
+        var main = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets().getByName("main");
+        assertThat(main.getJava().getSrcDirs()).doesNotContain(p.getLayout().getBuildDirectory().dir("joust/library-sources").get().getAsFile());
+        JavaExec check = (JavaExec) p.getTasks().getByName("checkJoustLibraries");
+        assertThat(check.getMainClass().get()).isEqualTo("org.julclang.state.dsl.JscMain");
+        assertThat(p.getTasks().getByName("check").getDependsOn().stream().map(String::valueOf).toList().toString()).contains("checkJoustLibraries");
+        // Review r2 F5, S3: the duplicate-class check runs before compileJava, so for test, jar and run too.
+        assertThat(p.getTasks().getByName("compileJava").getTaskDependencies().getDependencies(null).stream().map(org.gradle.api.Task::getName).toList())
+                .contains("checkJoustLibraries");
+        assertThat(p.getTasks().getByName("compileJava").getFinalizedBy().getDependencies(null).stream().map(org.gradle.api.Task::getName).toList())
+                .contains("recordJoustLibraries");
+        // Without such a dependency, nothing changes: the lowering is not given --java-libraries, nor the certifier.
+        Project plain = project();
+        assertThat(deps(plain, "joustJsc")).containsExactly("org.julclang:julc-state-dsl:" + versions().getProperty("joust"));
     }
 
     @org.junit.jupiter.api.Test

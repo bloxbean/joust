@@ -21,6 +21,9 @@ dependencies {
     testImplementation project(':examples:crowdfund')
     testImplementation project(':examples:pool')
     testImplementation project(':examples:treasury')  // M1c review S1: a parameterised script, read beside its class
+    testImplementation project(':examples:dex')       // ADR-0018 M2 (J11): the Java example the dex port is measured against
+    testImplementation project(':examples:oracle')    // ADR-0018 M2c (J11): the Java examples the oracle and fees ports are measured against
+    testImplementation project(':examples:fees')
     testImplementation libs.julc.vm.java
     testImplementation project(':julc-state-api')
     testImplementation project(':julc-state-runtime')     // PlutusDataAdapter, as the runtime encodes
@@ -30,10 +33,15 @@ dependencies {
 // I1 compares with what the Gradle build of the examples wrote.
 tasks.named('test') {
     systemProperty 'joust.s2.debug', System.getProperty('joust.s2.debug', 'false')
+    // -Pjoust.writeIrFixtures: rewrite the JavaScript interpreter's java: fixture (js/jsc-interpreter/test/fixtures/java).
+    if (project.hasProperty('joust.writeIrFixtures')) systemProperty 'joust.writeIrFixtures', 'true'
+    inputs.dir(rootProject.file('examples/compliance/src/main/java')).withPropertyName('javaLibrarySources').withPathSensitivity(PathSensitivity.RELATIVE)
     // ADR-0018 D15 (M1b): the five-way tests run the JavaScript reference interpreter in Node (JsLeg).
     inputs.dir(rootProject.file('js/jsc-interpreter/src')).withPropertyName('jscInterpreterSources').withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('js/jsc-interpreter/bin')).withPropertyName('jscInterpreterBin').withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootProject.file('js/jsc-interpreter/test/fixtures')).withPropertyName('jscInterpreterFixtures').withPathSensitivity(PathSensitivity.RELATIVE)
+    // EngineFixtureScriptsTest (M2c review r2, F9): the recorded oracle, so a change to fixtures/ alone runs it again.
+    inputs.dir(rootProject.file('fixtures')).withPropertyName('fixtures').withPathSensitivity(PathSensitivity.RELATIVE)
     dependsOn ':examples:counter:classes', ':examples:bank:classes', ':examples:vault:classes', ':examples:escrow:classes',
             ':examples:dsl:classes', ':examples:guild:classes', ':examples:token:classes', ':examples:treasury:classes',
             ':examples:market:classes', ':examples:fees:classes', ':examples:crowdfund:classes', ':examples:pool:classes',
@@ -87,7 +95,23 @@ dependencies {
 }
 def toolchainGraalvm = providers.gradleProperty('graalvmHome').orElse(providers.environmentVariable('GRAALVM_HOME'))
 def toolchainWasmDir = layout.buildDirectory.dir('wasm')
+// #80 review S1: an image's resources no longer say which jar they came from, so the runtime takes its one copy of a
+// validator's script unverified (ValidatorScripts). This check, over the image's class path, is what makes that safe:
+// no script name twice, and every location holding a validator class also holds its script.
+def checkImageScripts = tasks.register('checkImageScripts') {
+    group = 'verification'
+    description = 'Checks the image class path\'s META-INF/plutus scripts: one location per name, each beside its validator'
+    def cp = sourceSets.wasm.runtimeClasspath
+    inputs.files(cp)
+    inputs.file(rootProject.file('gradle/plutus-scripts.gradle'))
+    doLast {
+        rootProject.ext.plutusScriptSelfTest(layout.buildDirectory.dir('tmp/plutusScriptSelfTest').get().asFile)
+        def problems = rootProject.ext.plutusScriptProblems(cp.files)
+        if (!problems.isEmpty()) throw new GradleException("the image's class path lends a validator another's script:\n  " + problems.join('\n  '))
+    }
+}
 tasks.register('toolchainWasm', Exec) {
+    dependsOn checkImageScripts
     group = 'build'
     description = 'Builds build/wasm/joust-toolchain.js(.wasm) with GraalVM Web Image'
     dependsOn 'wasmClasses'
@@ -135,19 +159,24 @@ tasks.register('toolchainWasmTest', Exec) {
     dependsOn 'toolchainWasm'
     dependsOn tasks.named('test').get().dependsOn
     dependsOn 'test'   // writes build/s2-vectors.json (TransitionParityTest)
+    dependsOn ':julc-state-dsl:test'   // writes julc-state-dsl/build/lang-parity.json (JscLangTest)
     doLast {
+        // ADR-0021 M5a in Wasm: lang.analyze's document models equal the JVM's, its diagnostics are joust.build's (L1),
+        // and the nesting cap holds through it on the main thread and on the language server's 4 MB worker.
+        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/lang-in-node.mjs',
+                'julc-state-toolchain/build/wasm', 'julc-state-dsl/build/lang-parity.json'; workingDir rootDir }
         // S2 in Wasm: every transition vector through the engine's VM, against the JVM's answers.
-        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
+        injectedExec.execOps.exec { commandLine 'node', 'julc-state-toolchain/src/test/js/run-transitions.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2-vectors.json'; workingDir rootDir }
         // J18 in Wasm (ADR-0018 r12): the nesting cap and long chains, on Node's default stack, as on the JVM.
-        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/depth-in-node.mjs',
+        injectedExec.execOps.exec { commandLine 'node', 'julc-state-toolchain/src/test/js/depth-in-node.mjs',
                 'julc-state-toolchain/build/wasm'; workingDir rootDir }
         // S2b in Wasm: read discovery (build/s2b-vectors.json, from ReadDiscoveryTest).
-        injectedExec.execOps.exec { commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/run-discovery.mjs',
+        injectedExec.execOps.exec { commandLine 'node', 'julc-state-toolchain/src/test/js/run-discovery.mjs',
                 'julc-state-toolchain/build/wasm', 'julc-state-toolchain/build/s2b-vectors.json', 'examples/token/src/main/java'; workingDir rootDir }
     }
     workingDir rootDir
-    commandLine 'node', '--experimental-wasm-exnref', 'julc-state-toolchain/src/test/js/build-in-node.mjs',
+    commandLine 'node', 'julc-state-toolchain/src/test/js/build-in-node.mjs',
             'julc-state-toolchain/build/wasm', 'examples', 'counter', 'bank', 'vault', 'escrow', 'crowdfund', 'dsl', 'guild',
             'token', 'treasury', 'market', 'fees', 'pool', 'rollup', 'dex', 'staking', 'oracle', 'upgrade', 'locker'
 }

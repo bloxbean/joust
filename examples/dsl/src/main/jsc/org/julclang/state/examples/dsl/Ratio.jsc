@@ -1,0 +1,12 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M2b, #84 review S2 (the security review's SecInv): an invariant that can fail, not only be false. A division
+// by zero in an invariant refuses the call as the invariant's (class invariant:ratio), on both interpreters, while the
+// JVM method and the transition program compute the state and the validator refuses it.
+contract Ratio {
+  state { total: Int, count: Int }
+  init() { return { total: 0, count: 1 } }
+  action set(t: Int, c: Int) open { return { total: t, count: c } }
+  invariant ratio = total / count >= 0
+}

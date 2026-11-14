@@ -4,6 +4,8 @@
 // { message: [{ line, col, kind, in, what? }] } }), and a refusal is shown with the .jsc position(s) that raise it, from
 // the map of the contract that refused only: a key is unique within its script, not across scripts.
 
+import { plutusScriptHash } from '@julclang/state-client';
+
 const describe = (s) => {
   switch (s.kind) {
     case 'input': return `the parameter ${s.what} of ${s.in} is not a well-formed input`;
@@ -37,13 +39,57 @@ const titleOf = (c) => {
   }
 };
 
+const descriptionOf = (c) => {
+  try {
+    return typeof c.description === 'string' ? JSON.parse(c.description) : c.description;
+  } catch {
+    return null;
+  }
+};
+
+/** The content of one whole CBOR byte string (hex), or null when `hex` is not exactly one. */
+function cborBytes(hex) {
+  if (typeof hex !== 'string' || !/^(?:[0-9a-fA-F]{2})+$/.test(hex)) return null;
+  const b0 = parseInt(hex.slice(0, 2), 16);
+  if (b0 >> 5 !== 2) return null;
+  const ai = b0 & 31;
+  const size = ai < 24 ? 0 : ai === 24 ? 1 : ai === 25 ? 2 : ai === 26 ? 4 : -1;
+  if (size < 0) return null;
+  const len = size === 0 ? ai : parseInt(hex.slice(2, 2 + 2 * size), 16);
+  const from = 2 + 2 * size;
+  return hex.length === from + 2 * len ? hex.slice(from) : null;
+}
+
 /**
- * The bundle entry of the contract that refused: by script hash when given, else by title (the engine's `refusedBy`
- * or the call's `contract`). Null when it is not one entry: a key is never looked up across contracts.
+ * The script hash of a contract's compiled Plutus V3 script as `joust build` ships it (CBOR-wrapped twice, as CCL's
+ * cborHex): blake2b-224 of the language tag and the script's CBOR (issue #74, security S6 on #71). Null when the text is
+ * not such a script.
+ */
+export function scriptHashOf(script) {
+  const inner = cborBytes(script);
+  return inner !== null && cborBytes(inner) !== null ? plutusScriptHash(inner, 3) : null;
+}
+
+/**
+ * A bundle entry's message map as the runtime trusts it (issue #74, security S6 on #71): its `scriptHash` is derived
+ * from the entry's own script when the map is read, never taken from the map, which only claims it. A contract with
+ * @Params has none: its deployed script is the one with the parameters applied, which the bundle does not hold.
+ */
+export function messageMap(contract) {
+  const m = contract?.messages;
+  if (!m?.messages) return null;
+  const params = descriptionOf(contract)?.['x-joust']?.params;
+  return { ...m, scriptHash: params ? '' : scriptHashOf(contract.script) ?? '' };
+}
+
+/**
+ * The bundle entry of the contract that refused: by script hash when given (the hash of the entry's own script, never
+ * the one its map claims), else by title (the engine's `refusedBy` or the call's `contract`). Null when it is not one
+ * entry: a key is never looked up across contracts.
  */
 export function refusingContract(contracts, { scriptHash, title } = {}) {
   const all = contracts ?? [];
-  const found = all.filter((c) => (scriptHash ? c.messages?.scriptHash === scriptHash : title != null && titleOf(c) === title));
+  const found = all.filter((c) => (scriptHash ? messageMap(c)?.scriptHash === scriptHash : title != null && titleOf(c) === title));
   return found.length === 1 ? found[0] : null;
 }
 
@@ -53,7 +99,8 @@ export function messageSites(text, contract) {
   if (!m?.messages) return [];
   const best = matchingMessage(text, Object.keys(m.messages));
   if (best === null) return [];
-  return [...new Set(m.messages[best].map((s) => `${m.source}:${s.line}:${s.col} (${describe(s)})`))];
+  // A site in an imported .jsc library names its file (ADR-0018 D9, M4); the map's own file is the default.
+  return [...new Set(m.messages[best].map((s) => `${s.file ?? m.source}:${s.line}:${s.col} (${describe(s)})`))];
 }
 
 /** A refusal's text with the .jsc position(s) of its message, from the refusing contract's map when it has one. */

@@ -1,9 +1,12 @@
 // ADR-0015 S1: the toolchain engine compiles contracts in Node (no JDK), with the same outputs as Gradle (I1).
-// Usage: node --experimental-wasm-exnref build-in-node.mjs <engine dir> <examples dir> <example>...
+// Usage: node build-in-node.mjs <engine dir> <examples dir> <example>...
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { enableExnref } from '../../../../js/joust-runtime/src/exnref.js';
+// Wasm exception references: a flag on Node 22, on by default on newer Node (which only warns about the flag).
+enableExnref();
 
 const [engineDir, examples, ...modules] = process.argv.slice(2);
 const started = Date.now();
@@ -30,8 +33,14 @@ for (const m of modules) {
       }
     }
   }
+  // ADR-0018 D9 (M4b): examples/dsl imports the Java library of examples/compliance (its joustLibrary), as sources.
+  const javaLibraries = {};
+  if (m === 'dsl') {
+    const root = join(examples, 'compliance', 'src/main/java');
+    for (const p of walk(root)) if (p.endsWith('.java')) javaLibraries[relative(root, p)] = readFileSync(p, 'utf8');
+  }
   const t = Date.now();
-  const r = engine.joust.build({ files, options: {} });
+  const r = engine.joust.build({ files, options: {}, javaLibraries });
   // Review r3 F13: a built engine reports the versions it was built with, never 'dev'.
   if (!r.joust || r.joust === 'dev' || !r.julc || r.julc === 'dev') {
     console.log(`DIFF engine versions: joust ${r.joust}, julc ${r.julc}`);

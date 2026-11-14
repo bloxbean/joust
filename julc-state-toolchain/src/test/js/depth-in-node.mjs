@@ -4,13 +4,16 @@
 //   main:   on Node's main thread, default stack (about 1 MB, the smallest host): the front end's cap holds there;
 //   worker: on a worker with `joust build`'s stack (js/joust/src/toolchain.js ENGINE_STACK_MB, 8 MB), where a cold
 //           engine also compiles contracts past the front end as the JVM does (JuLC's passes recurse on the term).
-// Usage: node --experimental-wasm-exnref depth-in-node.mjs <engine dir>   (runs every case, each in a child process)
+// Usage: node depth-in-node.mjs <engine dir>   (runs every case, each in a child process)
 
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
+import { enableExnref } from '../../../../js/joust-runtime/src/exnref.js';
+// Wasm exception references: a flag on Node 22, on by default on newer Node (which only warns about the flag).
+enableExnref();
 
 const ENGINE_STACK_MB = 8;
 const [engineDir, caseIndex, where] = isMainThread ? process.argv.slice(2) : [workerData.engineDir, workerData.caseIndex, 'worker'];
@@ -134,7 +137,7 @@ if (!isMainThread) {
     const [name, , want, only] = cases[i];
     for (const host of only ? [only] : ['main', 'worker']) {
       const t = Date.now();
-      const got = execFileSync(process.execPath, ['--experimental-wasm-exnref', fileURLToPath(import.meta.url), engineDir, String(i), host],
+      const got = execFileSync(process.execPath, [fileURLToPath(import.meta.url), engineDir, String(i), host],
         { encoding: 'utf8', maxBuffer: 1 << 24 }).trim().split('\n').pop();
       const pass = got === want;
       if (!pass) failures++;

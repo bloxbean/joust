@@ -1,0 +1,46 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { isEmpty, withoutLovelace } from "std/value"
+
+// What the oracle and fees ports leave out of M2c (ADR-0018 M2c): a tip jar that reads typed memos (receives Note: each
+// a checked input), credits each beneficiary in an inline map, and stores values in its state and in a record (their
+// wire form, D5). Tipper.jsc deposits into it, reads it and sends with datums.
+type Note = { to: Key, tag: Bytes }
+type Last = { by: Key, value: Value }
+
+contract Tips(maxDatumBytes = 1024, assetSlots = 4) {
+  state { owner: Key, credits: Map<Key, Int>, taken: Value, last: Option<Last> }
+
+  init() {
+    return { owner: caller, credits: Map.empty(), taken: Value.none(), last: None }
+  }
+
+  // Each deposit credits the beneficiary its memo names with its lovelace; its native assets join taken.
+  action credit() receives Note {
+    require(!funds.deposits.isEmpty, "nothing deposited")
+    const next = funds.deposits.fold(credits, (m, d) => m.set(d.memo.to, (m.get(d.memo.to) ?? 0) + d.value.lovelace))
+    const assets = funds.deposits.fold(Value.none(), (v, d) => v + withoutLovelace(d.value))
+    const total = funds.deposits.fold(Value.none(), (v, d) => v + d.value)
+    return { ...state, credits: next, taken: taken + assets, last: Some(Last { by: caller, value: total }) }
+  }
+
+  // A beneficiary takes its credit.
+  action claim() open {
+    const due = credits.get(caller) ?? 0
+    require(due > 0, "no credit")
+    pay(caller, due)
+    return { ...state, credits: credits.delete(caller) }
+  }
+
+  // The owner ends the jar: the native assets taken in go to the owner with a receipt (a datum holding a value), the
+  // lovelace too.
+  destroy close() only owner {
+    if !isEmpty(taken) {
+      send(wallet(owner), taken, Last { by: owner, value: taken })
+    }
+    pay(owner, balance)
+  }
+
+  view lastValue(): Option<Last> = last
+}

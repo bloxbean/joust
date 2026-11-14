@@ -33,7 +33,8 @@ class JscV2HashStabilityTest {
         try (Stream<Path> s = Files.list(DSL)) {
             return s.filter(p -> p.toString().endsWith(".jsc")).filter(p -> {
                 try {
-                    return Files.readString(p).startsWith("jsc 2");
+                    String t = Files.readString(p);
+                    return t.startsWith("jsc 2") && !org.julclang.state.dsl.v2.JscV2.isLibrary(t);
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -43,11 +44,77 @@ class JscV2HashStabilityTest {
 
     record Built(String hash, int size) {}
 
-    static Built build(String file, String text) {
-        var r = Toolchain.build(Map.of(PKG + file, text), Map.of());
+    /** M2c: the contracts a file imports ({@code import contract { C } from "./C.jsc"}), by name. */
+    static List<String> imported(String text) {
+        var out = new ArrayList<String>();
+        Matcher m = Pattern.compile("import\\s+contract\\s*\\{\\s*([A-Za-z0-9]+)\\s*\\}").matcher(text);
+        while (m.find()) out.add(m.group(1));
+        return out;
+    }
+
+    /** M2c: every identifier of the files a file imports: never renamed in it (their names are the other contract's). */
+    static Set<String> importedWords(String text) {
+        var out = new HashSet<String>();
+        for (String c : imported(text)) {
+            try {
+                Matcher m = Pattern.compile("\\b[A-Za-z_]\\w*\\b").matcher(Files.readString(DSL.resolve(c + ".jsc")));
+                while (m.find()) out.add(m.group());
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }
+        return out;
+    }
+
+    /** The examples' {@code .jsc} libraries (ADR-0018 D9, M4), by path: every build includes them, as Gradle's does. */
+    static Map<String, String> libraries() throws Exception {
+        var out = new LinkedHashMap<String, String>();
+        try (Stream<Path> s = Files.list(DSL)) {
+            for (Path p : s.filter(p -> p.toString().endsWith(".jsc")).sorted().toList()) {
+                String t = Files.readString(p);
+                if (t.startsWith("jsc 2") && org.julclang.state.dsl.v2.JscV2.isLibrary(t)) out.put(PKG + p.getFileName(), t);
+            }
+        }
+        return out;
+    }
+
+    static Built build(String file, String text) throws Exception {
+        return build(file, text, libraries());
+    }
+
+    static Map<String, String> javaSources() {
+        return ExampleLibraries.javaSources();
+    }
+
+    static Built build(String file, String text, Map<String, String> libraries) {
+        var files = new LinkedHashMap<String, String>(libraries);
+        files.put(PKG + file, text);
+        // M2c: a contract that imports others is built with them (unedited); its own is the one not imported.
+        var others = imported(text);
+        for (String c : others) {
+            try {
+                files.put(PKG + c + ".jsc", Files.readString(DSL.resolve(c + ".jsc")));
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }
+        var r = Toolchain.build(files, Map.of(), javaSources());
         assertTrue(r.ok(), file + ": " + r.diagnostics());
-        assertEquals(1, r.contracts().size());
-        return new Built(r.contracts().get(0).scriptHash(), r.contracts().get(0).scriptSizeBytes());
+        var own = r.contracts().stream().filter(x -> !others.contains(x.name())).toList();
+        assertEquals(1, own.size());
+        var c = own.get(0);
+        // A contract with params (M2b) has no hash until they are applied: its unapplied script's digest stands for it
+        // (the applied script's hash moves exactly when the unapplied script does).
+        String hash = !c.scriptHash().isEmpty() ? c.scriptHash() : "unapplied:" + sha256(c.scriptCborHex());
+        return new Built(hash, c.scriptSizeBytes());
+    }
+
+    static String sha256(String hex) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(java.util.HexFormat.of().parseHex(hex)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     // ------------------------------------------------------------------ edits, outside strings and comments
@@ -144,6 +211,9 @@ class JscV2HashStabilityTest {
         }
         declared.removeAll(fields);
         declared.removeAll(Set.of("caller", "received", "balance", "validFrom", "validTo", "state", "from", "of", "in"));
+        declared.removeAll(LANGUAGE);
+        declared.removeAll(importedWords(s));
+        declared.removeAll(LIBRARY_NAMES);
         var out = new LinkedHashMap<String, String>();
         for (String n : declared) out.put(n, n + "Rn");
         return out;
@@ -156,10 +226,40 @@ class JscV2HashStabilityTest {
             "ada", "Int", "Bool", "Bytes", "Key", "Hash", "List", "Option", "Map", "BigMap", "State", "maxDatumBytes", "minAda",
             "maxValidityMs", "min", "max", "abs", "asKey", "asHash", "range", "length", "isEmpty", "head", "sum", "reverse", "contains",
             "any", "all", "find", "filter", "map", "fold", "concat", "take", "drop", "get", "has", "set", "delete", "size", "keys",
-            "values", "empty", "_", "utf8"));
+            "values", "empty", "_", "utf8",
+            // M2: funds' fields, the members of Value and Address, a credential's patterns and their fields, the effects,
+            // the prelude's constructors and the option assetSlots. A parameter may share a member's name (a Coins
+            // parameter is called policy, as funds.policy is): such a name is not renamed, since a member is not.
+            "funds", "held", "policy", "self", "lovelace", "covers", "payment", "none", "asset", "send", "mint", "burn", "accept",
+            "keyCred", "scriptCred", "wallet", "script", "Value", "Address", "Credential", "KeyCred", "ScriptCred", "key", "hash",
+            "assetSlots",
+            // M2b: the declarations' and modifiers' words, emit, and the generated names. A state field may be called
+            // quorum (treasury's is): such a name is not renamed, since the modifier word beside it is not.
+            "params", "event", "invariant", "emit", "quorum", "authorized", "Config", "Event",
+            // M2c: composition's words, funds.deposits and a deposit's members.
+            "deposit", "receives", "reads", "Instance", "deposits", "memo", "value"));
 
     static {
         for (var b : org.julclang.state.dsl.v2.JscV2.bindings()) LANGUAGE.add(b.name());
+    }
+
+    /** Every name the examples' libraries declare (fields, types, variants, fns, parameters): an importer keeps them. */
+    static final Set<String> LIBRARY_NAMES = new HashSet<>();
+
+    static {
+        try {
+            for (String lib : libraries().values()) LIBRARY_NAMES.addAll(renameAllOf(lib));
+            // The Java libraries' fns and record fields (M4b): declared in Java, kept by the importer.
+            for (var lib : JavaLibraryCertifier.certify(javaSources()).values()) {
+                lib.fns().forEach(f -> LIBRARY_NAMES.add(f.name()));
+                lib.records().forEach(r -> {
+                    LIBRARY_NAMES.add(r.simpleName());
+                    LIBRARY_NAMES.addAll(r.fieldNames());
+                });
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /**
@@ -168,6 +268,20 @@ class JscV2HashStabilityTest {
      * order, this does not). Imported names and the language's words are kept.
      */
     static Map<String, String> renameAll(String s) {
+        var names = new ArrayList<>(renameAllOf(s));
+        names.removeAll(LIBRARY_NAMES);
+        var out = new LinkedHashMap<String, String>();
+        for (int i = 0; i < names.size(); i++) {
+            int r = names.size() - i;   // reversed rank
+            String code3 = "" + (char) ('a' + r / 676 % 26) + (char) ('a' + r / 26 % 26) + (char) ('a' + r % 26);
+            String n = names.get(i);
+            out.put(n, (Character.isUpperCase(n.charAt(0)) ? "Zq" : "zq") + code3);
+        }
+        return out;
+    }
+
+    /** The names {@link #renameAll} renames, before the libraries' are kept: sorted. */
+    static java.util.TreeSet<String> renameAllOf(String s) {
         String code = stripComments(s).replaceAll("\"(?:[^\"\\\\]|\\\\.)*\"", "\"\"");
         var declared = new java.util.TreeSet<String>();
         for (String re : List.of("\\b(?:type|enum|contract)\\s+([A-Z]\\w*)", "\\b(?:fn|action|destroy|view|const)\\s+([a-z]\\w*)",
@@ -195,15 +309,8 @@ class JscV2HashStabilityTest {
         Matcher imports = Pattern.compile("import\\s*\\{([^}]*)\\}").matcher(code);
         while (imports.find()) for (String n : imports.group(1).split("\\s*,\\s*")) declared.remove(n.trim());
         declared.removeAll(LANGUAGE);
-        var names = new ArrayList<>(declared);
-        var out = new LinkedHashMap<String, String>();
-        for (int i = 0; i < names.size(); i++) {
-            int r = names.size() - i;   // reversed rank
-            String code3 = "" + (char) ('a' + r / 676 % 26) + (char) ('a' + r / 26 % 26) + (char) ('a' + r % 26);
-            String n = names.get(i);
-            out.put(n, (Character.isUpperCase(n.charAt(0)) ? "Zq" : "zq") + code3);
-        }
-        return out;
+        declared.removeAll(importedWords(s));
+        return declared;
     }
 
     static Map<String, String> edits(String src) {
@@ -242,6 +349,30 @@ class JscV2HashStabilityTest {
         }
         System.out.print(table);
         assertTrue(checked >= 9 * 10, "edits checked: " + checked);
+    }
+
+    /**
+     * ADR-0018 M4 (J20 for libraries): layout and comment edits of a {@code .jsc} library leave the hash of every contract
+     * that imports it unchanged (its names are its importers' too, so renames are not behaviour-neutral edits of the
+     * library alone).
+     */
+    @Test
+    void libraryLayoutAndCommentEdits_leaveTheImportersHash() throws Exception {
+        String fees = Files.readString(DSL.resolve("fees.jsc"));
+        String shop = Files.readString(DSL.resolve("Shop.jsc"));
+        Built base = build("Shop.jsc", shop);
+        int checked = 0;
+        for (var e : edits(fees).entrySet()) {
+            // Renames are not edits of the library alone; an edit that targets a contract's header changes nothing here.
+            if (e.getKey().contains("renamed") || e.getValue().equals(fees)) continue;
+            assertEquals(base.hash(), build("Shop.jsc", shop, Map.of(PKG + "fees.jsc", e.getValue())).hash(),
+                    "fees.jsc: " + e.getKey() + " moved Shop's script hash");
+            checked++;
+        }
+        assertNotEquals(base.hash(), build("Shop.jsc", shop, Map.of(PKG + "fees.jsc", fees.replace("since >= 10 ? 25 : 50", "since >= 10 ? 25 : 51"))).hash(),
+                "a changed library fn changes its importer's script");
+        assertTrue(checked >= 6, "edits checked: " + checked);
+        System.out.println("[hash] Shop keeps " + base.hash() + " under " + checked + " layout and comment edits of fees.jsc");
     }
 
     /**

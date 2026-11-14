@@ -1,0 +1,19 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+// ADR-0018 M2c (review r3, C7): a writer that stores a Value made from its params (a Value and a Hash, set at deployment),
+// read by StashReader.jsc. The params are a checked input of the init, so no instance is made under a Value of other
+// policies than lovelace's and 28-byte ones, or a Hash that is not 28 bytes: a reader never meets a state its writer made
+// and it must refuse. Not an example to deploy: the five-way tests' fixture.
+contract Stash {
+  params { v: Value, h: Hash }
+  state { n: Int, held: Value }
+
+  init() {
+    return { n: 7, held: params.v + Value.asset(params.h, #01, 1) }
+  }
+
+  action stay() open {
+    return state
+  }
+}

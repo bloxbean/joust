@@ -32,10 +32,10 @@ const someOf = (v, t) => node('SomeOf', { value: v }, { option: t });
 const none = (t) => node('NoneLit', {}, { option: t });
 
 /** A program with the given records, enums and fns, and no methods: for evaluating expressions. */
-function program({ records = [], enums = [], fns = [] } = {}) {
+function program({ records = [], enums = [], fns = [], libraries = [] } = {}) {
   return load(JSON.stringify({
-    ir: 1, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
-    state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], fns, methods: [], warnings: [],
+    ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records, enums,
+    state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: [], libraries, javaLibraries: [], fns, methods: [], warnings: [],
   }));
 }
 
@@ -282,8 +282,8 @@ function deepProgram() {
   const go = { kind: 'view', name: 'go', params: [k], mods: [], checked: [], usesCtx: false, pays: false, result: INT, at,
     body: { stmts: [], at, result: node('CallFn', { fn: 'down', args: [node('LocalRef', { local: 2 }, INT)] }, INT) } };
   return JSON.stringify({
-    ir: 1, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'Deep', source: 'Deep.jsc', options: [], records: [],
-    enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], fns: [down], methods: [go], warnings: [],
+    ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'Deep', source: 'Deep.jsc', options: [], records: [],
+    enums: [], state: { name: 'State', fields: [], at }, timeFields: [], recursiveFns: ['down'], libraries: [], javaLibraries: [], fns: [down], methods: [go], warnings: [],
   });
 }
 
@@ -435,7 +435,7 @@ test('§3.9 asKey and asHash: exactly 28 bytes', () => {
 
 test('a reader refuses another IR version, an unknown std row, and keeps answers in the vector form', () => {
   const text = readFileSync(new URL('./fixtures/Counter2.ir.json', import.meta.url), 'utf8');
-  assert.throws(() => load(text.replace('"ir": 1,', '"ir": 2,')), /"ir" must be exactly 1/);
+  assert.throws(() => load(text.replace('"ir": 2,', '"ir": 1,')), /"ir" must be exactly 2/);
   const stdBytes = readFileSync(new URL('./fixtures/StdBytes.ir.json', import.meta.url), 'utf8');
   assert.throws(() => load(stdBytes.replace('"name": "sha2_256"', '"name": "keccak_256"')), /unknown std row std\/crypto.keccak_256/);
   const counter = load(text);
@@ -451,8 +451,8 @@ test('a reader refuses up front what it does not know or cannot trust (review S3
   const text = readFileSync(new URL('./fixtures/Pledges.ir.json', import.meta.url), 'utf8');
   load(text);
   const refuses = (edit, why) => assert.throws(() => load(edit(text)), why);
-  refuses((t) => t.replace('"ir": 1,', '"ir": 1.0,'), /not a plain integer/);
-  refuses((t) => t.replace('"ir": 1,', '"ir": 1, "ir": 1,'), /duplicate key "ir"/);
+  refuses((t) => t.replace('"ir": 2,', '"ir": 2.0,'), /not a plain integer/);
+  refuses((t) => t.replace('"ir": 2,', '"ir": 2, "ir": 2,'), /duplicate key "ir"/);
   refuses((t) => t.replace('"checked": [3]', '"checked": [3], "checked": []'), /duplicate key "checked"/);
   refuses((t) => t.replace('"checked": [3]', '"checked": []'), /checked is \[\], but the parameters whose types hold a Key, a Hash or a Map are \[3\]/);
   refuses((t) => t.replace('"node": "Compare"', '"node": "Bogus"'), /unknown node "Bogus"/);
@@ -463,7 +463,7 @@ test('a reader refuses up front what it does not know or cannot trust (review S3
   refuses((t) => t.replace('"name": "only"', '"name": "sealed"'), /unknown modifier sealed/);
   // F11: M1c's batched is known (a version-1 reader loads #67's IR), and like every modifier but open and only it
   // makes a method read the transaction.
-  refuses((t) => t.replace('"name": "only"', '"name": "batched"'), /usesCtx is false, but the method reads the transaction/);
+  refuses((t) => t.replace('{ "name": "only", "field": "owner" }', '{ "name": "batched" }'), /usesCtx is false, but the method reads the transaction/);
   // C4, S7: an initializer that reads its own binding; a local out of its scope; a fn, field or arity that is not there.
   const withSelfRef = (t) => {
     const p = JSON.parse(t);
@@ -582,4 +582,570 @@ test('the reader refuses a malformed branches list and a condition that is not a
       /branch condition is of type "Int", not Bool/, node);
   }
   assert.throws(edit((p) => { firstIf(p, 'IfValue').otherwise = null; }), Error);
+});
+
+// ------------------------------------------------------------------ M1 hardening: modifier shapes (S5) and the caller (S6)
+
+test('the reader refuses a modifier the checker would not emit: fields, kinds, duplicates (review S5 on #76)', () => {
+  const edit = (name, f) => () => {
+    const p = JSON.parse(readFileSync(new URL(`./fixtures/${name}.ir.json`, import.meta.url), 'utf8'));
+    f(p, (n) => p.methods.find((m) => m.name === n));
+    return load(JSON.stringify(p));
+  };
+  assert.doesNotThrow(edit('Pool', () => {}));
+  assert.doesNotThrow(edit('Vault', () => {}));
+  // 'only' with no field: loaded and skipped before, so Pool's withdraw was accepted unsigned.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods[0].field = null; }), /only names a state field, not null/);
+  assert.throws(edit('Pool', (p, m) => { delete m('withdraw').mods[0].field; }), /only names a state field, not null/);
+  assert.throws(edit('Vault', (p, m) => { m('withdraw').mods[1].field = null; }), /after names a state field, not null/);
+  // A field that is not there, or of the wrong type.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods[0].field = 'nobody'; }), /only nobody: the state has no field nobody/);
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods[0].field = 'donated'; }), /only donated: donated is of type "Int", not Key/);
+  assert.throws(edit('Vault', (p, m) => { m('withdraw').mods[1].field = 'owner'; }), /after owner: owner is of type "Key", not Int/);
+  assert.throws(edit('Vault', (p, m) => { m('withdraw').mods[1] = { name: 'before', field: 'owner' }; }), /before owner: owner is of type "Key", not Int/);
+  // Duplicates; an init's and a view's modifiers; a payable destroy; 'payable' and 'open' with a field.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods.push({ name: 'only', field: 'admin' }); }), /the modifier only is given twice/);
+  assert.throws(edit('Vault', (p, m) => { m('init').mods.push({ name: 'only', field: 'owner' }); }), /an init takes only payable, not only/);
+  assert.throws(edit('Vault', (p, m) => { m('total').mods.push({ name: 'open' }); }), /a view takes no modifiers, not open/);
+  assert.throws(edit('Vault', (p, m) => { m('close').mods.push({ name: 'payable' }); }), /a destroy cannot be payable/);
+  assert.throws(edit('Vault', (p, m) => { m('deposit').mods[0].field = 'owner'; }), /unknown field "field"/);
+  assert.throws(edit('Pool', (p, m) => { m('buy').mods[2].field = 'admin'; }), /unknown field "field"/);
+  // batched: plain or 'batched only', on an action, never with only/after/before.
+  assert.throws(edit('Pool', (p, m) => { m('close').mods.push({ name: 'batched', field: 'only' }); }), /only an action can be batched, not a destroy/);
+  assert.throws(edit('Pool', (p, m) => { m('init').mods.push({ name: 'batched' }); }), /an init takes only payable, not batched/);
+  assert.throws(edit('Pool', (p, m) => { m('donate').mods[1].field = 'admin'; }), /batched is plain or "batched only", not "admin"/);
+  assert.throws(edit('Pool', (p, m) => { m('donate').mods.push({ name: 'only', field: 'admin' }); }), /a batched action cannot use only/);
+  assert.throws(edit('Vault', (p, m) => { m('withdraw').mods.push({ name: 'batched' }); }), /a batched action cannot use only/);
+  // The interpreter never skips one either: a program whose modifier lost its field (past the reader) is an error.
+  const pool = fixture('Pool');
+  pool.methods.get('withdraw').mods[0].field = null;
+  const admin = fromHex('0a'.repeat(28));
+  const s = new Rec('State', [admin, 0n, 0n, 1n, 1n]);
+  assert.throws(() => pool.call('withdraw', s, [0n], { ...TX, caller: admin, balance: 0n }), (e) => !(e instanceof Refused) && /without a state field/.test(e.message));
+});
+
+test('§2 the caller is among the signers: a τ whose caller did not sign is the caller\'s error (review S6 on #76)', () => {
+  const vault = fixture('Vault');
+  const owner = fromHex('0a'.repeat(28)), ann = fromHex('a1'.repeat(28));
+  const s = new Rec('State', [owner, 1500n, 10_000_000n]);
+  const tx = (o) => ({ ...TX, balance: 10_000_000n, validFrom: 1500n, validTo: 2000n, ...o });
+  // Ann calls, the owner signs and Ann does not: not an answer ('only owner' holds, but the caller never signed).
+  for (const f of ['call', 'transition']) {
+    assert.throws(() => vault[f]('withdraw', s, [1_000_000n], tx({ caller: ann, signers: [owner] })),
+      (e) => !(e instanceof Refused) && /caller is not among its signers/.test(e.message), f);
+    assert.throws(() => vault[f]('withdraw', s, [1_000_000n], tx({ caller: ann, signers: [] })), (e) => !(e instanceof Refused), f);
+  }
+  // Both sign: accepted; the caller alone (no signers given: [caller]): refused by 'only owner'.
+  assert.equal(vault.call('withdraw', s, [1_000_000n], tx({ caller: ann, signers: [ann, owner] })).value.fields[2], 9_000_000n);
+  assert.throws(() => vault.call('withdraw', s, [1_000_000n], tx({ caller: ann })), (e) => e instanceof Refused && e.refusal === 'modifier:only owner');
+  // The JSON entry (run-vectors) says the same.
+  const call = (signers) => runCall(vault, { method: 'withdraw', state: { rec: 'State', fields: [{ bytes: '0a'.repeat(28) }, { int: '1500' }, { int: '10000000' }] },
+    args: [{ int: '1000000' }], tx: { caller: 'a1'.repeat(28), received: '0', balance: '10000000', validFrom: '1500', validTo: '2000', signers } });
+  assert.ok(call(['a1'.repeat(28), '0a'.repeat(28)]).ok);
+  assert.throws(() => call(['0a'.repeat(28)]), /caller is not among its signers/);
+});
+
+test('the reader recomputes pays and requires a paying method to say who may call it; no batched action with BigMap state (#80 review S3)', () => {
+  const edit = (name, f) => () => {
+    const p = JSON.parse(readFileSync(new URL(`./fixtures/${name}.ir.json`, import.meta.url), 'utf8'));
+    f(p, (n) => p.methods.find((m) => m.name === n));
+    return load(JSON.stringify(p));
+  };
+  // Deleting the audience of a paying method: before, Pool's withdraw then accepted a stranger alone.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').mods = []; }), /it pays, sends, mints, burns or deposits, so it says who may call it \(only f, open, quorum or authorized\)/);
+  assert.throws(edit('Pool', (p, m) => { m('buy').mods = m('buy').mods.filter((x) => x.name !== 'open'); }), /so it says who may call it/);
+  assert.throws(edit('Counter2', (p, m) => { m('close').mods = []; }), /so it says who may call it/);
+  // pays as written must be what the body says, on the method and on each if, for and match statement.
+  assert.throws(edit('Pool', (p, m) => { m('withdraw').pays = false; }), /pays is false, but the body pays/);
+  assert.throws(edit('Counter2', (p, m) => { m('increment').pays = true; }), /pays is true, but the body does not pay/);
+  assert.throws(edit('Branches', (p, m) => {
+    const walk = (o) => (o && typeof o === 'object' ? (o.stmt === 'If' && o.pays === true ? o : Object.values(o).map(walk).find(Boolean)) : null);
+    walk(m('settle').body).pays = false;
+  }), /If at .*: pays is false, but its blocks pay/);
+  // JSC0419: no batched action in a contract with BigMap state.
+  assert.throws(edit('Ledger', (p, m) => { m('transfer').mods.push({ name: 'batched' }); }), /a contract with BigMap state has no batched action/);
+  assert.doesNotThrow(edit('Pool', () => {}));
+  assert.doesNotThrow(edit('Ledger', () => {}));
+});
+
+test('the reader refuses a pay under an expression or in a fn (JSC0413), and a destroy that pays nothing (JSC0409) (#80 review C4, S7, F7)', () => {
+  const mutant = (n) => readFileSync(new URL(`./mutants/${n}.json`, import.meta.url), 'utf8');
+  // Before, the first loaded and a stranger alone got Pool's payout: pays was recomputed from statement blocks only.
+  assert.throws(() => load(mutant('pay-in-value-block')), /method withdraw\): a pay inside an expression or a fn, where the checker allows none \(JSC0413/);
+  assert.throws(() => load(mutant('pay-in-value-if')), /method withdraw\): a pay inside an expression or a fn/);
+  assert.throws(() => load(mutant('pay-in-fn')), /fn total\): a pay inside an expression or a fn/);
+  assert.throws(() => load(mutant('destroy-without-pay')), /method close\): a destroy pays out what the instance holds: it has no pay/);
+  // #98 review F1: every effect statement, not only a pay (send, mint, deposit), as the Java reader refuses them.
+  assert.throws(() => load(mutant('send-in-value-block')), /method give\): a send inside an expression or a fn/);
+  assert.throws(() => load(mutant('send-in-fn')), /fn total\): a send inside an expression or a fn/);
+  assert.throws(() => load(mutant('mint-in-fn')), /fn tokens\): a mint inside an expression or a fn/);
+  assert.throws(() => load(mutant('deposit-in-lambda')), /method sell\): a deposit inside an expression or a fn/);
+});
+
+// ------------------------------------------------------------------ M2a: values, credentials, addresses, effects
+
+const VALUE = 'Value';
+const ledger = (op, args, type) => node('LedgerOp', { op, args }, type);
+const POL = '70'.repeat(28), Q = '71'.repeat(28);
+const vjson = (...entries) => ({ value: entries.map(([p, n, q]) => [p, n, String(q)]) });
+
+test('§1.3 a value keeps the ledger order (a prefix first, then bytewise) and drops zero sums; §3.12 its operations', () => {
+  const p = program();
+  // (POL, "b") and (POL, "aa"): bytewise "aa" < "b", although "b" is shorter (the ledger's order, not §1.1's).
+  const v = p.evalExpr(ledger('add', [ledger('asset', [b(POL), b('62'), lit(1n)], VALUE), ledger('asset', [b(POL), b('6161'), lit(2n)], VALUE)], VALUE));
+  assert.deepEqual(toJson(v), vjson([POL, '6161', 2n], [POL, '62', 1n]));
+  // A zero sum leaves no entry; 0 builds the empty value.
+  const z = p.evalExpr(ledger('sub', [ledger('asset', [b(POL), b('62'), lit(3n)], VALUE), ledger('asset', [b(POL), b('62'), lit(3n)], VALUE)], VALUE));
+  assert.deepEqual(toJson(z), vjson());
+  assert.deepEqual(toJson(p.evalExpr(ledger('lovelace', [lit(0n)], VALUE))), vjson());
+  // Quantities stay in [-2^127, 2^127 - 1]: building, adding, subtracting (−(−2^127) is out) and scaling fail outside it.
+  const MAX = (1n << 127n) - 1n, MIN = -(1n << 127n);
+  const fails = (e, cls) => assert.throws(() => p.evalExpr(e), (x) => x instanceof Refused && x.refusal === cls);
+  fails(ledger('lovelace', [lit(MAX + 1n)], VALUE), 'domain:Value.lovelace');
+  fails(ledger('asset', [b(POL), b('00'.repeat(33)), lit(1n)], VALUE), 'domain:Value.asset');
+  assert.deepEqual(toJson(p.evalExpr(ledger('asset', [b(POL), b('00'.repeat(33)), lit(0n)], VALUE))), vjson());   // 0: no check, as insertCoin
+  fails(ledger('add', [ledger('lovelace', [lit(MAX)], VALUE), ledger('lovelace', [lit(1n)], VALUE)], VALUE), 'domain:Value +');
+  fails(ledger('sub', [ledger('none', [], VALUE), ledger('lovelace', [lit(MIN)], VALUE)], VALUE), 'domain:Value -');
+  fails(std('std/value', 'scale', [lit(2n), ledger('lovelace', [lit(MAX)], VALUE)], VALUE), 'domain:scale');
+  assert.deepEqual(toJson(p.evalExpr(std('std/value', 'scale', [lit(0n), ledger('lovelace', [lit(MAX)], VALUE)], VALUE))), vjson());
+  // covers fails on a negative quantity, either side; of and lovelace read 0 when absent.
+  fails(ledger('covers', [ledger('lovelace', [lit(-1n)], VALUE), ledger('none', [], VALUE)], BOOL), 'domain:covers');
+  assert.equal(p.evalExpr(ledger('covers', [ledger('asset', [b(POL), b('01'), lit(5n)], VALUE), ledger('asset', [b(POL), b('01'), lit(5n)], VALUE)], BOOL)), true);
+  assert.equal(p.evalExpr(ledger('covers', [ledger('asset', [b(POL), b('01'), lit(5n)], VALUE), ledger('asset', [b(Q), b('01'), lit(1n)], VALUE)], BOOL)), false);
+  assert.equal(p.evalExpr(ledger('of', [ledger('none', [], VALUE), b(POL), b('01')], INT)), 0n);
+  assert.equal(p.evalExpr(eq(ledger('asset', [b(POL), b('01'), lit(1n)], VALUE), ledger('asset', [b(POL), b('01'), lit(1n)], VALUE), VALUE)), true);
+});
+
+test('§1.4 credentials and addresses compare by kind and bytes; §4 a 28-byte hash wherever one crosses', () => {
+  const p = program();
+  const k = 'aa'.repeat(28);
+  const addr = (op, ...args) => ledger(op, args, 'Address');
+  assert.equal(p.evalExpr(eq(addr('wallet', b(k)), addr('wallet', b(k)), 'Address')), true);
+  assert.equal(p.evalExpr(eq(addr('wallet', b(k)), addr('script', b(k)), 'Address')), false);   // the kind differs
+  assert.equal(p.evalExpr(eq(addr('wallet', b(k)), addr('walletStaked', b(k), b(k)), 'Address')), false);   // the staking part differs
+  assert.equal(p.evalExpr(eq(ledger('payment', [addr('scriptStaked', b(k), b(k))], 'Credential'), ledger('scriptCred', [b(k)], 'Credential'),
+    'Credential')), true);
+  assert.equal(p.wellFormed(p.evalExpr(addr('wallet', b('aa'.repeat(27)))), 'Address'), false);
+  assert.equal(p.wellFormed(p.evalExpr(addr('walletStaked', b(k), b('aa'.repeat(29)))), 'Address'), false);
+  assert.equal(p.wellFormed(p.evalExpr(ledger('keyCred', [b(k)], 'Credential')), 'Credential'), true);
+  assert.deepEqual(toJson(p.evalExpr(std('std/address', 'paymentScript', [addr('script', b(k))], { option: 'Hash' }))), { some: { bytes: k } });
+  assert.deepEqual(toJson(p.evalExpr(std('std/address', 'paymentKey', [addr('script', b(k))], { option: 'Key' }))), { none: true });
+});
+
+test('§5 effects: sends in order, the net mint, the accepted sum, and what was accepted checked last (Coins)', () => {
+  const coins = fixture('Coins');
+  const policy = '52'.repeat(28), label = '0d'.repeat(28), self = '03'.repeat(32), caller = '0a'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: caller }, { address: [{ keyCred: 'b1'.repeat(28) }, null] }, { int: '5' }, { bytes: label }] };
+  const tx = (received, held) => ({ caller, received: '0', balance: '3000000', validFrom: '0', validTo: '1', funds: { received, held, policy, self } });
+  const call = (method, args, t) => runCall(coins, { method, state, args, tx: t });
+  // redeem: accept 2 receipts, burn 3 then mint 1 (net −2), send 2 tokens to the beneficiary.
+  const ok = call('redeem', [{ bytes: POL }, { bytes: '484f534b59' }, { int: '2' }], tx(vjson([policy, label, 2n]), vjson([POL, '484f534b59', 9n])));
+  assert.deepEqual(ok.ok.mint, vjson([policy, label, -2n]));
+  assert.deepEqual(ok.ok.accepted, vjson([policy, label, 2n]));
+  assert.deepEqual(ok.ok.sends, [{ to: { address: [{ keyCred: 'b1'.repeat(28) }, null] }, value: vjson([POL, '484f534b59', 2n]) }]);
+  // Offering other assets than those accepted: refused last, with the class domain:accepted.
+  const off = call('redeem', [{ bytes: POL }, { bytes: '484f534b59' }, { int: '2' }], tx(vjson([policy, label, 1n]), vjson([POL, '484f534b59', 9n])));
+  assert.equal(off.class, 'domain:accepted');
+  // A reserved name of the own policy cannot be accepted (§5.5); another policy's 32-byte name can.
+  const reserved = call('probe', [{ bytes: POL }, { bytes: '01' }, { int: '1' }, { int: '1' }], tx(vjson([policy, '4f' + '00'.repeat(28), 1n]), vjson()));
+  assert.equal(reserved.class, 'domain:accept');
+  const foreign = call('probe', [{ bytes: POL }, { bytes: '01' }, { int: '1' }, { int: '1' }], tx(vjson([Q, '00'.repeat(32), 1n]), vjson()));
+  assert.ok('ok' in foreign, JSON.stringify(foreign));
+  // A method that moves native assets needs the funds in its transaction (a caller's error, not a refusal).
+  assert.throws(() => runCall(coins, { method: 'probe', state, args: [{ bytes: POL }, { bytes: '01' }, { int: '1' }, { int: '1' }],
+    tx: { caller, received: '0', balance: '0', validFrom: '0', validTo: '1' } }), /needs them/);
+});
+
+test('§2.6 quorum and authorized, §2.7 the output checks, §5.6 events and params (Treasury)', () => {
+  const treasury = fixture('Treasury');
+  const A = '11'.repeat(28), B = '22'.repeat(28), C = '33'.repeat(28), BOB = 'b0'.repeat(28), G = '6a'.repeat(28);
+  const keys = (...ks) => ks.map((k) => ({ bytes: k }));
+  const params = { rec: 'Config', fields: [{ scriptCred: G }, { int: '100000000' }] };
+  const state = (council, q, frozen = false) => ({ rec: 'State', fields: [keys(...council), { int: String(q) }, frozen] });
+  const tx = (signers, approvers = []) => ({ caller: signers[0] ?? A, received: '0', balance: '500000000', validFrom: '0', validTo: '1', signers, approvers });
+  const call = (method, s, args, t, transition = false) => runCall(treasury, { method, state: s, args, tx: t, params, transition });
+  const council = state([A, B, C], 2);
+  // quorum: two distinct members of three sign; one does not reach it, nor does a stranger, nor one key signing twice.
+  const paid = call('pay', council, [{ bytes: BOB }, { int: '10000000' }], tx([A, C]));
+  assert.deepEqual(paid.ok.payouts, [{ to: BOB, lovelace: '10000000' }]);
+  assert.deepEqual(paid.ok.events, [{ rec: 'Paid', fields: [{ bytes: BOB }, { int: '10000000' }] }]);
+  for (const signers of [[A], [A, BOB], [A, A]]) {
+    assert.equal(call('pay', council, [{ bytes: BOB }, { int: '1' }], tx(signers)).class, 'modifier:quorum council quorum');
+  }
+  // The transition alone (§2.6) leaves the modifier to the validator.
+  assert.ok('ok' in call('pay', council, [{ bytes: BOB }, { int: '1' }], tx([A]), true));
+  // params.maxPayout bounds a payment; a call needs the params when the contract reads them.
+  assert.match(call('pay', council, [{ bytes: BOB }, { int: '100000001' }], tx([A, B])).class, /^require:/);
+  assert.throws(() => runCall(treasury, { method: 'pay', state: council, args: [{ bytes: BOB }, { int: '1' }], tx: tx([A, B]) }), /supply them/);
+  // authorized params.guardian: the guardian script approves (a key signing with its hash does not).
+  assert.deepEqual(call('freeze', council, [true], tx([A], [G])).ok.value, state([A, B, C], 2, true));
+  assert.equal(call('freeze', council, [true], tx([G])).class, 'modifier:authorized params.guardian');
+  // §2.7: the next state's quorum is well formed (sorted, distinct, 28-byte keys; 1 <= threshold <= keys), then the
+  // invariants hold; the transition alone computes the state anyway.
+  assert.equal(call('rotate', council, [keys(A, A, B), { int: '3' }], tx([A, B])).class, 'invariant:quorum council quorum');
+  assert.equal(call('rotate', council, [keys(B, A), { int: '1' }], tx([A, B])).class, 'invariant:quorum council quorum');
+  assert.ok('ok' in call('rotate', council, [keys(B, A), { int: '1' }], tx([A, B]), true));
+  assert.deepEqual(call('rotate', council, [keys(A, B), { int: '2' }], tx([A, B])).ok.events,
+    [{ rec: 'CouncilChanged', fields: [{ int: '2' }, { int: '2' }] }]);
+  // At creation too: an init whose council is malformed is refused.
+  const init = (council, q) => runCall(treasury, { method: 'init', state: null, args: [keys(...council), { int: String(q) }], tx: tx([A]), params });
+  assert.ok('ok' in init([A, B, C], 2));
+  assert.equal(init([A, B], 3).class, 'invariant:quorum council quorum');
+});
+
+test('§2.7 step 1: a params quorum is checked at creation; a failing invariant is the invariant\'s refusal (#84 review F3, S2)', () => {
+  const council = fixture('Council');
+  const K1 = '41'.repeat(28), K2 = '42'.repeat(28), K3 = '43'.repeat(28), A = '11'.repeat(28), B = '22'.repeat(28);
+  const keys = (...ks) => ks.map((k) => ({ bytes: k }));
+  const tx = { caller: A, received: '0', balance: '0', validFrom: '0', validTo: '1' };
+  const init = (board, q) => runCall(council, { method: 'init', state: null, args: [keys(A, B), { int: '1' }, { keyCred: '4e'.repeat(28) }], tx,
+    params: { rec: 'Config', fields: [board, { int: String(q) }, { keyCred: 'ad'.repeat(28) }, { int: '50000000' }] } });
+  assert.ok('ok' in init(keys(K1, K2, K3), 2));
+  const cls = 'invariant:quorum params.board params.boardQuorum';
+  for (const [board, q] of [[keys(K2, K1, K3), 2], [keys(K1, K1, K3), 2], [keys(K1, K2, K3), 0], [keys(K1, K2, K3), -1],
+    [keys(K1, K2, K3), 4], [[], 1]]) {
+    assert.equal(init(board, q).class, cls, JSON.stringify([board, q]));
+  }
+  // M2c (review r3, C7): the params are a checked input of the init: a malformed key is refused before the invariant.
+  assert.equal(init(keys('00'.repeat(27), K2, K3), 2).class, 'input:params');
+  // The transition alone (§2.6) computes the creation; the output check is the validator's.
+  assert.ok('ok' in runCall(council, { method: 'init', state: null, args: [keys(A, B), { int: '1' }, { keyCred: '4e'.repeat(28) }], tx,
+    params: { rec: 'Config', fields: [keys(K2, K1, K3), { int: '2' }, { keyCred: 'ad'.repeat(28) }, { int: '50000000' }] }, transition: true }));
+  // An invariant that fails (a division by zero) refuses with its own class, not domain:/.
+  const ratio = fixture('Ratio');
+  const s = { rec: 'State', fields: [{ int: '0' }, { int: '1' }] };
+  assert.equal(runCall(ratio, { method: 'set', state: s, args: [{ int: '5' }, { int: '0' }], tx: null }).class, 'invariant:ratio');
+  assert.ok('ok' in runCall(ratio, { method: 'set', state: s, args: [{ int: '5' }, { int: '0' }], tx: null, transition: true }));
+  assert.ok('ok' in runCall(ratio, { method: 'set', state: s, args: [{ int: '5' }, { int: '2' }], tx: null }));
+});
+
+// ------------------------------------------------------------------ M2c: composition (§4, §5.1, §5.7; ADR-0011)
+
+test('M2c reads: a Kiosk buy reads the oracle state; stale refused by its require (before), a malformed state input:price', () => {
+  const kiosk = fixture('Kiosk');
+  const ORACLE = { instance: ['0c'.repeat(28), '0d'.repeat(32)] };
+  const params = { rec: 'Config', fields: [ORACLE, { int: '600000' }] };
+  const owner = '0a'.repeat(28), buyer = 'b0'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { int: '0' }] };
+  const oracle = (publisher, price, at) => ({ rec: 'Oracle.State', fields: [{ bytes: publisher }, { int: String(price) }, { int: String(at) }] });
+  const tx = (received, read) => ({ caller: buyer, received: String(received), balance: '0', validFrom: '1000000', validTo: '1120000',
+    reads: { oracle: read } });
+  const buy = (qty, received, read) => runCall(kiosk, { method: 'buy', state, args: [{ int: String(qty) }], tx: tx(received, read), params });
+  // Fresh: posted 60 s before the window; the whole window ends within 600 s of it. Paid exactly qty * price.
+  const fresh = oracle('9b'.repeat(28), 3000000, 940000);
+  assert.deepEqual(buy(2, 6000000, fresh).ok.value, { rec: 'State', fields: [{ bytes: owner }, { int: '2' }] });
+  assert.equal(buy(2, 5999999, fresh).class, 'require:22:5:pay exactly qty * price');
+  // Stale: posted 700 s before; before(updatedAt + maxAge) does not hold for the window.
+  assert.equal(buy(2, 6000000, oracle('9b'.repeat(28), 3000000, 300000)).class, 'require:21:5:stale price');
+  // A read state is a checked input (§4): a 27-byte publisher key is refused before the body.
+  assert.equal(buy(0, 0, oracle('9b'.repeat(27), 3000000, 940000)).class, 'input:price');
+  // No state for the read: no answer from the vector (an error of the call, not a refusal).
+  assert.throws(() => runCall(kiosk, { method: 'buy', state, args: [{ int: '1' }], tx: { ...tx(0, fresh), reads: {} }, params }), /reads params.oracle/);
+});
+
+test('M2c deposits: a Stall sell deposits its fee into params.pot, the memo the caller; Pot collect sums what it receives', () => {
+  const stall = fixture('Stall');
+  const POT = { instance: ['70'.repeat(28), '71'.repeat(32)] };
+  const params = { rec: 'Config', fields: [POT, { int: '500' }] };
+  const owner = '0a'.repeat(28), buyer = 'b1'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { int: '0' }] };
+  const sell = (price, received) => runCall(stall, { method: 'sell', state, args: [{ int: String(price) }],
+    tx: { caller: buyer, received: String(received), balance: '0', validFrom: '0', validTo: '1' }, params });
+  const ok = sell(10000000, 10000000).ok;
+  assert.deepEqual(ok.value, { rec: 'State', fields: [{ bytes: owner }, { int: '9500000' }] });
+  assert.deepEqual(ok.deposits, [{ target: POT, value: { value: [['', '', '500000']] }, memo: { bytes: buyer } }]);
+  assert.equal(sell(1000, 1000).class, 'require:20:5:pay exactly the price, at least 2 ADA');
+
+  const pot = fixture('Pot');
+  const potState = { rec: 'State', fields: [{ bytes: owner }, { int: '0' }, { int: '0' }] };
+  const funds = (deposits) => ({ received: { value: [] }, held: { value: [] }, policy: '70'.repeat(28), self: '71'.repeat(32), deposits });
+  const collect = (deposits) => runCall(pot, { method: 'collect', state: potState, args: [],
+    tx: { caller: buyer, received: '0', balance: '0', validFrom: '0', validTo: '1', funds: funds(deposits) } });
+  const two = [{ value: { value: [['', '', '500000']] }, memo: null }, { value: { value: [['', '', '250000'], ['ab'.repeat(28), '01', '3']] }, memo: null }];
+  assert.deepEqual(collect(two).ok.value, { rec: 'State', fields: [{ bytes: owner }, { int: '750000' }, { int: '2' }] });
+  assert.equal(collect([]).class, 'require:17:5:nothing deposited');
+});
+
+test('M2c deposits: a deposit is not empty, strictly positive, and holds no reserved-kind name (domain:deposit)', () => {
+  const tipper = fixture('Tipper');
+  const JAR = { instance: ['70'.repeat(28), '71'.repeat(32)] };
+  const params = { rec: 'Config', fields: [JAR, { int: '100000000' }] };
+  const owner = '0a'.repeat(28), alice = 'a1'.repeat(28), policy = '5e'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { int: '0' }, { bytes: '00' }] };
+  const jar = { rec: 'Tips.State', fields: [{ bytes: owner }, { map: [] }, { value: [] }, { none: true }] };
+  const tip = (amount, received, offered) => runCall(tipper, { method: 'tip', state, args: [{ bytes: alice }, { bytes: '7a' }, { int: String(amount) }],
+    tx: { caller: alice, received: String(received), balance: '0', validFrom: '0', validTo: '1', reads: { jar },
+      funds: { received: { value: offered }, held: { value: [] }, policy, self: '5f'.repeat(32) } }, params });
+  // Lovelace and native assets offered: both deposited, with a Note memo; the assets accepted first.
+  const P = 'cc'.repeat(28);
+  const ok = tip(1000000, 1000000, [[P, '00ff', '1'], [P, '01', '2']]).ok;
+  assert.deepEqual(ok.accepted, { value: [[P, '00ff', '1'], [P, '01', '2']] });
+  assert.deepEqual(ok.deposits, [{ target: JAR, value: { value: [['', '', '1000000'], [P, '00ff', '1'], [P, '01', '2']] },
+    memo: { rec: 'Note', fields: [{ bytes: alice }, { bytes: '7a' }] } }]);
+  // A reserved-kind token name (32 bytes) under any policy cannot be deposited.
+  assert.equal(tip(1000000, 1000000, [[P, '11'.repeat(32), '1']]).class, 'domain:deposit');
+  assert.equal(tip(1000000, 1000000, [[P, '4f' + '11'.repeat(28), '1']]).class, 'domain:deposit');
+  // A 29-byte name not starting 0x4F or 0x49 is fine.
+  assert.ok('ok' in tip(1000000, 1000000, [[P, '4b' + '11'.repeat(28), '1']]));
+  // The jar read: a credits map out of canonical order is a malformed read (§4).
+  const bad = { rec: 'Tips.State', fields: [{ bytes: owner }, { map: [[{ bytes: 'b2'.repeat(28) }, { int: '1' }], [{ bytes: 'a2'.repeat(28) }, { int: '1' }]] },
+    { value: [] }, { none: true }] };
+  assert.equal(runCall(tipper, { method: 'tip', state, args: [{ bytes: alice }, { bytes: '7a' }, { int: '1' }],
+    tx: { caller: alice, received: '1', balance: '0', validFrom: '0', validTo: '1', reads: { jar: bad },
+      funds: { received: { value: [] }, held: { value: [] }, policy, self: '5f'.repeat(32) } }, params }).class, 'input:jar');
+});
+
+test('M2c deposits: an empty or a negative deposit value is refused (domain:deposit), on a hand-built program', () => {
+  const POL = 'ab'.repeat(28);
+  const inst = { name: 'Other', package: 't', state: { name: 'Other.State', fields: [{ name: 'n', type: 'Int' }], at }, records: [], enums: [],
+    timeFields: [], receives: [null], bigMaps: false };
+  const p = (valueExpr) => load(JSON.stringify({
+    ir: 2, language: 'jsc 2', sourceSha256: '0'.repeat(64), package: 't', contract: 'T', source: 'T.jsc', options: [], records: [], enums: [],
+    state: { name: 'State', fields: [{ name: 'n', type: 'Int' }], at },
+    params: { name: 'Config', fields: [{ name: 'other', type: { instance: 'Other' } }], at },
+    contracts: [inst], timeFields: [], recursiveFns: [], libraries: [], javaLibraries: [], fns: [], warnings: [],
+    methods: [{ kind: 'action', name: 'give', params: [], mods: [{ name: 'open' }], checked: [], usesCtx: false, pays: false, result: { record: 'State' },
+      body: { stmts: [{ stmt: 'Deposit', target: node('ParamsRef', { field: 'other' }, { instance: 'Other' }), value: valueExpr, memo: lit(1n), at }],
+        result: node('StateRef', {}, { record: 'State' }), at }, at }],
+  }));
+  const params = { rec: 'Config', fields: [{ instance: [POL, 'cd'.repeat(32)] }] };
+  const give = (prog) => runCall(prog, { method: 'give', state: { rec: 'State', fields: [{ int: '0' }] }, args: [], tx: null, params });
+  const none = node('LedgerOp', { op: 'none', args: [] }, 'Value');
+  const lovelace = (q) => node('LedgerOp', { op: 'lovelace', args: [lit(q)] }, 'Value');
+  assert.equal(give(p(none)).class, 'domain:deposit');
+  assert.equal(give(p(lovelace(-1n))).class, 'domain:deposit');
+  assert.deepEqual(give(p(lovelace(5n))).ok.deposits, [{ target: { instance: [POL, 'cd'.repeat(32)] }, value: { value: [['', '', '5']] }, memo: { int: '1' } }]);
+});
+
+test('M2c receives T: Tips credit decodes Note memos and credits each beneficiary; a malformed memo is input:deposits', () => {
+  const tips = fixture('Tips');
+  const owner = '0a'.repeat(28), alice = 'a1'.repeat(28), bob = 'b2'.repeat(28), P = 'cc'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { map: [] }, { value: [] }, { none: true }] };
+  const note = (to, tag) => ({ rec: 'Note', fields: [{ bytes: to }, { bytes: tag }] });
+  const credit = (deposits) => runCall(tips, { method: 'credit', state, args: [],
+    tx: { caller: owner, received: '0', balance: '0', validFrom: '0', validTo: '1',
+      funds: { received: { value: [] }, held: { value: [] }, policy: '70'.repeat(28), self: '71'.repeat(32), deposits } } });
+  const ok = credit([
+    { value: { value: [['', '', '3000000'], [P, '01', '1']] }, memo: note(bob, '01') },
+    { value: { value: [['', '', '2000000']] }, memo: note(alice, '02') },
+    { value: { value: [['', '', '1000000']] }, memo: note(bob, '03') },
+  ]).ok;
+  // Keys in canonical order; bob credited twice; the assets taken; the last tip records the caller and the total.
+  assert.deepEqual(ok.value, { rec: 'State', fields: [
+    { bytes: owner },
+    { map: [[{ bytes: alice }, { int: '2000000' }], [{ bytes: bob }, { int: '4000000' }]] },
+    { value: [[P, '01', '1']] },
+    { some: { rec: 'Last', fields: [{ bytes: owner }, { value: [['', '', '6000000'], [P, '01', '1']] }] } },
+  ] });
+  assert.equal(credit([{ value: { value: [['', '', '1']] }, memo: note('a1'.repeat(27), '01') }]).class, 'input:deposits');
+  assert.equal(credit([{ value: { value: [['', '', '1']] }, memo: null }]).class, 'input:deposits');
+  assert.equal(credit([]).class, 'require:21:5:nothing deposited');
+});
+
+test('M2c send datums: Tipper refund sends a record datum, and an enum datum for a bonus', () => {
+  const tipper = fixture('Tipper');
+  const params = { rec: 'Config', fields: [{ instance: ['70'.repeat(28), '71'.repeat(32)] }, { int: '100' }] };
+  const owner = '0a'.repeat(28), alice = 'a1'.repeat(28), policy = '5e'.repeat(28);
+  const state = { rec: 'State', fields: [{ bytes: owner }, { int: '10000000' }, { bytes: '00' }] };
+  const refund = (amount, bonus) => runCall(tipper, { method: 'refund', state, args: [{ bytes: alice }, { int: String(amount) }, bonus],
+    tx: { caller: owner, received: '0', balance: '0', validFrom: '0', validTo: '1',
+      funds: { received: { value: [] }, held: { value: [] }, policy, self: '5f'.repeat(32) } }, params });
+  const to = { address: [{ keyCred: alice }, null] };
+  const ok = refund(3000000, true).ok;
+  assert.deepEqual(ok.sends, [
+    { to, value: { value: [['', '', '3000000']] }, datum: { rec: 'Receipt', fields: [{ bytes: alice }, { int: '3000000' }] } },
+    { to, value: { value: [['', '', '2000000']] }, datum: { rec: 'Bonus', fields: [{ int: '2' }] } },
+  ]);
+  assert.deepEqual(ok.value.fields[1], { int: '7000000' });
+  assert.equal(refund(3000000, false).ok.sends.length, 1);
+  assert.equal(refund(0, false).class, 'require:34:5:refund out of range');
+});
+
+test('M2c IR: the reader refuses an unknown field of an imported contract, a read and a receives modifier', () => {
+  const text = readFileSync(new URL('./fixtures/Tipper.ir.json', import.meta.url), 'utf8');
+  const j = JSON.parse(text);
+  const bad1 = structuredClone(j);
+  bad1.contracts[0].extra = 1;
+  assert.throws(() => load(JSON.stringify(bad1)), /unknown field "extra"/);
+  const bad2 = structuredClone(j);
+  bad2.methods.find((m) => m.reads).reads[0].extra = 1;
+  assert.throws(() => load(JSON.stringify(bad2)), /unknown field "extra"/);
+  const tips = JSON.parse(readFileSync(new URL('./fixtures/Tips.ir.json', import.meta.url), 'utf8'));
+  tips.methods.find((m) => m.name === 'credit').mods[0].field = 'x';
+  assert.throws(() => load(JSON.stringify(tips)), /unknown field "field"/);
+});
+
+test('integration of #80 with M2: the strict modifier shapes cover quorum, authorized and receives, and every effect needs an audience', () => {
+  const edit = (name, f) => () => {
+    const p = JSON.parse(readFileSync(new URL(`./fixtures/${name}.ir.json`, import.meta.url), 'utf8'));
+    f(p, (n) => p.methods.find((m) => m.name === n));
+    return load(JSON.stringify(p));
+  };
+  for (const n of ['Treasury', 'Council', 'Tips', 'Coins', 'Dex', 'Tipper']) assert.doesNotThrow(edit(n, () => {}), n);
+  // quorum: keys and threshold, both state fields or both params fields, of their types; no field beside them.
+  assert.throws(edit('Treasury', (p, m) => { m('pay').mods[0].threshold = 'params.guardian'; }), /both state fields or both params fields/);
+  assert.throws(edit('Treasury', (p, m) => { m('pay').mods[0].keys = 'quorum'; }), /quorum is not \{"list":"Key"\}/);
+  assert.throws(edit('Treasury', (p, m) => { m('pay').mods[0].field = 'council'; }), /unknown field "field"/);
+  assert.throws(edit('Treasury', (p, m) => { delete m('pay').mods[0].threshold; }), /missing field "threshold"/);
+  // authorized: a Credential field; never with keys.
+  assert.throws(edit('Treasury', (p, m) => { m('freeze').mods[0].field = 'council'; }), /council is not "Credential"/);
+  assert.throws(edit('Treasury', (p, m) => { m('freeze').mods[0].keys = 'council'; }), /unknown field "keys"/);
+  // An init takes payable only; a batched action has no quorum, authorized or receives.
+  assert.throws(edit('Treasury', (p, m) => { m('init').mods.push({ name: 'quorum', keys: 'council', threshold: 'quorum' }); }), /an init takes only payable, not quorum/);
+  assert.throws(edit('Treasury', (p, m) => { m('rotate').mods.push({ name: 'batched' }); }), /a batched action cannot use quorum/);
+  assert.throws(edit('Tips', (p, m) => { m('credit').mods.push({ name: 'batched' }); }), /a batched action cannot use receives/);
+  assert.throws(edit('Tips', (p, m) => { m('close').mods.push({ name: 'receives' }); }), /only an action receives/);
+  assert.throws(edit('Tips', (p, m) => { m('credit').mods.push({ name: 'receives' }); }), /the modifier receives is given twice/);
+  // A method that only sends (no pay) still says who may call it (JSC0408); quorum is an audience.
+  assert.throws(edit('Coins', (p, m) => { m('forge').mods = []; }), /so it says who may call it/);
+  assert.throws(edit('Treasury', (p, m) => { m('pay').mods = []; }), /so it says who may call it/);
+});
+
+// ADR-0018 D9 (M4b): a java: library's body has no reference semantics here. A call that reaches one gets no answer (a
+// Limit, §2.4), never a refusal; the program's other code is evaluated as usual. The fixture is Guarded.jsc's export
+// (julc-state-toolchain's JscV2JavaLibraryTest writes it), with CallJava nodes and the library's records.
+test('§3.9 a java: library call has no answer; the rest of the program has one', () => {
+  const guarded = load(readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8'));
+  const ann = fromHex('a1'.repeat(28));
+  const s = new Rec('State', [fromHex('0a'.repeat(28)), [new Rec('Entry', [ann, 5n])], 0n]);
+  assert.throws(() => guarded.call('limit', s, [ann], null), (e) => e instanceof Limit && /no reference semantics/.test(e.message));
+  assert.equal(guarded.call('firstLimit', s, [], null).value, 5n);
+  // A CallJava naming a fn the program did not import is refused at load.
+  const text = readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8');
+  assert.throws(() => load(text.replace('"fn": "limitOf"', '"fn": "nowhere"')), /no fn nowhere imported/);
+});
+
+// The integration of M2 and M4: one IR format 2. Joined.ir.json (JscV2IrTest writes it) carries M2b's params and
+// invariants, M2c's contracts, reads and a receives type, and M4's libraries; it loads, and an unknown field added to any
+// one of its objects is refused, as the Java reader refuses it.
+test('format 2 joined: params, invariants, contracts, reads, receives T and libraries load; an unknown field anywhere is refused', () => {
+  const text = readFileSync(new URL('./fixtures/joined/Joined.ir.json', import.meta.url), 'utf8');
+  const p = JSON.parse(text);
+  for (const k of ['params', 'invariants', 'contracts', 'libraries', 'javaLibraries']) assert.ok(k in p, k);
+  assert.equal(p.libraries[0].library, 'org.julclang.state.examples.dsl.Fees');
+  assert.ok(p.methods.find((m) => m.name === 'look').reads.length === 1);
+  assert.ok(p.methods.find((m) => m.name === 'take').mods.find((x) => x.name === 'receives').type);
+  const joined = load(text);
+  assert.ok(joined);
+  // Every object of the export, each in its own copy with an extra field (types and a local's fieldTaints are maps of
+  // their own kind, not objects with fields).
+  const TYPE_KEYS = new Set(['list', 'option', 'record', 'enum', 'map', 'bigmap', 'instance', 'deposit']);
+  const paths = [];
+  const walk = (o, path) => {
+    if (Array.isArray(o)) o.forEach((x, i) => walk(x, [...path, i]));
+    else if (o && typeof o === 'object') {
+      const keys = Object.keys(o);
+      const isType = keys.length === 1 && TYPE_KEYS.has(keys[0]);
+      if (isType || path.at(-1) === 'fieldTaints') return;
+      paths.push(path);
+      for (const k of keys) walk(o[k], [...path, k]);
+    }
+  };
+  walk(p, []);
+  const dropped = [];
+  for (const path of paths) {
+    const copy = structuredClone(p);
+    let o = copy;
+    for (const k of path) o = o[k];
+    o.futureCheck = false;
+    try {
+      load(JSON.stringify(copy));
+      dropped.push(path.join('.'));
+    } catch (e) {
+      assert.match(e.message, /futureCheck/, path.join('.'));
+    }
+  }
+  assert.deepEqual(dropped, [], 'objects whose unknown field the reader took');
+  assert.ok(paths.length > 100, `objects checked: ${paths.length}`);
+  for (const k of ['params', 'invariants', 'contracts', 'libraries']) assert.ok(paths.some((x) => x[0] === k), `${k} was mutated`);
+  // An absent params is not written: null is refused.
+  for (const k of ['params', 'invariants', 'contracts']) {
+    const q = JSON.parse(text);
+    q[k] = null;
+    assert.throws(() => load(JSON.stringify(q)), /is null/, k);
+  }
+});
+
+// #98 review F2, C5: the strictness sweep over a program with javaLibraries and CallJava (Guarded.ir.json): an unknown
+// field added to any one of its objects is refused, the java: fns' parameter and result types included.
+test('format 2, java: libraries: an unknown field in any object of Guarded\'s export is refused', () => {
+  const text = readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8');
+  const p = JSON.parse(text);
+  assert.ok(p.javaLibraries.length > 0 && text.includes('"CallJava"'));
+  const paths = [];
+  // Every object, type objects included ({ "list": T } with a field more is refused too), but a local's fieldTaints,
+  // a map of its own kind.
+  const walk = (o, path) => {
+    if (Array.isArray(o)) o.forEach((x, i) => walk(x, [...path, i]));
+    else if (o && typeof o === 'object') {
+      if (path.at(-1) === 'fieldTaints') return;
+      paths.push(path);
+      for (const k of Object.keys(o)) walk(o[k], [...path, k]);
+    }
+  };
+  walk(p, []);
+  const taken = [];
+  for (const path of paths) {
+    const copy = structuredClone(p);
+    let o = copy;
+    for (const k of path) o = o[k];
+    o.futureCheck = false;
+    try {
+      load(JSON.stringify(copy));
+      taken.push(path.join('.'));
+    } catch (e) {
+      assert.match(e.message, /futureCheck/, path.join('.'));
+    }
+  }
+  assert.deepEqual(taken, [], 'objects whose unknown field the reader took');
+  // A type object inside a java: fn's signature, too (the review's case: a result { record: Entry } with a field more).
+  for (const f of p.javaLibraries[0].fns) {
+    const copy = structuredClone(p);
+    const g = copy.javaLibraries[0].fns.find((x) => x.name === f.name);
+    const t = typeof g.result === 'object' ? g.result : null;
+    if (!t) continue;
+    t.futureField = true;
+    assert.throws(() => load(JSON.stringify(copy)), /a bad type/, f.name);
+  }
+  assert.ok(paths.length > 100, `objects checked: ${paths.length}`);
+});
+
+// #98 review S5: params.f names the program's params only, never a record of another name space called Config.
+test('a quorum over params.f in a contract without params is refused, even with a record named Config', () => {
+  const p = JSON.parse(readFileSync(new URL('./fixtures/Counter2.ir.json', import.meta.url), 'utf8'));
+  p.records.push({ name: 'Config', fields: [{ name: 'k', type: { list: 'Key' } }, { name: 't', type: 'Int' }], at: [1, 1] });
+  p.methods.find((m) => m.name === 'increment').mods = [{ name: 'quorum', keys: 'params.k', threshold: 'params.t' }];
+  assert.throws(() => load(JSON.stringify(p)), /params.k: the contract has no params/);
+});
+
+// #98 review C6: a present null in a modifier is malformed in both readers, never read as an absent field.
+test('a modifier\'s present null is refused, never normalised away (Joined, Treasury, Tips, Pool)', () => {
+  const fix = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}.ir.json`, import.meta.url), 'utf8'));
+  const refused = (p, re) => assert.throws(() => load(JSON.stringify(p)), re);
+  let p = fix('joined/Joined');
+  p.methods.find((m) => m.name === 'take').mods[0].type = null;
+  refused(p, /a bad type null/);
+  p = fix('Treasury');
+  p.methods.find((m) => m.name === 'pay').mods[0].field = null;
+  refused(p, /unknown field "field"/);
+  p = fix('Tips');
+  p.methods.find((m) => m.name === 'claim').mods[0].field = null;
+  refused(p, /unknown field "field"/);
+  p = fix('Pool');
+  const b = p.methods.find((m) => m.mods.some((x) => x.name === 'batched' && !('field' in x)));
+  b.mods.find((x) => x.name === 'batched').field = null;
+  refused(p, /batched names no field or "only", not null/);
+});
+
+// #98 review C11: a duplicate java: fn cannot hide a malformed signature: listed twice is refused, in both readers.
+test('a java: fn listed twice is refused, whichever copy is malformed', () => {
+  const text = readFileSync(new URL('./fixtures/java/Guarded.ir.json', import.meta.url), 'utf8');
+  for (const bad of [(f) => { f.result = { record: 'Nonexistent', futureField: true }; }, (f) => { f.params = [{ list: 'Int', futureField: true }]; }]) {
+    const p = JSON.parse(text);
+    const fns = p.javaLibraries[0].fns;
+    const copy = structuredClone(fns[0]);
+    bad(copy);
+    fns.unshift(copy);
+    assert.throws(() => load(JSON.stringify(p)), /listed twice|a bad type/);
+  }
 });

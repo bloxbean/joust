@@ -1,0 +1,257 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "9fc97004be8ff3bf9842ff77274402c1ec96abb46ac75ac333f534589fe2149b",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Stall",
+  "source": "Stall.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": { "name": "State", "fields": [{ "name": "owner", "type": "Key" }, { "name": "sales", "type": "Int" }], "at": [9, 1] },
+  "params": {
+    "name": "Config",
+    "fields": [{ "name": "pot", "type": { "instance": "Pot" } }, { "name": "feeBps", "type": "Int" }],
+    "at": [10, 3]
+  },
+  "contracts": [
+    {
+      "name": "Pot",
+      "package": "org.julclang.state.examples.dsl",
+      "state": {
+        "name": "Pot.State",
+        "fields": [
+          { "name": "owner", "type": "Key" },
+          { "name": "collected", "type": "Int" },
+          { "name": "deposits", "type": "Int" }
+        ],
+        "at": [7, 1]
+      },
+      "records": [],
+      "enums": [],
+      "timeFields": [],
+      "receives": [null],
+      "bigMaps": false
+    }
+  ],
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Compare",
+                "op": ">",
+                "left": { "node": "ParamsRef", "field": "feeBps", "type": "Int", "taint": 0, "at": [14, 13] },
+                "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [14, 29] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [14, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": "<",
+                "left": { "node": "ParamsRef", "field": "feeBps", "type": "Int", "taint": 0, "at": [14, 34] },
+                "right": { "node": "Lit", "value": "10000", "type": "Int", "taint": 0, "at": [14, 50] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [14, 34]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [14, 13]
+            },
+            "message": "fee in (0, 100%)",
+            "at": [14, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [15, 21] },
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [15, 36] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [15, 12]
+        },
+        "at": [13, 10]
+      },
+      "at": [13, 3]
+    },
+    {
+      "kind": "action",
+      "name": "sell",
+      "params": [{ "id": 1, "name": "price", "type": "Int", "taint": 0, "at": [19, 15] }],
+      "mods": [{ "name": "payable" }, { "name": "open" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Logic",
+              "op": "&&",
+              "left": {
+                "node": "Equals",
+                "negate": false,
+                "left": { "node": "CtxRef", "name": "received", "type": "Int", "taint": 0, "at": [20, 13] },
+                "right": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [20, 25] },
+                "operand": "Int",
+                "type": "Bool",
+                "taint": 0,
+                "at": [20, 13]
+              },
+              "right": {
+                "node": "Compare",
+                "op": ">=",
+                "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [20, 34] },
+                "right": { "node": "Lit", "value": "2000000", "type": "Int", "taint": 0, "at": [20, 43] },
+                "type": "Bool",
+                "taint": 0,
+                "at": [20, 34]
+              },
+              "type": "Bool",
+              "taint": 0,
+              "at": [20, 13]
+            },
+            "message": "pay exactly the price, at least 2 ADA",
+            "at": [20, 5]
+          },
+          {
+            "stmt": "Let",
+            "local": { "id": 2, "name": "fee", "type": "Int", "taint": 0, "at": [21, 5] },
+            "value": {
+              "node": "Arith",
+              "op": "/",
+              "left": {
+                "node": "Arith",
+                "op": "*",
+                "left": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [21, 17] },
+                "right": { "node": "ParamsRef", "field": "feeBps", "type": "Int", "taint": 0, "at": [21, 25] },
+                "type": "Int",
+                "taint": 0,
+                "at": [21, 17]
+              },
+              "right": { "node": "Lit", "value": "10000", "type": "Int", "taint": 0, "at": [21, 41] },
+              "type": "Int",
+              "taint": 0,
+              "at": [21, 17]
+            },
+            "at": [21, 5]
+          },
+          {
+            "stmt": "Require",
+            "cond": {
+              "node": "Compare",
+              "op": ">=",
+              "left": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [22, 13] },
+              "right": { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [22, 20] },
+              "type": "Bool",
+              "taint": 0,
+              "at": [22, 13]
+            },
+            "message": "the fee rounds to zero",
+            "at": [22, 5]
+          },
+          {
+            "stmt": "Deposit",
+            "target": { "node": "ParamsRef", "field": "pot", "type": { "instance": "Pot" }, "taint": 0, "at": [23, 13] },
+            "value": {
+              "node": "LedgerOp",
+              "op": "lovelace",
+              "args": [{ "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [23, 40] }],
+              "type": "Value",
+              "taint": 0,
+              "at": [23, 25]
+            },
+            "memo": { "node": "CtxRef", "name": "caller", "type": "Key", "taint": 0, "at": [23, 46] },
+            "at": [23, 5]
+          }
+        ],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            {
+              "node": "GetField",
+              "target": { "node": "StateRef", "type": { "record": "State" }, "taint": 0, "at": [24, 17] },
+              "record": "State",
+              "field": "owner",
+              "type": "Key",
+              "taint": 0,
+              "at": [24, 12]
+            },
+            {
+              "node": "Arith",
+              "op": "-",
+              "left": {
+                "node": "Arith",
+                "op": "+",
+                "left": { "node": "StateField", "field": "sales", "type": "Int", "taint": 0, "at": [24, 31] },
+                "right": { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [24, 39] },
+                "type": "Int",
+                "taint": 0,
+                "at": [24, 31]
+              },
+              "right": { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [24, 47] },
+              "type": "Int",
+              "taint": 0,
+              "at": [24, 31]
+            }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [24, 12]
+        },
+        "at": [19, 40]
+      },
+      "at": [19, 3]
+    },
+    {
+      "kind": "destroy",
+      "name": "close",
+      "params": [],
+      "mods": [{ "name": "only", "field": "owner" }],
+      "checked": [],
+      "usesCtx": true,
+      "pays": true,
+      "result": null,
+      "body": {
+        "stmts": [
+          {
+            "stmt": "Pay",
+            "to": { "node": "StateField", "field": "owner", "type": "Key", "taint": 0, "at": [28, 9] },
+            "amount": { "node": "CtxRef", "name": "balance", "type": "Int", "taint": 0, "at": [28, 16] },
+            "at": [28, 5]
+          }
+        ],
+        "result": null,
+        "at": [27, 30]
+      },
+      "at": [27, 3]
+    }
+  ],
+  "warnings": []
+}

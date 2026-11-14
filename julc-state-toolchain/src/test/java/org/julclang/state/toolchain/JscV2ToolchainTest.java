@@ -42,6 +42,231 @@ class JscV2ToolchainTest {
         }
     }
 
+    /**
+     * ADR-0018 D14 (M4c): a .jsc library of an npm package, imported by package specifier, is lowered and compiled with
+     * the project, its class linted as a generated library; the same library inside the project builds the same script.
+     */
+    @Test
+    void anNpmPackagesJscLibrary_buildsAsTheProjectsOwnWould() {
+        String fees = "jsc 2\nlibrary acme.fees\n\nfn fee(amount: Int, bps: Int): Int = amount * bps / 10_000\n";
+        String shop = """
+                jsc 2
+                package app
+
+                import { fee } from "%s"
+
+                contract Shop {
+                  state { owner: Key, price: Int }
+                  init(price: Int) { return { owner: caller, price } }
+                  action buy() payable {
+                    require(received >= price + fee(price, 100), "pay the price and the fee")
+                    return state
+                  }
+                }
+                """;
+        var fromPackage = Toolchain.build(Map.of("app/Shop.jsc", shop.formatted("@acme/fees/fees.jsc")), Map.of(), Map.of(),
+                Map.of("@acme/fees/fees.jsc", fees));
+        assertTrue(fromPackage.ok(), fromPackage.diagnostics().toString());
+        var uses = fromPackage.generated().get(0).libraries();
+        assertEquals("pkg:@acme/fees/fees.jsc", uses.get(0).name());
+        assertTrue(uses.get(0).external());
+        // The same library in the project's sources (its own package directory): the same script, not pinned.
+        var local = Toolchain.build(Map.of("app/Shop.jsc", shop.formatted("../acme/fees.jsc"), "acme/fees.jsc", fees), Map.of());
+        assertTrue(local.ok(), local.diagnostics().toString());
+        assertEquals(local.contracts().get(0).scriptHash(), fromPackage.contracts().get(0).scriptHash());
+        assertFalse(local.generated().stream().filter(g -> g.jscFile().equals("app/Shop.jsc")).findFirst().orElseThrow()
+                .libraries().get(0).external());
+    }
+
+    /**
+     * Review r2 (#82 C7, F2, S2; design P-b, Codex's JavaOnlyProbe): a hand-written Java contract that imports a package's
+     * Java library reports it, with the hash of its source closure, so joust.lock pins it; changing the library's body
+     * changes that hash, however the contract names it (r3 C16).
+     */
+    @Test
+    void aJavaContractsPackageLibrary_isReportedForTheLock_andNothingElseIsOnThePool() throws Exception {
+        String lib = "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n";
+        String counter = Files.readString(Path.of("../js/create-joust/template/contracts/app/Counter.java"));
+        String uses = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport lib.L;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(L.f(), ctx.caller());");
+        assertNotEquals(counter, uses);
+        var one = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib));
+        assertTrue(one.ok(), one.diagnostics().toString());
+        assertEquals(1, one.libraries().size(), one.libraries().toString());
+        var use = one.libraries().get(0);
+        assertEquals("java:lib.L", use.name());
+        assertEquals(org.julclang.state.dsl.v2.JscV2.LibraryUse.JAVA_SOURCE, use.kind());
+        assertTrue(use.external());
+        var two = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib.replace("ONE", "TWO")));
+        assertTrue(two.ok(), two.diagnostics().toString());
+        assertNotEquals(use.sha256(), two.libraries().get(0).sha256(), "a changed body moves the pin");
+        assertNotEquals(one.contracts().get(0).scriptHash(), two.contracts().get(0).scriptHash());
+        // Review r3 (Codex C16): what the contract reaches is read from javac, not from the text: an import on the package's
+        // line and an import with a comment inside it are found and pinned.
+        for (String spelling : List.of(
+                uses.replace("package app;\n", "package app; ").replace("import lib.L;", ""),
+                uses.replace("import lib.L;", "import /* library */ lib.L;"))) {
+            assertNotEquals(counter, spelling);
+            var r = Toolchain.build(Map.of("app/Counter.java", spelling.contains("package app; ") ? spelling.replace("package app; ",
+                    "package app; import lib.L;\n") : spelling), Map.of(), Map.of("lib/L.java", lib));
+            assertTrue(r.ok(), r.diagnostics().toString());
+            assertEquals(List.of(use), r.libraries());
+        }
+        // A qualified name without an import reaches the library too: javac finds it (JuLC then asks for an import).
+        var qualified = Toolchain.build(Map.of("app/Counter.java", counter.replace("return new State(BigInteger.ZERO, ctx.caller());",
+                "return new State(lib.L.f(), ctx.caller());")), Map.of(), Map.of("lib/L.java", lib));
+        assertFalse(qualified.ok());
+        assertTrue(qualified.diagnostics().stream().anyMatch(d -> d.message().contains("JULC0123")), qualified.diagnostics().toString());
+        assertTrue(qualified.diagnostics().stream().noneMatch(d -> d.message().contains("does not exist")), qualified.diagnostics().toString());
+        // A contract that imports nothing of a package reports nothing.
+        var plain = Toolchain.build(Map.of("app/Counter.java", counter), Map.of(), Map.of("lib/L.java", lib));
+        assertTrue(plain.ok(), plain.diagnostics().toString());
+        assertEquals(List.of(), plain.libraries());
+    }
+
+    /**
+     * Review r4 (#82 S9, S10): a package's library never adds a class to the project's own package (a no-op app.Require
+     * would replace the real one for a contract that names Require unqualified); and when an offered source does not
+     * compile, the build names it rather than reporting the library's package missing.
+     */
+    @Test
+    void aLibraryInTheProjectsPackage_isRefused_andABrokenSourceIsNamed() throws Exception {
+        String counter = Files.readString(Path.of("../js/create-joust/template/contracts/app/Counter.java"));
+        String noop = "package app;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n@OnchainLibrary\npublic class Require {\n"
+                + "    public static void that(boolean ok, String message) { }\n}\n";
+        String unimported = counter.replace("import org.julclang.state.api.Require;\n", "");
+        assertNotEquals(counter, unimported);
+        var r = Toolchain.build(Map.of("app/Counter.java", unimported), Map.of(), Map.of("app/Require.java", noop));
+        assertFalse(r.ok(), "a split package");
+        assertTrue(r.diagnostics().stream().anyMatch(d -> d.message().contains("declares app.Require in the package app")), r.diagnostics().toString());
+        // A broken source beside a used library: the build names the broken file.
+        String lib = "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n";
+        String uses = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport lib.L;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(L.f(), ctx.caller());");
+        var broken = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib,
+                "other/Broken.java", "package other;\npublic class Broken { int x = ; }\n"));
+        assertFalse(broken.ok());
+        assertTrue(broken.diagnostics().stream().anyMatch(d -> d.message().contains("cannot be built") && d.message().contains("other/Broken.java:2")),
+                broken.diagnostics().toString());
+    }
+
+    /**
+     * Review r5 (Codex C28): a package's .jsc library is compiled with the project, but its package is not the project's:
+     * Codex's npm library acme.fees (wrapping the Java library acme.fees.L) builds with and without an unrelated project
+     * Java file. And (design, on S10) a broken or duplicate package source no contract reaches no longer fails a build with
+     * Java contracts; one a used library needs is reported with its offered path (security's note).
+     */
+    @Test
+    void packageOwnership_andUnreachedBadSources() throws Exception {
+        String javaLib = "package acme.fees;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f(BigInteger n) { return n; }\n}\n";
+        String fees = "jsc 2\nlibrary acme.fees\nimport { f } from \"java:acme.fees.L\"\nfn fee(n: Int): Int = f(n)\n";
+        String c = "jsc 2\npackage app\nimport { fee } from \"@acme/fees/fees.jsc\"\ncontract C {\n  state { n: Int }\n  init() { return { n: fee(1) } }\n}\n";
+        var plain = Toolchain.build(Map.of("app/C.jsc", c), Map.of(), Map.of("acme/fees/L.java", javaLib), Map.of("@acme/fees/fees.jsc", fees));
+        assertTrue(plain.ok(), plain.diagnostics().toString());
+        var extra = Toolchain.build(Map.of("app/C.jsc", c, "app/Extra.java", "package app; public class Extra {}\n"), Map.of(),
+                Map.of("acme/fees/L.java", javaLib), Map.of("@acme/fees/fees.jsc", fees));
+        assertTrue(extra.ok(), extra.diagnostics().toString());
+        assertEquals(plain.contracts().get(0).scriptHash(), extra.contracts().get(0).scriptHash());
+        // Codex C29 (r6): ownership by exact source identity: a project Fees.java (package app) at the root of the sources is
+        // not the package library's acme/fees/Fees.java.
+        var sameName = Toolchain.build(Map.of("app/C.jsc", c, "Fees.java", "package app;\npublic class Fees {}\n"), Map.of(),
+                Map.of("acme/fees/L.java", javaLib), Map.of("@acme/fees/fees.jsc", fees));
+        assertTrue(sameName.ok(), sameName.diagnostics().toString());
+        assertEquals(plain.contracts().get(0).scriptHash(), sameName.contracts().get(0).scriptHash());
+
+        // A Java contract that uses no package library, beside a broken source and a duplicate of JOUST's Require.
+        String counter = Files.readString(Path.of("../js/create-joust/template/contracts/app/Counter.java"));
+        var unreached = Toolchain.build(Map.of("app/Counter.java", counter), Map.of(), Map.of(
+                "other/Broken.java", "package other;\npublic class Broken { int x = ; }\n",
+                "org/julclang/state/api/Require.java", "package org.julclang.state.api;\npublic final class Require {\n"
+                        + "    public static void that(boolean ok, String message) { }\n}\n"));
+        assertTrue(unreached.ok(), unreached.diagnostics().toString());
+        assertEquals(List.of(), unreached.libraries());
+        // A used library beside the duplicate: the duplicate is in no closure, never compiled, and the build is the control's.
+        String lib = "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n";
+        String uses = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport lib.L;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(L.f(), ctx.caller());");
+        String dupRequire = "package org.julclang.state.api;\npublic final class Require {\n    public static void that(boolean ok, String message) { }\n}\n";
+        var control = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib));
+        var dup = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib, "org/julclang/state/api/Require.java", dupRequire));
+        assertTrue(dup.ok(), dup.diagnostics().toString());
+        assertEquals(control.contracts().get(0).scriptHash(), dup.contracts().get(0).scriptHash());
+        // When the offered set does not compile, the used library is refused, naming the files by their offered paths.
+        var broken = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("lib/L.java", lib,
+                "org/julclang/state/api/Require.java", dupRequire, "other/Broken.java", "package other;\npublic class Broken { int x = ; }\n"));
+        assertFalse(broken.ok());
+        assertTrue(broken.diagnostics().stream().anyMatch(d -> d.message().contains("other/Broken.java:2")
+                && d.message().contains("org/julclang/state/api/Require.java")), broken.diagnostics().toString());
+    }
+
+    /**
+     * Review r6: security S11 (a Java contract's library that adds a class to JOUST's namespace is refused, as JSC0721
+     * refuses it for a java: import), Codex C31 (a reserved source a used closure brings back is named by its joust-lib/
+     * path) and security's observation (a source whose file name is not its class is named by its path too).
+     */
+    @Test
+    void closureRulesHoldForJavaContracts_andOfferedSourcesAreNamedByPath() throws Exception {
+        String counter = Files.readString(Path.of("../js/create-joust/template/contracts/app/Counter.java"));
+        String uses = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport acme.allow.Limits;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(Limits.cap(BigInteger.ONE), ctx.caller());");
+        String head = "import java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n";
+        String limits = "package acme.allow;\n" + head + "import org.julclang.state.api.ZHelper;\n@OnchainLibrary\npublic class Limits {\n"
+                + "    public static BigInteger cap(BigInteger x) { return ZHelper.id(x); }\n}\n";
+        String zhelper = "package org.julclang.state.api;\n" + head + "@OnchainLibrary\npublic class ZHelper {\n"
+                + "    public static BigInteger id(BigInteger x) { return BigInteger.ZERO; }\n}\n";
+        var s11 = Toolchain.build(Map.of("app/Counter.java", uses), Map.of(), Map.of("acme/allow/Limits.java", limits, "acme/allow/ZHelper.java", zhelper));
+        assertFalse(s11.ok());
+        assertTrue(s11.diagnostics().stream().anyMatch(d -> d.message().contains("the Java library acme.allow.Limits, which a Java contract uses,"
+                + " is refused") && d.message().contains("acme/allow/ZHelper.java declares org.julclang.state.api.ZHelper")), s11.diagnostics().toString());
+        // C31: Codex's L calling org.julclang.state.api.Require.that, beside an offered duplicate of Require.
+        String l = "package lib;\n" + head + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() {\n"
+                + "        org.julclang.state.api.Require.that(true, \"hi\");\n        return BigInteger.ONE;\n    }\n}\n";
+        String usesL = counter.replace("import java.math.BigInteger;", "import java.math.BigInteger;\nimport lib.L;")
+                .replace("return new State(BigInteger.ZERO, ctx.caller());", "return new State(L.f(), ctx.caller());");
+        var c31 = Toolchain.build(Map.of("app/Counter.java", usesL), Map.of(), Map.of("lib/L.java", l, "org/julclang/state/api/Require.java",
+                "package org.julclang.state.api;\npublic class Require {\n    public static void that(boolean ok, String message) {}\n}\n"));
+        assertFalse(c31.ok());
+        assertTrue(c31.diagnostics().stream().anyMatch(d -> d.message().contains("org/julclang/state/api/Require.java")), c31.diagnostics().toString());
+        // Security's observation: javac names acme/allow/JulcListX.java by its class (JulcList.java); the build names its path.
+        var offered = Map.of("acme/allow/JulcListX.java", "package org.julclang.core.types;\npublic interface JulcList<T> {}\n");
+        assertTrue(Toolchain.withOfferedPaths("JulcList.java:1: duplicate class", "JulcList.java", offered)
+                .contains("(offered as joust-lib/acme/allow/JulcListX.java)"));
+        // ...and a contract that reaches no library builds beside it (discovery drops it and retries).
+        var unreached = Toolchain.build(Map.of("app/Counter.java", counter), Map.of(), offered);
+        assertTrue(unreached.ok(), unreached.diagnostics().toString());
+    }
+
+    /** Review r2 (#82 S6): --accept-abi accepts the ABI manifest only; only --accept-lock writes joust.lock. */
+    @Test
+    void acceptingTheAbi_neverWritesTheLock(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        Path src = Files.createDirectories(dir.resolve("jsc/app"));
+        Files.writeString(src.resolve("C.jsc"), "jsc 2\npackage app\nimport { f } from \"java:lib.L\"\ncontract C {\n  state { n: Int }\n"
+                + "  init() { return { n: f() } }\n}\n");
+        Path libs = Files.createDirectories(dir.resolve("libs/lib"));
+        Files.writeString(libs.resolve("L.java"), "package lib;\nimport java.math.BigInteger;\nimport org.julclang.stdlib.annotation.OnchainLibrary;\n"
+                + "@OnchainLibrary\npublic class L {\n    public static BigInteger f() { return BigInteger.ONE; }\n}\n");
+        Path lock = dir.resolve("joust.lock");
+        String[] base = {dir.resolve("jsc").toString(), dir.resolve("out").toString(), "--java-libraries", dir.resolve("libs").toString(), "--lock", lock.toString()};
+        var old = System.err;
+        System.setErr(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+        try {
+            String[] acceptAbi = java.util.Arrays.copyOf(base, base.length + 1);
+            acceptAbi[base.length] = "--accept-abi";
+            assertEquals(1, org.julclang.state.dsl.JscMain.run(acceptAbi), "the library is not pinned");
+            assertFalse(Files.exists(lock), "--accept-abi wrote no lock");
+            String[] acceptLock = java.util.Arrays.copyOf(acceptAbi, acceptAbi.length + 1);
+            acceptLock[acceptAbi.length] = "--accept-lock";
+            assertEquals(0, org.julclang.state.dsl.JscMain.run(acceptLock));
+            assertTrue(Files.readString(lock).contains("java:lib.L"));
+        } finally {
+            System.setErr(old);
+        }
+    }
+
     @Test
     void errorsKeepTheirJscLineAndColumn() {
         var r = Toolchain.build(Map.of("t/Bad.jsc", """

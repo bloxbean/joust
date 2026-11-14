@@ -51,6 +51,40 @@ class JscMessagesTest {
         assertNotNull(JscMessages.map(JscMessagesTest.class, "Pay"));
     }
 
+    /**
+     * Issue #74 (Codex C6): the cache is keyed by class, not by class name. Two class loaders that each load a contract
+     * class of the same name, each with its own map beside it, get their own map (the second used to get the first's).
+     */
+    @Test
+    void twoLoadersOfTheSameName_eachGetTheirOwnMap() throws Exception {
+        String cls = "org/julclang/state/runtime/fixture/MapAnchor.class";
+        byte[] bytes;
+        try (var in = JscMessagesTest.class.getClassLoader().getResourceAsStream(cls)) {
+            bytes = in.readAllBytes();
+        }
+        var loaded = new ArrayList<Class<?>>();
+        var loaders = new ArrayList<java.net.URLClassLoader>();
+        try {
+            for (String source : List.of("First.jsc", "Second.jsc")) {
+                Path d = java.nio.file.Files.createTempDirectory("jscmap-loader");
+                java.nio.file.Files.createDirectories(d.resolve(cls).getParent());
+                java.nio.file.Files.write(d.resolve(cls), bytes);
+                java.nio.file.Files.writeString(d.resolve("org/julclang/state/runtime/fixture/Pay.jscmap.json"), "{\"source\": \"" + source
+                        + "\", \"messages\": {\"#pay:spend0.1\": [{\"line\": 3, \"col\": 5, \"kind\": \"pay\", \"in\": \"sweep\"}]}}");
+                var loader = new java.net.URLClassLoader(new java.net.URL[]{d.toUri().toURL()}, null);
+                loaders.add(loader);
+                loaded.add(loader.loadClass("org.julclang.state.runtime.fixture.MapAnchor"));
+            }
+            assertEquals(loaded.get(0).getName(), loaded.get(1).getName());
+            assertNotSame(loaded.get(0), loaded.get(1));
+            assertEquals(List.of("First.jsc:3:5 (a payout in sweep is negative)"), JscMessages.sites(loaded.get(0), "Pay", "#pay:spend0.1"));
+            assertEquals(List.of("Second.jsc:3:5 (a payout in sweep is negative)"), JscMessages.sites(loaded.get(1), "Pay", "#pay:spend0.1"));
+            assertEquals(List.of("First.jsc:3:5 (a payout in sweep is negative)"), JscMessages.sites(loaded.get(0), "Pay", "#pay:spend0.1"));
+        } finally {
+            for (var l : loaders) l.close();
+        }
+    }
+
     @Test
     void theSharedMatchingVectors() throws Exception {
         JsonNode v = new ObjectMapper().readTree(Path.of("../julc-state-dsl/src/test/resources/jsc2-message-matching.json").toFile());

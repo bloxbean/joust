@@ -1,0 +1,102 @@
+{
+  "ir": 2,
+  "language": "jsc 2",
+  "sourceSha256": "f06a7584e2818c0d9711d3065c6a07a1603d575b473ec41665e197080ab2a74b",
+  "package": "org.julclang.state.examples.dsl",
+  "contract": "Ratio",
+  "source": "Ratio.jsc",
+  "options": [],
+  "records": [],
+  "enums": [],
+  "state": { "name": "State", "fields": [{ "name": "total", "type": "Int" }, { "name": "count", "type": "Int" }], "at": [7, 1] },
+  "timeFields": [],
+  "recursiveFns": [],
+  "libraries": [],
+  "javaLibraries": [],
+  "fns": [],
+  "methods": [
+    {
+      "kind": "init",
+      "name": "init",
+      "params": [],
+      "mods": [],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [9, 28] },
+            { "node": "Lit", "value": "1", "type": "Int", "taint": 0, "at": [9, 38] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [9, 19]
+        },
+        "at": [9, 10]
+      },
+      "at": [9, 3]
+    },
+    {
+      "kind": "action",
+      "name": "set",
+      "params": [
+        { "id": 1, "name": "t", "type": "Int", "taint": 0, "at": [10, 14] },
+        { "id": 2, "name": "c", "type": "Int", "taint": 0, "at": [10, 22] }
+      ],
+      "mods": [{ "name": "open" }],
+      "checked": [],
+      "usesCtx": false,
+      "pays": false,
+      "result": { "record": "State" },
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "New",
+          "record": "State",
+          "values": [
+            { "node": "LocalRef", "local": 1, "type": "Int", "taint": 0, "at": [10, 53] },
+            { "node": "LocalRef", "local": 2, "type": "Int", "taint": 0, "at": [10, 63] }
+          ],
+          "type": { "record": "State" },
+          "taint": 0,
+          "at": [10, 44]
+        },
+        "at": [10, 35]
+      },
+      "at": [10, 3]
+    }
+  ],
+  "invariants": [
+    {
+      "name": "ratio",
+      "body": {
+        "stmts": [],
+        "result": {
+          "node": "Compare",
+          "op": ">=",
+          "left": {
+            "node": "Arith",
+            "op": "/",
+            "left": { "node": "StateField", "field": "total", "type": "Int", "taint": 0, "at": [11, 21] },
+            "right": { "node": "StateField", "field": "count", "type": "Int", "taint": 0, "at": [11, 29] },
+            "type": "Int",
+            "taint": 0,
+            "at": [11, 21]
+          },
+          "right": { "node": "Lit", "value": "0", "type": "Int", "taint": 0, "at": [11, 38] },
+          "type": "Bool",
+          "taint": 0,
+          "at": [11, 21]
+        },
+        "at": [11, 21]
+      },
+      "at": [11, 3]
+    }
+  ],
+  "warnings": []
+}

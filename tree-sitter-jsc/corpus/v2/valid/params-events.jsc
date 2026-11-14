@@ -1,0 +1,20 @@
+jsc 2
+package t
+contract C {
+  params { guardian: Credential, cap: Int }
+  state { council: List<Key>, quorum: Int, on: Bool }
+  event Paid { to: Key, amount: Int }
+  event Reset
+  action pay(to: Key, amount: Int) quorum council quorum {
+    require(amount <= params.cap, "too much")
+    pay(to, amount)
+    emit(Paid { to, amount })
+    return state
+  }
+  action stop() authorized params.guardian {
+    emit(Reset)
+    return { ...state, on: false }
+  }
+  invariant reachable = quorum > 0 && quorum <= council.length
+  invariant positive { quorum > 0 }
+}

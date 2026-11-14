@@ -140,6 +140,20 @@ class JscV2M1cFourWayTest {
         f.mutants("withdraw", vault(PAST, ada(10)), List.of(ada(3)), at(OWNER, 0, 10_000_000), OWNER);
         f.mutants("close", vault(PAST, ada(10)), List.of(), at(OWNER, 0, 10_000_000 + minAda), OWNER);
         javaDiffers(f);
+        // Review S6 on #76: the caller is among the signers (semantics §2). A stranger calls and the owner co-signs:
+        // the interpreters see both keys, as the validator's transaction carries them, and all five legs accept 'only
+        // owner' (before, the interpreters saw the owner alone and accepted, while the validator refused the unsigned
+        // caller). A transaction whose caller did not sign is no answer in either interpreter.
+        ok(f.check("withdraw", vault(PAST, ada(10)), List.of(ada(3)), at(STRANGER, 0, 10_000_000), OWNER));
+        assertEquals(List.of(Bytes.of(OWNER), Bytes.of(STRANGER)), interpreterTx(at(STRANGER, 0, 10_000_000), OWNER).signers());
+        Tx unsigned = at(STRANGER, 0, 10_000_000).signedBy(List.of(Bytes.of(OWNER)));
+        for (boolean modifiers : List.of(true, false)) {
+            var e = assertThrows(IllegalArgumentException.class, () -> {
+                if (modifiers) f.interp.call("withdraw", vault(PAST, ada(10)), List.of(ada(3)), unsigned);
+                else f.interp.transition("withdraw", vault(PAST, ada(10)), List.of(ada(3)), unsigned);
+            });
+            assertTrue(e.getMessage().contains("caller is not among its signers"), e.getMessage());
+        }
         report(f);
     }
 

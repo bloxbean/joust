@@ -1,0 +1,45 @@
+jsc 2
+package org.julclang.state.examples.dsl
+
+import { withoutLovelace } from "std/value"
+import contract { Tips } from "./Tips.jsc"
+
+// What the ports leave out of M2c (ADR-0018 M2c): a tipper that reads the jar it deposits into (a foreign state with a
+// map, checked deeply), deposits lovelace and native assets with a typed memo (encoded as the jar's Note), and sends with
+// datums (a record, an enum).
+type Note = { to: Key, tag: Bytes }
+type Receipt = { to: Key, amount: Int }
+enum Kind { Plain, Bonus { factor: Int } }
+
+contract Tipper(assetSlots = 2) {
+  params { jar: Instance<Tips>, cap: Int }
+  state { owner: Key, tipped: Int, lastTag: Bytes }
+
+  init() {
+    return { owner: caller, tipped: 0, lastTag: #00 }
+  }
+
+  // Tips to through the jar: the lovelace the caller pays, and any native assets it offers, deposited with a Note.
+  action tip(to: Key, tag: Bytes, amount: Int, jar: reads params.jar) payable open {
+    require(amount > 0 && amount <= params.cap, "tip out of range")
+    require(received == amount, "pay exactly the tip")
+    require(jar.credits.size < 20, "the jar is full")
+    accept(withoutLovelace(funds.received))
+    deposit(params.jar, Value.lovelace(amount) + withoutLovelace(funds.received), Note { to, tag })
+    return { ...state, tipped: tipped + amount, lastTag: tag }
+  }
+
+  // The owner pays back a tipper, with a receipt datum; a bonus carries an enum datum.
+  action refund(to: Key, amount: Int, bonus: Bool) only owner {
+    require(amount > 0 && amount <= tipped, "refund out of range")
+    send(wallet(to), Value.lovelace(amount), Receipt { to, amount })
+    if bonus {
+      send(wallet(to), Value.lovelace(2_000_000), Bonus { factor: 2 })
+    }
+    return { ...state, tipped: tipped - amount }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+}

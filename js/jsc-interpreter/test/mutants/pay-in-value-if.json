@@ -1,0 +1,1042 @@
+{
+ "ir": 2,
+ "language": "jsc 2",
+ "sourceSha256": "9f0da3f2fa2f1c1b23c55cc56ab3bb51d0b1bb260ef458425f7c41e27b1459e0",
+ "package": "org.julclang.state.examples.dsl",
+ "contract": "Pool",
+ "source": "Pool.jsc",
+ "options": [
+  {
+   "name": "maxDatumBytes",
+   "value": "192"
+  }
+ ],
+ "records": [],
+ "enums": [],
+ "state": {
+  "name": "State",
+  "fields": [
+   {
+    "name": "admin",
+    "type": "Key"
+   },
+   {
+    "name": "donated",
+    "type": "Int"
+   },
+   {
+    "name": "sold",
+    "type": "Int"
+   },
+   {
+    "name": "price",
+    "type": "Int"
+   },
+   {
+    "name": "step",
+    "type": "Int"
+   }
+  ],
+  "at": [
+   8,
+   1
+  ]
+ },
+ "timeFields": [],
+ "recursiveFns": [],
+ "libraries": [],
+ "javaLibraries": [],
+ "fns": [],
+ "methods": [
+  {
+   "kind": "init",
+   "name": "init",
+   "params": [
+    {
+     "id": 1,
+     "name": "price",
+     "type": "Int",
+     "taint": 0,
+     "at": [
+      11,
+      8
+     ]
+    },
+    {
+     "id": 2,
+     "name": "step",
+     "type": "Int",
+     "taint": 0,
+     "at": [
+      11,
+      20
+     ]
+    }
+   ],
+   "mods": [],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Require",
+      "cond": {
+       "node": "Logic",
+       "op": "&&",
+       "left": {
+        "node": "Compare",
+        "op": ">",
+        "left": {
+         "node": "LocalRef",
+         "local": 1,
+         "type": "Int",
+         "taint": 0,
+         "at": [
+          12,
+          13
+         ]
+        },
+        "right": {
+         "node": "Lit",
+         "value": "0",
+         "type": "Int",
+         "taint": 0,
+         "at": [
+          12,
+          21
+         ]
+        },
+        "type": "Bool",
+        "taint": 0,
+        "at": [
+         12,
+         13
+        ]
+       },
+       "right": {
+        "node": "Compare",
+        "op": ">=",
+        "left": {
+         "node": "LocalRef",
+         "local": 2,
+         "type": "Int",
+         "taint": 0,
+         "at": [
+          12,
+          26
+         ]
+        },
+        "right": {
+         "node": "Lit",
+         "value": "0",
+         "type": "Int",
+         "taint": 0,
+         "at": [
+          12,
+          34
+         ]
+        },
+        "type": "Bool",
+        "taint": 0,
+        "at": [
+         12,
+         26
+        ]
+       },
+       "type": "Bool",
+       "taint": 0,
+       "at": [
+        12,
+        13
+       ]
+      },
+      "message": "bad pricing",
+      "at": [
+       12,
+       5
+      ]
+     }
+    ],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "CtxRef",
+       "name": "caller",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        13,
+        21
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "0",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        13,
+        38
+       ]
+      },
+      {
+       "node": "Lit",
+       "value": "0",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        13,
+        47
+       ]
+      },
+      {
+       "node": "LocalRef",
+       "local": 1,
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        13,
+        50
+       ]
+      },
+      {
+       "node": "LocalRef",
+       "local": 2,
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        13,
+        57
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      13,
+      12
+     ]
+    },
+    "at": [
+     11,
+     31
+    ]
+   },
+   "at": [
+    11,
+    3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "donate",
+   "params": [],
+   "mods": [
+    {
+     "name": "payable"
+    },
+    {
+     "name": "batched"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Require",
+      "cond": {
+       "node": "Compare",
+       "op": ">=",
+       "left": {
+        "node": "CtxRef",
+        "name": "received",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         17,
+         13
+        ]
+       },
+       "right": {
+        "node": "Lit",
+        "value": "1000000",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         17,
+         25
+        ]
+       },
+       "type": "Bool",
+       "taint": 0,
+       "at": [
+        17,
+        13
+       ]
+      },
+      "message": "donate at least 1 ADA",
+      "at": [
+       17,
+       5
+      ]
+     }
+    ],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         18,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "admin",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        18,
+        12
+       ]
+      },
+      {
+       "node": "Arith",
+       "op": "+",
+       "left": {
+        "node": "StateField",
+        "field": "donated",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         18,
+         33
+        ]
+       },
+       "right": {
+        "node": "CtxRef",
+        "name": "received",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         18,
+         43
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        18,
+        33
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         18,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "sold",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        18,
+        12
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         18,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "price",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        18,
+        12
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         18,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "step",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        18,
+        12
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      18,
+      12
+     ]
+    },
+    "at": [
+     16,
+     35
+    ]
+   },
+   "at": [
+    16,
+    3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "buy",
+   "params": [
+    {
+     "id": 3,
+     "name": "maxPrice",
+     "type": "Int",
+     "taint": 0,
+     "at": [
+      23,
+      14
+     ]
+    }
+   ],
+   "mods": [
+    {
+     "name": "payable"
+    },
+    {
+     "name": "batched",
+     "field": "only"
+    },
+    {
+     "name": "open"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": true,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Require",
+      "cond": {
+       "node": "Compare",
+       "op": "<=",
+       "left": {
+        "node": "StateField",
+        "field": "price",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         24,
+         13
+        ]
+       },
+       "right": {
+        "node": "LocalRef",
+        "local": 3,
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         24,
+         22
+        ]
+       },
+       "type": "Bool",
+       "taint": 0,
+       "at": [
+        24,
+        13
+       ]
+      },
+      "message": "price above the buyer's bound",
+      "at": [
+       24,
+       5
+      ]
+     },
+     {
+      "stmt": "Require",
+      "cond": {
+       "node": "Compare",
+       "op": ">=",
+       "left": {
+        "node": "CtxRef",
+        "name": "received",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         25,
+         13
+        ]
+       },
+       "right": {
+        "node": "StateField",
+        "field": "price",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         25,
+         25
+        ]
+       },
+       "type": "Bool",
+       "taint": 0,
+       "at": [
+        25,
+        13
+       ]
+      },
+      "message": "pays less than the price",
+      "at": [
+       25,
+       5
+      ]
+     },
+     {
+      "stmt": "Pay",
+      "to": {
+       "node": "CtxRef",
+       "name": "caller",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        26,
+        9
+       ]
+      },
+      "amount": {
+       "node": "Arith",
+       "op": "-",
+       "left": {
+        "node": "CtxRef",
+        "name": "received",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         26,
+         17
+        ]
+       },
+       "right": {
+        "node": "StateField",
+        "field": "price",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         26,
+         28
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        26,
+        17
+       ]
+      },
+      "at": [
+       26,
+       5
+      ]
+     }
+    ],
+    "result": {
+     "node": "New",
+     "record": "State",
+     "values": [
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         27,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "admin",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        27,
+        12
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         27,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "donated",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        27,
+        12
+       ]
+      },
+      {
+       "node": "Arith",
+       "op": "+",
+       "left": {
+        "node": "StateField",
+        "field": "sold",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         27,
+         30
+        ]
+       },
+       "right": {
+        "node": "Lit",
+        "value": "1",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         27,
+         37
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        27,
+        30
+       ]
+      },
+      {
+       "node": "Arith",
+       "op": "+",
+       "left": {
+        "node": "StateField",
+        "field": "price",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         27,
+         47
+        ]
+       },
+       "right": {
+        "node": "StateField",
+        "field": "step",
+        "type": "Int",
+        "taint": 0,
+        "at": [
+         27,
+         55
+        ]
+       },
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        27,
+        47
+       ]
+      },
+      {
+       "node": "GetField",
+       "target": {
+        "node": "StateRef",
+        "type": {
+         "record": "State"
+        },
+        "taint": 0,
+        "at": [
+         27,
+         17
+        ]
+       },
+       "record": "State",
+       "field": "step",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        27,
+        12
+       ]
+      }
+     ],
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      27,
+      12
+     ]
+    },
+    "at": [
+     23,
+     55
+    ]
+   },
+   "at": [
+    23,
+    3
+   ]
+  },
+  {
+   "kind": "action",
+   "name": "withdraw",
+   "params": [
+    {
+     "id": 4,
+     "name": "amount",
+     "type": "Int",
+     "taint": 0,
+     "at": [
+      30,
+      19
+     ]
+    }
+   ],
+   "mods": [],
+   "checked": [],
+   "usesCtx": true,
+   "pays": false,
+   "result": {
+    "record": "State"
+   },
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Require",
+      "cond": {
+       "node": "Logic",
+       "op": "&&",
+       "left": {
+        "node": "Compare",
+        "op": ">",
+        "left": {
+         "node": "LocalRef",
+         "local": 4,
+         "type": "Int",
+         "taint": 0,
+         "at": [
+          31,
+          13
+         ]
+        },
+        "right": {
+         "node": "Lit",
+         "value": "0",
+         "type": "Int",
+         "taint": 0,
+         "at": [
+          31,
+          22
+         ]
+        },
+        "type": "Bool",
+        "taint": 0,
+        "at": [
+         31,
+         13
+        ]
+       },
+       "right": {
+        "node": "Compare",
+        "op": "<=",
+        "left": {
+         "node": "LocalRef",
+         "local": 4,
+         "type": "Int",
+         "taint": 0,
+         "at": [
+          31,
+          27
+         ]
+        },
+        "right": {
+         "node": "CtxRef",
+         "name": "balance",
+         "type": "Int",
+         "taint": 0,
+         "at": [
+          31,
+          37
+         ]
+        },
+        "type": "Bool",
+        "taint": 0,
+        "at": [
+         31,
+         27
+        ]
+       },
+       "type": "Bool",
+       "taint": 0,
+       "at": [
+        31,
+        13
+       ]
+      },
+      "message": "bad amount",
+      "at": [
+       31,
+       5
+      ]
+     }
+    ],
+    "result": {
+     "node": "IfValue",
+     "branches": [
+      {
+       "cond": {
+        "node": "Lit",
+        "value": true,
+        "type": "Bool",
+        "taint": 0,
+        "at": [
+         1,
+         1
+        ]
+       },
+       "then": {
+        "stmts": [
+         {
+          "stmt": "Pay",
+          "to": {
+           "node": "StateField",
+           "field": "admin",
+           "type": "Key",
+           "taint": 0,
+           "at": [
+            32,
+            9
+           ]
+          },
+          "amount": {
+           "node": "LocalRef",
+           "local": 4,
+           "type": "Int",
+           "taint": 0,
+           "at": [
+            32,
+            16
+           ]
+          },
+          "at": [
+           32,
+           5
+          ]
+         }
+        ],
+        "result": {
+         "node": "StateRef",
+         "type": {
+          "record": "State"
+         },
+         "taint": 0,
+         "at": [
+          33,
+          12
+         ]
+        },
+        "at": [
+         1,
+         1
+        ]
+       },
+       "at": [
+        1,
+        1
+       ]
+      }
+     ],
+     "otherwise": {
+      "stmts": [],
+      "result": {
+       "node": "StateRef",
+       "type": {
+        "record": "State"
+       },
+       "taint": 0,
+       "at": [
+        33,
+        12
+       ]
+      },
+      "at": [
+       1,
+       1
+      ]
+     },
+     "type": {
+      "record": "State"
+     },
+     "taint": 0,
+     "at": [
+      1,
+      1
+     ]
+    },
+    "at": [
+     30,
+     43
+    ]
+   },
+   "at": [
+    30,
+    3
+   ]
+  },
+  {
+   "kind": "destroy",
+   "name": "close",
+   "params": [],
+   "mods": [
+    {
+     "name": "only",
+     "field": "admin"
+    }
+   ],
+   "checked": [],
+   "usesCtx": true,
+   "pays": true,
+   "result": null,
+   "body": {
+    "stmts": [
+     {
+      "stmt": "Pay",
+      "to": {
+       "node": "StateField",
+       "field": "admin",
+       "type": "Key",
+       "taint": 0,
+       "at": [
+        37,
+        9
+       ]
+      },
+      "amount": {
+       "node": "CtxRef",
+       "name": "balance",
+       "type": "Int",
+       "taint": 0,
+       "at": [
+        37,
+        16
+       ]
+      },
+      "at": [
+       37,
+       5
+      ]
+     }
+    ],
+    "result": null,
+    "at": [
+     36,
+     30
+    ]
+   },
+   "at": [
+    36,
+    3
+   ]
+  },
+  {
+   "kind": "view",
+   "name": "nextPrice",
+   "params": [],
+   "mods": [],
+   "checked": [],
+   "usesCtx": false,
+   "pays": false,
+   "result": "Int",
+   "body": {
+    "stmts": [],
+    "result": {
+     "node": "StateField",
+     "field": "price",
+     "type": "Int",
+     "taint": 0,
+     "at": [
+      40,
+      27
+     ]
+    },
+    "at": [
+     40,
+     27
+    ]
+   },
+   "at": [
+    40,
+    3
+   ]
+  }
+ ],
+ "warnings": []
+}

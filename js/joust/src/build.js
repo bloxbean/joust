@@ -12,22 +12,33 @@
 // differs, or is missing, fails unless accepted (--accept-abi: src/abi.js), so an encoding change cannot strand
 // deployed instances.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, lstatSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { generate } from '@julclang/state-client/codegen';
-import { buildInWorker, ENGINE_STACK_MB } from './toolchain.js';
+import { buildInWorker, engineLimits } from './toolchain.js';
 import { abiGate } from './abi.js';
+import { libraryPackages, lockGate } from './libraries.js';
 import { deploymentsShape, scriptDigest } from './deploy.js';
 
 export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
-function sources(dir, keep = () => true) {
+/**
+ * The project's contract sources under `dir`: every .java and .jsc file, by path relative to it. Issue #92 (S12, review
+ * of #82): a package's code is never project code, so the walk skips node_modules and dot-directories (.git, .joust, an
+ * editor's) at any depth, and follows no link (a link to a file or a directory is skipped, as libraries.js skips them
+ * under joust-lib/): with `contracts: "."`, or a package installed under contracts/, a package's sources would otherwise
+ * escape the split-package rule and joust.lock, and could replace the project's own Require.
+ */
+export function sources(dir, keep = () => true) {
   const out = {};
   const walk = (d) => {
     for (const n of readdirSync(d)) {
       const p = join(d, n);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith('.java') || p.endsWith('.jsc')) {
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        if (n === 'node_modules' || n.startsWith('.')) continue;
+        walk(p);
+      } else if (st.isFile() && (p.endsWith('.java') || p.endsWith('.jsc'))) {
         const text = readFileSync(p, 'utf8');
         if (keep(relative(dir, p), text)) out[relative(dir, p)] = text;
       }
@@ -37,30 +48,51 @@ function sources(dir, keep = () => true) {
   return out;
 }
 
+/**
+ * One diagnostic as both build paths print it (ADR-0021 D9; the catalogue's shape, as Gradle's JscMain prints it):
+ * `app/Counter.jsc:12:5: error[JSC0502]: message`, the file relative to the contracts directory; `error: message` when
+ * there is no file. The `$joust` problem matcher of the VS Code extension reads this shape.
+ */
+export function diagnosticLine(d) {
+  const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
+  // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
+  return `${where}${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${d.message}`;
+}
+
 /** Builds {@code root}'s contracts; returns { ok, contracts, diagnostics }. */
 export async function build({ root = process.cwd(), src = 'contracts', out = 'build/joust', options = {}, log = console.log, keep,
-  acceptAbi = false } = {}) {
+  acceptAbi = false, acceptLock = false, traces = false } = {}) {
   const files = sources(resolve(root, src), keep);
   if (!Object.keys(files).length) throw new Error(`no .java or .jsc contracts under ${resolve(root, src)}`);
+  // ADR-0018 D14 (M4c): the libraries the project's npm packages ship under joust-lib/ (.jsc, and Java on-chain sources).
+  let packages;
+  let javaLibraries;
+  try {
+    ({ packages, javaLibraries } = libraryPackages(root));
+  } catch (e) {
+    return { ok: false, contracts: [], diagnostics: [{ severity: 'error', message: e.message }] };
+  }
+  // ADR-0018 D12: joust build --traces keeps the contracts' traces in the scripts (Gradle: -Pjoust.traces).
+  if (traces) options = { ...options, 'joust.traces': 'true' };
   const t = Date.now();
+  // The worker's limits (issue #74): an invalid JOUST_ENGINE_* setting is the user's error, said before anything runs.
+  const limits = engineLimits();
   let r;
   try {
-    // On a worker with a set stack (ENGINE_STACK_MB), so a cold engine builds what the JVM builds (ADR-0018 J18, r12).
-    r = await buildInWorker({ files, options });
+    // On a worker with a set stack (ENGINE_STACK_MB), so a cold engine builds what the JVM builds (ADR-0018 J18, r12),
+    // a heap limit and a time limit; with the npm packages' libraries (M4c).
+    r = await buildInWorker({ files, options, limits, packages, javaLibraries });
   } catch (e) {
     // The engine's stack ran out past the front end (whose nesting cap keeps it within the stack, ADR-0018 J18): in
     // JuLC's passes, on a contract far larger than a script can be. Web Image surfaces that as a TypeError; the build
     // reports it and fails.
     r = { ok: false, contracts: [], diagnostics: [{ severity: 'error', source: 'toolchain', message: 'internal error: the'
       + ` toolchain engine failed (${e?.message ?? e}); a contract this large may exhaust the engine's stack`
-      + ` (JOUST_ENGINE_STACK_MB=${ENGINE_STACK_MB}): build it on Gradle, or split it (please report it, with the file)` }],
+      + ` (JOUST_ENGINE_STACK_MB=${limits.stackMb}, JOUST_ENGINE_MEMORY_MB=${limits.memoryMb}, JOUST_ENGINE_TIMEOUT_S=${limits.timeoutS}):`
+      + ' build it on Gradle, or split it (please report it, with the file)' }],
       generated: [] };
   }
-  for (const d of r.diagnostics) {
-    const where = d.file ? `${d.file}${d.line > 0 ? ':' + d.line : ''}${d.line > 0 && d.col > 0 ? ':' + d.col : ''}: ` : '';
-    // A .jsc 2 diagnostic has a stable code (ADR-0018 D12): error[JSC0502].
-    (d.severity === 'error' ? console.error : log)(`${d.severity}${d.code ? '[' + d.code + ']' : ''}: ${where}${d.message}`);
-  }
+  for (const d of r.diagnostics) (d.severity === 'error' ? console.error : log)(diagnosticLine(d));
   const dir = resolve(root, out);
   // ADR-0018 D12: the ABI gate first. Accepting is for a build that succeeded only.
   const refused = new Set();
@@ -80,6 +112,10 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
   }
   if (!r.ok) return { ok: false, contracts: [], diagnostics: r.diagnostics, ...(abiErrors.length ? { abiErrors } : {}) };
   if (abiErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, abiErrors };
+  // ADR-0018 J12: the build names every library it used with its hash; joust.lock pins those from outside the sources.
+  const lockErrors = lockGate({ generated: r.generated ?? [], libraries: r.libraries ?? [], root, acceptLock, log });
+  for (const e of lockErrors) console.error(e);
+  if (lockErrors.length) return { ok: false, contracts: [], diagnostics: r.diagnostics, lockErrors };
   mkdirSync(dir, { recursive: true });
   const bundle = [];
   // ADR-0018 D12 (r12): each .jsc 2 contract's message map (the source map's `messages`): what every message its script
@@ -90,6 +126,9 @@ export async function build({ root = process.cwd(), src = 'contracts', out = 'bu
     const m = JSON.parse(g.sourceMap);
     if (m.messages) messagesOf[g.javaFile] = { source: g.jscFile, messages: m.messages };
   }
+  // The client generator is loaded when there is a client to write, so the command line's checks before a build (no
+  // contracts, a refused project) need no package (CI runs cli.test.js with Node built-ins only).
+  const { generate } = r.contracts.length ? await import('@julclang/state-client/codegen') : {};
   for (const c of r.contracts) {
     const description = JSON.parse(c.descriptionJson);
     writeFileSync(join(dir, c.name + '.json'), JSON.stringify(description, null, 2) + '\n');

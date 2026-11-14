@@ -129,6 +129,7 @@ public final class TransitionsGenerator {
         if (c.assetAware()) {
             w.line("import org.julclang.ledger.Value;");
             w.line("import org.julclang.state.api.Assets;");
+            w.line("import org.julclang.state.api.ValueAdapter;");
             w.line("import org.julclang.state.api.Send;");
             w.line("import org.julclang.state.api.Sends;");
             w.line("import org.julclang.state.api.Deposit;");
@@ -174,7 +175,7 @@ public final class TransitionsGenerator {
             } else if (readNames.contains(name)) {
                 call.add("args." + name + "()");
             } else if (named(p.asType(), API + "Funds")) {
-                call.add("args.joustFunds()");
+                call.add("ValueAdapter.fundsFromWire(args.joustFunds())");   // as the validator: canonical values (review C1)
             } else if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Into"))) {
                 call.add("args.joustInto()");
             } else if (name.equals(t.arriving())) {
@@ -280,7 +281,7 @@ public final class TransitionsGenerator {
                 call.add("args.joustParams()");
                 paramsTaken = true;
             } else if (named(p.asType(), API + "Funds")) {
-                call.add("args.joustFunds()");
+                call.add("ValueAdapter.fundsFromWire(args.joustFunds())");   // as the validator: canonical values (review C1)
             } else if (p.getAnnotationMirrors().stream().anyMatch(a -> named(a.getAnnotationType(), API + "Shared"))) {
                 sharedType = render(p.asType());
                 call.add("shared");

@@ -233,10 +233,13 @@ class JscV2ToolingTest {
     void theGradlePathsCheck_agreesWithGradlesDescriptions_andCatchesADifference(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
         Path described = Path.of("../examples/dsl/build/classes/java/main/META-INF/joust");
         Path src = Path.of("../examples/dsl/src/main/jsc");
-        assertEquals(0, org.julclang.state.dsl.JscMain.run(new String[]{"--check-abi", src.toString(), described.toString()}));
+        // examples/dsl imports a Java library (M4b): its sources are on the library path, as Gradle's checkJscAbi passes them.
+        String java = ExampleLibraries.COMPLIANCE.toString();
+        assertEquals(0, org.julclang.state.dsl.JscMain.run(new String[]{"--check-abi", src.toString(), described.toString(), "--java-libraries", java}));
         // A description whose Close redeemer lost its ctx: the check fails (JSC0004).
         try (var s = Files.list(described)) {
-            for (Path f : s.toList()) Files.writeString(dir.resolve(f.getFileName()), Files.readString(f));
+            // The descriptions only (META-INF/joust also holds the java-libraries/ records, review r2).
+            for (Path f : s.filter(Files::isRegularFile).toList()) Files.writeString(dir.resolve(f.getFileName()), Files.readString(f));
         }
         Path ledger = dir.resolve("org.julclang.state.examples.dsl.Ledger.json");
         Object d = AbiCheck.Json.parse(Files.readString(ledger));
@@ -246,7 +249,7 @@ class JscV2ToolingTest {
         var old = System.err;
         System.setErr(new java.io.PrintStream(err, true));
         try {
-            assertEquals(1, org.julclang.state.dsl.JscMain.run(new String[]{"--check-abi", src.toString(), dir.toString()}));
+            assertEquals(1, org.julclang.state.dsl.JscMain.run(new String[]{"--check-abi", src.toString(), dir.toString(), "--java-libraries", java}));
         } finally {
             System.setErr(old);
         }

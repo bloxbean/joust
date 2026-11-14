@@ -23,7 +23,16 @@ public final class JscMessages {
     private JscMessages() {}
 
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Map<String, JsonNode> MAPS = new ConcurrentHashMap<>();
+    /**
+     * The maps read so far, by contract class and then by name (issue #74, Codex C6): two class loaders that each load a
+     * contract of the same name have two classes, so each gets its own map; a ClassValue does not pin the loader.
+     */
+    private static final ClassValue<Map<String, JsonNode>> MAPS = new ClassValue<>() {
+        @Override
+        protected Map<String, JsonNode> computeValue(Class<?> type) {
+            return new ConcurrentHashMap<>();
+        }
+    };
     private static final JsonNode NONE = JSON.createObjectNode();
 
     /**
@@ -36,7 +45,7 @@ public final class JscMessages {
     static JsonNode map(Class<?> anchor, String name) {
         // A described contract (the engine's, ADR-0015) has no class: its map is the JS runtime's to read.
         if (anchor == null || name == null) return null;
-        JsonNode m = MAPS.computeIfAbsent(anchor.getName() + "/" + name, k -> {
+        JsonNode m = MAPS.get(anchor).computeIfAbsent(name, k -> {
             String pkg = anchor.getPackageName();
             String entry = (pkg.isEmpty() ? "" : pkg.replace('.', '/') + "/") + name + ".jscmap.json";
             try {
@@ -83,7 +92,9 @@ public final class JscMessages {
         if (best == null) return new ArrayList<>(out);
         String source = map.path("source").asText();
         for (JsonNode s : map.get("messages").get(best)) {
-            out.add(source + ":" + s.path("line").asInt() + ":" + s.path("col").asInt() + " (" + describe(s) + ")");
+            // A site in an imported .jsc library names its file (ADR-0018 D9, M4).
+            out.add((s.hasNonNull("file") ? s.path("file").asText() : source) + ":" + s.path("line").asInt() + ":" + s.path("col").asInt()
+                    + " (" + describe(s) + ")");
         }
         return new ArrayList<>(out);
     }

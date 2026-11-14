@@ -1,14 +1,16 @@
 # ADR-0018: `.jsc` 2 — an immutable contract language for JavaScript developers, on the JuLC libraries
 
-**Status:** Proposed (r14)
+**Status:** Proposed (r22)
 **Date:** 2026-11-12
 **Builds on:** ADR-0005 (`.jsc` v1: lowering to a Java `@StateContract`, D1), ADR-0015 (the npm toolchain on Web
 Image; transition programs, D3; `.jsc` the default for JS developers, D7), ADR-0017 (`joust new`, the Gradle plugin's
 `generateJsc`), and the contract model of ADR-0001 to ADR-0016, which `.jsc` 2 only spells differently. JuLC's scoped
 javac attribution and ADR-050 (library source type descriptions) for library imports.
 **Related, in review:** ADR-0020 (#60, draft): whether the JVM path should also run UPLC transition programs.
-**Design, with its implementation so far:** this ADR was written design-only; M0 and M1 (M1a–M1e, integrated in #76)
-implement it, and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
+**Design, with its implementation so far:** this ADR was written design-only; M0, M1 (M1a–M1e, integrated in #76),
+M2a, M2b and M2c, and M4a (`.jsc` libraries, r16), M4b (`java:` imports, r19) and M4c (packages, `joust.lock`, offline
+tests, r20) implement it, joined with the M1 hardening (r17) and ADR-0021's M5a language server in the `.jsc` 2
+integration (r22), and their reports (`docs/research/jsc-2-m*-report.md`) record what was built. Snippets are illustrative.
 **Risk:** high. Nothing new is trusted on-chain (D1 keeps ADR-0005 D1: `.jsc` lowers to a Java `@StateContract` that
 the processor checks like hand-written code). But a wrong lowering produces a contract the validator then enforces
 faithfully: a miscompile is the author's security bug (ADR-0005 §3). `.jsc` 2 adds functions, recursion, lists,
@@ -147,7 +149,7 @@ or lambdas:
 
 | Method kind | `pay` | `send` | `mint`/`burn` | `deposit` | `accept` | `emit` |
 |---|---|---|---|---|---|---|
-| `init`, owned `init` | – | – | – | – | `payable` with `Funds` | – |
+| `init`, owned `init` | – | – | – | – | `payable` with `Funds`; **refused until #81** (r15: JSC0426 refuses `accept` in an init and any payable init that reads `funds`) | – |
 | `init migrate` | – | – | – | – | – (migration is refused in asset-aware contracts, `ContractReader.java:568-576`) | – |
 | `action`, owned `action` (both may be `receives`) | yes | yes | yes | yes | `payable` with `Funds` | yes |
 | `batched` action | yes | – | – | – | – | – |
@@ -155,10 +157,12 @@ or lambdas:
 | `withdraw` handler | – | yes (its result is the sends, totalling the amount) | – | – | – | – |
 | `certify`, `vote`, `propose` handlers | – | – | – | – | – | – |
 
-**A `payable` method takes native assets only if it uses `funds` or `accept`**; it is then lowered with the `Funds`
-parameter, and `accept` is **required** in it (ADR-0007 r2: the method states exactly the native assets it takes in;
-`ContractReader.java:1176-1182` ties the rule to the method's `Funds`, not to the contract). A `payable` method that
-uses neither takes ADA only and has no `Funds` (fees' `sell`, which deposits but takes no native assets). The fixtures
+**A `payable` method takes native assets only if it is lowered with the `Funds` parameter**, and `accept` is then
+**required** in it (ADR-0007 r2: the method states exactly the native assets it takes in; `ContractReader.java:1176-1182`
+ties the rule to the method's `Funds`, not to the contract). A method is lowered with `Funds` when it reads `funds` or
+sends, mints, burns or accepts (r15: each needs the own policy, or states what it takes in), so a payable method that
+sends, mints or burns takes `Funds` and must `accept` too (`accept(Value.none())` when it takes none). A `payable` method
+that does none of these takes ADA only and has no `Funds` (fees' `sell`, which deposits but takes no native assets). The fixtures
 include that sale and a contract mixing ADA-only and asset-taking payable methods. **Contract-level combinations**
 the processor refuses are reported at `.jsc` positions too: owned objects with an instance `destroy`; owned objects with
 instance-state `BigMap`s; keyed types with native assets; native assets with `batched` actions (`ContractReader.java:
@@ -179,6 +183,67 @@ destroy must produce at least one of pay/send/mint/deposit.
 
 "Source order" is order **within each kind**: the processor keeps kinds in separate components, so no order across
 kinds is promised. In a `for` loop the order is list order; an effect in an untaken branch does not happen.
+
+**As built in M2a (r15).** `send`, `mint`/`burn` and `accept` lower as the tables say, each with a generated check whose
+key is D12's: a sent value holds positive quantities and no reserved token name of the own policy (`#send:`); a mint or
+burn has a positive quantity of a user token name of at most 32 bytes (`#mint:`); an accepted value is native assets
+only, positive (`#accept:`); and a method that accepts checks, last, that the sum equals `funds.received`
+(`#funds:<redeemer>.1`); a send never goes to the contract's own script (`#send:` too: I30's rule for the one spent
+script a call can name, review r1 F1). These are the validator's own rules on what a method returns (ADR-0007 D2, D2b,
+D3, I30; the runtime's `AssetTx`), checked in the method too, so on **the rules a call can decide from its own inputs**
+(what it returns and the own policy) the JVM method, the transition program and both interpreters refuse exactly where
+the validator does. **Transaction-level rules** remain, as J6 has for balance: the call succeeds and its transaction
+fails, at the ledger or at the validator, because they depend on the transaction or the instance's whole value, not on
+the call (semantics §2, the transaction-level rules): sends and burns exceeding what the instance holds plus what it receives, accepts and mints (an
+output cannot hold a negative quantity); an output quantity above 2^64 − 1 or a net mint outside Int64; a destroy that
+leaves native assets; the ledger's minimum lovelace per send output; a send to the address of another script spent in
+the same transaction. `StateHarness` refuses the first two as the ledger does and the validator the third, and the
+five-way tests carry vectors of each of the three ("every leg accepts, the transaction is refused"); the last two need
+a transaction model with min-ADA and other scripts (testkit `Ledger`, issue #86). What the caller offers reaches a method as a
+canonical value: the validator and the transition program convert the redeemer's encoding (cardano-client-lib's
+canonical CBOR orders a policy's token names by encoded length) with `ValueAdapter.fromWire` before the method or the
+`accepted == offered` check (I31) sees it (review r1 C1; Java contracts too). `send` takes no datum until M2c's encoders
+(`JSC0429`). An init moves no native assets yet: `JSC0426` refuses `accept` in an `init` and any payable `init` that
+reads `funds`, because the processor's transition program of a creation that returns `(state, accepted)` is wrong
+(`TransitionsGenerator.creation` takes the whole result for the state and drops what was accepted, for Java contracts
+too): issue [#81](https://github.com/bloxbean/joust/issues/81), fixed in its own PR; the refusal is lifted in M2b or M2c. The result records are fixed by name:
+`Outcome` (an action's effects), `Received` (an action that takes native assets: `accepted` last) and `Settled` (a destroy
+that sends, mints or burns); each holds every kind its methods produce, in the order payouts, sends, mint, accepted.
+A contract whose only effect is `pay` keeps M1's lowering byte for byte.
+
+**As built in M2b (r18).** `emit(e)` lowers as the tables say: the events, a list in source order, are the last
+component of the result records (`Outcome`, `Received`, `Settled`: an action or a destroy whose record holds `events`
+carries them last in its redeemer, empty when it emits none), with no generated check in the method, since the
+validator compares the redeemer's events with the method's (ADR-0009 I35). A destroy that emits returns `Settled`. The
+events are the variants of an enum named `Event`, one per `event X { … }`; `params { … }` is the `@Params` record,
+named `Config`; both names are reserved in a contract that declares them (JSC0225). An `init` takes the params whenever
+the contract declares them (the creation is made under the script applied to them), any other method or view when it
+reads `params.f`. `quorum` and `authorized` are audiences, read no `Ctx`, and are refused in an init and a batched action;
+a quorum's two fields are both state fields or both params fields (JSC0439: the validator checks a state pair on every
+output and a params pair at creation). Invariants lower to `@Invariant` methods, not with batched actions or BigMap
+state. M2b fixed one processor defect on the way: a client's destroy that emits without native assets did not compile
+(`Transition.end(…).withEvents(…)` had no type witness). After #84's review r1: a batched action never returns events
+(ADR-0009 D5): when a direct action's `Outcome` holds events, a batched action that pays returns `Stepped(state,
+payouts)`; a contract with a quorum over state fields has no batched actions (JSC0440; the processor refuses it too,
+ADR-0009 r3), since a batch's states are not checked and a batched action could lock the contract; an invariant holds no
+`require` (JSC0441), and one that fails while evaluated is refused as the invariant's (class `invariant:<name>`); a view
+that reads `params.f` gets the deployment's params from the generated client (the processor's `ViewIR.takesParams`);
+the annotation names the lowering imports are reserved; invariants and emitted events are under the depth cap (J18).
+The IR format is version 2 (D15: version 1's Java reader dropped unknown top-level fields, so it would have lost
+invariants; both readers now refuse unknown fields at every level).
+
+**As built in M2c (r21).** `deposit(i, v, m)` lowers to the result component `deposits` (a list in source order, in the
+records after `accepted` and before `events`), with a generated check that the value is depositable (`#deposit:`: not
+empty, positive, no reserved-kind name under any policy: the output verifier's rule); the memo is built by a generated
+encoder (D5, J17). A deposit takes no `Funds` (fees' `sell` stays ADA-only), needs an audience (J16), and its target's
+contract must say `receives` with a memo type one of whose receivers decodes (JSC0449, JSC0450; ADR-0011 r3's rule that a
+target receives, checked statically where the target is a `.jsc` contract). `receives` / `receives T` lowers to
+`@Receives`; the action takes `Funds` (and `Ctx`), and `funds.deposits` are the claims on its output: their values, and for
+`receives T` their memos, each decoded and checked as a `T` where the action starts (`#memo:`). `send(to, v, d)` sends with
+the inline datum `d` (a generated encoder; JSC0429 is retired). A destroy that deposits returns `Settled`. JSC0426 stays:
+#81 is not fixed, so `accept` in an init is still refused. M2c also fixed issue #85 in the processor and the verifier
+(ADR-0007 §9): deposit claims are read from the wire as the offered assets are (C1), which changes the output verifier's
+hash and so every sending contract's script (fixtures re-recorded).
 
 **Lowering:** the method threads one accumulator per kind it uses (lists, or a `Value` for mint and accepted), as
 final locals; an `if`/`match` arm or a loop helper that may produce effects returns a generated record of
@@ -202,16 +267,16 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
 | `Bytes` | `byte[]` | `==` through `ByteStringLib.equals`; `<`, `<=` through `ByteStringLib.lessThan[Equals]` |
 | `Key` | `byte[]` | a 28-byte verification-key hash. `Bytes` is not a `Key`: keys come from `caller`, checked inputs, fields, or `asKey(b)` (a located check) |
 | `Hash` | `byte[]` | a 28-byte script hash or policy id, same rules |
-| `Credential` | `Credential` | `keyCred(k)`, `scriptCred(h)`; `match` on `KeyCred { key }` / `ScriptCred { hash }`. Needed by `authorized` (ADR-0009 D3) |
-| `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`) |
-| `Value` | `Value` | `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). Until M2 defines the explicit conversion (native ↔ wire, recursive for nested values, with unequal-length token-name goldens and round trips through the JVM, JS, transition programs and the validator), `Value` appears only in effects, `funds` and locals, not in state, parameters, records that are stored, or memos |
+| `Credential` | `Credential` | `keyCred(k)`, `scriptCred(h)`; `match` on `KeyCred { key }` / `ScriptCred { hash }`. Needed by `authorized` (ADR-0009 D3). As built (M2a): comparable, storable, a checked input (a 28-byte hash) |
+| `Address` | `Address` | `wallet(key)`, `wallet(key, stakeKey)`, `script(hash)`, `script(hash, stakeKey)`; `a.payment` (a `Credential`). As built (M2a): comparable, storable, a checked input: the ledger's encoding, every constructor tag and field count (decided on the data by `AddressAdapter`, one body on the JVM and on-chain), a 28-byte payment credential and staking hash, and **no staking pointer** (r15, review r1 S1: Conway gives pointers no staking meaning and the ledger bounds their parts by era, so a stored pointer could make every send to the address undeliverable; `wallet`/`script` never build one). It may be the contract's own script, to which every send fails (`#send:`): a contract that stores an address it sends to later refuses that where it takes it (semantics §5.1's guard idiom; review r2 S6), since the checked-input rule knows no policy |
+| `Value` | `Value` | **As built in M2c (r21):** a field of the state, the params, a record or a variant may be a `Value`, stored in its wire form (the generated code converts with `ValueAdapter.toWire` where a record is built and `ValueAdapter.fromWire` where a field is read, so the datum the method returns is the one the runtime writes); it is still never an element of a `List`, an `Option` or a `Map` (wrap it in a record), nor a method parameter (JSC0341: a redeemer field typed `Value` is not decoded alike on every leg; what a caller offers is `funds.received`). `Value.none()`, `Value.lovelace(n)`, `Value.asset(policy, name, qty)`, `+`, `-`, `v.lovelace`, `v.of(policy, name)`, `v.covers(w)` (ADR-0007 `Assets`; as built, the API's `ValueAdapter`, whose JVM body fails where the PV11 builtins fail: a quantity outside the signed 128-bit range, a token name over 32 bytes, `covers` on a negative quantity). `1 ada` is an `Int` literal of lovelace (×1,000,000), as in v1; there is no `ada(n)`. **Two orders exist**: `Assets` keeps entries in raw byte order, while a `Value` stored as data (state, parameters, memos, datums) is a map in encoded-CBOR key order, as the runtime and JS codec require (`Datums.java:29-54`, `data.js:90-100`). (Superseded in M2c by the as-built text at the start of this cell: before M2c, `Value` appeared only in effects, `funds` and locals.) M2a converts the one wire `Value` it has, what the caller offers (and a transition program's funds), with `ValueAdapter.fromWire` at the boundary (review r1 C1) |
 | `List<T>` | `JulcList<T>` | literals `[a, b]`, `[x, ...xs]`; D7 |
 | `Map<K, V>` | `JulcMap<K, V>`, canonical | an inline map in the datum. `K` is `Bytes`, `Key` or `Hash`, at most 64 bytes (F19); keys strictly ascending in canonical order, unique. `Map.empty()`. D7 |
 | `BigMap<K, Int>`, `BigMap<K, Bytes>` | `MerkleMap` | a Merkle map (ADR-0002/0014), state fields only; `K` as for `Map` (F14). Rules in D7 |
 | `Option<T>` | `java.util.Optional<T>` | `Some(x)`, `None`, `o ?? d` (lazy default), `match` (F20). `Option<Option<T>>` directly nested is rejected (the JS codec would lose `Some(None)`) |
 | `type R = { f: T, … }` | a generated record | user records; accessors through a typed local inside the arm or helper that needs them (D6) |
 | `enum E { A, B { x: Int } }` | a generated sealed interface with records | user sum types; `match` (D6). Variant constructor tags are the declaration order. Types, enums and variants share one namespace, as in Elm (no `E.A` qualification); a variant also clashes with a capitalised method name, since a method's redeemer is a class of the same name (r7) |
-| `Instance<C>` | `ForeignInstance` | another contract's instance (policy, 32-byte id), typed by its contract `C` (D9). Only in `params` (as ADR-0011 keeps `ForeignInstance`): the deployer fixes which script it trusts. A method parameter cannot claim to be an instance of `C`; `deposit` and `reads` take `params` instances |
+| `Instance<C>` | `ForeignInstance` | another contract's instance (policy, 32-byte id), typed by its contract `C` (D9). Only in `params` (as ADR-0011 keeps `ForeignInstance`): the deployer fixes which script it trusts. A method parameter cannot claim to be an instance of `C`; `deposit` and `reads` take `params` instances. As built (M2c): a params field's own type only (JSC0445), used whole, not comparable; `C`'s own types are `C.State`, `C.T`, read, never stored or encoded here (JSC0446), not matched |
 | ledger types for handlers | JuLC ledger types | `TxCert`, `Voter`, `Vote`, `GovernanceAction` are sealed types the handler `match`es on; `GovernanceActionId` and `ProposalProcedure` are records read by projection. Fields whose JuLC type maps to a `.jsc` type are readable; fields typed `PlutusData` (e.g. `GovernanceAction.ParameterChange.parameters`) are **inaccessible**, so a guardrail that must inspect proposed parameter changes stays in Java until a typed protocol-parameter view exists. No construction |
 | `LedgerMap<K, V>` | `JulcMap<K, V>` from ledger data | read-only maps in ledger order (e.g. `GovernanceAction`'s withdrawals `LedgerMap<Credential, Int>`): `get`, `has`, `size`, `any`/`all`/`fold`; keys any comparable type; never stored, so no canonical-order rule applies |
 
@@ -233,13 +298,28 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
   code sees it: method parameters (the redeemer), `init` arguments, foreign datums (`reads`), deposit memos and claims,
   and `java:` library results (D9). The check is recursive: every nested `Key`/`Hash` is 28 bytes; every `Map` has
   unique keys of at most 64 bytes in strictly ascending canonical order; every stored or received `Value` is canonical in its wire
-  form (encoded-key order, no zero quantities, no empty token maps), checked before conversion to `Assets` order (M2); every `Address` has valid constructor tags and 28-byte credentials. A failure is a
+  form (encoded-key order, no zero quantities, no empty token maps), checked before conversion to `Assets` order (M2); every `Address` and `Credential` has the ledger's constructor tags and
+field counts, decided on the data (an unknown tag must not reach a typed accessor: a transition program decodes nothing
+before the method runs), 28-byte credentials and no staking pointer (r15). A failure is a
   located `require` failure. From M2, `Value` parameters are carried in the redeemer as data and decoded by the
-  generated wire-to-native conversion plus this check (CLAUDE.md: redeemer fields typed `Value` mis-decode in JuLC). The on-chain cost of the
-  checks is measured in M0 and budgeted in each milestone (J15, J16). A foreign datum that fails the checks makes that
-  instance unreadable by this contract: for JOUST contracts, whose validators fix their datum's shape, this can only
-  happen if the foreign contract itself accepted a non-canonical value, and the reader's author is warned at build time
-  that strict reads mean the foreign contract's state shape decides whether `reads` calls can run.
+  generated wire-to-native conversion plus this check (CLAUDE.md: redeemer fields typed `Value` mis-decode in JuLC; M2c
+  keeps `Value` out of method parameters, so this is not built). **As built in M2c (r21):** a `reads` state is a checked
+  input at `C.State` (`#read:`), after the arguments, but not a deep one: the validator checks its outer shape (ADR-0011
+  D2), and the generated check covers every nested `Key`/`Hash` length, every `Map`'s canonical order, every `Address`
+  and `Credential`'s hashes, and every stored `Value`'s wire form (used or not; review r1, C4), but **not the constructor
+  tags and field counts of its nested `Bool`s, `Option`s, enums and records**, which are taken as `C` wrote them. That
+  trust rests on `params.f` naming a `.jsc` build of `C`, whose validator refuses a malformed tag in any argument it
+  stores (pinned by `JscV2M2cHostileInputTest`, `Inbox.set`); it holds for `.jsc` contract imports only and **must be
+  decided again before M4b's `java:` contract imports** (a Java contract may hold raw `PlutusData`), for example by
+  decoding the read datum with the memo decoders, which needs the raw datum in the method (the `@Reads` parameter is
+  typed by the processor today). A `receives T` memo is decoded by a generated decoder that decides every tag and field
+  count on the data (`#memo:`); a memo is a checked input in full. The params are a checked input of the init
+  (`#params:`, review r3 on #90, C7): fixed for the deployment, they are checked where the instance is made, so a
+  `.jsc` writer never stores a value (from a `Value` param, or `Value.asset` of a `Hash` param) that a `.jsc` reader
+  refuses. The on-chain cost of the checks is measured in M0 and
+  budgeted in each milestone (J15, J16). A foreign datum that fails the checks makes that instance unreadable by this
+  contract: for JOUST contracts, whose validators fix their datum's shape, this can only happen if the foreign contract
+  itself accepted a non-canonical value. (No build-time warning says so: none is built, M2c review r1, F7.)
 
 ### D6. Expressions, equality, `match`, laziness
 
@@ -341,7 +421,25 @@ deadlines stay short and order-sensitive arguments are bounded (pool's `buy(maxP
     a warm engine went further. So `joust build` runs the engine on a worker with an 8 MB stack
     (`js/joust/src/toolchain.js`, `JOUST_ENGINE_STACK_MB`). There, a cold engine builds 2,000 statement branches and
     1,000 value branches, as the JVM does. In the Web Image such an exhaustion is not JSC0005: it is an engine failure,
-    which `joust build` reports as a diagnostic.
+    which `joust build` reports as a diagnostic. The worker's limits (r17, #74; #80 review C2, S4, F3) are
+    `JOUST_ENGINE_STACK_MB` (8–1024, default 8), `JOUST_ENGINE_MEMORY_MB` (the heap, 256–65536, default 4,096) and
+    `JOUST_ENGINE_TIMEOUT_S` (per build, 1–86400, default 600), or a caller's `limits` in the same ranges; an invalid
+    one is refused with its name. The heap limit is enforced, not best-effort: the engine (WasmGC) allocates on the
+    worker's JS heap. The worker runs in an engine host process forked without the command line's Node flags and with
+    `NODE_OPTIONS` stripped of its heap flags (#80 review C7, C8, C12, F10, C14, S13: parsed with Node's own token rules,
+    the heap flags matched by their decoded names, the rest written back quoted so it reaches the host unchanged;
+    preloads such as Yarn PnP's still apply; on Windows every case variant of the variable is replaced, elsewhere only
+    the exact key), so an inherited `--max-old-space-size` or `--max-heap-size`
+    never reaches it, and
+    before any build the host measures the old generation: the build worker and two probes whose old generations are
+    64 MB smaller and larger each report V8's `heap_size_limit`, and they must step by exactly 64 MB (true whatever the
+    young generation; an old generation set elsewhere makes them equal). The decision rests on these measurements only,
+    never on flag text, and the startup timer runs until they settle (a probe that exits unanswered fails the start). Builds wait in the worker's queue without a limit.
+    A build's time counts from when the worker starts it, not its wait behind another build; past it, the worker is
+    stopped. `buildInWorker` is exported beside `loadToolchain`, whose builds run on the caller's thread and need a
+    stack of at least 8 MB. The engines enable Wasm exnref themselves, setting `--experimental-wasm-exnref` only where
+    a probe module does not validate (newer Node has it on, and only prints a warning for the flag: hardening against
+    stderr noise).
 - **Off-chain depth.** On the JVM, generated recursion is Java recursion without tail calls: the runtime runs
   transitions on a thread whose stack fits the deepest recursion the per-transaction budget allows, and the prepare
   service and the batcher evaluate under a step or depth cap. In the npm engine, transitions are UPLC programs (F21)
@@ -354,7 +452,8 @@ import { sha2_256, blake2b_224, verifyEd25519 } from "std/crypto"
 import { concat, slice, length } from "std/bytes"
 ```
 
-- Modules: `std/bytes`, `std/crypto`, `std/math`, `std/bits`, `std/value`, `std/address`, `std/list`, `std/time`
+- Modules: `std/bytes`, `std/crypto`, `std/math`, `std/bits`, `std/value` (M2a: `isEmpty`, `withoutLovelace`, `scale`),
+  `std/address` (M2a: `paymentKey`, `paymentScript`), `std/list`, `std/time`
   (`after`, `before`, `elapsedSince`, `elapsedSinceAtMost`, `windowStart`, `windowEnd`: D11). A prelude needs
   no import: `min`, `max`, `abs`, `utf8`, `asKey`, `asHash` (D5's checked conversion to a `Hash`, r7), `range`,
   `keyCred`, `scriptCred`, `wallet`, `script`, `Some`, `None`.
@@ -430,26 +529,143 @@ import { concat, slice, length } from "std/bytes"
     Certification also needs **per-function JVM-vs-UPLC vectors** (generated over each exported function's domain,
     including edges) before J3 counts the library as covered. Certification stops at the trusted base: the pinned JuLC
     stdlib through D8's table, and the JOUST API with its adapters. The build report marks every library certified.
+    *(r19, amended in review r2: the build certifies statically; the per-function vectors are the library's own
+    obligation, run by its own tests, and the build report says "statically certified", design F4.)*
   - **Downstream class loading.** The duplicate-class check covers the contract's own build. For applications that
     depend on the contract, the build records the hash of each class file compiled from a certified library's sources,
     in a manifest generated into the contract's client code, and the runtime verifies the **bytes that define** each
-    such class and its transitive library dependencies when it loads the contract's clients: it defines them itself
-    through an isolated loader from the verified bytes, so an application jar cannot supply those names, and refuses to
-    run on a mismatch. A constant inside the class would not do: a jar could carry the right constant with a different
+    such class and its transitive library dependencies when it loads the contract's clients: ~~it defines them itself
+    through an isolated loader from the verified bytes, so an application jar cannot supply those names,~~ *(superseded
+    by r19: a check of the defining bytes, not an isolated loader; see "as built" below)* and refuses to run on a
+    mismatch. A constant inside the class would not do: a jar could carry the right constant with a different
     body; a test substitutes such a class (same constant, changed body) and expects refusal. This protects JVM-side computation (views, prepared steps);
     on-chain safety never depends on it.
   - **No second variant.** A library that ships an on-chain variant different from its JVM source (as JOUST's own
     `Require` and `Assets` do, under `src/onchain/java`) is refused, except the JOUST API itself, whose variants are
-    part of the trusted base and covered by its own differential tests.
+    part of the trusted base and covered by its own differential tests (M2a's `ValueAdapter`:
+    `ValueAdapterDifferentialTest`, every public function, JVM body against on-chain body, on canonical arguments, its
+    stated precondition, and on wires and raw data for the functions that take them; since M2c the test finds the public
+    functions by reflection, so a new one without vectors fails; `AddressAdapter` keeps one body).
   - Library records map to `.jsc` records with read-only fields where the projection is representation-verified;
     otherwise they are opaque.
+- **`.jsc` libraries as built (r16, M4a).**
+  - **The file and its class.** `library <package>` replaces `package`; the file holds imports, types, enums and fns
+    (a contract is JSC0711). Its class is its file name capitalised (`fees.jsc` is `<package>.Fees`; JSC0705 when that
+    is no class name), so a library's package and file name are its identity, named by every importer and by Java
+    contracts: renaming either is a code change of its importers and may move their scripts (bloxbean/julc#328), as a
+    contract's package does (D12).
+  - **Imports.** `./x.jsc` and `../dir/x.jsc`, resolved from the importing file, never outside the source folder
+    (JSC0706); only a library and only names it declares (JSC0708); libraries may import libraries, without cycles
+    (JSC0707). npm library packages (D14) add package specifiers in M4c.
+  - **Scope and one namespace.** A file sees its own declarations and what it imports (an imported enum brings its
+    variants; JSC0710 otherwise); a library's values flow without an import (a fn may return a record whose type the
+    caller did not import). The declarations of a build (a contract and every library it imports, transitively) share
+    one namespace (JSC0709), so every name in the IR means one declaration; a binding may take the name of a library
+    declaration the file does not import. `std` imports are per file. *(r16, amended in review r2.)* The generated Java
+    names a library by its simple class name, so no binding (parameter, const, lambda parameter, match binding, state
+    field) takes a library's class name, where it would obscure the class (JLS 6.4.2) and could turn `Fees.fee()` into
+    a record accessor (Codex C1), and the libraries of one build have distinct class names, whatever their packages
+    (Codex C2): both JSC0709. *Known limit:* with one namespace per build, two third-party libraries that declare the
+    same name (or share a file name) cannot be used together, and the user cannot rename either; there is no aliasing.
+    The planned fix is qualified names in the IR (a format 3) and qualified references in the generated Java (design
+    F3, recorded for M4c's packages too).
+  - **Java callers (r16, amended).** A `.jsc` library's fns are checked on the assumption that D5's ingress checks
+    have run (a `Key` is 28 bytes, a `Hash` 28 or 32, a map canonical). Only `.jsc` callers guarantee that: a Java
+    contract builds `new Fees.Line(anyBytes, …)` unchecked. Both sides run the same code, so this is no JVM/on-chain
+    divergence, but it is a precondition a Java caller must meet itself (security S1; checked factories are a
+    follow-up).
+  - **Checking.** A library is checked on its own and again in each importer. D11 runs through library calls: a
+    library fn called with a time value is checked with that parameter marked, in its own scope, and refused at the
+    call. An error in a library is reported at the import that brings it into the build, naming the library's position
+    (JSC0712, J5).
+  - **Lowering.** The library's class is a JuLC `@OnchainLibrary`; its fns are `public static`, its records and enums
+    nested (`Fees.Line`); importers qualify them and import the class. Helpers are generated in the class whose code
+    needs them (an importer's equality and check helpers on a library type are its own, under the same deterministic
+    names), not shared across classes as the r2 wording of D5 put it: a library's public surface stays its fns, and a
+    helper never becomes an API of the library. `SubsetLint` runs on a generated library on both paths (the toolchain;
+    the processor, for a class marked as generated from `.jsc`) (D1).
+  - **Artifacts.** A library has no ABI manifest: each contract's manifest states the library types its datum and
+    redeemers reach (`"kind": "library"`, with the class), which `checkJscAbi` and every toolchain build check against the
+    processor's description. Each contract's IR carries the libraries it imports (format 2, `libraries`), so both
+    reference interpreters evaluate library fns (five-way, J3); each contract's message map lists a library's messages
+    with the library's file (D12, J20).
+- **`java:` imports as built (r19, M4b).** `docs/reference/jsc-2-java-libraries.md` states the rules; the choices made
+  where the bullets above left room:
+  - **Types.** `byte[]` maps to `Bytes` (a Java signature cannot say Key or Hash; `asKey(b)` checks a result), and no map
+    crosses into `.jsc` in M4b (`JulcMap` is refused both ways), so a Java fn's result holds no Key, Hash or Map and its
+    checked-input function is empty. An overloaded name is refused (JSC0723), as ADR-050 reports overloads unsupported.
+  - **The trusted base, concretely.** The JuLC stdlib through D8's binding table (its exact signatures) and the three
+    byte-string comparisons the lowering uses; JOUST's `Require` and D8's adapters; an allow-list of `BigInteger`,
+    `JulcList`, `JulcMap` and `Optional` operations. Every other call, `Builtins` included, is refused.
+  - **The catalogue** adds three entries found while building it: `equals`/`hashCode`/`toString` on anything but
+    `BigInteger`; a record constructor with a body (the JVM runs it, JuLC builds `Constr 0` of the fields), a problem of the
+    library; `BigInteger.mod` (its sign).
+  - **Records.** Verified, read-only and comparable when every field maps and the record declares no constructor;
+    opaque (never written as a type, read or compared) when a field does not map.
+  - **One body.** Gradle's `joustLibrary` configuration (non-transitive) is extracted, and `generateJsc` writes the
+    certified sources of the libraries the contracts use beside the generated Java, which compiles them. *(r19 amended,
+    review r2, S3.)* Only a library's **closure** compiles: every source file its class's file names through a name javac
+    resolves (a type, a call, a field, an import), transitively; no other file of a jar. The certifier refuses a library
+    whose closure declares a class in a package of JOUST, JuLC, cardano-client-lib or the JDK (r3: only that library) (a no-op `JavaLibraryCheck`,
+    say). `checkJoustLibraries` refuses a library class on the compile or runtime class path from a jar or a directory
+    (JSC0727); it runs **before `compileJava`**, so `test`, `jar` and `run` never build a shadowed class, and it checks the
+    classes by javac's binary names, nested ones too (r1 took names from the source text by regex: S2, F5). Two sources
+    of one class are refused, which, with the jar's classes never used, is how no second variant can run.
+  - **Downstream class loading** *(r19 amended, review r2: F1, F2, S1, C4)*. The build records each library class
+    file's SHA-256 **per contract** (`recordJoustLibraries`, `META-INF/joust/java-libraries/<contract>.json`; a merged
+    jar keeps each; a project whose contracts use no `java:` library writes none). The contract's Java, generated from
+    `.jsc`, names its `java:` libraries in its Javadoc, and the processor generates into the **client** a check that runs
+    before anything else of it (`JavaLibraryCheck.verify(client, validator, contract, libraries)`), so a contract built
+    with libraries **fails closed**: it refuses to run when its record is missing, when the contract, its validator or its
+    client come from different code sources (a byte-identical copy of the validator ahead on the class path, S1), when a
+    library class's defining bytes differ from the record, or when a multi-release jar holds a versioned variant of one
+    (a loader may define that instead, C4). Code sources are read through their URLs, so `jar:` and `nested:` locations
+    (Spring Boot) work; contracts without `java:` libraries check nothing (F1). The hashes are in a resource beside the
+    client, not in the client's bytes: they are known only after the compilation that generates the client; a class path
+    that can replace the client's own code source can replace the client too, so anchoring the check on the client's code
+    source is what a constant in the client would give. Not an isolated loader: the generated client's typed API names
+    the library's records (`AllowList.Entry`), which an isolated loader would make a different class from the
+    application's; a loader that reports a code source other than the one that defined the class is already arbitrary
+    code in the JVM. On-chain safety never depends on it.
+  - **The Gradle plugin (r19 amended, design F3).** The certifier is julc-state-toolchain, which is not published, and
+    its pool needs JOUST's on-chain API sources, which no published artifact carries. Until both are published (an
+    `onchain` classifier of julc-state-api), the plugin fails fast on a `joustLibrary` dependency with the reason;
+    `examples/dsl` wires the same tasks by hand in this repository. M4's exit row "a Java library from `.jsc`" is met
+    there, not through the plugin.
+  - **Certification, review r2 (Codex C3, C5, C6; security S4).** No binding takes a Java library's class name (as for
+    `.jsc` libraries, JSC0709); a record that two libraries' signatures share is one type of the build, by its binary
+    name; a raw `JulcList` or `Optional` in a signature is unmappable per fn (JSC0722), never a crash. The certifier
+    refuses on its own, independently of the JuLC version, what JuLC refuses later: method references, calls to abstract
+    methods (dynamic dispatch to an uncertified body), initialiser blocks, static fields not final, not scalar or not initialised by
+    a literal (no static arrays, r3), overloads of any name (private ones too), constructors and accessor overrides in any library record,
+    `null`, non-short-circuit boolean operators, `continue`, a `return` inside a for-each, and `JulcMap.lookup`,
+    `delete` and `insert` on keys not compared by content.
+  - **In the interpreters.** A Java body has no reference semantics there: a `CallJava` gets no answer (a `Limit`, never
+    a refusal). A contract that imports a Java library is differential-tested on three legs (the JVM, the transition
+    program, the validator) for the calls that reach it, five for the others; the library is covered by its certification
+    and its per-function JVM-vs-UPLC vectors, which J3 requires before it counts the library (865 for the example).
+    The vectors are the library's own obligation (its tests); the build runs the static half only, and says so
+    ("statically certified"; a testkit utility for them is a follow-up).
+    Evaluating a Java body through recorded results would make one leg the oracle of another (D15).
+  - **D11.** A time value never reaches a Java fn (JSC0726), as the bullet above says ("a `java:` import never accepts
+    one").
 - **No `extern` declarations**: a `.jsc` author never writes a signature for Java code.
 - **Other contracts.** `import contract { Oracle } from "./Oracle.jsc"` (or `from "java:org.example.Oracle"`) makes
   the contract's state type `Oracle.State` and `Instance<Oracle>` available, for `reads`, `deposit` and params. On
   Gradle the contract is in the same project or a dependency on the processor path; on npm, in `contracts/` or a
   library package. The checker reads a `.jsc` contract's checked AST, and a Java contract through javac attribution.
-- **Supply chain.** A committed `joust.lock` pins every library (`.jsc` and Java) by the hash of its on-chain sources;
-  the build fails on a mismatch, and the build report lists every library with its hash (J12).
+  **As built in M2c (r21):** `.jsc` contracts of the same build (Gradle's `generateJsc` source tree, the npm toolchain's
+  files), by a path relative to the importing file, through M4a's `JscModules` (the same interface, so the integration
+  joins one). Each imported contract is parsed and checked on its own (its time fields its own fixed point); its state,
+  types, time fields and receiving actions' memo types reach the importer's IR (`contracts`). A cycle is refused
+  (JSC0743). `java:` contracts wait for M4b's attribution of `java:` sources (JSC0741); M4b's gate for them includes a
+  strict decode of a `java:` contract's read state (D5: the nested tags a `.jsc` reader trusts today), deciding every
+  nested constructor's tag and its field count (M2c review r2, security).
+- **Supply chain.** The build report lists every library (`.jsc` and Java) with the hash of its on-chain sources, and
+  a committed `joust.lock` pins every library from **outside the project's sources** (an npm package's `.jsc` library,
+  a `java:` library, and a Java library a hand-written Java contract imports); the build fails on a mismatch (J12).
+  *(r20, amended in review r2, design F3: the project's own libraries are its code, under its version control; the
+  reason is D14's.)* A Java library's hash covers its source closure, which is exactly what the build compiles.
 
 ### D10. Every contract feature, as the processor already defines it
 
@@ -466,10 +682,10 @@ positions. Each row names the example whose port gates it (J11).
 | `@Params` | `params { feeBps: Int, oracle: Instance<Oracle> }`, `params.feeBps` | treasury, oracle (M2) |
 | `@Invariant` | `invariant name = expr` | treasury (M2), guild (M3) |
 | `@Quorum`, `@AuthorizedBy` | `quorum guardians threshold`, `authorized admin` (a `Credential` field or `params.f`) | treasury (M2), registry (M3) |
-| events | `event Sold { price: Int }`, `emit(Sold { price })` | market (M3) |
+| events | `event Sold { price: Int }`, `emit(Sold { price })` | treasury (M2b), market (M3) |
 | `Funds`, `Assets`, `Send`, mint | the built-in `funds` (`received`, `held`, `policy`, `self`, `deposits`); a contract is asset-aware when it uses `funds`, `send`, `mint`, `deposit` or `receives` (`assetSlots` defaults from that, `ContractReader.java:312-315`) | dex (M2), market (M3) |
-| `@Reads` | a parameter `oracle: reads params.oracle` typed `Oracle.State` | oracle (M2) |
-| `@Receives`, deposits | `action name(…) receives`, `deposit(…)` | fees (M2) |
+| `@Reads` | a parameter `oracle: reads params.oracle` typed `Oracle.State` | oracle (M2c) |
+| `@Receives`, deposits | `action name(…) receives [T]`, `deposit(target, value, memo)`, `funds.deposits` | fees (M2c) |
 | `@Owned`, `@OwnedInit/Action/Destroy`, `@Shared`, `@Into`, `@Admits` | `owned Account { … }`, `owned init/action/destroy`, a `shared` parameter, `into`, `admits` | bank, locker (M3), guild (M3: three owned types, moves, invariant) |
 | keyed objects (ADR-0016) | `owned Name keyed by key (signed, maxKeyBytes = 32, linkCooldownMs = …, linkWindowMs = …)`; `owned destroy … retire` | registry (M3) |
 | `@Withdraw`, `@Certify`, `@Votes`, `@Propose` | `withdraw(params, amount: Int, …args): sends`; `certify(params, cert: TxCert): Bool`; `vote(params, voter: Voter, action: GovernanceActionId, vote: Vote): Bool`; `propose(params, p: ProposalProcedure): Bool` (the shapes of `ContractReader.java:1332-1355`), with their required `quorum`/`authorized` | staking (M3) |
@@ -500,7 +716,14 @@ the call with the class `modifier:<word> <field>`. So every modifier site of eve
 all five legs: both interpreters refuse it with that class, the JVM method and the transition program compute the
 transition (and agree with the interpreters' transition alone), and the validator refuses. The attack suite adds
 entries read from the description (a stranger who signs as the caller; windows on the wrong side of, or straddling,
-the bound). M2's `authorized` and `quorum` are further preconditions on the same transaction.
+the bound). M2's `authorized` and `quorum` are further preconditions on the same transaction (as built in M2b: both
+interpreters model them, `quorum` counting distinct signers among the keys and `authorized` reading the signers or the
+transaction's approving scripts), and the validator's output checks (a quorum's shape, the invariants) are modelled
+after the body, class `invariant` (semantics §2.7), with vectors on all five legs. Both IR readers take
+modifiers only in the checker's shapes (`only f` on a Key field, `after f`/`before f` on an Int field, `batched` on an
+action without them, none twice, an init with `payable` only), and the interpreters never skip a modifier without its
+field; a transaction whose caller is not among its signers is the caller's error in both interpreters, as the
+validator never accepts it (r17, #76 review S5, S6).
 
 **ADR-0005 rules kept, changed and dropped:**
 
@@ -671,10 +894,12 @@ the bound). M2's `authorized` and `quorum` are further preconditions on the same
     the `fn` in the script.
   - **The message map, the audit trail.** The source map (format 2) holds, beside the line map, `messages`: every
     message the script can trace, each with the `.jsc` sites that raise it (line, column, kind: `input`, `pay`,
-    `require`, `operation`; the method or `fn`; an input's parameter). "Every" is tested on the linked scripts: each
+    `require`, `operation`, and M2a's `send`, `mint`, `accept`, `funds`; the method or `fn`; an input's parameter). "Every" is tested on the linked scripts: each
     string constant a compiled validator or transition program holds is in its map (the read discovery's own trace
     aside). The map is written beside the generated Java (`Name.jscmap.json`) on both paths, into `contracts.json` by
-    `joust build` (with the script's hash), and on Gradle as a resource beside the contract's classes. The JS runtime
+    `joust build` (with the script's hash, which the JS runtime does not trust: it derives the hash from the entry's own
+    script when it reads the map, and a `@Params` contract, whose deployed script is not the bundle's, has none and is
+    found by title only; r17, #74), and on Gradle as a resource beside the contract's classes. The JS runtime
     adds the sites to a refusal (`#pay:spend1.2 [Pay.jsc:9:17 (a payout in split is negative)]`); so does the JVM
     runtime to a `RequireException` its contract method raises (`JscMessages`), and build tooling reads
     `Lowered.explain`. It is the build's record of what each message means, kept with the script it describes:
@@ -739,6 +964,49 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   validator evaluated and the attack suite, without DevKit. They need the Web Image engine to evaluate validators
   without a chain (entry gate of M4). The reference interpreter (D15) is a differential oracle and powers a fast
   `joust check`, not the offline tests.
+- **As built (r20, M4c).**
+  - **Library packages.** `import { fee } from "@acme/fees/fees.jsc"` names `node_modules/@acme/fees/joust-lib/fees.jsc`
+    (a package specifier: an npm name, then a path without `.` or `..` segments). Inside a package, relative imports
+    resolve within it and never leave it (JSC0712 at the importer, JSC0706 in the package). `joust build` hands the
+    toolchain every package's `joust-lib/`: its `.jsc` libraries, lowered and compiled with the project when a contract
+    imports them, and its `.java` files as Java library sources, which a `java:` import certifies as on Gradle. A package
+    library and the same library in the project build the same script. *(r20 amended, review r2: F2, S2, C7, F5, S4.)*
+    Of the packages' Java sources, the build compiles only the source closure of each library a `.jsc` file imports with
+    `java:` or a hand-written Java contract imports (`import a.b.Lib;`), and the lock pins each of them; no other package
+    source reaches javac or JuLC, so a package cannot change a script unpinned. A Java source is keyed by its path inside
+    `joust-lib/`, so its pin does not depend on the npm package's name; two packages shipping one path are refused.
+    Links under `joust-lib/` are not followed. *Known limit (design F7):* one namespace per build spans packages, so two
+    packages' libraries that declare one name cannot be combined (D9 r16 amended).
+  - **`joust.lock` (J12).** Committed at the project's root: `{ "lock": 1, "libraries": { name: sha256 } }`. It pins only
+    the libraries from **outside the project's sources** (a package's `.jsc` library, a `java:` library: the hash of its
+    on-chain sources), since the project's own libraries are its code, under its version control. A build reports every
+    library with its hash; it fails on one not pinned (JSC0731) or changed (JSC0732), until `joust build --accept-lock`
+    (Gradle: `acceptJoustLock`) rewrites the lock to be reviewed and committed. On Gradle `generateJsc` checks the lock
+    for its `joustLibrary` libraries. The lock is a different file from the build's `build/joust/joust.lock.json`
+    (script hashes, not committed).
+  - **Offline tests.** `@julclang/joust/test`'s `offline({ contracts })` gives an in-memory ledger behind the provider
+    interface, a runtime over it, funded key wallets, and the generated clients' options. The ledger checks the phase-1
+    rules it models *(r20 amended, review r2: F1, S3, C8–C12; the list is `memoryLedger`'s, `joust-cli.mdx` repeats
+    it)*: a valid tag, the size limit, unspent inputs, the validity interval, withdrawals from registered accounts of
+    their (zero) balance, the balance with fee and deposits, minimum ADA, the minimum fee (size, declared units,
+    reference scripts), a vkey witness for every key that must sign, a script (witnessed or referenced) for every script
+    credential that must authorise, native scripts evaluated, a redeemer for every Plutus purpose and none extra, witness
+    datums, collateral (key-locked, ADA-only or returned, enough, counted, `total_collateral`), the script integrity
+    hash, and the declared units (within the limit, and covering what each script uses); concurrent submissions apply
+    one at a time. It has the **runtime engine** evaluate its scripts whenever a Plutus script must run
+    (`joust.evaluate`: JuLC's VM with the ledger's cost model, the evaluator that prices transactions), so phase 2 runs
+    the validator the build produced. Not modelled: rewards, governance and pool rules, the treasury, PlutusV1's
+    integrity hash, and a phase-2 failure's collateral loss (an invalid-tagged transaction is refused). *(r3:)* What is
+    not modelled and would change a transaction's meaning (votes, proposals, treasury donations and values, pool, DRep
+    and committee certificates) is refused (`NotModelled`), not applied; spending and reference inputs are disjoint;
+    the collateral return holds its minimum; only Plutus-locked inputs need their datums. On each script
+    transaction it runs the attack suite (`joust.attacks`, **a subset** of the JVM testkit's `Attacks` (design F4): the
+    state's datum replaced or hashed, value skimmed, token dust, a key address, a stake credential, an output dropped,
+    the signer replaced, and the validity bounds moved or removed when the call read its window; the payout, mint and
+    send mutations are a follow-up), which the scripts must refuse; only a script's refusal counts as refused (S5). `joust test` builds and runs `test/*.test.js` with Node's runner; the template's test is offline, and its
+    DevKit test moved to `test/devkit/`. The ledger has no rewards, no governance and no certificates beyond stake
+    registration; tests of those run on DevKit.
+  - **`joust build --traces`** keeps the contracts' traces (`-Pjoust.traces` on Gradle).
 
 ### D15. Correctness: a written semantics and an independent interpreter
 
@@ -791,7 +1059,15 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   sources, or a target that is a source, is refused (JSC1108). `--in-place` replaces the v1 file and keeps its text as
   `Name.jsc.v1`, written create-new (an existing file or link is JSC1107); it never replaces a symbolic link, a file with
   more than one hard link or a file whose path under the sources goes through a link (JSC1109), and writes the new text
-  to a temporary file renamed over the source. Every default-mode target is checked before anything is written: none may
+  to a temporary file renamed over the source. Since r17 (#75; #80 review C1, F1, S2) it also refuses a path with `..`,
+  and a link anywhere on the path below the working directory, which it finds among the file's ancestors by identity
+  (so `/tmp/…` and `/private/tmp/…` are one) and checks on the physical path (a directory whose real path is not itself:
+  a symbolic link, or a Windows junction; a spelling that differs from the stored one only in case, on a
+  case-insensitive file system, is the same directory, not a link). Links at or above the working directory are the
+  user's file system, and a file outside the working directory is checked from its source directory down only. Both
+  CLIs do this (`JscMain` and the npm `joust migrate`, whose working directory is the project root; #80 review F6). On
+  Windows a junction outside the working directory, and hard links, are not detected. The checks and the writes are
+  separate steps: they assume no concurrent writer changes the tree during the run (#80 review S8). Every default-mode target is checked before anything is written: none may
   lie in the sources or be a source through a link on its path, resolved at its nearest existing ancestor.
   On npm it first copies the v1 build's artifacts to `build/joust/v1/` (the contract's, by the name the parser reads,
   and the shared ones), and does not replace the file if that fails; `joust deploy` keeps each record it replaces under
@@ -801,6 +1077,12 @@ into the release artefact when the grammar is packaged (ADR-0021 M5e).
   contracts too), is no longer built, or the record cannot be read. The Gradle path records no deployments: its
   `migrateJsc` says the new-script warning on every run that migrates.
 - Java contracts are unaffected.
+
+**D11 as built in M2c (r21).** A read state's field is a time value when it is a time field of its contract (from that
+contract's checked IR); its other fields are ordinary (Kiosk compares the oracle's `price`, and checks `updatedAt` only
+with `before`). A time value is never any part of a deposit's value (JSC0526, behind JSC0519). A send's datum or a
+deposit's memo may carry one, with a warning (JSC9009). A memo a receiving action reads is not a time value there: like
+an argument, whoever writes a depositing contract chooses it, so it is a checked input and nothing more.
 
 ## 4. Example (illustrative)
 
@@ -896,7 +1178,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 |---|---|---|---|
 | J1 | `.jsc` 2 output is Java `@StateContract` and `@OnchainLibrary` classes that the unmodified JOUST processor and JuLC accept, and all of it passes `SubsetLint`'s rules; nothing else is emitted | D1, D9, D10 | every build; lint on generated libraries and helpers |
 | J2 | No `.jsc` name is rebound; generated Java has no reassigned locals, no loops and no mutable accumulators | D3, D7 | checker; a scan of generated Java |
-| J3 | **All legs agree** (four to M1a, five from M1b) for every construct of the milestone: the reference interpreters (JavaScript, and M0's Java one: D15), the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings | D5–D7, D15 | differential tests (§9), in every milestone |
+| J3 | **All legs agree** (four to M1a, five from M1b) for every construct of the milestone: the reference interpreters (JavaScript, and M0's Java one: D15), the generated Java on the JVM, the UPLC transition program (the npm engine's path, F21, with the discovery variant when `BigMap` reads occur) and the validator on-chain: values, failures, laziness, division, recursion, encodings; a call into a `java:` library has three legs (the JVM, the transition program, the validator), the interpreters giving no answer, and the library's per-function vectors cover its bodies (r19 amended) | D5–D7, D15 | differential tests (§9), in every milestone |
 | J4 | Effects appear in each kind's result in source order (loops: list order), only from taken branches; mint and accepted are net sums | D4 | differential tests; on-chain fixtures |
 | J5 | Every diagnostic on either build path names a `.jsc` file, line and column, and a stable code | D12 | tests with errors from each layer (checker, processor, JuLC) |
 | J6 | No time value (including one read from another contract; a value's shape never is one) decides control flow or a `require`, except through `after`/`before` (any `t` not derived from the current window) in positive positions of a `require`; no time value can make an operation fail (refused in divisors, domain-checked arguments, bounds, indices, mint quantities, `BigMap` int values, and send, accept and deposit values, including inside called `fn`s; accepted by `std` functions only where the binding row declares the parameter total and of window-independent cost, never by `java:` imports; only under an outermost `max(0, …)` in pay amounts); time values reaching amounts or state warn. Influence through transaction-level rules (balance, minimum per output) is outside J6 and bounded by `maxValidityMs` | D11 | checker tests: every bypass of D11, both directions |
@@ -905,7 +1187,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J9 | Only direct self-recursion, checked after lowering; the build report lists recursive functions | D7 | checker tests (nested folds and branches) |
 | J10 | Generated names cannot collide with user names; no binding shadows a state field or a built-in name in methods with input state; no binding or state field replaces a declared type, enum, variant or `fn`; names are ASCII, and a file holds no format character, no line end other than LF or CRLF (r8) and no control character but TAB (r9) | D3, D7 | checker tests |
 | J11 | A D10 row is supported only once its gating port builds, passes its Java example's tests and attack suite, and stays within the size and budget bounds of §8 | D10 | milestone exit criteria |
-| J12 | The build names every library with its on-chain-source hash, and fails when it does not match `joust.lock` | D9 | build tests |
+| J12 | The build names every library with its on-chain-source hash, and fails when one from outside the project's sources (a package's `.jsc` library, a `java:` library, a Java library a Java contract imports: its source closure, all the build compiles of it) is not pinned by `joust.lock` or does not match it (r20 amended) | D9, D14 | build tests |
 | J13 | `joust migrate` preserves behaviour (equal next state, equal per-kind obligation multisets) or refuses with a reason; it never overwrites without a flag | D16 | migration tests over v1 vectors and generated v1 programs |
 | J14 | Every inline `Map` is canonical (unique keys of at most 64 bytes, strictly ascending), whether built by `set`/`delete` or received as input | D5, D7 | property tests against CCL and the JS codec, keys of 0–80 bytes, duplicates |
 | J15 | Every checked input (D5) is validated recursively before user code reads it: nested `Key`/`Hash` lengths, map canonicality, canonical `Value`, `Address` shape | D5 | negative tests on-chain and in the attack suite |
@@ -913,7 +1195,7 @@ I1–I55, which `.jsc` 2 leaves unchanged.
 | J17 | Data built from `.jsc` values (state, redeemers, `send` datums, memos) equals JuLC's encoding of the generated Java and the committed ABI manifest, and matches independent CBOR golden vectors | D5, D12 | encoder tests on the JVM, JS and on-chain; manifest comparison |
 | J18 | Off-chain evaluation of a transition is bounded (step or depth cap) in the prepare service and the batcher, and engines' stacks fit the deepest recursion the budget allows; the front end nests at most 64 levels on every path (JSC0149, JSC0150, JSC0340), reads `+`/`-`, `*`, `&&`, `\|\|` chains and else-if chains of any length without deeper recursion, and reports any stack exhaustion as JSC0005 (on the JVM) or an engine failure `joust build` reports (in the Web Image, whose `joust build` engine runs on an 8 MB worker), never a crash (r12) | D7, D12 | depth tests on the JVM and on a cold Web Image engine (Node's main thread; `joust build`'s worker) |
 | J19 | Every build reports each method's execution units and script size over measured scenarios (empty, small, saturated states; branch-covering inputs), names uncovered paths and unbounded arguments, warns above 80% of the protocol maximum, and calls a figure a bound only for an enumerated bounded domain | D12 | build-report tests |
-| J20 | Every generated check's message is a key of ABI facts and source order, unique within the script and mapped to exactly one `.jsc` construct by the message map; every string the linked script holds is in that map; no message holds a file name, line, column or name the author did not write in a `require` message, and no author's message contains a key's form; a trace is matched whole, and only against the refusing contract's map; layout, comments, the file's name and renames (in any order) leave the script hash unchanged, the package excepted (bloxbean/julc#328) (r12) | D12 | uniqueness and message-map tests; hash invariance under layout, comment, file-name and rename edits for every example; a changed condition changes the hash |
+| J20 | Every generated check's message is a key of ABI facts and source order, unique within the script and mapped to exactly one `.jsc` construct by the message map; every string the linked script holds is in that map; no message holds a file name, line, column or name the author did not write in a `require` message, and no author's message contains a key's form; a trace is matched whole, and only against the refusing contract's map; layout, comments, the file's name and renames (in any order) leave the script hash unchanged, the package excepted (bloxbean/julc#328), and a library's file name excepted, which is its class (D9; r12, r16 amended) | D12 | uniqueness and message-map tests; hash invariance under layout, comment, file-name and rename edits for every example; a changed condition changes the hash |
 
 ## 6. Alternatives considered
 
@@ -970,10 +1252,10 @@ migrated contracts are new scripts; time-dependent amounts carry a documented su
 |---|---|---|---|
 | M0 | Spike: version line, `const`, spread updates, shadowing rule, `fn` with direct recursion and the after-lowering recursion check (nested folds), a `fold`/`find`/`contains` helper and both `filter` lowerings, `Option` as `Optional` end to end (datum, redeemer, portable codec, JS; `Some(None)` rejected), one generated equality helper over a record with bytes, one checked input, one `std/crypto` and one `std/bytes` binding with domains, the binding test via javac attribution, positions on the npm path, the time dataflow pass | ADR accepted | builds on both paths; four-way agreement (J3) on hand vectors; size, budget and check-cost numbers recorded; javac attribution of library sources works inside the Web Image toolchain |
 | M1 | Core language: D2–D7, D11, D12 (codes, source maps, generated Java on disk, ABI manifest), the std library (D8), records, enums, `match`, lists, `Map`, `BigMap`, `Option`; written semantics and reference interpreter (D15); v1 coexistence and `joust migrate` (D16); tree-sitter grammar (D13); templates switched as preview (D14) | M0 exit | J2–J10, J13–J17 tested; vault, escrow (with `after` under `\|\|`), crowdfund (inline map), token and pool ported (J11) within **+15% script size and budget of the Java example and below 14 KB**; five-way differential tests (four-way to M1a) and mutation-rejection tests green; budget gate: every method at a state saturated to `maxDatumBytes` within the protocol maximum; docs rewritten. M1c's thresholds (r11): "below 14 KB" is below 14,000 bytes; "the protocol maximum" is 10,000,000,000 CPU steps and 14,000,000 memory units (the pre-Plomin memory limit, the stricter one), summed over every script of the transaction, with a warning above 80%; the saturated state is the largest one the Java example accepts (its stored datum within `maxDatumBytes`), which the port must then accept; a batched action is measured at `Batcher.DEFAULT_MAX` intents too |
-| M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green |
+| M2 | Values and composition: `Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `deposit`/`receives`, `params`, `invariant`, `event`/`emit`, `quorum`, `authorized`, `reads`, `Instance<C>` and `import contract` | M1 exit | treasury, oracle, fees and dex ported within the same bounds (J11); both interpreters and the five-way tests extended (D15); attack suites and mutation-rejection tests green. Split (r15) into stacked parts: **M2a** values and assets (`Value`, `Address`, `Credential`, `funds`, `send`, `mint`/`burn`, `accept`, `std/value`, `std/address`; gated by dex), **M2b** params, invariants, events, quorum, authorized (gated by treasury), **M2c** composition (deposits and `receives`, `reads`, `Instance<C>`, `import contract`, send datums and memo encoders, stored `Value`s with the wire conversion; gated by oracle and fees). M2c as built (r21): the oracle (Oracle, Shop as Kiosk) and fees (Pot, Stall) ports within +4% of the Java examples' sizes and budgets, every transaction at most 11.6% of the CPU and 26.2% of the memory maximum (a pot collecting 8 deposits); report `jsc-2-m2c-report.md`. **Exited (r22)**, on the integration branch: treasury 9,910 B (+6.6%), oracle 5,843 B (+0.9%; Kiosk 6,450 B, +2.1%), fees (Pot 9,439 B, +1.1%; Stall 9,846 B, +3.9%) and dex 13,492 B (+10.3%), all within J11; five-way M2a 136, M2b 56, M2c 81 calls |
 | M3 | Owned and keyed objects, moves, migration, script purposes and their ledger types | M2 exit | bank, locker, guild, market, registry, staking and upgrade ported within the bounds; interpreter extended; attack suites green |
-| M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12; a `.jsc` library called from Java and a Java library from `.jsc`; the template's tests run offline |
-| M5 | Language server | M3, M4 exit | — |
+| M4 | Libraries and tests: `.jsc` libraries (both directions), `java:` imports (D9), `joust.lock`, npm library packages, offline tests (D14), `joust build --traces` | M1 exit; the Web Image engine evaluates validators without a chain (verified) | J7, J12 (libraries from outside the sources pinned); a `.jsc` library called from Java and a Java library from `.jsc` (in `examples/dsl`; the plugin path waits for the toolchain's publication, D9 r19 amended); the template's tests run offline. **Exited (r22)**, on the integration branch: Shop with `fees.jsc` on five legs (285 calls), `Guarded` on three legs for its `java:` calls (129 of 133), `JavaShop` calling `fees.jsc`, `joust.lock` on npm and Gradle, the template's offline tests |
+| M5 | Language server | ADR-0021 §8's gates (M5a: M1e's exit; M5b and M5c: their own); the language server merges to `main` only after this ADR's acceptance (#83). The `.jsc` 2 integration branch (#98) carries M5a before M3: these gates apply to `main`, not to that branch | — |
 
 **Recommendation gate.** `.jsc` 2 becomes the recommended language for JS developers when M2 and M4 have exited (the
 features most dApps need, and offline tests) **and** an independent security review of the lowering, the generated
@@ -1197,3 +1479,169 @@ checks and the bindings has passed. Until then the docs call it a preview and sa
   M1b's exit and M1b had not done; the modifier vectors are five-way. §9 and the M2 row say five-way. D14 and r13's
   entry: M1e changed the hashes of scripts with generated checks only. D16 states the JSC1103 refusal of v1
   `batched`. The header no longer says design only.
+- **r15** (2026-11-13, M2a): §8 splits M2 into M2a (values and assets, gated by dex), M2b (params, invariants, events,
+  quorum, authorized; treasury) and M2c (composition; oracle, fees). D4 records what M2a built: the generated checks of
+  `send`, `mint`/`burn` and `accept` with their keys (`#send:`, `#mint:`, `#accept:`, and `#funds:` for what was accepted,
+  checked last), when a method takes `Funds`, the result records (`Outcome`, `Received`, `Settled`), `send` without a
+  datum until M2c, and `accept` in an `init` refused until the processor's creation transition program is fixed. D5:
+  `Credential` and `Address` are storable checked inputs; `Value` stays a local's, a `fn`'s and an effect's, its stored
+  form (the wire conversion) moving to M2c; its operations fail where the PV11 builtins fail (`ValueAdapter`). D8 lists
+  `std/value` and `std/address`. D12's message map gains the new kinds. After the implementation review (r1, still
+  r15): D4 narrows "refuse exactly where the validator does" to the rules a call can decide, lists the transaction-level
+  rules, adds the own-script send to `#send:`, states that the validator and the transition program convert the offered
+  assets from the wire (`ValueAdapter.fromWire`), and links JSC0426's processor bug (#81), the table saying so; D5 makes
+  the `Address`/`Credential` checked input tag- and arity-exact on the data and refuses staking pointers;
+  `ValueAdapter`'s on-chain variant has its differential test (D9).
+- **r16** (2026-11-13, M4a: `.jsc` libraries): D9 records the libraries as built (the `library` header and the class
+  named by the file, relative imports, scope and one namespace per build, D11 through library calls, errors at the
+  import, the lowering to `@OnchainLibrary`, helpers per class rather than shared, the artifacts: manifest kind `library`,
+  IR format 2, message-map files). The M4 entry gate was verified first (`runtimeWasmTest`, M4a report §0).
+- **r16 (amended)** (2026-11-13, M4a review round r2: Codex C1–C2, design F1–F3, security S1): D9 refuses a binding
+  named like a library's class (it obscured the class in the generated Java, and a record parameter's accessor ran in
+  place of the library fn on all three compiled legs) and two libraries of one class name in different packages (an
+  ambiguous Java import), both JSC0709. J20 excepts a library's file name, which is its class. D9 records one namespace
+  per build as a known limit with its planned fix (qualified IR names), and that Java callers of a `.jsc` library must
+  meet D5's ingress checks themselves. The Java IR reader refuses an unknown field at every level, as the JavaScript one
+  does; M2b (#84) also moved the IR to format 2, so the two additions are joined into one version before either is
+  released (`docs/reference/jsc-2-ir.md`).
+- **r17** (2026-11-13, the M1 hardening after #76: security S5, S6; issues #73, #74, #75): D10: both IR readers
+  validate a method's modifiers against the checker's rules, the interpreters refuse a modifier without its field
+  instead of skipping it, and a transaction whose caller is not among its signers is the caller's error (semantics §2,
+  §2.6; IR reference). D7: the build worker's stack, heap and time limits are validated settings, and `buildInWorker`
+  is exported. D12: the runtime derives a message map's script hash from the script (#74). The depth test's JSC0005
+  check no longer depends on the stack size. After #80's review round r1: the readers also recompute `pays` and
+  require `only f` or `open` on a paying method, and refuse `batched` with BigMap state; semantics §2 states the
+  caller-signature rule for batch steps; D7 states the worker's limits, ranges and checks (an inherited heap flag is
+  refused); D12 says a `@Params` contract is found by title only; D16 states the in-place checks by identity and `..`;
+  `ValidatorScripts` takes an image's one `resource:` copy unverified inside an image only, with the image builds'
+  `checkImageScripts` behind it (#73); the engines set the exnref flag only where exnref is off (no stderr noise on
+  newer Node). After round r2: the readers refuse a `pay` under an expression or in a fn (JSC0413) and a destroy
+  without one (JSC0409); D7 measures the worker's old generation (a young-generation flag passes); D16 compares names
+  ignoring case, covers the npm CLI, files outside the working directory and concurrent writers; `checkImageScripts`
+  counts classes per name per location, and covers JOUST's own images only (any other image must run it). After round
+  r3: the engine runs in a host process without inherited Node options, its heap decided from three measurements
+  only; directory names compare in Unicode normal form C too; `checkImageScripts` reads each class's real simple name
+  from its class file (`$` is legal in a Java name). After round r4: the host keeps `NODE_OPTIONS` preloads, its heap
+  flags stripped, under any case of the variable. After round r5: NODE_OPTIONS is parsed as Node parses it, and case
+  variants are promoted on Windows only.
+- **r18** (2026-11-13, M2b): D4 records what M2b built: `emit` and the events in the result records and redeemers, the
+  `Event` and `Config` names, which methods take the params, `quorum` and `authorized` as audiences without `Ctx`, a
+  quorum's fields of one place (JSC0439), invariants; and the processor's client fix for a destroy that emits. D10: both
+  interpreters model `quorum` and `authorized`, and the validator's output checks (semantics §2.7, class `invariant`).
+  D11 at the new positions: a time field is never a quorum's or an authorized field (JSC0524), an invariant never depends
+  on a time value (JSC0525, behind JSC0502), the params are never time values, an event may carry one with a warning
+  (JSC9008). Treasury gates M2b (J11): +5.4% script; every transaction from −0.2% to +8.3% of the Java example's budget
+  (these Treasury figures are superseded by r21's round-r4 note and r22: 9,910 B, +6.6%),
+  at most 5.21% of the CPU and 14.46% of the memory maximum at the saturated 21-key council. After #84's review r1: the
+  batched-action rules above (JSC0440, `Stepped`), JSC0441, IR format 2, views with params, reserved annotation names.
+  After review r2: a view's described arguments leave the params out too; the Java IR reader refuses unknown fields at
+  every level (the conditions for joining format 2 with M4a's are in the IR doc); the processor refuses a mixed
+  `@Quorum` (S3), as JSC0439 does.
+- **r19** (2026-11-13, M4b: `java:` imports): D9 records the Java imports as built: `byte[]` as `Bytes` and no maps in
+  M4b; overloads refused; the trusted base made concrete (D8's table, `Require` and the adapters, an allow-list); three
+  catalogue entries added (`equals`/`hashCode`/`toString`, record constructors, `BigInteger.mod`); verified and opaque
+  records; the `joustLibrary` configuration, the duplicate-class check and two sources of a class refused; downstream
+  class loading as a check of the defining bytes, not an isolated loader (the typed client API); no answer in the
+  interpreters, three legs for Java calls, per-function vectors.
+- **r19 (amended)** (2026-11-13, M4b review round r2: design F1–F6, security S1–S4, Codex C3–C6): D9's downstream class
+  loading is per contract and fails closed (a record per contract; the client, which knows its contract's `java:`
+  libraries from the generated Javadoc, checks before anything else that the contract, validator and client share a
+  code source, that the record is there, that each class's bytes match, and that no multi-release variant exists; code
+  sources read through URLs). Only a library's source closure compiles into the consumer, and the certifier refuses
+  sources in packages of JOUST, JuLC, CCL or the JDK; the duplicate-class check runs before `compileJava`, on javac's
+  binary names. The plugin fails fast on `joustLibrary` until julc-state-toolchain and the API's on-chain sources are
+  published. The certifier refuses the constructs JuLC would refuse later, binding hygiene covers Java calls, a shared
+  record is one type, raw signatures are per-fn refusals. The r2 isolated-loader sentence is marked superseded, J3
+  states the three legs of a Java call, and the build certifies statically (vectors are the library's obligation).
+  *Review round r3 (Codex C13–C15; design F7–F9; security S5):* a static array is refused (mutable JVM state a caller
+  can change for every later call, while UPLC keeps the constant), as is any instance method of a library's class or
+  record; a Java record's top-level class takes its simple name in the generated imports, so it clashes with a library
+  class of that name (JSC0709); `JscMain` normalises its output root. The example library moved to
+  `com.example.compliance`, and the reserved-package rule has no exception; it refuses only the library whose closure
+  holds such a class, so one bad source of a set no longer refuses every library (a set that does not compile still
+  does: #88). `jsc-2-java-libraries.md` states exactly what `-Pjoust.javaLibraries=experimental` does.
+  *Review round r4 (Codex C20, C21; design F10; security S6):* a Java record's top-level class is held to a library
+  class's naming rules (no name the generated code uses, none this build declares, unless it is the record itself);
+  annotation types and array element writes are refused; a certified library cannot express a byte constant (its
+  caller passes one), which `jsc-2-java-libraries.md` states and #88 tracks.
+- **r20** (2026-11-13, M4c: packages, the lock, offline tests): D14 records the library packages (`joust-lib/`, package
+  specifiers, relative imports kept inside a package, Java sources from packages certified as on Gradle), `joust.lock`
+  as built (only libraries from outside the sources; JSC0731/JSC0732; `--accept-lock`, `acceptJoustLock`), the offline
+  tests (an in-memory ledger whose phase 2 is the runtime engine's `joust.evaluate`, the attack suite as
+  `joust.attacks`, `joust test`, the template's test offline), and `joust build --traces`.
+- **r20 (amended)** (2026-11-13, M4c review round r2: design F1–F7, security S1–S6, Codex C7–C12): J12, D9's supply-chain
+  bullet and the M4 exit say what the build does: every library is named with its hash, and those from outside the
+  sources are pinned. A Java library's pin is its source closure (a record's own file included), which is all the build
+  compiles of it; on npm the packages' Java sources reach javac and JuLC only as the closures of libraries a `.jsc` file
+  or a hand-written Java contract imports, and the lock pins both; Java sources are keyed by their path inside
+  `joust-lib/`; links are not followed. The offline ledger checks script witnesses and redeemers for every purpose,
+  native scripts, the minimum fee, withdrawals, collateral, the size and unit limits, the integrity hash and the declared
+  units, refuses invalid-tagged transactions, and serialises submissions; D14 lists what it models and what it does not.
+  The attack suite is called a subset, and only a script's refusal counts. `--accept-abi` no longer writes the lock;
+  `joust test`'s offline flag makes the network providers refuse.
+  *Review round r3 (Codex C16–C19; design F8–F10; security S7):* a Java contract's libraries are found from javac's
+  attribution of the build's sources (any import form, a qualified name), not from the text; the ledger requires datums
+  only for Plutus-locked inputs, checks the collateral return's minimum and disjoint spending and reference inputs, and
+  refuses what it does not model (`NotModelled`); each new ledger rule has a refusal test. One bad package source no
+  longer refuses every `java:` import (the reserved-package rule is per library, #79 r3); a set that does not compile
+  still does (#88).
+  *Review round r4 (Codex C22–C24; security S8–S10):* the ledger models only stake registration (once) and
+  deregistration (when registered) among certificates and refuses every other kind as `NotModelled` (r3's pattern missed
+  cardano-js-sdk's DRep and `UnRegistration` names, and delegation went unchecked); spending and reference inputs are
+  disjoint at protocol versions 9 and 10, as the ledger's `disjointRefInputs` (r3 had it at 11); a witness datum must be
+  needed or named by an output or reference input (`NotAllowedSupplementalDatums`). On npm, a library may not declare a
+  class in a package the project's sources declare (a no-op `app.Require` would replace the real one for code naming it
+  unqualified), and a used library whose offered sources do not compile is reported with the failing file.
+  *Review round r5 (Codex C26–C28):* a registration pays `key_deposit` and a deregistration refunds the deposit held,
+  whatever the certificate states (another stated amount is refused); the collateral return may name a supplemental
+  datum; the project's packages are those of its own sources, never a package library's. Discovery leaves out
+  reserved-package sources and retries without an offered source javac refuses, so a broken or duplicate file no contract
+  reaches no longer fails a build; one that is reached is named by its `joust-lib/` path.
+  *Review round r6 (Codex C29–C31; security S11):* a source belongs to the project by its exact identity (the path the
+  build gave it), never by a name suffix; a library a Java contract uses is refused when its closure breaks the
+  reserved-package or one-source rule, as JSC0721 refuses it for a `java:` import; every diagnostic on an offered source
+  names its `joust-lib/` path, also when its file name is not its class's; the ledger names a wrong deposit or refund as
+  Conway does at each protocol version.
+- **r21** (2026-11-13, M2c; r19 and r20 are other PRs'): D4 records what M2c built (`deposit` and the `deposits`
+  component, `#deposit:`; `receives [T]` and `funds.deposits`, memos decoded and checked, `#memo:`; `send(to, v, d)` with a
+  generated datum encoder, JSC0429 retired; JSC0426 kept, #81 still open) and issue #85's fix (deposit claims from the
+  wire; ADR-0007 §9). D5: stored `Value`s (fields of the state, the params, records and variants, in their wire form;
+  never in a container or a method parameter), `Instance<C>` as built, read states and memos as checked inputs. D9:
+  `import contract` of `.jsc` contracts through M4a's `JscModules`; `java:` contracts deferred (JSC0741). D10: the
+  `@Reads` and `@Receives` rows gated by oracle and fees (M2c). D11 at the new positions (read states' time fields,
+  deposit values, datums and memos). §8: M2c's gates. Review round r2 (#90): memo decoders hold tags as `Int`s (S1) and
+  are named by the checked type (C1); both interpreters check an arriving `Value`'s domain (C2); the JVM `fromData` checks
+  the data as it came (C3); a read state's stored `Value`s are checked, used or not (C4); D5's read-state trust is scoped
+  to `.jsc` imports and re-decided before M4b (F4); D9's differential test covers M2c's `ValueAdapter` functions and is
+  checked by reflection (F3); stale D5 text removed (F7). Round r3: a Value that crosses as data holds only the
+  ledger's policies (C6). Round r4: the params are a checked input of the init (C7); this supersedes r18's M2b gate
+  numbers for the port: the `.jsc` Treasury is 9,910 B (+6.6% over Java) and its init +4.9% CPU / +6.3% memory (at the
+  21-key maximum +7.3% / +9.4%), Council 10,389 B (#90 review F11).
+- **r22** (2026-11-14, the `.jsc` 2 integration of M1h #80, M2 #78/#84/#90, M4 #77/#79/#82 and ADR-0021 M5a #83, on
+  `feat/jsc-2-int2`): one IR format 2 carries both sets of additions (M2b's `params` and `invariants`, M2c's `contracts`,
+  `reads` and `receives` types, M4's `libraries`, `javaLibraries` and `CallJava`); both readers stay strict at every
+  level (the Java reader by its field lists and by checking that every field was read), and a test reads back an export
+  carrying all of them and refuses an unknown field in each of its objects (`docs/reference/jsc-2-ir.md`). D10: M1h's
+  strict modifier shapes cover `quorum`, `authorized` and `receives`, and a method that sends, mints, burns or deposits
+  needs an audience as one that pays does (JSC0408, JSC0409). D9: one checker entry joins M4's module loader and `java:`
+  imports with M2c's `import contract` through one `JscModules` (M4c's copy); a library imports no contracts, an
+  imported `.jsc` library is not a contract (JSC0742), and an imported contract whose state, declared types, events or
+  memos use a library's type is refused until the foreign view can name it (JSC0746; #102: so no contract can import
+  Shop yet). ADR-0021 L1 with imports: the language core analyses a
+  file of a project with the project's files (`lang.analyze`'s `id` and `files`, feature `modules`), the server reads the
+  files a document's `.jsc`, contract and package imports reach (ADR-0021 r7a: a linear lexer-aware scan, confined
+  first, under the build's walk rules and bounds), and the outline holds params, events and invariants; a file with a
+  `java:` import is advisory (ADR-0021 D3a; M5c). **M2's exit is met**: treasury (9,910 B, +6.6% over
+  examples/treasury's 9,297; init +4.9% CPU / +6.3% memory, +7.3% / +9.4% at the 21-key maximum, its other calls from
+  −0.2% to +4.5%), oracle (5,843 B, +0.9%; its Shop as Kiosk 6,450 B, +2.1%), fees (Pot 9,439 B, +1.1%; Stall 9,846 B, +3.9%) and
+  dex (13,492 B against 12,229, +10.3%, below 14,000) are ported within J11, with the five-way, mutation and attack
+  suites of M2a–M2c passing on this branch. **M4's exit is met**: J7 and J12, `JavaShop` calling `fees.jsc` and
+  `Guarded` (6,765 B) calling `java:` `AllowList`, Shop (7,646 B) on five legs with its library (285 calls), the
+  template's offline tests. Issue #92's S12 is fixed here (the npm build's source walk skips `node_modules`,
+  dot-directories and links). After #98's round r1 (Codex C1–C8, security S1–S6,
+  design F1–F7): both IR readers refuse every effect statement under an expression or in a fn, an invariant, an init
+  or a view (F1), the JavaScript reader checks `java:` signatures' types (F2, C5; a sweep over Guarded's 149 objects in
+  both readers), the Java reader takes modifier fields by presence (C6), `params.f` is the params' (S5); the emitter
+  keeps the build's Java libraries in an imported library's checks (C1) and names library types in memo decoders and
+  datum encoders (S4); an imported contract's class is held in the Java import names (C2); §8's M2 and M4 rows record
+  their exits, and the M5 row its gates.
