@@ -43,6 +43,19 @@ for (const [name, src] of files) {
   }
   out.latency[name] = { lines, median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2), modelChars: (await host.analyze('a', engine, { file: 'Ledger.jsc', source: src })).model.length };
 }
+// F3 on #99: the 1,889-line file's lowering in the same worker (warm), the yardstick of a hardware-independent guard.
+{
+  const src = files[2][1];
+  const ts = [];
+  for (let k = 0; k < 23; k++) {
+    const t = performance.now();
+    const r = await host.request('a', engine, { op: 'lower', file: 'Ledger.jsc', source: src + ' '.repeat(k) }, { input: `lower${k}`, what: 'the lowering', timeoutMs: 30000 });
+    if (!r.model) throw new Error(`lowering failed: ${r.internal?.message}`);
+    if (k >= 3) ts.push(performance.now() - t);
+  }
+  out.latency.lower1889 = { median: +pct(ts, 0.5).toFixed(2), p95: +pct(ts, 0.95).toFixed(2) };
+  out.latency.ratio = +(out.latency['Ledger1889.jsc'].median / out.latency.lower1889.median).toFixed(3);
+}
 out.rss.oneAnalysisWorker = mb();
 await host.info('b', { ...engine, id: 'measure-b' });
 await host.analyze('b', { ...engine, id: 'measure-b' }, { file: 'Ledger.jsc', source: ledger });
@@ -74,6 +87,13 @@ const results = [
   ['RSS, one analysis worker (MB)', bound(out.rss.oneAnalysisWorker, 600, 900)],
   ['RSS, two analysis workers and a build worker (MB)', bound(out.rss.twoAnalysisWorkersAndABuildWorker, 1229, 1800)],
 ];
+// F3 on #99: guards that do not depend on the runner. The model of the 1,889-line file is deterministic (239,874
+// characters at M5b): a budget 5% above it. And the analysis's median against the same worker's warm lowering of the
+// same file, measured in the same job (M5b: about 0.3): at most 0.5.
+results.push(['model of 1,889 lines (characters)', check ? out.latency['Ledger1889.jsc'].modelChars <= 252000 && { v: out.latency['Ledger1889.jsc'].modelChars, strict: 252000, withinStrict: true }
+  : { v: out.latency['Ledger1889.jsc'].modelChars, strict: 252000, withinStrict: out.latency['Ledger1889.jsc'].modelChars <= 252000 }]);
+results.push(['analysis / lowering, median (1,889 lines)', check ? out.latency.ratio <= 0.5 && { v: out.latency.ratio, strict: 0.5, withinStrict: true }
+  : { v: out.latency.ratio, strict: 0.5, withinStrict: out.latency.ratio <= 0.5 }]);
 let failed = 0;
 for (const [what, r] of results) {
   if (!r) {

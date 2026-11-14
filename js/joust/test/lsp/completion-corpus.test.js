@@ -21,13 +21,17 @@ const skip = !HAS_ENGINE && 'needs the toolchain engine in js/joust/engine';
 const DSL = fileURLToPath(new URL('../../../../examples/dsl/src/main/jsc/org/julclang/state/examples/dsl/', import.meta.url));
 const SCOPE = new Set(['JSC0217', 'JSC0324', 'JSC0704', 'JSC0414', 'JSC0415', 'JSC0212', 'JSC0213', 'JSC0214', 'JSC0222', 'JSC0710', 'JSC0433']);
 
-async function engine() {
+// One engine per process: require() caches the image, so a second load never calls onJulcReady again.
+let loaded = null;
+function engine() {
+  if (loaded) return loaded;
   if (!hasExnref()) v8.setFlagsFromString('--experimental-wasm-exnref');
   const file = join(ENGINE, 'joust-toolchain.js');
-  return new Promise((resolve) => {
+  loaded = new Promise((resolve) => {
     globalThis.onJulcReady = (api) => resolve(api);
     createRequire(file)(file);
   });
+  return loaded;
 }
 
 test('every offered completion item, inserted at the corpus positions, adds no scope error (D7)', { skip, timeout: 600_000 }, async () => {

@@ -2,13 +2,14 @@
 // another file imports the renamed name (F2); a shorthand of one declaration renamed as one edit (C5); a large rename
 // whose check leaves the protocol thread answering (S3); completion and hover right after didChange answer from that
 // version, never an older model (C4); completion inside a method that does not parse (F1); a hostile file's errors
-// capped (S2); Remove invisible characters… from the text, past the model's cap (S2).
+// capped (S2); Remove invisible characters… from the text, past the model's cap (S2); builds that read the npm
+// packages' libraries (C6), stay in one buffer lifetime (C7) and coalesce (F7).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { HAS_ENGINE, startLsp, tmp, uriOf, VSCODE_CAPS } from './client.js';
+import { ENGINE, HAS_ENGINE, startLsp, tmp, uriOf, VSCODE_CAPS } from './client.js';
 
 const skip = !HAS_ENGINE && 'needs the toolchain engine in js/joust/engine';
 const vscode = (dir, extra = {}) => startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: false, ...extra } });
@@ -260,6 +261,133 @@ test('S2: a hostile file\'s errors are capped, it analyses quickly, and a valid 
     assert.equal(inv.occurrences.length, 10000, JSON.stringify(inv).slice(0, 200));
     assert.equal(inv.more, 10000);
     assert.equal(inv.occurrences[0].char, 'U+200B');
+  } finally {
+    await lsp.stop();
+  }
+});
+
+// ------------------------------------------------------------------ builds on save (C6, C7, F7)
+
+const SHOP = `jsc 2
+package app
+
+import { fee } from "@acme/fees/fees.jsc"
+
+contract Shop {
+  state { owner: Key, total: Int }
+
+  init() {
+    return { owner: caller, total: 0 }
+  }
+
+  action add(sum: Int) only owner {
+    require(fee(sum) >= 0, "never negative")
+    return { ...state, total: total + sum }
+  }
+
+  destroy close() only owner {
+    pay(owner, balance)
+  }
+}
+`;
+
+/** A trusted npm project with the real engine as its compiler and an npm package shipping a .jsc library (C6). */
+function libraryProject(root) {
+  mkdirSync(join(root, 'contracts', 'app'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { '@julclang/joust': '0.0.0', '@acme/fees': '1.0.0' } }));
+  writeFileSync(join(root, 'joust.config.json'), '{ "contracts": "contracts" }');
+  const pkg = join(root, 'node_modules', '@julclang', 'joust');
+  mkdirSync(join(pkg, 'engine'), { recursive: true });
+  writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@julclang/joust', version: '9.9.9' }));
+  for (const f of readdirSync(ENGINE).filter((x) => /^(joust-toolchain\.js(\.wasm)?|package\.json)$/.test(x))) copyFileSync(join(ENGINE, f), join(pkg, 'engine', f));
+  const fees = join(root, 'node_modules', '@acme', 'fees');
+  mkdirSync(join(fees, 'joust-lib'), { recursive: true });
+  writeFileSync(join(fees, 'package.json'), JSON.stringify({ name: '@acme/fees', version: '1.0.0' }));
+  writeFileSync(join(fees, 'joust-lib', 'fees.jsc'), 'jsc 2\nlibrary acme.fees\n\nfn fee(amount: Int): Int = amount / 100\n');
+  writeFileSync(join(root, 'contracts', 'app', 'Shop.jsc'), SHOP);
+  return join(root, 'contracts', 'app', 'Shop.jsc');
+}
+
+const trusted = (dir) => startLsp({ folders: [dir], capabilities: VSCODE_CAPS, initOptions: { client: 'vscode-joust', trusted: true }, hostOptions: {} });
+
+test('C6: the build reads the npm packages\' libraries as joust build does, and a failed build always says why', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  const uri = uriOf(libraryProject(dir));
+  const lsp = await trusted(dir);
+  try {
+    lsp.open(uri, SHOP);
+    await modelOf(lsp, uri, 1);
+    const d = (await lsp.diagnostics(uri, 1)).diagnostics;
+    assert.deepEqual(d.filter((x) => x.severity === 1), [], JSON.stringify(d));
+    const c = await lsp.request('joust/checkBuild', { uri });
+    // It builds (one contract); only the missing manifest (JSC0003) is left, shown.
+    assert.equal(c.contracts, 1, JSON.stringify(c));
+    assert.equal(c.errors, 1, JSON.stringify(c));
+    const p = await lsp.until(() => lsp.published.find((x) => x.uri === uri && x.diagnostics.some((y) => y.code === 'JSC0003')), 60000, 'JSC0003');
+    assert.ok(p);
+    // A package library that does not check: the build fails, and says so (never zero errors on a failure).
+    writeFileSync(join(dir, 'node_modules', '@acme', 'fees', 'joust-lib', 'fees.jsc'), 'jsc 2\nlibrary acme.fees\n\nfn fee(amount: Int): Int = amount / nope\n');
+    const f = await lsp.request('joust/checkBuild', { uri });
+    assert.equal(f.ok, false, JSON.stringify(f));
+    assert.ok(f.errors >= 1, JSON.stringify(f));
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('C7: a build does not cross a close and a reopen at the same version; a close withdraws its results', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  const uri = uriOf(libraryProject(dir));
+  const lsp = await trusted(dir);
+  try {
+    lsp.open(uri, SHOP);
+    await modelOf(lsp, uri, 1);
+    const before = (await lsp.stats()).builds.calls;
+    const pending = lsp.request('joust/checkBuild', { uri });
+    // Its snapshot is taken and the build is running (a cold build worker: seconds), then the buffer closes and reopens.
+    for (let i = 0; i < 200 && (await lsp.stats()).builds.calls === before; i++) await new Promise((res) => setTimeout(res, 10));
+    lsp.close(uri);
+    const NEW = SHOP.replace('"never negative"', '"never below zero"');
+    lsp.open(uri, NEW, 1);
+    const r = await pending;
+    assert.match(r.error ?? '', /changed while it built|cancelled/, JSON.stringify(r));
+    await modelOf(lsp, uri, 1);
+    await new Promise((res) => setTimeout(res, 500));
+    // Nothing of the old build on the new lifetime.
+    const last = lsp.published.filter((x) => x.uri === uri).at(-1);
+    assert.ok(!last.diagnostics.some((x) => /in memory/.test(x.source)), JSON.stringify(last));
+    // A finished build's results go with the close.
+    const done = await lsp.request('joust/checkBuild', { uri });
+    assert.equal(done.contracts, 1, JSON.stringify(done));
+    await lsp.until(() => lsp.published.filter((x) => x.uri === uri).at(-1)?.diagnostics.some((y) => y.code === 'JSC0003'), 60000, 'the build shown');
+    const n = lsp.published.length;
+    lsp.close(uri);
+    await lsp.until(() => lsp.published.slice(n).some((x) => x.uri === uri && x.diagnostics.length === 0), 10000, 'cleared on close');
+  } finally {
+    await lsp.stop();
+  }
+});
+
+test('F7: saves coalesce: one build in flight, the latest pending; a changed input cancels the one in flight', { skip, timeout: 300_000 }, async () => {
+  const dir = tmp();
+  const uri = uriOf(libraryProject(dir));
+  const lsp = await trusted(dir);
+  try {
+    lsp.open(uri, SHOP);
+    await modelOf(lsp, uri, 1);
+    const before = (await lsp.stats()).builds.calls;
+    // Six change-and-save cycles in quick succession.
+    for (let v = 2; v <= 7; v++) {
+      lsp.change(uri, v, SHOP.replace('"never negative"', `"never negative ${v}"`));
+      lsp.conn.sendNotification('textDocument/didSave', { textDocument: { uri } });
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    const p = await lsp.until(() => lsp.published.find((x) => x.uri === uri && x.version === 7 && x.diagnostics.some((d) => d.code === 'JSC0003')), 200000, 'the last version\'s build');
+    assert.ok(p);
+    await new Promise((res) => setTimeout(res, 1000));
+    const calls = (await lsp.stats()).builds.calls - before;
+    console.log(`F7: 6 saves ran ${calls} builds`);
+    assert.ok(calls <= 3, `${calls} builds for 6 saves`);
   } finally {
     await lsp.stop();
   }

@@ -49,6 +49,8 @@ export const BUILD_MS = 120000;
 export const BUILD_IDLE_MS = 5 * 60 * 1000;
 /** D4: at most this many source files in a build snapshot. */
 export const MAX_BUILD_FILES = 500;
+/** S7 on #99: at most this many characters in a build snapshot (sources and libraries). */
+export const MAX_BUILD_CHARS = 16 * 1024 * 1024;
 /** D4: a script over this many bytes is reported on save (a transaction holds at most 16 KB, scripts included). */
 export const SCRIPT_WARN_BYTES = 14 * 1024;
 export const SERVER_NAME = 'joust-lsp';
@@ -618,6 +620,8 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const s = state.get(e.document.uri);
     // Its importers read its buffer: they are analysed again with its file on disk (#98 F3d).
     rescheduleImporters(s?.realPath);
+    // C7 on #99: a build that read this buffer no longer describes anything open: withdrawn, and one in flight cancelled.
+    withdrawBuilds(e.document.uri);
     if (s) {
       clearTimeout(s.timer);
       s.cts?.cancel();
@@ -1002,8 +1006,11 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   let buildSeq = 0;
   const builtFrom = new Map();   // uri of an open document -> the build seq that read it
 
-  /** Withdraws every build result whose snapshot read `uri` (it changed). */
+  const inFlight = new Map();   // build seq -> { uris (the open buffers its snapshot read), cts }
+
+  /** Withdraws every build result whose snapshot read `uri` (it changed); a build in flight that read it is cancelled (F7). */
   function withdrawBuilds(uri) {
+    for (const b of inFlight.values()) if (b.uris.has(uri)) b.cts?.cancel();
     const seq = builtFrom.get(uri);
     if (seq === undefined) return;
     builtFrom.delete(uri);
@@ -1024,6 +1031,15 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   async function buildSnapshot(uri, sel) {
     const files = {};
     const versions = new Map();
+    // C7 on #99: each open buffer's lifetime (its state object) with its version: a close and a reopen at the same
+    // version is another buffer.
+    const states = new Map();
+    let chars = 0;
+    const digest = createHash('sha256');
+    const keep = (f, text) => {
+      chars += text.length;
+      digest.update(`${f.length}:${f}${text.length}:`).update(text);
+    };
     const openByPath = new Map();
     for (const d of documents.all()) {
       const p = localFileOf(d.uri);
@@ -1034,7 +1050,9 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       if (!doc) return { error: 'the file is not open' };
       files[fileNameOf(uri)] = doc.getText();
       versions.set(uri, doc.version);
-      return { files, versions, dir: null };
+      states.set(uri, state.get(uri));
+      keep(fileNameOf(uri), doc.getText());
+      return { files, versions, states, dir: null, packages: {}, javaLibraries: {}, digest: digest.digest('hex') };
     }
     const rel = sel.contractsRel.join('/');
     const listed = await reader.list(sel.folder, rel, { max: MAX_BUILD_FILES, kind: sel.kind === 'gradle' ? 'gradle' : 'npm' });
@@ -1045,13 +1063,74 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
       if (open) {
         files[f] = open.getText();
         versions.set(open.uri, open.version);
-        continue;
+        states.set(open.uri, state.get(open.uri));
+      } else {
+        const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: MAX_FILE_CHARS * 2 });
+        if (r.error) return { error: `${f} cannot be read (${r.error})` };
+        files[f] = r.bytes.toString('utf8');
       }
-      const r = await reader.read(sel.folder, `${rel}/${f}`, { cap: MAX_FILE_CHARS * 2 });
-      if (r.error) return { error: `${f} cannot be read (${r.error})` };
-      files[f] = r.bytes.toString('utf8');
+      keep(f, files[f]);
+      // S7 on #99: the snapshot's total is bounded too.
+      if (chars > MAX_BUILD_CHARS) return { error: `the project's sources are larger than the language server builds (${MAX_BUILD_CHARS} characters)` };
     }
-    return { files, versions, dir: listed.path };
+    // C6 on #99: the npm packages' libraries (joust-lib/: .jsc by <package>/<path>, Java sources by path), as joust
+    // build passes them (libraries.js), read confined: no link, inside the folder, under the same bounds.
+    const libs = sel.kind === 'gradle' ? { packages: {}, javaLibraries: {} } : await buildLibraries(sel);
+    if (libs.error) return { error: libs.error };
+    for (const [k, v] of [...Object.entries(libs.packages), ...Object.entries(libs.javaLibraries)]) {
+      keep(`lib:${k}`, v);
+      if (chars > MAX_BUILD_CHARS) return { error: `the project's sources and libraries are larger than the language server builds (${MAX_BUILD_CHARS} characters)` };
+    }
+    return { files, versions, states, dir: listed.path, packages: libs.packages, javaLibraries: libs.javaLibraries, digest: digest.digest('hex') };
+  }
+
+  /**
+   * C6 on #99: the libraries the project's npm packages ship under joust-lib/ (libraries.js libraryPackages' rules: every
+   * package of node_modules, scoped ones included, its joust-lib/'s .jsc and .java files), read through the confined
+   * reader: a package, a joust-lib/ or a file reached by a link is left out (as projectOf's package imports, which follow
+   * none). `{ packages, javaLibraries }` or `{ error }` (one Java class shipped twice: JSC0709; a bound).
+   */
+  async function buildLibraries(sel) {
+    const packages = {};
+    const javaLibraries = {};
+    const javaFrom = {};
+    if (!sel.root || !inside(sel.root, sel.folder)) return { packages, javaLibraries };
+    const rootRel = relative(sel.folder, sel.root).split(sep).join('/') || '.';
+    const dirs = async (rel) => {
+      const r = await reader.resolveIn(sel.folder, rel);
+      if (r.error) return [];
+      try {
+        return (await fsp.readdir(r.path, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name).sort();
+      } catch {
+        return [];
+      }
+    };
+    const names = [];
+    for (const n of await dirs(`${rootRel}/node_modules`)) {
+      if (n.startsWith('@')) for (const m of await dirs(`${rootRel}/node_modules/${n}`)) names.push(`${n}/${m}`);
+      else names.push(n);
+    }
+    let count = 0;
+    for (const name of names) {
+      const libRel = `${rootRel}/node_modules/${name}/joust-lib`;
+      const lib = await reader.resolveIn(sel.folder, libRel);
+      if (lib.error || lib.path !== join(sel.folder, ...libRel.split('/').filter((x) => x !== '.'))) continue;   // missing, or a link
+      const listed = await reader.list(sel.folder, libRel, { max: MAX_BUILD_FILES, kind: 'gradle' });
+      if (listed.error) return { error: listed.error === 'too-many' ? `the package ${name} ships more than ${MAX_BUILD_FILES} library files` : `${name}/joust-lib cannot be read` };
+      for (const f of listed.files) {
+        if (++count > MAX_BUILD_FILES) return { error: `the npm packages ship more than ${MAX_BUILD_FILES} library files` };
+        const r = await reader.read(sel.folder, `${libRel}/${f}`, { cap: MAX_FILE_CHARS * 2 });
+        if (r.error) return { error: `${name}/joust-lib/${f} cannot be read (${r.error})` };
+        const text = r.bytes.toString('utf8');
+        if (f.endsWith('.jsc')) packages[`${name}/${f}`] = text;
+        else if (f.endsWith('.java')) {
+          if (f in javaLibraries) return { error: `error[JSC0709]: the npm packages ${javaFrom[f]} and ${name} both ship joust-lib/${f}: one Java class twice` };
+          javaLibraries[f] = text;
+          javaFrom[f] = name;
+        }
+      }
+    }
+    return { packages, javaLibraries };
   }
 
   /**
@@ -1118,10 +1197,19 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     const gen = selector.generation;
     const snap = await buildSnapshot(uri, sel);
     if (snap.error) return { error: snap.error };
-    const input = JSON.stringify(Object.entries(snap.files).sort());
-    const r = await buildHost.request(`build:${engine.id}`, engine, { op: 'build', files: snap.files, options: {} },
-      { scope: sel.root ?? sel.folder ?? '', input, what: 'the build', timeoutMs: BUILD_MS }, token);
-    const stale = () => selector.generation !== gen || [...snap.versions].some(([u, v]) => documents.get(u)?.version !== v);
+    if (token?.isCancellationRequested) return { error: 'cancelled' };
+    inFlight.set(seq, { uris: new Set(snap.versions.keys()), cts: token?.cts });
+    let r;
+    try {
+      r = await buildHost.request(`build:${engine.id}`, engine,
+        { op: 'build', files: snap.files, options: {}, packages: snap.packages, javaLibraries: snap.javaLibraries },
+        { scope: sel.root ?? sel.folder ?? '', input: snap.digest, what: 'the build', timeoutMs: BUILD_MS }, token);
+    } finally {
+      inFlight.delete(seq);
+    }
+    // C7 on #99: every buffer the snapshot read is still the same lifetime at the same version.
+    const stale = () => selector.generation !== gen
+      || [...snap.versions].some(([u, v]) => documents.get(u)?.version !== v || state.get(u) !== snap.states.get(u));
     if (!r.model) return { error: r.internal?.message ?? (r.cancelled ? 'cancelled' : r.unavailable ? 'builds are unavailable' : 'the build did not run') };
     if (stale()) return { error: 'the sources changed while it built: not shown' };
     const result = JSON.parse(r.model);
@@ -1134,12 +1222,16 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
     };
     let errors = 0;
     for (const d of result.diagnostics ?? []) {
-      // The front end's own diagnostics are the analysis's already; the later stages' are added.
-      if (d.source === 'jsc' || (d.code && /^JSC0[1-9]/.test(d.code) && d.source !== 'julc' && d.source !== 'javac')) continue;
-      if (d.severity === 'error') errors++;
       const line = Math.max(0, Number(d.line ?? 1) - 1);
       const col = Math.max(0, Number(d.col ?? 1) - 1);
-      add(uriOfBuilt(snap.dir, d.file, uri), { range: { start: { line, character: col }, end: { line, character: col + 1 } },
+      const target = uriOfBuilt(snap.dir, d.file, uri);
+      // The front end's own diagnostics are the analysis's already, where that document's analysis shows the same code on
+      // the same line (C6 on #99: a front-end error the analysis does not show, a library the analysis did not read say,
+      // is the build's explanation, and is shown).
+      const frontEnd = d.source === 'jsc' || (d.code && /^JSC0[1-9]/.test(d.code) && d.source !== 'julc' && d.source !== 'javac');
+      if (frontEnd && (state.get(target)?.lastDiagnostics ?? []).some((x) => x.code === d.code && x.range?.start?.line === line)) continue;
+      if (d.severity === 'error') errors++;
+      add(target ?? uri, { range: { start: { line, character: col }, end: { line, character: col + 1 } },
         severity: d.severity === 'error' ? 1 : d.severity === 'warning' ? 2 : 3, ...(d.code ? { code: d.code } : {}), source: label,
         message: `${d.message}${d.source ? ` (${d.source})` : ''}` });
     }
@@ -1164,6 +1256,13 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
           source: label, message: `${c.name}'s script is ${c.scriptSizeBytes} bytes: a transaction holds at most 16 KB, scripts included (deploy it as a reference script)` });
       }
     }
+    // A failed build always says why (C6): with no error of its own to show, it says so where it was asked.
+    if (result.ok !== true && errors === 0) {
+      errors++;
+      const first = (result.diagnostics ?? []).find((d) => d.severity === 'error');
+      add(uri, { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, severity: 1, source: label,
+        message: `the build failed${first ? `: ${first.file ? `${first.file}:${first.line ?? 1}: ` : ''}${first.message}` : ' without a diagnostic'}` });
+    }
     if (stale()) return { error: 'the sources changed while it built: not shown' };
     // Published for every open document the snapshot read (or the build named), each with the version it read.
     const targets = new Set([...snap.versions.keys(), ...byUri.keys()]);
@@ -1181,11 +1280,33 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   }
 
   // D4, D10, Q7: on save, in trusted project-matched npm projects only (a user setting can turn it off).
-  documents.onDidSave(async (e) => {
+  // F7 on #99: coalesced: one build in flight and at most one pending (the latest save's); a build whose inputs change
+  // while it runs is cancelled (withdrawBuilds).
+  let saveRunning = false;
+  let savePending = null;
+  async function buildOnSaveLoop(next) {
+    savePending = next;
+    if (saveRunning) return;
+    saveRunning = true;
+    try {
+      while (savePending) {
+        const { uri, sel } = savePending;
+        savePending = null;
+        if (!state.has(uri)) continue;
+        const cts = new CancellationTokenSource();
+        const token = Object.assign(cts.token, { cts });
+        await runBuild(uri, sel, sel.engine, token).catch((err) => log(`build on save failed: ${err?.stack ?? err}`));
+        cts.dispose();
+      }
+    } finally {
+      saveRunning = false;
+    }
+  }
+  documents.onDidSave((e) => {
     const s = state.get(e.document.uri);
     const sel = s?.selection;
     if (!sel || buildOnSave === false || !selector.trusted || sel.source !== 'project' || sel.mode !== 'project-matched' || !sel.contracts) return;
-    await runBuild(e.document.uri, sel, sel.engine).catch((err) => log(`build on save failed: ${err?.stack ?? err}`));
+    buildOnSaveLoop({ uri: e.document.uri, sel });
   });
 
   // JOUST: Check build (in memory): one build on request, on the bundled engine unless the file is project-matched, in any
@@ -1214,6 +1335,10 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
   });
 
   // Trust granted mid-session (D3): select again, restart the workers on the project's engine when now eligible.
+  // F9 on #99: the extension forwards a change of joust.buildOnSave.
+  connection.onNotification('joust/settings', (p) => {
+    if (isVscode && typeof p?.buildOnSave === 'boolean') buildOnSave = p.buildOnSave;
+  });
   connection.onNotification('joust/trust', (p) => {
     if (!isVscode || p?.trusted !== true) return;
     selector.invalidate({ trusted: true });
@@ -1241,7 +1366,7 @@ export function startServer({ connection, engineDir, workerEntry, storageDir: st
 
   if (flags.testHooks) {
     connection.onRequest('joust/test/stats', () => ({
-      ...host.stats, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
+      ...host.stats, builds: { ...buildHost.stats }, quarantined: host.quarantine.size, slots: [...host.slots.values()].map((s) => ({ key: s.key, ...host.status(s.key), alive: !!(s.worker && !s.worker.dead), booted: !!s.worker?.booted, file: s.engine.file, calls: s.worker?.calls ?? 0 })),
     }));
   }
 

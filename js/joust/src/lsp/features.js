@@ -144,7 +144,7 @@ export function hover(model, pos, std) {
     if (row) {
       parts.push(code(row.signature), `*${escapeMarkdown(row.module)}*`);
       if (row.domain) parts.push(`Domain: ${escapeMarkdown(row.domain)}`);
-      if (row.target) parts.push(`Java: \`${escapeMarkdown(row.target).replace(/\\/g, '')}\``);
+      if (row.target) parts.push(`Java: ${code(String(row.target))}`);   // S9 on #99: as a signature, or escaped
     } else if (BUILTIN_DOCS[s.builtin]) {
       const [t, doc] = BUILTIN_DOCS[s.builtin];
       parts.push(code(`${s.builtin}: ${t}`), `*built-in*: ${doc}`);
@@ -643,7 +643,9 @@ export function completion(text, pos, model, std = {}) {
       continue;
     }
     if (imported.get(r.name) === r.module) add(r.name, 3, `${r.signature}  (${r.module})`);
-    else if (!imported.has(r.name) && !seen.has(r.name)) add(r.name, 3, `${r.signature}  (${r.module}; adds the import)`, { needsImport: { name: r.name, module: r.module }, sort: `~${r.name}` });
+    // S9 on #99: an import is offered only for a row the engine names plainly (a name, a std/ module): the text the
+    // import edit writes is never the engine's verbatim.
+    else if (!imported.has(r.name) && !seen.has(r.name) && NAME.test(r.name) && STD_MODULE.test(String(r.module))) add(r.name, 3, `${r.signature}  (${r.module}; adds the import)`, { needsImport: { name: r.name, module: r.module }, sort: `~${r.name}` });
   }
   return out;
 }
@@ -653,6 +655,7 @@ export function completion(text, pos, model, std = {}) {
  * import line after the last import (or after the package line). `{ range, newText }`, or null when it is there.
  */
 export function importEdit(text, name, module) {
+  if (!NAME.test(String(name)) || !STD_MODULE.test(String(module))) return null;   // S9 on #99
   const lines = text.split('\n');
   let lastImport = -1;
   let pkg = -1;
@@ -682,6 +685,8 @@ export function importEdit(text, name, module) {
 
 /** J10/D3: the lexical form of a name; the re-analysis checks the rest (shadowing, reserved and generated names). */
 export const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A std module's name, as an import writes it (S9 on #99). */
+export const STD_MODULE = /^std\/[a-z0-9_]+$/;
 const KEYWORDS = new Set(['jsc', 'package', 'import', 'from', 'contract', 'type', 'enum', 'fn', 'init', 'action', 'destroy', 'view', 'state',
   'const', 'require', 'pay', 'for', 'of', 'if', 'else', 'match', 'return', 'true', 'false', 'event', 'emit', 'params', 'invariant', 'receives',
   'let', 'var', 'function', 'class']);
