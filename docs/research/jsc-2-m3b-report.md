@@ -172,9 +172,12 @@ merged head unless stated.
 - **npm**: `js/jsc-interpreter` 59/59; `tree-sitter-jsc` 21/21 corpus parses, and the shared corpus (94 corpus, 55
   repository and 70 research files) agrees with the hand-written parsers; `js/state-client` 48/48; `js/joust` 168/170 (1
   skipped), the language-server tests among them: the one failure was the MerkleMap page's DevKit flow ("the caller's
-  address has no UTxO to use as seed", a dry wallet on a DevKit shared with other runs), which passed when run again.
-- **DevKit** (Yaci DevKit, at `295723e0`, before the merge, which changes neither port): the port's DevKit tests, 9 of 9
-  pass: examples/registry's `RegistrySmokeDevnetTest` (every operation), `ConcurrencyDevnetTest`, `ContestedGapDevnetTest`,
+  address has no UTxO to use as seed", a dry wallet on a DevKit shared with other runs), which passed when run again;
+  `js/joust-runtime` 34/37 (2 skipped), its one failure the Ogmios provider test that M3a's reports also have (it probes
+  the M0 fixtures' transactions, which are not on this devnet).
+- **DevKit** (Yaci DevKit): `./gradlew :examples:dsl:test` at the merged head (`672665bf`) gave **220 tests, 0 failures**
+  (1 skipped), the earlier ports' DevKit tests and the 9 below among them. Run first at `295723e0`, before the merge, the
+  port's DevKit tests, 9 of 9 pass: examples/registry's `RegistrySmokeDevnetTest` (every operation), `ConcurrencyDevnetTest`, `ContestedGapDevnetTest`,
   `HostilityDevnetTest` (a hostile predecessor updating every block cannot block the retire; a removal retries against an
   updated predecessor), `DuplicateKeyDevnetTest` (a duplicate forced past the JVM, refused on chain), `UntimedKeyedPending
   DevnetTest`, and `KeyedCooldownDevnetPortTest` (Registry's 60 s cooldown exactly at the boundary; Keys' C = 0 relinking
