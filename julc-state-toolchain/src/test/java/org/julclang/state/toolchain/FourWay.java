@@ -498,9 +498,28 @@ final class FourWay {
         JulcList<DepositClaim> ds = JulcList.empty();
         for (int k = f.deposits().size() - 1; k >= 0; k--) {
             DepositV d = f.deposits().get(k);
-            ds = ds.prepend(new DepositClaim(BigInteger.ZERO, depositor(k), value(d.value()), memoData(d.memo())));
+            ds = ds.prepend(new DepositClaim(BigInteger.ZERO, depositor(k), value(d.value()), rawMemos != null ? rawMemos.get(k) : memoData(d.memo())));
         }
         return new Funds(f.policy().bytes(), f.self().bytes(), value(f.received()), value(f.held()), ds);
+    }
+
+    /** While {@link #jvmRaw} runs: the deposits' memos as raw data, in place of the honest ones. */
+    private List<org.julclang.core.PlutusData> rawMemos;
+
+    /**
+     * M2c: the JVM leg of a receiving call whose deposits' memos are raw data ({@code memos}, one per deposit of {@code t}),
+     * as {@link #receiverRaw} hands them to the transition program: "refused" (a RequireException or an arithmetic failure),
+     * the step as the other legs encode it, or the exception the generated Java threw otherwise ("threw: …").
+     */
+    String jvmRaw(String method, Rec state, Tx t, List<org.julclang.core.PlutusData> memos) throws Exception {
+        rawMemos = memos;
+        try {
+            return jvm(method, state, List.of(), t);
+        } catch (RuntimeException e) {
+            return "threw: " + e;
+        } finally {
+            rawMemos = null;
+        }
     }
 
     /** M2c: the k-th depositor's input in a receiver's transaction (the registry names it as a claim's by). */

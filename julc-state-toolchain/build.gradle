@@ -37,7 +37,9 @@ dependencies {
 apply from: rootProject.file('gradle/jazzer-fuzz.gradle')
 fuzzTargets 'org.julclang.state.toolchain.FiveWayFuzzTest.generatedContractsAgree',
         'org.julclang.state.toolchain.ValueAdapterFuzzTest.decoders',
-        'org.julclang.state.toolchain.AddressAdapterFuzzTest.addressesAndCredentials'
+        'org.julclang.state.toolchain.AddressAdapterFuzzTest.addressesAndCredentials',
+        'org.julclang.state.toolchain.NodeOptionsFuzzTest.portAgreesWithNode',
+        'org.julclang.state.toolchain.MemoFuzzTest.decodersAgree'
 
 // I1 compares with what the Gradle build of the examples wrote.
 tasks.named('test') {
